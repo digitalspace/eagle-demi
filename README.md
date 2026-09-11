@@ -590,6 +590,10 @@ every workload that reads it so the pods pick up the new value.
 - A run that finds nothing changed writes nothing and restarts nothing.
 - A mapped secret missing or empty in the vault leaves the live OpenShift Secret untouched and
   fails the run, so a rotation half-done never lands as a Secret with a key deleted.
+- It overwrites values, it never creates objects. The cluster Role grants `update` on the named
+  Secrets and no `create`, because an unnamed `create` would let the ServiceAccount mint a Secret
+  of any type, a service-account token for another account included. A mapped Secret the namespace
+  does not have is logged and counted missing, and fails the run the same way.
 - `demi-secret-sync-test` owns `6cdc9e-dev` and `6cdc9e-test`; `demi-secret-sync-prod` owns
   `6cdc9e-prod`. `SYNC_NAMESPACES` on each app is what decides, and neither holds the other's token.
 
@@ -601,8 +605,10 @@ Dev names carry a `dev-` prefix because `demi-kv-test` is the nonprod vault and 
 namespaces.
 
 **To add a secret**: set the value in the vault from the devbox
-(`az keyvault secret set --vault-name demi-kv-<env> --name <name> --value '<value>'`), add one line
-per key to `mapping.json`, and merge. The staging workflow deploys it on push to main; production
+(`az keyvault secret set --vault-name demi-kv-<env> --name <name> --value '<value>'`); create the
+OpenShift Secret once by hand if the namespace does not already have it
+(`oc create secret generic <name> --from-literal=<key>=placeholder`, any placeholder value — the
+first run overwrites it); then add one line per key to `mapping.json`, and merge. The staging workflow deploys it on push to main; production
 goes by tag with the rest of the release. The next event or the next daily run writes it.
 
 **To force a run**: create a new version of any mapped secret, or run the timer by hand from the

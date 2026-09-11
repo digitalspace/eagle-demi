@@ -34,8 +34,21 @@ const ENTRIES = [
 
 const b64 = (value) => Buffer.from(value, 'utf8').toString('base64');
 
+/** The live Secret as the cluster holds it before a run: one key already stale. */
+const staleSecret = () => ({
+  'getok-secret': {
+    type: 'Opaque',
+    metadata: {
+      name: 'getok-secret',
+      labels: { app: 'eagle-api' },
+      annotations: { 'meta.helm.sh/release-name': 'eagle-api' }
+    },
+    data: { CLIENTID: b64('client-id-value'), CLIENT_SECRET: b64('stale') }
+  }
+});
+
 /** Records every call and answers from `secrets`. Nothing here is a real credential. */
-function fakeCluster({ secrets = {}, missingWorkloads = [] } = {}) {
+function fakeCluster({ secrets = staleSecret(), missingWorkloads = [] } = {}) {
   const calls = [];
   const fetchImpl = async (url, options) => {
     const path = url.replace(API, '');
@@ -105,19 +118,7 @@ test('a secret that already matches the vault is not written and nothing restart
 });
 
 test('a changed value is written whole, stamped, and its consumers are patched', async () => {
-  const cluster = fakeCluster({
-    secrets: {
-      'getok-secret': {
-        type: 'Opaque',
-        metadata: {
-          name: 'getok-secret',
-          labels: { app: 'eagle-api' },
-          annotations: { 'meta.helm.sh/release-name': 'eagle-api' }
-        },
-        data: { CLIENTID: b64('client-id-value'), CLIENT_SECRET: b64('stale') }
-      }
-    }
-  });
+  const cluster = fakeCluster();
 
   const { result } = await run({ cluster });
 
@@ -155,13 +156,19 @@ test('a changed value is written whole, stamped, and its consumers are patched',
   assert.deepStrictEqual(result, { checked: 1, updated: 1, restarted: 2, missing: 0, ok: true });
 });
 
-test('a Secret that does not exist yet is created rather than replaced', async () => {
-  const { result, cluster } = await run();
+test('a mapped Secret the namespace does not have is recorded missing and fails the run', async () => {
+  const cluster = fakeCluster({ secrets: {} });
 
-  const post = cluster.calls.find((c) => c.method === 'POST');
-  assert.strictEqual(post.path, `/api/v1/namespaces/${NAMESPACE}/secrets`);
-  assert.strictEqual(post.body.metadata.name, 'getok-secret');
-  assert.strictEqual(result.updated, 1);
+  const { result, logger } = await run({ cluster });
+
+  assert.deepStrictEqual(
+    cluster.calls.map((c) => c.method), ['GET'],
+    'creating the object would let this ServiceAccount mint a Secret of any type, ' +
+    'a service-account token for another account included'
+  );
+  assert.deepStrictEqual(result, { checked: 1, updated: 0, restarted: 0, missing: 1, ok: false });
+  assert.match(logger.lines.error[0], /6cdc9e-test/);
+  assert.match(logger.lines.error[0], /getok-secret/);
 });
 
 test('one missing vault secret writes nothing for that Secret and fails the run', async () => {

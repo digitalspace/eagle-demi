@@ -4,7 +4,7 @@
  * The bit of the Kubernetes API this sync needs, over `fetch`.
  *
  * No `oc` binary and no client library: a Flex Consumption worker has no shell to run one in, and
- * the four calls below (get, create, replace, patch) are the whole surface. Node 22 has `fetch`.
+ * the three calls below (get, replace, patch) are the whole surface. Node 22 has `fetch`.
  */
 
 const SECRETS_PATH = (namespace) => `/api/v1/namespaces/${namespace}/secrets`;
@@ -63,12 +63,15 @@ function createClient({ apiServer, token, fetchImpl = fetch }) {
     /** The live Secret, or null when it does not exist yet. */
     getSecret: (namespace, name) => call('GET', `${SECRETS_PATH(namespace)}/${name}`),
 
-    /** Whole-object write: PUT when it exists, POST when it does not. */
-    async writeSecret(namespace, name, secret, exists) {
-      return exists
-        ? call('PUT', `${SECRETS_PATH(namespace)}/${name}`, secret)
-        : call('POST', SECRETS_PATH(namespace), secret);
-    },
+    /**
+     * Whole-object PUT over a Secret that already exists.
+     *
+     * Replacing is the only write this app can make: its Role grants `update` on named Secrets and
+     * nothing else, because an unnamed `create` would let the ServiceAccount mint a Secret of any
+     * type — a service-account token for another account included.
+     */
+    replaceSecret: (namespace, name, secret) =>
+      call('PUT', `${SECRETS_PATH(namespace)}/${name}`, secret),
 
     /** Stamp the pod template so the workload rolls. Returns false when the workload is gone. */
     async restartWorkload(namespace, kind, name, timestamp) {

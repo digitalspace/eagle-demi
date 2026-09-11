@@ -9,7 +9,9 @@
  *
  * FAIL CLOSED: a mapped vault secret that is missing or empty stops its own Secret from being
  * written, leaving the last good copy in place, and makes the whole run fail so the failure is
- * visible in Application Insights rather than silently skipped.
+ * visible in Application Insights rather than silently skipped. A mapped OpenShift Secret that is
+ * not in the namespace counts the same way: this app can replace a Secret, never make one, so the
+ * object has to exist before the mapping entry does.
  */
 
 const { groupBySecret, tokenSecretName } = require('./mapping');
@@ -114,12 +116,19 @@ async function reconcile({ entries, namespaces, readSecret, createClient, logger
       if (!complete) continue;
 
       const live = await client.getSecret(namespace, secretName);
+      if (!live) {
+        counts.missing += 1;
+        logger.error(
+          `[secret-sync] no Secret '${secretName}' in ${namespace} — ` +
+          'create it once by hand, then this run writes its values'
+        );
+        continue;
+      }
       if (!secretDataChanged(live, data)) continue;
 
-      await client.writeSecret(
+      await client.replaceSecret(
         namespace, secretName,
-        buildSecret({ namespace, name: secretName, data, live, versions, timestamp }),
-        Boolean(live)
+        buildSecret({ namespace, name: secretName, data, live, versions, timestamp })
       );
       counts.updated += 1;
       logger.info(`[secret-sync] wrote ${namespace}/${secretName} (${Object.keys(data).length} keys)`);
