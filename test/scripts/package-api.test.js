@@ -90,6 +90,17 @@ test('API deploy package', async (t) => {
     );
   });
 
+  await t.test('does NOT ship src/secret-sync — that is a separate function app', () => {
+    // scripts/package-secret-sync.sh builds it with its own package.json and dependencies. A copy
+    // inside the API package is a second deployment of the same sync, drifting from the live one.
+    const syncEntries = [...entries].filter(e => e.startsWith('src/secret-sync/'));
+    assert.deepStrictEqual(
+      syncEntries,
+      [],
+      `src/secret-sync must not be packaged, found: ${syncEntries.join(', ')}`
+    );
+  });
+
   await t.test('does NOT ship public/ — an untracked local build output', () => {
     // Nothing serves it since the static mounts left src/app.js, and zipdeploy merges into
     // wwwroot, so packaging a stale bundle once would leave it there permanently. This packager

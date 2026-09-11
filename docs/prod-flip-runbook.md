@@ -139,7 +139,9 @@ Order matters. Do all four, in this order:
 Verify: `curl -H "X-Api-Key: <new>" https://demi-api-fc-prod.azurewebsites.net/api/db/stats` → 200.
 A literal `@Microsoft.KeyVault(...)` string in the live app setting means the reference did not
 resolve — check the `Key Vault Secrets User` grant on `demi-identity-prod` and that the app's
-`keyVaultReferenceIdentity` names that identity.
+`keyVaultReferenceIdentity` names that identity. The app reads that string as no value at all
+(`src/config.js`) and logs the setting name, so break-glass is closed rather than accepting a
+reference anyone who can read the app settings could present.
 
 Single-key auth means a window where one of the two values is wrong for some holder. Removing it
 needs dual-key acceptance on the readers — see the "Key manager / rotator" entry in

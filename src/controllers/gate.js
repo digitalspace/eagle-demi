@@ -55,10 +55,11 @@ exports.postGate = async (req, res) => {
     return res.status(404).json({ message: 'Not Found' });
   }
 
-  // An unresolved Key Vault reference arrives as the literal `@Microsoft.KeyVault(...)` string,
-  // which is public in this repository — same rule as helpers/auth.js and utils/caller-ip.js.
+  // src/config.js already empties an unresolved Key Vault reference read from the environment.
+  // Re-checked here because the literal is public in this repository, so a value that reached the
+  // field any other way must not double as the password.
   const password = config.accessGatePassword;
-  const expected = password && !password.startsWith('@Microsoft.KeyVault') ? password : '';
+  const expected = config.isKeyVaultReference(password) ? '' : password;
 
   // Flag on with no password is a misconfiguration, not "no gate": a 404 here would tell
   // eagle-public this environment runs ungated when eagle-api's flag says the opposite.

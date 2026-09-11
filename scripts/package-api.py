@@ -71,6 +71,11 @@ def package_api(repo_root, zip_path):
     exclude_extensions = {".zip", ".tar.gz", ".map", ".md", ".d.ts",
                           ".pem", ".key", ".p12", ".pfx"}
 
+    # Excluded by PATH rather than by name: `src/secret-sync` is a SEPARATE function app with its
+    # own package.json and dependencies, shipped by scripts/package-secret-sync.sh. Packaged here it
+    # would be a second copy of the sync deployed into the API, drifting from the one that runs.
+    path_exclude_dirs = {os.path.join("src", "secret-sync")}
+
     # Runtime data living under excluded directories: the boundary seeder reads the geojson,
     # eagle-query.js the indexes at REQUIRE time, apply-search-definitions.js the indexers.
     include_subpaths = {os.path.join("frontend", "public", "assets", "geojson"),
@@ -83,7 +88,8 @@ def package_api(repo_root, zip_path):
     # Realpaths of the excluded directories, so a followed symlink cannot re-admit one under a
     # different name. Identity, not position.
     blocked = tuple(sorted(
-        os.path.realpath(os.path.join(repo_root, d)) for d in root_exclude_dirs
+        os.path.realpath(os.path.join(repo_root, d))
+        for d in root_exclude_dirs | path_exclude_dirs
         if os.path.isdir(os.path.join(repo_root, d))))
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:

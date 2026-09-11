@@ -57,6 +57,46 @@ function proxyListFromEnv(name) {
   return entries;
 }
 
+// Settings App Service resolved as a literal Key Vault reference instead of a secret. Names only.
+const unresolvedSecrets = [];
+let exported = false;
+
+/**
+ * A credential app setting, or '' when the Key Vault reference behind it did not resolve.
+ *
+ * azure/modules/api-function-flex.bicep deploys every credential as
+ * `@Microsoft.KeyVault(SecretUri=...)`. App Service substitutes the secret for that string, but
+ * when the resolution fails — RBAC not granted yet, vault unreachable, secret deleted — it hands
+ * the app the reference text itself. Taking that as the credential fails every use of it anyway
+ * (the MinIO login, the client-credentials grant, the header comparison), and puts a vault URI
+ * into whatever logs or echoes the value. So an unresolved reference reads as unset, and the
+ * NAME of the setting is reported once. Never the value: for a resolved setting that is a secret.
+ */
+function secretFromEnv(name) {
+  const raw = process.env[name];
+  if (raw === undefined) return '';
+  if (!isKeyVaultReference(raw)) return raw;
+  if (!unresolvedSecrets.includes(name)) {
+    unresolvedSecrets.push(name);
+    if (exported) report([name]);
+  }
+  return '';
+}
+
+/** The literal App Service leaves behind when a Key Vault reference does not resolve. */
+function isKeyVaultReference(value) {
+  return typeof value === 'string' && value.trim().startsWith('@Microsoft.KeyVault(');
+}
+
+function report(names) {
+  // Required lazily: src/utils/logger.js reads this module, so it can only be loaded once the
+  // export below is in place.
+  require('./utils/logger').logger.error(
+    `[config] Key Vault reference did not resolve, treated as unset: ${names.join(', ')}. ` +
+    'Check the app identity\'s Key Vault Secrets User role and that each secret still exists.'
+  );
+}
+
 const config = {
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),
@@ -64,8 +104,8 @@ const config = {
   // performs a bucket-region lookup against MinIO on every presign — which hangs for
   // ~135s from Azure before failing, since MinIO lives on OpenShift Silver.
   minioRegion:  process.env.MINIO_REGION      || 'us-east-1',
-  minioAccess:  process.env.MINIO_ACCESS_KEY || '',
-  minioSecret:  process.env.MINIO_SECRET_KEY || '',
+  minioAccess:  secretFromEnv('MINIO_ACCESS_KEY'),
+  minioSecret:  secretFromEnv('MINIO_SECRET_KEY'),
   minioBucket:  process.env.MINIO_BUCKET_NAME || 'uploads',
   minioSsl:     process.env.MINIO_USE_SSL === 'true',
   // Path segment prepended to every stored object key.
@@ -94,7 +134,7 @@ const config = {
   azureStorageContainer: process.env.AZURE_STORAGE_CONTAINER || '',
 
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
-  doclingKey:   process.env.DOCLING_API_KEY  || '',
+  doclingKey:   secretFromEnv('DOCLING_API_KEY'),
 
   // The public site's access curtain (POST /api/gate). Compared in controllers/gate.js and nowhere
   // else, so it never reaches a bundle or GET /config/public — the boolean `ACCESS_GATE` in the
@@ -102,7 +142,7 @@ const config = {
   //
   // Empty is a valid state and the one prod runs: no password means no gate, and the route 404s.
   // So there is no boot guard here, unlike allowedClients — an ungated environment is a choice.
-  accessGatePassword: process.env.ACCESS_GATE_PASSWORD || '',
+  accessGatePassword: secretFromEnv('ACCESS_GATE_PASSWORD'),
 
   // Keys under a project's `sources` that may leave over HTTP (src/vis/redact.js).
   // Empty = no enrichment is published, which is what prod runs.
@@ -325,6 +365,10 @@ const config = {
   costScope:                  process.env.COST_SCOPE || '',
   budgetName:                 process.env.BUDGET_NAME || '',
 
+  // Break-glass shared secret (src/helpers/auth.js). A getter, not a fixed value: it is compared
+  // per request, and the suites that exercise that path set the variable after this file loaded.
+  get adminApiKey() { return secretFromEnv('ADMIN_API_KEY'); },
+
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
@@ -346,7 +390,7 @@ const config = {
   // eagle-notify, told when an Update is published. Both empty = dark: src/services/notify.js
   // sends nothing and the mirror never claims a notification, so wiring it later still notifies.
   notifyApiBase:         process.env.NOTIFY_API_BASE || '',
-  notifyApiKey:          process.env.NOTIFY_API_KEY || '',
+  notifyApiKey:          secretFromEnv('NOTIFY_API_KEY'),
 
   // Track team feed → `project:<id>` realm roles (src/scripts/sync-track-teams.js). Two
   // client-credentials identities in the realm above: one reads Track, one holds
@@ -354,9 +398,9 @@ const config = {
   // until SYNC_TEAMS_SCHEDULE is set.
   trackApiBase:              process.env.TRACK_API_BASE || '',
   trackClientId:             process.env.TRACK_CLIENT_ID || '',
-  trackClientSecret:         process.env.TRACK_CLIENT_SECRET || '',
+  trackClientSecret:         secretFromEnv('TRACK_CLIENT_SECRET'),
   keycloakAdminClientId:     process.env.KEYCLOAK_ADMIN_CLIENT_ID || '',
-  keycloakAdminClientSecret: process.env.KEYCLOAK_ADMIN_CLIENT_SECRET || '',
+  keycloakAdminClientSecret: secretFromEnv('KEYCLOAK_ADMIN_CLIENT_SECRET'),
 
   ssoJwksUri:            process.env.SSO_JWKSURI || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}/protocol/openid-connect/certs`,
   ssoIssuer:             process.env.SSO_ISSUER || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}`,
@@ -373,14 +417,14 @@ const config = {
   // Front Door terminates the connection, so APIM asserts an AFD egress address for every visitor
   // and the anonymous bulk quota becomes one global bucket again; the secret is the only reason
   // X-Azure-SocketIP can be believed. Empty = the header is ignored. See utils/caller-ip.js.
-  edgeSecret:            process.env.EDGE_SECRET || '',
+  edgeSecret:            secretFromEnv('EDGE_SECRET'),
 };
 
 // Optional second object-store credential, read by src/scripts/backfill-objects.js: the test
 // credentials cannot read the prod bucket, so that copy streams under a credential that can.
 // Connection details default to the target's, since both buckets sit on the same NRS host.
-config.sourceMinioAccess = process.env.SOURCE_MINIO_ACCESS_KEY || '';
-config.sourceMinioSecret = process.env.SOURCE_MINIO_SECRET_KEY || '';
+config.sourceMinioAccess = secretFromEnv('SOURCE_MINIO_ACCESS_KEY');
+config.sourceMinioSecret = secretFromEnv('SOURCE_MINIO_SECRET_KEY');
 config.sourceMinioHost = process.env.SOURCE_MINIO_HOST || config.minioHost;
 config.sourceMinioPort = intFromEnv('SOURCE_MINIO_PORT', config.minioPort);
 config.sourceMinioSsl = process.env.SOURCE_MINIO_USE_SSL
@@ -397,4 +441,13 @@ if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
   );
 }
 
+// Read by src/scripts/probe-acl.js, which takes ADMIN_API_KEY from an operator shell.
+config.secretFromEnv = secretFromEnv;
+// The predicate on its own, for the call sites that re-check a value they were handed.
+config.isKeyVaultReference = isKeyVaultReference;
+// Which settings came back as an unresolved reference. The log line below is built from it.
+config.unresolvedSecrets = unresolvedSecrets;
+
 module.exports = config;
+exported = true;
+if (unresolvedSecrets.length > 0) report(unresolvedSecrets);

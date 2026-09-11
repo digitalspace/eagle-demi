@@ -104,3 +104,73 @@ test('EDGE_SECRET reaches config.edgeSecret under that exact name', () => {
     delete require.cache[configPath];
   }
 });
+
+// App Service substitutes the secret for `@Microsoft.KeyVault(SecretUri=...)`, and hands the app
+// the reference text itself when that fails — no RBAC, vault unreachable, secret deleted. Every
+// credential in azure/modules/api-function-flex.bicep is deployed as one of those references, so
+// every one of them can arrive as this string.
+const UNRESOLVED = '@Microsoft.KeyVault(SecretUri=https://x.vault.azure.net/secrets/y)';
+
+/**
+ * Load a fresh config with `vars` in the environment and return `read(config)`.
+ *
+ * Read inside, not after: `adminApiKey` is a getter, so a value taken once the environment is back
+ * would be the restored one.
+ */
+function readConfig(vars, read) {
+  const configPath = path.resolve(__dirname, '..', 'src', 'config.js');
+  const previous = {};
+  for (const [name, value] of Object.entries(vars)) {
+    previous[name] = process.env[name];
+    process.env[name] = value;
+  }
+  delete require.cache[configPath];
+  try {
+    return read(require(configPath));
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    delete require.cache[configPath];
+  }
+}
+
+test('an unresolved Key Vault reference reads as unset, never as the credential', async (t) => {
+  // App setting in api-function-flex.bicep -> the field it reaches on config.
+  const settings = {
+    MINIO_ACCESS_KEY: 'minioAccess',
+    MINIO_SECRET_KEY: 'minioSecret',
+    DOCLING_API_KEY: 'doclingKey',
+    ACCESS_GATE_PASSWORD: 'accessGatePassword',
+    NOTIFY_API_KEY: 'notifyApiKey',
+    TRACK_CLIENT_SECRET: 'trackClientSecret',
+    KEYCLOAK_ADMIN_CLIENT_SECRET: 'keycloakAdminClientSecret',
+    EDGE_SECRET: 'edgeSecret',
+    ADMIN_API_KEY: 'adminApiKey'
+  };
+
+  for (const [name, field] of Object.entries(settings)) {
+    await t.test(`${name} unresolved is unset and named`, () => {
+      const seen = readConfig({ [name]: UNRESOLVED },
+        c => ({ value: c[field], unresolved: [...c.unresolvedSecrets] }));
+      assert.strictEqual(seen.value, '', `${name} must not reach config.${field} as reference text`);
+      // The name, so an operator is told which setting to fix. Never the value.
+      assert.ok(seen.unresolved.includes(name), `${name} must be reported as unresolved`);
+    });
+
+    await t.test(`${name} resolved passes through`, () => {
+      // Only the reference prefix is refused — a real secret must not be swallowed with it.
+      assert.strictEqual(readConfig({ [name]: 'a-real-secret' }, c => c[field]), 'a-real-secret');
+    });
+  }
+
+  await t.test('leading whitespace does not smuggle a reference past the guard', () => {
+    assert.strictEqual(readConfig({ EDGE_SECRET: `  ${UNRESOLVED}` }, c => c.edgeSecret), '');
+  });
+
+  await t.test('a secret that merely contains the prefix is still a secret', () => {
+    const value = `shared-secret-${UNRESOLVED}`;
+    assert.strictEqual(readConfig({ EDGE_SECRET: value }, c => c.edgeSecret), value);
+  });
+});
