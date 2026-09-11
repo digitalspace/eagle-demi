@@ -96,6 +96,14 @@ const config = {
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   process.env.DOCLING_API_KEY  || '',
 
+  // The public site's access curtain (POST /api/gate). Compared in controllers/gate.js and nowhere
+  // else, so it never reaches a bundle or GET /config/public — the boolean `ACCESS_GATE` in the
+  // public config document is the only part of the curtain a browser is told about.
+  //
+  // Empty is a valid state and the one prod runs: no password means no gate, and the route 404s.
+  // So there is no boot guard here, unlike allowedClients — an ungated environment is a choice.
+  accessGatePassword: process.env.ACCESS_GATE_PASSWORD || '',
+
   // Keys under a project's `sources` that may leave over HTTP (src/vis/redact.js).
   // Empty = no enrichment is published, which is what prod runs.
   enrichmentSources: (process.env.ENRICHMENT_SOURCES || '').split(',').map(s => s.trim()).filter(Boolean),
@@ -252,6 +260,12 @@ const config = {
   // contributed nothing and nations that were never consulted on the project were cited for it.
   projectSummaryNationChunksPerDoc:
     parseInt(process.env.PROJECT_SUMMARY_NATION_CHUNKS_PER_DOC || '4', 10),
+
+  // Where the `federal` section's source document comes from when DEMI holds no Decision Statement
+  // of its own — five projects in the whole corpus do. `iaac` reads the federal decision from the
+  // public Impact Assessment Agency registry (src/ai/federal-source.js); `off` is the kill switch,
+  // and leaves the section exactly as it was before that adapter existed.
+  federalSource: process.env.FEDERAL_SOURCE || 'iaac',
 
   // Which deployment answers the generator. `foundry` is the deployed path (managed identity, the
   // same account the query-time summariser uses). `ollama` is a local model on the LAN, for

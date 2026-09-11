@@ -36,6 +36,10 @@
  *   DEMI_TOKEN                a staff bearer token (or DEMI_API_KEY for the X-Api-Key header)
  *   SUMMARY_ENABLED=true      the same flag the query-time summariser reads
  *   PROJECT_SUMMARY_PROVIDER  `foundry` (default) or `ollama`
+ *   FEDERAL_SOURCE            `iaac` (default) reads a federal decision DEMI does not hold from
+ *                             the public IAAC registry; `off` is the kill switch. `iaac` needs
+ *                             `pdftotext` (poppler-utils) on PATH and outbound access to
+ *                             iaac-aeic.gc.ca.
  *
  * Cost is ALWAYS reported at the Foundry rates, whichever provider ran — see `pricedAs` on the
  * record. A local run is free in cash; the figure is what the same work would cost deployed.
@@ -131,14 +135,19 @@ function mergeSection(stored, fresh, section) {
   const sections = {};
   for (const [name, value] of Object.entries(kept)) sections[name] = renumber(name, value);
 
-  // The reason a section is null moves with the section it explains. Keeping the stored reasons
-  // for everything else and taking this run's for the named one is what makes the verdict line
-  // true after a one-section run: a fresh failure gets its reason, and a section that came back
-  // loses the reason from the run before, instead of reading as failed while it renders.
-  const sectionErrors = { ...stored.sectionErrors };
-  const freshError = (fresh.sectionErrors || {})[section];
-  if (freshError === undefined) delete sectionErrors[section];
-  else sectionErrors[section] = freshError;
+  // The reason a section is null, and the document it is waiting on, move with the section they
+  // explain. Keeping the stored entries for everything else and taking this run's for the named one
+  // is what makes the verdict line true after a one-section run: a fresh failure gets its reason,
+  // and a section that came back loses the reason from the run before.
+  const carry = (storedMap, freshMap) => {
+    const out = { ...storedMap };
+    const value = (freshMap || {})[section];
+    if (value === undefined) delete out[section];
+    else out[section] = value;
+    return out;
+  };
+  const sectionErrors = carry(stored.sectionErrors, fresh.sectionErrors);
+  const sectionSources = carry(stored.sectionSources, fresh.sectionSources);
 
   return {
     ...stored,
@@ -151,6 +160,7 @@ function mergeSection(stored, fresh, section) {
     facts: fresh.facts,
     sections,
     sectionErrors,
+    sectionSources,
     citations: entries
   };
 }

@@ -136,3 +136,28 @@ test('a malformed JSON body is a 400, not a 500', async () => {
   });
   assert.strictEqual(res.status, 400);
 });
+
+test('a null-body status is dispatched with no body and no content-length', async () => {
+  // The Functions worker (api/index.js) hands this straight to `new Response(body, ...)`, and
+  // undici throws `Invalid response status code 204` on any body — including the '' the shim's
+  // send('') leaves behind — which the host then serves as an empty 500.
+  const res = await call('/api/anything', {
+    method: 'OPTIONS',
+    headers: { origin: 'http://127.0.0.1', 'access-control-request-method': 'POST' }
+  });
+
+  assert.strictEqual(res.status, 204);
+  assert.strictEqual(res.body, undefined, 'a 204 carries no body at all, not even an empty string');
+  assert.strictEqual(res.headers['content-length'], undefined, 'a null-body status has no length');
+  assert.doesNotThrow(() => new Response(res.body, { status: res.status, headers: res.headers }));
+});
+
+test('a 200 with an empty body still carries content-length: 0', async (t) => {
+  t.mock.method(configController, 'getConfig', (req, res) => res.send(''));
+
+  const res = await call('/api/config');
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body, '', 'only null-body statuses lose their body');
+  assert.strictEqual(res.headers['content-length'], '0');
+});

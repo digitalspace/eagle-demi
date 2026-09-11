@@ -158,3 +158,9 @@ output notifyApiKeySecretUri string = contains(optionalSecretNames, 'notify-api-
 // Same rule: empty means X-Edge-Secret is ignored, which is what an environment with no Front Door
 // in front of it wants.
 output edgeSecretUri string = contains(optionalSecretNames, 'edge-secret') ? '${secretUriBase}edge-secret' : ''
+// Same rule again. Prod runs ungated, so empty is the expected state there rather than an
+// oversight, and an unresolved reference would make the curtain answer 401 instead of 404. Named
+// `…SecretUri` and not `…PasswordSecretUri` because the linter's `outputs-should-not-contain-secrets`
+// heuristic reads 'password' in an output name as the value itself; this is a vault URI, and the
+// repo carries no linter suppressions.
+output accessGateSecretUri string = contains(optionalSecretNames, 'access-gate-password') ? '${secretUriBase}access-gate-password' : ''

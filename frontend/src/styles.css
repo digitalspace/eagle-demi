@@ -431,6 +431,13 @@ svg.leaflet-zoom-animated:focus {
   margin: 0 0 var(--layout-margin-small);
 }
 
+/* The federal registry's facts: one line above anything generated, links inline with the text. */
+.ps-federal {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  margin: 0 0 var(--layout-margin-medium);
+}
+
 .ps-section__lede {
   font: var(--typography-regular-small-body);
   color: var(--typography-color-secondary);
@@ -726,6 +733,8 @@ svg.leaflet-zoom-animated:focus {
   color: var(--typography-color-primary);
   cursor: pointer;
   text-align: left;
+  /* A registry chip is an anchor rather than a button; the chip is the affordance, not an underline. */
+  text-decoration: none;
 }
 
 .ps-cite:hover {
@@ -846,4 +855,52 @@ svg.leaflet-zoom-animated:focus {
 
 .ps-footer a {
   color: var(--typography-color-link);
+}
+
+.ps__back {
+  display: inline-block;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-link);
+  margin-bottom: var(--layout-margin-small);
+}
+
+/* Project picker. A list of links: hover and focus are the only styling it needs, and neither
+   can be a style attribute. */
+.pp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pp-result {
+  display: block;
+  padding: var(--layout-padding-small);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  color: var(--typography-color-primary);
+  text-decoration: none;
+}
+
+.pp-list li:last-child .pp-result,
+.pp-list .pp-result:last-child {
+  border-bottom: none;
+}
+
+.pp-result:hover {
+  background: var(--surface-color-background-light-gray);
+}
+
+.pp-result:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: -2px;
+}
+
+.pp-result__name {
+  display: block;
+  font: var(--typography-bold-small-body);
+}
+
+.pp-result__meta {
+  display: block;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
 }

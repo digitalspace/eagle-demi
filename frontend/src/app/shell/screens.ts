@@ -18,8 +18,8 @@ export const SCREENS: Screen[] = [
   { key: 'index', label: 'Index Search', group: 'Discover', path: '/index' },
   { key: 'content', label: 'Document Content Search', group: 'Discover', path: '/content' },
   { key: 'summary', label: 'AI Search Summary', group: 'Discover', path: '/summary' },
-  // Prototype: one project has a generated summary row, so the sidebar links straight at it.
-  { key: 'project', label: 'AI Project Summary', group: 'Discover', path: '/projects/272' },
+  // The picker; /projects/:id under it is the same screen, so both share this key and info panel.
+  { key: 'project', label: 'AI Project Summary', group: 'Discover', path: '/projects' },
   { key: 'notify', label: 'eagle-notify', group: 'Operate', path: '/notify' },
   { key: 'links', label: 'Short URLs', group: 'Operate', path: '/links' },
   { key: 'rbac', label: 'Access model', group: 'Reference', path: '/rbac' },

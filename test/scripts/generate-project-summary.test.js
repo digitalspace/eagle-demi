@@ -210,6 +210,44 @@ test('mergeSection', async (t) => {
     assert.match(summaryLine(merged, true), /failed=none /);
   });
 
+  await t.test('moves the document a section waits on with the section it explains', () => {
+    // The link the page offers for a `not_extracted` section has to name the document THIS run
+    // could not read, not the one an earlier run named.
+    const stored = {
+      ...STORED,
+      sectionErrors: { status: 'not_extracted', conditions: 'not_extracted' },
+      sectionSources: {
+        status: { documentId: 'docC', displayName: 'Certificate' },
+        conditions: { documentId: 'docOld', displayName: 'Schedule B' }
+      }
+    };
+    const failed = {
+      ...FRESH,
+      sections: { ...FRESH.sections, conditions: null },
+      sectionErrors: { conditions: 'not_extracted' },
+      sectionSources: { conditions: { documentId: 'docNew', displayName: 'Schedule B (amended)' } }
+    };
+
+    const merged = mergeSection(stored, failed, 'conditions');
+
+    assert.deepStrictEqual(merged.sectionSources, {
+      status: { documentId: 'docC', displayName: 'Certificate' },
+      conditions: { documentId: 'docNew', displayName: 'Schedule B (amended)' }
+    });
+    assert.match(summaryLine(merged, true), /failed=none absent=conditions /,
+      'a document waiting on extraction is a registry state, not a failed run');
+  });
+
+  await t.test('drops the stored document when the section comes back', () => {
+    const stored = {
+      ...STORED,
+      sectionErrors: { conditions: 'not_extracted' },
+      sectionSources: { conditions: { documentId: 'docOld', displayName: 'Schedule B' } }
+    };
+
+    assert.deepStrictEqual(mergeSection(stored, FRESH, 'conditions').sectionSources, {});
+  });
+
   await t.test('leaves the reasons of the sections nobody regenerated alone', () => {
     const stored = { ...STORED, sectionErrors: { status: 'no_document', compliance: 'truncated' } };
 

@@ -196,6 +196,11 @@ param roleSyncClientId = 'demi-role-sync'
 // taken, so wiring it later still announces every published Update.
 param notifyApiBase = ''
 
+// ── Public site access curtain ─────────────────────────────────────────────────────────────────
+// Prod runs ungated, so `access-gate-password` is not named in optionalSecretNames above and
+// POST /api/gate answers 404. Gating prod means setting the vault secret by hand and naming it
+// there, plus the boolean ACCESS_GATE in the `public` config document eagle-api owns.
+
 // Nightly 11:00 UTC, an hour after reconcile. Armed 2026-09-05 after Track prod shipped
 // /api/v1/projects/team-members.
 param syncTeamsSchedule = '0 0 11 * * *'

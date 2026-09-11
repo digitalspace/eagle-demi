@@ -398,6 +398,49 @@ const BULK_MAX_OPERATIONS = 100;
 const PRECONDITION_FAILED = 412;
 
 /**
+ * The default retry budget, kept small because most callers are on the REQUEST path: the streaming
+ * ingest upsert and the publish/unpublish ACL cascade both reach `bulkVerified` inside an `/api`
+ * request, which APIM cuts off at 30s. With the doubling below, four attempts spend at most about
+ * 7s of waiting; eight would spend 72s and turn a throttle into a gateway timeout. An offline walk
+ * that can afford to sit through a sustained throttle asks for a longer budget with
+ * `opts.maxAttempts`.
+ */
+const BULK_MAX_ATTEMPTS = 4;
+const BULK_MAX_BACKOFF_MS = 20000;
+const BULK_BACKOFF_JITTER_MS = 250;
+
+/**
+ * How long to wait before the next attempt.
+ *
+ * Doubling rather than linear: a corpus walk against a serverless account stays throttled for
+ * minutes, and 1s/2s/3s/4s spends every attempt inside the same overload. The 2026-09 chunk
+ * backfill exhausted four linear attempts on 523,144 throttled operations and left 70 documents
+ * part-stamped. Cosmos's own hint wins over the exponential guess when it is larger, because it is
+ * the only figure that knows when the partition will have budget again. The ceiling bounds BOTH:
+ * a request-path caller inherits the 20s default, so a 30s hint on three retries cannot spend 90s
+ * behind an APIM gateway that cuts the request off at 30s. An offline walk that can afford to sit
+ * out a longer throttle raises the ceiling with `opts.maxBackoffMs` — the chunk backfill asks for
+ * 60s. Jitter keeps the concurrent walkers from resending in lockstep, which is what turns one
+ * throttle into a repeating one.
+ */
+function bulkBackoffMs(attempt, hintMs, maxBackoffMs = BULK_MAX_BACKOFF_MS) {
+  const hint = Number.isFinite(hintMs) && hintMs > 0 ? hintMs : 0;
+  const exponential = 1000 * 2 ** (attempt - 1);
+  return Math.min(Math.max(exponential, hint), maxBackoffMs)
+    + Math.round(Math.random() * BULK_BACKOFF_JITTER_MS);
+}
+
+/**
+ * The retry hint on a per-operation result. The bulk response does not carry it as dependably as a
+ * thrown `ErrorResponse.retryAfterInMs` does, so it is used when present and ignored otherwise.
+ */
+function operationRetryAfterMs(r) {
+  if (!r) return 0;
+  const hint = r.retryAfterMilliseconds ?? r.retryAfter;
+  return Number.isFinite(hint) ? hint : 0;
+}
+
+/**
  * Bulk write. All operations must target the SAME partition key value.
  *
  * Splits into 100-operation requests and concatenates the responses, so the return value has one
@@ -435,7 +478,9 @@ async function bulk(containerName, operations, opts = {}) {
  * that is how a seed silently under-writes: the first document seed reported 60,578 written while
  * only 56,317 landed, because the caller counted what it SENT. On serverless the usual cause is
  * 429 (throttling), which is retryable — so failures are retried with backoff rather than merely
- * counted.
+ * counted. `opts.maxAttempts` raises or lowers the `BULK_MAX_ATTEMPTS` default for a caller that
+ * knows its walk is long enough to sit through a sustained throttle, and `opts.maxBackoffMs` raises
+ * the ceiling on a single wait for the same caller.
  *
  * `requestCharge` is the RU actually billed, summed across every attempt — retries included, since
  * on serverless a retried operation is paid for twice and a figure that hid that would understate
@@ -460,10 +505,13 @@ function operationId(op) {
 }
 
 async function bulkVerified(containerName, operations, opts = {}) {
-  const maxAttempts = opts.maxAttempts || 4;
+  const maxAttempts = opts.maxAttempts || BULK_MAX_ATTEMPTS;
+  const maxBackoffMs = opts.maxBackoffMs || BULK_MAX_BACKOFF_MS;
   // Seam for the retry tests. Without a Cosmos client `bulk()` returns [] rather than throwing,
   // so there is otherwise no way to exercise the one path that matters here.
   const doBulk = opts.bulkFn || ((ops) => bulk(containerName, ops));
+  // Same seam for the wait, so a test can assert the delay without spending it.
+  const sleep = opts.sleepFn || ((ms) => new Promise(r => setTimeout(r, ms)));
   const statusCounts = {};
   let pending = operations;
   let succeeded = 0;
@@ -488,11 +536,14 @@ async function bulkVerified(containerName, operations, opts = {}) {
       // retried. Recorded under `thrown` so the caller's error message still says what happened.
       statusCounts.thrown = (statusCounts.thrown || 0) + 1;
       lastThrown = err;
-      if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 1000 * attempt));
+      if (attempt < maxAttempts) {
+        await sleep(bulkBackoffMs(attempt, err && err.retryAfterInMs, maxBackoffMs));
+      }
       continue;
     }
 
     const retry = [];
+    let retryAfterMs = 0;
     // Driven by what was SENT, not by what came back. A response shorter than the request — an
     // empty array, or a truncated one — otherwise dropped its tail silently: those operations were
     // never counted, never retried and never named in `failedIds`, so the caller was told the batch
@@ -508,14 +559,16 @@ async function bulkVerified(containerName, operations, opts = {}) {
       requestCharge += (r && Number(r.requestCharge)) || 0;
       if (code >= 200 && code < 300) succeeded++;
       else if (code === PRECONDITION_FAILED) skipped.push(op);
-      else retry.push(op);
+      else {
+        retry.push(op);
+        // The longest hint in the batch, because the wait has to clear the slowest of them.
+        retryAfterMs = Math.max(retryAfterMs, operationRetryAfterMs(r));
+      }
     });
 
     pending = retry;
     if (pending.length > 0 && attempt < maxAttempts) {
-      // Linear backoff. 429 carries retryAfterInMs, but the bulk response does not surface it
-      // per-operation reliably, so this stays simple and generous.
-      await new Promise(r => setTimeout(r, 1000 * attempt));
+      await sleep(bulkBackoffMs(attempt, retryAfterMs, maxBackoffMs));
     }
   }
 

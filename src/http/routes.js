@@ -25,6 +25,7 @@ const sealedAuth = require('../middleware/sealed-auth');
 // `/health` must not pay for the Cosmos client, the search index definitions or pdf-lib.
 const healthController = () => require('../controllers/health');
 const configController = () => require('../controllers/config');
+const gateController = () => require('../controllers/gate');
 const meController = () => require('../controllers/me');
 const accessSimulateController = () => require('../controllers/access-simulate');
 const dbController = () => require('../controllers/db');
@@ -89,6 +90,12 @@ const routes = [
   // answer different frontends, so neither key set can widen the other, and this one refuses to
   // guess. Missing document = 503, never a defaulted payload — see getPublicConfig.
   { method: 'get', path: '/config/public', guards: [], load: () => configController().getPublicConfig },
+  // The public site's access curtain, ported from eagle-api so eagle-public calls one API. NO
+  // GUARDS BY DESIGN — the caller is a visitor who holds nothing yet, and the password in the body
+  // is the only credential in play. Not passiveAuthMiddleware either: an access object would be
+  // read by nothing here. Guessing is bounded by the password's own entropy; the gateway cannot
+  // throttle it on the Consumption tier, and controllers/gate.js says why.
+  { method: 'post', path: '/gate', guards: [], load: () => gateController().postGate },
   // Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401.
   { method: 'get', path: '/me', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => meController().getMe },
   // Authenticated, though the body describes a HYPOTHETICAL caller and the handler reads no

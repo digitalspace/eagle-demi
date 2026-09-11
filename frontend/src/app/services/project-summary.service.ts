@@ -5,6 +5,7 @@ import {
   ListRef,
   OrganizationRow,
   ProjectFacts,
+  ProjectListRow,
   ProjectSummaryRecord,
   ResolvedLabel
 } from '../models/project-summary.models';
@@ -13,6 +14,7 @@ import {
   MOCK_PROJECT_SUMMARY,
   MOCK_PROJECT_SUMMARY_FACTS
 } from '../mocks/mock-project-summary.data';
+import { MOCK_PROJECTS } from '../mocks/mock-registry.data';
 
 /** Why there is no generated summary. `null` alongside a record means there is one. */
 export type SummaryReason = 'missing' | 'disabled' | 'error';
@@ -28,6 +30,12 @@ const UNRESOLVED_HINT = 'Not in the registry’s list of names: ';
  * fits in a single request — the API caps a page at 1000 and refuses over 100 anonymously.
  */
 const LIST_PAGE_SIZE = 1000;
+
+/**
+ * Rows to ask for in the one project read behind the picker. There are 411 projects on test and
+ * the controller caps a page at 500, so the browser holds the whole list and filters it locally.
+ */
+const PROJECT_PAGE_SIZE = 500;
 
 /**
  * Turn one stored lookup value into a label.
@@ -103,6 +111,16 @@ export class ProjectSummaryService {
   summaryLoading = signal<boolean>(false);
   /** Set whenever `summary()` is null for a reason the page should say out loud. */
   summaryReason = signal<SummaryReason | null>(null);
+
+  /** Every project the picker lists. null while unread, so the list shows skeletons not "none". */
+  projects = signal<ProjectListRow[] | null>(null);
+  projectsLoading = signal<boolean>(false);
+  projectsError = signal<string>('');
+  /**
+   * Projects the index holds, which is not `projects().length` once there are more than a page of
+   * them. The picker says so rather than presenting a truncated list as the whole registry.
+   */
+  projectsTotal = signal<number | null>(null);
 
   /** Organization rows by id. null while unread — the nation cards show skeletons until it lands. */
   organizations = signal<Map<string, OrganizationRow> | null>(null);
@@ -201,6 +219,76 @@ export class ProjectSummaryService {
       this.summaryReason.set('error');
     } finally {
       this.summaryLoading.set(false);
+    }
+  }
+
+  /**
+   * Every project the caller may see, in one read, cached for the session — the picker's list.
+   *
+   * The same `dataset=Project` search the registry screens make. Reused straight off
+   * `registry.projects()` when the global keyword box is empty, because an unfiltered registry
+   * read IS the whole list this picker wants; a live keyword still gets its own read, since
+   * `registry.projects()` would then be whatever that query last matched, not the whole list. The
+   * `List` lookup rides along because a row's phase is an id on every record the backfill left
+   * unresolved.
+   */
+  async loadProjects(): Promise<void> {
+    if (this.projects() || this.projectsLoading()) return;
+    this.projectsError.set('');
+    this.loadLists();
+
+    if (this.registry.config.USE_MOCK_DATA) {
+      this.projects.set(MOCK_PROJECTS.map(p => ({
+        id: String(p.id),
+        name: p.name,
+        region: p.region ?? null,
+        proponent: p.proponent ?? null
+      })));
+      this.projectsTotal.set(MOCK_PROJECTS.length);
+      return;
+    }
+
+    const registryRows = this.registry.projects();
+    if (registryRows && !this.registry.searchQuery().trim()) {
+      // Registry rows are already defaulted (name/id can never be blank there), so nothing to
+      // drop. Phase is not on this mapped row — re-asking for it would be the exact duplicate
+      // read this reuse exists to avoid, so the phase segment is absent until the reader opens
+      // the project itself.
+      this.projects.set(registryRows.map(row => ({
+        id: String(row.id),
+        name: row.name,
+        region: row.region ?? null,
+        proponent: row.proponent ?? null,
+        currentPhaseName: null
+      })));
+      this.projectsTotal.set(this.registry.projectMatchCount() ?? registryRows.length);
+      return;
+    }
+
+    this.projectsLoading.set(true);
+    try {
+      const params = `dataset=Project&pageSize=${PROJECT_PAGE_SIZE}`;
+      const res = await fetch(`${this.registry.getBasePath()}/search?${params}`);
+      if (!res.ok) throw new Error(`Project search returned status ${res.status}`);
+      const body = await res.json();
+      const rows: any[] = body?.[0]?.searchResults || [];
+      // A nameless row is dropped: it cannot be searched for and would render as a blank link.
+      this.projects.set(rows
+        .filter(r => r.name && (r.id ?? r._id))
+        .map(r => ({
+          id: String(r.id ?? r._id),
+          name: String(r.name),
+          region: r.region ?? null,
+          proponent: r.proponent ?? null,
+          currentPhaseName: r.currentPhaseName ?? null
+        })));
+      this.projectsTotal.set(body?.[0]?.meta?.[0]?.searchResultsTotal ?? body?.[0]?.count ?? null);
+    } catch (err) {
+      // Left null, not emptied: an outage must not read as "the registry has no projects".
+      console.error('[ProjectSummary] project list read failed:', err);
+      this.projectsError.set('The project list could not be loaded. Reload the page to try again.');
+    } finally {
+      this.projectsLoading.set(false);
     }
   }
 

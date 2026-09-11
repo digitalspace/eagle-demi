@@ -27,6 +27,9 @@ param minioKeyPrefix = 'ozwdez'
 param optionalSecretNames = [
   'notify-api-key'
   'edge-secret'
+  // The password POST /api/gate accepts. Optional because prod runs ungated; named here because
+  // test does, and an unnamed one leaves the route answering 404 for everyone.
+  'access-gate-password'
   // The secret sync's ServiceAccount tokens. Two, because demi-kv-test is the nonprod vault and
   // serves 6cdc9e-dev as well as 6cdc9e-test — same `dev-` prefix as every dev entry in
   // src/secret-sync/mapping.json.
@@ -150,6 +153,11 @@ param roleSyncClientId = 'demi-role-sync'
 // Where a published Update is announced. The key is the vault's `notify-api-key`, named in
 // optionalSecretNames above.
 param notifyApiBase = 'https://notify-api-test.azurewebsites.net'
+
+// ── Public site access curtain ─────────────────────────────────────────────────────────────────
+// The password POST /api/gate accepts is the vault's `access-gate-password`, named in
+// optionalSecretNames above. Whether the SITE shows the gate is the boolean ACCESS_GATE in the
+// `public` config document, which eagle-api owns — set both or neither.
 
 // Nightly 10:00 UTC. Armed 2026-09-02 after the first live run against epictrack-api-c8b80a-test.
 param syncTeamsSchedule = '0 0 10 * * *'

@@ -727,6 +727,46 @@ test('the secret sync is deployed only where namespaces are named, and is told w
     'the nonprod vault serves both nonprod namespaces, and neither is prod');
 });
 
+// The access curtain's password, same shape as EDGE_SECRET above and the same reason for a
+// text-structural guard: `az bicep build` exits 0 with the app setting deleted, and the failure is
+// silent in the wrong direction — an empty ACCESS_GATE_PASSWORD makes POST /api/gate answer 404, so
+// an environment that means to be gated would serve the whole site to anyone who asked.
+test('the API app reads ACCESS_GATE_PASSWORD through a Key Vault reference', () => {
+  const setting = API_MODULE
+    .split(/^\s+\{$/m)
+    .find(b => /name: 'ACCESS_GATE_PASSWORD'/.test(b));
+  assert.ok(setting, 'no ACCESS_GATE_PASSWORD app setting declared at all — the curtain would 404');
+  assert.match(setting, /value: empty\(accessGateSecretUri\) \? '' : '@Microsoft\.KeyVault\(SecretUri=\$\{accessGateSecretUri\}\)'/,
+    'the setting must be a Key Vault reference bound to accessGateSecretUri, never the ' +
+    'password itself, and empty where no secret was written');
+  assert.doesNotMatch(API_MODULE, /value: accessGatePassword$/m,
+    'no app setting may carry the raw password value');
+
+  assert.doesNotMatch(MAIN, /^param accessGatePassword /m,
+    'the password must not be a parameter again — a parameter is a value in ARM deployment ' +
+    'history, and a forgotten export would blank the live one');
+  assert.match(MAIN, /^\s+accessGateSecretUri: keyVault\.outputs\.accessGateSecretUri$/m,
+    'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
+
+  assert.doesNotMatch(KEY_VAULT, /value: accessGatePassword/,
+    'the vault template must not write the password value — it carries no secret value at all');
+  assert.match(KEY_VAULT,
+    /^output accessGateSecretUri string = contains\(optionalSecretNames, 'access-gate-password'\) \? '\$\{secretUriBase\}access-gate-password' : ''$/m,
+    'an environment that did not name the secret must get an empty URI, and the URI must be the ' +
+    'VERSIONLESS one, so a rotation is a new secret version plus a recycle');
+
+  // Test runs the curtain and prod runs ungated, so the name is on exactly one of them.
+  assert.match(TEST_PARAMS, /^\s+'access-gate-password'$/m,
+    'test runs the curtain, so an unnamed access-gate-password leaves POST /api/gate answering ' +
+    '404 for everyone');
+  assert.doesNotMatch(PROD_PARAMS, /'access-gate-password'/,
+    'prod runs ungated — naming the secret there would gate the public site on a value nobody set');
+
+  assert.doesNotMatch(DEPLOY, /ACCESS_GATE_PASSWORD/,
+    'the deploy script must not source the value at all any more — the vault holds it and the ' +
+    'script checks names only');
+});
+
 // The gateway secret is what makes the app trust an APIM-asserted subscription, and both halves of
 // that trust are text-structural: a plain-value app setting would put the secret in the template
 // and in ARM history, and a global policy that sets the two headers without deleting the client's

@@ -120,6 +120,7 @@ test('the pushed-enriched Eagle project record', async (t) => {
     },
     build: 'modification',
     dateAdded: '2016-12-14T00:00:00.000Z',
+    dateUpdated: '2021-06-02T00:00:00.000Z',
     projectLeadPhone: '250 555 0101',
     responsibleEPDPhone: '250 555 0102',
     proponentId: '58850f69aaecd9001b8085cc',
@@ -193,6 +194,45 @@ test('the pushed-enriched Eagle project record', async (t) => {
       if (field === 'proponentName') continue;
       assert.ok(!(field in merged), `${field} was fabricated`);
     }
+  });
+});
+
+/**
+ * `dateUpdated` is the stamp eagle-public prints as "Last updated". It is Eagle's own edit date and
+ * lives inside the legislation block, so it has to survive the flatten AND stay clear of
+ * `updatedAt`, which is DEMI's sync stamp and moves every time the merge runs.
+ */
+test('Eagle\'s dateUpdated', async (t) => {
+  const EDITED = '2021-06-02T00:00:00.000Z';
+
+  await t.test('it lands top level on a Track-matched project', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { dateUpdated: EDITED }), OPTS);
+    assert.strictEqual(merged.dateUpdated, EDITED);
+  });
+
+  await t.test('and on an Eagle-only project', () => {
+    const merged = mergeEagleOnlyProject(eagleFor(TRACK_207, { dateUpdated: EDITED }), OPTS);
+    assert.strictEqual(merged.dateUpdated, EDITED);
+  });
+
+  await t.test('it survives the legislation flatten of a raw Mongo push', () => {
+    const merged = mergeTrackProject(TRACK_207, {
+      _id: TRACK_207.epic_guid,
+      read: ['public'],
+      currentLegislationYear: 'legislation_2002',
+      legislation_2002: { name: 'Nested Name', dateUpdated: EDITED }
+    }, OPTS);
+
+    assert.strictEqual(merged.dateUpdated, EDITED);
+  });
+
+  await t.test('it does not become the sync stamp, and the sync stamp does not become it', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { dateUpdated: EDITED }), OPTS);
+    assert.strictEqual(merged.updatedAt, NOW, 'updatedAt is DEMI\'s own, injected by opts.now');
+
+    const never = mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS);
+    assert.ok(!('dateUpdated' in never),
+      'a project Eagle never edited must read as never edited, not as edited when DEMI last synced');
   });
 });
 

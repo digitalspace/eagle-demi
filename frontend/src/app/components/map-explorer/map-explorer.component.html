@@ -167,8 +167,8 @@
       <button type="button" (click)="toggleLayers()" [attr.aria-expanded]="layersOpen()" style="display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface-color-background-white); color: var(--typography-color-primary); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); box-shadow: 0 2px 8px rgba(0,0,0,0.18); padding: 0.45rem 0.8rem; font: var(--typography-bold-small-body); cursor: pointer;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12,3 21,8 12,13 3,8"></polygon><polyline points="3,13 12,18 21,13"></polyline></svg>
         Layers
-        @if (service.activeBoundaryLayers().length) {
-          <span class="pill pill--info">{{ service.activeBoundaryLayers().length }}</span>
+        @if (activeLayersCount()) {
+          <span class="pill pill--info">{{ activeLayersCount() }}</span>
         }
       </button>
       @if (layersOpen()) {
@@ -184,6 +184,33 @@
             <input type="checkbox" [checked]="showWildfires()" (change)="toggleWildfires()">
             Active wildfires
           </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; font: var(--typography-regular-small-body); padding: 3px 0; cursor: pointer;">
+            <input type="checkbox" [checked]="showInvasives()" (change)="toggleInvasives()">
+            Invasive species observations
+          </label>
+          @if (showInvasives()) {
+            <div style="padding: 2px 0 4px 1.4rem;">
+              <p class="cell__sub" style="display: flex; align-items: center; gap: 0.75rem; margin: 0 0 4px;">
+                <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
+                  <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 2px; background: var(--typography-color-danger); opacity: 0.6;"></span>Present
+                </span>
+                <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
+                  <span aria-hidden="true" style="width: 10px; height: 10px; box-sizing: border-box; border-radius: 2px; background: var(--support-border-color-success); background-clip: padding-box; border: 1px dashed var(--support-border-color-success); opacity: 0.45;"></span>Confirmed absent
+                </span>
+              </p>
+              <label for="demi-invasives-species" class="micro-label" style="display: block; margin-bottom: 2px;">Species</label>
+              <input id="demi-invasives-species" type="text" list="demi-invasives-species-options" autocomplete="off" placeholder="e.g. Baby's breath" [value]="invasivesSpecies()" (input)="setInvasivesSpecies($event)"
+                     style="width: 100%; box-sizing: border-box; padding: 0.35rem 0.6rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
+              <datalist id="demi-invasives-species-options">
+                @for (name of invasivesSpeciesList(); track name) {
+                  <option [value]="name"></option>
+                }
+              </datalist>
+              @if (invasivesMatchLabel()) {
+                <span class="cell__sub" style="display: block; margin-top: 2px;">{{ invasivesMatchLabel() }}</span>
+              }
+            </div>
+          }
           <p class="cell__sub" style="margin: var(--layout-margin-xsmall) 0 0;">Overlays change the map. Filters change the results.</p>
         </div>
       }

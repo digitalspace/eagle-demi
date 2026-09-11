@@ -543,6 +543,7 @@ CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live
 | `analytics-audit-header` | second credential APIM stamps on `POST /analytics-machine/audit` alone | every environment |
 | `notify-api-key` | function key eagle-notify accepts on `POST /api/events` | only where `notifyApiBase` is set |
 | `edge-secret` | value the eagle-edge Front Door rule set stamps as `X-Edge-Secret` | only where Front Door fronts the app |
+| `access-gate-password` | password `POST /api/gate` accepts, gating the public site | only where the site runs a curtain; not prod |
 | `openshift-token-<env>` | ServiceAccount token the secret sync writes OpenShift Secrets with | every environment that syncs |
 | `dev-openshift-token` | the same for `6cdc9e-dev`, which `demi-kv-test` also serves | `demi-kv-test` only |
 

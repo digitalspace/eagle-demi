@@ -12,7 +12,7 @@
  * when any string in this file changes.
  */
 
-const PROMPT_VERSION = 3;
+const PROMPT_VERSION = 4;
 
 /**
  * The shared half of every prompt.
@@ -85,8 +85,12 @@ const INSTRUCTIONS = {
   ].join(' '),
 
   timelineEvents: [
-    'List dated events in this project\'s regulatory history — orders, decisions, amendments,',
-    'name changes. Only events the source gives a full date for.'
+    'List only the MILESTONE events in this project\'s regulatory history: orders under the Act,',
+    'acceptance of the application, referral, the ministers\' decision, issue of the certificate,',
+    'amendments to the certificate, name or proponent changes, substantial start decisions,',
+    'suspension or extension orders, and federal decisions. Leave out meetings, letters, comment',
+    'periods, working-group sessions and drafts of reports. List at most 15 events; where the',
+    'source has more, list the 15 most significant. Only events the source gives a full date for.'
   ].join(' '),
 
   amendments:

@@ -9,11 +9,16 @@ const { Readable } = require('node:stream');
 
 const config = require('../../src/config');
 const summarizer = require('../../src/ai/summarize');
+// The seam that keeps the generator off the IAAC registry. Required as a module, because the
+// generator calls it as one.
+const iaac = require('../../src/ai/federal-source');
 const { logger } = require('../../src/utils/logger');
 const {
   generateProjectSummary, validCitations, groundedInCitations, normaliseNationName, joinNations,
-  buildFacts, buildItems, buildTimeline, sanitisePromptName, PRICED_AS, PICK
+  buildFacts, buildItems, buildTimeline, sanitisePromptName, pickSource, PRICED_AS, PICK,
+  isFrenchTitle, hasFullDate
 } = require('../../src/ai/project-summary');
+const { INSTRUCTIONS } = require('../../src/ai/project-summary-prompts');
 
 /** The transport before any stub, for the test that has to reach a real socket. */
 const realHttpRequest = http.request;
@@ -41,6 +46,22 @@ const INSPECTION = {
 const AMENDMENT = {
   id: 'docA', type: 'Amendment Package', displayName: 'Amendment #1',
   datePosted: '2016-05-01', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+};
+
+const SCHEDULE_A = {
+  id: 'docSA', type: 'Certificate Package', displayName: 'Schedule A - Certificate',
+  datePosted: '2014-10-14', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+};
+const ASSESSMENT_REPORT = {
+  id: 'docAR', type: 'Assessment Report',
+  displayName: 'EAO Assessment Report - Tilbury Marine Jetty', datePosted: '2014-09-30',
+  isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+};
+/** The newest report row on project 302, and a document most readers cannot read. */
+const FRENCH_ASSESSMENT_REPORT = {
+  id: 'docAR-fr', type: 'Assessment Report',
+  displayName: 'Assessment Report - Executive Summary (French) – Tilbury Marine Jetty',
+  datePosted: '2024-03-11', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
 };
 
 /** Where a project actually writes nation names: a consultation appendix, not the certificate. */
@@ -163,6 +184,10 @@ function stubFoundry(t, replies) {
   return calls;
 }
 
+/** The document each prompt was built from, in the order the calls were made. */
+const sourcesNamed = calls => calls.map(call =>
+  (call.body.messages[1].content.match(/^Sources from "([^"]+)"/) || [])[1]);
+
 /** The `(page N)` numbers a prompt carried, in the order it numbered them. */
 const pagesIn = call => Array.from(
   call.body.messages[1].content.matchAll(/\[(\d+)\] \(page (\d+)\)/g),
@@ -174,22 +199,29 @@ test('generateProjectSummary', async (t) => {
     provider: config.projectSummaryProvider,
     ollamaCtx: config.projectSummaryOllamaCtx,
     ollamaUrl: config.ollamaUrl,
+    maxChunks: config.projectSummaryMaxChunks,
     batchChunks: config.projectSummaryBatchChunks,
     nationChunks: config.projectSummaryNationChunks,
     nationChunksPerDoc: config.projectSummaryNationChunksPerDoc,
     foundryEndpoint: config.foundryEndpoint,
-    foundryDeployment: config.foundryDeployment
+    foundryDeployment: config.foundryDeployment,
+    federalSource: config.federalSource
   };
+  // The IAAC registry is OFF unless a test turns it on with a stubbed adapter. Its default is
+  // `iaac`, and a test that left it there would reach the real registry over the network.
+  t.beforeEach(() => { config.federalSource = 'off'; });
   t.afterEach(() => {
     config.summaryEnabled = original.enabled;
     config.projectSummaryProvider = original.provider;
     config.projectSummaryOllamaCtx = original.ollamaCtx;
     config.ollamaUrl = original.ollamaUrl;
+    config.projectSummaryMaxChunks = original.maxChunks;
     config.projectSummaryBatchChunks = original.batchChunks;
     config.projectSummaryNationChunks = original.nationChunks;
     config.projectSummaryNationChunksPerDoc = original.nationChunksPerDoc;
     config.foundryEndpoint = original.foundryEndpoint;
     config.foundryDeployment = original.foundryDeployment;
+    config.federalSource = original.federalSource;
   });
 
   await t.test('never calls the model for a section whose source document is missing', async () => {
@@ -1199,7 +1231,436 @@ test('generateProjectSummary', async (t) => {
     const record = await generateProjectSummary('272', { sources, section: 'federal' });
 
     assert.strictEqual(record.sections.federal.sourceDocumentId, 'docF');
+    assert.strictEqual(record.sections.federal.source, 'demi');
     assert.deepStrictEqual(record.sections.federal.items.map(i => i.title), ['Fish habitat']);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // Federal decisions from the IAAC registry
+  //
+  // DEMI holds five Decision Statements in the whole corpus and every project that had a federal
+  // assessment has one on the public registry, so the fallback is the normal path and the DEMI one
+  // is the exception. Everything below stubs the adapter: what is under test here is the WIRING —
+  // which source wins, what the section stores, and what a failure stores instead.
+  // -------------------------------------------------------------------------------------------
+
+  /** A registry answer, with as much or as little of it as a test needs. */
+  const federalSource = (over = {}) => ({
+    status: 'Completed',
+    cearId: '80105',
+    projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+    documents: [
+      { docId: '158078', title: "Minister's Environmental Assessment Decision Statement",
+        date: '2024-07-03', category: 'Additional Information' },
+      { docId: '129572', title: 'Notice of Commencement', date: '2015-07-10',
+        category: 'Additional Information' }
+    ],
+    decision: {
+      docId: '158078',
+      title: 'Decision Statement',
+      date: '2024-07-03',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'pdf',
+      pages: [
+        { page: 1, text: 'Decision Statement issued under Section 54.' },
+        { page: 2, text: 'Condition 3.1 The Proponent shall protect fish habitat.' }
+      ]
+    },
+    ...over
+  });
+
+  /** Replaces the adapter and records what it was asked for. */
+  const stubFederalSource = (t2, answer) => {
+    const calls = [];
+    t2.mock.method(iaac, 'fetchFederalSource', async (project) => {
+      calls.push(project);
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+    return calls;
+  };
+
+  await t.test('never asks the registry when DEMI holds the decision statement', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Fish habitat', oneLiner: 'Protect it.',
+        bullets: [], citations: [1] }]
+    }));
+    const asked = stubFederalSource(t, federalSource());
+
+    const sources = fakeSources({
+      documents: [{
+        id: 'docF', type: 'Decision Materials', datePosted: '2014-10-14',
+        displayName: 'Decision Statement issued under the Canadian Environmental Assessment Act',
+        isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+      }],
+      chunks: { docF: [chunk(1, 'Protect it.', 'docF')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.deepStrictEqual(asked, [], 'the registry is a fallback, not a second opinion');
+    assert.strictEqual(record.sections.federal.source, 'demi');
+    assert.strictEqual(record.sections.federal.sourceDocumentId, 'docF');
+    assert.strictEqual(record.sections.federal.facts, undefined);
+    assert.strictEqual(record.citations[0].source, undefined, 'a DEMI citation names no source');
+  });
+
+  await t.test('builds the federal section from the registry when DEMI holds none', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    // The figure is on page 2, which is the chunk the item cites: the grounding gate has to pass it
+    // through the pseudo-chunk exactly as it passes a DEMI one.
+    const calls = stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [2] }]
+    }));
+    stubFederalSource(t, federalSource());
+
+    // Only an inspection record in DEMI: no federal decision here at all.
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(calls.length, 1, 'the registry pages were the model call\'s only sources');
+    const federal = record.sections.federal;
+    assert.strictEqual(federal.source, 'iaac');
+    assert.strictEqual(federal.sourceDocumentId, 'iaac:158078');
+    assert.deepStrictEqual(federal.items.map(i => i.title), ['Condition 3.1']);
+    assert.deepStrictEqual(federal.facts, {
+      status: 'Completed',
+      cearId: '80105',
+      projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+      latest: { title: "Minister's Environmental Assessment Decision Statement",
+        date: '2024-07-03', docId: '158078' },
+      decision: {
+        docId: '158078',
+        title: 'Decision Statement',
+        date: '2024-07-03',
+        pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+        pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+        format: 'pdf',
+        pageCount: 2
+      }
+    });
+
+    // The citation is what a reader follows, and nothing in DEMI resolves `iaac:158078`. So it
+    // carries the registry's own link and says which registry it came from.
+    assert.deepStrictEqual(record.citations, [{
+      n: 1,
+      chunkId: 'iaac:158078:2',
+      documentId: 'iaac:158078',
+      pageNumber: 2,
+      documentName: 'Decision Statement',
+      source: 'iaac',
+      url: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      format: 'pdf'
+    }]);
+    assert.deepStrictEqual(federal.items[0].citations, [1]);
+  });
+
+  // An older CEAA 2012 decision was never filed as a PDF: the registry prints it on the document
+  // page. The page is then the only link there is, for the citation and for the fact row alike.
+  const inlineDecision = () => federalSource({
+    decision: {
+      docId: '158078',
+      title: 'Decision Statement',
+      date: '2013-05-22',
+      pdfUrl: null,
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'html',
+      pages: [
+        { page: 1, text: 'Decision Statement issued under Section 54.' },
+        { page: 2, text: 'Condition 3.1 The Proponent shall protect fish habitat.' }
+      ]
+    }
+  });
+
+  await t.test('cites the registry page when the decision was never filed as a PDF', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [2] }]
+    }));
+    stubFederalSource(t, inlineDecision());
+
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    // Without the `pageUrl` fallback the citation carries no link at all and the reader is left
+    // with a document name and nowhere to follow it.
+    assert.deepStrictEqual(record.citations.map(c => c.url),
+      ['https://iaac-aeic.gc.ca/050/evaluations/document/158078']);
+  });
+
+  await t.test('stores the registry page and the format of an inline decision', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [2] }]
+    }));
+    stubFederalSource(t, inlineDecision());
+
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    // The page renders one link and one label from these three fields: no `pdfUrl` to offer, a
+    // page to send the reader to, and a format that says it is a registry page and not a file.
+    assert.deepStrictEqual(record.sections.federal.facts.decision, {
+      docId: '158078',
+      title: 'Decision Statement',
+      date: '2013-05-22',
+      pdfUrl: null,
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'html',
+      pageCount: 2
+    });
+  });
+
+  await t.test("carries the decision's format onto its citations", async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [2] }]
+    }));
+    stubFederalSource(t, inlineDecision());
+
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    // The chip labels itself from this field: a registry page is not a file, and a chip that
+    // offers "Open PDF" for one promises what the link cannot deliver.
+    assert.deepStrictEqual(record.citations.map(c => c.format), ['html']);
+  });
+
+  await t.test('stores the registry facts when Canada issued no decision', async () => {
+    // NOT a null section. The registry was read and what it says is that there is no federal
+    // decision — which is a fact about the project, and a different thing from knowing nothing.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    const calls = stubModel(t, '{"items":[]}');
+    stubFederalSource(t, federalSource({ decision: null }));
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(calls.length, 0, 'no sources, no model call');
+    assert.deepStrictEqual(record.sections.federal, {
+      source: 'iaac',
+      facts: {
+        status: 'Completed',
+        cearId: '80105',
+        projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+        latest: { title: "Minister's Environmental Assessment Decision Statement",
+          date: '2024-07-03', docId: '158078' }
+      },
+      items: [],
+      reason: 'no_federal_decision'
+    });
+    assert.strictEqual(record.sectionErrors.federal, 'no_federal_decision');
+  });
+
+  await t.test('keeps the decision facts when it lists no conditions', async () => {
+    // A CEAA 2012 comprehensive-study decision carries no numbered conditions. The decision read
+    // fine and the model answered honestly, so the run has a citable outcome to store; a null
+    // section here loses the status, the CEAR link and the decision itself.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    const calls = stubModel(t, '{"items":[]}');
+    const warned = [];
+    t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+    stubFederalSource(t, federalSource());
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(calls.length, 1, 'the decision was readable, so it was read');
+    const federal = record.sections.federal;
+    assert.ok(federal, 'a readable decision with no conditions is not a null section');
+    assert.strictEqual(federal.source, 'iaac');
+    assert.strictEqual(federal.reason, 'no_conditions');
+    assert.deepStrictEqual(federal.items, []);
+    assert.deepStrictEqual(federal.facts.decision, {
+      docId: '158078',
+      title: 'Decision Statement',
+      date: '2024-07-03',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'pdf',
+      pageCount: 2
+    });
+    assert.strictEqual(federal.facts.cearId, '80105');
+    assert.strictEqual(federal.facts.status, 'Completed');
+    // The section stored what the registry says, so it is not a section that failed.
+    assert.ok(!('federal' in record.sectionErrors),
+      `no sectionErrors.federal: ${JSON.stringify(record.sectionErrors)}`);
+    assert.deepStrictEqual(warned.filter(line => line.includes('federal')), [],
+      'and nothing to investigate in the log');
+  });
+
+  await t.test('still fails the federal section when the reply was unusable', async () => {
+    // The other half of the rule: `empty` is an answer, a reply that would not parse is not.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, 'not json at all');
+    stubFederalSource(t, federalSource());
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(record.sections.federal, null);
+    assert.strictEqual(record.sectionErrors.federal, 'not_json');
+  });
+
+  await t.test('names the DEMI decision statement the federal section waits on', async () => {
+    // The registry answered with nothing and DEMI holds the statement with no text yet. Those are
+    // different states from "Canada issued no decision", and only this one links a document.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    const calls = stubModel(t, '{"items":[]}');
+    stubFederalSource(t, null);
+
+    const sources = fakeSources({
+      documents: [{
+        id: 'docF', type: 'Decision Materials', datePosted: '2014-10-14',
+        displayName: 'Decision Statement issued under the Canadian Environmental Assessment Act',
+        isPublished: true, read: PUBLIC_READ, contentExtracted: false, contentPageCount: 0
+      }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(record.sectionErrors.federal, 'not_extracted');
+    assert.deepStrictEqual(record.sectionSources.federal, {
+      documentId: 'docF',
+      displayName: 'Decision Statement issued under the Canadian Environmental Assessment Act'
+    });
+    assert.strictEqual(calls.length, 0, 'a document with no text is never handed to the model');
+  });
+
+  // Every cause below is a decision statement the registry LISTS and this run could not read. The
+  // stored record must say so: `no_federal_decision` here would publish the claim that Canada
+  // issued no decision for a project whose statement is sitting on the registry.
+  for (const error of ['no_pdf_extractor', 'pdf_fetch_failed:404', 'no_text', 'no_pdf_link',
+    'request_budget_spent']) {
+    await t.test(`stores an unread decision (${error}) as unreadable`, async () => {
+      config.summaryEnabled = true;
+      config.projectSummaryProvider = 'ollama';
+      config.federalSource = 'iaac';
+      const calls = stubModel(t, '{"items":[]}');
+      const warned = [];
+      const noted = [];
+      t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+      t.mock.method(logger, 'info', line => { noted.push(String(line)); });
+      const unread = federalSource();
+      unread.decision = { ...unread.decision, pages: [], error };
+      stubFederalSource(t, unread);
+
+      const sources = fakeSources({ documents: [INSPECTION] });
+      const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+      assert.strictEqual(calls.length, 0, 'no pages, no model call');
+      assert.deepStrictEqual(record.sections.federal, {
+        source: 'iaac',
+        facts: {
+          status: 'Completed',
+          cearId: '80105',
+          projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+          latest: { title: "Minister's Environmental Assessment Decision Statement",
+            date: '2024-07-03', docId: '158078' },
+          decision: {
+            docId: '158078',
+            title: 'Decision Statement',
+            date: '2024-07-03',
+            pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+            pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+            format: 'pdf'
+          }
+        },
+        items: [],
+        reason: 'federal_decision_unreadable'
+      });
+      assert.strictEqual(record.sectionErrors.federal, 'federal_decision_unreadable');
+      assert.ok(warned.some(line => line.includes('federal_decision_unreadable')),
+        `a document that could not be read is a warning: ${warned.join(' | ')}`);
+      assert.deepStrictEqual(noted.filter(line => line.includes('no_federal_decision')), [],
+        'and never reported as Canada having issued no decision');
+    });
+  }
+
+  await t.test('drops a blank registry page before the model sees it', async () => {
+    // A blank page is not a source: nothing can be cited to it and the grounding gate cannot check
+    // a claim against it, so the page numbers the citations carry have to skip it.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [1] }]
+    }));
+    const scanned = federalSource();
+    scanned.decision.pages = [{ page: 1, text: '   \n ' }, scanned.decision.pages[1]];
+    stubFederalSource(t, scanned);
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.deepStrictEqual(record.citations.map(c => [c.n, c.chunkId, c.pageNumber]),
+      [[1, 'iaac:158078:2', 2]], 'the first source is page 2; page 1 carried nothing');
+    assert.deepStrictEqual(record.sections.federal.items.map(i => i.title), ['Condition 3.1']);
+  });
+
+  await t.test('stores no federal section when the registry cannot be read', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    const calls = stubModel(t, '{"items":[]}');
+    stubFederalSource(t, new Error('GET https://iaac-aeic.gc.ca/... -> 503'));
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(calls.length, 0);
+    assert.strictEqual(record.sections.federal, null, 'a half-read registry generates nothing');
+    assert.strictEqual(record.sectionErrors.federal, 'federal_source_unavailable');
+  });
+
+  await t.test('FEDERAL_SOURCE=off leaves the section exactly as it was', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'off';
+    stubModel(t, '{"items":[]}');
+    const asked = stubFederalSource(t, federalSource());
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.deepStrictEqual(asked, [], 'the kill switch is a kill switch');
+    assert.strictEqual(record.sections.federal, null);
+    assert.strictEqual(record.sectionErrors.federal, 'no_document');
   });
 
   await t.test('takes a reply the model wrapped in a code fence', async () => {
@@ -1288,6 +1749,28 @@ test('generateProjectSummary', async (t) => {
     assert.deepStrictEqual(record.sections.nations.map(n => n.name), ['Saulteau First Nation']);
   });
 
+  await t.test('asks the timeline for milestones, with room for the reply', async () => {
+    // Project 302's assessment report dates hundreds of letters, meetings and comment periods, so
+    // an uncapped ask ran past the 1500-token default on every batch, even halved. The budget and
+    // the ask move together: either one alone still stops the list mid-item, and a stopped list
+    // parses as nothing.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')] }
+    });
+    await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls[0].body.options.num_predict, 4000);
+    assert.match(calls[0].body.messages[0].content, /at most 15 events/,
+      'the batch carries the capped instruction, not the open-ended one');
+  });
+
   await t.test('keeps a timeline event the source dates in long form', async () => {
     // The timeline shape forces an ISO date and the documents write "October 14, 2014", so a
     // literal comparison dropped every event Site C produced — a 100% failure that read on the
@@ -1354,6 +1837,582 @@ test('generateProjectSummary', async (t) => {
       `the log names the failing token and the claim: ${warned.join(' | ')}`);
     assert.ok(warned.some(line => line.includes('listed 1 entries')),
       `and how many entries the reply carried: ${warned.join(' | ')}`);
+  });
+
+  await t.test('names the document a section is waiting on extraction for', async () => {
+    // "No Schedule B" and "the Schedule B has no extracted text yet" are different states and only
+    // one of them is permanent. Told apart, the page can link the document and the operator knows
+    // the fix is an extraction run, not a registry that holds nothing.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, '{"items":[]}');
+    const noted = [];
+    const warned = [];
+    t.mock.method(logger, 'info', line => { noted.push(String(line)); });
+    t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+
+    const sources = fakeSources({
+      documents: [{ ...SCHEDULE_B, contentExtracted: false, contentPageCount: 0 }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sections.conditions, null);
+    assert.strictEqual(record.sectionErrors.conditions, 'not_extracted');
+    assert.deepStrictEqual(record.sectionSources.conditions,
+      { documentId: 'docB', displayName: 'Schedule B - Table of Conditions' });
+    assert.strictEqual(calls.length, 0, 'a document with no text is never handed to the model');
+    assert.deepStrictEqual(sources.asked, [], 'and never even read');
+    assert.ok(noted.some(line => line.includes('not_extracted')),
+      `waiting on the extractor is reported quietly: ${noted.join(' | ')}`);
+    assert.deepStrictEqual(warned.filter(line => line.includes('not_extracted')), [],
+      'and never as a warning');
+  });
+
+  await t.test('names the document the nations search found but could not read', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, '{"nations":[]}');
+
+    const sources = fakeSources({
+      documents: [{ ...APPENDIX, contentExtracted: false, contentPageCount: 0 }],
+      chunkHits: [{ documentId: 'docX' }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.strictEqual(record.sections.nations, null);
+    assert.strictEqual(record.sectionErrors.nations, 'not_extracted');
+    assert.deepStrictEqual(record.sectionSources.nations,
+      { documentId: 'docX', displayName: 'Appendix 7D - First Nations Consultation' });
+    assert.strictEqual(calls.length, 0);
+  });
+
+  await t.test('never names a document the reader may not see as the one to extract', async () => {
+    // `sectionSources` is rendered, so it is picked from the same public list the rest of the
+    // record is built from: a narrower document's name would reach a reader who 404s on it.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, '{"items":[]}');
+
+    const sources = fakeSources({
+      documents: [{ ...SCHEDULE_B, read: ['staff', 'idir'], contentExtracted: false,
+        contentPageCount: 0 }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sectionErrors.conditions, 'no_document',
+      'a document the reader cannot see is not a document the registry holds');
+    assert.deepStrictEqual(record.sectionSources, {});
+  });
+
+  await t.test('grounds a claim on the whole document, not only the pages the model saw', async () => {
+    // The model is shown a window of a long document and cites within it, while the date it quotes
+    // is printed on a page outside the window. Checked against the window alone, a true claim reads
+    // as an invention and the section stores a null.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 1;
+    const calls = stubModel(t, JSON.stringify({
+      sentence: 'The certificate was issued 2014-10-14.', citations: [1]
+    }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate is in effect.', 'docC'),
+          chunk(2, 'It was issued on October 14, 2014.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'status' });
+
+    assert.strictEqual(pagesIn(calls[0]).length, 1, 'the model still saw one page');
+    assert.strictEqual(record.sections.status.sentence, 'The certificate was issued 2014-10-14.');
+  });
+
+  await t.test('reads a long document for the timeline in batches and merges the events', async () => {
+    // A chronology runs to the last page of an assessment report, and the first window of it holds
+    // the application dates and nothing else. Batched, the whole document is read; the batches
+    // restate the same event, so the merge deduplicates and orders what comes back.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 2;
+    const calls = stubModel(t, [
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [
+          { date: '2014-10-14', label: 'Certificate  issued', citations: [1] },
+          { date: '2016-08-09', label: 'Certificate amended', citations: [2] }
+        ]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(2, 'Conditions apply from October 15, 2014.', 'docC'),
+          chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
+          chunk(4, 'The amendment was filed on August 10, 2016.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 2, 'one call per batch of chunks');
+    assert.deepStrictEqual(pagesIn(calls[1]).map(s => s.page), [3, 4],
+      'the second batch carries the pages the first one did not');
+    assert.deepStrictEqual(record.sections.timelineEvents, [
+      { date: '2016-08-09', label: 'Certificate amended', citations: [3] },
+      { date: '2014-10-14', label: 'Certificate issued', citations: [1] }
+    ], 'newest first, and the event both batches reported only once');
+  });
+
+  await t.test('reads only the pages that carry a full date for the timeline', async () => {
+    // Project 302's English assessment report is 680k tokens over 12 window-sized batches, at about
+    // twelve minutes a batch on a host that evaluates the prompt on CPU. Most of those pages carry
+    // no date at all, and the instruction only allows an event the source dates in full, so an
+    // undated page can never contribute one — sending it buys nothing and costs a batch.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    // One dated page per batch, so the filter and the merge are both visible in the calls.
+    config.projectSummaryMaxChunks = 1;
+    const calls = stubModel(t, [
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [{ date: '2016-08-09', label: 'Certificate amended', citations: [1] }]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'Table of contents.', 'docC'),
+          chunk(2, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(3, 'The proponent must monitor water quality.', 'docC'),
+          chunk(4, 'Conditions apply for the life of the project.', 'docC'),
+          chunk(5, 'The certificate was amended on August 9, 2016.', 'docC'),
+          chunk(6, 'End of document.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.deepStrictEqual(calls.map(call => pagesIn(call).map(s => s.page)), [[2], [5]],
+      'the two dated pages are asked, in page order, and the four undated ones are not');
+    assert.deepStrictEqual(record.sections.timelineEvents, [
+      { date: '2016-08-09', label: 'Certificate amended', citations: [2] },
+      { date: '2014-10-14', label: 'Certificate issued', citations: [1] }
+    ], 'the batches still merge, newest first');
+  });
+
+  await t.test('reads the next document when no page of the first carries a full date', async () => {
+    // A document with no dated page cannot answer the timeline, so it costs no model call at all
+    // and the chain moves on exactly as it does for a document that answered with nothing.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+    }));
+    const info = [];
+    t.mock.method(logger, 'info', line => { info.push(String(line)); });
+
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, CERTIFICATE],
+      chunks: {
+        docAR: [
+          chunk(1, 'The Tilbury Marine Jetty project overview.', 'docAR'),
+          chunk(2, 'The proponent applied in 2014.', 'docAR')
+        ],
+        docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.deepStrictEqual(sourcesNamed(calls), ['Environmental Assessment Certificate #E14-02'],
+      'the undated report is skipped without a call and the certificate is read');
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC');
+    assert.strictEqual(record.sectionErrors.timelineEvents, undefined,
+      'a fallback that worked stores no error');
+    assert.ok(info.some(line => line.includes('timelineEvents') && line.includes('0 of 2')),
+      `the skipped document is logged with its counts: ${info.join(' | ')}`);
+  });
+
+  await t.test('sends no Foundry call for a document whose pages carry no date', async () => {
+    // Foundry is the deployed provider and sizes its batches by count, so an empty page list is
+    // still one batch — a prompt with zero sources, asking the model to date events it was shown
+    // none of. Ollama's fitBatches returns no batch at all, which is why the guard needs pinning
+    // here rather than there.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'foundry';
+    config.foundryEndpoint = 'https://foundry.example';
+    config.foundryDeployment = 'gpt-4.1-mini-test';
+    const calls = stubFoundry(t, JSON.stringify({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, CERTIFICATE],
+      chunks: {
+        docAR: [
+          chunk(1, 'The Tilbury Marine Jetty project overview.', 'docAR'),
+          chunk(2, 'The proponent applied in 2014.', 'docAR')
+        ],
+        docC: [chunk(1, 'Dated this 14th day of October, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.deepStrictEqual(sourcesNamed(calls), ['Environmental Assessment Certificate #E14-02'],
+      'the undated report costs no call and the certificate is read instead');
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC');
+  });
+
+  await t.test('splits the timeline into count-sized batches off Ollama too', async () => {
+    // Foundry is the deployed provider and has no fixed window to size against, so the count cap
+    // is the whole bound there: `projectSummaryMaxChunks` chunks per call, over the whole document.
+    // One call carrying everything would drop the events on the pages past the first window.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'foundry';
+    config.foundryEndpoint = 'https://foundry.example';
+    config.foundryDeployment = 'gpt-4.1-mini-test';
+    config.projectSummaryMaxChunks = 2;
+    const calls = stubFoundry(t, [
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [
+          { date: '2014-10-14', label: 'Certificate  issued', citations: [1] },
+          { date: '2016-08-09', label: 'Certificate amended', citations: [1] }
+        ]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(2, 'Conditions apply from October 15, 2014.', 'docC'),
+          chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
+          chunk(4, 'The amendment was filed on August 10, 2016.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 2, 'one call per batch of `projectSummaryMaxChunks` chunks');
+    const batches = calls.map(pagesIn);
+    assert.deepStrictEqual(batches.map(b => b.map(s => s.page)), [[1, 2], [3, 4]],
+      'every page is sent once, two per batch, in page order');
+    assert.deepStrictEqual(record.sections.timelineEvents.map(e => [e.date, e.label]), [
+      ['2016-08-09', 'Certificate amended'],
+      ['2014-10-14', 'Certificate issued']
+    ], 'newest first, and the event both batches reported only once');
+    for (const event of record.sections.timelineEvents) {
+      assert.ok(event.citations.length && event.citations.every(n => record.citations[n - 1]),
+        'every merged event still cites a source the record carries');
+    }
+  });
+
+  await t.test('sizes the timeline batches to the window, not to a fixed chunk count', async () => {
+    // Project 302: split into fixed runs of `projectSummaryMaxChunks`, batch 1 of the assessment
+    // report alone came 25,825 tokens over the window. `context_overflow` is not a timeline
+    // fallback reason, so the section died there rather than moving on. Batches sized the way a
+    // list section's are fit, and the whole document is still read.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    // Room for the 1500-token reply and about 8500 tokens of prompt.
+    config.projectSummaryOllamaCtx = 10000;
+    // Far more chunks than this document has, so the count cap cannot be what splits it.
+    config.projectSummaryMaxChunks = 120;
+    const calls = stubModel(t, JSON.stringify({
+      events: [
+        { date: '2014-10-14', label: 'Certificate issued', citations: [1] },
+        { date: '2016-08-09', label: 'Certificate amended', citations: [1] }
+      ]
+    }));
+
+    // Twelve pages of roughly 1200 tokens: any one of them fits the window, all twelve do not.
+    const chunks = Array.from({ length: 12 }, (_, i) => chunk(
+      i + 1,
+      `Page ${i + 1}. The certificate was issued on October 14, 2014 and amended on August 9, ` +
+      `2016. ${'The proponent must monitor water quality. '.repeat(110)}`,
+      'docAR'));
+    const sources = fakeSources({ documents: [ASSESSMENT_REPORT], chunks: { docAR: chunks } });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(record.sectionErrors.timelineEvents, undefined,
+      'a document larger than the window is batched, not refused');
+
+    const oversized = calls.filter(call => {
+      const [system, user] = call.body.messages.map(m => m.content);
+      return Math.ceil((system.length + user.length) / 4) + call.body.options.num_predict >
+        config.projectSummaryOllamaCtx;
+    });
+    assert.deepStrictEqual(oversized.map(call => call.body.messages[1].content.length), [],
+      'no batch asks for more than the context window holds');
+
+    const batches = calls.map(pagesIn);
+    assert.ok(batches.length > 1 && batches.every(b => b.length < config.projectSummaryMaxChunks),
+      `split by the window, under the count cap, got ${batches.map(b => b.length).join('+')}`);
+    assert.deepStrictEqual(batches.flatMap(b => b.map(s => s.page)), chunks.map(c => c.pageNumber),
+      'every page is sent once, in page order');
+
+    assert.deepStrictEqual(record.sections.timelineEvents.map(e => [e.date, e.label]), [
+      ['2016-08-09', 'Certificate amended'],
+      ['2014-10-14', 'Certificate issued']
+    ], 'the events the batches reported are merged into one list, newest first');
+    for (const event of record.sections.timelineEvents) {
+      assert.ok(event.citations.length && event.citations.every(n => record.citations[n - 1]),
+        'every merged event still cites a source the record carries');
+    }
+  });
+
+  await t.test('asks a truncated timeline batch again as two halves', async () => {
+    // Project 302: a batch sized to fit the PROMPT window still held more dated events than the
+    // 1500-token reply carries, so batch 1 came back a fragment and the whole section died. The
+    // same pages asked as two halves each get the budget to themselves.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 4;
+    const calls = stubModel(t, [
+      { content: '{"events": [{"date": "2014-10-14", "label": "Certificate iss',
+        doneReason: 'length' },
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [{ date: '2016-08-09', label: 'Certificate amended', citations: [1] }]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(2, 'Conditions apply from October 15, 2014.', 'docC'),
+          chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
+          chunk(4, 'The amendment was filed on August 10, 2016.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 3, 'the batch, then one call per half — not a strict retry');
+    assert.deepStrictEqual(calls.map(call => pagesIn(call).map(s => s.page)),
+      [[1, 2, 3, 4], [1, 2], [3, 4]], 'the halves carry the batch\'s pages, in page order');
+
+    assert.strictEqual(record.sectionErrors.timelineEvents, undefined,
+      'a batch that truncates is halved, not fatal');
+    assert.deepStrictEqual(record.sections.timelineEvents.map(e => [e.date, e.label]), [
+      ['2016-08-09', 'Certificate amended'],
+      ['2014-10-14', 'Certificate issued']
+    ], 'both halves contributed, newest first');
+    // Each half numbers its own sources from 1, so the second half's `[1]` is page 3.
+    assert.deepStrictEqual(
+      record.sections.timelineEvents.map(e => e.citations.map(n => record.citations[n - 1].chunkId)),
+      [['docC::p3::c0'], ['docC::p1::c0']],
+      'a half\'s local citation resolves to that half\'s first source');
+  });
+
+  await t.test('stops halving a truncated timeline batch at the depth bound', async () => {
+    // A document that truncates at every size would cost one call per chunk if the halving ran to
+    // the floor. `MAX_BATCH_HALVINGS` stops it at eight pieces of the batch; the first piece to
+    // reach that depth fails the section, so the descent is what the call count shows.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 16;
+    // One reply for every call: whatever it is asked, the model runs out of completion budget.
+    const calls = stubModel(t, {
+      content: '{"events": [{"date": "2014-10-14", "label": "Certificate iss',
+      doneReason: 'length'
+    });
+
+    const chunks = Array.from({ length: 16 }, (_, i) => chunk(
+      i + 1, `Page ${i + 1}. The certificate was issued on October 14, 2014.`, 'docC'));
+    const sources = fakeSources({ documents: [CERTIFICATE], chunks: { docC: chunks } });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 5, 'three halvings, then the strict retry at the bound');
+    assert.deepStrictEqual(calls.map(call => pagesIn(call).map(s => s.page)), [
+      chunks.map(c => c.pageNumber),
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [1, 2, 3, 4],
+      [1, 2],
+      [1, 2]
+    ], 'the batch, its half, quarter and eighth — then that eighth asked again, not split further');
+
+    assert.strictEqual(record.sections.timelineEvents, null);
+    assert.ok(record.sectionErrors.timelineEvents.startsWith('truncated'),
+      `stored the truncation, got ${record.sectionErrors.timelineEvents}`);
+  });
+
+  await t.test('fails the timeline when a batch of one chunk still truncates', async () => {
+    // The floor of the halving: nothing left to split, so the budget is what has to move and the
+    // record says so rather than storing a fragment.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 1;
+    const cutOff = { content: '{"events": [{"date": "2014-10-14", "label": "Certificate iss',
+      doneReason: 'length' };
+    const calls = stubModel(t, [cutOff, cutOff, cutOff, cutOff]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 2, 'one chunk is not halved: the ask and its strict retry');
+    assert.strictEqual(record.sections.timelineEvents, null);
+    assert.ok(record.sectionErrors.timelineEvents.startsWith('truncated'),
+      `stored the truncation, got ${record.sectionErrors.timelineEvents}`);
+  });
+
+  await t.test('reads the next document when the timeline\'s first source yields nothing', async () => {
+    // Project 302 stored `no_grounded_content` for its timeline: the section was read from an
+    // executive summary that produced one event the gates dropped, while the certificate sat
+    // extracted and full of dates. One emptied reply is not the project having no chronology.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, [
+      JSON.stringify({
+        events: [{ date: '2019-03-14', label: 'Certificate amended', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      })
+    ]);
+    const info = [];
+    t.mock.method(logger, 'info', line => { info.push(String(line)); });
+
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, CERTIFICATE],
+      chunks: {
+        docAR: [chunk(1, 'Amended in 2019. Issued on October 14, 2014.', 'docAR')],
+        docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 2, 'the assessment report, then the certificate');
+    assert.deepStrictEqual(sourcesNamed(calls), [
+      'EAO Assessment Report - Tilbury Marine Jetty',
+      'Environmental Assessment Certificate #E14-02'
+    ]);
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC',
+      'the source is the document the events were read from, not the one that failed');
+    assert.strictEqual(record.sectionErrors.timelineEvents, undefined,
+      'a fallback that worked stores no error');
+    assert.ok(info.some(line => line.includes('timelineEvents') &&
+      line.includes('EAO Assessment Report - Tilbury Marine Jetty') &&
+      line.includes('Environmental Assessment Certificate #E14-02')),
+    `the fallback is logged, naming both documents: ${info.join(' | ')}`);
+  });
+
+  await t.test('reads the next document when the timeline\'s first source declares zero events',
+    async () => {
+      // `empty` (the model saw the document and declared no events) is a different reason than
+      // `no_grounded_content` (the model declared events the gates then dropped), but both are an
+      // honest "not here" that the next candidate deserves a turn on.
+      config.summaryEnabled = true;
+      config.projectSummaryProvider = 'ollama';
+      const calls = stubModel(t, [
+        JSON.stringify({ events: [] }),
+        JSON.stringify({
+          events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+        })
+      ]);
+
+      const sources = fakeSources({
+        documents: [ASSESSMENT_REPORT, CERTIFICATE],
+        chunks: {
+          docAR: [chunk(1, 'The application was accepted on March 3, 2013.', 'docAR')],
+          docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+        }
+      });
+      const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+      assert.strictEqual(calls.length, 2, 'the assessment report, then the certificate');
+      assert.deepStrictEqual(record.sections.timelineEvents,
+        [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+      assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC',
+        'the source is the certificate the events were read from, not the report that answered empty');
+    });
+
+  await t.test('stops the timeline at the first document that produces events', async () => {
+    // The chain is a fallback, not a sweep: a second document read after a good answer is a second
+    // minutes-long call, and its events would merge into a chronology already written.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, CERTIFICATE],
+      chunks: {
+        docAR: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docAR')],
+        docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 1, 'one call: the first candidate answered');
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docAR');
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+  });
+
+  await t.test('stops the timeline chain at three documents and keeps the last reason', async () => {
+    // Four candidates are filed and the French copy of the report is the last of them. The cap is
+    // what keeps a project whose documents hold no chronology from spending four full reads to
+    // find that out.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const ungrounded = JSON.stringify({
+      events: [{ date: '2019-03-14', label: 'Certificate amended', citations: [1] }]
+    });
+    const calls = stubModel(t, [ungrounded, ungrounded, JSON.stringify({ timeline: [] })]);
+
+    const text = 'Amended in 2019. Issued on October 14, 2014.';
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, FRENCH_ASSESSMENT_REPORT, CERTIFICATE, SCHEDULE_A],
+      chunks: {
+        docAR: [chunk(1, text, 'docAR')],
+        'docAR-fr': [chunk(1, text, 'docAR-fr')],
+        docC: [chunk(1, text, 'docC')],
+        docSA: [chunk(1, text, 'docSA')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 3, 'three model runs, whatever the registry holds');
+    assert.deepStrictEqual(sourcesNamed(calls), [
+      'EAO Assessment Report - Tilbury Marine Jetty',
+      'Environmental Assessment Certificate #E14-02',
+      'Schedule A - Certificate'
+    ], 'the English report, the certificate, Schedule A; the French copy is last and never read');
+    assert.strictEqual(record.sections.timelineEvents, null);
+    assert.strictEqual(record.sectionErrors.timelineEvents, 'no_list',
+      'the reason stored is the last candidate\'s, not the first\'s');
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docSA',
+      'and the source is the last document tried');
   });
 
   await t.test('generates nothing while the feature is off', async () => {
@@ -1768,6 +2827,91 @@ test('key document pickers', async (t) => {
     assert.strictEqual(PICK.application(documents).id, 'docIntro');
   });
 
+  await t.test('prefers the English copy of a key document over the French one', () => {
+    // EAO files a French copy of the report and the application. The French one is often the newer
+    // row, so picked by date the whole page is written from a document most readers cannot read.
+    const french = { id: 'docAR-fr', type: 'Assessment Report', datePosted: '2015-06-01',
+      displayName: 'Rapport d\'évaluation environnementale - Sommaire' };
+    const english = { id: 'docAR-en', type: 'Assessment Report', datePosted: '2014-01-15',
+      displayName: 'EAO Assessment Report - Site C Clean Energy Project' };
+    assert.strictEqual(PICK.assessmentReport([french, english]).id, 'docAR-en');
+
+    const frenchEis = { id: 'docEIS-fr', type: 'Application Materials', datePosted: '2013-06-01',
+      displayName: 'Environmental Impact Statement - Version française' };
+    const englishEis = { id: 'docEIS-en', type: 'Application Materials', datePosted: '2013-01-25',
+      displayName: 'Environmental Impact Statement' };
+    assert.strictEqual(PICK.application([frenchEis, englishEis]).id, 'docEIS-en');
+  });
+
+  await t.test('does not flag English titles that merely contain "French" or "resume"', () => {
+    // "French Creek", "Frenchman River", and "Resume of Conditions" are English titles; the French
+    // check must key on French-language phrases and markers, not on these substrings.
+    assert.strictEqual(isFrenchTitle({ displayName: 'French Creek Water Project - Assessment Report' }), false);
+    assert.strictEqual(isFrenchTitle({ displayName: 'Resume of Conditions' }), false);
+    assert.strictEqual(isFrenchTitle({ displayName: 'Frenchman River Assessment Report' }), false);
+  });
+
+  await t.test('flags French-language titles and markers', () => {
+    assert.strictEqual(isFrenchTitle({ displayName: "Sommaire du rapport d'évaluation" }), true);
+    assert.strictEqual(isFrenchTitle({ displayName: 'Résumé exécutif' }), true);
+    assert.strictEqual(isFrenchTitle({ displayName: 'Assessment Report (FR)' }), true);
+  });
+
+  await t.test('flags the English-marker forms the registry files a French copy under', () => {
+    // Tilbury Marine Jetty's French documents are titled in English: "(French)", a trailing
+    // "- French", and "French version". Missed, the newest of them won the assessment report role
+    // and the timeline was read from a translated executive summary.
+    assert.strictEqual(isFrenchTitle({
+      displayName: 'Assessment Report - Executive Summary (French) – Tilbury Marine Jetty' }), true);
+    assert.strictEqual(isFrenchTitle({
+      displayName: 'Tilbury Marine Jetty - Assessment Report Executive Summary – French' }), true);
+    assert.strictEqual(isFrenchTitle({
+      displayName: 'Executive Summary for the Tilbury Marine Jetty Assessment Report - French version'
+    }), true);
+    // The English titles the narrower pattern was written to protect stay English.
+    assert.strictEqual(
+      isFrenchTitle({ displayName: 'French Creek Water Project - Assessment Report' }), false);
+    assert.strictEqual(
+      isFrenchTitle({ displayName: 'Frenchman River Assessment Report' }), false);
+  });
+
+  await t.test('links the English report over a newer French one titled in English', () => {
+    // What project 302 actually stored: the French executive summary is the newest row, so the
+    // assessmentReport link named it, unflagged, beside prose written from another document.
+    const french = { id: 'docAR-fr', type: 'Assessment Report', datePosted: '2024-03-11',
+      displayName: 'Assessment Report - Executive Summary (French) – Tilbury Marine Jetty' };
+    const english = { id: 'docAR-en', type: 'Assessment Report', datePosted: '2023-11-02',
+      displayName: 'Assessment Report - Tilbury Marine Jetty' };
+
+    assert.strictEqual(PICK.assessmentReport([french, english]).id, 'docAR-en');
+    const both = buildFacts([french, english]).keyDocuments.find(r => r.role === 'assessmentReport');
+    assert.strictEqual(both.documentId, 'docAR-en');
+    assert.strictEqual('languageFlag' in both, false);
+
+    const only = buildFacts([french]).keyDocuments.find(r => r.role === 'assessmentReport');
+    assert.strictEqual(only.documentId, 'docAR-fr');
+    assert.strictEqual(only.languageFlag, 'fr');
+  });
+
+  await t.test('links the French copy, flagged, when it is the only one filed', () => {
+    // Dropping the role would leave the page with no report at all; linking it unflagged would
+    // offer a French document to a reader with no warning that it is one.
+    const french = { id: 'docAR-fr', type: 'Assessment Report', datePosted: '2015-06-01',
+      displayName: 'Rapport d\'évaluation environnementale - Sommaire' };
+    const report = buildFacts([french]).keyDocuments.find(r => r.role === 'assessmentReport');
+
+    assert.strictEqual(report.documentId, 'docAR-fr');
+    assert.strictEqual(report.languageFlag, 'fr');
+  });
+
+  await t.test('flags nothing when the linked document is the English one', () => {
+    const english = { id: 'docAR-en', type: 'Assessment Report', datePosted: '2014-01-15',
+      displayName: 'EAO Assessment Report - Site C Clean Energy Project' };
+    const report = buildFacts([english]).keyDocuments.find(r => r.role === 'assessmentReport');
+
+    assert.strictEqual('languageFlag' in report, false);
+  });
+
   await t.test('links the assessment report the sections were written from', () => {
     // The picker runs over the documents that HAVE text to choose a source and over the whole
     // registry for the link, so a newer unextracted report would name one document on the page
@@ -1779,6 +2923,60 @@ test('key document pickers', async (t) => {
 
     const roles = buildFacts([withoutText, withText], [withText]).keyDocuments;
     assert.strictEqual(roles.find(r => r.role === 'assessmentReport').documentId, 'docAR1');
+  });
+});
+
+test('timeline instruction', async (t) => {
+  await t.test('caps the list and rules out routine correspondence', () => {
+    assert.match(INSTRUCTIONS.timelineEvents, /at most 15 events/,
+      'the ask is capped, so the reply fits the completion budget');
+    assert.match(INSTRUCTIONS.timelineEvents, /[Ll]eave out[^.]*meetings/,
+      'meetings are named as something to leave out');
+  });
+});
+
+test('hasFullDate', async (t) => {
+  // What the timeline filter keeps. The instruction only allows an event the source dates in full,
+  // so a year on its own or a day with no year is a page that cannot produce one.
+  await t.test('matches a date written with a year, a month and a day', () => {
+    for (const text of [
+      'issued 2014-10-14',
+      'issued October 14, 2014',
+      'issued 14 October 2014',
+      'issued Oct. 14, 2014',
+      'déposé le 3 juillet 2024',
+      'modifié 3 décembre 2019',
+      // The ordinal, legal and slashed spellings a certificate dates itself with. `dateSpellings`
+      // accepts every one of them as October 14 2014, so the filter has to as well.
+      'Issued October 14th, 2014.',
+      'DATED at Victoria, British Columbia, this 14th day of October, 2014.',
+      'Dated this 14 day of October, 2014.',
+      'amended this 9th August 2016',
+      'Issued 2014/10/14.',
+      'Issued 2014.10.14.',
+      'issued 14/10/2014',
+      'issued 10/14/2014',
+      'déposé le 1er janvier 2024',
+      // PDF text loses the space after a comma or a month's dot often enough to matter.
+      'issued October 14,2014',
+      'issued Oct.14, 2014'
+    ]) {
+      assert.ok(hasFullDate(text), `expected a full date in "${text}"`);
+    }
+  });
+
+  await t.test('rejects a partial date', () => {
+    for (const text of [
+      'issued October 2014',
+      'issued 14 October',
+      'issued in 2014',
+      'see page 14',
+      // Two numbers are not three, and a dotted clause number is not a dotted date.
+      'issued 14/2014',
+      'see Section 14.2'
+    ]) {
+      assert.strictEqual(hasFullDate(text), false, `expected no full date in "${text}"`);
+    }
   });
 });
 
@@ -1821,11 +3019,81 @@ test('buildTimeline', async (t) => {
   });
 });
 
+test('pickSource', async (t) => {
+  const withText = { ...SCHEDULE_B };
+  const withoutText = { ...SCHEDULE_B, contentExtracted: false, contentPageCount: 0 };
+
+  await t.test('takes the document that has text', () => {
+    const picked = pickSource(PICK.scheduleB, [withText], [withText]);
+    assert.strictEqual(picked.document.id, 'docB');
+    assert.strictEqual(picked.absentReason, null);
+  });
+
+  await t.test('names the document waiting on the extractor', () => {
+    const picked = pickSource(PICK.scheduleB, [], [withoutText]);
+    assert.strictEqual(picked.document, null);
+    assert.strictEqual(picked.absentReason, 'not_extracted');
+    assert.deepStrictEqual(picked.absentSource,
+      { documentId: 'docB', displayName: 'Schedule B - Table of Conditions' });
+  });
+
+  await t.test('says no_document only when the registry holds none', () => {
+    const picked = pickSource(PICK.scheduleB, [], [CERTIFICATE]);
+    assert.strictEqual(picked.absentReason, 'no_document');
+    assert.strictEqual(picked.absentSource, null);
+  });
+});
+
 test('nation name join', async (t) => {
   const organizations = [
     { id: 'org-1', name: 'Saulteau First Nations' },
     { id: 'org-2', name: "Doig River First Nation" }
   ];
+
+  // The registry's own spellings, punctuation and all.
+  const rows = [
+    { id: 'org-k', name: "Ka:'yu:'k't'h'/Che:k'tles7et'h' First Nations" },
+    { id: 'org-s', name: "Scia'new First Nation" },
+    { id: 'org-t', name: "T'Sou-ke Nation" },
+    { id: 'org-l', name: 'Lake Cowichan First Nation' },
+    { id: 'org-m', name: 'Métis Nation British Columbia' },
+    { id: 'org-x', name: 'Stó:lō Nation' }
+  ];
+
+  await t.test('joins the names a document writes to the rows the registry holds', () => {
+    // Every one of these is a name a model read out of a consultation appendix beside a row that
+    // spells the same nation another way. Unjoined, each renders with no contact card.
+    const written = [
+      ['Kayukth Chektles7eth First Nation', 'org-k'],
+      ["Ka:yu:'k't'h'/Che:k'tles7et'h'", 'org-k'],
+      ['Beecher Bay First Nation', 'org-s'],
+      ['Sooke First Nation', 'org-t'],
+      ['Tsouke Nation', 'org-t'],
+      ['Lake Cowichan Band', 'org-l'],
+      ['Métis Nation BC', 'org-m'],
+      ['Sto:lo First Nation', 'org-x']
+    ];
+
+    for (const [name, id] of written) {
+      const joined = joinNations([{ name, citations: [1] }], rows);
+      assert.strictEqual(joined[0].organizationId, id, `"${name}" joins ${id}`);
+    }
+  });
+
+  await t.test('leaves a name no row and no alias covers unmatched', () => {
+    const joined = joinNations([{ name: 'Cowichan Tribes', citations: [1] }], rows);
+    assert.strictEqual(joined[0].organizationId, null,
+      'the alias table joins names, it does not guess at them');
+  });
+
+  await t.test('joins whichever side carries the diacritics', () => {
+    assert.strictEqual(
+      joinNations([{ name: 'Métis Nation British Columbia', citations: [1] }],
+        [{ id: 'org-m', name: 'Metis Nation British Columbia' }])[0].organizationId, 'org-m');
+    assert.strictEqual(
+      joinNations([{ name: 'Stolo Nation', citations: [1] }],
+        [{ id: 'org-x', name: 'Stó:lō Nation' }])[0].organizationId, 'org-x');
+  });
 
   await t.test('matches across the generic words a name is written with', () => {
     const joined = joinNations([{ name: 'Saulteau First Nation', citations: [1] }], organizations);

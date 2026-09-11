@@ -55,6 +55,7 @@ const VAULT_NAMES = [
   'analytics-audit-header',
   'notify-api-key',
   'edge-secret',
+  'access-gate-password',
   'openshift-token-test',
   'dev-openshift-token'
 ];

@@ -16,12 +16,30 @@
       <ul class="ps-cites">
         @for (c of cited; track c.chunkId) {
           <li>
-            <button type="button" class="ps-cite" (click)="openDocument(c.documentId)" [disabled]="downloadingId() === c.documentId">
-              <span class="ps-cite__n">[{{ c.n }}]</span>
-              <span class="ps-cite__doc">{{ c.documentName }}</span>
-              <span class="ps-cite__page">p.&nbsp;{{ c.pageNumber }}</span>
-              <span class="ps-cite__action">{{ downloadingId() === c.documentId ? 'Preparing…' : 'Open document' }}</span>
-            </button>
+            @if (c.source === 'iaac' && c.url) {
+              <!-- Nothing in DEMI resolves `iaac:158078`, so this chip is a link to the registry's
+                   own PDF and never reaches the document download. -->
+              <a class="ps-cite" [href]="c.url" target="_blank" rel="noopener" [attr.title]="c.documentName">
+                <span class="ps-cite__n">[{{ c.n }}]</span>
+                <span class="ps-cite__doc">IAAC registry, p.&nbsp;{{ c.pageNumber }}</span>
+                <span class="ps-cite__action">{{ citeAction(c) }}<span class="visually-hidden"> (opens in a new tab)</span></span>
+              </a>
+            } @else if (c.source === 'iaac') {
+              <!-- The registry never gave us a PDF url for this one: not a link anywhere, since
+                   there is no DEMI document behind it to fall back to. -->
+              <span class="ps-cite" [attr.title]="c.documentName">
+                <span class="ps-cite__n">[{{ c.n }}]</span>
+                <span class="ps-cite__doc">IAAC registry, p.&nbsp;{{ c.pageNumber }}</span>
+                <span class="ps-cite__action">{{ citeAction(c) }}</span>
+              </span>
+            } @else {
+              <button type="button" class="ps-cite" (click)="openDocument(c.documentId)" [disabled]="downloadingId() === c.documentId">
+                <span class="ps-cite__n">[{{ c.n }}]</span>
+                <span class="ps-cite__doc">{{ c.documentName }}</span>
+                <span class="ps-cite__page">p.&nbsp;{{ c.pageNumber }}</span>
+                <span class="ps-cite__action">{{ downloadingId() === c.documentId ? 'Preparing…' : 'Open document' }}</span>
+              </button>
+            }
           </li>
         }
       </ul>
@@ -29,7 +47,24 @@
   }
 </ng-template>
 
+<!--
+  The one-line note a section leaves when it generated nothing. A document the registry holds but
+  has not extracted yet is named and linked: "no source document" would be untrue, and the reader
+  can open the file the page is waiting on.
+-->
+<ng-template #absent let-section let-fallback="fallback">
+  <p class="ps-note">
+    @if (notExtracted(section); as pending) {
+      <button type="button" class="ps-card__link ps-card__link--button" (click)="openDocument(pending.documentId)" [disabled]="downloadingId() === pending.documentId">{{ pending.displayName }}</button>&ngsp;is in the registry but not yet extracted.
+    } @else {
+      {{ fallback }}
+    }
+  </p>
+</ng-template>
+
 <div class="ps">
+
+  <a class="ps__back" routerLink="/projects"><span aria-hidden="true">←</span> All projects</a>
 
   @if (service.factsError(); as err) {
     <div class="callout callout--warning" role="alert">
@@ -216,22 +251,52 @@
     <section class="ps-section" aria-labelledby="ps-federal-h">
       <h2 id="ps-federal-h" class="ps-section__title">Federal decision</h2>
       @if (sections()?.federal; as federal) {
-        <p class="ps-badge-row">
-          <span class="pill pill--info">AI-generated from the sources below</span>
-        </p>
-        <div class="ps-cards">
-          @for (item of federal.items; track item.n) {
-            <button type="button" class="ps-card ps-card--action" (click)="showCondition(item, $event)">
-              <span class="micro-label ps-card__category">{{ item.category }}</span>
-              <span class="ps-card__title">{{ item.title }}</span>
-              <span class="ps-card__text">{{ item.oneLiner }}</span>
-              <span class="ps-card__cue" aria-hidden="true">Open</span>
-              <span class="visually-hidden">Open the summary of this condition</span>
-            </button>
-          }
-        </div>
+        <!-- The registry's own facts, which stand whether or not anything was generated from them. -->
+        @if (federalFacts(); as ff) {
+          <p class="ps-federal">{{ federalLine() }} ·
+            <a class="ps-card__link" [href]="ff.projectUrl" target="_blank" rel="noopener">View on IAAC registry<span class="visually-hidden"> (opens in a new tab)</span></a>
+            @if (ff.decision) {
+              &ngsp;· @if (federalDecisionUrl(); as decisionUrl) {
+                <a class="ps-card__link" [href]="decisionUrl" target="_blank" rel="noopener">{{ federalDecisionLabel() }}<span class="visually-hidden"> (opens in a new tab)</span></a>
+              } @else {
+                <!-- Neither a file nor a page to send a reader to: naming the document is all that is left. -->
+                <span>{{ federalDecisionLabel() }}</span>
+              }
+            }
+          </p>
+        }
+        @if (federal.reason === 'federal_decision_unreadable') {
+          <p class="ps-note">Decision statement found on the IAAC registry but its text could not be read.</p>
+        }
+        <!-- The decision read and carries no numbered conditions, which the reader is owed in place
+             of an empty list: a comprehensive study under CEAA 2012 is decided that way. -->
+        @if (federal.reason === 'no_conditions') {
+          <p class="ps-note">The decision statement lists no conditions.</p>
+        }
+        <!-- No items means no model claim was made here, so the badge and its sources stay away.
+             `items` is guarded (federalItems()): a federal section built from registry facts
+             alone can arrive without the key at all, not just an empty array. -->
+        @if (federalItems().length) {
+          <p class="ps-badge-row">
+            <span class="pill pill--info">AI-generated from the sources below</span>
+          </p>
+          <div class="ps-cards">
+            @for (item of federalItems(); track item.n) {
+              <button type="button" class="ps-card ps-card--action" (click)="showCondition(item, $event)">
+                <span class="micro-label ps-card__category">{{ item.category }}</span>
+                <span class="ps-card__title">{{ item.title }}</span>
+                <span class="ps-card__text">{{ item.oneLiner }}</span>
+                <span class="ps-card__cue" aria-hidden="true">Open</span>
+                <span class="visually-hidden">Open the summary of this condition</span>
+              </button>
+            }
+          </div>
+        }
       } @else {
-        <p class="ps-note">No federal decision document for this project is in the registry, so no federal conditions are shown.</p>
+        <ng-container *ngTemplateOutlet="absent; context: {
+          $implicit: 'federal',
+          fallback: 'No federal decision document for this project is in the registry, so no federal conditions are shown.'
+        }"></ng-container>
       }
     </section>
   }
@@ -292,7 +357,10 @@
           }
         }
       } @else {
-        <p class="ps-note">No nations were read from this project’s documents, so none are listed.</p>
+        <ng-container *ngTemplateOutlet="absent; context: {
+          $implicit: 'nations',
+          fallback: 'No nations were read from this project’s documents, so none are listed.'
+        }"></ng-container>
       }
     </section>
   }
@@ -344,7 +412,7 @@
         @for (doc of keyDocuments(); track doc.documentId) {
           <div class="ps-card">
             <span class="micro-label ps-card__category">{{ doc.label }}</span>
-            <span class="ps-card__title">{{ doc.displayName }}</span>
+            <span class="ps-card__title">{{ doc.displayName }}@if (doc.languageFlag === 'fr') {&ngsp;<span class="pill pill--neutral">FR<span class="visually-hidden"> — French-language document</span></span>}</span>
             <span class="ps-card__text">{{ doc.note }}</span>
             <button type="button" class="ps-card__link ps-card__link--button" (click)="openDocument(doc.documentId)" [disabled]="downloadingId() === doc.documentId">
               {{ downloadingId() === doc.documentId ? 'Preparing…' : 'Open document' }}

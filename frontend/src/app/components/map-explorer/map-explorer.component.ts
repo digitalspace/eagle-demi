@@ -6,6 +6,7 @@ import { RegistryStateService } from '../../services/registry-state.service';
 import { UserdataService, SavedLasso } from '../../services/userdata.service';
 import { Project } from '../../models/registry.models';
 import { readPrefs } from '../../shell/prefs';
+import { TelemetryService } from '../../services/telemetry.service';
 import type * as Leaflet from 'leaflet';
 import 'leaflet';
 import 'leaflet.markercluster';
@@ -15,6 +16,64 @@ const L = (window as unknown as { L: typeof Leaflet }).L;
 
 /** Where a selection picked from a BC-wide view lands. Selecting never zooms in past this. */
 const ORIENTATION_ZOOM = 8;
+
+// DataBC serves 134k invasive-plant polygons, so this overlay draws as WMS tiles and asks
+// GetFeatureInfo about one pixel on click, rather than fetching GeoJSON the way wildfires do.
+const DATABC_OWS_URL = 'https://openmaps.gov.bc.ca/geo/pub/ows';
+const INVASIVES_WMS_URL = 'https://openmaps.gov.bc.ca/geo/pub/WHSE_FOREST_VEGETATION.IBC_INVASIVE_SPECIES_OBS_SP/ows';
+const INVASIVES_LAYER = 'pub:WHSE_FOREST_VEGETATION.IBC_INVASIVE_SPECIES_OBS_SP';
+const OGL_BC_ATTRIBUTION = 'Contains information licensed under the Open Government Licence – British Columbia.';
+
+/**
+ * DataBC's two published styles draw the layer green (`10523`) or grey at close zoom (`10524`), and
+ * both stop drawing below roughly a 5 km wide view. This inline style draws at every zoom, and
+ * GetFeatureInfo answers from it too, so a click finds a polygon where the published style would
+ * have shown bare ground.
+ *
+ * One row in five is a survey that confirmed the plant absent — good news, so those draw in the
+ * success green rather than the danger red an infestation earns. Colours are
+ * `--typography-color-danger` and `--support-border-color-success`; a server-side style cannot read
+ * a CSS variable. Absences also draw dashed, and their points hollow, so the two kinds stay apart
+ * for anyone who cannot tell the hues apart (WCAG 1.4.1). The dash pattern spends the room the
+ * absence stroke used to give to stroke-opacity: the whole style rides in a query string.
+ */
+const INVASIVES_RED = '#ce3e39';
+const INVASIVES_GREEN = '#42814a';
+const INVASIVES_SLD = '<StyledLayerDescriptor version="1.0.0" xmlns="http://www.opengis.net/sld" xmlns:ogc="http://www.opengis.net/ogc">'
+  + `<NamedLayer><Name>${INVASIVES_LAYER}</Name><UserStyle><FeatureTypeStyle>`
+  + '<Rule><ogc:Filter><ogc:Not><ogc:PropertyIsNull>'
+  + '<ogc:PropertyName>INVASIVE_PLANT_POSITIVE</ogc:PropertyName>'
+  + '</ogc:PropertyIsNull></ogc:Not></ogc:Filter>'
+  + `<PolygonSymbolizer><Fill><CssParameter name="fill">${INVASIVES_RED}</CssParameter>`
+  + '<CssParameter name="fill-opacity">0.6</CssParameter></Fill>'
+  + `<Stroke><CssParameter name="stroke">${INVASIVES_RED}</CssParameter></Stroke></PolygonSymbolizer>`
+  + '<PointSymbolizer><Graphic><Mark><WellKnownName>circle</WellKnownName>'
+  + `<Fill><CssParameter name="fill">${INVASIVES_RED}</CssParameter></Fill></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>`
+  + '<Rule><ElseFilter/>'
+  + `<PolygonSymbolizer><Fill><CssParameter name="fill">${INVASIVES_GREEN}</CssParameter>`
+  + '<CssParameter name="fill-opacity">0.45</CssParameter></Fill>'
+  + `<Stroke><CssParameter name="stroke">${INVASIVES_GREEN}</CssParameter>`
+  + '<CssParameter name="stroke-width">1.5</CssParameter>'
+  + '<CssParameter name="stroke-dasharray">4 2</CssParameter></Stroke></PolygonSymbolizer>'
+  + '<PointSymbolizer><Graphic><Mark><WellKnownName>circle</WellKnownName>'
+  + `<Stroke><CssParameter name="stroke">${INVASIVES_GREEN}</CssParameter>`
+  + '<CssParameter name="stroke-width">1.5</CssParameter></Stroke></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>'
+  + '</FeatureTypeStyle></UserStyle></NamedLayer></StyledLayerDescriptor>';
+
+/** The style's two rules, as CQL, so the count can be split the same way the map is. */
+const PRESENT_CQL = 'INVASIVE_PLANT_POSITIVE IS NOT NULL';
+const ABSENT_CQL = 'INVASIVE_PLANT_POSITIVE IS NULL';
+
+/** Long enough that a typed species name is one request, short enough to feel immediate. */
+const INVASIVES_FILTER_DEBOUNCE_MS = 400;
+
+/** A CQL string literal: quotes double, and % and _ are wildcards unless escaped. */
+export function invasivesCql(species: string): string {
+  const term = species.trim();
+  if (!term) return '';
+  const literal = term.replace(/'/g, "''").replace(/[%_]/g, match => `\\${match}`);
+  return `INVASIVE_PLANT ILIKE '%${literal}%'`;
+}
 
 /** One checkbox row inside the Filters drawer. */
 interface FilterOption { value: string; label: string; checked: boolean }
@@ -34,6 +93,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   service = inject(RegistryStateService);
   userdata = inject(UserdataService);
   private router = inject(Router);
+  private telemetry = inject(TelemetryService);
 
   availableRegions = ['Vancouver Island', 'Lower Mainland', 'Thompson', 'Kootenay', 'Cariboo', 'Skeena', 'Omineca', 'Okanagan', 'Peace'];
 
@@ -47,8 +107,26 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   private poppedOriginal: any = null;
   private poppedProjectId: string | number | null = null;
   private wildfireLayerGroup: any = null;
+  /** Built once and kept: a WMS layer holds no data of its own, only the tile requests. */
+  private invasivesLayer: any = null;
 
   showWildfires = signal<boolean>(false);
+  showInvasives = signal<boolean>(false);
+  invasivesSpecies = signal<string>('');
+  invasivesMatches = signal<{ present: number; absent: number } | null>(null);
+  /** Every plant DataBC has ever recorded, from the build-time asset. Empty until the overlay is on. */
+  invasivesSpeciesList = signal<string[]>([]);
+  private speciesListRequested = false;
+  private invasivesFilterTimer: any = null;
+  /** The filter the newest count request was made for, so a slow earlier answer is dropped. */
+  private invasivesCountCql = '';
+
+  invasivesMatchLabel = computed(() => {
+    if (!this.invasivesSpecies().trim()) return 'All species';
+    const matches = this.invasivesMatches();
+    if (matches === null) return '';
+    return `${matches.present.toLocaleString()} present, ${matches.absent.toLocaleString()} absent`;
+  });
 
   // --- Lasso ---------------------------------------------------------------------------------
   lassoActive = signal<boolean>(false);
@@ -64,6 +142,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   // --- Left rail and detail card -------------------------------------------------------------
   filtersOpen = signal<boolean>(false);
   layersOpen = signal<boolean>(false);
+  /** Layers button badge: boundary overlays plus the wildfire and invasives toggles. */
+  activeLayersCount = computed(() =>
+    this.service.activeBoundaryLayers().length + (this.showWildfires() ? 1 : 0) + (this.showInvasives() ? 1 : 0)
+  );
   detailsExpanded = signal<boolean>(false);
   sourceTab = signal<'all' | 'track' | 'epic' | 'demi'>('all');
   sortBy = signal<'relevance' | 'name'>('relevance');
@@ -396,6 +478,20 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         this.wildfireLayerGroup = null;
       }
     });
+
+    // Invasive species observations come as tiles, so the layer only goes on and off the map.
+    effect(() => {
+      const active = this.showInvasives();
+      if (!this.map) return;
+      if (active) {
+        this.map.addLayer(this.invasivesWmsLayer());
+        untracked(() => this.loadInvasivesSpeciesList());
+      } else if (this.invasivesLayer) {
+        try {
+          this.map.removeLayer(this.invasivesLayer);
+        } catch (e) {}
+      }
+    });
   }
 
   ngOnInit() {
@@ -500,6 +596,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   ngOnDestroy() {
     this.sizeObserver?.disconnect();
+    if (this.invasivesFilterTimer) clearTimeout(this.invasivesFilterTimer);
     this.destroyMap();
   }
 
@@ -510,6 +607,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       // Above markerPane (600) and below popupPane (700): the selection is never inside a cluster
       // bubble, so it needs a layer of its own that always draws on top.
       this.map.createPane('selected-marker').style.zIndex = '650';
+      // Over the basemap tiles (200), under boundaries (400) and every pin.
+      this.map.createPane('invasives').style.zIndex = '250';
       this.map.on('click', this.onMapClick);
       // The pane is sized by flex after first paint; Leaflet keeps the size it measured at init.
       const host = document.getElementById('demi-map');
@@ -559,6 +658,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         this.regionsLayer = null;
         this.boundariesLayers.clear();
         this.markerClusterGroup = null;
+        this.invasivesLayer = null;
         this.markersMap.clear();
         this.poppedMarker = null;
         this.poppedOriginal = null;
@@ -811,9 +911,11 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     if (returnFocus && id != null) this.rowElement(id)?.focus();
   }
 
-  private onMapClick = () => {
+  private onMapClick = (event?: any) => {
     // While the lasso is armed a stroke ends in a map click; that must not clear the selection.
     if (!this.lassoActive()) this.clearSelection(false);
+    // Nothing is asked of the WMS while its overlay is off.
+    if (this.showInvasives() && event?.latlng) this.loadInvasiveObservation(event);
   };
 
   private rowElement(id: string | number): HTMLElement | null {
@@ -1103,6 +1205,16 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     this.showWildfires.set(!this.showWildfires());
   }
 
+  toggleInvasives() {
+    this.showInvasives.set(!this.showInvasives());
+  }
+
+  setInvasivesSpecies(event: Event) {
+    this.invasivesSpecies.set((event.target as HTMLInputElement).value);
+    if (this.invasivesFilterTimer) clearTimeout(this.invasivesFilterTimer);
+    this.invasivesFilterTimer = setTimeout(() => this.applyInvasivesFilter(), INVASIVES_FILTER_DEBOUNCE_MS);
+  }
+
   toggleLasso() {
     if (this.lassoActive()) this.exitLasso();
     else this.enterLasso();
@@ -1244,7 +1356,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       6: 'Southeast Fire Centre'
     };
 
-    const wfsUrl = 'https://openmaps.gov.bc.ca/geo/pub/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=pub:WHSE_LAND_AND_NATURAL_RESOURCE.PROT_CURRENT_FIRE_PNTS_SP&outputFormat=application/json&srsName=EPSG:4326';
+    const wfsUrl = `${DATABC_OWS_URL}?service=WFS&version=1.0.0&request=GetFeature&typeName=pub:WHSE_LAND_AND_NATURAL_RESOURCE.PROT_CURRENT_FIRE_PNTS_SP&outputFormat=application/json&srsName=EPSG:4326`;
 
     fetch(wfsUrl)
       .then(res => res.json())
@@ -1328,5 +1440,189 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       .catch(err => {
         console.warn('Failed to load active wildfires from DataBC WFS:', err);
       });
+  }
+
+  private invasivesWmsLayer() {
+    if (!this.invasivesLayer) {
+      this.invasivesLayer = L.tileLayer.wms(INVASIVES_WMS_URL, {
+        layers: INVASIVES_LAYER,
+        format: 'image/png',
+        transparent: true,
+        opacity: 0.7,
+        pane: 'invasives',
+        attribution: OGL_BC_ATTRIBUTION
+      });
+      // The style and filter ride in wmsParams, which the Leaflet typings do not model. A species
+      // can also be typed before the overlay is switched on, or after it was switched off.
+      const cql = invasivesCql(this.invasivesSpecies());
+      this.invasivesLayer.setParams(cql
+        ? { SLD_BODY: INVASIVES_SLD, CQL_FILTER: cql }
+        : { SLD_BODY: INVASIVES_SLD });
+    }
+    return this.invasivesLayer;
+  }
+
+  /** Ask the WMS what sits under the clicked pixel, styled the same way the tiles are. */
+  private loadInvasiveObservation(event: any) {
+    const map = this.map;
+    if (!map) return;
+
+    const size = map.getSize();
+    const bounds = map.getBounds();
+    const sw = L.CRS.EPSG3857.project(bounds.getSouthWest());
+    const ne = L.CRS.EPSG3857.project(bounds.getNorthEast());
+    const pixel = map.latLngToContainerPoint(event.latlng);
+
+    const params = new URLSearchParams({
+      SERVICE: 'WMS',
+      VERSION: '1.3.0',
+      REQUEST: 'GetFeatureInfo',
+      LAYERS: INVASIVES_LAYER,
+      QUERY_LAYERS: INVASIVES_LAYER,
+      CRS: 'EPSG:3857',
+      BBOX: `${sw.x},${sw.y},${ne.x},${ne.y}`,
+      WIDTH: String(Math.round(size.x)),
+      HEIGHT: String(Math.round(size.y)),
+      I: String(Math.round(pixel.x)),
+      J: String(Math.round(pixel.y)),
+      INFO_FORMAT: 'application/json',
+      FEATURE_COUNT: '1',
+      SLD_BODY: INVASIVES_SLD
+    });
+    // The popup answers about the drawn set, so it carries the same filter as the tiles.
+    const cql = invasivesCql(this.invasivesSpecies());
+    if (cql) params.set('CQL_FILTER', cql);
+
+    fetch(`${INVASIVES_WMS_URL}?${params.toString()}`)
+      .then(res => res.json())
+      .then(data => {
+        // The overlay can be switched off, or the view torn down, while the request is in flight.
+        if (!this.map || !this.showInvasives()) return;
+        this.openInvasivesPopup(event.latlng, this.invasiveObservationCard(data?.features?.[0]?.properties || null));
+      })
+      .catch(err => {
+        // A failed read must not read as a click that did nothing. GeoServer answers errors with
+        // an XML exception report, which makes the JSON parse reject.
+        const card = document.createElement('div');
+        card.textContent = 'Could not load observation details.';
+        if (this.map && this.showInvasives()) this.openInvasivesPopup(event.latlng, card);
+        this.telemetry.trackException(err, { source: 'map-explorer:invasives-getfeatureinfo' });
+      });
+  }
+
+  /** Put the typed species on the tiles, and count what it matches. */
+  private applyInvasivesFilter() {
+    const cql = invasivesCql(this.invasivesSpecies());
+    if (this.invasivesLayer) {
+      if (cql) {
+        this.invasivesLayer.setParams({ CQL_FILTER: cql });
+      } else {
+        // setParams only merges, so an unfiltered view means taking the key off the layer.
+        delete this.invasivesLayer.wmsParams.CQL_FILTER;
+        this.invasivesLayer.setParams({});
+      }
+    }
+    this.loadInvasivesMatchCount(cql);
+  }
+
+  private loadInvasivesSpeciesList() {
+    if (this.speciesListRequested) return;
+    this.speciesListRequested = true;
+
+    fetch(new URL('data/invasive-species.json', document.baseURI).toString())
+      .then(res => res.json())
+      .then(data => this.invasivesSpeciesList.set(Array.isArray(data?.species) ? data.species : []))
+      .catch(err => {
+        // Losing the list only costs the dropdown; typing a name still filters the map.
+        this.speciesListRequested = false;
+        this.telemetry.trackException(err, { source: 'map-explorer:invasives-species-list' });
+      });
+  }
+
+  private loadInvasivesMatchCount(cql: string) {
+    this.invasivesCountCql = cql;
+    if (!cql) {
+      this.invasivesMatches.set(null);
+      return;
+    }
+
+    Promise.all([this.hitsFor(cql, PRESENT_CQL), this.hitsFor(cql, ABSENT_CQL)])
+      .then(([present, absent]) => {
+        // A slower earlier request must not overwrite the count for what is typed now.
+        if (this.invasivesCountCql !== cql) return;
+        this.invasivesMatches.set(present === null || absent === null ? null : { present, absent });
+      })
+      .catch(err => {
+        if (this.invasivesCountCql === cql) this.invasivesMatches.set(null);
+        this.telemetry.trackException(err, { source: 'map-explorer:invasives-hits' });
+      });
+  }
+
+  /** How many rows match the species and one of the style's two rules. */
+  private hitsFor(cql: string, rule: string): Promise<number | null> {
+    const params = new URLSearchParams({
+      service: 'WFS',
+      version: '2.0.0',
+      request: 'GetFeature',
+      typeName: INVASIVES_LAYER,
+      resultType: 'hits',
+      CQL_FILTER: `(${cql}) AND ${rule}`
+    });
+
+    return fetch(`${DATABC_OWS_URL}?${params.toString()}`)
+      .then(res => res.text())
+      .then(xml => {
+        const matched = /numberMatched="(\d+)"/.exec(xml);
+        return matched ? Number(matched[1]) : null;
+      });
+  }
+
+  private openInvasivesPopup(latlng: any, card: HTMLElement) {
+    this.map.openPopup(L.popup({ maxWidth: 260 }).setLatLng(latlng).setContent(card));
+  }
+
+  /** Values come straight off a third-party service, so they go in as text, never as markup. */
+  private invasiveObservationCard(props: Record<string, any> | null): HTMLElement {
+    const card = document.createElement('div');
+    card.style.font = 'var(--typography-regular-small-body)';
+
+    const name = props ? String(props['INVASIVE_PLANT'] || props['INVASIVE_PLANT_POSITIVE'] || props['INVASIVE_PLANT_NEGATIVE'] || '') : '';
+    if (!name) {
+      card.textContent = 'No observation here.';
+      return card;
+    }
+
+    // DataBC packs both names into one string: "Japanese knotweed (Reynoutria / Fallopia japonica)".
+    const split = /^(.*?)\s*\((.*)\)\s*$/.exec(name);
+    const title = document.createElement('h4');
+    title.style.margin = '0 0 4px';
+    title.style.font = 'var(--typography-bold-small-body)';
+    title.textContent = split ? split[1] : name;
+    card.appendChild(title);
+
+    if (split) {
+      const scientific = document.createElement('p');
+      scientific.style.margin = '0 0 6px';
+      scientific.style.fontStyle = 'italic';
+      scientific.textContent = split[2];
+      card.appendChild(scientific);
+    }
+
+    const row = (label: string, value: string) => {
+      const line = document.createElement('p');
+      line.style.margin = '3px 0';
+      const key = document.createElement('strong');
+      key.textContent = `${label}: `;
+      line.appendChild(key);
+      line.appendChild(document.createTextNode(value));
+      card.appendChild(line);
+    };
+
+    const observed = String(props!['ACTIVITY_DATE'] || '').replace('Z', '');
+    if (observed) row('Observed', observed);
+    if (props!['INVASIVE_PLANT_POSITIVE']) row('Presence', 'Present');
+    else if (props!['INVASIVE_PLANT_NEGATIVE']) row('Presence', 'Not present');
+
+    return card;
   }
 }

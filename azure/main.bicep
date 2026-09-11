@@ -123,8 +123,10 @@ param trustedProxyIps string = ''
 // does, and an unnamed one leaves its app setting empty rather than pointing at nothing.
 // `edge-secret` unnamed means X-Edge-Secret is ignored and every visitor arriving through Front
 // Door shares its egress address as one anonymous quota key; `notify-api-key` unnamed leaves the
-// eagle-notify push dark.
-@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret.')
+// eagle-notify push dark; `access-gate-password` unnamed leaves POST /api/gate answering 404, which
+// is what prod runs. The flag the browser sees is the boolean ACCESS_GATE in the `public` config
+// document, not the secret, so the curtain's two halves are set in different places on purpose.
+@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password.')
 param optionalSecretNames array = []
 
 // The OpenShift namespaces the secret sync writes to, and the switch that deploys it. Empty
@@ -547,6 +549,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
     edgeSecretUri: keyVault.outputs.edgeSecretUri
+    accessGateSecretUri: keyVault.outputs.accessGateSecretUri
     virtualNetworkSubnetId: apiFlexSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId
