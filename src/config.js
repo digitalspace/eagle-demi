@@ -57,9 +57,12 @@ function proxyListFromEnv(name) {
   return entries;
 }
 
+const { isKeyVaultReference } = require('./utils/key-vault-reference');
+
 // Settings App Service resolved as a literal Key Vault reference instead of a secret. Names only.
+// Data, never a log line: src/utils/logger.js reads this module, so this file cannot load the
+// logger. That module reports these names once, after the logger exists.
 const unresolvedSecrets = [];
-let exported = false;
 
 /**
  * A credential app setting, or '' when the Key Vault reference behind it did not resolve.
@@ -76,25 +79,8 @@ function secretFromEnv(name) {
   const raw = process.env[name];
   if (raw === undefined) return '';
   if (!isKeyVaultReference(raw)) return raw;
-  if (!unresolvedSecrets.includes(name)) {
-    unresolvedSecrets.push(name);
-    if (exported) report([name]);
-  }
+  if (!unresolvedSecrets.includes(name)) unresolvedSecrets.push(name);
   return '';
-}
-
-/** The literal App Service leaves behind when a Key Vault reference does not resolve. */
-function isKeyVaultReference(value) {
-  return typeof value === 'string' && value.trim().startsWith('@Microsoft.KeyVault(');
-}
-
-function report(names) {
-  // Required lazily: src/utils/logger.js reads this module, so it can only be loaded once the
-  // export below is in place.
-  require('./utils/logger').logger.error(
-    `[config] Key Vault reference did not resolve, treated as unset: ${names.join(', ')}. ` +
-    'Check the app identity\'s Key Vault Secrets User role and that each secret still exists.'
-  );
 }
 
 const config = {
@@ -441,13 +427,13 @@ if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
   );
 }
 
-// Read by src/scripts/probe-acl.js, which takes ADMIN_API_KEY from an operator shell.
+// The adminApiKey getter is only read per request, so an unresolved ADMIN_API_KEY would miss the
+// one boot report docs/prod-flip-runbook.md promises. The value is discarded here; only the name is recorded.
+secretFromEnv('ADMIN_API_KEY');
+
+// Read by src/helpers/auth.js, which takes APIM_GATEWAY_SECRET per request.
 config.secretFromEnv = secretFromEnv;
-// The predicate on its own, for the call sites that re-check a value they were handed.
-config.isKeyVaultReference = isKeyVaultReference;
-// Which settings came back as an unresolved reference. The log line below is built from it.
+// Which settings came back as an unresolved reference. src/utils/logger.js reports the names.
 config.unresolvedSecrets = unresolvedSecrets;
 
 module.exports = config;
-exported = true;
-if (unresolvedSecrets.length > 0) report(unresolvedSecrets);

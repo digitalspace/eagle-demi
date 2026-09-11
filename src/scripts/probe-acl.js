@@ -23,9 +23,13 @@
  */
 
 const BASE = process.env.DEMI_API_BASE || 'https://demi-api-fc-test.azurewebsites.net';
-// Via config: an unresolved Key Vault reference reads as unset, so the guard below reports a
-// missing key instead of sending the reference text and reading the 401 as a broken ACL.
-const ADMIN = require('../config').secretFromEnv('ADMIN_API_KEY');
+// Read straight from the shell, not through src/config.js: this script only talks to a remote API
+// over HTTP, and going through config would apply the server's boot guards to an operator shell.
+// An unresolved Key Vault reference reads as unset, so the guard below reports a missing key
+// instead of sending the reference text and reading the 401 as a broken ACL.
+const { isKeyVaultReference } = require('../utils/key-vault-reference');
+const ADMIN_RAW = process.env.ADMIN_API_KEY || '';
+const ADMIN = isKeyVaultReference(ADMIN_RAW) ? '' : ADMIN_RAW;
 
 // Documents reach the search index only on the indexer's PT5M pass, so the search leg has to wait
 // for its own control row before it can conclude anything.

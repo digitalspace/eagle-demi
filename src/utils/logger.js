@@ -63,6 +63,18 @@ const logger = winston.createLogger({
   exitOnError: false
 });
 
+// Key Vault references App Service failed to resolve, reported once per process. It happens here
+// because src/config.js records the names but cannot log them: this module reads that one, so a
+// logger require from there runs against a half-built module. Names only — the value is a secret
+// whenever the reference did resolve.
+if (config.unresolvedSecrets.length > 0) {
+  logger.error(
+    '[config] Key Vault reference did not resolve, treated as unset: ' +
+    `${config.unresolvedSecrets.join(', ')}. Check the app identity's Key Vault Secrets User ` +
+    'role and that each secret still exists.'
+  );
+}
+
 module.exports = {
   logger,
   asyncLocalStorage,

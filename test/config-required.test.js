@@ -5,6 +5,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const { spawnSync } = require('node:child_process');
 
 const CONFIG = path.join(__dirname, '..', 'src', 'config');
 
@@ -172,5 +173,55 @@ test('an unresolved Key Vault reference reads as unset, never as the credential'
   await t.test('a secret that merely contains the prefix is still a secret', () => {
     const value = `shared-secret-${UNRESOLVED}`;
     assert.strictEqual(readConfig({ EDGE_SECRET: value }, c => c.edgeSecret), value);
+  });
+});
+
+/**
+ * Load `expr` in a child process with `vars` set, returning {status, output}.
+ *
+ * A child, because load ORDER is what is under test and this process already holds both modules:
+ * evicting src/config.js from the require cache leaves the logger loaded, so config is always
+ * second here and the order every entry point actually uses cannot be reproduced in process.
+ */
+function loadInChild(vars, expr) {
+  const env = { ...process.env, ...vars };
+  // The allowlist guard would otherwise refuse to boot before the case under test ran.
+  delete env.ENVIRONMENT;
+  const res = spawnSync(process.execPath, ['-e', expr], {
+    cwd: path.resolve(__dirname, '..'),
+    encoding: 'utf8',
+    timeout: 60000,
+    env
+  });
+  return { status: res.status, output: `${res.stdout}${res.stderr}` };
+}
+
+test('an unresolved reference is reported without crashing the app at load', async (t) => {
+  await t.test('the HTTP entry point loads, logger first', () => {
+    // What api/index.js does on the first request: src/http/router.js requires the logger, which
+    // requires config. A report written from config would run against a half-built logger module.
+    const { status, output } = loadInChild(
+      { EDGE_SECRET: UNRESOLVED },
+      "require('./src/http/router'); console.log('ROUTER OK');");
+    assert.strictEqual(status, 0, `the router must load; got:\n${output}`);
+    assert.match(output, /ROUTER OK/);
+  });
+
+  await t.test('the setting is named and the reference text is not printed', () => {
+    const { output } = loadInChild(
+      { EDGE_SECRET: UNRESOLVED },
+      "require('./src/http/router');");
+    assert.match(output, /EDGE_SECRET/, 'the operator has to be told which setting to fix');
+    // The same position holds a real credential whenever the reference did resolve.
+    assert.ok(!output.includes('vault.azure.net'), 'the value must never be logged');
+  });
+
+  await t.test('config first is reported too', () => {
+    // An operator script's order: config, then whatever logs.
+    const { status, output } = loadInChild(
+      { EDGE_SECRET: UNRESOLVED },
+      "require('./src/config'); require('./src/utils/logger');");
+    assert.strictEqual(status, 0, `config first must load; got:\n${output}`);
+    assert.match(output, /EDGE_SECRET/);
   });
 });

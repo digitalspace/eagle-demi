@@ -3,6 +3,7 @@
 const net = require('node:net');
 const { fromGateway, matchesConfiguredKey } = require('../helpers/auth');
 const config = require('../config');
+const { isKeyVaultReference } = require('./key-vault-reference');
 
 /**
  * `1.2.3.4:5678` → `1.2.3.4`, `[2001:db8::1]:8080` → `2001:db8::1`.
@@ -63,7 +64,7 @@ function normalizeIp(value) {
  */
 function fromEdge(headers) {
   const secret = config.edgeSecret;
-  if (!secret || config.isKeyVaultReference(secret)) return false;
+  if (!secret || isKeyVaultReference(secret)) return false;
 
   return matchesConfiguredKey(headers['x-edge-secret'] || '', [secret]);
 }

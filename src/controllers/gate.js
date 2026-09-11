@@ -17,6 +17,7 @@ const config = require('../config');
 const configRepository = require('../repositories/config');
 const { matchesConfiguredKey } = require('../helpers/auth');
 const { callerIp } = require('../utils/caller-ip');
+const { isKeyVaultReference } = require('../utils/key-vault-reference');
 const { logger } = require('../utils/logger');
 
 /**
@@ -59,7 +60,7 @@ exports.postGate = async (req, res) => {
   // Re-checked here because the literal is public in this repository, so a value that reached the
   // field any other way must not double as the password.
   const password = config.accessGatePassword;
-  const expected = config.isKeyVaultReference(password) ? '' : password;
+  const expected = isKeyVaultReference(password) ? '' : password;
 
   // Flag on with no password is a misconfiguration, not "no gate": a 404 here would tell
   // eagle-public this environment runs ungated when eagle-api's flag says the opposite.
