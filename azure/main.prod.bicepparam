@@ -25,12 +25,13 @@ param minioKeyPrefix = ''
 // for any of them passes through this file: they are set once by hand from the devbox with
 // `az keyvault secret set` and the app resolves them by reference.
 //
-// EMPTY, and it stays empty until each optional secret is actually set in `demi-kv-prod`: naming a
-// secret the vault does not hold points the app setting at nothing. `notify-api-key` is not wanted
-// here at all while notifyApiBase below is empty. TODO(kv-prod-edge): add 'edge-secret' once the
-// prod Front Door value has been set in the vault; until then prod visitors arriving through Front
-// Door share one anonymous rate-limit key, which is the behaviour prod has today.
-param optionalSecretNames = []
+// A name here says `demi-kv-prod` holds that secret; naming one it does not hold points the app
+// setting at nothing. `edge-secret` is the Front Door shared secret, set by hand in the vault.
+// `notify-api-key` is not named: prod sends no notifications. `access-gate-password` is not named
+// either: prod runs ungated.
+param optionalSecretNames = [
+  'edge-secret'
+]
 
 // No sync app in prod. The prod spoke has no route table and policy forbids creating one, so the
 // app could not reach the OpenShift API on 6443. Prod OpenShift secrets are set by hand in the
@@ -92,8 +93,9 @@ param ssoAudience = ''
 // An address missing here only puts that proxy's visitors back on one shared key.
 param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194.124'
 
-// The secret the eagle-edge rule set stamps on origin requests is the vault's `edge-secret`. It is
-// not named in optionalSecretNames above yet — see the TODO there.
+// The secret the eagle-edge rule set stamps on origin requests is the vault's `edge-secret`, named
+// in optionalSecretNames above. Both sides read the SAME value — rotate it in eagle-edge and in the
+// vault together, or callers fall back to the shared anonymous quota key for a while.
 
 // The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
 // so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
