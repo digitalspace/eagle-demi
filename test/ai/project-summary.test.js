@@ -2046,6 +2046,38 @@ test('generateProjectSummary', async (t) => {
       `the skipped document is logged with its counts: ${info.join(' | ')}`);
   });
 
+  await t.test('sends no Foundry call for a document whose pages carry no date', async () => {
+    // Foundry is the deployed provider and sizes its batches by count, so an empty page list is
+    // still one batch — a prompt with zero sources, asking the model to date events it was shown
+    // none of. Ollama's fitBatches returns no batch at all, which is why the guard needs pinning
+    // here rather than there.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'foundry';
+    config.foundryEndpoint = 'https://foundry.example';
+    config.foundryDeployment = 'gpt-4.1-mini-test';
+    const calls = stubFoundry(t, JSON.stringify({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, CERTIFICATE],
+      chunks: {
+        docAR: [
+          chunk(1, 'The Tilbury Marine Jetty project overview.', 'docAR'),
+          chunk(2, 'The proponent applied in 2014.', 'docAR')
+        ],
+        docC: [chunk(1, 'Dated this 14th day of October, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.deepStrictEqual(sourcesNamed(calls), ['Environmental Assessment Certificate #E14-02'],
+      'the undated report costs no call and the certificate is read instead');
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC');
+  });
+
   await t.test('splits the timeline into count-sized batches off Ollama too', async () => {
     // Foundry is the deployed provider and has no fixed window to size against, so the count cap
     // is the whole bound there: `projectSummaryMaxChunks` chunks per call, over the whole document.
@@ -2913,7 +2945,21 @@ test('hasFullDate', async (t) => {
       'issued 14 October 2014',
       'issued Oct. 14, 2014',
       'déposé le 3 juillet 2024',
-      'modifié 3 décembre 2019'
+      'modifié 3 décembre 2019',
+      // The ordinal, legal and slashed spellings a certificate dates itself with. `dateSpellings`
+      // accepts every one of them as October 14 2014, so the filter has to as well.
+      'Issued October 14th, 2014.',
+      'DATED at Victoria, British Columbia, this 14th day of October, 2014.',
+      'Dated this 14 day of October, 2014.',
+      'amended this 9th August 2016',
+      'Issued 2014/10/14.',
+      'Issued 2014.10.14.',
+      'issued 14/10/2014',
+      'issued 10/14/2014',
+      'déposé le 1er janvier 2024',
+      // PDF text loses the space after a comma or a month's dot often enough to matter.
+      'issued October 14,2014',
+      'issued Oct.14, 2014'
     ]) {
       assert.ok(hasFullDate(text), `expected a full date in "${text}"`);
     }
@@ -2924,7 +2970,10 @@ test('hasFullDate', async (t) => {
       'issued October 2014',
       'issued 14 October',
       'issued in 2014',
-      'see page 14'
+      'see page 14',
+      // Two numbers are not three, and a dotted clause number is not a dotted date.
+      'issued 14/2014',
+      'see Section 14.2'
     ]) {
       assert.strictEqual(hasFullDate(text), false, `expected no full date in "${text}"`);
     }

@@ -804,11 +804,34 @@ const OTHER_MONTHS = [
   'septembre', 'octobre', 'novembre', 'décembre', 'decembre'
 ].join('|');
 
-/** Year, month and day together, in ISO or in either written order. A year alone is not a date. */
+/** Every month name the corpus writes: English and French, full and abbreviated. */
+const ANY_MONTH = `(?:${MONTHS}|${OTHER_MONTHS})`;
+
+/** The suffix a day carries when it is written as an ordinal: "14th", "1st", French "1er". */
+const DAY_SUFFIX = '(?:st|nd|rd|th|er)?';
+
+/**
+ * Year, month and day together, in every spelling `dateSpellings` treats as the same day.
+ *
+ * The two must agree on what a date looks like or the filter throws away pages the grounding gate
+ * would have accepted. A certificate dates itself "DATED at Victoria, this 14th day of October,
+ * 2014"; matching only "October 14, 2014" dropped that page before the model ever saw it, and with
+ * it the one event the document exists to carry. Both share `MONTHS` and `OTHER_MONTHS`, so a month
+ * name added for one is added for the other.
+ *
+ * A year alone is not a date, and neither is a day with no year: "October 2014" and "14 October"
+ * cannot date an event the instruction will accept.
+ */
 const FULL_DATE = new RegExp([
-  '\\b\\d{4}-\\d{2}-\\d{2}\\b',
-  `(?:${MONTHS}|${OTHER_MONTHS})\\.?\\s+\\d{1,2},?\\s+\\d{4}\\b`,
-  `\\b\\d{1,2}\\s+(?:${MONTHS}|${OTHER_MONTHS})\\.?\\s+\\d{4}\\b`
+  // ISO, and the same three numbers slashed or dotted: "2014-10-14", "2014/10/14", "2014.10.14".
+  '\\b\\d{4}[-/.]\\d{2}[-/.]\\d{2}\\b',
+  // Day and month numeric, in either order. A source that does not say whether it writes dd/mm or
+  // mm/dd gives no way to tell, and both orders are a full date whichever one it meant.
+  '\\b\\d{1,2}/\\d{1,2}/\\d{4}\\b',
+  // "October 14, 2014", "October 14th, 2014", "Oct. 14 2014", "Oct.14, 2014".
+  `\\b${ANY_MONTH}(?:\\.\\s*|\\s+)\\d{1,2}${DAY_SUFFIX}(?:,\\s*|\\s+)\\d{4}\\b`,
+  // "14 October 2014", "le 1er janvier 2024", and the legal "14th day of October, 2014".
+  `\\b\\d{1,2}${DAY_SUFFIX}\\s+(?:day\\s+of\\s+)?${ANY_MONTH}(?:\\.?,\\s*|\\.?\\s+)\\d{4}\\b`
 ].join('|'), 'i');
 
 /** Does `text` date anything in full? What `DATE_FILTERED_SECTIONS` narrows their sources to. */
