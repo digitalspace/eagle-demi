@@ -287,3 +287,131 @@ test('bulk splits requests at the 100-operation ceiling', async (t) => {
     assert.deepStrictEqual(await bulk('chunks', ops(5), { containerFn: () => null }), []);
   });
 });
+
+/**
+ * A SUSTAINED throttle, not a transient one.
+ *
+ * Measured 2026-09 on the serverless test account: a full chunk-parent walk of ~1M PATCH operations
+ * came back {200: 1004569, 412: 12248, 429: 523144, thrown: 291} and left 70 documents part-stamped
+ * with 99,633 operations rejected. Four attempts of 1s/2s/3s spend the whole budget inside the same
+ * overload, so the budget, the doubling, the 20s ceiling and Cosmos's own hint are pinned here.
+ */
+test('bulkVerified sits out a sustained throttle', async (t) => {
+  // Records the wait instead of spending it: even the four-attempt default is seconds of real time,
+  // and a raised budget is over a minute, which no unit test can afford to sleep through.
+  const recorder = () => {
+    const waits = [];
+    return { waits, sleepFn: async (ms) => { waits.push(ms); } };
+  };
+  const withinJitter = (waited, floor, label) => assert.ok(
+    waited >= floor && waited <= floor + 250,
+    `${label}: waited ${waited}, expected ${floor} plus at most 250ms of jitter`
+  );
+
+  await t.test("a thrown 429 waits at least the SDK's retryAfterInMs", async () => {
+    // `retryAfterInMs` on the ErrorResponse is the only figure that knows when the partition has
+    // budget again; the first exponential step is 1s, which would resend into the same overload.
+    const { waits, sleepFn } = recorder();
+    let calls = 0;
+    const res = await bulkVerified('chunks', ops(2), {
+      sleepFn,
+      bulkFn: async (pending) => {
+        calls++;
+        if (calls === 1) throw Object.assign(RU(), { retryAfterInMs: 5000 });
+        return ok(pending);
+      }
+    });
+
+    assert.strictEqual(waits.length, 1);
+    withinJitter(waits[0], 5000, 'the server hint must win over the first step');
+    assert.strictEqual(res.succeeded, 2);
+  });
+
+  await t.test('a per-operation retry hint is honoured the same way', async () => {
+    const { waits, sleepFn } = recorder();
+    let calls = 0;
+    await bulkVerified('chunks', ops(2), {
+      sleepFn,
+      bulkFn: async (pending) => {
+        calls++;
+        return calls === 1
+          ? pending.map(() => ({ statusCode: 429, retryAfterMilliseconds: 6000 }))
+          : ok(pending);
+      }
+    });
+
+    assert.strictEqual(waits.length, 1);
+    withinJitter(waits[0], 6000, 'the operation result hint must win over the first step');
+  });
+
+  await t.test('the ceiling clips a long hint for a request-path caller, not for a walk', async () => {
+    // The request paths share this default: three retries on an unclipped 30s hint is 90s behind an
+    // APIM gateway that gives the whole request 30s. An offline walk names its own ceiling instead,
+    // because clipping a 45s hint there resends into a partition the service just said has no
+    // budget, spending an attempt to be rejected again.
+    const hinted = () => {
+      let calls = 0;
+      return async (pending) => (++calls === 1
+        ? pending.map(() => ({ statusCode: 429, retryAfterMilliseconds: 45000 }))
+        : ok(pending));
+    };
+
+    const capped = recorder();
+    await bulkVerified('chunks', ops(2), { sleepFn: capped.sleepFn, bulkFn: hinted() });
+
+    assert.strictEqual(capped.waits.length, 1);
+    withinJitter(capped.waits[0], 20000, 'the default ceiling bounds the hint too');
+
+    const raised = recorder();
+    await bulkVerified('chunks', ops(2), {
+      sleepFn: raised.sleepFn, bulkFn: hinted(), maxBackoffMs: 60000
+    });
+
+    assert.strictEqual(raised.waits.length, 1);
+    assert.ok(raised.waits[0] >= 45000, `waited ${raised.waits[0]}, the hint of 45000 was clipped`);
+    withinJitter(raised.waits[0], 45000, 'under its own ceiling the hint is the whole wait');
+  });
+
+  await t.test('per-operation 429s get four attempts by default, doubling', async () => {
+    // Four, not more: this is the budget an ingest upsert and the ACL cascade inherit inside an
+    // `/api` request that APIM cuts off at 30s. 1s+2s+4s is about 7s of waiting; the offline walks
+    // that need to outlast a longer throttle ask for a bigger budget through `maxAttempts`.
+    const { waits, sleepFn } = recorder();
+    let calls = 0;
+    const res = await bulkVerified('chunks', ops(3), {
+      sleepFn,
+      bulkFn: async (pending) => { calls++; return pending.map(() => ({ statusCode: 429 })); }
+    });
+
+    assert.strictEqual(calls, 4, 'four attempts is the shared default');
+    assert.ok(waits.reduce((a, b) => a + b, 0) < 10000,
+      'a request-path caller cannot block for longer than the gateway will wait');
+    [1000, 2000, 4000].forEach((floor, i) => withinJitter(waits[i], floor, `wait ${i + 1}`));
+    assert.strictEqual(waits.length, 3, 'no wait after the last attempt');
+    assert.strictEqual(res.succeeded, 0);
+    assert.strictEqual(res.failed, 3);
+    assert.strictEqual(res.statusCounts[429], 12, 'every attempt is still counted, as before');
+    assert.deepStrictEqual(res.failedIds, ['c0', 'c1', 'c2']);
+  });
+
+  await t.test('a 412 is answered once and never retried, however long the 429s go on', async () => {
+    // A precondition that did not hold is Cosmos's answer, not a throttle. Widening the budget for
+    // 429 must not start paying a request per attempt for a decision already made.
+    const { sleepFn } = recorder();
+    const sent = [];
+    const res = await bulkVerified('chunks', ops(2), {
+      sleepFn,
+      bulkFn: async (pending) => {
+        sent.push(pending.map(o => o.id));
+        return pending.map(op => ({ statusCode: op.id === 'c0' ? 412 : 429 }));
+      }
+    });
+
+    assert.strictEqual(sent.length, 4, 'the 429 keeps its full budget');
+    assert.deepStrictEqual(sent[0], ['c0', 'c1']);
+    assert.ok(sent.slice(1).every(ids => ids.join() === 'c1'), 'the 412 must not be resent');
+    assert.strictEqual(res.statusCounts[412], 1, 'counted once, not once per attempt');
+    assert.deepStrictEqual(res.skippedIds, ['c0']);
+    assert.deepStrictEqual(res.failedIds, ['c1']);
+  });
+});
