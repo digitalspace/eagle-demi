@@ -21,24 +21,24 @@ const UPDATED_ANNOTATION = 'secret-sync/updated-at';
 const RESTARTED_ANNOTATION = 'secret-sync/restarted-at';
 
 /**
- * Does the live Secret already hold exactly this data?
+ * Does the live Secret already hold the mapped values?
  *
- * Only `data` is compared. The annotations this sync stamps are deliberately excluded: comparing
- * them would make every run differ from itself (the timestamp) and turn drift detection into an
- * unconditional write.
+ * Only the mapped keys of `data` are compared. A key the mapping does not own is none of this
+ * sync's business — it is carried through the write untouched, so counting it as drift would write
+ * (and roll every consumer) on every run. The annotations this sync stamps are excluded for the
+ * same reason: comparing them would make every run differ from itself.
  */
 function secretDataChanged(live, desiredData) {
   if (!live || !live.data) return true;
-  const liveKeys = Object.keys(live.data).sort();
-  const desiredKeys = Object.keys(desiredData).sort();
-  if (liveKeys.length !== desiredKeys.length) return true;
-  if (liveKeys.some((key, i) => key !== desiredKeys[i])) return true;
-  return desiredKeys.some((key) => live.data[key] !== desiredData[key]);
+  return Object.keys(desiredData).some((key) => live.data[key] !== desiredData[key]);
 }
 
 /**
- * The object to write. Labels and any annotation this sync does not own are carried over from the
- * live object, because a PUT replaces the whole thing and the Helm release metadata lives there.
+ * The object to write: the live object with the mapped keys overwritten.
+ *
+ * A PUT replaces the whole thing, so everything else on the GET body — the other keys, the labels,
+ * the Helm release annotations, the type — is carried over. Writing only the mapped keys would
+ * delete any key the mapping does not list, and the workloads that bind those keys would not start.
  */
 function buildSecret({ namespace, name, data, live, versions, timestamp }) {
   const annotations = { ...((live && live.metadata && live.metadata.annotations) || {}) };
@@ -50,16 +50,17 @@ function buildSecret({ namespace, name, data, live, versions, timestamp }) {
   annotations[UPDATED_ANNOTATION] = timestamp;
 
   return {
-    apiVersion: 'v1',
-    kind: 'Secret',
+    ...(live || {}),
+    apiVersion: (live && live.apiVersion) || 'v1',
+    kind: (live && live.kind) || 'Secret',
     type: (live && live.type) || 'Opaque',
     metadata: {
+      ...((live && live.metadata) || {}),
       name,
       namespace,
-      labels: (live && live.metadata && live.metadata.labels) || undefined,
       annotations
     },
-    data
+    data: { ...((live && live.data) || {}), ...data }
   };
 }
 
@@ -111,8 +112,8 @@ async function reconcile({ entries, namespaces, readSecret, createClient, logger
         data[entry.key] = Buffer.from(secret.value, 'utf8').toString('base64');
         versions[entry.vaultSecret] = secret.version;
       }
-      // Partial writes are the failure this guard exists for: an OpenShift Secret is replaced
-      // whole, so writing four of five keys DELETES the fifth from a live app.
+      // Partial writes are the failure this guard exists for: writing four of five rotated keys
+      // leaves the live Secret half old and half new, and restarts its consumers onto that.
       if (!complete) continue;
 
       const live = await client.getSecret(namespace, secretName);

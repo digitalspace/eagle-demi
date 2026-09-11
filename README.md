@@ -589,6 +589,8 @@ every workload that reads it so the pods pick up the new value.
 - Triggers: an Event Grid subscription on the vault (`SecretNewVersionCreated`, filtered to mapped
   names) and a daily timer at 06:00 UTC for drift. Both run the same reconcile.
 - A run that finds nothing changed writes nothing and restarts nothing.
+- A write overwrites the mapped keys and leaves every other key of that Secret as it is, so a key
+  set by hand or by a Helm release is neither deleted nor treated as drift.
 - A mapped secret missing or empty in the vault leaves the live OpenShift Secret untouched and
   fails the run, so a rotation half-done never lands as a Secret with a key deleted.
 - It overwrites values, it never creates objects. The cluster Role grants `update` on the named
@@ -601,7 +603,7 @@ every workload that reads it so the pods pick up the new value.
 **The mapping file** is `src/secret-sync/mapping.json`. It holds names only, never values: one entry
 per key, saying which vault secret feeds which key of which OpenShift Secret, and which Deployments
 and CronJobs to roll when it changes. An OpenShift Secret with several keys — `eagle-api-mongodb`
-has five in dev, `rproxy-basic-auth` six — is several entries merged into the one Secret object.
+has five in dev, `rproxy-basic-auth` six in prod, four in dev and test — is several entries merged into the one Secret object.
 Dev names carry a `dev-` prefix because `demi-kv-test` is the nonprod vault and serves both nonprod
 namespaces.
 
