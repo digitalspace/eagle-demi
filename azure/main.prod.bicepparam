@@ -2,8 +2,7 @@ using './main.bicep'
 
 // Production: rg-demi-prod in c4b0a8-prod (be5924ac-1083-4a1b-be92-7b444882cfd9). Hand-run only —
 // there is no CI path to production infrastructure and deliberately will not be one:
-//   MINIO_BUCKET_NAME=… MINIO_ACCESS_KEY=… MINIO_SECRET_KEY=… ADMIN_API_KEY=… DOCLING_API_KEY=… \
-//     ./scripts/deploy-infra.sh prod --what-if
+//   ./scripts/deploy-infra.sh prod --what-if
 // The group already holds demi-search-prod and its private endpoint; everything else is new.
 
 param environmentName = 'prod'
@@ -13,19 +12,32 @@ param location = 'canadacentral'
 // The NRS store, shared with eagle-api and outliving any Azure environment. Prod's objects sit at
 // the root of bucket `ozwdez` with no prefix — which is the same path test reaches as
 // asnpnn/ozwdez/, because the test bucket holds a nested copy of prod one segment deeper.
-// Credentials come from the 6cdc9e-prod secret `nr-object-store-credential` (user_account /
-// password), NOT eagle-api-minio-keys; deploy-infra.sh knows which secret to read per environment.
+// The credential behind it is the platform team's `nr-object-store-credential` in 6cdc9e-prod
+// (user_account / password). Nothing reads that secret at deploy time any more: both fields are
+// copied once into `demi-kv-prod` as minio-access-key and minio-secret-key, and the app resolves
+// them from there like every other environment.
 param minioHost = 'nrs.objectstore.gov.bc.ca'
 param minioBucketName = 'ozwdez'
 param minioKeyPrefix = ''
 
-// No second argument to readEnvironmentVariable anywhere below, for the reason spelled out in
-// main.test.bicepparam:22-25 — appSettings is a whole-collection PUT, what-if masks @secure()
-// values in BOTH before and after, so an empty fallback destroys a live credential invisibly.
-param minioAccessKey = readEnvironmentVariable('MINIO_ACCESS_KEY')
-param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY')
-param adminApiKey = readEnvironmentVariable('ADMIN_API_KEY')
-param doclingApiKey = readEnvironmentVariable('DOCLING_API_KEY')
+// The vault holds admin-api-key, track-client-secret, role-sync-client-secret, docling-api-key,
+// minio-access-key, minio-secret-key, analytics-shared-header and analytics-audit-header. No value
+// for any of them passes through this file: they are set once by hand from the devbox with
+// `az keyvault secret set` and the app resolves them by reference.
+//
+// EMPTY, and it stays empty until each optional secret is actually set in `demi-kv-prod`: naming a
+// secret the vault does not hold points the app setting at nothing. `notify-api-key` is not wanted
+// here at all while notifyApiBase below is empty. TODO(kv-prod-edge): add 'edge-secret' once the
+// prod Front Door value has been set in the vault; until then prod visitors arriving through Front
+// Door share one anonymous rate-limit key, which is the behaviour prod has today.
+param optionalSecretNames = [
+  // The secret sync's ServiceAccount token for 6cdc9e-prod. Set by hand from the prod devbox with
+  // Daniel's own login, like every other value in this vault.
+  'openshift-token-prod'
+]
+
+// The one namespace demi-secret-sync-prod owns.
+param syncNamespaces = '6cdc9e-prod'
 
 // ── Data ──────────────────────────────────────────────────────────────────────────────────────
 // The seed loader's upstream. PROD eagle-api, reached at its public hostname.
@@ -82,11 +94,8 @@ param ssoAudience = ''
 // An address missing here only puts that proxy's visitors back on one shared key.
 param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194.124'
 
-// The secret the eagle-edge rule set stamps on origin requests. It comes from OpenShift
-// `demi-app-secrets` through deploy-infra.sh, never from this file. The `''` fallback is
-// deliberate, like notifyApiKey below: an environment with no Front Door in front of it writes no
-// secret and ignores the header, rather than failing the build on a value it does not use.
-param edgeSecret = readEnvironmentVariable('EDGE_SECRET', '')
+// The secret the eagle-edge rule set stamps on origin requests is the vault's `edge-secret`. It is
+// not named in optionalSecretNames above yet — see the TODO there.
 
 // The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
 // so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
@@ -113,12 +122,9 @@ param analyticsBackendUrl = 'https://analytics-api-fc-prod.azurewebsites.net'
 param analyticsDcrEndpoint = 'https://analytics-dcr-prod-625z-canadacentral.logs.z1.ingest.monitor.azure.com'
 param analyticsDcrImmutableId = 'dcr-1805b5a943b34c8d83f13bb4225b8319'
 param analyticsWorkspaceCustomerId = '2a0751d4-6666-40f1-b9a6-846030078467'
-// The '' fallback keeps `az bicep build` green without the GitHub environment secret exported;
-// deploy-infra.sh refuses a prod apply unless this and analyticsAuditHeaderValue below are both set.
-param analyticsSharedHeaderValue = readEnvironmentVariable('APIM_SHARED_HEADER_VALUE', '')
-// The second credential, demanded on POST /audit alone and deployed there as
-// AUDIT_SHARED_HEADER_VALUE. Same home and same handling as the one above.
-param analyticsAuditHeaderValue = readEnvironmentVariable('AUDIT_SHARED_HEADER_VALUE', '')
+// The two header values are not parameters: APIM reads them from `demi-kv-prod` as
+// analytics-shared-header and analytics-audit-header, and eagle-analytics reads the same two
+// secrets as APIM_SHARED_HEADER_VALUE and AUDIT_SHARED_HEADER_VALUE.
 
 // Live budget period, read from demi-budget-prod 2026-09-01 (az rest: 2026-08-01T00:00:00Z) —
 // an existing budget rejects startDate changes.
@@ -184,14 +190,11 @@ param contactEmails = [
 param trackApiBase = 'https://epictrack-api-c8b80a-prod.apps.gold.devops.gov.bc.ca'
 param trackClientId = 'demi-track-reader'
 param roleSyncClientId = 'demi-role-sync'
-param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
-param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
 // ── eagle-notify ──────────────────────────────────────────────────────────────────────────────
 // Empty until eagle-notify is deployed in prod: the push stays dark and no notification claim is
 // taken, so wiring it later still announces every published Update.
 param notifyApiBase = ''
-param notifyApiKey = readEnvironmentVariable('NOTIFY_API_KEY', '')
 
 // Nightly 11:00 UTC, an hour after reconcile. Armed 2026-09-05 after Track prod shipped
 // /api/v1/projects/team-members.

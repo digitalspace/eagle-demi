@@ -2,11 +2,9 @@ using './main.bicep'
 
 // Test-subscription (staging) environment: c4b0a8-test-rg in c4b0a8-test
 // (7897ceb1-9a86-4639-87d7-7f9ff67142b3). Deploy by hand:
-//   MINIO_ACCESS_KEY=… MINIO_SECRET_KEY=… az deployment group create \
-//     -g c4b0a8-test-rg --subscription 7897ceb1-9a86-4639-87d7-7f9ff67142b3 \
-//     -f azure/main.bicep -p azure/main.test.bicepparam
-// Credentials come from the 6cdc9e-test secret `nr-object-store-credential`
-// (user_account / password) — never committed; this repo is public.
+//   ./scripts/deploy-infra.sh test --what-if
+// No credential is exported first: every one of them lives in `demi-kv-test` and the app resolves
+// it by reference — never committed; this repo is public.
 
 param environmentName = 'test'
 param location = 'canadacentral'
@@ -15,29 +13,30 @@ param location = 'canadacentral'
 // objects, 257 GB) exists ONLY under asnpnn/ozwdez/, zdspnb holds zero objects under any DEMI
 // prefix, and eagle-api on OpenShift TEST reads asnpnn too (its eagle-api-minio-keys secret).
 // Measured 2026-08-11 before the dev teardown; the store is NRS-owned and outlives any Azure
-// environment. Credentials come from the 6cdc9e-test secret `eagle-api-minio-keys`.
+// environment. Only the coordinates are here — the credentials are `minio-access-key` and
+// `minio-secret-key` in `demi-kv-test`, and no parameter carries either value.
 param minioHost = 'nrs.objectstore.gov.bc.ca'
 param minioBucketName = 'asnpnn'
 param minioKeyPrefix = 'ozwdez'
-// No second argument to readEnvironmentVariable, deliberately. With a `''` fallback a forgotten
-// export resolves to empty and the deploy writes that over the live credential — silently, because
-// the app settings collection is a whole-collection PUT and what-if masks @secure() values as
-// "*******" in BOTH before and after. Without the fallback bicep fails the build instead.
-param minioAccessKey = readEnvironmentVariable('MINIO_ACCESS_KEY')
-param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY')
 
-// Same rule, and use ./scripts/deploy-infra.sh rather than exporting these by hand — it sources
-// all four from OpenShift, which is the source of truth for every credential here.
-//
-// NOT from the live app settings. Reading the app you are about to deploy feeds a corrupted value
-// straight back into itself, and there is no rollback: ARM does not retain @secure() parameters.
-// That is not hypothetical — on 2026-08-13 both keys below were destroyed exactly that way, and
-// only MinIO survived, because OpenShift held an authoritative copy of it.
-//
-// ADMIN_API_KEY is the break-glass sysadmin credential the extraction host presents;
-// DOCLING_API_KEY is outbound to docling-serve. Blanking either fails closed.
-param adminApiKey = readEnvironmentVariable('ADMIN_API_KEY')
-param doclingApiKey = readEnvironmentVariable('DOCLING_API_KEY')
+// The vault holds admin-api-key, track-client-secret, role-sync-client-secret, docling-api-key,
+// minio-access-key, minio-secret-key, analytics-shared-header and analytics-audit-header, plus the
+// two named here. No value for any of them passes through this file: they are set once by hand from
+// the devbox with `az keyvault secret set` and the app resolves them by reference. Naming one here
+// says it has been set — deploy-infra.sh checks the live vault against this list before deploying.
+param optionalSecretNames = [
+  'notify-api-key'
+  'edge-secret'
+  // The secret sync's ServiceAccount tokens. Two, because demi-kv-test is the nonprod vault and
+  // serves 6cdc9e-dev as well as 6cdc9e-test — same `dev-` prefix as every dev entry in
+  // src/secret-sync/mapping.json.
+  'openshift-token-test'
+  'dev-openshift-token'
+]
+
+// The namespaces demi-secret-sync-test owns. Both nonprod namespaces, and prod is deliberately not
+// one of them: the app can only reach what its token opens, and it holds no prod token.
+param syncNamespaces = '6cdc9e-dev,6cdc9e-test'
 
 // The map explorer renders the wildfire aggregate. Prod publishes no enrichment.
 param enrichmentSources = 'wildfire'
@@ -136,26 +135,21 @@ param ssoAudience = 'account'
 // An address missing here only puts that proxy's visitors back on one shared key.
 param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194.124'
 
-// The secret the eagle-edge rule set stamps on origin requests. It comes from OpenShift
-// `demi-app-secrets` through deploy-infra.sh, never from this file. The `''` fallback is
-// deliberate, like notifyApiKey below: an environment with no Front Door in front of it writes no
-// secret and ignores the header, rather than failing the build on a value it does not use.
-param edgeSecret = readEnvironmentVariable('EDGE_SECRET', '')
+// The secret the eagle-edge rule set stamps on origin requests is the vault's `edge-secret`, named
+// in optionalSecretNames above. Both sides read the SAME value — rotate it in eagle-edge and in the
+// vault together, or callers fall back to the shared anonymous quota key for a while.
 
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
-// Secrets come from OpenShift `demi-app-secrets` through deploy-infra.sh, never from this file.
+// Both client secrets are vault-only (`track-client-secret`, `role-sync-client-secret`).
 param trackApiBase = 'https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.ca'
 param trackClientId = 'demi-track-reader'
 param roleSyncClientId = 'demi-role-sync'
-param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
-param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
 // ── eagle-notify ──────────────────────────────────────────────────────────────────────────────
-// Where a published Update is announced. The key comes from OpenShift `demi-app-secrets` through
-// deploy-infra.sh, never from this file.
+// Where a published Update is announced. The key is the vault's `notify-api-key`, named in
+// optionalSecretNames above.
 param notifyApiBase = 'https://notify-api-test.azurewebsites.net'
-param notifyApiKey = readEnvironmentVariable('NOTIFY_API_KEY', '')
 
 // Nightly 10:00 UTC. Armed 2026-09-02 after the first live run against epictrack-api-c8b80a-test.
 param syncTeamsSchedule = '0 0 10 * * *'
@@ -180,18 +174,10 @@ param analyticsBackendUrl = 'https://analytics-api-fc-test.azurewebsites.net'
 param analyticsDcrEndpoint = 'https://analytics-dcr-test-akm7-canadacentral.logs.z1.ingest.monitor.azure.com'
 param analyticsDcrImmutableId = 'dcr-f14d018cfbcf4b59945cbfeb0ce09a2e'
 param analyticsWorkspaceCustomerId = '3d9b7393-bec2-4f06-bb5f-87887b72c4ef'
-// The header value eagle-analytics deploys as APIM_SHARED_HEADER_VALUE — both sides must match or
-// that app refuses the gateway. It lives in the GitHub environment secret of that name, on this
-// repository and on eagle-analytics, and NOT in OpenShift `demi-app-secrets`: export it before
-// deploying, and deploy-infra.sh demands it once analyticsBackendUrl above is filled in. The `''`
-// fallback matches edgeSecret above: an environment with no analytics API stamps no header rather
-// than failing the build on a value it does not use.
-param analyticsSharedHeaderValue = readEnvironmentVariable('APIM_SHARED_HEADER_VALUE', '')
-// The second credential, which eagle-analytics demands on POST /audit alone and deploys as
-// AUDIT_SHARED_HEADER_VALUE. A different secret from the one above so the write path rotates on its
-// own. Same home and same handling: the GitHub environment secret of that name on this repository
-// and on eagle-analytics, demanded by deploy-infra.sh once analyticsBackendUrl above is filled in.
-param analyticsAuditHeaderValue = readEnvironmentVariable('AUDIT_SHARED_HEADER_VALUE', '')
+// The two header values are not parameters: APIM reads them from `demi-kv-test` as
+// analytics-shared-header and analytics-audit-header. eagle-analytics reads the same two secrets as
+// APIM_SHARED_HEADER_VALUE and AUDIT_SHARED_HEADER_VALUE, so a rotation is one new secret version
+// and a recycle on each side rather than a redeploy of two repositories.
 
 // The dev-access VM, on `snet-servers` — a plain landing-zone subnet with its own NSG, not one of
 // the delegated ones above. The key is a PUBLIC key and never committed; nothing SSHes in, so a
