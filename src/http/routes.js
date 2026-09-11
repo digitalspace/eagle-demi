@@ -145,6 +145,10 @@ const routes = [
 
   // Documents Routes
   { method: 'get', path: '/documents', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getDocuments },
+  // BEFORE `/documents/:id`: the table is matched in order and `:id` is any single segment, so a
+  // literal route placed after it would be answered as a document lookup for the id
+  // "recent-uploads".
+  { method: 'get', path: '/documents/recent-uploads', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getRecentUploads },
   { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getDocument },
   // Presigned download link — ACL-gated inside the controller, same as the metadata read.
   { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().downloadDocument },

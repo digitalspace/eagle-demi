@@ -689,6 +689,84 @@ paths:
         '401':
           description: Unauthorized.
 
+  /api/documents/recent-uploads:
+    get:
+      summary: Projects with the most recent uploads
+      description: >-
+        The distinct projects that most recently received a document the caller may read, newest
+        first, each listing up to five of its newest documents. Documents the caller cannot read,
+        documents with no upload date and projects the caller cannot read are all left out.
+
+        The ranking comes from the newest upload date in each project, so a bulk import of many
+        documents into one project takes one place in the list. FEWER than `limit` projects is a
+        normal answer — the list is never padded, and a project with fewer than five documents
+        lists what it has. Projects tie-break by id and documents tie-break by id, so the same data
+        renders the same way. `dateUploaded` on the project is that of the first document listed.
+
+        Anonymous answers carry `Cache-Control: public, max-age=300`; a request that presented a
+        credential carries `private, no-store`, because the rows differ per caller. Both carry
+        `Vary: Authorization, X-Api-Key`.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Number of projects to return, written plainly: `1`-`10`. Padded, signed, decimal,
+            exponent and hex spellings (`05`, `+5`, `5.0`, `5e0`, `0x5`) and a repeated key are
+            refused rather than normalised, so one answer has one cache key.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 5
+      responses:
+        '200':
+          description: The ranked projects, at most `limit` of them.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        projectId:
+                          type: string
+                        eagleProjectId:
+                          type: string
+                          nullable: true
+                        projectName:
+                          type: string
+                          nullable: true
+                        dateUploaded:
+                          type: string
+                        documents:
+                          type: array
+                          maxItems: 5
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              eagleId:
+                                type: string
+                                nullable: true
+                              displayName:
+                                type: string
+                                nullable: true
+                              documentFileName:
+                                type: string
+                                nullable: true
+                              type:
+                                type: string
+                                nullable: true
+                              dateUploaded:
+                                type: string
+        '400':
+          description: limit was not a plain whole number between 1 and 10.
+
   /api/documents/extract:
     post:
       summary: Upload and extract document

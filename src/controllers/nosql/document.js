@@ -20,7 +20,7 @@ const chunks = require('../../repositories/chunks');
 const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
 const restampChunks = require('../../jobs/restamp-chunks');
 const {
-  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, TIER
 } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
@@ -295,6 +295,200 @@ exports.getDocuments = async (req, res) => {
 
     if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
     return res.json(redactAllForAccess('documents', items, access));
+  } catch (err) {
+    return serverError(res, err, 'document controller failed');
+  }
+};
+
+// Recent uploads: eagle-public's homepage panel. Five projects by default, ten at most — the
+// panel is a teaser, and every extra project costs another point read.
+const RECENT_UPLOADS_DEFAULT_LIMIT = 5;
+// The ONLY accepted spellings of `limit`, matched against the RAW string. `Number()` would accept
+// `05`, `5.0`, `5e0`, `0x5` and `+5` as five, which are five different cache keys for one answer —
+// a free way to blow past the shared cache and the memo below.
+const RECENT_UPLOADS_LIMIT = /^(?:[1-9]|10)$/;
+// Five minutes, matching the Cache-Control the anonymous answer carries: the panel is a teaser, not
+// a feed, and this read fans out across every partition — it must not run once per visitor. APIM
+// puts no rate limit on the anonymous product, so the memo is what bounds an anonymous flood.
+const RECENT_UPLOADS_TTL_MS = 60_000;
+const RECENT_UPLOADS_MAX_AGE = 300;
+
+/**
+ * Answers for the ANONYMOUS tier only, keyed by limit.
+ *
+ * Tier is not an identity: `resolveAccess` puts a `compliance` API key in TIER.PUBLIC too, and a
+ * staff caller's rows differ by roles, teams, scope and credentials. Caching per tier would serve
+ * one caller's ranking to another, so anything that presented a credential is computed fresh.
+ */
+const recentUploadsMemo = new Map();
+
+/** Test seam: module state outlives one request, so a suite must be able to start from empty. */
+exports._resetRecentUploadsMemo = () => recentUploadsMemo.clear();
+
+/** Anonymous: no credential was presented at all, so every such caller sees the same rows. */
+function isAnonymous(access) {
+  return access.authenticated === false && access.tier === TIER.PUBLIC;
+}
+
+function memoRead(key, now) {
+  const hit = recentUploadsMemo.get(key);
+  if (!hit) return null;
+  // Evict on read: the map holds ten keys at most, so nothing else has to sweep it.
+  if (now - hit.at >= RECENT_UPLOADS_TTL_MS) {
+    recentUploadsMemo.delete(key);
+    return null;
+  }
+  return hit.items;
+}
+
+/** `limit` is opt-in and strict: anything but a whole number 1-10 is caller error. */
+function recentUploadsLimit(raw) {
+  if (raw === undefined) return { limit: RECENT_UPLOADS_DEFAULT_LIMIT };
+  // Repeated query keys arrive as an array — one value only, rather than silently taking one.
+  if (Array.isArray(raw) || !RECENT_UPLOADS_LIMIT.test(String(raw))) {
+    return { error: 'limit must be a whole number between 1 and 10' };
+  }
+  return { limit: Number(raw) };
+}
+
+/**
+ * Newest first, then id — a total order over documents, so a project with several uploads at the
+ * same instant lists them the same way on every call. Cosmos guarantees no order among equal sort
+ * keys, and `dateUploaded` is an ISO-8601 string, which sorts lexicographically.
+ */
+function byNewestDocument(a, b) {
+  const left = a.dateUploaded || '';
+  const right = b.dateUploaded || '';
+  if (left !== right) return left < right ? 1 : -1;
+  return String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0;
+}
+
+/**
+ * One ranked row as this caller may SEE it: a project and the documents its row expands to. Null
+ * when the redactor withheld something the row cannot be stated without.
+ *
+ * Redacting HERE rather than at the response boundary, for the same reason the search fallback
+ * does: the row is a wire shape (`eagleProjectId`, `documents: [...]`) that the catalog must never
+ * run over. Every field, both ids included, is read off the redacted copies.
+ *
+ * Ordered in JS before anything is taken: Cosmos returns no particular order among documents
+ * sharing one instant, and a bulk push stamps whole batches with one.
+ */
+function recentUploadRow(rows, project, access) {
+  const visibleProject = redactForAccess('projects', project, access);
+  const visible = [...rows].sort(byNewestDocument)
+    .map(row => redactForAccess('documents', row, access));
+  const [newest] = visible;
+
+  // A row that cannot state its ranking key, name the project it ranks, or identify the document
+  // it ranks by does not belong in a ranking. A LATER document that cannot be stated is merely
+  // left out of the list below.
+  if (!visibleProject.id || !newest || !newest.dateUploaded || !newest.id) return null;
+
+  return {
+    projectId: String(visibleProject.id),
+    eagleProjectId: visibleProject.eagleId || null,
+    projectName: visibleProject.name || null,
+    dateUploaded: newest.dateUploaded,
+    documents: visible
+      .filter(visibleDoc => visibleDoc.id && visibleDoc.dateUploaded)
+      .map(visibleDoc => ({
+        id: visibleDoc.id,
+        eagleId: visibleDoc.eagleId || null,
+        displayName: visibleDoc.displayName || null,
+        documentFileName: visibleDoc.documentFileName || null,
+        // Returned exactly as stored: eagle-public renders the document type itself, so relabelling
+        // it here would split that mapping across two repositories.
+        type: visibleDoc.type || null,
+        dateUploaded: visibleDoc.dateUploaded
+      }))
+  };
+}
+
+/**
+ * Newest upload first, then project id — a total order, so two requests answered from the same data
+ * rank the same way. `dateUploaded` is an ISO-8601 string, which sorts lexicographically.
+ */
+function byNewestUpload(a, b) {
+  if (a.dateUploaded !== b.dateUploaded) return a.dateUploaded < b.dateUploaded ? 1 : -1;
+  return a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0;
+}
+
+/**
+ * Rank projects by their newest readable upload.
+ *
+ * The aggregate answers WHICH projects and WHEN, one row each; the documents behind each answer are
+ * then fetched from that project's own partition. Reading the newest documents instead would rank
+ * whatever a bulk push filled the window with — hundreds of rows, one project.
+ *
+ * Fewer than `limit` rows is a legitimate answer, and it is never padded: a project the caller
+ * cannot read, or whose row the redactor will not let be stated, is skipped and the walk continues.
+ */
+async function rankRecentUploads(access, limit) {
+  const candidates = (await documents.projectUploadMaxima(access))
+    .filter(row => row.projectId !== undefined && row.projectId !== null && row.dateUploaded)
+    .map(row => ({ projectId: String(row.projectId), dateUploaded: row.dateUploaded }))
+    .sort(byNewestUpload);
+
+  const ranked = [];
+
+  for (const candidate of candidates) {
+    if (ranked.length >= limit) break;
+
+    const project = await projects.getById(access, candidate.projectId);
+    if (!project) continue;
+
+    // Single-partition, so this costs a few RU per candidate. A project the redactor will not let
+    // be stated is dropped one step later, inside the row builder, which is where both the project
+    // and its documents are redacted — one redaction site is worth one cheap query on a rare edge.
+    const rows = await documents.newestUploads(access, candidate.projectId);
+    if (rows.length === 0) continue;
+
+    const row = recentUploadRow(rows, project, access);
+    if (!row) continue;
+
+    ranked.push(row);
+  }
+
+  return ranked;
+}
+
+/**
+ * The projects that most recently received a document this caller may read.
+ *
+ * The document ACL runs in the query and the project ACL runs on a point read, so a restricted
+ * document never ranks its project and an unreadable project is skipped while the scan continues —
+ * neither one shortens the list on its own.
+ */
+exports.getRecentUploads = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+
+    const { limit, error } = recentUploadsLimit(req.query.limit);
+    if (error) return res.status(400).json({ error });
+
+    const anonymous = isAnonymous(access);
+
+    // The rows vary by caller, and a credential can arrive in either header — a shared cache keyed
+    // on the URL alone would hand one caller's ranking to the next visitor.
+    res.setHeader('Vary', 'Authorization, X-Api-Key');
+    res.setHeader('Cache-Control', anonymous
+      ? `public, max-age=${RECENT_UPLOADS_MAX_AGE}`
+      : 'private, no-store');
+
+    const now = Date.now();
+    const memoKey = `${access.tier}:${limit}`;
+    const memoed = anonymous ? memoRead(memoKey, now) : null;
+    if (memoed) return res.json({ items: memoed });
+
+    const ranked = await rankRecentUploads(access, limit);
+    if (anonymous) recentUploadsMemo.set(memoKey, { items: ranked, at: now });
+
+    if (ranked.length < limit) {
+      logger.info(`recent uploads: ${ranked.length} of ${limit} projects had a readable upload`);
+    }
+
+    return res.json({ items: ranked });
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }

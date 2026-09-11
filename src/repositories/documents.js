@@ -135,6 +135,59 @@ async function listVisible(access, opts = {}) {
 }
 
 /**
+ * The newest upload date in every project this caller can read a dated document of — one row per
+ * project, `{projectId, dateUploaded}`.
+ *
+ * GROUP BY rather than a window over the newest documents: one Eagle bulk push mirrors hundreds of
+ * documents into a single project with the SAME `dateUploaded`, which fills any TOP window and
+ * leaves the panel showing that one project. Cosmos allows GROUP BY only without ORDER BY, so the
+ * ranking is sorted in JS — which is affordable because the result is one row per project, not one
+ * per document.
+ *
+ * `/dateUploaded/?` must stay in the container's indexing policy for the aggregate.
+ */
+async function projectUploadMaxima(access) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [isDefinedAndNotNull('dateUploaded')],
+    select: 'c.projectId, MAX(c.dateUploaded) AS dateUploaded',
+    groupBy: 'c.projectId'
+  });
+
+  return fetchAll(CONTAINER, spec);
+}
+
+/** How many documents of a project the recent-uploads panel lists when a row is expanded. */
+const RECENT_UPLOAD_DOCUMENTS = 5;
+
+/**
+ * The newest dated documents of ONE project, newest first — the candidates for its panel row.
+ *
+ * Single-partition, so the ORDER BY is served by the SDK's default execution context and the read
+ * costs a few RU whatever the corpus holds — this is not the cross-partition case that cannot page.
+ * TOP bounds it; no `maxItemCount`, so `cosmos.query` drains the result itself.
+ *
+ * Cosmos gives no order among rows sharing the sort key, so the caller breaks that tie.
+ */
+async function newestUploads(access, projectId) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [
+      eq('projectId', String(projectId), '@projectId'),
+      isDefinedAndNotNull('dateUploaded')
+    ],
+    select: `TOP ${RECENT_UPLOAD_DOCUMENTS} ${selectFor('documents', access, PARTITION_FIELD)}`,
+    orderBy: 'c.dateUploaded DESC'
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec,
+    pageOptions({ partitionKey: partitionKeyFor(projectId) }));
+  return items;
+}
+
+/**
  * Sealed documents only — level 0, the compliance compartment.
  *
  * The criterion NARROWS; the visibility predicate is still composed first, so this returns nothing
@@ -835,6 +888,9 @@ module.exports = {
   MANIFEST_FIELDS,
   buildCriteria,
   listVisible,
+  projectUploadMaxima,
+  newestUploads,
+  RECENT_UPLOAD_DOCUMENTS,
   listSealed,
   countVisible,
   getById,
