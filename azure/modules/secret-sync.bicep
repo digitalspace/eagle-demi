@@ -144,8 +144,9 @@ resource syncFunctionApp 'Microsoft.Web/sites@2024-11-01' = {
     // The vault denies public network access, so every read goes through the private endpoint and
     // this app has to be inside the VNet to make one at all.
     virtualNetworkSubnetId: virtualNetworkSubnetId
-    // Port 6443 (OpenShift API) is not reachable through the platform's default outbound egress.
-    // Route ALL outbound through the VNet instead, the same hub path the devbox uses to reach it.
+    // The subnet must carry the landing-zone route table `openshift-public-endpoint`: hub BGP
+    // advertises 142.34.0.0/16 and swallows OpenShift API (port 6443) traffic, and policy forbids
+    // new route tables. This setting only forces all egress onto the VNet path so that route applies.
     outboundVnetRouting: {
       allTraffic: true
     }
