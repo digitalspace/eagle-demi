@@ -586,6 +586,9 @@ vault, writes each one into the OpenShift Secret that consumes it, and stamps th
 every workload that reads it so the pods pick up the new value.
 
 - Code: `src/secret-sync/`. Infrastructure: `azure/modules/secret-sync.bicep`.
+- The app routes ALL outbound traffic through the VNet (`outboundVnetRouting.allTraffic: true`), not
+  just vault traffic, because the OpenShift API on port 6443 is only reachable through the hub that
+  path takes, not through the platform's default egress.
 - Triggers: an Event Grid subscription on the vault (`SecretNewVersionCreated`, filtered to mapped
   names) and a daily timer at 06:00 UTC for drift. Both run the same reconcile.
 - A run that finds nothing changed writes nothing and restarts nothing.
