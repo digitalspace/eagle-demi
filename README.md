@@ -603,7 +603,7 @@ every workload that reads it so the pods pick up the new value.
 **The mapping file** is `src/secret-sync/mapping.json`. It holds names only, never values: one entry
 per key, saying which vault secret feeds which key of which OpenShift Secret, and which Deployments
 and CronJobs to roll when it changes. An OpenShift Secret with several keys — `eagle-api-mongodb`
-has five in dev, `rproxy-basic-auth` six — is several entries merged into the one Secret object.
+has five in dev, `rproxy-basic-auth` six in prod, four in dev and test — is several entries merged into the one Secret object.
 Dev names carry a `dev-` prefix because `demi-kv-test` is the nonprod vault and serves both nonprod
 namespaces.
 
