@@ -176,6 +176,29 @@ test('GET /documents/recent-uploads', async (t) => {
     assert.deepStrictEqual(reads, ['projects:101', 'projects:202']);
   });
 
+  // Ten is the maximum swagger documents, so it is the one limit a caller may send that the
+  // endpoint must accept but no default exercises.
+  await t.test('accepts the documented maximum limit of ten', async (t2) => {
+    setup(t2);
+    // Eleven readable projects, one per hour, so a limit that arrived as anything less than ten
+    // would show up as a shorter panel rather than as the same answer.
+    const ids = ['101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111'];
+    const corpus = ids.map((id, i) =>
+      doc(`d-${id}`, id, `2026-09-10T${String(20 - i).padStart(2, '0')}:00:00.000Z`));
+    const projectRows = Object.fromEntries(ids.map(id => [id, project(id)]));
+    stubCosmos(t2, corpus, projectRows);
+
+    await withServer(async (call) => {
+      const res = await call('/documents/recent-uploads?limit=10');
+      assert.strictEqual(res.status, 200, 'limit=10 is the documented maximum, not caller error');
+
+      const body = await res.json();
+      assert.deepStrictEqual(body.items.map(i => i.projectId),
+        ['101', '102', '103', '104', '105', '106', '107', '108', '109', '110'],
+        'ten rows are ranked and the eleventh project is cut, so the limit reached the ranking');
+    });
+  });
+
   // The bug the aggregate exists for: an Eagle bulk push mirrors hundreds of documents into one
   // project at one instant. A window over the newest documents returns that project alone.
   await t.test('a bulk import takes one row, not the whole panel', async (t2) => {
