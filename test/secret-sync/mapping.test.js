@@ -46,6 +46,12 @@ test('a dev entry is prefixed, because demi-kv-test serves both nonprod namespac
   }
 });
 
+test('the shipped mapping names no prod namespace, because prod runs no sync app', () => {
+  const prod = loadMapping().filter((e) => e.namespace === '6cdc9e-prod');
+  assert.deepStrictEqual(prod, [],
+    'prod OpenShift secrets are set by hand: no sync app can reach the cluster from the prod spoke');
+});
+
 test('validation reports a missing key rather than accepting the entry', () => {
   const problems = validateMapping([
     { vaultSecret: 'a', namespace: '6cdc9e-test', secretName: 's', restart: [] }

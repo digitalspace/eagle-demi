@@ -36,8 +36,10 @@ param optionalSecretNames = [
   'openshift-token-prod'
 ]
 
-// The one namespace demi-secret-sync-prod owns.
-param syncNamespaces = '6cdc9e-prod'
+// No sync app in prod. The prod spoke has no route table and policy forbids creating one, so the
+// app could not reach the OpenShift API on 6443. Prod OpenShift secrets are set by hand in the
+// cluster; demi-kv-prod serves only Azure-native consumers, which read it by Key Vault reference.
+param deploySecretSync = false
 
 // ── Data ──────────────────────────────────────────────────────────────────────────────────────
 // The seed loader's upstream. PROD eagle-api, reached at its public hostname.
