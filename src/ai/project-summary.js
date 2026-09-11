@@ -811,13 +811,12 @@ const ANY_MONTH = `(?:${MONTHS}|${OTHER_MONTHS})`;
 const DAY_SUFFIX = '(?:st|nd|rd|th|er)?';
 
 /**
- * Year, month and day together, in every spelling `dateSpellings` treats as the same day.
- *
- * The two must agree on what a date looks like or the filter throws away pages the grounding gate
- * would have accepted. A certificate dates itself "DATED at Victoria, this 14th day of October,
- * 2014"; matching only "October 14, 2014" dropped that page before the model ever saw it, and with
- * it the one event the document exists to carry. Both share `MONTHS` and `OTHER_MONTHS`, so a month
- * name added for one is added for the other.
+ * Year, month and day together, deliberately wider than `dateSpellings` below: French month names,
+ * 4-letter abbreviations ("sept"), and ordinals `dateSpellings` never emits. A certificate dates
+ * itself "DATED at Victoria, this 14th day of October, 2014"; matching only "October 14, 2014"
+ * dropped that page before the model ever saw it, and with it the one event the document exists to
+ * carry. The invariant is one-directional: this filter must stay at least as wide as the grounding
+ * gate, so no page the gate could ground is thrown away before the model sees it.
  *
  * A year alone is not a date, and neither is a day with no year: "October 2014" and "14 October"
  * cannot date an event the instruction will accept.
