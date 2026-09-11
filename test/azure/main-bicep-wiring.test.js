@@ -736,6 +736,13 @@ test('the secret sync is deployed only where it is asked for and namespaces are 
     'naming prod namespaces would say a prod sync app owns them');
   assert.match(TEST_PARAMS, /^param syncNamespaces = '6cdc9e-dev,6cdc9e-test'$/m,
     'the nonprod vault serves both nonprod namespaces, and neither is prod');
+
+  // The output that names the sync app to the caller must gate on the exact same condition as the
+  // module itself — a looser output would report an app name for an environment the module never
+  // deployed.
+  assert.match(MAIN, /^output secretSyncAppName string = \(deploySecretSync && /m,
+    'the output must gate on deploySecretSync too, or a caller reads a sync app name for an ' +
+    'environment that asked for none');
 });
 
 // The access curtain's password, same shape as EDGE_SECRET above and the same reason for a

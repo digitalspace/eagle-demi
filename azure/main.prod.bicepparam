@@ -30,11 +30,7 @@ param minioKeyPrefix = ''
 // here at all while notifyApiBase below is empty. TODO(kv-prod-edge): add 'edge-secret' once the
 // prod Front Door value has been set in the vault; until then prod visitors arriving through Front
 // Door share one anonymous rate-limit key, which is the behaviour prod has today.
-param optionalSecretNames = [
-  // The secret sync's ServiceAccount token for 6cdc9e-prod. Set by hand from the prod devbox with
-  // Daniel's own login, like every other value in this vault.
-  'openshift-token-prod'
-]
+param optionalSecretNames = []
 
 // No sync app in prod. The prod spoke has no route table and policy forbids creating one, so the
 // app could not reach the OpenShift API on 6443. Prod OpenShift secrets are set by hand in the
