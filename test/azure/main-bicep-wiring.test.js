@@ -3,9 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const os = require('node:os');
 const path = require('path');
-const { spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -102,10 +100,15 @@ const WIRED = [
   // it is an environment that looks configured and writes its audit rows to the old table anyway.
   ['analyticsBackendUrl', /^\s+analyticsBackendUrl: analyticsBackendUrl$/m,
     'the apim module call — without it no param file can publish the /analytics API'],
-  ['analyticsSharedHeaderValue', /^\s+analyticsSharedHeaderValue: analyticsSharedHeaderValue$/m,
-    'the apim module call — without it the gateway stamps no header and the analytics app refuses it'],
-  ['analyticsAuditHeaderValue', /^\s+analyticsAuditHeaderValue: analyticsAuditHeaderValue$/m,
-    'the apim module call — without it POST /audit is forwarded with no audit credential and 401s'],
+  // The two analytics header VALUES are no longer parameters — they are vault secrets APIM reads
+  // by identifier, asserted below. What stays a parameter is the list of optional names and the
+  // sync's namespaces.
+  ['optionalSecretNames', /^\s+optionalSecretNames: optionalSecretNames$/m,
+    'the key-vault module call — without it no environment can declare the optional secrets it ' +
+    'holds, and every optional app setting reads empty'],
+  ['syncNamespaces', /^\s+syncNamespaces: syncNamespaces$/m,
+    'the secret-sync module call — without it SYNC_NAMESPACES is empty and the sync writes to no ' +
+    'OpenShift namespace at all'],
   ['analyticsDcrEndpoint', /^\s+analyticsDcrEndpoint: analyticsDcrEndpoint$/m,
     'the API module call — without it audit rows stay on the DEMI DCR whatever the param file says'],
   ['analyticsDcrImmutableId', /^\s+analyticsDcrImmutableId: analyticsDcrImmutableId$/m,
@@ -427,48 +430,46 @@ test('deployEnrichment gates the wildfires container and only that one', () => {
 });
 
 // eagle-notify is two settings and the key is OPTIONAL, which is a shape three files have to agree
-// on: an empty key writes no Key Vault secret, an empty secret URI leaves the app setting empty,
-// and the deploy script demands the key only where a host is named. Break any one and either a
-// prod deploy is blocked on a credential prod does not use, or a test environment goes dark while
-// looking configured. `az bicep build` says nothing about either.
-test('the eagle-notify key is demanded exactly where a host is named', () => {
-  assert.match(KEY_VAULT, /var hasNotifyKey = !empty\(notifyApiKey\)/);
-  assert.match(KEY_VAULT, /resource notifyApiKeySecret [^\n]+ = if \(hasNotifyKey\) \{/,
-    'an empty key must write no secret — there is no empty secret value to write');
-  assert.match(API_MODULE, /value: empty\(notifyApiKeySecretUri\) \?/,
-    'without the empty branch a dark environment gets a Key Vault reference to no secret');
+// on: a vault that was never given the secret must produce no URI, an empty URI must leave the app
+// setting empty rather than pointing at nothing, and an environment that names a host must name the
+// secret. Break any one and either the app setting carries an unresolvable
+// `@Microsoft.KeyVault(...)` literal, or a test environment goes dark while looking configured.
+// `az bicep build` says nothing about either.
+test('the eagle-notify key is optional in the vault and empty where it was never set', () => {
+  assert.match(KEY_VAULT,
+    /^output notifyApiKeySecretUri string = contains\(optionalSecretNames, 'notify-api-key'\) \? '\$\{secretUriBase\}notify-api-key' : ''$/m,
+    'an environment that did not name the secret must get an empty URI — there is nothing in the ' +
+    'vault for a reference to resolve against');
+  assert.match(API_MODULE,
+    /value: empty\(notifyApiKeySecretUri\) \? '' : '@Microsoft\.KeyVault\(SecretUri=\$\{notifyApiKeySecretUri\}\)'/,
+    'without the empty branch a dark environment gets a Key Vault reference to no secret, which ' +
+    'App Service leaves in the setting verbatim');
+  assert.match(MAIN, /^\s+notifyApiKeySecretUri: keyVault\.outputs\.notifyApiKeySecretUri$/m,
+    'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
 
-  const base = (params) => /^param notifyApiBase = '([^']*)'$/m.exec(params);
-  assert.ok(base(TEST_PARAMS), 'test must state notifyApiBase');
-  assert.ok(base(PROD_PARAMS), 'prod must state notifyApiBase, empty or otherwise');
-  assert.strictEqual(base(PROD_PARAMS)[1], '', 'prod has no eagle-notify to announce to yet');
+  // No value for the key anywhere in the templates: it is set by hand in the vault.
+  assert.doesNotMatch(MAIN, /^param notifyApiKey /m,
+    'the key must not be a parameter again — a parameter is a value in ARM deployment history');
+});
 
-  assert.match(DEPLOY, /os_secret demi-app-secrets NOTIFY_API_KEY/,
-    'the key comes from OpenShift, like every other secret this script sources');
-  assert.match(DEPLOY, /notifyApiBase[^\n]*PARAM_FILE[\s\S]{0,120}required\+=\(NOTIFY_API_KEY\)/,
-    'the key must be required only where the param file names a host — otherwise prod is blocked ' +
-    'on a credential it does not use, or test deploys a host with no key and stays dark');
+// The host and the secret name are set in the same file and mean nothing apart: a named host with
+// no secret is an environment that looks configured and pushes nothing, and a named secret with no
+// host is a credential nobody reads.
+test('test names both the eagle-notify host and its vault secret', () => {
+  const base = /^param notifyApiBase = '([^']*)'$/m.exec(TEST_PARAMS);
+  assert.ok(base, 'test must state notifyApiBase');
+  assert.notStrictEqual(base[1], '', 'test announces to eagle-notify, so it must name the host');
+  assert.match(TEST_PARAMS, /^\s+'notify-api-key'$/m,
+    'and name notify-api-key in optionalSecretNames, or NOTIFY_API_KEY deploys empty and the push ' +
+    'is dark while the host says otherwise');
+});
 
-  // Reading the script proves the gate is wired, not that it discriminates: widen `[^']+` to
-  // `[^']*` and every assertion above still passes while prod is blocked on a key it does not use.
-  // So run the script's own expression, with the script's own grep, against both shapes of value.
-  const gate = /grep -Eq "(\^param notifyApiBase[^"]*)" "\$PARAM_FILE"/.exec(DEPLOY);
-  assert.ok(gate, 'the gate must be a grep -Eq of the param file, or this cannot be exercised');
-
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'notify-gate-'));
-  const demands = (line) => {
-    const file = path.join(dir, 'x.bicepparam');
-    fs.writeFileSync(file, `${line}\n`);
-    return spawnSync('grep', ['-Eq', gate[1], file]).status === 0;
-  };
-  try {
-    assert.strictEqual(demands("param notifyApiBase = ''"), false,
-      'an empty host is a dark environment — demanding the key there blocks the prod deploy');
-    assert.strictEqual(demands("param notifyApiBase = 'https://eagle-notify.example.gov.bc.ca'"), true,
-      'a named host must demand the key, or the environment deploys looking configured and dark');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('prod names neither the eagle-notify host nor its vault secret', () => {
+  const base = /^param notifyApiBase = '([^']*)'$/m.exec(PROD_PARAMS);
+  assert.ok(base, 'prod must state notifyApiBase, empty or otherwise');
+  assert.strictEqual(base[1], '', 'prod has no eagle-notify to announce to yet');
+  assert.doesNotMatch(PROD_PARAMS, /'notify-api-key'/,
+    'naming the secret prod never set makes the deploy check demand a credential prod does not use');
 });
 
 // Two params, one feature, and each is useless alone: the schedule is what writes the drift line,
@@ -550,8 +551,6 @@ test('the drift alert query matches the line the reconcile actually logs', () =>
 // parameters and in ARM deployment history; a revert to that is invisible to `az bicep build` and to
 // a what-if diff, which masks @secure() values on both sides. Text-structural, same honest limits as
 // the guards above.
-const KEY_VAULT_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
-
 test('the API app reads ADMIN_API_KEY through a Key Vault reference', () => {
   const setting = API_MODULE
     .split(/^\s+\{$/m)
@@ -572,11 +571,11 @@ test('the API app reads ADMIN_API_KEY through a Key Vault reference', () => {
 // `@Microsoft.KeyVault(...)` string in the setting, and every admin call 401s against a credential
 // that looks configured. `az bicep build` exits 0 with the assignment deleted.
 test('the app identity is granted Key Vault Secrets User', () => {
-  assert.match(KEY_VAULT_MODULE, /'4633458b-17de-408a-b874-0445c86b69e6'/,
+  assert.match(KEY_VAULT, /'4633458b-17de-408a-b874-0445c86b69e6'/,
     'Key Vault Secrets User is the role that reads secret VALUES; no other built-in role does');
-  assert.match(KEY_VAULT_MODULE, /principalId: identityPrincipalId/,
+  assert.match(KEY_VAULT, /principalId: identityPrincipalId/,
     'the assignment must target the identity the API runs as');
-  assert.match(KEY_VAULT_MODULE, /enableRbacAuthorization: true/,
+  assert.match(KEY_VAULT, /enableRbacAuthorization: true/,
     'a role assignment grants nothing on a vault still using access policies');
 
   // Key Vault references resolve as the system-assigned identity by default, and this app has only
@@ -606,13 +605,15 @@ test('the API app reads both team-sync secrets through Key Vault references', ()
 
     assert.match(MAIN, new RegExp(`^\\s+${paramName}Uri: keyVault\\.outputs\\.${paramName}Uri$`, 'm'),
       'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
-    assert.match(MAIN, new RegExp(`^\\s+${paramName}: ${paramName}$`, 'm'),
-      'and the value into the vault module, or the secret is never written');
-    assert.match(KEY_VAULT_MODULE, new RegExp(`name: '${secretName}'`),
-      `key-vault.bicep must declare the ${secretName} secret`);
-    assert.match(KEY_VAULT_MODULE, new RegExp(`^output ${paramName}Uri string = \\w+\\.properties\\.secretUri$`, 'm'),
-      'and output its VERSIONLESS uri (secretUri, not secretUriWithVersion), so a rotation needs ' +
-      'a new secret version and a restart rather than an infrastructure deploy');
+    assert.doesNotMatch(MAIN, new RegExp(`^param ${paramName} `, 'm'),
+      `${paramName} must not be a parameter again — the value would sit in ARM deployment history, ` +
+      'and a deploy that forgot it would blank the live credential');
+    assert.match(KEY_VAULT, new RegExp(`^\\s+'${secretName}'$`, 'm'),
+      `key-vault.bicep must list ${secretName} among the names the vault has to hold, or ` +
+      'deploy-infra.sh never checks for it');
+    assert.match(KEY_VAULT, new RegExp(`^output ${paramName}Uri string = '\\$\\{secretUriBase\\}${secretName}'$`, 'm'),
+      'and compose its VERSIONLESS uri from the vault uri, so a rotation needs a new secret ' +
+      'version and a restart rather than an infrastructure deploy');
   }
 });
 
@@ -632,33 +633,104 @@ test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
   assert.doesNotMatch(API_MODULE, /value: edgeSecret$/m,
     'no app setting may carry the raw edgeSecret value');
 
-  assert.match(MAIN, /^@secure\(\)\nparam edgeSecret string = ''$/m,
-    'edgeSecret must be @secure() in main.bicep, or its value is readable in ARM deployment history');
-  assert.match(MAIN, /^\s+edgeSecret: edgeSecret$/m,
-    'and be passed into the vault module, or the secret is never written');
+  assert.doesNotMatch(MAIN, /^param edgeSecret /m,
+    'the secret must not be a parameter again — a parameter is a value in ARM deployment history, ' +
+    'and a forgotten export would blank the live one');
   assert.match(MAIN, /^\s+edgeSecretUri: keyVault\.outputs\.edgeSecretUri$/m,
     'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
 
-  assert.match(KEY_VAULT, /var hasEdgeSecret = !empty\(edgeSecret\)/);
-  assert.match(KEY_VAULT, /resource edgeSecretSecret [^\n]+ = if \(hasEdgeSecret\) \{/,
-    'an empty secret must write no Key Vault secret — there is no empty secret value to write');
-  assert.match(KEY_VAULT, /^output edgeSecretUri string = hasEdgeSecret \? \w+!\.properties\.secretUri : ''$/m,
-    'and output its VERSIONLESS uri, so a rotation is a new secret version plus a restart');
+  assert.match(KEY_VAULT,
+    /^output edgeSecretUri string = contains\(optionalSecretNames, 'edge-secret'\) \? '\$\{secretUriBase\}edge-secret' : ''$/m,
+    'an environment that did not name the secret must get an empty URI, and the URI must be the ' +
+    'VERSIONLESS one, so a rotation is a new secret version plus a recycle');
 
-  for (const [label, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-    assert.match(params, /^param edgeSecret = readEnvironmentVariable\('EDGE_SECRET', ''\)$/m,
-      `${label} must read the secret from the environment — a literal would publish it, this ` +
-      'repository is public');
-  }
+  // The one environment that has a Front Door in front of it is the one that must name the secret.
+  assert.match(TEST_PARAMS, /^\s+'edge-secret'$/m,
+    'test sits behind eagle-edge-test, so an unnamed edge-secret puts every visitor arriving ' +
+    'through Front Door on one shared anonymous quota key');
 
-  assert.match(DEPLOY, /os_secret demi-app-secrets EDGE_SECRET/,
-    'the secret comes from OpenShift, like every other secret this script sources');
+  assert.doesNotMatch(DEPLOY, /EDGE_SECRET/,
+    'the deploy script must not source the value at all any more — the vault holds it and the ' +
+    'script checks names only');
 });
 
-// The access curtain's password, same five-file shape as EDGE_SECRET above and the same reason for
-// a text-structural guard: `az bicep build` exits 0 with the app setting deleted, and the failure
-// is silent in the wrong direction — an empty ACCESS_GATE_PASSWORD makes POST /api/gate answer 404,
-// so an environment that means to be gated would serve the whole site to anyone who asked.
+// The object-store pair and the extraction host key, the three credentials that used to arrive as
+// @secure() parameters and land in app settings verbatim. A revert is invisible twice over: `az
+// bicep build` compiles a plain value, and what-if masks a @secure() one in BOTH before and after,
+// so a deploy that blanked a live credential renders as no change at all.
+const VAULT_SETTINGS = [
+  ['MINIO_ACCESS_KEY', 'minioAccessKeySecretUri', 'minio-access-key'],
+  ['MINIO_SECRET_KEY', 'minioSecretKeySecretUri', 'minio-secret-key'],
+  ['DOCLING_API_KEY', 'doclingApiKeySecretUri', 'docling-api-key']
+];
+
+for (const [settingName, paramName, secretName] of VAULT_SETTINGS) {
+  test(`the API app reads ${settingName} through a Key Vault reference`, () => {
+    const setting = API_MODULE
+      .split(/^\s+\{$/m)
+      .find(b => new RegExp(`name: '${settingName}'`).test(b));
+    assert.ok(setting, `no ${settingName} app setting declared at all`);
+    assert.match(setting, new RegExp(`value: '@Microsoft\\.KeyVault\\(SecretUri=\\$\\{${paramName}\\}\\)'`),
+      `${settingName} must be a Key Vault reference, not the credential itself`);
+
+    assert.match(MAIN, new RegExp(`^\\s+${paramName}: keyVault\\.outputs\\.${paramName}$`, 'm'),
+      'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
+    assert.match(KEY_VAULT, new RegExp(`^\\s+'${secretName}'$`, 'm'),
+      `key-vault.bicep must list ${secretName} among the names the vault has to hold, or ` +
+      'deploy-infra.sh never checks for it and the setting resolves to nothing');
+    assert.match(KEY_VAULT, new RegExp(`^output ${paramName} string = '\\$\\{secretUriBase\\}${secretName}'$`, 'm'),
+      'and compose its VERSIONLESS uri from the vault uri, so a rotation is a new secret version ' +
+      'plus a recycle rather than an infrastructure deploy');
+  });
+}
+
+// The single statement that makes the whole estate safe: with no @secure() parameter left, there is
+// no credential a deploy can carry, and therefore none it can blank. Every one is set by hand in the
+// vault and read by reference. A re-added parameter compiles, deploys, and reads as no change in
+// what-if — which is exactly the failure this change exists to remove.
+test('main.bicep carries no credential values at all', () => {
+  assert.doesNotMatch(MAIN, /^@secure\(\)$/m,
+    'a @secure() parameter is a credential in the deployment inputs and in ARM history — the vault ' +
+    'holds the values now, and main.bicep passes only secret URIs');
+
+  // The vault URI is composed once, so a missing slash cannot differ between names, and versionless
+  // so App Service re-reads a rotation on its own.
+  assert.match(KEY_VAULT, /^var secretUriBase = '\$\{vault\.properties\.vaultUri\}secrets\/'$/m,
+    'every secret URI must be composed from the live vault uri, not from a name pattern');
+  assert.doesNotMatch(KEY_VAULT, /secretUriWithVersion/,
+    'a versioned identifier pins the app to one version, so a rotation becomes an infrastructure ' +
+    'deploy instead of a recycle');
+});
+
+// The sync app is what copies vault secrets into OpenShift, and both halves of its gate matter: it
+// needs the namespaces it owns, and it needs a subnet to reach the vault's private endpoint from.
+// Deployed with an empty namespace list it runs and writes nowhere; `az bicep build` compiles that.
+test('the secret sync is deployed only where namespaces are named, and is told which', () => {
+  const block = MAIN.split(/^module /m).find(b => b.includes("'./modules/secret-sync.bicep'"));
+  assert.ok(block, 'main.bicep must call the secret-sync module');
+  assert.match(block.split('\n')[0], /= if \(!empty\(syncNamespaces\) && !empty\(apiFlexSubnetId\)\)/,
+    'an environment that names no namespace must deploy no sync app, and one with no subnet ' +
+    'cannot reach the vault private endpoint at all');
+
+  assert.match(block, /^\s+keyVaultName: keyVault\.outputs\.vaultName$/m,
+    'the sync must be told which vault to read, or it has nothing to copy');
+  assert.match(block, /^\s+syncNamespaces: syncNamespaces$/m,
+    'and which namespaces it owns — empty writes to none while the app still runs');
+  assert.match(block, /^\s+identityPrincipalId: identity\.outputs\.principalId$/m,
+    'it reads the vault as the identity that holds the Secrets User grant');
+
+  // Prod owns its own namespace only: the sync can reach exactly what its token opens, and the
+  // nonprod vault holds no prod token.
+  assert.match(PROD_PARAMS, /^param syncNamespaces = '6cdc9e-prod'$/m,
+    'prod must name only the prod namespace');
+  assert.match(TEST_PARAMS, /^param syncNamespaces = '6cdc9e-dev,6cdc9e-test'$/m,
+    'the nonprod vault serves both nonprod namespaces, and neither is prod');
+});
+
+// The access curtain's password, same shape as EDGE_SECRET above and the same reason for a
+// text-structural guard: `az bicep build` exits 0 with the app setting deleted, and the failure is
+// silent in the wrong direction — an empty ACCESS_GATE_PASSWORD makes POST /api/gate answer 404, so
+// an environment that means to be gated would serve the whole site to anyone who asked.
 test('the API app reads ACCESS_GATE_PASSWORD through a Key Vault reference', () => {
   const setting = API_MODULE
     .split(/^\s+\{$/m)
@@ -670,27 +742,29 @@ test('the API app reads ACCESS_GATE_PASSWORD through a Key Vault reference', () 
   assert.doesNotMatch(API_MODULE, /value: accessGatePassword$/m,
     'no app setting may carry the raw password value');
 
-  assert.match(MAIN, /^@secure\(\)\nparam accessGatePassword string = ''$/m,
-    'accessGatePassword must be @secure() in main.bicep, or it is readable in ARM deployment history');
-  assert.match(MAIN, /^\s+accessGatePassword: accessGatePassword$/m,
-    'and be passed into the vault module, or the secret is never written');
+  assert.doesNotMatch(MAIN, /^param accessGatePassword /m,
+    'the password must not be a parameter again — a parameter is a value in ARM deployment ' +
+    'history, and a forgotten export would blank the live one');
   assert.match(MAIN, /^\s+accessGateSecretUri: keyVault\.outputs\.accessGateSecretUri$/m,
     'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
 
-  assert.match(KEY_VAULT, /var hasAccessGatePassword = !empty\(accessGatePassword\)/);
-  assert.match(KEY_VAULT, /resource accessGateSecret [^\n]+ = if \(hasAccessGatePassword\) \{/,
-    'an empty password must write no Key Vault secret — an ungated environment has none to write');
-  assert.match(KEY_VAULT, /^output accessGateSecretUri string = hasAccessGatePassword \? \w+!\.properties\.secretUri : ''$/m,
-    'and output its VERSIONLESS uri, so a rotation is a new secret version plus a restart');
+  assert.doesNotMatch(KEY_VAULT, /value: accessGatePassword/,
+    'the vault template must not write the password value — it carries no secret value at all');
+  assert.match(KEY_VAULT,
+    /^output accessGateSecretUri string = contains\(optionalSecretNames, 'access-gate-password'\) \? '\$\{secretUriBase\}access-gate-password' : ''$/m,
+    'an environment that did not name the secret must get an empty URI, and the URI must be the ' +
+    'VERSIONLESS one, so a rotation is a new secret version plus a recycle');
 
-  for (const [label, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-    assert.match(params, /^param accessGatePassword = readEnvironmentVariable\('ACCESS_GATE_PASSWORD', ''\)$/m,
-      `${label} must read the password from the environment — a literal would publish it, this ` +
-      'repository is public');
-  }
+  // Test runs the curtain and prod runs ungated, so the name is on exactly one of them.
+  assert.match(TEST_PARAMS, /^\s+'access-gate-password'$/m,
+    'test runs the curtain, so an unnamed access-gate-password leaves POST /api/gate answering ' +
+    '404 for everyone');
+  assert.doesNotMatch(PROD_PARAMS, /'access-gate-password'/,
+    'prod runs ungated — naming the secret there would gate the public site on a value nobody set');
 
-  assert.match(DEPLOY, /os_secret demi-app-secrets ACCESS_GATE_PASSWORD/,
-    'the password comes from OpenShift, like every other secret this script sources');
+  assert.doesNotMatch(DEPLOY, /ACCESS_GATE_PASSWORD/,
+    'the deploy script must not source the value at all any more — the vault holds it and the ' +
+    'script checks names only');
 });
 
 // The gateway secret is what makes the app trust an APIM-asserted subscription, and both halves of
@@ -822,10 +896,60 @@ test('the analytics APIs strip every client-sent trust header before stamping th
       `${named} must be a secret named value, or its value is readable in the portal and in ARM`);
   }
 
-  // An exported URL with either secret unexported publishes a gateway that 502s what it forwards.
+  // A URL with either secret identifier missing publishes a gateway that 502s what it forwards.
   assert.match(APIM_MODULE,
-    /^var analyticsDeployed = !empty\(analyticsBackendUrl\) && !empty\(analyticsSharedHeaderValue\) && !empty\(analyticsAuditHeaderValue\)$/m,
+    /^var analyticsDeployed = !empty\(analyticsBackendUrl\) && !empty\(analyticsSharedHeaderSecretUri\) && !empty\(analyticsAuditHeaderSecretUri\)$/m,
     'a half-set trio must read as not deployed');
+});
+
+// The two header values APIM stamps are the same pair eagle-analytics reads, and the vault is the
+// one copy either side sees. A named value carrying a literal `value:` compiles just as well, puts
+// the secret in this repository's deploy inputs and in ARM history, and makes a rotation a redeploy
+// of two repositories instead of a new secret version.
+test('the analytics named values are Key Vault-backed, not literals', () => {
+  const named = (name) => {
+    const hit = APIM_MODULE.split(/^resource /m).find((b) => new RegExp(`\\n  name: '${name}'\\n`).test(b));
+    assert.ok(hit, `apim.bicep must declare the ${name} named value`);
+    return hit;
+  };
+
+  const shared = named('analytics-shared-header');
+  assert.match(shared, /^\s+secretIdentifier: analyticsSharedHeaderSecretUri$/m,
+    'the gateway must read the value from the vault by identifier');
+  assert.doesNotMatch(shared, /^\s+value: /m,
+    'a literal value is a second copy of a secret another repository also holds');
+
+  const audit = named('analytics-audit-header');
+  assert.match(audit, /^\s+secretIdentifier: analyticsAuditHeaderSecretUri$/m,
+    'and the audit credential the same way — a DIFFERENT secret, so the write path rotates alone');
+  assert.doesNotMatch(audit, /^\s+value: /m,
+    'a literal value is a second copy of a secret another repository also holds');
+
+  // APIM resolves the secret while it creates the named value: without the grant already in place
+  // that create fails, and the ordering is invisible to `az bicep build`.
+  assert.match(shared, /dependsOn: \[\n\s+secretsUser\n\s+\]/,
+    'the named value must be created after the read grant, or its first deploy fails to resolve');
+  assert.match(audit, /dependsOn: \[\n\s+secretsUser\n\s+\]/,
+    'the named value must be created after the read grant, or its first deploy fails to resolve');
+
+  // The identifiers come from the vault module, and the values are nobody's parameter any more.
+  assert.match(MAIN, /^\s+analyticsSharedHeaderSecretUri: keyVault\.outputs\.analyticsSharedHeaderSecretUri$/m,
+    'main.bicep must pass the vault URI into the apim module — without it the named value is empty ' +
+    'and analyticsDeployed reads false, which publishes no analytics API at all');
+  assert.match(MAIN, /^\s+analyticsAuditHeaderSecretUri: keyVault\.outputs\.analyticsAuditHeaderSecretUri$/m,
+    'and the audit one, same consequence');
+  assert.doesNotMatch(MAIN, /^param analyticsSharedHeaderValue /m,
+    'the value must not be a parameter again');
+  assert.doesNotMatch(MAIN, /^param analyticsAuditHeaderValue /m,
+    'the value must not be a parameter again');
+
+  // Required, not optional: both environments that deploy this vault publish the analytics API, and
+  // deploy-infra.sh only checks the names these lists carry. A gateway stamping an unresolved named
+  // value deploys clean and 401s everything it forwards.
+  assert.match(KEY_VAULT, /^\s+'analytics-shared-header'$/m,
+    'analytics-shared-header must be a required vault name');
+  assert.match(KEY_VAULT, /^\s+'analytics-audit-header'$/m,
+    'analytics-audit-header must be a required vault name');
 });
 
 // Without operations APIM answers 404 for everything: an API with a backend but no exposed

@@ -16,13 +16,11 @@ param tags object
 @description('OpenShift MinIO Endpoint URL')
 param minioHost string
 
-@description('OpenShift MinIO Access Key')
-@secure()
-param minioAccessKey string
+@description('Key Vault URI of the object-store access key. Not the value: the app resolves it through a Key Vault reference.')
+param minioAccessKeySecretUri string
 
-@description('OpenShift MinIO Secret Key')
-@secure()
-param minioSecretKey string
+@description('Key Vault URI of the object-store secret key. Same handling as minioAccessKeySecretUri.')
+param minioSecretKeySecretUri string
 
 @description('Azure AI Search endpoint, e.g. https://demi-search-test.search.windows.net. Empty disables chunk search rather than failing it.')
 param searchEndpoint string = ''
@@ -86,9 +84,8 @@ param minioKeyPrefix string = ''
 @description('Key Vault URI of the break-glass sysadmin credential, INBOUND. Not the value: the app resolves it through a Key Vault reference.')
 param adminApiKeySecretUri string
 
-@description('OUTBOUND credential DEMI presents to docling-serve as X-Api-Key. Nothing inbound validates it.')
-@secure()
-param doclingApiKey string = ''
+@description('Key Vault URI of the OUTBOUND credential DEMI presents to docling-serve as X-Api-Key. Nothing inbound validates it.')
+param doclingApiKeySecretUri string
 
 @description('Keycloak base URL for this environment (dev/test/prod loginproxy)')
 param keycloakUrl string = environmentName == 'prod'
@@ -473,13 +470,15 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'MINIO_HOST'
           value: minioHost
         }
+        // Both resolve through the UAMI (keyVaultReferenceIdentity) over the vault private endpoint,
+        // the same way ADMIN_API_KEY below does. No value passes through this template.
         {
           name: 'MINIO_ACCESS_KEY'
-          value: minioAccessKey
+          value: '@Microsoft.KeyVault(SecretUri=${minioAccessKeySecretUri})'
         }
         {
           name: 'MINIO_SECRET_KEY'
-          value: minioSecretKey
+          value: '@Microsoft.KeyVault(SecretUri=${minioSecretKeySecretUri})'
         }
         {
           name: 'MINIO_BUCKET_NAME'
@@ -526,7 +525,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'DOCLING_API_KEY'
-          value: doclingApiKey
+          value: '@Microsoft.KeyVault(SecretUri=${doclingApiKeySecretUri})'
         }
         {
           name: 'TRACK_API_BASE'

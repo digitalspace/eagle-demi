@@ -186,15 +186,11 @@ jobs:
     name: Validate Bicep Template
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # The param files read these with NO default (BCP427), and THE MISSING DEFAULTS ARE THE SAFETY
-    # PROPERTY: a `''` fallback overwrote live credentials on 2026-08-13. Placeholders reach nothing.
+    # The one parameter the param files still read from the environment with NO default (BCP427),
+    # and the missing default IS the safety property: a `''` fallback overwrote live credentials on
+    # 2026-08-13. It is a public key, not a credential, and this placeholder reaches nothing. Every
+    # credential moved to demi-kv-<env> and reaches the app as a Key Vault reference instead.
     env:
-      MINIO_ACCESS_KEY: ci-placeholder-not-a-real-key
-      MINIO_SECRET_KEY: ci-placeholder-not-a-real-key
-      ADMIN_API_KEY: ci-placeholder-not-a-real-key
-      DOCLING_API_KEY: ci-placeholder-not-a-real-key
-      TRACK_CLIENT_SECRET: ci-placeholder-not-a-real-key
-      ROLE_SYNC_CLIENT_SECRET: ci-placeholder-not-a-real-key
       DEVBOX_SSH_PUBLIC_KEY: ci-placeholder-not-a-real-key
     steps:
       - name: Checkout repository

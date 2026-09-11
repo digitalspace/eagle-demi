@@ -17,23 +17,33 @@ set -euo pipefail
 # ── WHY THIS EXISTS AT ALL ────────────────────────────────────────────────────────────────────
 #
 # `siteConfig.appSettings` in api-function-flex.bicep is a WHOLE-COLLECTION PUT: every setting the
-# template does not supply is deleted from the running app. Six of them are secrets the template
-# cannot derive, so a deploy has to be told all six. That made the procedure a multi-command
+# template does not supply is deleted from the running app. Some of them are secrets the template
+# cannot derive, so a deploy has to be told them. That made the procedure a multi-command
 # hand-export across two clouds, documented only in a comment, and getting it wrong overwrote the
 # break-glass credential with an empty string.
 #
 # `what-if` could not warn about any of it: it masks @secure() values as "*******" in BOTH the
 # before and the after, so a credential being blanked renders as no change at all.
 #
-# Two guards now exist ahead of this script — the .bicepparam files call readEnvironmentVariable
-# with NO fallback, so a missing export fails the build rather than deploying an empty string.
-# This script is the third: it fetches the values so nobody has to, and asserts afterwards that
-# they survived.
+# ── WHERE THE VALUES LIVE NOW ─────────────────────────────────────────────────────────────────
+#
+# `demi-kv-<env>` is the source of truth for every credential the app resolves by reference:
+# admin-api-key, track-client-secret, role-sync-client-secret, docling-api-key, minio-access-key,
+# minio-secret-key, the two analytics header values APIM stamps, and per environment notify-api-key
+# and edge-secret. NOTHING here reads or writes those values. They are set once by hand from the
+# devbox (`az keyvault secret set`), so an infrastructure deploy cannot blank one — the template
+# has no parameter to blank. What this script does instead is check, before deploying, that the
+# vault holds every NAME the app will ask for; a missing name is an app setting that silently never
+# resolves.
+#
+# One guard remains for what is still a parameter — the devbox public key, which is not a
+# credential. The .bicepparam file calls readEnvironmentVariable with NO fallback, so a missing
+# export fails the build rather than deploying an empty string.
 #
 # ── SECRETS ───────────────────────────────────────────────────────────────────────────────────
 #
-# Lengths are printed, values never. A credential in a terminal is a credential in a scrollback
-# buffer, a CI log, and whatever is reading over your shoulder.
+# Lengths are printed, values never — and secret VALUES never leave the vault. The devbox check
+# below lists NAMES only, because run-command output comes back to this terminal.
 #
 # ── TESTING THIS SCRIPT ───────────────────────────────────────────────────────────────────────
 #
@@ -63,10 +73,8 @@ case "$ENVIRONMENT" in
     SUBSCRIPTION='be5924ac-1083-4a1b-be92-7b444882cfd9'
     RESOURCE_GROUP='rg-demi-prod'
     # This box has NO prod write context. The name below is the read-only ServiceAccount context
-    # for this workspace, used here to read the MinIO secret and demi-app-secrets
-    # (ADMIN_API_KEY, DOCLING_API_KEY, TRACK_CLIENT_SECRET, ROLE_SYNC_CLIENT_SECRET,
-    # NOTIFY_API_KEY) out of
-    # 6cdc9e-prod. Export any of them by hand to override.
+    # for this workspace, used here only to read the devbox public key out of 6cdc9e-prod. Export
+    # it by hand to override.
     OC_CONTEXT='6cdc9e-prod/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd'
     ;;
   *)
@@ -79,17 +87,11 @@ esac
 # this machine, only the read-only ServiceAccount one set above.
 OC_CONTEXT="${OC_CONTEXT:-epic-${ENVIRONMENT}}"
 
-# The object-store credential is in a DIFFERENT secret with DIFFERENT keys in prod. Same values,
-# same exported names — only where they are read from changes.
-if [ "$ENVIRONMENT" = 'prod' ]; then
-  MINIO_SECRET_NAME='nr-object-store-credential'
-  MINIO_ACCESS_KEY_FIELD='user_account'
-  MINIO_SECRET_KEY_FIELD='password'
-else
-  MINIO_SECRET_NAME='eagle-api-minio-keys'
-  MINIO_ACCESS_KEY_FIELD='MINIO_ACCESS_KEY'
-  MINIO_SECRET_KEY_FIELD='MINIO_SECRET_KEY'
-fi
+# The object-store credentials are no longer read here. Prod's authoritative copy is still the
+# platform team's `nr-object-store-credential` in 6cdc9e-prod (user_account / password), but it is
+# copied into demi-kv-prod as minio-access-key / minio-secret-key once, and the app resolves the
+# vault. Non-prod used to read `eagle-api-minio-keys`, an eagle-api secret DEMI had no claim on;
+# nothing reads it here now either.
 
 case "$MODE" in
   --what-if|--live) ;;
@@ -110,156 +112,187 @@ PARAM_FILE="${REPO_ROOT}/azure/main.${ENVIRONMENT}.bicepparam"
 
 # The app this deployment writes: the Flex app is the only API app in every environment.
 API_APP="demi-api-fc-${ENVIRONMENT}"
+# The vault the app resolves its credentials from, and the only machine that can read it: policy
+# denies public network access, so every caller has to sit inside the VNet.
+VAULT="demi-kv-${ENVIRONMENT}"
+DEVBOX="demi-devbox-${ENVIRONMENT}"
+KEY_VAULT_MODULE="${REPO_ROOT}/azure/modules/key-vault.bicep"
 PROBE_HOST="${APIM_HOST:-${API_APP}.azurewebsites.net}"
 
-# Read one key out of an OpenShift secret. OpenShift is the source of truth for every credential
-# this template deploys — NOT the app settings.
+# Read one key out of an OpenShift secret. One caller is left: the devbox PUBLIC key, which is not
+# a credential. Every credential this template used to carry now comes from the vault instead.
 #
-# That distinction is the whole reason this function looks like it does. An earlier version
-# round-tripped ADMIN_API_KEY and DOCLING_API_KEY out of the live app settings, which sounds
-# idempotent and is actually a loop: a deploy that reads the app's own settings will happily feed a
-# corrupted value straight back into it, and there is then nothing left to recover from. That is
-# not hypothetical — on 2026-08-13 a bad value reached the app that way and both credentials were
-# permanently lost, because ARM does not retain @secure() parameters either. MinIO survived the
-# same incident purely because OpenShift held an authoritative copy.
+# Never point this at the app's own settings. An earlier version round-tripped ADMIN_API_KEY and
+# DOCLING_API_KEY out of the live app settings, which sounds idempotent and is actually a loop: a
+# deploy that reads the app's own settings will happily feed a corrupted value straight back into
+# it, and there is then nothing left to recover from. That is not hypothetical — on 2026-08-13 a
+# bad value reached the app that way and both credentials were permanently lost, because ARM does
+# not retain @secure() parameters either.
 #
 # `|| true` so a missing secret is reported by the length check below with a useful message, rather
 # than killing the script under `set -e` with an oc error.
 os_secret() {
+  [ -n "$1" ] || return 0
   oc --context "$OC_CONTEXT" get secret "$1" -n "6cdc9e-${ENVIRONMENT}" \
     -o "jsonpath={.data.${2}}" 2>/dev/null | base64 -d 2>/dev/null || true
 }
 
-# `${VAR:-…}` and not a bare assignment, deliberately: an already-exported value always wins. That
-# is what makes a FRESH environment work, where the OpenShift secrets do not exist yet and the
-# operator supplies the values instead.
-require_secrets() {
-  echo -e "${BLUE}[1/4] Sourcing secrets from OpenShift (6cdc9e-${ENVIRONMENT})…${NC}"
+# The names the app will resolve from the vault, read out of the templates rather than repeated
+# here: the required set is the `requiredSecretNames` var in key-vault.bicep, the per-environment
+# additions are `optionalSecretNames` in the param file. Both stop at the first `]`, so a `= []`
+# on one line yields nothing instead of eating the rest of the file.
+expected_secret_names() {
+  awk '/^var requiredSecretNames *= *\[/{f=1} f{print; if (/\]/) exit}' "$KEY_VAULT_MODULE"
+  awk '/^param optionalSecretNames *= *\[/{f=1} f{print; if (/\]/) exit}' "$PARAM_FILE"
+}
 
-  MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-$(os_secret "$MINIO_SECRET_NAME" "$MINIO_ACCESS_KEY_FIELD")}"
-  MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-$(os_secret "$MINIO_SECRET_NAME" "$MINIO_SECRET_KEY_FIELD")}"
-  ADMIN_API_KEY="${ADMIN_API_KEY:-$(os_secret demi-app-secrets ADMIN_API_KEY)}"
-  DOCLING_API_KEY="${DOCLING_API_KEY:-$(os_secret demi-app-secrets DOCLING_API_KEY)}"
-  TRACK_CLIENT_SECRET="${TRACK_CLIENT_SECRET:-$(os_secret demi-app-secrets TRACK_CLIENT_SECRET)}"
-  ROLE_SYNC_CLIENT_SECRET="${ROLE_SYNC_CLIENT_SECRET:-$(os_secret demi-app-secrets ROLE_SYNC_CLIENT_SECRET)}"
-  NOTIFY_API_KEY="${NOTIFY_API_KEY:-$(os_secret demi-app-secrets NOTIFY_API_KEY)}"
-  # The value the eagle-edge rule set stamps as X-Edge-Secret. Never in `required` below and never
-  # asserted afterwards: an environment with no Front Door in front of it has none, and an empty one
-  # only puts that environment's visitors back on one shared anonymous quota key. Both sides read
-  # the SAME value — rotate it in eagle-edge and here together, or callers fall back for a while.
-  EDGE_SECRET="${EDGE_SECRET:-$(os_secret demi-app-secrets EDGE_SECRET)}"
-  # The password POST /api/gate accepts. Never in `required` below, same as EDGE_SECRET above: an
-  # environment that runs no access curtain has none, and an empty one writes no Key Vault secret
-  # and leaves the route answering 404. eagle-api's Config.ACCESS_GATE is the other half — a
-  # password here with the flag off, or the flag on with no password here, is a curtain that never
-  # opens for anyone.
-  ACCESS_GATE_PASSWORD="${ACCESS_GATE_PASSWORD:-$(os_secret demi-app-secrets ACCESS_GATE_PASSWORD)}"
+# NAMES only, never values. run-command hands its output back to this terminal, and a secret in a
+# terminal is a secret in a scrollback buffer.
+#
+# Runs in --what-if mode too: it is the gate, not a convenience, and a name that is missing is
+# missing whether or not this run applies anything. It does start the devbox, which is deallocated
+# between sessions.
+require_vault_secrets() {
+  echo -e "${BLUE}[1/5] Checking ${VAULT} holds the names the app resolves…${NC}"
 
-  export MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
-  export TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET NOTIFY_API_KEY EDGE_SECRET
-  export ACCESS_GATE_PASSWORD
+  local -a expected=()
+  local name
+  while read -r name; do
+    [ -n "$name" ] && expected+=("$name")
+  done < <(expected_secret_names | grep -o "'[a-z0-9-]*'" | tr -d "'")
 
-  local -a required=(MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
-    TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET)
-
-  # Only where the param file names an eagle-notify host. With `notifyApiBase` empty the push is
-  # dark, no Key Vault secret is written, and demanding the key would block a prod deploy on a
-  # credential prod does not use. Same shape as the devbox key below.
-  if grep -Eq "^param notifyApiBase *= *'[^']+'" "$PARAM_FILE"; then
-    required+=(NOTIFY_API_KEY)
+  if [ "${#expected[@]}" -eq 0 ]; then
+    echo -e "${RED}  ✗ no secret names found in ${KEY_VAULT_MODULE} — the check cannot run${NC}" >&2
+    exit 3
   fi
 
-  # Only where the param file publishes the analytics API. Not sourced from OpenShift like the six
-  # above: the values belong to eagle-analytics, and their home is the GitHub environment secrets
-  # APIM_SHARED_HEADER_VALUE and AUDIT_SHARED_HEADER_VALUE, held on that repository and this one.
-  # TWO of them, because that app guards POST /audit with a credential of its own on top of the
-  # gateway header. Both sides must read the same values, so an unexported one would publish a
-  # gateway stamping nothing and a Function refusing what it forwards.
-  if grep -Eq "^param analyticsBackendUrl *= *'[^']+'" "$PARAM_FILE"; then
-    required+=(APIM_SHARED_HEADER_VALUE AUDIT_SHARED_HEADER_VALUE)
+  # The devbox and the vault do not have to share the deployment's resource group, so the VM's
+  # group is read from the VM rather than assumed.
+  local vm_rg
+  vm_rg=$(az resource list -n "$DEVBOX" --resource-type Microsoft.Compute/virtualMachines \
+    --subscription "$SUBSCRIPTION" --query '[0].resourceGroup' -o tsv --only-show-errors 2>/dev/null || true)
+  if [ -z "$vm_rg" ]; then
+    echo -e "${RED}  ✗ ${DEVBOX} not found in subscription ${SUBSCRIPTION}${NC}" >&2
+    echo -e "${YELLOW}    ${VAULT} denies public network access, so the check has to run inside the VNet.${NC}" >&2
+    echo -e "${YELLOW}    Deploy the devbox (deployDevbox = true in ${PARAM_FILE##*/}) or run the list by hand from one.${NC}" >&2
+    exit 3
   fi
 
-  # The devbox SSH key. A public key, not a credential — but the param file reads it with no
-  # fallback like the six above, so a missing one fails the build, and the same guard is what turns
-  # that into a message. Only where the param file switches the VM on.
-  if grep -Eq '^param deployDevbox *= *true' "$PARAM_FILE"; then
-    DEVBOX_SSH_PUBLIC_KEY="${DEVBOX_SSH_PUBLIC_KEY:-$(os_secret demi-app-secrets DEVBOX_SSH_PUBLIC_KEY)}"
-    export DEVBOX_SSH_PUBLIC_KEY
-    required+=(DEVBOX_SSH_PUBLIC_KEY)
+  # Idempotent, and it returns once the VM is running: a schedule stops the box at 19:00 Pacific.
+  az vm start --subscription "$SUBSCRIPTION" -g "$vm_rg" -n "$DEVBOX" -o none
+
+  local listed status bad_line
+  # `if var=$(cmd)` rather than a bare assignment: under `set -e` a bare `listed=$(cmd)` that fails
+  # would abort the script before `status=$?` ever ran, which is the same swallow this replaces.
+  if listed=$(az vm run-command invoke --subscription "$SUBSCRIPTION" -g "$vm_rg" -n "$DEVBOX" \
+    --command-id RunShellScript --only-show-errors \
+    --scripts "sudo -u demi /usr/local/bin/demi-run 'az keyvault secret list --vault-name ${VAULT} --query \"[].name\" -o tsv'" \
+    --query 'value[].message' -o tsv 2>/dev/null); then
+    status=0
+  else
+    status=$?
   fi
 
-  # `val` via indirect expansion, then ${#val}. There is no ${#!name} form — bash rejects it as a
-  # bad substitution, and `bash -n` does not catch it because it is a runtime expansion error.
-  #
-  # `${!name:-}` and NOT `${!name}`. Under `set -u` an unset name kills the script with
-  # `<NAME>: unbound variable` and exit 1, before the checks below can name what is missing — and
-  # unset is the normal case for the two APIM headers, which only ever arrive as a hand export.
-  #
-  # MIN_LEN rather than a bare emptiness check. `[ -z ]` passes a single space, which is exactly how
-  # a throwaway test value reached a real deployment and destroyed two live credentials. Nothing
-  # here is legitimately shorter than 8 characters — the real ones are 11, 40, 48 and 64.
-  local missing=0 val
-  local -r MIN_LEN=8
-  for name in "${required[@]}"; do
-    # Trim surrounding whitespace before judging it, so " " is empty and not a one-character secret.
-    # ENDS ONLY for the SSH key: it is `<algorithm> <base64> [comment]`, and the full strip the six
-    # opaque secrets get eats those separators and hands Compute a one-field string ARM rejects.
-    if [ "$name" = 'DEVBOX_SSH_PUBLIC_KEY' ]; then
-      val="$(printf '%s' "${!name:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  # A failed read must never be read as an empty vault: an owner with no line into the VNet gets
+  # ForbiddenByConnection, not an empty list, and that has to be reported as a broken check, not as
+  # every secret missing.
+  bad_line=$(grep -m1 -E 'ForbiddenByConnection|AuthorizationFailed|ERROR' <<<"$listed" || true)
+  if [ "$status" -ne 0 ] || [ -n "$bad_line" ]; then
+    echo -e "${RED}  ✗ reading ${VAULT} from ${DEVBOX} failed${NC}" >&2
+    [ -n "$bad_line" ] && echo -e "${RED}    ${bad_line}${NC}" >&2
+    echo -e "${YELLOW}    That read has to run inside the VNet — this is not a missing-secret result.${NC}" >&2
+    exit 1
+  fi
+
+  local -a absent=()
+  for name in "${expected[@]}"; do
+    if grep -qx -- "$name" <<<"$listed"; then
+      echo -e "${GREEN}  ✓ ${name}${NC}"
     else
-      val="$(printf '%s' "${!name:-}" | tr -d '[:space:]')"
-    fi
-    if [ -z "$val" ]; then
-      echo -e "${RED}  ✗ ${name} is empty${NC}" >&2
-      missing=1
-    elif [ "${#val}" -lt "$MIN_LEN" ]; then
-      echo -e "${RED}  ✗ ${name} is ${#val} chars — under the ${MIN_LEN}-char floor, refusing${NC}" >&2
-      missing=1
-    elif [ "$name" = 'DEVBOX_SSH_PUBLIC_KEY' ] && ! printf '%s' "$val" | grep -Eq '^ssh-(ed25519|rsa) '; then
-      # A private key, a path, or a mangled value all pass the length floor and all fail at ARM.
-      echo -e "${RED}  ✗ ${name} is not an OpenSSH public key — expected 'ssh-ed25519 …' or 'ssh-rsa …'${NC}" >&2
-      missing=1
-    else
-      # Re-export the trimmed value: a trailing newline from `oc` would be deployed verbatim.
-      printf -v "$name" '%s' "$val"
-      export "${name?}"
-      echo -e "${GREEN}  ✓ ${name}${NC} (${#val} chars)"
+      absent+=("$name")
     fi
   done
 
-  if [ "$missing" -ne 0 ]; then
+  if [ "${#absent[@]}" -ne 0 ]; then
+    for name in "${absent[@]}"; do
+      echo -e "${RED}  ✗ ${name} is not in ${VAULT}${NC}" >&2
+    done
     cat >&2 <<EOF
 
-Refusing to deploy. Deploying an empty or junk value would overwrite the live credential, and
-there is no rollback — ARM does not retain @secure() parameter values.
+Refusing to deploy. The app resolves each of those names as
+@Microsoft.KeyVault(SecretUri=...); one that is not in the vault leaves the app setting unresolved,
+which reads as an empty credential at runtime and reports no error at deploy time.
 
-  MINIO_ACCESS_KEY / MINIO_SECRET_KEY      OpenShift secret ${MINIO_SECRET_NAME} in 6cdc9e-${ENVIRONMENT}
-                                           (keys ${MINIO_ACCESS_KEY_FIELD} / ${MINIO_SECRET_KEY_FIELD})
-  ADMIN_API_KEY / DOCLING_API_KEY          OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
-  TRACK_CLIENT_SECRET / ROLE_SYNC_CLIENT_SECRET  OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
-  NOTIFY_API_KEY                           OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
-                                           (the eagle-notify function key; only asked for where the
-                                           param file sets a non-empty notifyApiBase)
-  APIM_SHARED_HEADER_VALUE / AUDIT_SHARED_HEADER_VALUE
-                                           NOT in OpenShift. GitHub environment secrets of the same
-                                           names, on eagle-analytics and on this repository — export
-                                           both by hand; only asked for where the param file sets a
-                                           non-empty analyticsBackendUrl
-  DEVBOX_SSH_PUBLIC_KEY                    OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
-                                           (a PUBLIC key — 'ssh-keygen -t ed25519' and store the .pub,
-                                           or export it; only asked for when deployDevbox = true)
+Set the missing values ONCE, by hand, from ${DEVBOX} — never through git, a workflow input or a
+template parameter:
 
-Check 'oc --context ${OC_CONTEXT}' works, or export the missing value and re-run.
+  az vm run-command invoke -g ${vm_rg} -n ${DEVBOX} --command-id RunShellScript \\
+    --scripts "sudo -u demi /usr/local/bin/demi-run 'az keyvault secret set --vault-name ${VAULT} --name <name> --value <value>'"
+
+Or SSH to the box and run the \`az keyvault secret set\` directly, which keeps the value out of this
+terminal. Rotation is the same command: a new version, then recycle the app.
 EOF
     exit 3
   fi
+}
+
+# `${VAR:-…}` and not a bare assignment, deliberately: an already-exported value always wins. That
+# is what makes a FRESH environment work, where the OpenShift secret does not exist yet and the
+# operator supplies the value instead.
+#
+# ONE parameter is left to source. Every credential the app reads now comes from the vault, checked
+# by name in step 1; what remains is the devbox PUBLIC key, which the param file reads with no
+# fallback, so a missing one fails the bicep build with BCP427 rather than deploying a blank.
+require_secrets() {
+  echo -e "${BLUE}[2/5] Sourcing the remaining template parameters…${NC}"
+
+  # Only where the param file switches the VM on. Elsewhere the parameter is never evaluated.
+  if ! grep -Eq '^param deployDevbox *= *true' "$PARAM_FILE"; then
+    echo -e "${GREEN}  ✓ nothing to source — deployDevbox is off in ${PARAM_FILE##*/}${NC}"
+    return 0
+  fi
+
+  DEVBOX_SSH_PUBLIC_KEY="${DEVBOX_SSH_PUBLIC_KEY:-$(os_secret demi-app-secrets DEVBOX_SSH_PUBLIC_KEY)}"
+
+  # Trim the ENDS only: the key is `<algorithm> <base64> [comment]`, and stripping every space
+  # hands Compute a one-field string ARM rejects. Trimming first makes " " empty rather than a
+  # one-character value — `[ -z ]` alone passes a single space, which is how a throwaway test value
+  # once reached a real deployment.
+  DEVBOX_SSH_PUBLIC_KEY="$(printf '%s' "$DEVBOX_SSH_PUBLIC_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  export DEVBOX_SSH_PUBLIC_KEY
+
+  local ok=1
+  if [ -z "$DEVBOX_SSH_PUBLIC_KEY" ]; then
+    echo -e "${RED}  ✗ DEVBOX_SSH_PUBLIC_KEY is empty${NC}" >&2
+    ok=0
+  elif ! printf '%s' "$DEVBOX_SSH_PUBLIC_KEY" | grep -Eq '^ssh-(ed25519|rsa) '; then
+    # A private key, a path, or a mangled value all fail at ARM instead; say so here.
+    echo -e "${RED}  ✗ DEVBOX_SSH_PUBLIC_KEY is not an OpenSSH public key — expected 'ssh-ed25519 …' or 'ssh-rsa …'${NC}" >&2
+    ok=0
+  fi
+
+  if [ "$ok" -ne 1 ]; then
+    cat >&2 <<EOF
+
+Refusing to deploy: deployDevbox is on and the key the VM is built with is missing or malformed.
+
+  DEVBOX_SSH_PUBLIC_KEY                    OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
+                                           (a PUBLIC key — 'ssh-keygen -t ed25519' and store the
+                                           .pub, or export it by hand)
+
+Check 'oc --context ${OC_CONTEXT}' works, or export the value and re-run.
+EOF
+    exit 3
+  fi
+
+  echo -e "${GREEN}  ✓ DEVBOX_SSH_PUBLIC_KEY${NC} (${#DEVBOX_SSH_PUBLIC_KEY} chars)"
 }
 
 run_deployment() {
   local name="infra-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo manual)-$(date -u +%H%M%S)"
 
   if [ "$MODE" = '--what-if' ]; then
-    echo -e "${BLUE}[2/4] what-if against ${RESOURCE_GROUP}…${NC}"
+    echo -e "${BLUE}[3/5] what-if against ${RESOURCE_GROUP}…${NC}"
     echo -e "${YELLOW}  Reminder: @secure() values render as '*******' in both before and after.${NC}"
     echo -e "${YELLOW}  A blanked credential is INVISIBLE here. That is what step 4 is for.${NC}"
     az deployment group what-if -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" \
@@ -267,14 +300,14 @@ run_deployment() {
     exit 0
   fi
 
-  echo -e "${BLUE}[2/4] Deploying ${name}…${NC}"
+  echo -e "${BLUE}[3/5] Deploying ${name}…${NC}"
   az deployment group create -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" \
     -f "${REPO_ROOT}/azure/main.bicep" -p "$PARAM_FILE" -n "$name" --no-wait --only-show-errors
 
   # Poll the record rather than trusting the CLI's exit code, for the same reason deploy-azure.sh
   # does: --no-wait returns as soon as ARM accepts the request, which is not the same fact as the
   # deployment succeeding.
-  echo -e "${BLUE}[3/4] Waiting…${NC}"
+  echo -e "${BLUE}[4/5] Waiting…${NC}"
   local state
   if ! az deployment group wait -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" \
         -n "$name" --created --timeout 1800 --only-show-errors; then
@@ -296,23 +329,56 @@ run_deployment() {
 # catches the failure that started all of this — a deploy that reports success while having
 # emptied a credential.
 assert_secrets_survived() {
-  echo -e "${BLUE}[4/4] Verifying live app settings…${NC}"
-  local failed=0 len
-  for name in DOCLING_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY EAGLE_API_BASE; do
-    len=$(az webapp config appsettings list -n "$API_APP" -g "$RESOURCE_GROUP" \
+  echo -e "${BLUE}[5/5] Verifying live app settings…${NC}"
+  local failed=0 len value
+  # The one plain setting worth asserting: absent, src/seed/sources.js silently repoints this
+  # environment's seed at eagle-DEV.
+  len=$(az webapp config appsettings list -n "$API_APP" -g "$RESOURCE_GROUP" \
+    --subscription "$SUBSCRIPTION" --only-show-errors \
+    --query "[?name=='EAGLE_API_BASE'] | [0].value | length(@)" -o tsv 2>/dev/null || echo 0)
+  if [ -z "$len" ] || [ "$len" = '0' ] || [ "$len" = 'None' ]; then
+    echo -e "${RED}  ✗ EAGLE_API_BASE is EMPTY or ABSENT on ${API_APP}${NC}" >&2
+    failed=1
+  else
+    echo -e "${GREEN}  ✓ EAGLE_API_BASE${NC} (${len} chars)"
+  fi
+
+  # The credential settings are not length-checked: each one is the literal
+  # `@Microsoft.KeyVault(SecretUri=...)` reference (~70 chars) whether or not it resolves, so a
+  # length check passes on a dead reference. Assert the SHAPE instead — that catches a template
+  # regression writing a literal or a blank back over one — and prove that a reference actually
+  # resolves with the live ADMIN_API_KEY probe below, which is the only check that can.
+  for name in ADMIN_API_KEY DOCLING_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY TRACK_CLIENT_SECRET KEYCLOAK_ADMIN_CLIENT_SECRET; do
+    value=$(az webapp config appsettings list -n "$API_APP" -g "$RESOURCE_GROUP" \
       --subscription "$SUBSCRIPTION" --only-show-errors \
-      --query "[?name=='${name}'] | [0].value | length(@)" -o tsv 2>/dev/null || echo 0)
-    if [ -z "$len" ] || [ "$len" = '0' ] || [ "$len" = 'None' ]; then
-      echo -e "${RED}  ✗ ${name} is EMPTY or ABSENT on ${API_APP}${NC}" >&2
-      failed=1
-    else
-      echo -e "${GREEN}  ✓ ${name}${NC} (${len} chars)"
-    fi
+      --query "[?name=='${name}'] | [0].value" -o tsv 2>/dev/null || echo '')
+    case "$value" in
+      '@Microsoft.KeyVault(SecretUri='*)
+        echo -e "${GREEN}  ✓ ${name}${NC} (Key Vault reference)" ;;
+      *)
+        echo -e "${RED}  ✗ ${name} on ${API_APP} is not a Key Vault reference${NC}" >&2
+        failed=1 ;;
+    esac
   done
 
-  # ADMIN_API_KEY is not length-checked above: the app setting is always the literal
-  # `@Microsoft.KeyVault(SecretUri=...)` reference (~70 chars) whether or not it resolves, so the
-  # length check the other four use would pass on a dead reference. Probe the key live instead.
+  # ADMIN_API_KEY stands in for all of them in the probe: they resolve through the same identity
+  # over the same private endpoint, so one 200 says the whole set resolved.
+  #
+  # The value is no longer sourced for you — it lives in the vault and nothing here reads it. Export
+  # ADMIN_API_KEY by hand to run the probe. Without it the deploy still succeeds and the reference
+  # is still unverified, which is worth saying out loud rather than passing silently.
+  if [ -z "${ADMIN_API_KEY:-}" ]; then
+    echo -e "${YELLOW}  ADMIN_API_KEY not exported — skipping the live probe.${NC}"
+    echo -e "${YELLOW}    Nothing has checked that the Key Vault reference resolves. Read the value${NC}"
+    echo -e "${YELLOW}    from ${DEVBOX} (az keyvault secret show --vault-name ${VAULT} --name admin-api-key),${NC}"
+    echo -e "${YELLOW}    export it, and re-run to close that gap.${NC}"
+    if [ "$failed" -ne 0 ]; then
+      echo -e "${RED}✗ a live credential was lost. Restore it before anything else.${NC}" >&2
+      exit 4
+    fi
+    return 0
+  fi
+
   local code attempt
   local recycled=0
   probe_admin_key() {
@@ -362,6 +428,7 @@ assert_secrets_survived() {
 }
 
 echo -e "${BLUE}DEMI infrastructure → ${ENVIRONMENT} (${RESOURCE_GROUP})${NC}"
+require_vault_secrets
 require_secrets
 run_deployment
 assert_secrets_survived

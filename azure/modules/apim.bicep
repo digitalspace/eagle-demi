@@ -24,7 +24,7 @@ param publisherName string = 'BC EAO EPIC'
 @description('Function App default host name, e.g. demi-api-fc-test.azurewebsites.net.')
 param apiHostName string
 
-@description('Vault holding the gateway secret. The APIM system identity is granted read on it.')
+@description('Vault holding the gateway secret and the two analytics header values. The APIM system identity is granted read on it.')
 param keyVaultName string
 
 @description('Name of the shared gateway secret in that vault.')
@@ -36,13 +36,11 @@ param gatewaySecretName string = 'apim-gateway-secret'
 @description('Absolute base URL of analytics-api-fc-<env>, e.g. https://analytics-api-fc-test.azurewebsites.net. Empty deploys no analytics API, which is every environment where eagle-analytics does not exist yet.')
 param analyticsBackendUrl string = ''
 
-@description('Value of that header. The same secret eagle-analytics deploys as APIM_SHARED_HEADER_VALUE, passed at deploy time — this repository is public.')
-@secure()
-param analyticsSharedHeaderValue string = ''
+@description('Key Vault URI of that header value. Not the value: APIM resolves the named value from the vault. The same secret eagle-analytics deploys as APIM_SHARED_HEADER_VALUE.')
+param analyticsSharedHeaderSecretUri string = ''
 
-@description('Value of the second credential POST /audit demands, which eagle-analytics deploys as AUDIT_SHARED_HEADER_VALUE. A DIFFERENT secret from the one above on purpose: the write path is rotatable on its own, and a leaked ingest header must not buy an audit write.')
-@secure()
-param analyticsAuditHeaderValue string = ''
+@description('Key Vault URI of the second credential POST /audit demands, which eagle-analytics deploys as AUDIT_SHARED_HEADER_VALUE. A DIFFERENT secret from the one above on purpose: the write path is rotatable on its own, and a leaked ingest header must not buy an audit write.')
+param analyticsAuditHeaderSecretUri string = ''
 
 @description('Browser origins, scheme included, allowed on the analytics read routes. Named rather than `*` because those requests carry a Keycloak bearer; ingest stays open to any origin. Empty deploys no CORS policy on those routes, so no browser reaches them at all — fail closed.')
 param analyticsBrowserOrigins array = []
@@ -51,9 +49,9 @@ var backendUrl = 'https://${apiHostName}/api'
 var machineApiName = 'demi-machine'
 
 // All three, not just the URL: the Function refuses every request that arrives without the shared
-// header and every /audit write without the audit one, so publishing the API on an unexported secret
-// would deploy a gateway that 502s what it forwards.
-var analyticsDeployed = !empty(analyticsBackendUrl) && !empty(analyticsSharedHeaderValue) && !empty(analyticsAuditHeaderValue)
+// header and every /audit write without the audit one, so publishing the API on a header the vault
+// cannot supply would deploy a gateway that 502s what it forwards.
+var analyticsDeployed = !empty(analyticsBackendUrl) && !empty(analyticsSharedHeaderSecretUri) && !empty(analyticsAuditHeaderSecretUri)
 var analyticsApiName = 'analytics'
 var analyticsMachineApiName = 'analytics-machine'
 
@@ -255,17 +253,26 @@ resource machineSubscriptions 'Microsoft.ApiManagement/service/subscriptions@202
 // short fixed list owned by one repository, and naming each one keeps a route nobody declared off
 // the gateway.
 
-// Plain named values, not Key Vault references like gateway-secret: the secrets belong to another
-// repository's deployment, so there is no vault entry here to point at. Neither value lands in this
-// file — see the parameters.
+// Key Vault-backed, same as gateway-secret above. eagle-analytics deploys the other side of both
+// headers, but the vault is the one copy either side reads, so APIM is no longer a second store and
+// a rotation is a new secret version rather than a redeploy of two repositories.
+//
+// No `identityClientId`: the service above is SystemAssigned, and that is the identity APIM uses
+// when the property is absent. `dependsOn` the role assignment because APIM resolves the secret
+// while it creates the named value — without the read grant already in place that create fails.
 resource analyticsSharedHeader 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = if (analyticsDeployed) {
   parent: apim
   name: 'analytics-shared-header'
   properties: {
     displayName: 'analytics-shared-header'
     secret: true
-    value: analyticsSharedHeaderValue
+    keyVault: {
+      secretIdentifier: analyticsSharedHeaderSecretUri
+    }
   }
+  dependsOn: [
+    secretsUser
+  ]
 }
 
 resource analyticsAuditHeader 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = if (analyticsDeployed) {
@@ -274,8 +281,13 @@ resource analyticsAuditHeader 'Microsoft.ApiManagement/service/namedValues@2024-
   properties: {
     displayName: 'analytics-audit-header'
     secret: true
-    value: analyticsAuditHeaderValue
+    keyVault: {
+      secretIdentifier: analyticsAuditHeaderSecretUri
+    }
   }
+  dependsOn: [
+    secretsUser
+  ]
 }
 
 // API scope, because eagle-analytics puts its apimGuard on every route but /health, reads included:

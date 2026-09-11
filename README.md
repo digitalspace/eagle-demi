@@ -512,8 +512,8 @@ App Service plan to size or join. Data-plane work goes through `demi-devbox-prod
 landing-zone VNet; see "Running anything against the database".
 
 Object-store credentials come from the `nr-object-store-credential` secret in `6cdc9e-prod`
-(`user_account` / `password`), not `eagle-api-minio-keys`. The application secrets come from
-`demi-app-secrets` in the same namespace.
+(`user_account` / `password`). The credentials the app resolves by reference come from
+`demi-kv-prod` — see "Secrets live in Key Vault" below.
 
 ```bash
 # what-if — the default, nothing is applied
@@ -525,6 +525,100 @@ CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live
 
 `--live` is required to apply in every environment; prod additionally refuses without
 `CONFIRM_PROD=yes`.
+
+### Secrets live in Key Vault
+
+`demi-kv-<env>` holds the credentials the API resolves at runtime as
+`@Microsoft.KeyVault(SecretUri=...)`. The names it must hold:
+
+| Secret | What it is | Where it is required |
+|---|---|---|
+| `admin-api-key` | break-glass sysadmin credential | every environment |
+| `track-client-secret` | Keycloak client secret of the Track service account | every environment |
+| `role-sync-client-secret` | Keycloak client secret the team sync grants roles with | every environment |
+| `docling-api-key` | outbound key DEMI presents to docling-serve as `X-Api-Key` | every environment |
+| `minio-access-key` | object-store access key for the NRS store the corpus lives in | every environment |
+| `minio-secret-key` | object-store secret key paired with it | every environment |
+| `analytics-shared-header` | header APIM stamps on every analytics call, which that app demands | every environment |
+| `analytics-audit-header` | second credential APIM stamps on `POST /analytics-machine/audit` alone | every environment |
+| `notify-api-key` | function key eagle-notify accepts on `POST /api/events` | only where `notifyApiBase` is set |
+| `edge-secret` | value the eagle-edge Front Door rule set stamps as `X-Edge-Secret` | only where Front Door fronts the app |
+| `access-gate-password` | password `POST /api/gate` accepts, gating the public site | only where the site runs a curtain; not prod |
+| `openshift-token-<env>` | ServiceAccount token the secret sync writes OpenShift Secrets with | every environment that syncs |
+| `dev-openshift-token` | the same for `6cdc9e-dev`, which `demi-kv-test` also serves | `demi-kv-test` only |
+
+The first eight are the required set, written down once in `requiredSecretNames` in
+`azure/modules/key-vault.bicep`. The rest are optional per environment and are listed in that
+environment's `optionalSecretNames` parameter. Naming one there says the vault holds it; an unnamed
+one leaves its app setting empty, which is what a dark environment wants.
+
+The two analytics headers are not read by the API app. APIM resolves them as Key Vault-backed named
+values, so the gateway is no longer a second copy of them, and eagle-analytics reads the same two
+secrets as `APIM_SHARED_HEADER_VALUE` and `AUDIT_SHARED_HEADER_VALUE`. Both sides have to be
+recycled after a rotation.
+
+**Values are set once by hand, from the devbox, and never through git, a workflow input or a
+template parameter.** The Bicep has no parameter carrying a secret value, so an infrastructure
+deploy cannot blank a live credential. Rotation is the same command as the first write: a new
+version, then recycle the app (`stop` then `start` — `restart` does not re-read a reference).
+
+```bash
+# on demi-devbox-<env>, which runs as demi-identity-<env>
+az keyvault secret set --vault-name demi-kv-<env> --name admin-api-key --value '<value>'
+az keyvault secret list --vault-name demi-kv-<env> -o table
+```
+
+The same list from anywhere else answers `ForbiddenByConnection`, owner or not: landing-zone policy
+`Deny-PublicPaaSEndpoints` forces `publicNetworkAccess: Disabled`, so the only route in is the
+vault's private endpoint. That failure is the control, not a problem to route around — it is also
+why `peSubnetId` has no default in `azure/modules/key-vault.bicep`.
+
+`deploy-infra.sh` checks the live vault against the expected names from the devbox before it
+deploys anything, and refuses when one is missing, because a reference to a secret nobody set
+resolves to nothing and reports no error.
+
+### OpenShift secret sync
+
+Some of the same credentials are also needed by workloads in OpenShift, which cannot read the vault
+itself: the cluster cannot federate to Entra, and the vault answers only inside the VNet. So a
+second Function app, `demi-secret-sync-<env>`, copies them out. It reads mapped secrets from the
+vault, writes each one into the OpenShift Secret that consumes it, and stamps the pod template of
+every workload that reads it so the pods pick up the new value.
+
+- Code: `src/secret-sync/`. Infrastructure: `azure/modules/secret-sync.bicep`.
+- Triggers: an Event Grid subscription on the vault (`SecretNewVersionCreated`, filtered to mapped
+  names) and a daily timer at 06:00 UTC for drift. Both run the same reconcile.
+- A run that finds nothing changed writes nothing and restarts nothing.
+- A mapped secret missing or empty in the vault leaves the live OpenShift Secret untouched and
+  fails the run, so a rotation half-done never lands as a Secret with a key deleted.
+- It overwrites values, it never creates objects. The cluster Role grants `update` on the named
+  Secrets and no `create`, because an unnamed `create` would let the ServiceAccount mint a Secret
+  of any type, a service-account token for another account included. A mapped Secret the namespace
+  does not have is logged and counted missing, and fails the run the same way.
+- `demi-secret-sync-test` owns `6cdc9e-dev` and `6cdc9e-test`; `demi-secret-sync-prod` owns
+  `6cdc9e-prod`. `SYNC_NAMESPACES` on each app is what decides, and neither holds the other's token.
+
+**The mapping file** is `src/secret-sync/mapping.json`. It holds names only, never values: one entry
+per key, saying which vault secret feeds which key of which OpenShift Secret, and which Deployments
+and CronJobs to roll when it changes. An OpenShift Secret with several keys — `eagle-api-mongodb`
+has five in dev, `rproxy-basic-auth` six — is several entries merged into the one Secret object.
+Dev names carry a `dev-` prefix because `demi-kv-test` is the nonprod vault and serves both nonprod
+namespaces.
+
+**To add a secret**: set the value in the vault from the devbox
+(`az keyvault secret set --vault-name demi-kv-<env> --name <name> --value '<value>'`); create the
+OpenShift Secret once by hand if the namespace does not already have it
+(`oc create secret generic <name> --from-literal=<key>=placeholder`, any placeholder value — the
+first run overwrites it); then add one line per key to `mapping.json`, and merge. The staging workflow deploys it on push to main; production
+goes by tag with the rest of the release. The next event or the next daily run writes it.
+
+**To force a run**: create a new version of any mapped secret, or run the timer by hand from the
+portal (`demi-secret-sync-<env>` → Functions → `secretSyncDaily` → Code + Test → Run). The run logs
+one line with its counts: `checked`, `updated`, `restarted`, `missing`.
+
+**To disable it**: stop the function app
+(`az functionapp stop -g <rg> -n demi-secret-sync-<env>`). Nothing else depends on it running — the
+secrets it last wrote stay where they are, and deploys bind them by name.
 
 ### `demi-frontend-test` is gone — decommissioned 2026-08-15
 
@@ -727,7 +821,8 @@ That first apply found two defects the template had carried for months, both inv
 
 The second one is the general lesson: **a clean `what-if` is not evidence that an apply is safe.**
 It cannot see secure parameters and it does not validate resource-provider rules. Read the diff for
-secrets by hand before applying, and round-trip the live values in.
+secrets by hand before applying. The credentials that used to be round-tripped through parameters
+are vault-only now, so the template has nothing left to blank for those.
 
 It is not a loaded gun, though, and now for two independent reasons. **No dev workflow contains an
 infra job at all** — the `deploy-infra` job became a loginless `validate-infra` on 2026-08-04, and

@@ -34,32 +34,11 @@ param environmentName string = 'dev'
 @description('OpenShift MinIO Endpoint URL')
 param minioHost string = 'minio-6cdc9e-dev.apps.silver.devops.gov.bc.ca'
 
-@description('OpenShift MinIO Access Key')
-@secure()
-param minioAccessKey string
-
-@description('OpenShift MinIO Secret Key')
-@secure()
-param minioSecretKey string
-
-// `adminApiKey` is written to the Key Vault secret the app then reads by reference; `doclingApiKey`
-// reaches an app setting directly. Both must be passed: a module default of '' would write
-// ADMIN_API_KEY='' and DOCLING_API_KEY='' over the live values, destroying the break-glass
-// credential and the extraction host's key. `what-if` cannot surface that, because @secure() values
-// are masked in its output.
-//
-// The live app settings are the source of truth; the deploy round-trips them in. Empty is still
-// permitted so a fresh environment can be stood up before the credentials exist.
-// No `= ''` default on either: an unset value must fail the build, not deploy an empty string over
-// a live credential. The param files source them from the environment with no fallback, so a
-// forgotten export stops the deploy instead of silently destroying the app.
-@description('Break-glass admin credential. Round-tripped from the live app settings at deploy time.')
-@secure()
-param adminApiKey string
-
-@description('Extraction host credential. Same handling as adminApiKey.')
-@secure()
-param doclingApiKey string
+// NO CREDENTIAL PARAMETERS. The object-store pair and the extraction host key used to arrive here
+// as @secure() values and land in app settings verbatim, which is how a deploy could blank a live
+// credential invisibly — what-if masks a @secure() value in BOTH before and after. They live in the
+// vault now as minio-access-key, minio-secret-key and docling-api-key, beside admin-api-key, and
+// the app resolves each by reference — see modules/key-vault.bicep.
 
 @description('Upstream eagle-api the seed loader reads. Environment-specific — the code default is the DEV instance, so this must be set per environment or staging silently reads dev data.')
 param eagleApiBase string
@@ -124,7 +103,7 @@ param deployStaticSite bool = true
 @description('Keycloak client whose tokens the API accepts.')
 param keycloakClientId string = 'eagle-admin-console'
 
-// No default, same rule as adminApiKey above: an unset value must fail the build. An empty string
+// No default: an unset value must fail the build rather than deploy a blank. An empty string
 // deployed to test or prod is an allowlist that admits every client in the realm.
 @description('Comma-separated Keycloak client ids (token azp) permitted to call this API.')
 param allowedClients string
@@ -139,20 +118,22 @@ param ssoAudience string = ''
 @description('Comma-separated egress IPs of proxies we run. An APIM-asserted address on this list makes the browser hop of X-Forwarded-For the caller.')
 param trustedProxyIps string = ''
 
-// Empty means X-Edge-Secret is ignored and every visitor arriving through Front Door shares its
-// egress address as one anonymous quota key. OPTIONAL, like notifyApiKey: empty writes no Key
-// Vault secret at all.
-@description('Shared secret the eagle-edge Front Door rule set stamps as X-Edge-Secret. A request carrying it is keyed on X-Azure-SocketIP.')
-@secure()
-param edgeSecret string = ''
+// Which OPTIONAL secrets this environment's vault already holds. Values are set by hand on the
+// devbox, so this template cannot see whether one exists — naming it here is the statement that it
+// does, and an unnamed one leaves its app setting empty rather than pointing at nothing.
+// `edge-secret` unnamed means X-Edge-Secret is ignored and every visitor arriving through Front
+// Door shares its egress address as one anonymous quota key; `notify-api-key` unnamed leaves the
+// eagle-notify push dark; `access-gate-password` unnamed leaves POST /api/gate answering 404, which
+// is what prod runs. The flag the browser sees is the boolean ACCESS_GATE in the `public` config
+// document, not the secret, so the curtain's two halves are set in different places on purpose.
+@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password.')
+param optionalSecretNames array = []
 
-// The public site's access curtain. Empty means no curtain: POST /api/gate answers 404 and no Key
-// Vault secret is written, which is what prod runs. OPTIONAL for that reason, like edgeSecret above
-// — and the flag the browser sees is the boolean ACCESS_GATE in the `public` config document, not
-// this value, so the two are set in different places on purpose.
-@description('Password POST /api/gate accepts. Compared in constant time and never served; empty leaves the site ungated.')
-@secure()
-param accessGatePassword string = ''
+// The OpenShift namespaces the secret sync writes to, and the switch that deploys it. Empty
+// deploys no sync app — which is what an environment whose vault holds no OpenShift copies wants.
+// The nonprod vault serves both nonprod namespaces; prod names only its own.
+@description('OpenShift namespaces the secret sync owns, e.g. 6cdc9e-dev,6cdc9e-test. Empty deploys no sync app.')
+param syncNamespaces string = ''
 
 // Flex needs its own subnet, delegated to `Microsoft.App/environments`. Empty deploys no API app
 // at all, so an environment that wants one must supply it.
@@ -237,22 +218,10 @@ param trackApiBase string = ''
 @description('Keycloak client id of the Track service account (client credentials).')
 param trackClientId string = ''
 
-// No default, same rule as adminApiKey: an unset value must fail the build rather than write an
-// empty secret over a live one.
-@description('Client secret for trackClientId. Written to the Key Vault secret the app reads by reference.')
-@secure()
-param trackClientSecret string
-
+// The Track and role-sync client secrets are vault-only: `track-client-secret` and
+// `role-sync-client-secret`, resolved by reference. Neither is a parameter any more.
 @description('Keycloak client id of the realm-management service account the sync grants roles with.')
 param roleSyncClientId string = ''
-
-@description('Client secret for roleSyncClientId. Same handling as trackClientSecret.')
-@secure()
-param roleSyncClientSecret string
-
-@description('Function key eagle-notify accepts on POST /api/events. OPTIONAL, unlike trackClientSecret: empty writes no Key Vault secret and leaves the push dark, which is what an environment with no notifyApiBase wants.')
-@secure()
-param notifyApiKey string = ''
 
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty runs it never.')
 param syncTeamsSchedule string = ''
@@ -328,13 +297,9 @@ param deployApim bool = false
 @description('Absolute base URL of analytics-api-fc-<env>, read from the eagle-analytics deployment `apiHostName` output. NEVER composed: a Function App host name can carry a regional suffix. Empty deploys no analytics API.')
 param analyticsBackendUrl string = ''
 
-@description('Value of the header analytics-api-fc-<env> demands, shared with its APIM_SHARED_HEADER_VALUE setting. Empty leaves the gateway stamping nothing, which that app refuses.')
-@secure()
-param analyticsSharedHeaderValue string = ''
-
-@description('Value of the SECOND credential that app demands on POST /audit alone, shared with its AUDIT_SHARED_HEADER_VALUE setting. A separate secret from the one above, so the write path can be rotated without touching ingest. Empty deploys no analytics API.')
-@secure()
-param analyticsAuditHeaderValue string = ''
+// The two header values are not parameters either: APIM reads them from the vault as
+// `analytics-shared-header` and `analytics-audit-header`, which is the same pair eagle-analytics
+// reads as APIM_SHARED_HEADER_VALUE and AUDIT_SHARED_HEADER_VALUE.
 
 // The audit repoint. Privileged actions move to EagleAudit_CL in the eagle-analytics pipeline, which
 // is EPIC-wide; usage counters stay on DEMI's own DCR. Both empty keeps audit rows where they are.
@@ -406,8 +371,10 @@ module identity './modules/identity.bicep' = {
   }
 }
 
-// 1b. Key Vault — holds ADMIN_API_KEY, which the API reads by reference rather than as a stored
-// setting. Declared after identity because the secrets-read grant needs its principal.
+// 1b. Key Vault — holds the credentials the API reads by reference rather than as stored settings.
+// Declared after identity because the secrets-read grant needs its principal. `peSubnetId` is
+// required here, so an environment with no private endpoint subnet fails the deploy rather than
+// creating a vault policy makes unreachable.
 module keyVault './modules/key-vault.bicep' = {
   name: 'deploy-key-vault'
   params: {
@@ -416,12 +383,7 @@ module keyVault './modules/key-vault.bicep' = {
     tags: defaultTags
     peSubnetId: privateEndpointSubnetId
     identityPrincipalId: identity.outputs.principalId
-    adminApiKey: adminApiKey
-    trackClientSecret: trackClientSecret
-    roleSyncClientSecret: roleSyncClientSecret
-    notifyApiKey: notifyApiKey
-    edgeSecret: edgeSecret
-    accessGatePassword: accessGatePassword
+    optionalSecretNames: optionalSecretNames
   }
 }
 
@@ -551,12 +513,12 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     environmentName: environmentName
     tags: defaultTags
     minioHost: minioHost
-    minioAccessKey: minioAccessKey
-    minioSecretKey: minioSecretKey
+    minioAccessKeySecretUri: keyVault.outputs.minioAccessKeySecretUri
+    minioSecretKeySecretUri: keyVault.outputs.minioSecretKeySecretUri
     minioBucketName: minioBucketName
     minioKeyPrefix: minioKeyPrefix
     adminApiKeySecretUri: keyVault.outputs.adminApiKeySecretUri
-    doclingApiKey: doclingApiKey
+    doclingApiKeySecretUri: keyVault.outputs.doclingApiKeySecretUri
     eagleApiBase: eagleApiBase
     reconcileSchedule: reconcileSchedule
     trackApiBase: trackApiBase
@@ -618,6 +580,26 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
   }
 }
 
+// 7d. The OpenShift secret sync. Its own Flex app on the API's subnet, so a bad deploy of it
+// cannot take the API down, and it reads the vault through the same private endpoint. Off unless
+// the environment names the namespaces it owns.
+module secretSync './modules/secret-sync.bicep' = if (!empty(syncNamespaces) && !empty(apiFlexSubnetId)) {
+  name: 'deploy-secret-sync'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    virtualNetworkSubnetId: apiFlexSubnetId
+    identityId: identity.outputs.identityId
+    identityClientId: identity.outputs.clientId
+    identityPrincipalId: identity.outputs.principalId
+    keyVaultName: keyVault.outputs.vaultName
+    keyVaultUri: keyVault.outputs.vaultUri
+    syncNamespaces: syncNamespaces
+    appInsightsConnectionString: observability.outputs.connectionString
+  }
+}
+
 // 7c. The gateway. After the Flex app because it fronts it, and skipped whenever that app is.
 module apim './modules/apim.bicep' = if (deployApim && !empty(apiFlexSubnetId)) {
   name: 'deploy-apim'
@@ -633,8 +615,8 @@ module apim './modules/apim.bicep' = if (deployApim && !empty(apiFlexSubnetId)) 
     // Another repository's estate: the module's own !empty() gate skips the analytics API when
     // eagle-analytics has not been deployed here.
     analyticsBackendUrl: analyticsBackendUrl
-    analyticsSharedHeaderValue: analyticsSharedHeaderValue
-    analyticsAuditHeaderValue: analyticsAuditHeaderValue
+    analyticsSharedHeaderSecretUri: keyVault.outputs.analyticsSharedHeaderSecretUri
+    analyticsAuditHeaderSecretUri: keyVault.outputs.analyticsAuditHeaderSecretUri
     analyticsBrowserOrigins: analyticsAdminOrigins
   }
 }
@@ -725,6 +707,10 @@ output frontendStaticSiteHostName string = deployStaticSite ? staticSite!.output
 output frontendStorageAccountName string = deployStaticSite ? staticSite!.outputs.storageAccountName : ''
 // The gateway machine and browser traffic is moved onto. Empty until deployApim is set.
 output apimGatewayUrl string = (deployApim && !empty(apiFlexSubnetId)) ? apim!.outputs.gatewayUrl : ''
+
+// Empty where the environment deploys no sync app. The deploy workflow publishes the package to
+// this name, so it is read rather than rebuilt from environmentName.
+output secretSyncAppName string = (!empty(syncNamespaces) && !empty(apiFlexSubnetId)) ? secretSync!.outputs.secretSyncAppName : ''
 // The VM every `az vm run-command invoke` addresses. Empty when the devbox is not deployed.
 output devboxName string = (deployDevbox && !empty(devboxSubnetId)) ? devbox!.outputs.devboxName : ''
 output searchEndpoint string = deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint

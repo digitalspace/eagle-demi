@@ -1,0 +1,17 @@
+{
+  "name": "eagle-demi-secret-sync",
+  "version": "1.0.0",
+  "description": "Copies mapped Key Vault secrets into OpenShift Secrets and restarts what reads them",
+  "_comment_main": "This file is the PACKAGE MANIFEST OF THE ZIP, not of this directory: the deploy step copies it to the zip root, where the repo's own layout (src/secret-sync, src/utils) is preserved so the relative requires still resolve. Hence the path-from-repo-root main.",
+  "main": "src/secret-sync/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.13.2",
+    "@azure/keyvault-secrets": "^4.10.0",
+    "@azure/monitor-opentelemetry": "^1.19.0",
+    "winston": "^3.19.0"
+  }
+}
