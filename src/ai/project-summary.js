@@ -658,6 +658,16 @@ const LIST_SHAPE_SECTIONS = ['conditions', 'federal', 'timelineEvents', 'nations
 const CHUNK_BATCHED_SECTIONS = ['timelineEvents'];
 
 /**
+ * The sections whose sources are narrowed to the pages carrying a full date.
+ *
+ * Project 302's English assessment report is around 680k tokens over twelve window-sized batches,
+ * and a host holding a fraction of the model in VRAM evaluates one of those prompts in minutes. The
+ * timeline instruction only allows an event the source dates in full, so a page with no date on it
+ * can never contribute one: it is cost with no possible answer.
+ */
+const DATE_FILTERED_SECTIONS = ['timelineEvents'];
+
+/**
  * How many times a chunk-batched batch may be halved when its reply runs out of completion budget.
  *
  * Three levels is at most eight pieces from one batch: a batch sized to the PROMPT window can still
@@ -668,6 +678,7 @@ const MAX_BATCH_HALVINGS = 3;
 
 const isListSection = name => LIST_SECTIONS.includes(name);
 const isChunkBatched = name => CHUNK_BATCHED_SECTIONS.includes(name);
+const isDateFiltered = name => DATE_FILTERED_SECTIONS.includes(name);
 const isListShape = name => LIST_SHAPE_SECTIONS.includes(name);
 const maxTokensFor = name => SECTION_MAX_TOKENS[name] || config.projectSummaryMaxTokens;
 
@@ -782,6 +793,48 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
   'September', 'October', 'November', 'December'];
 const MONTHS = MONTH_NAMES.join('|');
 const MONTH_NUMBER = new Map(MONTH_NAMES.map((name, i) => [name.toLowerCase(), i + 1]));
+
+/**
+ * The month names beyond the English ones: the three-letter abbreviations, and French, which is how
+ * the federal and bilingual documents in the corpus date their own events.
+ */
+const OTHER_MONTHS = [
+  'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sept', 'sep', 'oct', 'nov', 'dec',
+  'janvier', 'février', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'aout',
+  'septembre', 'octobre', 'novembre', 'décembre', 'decembre'
+].join('|');
+
+/** Every month name the corpus writes: English and French, full and abbreviated. */
+const ANY_MONTH = `(?:${MONTHS}|${OTHER_MONTHS})`;
+
+/** The suffix a day carries when it is written as an ordinal: "14th", "1st", French "1er". */
+const DAY_SUFFIX = '(?:st|nd|rd|th|er)?';
+
+/**
+ * Year, month and day together, deliberately wider than `dateSpellings` below: French month names,
+ * 4-letter abbreviations ("sept"), and ordinals `dateSpellings` never emits. A certificate dates
+ * itself "DATED at Victoria, this 14th day of October, 2014"; matching only "October 14, 2014"
+ * dropped that page before the model ever saw it, and with it the one event the document exists to
+ * carry. The invariant is one-directional: this filter must stay at least as wide as the grounding
+ * gate, so no page the gate could ground is thrown away before the model sees it.
+ *
+ * A year alone is not a date, and neither is a day with no year: "October 2014" and "14 October"
+ * cannot date an event the instruction will accept.
+ */
+const FULL_DATE = new RegExp([
+  // ISO, and the same three numbers slashed or dotted: "2014-10-14", "2014/10/14", "2014.10.14".
+  '\\b\\d{4}[-/.]\\d{2}[-/.]\\d{2}\\b',
+  // Day and month numeric, in either order. A source that does not say whether it writes dd/mm or
+  // mm/dd gives no way to tell, and both orders are a full date whichever one it meant.
+  '\\b\\d{1,2}/\\d{1,2}/\\d{4}\\b',
+  // "October 14, 2014", "October 14th, 2014", "Oct. 14 2014", "Oct.14, 2014".
+  `\\b${ANY_MONTH}(?:\\.\\s*|\\s+)\\d{1,2}${DAY_SUFFIX}(?:,\\s*|\\s+)\\d{4}\\b`,
+  // "14 October 2014", "le 1er janvier 2024", and the legal "14th day of October, 2014".
+  `\\b\\d{1,2}${DAY_SUFFIX}\\s+(?:day\\s+of\\s+)?${ANY_MONTH}(?:\\.?,\\s*|\\.?\\s+)\\d{4}\\b`
+].join('|'), 'i');
+
+/** Does `text` date anything in full? What `DATE_FILTERED_SECTIONS` narrows their sources to. */
+const hasFullDate = text => FULL_DATE.test(String(text || ''));
 
 const pad2 = n => String(n).padStart(2, '0');
 
@@ -1169,7 +1222,18 @@ async function runSection({ section, document, chunks, registry, projectName, in
   const listSection = isListSection(section);
   const chunkBatched = isChunkBatched(section);
   // A chunk-batched section reads the whole document; every other one reads its first window.
-  const used = chunkBatched ? chunks : chunks.slice(0, maxChunks);
+  const read = chunkBatched ? chunks : chunks.slice(0, maxChunks);
+  let used = read;
+  if (isDateFiltered(section)) {
+    used = read.filter(c => hasFullDate(c.content));
+    logger.info(`[project-summary] ${section}: ${used.length} of ${read.length} pages carry a ` +
+      'full date', { documentId, dated: used.length, pages: read.length });
+    // No dated page, no possible event: the same outcome as a model that read the document and
+    // declared none, which is what earns the next candidate its turn.
+    if (!used.length) {
+      return { value: null, usage: null, model: null, documentId, reason: 'empty' };
+    }
+  }
   const system = systemPrompt(projectName, instruction, shape);
   // What every batch's prompt carries before its sources: the system half, and the user half's header.
   const fixedChars = system.length + userPrompt(document, []).length;
@@ -2063,6 +2127,7 @@ module.exports = {
   joinNations,
   pickSource,
   isFrenchTitle,
+  hasFullDate,
   mergeTimelineBatches,
   buildItems,
   buildNations,
