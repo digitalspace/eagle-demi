@@ -67,15 +67,20 @@ function inList(field, values, prefix, alias = 'c') {
  * @param {Array}    [opts.criteria]       extra fragments
  * @param {string}   [opts.select='*']     projection — use to omit fields a caller may not see
  * @param {string}   [opts.orderBy]        e.g. 'c.name ASC' (the path must be indexed)
+ * @param {string}   [opts.groupBy]        e.g. 'c.projectId'. Cosmos REFUSES it beside an ORDER BY,
+ *                                        so a grouped read sorts its own rows in JS.
  * @returns {{query: string, parameters: Array}}
  */
-function selectWhere({ access, partitionField, criteria = [], select = '*', orderBy }) {
+function selectWhere({ access, partitionField, criteria = [], select = '*', orderBy, groupBy }) {
+  if (orderBy && groupBy) throw new Error('[sql] Cosmos rejects GROUP BY beside ORDER BY');
+
   const predicate = andClauses(
     visibilityFor(access, partitionField),
     ...criteria.filter(Boolean)
   );
 
   let query = `SELECT ${select} FROM c WHERE ${predicate.clause}`;
+  if (groupBy) query += ` GROUP BY ${groupBy}`;
   if (orderBy) query += ` ORDER BY ${orderBy}`;
 
   return { query, parameters: predicate.params };
@@ -143,8 +148,9 @@ function pageOptions({ pageSize, continuationToken, partitionKey } = {}) {
  * Every row a query matches, at the SDK's own page size and following any continuation token.
  *
  * For bounded whole-container reads only (the seeder's reconcile and per-project extraction
- * state). No request path may call this — an unbounded read is what `pageOptions` exists to
- * prevent.
+ * state). A request path may call it ONLY when the result set is bounded by something other than
+ * the corpus: `documents.projectUploadMaxima` groups to one row per project. Anything that returns
+ * one row per document reads through `pageOptions` instead.
  */
 async function fetchAll(container, spec, opts = {}) {
   const rows = [];
