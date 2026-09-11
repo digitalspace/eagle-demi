@@ -5,6 +5,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+const { spawnSync } = require('node:child_process');
 
 const CONFIG = path.join(__dirname, '..', 'src', 'config');
 
@@ -103,4 +104,124 @@ test('EDGE_SECRET reaches config.edgeSecret under that exact name', () => {
     if (previous === undefined) delete process.env.EDGE_SECRET; else process.env.EDGE_SECRET = previous;
     delete require.cache[configPath];
   }
+});
+
+// App Service substitutes the secret for `@Microsoft.KeyVault(SecretUri=...)`, and hands the app
+// the reference text itself when that fails — no RBAC, vault unreachable, secret deleted. Every
+// credential in azure/modules/api-function-flex.bicep is deployed as one of those references, so
+// every one of them can arrive as this string.
+const UNRESOLVED = '@Microsoft.KeyVault(SecretUri=https://x.vault.azure.net/secrets/y)';
+
+/**
+ * Load a fresh config with `vars` in the environment and return `read(config)`.
+ *
+ * Read inside, not after: `adminApiKey` is a getter, so a value taken once the environment is back
+ * would be the restored one.
+ */
+function readConfig(vars, read) {
+  const configPath = path.resolve(__dirname, '..', 'src', 'config.js');
+  const previous = {};
+  for (const [name, value] of Object.entries(vars)) {
+    previous[name] = process.env[name];
+    process.env[name] = value;
+  }
+  delete require.cache[configPath];
+  try {
+    return read(require(configPath));
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    delete require.cache[configPath];
+  }
+}
+
+test('an unresolved Key Vault reference reads as unset, never as the credential', async (t) => {
+  // App setting in api-function-flex.bicep -> the field it reaches on config.
+  const settings = {
+    MINIO_ACCESS_KEY: 'minioAccess',
+    MINIO_SECRET_KEY: 'minioSecret',
+    DOCLING_API_KEY: 'doclingKey',
+    ACCESS_GATE_PASSWORD: 'accessGatePassword',
+    NOTIFY_API_KEY: 'notifyApiKey',
+    TRACK_CLIENT_SECRET: 'trackClientSecret',
+    KEYCLOAK_ADMIN_CLIENT_SECRET: 'keycloakAdminClientSecret',
+    EDGE_SECRET: 'edgeSecret',
+    ADMIN_API_KEY: 'adminApiKey'
+  };
+
+  for (const [name, field] of Object.entries(settings)) {
+    await t.test(`${name} unresolved is unset and named`, () => {
+      const seen = readConfig({ [name]: UNRESOLVED },
+        c => ({ value: c[field], unresolved: [...c.unresolvedSecrets] }));
+      assert.strictEqual(seen.value, '', `${name} must not reach config.${field} as reference text`);
+      // The name, so an operator is told which setting to fix. Never the value.
+      assert.ok(seen.unresolved.includes(name), `${name} must be reported as unresolved`);
+    });
+
+    await t.test(`${name} resolved passes through`, () => {
+      // Only the reference prefix is refused — a real secret must not be swallowed with it.
+      assert.strictEqual(readConfig({ [name]: 'a-real-secret' }, c => c[field]), 'a-real-secret');
+    });
+  }
+
+  await t.test('leading whitespace does not smuggle a reference past the guard', () => {
+    assert.strictEqual(readConfig({ EDGE_SECRET: `  ${UNRESOLVED}` }, c => c.edgeSecret), '');
+  });
+
+  await t.test('a secret that merely contains the prefix is still a secret', () => {
+    const value = `shared-secret-${UNRESOLVED}`;
+    assert.strictEqual(readConfig({ EDGE_SECRET: value }, c => c.edgeSecret), value);
+  });
+});
+
+/**
+ * Load `expr` in a child process with `vars` set, returning {status, output}.
+ *
+ * A child, because load ORDER is what is under test and this process already holds both modules:
+ * evicting src/config.js from the require cache leaves the logger loaded, so config is always
+ * second here and the order every entry point actually uses cannot be reproduced in process.
+ */
+function loadInChild(vars, expr) {
+  const env = { ...process.env, ...vars };
+  // The allowlist guard would otherwise refuse to boot before the case under test ran.
+  delete env.ENVIRONMENT;
+  const res = spawnSync(process.execPath, ['-e', expr], {
+    cwd: path.resolve(__dirname, '..'),
+    encoding: 'utf8',
+    timeout: 60000,
+    env
+  });
+  return { status: res.status, output: `${res.stdout}${res.stderr}` };
+}
+
+test('an unresolved reference is reported without crashing the app at load', async (t) => {
+  await t.test('the HTTP entry point loads, logger first', () => {
+    // What api/index.js does on the first request: src/http/router.js requires the logger, which
+    // requires config. A report written from config would run against a half-built logger module.
+    const { status, output } = loadInChild(
+      { EDGE_SECRET: UNRESOLVED },
+      "require('./src/http/router'); console.log('ROUTER OK');");
+    assert.strictEqual(status, 0, `the router must load; got:\n${output}`);
+    assert.match(output, /ROUTER OK/);
+  });
+
+  await t.test('the setting is named and the reference text is not printed', () => {
+    const { output } = loadInChild(
+      { EDGE_SECRET: UNRESOLVED },
+      "require('./src/http/router');");
+    assert.match(output, /EDGE_SECRET/, 'the operator has to be told which setting to fix');
+    // The same position holds a real credential whenever the reference did resolve.
+    assert.ok(!output.includes('vault.azure.net'), 'the value must never be logged');
+  });
+
+  await t.test('config first is reported too', () => {
+    // An operator script's order: config, then whatever logs.
+    const { status, output } = loadInChild(
+      { EDGE_SECRET: UNRESOLVED },
+      "require('./src/config'); require('./src/utils/logger');");
+    assert.strictEqual(status, 0, `config first must load; got:\n${output}`);
+    assert.match(output, /EDGE_SECRET/);
+  });
 });

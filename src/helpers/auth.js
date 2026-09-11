@@ -74,12 +74,14 @@ function identityFor(record) {
  *
  * The Function App host stays publicly reachable — Consumption APIM has no VNet — so both gateway
  * headers are attacker input until the shared secret matches. Unset secret disables the path, which
- * is the local and pre-APIM default. A Key Vault reference that failed to resolve arrives as the
- * literal `@Microsoft.KeyVault(...)` string, which is public in this repo, so it is never a secret.
+ * is the local and pre-APIM default — and an unresolved Key Vault reference counts as unset, since
+ * the literal is public in this repo.
  */
 function fromGateway(req) {
-  const secret = process.env.APIM_GATEWAY_SECRET;
-  if (!secret || secret.startsWith('@Microsoft.KeyVault')) return false;
+  // Read per request rather than from a config field: APIM was wired after this path shipped, and
+  // the suites that exercise it set the variable once the process is up.
+  const secret = config.secretFromEnv('APIM_GATEWAY_SECRET');
+  if (!secret) return false;
 
   // The header bag as well as req.header(): utils/caller-ip.js asks this question from the request
   // log and the audit writer, which are handed request-shaped objects that carry headers only.
@@ -200,7 +202,9 @@ function authenticate(req, onSuccess, onFailure) {
   // that happens to be shaped like `demi_<env>_<id>_<secret>` would otherwise parse as a registry
   // key, take that branch, miss in Cosmos and 401 — permanently disabling the one credential whose
   // whole purpose is working when nothing else does. It costs one timingSafeEqual, no Cosmos read.
-  const validKeys = [process.env.ADMIN_API_KEY].filter(Boolean);
+  // Through config, so an unresolved Key Vault reference is no key at all rather than a shared
+  // secret every caller can read off the template.
+  const validKeys = [config.adminApiKey].filter(Boolean);
 
   if (apiKey && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys)) {
     logger.info('[demi-api] Authenticated internal-service via break-glass ADMIN_API_KEY');

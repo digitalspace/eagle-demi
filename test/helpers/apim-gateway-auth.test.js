@@ -154,3 +154,18 @@ test('a presented X-Api-Key still owns the outcome during the dual-accept window
   assert.strictEqual(user.preferred_username, 'internal-service');
   assert.strictEqual(apiKeys.getById.mock.callCount(), 0);
 });
+
+test('break-glass is closed when ADMIN_API_KEY arrives as an unresolved Key Vault reference', async (t) => {
+  stubRegistry(t, {});
+
+  // What App Service leaves in the variable when it cannot read the secret. It is a NAME, not a
+  // credential — it appears in the ARM template and in `az functionapp config appsettings list` —
+  // so accepting it would grant sysadmin to anyone who can read either.
+  process.env.ADMIN_API_KEY = '@Microsoft.KeyVault(SecretUri=https://x.vault.azure.net/secrets/y)';
+  t.after(() => { delete process.env.ADMIN_API_KEY; });
+
+  const { user, status } = await run({ 'X-Api-Key': process.env.ADMIN_API_KEY });
+
+  assert.strictEqual(user, undefined, 'the reference text must not authenticate anyone');
+  assert.strictEqual(status, 401);
+});

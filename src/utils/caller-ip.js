@@ -3,6 +3,7 @@
 const net = require('node:net');
 const { fromGateway, matchesConfiguredKey } = require('../helpers/auth');
 const config = require('../config');
+const { isKeyVaultReference } = require('./key-vault-reference');
 
 /**
  * `1.2.3.4:5678` → `1.2.3.4`, `[2001:db8::1]:8080` → `2001:db8::1`.
@@ -57,13 +58,13 @@ function normalizeIp(value) {
 /**
  * Is this request provably stamped by the eagle-edge Front Door rule set?
  *
- * Empty config is the off switch, and an unresolved Key Vault reference arrives as the literal
- * `@Microsoft.KeyVault(...)` string, which is public in this repository — same rule as the gateway
- * secret in helpers/auth.js.
+ * Empty config is the off switch. src/config.js already empties an unresolved Key Vault reference
+ * read from the environment; the literal is public in this repository, so it is re-checked here
+ * rather than trusted because of where it came from.
  */
 function fromEdge(headers) {
   const secret = config.edgeSecret;
-  if (!secret || secret.startsWith('@Microsoft.KeyVault')) return false;
+  if (!secret || isKeyVaultReference(secret)) return false;
 
   return matchesConfiguredKey(headers['x-edge-secret'] || '', [secret]);
 }
