@@ -127,7 +127,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   }
 }
 
-resource syncFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
+resource syncFunctionApp 'Microsoft.Web/sites@2024-11-01' = {
   name: syncAppName
   location: location
   tags: tags
@@ -144,6 +144,11 @@ resource syncFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
     // The vault denies public network access, so every read goes through the private endpoint and
     // this app has to be inside the VNet to make one at all.
     virtualNetworkSubnetId: virtualNetworkSubnetId
+    // Port 6443 (OpenShift API) is not reachable through the platform's default outbound egress.
+    // Route ALL outbound through the VNet instead, the same hub path the devbox uses to reach it.
+    outboundVnetRouting: {
+      allTraffic: true
+    }
     keyVaultReferenceIdentity: identityId
     functionAppConfig: {
       deployment: {
