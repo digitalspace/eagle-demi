@@ -140,6 +140,34 @@ test('access-odata filter', async (t) => {
       'the key scope stays an AND over everything the roles and teams allow');
   });
 
+  // `project-notifications` has no project axis at all, so it passes partitionField: null. Both
+  // arms that name the field must drop out — the filter still has to be valid OData, and the
+  // literal string `null` in it is a 400 on every request rather than a narrower page.
+  await t.test('a null partition field drops every clause that names it', () => {
+    const cases = [
+      ['public', PUBLIC],
+      ['scoped with teams', {
+        tier: TIER.SCOPED, roles: ['public', 'staff'], projectScope: ['207'], teams: ['300']
+      }],
+      ['scoped with projectScope', SCOPED]
+    ];
+
+    for (const [name, access] of cases) {
+      const { filter, empty } = filterFor(access, null);
+      assert.strictEqual(empty, false, `${name}: an index with no project axis is not empty`);
+      assert.ok(!/null/.test(filter), `${name}: ${filter}`);
+      assert.ok(!filter.includes("r eq 'team'"), `${name}: no team arm without a field to scope on`);
+      assert.ok(!filter.includes("'207'") && !filter.includes("'300'"),
+        `${name}: no project id reaches a filter with no project field`);
+      // The role ACL is the part that must survive: dropping it would open the index.
+      assert.ok(filter.includes("read/any(r: "), `${name}: the role clause still applies`);
+      assert.ok(filter.includes("not read/any(r: r eq 'compliance')"),
+        `${name}: level 0 stays excluded`);
+      assert.strictEqual((filter.match(/'/g) || []).length % 2, 0,
+        `${name}: quotes must stay balanced`);
+    }
+  });
+
   // A comma is the separator search.in() uses, so a value containing one would silently split
   // into two roles — granting a role nobody holds.
   // The sealed compartment. AI Search holds each row's read[] verbatim, so without this clause a

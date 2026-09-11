@@ -62,6 +62,13 @@ const WIRED = [
   ['existingSearchEndpoint',
     /^\s+searchEndpoint: deploySearch \? search!\.outputs\.searchEndpoint : existingSearchEndpoint$/m,
     'the SEARCH_ENDPOINT fallback — a different fallback leaves prod pointing at nothing'],
+  // The two keyword kill switches. Unwired they are not a failed deploy either: the module default
+  // is the switch OFF, so a turn-on set anywhere else is reverted by the next whole-collection PUT.
+  ['searchIndexActivities', /^\s+searchIndexActivities: searchIndexActivities$/m,
+    'the API module call — without it no param file can turn RecentActivity keyword ranking on'],
+  ['searchIndexProjectNotifications',
+    /^\s+searchIndexProjectNotifications: searchIndexProjectNotifications$/m,
+    'the API module call — without it no param file can turn ProjectNotification ranking on'],
   ['deployFoundry', /^module foundry '\.\/modules\/foundry\.bicep' = if \(deployFoundry\) \{$/m,
     'the foundry module gate — without it prod creates a model account it never queries'],
   ['deployStaticSite', /^module staticSite '\.\/modules\/static-site\.bicep' = if \(deployStaticSite\) \{$/m,

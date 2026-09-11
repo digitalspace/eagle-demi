@@ -551,8 +551,9 @@ const COSMOS_DATASETS = {
     // `query`, NOT `filterQuery`: `updates.projectId` holds the EAGLE project id (the id eagle-api
     // pushed), so the translated DEMI id would match nothing. The mirror image of CommentPeriod.
     const [projectId] = eagleQuery.projectIdsFrom(query);
-    // The news page searches this dataset by text, and there is no index behind it — the container
-    // is small and the repository does it with CONTAINS.
+    // The news page searches this dataset by text. Reached with keywords only when the index is
+    // switched off (see KEYWORD_INDEX_DATASETS): the container is small, so the repository answers
+    // with CONTAINS — a substring match, without ranking, stemming or a half-typed last word.
     const keywords = query.keywords || query.q || '';
     const [rows, count] = await Promise.all([
       updatesRepo.list(access, { projectId, keywords, pageNum, pageSize, sortBy }),
@@ -598,6 +599,92 @@ const COSMOS_DATASETS = {
     };
   }
 };
+
+/**
+ * The two Cosmos datasets a KEYWORD search is answered from the index instead.
+ *
+ * Only the ranking moves. The index carries ids and the text it ranks on, never the row: every row
+ * a caller receives is read back from Cosmos through the same mapper the keywordless page uses, so
+ * the wire shape cannot drift between the two paths and a row the index still holds but Cosmos no
+ * longer admits simply drops out. Without keywords, or with the switch off, nothing here runs.
+ */
+const KEYWORD_INDEX_DATASETS = {
+  RecentActivity: {
+    index: () => aiSearch.config().activitiesIndex,
+    search: (opts) => aiSearch.searchActivities(opts),
+    // `?top=true` is the home-page strip, which eagle-api answers whole and by pinned-ness rather
+    // than by relevance. It stays a Cosmos read whatever else the caller sent.
+    cosmosOnly: (query) => String(query.top) === 'true',
+    // `updates.projectId` holds the EAGLE project id, so the UNTRANSLATED ids are the ones to
+    // filter with — the mirror image of the Cosmos branch. Flattened onto `project` because that
+    // is the one form `buildFilter` applies.
+    indexQuery: (query) => eagleQuery.withProjectIds(query, eagleQuery.projectIdsFrom(query)),
+    // Same id space, one layer up: a scoped caller's DEMI ids have to become Eagle ones before the
+    // OData clause compares them against this index.
+    aclAccess: (access) => updatesRepo.inEagleIdSpace(access),
+    aclField: 'projectId',
+    rows: async (access, ids) => {
+      const rows = inIdOrder(await updatesRepo.listByIds(access, ids), ids);
+      return cosmosRows('updates', rows, access, 'RecentActivity',
+        await updateProjects(access, rows));
+    }
+  },
+  ProjectNotification: {
+    index: () => aiSearch.config().notificationsIndex,
+    search: (opts) => aiSearch.searchNotifications(opts),
+    // `and[_id]` is a point read of one record, and the keywords say nothing about which one.
+    cosmosOnly: (query) => filterValue(query, '_id') !== null,
+    indexQuery: (query) => query,
+    aclAccess: (access) => access,
+    // NULL, like `notifications.SCOPE_FIELD`: a notification is not project data, so there is no
+    // project axis to narrow on and role ACL is the whole filter.
+    aclField: null,
+    rows: async (access, ids) => notificationRows(access,
+      inIdOrder(await notificationsRepo.listByIds(access, ids, { full: true }), ids))
+  }
+};
+
+/** Cosmos answers a named set in its own order; the ranking the index computed is the one to keep. */
+function inIdOrder(rows, ids) {
+  const byId = new Map(rows.map(row => [String(row.id), row]));
+  return ids.map(id => byId.get(String(id))).filter(Boolean);
+}
+
+/**
+ * The filter keys an INDEX page did not apply, in the form the Cosmos branch reports them.
+ *
+ * `buildFilter` names only what it could not EXPRESS; a bare key (`period`, `docIds`) never reaches
+ * it at all. Both are the same fact to the caller — a filter panel that quietly does nothing — so
+ * this is built from what was applied rather than from what was refused.
+ */
+function unappliedFilterKeys(query, indexQuery, dropped) {
+  const offered = [
+    ...Array.from(eagleQuery.andParams(indexQuery), ([key]) => key),
+    ...(indexQuery.project ? ['project'] : []),
+    ...(indexQuery.categorized !== undefined ? ['categorized'] : [])
+  ];
+  const applied = new Set(offered.filter(key => !dropped.includes(key)));
+  return eagleQuery.filterKeysIn(query).filter(key => !applied.has(key));
+}
+
+/**
+ * Once per process per dataset, like `warnUnconfigured` in ai-search and for the same reason: the
+ * frontend searches on every debounced keystroke, so a per-request line would be pure noise. The
+ * Cosmos path still answers — this says the ranking the caller got is not the one they asked for.
+ */
+const keywordFallbackWarned = new Set();
+function warnKeywordFallback(dataset) {
+  if (keywordFallbackWarned.has(dataset)) return;
+  keywordFallbackWarned.add(dataset);
+  logger.warn(
+    `[search] ${dataset}: keyword search is falling back to the Cosmos read — SEARCH_ENDPOINT or ` +
+    'the index app setting for this dataset is empty. This is a configuration state, NOT a search ' +
+    'that found nothing.'
+  );
+}
+
+/** Test seam, like resetStaleChunkScopeCache: the warn-once latch outlives one test otherwise. */
+exports.resetKeywordFallbackWarnings = () => keywordFallbackWarned.clear();
 
 /** `List` and `Organization`: one container, one handler, told apart by `kind`. */
 async function listRows({ access, query, pageNum, pageSize, sortBy }, kind) {
@@ -696,6 +783,10 @@ exports.search = async (req, res) => {
     // wiki Search-Query-Construction#why-the-fuzzy-parameter-is-ignored. Still an ACCEPTED parameter,
     // because dropping it from unknownParams would 400 every saved URL.
     const fuzzy = true;
+    // On unless the caller sends the exact string `false`: the frontend searches on debounced
+    // keystrokes, so the last word is half-typed on nearly every request. Reaches Project and
+    // Document only — chunk search has no half-typed word and stays off.
+    const prefix = req.query.prefix !== 'false';
     // `>= 1` and NOT `Math.max(1, ... || 10)`: NaN, 0 and negatives all land on the one default
     // this endpoint documents, where the `Math.max` form would clamp -1 to a one-row page instead.
     // See wiki Search-Query-Construction#page-size-clamping.
@@ -859,6 +950,7 @@ exports.search = async (req, res) => {
               // short-circuits on an empty token list and the filtered search answers zero rows.
               matchAll: !keywords,
               fuzzy,
+              prefix,
               top: pageSize
             });
             noteDegraded(meta);
@@ -1062,6 +1154,7 @@ exports.search = async (req, res) => {
             // See the Project branch: no keywords means every row the filter admits.
             matchAll: !keywords,
             fuzzy,
+            prefix,
             top: pageSize
           });
           noteDegraded(meta);
@@ -1295,10 +1388,55 @@ exports.search = async (req, res) => {
         return res.status(502).json(searchUnavailable(req, err, 'Deep Search is unavailable'));
       }
     } else if (COSMOS_DATASETS[dataset]) {
-      // The reads eagle-public used to make against eagle-api. Cosmos, never the index: these
-      // containers have no index, and the guard chain is the Project bare-list branch's — one
-      // measured count per request, every row through the catalog, and a 502 on failure because a
-      // read that FAILED is not a read that found nothing.
+      // A KEYWORD search over one of the two indexed datasets is ranked by the index; everything
+      // else here is a Cosmos list read. See KEYWORD_INDEX_DATASETS for why only the ranking moves.
+      const indexed = keywords ? KEYWORD_INDEX_DATASETS[dataset] : null;
+      if (indexed && !indexed.cosmosOnly(req.query)) {
+        // The kill switch: an unset SEARCH_ENDPOINT or an app setting deliberately emptied for this
+        // one dataset. Falls through to the Cosmos read below rather than failing — that read
+        // answers keywords too, on CONTAINS instead of BM25.
+        if (!aiSearch.config().configured || indexed.index() === '') {
+          warnKeywordFallback(dataset);
+        } else {
+          try {
+            const acl = filterFor(await indexed.aclAccess(access), indexed.aclField);
+            // Scoped to nothing: 0 is measured, and OData cannot express a filter that matches
+            // nothing — see filterFor.
+            if (acl.empty) return res.json([{ searchResults: [], count: 0 }]);
+
+            const indexQuery = indexed.indexQuery(req.query);
+            const { filter, dropped } = eagleQuery.buildFilter(indexQuery, dataset, acl, access);
+            noteDropped('filter', unappliedFilterKeys(req.query, indexQuery, dropped));
+
+            // `true`, not `Boolean(keywords)`: this branch only runs with keywords, so the order is
+            // relevance unless the caller named a field.
+            const { orderby, dropped: sortDropped } =
+              eagleQuery.buildOrderBy(req.query.sortBy, dataset, true, access);
+            noteDropped('sort', sortDropped);
+
+            const { items, count, meta } = await indexed.search({
+              filter, orderby, skip, keywords, fuzzy, prefix, top: pageSize
+            });
+            noteDegraded(meta);
+
+            // `count` is the index-wide total, as on every other indexed branch. The page can be
+            // shorter than the index promised — a row whose Cosmos ACL no longer admits it drops
+            // out at the read — and that is the fail-closed direction.
+            const searchResults = await indexed.rows(access, items.map(hit => String(hit.id)));
+            return res.json([{ searchResults, count }]);
+          } catch (err) {
+            // Same rule as the Project and Document branches: a search that FAILED is not a search
+            // that found nothing, and it must not become the keywordless list either.
+            logger.error(`[search] ${dataset} keyword search failed: ${err.message}`);
+            return res.status(502).json(
+              searchUnavailable(req, err, `${dataset} search is unavailable`));
+          }
+        }
+      }
+
+      // The reads eagle-public used to make against eagle-api. The guard chain is the Project
+      // bare-list branch's — one measured count per request, every row through the catalog, and a
+      // 502 on failure because a read that FAILED is not a read that found nothing.
       try {
         const result = await COSMOS_DATASETS[dataset]({
           access, query: req.query, filterQuery, pageNum, pageSize, sortBy: req.query.sortBy

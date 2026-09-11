@@ -17,7 +17,8 @@ paths:
     get:
       summary: Search or list one dataset
       description: >-
-        Project, Document and DocumentChunk are answered by Azure AI Search. The rest are Cosmos
+        Project, Document and DocumentChunk are answered by Azure AI Search, and so are
+        RecentActivity and ProjectNotification when `q` carries keywords. The rest are Cosmos
         list reads of the mirrored Eagle records, on the same envelope: a one-element array of
         `{searchResults, count, meta}`, where `meta[0].searchResultsTotal` is the measured total to
         page against. An unknown dataset, or any query parameter not listed here, is a 400.
@@ -42,11 +43,27 @@ paths:
           in: query
           required: false
           description: >-
-            Search query string. Also accepted as `keywords`. Ignored by the Cosmos datasets except
-            RecentActivity, which matches it against the headline and the content,
-            case-insensitively.
+            Search query string. Also accepted as `keywords`. On RecentActivity it matches the
+            headline, the content and the notification name; on ProjectNotification it matches the
+            name, the description, the proponent and the coded fields. Both rank the rows by
+            relevance and match the last word as a prefix, the same as Project and Document. The
+            other Cosmos datasets ignore it. RecentActivity still answers `top=true` from Cosmos,
+            where `q` matches the headline and the content case-insensitively and does not rank.
           schema:
             type: string
+        - name: prefix
+          in: query
+          required: false
+          description: >-
+            Type-ahead matching, on by default for every dataset answered from an index: Project,
+            Document, and RecentActivity and ProjectNotification when they carry keywords. The last
+            word of `q` is matched as a prefix as well as exactly, so a query sent while someone is
+            still typing finds the word they are part-way through. Earlier words are matched whole.
+            Send `prefix=false` to compare a page against the plain-word ordering. Chunk search
+            never applies it, and a word the index analyzer removes ("this", "from") is left alone.
+          schema:
+            type: boolean
+            default: true
         - name: project
           in: query
           required: false

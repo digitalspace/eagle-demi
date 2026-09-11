@@ -12,7 +12,7 @@ environment is rebuildable and so schema changes show up in a diff.
 before indexers, applies an index the app is serving from only when the change ADDS fields, and never
 writes a data source. **`--only <name>` narrows a run to one index and its indexer** — `--only
 projects` or `--only projects-indexer` both resolve to the same pair — which is what you want when
-restoring service, since it leaves the other two untouched. Its header carries the run instructions;
+restoring service, since it leaves every other index untouched. Its header carries the run instructions;
 this file stays the reference for what the objects ARE and for the grant they need. Do not restate
 one in the other — a duplicated operational doc drifting into a false claim is the failure this repo
 has already had.
@@ -62,9 +62,40 @@ silently dropped under a 200.
 
 | Directory | What it is |
 |---|---|
-| `indexes/` | Field schemas. `chunks` is the search corpus; `projects` and `documents` are metadata. |
-| `indexers/` | The Cosmos-to-index sync jobs. All three run on `PT5M`. |
+| `indexes/` | Field schemas. `chunks` is the search corpus; the other four are metadata. |
+| `indexers/` | The Cosmos-to-index sync jobs. All five run on `PT5M`. |
 | `datasources/` | Cosmos NoSQL connections and the `SELECT` each indexer pulls. |
+
+The five indexes, and what the app does with each:
+
+| Index | Cosmos container | Data source | App setting | What it answers |
+|---|---|---|---|---|
+| `chunks` | `chunks` | `demi-chunks-ds` | `SEARCH_INDEX` | Deep Search over extracted document text. |
+| `projects` | `projects` | `demi-projects-ds` | `SEARCH_INDEX_PROJECTS` | Every project read: keyword, filter and sort. |
+| `documents` | `documents` | `demi-documents-ds` | `SEARCH_INDEX_DOCUMENTS` | Every document read. |
+| `activities` | `updates` | `demi-updates-ds` | `SEARCH_INDEX_ACTIVITIES` | `dataset=RecentActivity` WITH keywords. |
+| `project-notifications` | `notifications` | `demi-notifications-ds` | `SEARCH_INDEX_PROJECT_NOTIFICATIONS` | `dataset=ProjectNotification` WITH keywords. |
+
+The last two are different from the first three in two ways, and both are deliberate.
+
+They rank rows and return **ids only** — `id, eagleId, projectId` and `id, eagleId`. The row a
+caller receives is read back from Cosmos by `controllers/search.js`, through the same mapper the
+keywordless page uses, so the two paths cannot answer different shapes and a row the index still
+holds but Cosmos no longer admits drops out of the page. That is why their searchable fields are
+`retrievable: false`.
+
+**Their app setting may be EMPTY, and empty is a kill switch.** The dataset then answers keywords
+from Cosmos with `CONTAINS`, without ranking or a half-typed last word, and the app logs one
+warning per process. Nothing to restore, nothing to reindex: it is a settings change. The other
+three have no such switch, because nothing else can answer them.
+
+Flip it in `azure/main.<env>.bicepparam`, never on the app. `appSettings` is a whole-collection PUT,
+so a value set in the portal or with `az functionapp config appsettings set` is deleted by the next
+infra deploy and the switch goes back off.
+
+`activities.content` is the one field under a custom analyzer other than `filename`: an update body
+can hold HTML, so `html_text` puts the `html_strip` char filter in front of the standard tokenizer.
+Without it `p` and `br` are indexed as words.
 
 `@odata.etag` is stripped — it is server-assigned and rejected on re-POST. Data-source
 `connectionString` is `null` because Azure redacts it on read, not because it is unset; a restore
@@ -296,6 +327,54 @@ never reaches zero, because a document with no List refs stamps exactly that and
 The count is taken under the caller's own ACL clause and project scope, so a backfill running
 project by project marks the projects it has not reached rather than every page in the corpus; the
 index-wide number is used only to skip the question when nothing anywhere is behind.
+
+## Adding an index
+
+A whole new index is four committed files and one app setting, and the order is the same as for a
+field: the service is written before the app that reads it. `activities` and `project-notifications`
+were added on 2026-09-10 and are the worked example.
+
+1. **`azure/search/indexes/<name>.json`** — the field schema, plus any analyzer the fields name.
+   `src/search/eagle-query.js` reads this file at require time to decide which wire filters and
+   sorts it can translate, so a field missing here is a dropped key at runtime, not an error.
+2. **`azure/search/datasources/demi-<container>-ds.json`** — the Cosmos container and the `SELECT`.
+   Project exactly the columns the index declares and nothing else, and end it with
+   `c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts`. A column in the index but not in
+   the `SELECT` stays `null` forever with no error anywhere.
+   `test/azure/search-datasource-columns.test.js` pins the two files against each other; add the
+   new pair to it.
+3. **`azure/search/indexers/<name>-indexer.json`** — joins the two, `PT5M`, `maxFailedItems: 0`.
+4. **The app setting**, in `azure/modules/api-function-flex.bicep` — both the parameter and the
+   `appSettings` entry. That array is a whole-collection PUT, so a setting the code reads but the
+   template does not declare is deleted by the next infra deploy. A setting whose value differs per
+   environment needs the same parameter in `azure/main.bicep`, passed into the module call, or the
+   module default is what every deploy writes and no param file can change it.
+5. **Register the index** in `src/controllers/search-schema.js` so `/health/search-schema` can probe
+   it, and in `src/scripts/apply-search-definitions.js` under `liveNames` so `--live` maps the
+   committed name onto the deployed one.
+
+Then deploy in this order, on the devbox under `with-search-admin.sh`:
+
+```
+node src/scripts/apply-search-definitions.js --live --only <name>    # PUT the index
+node src/scripts/put-search-datasources.js                           # PUT the data source
+POST {endpoint}/indexers/<name>-indexer/run?api-version=2024-07-01   # first fill
+```
+
+A brand-new indexer needs no reset — it has no high-water mark to clear — but it does need the
+`Content-Length: 0` header, and the run is read the same way as any other: `executionHistory[0]`,
+not the top-level `status`. The first run reported 2,433 rows for `activities` and 17 for
+`project-notifications`. Deploy the app last.
+
+The rollout order: deploy the app with the setting empty, PUT the index and data source, run the
+indexer once, then turn it on by adding the parameter to that environment's param file —
+
+```
+param searchIndexActivities = 'activities'
+param searchIndexProjectNotifications = 'project-notifications'
+```
+
+— and running `./scripts/deploy-infra.sh <env> --live`. Turning it off is the same edit in reverse.
 
 ## Restoring one
 

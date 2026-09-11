@@ -25,7 +25,7 @@ param minioSecretKeySecretUri string
 @description('Azure AI Search endpoint, e.g. https://demi-search-test.search.windows.net. Empty disables chunk search rather than failing it.')
 param searchEndpoint string = ''
 
-// The three live index names, pinned to the code defaults in src/search/ai-search.js — a name the
+// The five live index names, pinned to the code defaults in src/search/ai-search.js — a name the
 // app reads but this template omits is DELETED by the whole-collection appSettings PUT.
 @description('Azure AI Search index holding document chunks.')
 param searchIndex string = 'chunks'
@@ -35,6 +35,17 @@ param searchIndexProjects string = 'projects'
 
 @description('Azure AI Search index holding document metadata.')
 param searchIndexDocuments string = 'documents'
+
+// EMPTY IS A VALID VALUE for these two, and it is the kill switch: RecentActivity and
+// ProjectNotification keyword searches fall back to the Cosmos read, which answers them with
+// CONTAINS. The other three have nothing to fall back to.
+// Set to the index name only after the index PUT and the first indexer run.
+@description('Azure AI Search index holding recent activity (updates). Empty falls back to Cosmos.')
+param searchIndexActivities string = ''
+
+// Set to the index name only after the index PUT and the first indexer run.
+@description('Azure AI Search index holding project notifications. Empty falls back to Cosmos.')
+param searchIndexProjectNotifications string = ''
 
 @description('Foundry account endpoint for the AI summariser. Empty leaves the summary panel off rather than failing search.')
 param foundryEndpoint string = ''
@@ -652,6 +663,14 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SEARCH_INDEX_DOCUMENTS'
           value: searchIndexDocuments
+        }
+        {
+          name: 'SEARCH_INDEX_ACTIVITIES'
+          value: searchIndexActivities
+        }
+        {
+          name: 'SEARCH_INDEX_PROJECT_NOTIFICATIONS'
+          value: searchIndexProjectNotifications
         }
         {
           name: 'ENRICHMENT_SOURCES'

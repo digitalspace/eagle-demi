@@ -51,6 +51,22 @@ const INDEXES = [
     definition: require('../../azure/search/indexes/documents.json'),
     select: () => aiSearch.DOCUMENT_SELECT,
     liveName: cfg => cfg.documentsIndex
+  },
+  // The two keyword indexes. Their live name is EMPTY when the dataset's kill switch is set, and
+  // `probeFor` drops those: an app serving that dataset from Cosmos has nothing to be drifted from.
+  {
+    schema: 'activities',
+    dataset: 'RecentActivity',
+    definition: require('../../azure/search/indexes/activities.json'),
+    select: () => aiSearch.KEYWORD_INDEXES.activities.select,
+    liveName: cfg => cfg.activitiesIndex
+  },
+  {
+    schema: 'project-notifications',
+    dataset: 'ProjectNotification',
+    definition: require('../../azure/search/indexes/project-notifications.json'),
+    select: () => aiSearch.KEYWORD_INDEXES.notifications.select,
+    liveName: cfg => cfg.notificationsIndex
   }
 ];
 
@@ -74,8 +90,8 @@ const MAX_OVERRIDE_ENTRIES = 64;
 const MAX_ENTRY_CHARS = 64;
 /** `field` or `field asc|desc` — an index field name, which is all a probe can ask about. */
 const ENTRY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*( (asc|desc))?$/;
-/** Three indexes × (one select probe + at most three `orderby` batches). */
-const MAX_PROBES_PER_REQUEST = 12;
+/** Five indexes × (one select probe + at most three `orderby` batches). */
+const MAX_PROBES_PER_REQUEST = 20;
 
 /**
  * One message for every bound, because the caller is CI or a curl and the answer is the same:
@@ -255,15 +271,19 @@ exports.searchSchema = async (req, res) => {
   let plan;
   try {
     const overrides = overridesFrom(req.body);
-    plan = INDEXES.map(entry => {
-      const override = overrides[entry.schema];
-      return {
-        schema: entry.schema,
-        liveName: entry.liveName(cfg),
-        select: (override && override.select) || entry.select(),
-        orderby: (override && override.orderby) || orderbyFieldsFor(entry).map(orderbyClause)
-      };
-    });
+    plan = INDEXES
+      // An index the app is not serving from — the kill switch empties the app setting — cannot be
+      // drifted from, and probing '' is a 404 reported as a failed probe.
+      .filter(entry => entry.liveName(cfg) !== '')
+      .map(entry => {
+        const override = overrides[entry.schema];
+        return {
+          schema: entry.schema,
+          liveName: entry.liveName(cfg),
+          select: (override && override.select) || entry.select(),
+          orderby: (override && override.orderby) || orderbyFieldsFor(entry).map(orderbyClause)
+        };
+      });
     const probes = plan.reduce(
       (total, index) => total + 1 + Math.ceil(index.orderby.length / ORDERBY_CLAUSES_PER_PROBE), 0
     );

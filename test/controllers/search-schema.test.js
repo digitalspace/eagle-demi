@@ -20,6 +20,8 @@ process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
 process.env.SEARCH_INDEX = 'chunks-live';
 process.env.SEARCH_INDEX_PROJECTS = 'projects-live';
 process.env.SEARCH_INDEX_DOCUMENTS = 'documents-live';
+process.env.SEARCH_INDEX_ACTIVITIES = 'activities-live';
+process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS = 'project-notifications-live';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -69,7 +71,13 @@ test('search schema health', async (t) => {
     assert.strictEqual(out.status, 200);
     assert.deepStrictEqual(out.body, {
       ok: true,
-      indexes: { chunks: { ok: true }, projects: { ok: true }, documents: { ok: true } }
+      indexes: {
+        chunks: { ok: true },
+        projects: { ok: true },
+        documents: { ok: true },
+        activities: { ok: true },
+        'project-notifications': { ok: true }
+      }
     });
   });
 
@@ -85,7 +93,10 @@ test('search schema health', async (t) => {
     assert.deepStrictEqual(selects, new Map([
       ['chunks-live', aiSearch.CHUNK_SELECT],
       ['projects-live', aiSearch.PROJECT_SELECT],
-      ['documents-live', aiSearch.DOCUMENT_SELECT]
+      ['documents-live', aiSearch.DOCUMENT_SELECT],
+      // Ids only: these two indexes rank rows, and the row is read back from Cosmos.
+      ['activities-live', aiSearch.KEYWORD_INDEXES.activities.select],
+      ['project-notifications-live', aiSearch.KEYWORD_INDEXES.notifications.select]
     ]), 'the schema names are the response keys; the live names come from the app settings');
   });
 
@@ -135,7 +146,9 @@ test('search schema health', async (t) => {
       indexes: {
         chunks: { ok: true },
         projects: { ok: true },
-        documents: { ok: false, missing: ['fileSize'] }
+        documents: { ok: false, missing: ['fileSize'] },
+        activities: { ok: true },
+        'project-notifications': { ok: true }
       }
     });
     assert.ok(warnings.some(w => w.includes('documents-live') && w.includes('fileSize')),
@@ -294,8 +307,8 @@ test('search schema health', async (t) => {
     assert.strictEqual(probes.length, 0);
   });
 
-  // The bounds exist for the anonymous caller, not for CI: what the deploy workflow posts is these
-  // three files, and they have to keep passing or the gate stops being runnable.
+  // The bounds exist for the anonymous caller, not for CI: what the deploy workflow posts is every
+  // committed definition, and they have to keep passing or the gate stops being runnable.
   await t.test('the committed index definitions still fit inside the bounds', async (tt) => {
     const probes = stubProbe(tt);
 
@@ -304,27 +317,36 @@ test('search schema health', async (t) => {
       indexes: {
         chunks: require('../../azure/search/indexes/chunks.json'),
         projects: require('../../azure/search/indexes/projects.json'),
-        documents: require('../../azure/search/indexes/documents.json')
+        documents: require('../../azure/search/indexes/documents.json'),
+        activities: require('../../azure/search/indexes/activities.json'),
+        'project-notifications': require('../../azure/search/indexes/project-notifications.json')
       }
     }), res);
 
     assert.strictEqual(out.status, 200);
-    assert.strictEqual(probes.length, 3, 'one select probe per index, and no order to batch');
+    assert.strictEqual(probes.length, 5, 'one select probe per index, and no order to batch');
   });
 
-  // The widest index emits 14 orders, so the app's own probe costs 3 indexes x 2 calls. The cap is
-  // what stops a body from turning the same route into an arbitrary number of them.
-  await t.test('a request is capped at twelve probes however the body is split', async (tt) => {
+  // The widest index emits 14 orders, so the app's own probe costs one call per index plus its
+  // batches. The cap is what stops a body from turning the same route into an arbitrary number of
+  // them: the longest override a caller may send is 64 entries, two batches, for each index.
+  await t.test('the longest body a caller may send stays inside the probe cap', async (tt) => {
     const probes = stubProbe(tt);
     const orderby = Array.from({ length: 64 }, (_, i) => `field${i}`);
 
     const { out, res } = capture();
     await searchSchema.searchSchema(request({
-      indexes: { chunks: { orderby }, projects: { orderby }, documents: { orderby } }
+      indexes: {
+        chunks: { orderby },
+        projects: { orderby },
+        documents: { orderby },
+        activities: { orderby },
+        'project-notifications': { orderby }
+      }
     }), res);
 
-    assert.strictEqual(out.status, 200, '3 x (1 select + 2 order batches) = 9 is inside the cap');
-    assert.strictEqual(probes.length, 9);
+    assert.strictEqual(out.status, 200, '5 x (1 select + 2 order batches) = 15 is inside the cap');
+    assert.strictEqual(probes.length, 15);
   });
 
   await t.test('no search endpoint is a 503, not a clean bill of health', async (tt) => {

@@ -21,6 +21,8 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const aiSearch = require('../../src/search/ai-search');
+const searchController = require('../../src/controllers/search');
+const { logger } = require('../../src/utils/logger');
 const apiKeys = require('../../src/repositories/api-keys');
 const { generateKey } = require('../../src/helpers/api-key');
 const { forgetCachedKey } = require('../../src/helpers/auth');
@@ -759,4 +761,252 @@ test('GET /search?dataset=Document&docIds=', async (t) => {
       assert.match(asked.filter, /id eq ''/);
       assert.strictEqual(body[0].count, 0);
     });
+});
+
+/**
+ * The same two datasets, WITH keywords: ranked by the index, read back from Cosmos.
+ *
+ * The index is stubbed at `aiSearch.searchActivities`/`searchNotifications` — what belongs here is
+ * the routing, the filter the controller hands the index, and the row shape it answers with. The
+ * query those two functions build is pinned in `test/search/ai-search.test.js`.
+ */
+test('GET /search keyword searches over the indexed Cosmos datasets', async (t) => {
+  t.beforeEach(() => {
+    process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
+    searchController.resetKeywordFallbackWarnings();
+  });
+  t.afterEach(() => {
+    delete process.env.SEARCH_ENDPOINT;
+    delete process.env.SEARCH_INDEX_ACTIVITIES;
+    delete process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS;
+    t.mock.restoreAll();
+  });
+
+  /** Answer the index with the ids given, and record what it was asked. */
+  const stubIndex = (name, ids, count) => {
+    const asked = {};
+    t.mock.method(aiSearch, name, async (opts) => {
+      Object.assign(asked, opts);
+      return { items: ids.map(id => ({ id })), count: count ?? ids.length };
+    });
+    return asked;
+  };
+
+  await t.test('a keyword news search is ranked by the index and read back from Cosmos',
+    async () => {
+      const seen = stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+      const asked = stubIndex('searchActivities', ['5f0e4a0c3f4b1a0021a1b2c1'], 42);
+
+      const { status, body } = await get(
+        '/api/search?dataset=RecentActivity&keywords=application&pageSize=10&pageNum=2');
+
+      assert.strictEqual(status, 200);
+      assert.strictEqual(asked.keywords, 'application');
+      assert.strictEqual(asked.prefix, true, 'type-ahead is on unless the caller opts out');
+      assert.strictEqual(asked.top, 10);
+      assert.strictEqual(asked.skip, 20, 'rows, in the caller\'s own page size');
+      // THE INDEX-WIDE TOTAL, not the page: eagle-public pages against it.
+      assert.strictEqual(body[0].count, 42);
+      assert.strictEqual(body[0].meta[0].searchResultsTotal, 42);
+
+      // The Cosmos read is the named set the index ranked, never the whole container.
+      const [read] = specsFor(seen, 'updates');
+      assert.match(read.query, /c\.id IN \(@uid0\)/);
+      assert.ok(boundValues(read).includes('5f0e4a0c3f4b1a0021a1b2c1'));
+      // And NOT the CONTAINS predicate: that is the fallback path, and running both would be two
+      // different answers to one question.
+      assert.ok(!/CONTAINS\(c\.headline/.test(read.query));
+    });
+
+  await t.test('the keyword row is the SAME row the keywordless page answers with', async () => {
+    stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+    stubIndex('searchActivities', ['5f0e4a0c3f4b1a0021a1b2c1']);
+    const indexed = await get('/api/search?dataset=RecentActivity&keywords=application');
+
+    t.mock.restoreAll();
+    stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+    const cosmosOnly = await get('/api/search?dataset=RecentActivity');
+
+    // Not just the same KEYS — the same row. The index carries no copy of any field on it, so a
+    // difference here would mean one of the two paths maps the record differently.
+    assert.deepStrictEqual(indexed.body[0].searchResults, cosmosOnly.body[0].searchResults);
+    assert.strictEqual(indexed.body[0].searchResults[0]._schemaName, 'RecentActivity');
+    assert.strictEqual(indexed.body[0].searchResults[0].read, undefined);
+  });
+
+  await t.test('notifications answer the same row on both paths too', async () => {
+    stubCosmos(t, { notifications: [notificationRow()] });
+    stubIndex('searchNotifications', ['5f0e4a0c3f4b1a0021a1b2c3']);
+    const indexed = await get('/api/search?dataset=ProjectNotification&keywords=quarry');
+
+    t.mock.restoreAll();
+    stubCosmos(t, { notifications: [notificationRow()] });
+    const cosmosOnly = await get('/api/search?dataset=ProjectNotification');
+
+    assert.deepStrictEqual(indexed.body[0].searchResults, cosmosOnly.body[0].searchResults);
+  });
+
+  await t.test('the page keeps the ranking, not the order Cosmos answered in', async () => {
+    const ids = ['5f0e4a0c3f4b1a0021a1b2c1', '5f0e4a0c3f4b1a0021a1b2c2'];
+    // The fixture order is the opposite of the ranking, so a page that simply took what Cosmos
+    // returned would still look sorted.
+    stubCosmos(t, {
+      projects: [PROJECT_ROW],
+      updates: [updateRow({ id: ids[1], eagleId: ids[1] }), updateRow({ id: ids[0], eagleId: ids[0] })]
+    });
+    stubIndex('searchActivities', ids);
+
+    const { body } = await get('/api/search?dataset=RecentActivity&keywords=application');
+
+    assert.deepStrictEqual(body[0].searchResults.map(r => r._id), ids);
+  });
+
+  await t.test('the caller ACL and their filters are ONE $filter, never one instead of the other',
+    async () => {
+      stubCosmos(t, { notifications: [notificationRow()] });
+      const asked = stubIndex('searchNotifications', []);
+
+      const { body } = await get('/api/search?dataset=ProjectNotification' +
+        '&keywords=quarry&and%5Bregion%5D=Cariboo&and%5Btype%5D=Project%20Notification');
+
+      assert.match(asked.filter, /region eq 'Cariboo'/);
+      assert.match(asked.filter, /type eq 'Project Notification'/);
+      // The read[] gate, from the same builder the Document branch uses.
+      assert.match(asked.filter, /read\/any\(r: search\.in\(r, '[^']*public/);
+      assert.match(asked.filter, / and /);
+      assert.strictEqual(body[0].meta[0].dropped, undefined, 'both filters are applied');
+    });
+
+  await t.test('a project filter keeps the EAGLE id on the index path too', async () => {
+    stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+    const asked = stubIndex('searchActivities', []);
+
+    const { body } = await get('/api/search?dataset=RecentActivity' +
+      `&keywords=application&and%5Bproject%5D=${PROJECT_EAGLE_ID}`);
+
+    // `activities.projectId` holds the id eagle-api pushed, so the translated DEMI id would match
+    // nothing — the same rule the Cosmos branch follows, one query layer over.
+    assert.match(asked.filter, new RegExp(`projectId eq '${PROJECT_EAGLE_ID}'`));
+    assert.strictEqual(body[0].meta[0].dropped, undefined, 'the project filter is applied');
+  });
+
+  await t.test('a filter key the index cannot express is reported, not ignored', async () => {
+    stubCosmos(t, { notifications: [notificationRow()] });
+    stubIndex('searchNotifications', []);
+
+    const { body } = await get(
+      '/api/search?dataset=ProjectNotification&keywords=quarry&period=abc&and%5Bread%5D=sealed');
+
+    // `period` never reaches the filter builder; `read` resolves to a real filterable field and is
+    // refused by the catalog, which is what stops a row count answering what a row's ACL holds.
+    assert.deepStrictEqual(body[0].meta[0].dropped.filter.sort(), ['period', 'read']);
+  });
+
+  await t.test('sortBy=-_id still means the arrival order these rows carry', async () => {
+    stubCosmos(t, { notifications: [notificationRow()] });
+    const asked = stubIndex('searchNotifications', []);
+
+    await get('/api/search?dataset=ProjectNotification&keywords=quarry&sortBy=-_id');
+
+    assert.match(asked.orderby, /^notificationReceivedDate desc/);
+  });
+
+  await t.test('with no keywords the index is not asked at all', async () => {
+    stubCosmos(t, { notifications: [notificationRow()] });
+    let called = 0;
+    t.mock.method(aiSearch, 'searchNotifications',
+      async () => { called++; return { items: [], count: 0 }; });
+
+    const { status, body } = await get('/api/search?dataset=ProjectNotification');
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(called, 0, 'a bare list read is a Cosmos read whatever the index could do');
+    assert.strictEqual(body[0].searchResults.length, 1);
+  });
+
+  await t.test('top=true and and[_id] stay Cosmos reads however they are asked', async () => {
+    stubCosmos(t, {
+      projects: [PROJECT_ROW], updates: [updateRow()], notifications: [notificationRow()]
+    });
+    let called = 0;
+    const counted = async () => { called++; return { items: [], count: 0 }; };
+    t.mock.method(aiSearch, 'searchActivities', counted);
+    t.mock.method(aiSearch, 'searchNotifications', counted);
+
+    // The home-page strip is ordered by pinned-ness, and a point read by id has nothing to rank.
+    const strip = await get('/api/search?dataset=RecentActivity&keywords=application&top=true');
+    const one = await get('/api/search?dataset=ProjectNotification' +
+      '&keywords=quarry&and%5B_id%5D=5f0e4a0c3f4b1a0021a1b2c3');
+
+    assert.strictEqual(called, 0);
+    // The strip runs the pinned and unpinned reads, so its length is the fixture's, not one row.
+    assert.strictEqual(strip.body[0].searchResults[0]._schemaName, 'RecentActivity');
+    assert.strictEqual(one.body[0].count, 1);
+  });
+
+  // THE KILL SWITCH. An emptied app setting is an operator decision, and the Cosmos read answers
+  // keywords too — with CONTAINS instead of BM25.
+  await t.test('an emptied index setting falls back to the Cosmos read and says so once',
+    async () => {
+      const warnings = [];
+      t.mock.method(logger, 'warn', message => warnings.push(message));
+      process.env.SEARCH_INDEX_ACTIVITIES = '';
+      const seen = stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+      let called = 0;
+      t.mock.method(aiSearch, 'searchActivities',
+        async () => { called++; return { items: [], count: 0 }; });
+
+      const first = await get('/api/search?dataset=RecentActivity&keywords=application');
+      await get('/api/search?dataset=RecentActivity&keywords=application');
+
+      assert.strictEqual(first.status, 200);
+      assert.strictEqual(called, 0, 'the index is not asked when its setting is empty');
+      assert.match(specsFor(seen, 'updates')[0].query, /CONTAINS\(c\.headline/);
+      const fallback = warnings.filter(w => w.includes('falling back to the Cosmos read'));
+      assert.strictEqual(fallback.length, 1,
+        'once per process — the frontend searches on every keystroke');
+    });
+
+  await t.test('no SEARCH_ENDPOINT falls back the same way', async () => {
+    delete process.env.SEARCH_ENDPOINT;
+    t.mock.method(logger, 'warn', () => {});
+    const seen = stubCosmos(t, { notifications: [notificationRow()] });
+    let called = 0;
+    t.mock.method(aiSearch, 'searchNotifications',
+      async () => { called++; return { items: [], count: 0 }; });
+
+    const { status, body } = await get('/api/search?dataset=ProjectNotification&keywords=quarry');
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(called, 0);
+    assert.strictEqual(body[0].searchResults.length, 1);
+    assert.ok(specsFor(seen, 'notifications').length > 0, 'the Cosmos read answered instead');
+  });
+
+  // A search that FAILED is not a search that found nothing, and it must not become the
+  // keywordless list either — the same rule as the Project and Document branches.
+  await t.test('an index failure is a 502, never an empty page', async () => {
+    t.mock.method(logger, 'error', () => {});
+    stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+    t.mock.method(aiSearch, 'searchActivities', async () => {
+      throw new Error('HTTP 503 Service Unavailable');
+    });
+
+    const { status, body } = await get('/api/search?dataset=RecentActivity&keywords=application');
+
+    assert.strictEqual(status, 502);
+    assert.match(body.error, /RecentActivity search is unavailable/);
+  });
+
+  // The indexers have no delete detection (`_ts` high-water only), so a row the index still holds
+  // may be one Cosmos no longer admits. Dropping it is the fail-closed direction.
+  await t.test('a ranked id the caller may not read drops out of the page', async () => {
+    stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+    stubIndex('searchActivities', ['5f0e4a0c3f4b1a0021a1b2c1', 'gone-from-cosmos'], 2);
+
+    const { body } = await get('/api/search?dataset=RecentActivity&keywords=application');
+
+    assert.deepStrictEqual(body[0].searchResults.map(r => r._id), ['5f0e4a0c3f4b1a0021a1b2c1']);
+    assert.strictEqual(body[0].count, 2, 'the total is the index-wide one, as on every other branch');
+  });
 });

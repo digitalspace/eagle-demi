@@ -101,6 +101,32 @@ const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,status,
  */
 const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,read';
 
+/**
+ * The two datasets whose index answers WHICH ROWS MATCH and nothing else.
+ *
+ * `select` is the row key plus what the caller's own id space needs; the row itself is read back
+ * from Cosmos, so the index carries no copy of the text it ranks on and the wire shape stays the
+ * one the Cosmos list read already emits. That is why `searchable` fields here are not
+ * `retrievable` — see azure/search/indexes/activities.json.
+ *
+ * `content` is indexed under `html_text` (html_strip in front of the standard tokenizer) because
+ * an update body can hold markup; the other searchable fields are `en.microsoft` like everywhere
+ * else, and `nameTokens` is `name` under `filename` for the same reason `projects` carries one.
+ */
+const KEYWORD_INDEXES = Object.freeze({
+  activities: {
+    setting: 'SEARCH_INDEX_ACTIVITIES',
+    searchFields: 'headline,content,notificationName',
+    select: 'id,eagleId,projectId'
+  },
+  notifications: {
+    setting: 'SEARCH_INDEX_PROJECT_NOTIFICATIONS',
+    searchFields: 'name,description,proponent,region,type,subType,trigger,decision,location,' +
+      'nature,nameTokens',
+    select: 'id,eagleId'
+  }
+});
+
 /** Rows one search request can return. A larger page costs more requests, not fewer rows. */
 const SERVICE_MAX_TOP = 250;
 
@@ -164,6 +190,12 @@ function config() {
     index,
     projectsIndex: process.env.SEARCH_INDEX_PROJECTS || 'projects',
     documentsIndex: process.env.SEARCH_INDEX_DOCUMENTS || 'documents',
+    // `??`, NOT `||`, and only on these two: an EMPTY string is the kill switch that sends
+    // RecentActivity and ProjectNotification keyword searches back to Cosmos, so it has to survive
+    // as a value rather than fall through to the default name. The other three have no such switch
+    // — nothing else can answer them.
+    activitiesIndex: process.env[KEYWORD_INDEXES.activities.setting] ?? 'activities',
+    notificationsIndex: process.env[KEYWORD_INDEXES.notifications.setting] ?? 'project-notifications',
     configured: Boolean(endpoint)
   };
 }
@@ -337,6 +369,16 @@ function tokenize(keywords) {
 const MIN_FUZZY_LENGTH = 4;
 
 /**
+ * Shortest term that may carry a trailing `*`. Lower than MIN_FUZZY_LENGTH on purpose: a prefix is
+ * not a guess the way an edit-distance match is — `ke*` is what someone typing "kemess" has entered
+ * so far, and waiting for the fourth keystroke is the type-ahead failing on the first three.
+ *
+ * Two rather than one because a one-character prefix overruns the service's term-expansion cap,
+ * which truncates rather than errors: `k*` then answers from an arbitrary subset of the vocabulary.
+ */
+const MIN_PREFIX_LENGTH = 2;
+
+/**
  * Score multiplier on the fuzzy variant. MEASURED, not chosen.
  *
  * `(term OR term~1)` lets the fuzzy arm compete with the exact arm on BM25 score, so a document
@@ -432,7 +474,10 @@ function buildQuery(terms, fuzzy, prefix = false) {
       // match `pipe` inside `pipeline` in the middle of a phrase and blur the query; applying it
       // to none loses search-as-you-type, which Typesense provided via `prefix=true` and the
       // frontend relies on because it searches on debounced keystrokes.
-      if (prefix && analyzed && i === last && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}*`);
+      //
+      // MIN_PREFIX_LENGTH, not MIN_FUZZY_LENGTH — the two thresholds answer different questions.
+      // `analyzed` still gates it: `*` bypasses the query analyzer exactly as `~1` does.
+      if (prefix && analyzed && i === last && t.length >= MIN_PREFIX_LENGTH) parts.push(`${t}*`);
       return parts.length > 1 ? `(${parts.join(' OR ')})` : t;
     })
     .join(' AND ');
@@ -1290,7 +1335,9 @@ async function searchProjects(opts = {}) {
 
   const { value, count, degraded } = await runSearch(projectsIndex, {
     ...opts,
-    prefix: true,
+    // `!== false`, not `=== true`: type-ahead is the normal way this dataset is read, so a caller
+    // gets it without asking and opting out is the deliberate act.
+    prefix: opts.prefix !== false,
     // `nameTokens` is `name` under the `filename` analyzer — `keywords=mine` matches "Mine Project",
     // which `en.microsoft` strips as a stopword from every other field here.
     searchFields: 'name,displayName,description,proponent,nameTokens',
@@ -1362,11 +1409,15 @@ async function searchDocuments(opts = {}) {
   // `fileNameTokens` is documentFileName under the `filename` analyzer — `keywords=mine` matches
   // `2019-mine-plan.pdf`, which `en.microsoft` on documentFileName does not.
   const searchFields = 'displayName,documentFileName,description,fileNameTokens';
+  // Resolved once because leg two's exclusion clause re-serialises leg one's query: a `*` on one
+  // side and not the other stops the legs being complements, which is the paging bug it exists to
+  // fix. Default-on, as in searchProjects.
+  const prefix = opts.prefix !== false;
 
   const direct = await runSearch(documentsIndex, {
     ...opts,
     top,
-    prefix: true,
+    prefix,
     searchFields,
     select,
     highlight: 'displayName,description'
@@ -1402,7 +1453,7 @@ async function searchDocuments(opts = {}) {
     const projects = await runSearch(config().projectsIndex, {
       keywords: opts.keywords,
       fuzzy: opts.fuzzy,
-      prefix: true,
+      prefix,
       filter: opts.projectFilter,
       searchFields: 'name,displayName,proponent,nameTokens',
       select: 'id',
@@ -1433,7 +1484,7 @@ async function searchDocuments(opts = {}) {
       // literal: `tokenize` cannot emit one, but this is user text being spliced into a query
       // string. The empty query that would 400 here cannot be reached — the projects leg
       // short-circuits on an empty tokenisation, so `projectIds` is empty and this never runs.
-      const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, true);
+      const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, prefix);
       const scope = `${inClause('projectId', projectIds)} and ` +
         `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${searchFields}', 'full', 'any')`;
       const byProject = await runSearch(documentsIndex, {
@@ -1489,6 +1540,48 @@ async function searchDocuments(opts = {}) {
     }))
   };
 }
+
+/**
+ * The keyword search behind RecentActivity and ProjectNotification: one leg, one index, ids back.
+ *
+ * PARAMETERISED RATHER THAN COPIED because the two datasets differ only in which index and which
+ * fields they name — there is no project-name leg to recover and no highlighting, since the rows
+ * the caller receives are the Cosmos rows and the controller maps them exactly as the keywordless
+ * page does. Both `searchProjects` and `searchDocuments` carry per-dataset behaviour this has none
+ * of, so they are left as they are rather than folded in here.
+ */
+async function searchKeywordIndex(dataset, opts = {}) {
+  const cfg = config();
+  const index = dataset === 'activities' ? cfg.activitiesIndex : cfg.notificationsIndex;
+  // Same rule as searchProjects: not configured has not searched anything, so it throws rather than
+  // reporting zero. The controller checks the switch BEFORE calling and falls back to Cosmos; a
+  // throw reaching it means the switch said yes and the service still could not answer.
+  if (!cfg.configured || index === '') {
+    warnUnconfigured();
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
+  }
+
+  const { searchFields, select } = KEYWORD_INDEXES[dataset];
+  const { value, count, degraded } = await runSearch(index, {
+    ...opts,
+    // Default-on, as in searchProjects: these pages are read by the same debounced keystroke.
+    prefix: opts.prefix !== false,
+    searchFields,
+    select
+  });
+
+  return {
+    count,
+    ...(degraded ? { meta: { degraded } } : {}),
+    items: value
+  };
+}
+
+/** Updates (Eagle `RecentActivity`). Rows come back as `{id, eagleId, projectId}`, ranked. */
+const searchActivities = (opts = {}) => searchKeywordIndex('activities', opts);
+
+/** Project notifications. Rows come back as `{id, eagleId}`, ranked. */
+const searchNotifications = (opts = {}) => searchKeywordIndex('notifications', opts);
 
 /** Project ids beyond this add nothing: the document page is capped long before they matter. */
 const MAX_PROJECT_FANOUT = 25;
@@ -1763,6 +1856,12 @@ module.exports = {
   searchChunks,
   searchProjects,
   searchDocuments,
+  searchActivities,
+  searchNotifications,
+  // Exported so the guard test can hold each `select` and `searchFields` against the committed
+  // index definition, the same invariant DOCUMENT_SELECT carries: a name the index does not
+  // declare is a 400 on every query, not a missing field in the response.
+  KEYWORD_INDEXES,
   documentIdsMatching,
   DOCUMENT_SCOPE_CAP,
   chunkParentFieldStatus,

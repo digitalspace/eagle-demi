@@ -28,6 +28,14 @@ A 404 means the running app has no /health/search-schema. That is a real failure
 the endpoint is expected to be there — except on the one deploy that first ships it.
 Set SEARCH_SCHEMA_ALLOW_MISSING=1 to pass that deploy, once.
 
+The body is first cut down to the indexes the RUNNING app reports at
+GET <base-url>/health/search-schema, and every dropped index is named on stdout. A
+release that ADDS an index definition is otherwise refused outright by the app still
+deployed (400, "schema override out of bounds"), which would block the release that
+ships the index rather than check anything. The new index is gated on the next run,
+once it is the deployed one. If that GET answers nothing readable, the whole body is
+posted, and an empty body after the cut is a failure — a probe of nothing must not pass.
+
 Non-retrievable fields are left out of `select`: AI Search rejects one, and a 400
 from a legal-but-unusable field would read as drift. No `orderby` is sent, so the
 orders checked are the ones the app can actually emit — restating that type gate
@@ -68,8 +76,55 @@ if (!Object.keys(indexes).length) throw new Error(`no index definitions under ${
 process.stdout.write(JSON.stringify({ indexes }));
 ' "$INDEX_DIR")
 
-RESPONSE=$(mktemp)
-trap 'rm -f "$RESPONSE"' EXIT
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+RESPONSE="$WORK/response"
+FILTERED="$WORK/body.json"
+
+# Which indexes does the DEPLOYED app know? It compiles in a fixed list and answers 400 to a body
+# naming more (src/controllers/search-schema.js), so the release that ADDS an index definition
+# would fail this gate against the app still running — on the one thing about it that is expected.
+# A GET runs the app's own probe and names them, and costs what the POST below costs.
+KNOWN=$(curl -sS --max-time 60 "$BASE_URL/health/search-schema") || KNOWN=''
+
+if ! node -e '
+const fs = require("fs");
+const [bodyJson, knownJson, baseUrl, outFile] = process.argv.slice(1);
+const body = JSON.parse(bodyJson);
+
+let known = null;
+try {
+  const live = (JSON.parse(knownJson) || {}).indexes;
+  if (live && typeof live === "object" && !Array.isArray(live) && Object.keys(live).length) {
+    known = Object.keys(live);
+  }
+} catch {
+  // No readable answer — no route yet, a proxy error page, search unconfigured. Post the whole
+  // body, which is what this script did before the cut, and let the status handling below read it.
+}
+
+if (known) {
+  const kept = {};
+  for (const [name, value] of Object.entries(body.indexes)) {
+    // Also drops an index whose kill switch is set: the app leaves those out of its own answer,
+    // and an index it is not querying has nothing to be drifted from.
+    if (known.includes(name)) kept[name] = value;
+    else console.log(`skipping ${name}: not known to the deployed app at ${baseUrl}, it ships with this change`);
+  }
+  if (!Object.keys(kept).length) {
+    console.error(`❌ the deployed app at ${baseUrl} shares none of the committed indexes ` +
+      `(it knows ${known.join(", ")}), so this gate would have checked nothing.`);
+    process.exit(1);
+  }
+  body.indexes = kept;
+}
+
+fs.writeFileSync(outFile, JSON.stringify(body));
+' "$BODY" "$KNOWN" "$BASE_URL" "$FILTERED"; then
+  exit 1
+fi
+
+BODY=$(cat "$FILTERED")
 
 # No --retry: curl counts 503 as transient and would re-send the probe three times for the one
 # answer this script exists to read. A connection failure is a failure here too.

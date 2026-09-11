@@ -10,8 +10,10 @@ test('apply-search-definitions', async (t) => {
   await t.test('loads every index and indexer definition, indexes sorted', () => {
     const indexes = script.load(script.INDEX_DIR).map(d => d.body.name);
     const indexers = script.load(script.INDEXER_DIR).map(d => d.body.name);
-    assert.deepStrictEqual(indexes, ['chunks', 'documents', 'projects']);
-    assert.deepStrictEqual(indexers, ['chunks-indexer', 'documents-indexer', 'projects-indexer']);
+    assert.deepStrictEqual(indexes,
+      ['activities', 'chunks', 'documents', 'project-notifications', 'projects']);
+    assert.deepStrictEqual(indexers, ['activities-indexer', 'chunks-indexer',
+      'documents-indexer', 'project-notifications-indexer', 'projects-indexer']);
   });
 
   await t.test('every indexer targets an index that is being applied alongside it', () => {
@@ -90,8 +92,10 @@ test('apply-search-definitions', async (t) => {
     await script.run({ endpoint: ENDPOINT, live: true, only: '', liveNames: ['demi-chunks'] });
     const puts = calls.filter(c => c.method === 'PUT').map(c => c.url.split('?')[0].replace(ENDPOINT, ''));
     assert.deepStrictEqual(puts, [
-      '/indexes/chunks', '/indexes/documents', '/indexes/projects',
-      '/indexers/chunks-indexer', '/indexers/documents-indexer', '/indexers/projects-indexer'
+      '/indexes/activities', '/indexes/chunks', '/indexes/documents',
+      '/indexes/project-notifications', '/indexes/projects',
+      '/indexers/activities-indexer', '/indexers/chunks-indexer', '/indexers/documents-indexer',
+      '/indexers/project-notifications-indexer', '/indexers/projects-indexer'
     ], 'every index must be written before any indexer');
     assert.strictEqual(
       calls.filter(c => c.method === 'PUT' && /\/datasources\//.test(c.url)).length, 0,
@@ -394,7 +398,8 @@ test('apply-search-definitions', async (t) => {
     // coincident, applying the definitions again would rewrite indexes serving traffic.
     const { config } = require('../../src/search/ai-search');
     const cfg = config();
-    const live = new Set([cfg.index, cfg.projectsIndex, cfg.documentsIndex].filter(Boolean));
+    const live = new Set([cfg.index, cfg.projectsIndex, cfg.documentsIndex,
+      cfg.activitiesIndex, cfg.notificationsIndex].filter(Boolean));
     const names = script.load(script.INDEX_DIR).map(d => d.body.name);
     assert.ok(
       names.every(n => live.has(n)),

@@ -573,6 +573,64 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(row.isPublished, false, 'derived from read[], not copied from the index');
   });
 
+  // The frontend searches on debounced keystrokes, so the last word is half-typed on nearly every
+  // request. Nobody sends `prefix=true` — it has to be what a plain keyword search already does.
+  await t.test('a keyword search asks for type-ahead without being told to', async () => {
+    let projectOpts = null;
+    let documentOpts = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      projectOpts = opts;
+      return { count: 0, items: [] };
+    });
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
+      documentOpts = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'kem' }, header: () => null }, res);
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: 'kem' }, header: () => null }, res);
+
+    assert.strictEqual(projectOpts.prefix, true);
+    assert.strictEqual(documentOpts.prefix, true);
+  });
+
+  // The parity switch. An ACCEPTED parameter, so it must not trip the unknown-parameter 400 the
+  // way any unrecognised key does.
+  await t.test('prefix=false turns type-ahead off and is not a 400', async () => {
+    let projectOpts = null;
+    let status = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      projectOpts = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: (code) => { status = code; return res; } };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'kem', prefix: 'false' }, header: () => null }, res);
+
+    assert.strictEqual(status, null, 'an accepted parameter must not be refused');
+    assert.strictEqual(projectOpts.prefix, false);
+  });
+
+  // Chunk search is a phrase somebody finished typing. buildQuery is shared, so this pins that
+  // sharing it did not hand chunks a `*` too.
+  await t.test('chunk search is not given the type-ahead flag', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'DocumentChunk', keywords: 'kem' }, header: () => null }, res);
+
+    assert.notStrictEqual(sent.prefix, true, `chunk search must not prefix, got: ${sent.prefix}`);
+  });
+
   await t.test('search projects queries AI Search when keywords are provided', async () => {
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {

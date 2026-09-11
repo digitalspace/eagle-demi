@@ -1,0 +1,19 @@
+{
+  "name": "demi-notifications-ds",
+  "description": null,
+  "type": "cosmosdb",
+  "subtype": null,
+  "credentials": {
+    "connectionString": null
+  },
+  "container": {
+    "name": "notifications",
+    "query": "SELECT c.id, c.eagleId, c.name, c.name AS nameTokens, c.description, c.proponent, c.nature, c.location, c.trigger, c.region, c.type, c.subType, c.decision, c.pcp, c.notificationReceivedDate, c.decisionDate, c.isPublished, c.read, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+  },
+  "dataChangeDetectionPolicy": {
+    "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
+    "highWaterMarkColumnName": "_ts"
+  },
+  "dataDeletionDetectionPolicy": null,
+  "encryptionKey": null
+}

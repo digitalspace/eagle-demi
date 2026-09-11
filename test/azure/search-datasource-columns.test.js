@@ -13,7 +13,14 @@ const datasource = require('../../azure/search/datasources/demi-documents-ds.jso
 const PAIRS = [
   [index, datasource],
   [require('../../azure/search/indexes/projects.json'),
-    require('../../azure/search/datasources/demi-projects-ds.json')]
+    require('../../azure/search/datasources/demi-projects-ds.json')],
+  // The two keyword indexes. `activities` is fed by the `updates` container and
+  // `project-notifications` by `notifications`, so the data-source name follows the CONTAINER and
+  // the index name follows the dataset — the same split the README describes.
+  [require('../../azure/search/indexes/activities.json'),
+    require('../../azure/search/datasources/demi-updates-ds.json')],
+  [require('../../azure/search/indexes/project-notifications.json'),
+    require('../../azure/search/datasources/demi-notifications-ds.json')]
 ];
 
 // Selected for the change detection policy, not for the index — the only column with no field.

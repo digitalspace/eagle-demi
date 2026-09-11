@@ -432,7 +432,8 @@ async function main() {
     endpoint,
     live: args.live,
     only: args.only,
-    liveNames: [cfg.index, cfg.projectsIndex, cfg.documentsIndex]
+    liveNames: [cfg.index, cfg.projectsIndex, cfg.documentsIndex,
+      cfg.activitiesIndex, cfg.notificationsIndex]
   });
 }
 
