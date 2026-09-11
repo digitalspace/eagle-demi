@@ -587,8 +587,11 @@ every workload that reads it so the pods pick up the new value.
 
 - Code: `src/secret-sync/`. Infrastructure: `azure/modules/secret-sync.bicep`.
 - The app routes ALL outbound traffic through the VNet (`outboundVnetRouting.allTraffic: true`), not
-  just vault traffic, because the OpenShift API on port 6443 is only reachable through the hub that
-  path takes, not through the platform's default egress.
+  just vault traffic. Its subnet also needs the landing-zone route table `openshift-public-endpoint`
+  attached, or hub BGP routes swallow the OpenShift API's public range (`142.34.0.0/16`) and port
+  6443 is dropped: `az network vnet subnet update -g c4b0a8-<env>-networking --vnet-name
+  c4b0a8-<env>-vwan-spoke -n snet-demi-func-fc1-<env> --route-table openshift-public-endpoint`. Done
+  on test 2026-09-11; prod needs the same attach before the sync app runs there.
 - Triggers: an Event Grid subscription on the vault (`SecretNewVersionCreated`, filtered to mapped
   names) and a daily timer at 06:00 UTC for drift. Both run the same reconcile.
 - A run that finds nothing changed writes nothing and restarts nothing.
