@@ -307,9 +307,11 @@ const RECENT_UPLOADS_DEFAULT_LIMIT = 5;
 // `05`, `5.0`, `5e0`, `0x5` and `+5` as five, which are five different cache keys for one answer —
 // a free way to blow past the shared cache and the memo below.
 const RECENT_UPLOADS_LIMIT = /^(?:[1-9]|10)$/;
-// Five minutes, matching the Cache-Control the anonymous answer carries: the panel is a teaser, not
-// a feed, and this read fans out across every partition — it must not run once per visitor. APIM
-// puts no rate limit on the anonymous product, so the memo is what bounds an anonymous flood.
+// Memo lives one minute so a fresh upload shows within a minute; the anonymous response itself
+// carries a 5-minute Cache-Control (RECENT_UPLOADS_MAX_AGE) so the edge can hold it longer. The
+// panel is a teaser, not a feed, and this read fans out across every partition — it must not run
+// once per visitor. APIM puts no rate limit on the anonymous product, so the memo is what bounds
+// an anonymous flood.
 const RECENT_UPLOADS_TTL_MS = 60_000;
 const RECENT_UPLOADS_MAX_AGE = 300;
 
