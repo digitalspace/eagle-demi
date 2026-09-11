@@ -397,7 +397,20 @@ test('apply-search-definitions', async (t) => {
     // That guard now REFUSES a plain re-run of this script, which is correct: with the names
     // coincident, applying the definitions again would rewrite indexes serving traffic.
     const { config } = require('../../src/search/ai-search');
+    // The two keyword indexes have NO code default — absent means Cosmos — so the app "serves"
+    // them only where a param file names one. Asked with the switch on, which is the state this
+    // script is ever run against; with it off those indexes serve nothing and the guard has
+    // nothing to protect.
+    const switched = { SEARCH_INDEX_ACTIVITIES: 'activities',
+      SEARCH_INDEX_PROJECT_NOTIFICATIONS: 'project-notifications' };
+    const saved = Object.fromEntries(
+      Object.keys(switched).map(key => [key, process.env[key]]));
+    Object.assign(process.env, switched);
     const cfg = config();
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     const live = new Set([cfg.index, cfg.projectsIndex, cfg.documentsIndex,
       cfg.activitiesIndex, cfg.notificationsIndex].filter(Boolean));
     const names = script.load(script.INDEX_DIR).map(d => d.body.name);

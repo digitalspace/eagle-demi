@@ -190,12 +190,16 @@ function config() {
     index,
     projectsIndex: process.env.SEARCH_INDEX_PROJECTS || 'projects',
     documentsIndex: process.env.SEARCH_INDEX_DOCUMENTS || 'documents',
-    // `??`, NOT `||`, and only on these two: an EMPTY string is the kill switch that sends
-    // RecentActivity and ProjectNotification keyword searches back to Cosmos, so it has to survive
-    // as a value rather than fall through to the default name. The other three have no such switch
-    // — nothing else can answer them.
-    activitiesIndex: process.env[KEYWORD_INDEXES.activities.setting] ?? 'activities',
-    notificationsIndex: process.env[KEYWORD_INDEXES.notifications.setting] ?? 'project-notifications',
+    // NO DEFAULT NAME on these two, and that is the whole switch: ABSENT and EMPTY both mean the
+    // RecentActivity and ProjectNotification keyword searches are answered from Cosmos. Only an
+    // explicitly non-empty setting turns the index on.
+    //
+    // A default name here made the switch work only where the setting already existed. Test had no
+    // such app setting — the index was never PUT there — so the app read 'activities', queried an
+    // index the service does not hold, and every keyword search 404'd into a 502. The other three
+    // keep their defaults: nothing else can answer them, so there is nothing to fall back to.
+    activitiesIndex: process.env[KEYWORD_INDEXES.activities.setting] || '',
+    notificationsIndex: process.env[KEYWORD_INDEXES.notifications.setting] || '',
     configured: Boolean(endpoint)
   };
 }
@@ -1583,6 +1587,26 @@ const searchActivities = (opts = {}) => searchKeywordIndex('activities', opts);
 /** Project notifications. Rows come back as `{id, eagleId}`, ranked. */
 const searchNotifications = (opts = {}) => searchKeywordIndex('notifications', opts);
 
+/**
+ * Whether a failure says THE INDEX IS NOT THERE, rather than that the search failed.
+ *
+ * The second half of the kill switch, for the case the first half cannot see: a setting naming an
+ * index nobody PUT answers 404 on every query, and for the two keyword datasets the Cosmos read can
+ * still answer the caller. `status` is read off the error rather than parsed out of its message —
+ * see `request`, which carries it for exactly this reason — and the wording is checked on top so a
+ * 404 from anything but a missing index stays a failure.
+ *
+ * DELIBERATELY NARROW. Every other failure — 403, a 400 over a bad field, a timeout — means the
+ * index exists and the query did not work, and those stay fail-closed: answering them from Cosmos
+ * would publish an unranked page as though the index had produced it.
+ */
+function isMissingIndex(err, index) {
+  if (!err || err.status !== 404) return false;
+  const message = String(err.message || '');
+  // "No index with the name 'activities' was found in the service" is the service's own wording.
+  return message.includes('was not found') || Boolean(index) && message.includes(index);
+}
+
 /** Project ids beyond this add nothing: the document page is capped long before they matter. */
 const MAX_PROJECT_FANOUT = 25;
 
@@ -1858,6 +1882,9 @@ module.exports = {
   searchDocuments,
   searchActivities,
   searchNotifications,
+  // The controller's fallback test: a 404 for an index that was never created is a configuration
+  // state the Cosmos read can answer, not a search that failed.
+  isMissingIndex,
   // Exported so the guard test can hold each `select` and `searchFields` against the committed
   // index definition, the same invariant DOCUMENT_SELECT carries: a name the index does not
   // declare is a 400 on every query, not a missing field in the response.

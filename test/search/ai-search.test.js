@@ -1317,11 +1317,14 @@ test('the deploy template pins every index name to the code defaults', () => {
       `${param} must default to '', the kill switch until the index exists`);
   }
 
-  // The code default is where the name stays pinned while the template holds the kill switch.
-  assert.strictEqual(codeDefaults.activitiesIndex, 'activities',
-    'code default for the activities index must not drift while the bicep param is the kill switch');
-  assert.strictEqual(codeDefaults.notificationsIndex, 'project-notifications',
-    'code default for the project-notifications index must not drift while the bicep param is the kill switch');
+  // AND SO MUST THE CODE, which is the half that was missing. A default name here applied wherever
+  // the app setting was never deployed at all — test, where the index does not exist — so the
+  // switch read "on" and every keyword search 404'd into a 502. The template and the code now hold
+  // the same position: off until something explicitly names an index.
+  assert.strictEqual(codeDefaults.activitiesIndex, '',
+    'an absent SEARCH_INDEX_ACTIVITIES must mean Cosmos, never a guessed index name');
+  assert.strictEqual(codeDefaults.notificationsIndex, '',
+    'an absent SEARCH_INDEX_PROJECT_NOTIFICATIONS must mean Cosmos, never a guessed index name');
 });
 
 // A name in `select` that the index does not carry is a 400 on EVERY query — the code says so and
@@ -1476,6 +1479,16 @@ test('type-ahead is on by default for the two keyword datasets', async (t) => {
  * and the ids that come back — nothing about the shape of a row.
  */
 test('keyword search over the two Cosmos-backed datasets', async (t) => {
+  // The switch is OFF until a setting names an index — there is no code default to fall back on —
+  // so asking the index anything means turning it on first, exactly as a param file does in an
+  // environment where these two indexes exist.
+  process.env.SEARCH_INDEX_ACTIVITIES = 'activities';
+  process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS = 'project-notifications';
+  t.after(() => {
+    delete process.env.SEARCH_INDEX_ACTIVITIES;
+    delete process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS;
+  });
+
   const rows = (...ids) => ({
     json: { value: ids.map(id => ({ id })), '@odata.count': ids.length }
   });
@@ -1559,15 +1572,53 @@ test('keyword search over the two Cosmos-backed datasets', async (t) => {
     assert.strictEqual(calls.length, 1);
   });
 
-  await t.test('an unset setting still names the default index', () => {
+  // An ABSENT setting is the state a deploy that never carried one leaves behind, and it has to
+  // mean what an emptied one means. It did not: the code guessed a name, the index was not there,
+  // and the dataset 502'd instead of falling back.
+  await t.test('an unset setting names no index at all, like an emptied one', async (tt) => {
+    const calls = captureFetch(tt, () => rows('a'));
     const saved = { ...process.env };
     delete process.env.SEARCH_INDEX_ACTIVITIES;
     delete process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS;
-    const cfg = aiSearch.config();
-    Object.assign(process.env, saved);
+    tt.after(() => Object.assign(process.env, saved));
 
-    assert.strictEqual(cfg.activitiesIndex, 'activities');
-    assert.strictEqual(cfg.notificationsIndex, 'project-notifications');
+    const cfg = aiSearch.config();
+    assert.strictEqual(cfg.activitiesIndex, '');
+    assert.strictEqual(cfg.notificationsIndex, '');
+
+    await assert.rejects(() => aiSearch.searchActivities({ keywords: 'x' }),
+      /SEARCH_ENDPOINT is not set/);
+    await assert.rejects(() => aiSearch.searchNotifications({ keywords: 'x' }),
+      /SEARCH_ENDPOINT is not set/);
+    assert.strictEqual(calls.length, 0, 'no request may be issued against an unnamed index');
+  });
+
+  // What the controller falls back on. Narrow on purpose: a 403 or a 400 means the index is there
+  // and the query is not, and answering those from Cosmos would publish an unranked page as if the
+  // index had produced it.
+  await t.test('only a 404 naming the index reads as "that index does not exist"', () => {
+    const err404 = Object.assign(
+      new Error("HTTP 404 No index with the name 'activities' was found in the service"),
+      { status: 404 });
+    assert.strictEqual(aiSearch.isMissingIndex(err404, 'activities'), true);
+    // The service wording alone is enough — the message need not repeat the name we sent.
+    assert.strictEqual(aiSearch.isMissingIndex(
+      Object.assign(new Error('HTTP 404 was not found'), { status: 404 }), 'other'), true);
+
+    for (const err of [
+      Object.assign(new Error('HTTP 403 Forbidden'), { status: 403 }),
+      Object.assign(new Error("HTTP 400 Could not find a property named 'x'"), { status: 400 }),
+      // A TIMEOUT CARRIES THE INDEX NAME — `request` formats the path into its message — and has
+      // no status at all. Reading the name alone would turn a service outage into a quiet
+      // unranked page.
+      Object.assign(new Error(
+        '/indexes/activities/docs/search failed after 30000ms (TimeoutError) [abc]'), {}),
+      // A 404 about something else entirely — a route, not an index.
+      Object.assign(new Error('HTTP 404 Resource not available'), { status: 404 })
+    ]) {
+      assert.strictEqual(aiSearch.isMissingIndex(err, 'activities'), false, err.message);
+    }
+    assert.strictEqual(aiSearch.isMissingIndex(null, 'activities'), false);
   });
 });
 

@@ -673,13 +673,21 @@ function unappliedFilterKeys(query, indexQuery, dropped) {
  * Cosmos path still answers — this says the ranking the caller got is not the one they asked for.
  */
 const keywordFallbackWarned = new Set();
-function warnKeywordFallback(dataset) {
-  if (keywordFallbackWarned.has(dataset)) return;
-  keywordFallbackWarned.add(dataset);
+
+/** Why the ranking the caller got is not the one they asked for. One line each, one latch each. */
+const KEYWORD_FALLBACK_REASONS = {
+  off: 'SEARCH_ENDPOINT or the index app setting for this dataset is empty',
+  missing: 'the index its app setting names does not exist on the search service (HTTP 404)'
+};
+
+function warnKeywordFallback(dataset, reason = 'off') {
+  const key = `${dataset}:${reason}`;
+  if (keywordFallbackWarned.has(key)) return;
+  keywordFallbackWarned.add(key);
   logger.warn(
-    `[search] ${dataset}: keyword search is falling back to the Cosmos read — SEARCH_ENDPOINT or ` +
-    'the index app setting for this dataset is empty. This is a configuration state, NOT a search ' +
-    'that found nothing.'
+    `[search] ${dataset}: keyword search is falling back to the Cosmos read — ` +
+    `${KEYWORD_FALLBACK_REASONS[reason]}. This is a configuration state, NOT a search that found ` +
+    'nothing.'
   );
 }
 
@@ -1392,12 +1400,15 @@ exports.search = async (req, res) => {
       // else here is a Cosmos list read. See KEYWORD_INDEX_DATASETS for why only the ranking moves.
       const indexed = keywords ? KEYWORD_INDEX_DATASETS[dataset] : null;
       if (indexed && !indexed.cosmosOnly(req.query)) {
-        // The kill switch: an unset SEARCH_ENDPOINT or an app setting deliberately emptied for this
-        // one dataset. Falls through to the Cosmos read below rather than failing — that read
-        // answers keywords too, on CONTAINS instead of BM25.
+        // The kill switch: an unset SEARCH_ENDPOINT, or an app setting that is absent or emptied
+        // for this one dataset. Falls through to the Cosmos read below rather than failing — that
+        // read answers keywords too, on CONTAINS instead of BM25.
         if (!aiSearch.config().configured || indexed.index() === '') {
           warnKeywordFallback(dataset);
         } else {
+          // What the INDEX attempt reported dropped, so a fallback can put it back: the page the
+          // caller receives is the Cosmos one, and it reports its own keys below.
+          const notedBefore = { filter: droppedKeys.filter.length, sort: droppedKeys.sort.length };
           try {
             const acl = filterFor(await indexed.aclAccess(access), indexed.aclField);
             // Scoped to nothing: 0 is measured, and OData cannot express a filter that matches
@@ -1425,11 +1436,21 @@ exports.search = async (req, res) => {
             const searchResults = await indexed.rows(access, items.map(hit => String(hit.id)));
             return res.json([{ searchResults, count }]);
           } catch (err) {
-            // Same rule as the Project and Document branches: a search that FAILED is not a search
-            // that found nothing, and it must not become the keywordless list either.
-            logger.error(`[search] ${dataset} keyword search failed: ${err.message}`);
-            return res.status(502).json(
-              searchUnavailable(req, err, `${dataset} search is unavailable`));
+            // THE SWITCH THE SETTING COULD NOT THROW. A setting naming an index that was never
+            // created 404s on every query, and no configuration this app can read says so — which
+            // is how test served 502s to every keyword search over these two datasets. Falls
+            // through to the Cosmos read below, like an emptied setting does.
+            if (aiSearch.isMissingIndex(err, indexed.index())) {
+              droppedKeys.filter.length = notedBefore.filter;
+              droppedKeys.sort.length = notedBefore.sort;
+              warnKeywordFallback(dataset, 'missing');
+            } else {
+              // Same rule as the Project and Document branches: a search that FAILED is not a
+              // search that found nothing, and it must not become the keywordless list either.
+              logger.error(`[search] ${dataset} keyword search failed: ${err.message}`);
+              return res.status(502).json(
+                searchUnavailable(req, err, `${dataset} search is unavailable`));
+            }
           }
         }
       }
