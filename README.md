@@ -544,7 +544,7 @@ CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live
 | `notify-api-key` | function key eagle-notify accepts on `POST /api/events` | only where `notifyApiBase` is set |
 | `edge-secret` | value the eagle-edge Front Door rule set stamps as `X-Edge-Secret` | only where Front Door fronts the app |
 | `access-gate-password` | password `POST /api/gate` accepts, gating the public site | only where the site runs a curtain; not prod |
-| `openshift-token-<env>` | ServiceAccount token the secret sync writes OpenShift Secrets with | every environment that syncs |
+| `openshift-token-<env>` | ServiceAccount token the secret sync writes OpenShift Secrets with | `demi-kv-test` only; prod runs no sync |
 | `dev-openshift-token` | the same for `6cdc9e-dev`, which `demi-kv-test` also serves | `demi-kv-test` only |
 
 The first eight are the required set, written down once in `requiredSecretNames` in
@@ -585,13 +585,20 @@ second Function app, `demi-secret-sync-<env>`, copies them out. It reads mapped 
 vault, writes each one into the OpenShift Secret that consumes it, and stamps the pod template of
 every workload that reads it so the pods pick up the new value.
 
+**Test only.** `demi-secret-sync-test` is the one sync app, and it owns `6cdc9e-dev` and
+`6cdc9e-test`. There is no prod sync app: the prod spoke has no route table and policy forbids
+creating one, so an app there could not reach the OpenShift API on 6443. Prod OpenShift secrets
+stay in OpenShift and are set by hand; `demi-kv-prod` holds only what Azure itself reads, through
+Key Vault references from `demi-api-fc-prod`. `deploySecretSync` in `azure/main.prod.bicepparam` is
+false, so a prod infrastructure deploy creates no sync app.
+
 - Code: `src/secret-sync/`. Infrastructure: `azure/modules/secret-sync.bicep`.
 - The app routes ALL outbound traffic through the VNet (`outboundVnetRouting.allTraffic: true`), not
   just vault traffic. Its subnet also needs the landing-zone route table `openshift-public-endpoint`
   attached, or hub BGP routes swallow the OpenShift API's public range (`142.34.0.0/16`) and port
   6443 is dropped: `az network vnet subnet update -g c4b0a8-<env>-networking --vnet-name
   c4b0a8-<env>-vwan-spoke -n snet-demi-func-fc1-<env> --route-table openshift-public-endpoint`. Done
-  on test 2026-09-11; prod needs the same attach before the sync app runs there.
+  on test 2026-09-11.
 - Triggers: an Event Grid subscription on the vault (`SecretNewVersionCreated`, filtered to mapped
   names) and a daily timer at 06:00 UTC for drift. Both run the same reconcile.
 - A run that finds nothing changed writes nothing and restarts nothing.
@@ -603,13 +610,14 @@ every workload that reads it so the pods pick up the new value.
   Secrets and no `create`, because an unnamed `create` would let the ServiceAccount mint a Secret
   of any type, a service-account token for another account included. A mapped Secret the namespace
   does not have is logged and counted missing, and fails the run the same way.
-- `demi-secret-sync-test` owns `6cdc9e-dev` and `6cdc9e-test`; `demi-secret-sync-prod` owns
-  `6cdc9e-prod`. `SYNC_NAMESPACES` on each app is what decides, and neither holds the other's token.
+- `SYNC_NAMESPACES` on the app is what decides which namespaces it writes to, and the app can only
+  reach what its token opens: it holds no prod token.
 
 **The mapping file** is `src/secret-sync/mapping.json`. It holds names only, never values: one entry
 per key, saying which vault secret feeds which key of which OpenShift Secret, and which Deployments
-and CronJobs to roll when it changes. An OpenShift Secret with several keys — `eagle-api-mongodb`
-has five in dev, `rproxy-basic-auth` six in prod, four in dev and test — is several entries merged into the one Secret object.
+and CronJobs to roll when it changes. It holds dev and test entries only. An OpenShift Secret with
+several keys — `eagle-api-mongodb` has five in dev, `rproxy-basic-auth` four in dev and test — is
+several entries merged into the one Secret object.
 Dev names carry a `dev-` prefix because `demi-kv-test` is the nonprod vault and serves both nonprod
 namespaces.
 
@@ -617,15 +625,15 @@ namespaces.
 (`az keyvault secret set --vault-name demi-kv-<env> --name <name> --value '<value>'`); create the
 OpenShift Secret once by hand if the namespace does not already have it
 (`oc create secret generic <name> --from-literal=<key>=placeholder`, any placeholder value — the
-first run overwrites it); then add one line per key to `mapping.json`, and merge. The staging workflow deploys it on push to main; production
-goes by tag with the rest of the release. The next event or the next daily run writes it.
+first run overwrites it); then add one line per key to `mapping.json`, and merge. The staging
+workflow deploys it on push to main. The next event or the next daily run writes it.
 
 **To force a run**: create a new version of any mapped secret, or run the timer by hand from the
-portal (`demi-secret-sync-<env>` → Functions → `secretSyncDaily` → Code + Test → Run). The run logs
+portal (`demi-secret-sync-test` → Functions → `secretSyncDaily` → Code + Test → Run). The run logs
 one line with its counts: `checked`, `updated`, `restarted`, `missing`.
 
 **To disable it**: stop the function app
-(`az functionapp stop -g <rg> -n demi-secret-sync-<env>`). Nothing else depends on it running — the
+(`az functionapp stop -g <rg> -n demi-secret-sync-test`). Nothing else depends on it running — the
 secrets it last wrote stay where they are, and deploys bind them by name.
 
 ### `demi-frontend-test` is gone — decommissioned 2026-08-15

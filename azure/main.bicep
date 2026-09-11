@@ -129,11 +129,16 @@ param trustedProxyIps string = ''
 @description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password.')
 param optionalSecretNames array = []
 
-// The OpenShift namespaces the secret sync writes to, and the switch that deploys it. Empty
-// deploys no sync app — which is what an environment whose vault holds no OpenShift copies wants.
-// The nonprod vault serves both nonprod namespaces; prod names only its own.
+// The OpenShift namespaces the secret sync writes to. Empty deploys no sync app — which is what an
+// environment whose vault holds no OpenShift copies wants.
 @description('OpenShift namespaces the secret sync owns, e.g. 6cdc9e-dev,6cdc9e-test. Empty deploys no sync app.')
 param syncNamespaces string = ''
+
+// False where the environment cannot reach the OpenShift API at all, so naming namespaces is not
+// enough on its own: the prod spoke has no route table and policy forbids creating one, so a prod
+// sync app would sit there failing every run.
+@description('Deploy the OpenShift secret sync app. False leaves that environment\'s OpenShift secrets to be set by hand.')
+param deploySecretSync bool = true
 
 // Flex needs its own subnet, delegated to `Microsoft.App/environments`. Empty deploys no API app
 // at all, so an environment that wants one must supply it.
@@ -594,8 +599,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
 
 // 7d. The OpenShift secret sync. Its own Flex app on the API's subnet, so a bad deploy of it
 // cannot take the API down, and it reads the vault through the same private endpoint. Off unless
-// the environment names the namespaces it owns.
-module secretSync './modules/secret-sync.bicep' = if (!empty(syncNamespaces) && !empty(apiFlexSubnetId)) {
+// the environment both asks for it and names the namespaces it owns.
+module secretSync './modules/secret-sync.bicep' = if (deploySecretSync && !empty(syncNamespaces) && !empty(apiFlexSubnetId)) {
   name: 'deploy-secret-sync'
   params: {
     location: location
@@ -722,7 +727,7 @@ output apimGatewayUrl string = (deployApim && !empty(apiFlexSubnetId)) ? apim!.o
 
 // Empty where the environment deploys no sync app. The deploy workflow publishes the package to
 // this name, so it is read rather than rebuilt from environmentName.
-output secretSyncAppName string = (!empty(syncNamespaces) && !empty(apiFlexSubnetId)) ? secretSync!.outputs.secretSyncAppName : ''
+output secretSyncAppName string = (deploySecretSync && !empty(syncNamespaces) && !empty(apiFlexSubnetId)) ? secretSync!.outputs.secretSyncAppName : ''
 // The VM every `az vm run-command invoke` addresses. Empty when the devbox is not deployed.
 output devboxName string = (deployDevbox && !empty(devboxSubnetId)) ? devbox!.outputs.devboxName : ''
 output searchEndpoint string = deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint

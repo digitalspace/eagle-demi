@@ -709,15 +709,17 @@ test('main.bicep carries no credential values at all', () => {
     'deploy instead of a recycle');
 });
 
-// The sync app is what copies vault secrets into OpenShift, and both halves of its gate matter: it
-// needs the namespaces it owns, and it needs a subnet to reach the vault's private endpoint from.
-// Deployed with an empty namespace list it runs and writes nowhere; `az bicep build` compiles that.
-test('the secret sync is deployed only where namespaces are named, and is told which', () => {
+// The sync app is what copies vault secrets into OpenShift, and every part of its gate matters: the
+// environment has to ask for it, it needs the namespaces it owns, and it needs a subnet to reach the
+// vault's private endpoint from. Deployed with an empty namespace list it runs and writes nowhere;
+// `az bicep build` compiles that.
+test('the secret sync is deployed only where it is asked for and namespaces are named', () => {
   const block = MAIN.split(/^module /m).find(b => b.includes("'./modules/secret-sync.bicep'"));
   assert.ok(block, 'main.bicep must call the secret-sync module');
-  assert.match(block.split('\n')[0], /= if \(!empty\(syncNamespaces\) && !empty\(apiFlexSubnetId\)\)/,
-    'an environment that names no namespace must deploy no sync app, and one with no subnet ' +
-    'cannot reach the vault private endpoint at all');
+  assert.match(block.split('\n')[0],
+    /= if \(deploySecretSync && !empty\(syncNamespaces\) && !empty\(apiFlexSubnetId\)\)/,
+    'an environment that asks for no sync app or names no namespace must get none, and one with ' +
+    'no subnet cannot reach the vault private endpoint at all');
 
   assert.match(block, /^\s+keyVaultName: keyVault\.outputs\.vaultName$/m,
     'the sync must be told which vault to read, or it has nothing to copy');
@@ -726,12 +728,21 @@ test('the secret sync is deployed only where namespaces are named, and is told w
   assert.match(block, /^\s+identityPrincipalId: identity\.outputs\.principalId$/m,
     'it reads the vault as the identity that holds the Secrets User grant');
 
-  // Prod owns its own namespace only: the sync can reach exactly what its token opens, and the
-  // nonprod vault holds no prod token.
-  assert.match(PROD_PARAMS, /^param syncNamespaces = '6cdc9e-prod'$/m,
-    'prod must name only the prod namespace');
+  // Prod runs no sync app: its spoke has no route table, so the app could not reach the OpenShift
+  // API, and prod OpenShift secrets are set by hand instead.
+  assert.match(PROD_PARAMS, /^param deploySecretSync = false$/m,
+    'a prod deploy must create no sync app');
+  assert.doesNotMatch(PROD_PARAMS, /^param syncNamespaces =/m,
+    'naming prod namespaces would say a prod sync app owns them');
   assert.match(TEST_PARAMS, /^param syncNamespaces = '6cdc9e-dev,6cdc9e-test'$/m,
     'the nonprod vault serves both nonprod namespaces, and neither is prod');
+
+  // The output that names the sync app to the caller must gate on the exact same condition as the
+  // module itself — a looser output would report an app name for an environment the module never
+  // deployed.
+  assert.match(MAIN, /^output secretSyncAppName string = \(deploySecretSync && /m,
+    'the output must gate on deploySecretSync too, or a caller reads a sync app name for an ' +
+    'environment that asked for none');
 });
 
 // The access curtain's password, same shape as EDGE_SECRET above and the same reason for a

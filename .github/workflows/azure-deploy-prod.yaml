@@ -28,7 +28,6 @@ env:
   # Still `eagle-extractor-*`: the code moved repositories, the deployed app did not.
   EXTRACTOR_APP_NAME: eagle-extractor-prod
   API_FLEX_APP_NAME: demi-api-fc-prod
-  SECRET_SYNC_APP_NAME: demi-secret-sync-prod
   # The app's own host, the same one the staging workflow smokes. Not the public
   # www.projects.eao.gov.bc.ca/demi-search path: that answer also depends on the OpenShift rproxy,
   # which this workflow does not deploy and must not be able to fail on.
@@ -127,93 +126,6 @@ jobs:
         if: failure()
         run: |
           echo "### ❌ Extractor deployment failed" >> $GITHUB_STEP_SUMMARY
-          echo "Check the step logs above for packaging, zipdeploy or trigger-registration errors." >> $GITHUB_STEP_SUMMARY
-
-  # The OpenShift secret sync, from the same tag. Independent of the API: it writes secrets into
-  # 6cdc9e-prod and reads nothing the API serves, so it neither blocks nor is blocked by that job.
-  deploy-secret-sync:
-    name: Deploy secret sync (Azure Function App)
-    runs-on: ubuntu-latest
-    environment: prod
-    timeout-minutes: 15
-    env:
-      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-    steps:
-      - name: Validate version format
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          VERSION="$INPUT_VERSION"
-          if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "❌ Version must be in the format v1.2.3, got '$VERSION'"
-            exit 1
-          fi
-
-      # Tooling from this workflow's ref, sources from the tag — same split and same reason as the
-      # extractor job above. Root first: a checkout cleans the directory it lands in.
-      - name: Checkout this workflow's ref for the tooling
-        uses: actions/checkout@v7
-
-      - name: Checkout the tag
-        uses: actions/checkout@v7
-        with:
-          ref: refs/tags/${{ inputs.version }}
-          path: release
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-
-      - name: Azure Login
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      # The prod sync app does not exist until the infrastructure deploy creates it, and a release
-      # must not fail on that. Same two "absent" errors the extractor probe accepts, for the same
-      # reason: a site that was never created answers Forbidden, not NotFound.
-      - name: Does the sync app exist yet?
-        id: probe
-        run: |
-          set -uo pipefail
-          if err=$(az functionapp show -g "$AZURE_RESOURCE_GROUP" -n "$SECRET_SYNC_APP_NAME" \
-                     --query name -o tsv 2>&1 >/dev/null); then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$err" == *ResourceNotFound* || "$err" == *AuthorizationFailed* ]]; then
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "⏭️ $SECRET_SYNC_APP_NAME not present — skipping the secret sync deploy." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::az functionapp show failed for $SECRET_SYNC_APP_NAME: $err"
-            exit 1
-          fi
-
-      - name: Deploy the secret sync
-        if: steps.probe.outputs.found == 'true'
-        run: |
-          set -euo pipefail
-          ./scripts/package-secret-sync.sh release /tmp/secret-sync.zip
-          az functionapp deployment source config-zip \
-            -g "$AZURE_RESOURCE_GROUP" \
-            -n "$SECRET_SYNC_APP_NAME" \
-            --src /tmp/secret-sync.zip
-
-      # The Event Grid subscription delivers to this function BY NAME: a deploy that registers
-      # nothing drops every rotation after its retries.
-      - name: Verify the Event Grid trigger is registered
-        if: steps.probe.outputs.found == 'true'
-        run: ./scripts/wait-for-function.sh "$AZURE_RESOURCE_GROUP" "$SECRET_SYNC_APP_NAME" secretSyncVaultEvent
-
-      - name: Verify the daily timer is registered
-        if: steps.probe.outputs.found == 'true'
-        run: ./scripts/wait-for-function.sh "$AZURE_RESOURCE_GROUP" "$SECRET_SYNC_APP_NAME" secretSyncDaily
-
-      - name: Report secret sync failure to job summary
-        if: failure()
-        run: |
-          echo "### ❌ Secret sync deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "Check the step logs above for packaging, zipdeploy or trigger-registration errors." >> $GITHUB_STEP_SUMMARY
 
   # The index definitions of the tag ABOUT TO SHIP, asked of the app that is ALREADY SERVING. That
