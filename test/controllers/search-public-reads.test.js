@@ -773,6 +773,10 @@ test('GET /search?dataset=Document&docIds=', async (t) => {
 test('GET /search keyword searches over the indexed Cosmos datasets', async (t) => {
   t.beforeEach(() => {
     process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
+    // BOTH HALVES OF THE SWITCH have to be on for the index to be asked anything: there is no code
+    // default index name, so an environment whose param file does not name one answers from Cosmos.
+    process.env.SEARCH_INDEX_ACTIVITIES = 'activities';
+    process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS = 'project-notifications';
     searchController.resetKeywordFallbackWarnings();
   });
   t.afterEach(() => {
@@ -965,6 +969,99 @@ test('GET /search keyword searches over the indexed Cosmos datasets', async (t) 
       const fallback = warnings.filter(w => w.includes('falling back to the Cosmos read'));
       assert.strictEqual(fallback.length, 1,
         'once per process — the frontend searches on every keystroke');
+    });
+
+  // THE BUG THIS PAIR EXISTS FOR. Test carries neither app setting — the two indexes were never
+  // created there — and the code used to supply a default name, so the switch read "on", the query
+  // hit an index the service does not hold, and both datasets answered 502 on every keyword search.
+  await t.test('an app setting that was never deployed answers from Cosmos, both datasets',
+    async () => {
+      t.mock.method(logger, 'warn', () => {});
+      delete process.env.SEARCH_INDEX_ACTIVITIES;
+      delete process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS;
+      const seen = stubCosmos(t, {
+        projects: [PROJECT_ROW], updates: [updateRow()], notifications: [notificationRow()]
+      });
+      let called = 0;
+      const counted = async () => { called++; return { items: [], count: 0 }; };
+      t.mock.method(aiSearch, 'searchActivities', counted);
+      t.mock.method(aiSearch, 'searchNotifications', counted);
+
+      const news = await get('/api/search?dataset=RecentActivity&keywords=Assessment');
+      const notices = await get('/api/search?dataset=ProjectNotification&keywords=pa');
+
+      assert.strictEqual(called, 0, 'an unnamed index is not asked anything');
+      for (const { status, body } of [news, notices]) {
+        assert.strictEqual(status, 200);
+        assert.strictEqual(body[0].searchResults.length, 1);
+        assert.strictEqual(body[0].count, 1);
+        assert.strictEqual(body[0].meta[0].searchResultsTotal, 1);
+      }
+      assert.strictEqual(news.body[0].searchResults[0]._schemaName, 'RecentActivity');
+      assert.strictEqual(notices.body[0].searchResults[0]._schemaName, 'ProjectNotification');
+      // The keywords reached the Cosmos read as CONTAINS, so the page is filtered, not the whole
+      // container handed back under a keyword query.
+      assert.match(specsFor(seen, 'updates')[0].query, /CONTAINS\(c\.headline/);
+    });
+
+  // Defence in depth behind the setting: a name that IS deployed but points at an index nobody
+  // created answers 404 per query, and no configuration this app can read says so.
+  await t.test('a 404 for a missing index falls back to Cosmos and says so once', async () => {
+    const warnings = [];
+    t.mock.method(logger, 'warn', message => warnings.push(message));
+    const seen = stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+    let called = 0;
+    t.mock.method(aiSearch, 'searchActivities', async () => {
+      called++;
+      throw Object.assign(
+        new Error("HTTP 404 No index with the name 'activities' was found in the service [abc]"),
+        { status: 404 });
+    });
+
+    const first = await get('/api/search?dataset=RecentActivity&keywords=Assessment');
+    const second = await get('/api/search?dataset=RecentActivity&keywords=Assessment');
+
+    assert.strictEqual(called, 2, 'the switch still says on — each request tries the index first');
+    for (const { status, body } of [first, second]) {
+      assert.strictEqual(status, 200);
+      assert.strictEqual(body[0].searchResults.length, 1);
+      assert.strictEqual(body[0].searchResults[0]._schemaName, 'RecentActivity');
+    }
+    assert.match(specsFor(seen, 'updates')[0].query, /CONTAINS\(c\.headline/);
+    const fallback = warnings.filter(w => w.includes('does not exist on the search service'));
+    assert.strictEqual(fallback.length, 1, 'once per process, like the emptied-setting warning');
+  });
+
+  // The narrowness is the point: a 403 or a slow service means the index is there and the query is
+  // not, and answering those from Cosmos would publish an unranked page as the index's own.
+  await t.test('any other index failure is still a 502', async () => {
+    t.mock.method(logger, 'error', () => {});
+    stubCosmos(t, { notifications: [notificationRow()] });
+    t.mock.method(aiSearch, 'searchNotifications', async () => {
+      throw Object.assign(new Error('HTTP 403 Forbidden'), { status: 403 });
+    });
+
+    const { status, body } = await get('/api/search?dataset=ProjectNotification&keywords=pa');
+
+    assert.strictEqual(status, 502);
+    assert.match(body.error, /ProjectNotification search is unavailable/);
+  });
+
+  // A fallback page reports ITS OWN unapplied keys. The index attempt refused `period` on the way
+  // out, and counting that refusal twice would tell the caller a filter panel did nothing twice.
+  await t.test('the dropped keys a fallback reports are the Cosmos read\'s, not both paths\'',
+    async () => {
+      t.mock.method(logger, 'warn', () => {});
+      stubCosmos(t, { notifications: [notificationRow()] });
+      t.mock.method(aiSearch, 'searchNotifications', async () => {
+        throw Object.assign(new Error('HTTP 404 was not found'), { status: 404 });
+      });
+
+      const { status, body } = await get(
+        '/api/search?dataset=ProjectNotification&keywords=quarry&period=abc');
+
+      assert.strictEqual(status, 200);
+      assert.deepStrictEqual(body[0].meta[0].dropped.filter, ['period']);
     });
 
   await t.test('no SEARCH_ENDPOINT falls back the same way', async () => {

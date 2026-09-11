@@ -84,10 +84,17 @@ keywordless page uses, so the two paths cannot answer different shapes and a row
 holds but Cosmos no longer admits drops out of the page. That is why their searchable fields are
 `retrievable: false`.
 
-**Their app setting may be EMPTY, and empty is a kill switch.** The dataset then answers keywords
-from Cosmos with `CONTAINS`, without ranking or a half-typed last word, and the app logs one
-warning per process. Nothing to restore, nothing to reindex: it is a settings change. The other
-three have no such switch, because nothing else can answer them.
+**Their app setting is a kill switch, and it is OFF unless something turns it on.** Absent and
+empty mean the same thing: the dataset answers keywords from Cosmos with `CONTAINS`, without
+ranking or a half-typed last word, and the app logs one warning per process. There is no code
+default index name for these two — only the param file naming an index turns one on. Nothing to
+restore, nothing to reindex either way: it is a settings change. The other three have no such
+switch, because nothing else can answer them.
+
+An index name that IS set but names an index the service does not hold answers 404 per query. The
+app treats that as the same fact and falls back to Cosmos, warning once. Every other search failure
+— 403, a bad field, a timeout — is still a 502: the index is there and the query is not, and an
+unranked page must not be published as though the index produced it.
 
 Flip it in `azure/main.<env>.bicepparam`, never on the app. `appSettings` is a whole-collection PUT,
 so a value set in the portal or with `az functionapp config appsettings set` is deleted by the next
