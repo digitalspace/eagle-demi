@@ -102,6 +102,14 @@ const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,status,
 const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,read';
 
 /**
+ * The fields a project keyword query matches on. Shared by the search and the count so the badge
+ * and the result total answer the same question; `nameTokens` is `name` under the `filename`
+ * analyzer — `keywords=mine` matches "Mine Project", which `en.microsoft` strips as a stopword
+ * from every other field here.
+ */
+const PROJECT_SEARCH_FIELDS = 'name,displayName,description,proponent,nameTokens';
+
+/**
  * The two datasets whose index answers WHICH ROWS MATCH and nothing else.
  *
  * `select` is the row key plus what the caller's own id space needs; the row itself is read back
@@ -1342,9 +1350,7 @@ async function searchProjects(opts = {}) {
     // `!== false`, not `=== true`: type-ahead is the normal way this dataset is read, so a caller
     // gets it without asking and opting out is the deliberate act.
     prefix: opts.prefix !== false,
-    // `nameTokens` is `name` under the `filename` analyzer — `keywords=mine` matches "Mine Project",
-    // which `en.microsoft` strips as a stopword from every other field here.
-    searchFields: 'name,displayName,description,proponent,nameTokens',
+    searchFields: PROJECT_SEARCH_FIELDS,
     // Every name here must exist in the index — a stray one is a 400 on EVERY query, not a
     // missing field in the response. `trackProjectId` was in this list and is not in the index
     // (it is an int in Cosmos), which turned all project search into a silent fallback.
@@ -1401,7 +1407,10 @@ async function searchDocuments(opts = {}) {
     throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
   }
 
-  const top = Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
+  // A count wants the TOTAL, not the rows, but the two-leg sum is what makes that total right, so
+  // both legs still run — trimmed to one row each, which is the smallest page the service takes.
+  const countOnly = opts.countOnly === true;
+  const top = countOnly ? 1 : Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
   // Every name here must exist in the index — a stray one is a 400 on EVERY query. The five added
   // 2026-08-23 are the ones eagle-public's document table renders and DEMI could not answer before
   // the index carried them: `datePosted` is its Date column, and the four `*Id` values are what
@@ -1423,8 +1432,10 @@ async function searchDocuments(opts = {}) {
     top,
     prefix,
     searchFields,
-    select,
-    highlight: 'displayName,description'
+    // The row key alone under `countOnly`: nothing reads the row back, and the wide select is a
+    // response body per leg spent on fields the caller never receives.
+    select: countOnly ? 'id' : select,
+    ...(countOnly ? {} : { highlight: 'displayName,description' })
   });
 
   const items = [...direct.value];
@@ -1499,7 +1510,7 @@ async function searchDocuments(opts = {}) {
         // where the page is ALREADY full: no row of this leg can be used there (the fill loop
         // breaks immediately), and the count is the only reason the request is issued.
         top: Math.max(1, top - items.length),
-        select,
+        select: countOnly ? 'id' : select,
         orderby: opts.orderby,
         // Leg two continues where the DIRECT hits ran out, and with disjoint legs that arithmetic
         // is exact rather than approximate. The direct leg owns union positions 0..direct.count,
@@ -1527,6 +1538,12 @@ async function searchDocuments(opts = {}) {
   }
 
   const degraded = mergeDegraded(legs);
+
+  // `count` keeps its name here rather than becoming a second key meaning the same number: the
+  // badge and the toolbar total have to be the same fact, and two names is how they drift.
+  if (countOnly) {
+    return { count: total, ...(degraded ? { meta: { degraded } } : {}), items: [] };
+  }
 
   // Leg two's documents matched on their PROJECT's name, not their own metadata, so they carry no
   // `@search.highlights` — `markedField` returns their escaped text and the card renders unmarked,
@@ -1586,6 +1603,72 @@ const searchActivities = (opts = {}) => searchKeywordIndex('activities', opts);
 
 /** Project notifications. Rows come back as `{id, eagleId}`, ranked. */
 const searchNotifications = (opts = {}) => searchKeywordIndex('notifications', opts);
+
+/**
+ * How many rows of an index a KEYWORD query matches, in one `$count`-only request.
+ *
+ * The twin of `countMatching`, which asks the same question of a filter alone. This one builds the
+ * SAME query string `runSearch` would — same tokenizer, same fuzzy arm, same trailing `*`, same
+ * `searchFields` — because a badge that counts a different query than the results page is worse
+ * than no badge. What it does not do is ask for rows, highlights or a semantic rerank: `top: 0`
+ * returns the count and nothing else, and the ranker cannot change how many rows match.
+ *
+ * @returns {Promise<number|null>} null when the service answered without a count.
+ */
+async function countKeyword(index, opts = {}) {
+  const terms = tokenize(opts.keywords);
+  // Same short-circuit as `runSearch`: an empty tokenisation matches nothing, and asking anyway
+  // sends an empty query the service 400s on.
+  if (terms.length === 0 && !opts.matchAll) return 0;
+
+  const body = {
+    search: opts.matchAll ? '*' : buildQuery(terms, opts.fuzzy === true, opts.prefix === true),
+    queryType: opts.matchAll ? 'simple' : 'full',
+    top: 0,
+    count: true
+  };
+  if (opts.searchFields) body.searchFields = opts.searchFields;
+  // Omitted when absent, never sent empty — an empty-string filter is UNRESTRICTED. See `runSearch`.
+  if (opts.filter) body.filter = opts.filter;
+
+  const data = await request(`/indexes/${index}/docs/search?api-version=${API_VERSION}`, body);
+  const count = data['@odata.count'];
+  return Number.isFinite(count) ? count : null;
+}
+
+/** The count behind the Projects badge, over the same fields `searchProjects` ranks on. */
+function countProjects(opts = {}) {
+  const { configured, projectsIndex } = config();
+  // Throws rather than answering 0, for the reason `searchProjects` does: an unconfigured service
+  // has not counted anything, and the controller turns the rejection into an unknown count.
+  if (!configured) {
+    warnUnconfigured();
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the count did not run');
+  }
+  return countKeyword(projectsIndex, {
+    ...opts,
+    prefix: opts.prefix !== false,
+    searchFields: PROJECT_SEARCH_FIELDS
+  });
+}
+
+/** The count twin of `searchKeywordIndex`: same index, same fields, no rows. */
+function countKeywordIndex(dataset, opts = {}) {
+  const cfg = config();
+  const index = dataset === 'activities' ? cfg.activitiesIndex : cfg.notificationsIndex;
+  if (!cfg.configured || index === '') {
+    warnUnconfigured();
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the count did not run');
+  }
+  return countKeyword(index, {
+    ...opts,
+    prefix: opts.prefix !== false,
+    searchFields: KEYWORD_INDEXES[dataset].searchFields
+  });
+}
+
+const countActivities = (opts = {}) => countKeywordIndex('activities', opts);
+const countNotifications = (opts = {}) => countKeywordIndex('notifications', opts);
 
 /**
  * Whether a failure says THE INDEX IS NOT THERE, rather than that the search failed.
@@ -1882,6 +1965,13 @@ module.exports = {
   searchDocuments,
   searchActivities,
   searchNotifications,
+  // The `/search/counts` legs. `countKeyword` is exported for the guard test that pins the request
+  // body shape — `top: 0`, no highlight, no semantic — which is the whole reason a badge costs a
+  // fraction of a results page.
+  countKeyword,
+  countProjects,
+  countActivities,
+  countNotifications,
   // The controller's fallback test: a 404 for an index that was never created is a configuration
   // state the Cosmos read can answer, not a search that failed.
   isMissingIndex,

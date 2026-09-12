@@ -144,11 +144,22 @@ paths:
             `and[type]`.
           schema:
             type: string
+        - name: and[documentUrl]
+          in: query
+          required: false
+          description: >-
+            "Has an attachment", on dataset=RecentActivity. `true` keeps the updates carrying a
+            document link, `false` keeps the ones without; an empty string and an absent value both
+            count as without. Any other value is reported under `meta[0].dropped.filter` — this key
+            asks whether the field is filled, never what it holds.
+          schema:
+            type: boolean
         - name: sortBy
           in: query
           required: false
           description: >-
-            One key, `-` for descending. On RecentActivity `-score` orders by dateAdded, and on
+            One key, `-` for descending. On Project, `-dateUpdated` is the most recently changed
+            record first. On RecentActivity `-score` orders by dateAdded, and on
             ProjectNotification `-_id` orders by notificationReceivedDate — neither field is stored,
             and an ORDER BY on a field a row lacks drops the row.
           schema:
@@ -185,6 +196,53 @@ paths:
             The backing search index or database could not be read. The body carries `code`
             (`SEARCH_SCHEMA_DRIFT` when the live index is missing a field this app needs, and then
             `field` names it; `SEARCH_UPSTREAM` otherwise) and `traceId`.
+
+  /api/search/counts:
+    get:
+      summary: How many records of each type one query matches
+      description: >-
+        One request for the record-type badges the search page shows, so a page of four tabs costs
+        one call rather than four. Same access rules as `/api/search`: every count is measured under
+        the caller's own ACL. A count of `null` means UNKNOWN, never zero — the leg that would have
+        measured it could not, and the record type is named under `meta[0].unavailable`. A type
+        named under `meta[0].degraded` was counted by a substring match in the database rather than
+        by the search index, so its number answers a slightly different question than the tab will.
+        No `Cache-Control` is sent: the counts are ACL-scoped and must not be held by a shared cache.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: >-
+            Search query string, also accepted as `keywords`. Matched on each record type's own
+            fields, exactly as `/api/search` matches them. Absent means "every record this caller
+            can see", per type.
+          schema:
+            type: string
+        - name: prefix
+          in: query
+          required: false
+          description: Type-ahead matching, on the same terms as `/api/search`.
+          schema:
+            type: boolean
+            default: true
+        - name: datasets
+          in: query
+          required: false
+          description: >-
+            Comma-separated record types to answer, defaulting to all four. An unknown name is a
+            400, as it is on `/api/search`.
+          schema:
+            type: string
+            default: Project,Document,RecentActivity,ProjectNotification
+      responses:
+        '200':
+          description: >-
+            One-element array of `{counts, meta}`. `counts` carries one entry per requested record
+            type, an integer or `null`. `meta[0]` carries `unavailable` and `degraded` (record-type
+            names, possibly empty) and `cached`, which says whether this answer was reused from a
+            recent identical request rather than measured again.
+        '400':
+          description: Unsupported query parameter, or an unknown record type in `datasets`.
 
   /api/health/search-schema:
     get:

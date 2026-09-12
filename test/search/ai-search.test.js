@@ -2547,3 +2547,97 @@ test('the live chunk parent-field status', async (t) => {
     assert.strictEqual(calls.length, FIELDS.length + 1, 'the service was actually re-probed');
   });
 });
+
+// A badge is measured on every debounced keystroke against a 1-SU service, so what the count request
+// does NOT ask for is the whole reason it can exist beside the results query.
+test('countKeyword asks for the count and nothing else', async (t) => {
+  await t.test('top 0, count true, no rows, no highlight, no semantic rerank', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { '@odata.count': 42 } }));
+
+    const count = await aiSearch.countKeyword('projects', {
+      keywords: 'peace river',
+      fuzzy: true,
+      prefix: true,
+      filter: ANONYMOUS_ACL,
+      searchFields: 'name,displayName'
+    });
+
+    assert.strictEqual(count, 42);
+    assert.strictEqual(calls.length, 1, 'one request, not a page fill');
+    const body = calls[0].body;
+    assert.strictEqual(body.top, 0);
+    assert.strictEqual(body.count, true);
+    assert.strictEqual(body.highlight, undefined, 'there are no rows to mark');
+    assert.strictEqual(body.semanticQuery, undefined,
+      'reranking cannot change how many rows match, and Azure bills per semantic query');
+    assert.strictEqual(body.semanticConfiguration, undefined);
+    assert.strictEqual(body.select, undefined, 'no row is read back');
+    assert.strictEqual(body.searchFields, 'name,displayName');
+    assert.strictEqual(body.filter, ANONYMOUS_ACL, 'the ACL is the count predicate, not a hint');
+  });
+
+  // The badge has to count the query the tab will run. A different query string is a number that
+  // disagrees with the page the caller then opens.
+  await t.test('the query string is the one runSearch would have sent', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { '@odata.count': 1 } }));
+
+    await aiSearch.countKeyword('projects', { keywords: 'peace river', fuzzy: true, prefix: true });
+
+    assert.strictEqual(calls[0].body.search,
+      aiSearch.buildQuery(aiSearch.tokenize('peace river'), true, true));
+    assert.strictEqual(calls[0].body.queryType, 'full');
+  });
+
+  await t.test('matchAll counts every row the filter admits', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { '@odata.count': 7 } }));
+
+    assert.strictEqual(await aiSearch.countKeyword('projects', { matchAll: true }), 7);
+    assert.strictEqual(calls[0].body.search, '*');
+    assert.strictEqual(calls[0].body.queryType, 'simple');
+  });
+
+  // The same short-circuit `runSearch` takes: an empty tokenisation is an empty query string, which
+  // the service answers with a 400 rather than with zero.
+  await t.test('a query that tokenises to nothing is answered as 0 without a request', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { '@odata.count': 99 } }));
+
+    assert.strictEqual(await aiSearch.countKeyword('projects', { keywords: '  ' }), 0);
+    assert.strictEqual(calls.length, 0);
+  });
+
+  // A count nobody measured is not 0. The controller publishes null, and the badge is hidden.
+  await t.test('a response carrying no count answers null, never zero', async (tt) => {
+    captureFetch(tt, () => ({ json: { value: [] } }));
+
+    assert.strictEqual(await aiSearch.countKeyword('projects', { matchAll: true }), null);
+  });
+
+  // Same `request` as every other call in this module, so the 429 budget is the same one.
+  await t.test('a 429 is retried on the service-supplied delay', async (tt) => {
+    const calls = captureFetch(tt, (i) => (i === 0
+      ? { ok: false, status: 429, headers: { 'retry-after': '0' }, json: { error: 'throttled' } }
+      : { json: { '@odata.count': 5 } }));
+
+    assert.strictEqual(await aiSearch.countKeyword('projects', { matchAll: true }), 5);
+    assert.strictEqual(calls.length, 2);
+  });
+});
+
+test('a document count is the two-leg total, with no rows read back', async (t) => {
+  const calls = captureFetch(t, (i) => {
+    // The direct leg, then the projects leg, then the by-project document leg.
+    if (i === 0) return { json: { '@odata.count': 11, value: [{ id: 'd1' }] } };
+    if (i === 1) return { json: { '@odata.count': 1, value: [{ id: 'p1' }] } };
+    return { json: { '@odata.count': 4, value: [{ id: 'd2' }] } };
+  });
+
+  const result = await aiSearch.searchDocuments({
+    countOnly: true, keywords: 'caribou', projectFilter: null, prefix: true
+  });
+
+  assert.strictEqual(result.count, 15, 'a bare top:0 on the documents index would have said 11');
+  assert.deepStrictEqual(result.items, [], 'nothing is mapped, so nothing is highlighted');
+  assert.strictEqual(calls[0].body.highlight, undefined);
+  assert.strictEqual(calls[0].body.select, 'id', 'the wide select is a body spent on nothing');
+  assert.strictEqual(calls[0].body.top, 1, 'the smallest page the service takes');
+});

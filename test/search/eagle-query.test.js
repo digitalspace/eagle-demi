@@ -761,3 +761,60 @@ test('the document facets cannot drift between the two datasets or the write sid
     assert.strictEqual(def.filterable, true, `chunks.json '${field}' is not filterable`);
   }
 });
+
+// "Documents attached" on the activities list. The key asks whether the field is FILLED, and an
+// `eq` against the value the caller sent would answer zero rows under a 200.
+test('and[documentUrl] filters on presence, not on the URL', async (t) => {
+  const acl = anonAcl('projectId');
+
+  await t.test('true keeps the updates that carry a link', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[documentUrl]': 'true' }, 'RecentActivity', acl, anonymous());
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("(documentUrl ne null and documentUrl ne '')"), filter);
+  });
+
+  // The updates container writes `documentUrl: ''` on some rows and omits it on others, so both
+  // spellings of "no attachment" have to be in the clause.
+  await t.test('false keeps the ones without, empty string included', () => {
+    const { filter } = eagleQuery.buildFilter(
+      { 'and[documentUrl]': 'false' }, 'RecentActivity', acl, anonymous());
+
+    assert.ok(filter.includes("(documentUrl eq null or documentUrl eq '')"), filter);
+  });
+
+  await t.test('any other value is dropped rather than matched as a URL', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[documentUrl]': 'https://example.test/a.pdf' }, 'RecentActivity', acl, anonymous());
+
+    assert.deepStrictEqual(dropped, ['documentUrl']);
+    assert.ok(!filter.includes('documentUrl'), filter);
+  });
+
+  // Every presence key still has to name a real, filterable, catalogued field of its index.
+  await t.test('the presence keys name fields their index can answer', () => {
+    for (const [dataset, keys] of Object.entries(eagleQuery.PRESENCE_KEYS)) {
+      const indexName = eagleQuery.DATASET_INDEX[dataset];
+      const fields = JSON.parse(fs.readFileSync(
+        path.join(__dirname, '..', '..', 'azure', 'search', 'indexes', `${indexName}.json`),
+        'utf8')).fields;
+      for (const key of keys) {
+        const def = fields.find(f => f.name === key);
+        assert.ok(def, `${indexName}.json declares no '${key}'`);
+        assert.strictEqual(def.filterable, true, `${indexName}.json '${key}' is not filterable`);
+        assert.ok(catalogFor(eagleQuery.DATASET_CATALOG[dataset])[key],
+          `'${key}' is uncatalogued, so fieldVisible would drop it`);
+      }
+    }
+  });
+});
+
+// The projects index gained `dateUpdated` so the search page can sort by most recently changed.
+// Nothing maps the name — it is the field's TYPE and flags that decide, so this is the whole gate.
+test('Project accepts sortBy=-dateUpdated', () => {
+  const { orderby, dropped } = eagleQuery.buildOrderBy('-dateUpdated', 'Project', false, anonymous());
+
+  assert.deepStrictEqual(dropped, []);
+  assert.ok(orderby.startsWith('dateUpdated desc'), orderby);
+});

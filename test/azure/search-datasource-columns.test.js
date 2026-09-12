@@ -205,3 +205,27 @@ test('the projects nameTokens field is declared and sourced as intended', () => 
   assert.ok(idx.analyzers.some(a => a.name === 'filename'));
   assert.ok(idx.tokenizers.some(t => t.name === 'filename_tokenizer'));
 });
+
+// `eagle-query` reads these flags off the committed JSON at require time and decides from them
+// alone whether a sort or a filter is expressible. A field present but flagged wrong is a key
+// silently dropped into `meta.dropped` — a 200 with an unfiltered page, not an error.
+test('the fields the search page sorts and filters on carry the flags that make them usable', () => {
+  const projects = require('../../azure/search/indexes/projects.json');
+  const activities = require('../../azure/search/indexes/activities.json');
+
+  const dateUpdated = projects.fields.find(f => f.name === 'dateUpdated');
+  assert.ok(dateUpdated, 'the projects index must carry dateUpdated — `sortBy=-dateUpdated`');
+  assert.strictEqual(dateUpdated.type, 'Edm.DateTimeOffset');
+  assert.strictEqual(dateUpdated.sortable, true);
+  assert.strictEqual(dateUpdated.filterable, true, 'and the dateUpdatedStart/End range');
+  assert.strictEqual(dateUpdated.retrievable, true, 'the "Last updated" column renders it');
+
+  const documentUrl = activities.fields.find(f => f.name === 'documentUrl');
+  assert.ok(documentUrl, 'the activities index must carry documentUrl — "has an attachment"');
+  assert.strictEqual(documentUrl.type, 'Edm.String');
+  assert.strictEqual(documentUrl.filterable, true);
+  assert.strictEqual(documentUrl.searchable, false,
+    'a URL is not text anyone searches for, and searchable here would be a rebuild to undo');
+  assert.strictEqual(documentUrl.retrievable, false,
+    'the row is read back from Cosmos: this index answers which rows match and nothing else');
+});
