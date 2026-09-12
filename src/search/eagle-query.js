@@ -698,6 +698,17 @@ function unknownParams(query, extra = EMPTY_SET) {
 }
 
 /**
+ * The same 400, for an endpoint that reads its OWN short list rather than the `/search` set.
+ *
+ * `unknownParams` widens KNOWN_PARAMS and always lets `and[...]` through, which is right for the
+ * one handler that builds filters. An endpoint that builds none must refuse every filter key
+ * instead: accepted and silently ignored is the outcome the 400 exists to prevent.
+ */
+function unsupportedParams(query, allowed) {
+  return Object.keys(query || {}).filter(key => !allowed.has(key));
+}
+
+/**
  * The `{_id, name}` pair eagle-public's templates expect where eagle-api populated a reference.
  * `undefined` rather than `{}`, because the templates read `?.name || '-'`: an absent value renders
  * a dash, while `{}` renders a blank cell. A dash says "no proponent", a blank says "this is broken".
@@ -743,6 +754,7 @@ module.exports = {
   sortEntries,
   hasCriteria,
   unknownParams,
+  unsupportedParams,
   filterKeysIn,
   canScopeToProject,
   andParams,

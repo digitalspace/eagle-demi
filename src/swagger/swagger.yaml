@@ -208,6 +208,12 @@ paths:
         named under `meta[0].degraded` was counted by a substring match in the database rather than
         by the search index, so its number answers a slightly different question than the tab will.
         No `Cache-Control` is sent: the counts are ACL-scoped and must not be held by a shared cache.
+
+
+        TAKES NO FILTERS. The four parameters below are the whole list: filters belong to one
+        record type and this endpoint answers all four at once, so a filter key `/api/search`
+        accepts — `dataset`, `and[...]`, `pageSize`, `sortBy`, `project`, `top`, `docIds`,
+        `period`, `fuzzy` — is a 400 here rather than a number counted without it.
       parameters:
         - name: q
           in: query
@@ -242,7 +248,9 @@ paths:
             names, possibly empty) and `cached`, which says whether this answer was reused from a
             recent identical request rather than measured again.
         '400':
-          description: Unsupported query parameter, or an unknown record type in `datasets`.
+          description: >-
+            A query parameter this endpoint does not read, including every filter parameter
+            `/api/search` accepts, or an unknown record type in `datasets`.
 
   /api/health/search-schema:
     get:

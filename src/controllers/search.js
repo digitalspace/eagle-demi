@@ -384,11 +384,19 @@ function documentIdScope(raw) {
  */
 function filterValue(query, key) {
   for (const [k, v] of eagleQuery.andParams(query || {})) {
-    if (k === key) return String(Array.isArray(v) ? v[0] : v);
+    if (k === key) return String(firstValue(v));
   }
   const bare = (query || {})[key];
   if (bare === undefined) return null;
-  return String(Array.isArray(bare) ? bare[0] : bare);
+  return String(firstValue(bare));
+}
+
+/**
+ * One value from a query parameter `querystring.parse` may have handed back as an ARRAY — a
+ * repeated key stays an array there, and a string method called on it throws.
+ */
+function firstValue(raw) {
+  return Array.isArray(raw) ? raw[0] : raw;
 }
 
 /**
@@ -1491,8 +1499,15 @@ exports.search = async (req, res) => {
 /** The record types the unified search page shows a badge for, in the order the tabs sit in. */
 const COUNTS_DATASETS = ['Project', 'Document', 'RecentActivity', 'ProjectNotification'];
 
-/** `/search/counts` reads this parameter and `/search` does not — see eagleQuery.unknownParams. */
-const COUNTS_PARAMS = new Set(['datasets']);
+/**
+ * EVERY parameter `/search/counts` reads, and the whole gate — not a widening of the `/search` set.
+ *
+ * Filters are per record type and this endpoint counts all four at once, so there is no filter it
+ * could honour. `and[type]=Letter`, `dataset`, `pageSize`, `sortBy` and the rest are REFUSED here
+ * rather than accepted and dropped: a badge answered under a filter the caller believes was
+ * applied is a wrong number with nothing to say so.
+ */
+const COUNTS_PARAMS = new Set(['keywords', 'q', 'prefix', 'datasets']);
 
 /**
  * How long one caller's badge row is reused. The page asks on a debounced keystroke, and four
@@ -1663,7 +1678,7 @@ async function computeCounts(access, keywords, prefix) {
  */
 exports.counts = async (req, res) => {
   try {
-    const unknown = eagleQuery.unknownParams(req.query, COUNTS_PARAMS);
+    const unknown = eagleQuery.unsupportedParams(req.query, COUNTS_PARAMS);
     if (unknown.length > 0) {
       return res.status(400).json({ error: `Unsupported query parameter: ${unknown.join(', ')}` });
     }
@@ -1678,7 +1693,10 @@ exports.counts = async (req, res) => {
 
     // Whitespace only. Lowercasing would widen the cache but change the string the analyzer is
     // handed, and the key has to name the query that was actually run.
-    const keywords = (req.query.keywords || req.query.q || '').trim().replace(/\s+/g, ' ');
+    // A REPEATED `keywords` takes the first value, as every other repeated key on this API does:
+    // `.trim()` on the array `querystring.parse` hands back would be a 500 on a 200-shaped request.
+    const keywords = String(firstValue(req.query.keywords || req.query.q) || '')
+      .trim().replace(/\s+/g, ' ');
     // Same default as `/search`: on unless the caller sends the exact string `false`.
     const prefix = req.query.prefix !== 'false';
     const access = resolveAccess(req);

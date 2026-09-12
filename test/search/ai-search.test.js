@@ -2640,4 +2640,6 @@ test('a document count is the two-leg total, with no rows read back', async (t) 
   assert.strictEqual(calls[0].body.highlight, undefined);
   assert.strictEqual(calls[0].body.select, 'id', 'the wide select is a body spent on nothing');
   assert.strictEqual(calls[0].body.top, 1, 'the smallest page the service takes');
+  // BOTH document legs, not only the direct one: leg two reads rows nobody maps either.
+  assert.strictEqual(calls[2].body.select, 'id', 'the by-project leg spends a wide body too');
 });

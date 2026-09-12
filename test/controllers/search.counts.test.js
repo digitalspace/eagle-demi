@@ -152,6 +152,109 @@ test('GET /search/counts answers one badge per record type', async (t) => {
   });
 });
 
+// This endpoint counts all four record types at once and filters belong to one type, so there is
+// no filter it could honour. Accepting one and answering the unfiltered total is the failure these
+// cover: the caller would read the number as filtered and nothing in the body says otherwise.
+test('a filter /search accepts is refused here, not counted without', async (t) => {
+  t.beforeEach(() => searchController.resetCountsCache());
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('an and[...] filter key is a 400 and no leg runs', async (tt) => {
+    withIndexes(tt, {});
+    const seen = stubAllLegs(tt);
+
+    const { out, res } = capture();
+    await searchController.counts(anonymous({ keywords: 'caribou', 'and[type]': 'Letter' }), res);
+
+    assert.strictEqual(out.status, 400);
+    assert.match(out.body.error, /and\[type\]/);
+    assert.strictEqual(seen.Project, undefined, 'nothing was counted under a filter that was refused');
+  });
+
+  await t.test('pageSize is a 400: these counts are not a page', async (tt) => {
+    withIndexes(tt, {});
+    stubAllLegs(tt);
+
+    const { out, res } = capture();
+    await searchController.counts(anonymous({ keywords: 'caribou', pageSize: '5' }), res);
+
+    assert.strictEqual(out.status, 400);
+    assert.match(out.body.error, /pageSize/);
+  });
+
+  await t.test('dataset is a 400: the plural datasets is this endpoint\'s own', async (tt) => {
+    withIndexes(tt, {});
+    stubAllLegs(tt);
+
+    const { out, res } = capture();
+    await searchController.counts(anonymous({ keywords: 'caribou', dataset: 'Document' }), res);
+
+    assert.strictEqual(out.status, 400);
+    assert.match(out.body.error, /dataset/);
+  });
+
+  await t.test('the four parameters it does read are a 200', async (tt) => {
+    withIndexes(tt, {});
+    stubAllLegs(tt);
+
+    const { out, res } = capture();
+    await searchController.counts(
+      anonymous({ keywords: 'caribou', prefix: 'false', datasets: 'Project,Document' }), res);
+
+    assert.strictEqual(out.status, undefined, '200');
+    assert.deepStrictEqual(out.body[0].counts, { Project: 12, Document: 340 });
+  });
+
+  // `querystring.parse` hands back an ARRAY for a repeated key, and a string method called on one
+  // throws — a 500 on a request /search answers 200.
+  await t.test('a repeated keywords parameter counts on the first value', async (tt) => {
+    withIndexes(tt, {});
+    const seen = stubAllLegs(tt);
+
+    const { out, res } = capture();
+    await searchController.counts(anonymous({ keywords: ['caribou', 'pipeline'] }), res);
+
+    assert.strictEqual(out.status, undefined, '200');
+    assert.strictEqual(seen.Project.keywords, 'caribou');
+    assert.strictEqual(seen.Document.keywords, 'caribou');
+  });
+});
+
+// `prefix` is type-ahead matching: it changes which rows each leg counts, and it is part of the
+// cache key. A default that inverted would badge a half-typed word as no matches.
+test('prefix reaches the legs that count on it', async (t) => {
+  t.beforeEach(() => searchController.resetCountsCache());
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('on by default, as swagger documents', async (tt) => {
+    withIndexes(tt, {});
+    const seen = stubAllLegs(tt);
+
+    const { out, res } = capture();
+    await searchController.counts(anonymous({ keywords: 'carib' }), res);
+
+    assert.strictEqual(out.status, undefined, '200');
+    assert.strictEqual(seen.Project.prefix, true);
+    assert.strictEqual(seen.Document.prefix, true);
+    assert.strictEqual(seen.RecentActivity.prefix, true);
+    assert.strictEqual(seen.ProjectNotification.prefix, true);
+  });
+
+  await t.test('off on the exact string false, and only on that', async (tt) => {
+    withIndexes(tt, {});
+    const seen = stubAllLegs(tt);
+
+    const { out, res } = capture();
+    await searchController.counts(anonymous({ keywords: 'carib', prefix: 'false' }), res);
+
+    assert.strictEqual(out.status, undefined, '200');
+    assert.strictEqual(seen.Project.prefix, false);
+    assert.strictEqual(seen.Document.prefix, false);
+    assert.strictEqual(seen.RecentActivity.prefix, false);
+    assert.strictEqual(seen.ProjectNotification.prefix, false);
+  });
+});
+
 test('a badge that cannot be measured is unknown, never zero', async (t) => {
   t.beforeEach(() => searchController.resetCountsCache());
   t.afterEach(() => t.mock.restoreAll());
