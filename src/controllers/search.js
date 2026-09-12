@@ -1013,6 +1013,9 @@ exports.search = async (req, res) => {
                 currentPhaseName: eagleQuery.ref(doc.currentPhaseNameId, doc.currentPhaseName),
                 eacDecision: eagleQuery.ref(doc.eacDecisionId, doc.eacDecision),
                 decisionDate: doc.decisionDate || null,
+                // Eagle's own edit date, the "Last updated" column. NOT `updatedAt`, which is
+                // DEMI's sync stamp and moves on every re-merge.
+                dateUpdated: doc.dateUpdated || null,
                 // Pre-escaped display markup from the analyzer, keyed by INDEX field. `name` falls
                 // back to `displayName` the same way the plain value above does.
                 highlighted: {
@@ -1112,6 +1115,8 @@ exports.search = async (req, res) => {
             currentPhaseName: eagleQuery.ref(row.currentPhaseName?._id, row.currentPhaseName?.name),
             eacDecision: eagleQuery.ref(row.eacDecision?._id, row.eacDecision?.name),
             decisionDate: row.decisionDate || null,
+            // Same column as the index branch above, so both project shapes answer it.
+            dateUpdated: row.dateUpdated || null,
             // 'public' in the read ACL is what makes a record public; isPublished mirrors it, and
             // the redactor derives it. The frontend derives its staged/admitted badge from this.
             isPublished: row.isPublished,

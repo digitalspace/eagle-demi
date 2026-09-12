@@ -206,6 +206,39 @@ test('Search Controller Tests', async (t) => {
       { _id: '5e27937a749c83437054f214', name: 'Certificate Issued' });
   });
 
+  // "Last updated" is one column bound off two different mappers, and the keyword branch could only
+  // answer it once `dateUpdated` was in `PROJECT_SELECT` — a field nobody selects comes back
+  // undefined, so the column reads '-' under a 200 while `sortBy=-dateUpdated` orders correctly.
+  // Both branches are asserted here because they are separate literal row shapes.
+  await t.test('both project branches carry dateUpdated', async () => {
+    const EDITED = '2026-09-10T17:04:00.000Z';
+    t.mock.method(projectsRepo, 'listVisible', async () => ({
+      items: [{ id: '46', name: 'Caribou', dateUpdated: EDITED, read: ['public'] }]
+    }));
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{ id: '46', name: 'Caribou', dateUpdated: EDITED, read: ['public'] }]
+    }));
+
+    const rowFor = async (keywords) => {
+      let jsonResponse;
+      const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+      await searchController.search(
+        { query: { dataset: 'Project', keywords, pageSize: '10' }, header: () => null }, res);
+      return jsonResponse[0].searchResults[0];
+    };
+
+    assert.strictEqual((await rowFor('')).dateUpdated, EDITED, 'Cosmos list branch');
+    assert.strictEqual((await rowFor('caribou')).dateUpdated, EDITED, 'AI Search branch');
+
+    // NULL, not undefined: a project Eagle has never edited must serialise as an absent date
+    // rather than drop the key, which is how the column tells "never edited" from "not asked for".
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1, items: [{ id: '47', name: 'No edits', read: ['public'] }]
+    }));
+    assert.strictEqual((await rowFor('no edits')).dateUpdated, null);
+  });
+
   // eagle-public hard-codes `fuzzy=false` and eagle-search has always fuzzed anyway. Honouring the
   // parameter made demi answer a strictly smaller set than the service it replaces: measured live,
   // `keywords=caribou` returned 1 project from demi and 3 from prod eagle-search, and `caribuu`
