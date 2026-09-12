@@ -137,6 +137,27 @@ const EMPTY_SET = new Set();
 const UNMAPPED_KEYS = {};
 
 /**
+ * Wire keys that ask WHETHER A FIELD IS FILLED rather than what it holds.
+ *
+ * `and[documentUrl]=true` is eagle-public's "Documents attached" filter on the activities list. The
+ * value space is `true`/`false` ONLY, and anything else is dropped: a URL is not something a caller
+ * filters an update list by, and accepting one would make the same key mean two different questions.
+ * An empty string and an absent property are both "no attachment" — the updates container writes
+ * `documentUrl: ''` on some rows and omits it on others.
+ */
+const PRESENCE_KEYS = {
+  RecentActivity: new Set(['documentUrl'])
+};
+
+/** `field is filled` / `field is empty`, the only two questions a PRESENCE_KEYS key can ask. */
+function presenceTerm(field, values) {
+  if (values.length !== 1) return null;
+  if (values[0] === 'true') return `(${field} ne null and ${field} ne '')`;
+  if (values[0] === 'false') return `(${field} eq null or ${field} eq '')`;
+  return null;
+}
+
+/**
  * Wire VALUE -> the OTHER spelling the corpus may hold it under. Both are matched, never swapped,
  * because both are stored. An unlisted value is matched as sent: Track can add a type without
  * asking us. See wiki Search-Index-Reference#project-type-spellings.
@@ -446,8 +467,15 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
       continue;
     }
 
-    const valueMap = (VALUE_ALIASES[dataset] || {})[base] || {};
     const values = valuesOf(rawValue);
+
+    if (!edge && (PRESENCE_KEYS[dataset] || EMPTY_SET).has(base)) {
+      const clause = presenceTerm(field, values);
+      if (clause) groups.push(clause); else dropped.push(key);
+      continue;
+    }
+
+    const valueMap = (VALUE_ALIASES[dataset] || {})[base] || {};
     // ONE ENTRY PER WIRE VALUE, whatever it expands to, so the report below counts values that
     // produced no term rather than the spellings each was tried under.
     const terms = values.flatMap((v) => {
@@ -658,11 +686,26 @@ function filterKeysIn(query) {
 
 /**
  * Parameters this endpoint does not understand. See KNOWN_PARAMS for why this is a 400.
+ *
+ * `extra` is the handler's OWN parameters, not a widening of KNOWN_PARAMS: `datasets` means
+ * something on `/search/counts` and nothing on `/search`, and adding it to the shared set would
+ * make `/search?datasets=…` a silently ignored parameter instead of the 400 it is today.
  */
-function unknownParams(query) {
+function unknownParams(query, extra = EMPTY_SET) {
   return Object.keys(query || {}).filter(
-    key => !KNOWN_PARAMS.has(key) && key !== 'and' && !/^and\[.+\]$/.test(key)
+    key => !KNOWN_PARAMS.has(key) && !extra.has(key) && key !== 'and' && !/^and\[.+\]$/.test(key)
   );
+}
+
+/**
+ * The same 400, for an endpoint that reads its OWN short list rather than the `/search` set.
+ *
+ * `unknownParams` widens KNOWN_PARAMS and always lets `and[...]` through, which is right for the
+ * one handler that builds filters. An endpoint that builds none must refuse every filter key
+ * instead: accepted and silently ignored is the outcome the 400 exists to prevent.
+ */
+function unsupportedParams(query, allowed) {
+  return Object.keys(query || {}).filter(key => !allowed.has(key));
 }
 
 /**
@@ -699,6 +742,9 @@ module.exports = {
   // a dataset added here without a catalog entry fails rather than going ungated.
   DATASET_CATALOG,
   SORT_KEYS,
+  // Exported beside ALIASES for the ratchet tests: a presence key still has to name a real,
+  // filterable, catalogued field.
+  PRESENCE_KEYS,
   DEFAULT_ORDER,
   KNOWN_PARAMS,
   COSMOS_PROJECT_DATASETS,
@@ -708,6 +754,7 @@ module.exports = {
   sortEntries,
   hasCriteria,
   unknownParams,
+  unsupportedParams,
   filterKeysIn,
   canScopeToProject,
   andParams,

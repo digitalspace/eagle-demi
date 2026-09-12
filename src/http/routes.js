@@ -117,6 +117,9 @@ const routes = [
   { method: 'get', path: '/admin/index-progress', guards: [authMiddleware], load: () => dbController().getIndexProgressHandler },
 
   { method: 'get', path: '/search', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => searchController().search },
+  // The record-type badges. Same guards as `/search` and for the same reason: the counts are
+  // ACL-scoped, so the caller's credentials have to be loaded before the filters are built.
+  { method: 'get', path: '/search/counts', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => searchController().counts },
   // authMiddleware, NOT passiveAuth — the summary is privileged-only in v1 while cost, abuse and the
   // wider disclosure surface of a synthesised paraphrase are measured. See wiki ADR-006.
   { method: 'get', path: '/search/summary', guards: [authMiddleware, credentialsMiddleware], load: () => searchController().summarize },

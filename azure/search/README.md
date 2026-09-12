@@ -165,6 +165,14 @@ project. A re-seed of the projects stage fills it from the Organization the publ
 `node src/scripts/seed-nosql.js --only projects --live` on the devbox. Do that, then reset and run
 the indexer, then read one row back before deploying the app.
 
+`dateUpdated` on `projects` and `documentUrl` on `activities` were added on 2026-09-12, both plain
+widenings on the no-rebuild side of the line above. `dateUpdated` is the search page's "Last
+updated" column and its default project sort; `documentUrl` is the "has an attachment" filter on the
+activities list. **Both indexes and both data sources need the PUT and an indexer reset** before the
+app can use them: `projects` with `demi-projects-ds`, `activities` with `demi-updates-ds`. Until
+that is done `sortBy=-dateUpdated` and `and[documentUrl]=true` are dropped and named in
+`meta[0].dropped`, which is the quiet failure, not a broken page.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 
