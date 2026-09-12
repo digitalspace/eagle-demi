@@ -488,6 +488,43 @@ function buildQuery(terms, fuzzy, prefix = false) {
 }
 
 /**
+ * Every character Lucene reads as syntax under `queryType: 'full'`, backslashed so it is matched
+ * as text instead. `tokenize` answers the same danger by DELETING them, which is right for a
+ * keyword box; a filter cell has to keep what was typed, so `O'Brien (2019)` stays that phrase.
+ *
+ * The backslash is in the class, and one pass over the input is enough: a replacement is never
+ * rescanned, so the `\` this emits cannot be escaped a second time.
+ */
+function escapeLucene(term) {
+  return term.replace(/[+\-&|!(){}[\]^"~*?:\\/]/g, '\\$&');
+}
+
+/**
+ * Lucene query for a "the name contains this" filter: every word required, each word matched as a
+ * prefix so the word still being typed hits.
+ *
+ * Whitespace is the only separator. A comma, an apostrophe or a bracket is part of the name here,
+ * unlike in the keyword box where `tokenize` splits on all of them.
+ *
+ * The operator lowercasing and the stopword guard are `buildQuery`'s, for the reasons given there:
+ * a bare `AND` typed into the cell is an operator rather than a word, and a `*` on a word the
+ * analyzer removes demands a literal the index does not hold, which empties the conjunction.
+ */
+function buildContainsQuery(text) {
+  return String(text || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, MAX_TERMS)
+    .map((raw) => {
+      const t = LUCENE_OPERATORS.has(raw) ? raw.toLowerCase() : raw;
+      const prefixable = t.length >= MIN_PREFIX_LENGTH && !ANALYZER_STOPWORDS.has(t.toLowerCase());
+      // The `*` goes on AFTER escaping: it is ours, while a `*` the caller typed stays literal.
+      return prefixable ? `${escapeLucene(t)}*` : escapeLucene(t);
+    })
+    .join(' AND ');
+}
+
+/**
  * Semantic reranking (L2), applied ON TOP of the Lucene query rather than instead of it.
  *
  * `semanticQuery` is the load-bearing choice. The other route — `queryType: 'semantic'` — accepts
@@ -1937,6 +1974,10 @@ module.exports = {
   getToken,
   tokenize,
   buildQuery,
+  // Exported for `search/eagle-query.js`, which wraps it in an OData `search.ismatch`. Lucene
+  // syntax is this module's job; one copy of the escaping, wherever the query is assembled.
+  buildContainsQuery,
+  escapeLucene,
   snippetFrom,
   escapeHtml,
   HL_PRE,

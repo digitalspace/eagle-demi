@@ -810,6 +810,13 @@ exports.search = async (req, res) => {
       return res.status(400).json({ error: `Unsupported query parameter: ${unknown.join(', ')}` });
     }
 
+    // The name filter carries typed text rather than an id, so a dataset that has no name cell and
+    // a value past the cap are refused here rather than trimmed into a filter nobody asked for.
+    const nameContainsRefused = eagleQuery.nameContainsError(req.query, dataset);
+    if (nameContainsRefused) {
+      return res.status(400).json({ error: nameContainsRefused });
+    }
+
     // Did the caller ask for a filter or a sort? Decides BOTH the page-size ceiling below and which
     // backend answers — see eagleQuery.hasCriteria for why `project` is not in it.
     const criteria = eagleQuery.hasCriteria(req.query);

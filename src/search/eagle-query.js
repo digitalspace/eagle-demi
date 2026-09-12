@@ -17,6 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { logger } = require('../utils/logger');
+const { buildContainsQuery } = require('./ai-search');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
 const { levelOf } = require('../vis/level');
@@ -344,6 +345,71 @@ function valuesOf(rawValue) {
 }
 
 /**
+ * `and[nameContains]` -> the searchable field it runs against, per dataset.
+ *
+ * A SEPARATE KEY from `and[name]` and `and[displayName]`, which keep meaning `field eq 'value'`.
+ * Those two answer "this exact name"; a saved URL using one must not start meaning the other.
+ * Only these two datasets have the grid cell people type a fragment of a name into.
+ */
+const NAME_CONTAINS_FIELDS = Object.freeze({ Project: 'name', Document: 'displayName' });
+
+const NAME_CONTAINS_KEY = 'nameContains';
+
+/**
+ * Longest text accepted. The value is free text spliced into a query string rather than an id, and
+ * past a full name there is nothing left to narrow — a longer one is a caller fault, not a filter.
+ */
+const MAX_NAME_CONTAINS = 200;
+
+/**
+ * The text of `and[nameContains]`, whatever shape the parser produced.
+ *
+ * NOT `valuesOf`: a comma is part of a name here, so the multi-select split every other filter key
+ * does would turn "Kitimat LNG, Phase 2" into two filters neither half of the name satisfies. A
+ * repeated key joins with a space, which narrows the same way a repeated key does elsewhere.
+ */
+function nameContainsText(rawValue) {
+  return (Array.isArray(rawValue) ? rawValue : [rawValue])
+    .map(v => (v === undefined || v === null ? '' : String(v)))
+    .join(' ')
+    .trim();
+}
+
+/**
+ * The clause for one `and[nameContains]`, or null if the text yields no terms.
+ *
+ * `'full', 'any'` rather than the two-argument form: the query carries explicit `AND` operators and
+ * trailing `*`, and under the default simple syntax `AND` would match as the word "and". Same call
+ * shape the document-scope leg in `ai-search.js` uses.
+ */
+function nameContainsClause(field, text) {
+  const lucene = buildContainsQuery(text);
+  return lucene ? `search.ismatch(${quote(lucene)}, ${quote(field)}, 'full', 'any')` : null;
+}
+
+/**
+ * The message for an `and[nameContains]` the endpoint refuses, or null. Read by the controller,
+ * which answers 400.
+ *
+ * REFUSED RATHER THAN DROPPED, which is what an inexpressible filter key gets: this key exists to
+ * carry typed text, and a dataset with no name cell or a value past the cap means the caller built
+ * the URL wrong. Saying so beats serving the unfiltered corpus under a 200.
+ */
+function nameContainsError(query, dataset) {
+  for (const [key, rawValue] of andParams(query || {})) {
+    if (key !== NAME_CONTAINS_KEY) continue;
+    if (!NAME_CONTAINS_FIELDS[dataset]) {
+      return `and[${NAME_CONTAINS_KEY}] applies to ${
+        Object.keys(NAME_CONTAINS_FIELDS).map(d => `dataset=${d}`).join(' and ')} only`;
+    }
+    if (nameContainsText(rawValue).length > MAX_NAME_CONTAINS) {
+      return `and[${NAME_CONTAINS_KEY}] is limited to ${MAX_NAME_CONTAINS} characters`;
+    }
+  }
+  return null;
+}
+
+/**
  * Every project id the caller asked to filter on, in BOTH wire forms: `&project=<id>` flat from
  * `fields[]`, and `&and[project]=<id>` from `queryModifier`. Both are live, and handling only one
  * means half the project tabs return the whole corpus.
@@ -416,6 +482,25 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     // `project` is translated by the caller before it gets here — an Eagle ObjectId compared
     // against a DEMI project id matches nothing, which reads as an empty tab rather than a bug.
     if (key === 'project') continue;
+
+    // A substring match, not an `eq`, so it renders a `search.ismatch` clause instead of a term and
+    // is handled before the alias and field lookup below. A dataset with no name cell reports it
+    // dropped, the same answer any key that index cannot express gets.
+    if (key === NAME_CONTAINS_KEY) {
+      const containsField = NAME_CONTAINS_FIELDS[dataset];
+      const text = nameContainsText(rawValue);
+      // An empty cell is not a filter: the grid sends the key with no value when the box is cleared,
+      // and a clause over no terms is a 400 from the service.
+      if (!text) continue;
+      const clause = containsField &&
+        text.length <= MAX_NAME_CONTAINS &&
+        fieldVisible(dataset, containsField, access)
+        ? nameContainsClause(containsField, text)
+        : null;
+      if (clause) groups.push(clause);
+      else dropped.push(key);
+      continue;
+    }
 
     // A `Start`/`End` suffix is a RANGE on the base field, not a field of its own. Resolved against
     // the committed definition, so a suffixed name no index carries still falls through to
@@ -708,6 +793,10 @@ module.exports = {
   sortEntries,
   hasCriteria,
   unknownParams,
+  // Exported for the controller's 400 and for the tests that pin the two datasets it applies to.
+  nameContainsError,
+  NAME_CONTAINS_FIELDS,
+  MAX_NAME_CONTAINS,
   filterKeysIn,
   canScopeToProject,
   andParams,

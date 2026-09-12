@@ -144,6 +144,21 @@ paths:
             `and[type]`.
           schema:
             type: string
+        - name: and[nameContains]
+          in: query
+          required: false
+          description: >-
+            Free text the name must contain. Applies to dataset=Project, which matches on the
+            project name, and to dataset=Document, which matches on the document name. Sending it
+            on any other dataset is a 400, as is a value longer than 200 characters.
+            The text is split on spaces, every word has to appear, and a word of two or more
+            characters matches as a prefix, so `sed sam` finds "Sediment Sampling Plan". A comma,
+            an apostrophe and a bracket are part of the text here, not separators or syntax.
+            An empty value is no filter. This is a separate key from `and[name]` and
+            `and[displayName]`, which still match the whole name exactly.
+          schema:
+            type: string
+            maxLength: 200
         - name: sortBy
           in: query
           required: false

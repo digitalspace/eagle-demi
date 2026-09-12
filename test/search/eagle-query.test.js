@@ -333,6 +333,126 @@ test('eagle-query filters', async (t) => {
   });
 });
 
+/**
+ * The name cell of the unified search grid. Typing "sediment" has to find "Sediment Sampling Plan",
+ * which `and[displayName]` cannot do — it renders `eq`, so it answers the whole name or nothing.
+ */
+test('eagle-query nameContains', async (t) => {
+  await t.test('Project matches on name, Document on displayName', () => {
+    const project = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'sediment' }, 'Project', anonAcl());
+    const document = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'sediment' }, 'Document', anonAcl());
+
+    assert.deepStrictEqual(project.dropped, []);
+    assert.deepStrictEqual(document.dropped, []);
+    assert.ok(project.filter.includes("search.ismatch('sediment*', 'name', 'full', 'any')"),
+      project.filter);
+    assert.ok(document.filter.includes("search.ismatch('sediment*', 'displayName', 'full', 'any')"),
+      document.filter);
+    // The ACL clause is still ANDed on, exactly as it is for a term filter.
+    assert.ok(project.filter.includes("read/any(r: search.in(r, 'public', ','))"));
+  });
+
+  // Every word required, the prefix on each so a half-typed word still hits. A one-character word
+  // carries no `*`: the service truncates a one-letter term expansion instead of erroring, which
+  // answers from an arbitrary slice of the vocabulary.
+  await t.test('words are ANDed and words of two or more characters match as a prefix', () => {
+    const { filter } = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'Site C dam' }, 'Project', anonAcl());
+    assert.ok(filter.startsWith("search.ismatch('Site* AND C AND dam*', 'name', 'full', 'any')"),
+      filter);
+  });
+
+  // The whole reason the key is separate: these characters are Lucene syntax, and an unescaped one
+  // is a 400 from the search service rather than a search for that character.
+  await t.test("a typed ', * and ( are matched as text", () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[nameContains]': "O'Brien (2019) *" }, 'Document', anonAcl());
+
+    assert.deepStrictEqual(dropped, []);
+    // One single quote doubled for the OData literal, the brackets and the star backslashed for
+    // Lucene. The trailing `*` the caller typed is escaped; the ones this file appends are not.
+    assert.ok(
+      filter.startsWith(
+        "search.ismatch('O''Brien* AND \\(2019\\)* AND \\*', 'displayName', 'full', 'any')"),
+      filter);
+  });
+
+  // A comma is part of a name here. `valuesOf` would split this into two filters, and neither half
+  // is a name the corpus holds.
+  await t.test('a comma is text, not a multi-select', () => {
+    const { filter } = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'Kitimat LNG, Phase 2' }, 'Project', anonAcl());
+
+    // The comma stays inside the term — it is not Lucene syntax, so it needs no backslash either.
+    assert.ok(filter.includes("'Kitimat* AND LNG,* AND Phase* AND 2'"), filter);
+    assert.ok(!/ or /.test(filter), 'a comma must not become an OR');
+  });
+
+  await t.test('an empty or blank value adds no clause and is not reported dropped', () => {
+    for (const value of ['', '   ']) {
+      const { filter, dropped } = eagleQuery.buildFilter(
+        { 'and[nameContains]': value }, 'Project', anonAcl());
+
+      assert.deepStrictEqual(dropped, [], `${JSON.stringify(value)} is not a dropped filter`);
+      assert.ok(!filter.includes('search.ismatch'), `${JSON.stringify(value)} adds no clause`);
+    }
+  });
+
+  // The index behind these two has no name column to match on, so the clause cannot be built. The
+  // endpoint answers 400; `buildFilter` on its own reports the key dropped rather than widening the
+  // request to the whole corpus.
+  await t.test('a dataset with no name cell drops the key and renders no clause', () => {
+    for (const dataset of ['DocumentChunk', 'RecentActivity']) {
+      const { filter, dropped } = eagleQuery.buildFilter(
+        { 'and[nameContains]': 'sediment' }, dataset, anonAcl());
+
+      assert.deepStrictEqual(dropped, ['nameContains'], dataset);
+      assert.ok(!filter.includes('search.ismatch'), dataset);
+    }
+  });
+
+  // THE compatibility assertion. eagle-public has saved URLs carrying these two keys; a substring
+  // match hiding behind either of them would change what those URLs mean.
+  await t.test('and[name] and and[displayName] still render an exact match', () => {
+    const project = eagleQuery.buildFilter({ 'and[name]': 'Site C' }, 'Project', anonAcl());
+    const document = eagleQuery.buildFilter(
+      { 'and[displayName]': 'Site C' }, 'Document', anonAcl());
+
+    assert.ok(project.filter.includes("name eq 'Site C'"), project.filter);
+    assert.ok(document.filter.includes("displayName eq 'Site C'"), document.filter);
+    assert.ok(!project.filter.includes('search.ismatch'));
+    assert.ok(!document.filter.includes('search.ismatch'));
+  });
+
+  await t.test('the value is length-capped, and the cap is what the endpoint refuses on', () => {
+    const long = 'a'.repeat(eagleQuery.MAX_NAME_CONTAINS + 1);
+    const atCap = 'a'.repeat(eagleQuery.MAX_NAME_CONTAINS);
+
+    assert.match(eagleQuery.nameContainsError({ 'and[nameContains]': long }, 'Project'),
+      /limited to 200 characters/);
+    assert.strictEqual(eagleQuery.nameContainsError({ 'and[nameContains]': atCap }, 'Project'),
+      null);
+    assert.match(eagleQuery.nameContainsError({ 'and[nameContains]': 'x' }, 'DocumentChunk'),
+      /dataset=Project and dataset=Document only/);
+    assert.strictEqual(eagleQuery.nameContainsError({ 'and[name]': long }, 'Project'), null,
+      'the cap belongs to nameContains, not to every filter key');
+
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[nameContains]': long }, 'Project', anonAcl());
+    assert.deepStrictEqual(dropped, ['nameContains']);
+    assert.ok(!filter.includes('search.ismatch'));
+  });
+
+  // Both wire shapes the query parser produces, the same pair `andParams` already handles.
+  await t.test('the nested and={} shape is read too', () => {
+    const { filter } = eagleQuery.buildFilter(
+      { and: { nameContains: 'sediment' } }, 'Project', anonAcl());
+    assert.ok(filter.includes("search.ismatch('sediment*', 'name', 'full', 'any')"), filter);
+  });
+});
+
 test('eagle-query sort', async (t) => {
   // eagle-public sends sortBy TWICE and the second is frequently empty (api.ts:176-177).
   await t.test('the empty second sortBy is ignored, not treated as a field', () => {
