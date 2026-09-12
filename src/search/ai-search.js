@@ -423,10 +423,11 @@ const FUZZY_BOOST = 0.5;
 const LUCENE_OPERATORS = new Set(['AND', 'OR', 'NOT']);
 
 /**
- * Terms `en.microsoft` REMOVES at query time, and which must therefore never get a `~1` variant.
+ * Terms `en.microsoft` REMOVES at query time, and which must therefore never carry an UNANALYZED
+ * variant — neither `~1` nor `*`.
  *
- * The plain term is analyzed, so a stopword is dropped from the query and costs nothing. The fuzzy
- * variant is NOT analyzed, so `mine~1` resurrects the stopword as a literal — and the index side
+ * The plain term is analyzed, so a stopword is dropped from the query and costs nothing. An
+ * unanalyzed variant is NOT, so `mine~1` resurrects the stopword as a literal — and the index side
  * dropped it too, so the clause matches nothing. `(mine OR mine~1)` therefore collapses to an
  * unsatisfiable clause, and under the ` AND ` join ONE of those zeroes the entire query.
  *
@@ -435,17 +436,36 @@ const LUCENE_OPERATORS = new Set(['AND', 'OR', 'NOT']);
  * with fuzzy on and 1 with fuzzy off, against a chunk that holds the sentence verbatim. `from`,
  * `mine`, `that` and `with` are the ones an EA corpus hits constantly.
  *
- * Only terms of >= MIN_FUZZY_LENGTH are listed: shorter stopwords never get a variant, so they are
- * already harmless — verified, adding `the` or `of` to a query leaves its hit count unchanged.
+ * SHORT STOPWORDS ARE LISTED TOO. The set used to stop at MIN_FUZZY_LENGTH, on the reasoning that a
+ * shorter word never gets a variant — true while `~1` was the only unanalyzed variant, false from
+ * the moment `*` arrived at MIN_PREFIX_LENGTH 2. Without the short half,
+ * `buildContainsQuery('Notice of Commencement')` emits `of*` and an ordinary title finds nothing.
  *
- * To regenerate: for each candidate, `searchChunks({keywords: word, fuzzy: false})`. A count of 0
- * means the analyzer removed it. There is no cheaper route — the Analyze API needs a data-plane
- * role the app identity does not hold (403).
+ * The short half is the standard English stop set, inferred rather than measured: every field this
+ * module queries over is `analyzer: en.microsoft` (azure/search/indexes/*.json), whose stop list
+ * covers the standard set. Not confirmed against the live service — the Analyze API needs a
+ * data-plane role the app identity does not hold (403). The set errs wide on purpose: a word
+ * wrongly listed costs one prefix expansion, a word wrongly missing costs every hit on the phrase.
+ *
+ * To regenerate the measured half: for each candidate, `searchChunks({keywords: word,
+ * fuzzy: false})`. A count of 0 means the analyzer removed it.
  */
 const ANALYZER_STOPWORDS = new Set([
+  // Measured against the live index.
   'from', 'hers', 'herself', 'himself', 'itself', 'mine', 'myself', 'ours', 'ourselves', 'that',
-  'their', 'theirs', 'them', 'themselves', 'these', 'they', 'this', 'those', 'with', 'yourself'
+  'their', 'theirs', 'them', 'themselves', 'these', 'they', 'this', 'those', 'with', 'yourself',
+  // Standard English stop set, from the field analyzer being en.microsoft.
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'if', 'in', 'into', 'is', 'it',
+  'no', 'not', 'of', 'on', 'or', 'such', 'the', 'then', 'there', 'to', 'was', 'will'
 ]);
+
+/**
+ * One decision, used by every place that appends `~1` or `*`: the analyzer drops this term, so an
+ * unanalyzed variant of it would demand a literal the index does not hold.
+ */
+function isAnalyzerStopword(term) {
+  return ANALYZER_STOPWORDS.has(term.toLowerCase());
+}
 
 /**
  * `(term OR term~1)` per term, ANDed together.
@@ -470,7 +490,7 @@ function buildQuery(terms, fuzzy, prefix = false) {
       // term the analyzer removes they demand a literal the index does not hold, and the clause
       // becomes unsatisfiable — fatal under a conjunction. The plain term stays: it analyzes away
       // and is dropped harmlessly, which is the behaviour that was already correct.
-      const analyzed = !ANALYZER_STOPWORDS.has(t.toLowerCase());
+      const analyzed = !isAnalyzerStopword(t);
       // `^0.5` on the fuzzy variant only — see FUZZY_BOOST. Never on the plain term (the arm this
       // protects) and never on the `*` prefix variant, which is a different mechanism.
       if (fuzzy && analyzed && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}~1^${FUZZY_BOOST}`);
@@ -509,6 +529,11 @@ function escapeLucene(term) {
  * The operator lowercasing and the stopword guard are `buildQuery`'s, for the reasons given there:
  * a bare `AND` typed into the cell is an operator rather than a word, and a `*` on a word the
  * analyzer removes demands a literal the index does not hold, which empties the conjunction.
+ *
+ * A stopword is KEPT, just without its `*`: 'Notice of Commencement' renders
+ * `Notice* AND of AND Commencement*`. Dropping the word outright is the other defensible answer,
+ * but the plain term analyzes away at query time and costs nothing, and keeping it means the clause
+ * still reads as what the caller typed.
  */
 function buildContainsQuery(text) {
   return String(text || '')
@@ -517,7 +542,7 @@ function buildContainsQuery(text) {
     .slice(0, MAX_TERMS)
     .map((raw) => {
       const t = LUCENE_OPERATORS.has(raw) ? raw.toLowerCase() : raw;
-      const prefixable = t.length >= MIN_PREFIX_LENGTH && !ANALYZER_STOPWORDS.has(t.toLowerCase());
+      const prefixable = t.length >= MIN_PREFIX_LENGTH && !isAnalyzerStopword(t);
       // The `*` goes on AFTER escaping: it is ours, while a `*` the caller typed stays literal.
       return prefixable ? `${escapeLucene(t)}*` : escapeLucene(t);
     })
@@ -1977,7 +2002,6 @@ module.exports = {
   // Exported for `search/eagle-query.js`, which wraps it in an OData `search.ismatch`. Lucene
   // syntax is this module's job; one copy of the escaping, wherever the query is assembled.
   buildContainsQuery,
-  escapeLucene,
   snippetFrom,
   escapeHtml,
   HL_PRE,

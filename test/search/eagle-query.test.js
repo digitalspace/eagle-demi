@@ -362,6 +362,27 @@ test('eagle-query nameContains', async (t) => {
       { 'and[nameContains]': 'Site C dam' }, 'Project', anonAcl());
     assert.ok(filter.startsWith("search.ismatch('Site* AND C AND dam*', 'name', 'full', 'any')"),
       filter);
+
+    // The boundary itself: two characters is the shortest word that prefixes, and the swagger says
+    // so. Without a two-character word here, 'Site C dam' renders the same whether the floor is 2
+    // or 3.
+    const { filter: twoChar } = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'BC Hydro' }, 'Project', anonAcl());
+    assert.ok(twoChar.startsWith("search.ismatch('BC* AND Hydro*', 'name', 'full', 'any')"),
+      twoChar);
+  });
+
+  // A word the query analyzer removes must not carry the `*`: `of*` is a literal the index does not
+  // hold, and one unsatisfiable term under the AND join answers 0 rows for a document that exists.
+  await t.test('a stopword in the typed name keeps the word but not the prefix', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'Notice of Commencement' }, 'Document', anonAcl());
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(
+      filter.startsWith(
+        "search.ismatch('Notice* AND of AND Commencement*', 'displayName', 'full', 'any')"),
+      filter);
   });
 
   // The whole reason the key is separate: these characters are Lucene syntax, and an unescaped one

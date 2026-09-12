@@ -152,7 +152,9 @@ paths:
             project name, and to dataset=Document, which matches on the document name. Sending it
             on any other dataset is a 400, as is a value longer than 200 characters.
             The text is split on spaces, every word has to appear, and a word of two or more
-            characters matches as a prefix, so `sed sam` finds "Sediment Sampling Plan". A comma,
+            characters matches as a prefix, so `sed sam` finds "Sediment Sampling Plan". Common
+            English words the search analyzer removes ("of", "and", "the") are matched as whole
+            words rather than prefixes, so "Notice of Commencement" still finds that title. A comma,
             an apostrophe and a bracket are part of the text here, not separators or syntax.
             An empty value is no filter. This is a separate key from `and[name]` and
             `and[displayName]`, which still match the whole name exactly.

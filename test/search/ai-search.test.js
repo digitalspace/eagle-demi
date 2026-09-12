@@ -225,8 +225,62 @@ test('ai-search query construction', async (t) => {
       'no operator character survives but the ones this module emits');
     assert.strictEqual((query.match(/\*/g) || []).length, 1, 'exactly one star, and we added it');
     // A reserved boolean word in last position is demoted BEFORE the star is appended, so the
-    // prefix hangs off the term rather than the operator.
-    assert.strictEqual(aiSearch.buildQuery(['river', 'AND'], false, true), 'river AND (and OR and*)');
+    // prefix hangs off the term rather than the operator — and `and` is then an analyzer stopword,
+    // so it gets no star either. The join is the operator this module wrote; the caller's word is
+    // the bare term after it.
+    assert.strictEqual(aiSearch.buildQuery(['river', 'AND'], false, true), 'river AND and');
+  });
+});
+
+/**
+ * The name cell of the search grid, which prefixes EVERY word rather than the last one. That makes
+ * the stopword gate load-bearing mid-phrase: `of*` in the middle of a conjunction is unsatisfiable
+ * and zeroes the whole query, where in `buildQuery` it could only ever land on the final word.
+ */
+test('ai-search buildContainsQuery', async (t) => {
+  await t.test('every word is required, and each one matches as a prefix', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery('Sediment Sampling Plan'),
+      'Sediment* AND Sampling* AND Plan*');
+  });
+
+  // MIN_PREFIX_LENGTH is 2. Mutating `>=` to `>` makes this 'BC AND Hydro*', which is a different
+  // search: the abbreviation is a whole word here, not a prefix of a longer one.
+  await t.test('a two-character word carries a prefix, a one-character word does not', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery('BC Hydro'), 'BC* AND Hydro*');
+    assert.strictEqual(aiSearch.buildContainsQuery('Site C dam'), 'Site* AND C AND dam*');
+  });
+
+  // The documented answer for a stopword: KEEP the word, drop only its star. `of*` demands a
+  // literal `of` the index does not hold, and one such term zeroes the conjunction — so this is
+  // the difference between finding "Notice of Commencement" and answering 0 rows for it.
+  await t.test('a stopword keeps its word and loses its star', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery('Notice of Commencement'),
+      'Notice* AND of AND Commencement*');
+    assert.strictEqual(aiSearch.buildContainsQuery('Oil and Gas Commission'),
+      'Oil* AND and AND Gas* AND Commission*');
+    // Case-insensitive, and the four-character stopwords behave the same as the short ones.
+    assert.strictEqual(aiSearch.buildContainsQuery('That report With maps'),
+      'That AND report* AND With AND maps*');
+  });
+
+  // A non-stopword of the same length still prefixes, or the guard would be a blanket disable of
+  // short words and `BC*` above would pass for the wrong reason.
+  await t.test('a short word that is not a stopword still prefixes', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery('Gas'), 'Gas*');
+  });
+
+  await t.test('a typed Lucene special is escaped, and the appended star is not', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery("O'Brien (2019) *"),
+      "O'Brien* AND \\(2019\\)* AND \\*");
+  });
+
+  // A clause over no terms is a 400 from the service, so the caller needs the empty string to
+  // decide there is no clause to add at all.
+  await t.test('no words means no query, not an empty clause', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery(''), '');
+    assert.strictEqual(aiSearch.buildContainsQuery('   '), '');
+    assert.strictEqual(aiSearch.buildContainsQuery(null), '');
+    assert.strictEqual(aiSearch.buildContainsQuery(undefined), '');
   });
 });
 

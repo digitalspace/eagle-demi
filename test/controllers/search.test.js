@@ -1290,13 +1290,21 @@ test('Search Controller Tests', async (t) => {
     assert.ok(out.body.error.includes('limited to 200 characters'), out.body.error);
   });
 
-  // The control: at the cap, on a dataset that has the cell, the request is NOT refused. Without
-  // this the two refusals above could be satisfied by 400ing the key outright.
-  await t.test('and[nameContains] at the cap is not refused', async () => {
-    t.mock.method(aiSearch, 'searchProjects', async () => ({ items: [], total: 0 }));
+  // The control: at the cap, on a dataset that has the cell, the request is NOT refused AND the
+  // filter is really built. Status alone would pass while the two length checks disagreed — the
+  // controller refuses over 200, the builder admits up to 200, and a builder that stopped one
+  // character earlier would silently serve the whole ACL-visible corpus under this same 200.
+  await t.test('and[nameContains] at the cap is filtered, not refused', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { items: [], total: 0 };
+    });
     const out = await refusal({ dataset: 'Project', 'and[nameContains]': 'a'.repeat(200) });
 
     assert.strictEqual(out.status, 200);
+    assert.ok(sent.filter.includes(`search.ismatch('${'a'.repeat(200)}*', 'name', 'full', 'any')`),
+      sent.filter);
   });
 });
 
