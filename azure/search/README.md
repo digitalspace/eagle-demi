@@ -168,10 +168,14 @@ the indexer, then read one row back before deploying the app.
 `dateUpdated` on `projects` and `documentUrl` on `activities` were added on 2026-09-12, both plain
 widenings on the no-rebuild side of the line above. `dateUpdated` is the search page's "Last
 updated" column and its default project sort; `documentUrl` is the "has an attachment" filter on the
-activities list. **Both indexes and both data sources need the PUT and an indexer reset** before the
-app can use them: `projects` with `demi-projects-ds`, `activities` with `demi-updates-ds`. Until
-that is done `sortBy=-dateUpdated` and `and[documentUrl]=true` are dropped and named in
-`meta[0].dropped`, which is the quiet failure, not a broken page.
+activities list. **Each index and its data source need the PUT and an indexer reset** before the app
+can use them: `projects` with `demi-projects-ds`, `activities` with `demi-updates-ds`. Until that is
+done `sortBy=-dateUpdated` and `and[documentUrl]=true` are dropped and named in `meta[0].dropped`,
+which is the quiet failure, not a broken page.
+
+The `projects` half was applied on test on 2026-09-12 — index PUT, `demi-projects-ds` PUT, indexer
+reset and run — so `dateUpdated` is in `PROJECT_SELECT` and on the project row. The `activities`
+half is still outstanding, which is why `documentUrl` stays out of the activities select.
 
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.

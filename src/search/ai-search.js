@@ -81,10 +81,14 @@ const DOCUMENT_SELECT = 'id,displayName,documentFileName,description,type,projec
  * The last six arrived with the widened index: `type` is eagle-public's Type column, and the two
  * label/id pairs are what the response rebuilds into the `{_id, name}` shape Phase and Decision
  * bind. `decisionDate` backs the decision-date range filter.
+ *
+ * `dateUpdated` is eagle-public's "Last updated" column and the field `sortBy=-dateUpdated` orders
+ * by. The sort reads index metadata and so worked without it; the column read '-' on every row,
+ * which is the quiet half of this same bug.
  */
 const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,status,region,centroid,' +
   'legacyEagleId,read,isPublished,type,currentPhaseName,currentPhaseNameId,eacDecision,' +
-  'eacDecisionId,decisionDate,vis';
+  'eacDecisionId,decisionDate,dateUpdated,vis';
 
 /**
  * The fields a CHUNK hit carries back. Same invariant as the two above: every name must exist in
