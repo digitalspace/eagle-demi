@@ -8,7 +8,7 @@
   },
   "container": {
     "name": "updates",
-    "query": "SELECT c.id, c.eagleId, c.projectId, c.headline, c.content, c.notificationName, c.type, c.pinned, c.dateAdded, c.isPublished, c.read, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+    "query": "SELECT c.id, c.eagleId, c.projectId, c.headline, c.content, c.notificationName, c.type, c.documentUrl, c.pinned, c.dateAdded, c.isPublished, c.read, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
   },
   "dataChangeDetectionPolicy": {
     "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",

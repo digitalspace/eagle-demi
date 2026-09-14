@@ -404,7 +404,7 @@ resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
           // at all; the same filter drops them.
           // `ResultCode` is a string column; `toint` is what makes `>= 500` a numeric comparison
           // rather than a lexicographic one.
-          query: 'AppRequests | extend p = tostring(parse_url(Url).Path) | where p endswith "/search" or p endswith "/search/summary" | summarize total = count(), failed = countif(toint(ResultCode) >= 500) | where total >= 5 and todouble(failed) / total > 0.2'
+          query: 'AppRequests | extend p = tostring(parse_url(Url).Path) | where p endswith "/search" or p endswith "/search/counts" or p endswith "/search/summary" | summarize total = count(), failed = countif(toint(ResultCode) >= 500) | where total >= 5 and todouble(failed) / total > 0.2'
           // The query answers with one row or none, so the rule counts rows: a row means the ratio
           // was already over the line.
           timeAggregation: 'Count'

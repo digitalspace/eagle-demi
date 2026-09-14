@@ -32,6 +32,9 @@ module.exports = {
   eacDecisionId: { defaultVis: 4, maxVis: 4 },
   ceaaInvolvementId: { defaultVis: 4, maxVis: 4 },
   decisionDate: { defaultVis: 4, maxVis: 4 },
+  // The project list's "Last updated" column, and the default sort behind it. Same classification
+  // as the stored field it is copied from (catalog/projects.js).
+  dateUpdated: { defaultVis: 4, maxVis: 4 },
   sourceSystem: { defaultVis: 4, maxVis: 4 },
   // Searchable copy of `name`, never retrievable — classified because a dial on `name` maps here.
   nameTokens: { defaultVis: 4, maxVis: 4 },
