@@ -193,6 +193,19 @@ test('a filter /search accepts is refused here, not counted without', async (t) 
     assert.match(out.body.error, /dataset/);
   });
 
+  await t.test('and[nameContains] is a 400: a name filter is per record type too', async (tt) => {
+    withIndexes(tt, {});
+    const seen = stubAllLegs(tt);
+
+    const { out, res } = capture();
+    await searchController.counts(
+      anonymous({ keywords: 'caribou', 'and[nameContains]': 'sed sam' }), res);
+
+    assert.strictEqual(out.status, 400);
+    assert.match(out.body.error, /and\[nameContains\]/);
+    assert.strictEqual(seen.Project, undefined, 'nothing was counted under a filter that was refused');
+  });
+
   await t.test('the four parameters it does read are a 200', async (tt) => {
     withIndexes(tt, {});
     stubAllLegs(tt);

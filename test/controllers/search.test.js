@@ -1296,6 +1296,49 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(statusCode, 400);
     assert.ok(jsonResponse.error.includes('Invalid or unsupported dataset'));
   });
+
+  // The name filter is the one `and[...]` value that carries typed text. Both refusals are answered
+  // before any search request is issued, so a bad URL costs nothing and says what is wrong.
+  const refusal = async (query) => {
+    const out = { body: undefined, status: 200 };
+    const res = {
+      status: (code) => { out.status = code; return res; },
+      json: (data) => { out.body = data; return res; }
+    };
+    await searchController.search({ query, header: () => null }, res);
+    return out;
+  };
+
+  await t.test('and[nameContains] is refused on a dataset with no name cell', async () => {
+    const out = await refusal({ dataset: 'DocumentChunk', 'and[nameContains]': 'sediment' });
+
+    assert.strictEqual(out.status, 400);
+    assert.ok(out.body.error.includes('dataset=Project and dataset=Document only'), out.body.error);
+  });
+
+  await t.test('and[nameContains] over the length cap is refused', async () => {
+    const out = await refusal({ dataset: 'Project', 'and[nameContains]': 'a'.repeat(201) });
+
+    assert.strictEqual(out.status, 400);
+    assert.ok(out.body.error.includes('limited to 200 characters'), out.body.error);
+  });
+
+  // The control: at the cap, on a dataset that has the cell, the request is NOT refused AND the
+  // filter is really built. Status alone would pass while the two length checks disagreed — the
+  // controller refuses over 200, the builder admits up to 200, and a builder that stopped one
+  // character earlier would silently serve the whole ACL-visible corpus under this same 200.
+  await t.test('and[nameContains] at the cap is filtered, not refused', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { items: [], total: 0 };
+    });
+    const out = await refusal({ dataset: 'Project', 'and[nameContains]': 'a'.repeat(200) });
+
+    assert.strictEqual(out.status, 200);
+    assert.ok(sent.filter.includes(`search.ismatch('${'a'.repeat(200)}*', 'name', 'full', 'any')`),
+      sent.filter);
+  });
 });
 
 // The fail-open shape, dataset by dataset. `DocumentChunk` has been covered since the flag was
