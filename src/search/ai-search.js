@@ -521,8 +521,10 @@ function buildQuery(terms, fuzzy, prefix = false) {
 
 /**
  * Every character Lucene reads as syntax under `queryType: 'full'`, backslashed so it is matched
- * as text instead. `tokenize` answers the same danger by DELETING them, which is right for a
- * keyword box; a filter cell has to keep what was typed, so `O'Brien (2019)` stays that phrase.
+ * as text instead. `tokenize` answers the same danger by DELETING them, and the contains filter
+ * splits on them, so on today's rules no syntax character survives to reach this. It stays as the
+ * guard on that invariant: loosen CONTAINS_SEPARATORS and an unbalanced bracket is a 400 from the
+ * service, not a search.
  *
  * The backslash is in the class, and one pass over the input is enough: a replacement is never
  * rescanned, so the `\` this emits cannot be escaped a second time.
@@ -532,11 +534,33 @@ function escapeLucene(term) {
 }
 
 /**
+ * Word separators for the contains filter: whitespace and every punctuation mark the field
+ * analyzer strips, which is `tokenize`'s rule with the apostrophe held back.
+ *
+ * A word carrying punctuation cannot be a prefix. `*` makes the term UNANALYZED, while the index
+ * side is `en.microsoft` and holds no punctuation in its tokens, so `LNG,*` asks for a token that
+ * cannot exist — and one unsatisfiable term under the ` AND ` join answers 0 rows for a project
+ * whose name is on screen. Splitting first is what keeps `Kitimat LNG, Phase 2` findable.
+ *
+ * THE HYPHEN SEPARATES TOO, for the same reason: `en.microsoft` breaks `Site-C` into `site` and
+ * `c`, so `Site\-C*` is a prefix of a token the index never holds. Rendering it as two words is
+ * what the index can answer.
+ *
+ * The apostrophe stays INSIDE the word: the analyzer keeps `dam's` as one token, and splitting it
+ * would require a bare `s` on its own.
+ */
+const CONTAINS_SEPARATORS = /[^\p{L}\p{N}'\u2019]+/u;
+
+/** A run of apostrophes is not a word: `, ()` has to mean no filter, as `''` does. */
+const HAS_WORD_CHARACTER = /[\p{L}\p{N}]/u;
+
+/**
  * Lucene query for a "the name contains this" filter: every word required, each word matched as a
  * prefix so the word still being typed hits.
  *
- * Whitespace is the only separator. A comma, an apostrophe or a bracket is part of the name here,
- * unlike in the keyword box where `tokenize` splits on all of them.
+ * Whitespace and punctuation both separate words (CONTAINS_SEPARATORS), so a word reaching the
+ * query holds letters, digits and apostrophes only. `escapeLucene` is the guard on that, not a
+ * routine step — see its comment.
  *
  * The operator lowercasing and the stopword guard are `buildQuery`'s, for the reasons given there:
  * a bare `AND` typed into the cell is an operator rather than a word, and a `*` on a word the
@@ -549,13 +573,13 @@ function escapeLucene(term) {
  */
 function buildContainsQuery(text) {
   return String(text || '')
-    .split(/\s+/)
-    .filter(Boolean)
+    .split(CONTAINS_SEPARATORS)
+    .filter((word) => HAS_WORD_CHARACTER.test(word))
     .slice(0, MAX_TERMS)
     .map((raw) => {
       const t = LUCENE_OPERATORS.has(raw) ? raw.toLowerCase() : raw;
       const prefixable = t.length >= MIN_PREFIX_LENGTH && !isAnalyzerStopword(t);
-      // The `*` goes on AFTER escaping: it is ours, while a `*` the caller typed stays literal.
+      // The `*` goes on AFTER escaping: it is ours, and must stay syntax.
       return prefixable ? `${escapeLucene(t)}*` : escapeLucene(t);
     })
     .join(' AND ');

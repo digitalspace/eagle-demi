@@ -387,32 +387,43 @@ test('eagle-query nameContains', async (t) => {
 
   // The whole reason the key is separate: these characters are Lucene syntax, and an unescaped one
   // is a 400 from the search service rather than a search for that character.
-  await t.test("a typed ', * and ( are matched as text", () => {
+  await t.test("a typed ', ( and * cannot reach the query as syntax", () => {
     const { filter, dropped } = eagleQuery.buildFilter(
       { 'and[nameContains]': "O'Brien (2019) *" }, 'Document', anonAcl());
 
     assert.deepStrictEqual(dropped, []);
-    // One single quote doubled for the OData literal, the brackets and the star backslashed for
-    // Lucene. The trailing `*` the caller typed is escaped; the ones this file appends are not.
+    // One single quote doubled for the OData literal; the brackets and the typed star separate
+    // words rather than survive as text. The `*` on each word is the one this file appends.
     assert.ok(
-      filter.startsWith(
-        "search.ismatch('O''Brien* AND \\(2019\\)* AND \\*', 'displayName', 'full', 'any')"),
+      filter.startsWith("search.ismatch('O''Brien* AND 2019*', 'displayName', 'full', 'any')"),
       filter);
+
+    // A hyphen breaks the word: the analyzer holds `site` and `c` as separate index tokens, so the
+    // hyphenated prefix would match nothing.
+    const { filter: hyphen } = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'Site-C' }, 'Project', anonAcl());
+    assert.ok(hyphen.startsWith("search.ismatch('Site* AND C', 'name', 'full', 'any')"), hyphen);
   });
 
-  // A comma is part of a name here. `valuesOf` would split this into two filters, and neither half
-  // is a name the corpus holds.
-  await t.test('a comma is text, not a multi-select', () => {
+  // A comma is a word break here, not a multi-select. `valuesOf` would split this into two
+  // filters, and neither half is a name the corpus holds; carrying the comma into the term is the
+  // other failure, since `LNG,*` skips the analyzer and no index token holds the comma.
+  await t.test('a comma breaks words and is not a multi-select', () => {
     const { filter } = eagleQuery.buildFilter(
       { 'and[nameContains]': 'Kitimat LNG, Phase 2' }, 'Project', anonAcl());
 
-    // The comma stays inside the term — it is not Lucene syntax, so it needs no backslash either.
-    assert.ok(filter.includes("'Kitimat* AND LNG,* AND Phase* AND 2'"), filter);
+    assert.ok(filter.includes("'Kitimat* AND LNG* AND Phase* AND 2'"), filter);
     assert.ok(!/ or /.test(filter), 'a comma must not become an OR');
+
+    const { filter: brackets } = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'Site C (Phase 2)' }, 'Project', anonAcl());
+    assert.ok(brackets.includes("'Site* AND C AND Phase* AND 2'"), brackets);
   });
 
-  await t.test('an empty or blank value adds no clause and is not reported dropped', () => {
-    for (const value of ['', '   ']) {
+  // Punctuation alone leaves no word to require, so it has to land where the empty value lands
+  // rather than build a clause over nothing.
+  await t.test('an empty, blank or punctuation-only value adds no clause and is not reported dropped', () => {
+    for (const value of ['', '   ', ', ()']) {
       const { filter, dropped } = eagleQuery.buildFilter(
         { 'and[nameContains]': value }, 'Project', anonAcl());
 

@@ -269,9 +269,39 @@ test('ai-search buildContainsQuery', async (t) => {
     assert.strictEqual(aiSearch.buildContainsQuery('Gas'), 'Gas*');
   });
 
-  await t.test('a typed Lucene special is escaped, and the appended star is not', () => {
-    assert.strictEqual(aiSearch.buildContainsQuery("O'Brien (2019) *"),
-      "O'Brien* AND \\(2019\\)* AND \\*");
+  // Every Lucene syntax character is a separator, so none can reach the query as syntax and none
+  // survives as text either. The escape is the backstop if that split rule ever loosens.
+  await t.test('typed Lucene syntax cannot reach the query, and the appended star still can', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery("O'Brien (2019) *"), "O'Brien* AND 2019*");
+    assert.strictEqual(aiSearch.buildContainsQuery('Fish~ Habitat^2 || Water'),
+      'Fish* AND Habitat* AND 2 AND Water*');
+    assert.ok(!/[\\()[\]{}^~?:|!+"]/.test(aiSearch.buildContainsQuery('a+b (c) "d" e:f')));
+  });
+
+  // Prefix terms skip the query analyzer, and `en.microsoft` strips punctuation out of the index
+  // tokens — so `LNG,*` asks for a token the index cannot hold, and one such term under the AND
+  // join answers 0 rows for a project whose name is on screen.
+  await t.test('punctuation separates words instead of riding along on one', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery('Kitimat LNG, Phase 2'),
+      'Kitimat* AND LNG* AND Phase* AND 2');
+    assert.strictEqual(aiSearch.buildContainsQuery('Site C (Phase 2)'),
+      'Site* AND C AND Phase* AND 2');
+    assert.strictEqual(aiSearch.buildContainsQuery('Fisheries; Habitat/Water: "final"'),
+      'Fisheries* AND Habitat* AND Water* AND final*');
+  });
+
+  // An apostrophe is inside the word, not between two words: the analyzer keeps `dam's` as one
+  // token, and splitting here would ask for a bare `s` the index does not hold.
+  await t.test('an apostrophe stays inside the word', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery("dam's spillway"), "dam's* AND spillway*");
+  });
+
+  // A hyphen is the other direction: `en.microsoft` breaks `Site-C` into two index tokens, so a
+  // prefix over the hyphenated form matches nothing at all.
+  await t.test('a hyphen separates words', () => {
+    assert.strictEqual(aiSearch.buildContainsQuery('Site-C'), 'Site* AND C');
+    assert.strictEqual(aiSearch.buildContainsQuery('Trans-Mountain pipeline'),
+      'Trans* AND Mountain* AND pipeline*');
   });
 
   // A clause over no terms is a 400 from the service, so the caller needs the empty string to
@@ -279,6 +309,10 @@ test('ai-search buildContainsQuery', async (t) => {
   await t.test('no words means no query, not an empty clause', () => {
     assert.strictEqual(aiSearch.buildContainsQuery(''), '');
     assert.strictEqual(aiSearch.buildContainsQuery('   '), '');
+    // Punctuation on its own leaves no word behind, so it has to behave as the empty value does
+    // rather than render a clause over nothing.
+    assert.strictEqual(aiSearch.buildContainsQuery(', ()'), '');
+    assert.strictEqual(aiSearch.buildContainsQuery("-'"), '');
     assert.strictEqual(aiSearch.buildContainsQuery(null), '');
     assert.strictEqual(aiSearch.buildContainsQuery(undefined), '');
   });

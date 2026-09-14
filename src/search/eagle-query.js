@@ -385,9 +385,10 @@ const MAX_NAME_CONTAINS = 200;
 /**
  * The text of `and[nameContains]`, whatever shape the parser produced.
  *
- * NOT `valuesOf`: a comma is part of a name here, so the multi-select split every other filter key
- * does would turn "Kitimat LNG, Phase 2" into two filters neither half of the name satisfies. A
- * repeated key joins with a space, which narrows the same way a repeated key does elsewhere.
+ * NOT `valuesOf`: a comma separates WORDS here, not filters, so the multi-select split every other
+ * filter key does would turn "Kitimat LNG, Phase 2" into two alternatives when the caller asked
+ * for one name holding all four words. A repeated key joins with a space, which narrows the same
+ * way a repeated key does elsewhere.
  */
 function nameContainsText(rawValue) {
   return (Array.isArray(rawValue) ? rawValue : [rawValue])
@@ -397,15 +398,14 @@ function nameContainsText(rawValue) {
 }
 
 /**
- * The clause for one `and[nameContains]`, or null if the text yields no terms.
+ * The clause for one `and[nameContains]`, given the Lucene query its text already produced.
  *
  * `'full', 'any'` rather than the two-argument form: the query carries explicit `AND` operators and
  * trailing `*`, and under the default simple syntax `AND` would match as the word "and". Same call
  * shape the document-scope leg in `ai-search.js` uses.
  */
-function nameContainsClause(field, text) {
-  const lucene = buildContainsQuery(text);
-  return lucene ? `search.ismatch(${quote(lucene)}, ${quote(field)}, 'full', 'any')` : null;
+function nameContainsClause(field, lucene) {
+  return `search.ismatch(${quote(lucene)}, ${quote(field)}, 'full', 'any')`;
 }
 
 /**
@@ -510,16 +510,21 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     if (key === NAME_CONTAINS_KEY) {
       const containsField = NAME_CONTAINS_FIELDS[dataset];
       const text = nameContainsText(rawValue);
-      // An empty cell is not a filter: the grid sends the key with no value when the box is cleared,
-      // and a clause over no terms is a 400 from the service.
-      if (!text) continue;
-      const clause = containsField &&
-        text.length <= MAX_NAME_CONTAINS &&
-        fieldVisible(dataset, containsField, access)
-        ? nameContainsClause(containsField, text)
-        : null;
-      if (clause) groups.push(clause);
-      else dropped.push(key);
+      // Over the cap is a REFUSED filter, so it is reported before the no-words test below: a
+      // 300-character value must not read as an empty cell and widen the request to everything.
+      if (text.length > MAX_NAME_CONTAINS) { dropped.push(key); continue; }
+      // No word left to require is not a filter at all. The grid sends the key with no value when
+      // the box is cleared, and punctuation on its own ("()") leaves nothing behind either — while
+      // a clause over no terms is a 400 from the service.
+      const lucene = buildContainsQuery(text);
+      if (!lucene) continue;
+      // A dataset with no name cell, or one this caller may not read, reports the key dropped
+      // rather than silently searching a different field.
+      if (!containsField || !fieldVisible(dataset, containsField, access)) {
+        dropped.push(key);
+        continue;
+      }
+      groups.push(nameContainsClause(containsField, lucene));
       continue;
     }
 
