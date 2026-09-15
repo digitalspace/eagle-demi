@@ -32,24 +32,6 @@ const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
-/**
- * The bookkeeping only an eagle-api push writes: the stamp a later push is ordered against, and
- * the marker saying this project still owes a visibility cascade.
- *
- * Carried off the stored row on every OTHER write and never taken from a request body — a whole-
- * item write that rebuilt them from a staff PUT would let a caller replay an old push, or lose a
- * cascade the push had recorded as owed.
- */
-const PUSH_BOOKKEEPING = ['eaglePushedAt', 'cascadePendingAt'];
-
-function carryPushBookkeeping(row, current) {
-  for (const field of PUSH_BOOKKEEPING) {
-    if (current && current[field] !== undefined) row[field] = current[field];
-    else delete row[field];
-  }
-  return row;
-}
-
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
   logger.warn(`[Project Controller] ${what} lost its etag race, asking for a retry`, { id });
@@ -331,13 +313,13 @@ exports.updateProject = async (req, res) => {
       reread: () => projects.getById(access, req.params.id),
       attempt: async (current) => {
         if (!current) return { status: 'missing' };
-        const row = carryPushBookkeeping({
+        const row = {
           ...current,
           ...changes,
           id: current.id,
           trackProjectId: current.trackProjectId,
           updatedAt: new Date().toISOString()
-        }, current);
+        };
         return {
           status: 'saved',
           saved: await projects.upsert(row, { etag: current._etag })
@@ -421,12 +403,12 @@ exports.setLevel = async (req, res) => {
       reread: () => projects.getById(access, req.params.id),
       attempt: async (current) => {
         if (!current) return { status: 'missing' };
-        const row = carryPushBookkeeping({
+        const row = {
           ...current,
           ...acl,
           id: current.id,
           updatedAt: new Date().toISOString()
-        }, current);
+        };
         return {
           status: 'saved',
           saved: await projects.upsert(row, { etag: current._etag })
