@@ -1595,7 +1595,9 @@ paths:
               $ref: '#/components/schemas/EaglePush'
       responses:
         '200':
-          description: Project mirrored.
+          description: >-
+            Project mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
           content:
             application/json:
               schema:
@@ -1611,6 +1613,9 @@ paths:
           description: |-
             Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
             higher.
+        '503':
+          description: >-
+            The project changed repeatedly while the push was retried. The caller retries.
 
   /api/eagle/documents/{eagleId}:
     put:
@@ -1645,7 +1650,9 @@ paths:
               $ref: '#/components/schemas/EaglePush'
       responses:
         '200':
-          description: Document mirrored.
+          description: >-
+            Document mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
           content:
             application/json:
               schema:
@@ -1693,7 +1700,9 @@ paths:
               $ref: '#/components/schemas/EaglePush'
       responses:
         '200':
-          description: Update mirrored.
+          description: >-
+            Update mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
           content:
             application/json:
               schema:
@@ -1706,6 +1715,9 @@ paths:
           description: |-
             Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
             higher.
+        '503':
+          description: >-
+            The record changed repeatedly while the push was retried. The caller retries.
 
   /api/eagle/commentperiods/{eagleId}:
     put:
@@ -1742,7 +1754,9 @@ paths:
               $ref: '#/components/schemas/EaglePush'
       responses:
         '200':
-          description: Record mirrored.
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
           content:
             application/json:
               schema:
@@ -1761,6 +1775,9 @@ paths:
           description: |-
             The period was mirrored, but the comments under it were not all re-derived. The push
             is not retried; the nightly reconcile reports the drift.
+        '503':
+          description: >-
+            The record changed repeatedly while the push was retried. The caller retries.
 
   /api/eagle/comments/{eagleId}:
     put:
@@ -1788,7 +1805,9 @@ paths:
               $ref: '#/components/schemas/EaglePush'
       responses:
         '200':
-          description: Record mirrored.
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
           content:
             application/json:
               schema:
@@ -1803,6 +1822,9 @@ paths:
             higher.
         '404':
           description: The comment period named by `doc.period` is not mirrored yet.
+        '503':
+          description: >-
+            The record changed repeatedly while the push was retried. The caller retries.
 
   /api/eagle/organizations/{eagleId}:
     put:
@@ -1829,7 +1851,9 @@ paths:
               $ref: '#/components/schemas/EaglePush'
       responses:
         '200':
-          description: Record mirrored.
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
           content:
             application/json:
               schema:
@@ -1842,6 +1866,9 @@ paths:
           description: |-
             Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
             higher.
+        '503':
+          description: >-
+            The record changed repeatedly while the push was retried. The caller retries.
 
   /api/eagle/notifications/{eagleId}:
     put:
@@ -1868,7 +1895,9 @@ paths:
               $ref: '#/components/schemas/EaglePush'
       responses:
         '200':
-          description: Record mirrored.
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
           content:
             application/json:
               schema:
@@ -1881,6 +1910,9 @@ paths:
           description: |-
             Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
             higher.
+        '503':
+          description: >-
+            The record changed repeatedly while the push was retried. The caller retries.
 
   /api/eagle/config/public:
     put:
@@ -3131,6 +3163,15 @@ components:
             The raw Eagle record, exactly as eagle-api stores it. `doc._id` must equal the
             `eagleId` path parameter. For a document, `doc.project` is the parent project's
             Eagle `_id` (or an object carrying it as `_id`).
+        pushedAt:
+          type: integer
+          format: int64
+          description: |-
+            When eagle-api sent this push, in milliseconds since the epoch. It orders the pushes
+            for one record across eagle-api instances: DEMI stores it as `eaglePushedAt` and
+            refuses a push whose stamp is older than the stored one, answering 200 with
+            `ignored: "stale"` instead of writing. Equal stamps are written. Optional — a push
+            without it is applied as it arrives, and leaves the stored stamp alone.
         labels:
           type: object
           description: |-
@@ -3160,7 +3201,24 @@ components:
           enum: [upsert, delete]
           description: |-
             `delete` when the push carried `doc.isDeleted: true`. Documents and comment periods
-            only — the other mirrors always answer `upsert`.
+            only — the other mirrors always answer `upsert`. Absent when the push was ignored.
+        ok:
+          type: boolean
+          description: Present, and `true`, only on an ignored push. Nothing was written.
+        ignored:
+          type: string
+          enum: [stale]
+          description: |-
+            The push carried a `pushedAt` older than the one already stored, so a newer push for
+            the same record has already landed and this one was not applied — no write, no
+            cascade, no notification. It is a 200 rather than an error because there is nothing
+            to send again.
+        eaglePushedAt:
+          type: integer
+          format: int64
+          description: |-
+            Ignored pushes only: the `pushedAt` of the push that is stored, which this one lost
+            to.
 
     ShortLink:
       type: object

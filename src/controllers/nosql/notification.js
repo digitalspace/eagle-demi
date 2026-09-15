@@ -13,7 +13,9 @@ const { seedAcl } = require('../../seed/transform');
 const { systemAccess } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
-const { eaglePush, upsertWithRetry } = require('./eagle-mirror');
+const {
+  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
+} = require('./eagle-mirror');
 
 function mirrorItem(eagleId, doc, read, existing) {
   return {
@@ -57,13 +59,14 @@ function mirrorItem(eagleId, doc, read, existing) {
  *
  * @returns {Promise<{saved: object, existing: object|null}>}
  */
-function mirrorFromEagle(eagleId, doc) {
+function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   const read = seedAcl(doc.read);
 
   return upsertWithRetry(
     notifications,
     (current) => mirrorItem(eagleId, doc, read, current),
-    () => notifications.getById(systemAccess(), eagleId)
+    () => notifications.getById(systemAccess(), eagleId),
+    { pushedAt }
   );
 }
 
@@ -75,9 +78,19 @@ exports.upsertFromEagle = async (req, res) => {
     if (!push) {
       return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
     }
-    const { eagleId, doc } = push;
+    const { eagleId, doc, pushedAt } = push;
 
-    const { saved, existing } = await mirrorFromEagle(eagleId, doc);
+    const written = await mirrorFromEagle(eagleId, doc, { pushedAt });
+    if (written.status === 'conflict') {
+      return pushConflict(res, { label: 'Notification Controller', eagleId });
+    }
+    const { saved, existing, ignored } = written;
+    if (ignored) {
+      return ignoreStalePush(req, res, {
+        label: 'Notification Controller', action: 'notification.push',
+        targetType: 'notification', current: existing, pushedAt
+      });
+    }
 
     auditEvent(req, {
       action: 'notification.push',

@@ -207,6 +207,52 @@ async function upsertItem(container, partitionField, item, existing) {
 }
 
 /**
+ * The SDK reports a failed access condition on `code` or on `statusCode` depending on the path
+ * that raised it; a caller retrying a lost write should not have to know which.
+ */
+function racedAs(err, expected, message) {
+  const status = err.code || err.statusCode;
+  if (status !== expected) throw err;
+  throw Object.assign(new Error(message, { cause: err }), { code: expected });
+}
+
+/**
+ * Whole-item write guarded on the revision the caller read: it lands only while the row is still
+ * that revision, and a loser gets a 412 to rebuild from instead of silently replacing the winner.
+ *
+ * No `etag` means no guard — a row this caller found absent has no revision to test against, so
+ * use `createItem` for that case instead.
+ *
+ * @param {string} container
+ * @param {object} item
+ * @param {{etag?: string, label: string}} options `label` names the repository in the error
+ * @throws an error with `code === 412` when the row moved under the caller
+ */
+async function upsertWithEtag(container, item, { etag, label }) {
+  try {
+    return await cosmos.upsert(container, item, { etag });
+  } catch (err) {
+    return racedAs(err, 412, `[${label}] upsert of ${item && item.id} lost its etag race`);
+  }
+}
+
+/**
+ * Insert a row the caller read as absent. `create` rather than an unguarded upsert, because an
+ * upsert has no revision to guard on and would replace a row another writer created in between —
+ * the one hole the etag guard cannot cover. Cosmos answers 409, which the caller re-reads and
+ * re-judges exactly as it does a 412.
+ *
+ * @throws an error with `code === 409` when the row was created behind the caller
+ */
+async function createItem(container, item, label) {
+  try {
+    return await cosmos.create(container, item);
+  } catch (err) {
+    return racedAs(err, 409, `[${label}] create of ${item && item.id} lost to a concurrent create`);
+  }
+}
+
+/**
  * Offset paging onto Cosmos, which has continuation tokens and no offsets: overfetch `skip + size`
  * rows and slice. A real ceiling — a page is reachable only while that total stays inside
  * MAX_PAGE_SIZE, the same bound `controllers/search.js` documents on the project list.
@@ -223,6 +269,8 @@ module.exports = {
   orderByFrom,
   pageSlice,
   upsertItem,
+  upsertWithEtag,
+  createItem,
   isDefinedAndNotNull,
   selectWhere,
   selectFor,

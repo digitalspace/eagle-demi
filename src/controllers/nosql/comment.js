@@ -19,7 +19,9 @@ const { seedAcl } = require('../../seed/transform');
 const { systemAccess } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
-const { eaglePush, upsertWithRetry, refId } = require('./eagle-mirror');
+const {
+  eaglePush, upsertWithRetry, refId, ignoreStalePush, pushConflict
+} = require('./eagle-mirror');
 
 function mirrorItem(eagleId, doc, period, read, existing) {
   return {
@@ -58,9 +60,10 @@ function mirrorItem(eagleId, doc, period, read, existing) {
  *
  * @param {object} [periodRow] the DEMI comment-period row, when the caller already holds it. The
  *   backfill walks period by period, so it passes one and saves a read per comment.
- * @returns {Promise<{saved: object, existing: object|null}|null>}
+ * @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}
+ *   |null>}
  */
-async function mirrorFromEagle(eagleId, doc, periodRow) {
+async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}) {
   const periodEagleId = refId(doc.period);
   const period = periodRow || (periodEagleId
     ? await commentPeriods.getById(systemAccess(), periodEagleId)
@@ -71,11 +74,15 @@ async function mirrorFromEagle(eagleId, doc, periodRow) {
   // both ceilings.
   const read = constrainToProject(seedAcl(doc.read), period.read);
 
-  const { saved, existing } = await upsertWithRetry(
+  const written = await upsertWithRetry(
     comments,
     (current) => mirrorItem(eagleId, doc, period, read, current),
-    () => comments.getById(systemAccess(), eagleId)
+    () => comments.getById(systemAccess(), eagleId),
+    { pushedAt }
   );
+  // Nothing was written, so the partition cleanup below has nothing to clean up after.
+  if (written.status === 'conflict' || written.ignored) return written;
+  const { saved, existing } = written;
 
   // A comment moved to another period lands in a NEW partition; the old row would stay listable
   // under the old period. Same removal as the document mirror.
@@ -94,11 +101,20 @@ exports.upsertFromEagle = async (req, res) => {
     if (!push) {
       return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
     }
-    const { eagleId, doc } = push;
+    const { eagleId, doc, pushedAt } = push;
 
-    const mirrored = await mirrorFromEagle(eagleId, doc);
+    const mirrored = await mirrorFromEagle(eagleId, doc, undefined, { pushedAt });
     if (!mirrored) return res.status(404).json({ error: 'Parent comment period not found' });
-    const { saved, existing } = mirrored;
+    if (mirrored.status === 'conflict') {
+      return pushConflict(res, { label: 'Comment Controller', eagleId });
+    }
+    const { saved, existing, ignored } = mirrored;
+    if (ignored) {
+      return ignoreStalePush(req, res, {
+        label: 'Comment Controller', action: 'comment.push', targetType: 'comment',
+        current: existing, projectId: existing.projectId, pushedAt
+      });
+    }
 
     auditEvent(req, {
       action: 'comment.push',

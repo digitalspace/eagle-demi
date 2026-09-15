@@ -176,6 +176,9 @@ function mirrorList(eagleId, doc, repo = listsRepo) {
  */
 async function mirrorUpdate(eagleId, doc, deps) {
   const result = await deps.updateMirror.mirrorFromEagle(eagleId, doc);
+  // No row was written — a newer push won, or this one never found the row standing still — so
+  // there is no `saved` to read a claim off and nothing published to claim for.
+  if (result.ignored || result.status === 'conflict') return result;
   const { saved, existing } = result;
   if (saved.isPublished && !(existing && existing.notifiedAt)) {
     await deps.updatesRepo.claimForNotify(saved.id, new Date().toISOString());
@@ -255,8 +258,12 @@ async function writeRow(doc, write, args, deps, counts) {
     // A mirror answers null when the row's parent is not in DEMI — an unpublished project's
     // comment period, say. That is a skip, not an error: the parent is seed-nosql's to supply.
     // It is also counted as a drop, so the stage is not checkpointed complete over rows it owes.
+    //
+    // `ignored` and `conflict` are the same kind of answer: nothing was written, so counting the
+    // row as written would checkpoint the stage over a row it never wrote.
     const result = await write(doc, deps);
-    if (result) counts.written++; else { counts.skipped++; counts.dropped++; }
+    const wrote = Boolean(result) && !result.ignored && result.status !== 'conflict';
+    if (wrote) counts.written++; else { counts.skipped++; counts.dropped++; }
   } catch (err) {
     counts.errors++;
     if (counts.errors <= MAX_LOGGED_ERRORS) {

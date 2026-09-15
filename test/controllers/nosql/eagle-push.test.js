@@ -27,7 +27,8 @@ const { requireWrite, requireAdmin } = require('../../../src/middleware/require-
 const { routeChains } = require('../../helpers/router-source');
 // One id space for the whole push suite: the notification the public-read mirrors already use.
 const {
-  NOTIFICATION_EAGLE_ID, anonymous, staff
+  NOTIFICATION_EAGLE_ID, anonymous, staff,
+  eagleProject, storedEagleProject: storedProject
 } = require('../../helpers/eagle-mirror-fixtures');
 const { canRead } = require('../../../src/helpers/access-sql');
 
@@ -45,19 +46,6 @@ const STAFF = { sub: 'kc-sub-1', preferred_username: 'push', realm_access: { rol
 
 const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
 const DOC_EAGLE_ID = '58869abba4acd4014b81f55c';
-
-/** An Eagle project in the FLAT shape the public search endpoint returns. */
-function eagleProject(overrides = {}) {
-  return {
-    _id: PROJECT_EAGLE_ID,
-    name: 'Nicomen Wind Energy',
-    description: 'A wind farm near Nicomen',
-    status: 'Under Construction',
-    read: ['public', 'sysadmin', 'staff'],
-    centroid: [-120.4, 50.6],
-    ...overrides
-  };
-}
 
 /**
  * The same project as eagle-api's Mongo actually stores it: content nested under the legislation
@@ -93,28 +81,6 @@ function eagleDocument(overrides = {}) {
     type: '5cf00c03a266b7e1877504db',
     milestone: '5cf00c03a266b7e1877504ef',
     read: ['public', 'sysadmin'],
-    ...overrides
-  };
-}
-
-/** A project already in Cosmos: matched to Track, enriched by the wildfire sync. */
-function storedProject(overrides = {}) {
-  return {
-    id: '207',
-    eagleId: PROJECT_EAGLE_ID,
-    trackProjectId: 207,
-    isPublished: true,
-    read: ['public', 'sysadmin', 'staff'],
-    sources: {
-      track: { track_project_id: 207, name: 'Nicomen Wind Energy', epic_guid: PROJECT_EAGLE_ID },
-      eagle: { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy' },
-      wildfire: {
-        activeCountWithin50km: 2,
-        nearestDistanceKm: 12.4,
-        firesOfNoteNearby: 1,
-        lastCalculatedAt: '2026-08-23T00:00:00.000Z'
-      }
-    },
     ...overrides
   };
 }

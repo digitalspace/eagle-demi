@@ -291,7 +291,7 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 28,
+    assert.strictEqual(emissions.length, 31,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // A site emitting a stored row names it BARE (`redactForAccess('projects', saved, access)`) or
@@ -333,7 +333,7 @@ test('access gate coverage', async (t) => {
     // for the 404 (row deleted under edit), 409 (staff PUT write-race exhausted) and 503 (eagle
     // push write-race exhausted) sites. +3 for GET /documents/recent-uploads: its 400, its memo
     // hit and its ranked payload.
-    assert.strictEqual(emissions.length, 41,
+    assert.strictEqual(emissions.length, 40,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits

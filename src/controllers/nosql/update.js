@@ -17,7 +17,9 @@ const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const notify = require('../../services/notify');
-const { refId } = require('./eagle-mirror');
+const {
+  eaglePush, refId, upsertWithRetry, ignoreStalePush, pushConflict
+} = require('./eagle-mirror');
 
 /**
  * Tell eagle-notify what changed, if anything did.
@@ -100,31 +102,24 @@ function mirrorItem(eagleId, doc, existing) {
   };
 }
 
-/** 409 (created behind us) and 412 (etag moved) both mean: somebody else wrote this row. */
-const raced = (err) => [409, 412].includes(err.code || err.statusCode);
-
 /**
  * Mirror one raw Eagle `RecentActivity`, whoever asked — the push handler below or the backfill
  * (src/scripts/seed-public-reads.js). It does NOT announce: `announce` is the push handler's,
  * because a backfill is history rather than news.
  *
- * @returns {Promise<{saved: object, existing: object|null}>}
+ * The rebuild `upsertWithRetry` does after a lost race is what keeps `notifiedAt` honest: carried
+ * from a stale read it would hand back a claim another push is holding.
+ *
+ * @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}>}
  */
-async function mirrorFromEagle(eagleId, doc) {
-  // systemAccess: the mirror must find a row it is about to republish while that row is private.
-  let existing = await updates.getById(systemAccess(), eagleId);
-
-  let saved;
-  try {
-    saved = await updates.upsert(mirrorItem(eagleId, doc, existing), existing);
-  } catch (err) {
-    // The row moved between the read and the write, so the `notifiedAt` carried above is stale
-    // and writing it would hand back a claim another push is holding. Re-read, write again.
-    if (!raced(err)) throw err;
-    existing = await updates.getById(systemAccess(), eagleId);
-    saved = await updates.upsert(mirrorItem(eagleId, doc, existing), existing);
-  }
-  return { saved, existing };
+function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
+  return upsertWithRetry(
+    updates,
+    (current) => mirrorItem(eagleId, doc, current),
+    // systemAccess: the mirror must find a row it is about to republish while that row is private.
+    () => updates.getById(systemAccess(), eagleId),
+    { pushedAt }
+  );
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
@@ -136,13 +131,24 @@ exports.mirrorFromEagle = mirrorFromEagle;
  */
 exports.upsertFromEagle = async (req, res) => {
   try {
-    const eagleId = String(req.params.eagleId);
-    const doc = req.body && req.body.doc;
-    if (!doc || String(doc._id || '') !== eagleId) {
+    const push = eaglePush(req);
+    if (!push) {
       return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
     }
+    const { eagleId, doc, pushedAt } = push;
 
-    const { saved, existing } = await mirrorFromEagle(eagleId, doc);
+    const written = await mirrorFromEagle(eagleId, doc, { pushedAt });
+    if (written.status === 'conflict') {
+      return pushConflict(res, { label: 'Update Controller', eagleId });
+    }
+    const { saved, existing, ignored } = written;
+    // Nothing was written, so there is nothing to announce either — the newer push already did.
+    if (ignored) {
+      return ignoreStalePush(req, res, {
+        label: 'Update Controller', action: 'update.push', targetType: 'update',
+        current: existing, projectId: existing.projectId, pushedAt
+      });
+    }
 
     auditEvent(req, {
       action: 'update.push',
