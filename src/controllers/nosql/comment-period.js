@@ -44,7 +44,9 @@ const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
-const { eaglePush, upsertWithRetry } = require('./eagle-mirror');
+const {
+  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
+} = require('./eagle-mirror');
 
 /** The mirror row: the fields eagle-public renders, plus the raw Eagle record behind them. */
 function mirrorItem(eagleId, doc, projectId, read, existing) {
@@ -93,9 +95,10 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
  * @param {object} [parentRow] the admitted parent, when the caller already holds it — the shape
  *   `helpers/parent-admit` returns. A row without `kind` is read as a project, which is what every
  *   stored project row is.
- * @returns {Promise<{saved: object, existing: object|null, cascadeError: string|null}|null>}
+ * @returns {Promise<{saved: object, existing: object|null, cascadeError: string|null}
+ *   |{ignored: string, existing: object}|null>}
  */
-async function mirrorFromEagle(eagleId, doc, parentRow) {
+async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}) {
   const parent = parentRow || await admitParent(doc.project);
   if (!parent) return null;
 
@@ -110,11 +113,16 @@ async function mirrorFromEagle(eagleId, doc, parentRow) {
     ? constrainToProject(constrained, DELETED_CEILING)
     : constrained;
 
-  const { saved, existing } = await upsertWithRetry(
+  const written = await upsertWithRetry(
     commentPeriods,
     (current) => mirrorItem(eagleId, doc, parent.id, read, current),
-    () => commentPeriods.getById(systemAccess(), eagleId)
+    () => commentPeriods.getById(systemAccess(), eagleId),
+    { pushedAt }
   );
+  // Nothing was written, so neither the partition cleanup nor the cascade below has anything to
+  // answer for — the newer push settled both, or no write landed at all.
+  if (written.status === 'conflict' || written.ignored) return written;
+  const { saved, existing } = written;
 
   // A period whose parent changed lands in a NEW partition, and Cosmos leaves the old row
   // behind — still listable under the old parent. Same removal as the document mirror.
@@ -168,13 +176,23 @@ exports.upsertFromEagle = async (req, res) => {
     if (!push) {
       return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
     }
-    const { eagleId, doc } = push;
+    const { eagleId, doc, pushedAt } = push;
 
-    const mirrored = await mirrorFromEagle(eagleId, doc);
+    const mirrored = await mirrorFromEagle(eagleId, doc, undefined, { pushedAt });
     if (!mirrored) {
       return res.status(404).json({ error: 'Parent project or notification not found' });
     }
-    const { saved, existing, cascadeError } = mirrored;
+    if (mirrored.status === 'conflict') {
+      return pushConflict(res, { label: 'Comment Period Controller', eagleId });
+    }
+    const { saved, existing, cascadeError, ignored } = mirrored;
+    if (ignored) {
+      return ignoreStalePush(req, res, {
+        label: 'Comment Period Controller', action: 'commentPeriod.push',
+        targetType: 'commentPeriod',
+        current: existing, projectId: existing.projectId, pushedAt
+      });
+    }
 
     auditEvent(req, {
       action: saved.isDeleted ? 'commentPeriod.delete' : 'commentPeriod.push',

@@ -128,6 +128,13 @@ module.exports = {
   _attachments: { defaultVis: 0, maxVis: 0 },
   _ts: { defaultVis: 0, maxVis: 0 },
 
+  // Writer-visible only, like `_etag`: the eagle-api push clock this mirror orders pushes by, not
+  // a property of the record.
+  eaglePushedAt: { defaultVis: 2, maxVis: 2 },
+  // Same: the marker saying this project still owes a visibility cascade, which the next push
+  // looks for. Bookkeeping, not content.
+  cascadePendingAt: { defaultVis: 2, maxVis: 2 },
+
   // Writers need it back for optimistic concurrency; every WRITE_ROLES holder is level 2 or lower.
   _etag: { defaultVis: 2, maxVis: 2 }
 };

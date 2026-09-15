@@ -27,6 +27,36 @@ const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const { shortUrlFor } = require('../../helpers/short-links');
+const { writeGuarded } = require('../../helpers/etag-write');
+const {
+  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
+} = require('./eagle-mirror');
+
+/**
+ * The bookkeeping only an eagle-api push writes: the stamp a later push is ordered against, and
+ * the marker saying this project still owes a visibility cascade.
+ *
+ * Carried off the stored row on every OTHER write and never taken from a request body — a whole-
+ * item write that rebuilt them from a staff PUT would let a caller replay an old push, or lose a
+ * cascade the push had recorded as owed.
+ */
+const PUSH_BOOKKEEPING = ['eaglePushedAt', 'cascadePendingAt'];
+
+function carryPushBookkeeping(row, current) {
+  for (const field of PUSH_BOOKKEEPING) {
+    if (current && current[field] !== undefined) row[field] = current[field];
+    else delete row[field];
+  }
+  return row;
+}
+
+/** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
+function writeConflict(res, what, id) {
+  logger.warn(`[Project Controller] ${what} lost its etag race, asking for a retry`, { id });
+  return res.status(503).json({
+    error: 'The record is being written by another request. Try again.'
+  });
+}
 
 /**
  * A project's visibility change, carried to its index row and re-derived onto its documents, its
@@ -265,6 +295,10 @@ exports.updateProject = async (req, res) => {
       status: wireStatus,
       // The cacPublished predicate reads this, so PUT must not set it (doc §2 item 7).
       projectCACPublished: _ignoredCACPublished,
+      // Push bookkeeping. Catalogued at vis 2, so a staff caller CAN see them and would otherwise
+      // be able to send them back: an old `eaglePushedAt` makes every later push read as stale, and
+      // clearing `cascadePendingAt` loses a cascade the push recorded as still owed.
+      eaglePushedAt: _ignoredPushedAt, cascadePendingAt: _ignoredCascadePending,
       _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
       _ts: _ignoredTs, _etag: _ignoredEtag, sources: _ignoredSources,
       ...changes
@@ -290,13 +324,33 @@ exports.updateProject = async (req, res) => {
       });
     }
 
-    const saved = await projects.upsert({
-      ...existing,
-      ...changes,
-      id: existing.id,
-      trackProjectId: existing.trackProjectId,
-      updatedAt: new Date().toISOString()
+    // Guarded and rebuilt per try, the same as the push path: a whole-item write from this
+    // request's snapshot would silently replace a push that landed while the body was in flight.
+    const written = await writeGuarded({
+      existing,
+      reread: () => projects.getById(access, req.params.id),
+      attempt: async (current) => {
+        if (!current) return { status: 'missing' };
+        const row = carryPushBookkeeping({
+          ...current,
+          ...changes,
+          id: current.id,
+          trackProjectId: current.trackProjectId,
+          updatedAt: new Date().toISOString()
+        }, current);
+        return {
+          status: 'saved',
+          saved: await projects.upsert(row, { etag: current._etag })
+        };
+      },
+      onLost: (_current, attempt) =>
+        logger.warn('[Project Controller] project update lost its etag race, rebuilding',
+          { id: req.params.id, attempt })
     });
+
+    if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
+    const { saved } = written;
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full
     // before/after of arbitrary request bodies would put project content into a table kept for
@@ -360,12 +414,32 @@ exports.setLevel = async (req, res) => {
     }
 
     const acl = { read: readForLevel(level), isPublished: level === 4 };
-    const saved = await projects.upsert({
-      ...existing,
-      ...acl,
-      id: existing.id,
-      updatedAt: new Date().toISOString()
+    // Same guard as the push path: a level move that replaced the item from this snapshot would
+    // undo whatever content a push had written since, and carry an old `eaglePushedAt` back with it.
+    const written = await writeGuarded({
+      existing,
+      reread: () => projects.getById(access, req.params.id),
+      attempt: async (current) => {
+        if (!current) return { status: 'missing' };
+        const row = carryPushBookkeeping({
+          ...current,
+          ...acl,
+          id: current.id,
+          updatedAt: new Date().toISOString()
+        }, current);
+        return {
+          status: 'saved',
+          saved: await projects.upsert(row, { etag: current._etag })
+        };
+      },
+      onLost: (_current, attempt) =>
+        logger.warn('[Project Controller] project level change lost its etag race, rebuilding',
+          { id: req.params.id, attempt })
     });
+
+    if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (written.status === 'conflict') return writeConflict(res, 'project level change', req.params.id);
+    const { saved } = written;
 
     // Before the cascade, which can 500: the row someone comes looking for is the visibility
     // change, and it must not be the one path that records nothing.
@@ -469,32 +543,136 @@ exports.setVisibility = async (req, res) => {
  * matched, `eagle-<eagleId>` when it is not.
  */
 exports.upsertFromEagle = async (req, res) => {
-  try {
-    const eagleId = String(req.params.eagleId);
-    const doc = req.body && req.body.doc;
-    if (!doc || String(doc._id || '') !== eagleId) {
-      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
-    }
+  const push = eaglePush(req);
+  if (!push) {
+    return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
+  }
+  // eagle-api pushes the pre-save and the saved record separately, and prod saw the two land 34 ms
+  // apart for one project. The etag guard and the `pushedAt` order are what make that safe, across
+  // instances as well as inside one.
+  return applyEaglePush(req, res, push);
+};
 
+/** The row a push writes, built from whatever revision is stored at the moment of the write. */
+function mergeEaglePush(doc, existing) {
+  const merged = existing && existing.sources && existing.sources.track
+    ? mergeTrackProject(existing.sources.track, doc)
+    : mergeEagleOnlyProject(doc);
+
+  // Every OTHER source block survives the push. A Cosmos upsert replaces the item, and the merge
+  // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
+  // nothing upstream can rebuild. The same trap the seed hit.
+  merged.sources = { ...(existing && existing.sources), ...merged.sources };
+  // Same replace-the-whole-item trap as sources: an upsert with no vis wipes classification.
+  if (existing && existing.vis) merged.vis = existing.vis;
+  // And the same for the code: dropping it would leave a printed link pointing at nothing once
+  // the nightly sync minted a second one.
+  if (existing && existing.shortCode) merged.shortCode = existing.shortCode;
+  // The merge rebuilds the record from the push, so without this a retry of a push whose cascade
+  // failed would clear the marker saying that cascade is still owed.
+  if (existing && existing.cascadePendingAt) merged.cascadePendingAt = existing.cascadePendingAt;
+  return merged;
+}
+
+/** Whether a write moved what the documents, periods and the index row are gated on. */
+function visibilityMoved(before, after) {
+  if (before.isPublished !== after.isPublished) return true;
+  const was = [...(before.read || [])].sort();
+  const now = [...(after.read || [])].sort();
+  return was.length !== now.length || was.some((role, i) => role !== now[i]);
+}
+
+/**
+ * Cascade the project's visibility, and RECORD it on the row when that fails.
+ *
+ * The row is already written by the time the cascade runs, so a failure here leaves the documents,
+ * the periods and the index row carrying the old ACL with nothing to bring anyone back — eagle-api
+ * retries the push, the visibility no longer moves against the stored row, and the cascade never
+ * runs again. The marker is what the next push looks for.
+ *
+ * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ */
+async function runCascade(saved, eagleId) {
+  let failure;
+  try {
+    failure = await cascadeProjectVisibility(saved.id,
+      { read: saved.read, isPublished: saved.isPublished });
+  } catch (cascadeErr) {
+    logger.error('[Project Controller] project visibility cascade threw', {
+      projectId: saved.id, eagleId, error: cascadeErr.message
+    });
+    failure = 'Project visibility changed, but its documents and engagement were not updated.';
+  }
+  if (failure) await markCascadePending(saved, eagleId);
+  return failure;
+}
+
+/** Best effort, and deliberately so: the 500 the caller is about to send is the real answer. */
+async function markCascadePending(saved, eagleId) {
+  try {
+    await projects.patchCascadePending(saved.id, new Date().toISOString(), saved._etag);
+  } catch (patchErr) {
+    logger.error('[Project Controller] could not record the owed visibility cascade', {
+      projectId: saved.id, eagleId, error: patchErr.message
+    });
+  }
+}
+
+/** Also best effort: a marker left behind only costs the next push one redundant cascade. */
+async function clearCascadePending(saved, eagleId) {
+  try {
+    await projects.patchCascadePending(saved.id, null, saved._etag);
+  } catch (patchErr) {
+    logger.error('[Project Controller] could not clear the owed visibility cascade', {
+      projectId: saved.id, eagleId, error: patchErr.message
+    });
+  }
+}
+
+async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
+  try {
     // systemAccess: the push is a mirror, so it must find a project it is about to republish even
     // while that project is currently private.
-    const existing = await projects.getByEagleId(systemAccess(), eagleId);
+    const read = () => projects.getByEagleId(systemAccess(), eagleId);
+    const existing = await read();
 
-    const merged = existing && existing.sources && existing.sources.track
-      ? mergeTrackProject(existing.sources.track, doc)
-      : mergeEagleOnlyProject(doc);
+    // Rebuilt per try off the row that actually stored: an unguarded upsert replaced the item from
+    // this request's snapshot, so the stale half of a pre-save/save pair landed last and left a
+    // published project private — and with `isPublished` unmoved against that same snapshot, the
+    // cascade never ran to correct the documents or the index row.
+    const written = await writeGuarded({
+      existing,
+      reread: read,
+      attempt: async (current) => {
+        // Inside the attempt, so a retry after a 412 judges this push against the one that won.
+        if (isStalePush(pushedAt, current)) return { status: 'stale', existing: current };
+        const row = stampPush(mergeEaglePush(doc, current), pushedAt, current);
+        // Guarded on the revision this attempt read, or CREATED when it read none — an unguarded
+        // upsert would replace a project another push created in between.
+        const saved = await projects.upsert(row,
+          current ? { etag: current._etag } : { create: true });
+        return { status: 'saved', saved, existing: current };
+      },
+      onLost: (_current, attempt) =>
+        logger.warn('[Project Controller] eagle project push lost its etag race, rebuilding',
+          { eagleId, attempt })
+    });
 
-    // Every OTHER source block survives the push. A Cosmos upsert replaces the item, and the merge
-    // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
-    // nothing upstream can rebuild. The same trap the seed hit.
-    merged.sources = { ...(existing && existing.sources), ...merged.sources };
-    // Same replace-the-whole-item trap as sources: an upsert with no vis wipes classification.
-    if (existing && existing.vis) merged.vis = existing.vis;
-    // And the same for the code: dropping it would leave a printed link pointing at nothing once
-    // the nightly sync minted a second one.
-    if (existing && existing.shortCode) merged.shortCode = existing.shortCode;
+    if (written.status === 'stale') {
+      return ignoreStalePush(req, res, {
+        label: 'Project Controller', action: 'project.push', targetType: 'project',
+        current: written.existing, projectId: written.existing.id, pushedAt
+      });
+    }
 
-    const saved = await projects.upsert(merged);
+    if (written.status === 'conflict') {
+      return pushConflict(res, { label: 'Project Controller', eagleId });
+    }
+
+    // `from` is the revision the winning attempt built on, not the one this request first read:
+    // after a retry the first read is already gone, and the cascade has to answer "did this write
+    // move the row it landed on".
+    const { saved, existing: from } = written;
 
     auditEvent(req, {
       action: 'project.push',
@@ -503,18 +681,20 @@ exports.upsertFromEagle = async (req, res) => {
       projectId: saved.id,
       detail: {
         eagleId,
-        isPublishedFrom: existing ? existing.isPublished : null,
+        isPublishedFrom: from ? from.isPublished : null,
         isPublishedTo: saved.isPublished
       }
     });
 
     // Only against an existing row: a project DEMI has never seen has no documents to cascade onto
-    // and no index row to correct.
-    if (existing && saved.isPublished !== existing.isPublished) {
-      const failure = await cascadeProjectVisibility(saved.id, {
-        read: saved.read, isPublished: saved.isPublished
-      });
+    // and no index row to correct. A row still carrying `cascadePendingAt` cascades whether or not
+    // THIS push moved anything — the move it owes the cascade for happened on an earlier push, and
+    // nothing else would ever come back for it.
+    const owed = Boolean(from && from.cascadePendingAt);
+    if (from && (visibilityMoved(from, saved) || owed)) {
+      const failure = await runCascade(saved, eagleId);
       if (failure) return res.status(500).json({ success: false, error: failure });
+      if (owed) await clearCascadePending(saved, eagleId);
     }
 
     return res.json({ id: saved.id, action: 'upsert' });
@@ -522,7 +702,7 @@ exports.upsertFromEagle = async (req, res) => {
     if (err.status === 400) return res.status(400).json({ error: err.message });
     return serverError(res, err, 'project controller failed');
   }
-};
+}
 
 exports.deleteProject = async (req, res) => {
   try {

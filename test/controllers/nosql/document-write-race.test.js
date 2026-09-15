@@ -80,9 +80,13 @@ const editDisplayName = (res = mockRes()) => documentController.updateDocument({
   params: { id: DOC_ID }, query: {}, user: STAFF, body: { displayName: 'Application (revised)' }
 }, res);
 
-const push = (doc, res = mockRes()) => documentController.upsertFromEagle({
-  params: { eagleId: DOC_ID }, query: {}, user: STAFF, body: { doc }
-}, res);
+const push = (doc, pushedAt) => documentController.upsertFromEagle({
+  params: { eagleId: DOC_ID }, query: {}, user: STAFF, body: { doc, pushedAt }
+}, mockRes());
+
+/** Two stamps eagle-api could have sent, oldest first, a clear gap apart. */
+const OLDER = 1757980000000;
+const NEWER = 1757980005000;
 
 test('a staff edit writes only while the row is still the revision it read', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -229,4 +233,82 @@ test('an eagle push that keeps losing asks to be sent again', async (t) => {
   assert.ok(res.statusCode >= 500, `a retryable answer is the point, got ${res.statusCode}`);
   assert.strictEqual(res.statusCode, 503);
   assert.strictEqual(upserted.length, 3);
+});
+
+test('a document push older than the one already stored is ignored', async (t) => {
+  // The etag does not order two pods, so the stale half of a pair can read the winner's row and
+  // legitimately replace it — here, re-typing a document Eagle has already re-typed again.
+  t.afterEach(() => t.mock.restoreAll());
+  t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProjectRow(), isPublished: true }));
+  t.mock.method(logger, 'info', () => {});
+
+  const indexed = [];
+  const upserted = raceWith(t,
+    [storedDocument({ _etag: ETAG_READ, eaglePushedAt: NEWER, read: ['sysadmin'] })], 0);
+  t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => { indexed.push(...rows); return 0; });
+
+  const res = await push(eagleDocument({ type: OTHER_TYPE_ID }), OLDER);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body, { ok: true, ignored: 'stale', eaglePushedAt: NEWER });
+  assert.strictEqual(upserted.length, 0, 'the stale body was written over the newer one');
+  assert.deepStrictEqual(indexed, [], 'a push that wrote nothing must not move the index row');
+});
+
+test('a staff PUT cannot set the push stamp', async (t) => {
+  // `eaglePushedAt` is catalogued at vis 2, so a staff caller sees it on a GET and can send it
+  // back. An old stamp replayed onto the row makes every later eagle-api push read as stale.
+  t.afterEach(() => t.mock.restoreAll());
+
+  const upserted = raceWith(t, [storedDocument({ _etag: ETAG_READ, eaglePushedAt: NEWER })], 0);
+
+  const res = await documentController.updateDocument({
+    params: { id: DOC_ID },
+    query: {},
+    user: STAFF,
+    body: { displayName: 'Application (revised)', eaglePushedAt: OLDER }
+  }, mockRes());
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(upserted[0].item.eaglePushedAt, NEWER);
+  assert.strictEqual(upserted[0].item.displayName, 'Application (revised)');
+});
+
+test('a document push one millisecond older than the stored stamp is ignored', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProjectRow(), isPublished: true }));
+
+  const upserted = raceWith(t, [storedDocument({ _etag: ETAG_READ, eaglePushedAt: NEWER })], 0);
+
+  const res = await push(eagleDocument({ type: NEW_TYPE_ID }), NEWER - 1);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body, { ok: true, ignored: 'stale', eaglePushedAt: NEWER });
+  assert.strictEqual(upserted.length, 0, 'no tolerance: one millisecond older still loses');
+});
+
+test('a document push equal to the stored stamp writes', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProjectRow(), isPublished: true }));
+
+  const upserted = raceWith(t, [storedDocument({ _etag: ETAG_READ, eaglePushedAt: NEWER })], 0);
+
+  const res = await push(eagleDocument({ type: NEW_TYPE_ID }), NEWER);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(upserted[0].item.eaglePushedAt, NEWER);
+});
+
+test('a newer document push writes, and stores the stamp it was ordered by', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProjectRow(), isPublished: true }));
+
+  const upserted = raceWith(t, [storedDocument({ _etag: ETAG_READ, eaglePushedAt: OLDER })], 0);
+
+  const res = await push(eagleDocument({ type: NEW_TYPE_ID }), NEWER);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(upserted[0].item.typeId, NEW_TYPE_ID);
+  assert.strictEqual(upserted[0].item.eaglePushedAt, NEWER,
+    'without the stamp on the row the next push has nothing to be ordered against');
 });

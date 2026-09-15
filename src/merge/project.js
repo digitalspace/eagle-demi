@@ -129,7 +129,7 @@ function normalizeEagleSlot(flat, orgs) {
 }
 
 /**
- * The `EAGLE_ONLY_FIELDS` entries the seed's feed cannot supply at all.
+ * What a re-merge must take back off the stored row rather than rebuild.
  *
  * `/api/public/search?dataset=Project` sends none of these four: the push resolves `proponentId`
  * and `proponentName` out of the Organization it was handed, and the search omits
@@ -138,7 +138,14 @@ function normalizeEagleSlot(flat, orgs) {
  * so carrying the whole list forward made an upstream clear unappliable for ~36 fields, `pinsRead`
  * among them.
  */
-const PUSH_ONLY_FIELDS = ['proponentId', 'proponentName', 'applicableRegulation', 'featuredDocuments'];
+const PUSH_ONLY_FIELDS = [
+  'proponentId', 'proponentName', 'applicableRegulation', 'featuredDocuments',
+  // Not content at all: the stamp a later eagle-api push is ordered against, and the marker saying
+  // the project still owes a visibility cascade. Only the push writes them, and a re-seed or a
+  // Track re-merge that blanked them would let an already-applied push land again, or lose the
+  // cascade the row is still waiting for.
+  'eaglePushedAt', 'cascadePendingAt'
+];
 
 /**
  * Carry forward the Eagle fields a re-merge could not rebuild.

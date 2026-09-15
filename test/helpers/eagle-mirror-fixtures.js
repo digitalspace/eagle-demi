@@ -48,6 +48,41 @@ function storedProject(read = PUBLIC_ACL) {
   return { id: '207', eagleId: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy', read };
 }
 
+/** An Eagle project in the FLAT shape the public search endpoint returns, as the push sends it. */
+function eagleProject(overrides = {}) {
+  return {
+    _id: PROJECT_EAGLE_ID,
+    name: 'Nicomen Wind Energy',
+    description: 'A wind farm near Nicomen',
+    status: 'Under Construction',
+    read: [...PUBLIC_ACL],
+    centroid: [-120.4, 50.6],
+    ...overrides
+  };
+}
+
+/** The same project already in Cosmos: matched to Track, enriched by the wildfire sync. */
+function storedEagleProject(overrides = {}) {
+  return {
+    id: '207',
+    eagleId: PROJECT_EAGLE_ID,
+    trackProjectId: 207,
+    isPublished: true,
+    read: [...PUBLIC_ACL],
+    sources: {
+      track: { track_project_id: 207, name: 'Nicomen Wind Energy', epic_guid: PROJECT_EAGLE_ID },
+      eagle: { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy' },
+      wildfire: {
+        activeCountWithin50km: 2,
+        nearestDistanceKm: 12.4,
+        firesOfNoteNearby: 1,
+        lastCalculatedAt: '2026-08-23T00:00:00.000Z'
+      }
+    },
+    ...overrides
+  };
+}
+
 const DOCUMENT_EAGLE_ID = '58869abba4acd4014b81f55c';
 const TYPE_ID = '5cf00c03a266b7e1877504db';
 const MILESTONE_ID = '5cf00c03a266b7e1877504ef';
@@ -226,7 +261,9 @@ const STAFF = { sub: 'kc-sub-1', preferred_username: 'push', realm_access: { rol
  *
  * The caller's `t` owns the mocks; restore them with `t.mock.restoreAll()`.
  */
-async function captureMirror(t, entity, doc, { existing = null, project, period } = {}) {
+async function captureMirror(t, entity, doc, {
+  existing = null, project, period, pushedAt, losses = 0
+} = {}) {
   const { controller, repo, eagleId } = MIRRORS[entity];
 
   t.mock.method(projects, 'getByEagleId', async () => (project === undefined ? storedProject() : project));
@@ -236,14 +273,37 @@ async function captureMirror(t, entity, doc, { existing = null, project, period 
   t.mock.method(repo, 'getById', async () => existing);
 
   let row;
-  t.mock.method(repo, 'upsert', async (item) => { row = item; return item; });
+  // `losses` 412s the first N writes, so a case can drive the mirror's retry bound.
+  let writes = 0;
+  t.mock.method(repo, 'upsert', async (item) => {
+    writes++;
+    if (writes <= losses) throw Object.assign(new Error('lost its etag race'), { code: 412 });
+    row = item;
+    return item;
+  });
 
   const res = mockRes();
   await controller.upsertFromEagle(
-    { params: { eagleId }, query: {}, body: { doc: doc || MIRRORS[entity].fixture() }, user: STAFF },
+    {
+      params: { eagleId }, query: {}, user: STAFF,
+      body: { doc: doc || MIRRORS[entity].fixture(), pushedAt }
+    },
     res
   );
-  return { res, row };
+  return { res, row, writes: () => writes };
+}
+
+/** The stored mirror row a push is ordered against — only the stamp and the ids matter to it. */
+function storedStamped(entity, eaglePushedAt) {
+  return {
+    id: MIRRORS[entity].eagleId,
+    // Its own partition key, whichever of the two the mirror uses — a row that looks moved would
+    // send the controller into a cleanup this case is not about.
+    projectId: '207',
+    periodId: PERIOD_EAGLE_ID,
+    read: [...PUBLIC_ACL],
+    eaglePushedAt
+  };
 }
 
 module.exports = {
@@ -260,6 +320,8 @@ module.exports = {
   PRIVATE_ACL,
   MIRRORS,
   storedProject,
+  storedEagleProject,
+  eagleProject,
   storedPeriod,
   storedDocument,
   eaglePeriod,
@@ -271,5 +333,6 @@ module.exports = {
   STAFF,
   anonymous,
   staff,
-  captureMirror
+  captureMirror,
+  storedStamped
 };

@@ -46,5 +46,6 @@ module.exports = {
   _attachments: { defaultVis: 0, maxVis: 0 },
   _ts: { defaultVis: 0, maxVis: 0 },
 
+  eaglePushedAt: { defaultVis: 2, maxVis: 2 },
   _etag: { defaultVis: 2, maxVis: 2 }
 };

@@ -46,5 +46,6 @@ module.exports = {
   // Writer-visible only, same as `_etag`: `notifiedAt` is the eagle-notify claim this service
   // takes, not a property of the announcement.
   notifiedAt: { defaultVis: 2, maxVis: 2 },
+  eaglePushedAt: { defaultVis: 2, maxVis: 2 },
   _etag: { defaultVis: 2, maxVis: 2 }
 };

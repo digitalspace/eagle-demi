@@ -440,7 +440,10 @@ async function seed(argv = [], deps = {}) {
           if (existing.shortCode) project.shortCode = existing.shortCode;
           project.sources = { ...existing.sources, ...project.sources };
           // The public search carries no applicableRegulation or featuredDocuments, so a re-merge
-          // would blank whatever eagle-api's push had already resolved onto the row.
+          // would blank whatever eagle-api's push had already resolved onto the row. It also
+          // carries the push bookkeeping across (`eaglePushedAt`, `cascadePendingAt`) — a re-seed
+          // that blanked those would let an already-applied push land again, or lose a cascade the
+          // row is still owed.
           carryEagleOnlyFields(project, existing);
         }
         // Counted as minted, not as held: the carry above already answered for the rest.
