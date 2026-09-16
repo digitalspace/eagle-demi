@@ -134,10 +134,9 @@ async function readPartition(access, projectId) {
 /**
  * Every document row, partition by partition.
  *
- * Per-partition, NOT one cross-partition paged read: the SDK drops `x-ms-continuation` on a
- * cross-partition query, so a paging loop there stops silently at 1,000 rows (see
- * backfill-display-name-sort.js). Concurrent `next()` calls are queued by the runtime, so the
- * worker pool can share one iterator.
+ * Per-partition, not one cross-partition read: each partition is bounded, so fetchAll drains it
+ * whole. Concurrent `next()` calls are queued by the runtime, so the worker pool can share one
+ * iterator.
  */
 async function* eachRow(documentsRepo, readRows, access, since) {
   const sinceMs = since ? Date.parse(since) : null;
