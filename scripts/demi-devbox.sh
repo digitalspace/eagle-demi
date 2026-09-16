@@ -18,7 +18,8 @@
 #   scripts/demi-devbox.sh apply --env prod --datasources demi-updates-ds,demi-notifications-ds
 #
 # `drift` is read-only and exits 1 when any committed field is missing from the live index. `apply`
-# always dry-runs first, prints what it would do, and asks before writing.
+# asks before every write: data sources named by `--datasources` are written first, behind their own
+# prompt, then the dry run, then the plan for the rest and its prompt.
 #
 # WHAT `apply` DOES, in the order `azure/search/README.md` says these have to happen:
 #
@@ -34,6 +35,9 @@
 #
 # A data source named by `--datasources` is PUT BEFORE step 1: step 2 only covers data sources that
 # already exist and differ, and a new indexer's dry run refuses while its data source is missing.
+# That early PUT also makes it equal to the committed copy, so step 2 can no longer see it — the
+# names go into step 3 directly instead, or a pre-created data source would keep its old high-water
+# mark and fill every new field with nulls.
 #
 # WHY THE SUBSCRIPTION IDS ARE THE ONLY HARDCODED VALUES. Everything else is looked up at runtime —
 # the resource group comes from the search service, the VM's group from the VM, the tenant from the
@@ -88,6 +92,7 @@ Usage: scripts/demi-devbox.sh <drift|apply> [--env test|prod] [--only <index,...
   --datasources
            data source names to PUT before the dry run, comma separated. Needed when adding an
            indexer whose data source does not exist yet: its dry run refuses on the missing name.
+           Written first, behind their own prompt, and their indexers are reset with the rest.
 
 Env    Subscription                            Search service      Devbox
 test   7897ceb1-9a86-4639-87d7-7f9ff67142b3    demi-search-test    demi-devbox-test
@@ -268,6 +273,16 @@ do_apply() {
   # naming the ones to PUT first. Its own grant, ahead of the dry run's: a data source no committed
   # indexer reads yet cannot change what the service is serving.
   if [[ -n "$DATASOURCES" ]]; then
+    # Its own prompt, because this write lands before the one below: a `[y/N]` answered after the
+    # data sources are already on the service cannot still mean "nothing was written".
+    if [[ "$ASSUME_YES" -ne 1 ]]; then
+      local pre_answer=''
+      # The notice is its own echo: `read -p` prints nothing when stdin is not a terminal, and this
+      # line is the record of what the answer was about.
+      echo "demi-devbox: will PUT data source(s) ${DATASOURCES} before the dry run." >&2
+      read -r -p "Proceed? [y/N] " pre_answer || pre_answer=''
+      [[ "$pre_answer" == "y" || "$pre_answer" == "Y" ]] || die "aborted — nothing was written"
+    fi
     with_grant "$0" __put-datasources --env "$ENV_NAME" --datasources "$DATASOURCES"
     echo "demi-devbox: pre-created data source(s): ${DATASOURCES}"
   fi
@@ -294,10 +309,19 @@ do_apply() {
   # `|| true`: no match is the ordinary case, and under pipefail an empty grep would end the run.
   differing="$(grep -o 'data source [A-Za-z0-9-]* DIFFERS' <<<"$dry" | awk '{print $3}' | sort -u | paste -sd, - || true)"
 
-  local resets=''
-  if [[ -n "$differing" ]]; then
-    local ds indexer
-    for ds in ${differing//,/ }; do
+  # A pre-created data source now matches the committed copy, so the dry run never calls it
+  # DIFFERS — and without it here its indexer would keep the high-water mark it had before the
+  # columns changed. Every name the operator passed gets the same reset as one that differs.
+  local ds write_ds=''
+  for ds in ${DATASOURCES//,/ } ${differing//,/ }; do
+    if [[ ",${write_ds}," != *",${ds},"* ]]; then
+      write_ds="${write_ds:+${write_ds},}${ds}"
+    fi
+  done
+
+  local resets='' indexer
+  if [[ -n "$write_ds" ]]; then
+    for ds in ${write_ds//,/ }; do
       indexer="$(indexer_for_datasource "$ds")" \
         || die "no committed indexer reads data source ${ds}"
       resets="${resets:+${resets},}${indexer}"
@@ -307,8 +331,8 @@ do_apply() {
   echo ''
   echo "About to write to ${SERVICE} (${ENV_NAME}):"
   echo "  - PUT the committed indexes and indexers${ONLY:+ (--only ${ONLY})}"
-  if [[ -n "$differing" ]]; then
-    echo "  - PUT data source(s): ${differing}"
+  if [[ -n "$write_ds" ]]; then
+    echo "  - PUT data source(s): ${write_ds}"
     echo "  - reset and run indexer(s): ${resets}"
     if [[ ",${resets}," == *",chunks-indexer,"* ]]; then
       echo "  !! chunks-indexer re-pulls ~1.1M rows and takes hours. --only documents or --only"
@@ -324,7 +348,7 @@ do_apply() {
     [[ "$answer" == "y" || "$answer" == "Y" ]] || die "aborted — nothing was written"
   fi
 
-  with_grant "$0" __apply-run --env "$ENV_NAME" ${ONLY:+--only "$ONLY"} --datasources "$differing"
+  with_grant "$0" __apply-run --env "$ENV_NAME" ${ONLY:+--only "$ONLY"} --datasources "$write_ds"
 }
 
 internal_dry_run() {
