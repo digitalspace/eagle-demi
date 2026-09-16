@@ -166,7 +166,10 @@ test('the projects catalog covers every field the merge emits', async (t) => {
 
   await t.test('the job-written fields are catalogued', () => {
     const jobWritten = ['regionalDistrict', 'municipality', 'electoralDistrict', 'createdAt',
-      'sources.wildfire', 'shortCode'];
+      'sources.wildfire', 'shortCode',
+      // The eagle-api push writes both: the clock it orders pushes by, and the marker saying the
+      // project still owes a visibility cascade.
+      'eaglePushedAt', 'cascadePendingAt'];
     for (const key of jobWritten) {
       assert.ok(key in catalog, `${key} is not catalogued`);
     }
@@ -274,7 +277,9 @@ test('the documents catalog covers every field the seed and the controller write
     // createDocument adds the first four; patchExtraction the next two; upsertFromEagle and the
     // project ACL cascade write `ownRead`.
     for (const key of ['createdAt', 'isDeleted', 'sourceSystem', 'read',
-      'extractionMethod', 'extraction', 'ownRead']) {
+      'extractionMethod', 'extraction', 'ownRead',
+      // The clock the eagle-api push orders pushes by.
+      'eaglePushedAt']) {
       assert.ok(key in documentCatalog, `${key} is not catalogued`);
     }
   });
@@ -367,7 +372,9 @@ test('the public-read catalogs cover every field their mirror writes', async (t)
 
   for (const entity of Object.keys(MIRRORS)) {
     await t.test(`${entity}: every key the mirror writes is catalogued`, async () => {
-      const { res, row } = await captureMirror(t, entity);
+      // Stamped, so the row carries `eaglePushedAt` — a field only a stamped push writes is a
+      // field this suite cannot see unless the push it drives carries one.
+      const { res, row } = await captureMirror(t, entity, null, { pushedAt: 1757980000034 });
       assert.strictEqual(res.statusCode, 200, 'the fixture must actually reach a write');
       assert.ok(row, 'nothing was written, so the case below is vacuous');
       assert.deepStrictEqual(Object.keys(row).filter(k => !(k in catalogFor(entity))), []);

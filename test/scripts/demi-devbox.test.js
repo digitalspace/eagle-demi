@@ -61,11 +61,12 @@ group() { if [[ "$sub" == "${PROD_SUB}" ]]; then echo "rg-demi-prod"; else echo 
 
 # Call 1 is the pre-reset read. AZ_STALE_POLLS says how many polls AFTER the reset still answer
 # with that same execution — the PT5M steady-state tick that is already in the history and would
-# read as "success" to anything not comparing start times.
+# read as "success" to anything not comparing start times. Counted per indexer: a run that resets
+# two of them gives each its own history, as the service does.
 status_reply() {
-  local n=1 stale="\${AZ_STALE_POLLS:-0}"
-  if [[ -f "\${AZ_STATUS_COUNT}" ]]; then n=$(( $(cat "\${AZ_STATUS_COUNT}") + 1 )); fi
-  echo "$n" > "\${AZ_STATUS_COUNT}"
+  local n=1 stale="\${AZ_STALE_POLLS:-0}" count="\${AZ_STATUS_COUNT}.$1"
+  if [[ -f "$count" ]]; then n=$(( $(cat "$count") + 1 )); fi
+  echo "$n" > "$count"
   if [[ -n "\${AZ_INDEXER_INPROGRESS:-}" ]]; then
     echo "STATUS=inProgress START=2026-09-08T20:00:00Z ITEMS=0 FAILED=0"
   elif [[ "$n" -le $(( 1 + stale )) ]]; then
@@ -120,7 +121,7 @@ remote_reply() {
     echo "demi-documents-ds 204 -> demicosmos/documents"
     echo "DEMI_EXIT=0"
   elif [[ "$s" == *"/status?api-version"* ]]; then
-    status_reply
+    status_reply "$(grep -o "[a-z][a-z-]*-indexer" <<<"$s" | head -1)"
   elif [[ "$s" == *"/reset?api-version"* ]]; then
     echo "RESET=204"
     echo "RUN=202"
@@ -194,6 +195,17 @@ function run(args, opts = {}) {
 
 const creates = (calls) => calls.filter(c => c.startsWith('role assignment create'));
 const deletes = (calls) => calls.filter(c => c.startsWith('role assignment delete'));
+
+/** Which step of an apply a remote call is, so a run reads as the order it did things in. */
+const phase = (c) => {
+  if (c.includes('--check')) return 'check';
+  if (c.includes('apply-search-definitions.js --live')) return 'index';
+  if (c.includes('apply-search-definitions.js')) return 'dry';
+  if (c.includes('put-search-datasources.js')) return 'datasource';
+  if (c.includes('/reset?api-version')) return 'reset';
+  if (c.includes('/status?api-version')) return 'status';
+  return 'other';
+};
 
 test('demi-devbox.sh', async (t) => {
   await t.test('refuses an unknown action and an unknown flag', () => {
@@ -319,15 +331,7 @@ test('demi-devbox.sh', async (t) => {
       { env: { AZ_DS_DIFFERS: '1' } });
     assert.strictEqual(r.status, 0, r.stderr);
 
-    const order = r.remote.map((c) => {
-      if (c.includes('--check')) return 'check';
-      if (c.includes('apply-search-definitions.js --live')) return 'index';
-      if (c.includes('apply-search-definitions.js')) return 'dry';
-      if (c.includes('put-search-datasources.js')) return 'datasource';
-      if (c.includes('/reset?api-version')) return 'reset';
-      if (c.includes('/status?api-version')) return 'status';
-      return 'other';
-    });
+    const order = r.remote.map(phase);
     // The order is the whole point: an index widened without the data source fills with nulls, and
     // a reset before the PUT re-pulls the old column list.
     assert.deepStrictEqual(order, ['dry', 'index', 'datasource', 'status', 'reset', 'status'], order.join(','));
@@ -369,6 +373,71 @@ test('demi-devbox.sh', async (t) => {
     assert.match(r.stdout, /no data source differs, so no indexer reset/);
     assert.ok(r.remote.every(c => !c.includes('put-search-datasources') && !c.includes('/reset?')),
       'a reset re-pulls every row; it happens only when a projection actually changed');
+  });
+
+  await t.test('--datasources PUTs the named data sources before the dry run', () => {
+    // A new indexer's data source does not exist yet, so the dry run refuses on the missing name
+    // and the write phase that would have created it is never reached. The pre-create step is the
+    // only way in, and it has to land ahead of the dry run to be any use.
+    const r = run(['apply', '--only', 'activities', '--datasources', 'demi-updates-ds,demi-notifications-ds', '--yes']);
+    assert.strictEqual(r.status, 0, r.stderr);
+
+    const order = r.remote.map(phase);
+    // The second data source PUT is the writing half: a pre-created name is equal to the committed
+    // copy by the time the dry run reads it, so it can only reach the reset by being carried there.
+    assert.deepStrictEqual(order, [
+      'datasource', 'dry', 'index', 'datasource',
+      'status', 'reset', 'status', 'status', 'reset', 'status'
+    ], order.join(','));
+    assert.match(r.stdout, /reset and run indexer\(s\): activities-indexer,project-notifications-indexer/);
+
+    const ds = r.remote.find(c => c.includes('put-search-datasources.js'));
+    assert.match(ds, /cp azure\/search\/datasources\/demi-updates-ds\.json azure\/search\/datasources\/demi-notifications-ds\.json \/tmp\/demi-ds\//);
+    assert.ok(!ds.includes('demi-chunks-ds'), 'only the named data sources are written');
+    // Without the pull, a data source added in this commit is not in the devbox checkout yet: the
+    // dry run used to be the step that refreshed it, and this one runs before the dry run.
+    assert.match(ds, /git pull --ff-only && rm -rf \/tmp\/demi-ds/);
+    assert.match(r.stdout, /pre-created data source\(s\): demi-updates-ds,demi-notifications-ds/);
+    assert.strictEqual(deletes(r.calls).length, creates(r.calls).length, 'no grant left standing');
+  });
+
+  await t.test('a data source named by --datasources is reset even when nothing DIFFERS', () => {
+    // The pre-create makes the live data source equal to the committed one, so the dry run has
+    // nothing left to report on it. Taking the reset list from DIFFERS alone would leave
+    // documents-indexer on its old high-water mark: every row it already holds keeps the new
+    // column null, and no step of the run fails.
+    const r = run(['apply', '--only', 'documents', '--datasources', 'demi-documents-ds', '--yes']);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.ok(!r.stdout.includes('no data source differs'), r.stdout);
+    assert.match(r.stdout, /PUT data source\(s\): demi-documents-ds/);
+    assert.match(r.stdout, /reset and run indexer\(s\): documents-indexer/);
+
+    const order = r.remote.map(phase);
+    assert.deepStrictEqual(order,
+      ['datasource', 'dry', 'index', 'datasource', 'status', 'reset', 'status'], order.join(','));
+    assert.match(r.stdout, /documents-indexer finished, 61587 processed/);
+    assert.strictEqual(deletes(r.calls).length, creates(r.calls).length, 'no grant left standing');
+
+    // Named AND reported as differing is one data source, not two: a repeated name would reset the
+    // same indexer twice and re-pull everything a second time.
+    const both = run(['apply', '--only', 'documents', '--datasources', 'demi-documents-ds', '--yes'],
+      { env: { AZ_DS_DIFFERS: '1' } });
+    assert.strictEqual(both.status, 0, both.stderr);
+    assert.match(both.stdout, /PUT data source\(s\): demi-documents-ds\n/);
+    assert.match(both.stdout, /reset and run indexer\(s\): documents-indexer\n/);
+    assert.strictEqual(both.remote.filter(c => c.includes('/reset?api-version')).length, 1);
+  });
+
+  await t.test('--datasources asks before its own PUT, and a no writes nothing', () => {
+    // This PUT lands before the plan and its prompt, so it needs a prompt of its own: otherwise
+    // "aborted — nothing was written" is printed after data sources are already on the service.
+    const r = run(['apply', '--only', 'activities', '--datasources', 'demi-updates-ds'],
+      { input: '\n' });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /will PUT data source\(s\) demi-updates-ds before the dry run/);
+    assert.match(r.stderr, /aborted — nothing was written/);
+    assert.deepStrictEqual(r.remote, [], 'the devbox is not reached at all before the answer');
+    assert.strictEqual(creates(r.calls).length, 0, 'no grant is taken for a run that stops here');
   });
 
   await t.test('refuses to reset an indexer whose last execution is still running', () => {

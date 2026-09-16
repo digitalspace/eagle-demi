@@ -27,6 +27,10 @@ const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
 const { admitParent } = require('../../helpers/parent-admit');
+const { writeGuarded } = require('../../helpers/etag-write');
+const {
+  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
+} = require('./eagle-mirror');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const { transformDocument, seedAcl } = require('../../seed/transform');
@@ -76,16 +80,6 @@ function stampParentFieldsPending(existing, row) {
 }
 
 /**
- * How many times a write that may owe a re-stamp rebuilds and re-sends after losing its etag race.
- *
- * The same bound as the repository's own raise, for the same reason: each loss means another
- * writer landed, so the answer is a rebuild off the row that actually stored. A fourth loss is
- * contention this request cannot win, and the caller is told to retry rather than handed a row
- * built from a revision that is already gone.
- */
-const PARENT_STAMP_WRITE_TRIES = 3;
-
-/**
  * Write a row built from `existing`, but only while `existing` is still the stored revision.
  *
  * An unguarded upsert REPLACES the item from a snapshot, and two things went missing that way. A
@@ -99,36 +93,41 @@ const PARENT_STAMP_WRITE_TRIES = 3;
  * @param {() => Promise<object|null>} reread fetches the stored row again after a lost race
  * @param {(current: object|null) => object|null} build the row to write, from whatever is stored
  *   now. `null` means the request cannot be applied to that row.
+ * @param {{pushedAt?: number|null}} [options] the eagle mirror's ordering stamp; a staff edit
+ *   carries none and is never refused as stale.
  * @returns {Promise<{status: string, saved?: object, owed?: boolean, existing?: object|null}>}
  *   `saved` with the row that landed, whether it owes a re-stamp, and the revision it was built
- *   from; `conflict` when every try lost; `missing` when `build` refused the stored row.
+ *   from; `conflict` when every try lost; `missing` when `build` refused the stored row;
+ *   `stale` when a newer push already landed.
  */
-async function upsertGuarded(existing, reread, build) {
-  let current = existing;
+async function upsertGuarded(existing, reread, build, { pushedAt = null } = {}) {
+  let written = null;
 
-  for (let attempt = 1; attempt <= PARENT_STAMP_WRITE_TRIES; attempt++) {
-    const row = build(current);
-    if (!row) return { status: 'missing' };
-    // Recomputed per try, never carried over: the token has to be minted off the value the STORED
-    // row carries, or this raise repeats one that is already on the row and the other writer's
-    // clear takes this flag down with it.
-    const owed = stampParentFieldsPending(current, row);
-
-    try {
-      const saved = await documents.upsert(owed || row,
-        { etag: current ? current._etag : undefined });
+  return writeGuarded({
+    existing,
+    reread,
+    attempt: async (current) => {
+      // Inside the attempt, so a retry after a 412 judges this push against the one that won.
+      if (isStalePush(pushedAt, current)) return { status: 'stale', existing: current };
+      const row = build(current);
+      if (!row) return { status: 'missing' };
+      written = row;
+      // Recomputed per try, never carried over: the token has to be minted off the value the
+      // STORED row carries, or this raise repeats one that is already on the row and the other
+      // writer's clear takes this flag down with it.
+      const owed = stampParentFieldsPending(current, row);
+      const item = stampPush(owed || row, pushedAt, current);
+      // Guarded on the revision this attempt read, or CREATED when it read none — an unguarded
+      // upsert would replace a document another writer created in between.
+      const saved = await documents.upsert(item,
+        current ? { etag: current._etag } : { create: true });
       return { status: 'saved', saved, owed: Boolean(owed), existing: current };
-    } catch (err) {
-      if (err.code !== 412) throw err;
+    },
+    onLost: (_current, attempt) =>
       logger.warn('[Document Controller] document write lost its etag race, rebuilding', {
-        documentId: row.id, projectId: row.projectId, attempt
-      });
-      // Not on the last try: there is nothing left to rebuild for, and this is a point read.
-      if (attempt < PARENT_STAMP_WRITE_TRIES) current = await reread();
-    }
-  }
-
-  return { status: 'conflict' };
+        documentId: written.id, projectId: written.projectId, attempt
+      })
+  });
 }
 
 /**
@@ -756,6 +755,9 @@ exports.updateDocument = async (req, res) => {
       id: _ignoredId, projectId: _ignoredPk,
       read: _ignoredRead, ownRead: _ignoredOwnRead, isPublished: _ignoredPublished,
       isDeleted: _ignoredDeleted,
+      // Push bookkeeping: catalogued at vis 2, so a staff caller can see it and would otherwise be
+      // able to send it back — an old stamp makes every later eagle-api push read as stale.
+      eaglePushedAt: _ignoredPushedAt,
       _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
       _ts: _ignoredTs, _etag: _ignoredEtag,
       ...changes
@@ -1011,11 +1013,11 @@ function listLookupFrom(doc, labels) {
  */
 exports.upsertFromEagle = async (req, res) => {
   try {
-    const eagleId = String(req.params.eagleId);
-    const doc = req.body && req.body.doc;
-    if (!doc || String(doc._id || '') !== eagleId) {
+    const push = eaglePush(req);
+    if (!push) {
       return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
     }
+    const { eagleId, doc, pushedAt } = push;
 
     // A ProjectNotification is a parent here too — prod publishes documents under 17 of them —
     // and it carries no ACL to narrow against, so those keep their own read[]. Same admission the
@@ -1052,15 +1054,17 @@ exports.upsertFromEagle = async (req, res) => {
     const written = await upsertGuarded(
       existing,
       () => documents.getById(systemAccess(), eagleId),
-      buildRow);
+      buildRow,
+      { pushedAt });
+    if (written.status === 'stale') {
+      return ignoreStalePush(req, res, {
+        label: 'Document Controller', action: 'document.push', targetType: 'document',
+        current: written.existing, projectId: written.existing.projectId, pushedAt
+      });
+    }
     if (written.status === 'conflict') {
-      // A 5xx rather than a 409, because that is the only answer eagle-api's push client sends
-      // again: it retries a 500-and-up and gives up on everything below (api/helpers/pushClient.js).
-      // Nothing is wrong with the push, it just kept losing to another writer.
-      logger.warn('[Document Controller] eagle document push lost its etag race, asking for a retry',
-        { eagleId, projectId: parent.id });
-      return res.status(503).json({
-        error: 'The document is being written by another request. Push it again.'
+      return pushConflict(res, {
+        label: 'Document Controller', eagleId, projectId: parent.id
       });
     }
     const { saved, owed, existing: from } = written;

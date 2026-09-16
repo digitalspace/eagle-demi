@@ -10,7 +10,10 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead, readForLevel, levelOfRead, systemAccess, SEALED_TOKEN } = require('../helpers/access-sql');
-const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
+const {
+  eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
+  upsertWithEtag, createItem
+} = require('./_sql');
 // The fields the chunks carry a copy of, read from the one list that owns them.
 const { CHUNK_PARENT_FIELDS } = require('./chunks');
 
@@ -764,18 +767,12 @@ async function clearPending(id, partitionKey, guard) {
  * @param {{etag?: string}} [options] `etag` is the `_etag` the caller read off the row
  * @throws an error with `code === 412` when the row moved under the caller
  */
-async function upsert(document, { etag } = {}) {
-  try {
-    return await cosmos.upsert(CONTAINER, document, { etag });
-  } catch (err) {
-    // The SDK reports a failed access condition on `code` or on `statusCode` depending on the path
-    // that raised it; a caller retrying a lost write should not have to know which.
-    if ((err.code || err.statusCode) !== 412) throw err;
-    throw Object.assign(
-      new Error(`[documents] upsert of ${document && document.id} lost its etag race`,
-        { cause: err }),
-      { code: 412 });
-  }
+async function upsert(document, { etag, create = false } = {}) {
+  // A row the caller read as ABSENT has no revision to guard on, so the insert is the guard: an
+  // unguarded upsert would replace a document another writer created in between, and Cosmos
+  // answers a create with 409 instead — re-read and re-judged exactly as a 412 is.
+  if (create) return createItem(CONTAINER, document, 'documents');
+  return upsertWithEtag(CONTAINER, document, { etag, label: 'documents' });
 }
 
 /**

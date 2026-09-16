@@ -17,7 +17,10 @@ const { canRead } = require('../helpers/access-sql');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
 const { levelOf } = require('../vis/level');
-const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
+const {
+  eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
+  upsertWithEtag, createItem
+} = require('./_sql');
 
 const CONTAINER = 'projects';
 const PARTITION_FIELD = 'id';
@@ -252,9 +255,42 @@ async function countWithEagleId(access) {
  * Whole-item write. Safe only because nothing is folded into the project as an embedded array
  * any more — a replace from the Track sync would silently discard it. Use the patch helpers
  * below for partial updates.
+ *
+ * `etag` makes it optimistic: the write lands only while the row is still the revision the caller
+ * read, and a loser gets a 412 instead of replacing the winner. Two eagle-api pushes for one
+ * project 34 ms apart both read `isPublished: false` and the stale one landed last, leaving a
+ * published project private in DEMI with no cascade — that is what the guard is for.
+ *
+ * @param {object} project
+ * @param {{etag?: string, create?: boolean}} [options] `etag` is the `_etag` the caller read off
+ *   the row; `create` inserts a row the caller read as absent
+ * @throws an error with `code === 412` when the row moved, or `409` when it was created behind
+ *   this caller
  */
-async function upsert(project) {
-  return cosmos.upsert(CONTAINER, project);
+async function upsert(project, { etag, create = false } = {}) {
+  // A row the caller read as ABSENT has no revision to guard on, so the insert is the guard: an
+  // unguarded upsert would replace a project another writer created in between, and Cosmos answers
+  // a create with 409 instead — which callers re-read and re-judge exactly as they do a 412.
+  if (create) return createItem(CONTAINER, project, 'projects');
+  return upsertWithEtag(CONTAINER, project, { etag, label: 'projects' });
+}
+
+/**
+ * Record, or clear, that a visibility cascade this project owes has not run.
+ *
+ * `patch`, never `upsert`: the row has already been written by the time a cascade fails, and a
+ * whole-item write here would replace whatever landed since. Guarded on the revision the caller
+ * read, so it cannot stamp a row a later push has already moved past.
+ *
+ * @param {string} id
+ * @param {string|null} pendingAt an ISO timestamp, or null to clear the marker
+ * @param {string} [etag] the `_etag` the caller read off the row
+ */
+async function patchCascadePending(id, pendingAt, etag) {
+  const op = pendingAt
+    ? { op: 'set', path: '/cascadePendingAt', value: pendingAt }
+    : { op: 'remove', path: '/cascadePendingAt' };
+  return cosmos.patch(CONTAINER, String(id), String(id), [op], undefined, etag);
 }
 
 async function patchWildfireStats(id, stats) {
@@ -324,6 +360,7 @@ module.exports = {
   listWithEagleId,
   countWithEagleId,
   upsert,
+  patchCascadePending,
   patchWildfireStats,
   patchBoundaries,
   patchVis,

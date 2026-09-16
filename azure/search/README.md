@@ -390,6 +390,11 @@ node src/scripts/put-search-datasources.js                           # PUT the d
 POST {endpoint}/indexers/<name>-indexer/run?api-version=2024-07-01   # first fill
 ```
 
+`scripts/demi-devbox.sh apply --env <env> --only <name> --datasources demi-<container>-ds --yes` does the
+same three steps in one run. Pass `--datasources`: it PUTs the named data sources before the dry
+run, which a new indexer otherwise fails — the dry run refuses while the data source its
+definition names is missing.
+
 A brand-new indexer needs no reset — it has no high-water mark to clear — but it does need the
 `Content-Length: 0` header, and the run is read the same way as any other: `executionHistory[0]`,
 not the top-level `status`. The first run reported 2,433 rows for `activities` and 17 for
