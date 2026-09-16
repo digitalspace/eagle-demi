@@ -14,7 +14,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { chunkMarkdown, createChunkAccumulator } = require('../src/chunker');
+const crypto = require('node:crypto');
+const {
+  chunkMarkdown, createChunkAccumulator, hasPageMarkers, pageCountOf, PAGE_MARKER
+} = require('../src/chunker');
 
 const para = (n, ch = 'a') => ch.repeat(n);
 
@@ -296,5 +299,123 @@ test('intake cleaning', async (t) => {
     streamed.push(...acc.end());
 
     assert.deepStrictEqual(streamed, chunkMarkdown(sections.join('\n\n')));
+  });
+});
+
+/**
+ * Page provenance. The extraction host separates consecutive pages with a form feed, so a chunk can
+ * say which PDF page it came from and a reader can be sent there. These cases are about what that
+ * changes — and, first, about what it must not.
+ */
+test('page markers', async (t) => {
+  /** Distinct letters per page, none of them in the prose, so a chunk's origin is readable. */
+  const page = (n, ch) => `Page ${n} opens.\n\n${ch.repeat(2600)}\n\n${ch.repeat(900)}`;
+  const threePages = [page(1, 'Q'), page(2, 'W'), page(3, 'Z')].join(PAGE_MARKER);
+  /** Which pages' text a chunk holds, as the letters that mark them. */
+  const pagesIn = chunk => [...new Set(chunk.content.replace(/[^QWZ]/g, ''))].join('');
+
+  await t.test('a marker-free document chunks exactly as it did before pages existed', () => {
+    // THE GOLDEN. The hash was taken from the implementation at efde3d3, before any of this, over a
+    // fixture that exercises accumulation, the cross-block overlap, an oversized block split three
+    // ways and the short-tail merge. Every extraction in the corpus today is marker-free, so a
+    // change here silently re-chunks 1.1M rows and invalidates every stored chunk id.
+    const sections = Array.from({ length: 9 }, (_, i) => `Section ${i}. ${'word'.repeat(200 - i * 7)}`)
+      .concat('# A heading', 'Tiny tail.', 'L'.repeat(9000));
+    const chunks = chunkMarkdown(sections.join('\n\n'));
+
+    assert.deepStrictEqual(chunks.map(c => c.pageNumber), [0, 1, 2, 2, 2],
+      'without markers pageNumber is still the block sequence, counted from 0');
+    assert.strictEqual(
+      crypto.createHash('sha256').update(JSON.stringify(chunks)).digest('hex'),
+      'c82cd1d6b178af7ffbcc39a44378faefa22a9997a4f6c2e49e92a5a0642196d5',
+      'the marker-free path moved: re-ingesting the corpus is the only way to make the stored ' +
+      'chunk ids match again'
+    );
+  });
+
+  await t.test('a chunk carries the real 1-based page it came from', () => {
+    assert.deepStrictEqual(chunkMarkdown(threePages).map(c => c.pageNumber), [1, 1, 2, 2, 3, 3]);
+  });
+
+  await t.test('no chunk holds text from two pages', () => {
+    assert.deepStrictEqual(chunkMarkdown(threePages).filter(c => pagesIn(c).length !== 1), [],
+      'a chunk spanning a marker makes its own page number a lie');
+  });
+
+  await t.test('the marker itself never reaches a chunk', () => {
+    assert.deepStrictEqual(
+      chunkMarkdown(threePages).filter(c => c.content.includes(PAGE_MARKER)), []);
+  });
+
+  await t.test('the chunk ids stay dense and unique', () => {
+    // `chunkIndex` is the `c` in `<docId>::p<page>::c<index>` and stays a running count over the
+    // document, so a page that shares its number with nothing still cannot collide with one.
+    const chunks = chunkMarkdown(threePages);
+
+    assert.deepStrictEqual(chunks.map(c => c.chunkIndex), chunks.map((_, i) => i));
+    assert.strictEqual(new Set(chunks.map(c => `p${c.pageNumber}::c${c.chunkIndex}`)).size,
+      chunks.length);
+  });
+
+  await t.test('overlap joins consecutive chunks inside a page', () => {
+    // The case the boundary rule below must not take away with it.
+    const [first, second] = chunkMarkdown(threePages);
+
+    assert.ok(shareText(first, second), 'a phrase cut by a chunk boundary is no longer rescued');
+  });
+
+  await t.test('overlap never crosses a page boundary', () => {
+    // A chunk numbered page 2 that opens with page 1's wording sends a reader following "Page 2"
+    // to a sentence printed on page 1 — the citation is the whole point of a real page number.
+    const [lastOfPageOne, firstOfPageTwo] = chunkMarkdown(threePages).slice(1, 3);
+
+    assert.strictEqual(pagesIn(lastOfPageOne), 'Q');
+    assert.strictEqual(pagesIn(firstOfPageTwo), 'W');
+  });
+
+  await t.test('a page too short to earn its own chunk is still indexed', () => {
+    // Marker-free, these three merge into one chunk. Cut into pages they cannot merge, so the
+    // MIN_CHUNK_SIZE floor would delete a cover page or a plate caption from the index outright.
+    assert.deepStrictEqual(
+      chunkMarkdown(['Cover.', 'Body.', 'Appendix C.'].join(PAGE_MARKER)).map(c => c.content),
+      ['Cover.', 'Body.', 'Appendix C.']);
+  });
+
+  await t.test('an empty page spends its number and emits nothing', () => {
+    // Two markers in a row are a page with nothing on it. Skipping its number would shift every
+    // page after it off the PDF by one.
+    assert.deepStrictEqual(
+      chunkMarkdown(`First.${PAGE_MARKER}${PAGE_MARKER}Third.`).map(c => c.pageNumber), [1, 3]);
+  });
+
+  await t.test('the streaming door chunks a paged document identically', () => {
+    // Two doors into one corpus, now with a marker that can land mid-block. If they disagree, a
+    // document's page numbers depend on how big it happened to be.
+    const acc = createChunkAccumulator({ pageMarkers: true });
+    const streamed = [];
+    for (const section of threePages.split(/\n{2,}/)) streamed.push(...acc.push(section));
+    streamed.push(...acc.end());
+
+    assert.deepStrictEqual(streamed, chunkMarkdown(threePages));
+  });
+
+  await t.test('the two page counts agree, and neither counts chunks', () => {
+    const acc = createChunkAccumulator({ pageMarkers: true });
+    acc.push(threePages);
+    acc.end();
+
+    assert.strictEqual(acc.pageCount(), 3);
+    assert.strictEqual(pageCountOf(threePages), 3);
+    assert.strictEqual(chunkMarkdown(threePages).length, 6, 'six chunks over three pages');
+  });
+
+  await t.test('a document with no markers reports no pages at all', () => {
+    const acc = createChunkAccumulator();
+    acc.push('Some text.');
+    acc.end();
+
+    assert.strictEqual(hasPageMarkers('Some text.'), false);
+    assert.strictEqual(pageCountOf('Some text.'), 0);
+    assert.strictEqual(acc.pageCount(), 0, '0 is "unknown", never a document of zero pages');
   });
 });

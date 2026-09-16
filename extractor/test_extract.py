@@ -93,9 +93,9 @@ if pdfs:
         if route == "text":
             check(f"{pdf.name} yields text", extract.real_chars(markdown) > 500,
                   f"{extract.real_chars(markdown)} real chars")
-            # Pages are joined with a blank line because chunker.js splits on /\n{2,}/. Without it
-            # the whole document arrives as one block and chunk boundaries land arbitrarily.
-            check(f"{pdf.name} separates pages with a blank line", "\n\n" in markdown)
+            # Pages are separated by a form feed, which is what chunker.js counts pages off. A
+            # multi-page document with no marker in it has lost its page provenance.
+            check(f"{pdf.name} separates pages with a marker", "\f" in markdown)
 
     # A file this extractor cannot open is recorded, never raised: raising retries it five times
     # and parks it in the poison queue beside the failures that are actually worth looking at.
@@ -174,6 +174,148 @@ if pdfs:
         # without it should get the rest of the suite rather than a red run. Recorded rather than
         # swallowed, so the summary line says which cases did not run.
         ocr_note = f"{ocr_note}; truncation cases skipped too"
+
+# ── page markers ─────────────────────────────────────────────────────────────
+# The contract with src/chunker.js: still one markdown string, with a form feed between consecutive
+# pages — never leading, never trailing, and an empty page still yields its marker so the page
+# numbers stay real. It is what makes `pageNumber` a page a reader can quote rather than a passage
+# sequence, so each rule is pinned here instead of left to whoever next edits the joiner.
+check("the marker is a form feed", ocr.PAGE_BREAK == "\f", repr(ocr.PAGE_BREAK))
+check("consecutive pages get one marker each", ocr.join_pages(["a", "b", "c"]) == "a\fb\fc")
+check("a single page carries no marker", ocr.join_pages(["only"]) == "only")
+check("an empty page keeps its slot", ocr.join_pages(["a", "", "c"]) == "a\f\fc")
+check("page text is stripped around the marker", ocr.join_pages([" a \n", "\n b "]) == "a\fb")
+
+# A synthetic PDF, unlike the real documents above, because these cases need KNOWN text on KNOWN
+# pages. The real documents stay the proof that extraction itself works; this one is the proof that
+# page 2's text ends up on page 2.
+FIXTURE = HERE / "fixtures" / "three-pages.pdf"
+try:
+    import pypdfium2 as pdfium
+except ImportError as e:
+    pdfium = None
+    marker_note = f"pypdfium2 not installed — fixture cases skipped ({e})"
+
+if pdfium and FIXTURE.exists():
+    TOKENS = ["ALPHAPAGEONE", "BRAVOPAGETWO", "CHARLIEPAGETHREE"]
+
+    md = extract.extract_text(FIXTURE)
+    parts = md.split(ocr.PAGE_BREAK)
+    check("three pages give exactly two markers", md.count(ocr.PAGE_BREAK) == 2, repr(md))
+    check("no leading or trailing marker", not md.startswith("\f") and not md.endswith("\f"),
+          repr(md))
+    check("each page's text sits on its own side of the markers",
+          len(parts) == 3 and all(tok in parts[i] for i, tok in enumerate(TOKENS)), repr(parts))
+
+    # Through the routing, not just the joiner: `function_app.py` calls route_and_extract, and a
+    # marker that only survives in extract_text would never reach the index.
+    route, routed, info = extract.route_and_extract(FIXTURE, FIXTURE.stat().st_size)
+    check("the routed text path keeps its markers",
+          route == "text" and routed.count(ocr.PAGE_BREAK) == 2, f"{route}: {info}")
+
+    # A real PDF with a genuinely empty middle page — a page object with no content stream — rather
+    # than a hand-written list. This is the case that decides whether page 3 is called page 3.
+    blanked = HERE / ".blank-middle-probe.pdf"
+    source = pdfium.PdfDocument(FIXTURE)
+    try:
+        built = pdfium.PdfDocument.new()
+        built.import_pages(source, [0])
+        built.new_page(612, 792)
+        built.import_pages(source, [2])
+        built.save(str(blanked))
+    finally:
+        source.close()
+    try:
+        md = extract.extract_text(blanked)
+        blank_pages = md.split(ocr.PAGE_BREAK)
+        check("an empty middle page still yields its marker", md.count(ocr.PAGE_BREAK) == 2,
+              repr(md))
+        check("so the page after it is still the third page",
+              len(blank_pages) == 3 and blank_pages[2].startswith("CHARLIEPAGETHREE"), repr(md))
+    finally:
+        blanked.unlink(missing_ok=True)
+
+    # The OCR path over the same fixture with the recogniser stubbed out: rapidocr is not needed to
+    # prove that a page it reads nothing on keeps its place.
+    real_text_fn = ocr._text
+    try:
+        counter = {"page": 0}
+
+        def _fake_text(image):
+            counter["page"] += 1
+            return "" if counter["page"] == 2 else f"OCRPAGE{counter['page']}"
+
+        ocr._text = _fake_text
+        md, ocr_info = ocr.ocr_file(FIXTURE)
+        check("the OCR path marks pages too", md.count(ocr.PAGE_BREAK) == 2, repr(md))
+        check("a page OCR read nothing on still holds its place",
+              md.split(ocr.PAGE_BREAK) == ["OCRPAGE1", "", "OCRPAGE3"], repr(md))
+        check("and is still counted as empty", ocr_info.get("emptyPages") == 1, str(ocr_info))
+    finally:
+        ocr._text = real_text_fn
+
+    marker_note = f"text and OCR paths over {FIXTURE.name}"
+elif pdfium:
+    marker_note = f"{FIXTURE.name} missing — fixture cases skipped"
+
+# The host's copy of the contract. worker.py is vendored onto the extraction box and cannot import
+# this package, so its definitions are lifted by source and compared, the same way `decide()` is.
+wns = {}
+for opening in ('PAGE_BREAK = "', "def join_pages(pages):", "def text_len(md):",
+                "def doc_pages(doc):"):
+    at = src.index(opening)
+    exec(src[at:src.index("\n\n\n", at)], wns)  # noqa: S102
+
+check("the host uses the same marker", wns["PAGE_BREAK"] == ocr.PAGE_BREAK, wns["PAGE_BREAK"])
+check("the host joins pages the same way",
+      wns["join_pages"](["a", "", "c"]) == ocr.join_pages(["a", "", "c"]))
+# The low-yield and retry tests in worker.py compare recovered text. A long scan of blank pages
+# would otherwise read as a document that converted fine, on the strength of its markers alone.
+check("markers do not count as recovered text", wns["text_len"]("a\fb\fc") == 3)
+
+
+class _FakeDoclingDoc:
+    """What `conv.convert(part).document` gives the OCR path, for a host with no docling installed.
+
+    docling-core's `export_to_markdown(page_no=N)` (in it since 2.4.0; the host runs docling 2.116.0,
+    which floors docling-core at 2.86.0) returns "" for a page it found no items on, and `pages` is
+    a dict keyed by the 1-based page number. Both are copied here.
+    """
+
+    def __init__(self, page_markdown):
+        self._pages = page_markdown
+        self.pages = {n: None for n in range(1, len(page_markdown) + 1)}
+
+    def export_to_markdown(self, page_no=None):
+        if page_no is None:
+            return "\n\n".join(p for p in self._pages if p)
+        return self._pages[page_no - 1]
+
+
+class _FakeUnpagedDoc:
+    """An office document or a single image: docling builds no page map for these."""
+
+    pages = {}
+
+    def export_to_markdown(self, page_no=None):
+        check("an unpaged document is never asked for a page", page_no is None, str(page_no))
+        return "whole thing"
+
+
+doc_pages, host_join = wns["doc_pages"], wns["join_pages"]
+check("the OCR path exports one markdown per page",
+      doc_pages(_FakeDoclingDoc(["A", "", "C"])) == ["A", "", "C"])
+check("a page docling read nothing on is still joined in",
+      host_join(doc_pages(_FakeDoclingDoc(["A", "", "C"]))) == "A\f\fC")
+check("a document with no page map is one page with no marker",
+      host_join(doc_pages(_FakeUnpagedDoc())) == "whole thing")
+# ocr_worker converts OCR_BATCH_PAGES pages at a time and concatenates the per-batch page lists, so
+# the markers have to count the document's pages and not its batches.
+batched = host_join(page
+                    for part in (_FakeDoclingDoc(["A", "B"]), _FakeDoclingDoc(["C"]))
+                    for page in doc_pages(part))
+check("page batches join into one page sequence", batched == "A\fB\fC", repr(batched))
+
 
 # ── the outcome record ───────────────────────────────────────────────────────
 # The extractor's own log line is lost on short invocations (measured: two ~1 s runs on a cold Flex
@@ -277,4 +419,5 @@ if FAILURES:
         print("  -", f)
     sys.exit(1)
 
-print(f"extractor tests OK ({parity}; text path over {corpus}; OCR: {ocr_note})")
+print(f"extractor tests OK ({parity}; text path over {corpus}; OCR: {ocr_note}; "
+      f"page markers: {marker_note})")

@@ -75,8 +75,10 @@ function windowFor(pageSize, ceiling) {
  * `window` rows, more than `pageSize` whenever the matches are spread thin — and consecutive pages
  * cover consecutive, non-overlapping chunk ranges, which is what makes every match reachable.
  *
- * `pageNumber` IS NOT A PDF PAGE and is not surfaced as one. It is a passage sequence number — the
- * chunker increments it per emitted block — so nothing here renders "jump to page N" from it.
+ * `pageNumber` IS A PDF PAGE ONLY WHEN `pageNumbered` IS TRUE. Without it the number is a passage
+ * sequence — the chunker increments it per emitted block — and rendering "jump to page N" from one
+ * would send the reader to a page the passage is not on. Both fields ride the row so the caller can
+ * tell the two apart; the flag is the whole gate on that label.
  *
  * `matchCount` is the count of that document's passages IN THIS WINDOW, which is the honest count
  * of what this page found — not necessarily of what the corpus holds. A document whose passages
@@ -129,6 +131,10 @@ function groupByDocument(rows) {
         milestoneId: row.milestoneId || null,
         datePosted: row.datePosted || null,
         pageNumber: row.pageNumber,
+        // The lead chunk's, like every other field on this row. It is a property of the DOCUMENT's
+        // extraction rather than of the passage — every chunk of one document agrees on it — so the
+        // lead chunk answers for all of them.
+        pageNumbered: row.pageNumbered,
         content: '',
         snippet: row.snippet || '',
         snippets: [],

@@ -118,6 +118,31 @@ test('the chunk parent-fields version is declared, projected and filterable', ()
   assert.strictEqual(field.searchable, false);
 });
 
+// The page-provenance flag, pinned across the same three files and for the same failure. Declared
+// and not projected means the indexer writes null on all 1.1M rows under a 200 and a green run, so
+// every re-extracted document goes back to reading "Passage N" with nothing saying why.
+test('the chunk page flag is declared, projected and filterable', () => {
+  const chunkIndex = require('../../azure/search/indexes/chunks.json');
+  const chunkDatasource = require('../../azure/search/datasources/demi-chunks-ds.json');
+
+  const field = chunkIndex.fields.find(f => f.name === 'pageNumbered');
+  assert.ok(field, 'pageNumbered is stamped on chunks but not declared by the chunks index');
+  assert.strictEqual(projectedColumns(chunkDatasource.container.query).get('pageNumbered'),
+    'pageNumbered',
+    `pageNumbered is declared by the chunks index but not selected by ${chunkDatasource.name}`);
+
+  assert.strictEqual(field.type, 'Edm.Boolean');
+  // The chunk select asks for it on every Deep Search, and a caller cannot tell "Page 12" from
+  // "Passage 12" without it.
+  assert.strictEqual(field.retrievable, true);
+  // Filterable so a backfill can count what is left to re-extract without reading the rows.
+  assert.strictEqual(field.filterable, true);
+  assert.strictEqual(field.searchable, false, 'a searchable boolean answers keyword queries');
+  // Both cost index size on 1.1M rows and nothing orders or facets on it.
+  assert.strictEqual(field.sortable, false);
+  assert.strictEqual(field.facetable, false);
+});
+
 // The other direction for the one chunk field that must NOT reach the index. `parentStampedAt`
 // orders concurrent re-stamp walks and answers no query; adding it to the data source would pull
 // every one of the 1.1M rows through the indexer for a column nothing filters on, and declaring it

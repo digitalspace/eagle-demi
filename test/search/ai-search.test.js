@@ -396,6 +396,27 @@ test('ai-search request shape', async (t) => {
     assert.ok(!body.select.includes('content'), 'chunk text must not be requested');
   });
 
+  // The index stores `pageNumbered` only on chunks whose extraction recorded pages, and answers
+  // `null` for every row written before that. Null is not false to a consumer that tests for the
+  // key, so this is the one place it becomes a boolean.
+  await t.test('a chunk hit reports pageNumbered as a boolean, never the index null',
+    async (tt) => {
+      captureFetch(tt, () => ({
+        json: {
+          value: [
+            { chunkId: 'c1', documentId: 'd1', pageNumber: 12, pageNumbered: true },
+            { chunkId: 'c2', documentId: 'd2', pageNumber: 12, pageNumbered: null }
+          ],
+          '@odata.count': 2
+        }
+      }));
+
+      const { items } = await aiSearch.searchChunks({ filter: null, keywords: 'river' });
+
+      assert.deepStrictEqual(items.map(i => i.pageNumbered), [true, false],
+        'an unstamped chunk is a passage, and says so as a boolean');
+    });
+
   // A null filter means "privileged"; an EMPTY filter would mean unrestricted too, so the field
   // must be absent rather than empty — this pins that it is never sent as ''.
   await t.test('a null filter omits the field entirely', async (tt) => {

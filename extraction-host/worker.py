@@ -468,6 +468,38 @@ def pdfium_job(path_str, ext):
 
 # ---------------------------------------------------------------- extractors
 
+# The page boundary marker. One between consecutive pages, never leading, never trailing: the
+# chunker splits on it and counts pages from 1, so a missing or spare marker shifts every page
+# after it and `pageNumber` goes back to being a guess.
+#
+# A bare form feed with no newlines around it on purpose. ingest.py splits big documents into
+# blocks on /\n{2,}/ and drops whitespace-only blocks; a marker with blank lines around it would
+# become its own block and be dropped on that route.
+#
+# `extractor/ocr.py` holds the same constant. This file is vendored onto a host that has no copy of
+# the extractor package, so the two definitions are the price of that; the value is the wire
+# contract and is covered by extractor/test_extract.py.
+PAGE_BREAK = "\f"
+
+
+def join_pages(pages):
+    """One markdown string out of a per-page list, `PAGE_BREAK` between consecutive pages.
+
+    Pages are stripped but never dropped. A page that converted to nothing still holds its place,
+    or page 40 of a document with one blank page arrives labelled 39.
+    """
+    return PAGE_BREAK.join(p.strip() for p in pages)
+
+
+def text_len(md):
+    """Length of the markdown without its page markers.
+
+    The low-yield and retry-is-better tests below compare recovered TEXT. A marker is structure, so
+    counting it would let a long scan of blank pages read as a document that converted fine.
+    """
+    return len(md) - md.count(PAGE_BREAK)
+
+
 def extract_text(path, ext):
     """Text layer straight out of the file. No GPU, no layout model, milliseconds."""
     if ext == "txt":
@@ -484,9 +516,7 @@ def extract_text(path, ext):
             pages.append(tp.get_text_range())
             tp.close()
             page.close()
-        # Blank line between pages: src/chunker.js splits on /\n{2,}/, so this is what gives it
-        # block boundaries to accumulate against.
-        return "\n\n".join(p.strip() for p in pages if p.strip())
+        return join_pages(pages)
     finally:
         doc.close()
 
@@ -544,13 +574,35 @@ _force_lock = threading.Lock()
 _big_doc = threading.Semaphore(1)
 
 
-def convert_forced(path):
+def doc_pages(doc):
+    """Markdown per page of a converted docling document, in page order.
+
+    `export_to_markdown(page_no=...)` has been in docling-core since 2.4.0 (the host runs docling
+    2.116.0, which floors docling-core at 2.86.0) and returns "" for a page it found no items on.
+    That empty string is the point: it keeps a blank page in the sequence instead of renumbering
+    every page after it.
+
+    `doc.pages` is a dict keyed by the 1-based page number. Formats that produce no page map at all
+    — office documents, a single image, a tile — are one page.
+    """
+    pages = getattr(doc, "pages", None)
+    if not pages:
+        return [doc.export_to_markdown()]
+    return [doc.export_to_markdown(page_no=n) for n in sorted(pages)]
+
+
+def convert_forced_pages(path):
     global _force_conv
     with _force_lock:
         if _force_conv is None:
             log("building full-page-OCR converter (first low-yield document)")
             _force_conv = build_converter(force_ocr=True)
-        return _force_conv.convert(str(path)).document.export_to_markdown()
+        return doc_pages(_force_conv.convert(str(path)).document)
+
+
+def convert_forced(path):
+    """One file, pages joined. Tiles come through here, and a tile is one page with no marker."""
+    return join_pages(convert_forced_pages(path))
 
 
 PLACEHOLDER_RE = re.compile(r"<!--\s*image\s*-->")
@@ -648,7 +700,10 @@ def convert_tiled(path, ext, doc_id=""):
     The rendering half runs in the pool, never here — see tile_job. This function only feeds the
     resulting PNGs to docling, which is what the parent process is allowed to do."""
     import tempfile
-    seen, lines = set(), []
+    # Lines per page, so the tiled conversion carries page markers like every other route. The page
+    # number comes off the tile filename tile_job wrote it into; dedup stays document-wide, which is
+    # what it was before pages existed here.
+    seen, by_page = set(), {}
     with tempfile.TemporaryDirectory(prefix="tile-") as td:
         tiles, truncated = _pool.submit(tile_job, str(path), ext, td, TILE_GRID, TILE_OVERLAP,
                                         TILE_RENDER_SCALE, TILE_MAX_PIXELS,
@@ -656,6 +711,9 @@ def convert_tiled(path, ext, doc_id=""):
         if truncated:
             log(f"  {doc_id}: over {TILE_MAX_PAGES} pages — tiling stopped at that bound")
         for tile in tiles:
+            # `p<page>_<gy><gx>.png`, written by tile_job. A page whose tiles all read as nothing
+            # still gets its (empty) entry here, so it keeps its place in the page sequence.
+            lines = by_page.setdefault(int(Path(tile).stem.split("_")[0][1:]), [])
             for line in convert_forced(Path(tile)).splitlines():
                 s = line.strip()
                 # The placeholder is dropped rather than deduped: every one of the 9 tiles emits
@@ -665,7 +723,7 @@ def convert_tiled(path, ext, doc_id=""):
                     continue
                 seen.add(s)
                 lines.append(s)
-    return "\n\n".join(lines)
+    return join_pages("\n\n".join(by_page[p]) for p in sorted(by_page))
 
 
 # ---------------------------------------------------------------- threads
@@ -977,8 +1035,10 @@ def ocr_worker():
             if len(parts) > 1:
                 log(f"  {doc_id}: {pages} pages -> {len(parts)} batches of {OCR_BATCH_PAGES}")
 
-            md = "\n\n".join(
-                conv.convert(p).document.export_to_markdown() for p in parts
+            # Per page, not per part: the parts are consecutive page batches of the same document,
+            # so their page lists concatenate into the document's own page order.
+            md = join_pages(
+                page for p in parts for page in doc_pages(conv.convert(p).document)
             )
 
             # A big file that converts to almost nothing is a scan docling found no text regions
@@ -986,10 +1046,13 @@ def ocr_worker():
             # the document being searchable and being silently absent from Deep Search. Forced OCR
             # is far heavier per page, so it batches too.
             forced = False
-            if len(md) < LOW_YIELD_CHARS and size > LOW_YIELD_MIN_BYTES:
-                log(f"  low yield {doc_id} ({len(md)} chars from {size // 1024} KB) — forcing OCR")
-                retry = "\n\n".join(convert_forced(Path(p)) for p in parts)
-                if len(retry) > len(md):
+            if text_len(md) < LOW_YIELD_CHARS and size > LOW_YIELD_MIN_BYTES:
+                log(f"  low yield {doc_id} ({text_len(md)} chars from {size // 1024} KB)"
+                    " — forcing OCR")
+                retry = join_pages(
+                    page for p in parts for page in convert_forced_pages(Path(p))
+                )
+                if text_len(retry) > text_len(md):
                     md, forced = retry, True
                     bump("forced")
 

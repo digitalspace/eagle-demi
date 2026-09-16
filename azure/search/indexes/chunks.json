@@ -93,6 +93,24 @@
       "synonymMaps": []
     },
     {
+      "name": "pageNumbered",
+      "type": "Edm.Boolean",
+      "searchable": false,
+      "filterable": true,
+      "retrievable": true,
+      "stored": true,
+      "sortable": false,
+      "facetable": false,
+      "key": false,
+      "indexAnalyzer": null,
+      "searchAnalyzer": null,
+      "analyzer": null,
+      "dimensions": null,
+      "vectorSearchProfile": null,
+      "vectorEncoding": null,
+      "synonymMaps": []
+    },
+    {
       "name": "read",
       "type": "Collection(Edm.String)",
       "searchable": false,

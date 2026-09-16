@@ -17,7 +17,8 @@ const storage = require('../../storage');
 const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
-const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
+const { chunkMarkdown, createChunkAccumulator, hasPageMarkers, pageCountOf } =
+  require('../../chunker');
 const restampChunks = require('../../jobs/restamp-chunks');
 const {
   resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, TIER
@@ -1204,6 +1205,16 @@ function sanitizeExtraction(raw) {
 const STREAM_BATCH_CHUNKS = 200;
 
 /**
+ * When a marker-free hold has grown big enough to be worth a log line.
+ *
+ * Blocks are held until the first page marker (see `ingestChunksStreaming`), so a stream carrying
+ * no markers at all is held whole. 10 MB is the JSON door's body limit: past it this stream holds
+ * more than the buffering door would ever have been handed, which is the only case where this
+ * door's memory follows document size. Diagnostic only — nothing branches on it.
+ */
+const HOLD_WARN_CHARS = 10 * 1024 * 1024;
+
+/**
  * How many flushed batches a stream stamps from one read of the document row.
  *
  * Re-reading per batch would be one point read per 200 chunks — cheap each, but a 6k-chunk document
@@ -1256,7 +1267,28 @@ async function ingestChunksStreaming(req, res, doc) {
   const readline = require('readline');
 
   const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : readForLevel(2);
-  const acc = createChunkAccumulator();
+  // Created only once the page-marker question is settled — see `held` and `feed`.
+  let acc = null;
+  // Blocks held while that question is open. NOTHING is emitted until it is settled, because the
+  // accumulator has to be told whether the document is paged before its first chunk and a stream
+  // cannot be read ahead.
+  //
+  // THE HOLD RUNS TO THE FIRST MARKER OR TO END OF STREAM. There used to be a 20,000-character
+  // probe cap, and it was wrong: a first page longer than the cap settled "no page markers" for
+  // good, so a document the JSON door chunks by page came through here numbered by passage with
+  // every later page's form feed left inside chunk content — the two doors disagreeing about the
+  // same text, silently. No cap is safe, because the marker a cap misses is the marker that
+  // matters, and the question cannot be reopened once chunks have been written.
+  //
+  // What dropping it costs: a paged stream holds ONE PAGE, since the host writes a marker between
+  // every pair of pages. Only a stream with no markers anywhere is held whole, and that is what
+  // the JSON door does with the same text — so this door still bounds memory by batch size for
+  // every document the current extraction host produces. HOLD_WARN_CHARS makes the exception
+  // visible instead of leaving it to be discovered as an out-of-memory kill.
+  let held = [];
+  let heldChars = 0;
+  let heldWarned = false;
+  let pageNumbered = false;
   const keepIds = [];
   const startedAt = new Date().toISOString();
   let provenance = null;
@@ -1287,6 +1319,9 @@ async function ingestChunksStreaming(req, res, doc) {
         // chunks.CHUNK_PARENT_FIELDS.
         ...parentFields,
         pageNumber,
+        // ABSENT, never false. Every chunk written before page provenance carries no such key, so
+        // writing `false` here would claim this ingest measured something about those rows too.
+        ...(pageNumbered ? { pageNumbered: true } : {}),
         chunkIndex,
         content,
         read,
@@ -1297,6 +1332,36 @@ async function ingestChunksStreaming(req, res, doc) {
         if (err) return err;
       }
     }
+    return null;
+  };
+
+  // Settle the page-marker question, start the accumulator and replay everything held. Same return
+  // contract as collect(): an error string on partial failure, null on success.
+  const startAccumulator = async (markers) => {
+    pageNumbered = markers;
+    acc = createChunkAccumulator({ pageMarkers: markers });
+    const replay = held;
+    held = [];
+    for (const block of replay) {
+      const err = await collect(acc.push(block));
+      if (err) return err;
+    }
+    return null;
+  };
+
+  // One block in, held or chunked. Nothing is emitted while the question is open, so no chunk is
+  // ever stamped with the wrong kind of page number.
+  const feed = async (block) => {
+    if (acc) return collect(acc.push(block));
+    held.push(block);
+    heldChars += block.length;
+    if (heldChars >= HOLD_WARN_CHARS && !heldWarned) {
+      heldWarned = true;
+      logger.warn('[Document Controller] no page marker yet, holding the stream in memory', {
+        documentId: doc.id, heldChars, heldBlocks: held.length
+      });
+    }
+    if (hasPageMarkers(block)) return startAccumulator(true);
     return null;
   };
 
@@ -1378,7 +1443,7 @@ async function ingestChunksStreaming(req, res, doc) {
         return fail(400, `line ${lineNo} must be a JSON-encoded string`);
       }
 
-      const batchErr = await collect(acc.push(block));
+      const batchErr = await feed(block);
       if (batchErr) return fail(500, batchErr);
     }
   } finally {
@@ -1387,6 +1452,13 @@ async function ingestChunksStreaming(req, res, doc) {
 
   if (!seenHeader) {
     return fail(400, 'empty stream: expected a metadata line');
+  }
+
+  // A stream that ended with its blocks still held never met a marker anywhere in the document,
+  // so there were none. This is where a marker-free stream settles, however long it ran.
+  if (!acc) {
+    const startErr = await startAccumulator(false);
+    if (startErr) return fail(500, startErr);
   }
 
   const tailErr = await collect(acc.end());
@@ -1408,6 +1480,10 @@ async function ingestChunksStreaming(req, res, doc) {
     contentPageCount: keepIds.length,
     contentExtractionError: null,
     extractionMethod: 'docling',
+    // Only when the markers were there, so a document extracted before page provenance keeps the
+    // shape it has. `contentPageCount` is the CHUNK count and has always been; `pageCount` is the
+    // document's real pages, which is a different number and now a knowable one.
+    ...(pageNumbered ? { pageNumbered: true, pageCount: acc.pageCount() } : {}),
     ...(provenance ? { extraction: provenance } : {})
   });
 
@@ -1510,6 +1586,9 @@ exports.ingestChunks = async (req, res) => {
     const startedAt = new Date().toISOString();
     const parentFields = chunks.parentStampFieldsOf(doc, parentStampedAt(doc, startedAt));
 
+    // One test for the whole document, which is what makes every chunk of it agree.
+    const pageNumbered = hasPageMarkers(markdown);
+
     const items = chunkMarkdown(markdown).map(({ pageNumber, chunkIndex, content }) => ({
       id: chunks.chunkId(doc.id, pageNumber, chunkIndex),
       documentId: String(doc.id),
@@ -1517,6 +1596,8 @@ exports.ingestChunks = async (req, res) => {
       // chunks.CHUNK_PARENT_FIELDS — with the stamp that says how new they are.
       ...parentFields,
       pageNumber,
+      // ABSENT, never false — see the streaming path.
+      ...(pageNumbered ? { pageNumbered: true } : {}),
       chunkIndex,
       content,
       read,
@@ -1552,6 +1633,8 @@ exports.ingestChunks = async (req, res) => {
       contentPageCount: items.length,
       contentExtractionError: null,
       extractionMethod: 'docling',
+      // See the streaming path: `contentPageCount` counts chunks, `pageCount` counts pages.
+      ...(pageNumbered ? { pageNumbered: true, pageCount: pageCountOf(markdown) } : {}),
       ...(provenance ? { extraction: provenance } : {})
     });
 

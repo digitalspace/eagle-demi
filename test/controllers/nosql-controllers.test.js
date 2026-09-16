@@ -720,6 +720,66 @@ test('chunk ingest route', async (t) => {
     assert.strictEqual(res.body.chunks, patched.contentPageCount);
   });
 
+  // Page provenance. The extraction host separates consecutive pages with a form feed, so a
+  // passage can be shown as "Page 12" and linked into the file at it.
+  await t.test('page markers are stamped on the document and on every chunk', async () => {
+    stubDoc(t);
+    let written = null;
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async (access, id, items) => {
+      written = items; return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+
+    await documentController.ingestChunks({
+      params: { id: 'd1' },
+      query: {},
+      body: {
+        // Page 2 is long enough to need two chunks, so the page count cannot be read off the
+        // chunks and the ids have to keep them apart.
+        markdown: ['First page.', 'B'.repeat(5000), 'Third page.'].join('\f'),
+        extraction: { path: 'text', engine: 'pypdfium2', at: '2026-09-15T00:00:00.000Z' }
+      },
+      user: ADMIN_USER
+    }, mockRes());
+
+    assert.deepStrictEqual(written.map(c => c.id),
+      ['d1::p1::c0', 'd1::p2::c1', 'd1::p2::c2', 'd1::p3::c3'],
+      'the id keeps its shape and carries the real page');
+    assert.deepStrictEqual(written.map(c => c.pageNumbered), [true, true, true, true]);
+    assert.strictEqual(patched.pageNumbered, true);
+    assert.strictEqual(patched.pageCount, 3, 'three pages, which is not the four chunks');
+    // cosmos.patch throws a RangeError above ten operations, and this is the widest patch there is.
+    assert.ok(Object.keys(patched).length <= 10);
+  });
+
+  await t.test('an extraction with no page markers writes neither field', async () => {
+    // Every extraction taken before page provenance, which is the whole corpus today. `false`
+    // would claim this ingest measured something it could not, and a re-extraction would then be
+    // indistinguishable from a document nobody has looked at again.
+    stubDoc(t);
+    let written = null;
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async (access, id, items) => {
+      written = items; return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: { markdown: 'z'.repeat(2600) }, user: ADMIN_USER },
+      mockRes()
+    );
+
+    assert.deepStrictEqual(written.filter(c => 'pageNumbered' in c), [],
+      'a chunk carries the key only when the pages were measured');
+    assert.deepStrictEqual(
+      Object.keys(patched).filter(k => k === 'pageNumbered' || k === 'pageCount'), []);
+  });
+
   // Provenance exists because the extraction host ROUTES: a text-layer probe keeps digital PDFs on
   // a CPU path and only text-poor ones reach OCR. Without recording which, a text-layer artefact
   // and an OCR error are indistinguishable afterwards, and no claim about OCR quality can be
@@ -925,6 +985,92 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
       viaJson,
       'the streaming path produced different chunks from chunkMarkdown'
     );
+  });
+
+  await t.test('a marker the probe meets late still numbers the pages from the first block',
+    async () => {
+      // A stream cannot be read ahead, so blocks are held until a marker turns up. Everything
+      // before the first one belongs to page 1, which is only true if nothing was emitted while
+      // the question was open.
+      stubDoc(t);
+      let patched = null;
+      t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+        patched = fields; return {};
+      });
+      const written = [];
+      t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+        written.push(...items); return { succeeded: items.length, failed: 0, statusCounts: {} };
+      });
+      t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+      // The marker arrives in the third block, after two blocks of page 1 have already been fed.
+      const blocks = ['Page one opens.', 'a'.repeat(2600), `${'a'.repeat(2600)}\fPage two.`];
+      await documentController.ingestChunks(streamReq(ndjson(blocks)), mockRes());
+
+      assert.deepStrictEqual(written.map(c => c.pageNumber), [1, 1, 2],
+        'a block fed before the first marker belongs to page 1, not to its own sequence number');
+      assert.deepStrictEqual(written.map(c => c.id), ['d1::p1::c0', 'd1::p1::c1', 'd1::p2::c2']);
+      assert.deepStrictEqual(written.map(c => c.pageNumbered), [true, true, true]);
+      assert.strictEqual(patched.pageNumbered, true);
+      assert.strictEqual(patched.pageCount, 2);
+    });
+
+  await t.test('a first page bigger than any probe window still chunks by page', async () => {
+    // The door used to stop looking for markers after 20,000 characters, so a document whose first
+    // page ran past that was chunked as if it had no pages at all — passage numbers, and the form
+    // feeds of every later page left sitting inside chunk content — while the JSON door chunked
+    // the same text by page. Both doors, one corpus: the answer cannot depend on how long page 1 is.
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    const written = [];
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      written.push(...items); return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    // 24,000 characters of page 1 before the first marker, then two short pages.
+    const blocks = [
+      ...Array.from({ length: 6 }, (_, i) => `Page one para ${i} ${'q'.repeat(4000)}`),
+      '\fSecond page text.',
+      '\fThird page.'
+    ];
+    await documentController.ingestChunks(streamReq(ndjson(blocks)), mockRes());
+
+    const viaJson = chunkMarkdown(blocks.join('\n\n'));
+    assert.deepStrictEqual(written.map(c => c.pageNumber), viaJson.map(c => c.pageNumber),
+      'the streaming door numbered the pages differently from chunkMarkdown');
+    assert.deepStrictEqual(
+      written.map(c => c.id),
+      viaJson.map(c => chunksRepo.chunkId('d1', c.pageNumber, c.chunkIndex)),
+      'the streaming door gave the chunks different ids from chunkMarkdown'
+    );
+    assert.deepStrictEqual(written.filter(c => c.content.includes('\f')), [],
+      'a page marker was left inside chunk content');
+    assert.strictEqual(patched.pageCount, 3);
+  });
+
+  await t.test('a marker-free stream is stamped with neither field', async () => {
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    const written = [];
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      written.push(...items); return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    await documentController.ingestChunks(
+      streamReq(ndjson(['Block one.', 'c'.repeat(2600)])), mockRes());
+
+    assert.ok(written.length > 0, 'nothing was written, so the case below is vacuous');
+    assert.deepStrictEqual(written.filter(c => 'pageNumbered' in c), []);
+    assert.deepStrictEqual(
+      Object.keys(patched).filter(k => k === 'pageNumbered' || k === 'pageCount'), []);
   });
 
   await t.test('flushes in batches instead of buffering the whole document', async () => {

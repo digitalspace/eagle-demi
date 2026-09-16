@@ -22,6 +22,11 @@ module.exports = {
   documentId: { defaultVis: 4, maxVis: 4 },
   projectId: { defaultVis: 4, maxVis: 4 },
   pageNumber: { defaultVis: 4, maxVis: 4 },
+  // Whether `pageNumber` is a real PDF page rather than a passage sequence number. Written only
+  // when the extraction carried page markers, so a chunk without the key predates page provenance.
+  // 4/4 like the number it qualifies: a label that says "Page 12" is worth nothing if the caller
+  // cannot tell it apart from "Passage 12".
+  pageNumbered: { defaultVis: 4, maxVis: 4 },
   chunkIndex: { defaultVis: 4, maxVis: 4 },
   extractedAt: { defaultVis: 4, maxVis: 4 },
 

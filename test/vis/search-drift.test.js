@@ -60,7 +60,8 @@ test('content is maxVis 0 and absent from every select', () => {
   assert.strictEqual(catalogFor('chunks').content.maxVis, 0,
     'a chunk field above maxVis 0 would be shippable; chunk text is never a response field');
 
-  assert.strictEqual(aiSearch.CHUNK_SELECT, 'chunkId,documentId,projectId,pageNumber,read',
+  assert.strictEqual(aiSearch.CHUNK_SELECT,
+    'chunkId,documentId,projectId,pageNumber,pageNumbered,read',
     'adding a name here ships that column to every chunk caller; `content` ships whole chunk text');
 
   const source = code(fs.readFileSync(AI_SEARCH_PATH, 'utf8'));
