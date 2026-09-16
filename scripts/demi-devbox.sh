@@ -15,6 +15,7 @@
 #   scripts/demi-devbox.sh drift --env prod
 #   scripts/demi-devbox.sh apply --env prod --only documents
 #   scripts/demi-devbox.sh apply --env test --only projects --yes
+#   scripts/demi-devbox.sh apply --env prod --datasources demi-updates-ds,demi-notifications-ds
 #
 # `drift` is read-only and exits 1 when any committed field is missing from the live index. `apply`
 # always dry-runs first, prints what it would do, and asks before writing.
@@ -30,6 +31,9 @@
 #      schema-only change re-pulls nothing. The reset is refused while an execution is in progress:
 #      a `PT5M` tick that was already running writes its old high-water mark back when it finishes
 #      and silently undoes the clear (hit 2026-09-07).
+#
+# A data source named by `--datasources` is PUT BEFORE step 1: step 2 only covers data sources that
+# already exist and differ, and a new indexer's dry run refuses while its data source is missing.
 #
 # WHY THE SUBSCRIPTION IDS ARE THE ONLY HARDCODED VALUES. Everything else is looked up at runtime —
 # the resource group comes from the search service, the VM's group from the VM, the tenant from the
@@ -69,7 +73,8 @@ DATASOURCES=''
 
 usage() {
   cat <<'EOF'
-Usage: scripts/demi-devbox.sh <drift|apply> [--env test|prod] [--only <index,...>] [--yes]
+Usage: scripts/demi-devbox.sh <drift|apply> [--env test|prod] [--only <index,...>]
+                              [--datasources <name,...>] [--yes]
 
   drift    read-only: run apply-search-definitions.js --check on the devbox and exit 1 when a
            committed field is missing from the live index. Run it after any deploy that touches
@@ -80,6 +85,9 @@ Usage: scripts/demi-devbox.sh <drift|apply> [--env test|prod] [--only <index,...
   --env    test (default) or prod
   --only   index or indexer names, comma separated: documents, projects, chunks
   --yes    do not prompt before the writing half of `apply`
+  --datasources
+           data source names to PUT before the dry run, comma separated. Needed when adding an
+           indexer whose data source does not exist yet: its dry run refuses on the missing name.
 
 Env    Subscription                            Search service      Devbox
 test   7897ceb1-9a86-4639-87d7-7f9ff67142b3    demi-search-test    demi-devbox-test
@@ -255,6 +263,15 @@ do_apply() {
   resolve_env
   preflight_rbac
 
+  # A new indexer names a data source that does not exist yet, and the dry run refuses on that name
+  # before anything can be written — so no run could ever create it. `--datasources` is the operator
+  # naming the ones to PUT first. Its own grant, ahead of the dry run's: a data source no committed
+  # indexer reads yet cannot change what the service is serving.
+  if [[ -n "$DATASOURCES" ]]; then
+    with_grant "$0" __put-datasources --env "$ENV_NAME" --datasources "$DATASOURCES"
+    echo "demi-devbox: pre-created data source(s): ${DATASOURCES}"
+  fi
+
   local dry_log
   dry_log="$(mktemp)"
   # The dry run reads the LIVE schema, which the app identity cannot do on its own, so even the
@@ -355,7 +372,9 @@ put_datasources() {
     copies="${copies} azure/search/datasources/${ds}.json"
   done
   local cmd out
-  cmd="rm -rf /tmp/demi-ds && mkdir -p /tmp/demi-ds && cp${copies} /tmp/demi-ds/ && \
+  # `git pull` here as well as in the dry run: the pre-create step runs BEFORE the dry run, and a
+  # data source added in this commit is not in the devbox checkout until something pulls it.
+  cmd="git pull --ff-only && rm -rf /tmp/demi-ds && mkdir -p /tmp/demi-ds && cp${copies} /tmp/demi-ds/ && \
 DS_SUB='${SUBSCRIPTION}' DS_RG='${COSMOS_RG}' DS_IDENTITY_ID='${DS_IDENTITY_ID}' DS_DIR=/tmp/demi-ds \
 node src/scripts/put-search-datasources.js"
   out="$(devbox_run "$cmd")" || true
@@ -433,6 +452,11 @@ ai.getToken().then(async (t)=>{
   done
 }
 
+internal_put_datasources() {
+  [[ -n "$DATASOURCES" ]] || die "__put-datasources needs --datasources"
+  put_datasources "$DATASOURCES"
+}
+
 internal_apply_run() {
   local only cmd out
   local -a onlies=()
@@ -475,7 +499,7 @@ done
 case "$ACTION" in
   drift) do_drift ;;
   apply) do_apply ;;
-  __drift-run|__dry-run|__apply-run)
+  __drift-run|__dry-run|__apply-run|__put-datasources)
     [[ "${DEMI_DEVBOX_INTERNAL:-}" == '1' ]] || die "${ACTION} is internal; use drift or apply"
     RG="${DEMI_RG:?}"; VM_RG="${DEMI_VM_RG:?}"; TENANT="${DEMI_TENANT:?}"
     case "$ENV_NAME" in
@@ -488,6 +512,7 @@ case "$ACTION" in
       __drift-run) internal_drift_run ;;
       __dry-run) internal_dry_run ;;
       __apply-run) internal_apply_run ;;
+      __put-datasources) internal_put_datasources ;;
     esac
     ;;
   -h|--help|'') usage; [[ -n "$ACTION" ]] || exit 1 ;;

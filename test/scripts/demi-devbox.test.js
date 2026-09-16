@@ -371,6 +371,31 @@ test('demi-devbox.sh', async (t) => {
       'a reset re-pulls every row; it happens only when a projection actually changed');
   });
 
+  await t.test('--datasources PUTs the named data sources before the dry run', () => {
+    // A new indexer's data source does not exist yet, so the dry run refuses on the missing name
+    // and the write phase that would have created it is never reached. The pre-create step is the
+    // only way in, and it has to land ahead of the dry run to be any use.
+    const r = run(['apply', '--only', 'activities', '--datasources', 'demi-updates-ds,demi-notifications-ds', '--yes']);
+    assert.strictEqual(r.status, 0, r.stderr);
+
+    const order = r.remote.map((c) => {
+      if (c.includes('put-search-datasources.js')) return 'datasource';
+      if (c.includes('apply-search-definitions.js --live')) return 'index';
+      if (c.includes('apply-search-definitions.js')) return 'dry';
+      return 'other';
+    });
+    assert.deepStrictEqual(order, ['datasource', 'dry', 'index'], order.join(','));
+
+    const ds = r.remote.find(c => c.includes('put-search-datasources.js'));
+    assert.match(ds, /cp azure\/search\/datasources\/demi-updates-ds\.json azure\/search\/datasources\/demi-notifications-ds\.json \/tmp\/demi-ds\//);
+    assert.ok(!ds.includes('demi-chunks-ds'), 'only the named data sources are written');
+    // Without the pull, a data source added in this commit is not in the devbox checkout yet: the
+    // dry run used to be the step that refreshed it, and this one runs before the dry run.
+    assert.match(ds, /git pull --ff-only && rm -rf \/tmp\/demi-ds/);
+    assert.match(r.stdout, /pre-created data source\(s\): demi-updates-ds,demi-notifications-ds/);
+    assert.strictEqual(deletes(r.calls).length, creates(r.calls).length, 'no grant left standing');
+  });
+
   await t.test('refuses to reset an indexer whose last execution is still running', () => {
     // A PT5M tick already in flight writes its old high-water mark back when it finishes, undoing
     // the clear. The run that follows then reports 0 rows and reads like a broken reset.
