@@ -113,10 +113,8 @@ def probe_pdf(path):
 def extract_text(path):
     """Text layer straight out of the file. No GPU, no layout model, milliseconds.
 
-    Pages are joined with a blank line because `chunker.js` splits on `/\\n{2,}/` — that is what
-    gives it block boundaries to accumulate against. The page INDEX is dropped here, which is why
-    `pageNumber` in the index is a passage sequence rather than a PDF page. Recovering it is a
-    known follow-up: the per-page list exists right here, one line above the join.
+    Pages are joined with `ocr.PAGE_BREAK`, so the page index survives the join and `chunker.js`
+    can stamp a chunk with the PDF page it came off. Blank pages included: see `ocr.join_pages`.
     """
     import pypdfium2 as pdfium
 
@@ -129,7 +127,7 @@ def extract_text(path):
             pages.append(tp.get_text_range())
             tp.close()
             page.close()
-        return "\n\n".join(p.strip() for p in pages if p.strip())
+        return ocr.join_pages(pages)
     finally:
         doc.close()
 

@@ -53,6 +53,19 @@ MAGIC = {
     b"GIF8": "image",
 }
 
+# The page boundary marker, and the only thing that makes `pageNumber` a real PDF page rather than
+# a passage sequence. One marker between consecutive pages, never leading, never trailing: the
+# chunker splits on it and counts from 1, so a missing or spare marker shifts every page after it.
+#
+# A bare form feed with no newlines around it on purpose. `extraction-host/ingest.py` splits big
+# documents into blocks on /\n{2,}/ and drops blocks that are whitespace only; a marker with blank
+# lines around it would become its own block and be thrown away on that route.
+#
+# It lives in this module rather than in extract.py because extract.py imports this one, not the
+# other way round. `extraction-host/worker.py` keeps its own copy — it is vendored host code and
+# cannot import from here.
+PAGE_BREAK = "\f"
+
 OCR_ENABLED = os.environ.get("OCR_ENABLED", "true").lower() not in ("false", "0", "no")
 OCR_RENDER_SCALE = float(os.environ.get("OCR_RENDER_SCALE", "2.0"))
 OCR_THREADS = int(os.environ.get("OCR_THREADS", "2"))
@@ -60,6 +73,15 @@ OCR_BUDGET_SECONDS = float(os.environ.get("OCR_BUDGET_SECONDS", "2400"))
 MAX_OCR_PAGES = int(os.environ.get("MAX_OCR_PAGES", "2000"))
 
 _engine = None
+
+
+def join_pages(pages):
+    """One markdown string out of a per-page list, with `PAGE_BREAK` between consecutive pages.
+
+    Pages are stripped but never dropped. A page that read as nothing still holds its place, or
+    page 40 of a document with one blank page arrives labelled 39.
+    """
+    return PAGE_BREAK.join(p.strip() for p in pages)
 
 
 def sniff(path):
@@ -91,10 +113,8 @@ def _text(image):
 def ocr_file(path, max_pages=None):
     """OCR a whole document. Returns `(markdown, info)`; markdown is `''` when nothing was read.
 
-    Pages are joined with a blank line because `chunker.js` splits on `/\\n{2,}/` — the same
-    contract the text path honours. The page index is available here and dropped in the join, for
-    the same reason it is dropped there: `pageNumber` in the index is a passage sequence, and
-    threading real pages down one path only would leave two regimes with nothing to tell them apart.
+    Pages are joined with `PAGE_BREAK`, the same contract the text path honours, so `chunker.js`
+    can give a chunk the page it came off. A single image is one page and carries no marker.
     """
     import numpy as np
     import pypdfium2 as pdfium
@@ -133,9 +153,10 @@ def ocr_file(path, max_pages=None):
             finally:
                 page.close()
             read += 1
-            if text:
-                pages.append(text)
-            else:
+            # An empty page keeps its slot. Dropping it would renumber every page after it, and a
+            # page number that is wrong is worse than no page number at all.
+            pages.append(text)
+            if not text:
                 empty += 1
 
         info = {"kind": kind, "pagesRead": read, "emptyPages": empty}
@@ -145,6 +166,6 @@ def ocr_file(path, max_pages=None):
         if read < total:
             info["truncatedAtPage"] = read
             info["pages"] = total
-        return "\n\n".join(pages), info
+        return join_pages(pages), info
     finally:
         doc.close()
