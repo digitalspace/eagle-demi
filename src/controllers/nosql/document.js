@@ -1201,16 +1201,14 @@ function sanitizeExtraction(raw) {
 const STREAM_BATCH_CHUNKS = 200;
 
 /**
- * How much of a stream is read before concluding it carries no page markers.
+ * When a marker-free hold has grown big enough to be worth a log line.
  *
- * The accumulator has to be told whether the document is paged BEFORE it emits its first chunk,
- * and a stream cannot be looked at ahead of time. Blocks are held until a marker appears or this
- * many characters have gone by without one: a PDF page holding 20,000 characters does not occur in
- * this corpus — a dense page of text is about 4,000 — so a document still unmarked by then has no
- * markers at all. Bounded on purpose: holding the whole document is the thing this door exists to
- * avoid.
+ * Blocks are held until the first page marker (see `ingestChunksStreaming`), so a stream carrying
+ * no markers at all is held whole. 10 MB is the JSON door's body limit: past it this stream holds
+ * more than the buffering door would ever have been handed, which is the only case where this
+ * door's memory follows document size. Diagnostic only — nothing branches on it.
  */
-const PAGE_PROBE_CHARS = 20000;
+const HOLD_WARN_CHARS = 10 * 1024 * 1024;
 
 /**
  * How many flushed batches a stream stamps from one read of the document row.
@@ -1265,10 +1263,27 @@ async function ingestChunksStreaming(req, res, doc) {
   const readline = require('readline');
 
   const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : readForLevel(2);
-  // Created only once the page-marker question is settled — see PAGE_PROBE_CHARS and `feed`.
+  // Created only once the page-marker question is settled — see `held` and `feed`.
   let acc = null;
-  let probe = [];
-  let probeChars = 0;
+  // Blocks held while that question is open. NOTHING is emitted until it is settled, because the
+  // accumulator has to be told whether the document is paged before its first chunk and a stream
+  // cannot be read ahead.
+  //
+  // THE HOLD RUNS TO THE FIRST MARKER OR TO END OF STREAM. There used to be a 20,000-character
+  // probe cap, and it was wrong: a first page longer than the cap settled "no page markers" for
+  // good, so a document the JSON door chunks by page came through here numbered by passage with
+  // every later page's form feed left inside chunk content — the two doors disagreeing about the
+  // same text, silently. No cap is safe, because the marker a cap misses is the marker that
+  // matters, and the question cannot be reopened once chunks have been written.
+  //
+  // What dropping it costs: a paged stream holds ONE PAGE, since the host writes a marker between
+  // every pair of pages. Only a stream with no markers anywhere is held whole, and that is what
+  // the JSON door does with the same text — so this door still bounds memory by batch size for
+  // every document the current extraction host produces. HOLD_WARN_CHARS makes the exception
+  // visible instead of leaving it to be discovered as an out-of-memory kill.
+  let held = [];
+  let heldChars = 0;
+  let heldWarned = false;
   let pageNumbered = false;
   const keepIds = [];
   const startedAt = new Date().toISOString();
@@ -1321,9 +1336,9 @@ async function ingestChunksStreaming(req, res, doc) {
   const startAccumulator = async (markers) => {
     pageNumbered = markers;
     acc = createChunkAccumulator({ pageMarkers: markers });
-    const held = probe;
-    probe = [];
-    for (const block of held) {
+    const replay = held;
+    held = [];
+    for (const block of replay) {
       const err = await collect(acc.push(block));
       if (err) return err;
     }
@@ -1334,10 +1349,15 @@ async function ingestChunksStreaming(req, res, doc) {
   // ever stamped with the wrong kind of page number.
   const feed = async (block) => {
     if (acc) return collect(acc.push(block));
-    probe.push(block);
-    probeChars += block.length;
+    held.push(block);
+    heldChars += block.length;
+    if (heldChars >= HOLD_WARN_CHARS && !heldWarned) {
+      heldWarned = true;
+      logger.warn('[Document Controller] no page marker yet, holding the stream in memory', {
+        documentId: doc.id, heldChars, heldBlocks: held.length
+      });
+    }
     if (hasPageMarkers(block)) return startAccumulator(true);
-    if (probeChars >= PAGE_PROBE_CHARS) return startAccumulator(false);
     return null;
   };
 
@@ -1430,8 +1450,8 @@ async function ingestChunksStreaming(req, res, doc) {
     return fail(400, 'empty stream: expected a metadata line');
   }
 
-  // A stream that ended inside the probe never settled the question: no marker was seen in the
-  // whole document, so there were none.
+  // A stream that ended with its blocks still held never met a marker anywhere in the document,
+  // so there were none. This is where a marker-free stream settles, however long it ran.
   if (!acc) {
     const startErr = await startAccumulator(false);
     if (startErr) return fail(500, startErr);

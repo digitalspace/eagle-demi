@@ -1015,6 +1015,43 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
       assert.strictEqual(patched.pageCount, 2);
     });
 
+  await t.test('a first page bigger than any probe window still chunks by page', async () => {
+    // The door used to stop looking for markers after 20,000 characters, so a document whose first
+    // page ran past that was chunked as if it had no pages at all — passage numbers, and the form
+    // feeds of every later page left sitting inside chunk content — while the JSON door chunked
+    // the same text by page. Both doors, one corpus: the answer cannot depend on how long page 1 is.
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    const written = [];
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      written.push(...items); return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    // 24,000 characters of page 1 before the first marker, then two short pages.
+    const blocks = [
+      ...Array.from({ length: 6 }, (_, i) => `Page one para ${i} ${'q'.repeat(4000)}`),
+      '\fSecond page text.',
+      '\fThird page.'
+    ];
+    await documentController.ingestChunks(streamReq(ndjson(blocks)), mockRes());
+
+    const viaJson = chunkMarkdown(blocks.join('\n\n'));
+    assert.deepStrictEqual(written.map(c => c.pageNumber), viaJson.map(c => c.pageNumber),
+      'the streaming door numbered the pages differently from chunkMarkdown');
+    assert.deepStrictEqual(
+      written.map(c => c.id),
+      viaJson.map(c => chunksRepo.chunkId('d1', c.pageNumber, c.chunkIndex)),
+      'the streaming door gave the chunks different ids from chunkMarkdown'
+    );
+    assert.deepStrictEqual(written.filter(c => c.content.includes('\f')), [],
+      'a page marker was left inside chunk content');
+    assert.strictEqual(patched.pageCount, 3);
+  });
+
   await t.test('a marker-free stream is stamped with neither field', async () => {
     stubDoc(t);
     let patched = null;

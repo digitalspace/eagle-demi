@@ -128,6 +128,21 @@ test('clearing contentExtracted is what re-enters a document into the work list'
   assert.strictEqual(CLEARED_EXTRACTION.contentExtractionError, null);
 });
 
+test('a live run nulls the page provenance of the chunks it just deleted', async () => {
+  // A document left claiming "page numbered, 12 pages" with no chunks behind it is a claim nothing
+  // can check: the work list would re-extract it while the UI still quoted page numbers for text
+  // that is gone. Asserted against the patch the purge actually writes, not against the constant,
+  // which would only compare the code under test with itself.
+  const docs = fakeDocuments(DOCS);
+
+  await purge(['--live'], { documents: docs, chunks: fakeChunks(PER_DOC), index: fakeIndex() });
+
+  const [first] = docs.state.patched;
+  assert.strictEqual(first.fields.pageNumbered, null,
+    'the flag outlived the chunks that justified it');
+  assert.strictEqual(first.fields.pageCount, null);
+});
+
 test('a document whose chunks fail to delete keeps its flags', async () => {
   // The dangerous outcome: chunks still in Cosmos but the document advertised as unextracted.
   // Re-ingest would then reconcile against rows nobody knows are there.

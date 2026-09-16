@@ -101,7 +101,8 @@ function splitText(text) {
  * PAGE MODE IS THE CALLER'S TO DECLARE, never guessed here: a document is paged or it is not and
  * the whole document has to agree on which, so a decision made halfway through would number the
  * blocks before it differently from the ones after. `chunkMarkdown` reads it off the whole string;
- * the streaming ingest door probes its first blocks (`ingestChunksStreaming`). In page mode
+ * the streaming ingest door holds blocks until the first page marker or end of stream, no fixed
+ * probe window (`ingestChunksStreaming`). In page mode
  * `pageNumber` is the real 1-based page, several blocks can share one, and a block never spans a
  * marker. Otherwise it is the block sequence number it has always been.
  *

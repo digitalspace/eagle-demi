@@ -336,6 +336,20 @@ test('extraction state survives a re-seed', async (t) => {
     }
   });
 
+  await t.test('page provenance is carried too, so a re-seed cannot relabel pages as passages',
+    () => {
+      // Named here rather than left to the loop above: that loop takes its field list from the
+      // code under test, so a field dropped from EXTRACTION_FIELDS disappears from its expectation
+      // at the same time and the loss stays green.
+      const out = transformDocument(EAGLE_DOC, '207', LIST, {
+        ...OPTS,
+        existing: { ...existing, pageNumbered: true, pageCount: 12 }
+      });
+      assert.strictEqual(out.pageNumbered, true,
+        'dropping the flag renders "Passage N" over chunks that know their page');
+      assert.strictEqual(out.pageCount, 12);
+    });
+
   await t.test('a failed extraction is carried too, error and all', () => {
     const failed = {
       contentExtracted: false, contentExtractedAt: '2026-08-02T00:00:00.000Z',
