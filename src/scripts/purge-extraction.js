@@ -80,7 +80,11 @@ const CLEARED_EXTRACTION = {
   contentExtractedAt: null,
   contentPageCount: 0,
   contentExtractionError: null,
-  extractionMethod: null
+  extractionMethod: null,
+  // Nulled rather than left alone: the chunks these described are being deleted, and a document
+  // that still claims page numbers with no chunks behind them is a claim nothing can check.
+  pageNumbered: null,
+  pageCount: null
 };
 
 /**

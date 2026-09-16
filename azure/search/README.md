@@ -177,6 +177,16 @@ The `projects` half was applied on test on 2026-09-12 — index PUT, `demi-proje
 reset and run — so `dateUpdated` is in `PROJECT_SELECT` and on the project row. The `activities`
 half is still outstanding, which is why `documentUrl` stays out of the activities select.
 
+`pageNumbered` on `chunks` was added on 2026-09-15, with `c.pageNumbered` in `demi-chunks-ds`. It
+is a plain widening: an `Edm.Boolean` saying that a chunk's `pageNumber` is the real PDF page rather
+than a passage sequence number, written by the ingest only when the extraction carried page markers.
+It is `null` on every chunk in the index today, which reads as false and keeps the label at
+"Passage N" — the state the page has always been in. Until the index PUT lands, `CHUNK_SELECT` asks
+for a column the live index does not declare, so every Deep Search pays one extra round trip through
+the degrade path and logs it; the results are otherwise unchanged. No rebuild and no reset of the
+whole corpus is needed to start: the re-extraction refills rows document by document and the
+indexer's high-water mark carries each one as it lands.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 

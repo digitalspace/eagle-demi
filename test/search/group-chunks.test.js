@@ -53,6 +53,19 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(row.milestoneId, '5d0d212c7d50161b92a80eed');
   });
 
+  // The label gate. eagle-public reads "Page N" and links `#page=N` off this flag alone, so a row
+  // that loses it on the way through grouping silently downgrades a re-extracted document back to
+  // "Passage N" — and one that gains it sends a reader to a page the passage is not on.
+  await t.test('pageNumbered rides the row beside the page it qualifies', () => {
+    const [numbered] = groupByDocument([{ ...chunk('d1', 12, 'lead'), pageNumbered: true }]);
+    assert.strictEqual(numbered.pageNumber, 12);
+    assert.strictEqual(numbered.pageNumbered, true);
+
+    const [sequence] = groupByDocument([{ ...chunk('d2', 12, 'lead'), pageNumbered: false }]);
+    assert.strictEqual(sequence.pageNumbered, false,
+      'the same number without the flag is the 12th passage, not page 12');
+  });
+
   await t.test('snippets are capped, matchCount is not', () => {
     const rows = groupByDocument(
       Array.from({ length: 7 }, (_, i) => chunk('d1', i, `s${i}`)), 10);

@@ -55,6 +55,11 @@ module.exports = {
   contentExtracted: { defaultVis: 4, maxVis: 4 },
   contentExtractedAt: { defaultVis: 4, maxVis: 4 },
   contentPageCount: { defaultVis: 4, maxVis: 4 },
+  // Page provenance. `pageNumbered` says the extraction carried page boundaries, `pageCount` is how
+  // many pages it described — NOT `contentPageCount`, which counts chunks and always has. Both are
+  // absent on every document extracted before this existed, which is the honest "unknown".
+  pageNumbered: { defaultVis: 4, maxVis: 4 },
+  pageCount: { defaultVis: 4, maxVis: 4 },
   contentExtractionError: { defaultVis: 4, maxVis: 4 },
   extractionMethod: { defaultVis: 4, maxVis: 4 },
   extraction: { defaultVis: 4, maxVis: 4 },

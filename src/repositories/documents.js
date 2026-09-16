@@ -19,7 +19,11 @@ const PARTITION_FIELD = 'projectId';
 
 /** Extraction state, which belongs to DEMI and has no upstream counterpart. */
 const EXTRACTION_FIELDS = [
-  'contentExtracted', 'contentExtractedAt', 'contentPageCount', 'contentExtractionError'
+  'contentExtracted', 'contentExtractedAt', 'contentPageCount', 'contentExtractionError',
+  // Page provenance, carried forward for the same reason the four above are: a re-seed REPLACES
+  // the row, and a document whose flag was dropped would render "Passage N" over chunks that know
+  // their page.
+  'pageNumbered', 'pageCount'
 ];
 
 /**

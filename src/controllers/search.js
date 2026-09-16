@@ -1386,6 +1386,12 @@ exports.search = async (req, res) => {
             milestoneId: (parent && parent.milestoneId) || null,
             datePosted: (parent && parent.datePosted) || null,
             pageNumber: chunk.pageNumber ?? 0,
+            // Whether that number is a real PDF page. eagle-public labels the passage "Page N" and
+            // links `#page=N` only when this is true; otherwise it reads "Passage N" and links
+            // nowhere. A BOOLEAN on every row, never an absent key: `searchChunks` normalises the
+            // index's null, and this row is also built by the summary and chunk-list callers, whose
+            // chunks come from Cosmos where the field is absent on everything pre-provenance.
+            pageNumbered: chunk.pageNumbered === true,
             // Empty by design: `content` is not retrievable from the index, so the API never ships
             // whole chunks. The UI renders `snippet` and falls back to `content` only without one.
             content: '',

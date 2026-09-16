@@ -2534,11 +2534,36 @@ test('the answer matches the request that was made', async (t) => {
       milestoneId: 'm1',
       datePosted: '2020-01-01T00:00:00.000Z',
       pageNumber: 3,
+      // The hit carried no flag, which is what a chunk indexed before page provenance looks like.
+      pageNumbered: false,
       content: '',
       snippet: 'a river',
       snippets: ['a river'],
       matchCount: 1
     }], 'no s3Key, no read[], no _etag, no vis, and no withheld label');
+  });
+
+  // The label gate, end to end through the mapper and the grouping. eagle-public renders
+  // "Page 12" and a `#page=12` link off this flag alone; without it the same number is only the
+  // 12th passage the search returned, and a link built from it would open the wrong page.
+  await t.test('a page-numbered chunk says so on the row it returns', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      count: 1,
+      items: [{
+        chunkId: 'c1', documentId: 'd1', projectId: '207', pageNumber: 12,
+        pageNumbered: true, snippet: 'a river'
+      }]
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'First' }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'DocumentChunk', keywords: 'river' }, header: () => null }, res);
+
+    const [row] = out.body[0].searchResults;
+    assert.strictEqual(row.pageNumber, 12);
+    assert.strictEqual(row.pageNumbered, true);
   });
 
   await t.test('a summary citation is built from redacted parent rows', async () => {

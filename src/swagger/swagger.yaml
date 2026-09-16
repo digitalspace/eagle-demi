@@ -210,6 +210,14 @@ paths:
             all. A facet key the live chunks index cannot filter on is resolved through the
             documents index instead, and is named in `meta[0].dropped.filter`, with a reason
             attached, only when that resolution is over the document cap.
+
+
+            A DocumentChunk row carries `pageNumber` and `pageNumbered`. `pageNumbered` is true
+            when the extraction recorded real page boundaries, and then `pageNumber` is the PDF page
+            the passage sits on and can be shown as "Page N" and linked as `#page=N`. It is false on
+            every document extracted before page provenance, where `pageNumber` is only the Nth
+            passage of the document. The flag is a property of the document's extraction, so every
+            passage of one document agrees on it.
         '400':
           description: Unknown dataset, unsupported query parameter, or dataset=Comment with no period.
         '502':
@@ -1147,6 +1155,91 @@ paths:
           description: The document would out-rank its project.
 
   /api/documents/{id}/chunks:
+    post:
+      summary: Ingest a document's extracted text
+      description: >-
+        The extraction host sends MARKDOWN and the server splits it: `src/chunker.js` is the only
+        chunker, so an external worker never decides where a chunk begins. The ACL is copied from
+        the live document on every call and is never taken from the body. Chunk ids are
+        deterministic, so re-posting the same markdown replaces the same rows and a killed backfill
+        can simply be restarted.
+
+
+        PAGE MARKERS. A form feed (U+000C) between consecutive pages, never at either end and never
+        as a page's own content; an empty page still gets its separator, so two in a row mean a page
+        with nothing on it. With markers, each chunk's `pageNumber` is the real 1-based PDF page, no
+        chunk holds text from two pages, and the document is recorded as `pageNumbered` with its
+        `pageCount`. Without them the text is chunked exactly as before and `pageNumber` stays a
+        passage sequence number — which is every extraction taken before page provenance, and why
+        neither field is written in that case rather than written false.
+
+
+        Two bodies. `application/json` `{markdown}` or `{error}` for a failed extraction, which is
+        recorded against the document so a retry can find it. `application/x-ndjson` for text too
+        large to hold in memory: line 1 is a JSON object of stream metadata carrying the optional
+        `extraction` provenance, and lines 2..n are JSON-encoded markdown blocks split on blank
+        lines. Both doors chunk identically. Send `Content-Length`; chunked transfer encoding is not
+        accepted.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          description: Parent project id, the partition key. Avoids a cross-partition lookup.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                markdown:
+                  type: string
+                  description: >-
+                    The whole extracted document, pages separated by a form feed where the
+                    extraction recorded them.
+                error:
+                  type: string
+                  description: >-
+                    Sent INSTEAD of `markdown` when the extraction failed. The document is marked
+                    extracted with zero chunks and the message is kept, so `--retry-failed` can find
+                    it.
+                extraction:
+                  type: object
+                  description: >-
+                    Optional provenance describing how the text was produced — which path the host
+                    routed the document down. Recorded for failures too.
+          application/x-ndjson:
+            schema:
+              type: string
+              description: Metadata line, then one JSON-encoded markdown block per line.
+      responses:
+        '200':
+          description: >-
+            `{id, chunks}`, where `chunks` is how many were written, plus `extraction` when
+            provenance was sent and `streamed: true` on the NDJSON path. `recordedError: true`
+            instead when an `error` was reported.
+        '400':
+          description: >-
+            Neither `markdown` nor `error`, or a malformed NDJSON stream — the offending line is
+            named.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Document not found.
+        '500':
+          description: >-
+            Part of the write did not land. The shortfall is recorded on the document and
+            `contentExtracted` is NOT set, so the work list still offers it.
     get:
       summary: A document's extracted text, in page order
       description: >-

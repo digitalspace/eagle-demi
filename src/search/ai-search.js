@@ -103,7 +103,7 @@ const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,status,
  * the app actually sends, and so a test can hold it against the committed `chunks.json`. It was an
  * inline literal with no test at all while both of its neighbours had one.
  */
-const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,read';
+const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,pageNumbered,read';
 
 /**
  * The fields a project keyword query matches on. Shared by the search and the count so the badge
@@ -1410,6 +1410,11 @@ async function searchChunks(opts = {}) {
       documentId: hit.documentId,
       projectId: hit.projectId,
       pageNumber: hit.pageNumber,
+      // NORMALISED HERE, once. A chunk indexed before page provenance answers `null` for this
+      // column, and a live index that does not declare it yet drops it from the select entirely
+      // (`dropField`) — both mean "this number is a passage, not a page", which is what `false`
+      // says. Every layer above reads a boolean.
+      pageNumbered: hit.pageNumbered === true,
       read: hit.read,
       snippet: snippetFrom(hit),
       // Present only when L2 actually ran, so it doubles as the answer to "was this reranked?" —
