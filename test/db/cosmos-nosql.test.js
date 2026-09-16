@@ -295,6 +295,42 @@ test('queryFirst drains pages instead of trusting the first one', async (t) => {
 });
 
 /**
+ * Paged reads — every list endpoint, and the purge scan.
+ *
+ * Without query control the SDK's legacy fetch path drops the continuation header on a
+ * cross-partition ORDER BY, so `/api/documents?pageSize=100` served page one and reported no
+ * next page. The purge scan stopped at "200 of 200 scanned" on a corpus of tens of thousands.
+ */
+test('query() asks for query control only when it is paging', async (t) => {
+  const { module: db, pages, queries } = loadWithSdkStub(t);
+  const spec = { query: 'SELECT * FROM c ORDER BY c._ts DESC', parameters: [] };
+
+  await t.test('a paged read enables query control', async () => {
+    pages.push({ resources: [{ id: '1' }] });
+
+    await db.query('documents', spec, { maxItemCount: 100 });
+
+    assert.strictEqual(queries.at(-1).feedOptions.enableQueryControl, true);
+  });
+
+  await t.test('a whole-result read leaves it unset', async () => {
+    pages.push({ resources: [{ id: '1' }] });
+
+    await db.query('documents', spec);
+
+    assert.strictEqual(queries.at(-1).feedOptions.enableQueryControl, undefined);
+  });
+
+  await t.test('the caller gets the token the page came back with', async () => {
+    pages.push({ resources: [{ id: '1' }], continuationToken: 'page-2' });
+
+    const res = await db.query('documents', spec, { maxItemCount: 100 });
+
+    assert.strictEqual(res.continuationToken, 'page-2');
+  });
+});
+
+/**
  * `upsert` with an etag.
  *
  * An upsert replaces the whole item, so it has no stored value left for a patch `condition` to
