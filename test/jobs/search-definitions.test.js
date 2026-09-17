@@ -187,6 +187,20 @@ test('search definition job', async (t) => {
     assert.deepStrictEqual(h.final().results, [{ indexer: 'chunks-indexer', status: 'stillRunning' }]);
   });
 
+  await t.test('an unreadable tracking state is a warning with the message, not a still-running row', async () => {
+    const h = harness(t, {
+      job: row({ request: { only: ['chunks'], datasources: [], live: true, check: false } }),
+      resetLog: ['DEMI_WARN chunks-indexer tracking state unreadable']
+    });
+
+    await searchDefinitions.run(ID);
+
+    assert.strictEqual(h.final().status, 'warned');
+    assert.deepStrictEqual(h.final().results, [
+      { indexer: 'chunks-indexer', status: 'warned', message: 'tracking state unreadable' }
+    ]);
+  });
+
   await t.test('a dry run writes nothing and resets nothing', async () => {
     const h = harness(t, {
       job: row({ request: { only: ['projects'], datasources: ['demi-projects-ds'], live: false, check: false } })

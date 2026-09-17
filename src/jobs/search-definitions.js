@@ -158,10 +158,12 @@ function sink(jobId) {
       });
       return;
     }
-    const warn = /^DEMI_WARN (\S+)/.exec(line);
+    const warn = /^DEMI_WARN (\S+) ?(.*)/.exec(line);
     if (warn) {
       warned = true;
-      results.push({ indexer: warn[1], status: 'stillRunning' });
+      results.push(warn[2].includes('still running')
+        ? { indexer: warn[1], status: 'stillRunning' }
+        : { indexer: warn[1], status: 'warned', message: warn[2] });
       return;
     }
     const noWait = /^DEMI_NOWAIT (\S+)/.exec(line);
