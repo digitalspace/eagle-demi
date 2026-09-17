@@ -1,8 +1,9 @@
-# The two search probes, on a schedule rather than only at deploy time: a deploy gate cannot catch
-# the live indexes going wrong under a release that already shipped.
+# Data probe only, on a schedule rather than only at deploy time: a deploy gate cannot catch
+# the live index data going wrong under a release that already shipped.
+# Schema probe runs at deploy time only, not here: main's index files can be ahead of prod between releases.
 # Background: docs/runbook-search-outage.md.
 
-name: Probe production search
+name: Probe production search data
 
 on:
   schedule:
@@ -22,20 +23,15 @@ env:
 
 jobs:
   probe:
-    name: Probe the live prod indexes
+    name: Probe the live prod index data
     runs-on: ubuntu-latest
-    # NO `environment:`, deliberately. Both probes are unauthenticated GETs and POSTs against public
-    # health routes and return counts, never rows, so there is no credential to gate and an approval
+    # NO `environment:`, deliberately. The probe is unauthenticated GETs and POSTs against public
+    # health routes and returns counts, never rows, so there is no credential to gate and an approval
     # would mean this never runs on its schedule.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
-      # No setup-node and no install: the probes read JSON and curl, on the runner's own node.
-      - name: Probe the live index schemas
-        run: ./scripts/search-schema-probe.sh "$API_BASE_URL"
-
-      # Always, so a schema failure does not hide a data failure. They have different fixes.
+      # No setup-node and no install: the probe reads JSON and curl, on the runner's own node.
       - name: Check the values in the live indexes
-        if: always()
         run: ./scripts/search-data-probe.sh "$API_BASE_URL"
