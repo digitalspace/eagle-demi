@@ -11,6 +11,10 @@ const API = '2024-07-01';
 const SETTLE_MS = 60000;
 // How many drain polls to take before giving up, so a zero poll sleep cannot spin.
 const MAX_DRAIN_POLLS = 20;
+// A reset is applied asynchronously, so a run posted right behind it can still consume the old
+// high-water mark (hit 2026-09-17). One wait per attempt: wait, run, and if the execution still
+// carried a tracking state, reset again and wait longer. Length = the attempt cap.
+const RUN_WAIT_MS = [5000, 20000, 40000];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -52,7 +56,8 @@ async function resetAndRun(opts) {
     pollEvery = 4,
     noWait = false,
     mode = 'reset',
-    now = Date.now
+    now = Date.now,
+    sleep: sleepImpl = sleep
   } = opts;
 
   const headers = { Authorization: `Bearer ${token}` };
@@ -74,73 +79,35 @@ async function resetAndRun(opts) {
     { method: 'POST', headers, body: '' });
 
   // One deadline for the whole call, not one per indexer: run-command cuts the call off at 90
-  // minutes however many indexers it carries.
+  // minutes however many indexers it carries. The retries below share it.
   const deadline = now() + timeoutMs;
 
-  for (const name of names) {
-    const before = await status(name);
-    log(`DEMI_BEFORE ${name} status=${before.status || 'none'} start=${before.startTime || '-'}`);
+  // `initialTrackingState` is null on an execution that started from a cleared high-water mark.
+  // We could not confirm that api-version 2024-07-01 returns the field, so it only decides when
+  // it is there; when it is absent the startTime comparison is the whole proof.
+  const trackingOf = (e) => (e.initialTrackingState === undefined ? 'absent'
+    : e.initialTrackingState === null ? 'null' : 'set');
 
-    // In watch mode there is no reset to compare against, so the newest execution is the one asked
-    // about.
-    let resetAt = 0;
-
-    if (mode === 'reset') {
-      if (before.status === 'inProgress') {
-        log(`DEMI_BUSY ${name}`);
-        return 1;
+  // An execution that was already in flight when the reset landed writes its old high-water mark
+  // back when it finishes and silently undoes the clear. Wait for it to drain.
+  async function drained(name, resetAt) {
+    for (let i = 0; ; i += 1) {
+      const e = await status(name);
+      if (e.status !== 'inProgress') return true;
+      if (i + 1 >= MAX_DRAIN_POLLS || now() >= resetAt + settleMs) {
+        log(`DEMI_FAIL ${name} an execution was still running ${settleMs / 1000}s after the reset`);
+        return false;
       }
-      const reset = await post(name, 'reset');
-      log(`DEMI_RESET ${name} ${reset.status}`);
-      if (reset.status >= 300) {
-        log(`DEMI_FAIL ${name} reset ${reset.status}`);
-        return 1;
-      }
-      resetAt = now();
-
-      for (let i = 0; ; i += 1) {
-        const e = await status(name);
-        if (e.status !== 'inProgress') break;
-        if (i + 1 >= MAX_DRAIN_POLLS || now() >= resetAt + settleMs) {
-          log(`DEMI_FAIL ${name} an execution was still running ${settleMs / 1000}s after the reset`);
-          return 1;
-        }
-        await sleep(pollSleepMs);
-      }
-
-      let run = await post(name, 'run');
-      log(`DEMI_RUN ${name} ${run.status}`);
-      if (run.status === 409) {
-        // Already running. It is the run that was asked for when it started after the reset;
-        // otherwise let it drain and ask again, or the wait below watches a pre-reset execution.
-        const e = await status(name);
-        if (!(startedAt(e) >= resetAt)) {
-          for (let i = 0; i < MAX_DRAIN_POLLS; i += 1) {
-            await sleep(pollSleepMs);
-            const w = await status(name);
-            if (w.status !== 'inProgress') break;
-          }
-          run = await post(name, 'run');
-          log(`DEMI_RUN ${name} ${run.status}`);
-        }
-      }
-      if (run.status >= 300 && run.status !== 409) {
-        log(`DEMI_FAIL ${name} run ${run.status}`);
-        return 1;
-      }
-
-      if (noWait) {
-        log(`DEMI_NOWAIT ${name}`);
-        continue;
-      }
+      await sleepImpl(pollSleepMs);
     }
+  }
 
+  async function waitForRun(name, resetAt) {
     let tick = 0;
     let last;
-    let done = null;
     let pinnedStart = null;
     do {
-      if (tick > 0) await sleep(pollSleepMs);
+      if (tick > 0) await sleepImpl(pollSleepMs);
       tick += 1;
       const list = await history(name);
       // The poll line and the "still running" warning below are about the indexer, so they read the
@@ -153,11 +120,90 @@ async function resetAndRun(opts) {
       if (tick % pollEvery === 0) {
         log(`DEMI_POLL ${name} ${last.status || 'none'} items=${field(last.itemsProcessed)}`);
       }
-      if (startedAt(e) >= resetAt && e.status && e.status !== 'inProgress') {
-        done = e;
-        break;
-      }
+      if (startedAt(e) >= resetAt && e.status && e.status !== 'inProgress') return { done: e, last };
     } while (now() < deadline);
+    return { done: null, last };
+  }
+
+  for (const name of names) {
+    const before = await status(name);
+    log(`DEMI_BEFORE ${name} status=${before.status || 'none'} start=${before.startTime || '-'}`);
+
+    if (mode === 'reset' && before.status === 'inProgress') {
+      log(`DEMI_BUSY ${name}`);
+      return 1;
+    }
+
+    // In watch mode there is no reset to compare against, so the newest execution is the one asked
+    // about.
+    let resetAt = 0;
+    let done = null;
+    let last = {};
+
+    for (let attempt = 1; ; attempt += 1) {
+      if (mode === 'reset') {
+        // A scheduled tick can start on top of the run a retry is about to replace. Resetting into
+        // it is what DEMI_BUSY refuses on the first attempt, so wait it out here too.
+        if (attempt > 1 && (await status(name)).status === 'inProgress') {
+          const drain = await waitForRun(name, 0);
+          if (!drain.done) {
+            done = null;
+            last = drain.last;
+            break;
+          }
+        }
+
+        const reset = await post(name, 'reset');
+        log(`DEMI_RESET ${name} ${reset.status}`);
+        if (reset.status >= 300) {
+          log(`DEMI_FAIL ${name} reset ${reset.status}`);
+          return 1;
+        }
+        resetAt = now();
+
+        if (!await drained(name, resetAt)) return 1;
+
+        const waitMs = RUN_WAIT_MS[attempt - 1];
+        if (attempt > 1) log(`DEMI_RESET_RETRY ${name} attempt=${attempt} wait=${waitMs / 1000}s`);
+        await sleepImpl(waitMs);
+
+        let run = await post(name, 'run');
+        log(`DEMI_RUN ${name} ${run.status}`);
+        if (run.status === 409) {
+          // Already running. It is the run that was asked for when it started after the reset;
+          // otherwise let it drain and ask again, or the wait below watches a pre-reset execution.
+          const e = await status(name);
+          if (!(startedAt(e) >= resetAt)) {
+            for (let i = 0; i < MAX_DRAIN_POLLS; i += 1) {
+              await sleepImpl(pollSleepMs);
+              const w = await status(name);
+              if (w.status !== 'inProgress') break;
+            }
+            run = await post(name, 'run');
+            log(`DEMI_RUN ${name} ${run.status}`);
+          }
+        }
+        if (run.status >= 300 && run.status !== 409) {
+          log(`DEMI_FAIL ${name} run ${run.status}`);
+          return 1;
+        }
+
+        if (noWait) {
+          log(`DEMI_NOWAIT ${name}`);
+          break;
+        }
+      }
+
+      ({ done, last } = await waitForRun(name, resetAt));
+      // Only a finished execution can say whether the reset took; a deadline or a run that never
+      // started is reported below instead of retried.
+      if (done && mode === 'reset' && trackingOf(done) === 'set' && attempt < RUN_WAIT_MS.length) {
+        continue;
+      }
+      break;
+    }
+
+    if (mode === 'reset' && noWait) continue;
 
     if (!done) {
       if (last && last.status === 'inProgress') {
@@ -168,11 +214,7 @@ async function resetAndRun(opts) {
       return 1;
     }
 
-    // `initialTrackingState` is null on an execution that started from a cleared high-water mark.
-    // We could not confirm that api-version 2024-07-01 returns the field, so it only decides when
-    // it is there; when it is absent the startTime comparison above is the whole proof.
-    const tracking = done.initialTrackingState === undefined ? 'absent'
-      : done.initialTrackingState === null ? 'null' : 'set';
+    const tracking = trackingOf(done);
     if (mode === 'reset' && tracking === 'set') {
       log(`DEMI_RESET_NOT_APPLIED ${name}`);
       return 1;

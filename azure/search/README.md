@@ -300,6 +300,13 @@ order takes the live search down for anonymous callers.
    GET  {endpoint}/indexers/{name}/status?api-version=2024-07-01
    ```
 
+   **Leave a few seconds between the two POSTs.** The service applies the reset in its own time,
+   and a `run` sent straight after it can still start from the old high-water mark. If the run entry
+   comes back with `initialTrackingState` set, reset and run again. `demi-devbox.sh` does this for
+   you: it makes up to three attempts (two retries, waiting 20 s then 40 s before the run) and logs
+   `DEMI_RESET_RETRY` before each retry; after the third failed attempt it logs
+   `DEMI_RESET_NOT_APPLIED` and exits 1.
+
    Both POSTs need an empty-body content-length header or the REST API answers 411, not 204/202:
 
    ```bash

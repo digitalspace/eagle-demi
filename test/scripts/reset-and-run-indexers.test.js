@@ -66,6 +66,7 @@ async function drive(svc, opts = {}) {
     settleMs: 0,
     pollEvery: 1,
     now: () => NOW,
+    sleep: async () => {},
     ...opts
   });
   return { code, lines, out: lines.join('\n'), calls: svc.calls };
@@ -212,6 +213,8 @@ test('reset-and-run-indexers', async (t) => {
     const r = await drive(service({ history: [kept] }), { mode: 'watch' });
     assert.strictEqual(r.code, 0, r.out);
     assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=set/);
+    assert.ok(!r.out.includes('DEMI_RESET_RETRY'), r.out);
+    assert.ok(r.calls.every(c => c.startsWith('GET')), r.calls.join(' | '));
   });
 
   await t.test('the timeout covers the whole call, not each indexer in turn', async () => {
@@ -246,7 +249,8 @@ test('reset-and-run-indexers', async (t) => {
       timeoutMs,
       settleMs: 0,
       pollEvery: 1,
-      now: () => clock
+      now: () => clock,
+      sleep: async () => {}
     });
     const out = lines.join('\n');
     assert.strictEqual(code, 0, out);
@@ -278,10 +282,120 @@ test('reset-and-run-indexers', async (t) => {
       timeoutMs: 600000,
       settleMs: 0,
       pollEvery: 1,
-      now: () => NOW
+      now: () => NOW,
+      sleep: async () => {}
     });
     assert.strictEqual(code, 0, lines.join('\n'));
     const results = lines.filter(l => l.startsWith('DEMI_RESULT')).map(l => l.split(' ')[1]);
     assert.deepStrictEqual(results, ['name=projects-indexer', 'name=documents-indexer']);
+  });
+  await t.test('resets again when the run kept its tracking state', async () => {
+    // AI Search applies a reset asynchronously, so a run posted seconds later can still consume the
+    // old high-water mark (test, 2026-09-17). One more reset, given longer, clears it.
+    const kept = { ...FRESH, initialTrackingState: '{"lastTs":123}' };
+    const svc = service({ history: [STALE, STALE, kept, STALE, FRESH] });
+    const r = await drive(svc);
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /DEMI_RESET_RETRY documents-indexer attempt=2 wait=20s/);
+    assert.ok(!r.out.includes('DEMI_RESET_NOT_APPLIED'), r.out);
+    assert.strictEqual(r.calls.filter(c => c === `POST ${NAME} reset`).length, 2, r.calls.join(' | '));
+    assert.strictEqual(r.calls.filter(c => c === `POST ${NAME} run`).length, 2, r.calls.join(' | '));
+  });
+
+  await t.test('gives up after three resets that all kept the tracking state', async () => {
+    // The retry is bounded: a fourth reset would queue another full re-pull for an indexer whose
+    // high-water mark is not clearing, and the operator has to look at it instead.
+    const kept = { ...FRESH, initialTrackingState: '{"lastTs":123}' };
+    const svc = service({ history: [STALE, STALE, kept, STALE, kept, STALE, kept] });
+    const r = await drive(svc);
+    assert.strictEqual(r.code, 1, r.out);
+    assert.match(r.out, /DEMI_RESET_RETRY documents-indexer attempt=3 wait=40s/);
+    assert.match(r.out, /DEMI_RESET_NOT_APPLIED documents-indexer/);
+    assert.strictEqual(r.calls.filter(c => c === `POST ${NAME} reset`).length, 3, r.calls.join(' | '));
+    assert.strictEqual(r.calls.filter(c => c === `POST ${NAME} run`).length, 3, r.calls.join(' | '));
+  });
+
+  await t.test('waits before the first run, not only before a retry', async () => {
+    // Most of these races clear in a few seconds, so the cheap wait removes more of them than the
+    // retry does.
+    const svc = service({ history: [STALE, STALE, FRESH] });
+    const waits = [];
+    const r = await drive(svc, {
+      sleep: async (ms) => {
+        waits.push({ ms, runs: svc.calls.filter(c => c === `POST ${NAME} run`).length });
+      }
+    });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.deepStrictEqual(waits[0], { ms: 5000, runs: 0 }, JSON.stringify(waits));
+  });
+
+  await t.test('a retry waits for a scheduled run instead of resetting into it', async () => {
+    // The tick that starts on top of the kept run is the same hazard DEMI_BUSY refuses on the first
+    // attempt: it writes its old high-water mark back when it finishes and undoes the clear.
+    const kept = { ...FRESH, initialTrackingState: '{"lastTs":123}' };
+    const svc = service({ history: [STALE, STALE, kept, RUNNING, RUNNING, STALE, STALE, FRESH] });
+    const r = await drive(svc);
+    assert.strictEqual(r.code, 0, r.out);
+    assert.deepStrictEqual(r.calls, [
+      `GET ${NAME} status`,
+      `POST ${NAME} reset`,
+      `GET ${NAME} status`,
+      `POST ${NAME} run`,
+      `GET ${NAME} status`,
+      // The retry reads the indexer again and keeps reading until the tick is gone.
+      `GET ${NAME} status`,
+      `GET ${NAME} status`,
+      `GET ${NAME} status`,
+      `POST ${NAME} reset`,
+      `GET ${NAME} status`,
+      `POST ${NAME} run`,
+      `GET ${NAME} status`
+    ], r.calls.join(' | '));
+    assert.match(r.out, /DEMI_POLL documents-indexer inProgress/);
+    assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=null/);
+  });
+
+  await t.test('each retry waits longer than the one before it', async () => {
+    // The log line says 20s and 40s whatever the script actually sleeps, and the wait is the whole
+    // fix: a reset that did not take in 5 s needs longer, not another try at the same length.
+    const kept = { ...FRESH, initialTrackingState: '{"lastTs":123}' };
+    const waits = [];
+    const r = await drive(service({ history: [STALE, STALE, kept] }),
+      { sleep: async (ms) => { waits.push(ms); } });
+    assert.strictEqual(r.code, 1, r.out);
+    assert.deepStrictEqual(waits, [5000, 20000, 40000], r.out);
+  });
+
+  await t.test('a retry judges its own run, not one that started before its reset', async () => {
+    // A retry that keeps the first attempt's resetAt accepts the tick that ran between the two
+    // resets, reports its row count and never looks at the run it asked for.
+    const at = (ms) => new Date(NOW + ms).toISOString();
+    const counted = (ms, itemsProcessed, initialTrackingState) => ({
+      status: 'success', startTime: at(ms), itemsProcessed, itemsFailed: 0, initialTrackingState
+    });
+    const kept = counted(70000, 3, '{"lastTs":123}');
+    const between = counted(90000, 7, null);
+    const own = counted(150000, 61587, null);
+    const svc = service({ history: [STALE, STALE, kept, kept, kept, between, own] });
+    let clock = NOW;
+    const fetchImpl = async (url, init) => {
+      const res = await svc.fetchImpl(url, init);
+      // A reset takes wall clock, so each attempt's resetAt lands after the last attempt's run.
+      if (/\/reset\?/.test(url)) clock += 60000;
+      return res;
+    };
+    const r = await drive({ fetchImpl, calls: svc.calls }, { now: () => clock });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.deepStrictEqual(r.lines.filter((l) => l.startsWith('DEMI_RESULT')),
+      ['DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=null'], r.out);
+  });
+
+  await t.test('a retry that runs out of deadline while waiting warns instead of resetting', async () => {
+    const kept = { ...FRESH, initialTrackingState: '{"lastTs":123}' };
+    const svc = service({ history: [STALE, STALE, kept, RUNNING, RUNNING] });
+    const r = await drive(svc, { timeoutMs: 0 });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /DEMI_WARN documents-indexer still running after 0s/);
+    assert.strictEqual(r.calls.filter(c => c === `POST ${NAME} reset`).length, 1, r.calls.join(' | '));
   });
 });
