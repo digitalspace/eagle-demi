@@ -359,6 +359,13 @@ param devboxSubnetId string = ''
 @description('SSH public key for the devbox admin user.')
 param devboxSshPublicKey string = ''
 
+// Entra SSH login for the devbox, off by default; see modules/devbox.bicep
+@description('Install the Entra ID SSH extension on the devbox and grant VM login.')
+param devboxEnableEntraSsh bool = false
+
+@description('Object id of the Entra user or group that gets Virtual Machine User Login on the devbox.')
+param devboxEntraSshPrincipalId string = ''
+
 // Mandatory Cost Management Tags applied across ALL resources
 // Created out of band in the vault, shared by the gateway (named value) and the app (app setting).
 var apimGatewaySecretName = 'apim-gateway-secret'
@@ -662,6 +669,8 @@ module devbox './modules/devbox.bicep' = if (deployDevbox && !empty(devboxSubnet
     tags: defaultTags
     subnetId: devboxSubnetId
     sshPublicKey: devboxSshPublicKey
+    enableEntraSsh: devboxEnableEntraSsh
+    entraSshPrincipalId: devboxEntraSshPrincipalId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId
     // The same expressions the API app gets, so demi-run cannot drift from the running app.
