@@ -130,6 +130,62 @@ scripts/demi-devbox.sh apply --env prod --only chunks --datasources demi-chunks-
 scripts/demi-devbox.sh watch --env prod --datasources demi-chunks-ds
 ```
 
+### Applying definitions through the API
+
+`POST /api/admin/search-definitions/apply` runs the same apply inside the Function app, which is
+the primary path. Nothing goes through ARM, so a run costs what the search service costs and
+nothing more. `sysadmin` only, and the work runs on a queue: the answer is 202 with a job id and
+`GET /api/admin/search-definitions/jobs/{id}` is the poll.
+
+```bash
+curl -sS -X POST "$DEMI_API/admin/search-definitions/apply" \
+  -H "X-Api-Key: $DEMI_KEY" -H 'content-type: application/json' \
+  -d '{"only":["projects"],"datasources":["demi-projects-ds"],"live":true}'
+```
+
+`check: true` reports drift and writes nothing; neither flag is a dry run; `live: true` PUTs and
+then resets and runs the indexers it touched. The wait stops at 25 minutes — short of the host's
+30-minute function timeout — and a job whose indexer is still running finishes `warned` with the
+indexer named, which for `chunks` is the normal outcome. The rebuild carries on either way.
+
+The identity still needs Search Service Contributor at the service scope for the duration of the
+run; `scripts/with-search-admin.sh` is what grants and revokes it. `SEARCH_DEFINITIONS_QUEUE`,
+`DS_SUB`, `DS_RG` and `DS_IDENTITY_ID` come from `azure/main.bicep` — no queue name and the route
+answers 503, and the devbox recipe above is the way through.
+
+`scripts/with-search-admin.sh apply --env <env>` does the grant, the POST, the poll and the revoke
+in one command:
+
+```bash
+ADMIN_API_KEY=... scripts/with-search-admin.sh apply --env test --only projects \
+  --datasources demi-projects-ds --live
+```
+
+`ADMIN_API_KEY` is the env var name, not the break-glass key. Mint one for the run instead — a
+registry key whose only role is `sysadmin`, which is all this route needs:
+
+```bash
+curl -sS -X POST "$DEMI_API/admin/api-keys" -H "X-Api-Key: $DEMI_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"name":"search-definitions <who> <date>","roles":["sysadmin"],"allowWrite":true}'
+```
+
+The plaintext comes back once and nowhere else. Export it as `ADMIN_API_KEY`, run the apply, then
+`DELETE /admin/api-keys/<keyId>`. A key per run is one that can be revoked the moment the run is
+over and that names who ran it in the audit record; the break-glass key out of Key Vault is
+neither, and every copy of it taken for a routine apply is another place it can leak from. Only a
+caller that already holds `sysadmin` can mint one.
+
+It calls `https://demi-apim-<env>.azure-api.net/machine/admin/search-definitions/apply`. The
+`/machine` product takes the route without the `/api` prefix, because the APIM backend already
+carries it. `queued` and `running` are polled through; `succeeded` and `warned` exit 0, `failed`
+and anything else exit 1, and a revoke that fails exits 3 — the grant is still standing and the
+message says how to delete it. A `warned` run prints the per-indexer results and the warning — for
+`chunks` that is the usual end, and the rebuild carries on after the role is revoked.
+
+A run is refused with 409 while another is `queued` or `running`, and `live` needs an explicit
+`--only`: an empty one means every definition, which resets every indexer including `chunks`.
+
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
 npm run db:seed-nosql -- --only projects --live   # projects only

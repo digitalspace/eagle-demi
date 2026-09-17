@@ -22,7 +22,11 @@ function mockRes() {
   };
 }
 
-const ADMIN = { preferred_username: 'admin.person' };
+// A sysadmin, because minting a key that carries a service role is gated on the caller holding
+// the top role (src/controllers/nosql/api-key.js). What is under test here is the id, not the gate.
+const ADMIN = {
+  preferred_username: 'admin.person', realm_access: { roles: ['sysadmin'] }
+};
 
 function create(body, res = mockRes()) {
   return controller.createApiKey({ body, user: ADMIN }, res).then(() => res);

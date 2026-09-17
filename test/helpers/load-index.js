@@ -14,7 +14,7 @@ const FUNCTIONS = require.resolve('@azure/functions');
  *  in the environment registers a second trigger and breaks the caller's counts. */
 const SCHEDULE_VARS = [
   'RECONCILE_SCHEDULE', 'SYNC_TEAMS_SCHEDULE', 'BULK_CLEANUP_SCHEDULE', 'BULK_DOWNLOADS_QUEUE',
-  'CHUNK_RESTAMP_QUEUE'
+  'CHUNK_RESTAMP_QUEUE', 'SEARCH_DEFINITIONS_QUEUE'
 ];
 
 const setEnv = (name, value) => {

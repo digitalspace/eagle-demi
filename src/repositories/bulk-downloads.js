@@ -17,6 +17,10 @@
  * The container also holds one QUOTA row per requester, id `quota:<requesterKey>`. It shares the
  * container because the quota is only ever read by id, so it costs a point read and no second
  * container — and because a UUID job id can never collide with a prefixed one.
+ *
+ * Search-definition jobs (`searchdef:<uuid>`, src/jobs/search-definitions.js) share it on the same
+ * terms: point reads by id, a prefix no UUID can collide with, and their own controller. Only
+ * `listExpired` sees more than one row at a time, and it names the fields that tell them apart.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -25,9 +29,28 @@ const documents = require('./documents');
 const CONTAINER = 'bulkDownloads';
 const PARTITION_FIELD = 'id';
 
-// Every status a job row may carry. A patch condition takes no parameters, so `patchIfStatus`
-// interpolates; this is what keeps the interpolated values off the callers' hands.
-const STATUSES = ['queued', 'running', 'ready', 'failed', 'expired', 'cancelled'];
+// Job ids are UUIDs a controller minted. Anything else is not a job that ever existed — and the
+// container also holds `quota:<requester>` and `searchdef:<uuid>` rows, which no request may reach
+// by bare id. Shared by both controllers so one id shape is enforced in one place.
+const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The id prefix and the `kind` field that tell a search-definition row from a zip row. They live
+// here, with the container, because both workers and both controllers have to agree on them and a
+// second copy of either string is a way for the two kinds to start reaching each other's rows.
+const SEARCH_DEF_PREFIX = 'searchdef:';
+const SEARCH_DEF_KIND = 'searchDefinitions';
+
+// What `queued` and `running` mean for a search-definition job: the run is not over, so a second
+// apply must not start. Every other status in STATUSES is terminal for that kind.
+const ACTIVE_STATUSES = ['queued', 'running'];
+
+// Every status a job row in this container may carry — a zip job's (`ready`, `cancelled`) and a
+// search-definition job's (`succeeded`, `warned`) alike, because both kinds are patched through
+// `patchIfStatus`. A patch condition takes no parameters, so `patchIfStatus` interpolates; this
+// list is what keeps the interpolated values off the callers' hands.
+const STATUSES = [
+  'queued', 'running', 'ready', 'succeeded', 'warned', 'failed', 'expired', 'cancelled'
+];
 
 // Rolling window for the per-day cap, and how long a quota row outlives its last use. Two days, so
 // an in-flight count that leaked (a job whose worker never ran) clears itself.
@@ -71,10 +94,38 @@ async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 
       `c.slotReleasedAt FROM c ` +
       `WHERE (c.status IN (${names.join(', ')}) AND c.finishedAt < @cutoff ` +
       `AND ARRAY_LENGTH(c.parts) > 0) ` +
-      "OR (c.status = 'running' AND c.startedAt < @cutoff)",
+      // IS_DEFINED(c.documentIds) because the container also holds the search-definition job rows
+      // (`searchdef:` ids, src/jobs/search-definitions.js), and one of those still 'running' past
+      // the cutoff is not a dead zip: the sweep would stamp it `expired` and take its status away.
+      // The first clause needs no such guard — those rows carry no `parts`.
+      "OR (c.status = 'running' AND c.startedAt < @cutoff AND IS_DEFINED(c.documentIds))",
     parameters: [
       ...names.map((name, i) => ({ name, value: String(statuses[i]) })),
       { name: '@cutoff', value: String(cutoffIso) }
+    ]
+  }, { maxItemCount: limit });
+  return items;
+}
+
+/**
+ * The search-definition jobs that are still going.
+ *
+ * A prefix match on the id, which is also the partition key, so this reads the container's own
+ * index rather than scanning rows. `limit` is a page: the caller only needs to know whether there
+ * is one, so there is no reason to drain the set.
+ *
+ * `startedAt` comes back with the row because `running` alone does not say a run is in flight: a
+ * worker the host killed leaves that status behind for the rest of the row's TTL. The caller dates
+ * the row against the worker's own wait ceiling (src/jobs/search-definitions.js).
+ */
+async function listActiveSearchDefinitionJobs({ limit = 10 } = {}) {
+  const names = ACTIVE_STATUSES.map((_, i) => `@status${i}`);
+  const { items } = await cosmos.query(CONTAINER, {
+    query: `SELECT c.id, c.status, c.createdAt, c.startedAt FROM c ` +
+      `WHERE STARTSWITH(c.id, @prefix) AND c.status IN (${names.join(', ')})`,
+    parameters: [
+      { name: '@prefix', value: SEARCH_DEF_PREFIX },
+      ...names.map((name, i) => ({ name, value: ACTIVE_STATUSES[i] }))
     ]
   }, { maxItemCount: limit });
   return items;
@@ -198,7 +249,11 @@ async function releaseSlot(requesterKey) {
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
+  JOB_ID,
+  SEARCH_DEF_PREFIX,
+  SEARCH_DEF_KIND,
   getById,
+  listActiveSearchDefinitionJobs,
   create,
   patch,
   patchIfStatus,

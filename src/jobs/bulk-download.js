@@ -546,10 +546,25 @@ async function abandon(id, parts) {
  */
 async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   const id = String(jobId || '').trim();
+  // A zip job id is a UUID, and the container's other row kinds are all `<prefix>:<rest>` —
+  // `quota:` and `searchdef:`. So a colon says the message names something this worker does not
+  // own, and without this it would patch that row to `running` and then `ready`: for a
+  // search-definition job that is its handler seeing a terminal status and walking away from a
+  // chunks rebuild. Checked before the read, so a wrong id never becomes a write.
+  if (id.includes(':')) {
+    logger.warn(`[bulk] refusing ${id}: a prefixed id belongs to another kind of row`);
+    return null;
+  }
   const job = await bulkDownloads.getById(id);
   if (!job) {
     // Nothing to retry: a message with no row can only be logged and dropped.
     logger.warn(`[bulk] job missing ${id}`);
+    return null;
+  }
+  // Belt and braces with the id check above: a row that names a `kind` is another job type's, and
+  // zip rows have never carried one.
+  if (job.kind) {
+    logger.warn(`[bulk] refusing ${id}: it is a ${job.kind} row, not a bulk download`);
     return null;
   }
   if (job.status === 'ready') return job;

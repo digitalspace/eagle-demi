@@ -32,7 +32,8 @@ const { app } = require('@azure/functions');
 // Exported for test/reconcile-timer.test.js and test/sync-teams-timer.test.js — the host is the
 // only other caller of either.
 module.exports = {
-  reconcileEagle, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads, restampChunksWorker
+  reconcileEagle, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads, restampChunksWorker,
+  searchDefinitionsWorker
 };
 
 // Drain buffered audit events before the worker goes away.
@@ -120,6 +121,17 @@ if (process.env.CHUNK_RESTAMP_QUEUE) {
   });
 }
 
+// The search-definition apply, one job per message. Same guard again, and the same reason it is a
+// queue rather than a route: the run PUTs definitions and then waits for the indexers, which for
+// chunks is hours.
+if (process.env.SEARCH_DEFINITIONS_QUEUE) {
+  app.storageQueue('searchDefinitionsWorker', {
+    queueName: '%SEARCH_DEFINITIONS_QUEUE%',
+    connection: 'AzureWebJobsStorage',
+    handler: searchDefinitionsWorker
+  });
+}
+
 // Deletes zips past their retention window. Off unless the schedule is set, same guard again.
 if (process.env.BULK_CLEANUP_SCHEDULE) {
   app.timer('cleanupBulkDownloads', {
@@ -160,6 +172,17 @@ async function bulkDownloadWorker(message, context) {
 async function restampChunksWorker(message, context) {
   await require('../src/jobs/restamp-chunks')
     .run(message, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
+}
+
+/**
+ * Does NOT rethrow, unlike the two workers above. A retry would re-PUT definitions and re-reset
+ * indexers that are already rebuilding, so the job records its own verdict and the row is what an
+ * operator reads (src/jobs/search-definitions.js).
+ */
+async function searchDefinitionsWorker(message, context) {
+  const jobId = Buffer.isBuffer(message) ? message.toString('utf8') : String(message);
+  await require('../src/jobs/search-definitions')
+    .run(jobId, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
 
 /** Swallows the failure for the reason the reconcile does: the next run is the retry. */

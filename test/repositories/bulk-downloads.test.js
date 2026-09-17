@@ -187,6 +187,21 @@ test('a terminal status write', async (t) => {
     assert.strictEqual(patched.mock.callCount(), 0, 'the condition is interpolated, so it is checked');
   });
 
+  await t.test('accepts the terminal statuses a search-definition job reaches', async () => {
+    // `succeeded` and `warned` are what src/jobs/search-definitions.js finishes a run as. While
+    // they were missing from the allow-list, a conditional patch naming one threw instead of
+    // running, so a claim or a cancel against a finished apply could not be expressed at all.
+    let condition = null;
+    t.mock.method(cosmos, 'patch', async (container, id, pk, operations, cond) => {
+      condition = cond;
+      return {};
+    });
+
+    await bulkDownloads.patchIfStatus('searchdef:job-1', { status: 'cancelled' }, ['succeeded', 'warned']);
+
+    assert.strictEqual(condition, "FROM c WHERE c.status IN ('succeeded', 'warned')");
+  });
+
   await t.test('says so when somebody else already finished the job', async () => {
     t.mock.method(cosmos, 'patch', refuse(412));
 
@@ -223,6 +238,9 @@ test('listExpired', async (t) => {
     // A row still 'running' past the cutoff is an instance that died with retries exhausted; the
     // worker never released its slot, so the sweep must see it.
     assert.match(spec.query, /c\.status = 'running' AND c\.startedAt < @cutoff/);
+    // The container also holds search-definition job rows, which go `running` for hours on a
+    // chunks rebuild. Without this the zip sweep would stamp a live one `expired`.
+    assert.match(spec.query, /IS_DEFINED\(c\.documentIds\)/);
     // The sweep empties `parts` and a cancelled row keeps its status, so without this the same
     // rows come back on the next page and the sweep never finishes.
     assert.match(spec.query, /ARRAY_LENGTH\(c\.parts\) > 0/);
@@ -240,5 +258,36 @@ test('listExpired', async (t) => {
 
     assert.match(spec.query, /c\.status IN \(@status0\)/);
     assert.deepStrictEqual(spec.parameters[0], { name: '@status0', value: 'expired' });
+  });
+});
+
+test('listActiveSearchDefinitionJobs', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('selects search-definition rows by id prefix and the two live statuses', async () => {
+    // This is what refuses a second apply. Dropping the prefix would count a zip job as an apply
+    // in flight and refuse every run; dropping the status clause would count finished ones and
+    // refuse every run after the first.
+    let spec = null;
+    let options = null;
+    t.mock.method(cosmos, 'query', async (container, querySpec, queryOptions) => {
+      spec = querySpec;
+      options = queryOptions;
+      return { items: [] };
+    });
+
+    assert.deepStrictEqual(await bulkDownloads.listActiveSearchDefinitionJobs(), []);
+
+    // The caller has to tell a run in flight from a row whose worker died, and `startedAt` is the
+    // only stamp that says which — a projection without it makes every `running` row look live.
+    assert.match(spec.query, /SELECT c\.id, c\.status, c\.createdAt, c\.startedAt/);
+    assert.match(spec.query, /STARTSWITH\(c\.id, @prefix\)/);
+    assert.match(spec.query, /c\.status IN \(@status0, @status1\)/);
+    assert.deepStrictEqual(
+      spec.parameters.map(p => p.value),
+      [bulkDownloads.SEARCH_DEF_PREFIX, 'queued', 'running']
+    );
+    // The caller only needs to know whether there is one, so there is no reason to drain the set.
+    assert.strictEqual(options.maxItemCount, 10);
   });
 });

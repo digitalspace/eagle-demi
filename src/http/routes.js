@@ -32,6 +32,7 @@ const dbController = () => require('../controllers/db');
 const adminReadsController = () => require('../controllers/admin-reads');
 const searchController = () => require('../controllers/search');
 const searchSchemaController = () => require('../controllers/search-schema');
+const searchDefinitionsController = () => require('../controllers/search-definitions');
 const wildfireController = () => require('../controllers/wildfire');
 const projectController = () => require('../controllers/nosql/project');
 const projectSummaryController = () => require('../controllers/project-summary');
@@ -229,6 +230,14 @@ const routes = [
   // Admin-gated too, though it only reads: the credential registry is not application data.
   { method: 'get', path: '/admin/api-keys', guards: [authMiddleware, requireAdmin], load: () => apiKeyController().listApiKeys },
   { method: 'delete', path: '/admin/api-keys/:id', guards: [authMiddleware, requireAdmin], load: () => apiKeyController().revokeApiKey },
+
+  // Search definition apply. The narrowest gate in the table and not by habit: a request here
+  // decides what the search service serves, and a live run rebuilds an index the app is querying.
+  // The work runs on a queue (src/jobs/search-definitions.js) because a chunks rebuild outlives
+  // the platform's ~230 s request cap by hours; this route only accepts it.
+  { method: 'post', path: '/admin/search-definitions/apply', guards: [authMiddleware, requireAdmin, requireRole('sysadmin')], load: () => searchDefinitionsController().applySearchDefinitions },
+  // Same gate on the read: the steps name what was PUT where, which is service configuration.
+  { method: 'get', path: '/admin/search-definitions/jobs/:id', guards: [authMiddleware, requireAdmin, requireRole('sysadmin')], load: () => searchDefinitionsController().getSearchDefinitionJob },
 
   // Selected Credentials. Same gate as the classify endpoint and for the same reason: a grant hands
   // a named party sight of records nobody widened, which is access policy rather than data. Reading

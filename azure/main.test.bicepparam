@@ -73,6 +73,11 @@ param bulkFetchConcurrency = 1
 // the 10-second push out on large documents and earned a duplicate push.
 param chunkRestampQueue = 'chunk-restamp'
 
+// ── Search definition apply ───────────────────────────────────────────────────────────────────
+// The queue POST /admin/search-definitions/apply hands the run to. Without it the route answers
+// 503 and every index change goes back through the devbox.
+param searchDefinitionsQueue = 'search-definitions'
+
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
 // The browser origins allowed to call the API.
@@ -211,3 +216,4 @@ param availabilityUrl = 'https://test.projects.eao.gov.bc.ca/demi-search/search?
 // falls back to Cosmos CONTAINS.
 param searchIndexActivities = 'activities'
 param searchIndexProjectNotifications = 'project-notifications'
+

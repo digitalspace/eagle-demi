@@ -416,6 +416,53 @@ param searchIndexProjectNotifications = 'project-notifications'
 
 — and running `./scripts/deploy-infra.sh <env> --live`. Turning it off is the same edit in reverse.
 
+## Applying definitions through the API
+
+The same apply, run by the Function app instead of the devbox. The app is already in the VNet and
+already holds `SEARCH_ENDPOINT`, so the only thing it was missing is the role. No `az vm
+run-command` round trips, which is where the devbox run spends most of its hour.
+
+```
+ADMIN_API_KEY=... scripts/with-search-admin.sh apply --env test \
+  --only projects --datasources demi-projects-ds --live
+```
+
+That grants `demi-identity-<env>` Search Service Contributor at the service scope, POSTs
+`/admin/search-definitions/apply` through the APIM `/machine` path, polls the job it is given until
+it stops moving, and revokes. The revoke runs from a trap, so it also fires on a failed job, on
+Ctrl-C, and on the timeout (`APPLY_TIMEOUT`, 3600s by default). If the revoke itself fails the
+script exits 3 and prints the assignment id: the grant is still standing until somebody deletes it.
+Export `APIM_SUBSCRIPTION_KEY` as well where the gateway enforces a subscription.
+
+`ADMIN_API_KEY` is the variable the script reads, not an instruction to take the break-glass key
+out of Key Vault. Mint a registry key for the run — `POST /admin/api-keys` with
+`{"roles":["sysadmin"],"allowWrite":true}`, which is the only role this route needs — export the
+plaintext it returns once, and revoke the key when the run is done. It can only be minted by a
+caller that already holds `sysadmin`, and it puts the run's own identity in the audit record.
+
+If the wait is given up on, or the terminal is lost, the job is still readable on its own:
+
+```
+curl -H "X-Api-Key: $ADMIN_API_KEY" \
+  https://demi-apim-test.azure-api.net/machine/admin/search-definitions/jobs/<job-id>
+```
+
+**The grant is open only for that run.** The identity the public API runs as can create and delete
+index definitions while it is held, on every index on the service including the `eagle-*` ones, so
+a job that is still running after the revoke will fail on its next write rather than half-finish
+under a role nobody is watching. No bicep parameter holds the grant open: `with-search-admin.sh` is
+the only route, so the window cannot outlive the run it was opened for.
+
+**What the window costs, and why it is accepted.** Search Service Contributor cannot be scoped to
+one index. The smallest grant Azure offers here is the whole search service, so for the length of
+the run the identity the internet-facing API runs as can create, rewrite or delete every index on
+that service, the `eagle-*` ones included. The trade is a short window against a standing grant,
+and short is the only lever there is: keep `APPLY_TIMEOUT` low for anything that is not a `chunks`
+rebuild (a `projects` apply finishes in minutes, so 600 is generous), and let a `chunks` run end
+`warned` — the rebuild carries on without the role, because it needs the data plane, not the
+control plane. A run that is killed leaves the grant behind; the script warns on the next run when
+it finds one already standing, and it does not remove it for you.
+
 ## Restoring one
 
 Public network access is `Disabled` and local auth is off, so this only works from inside the VNet,

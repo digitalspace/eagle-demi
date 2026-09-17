@@ -41,9 +41,8 @@ exports.MANIFEST_SELECT = MANIFEST_SELECT;
 // Same short window as GET /documents/:id/download: a presigned URL carries no auth of its own.
 const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
 
-// Job ids are UUIDs this controller minted. Anything else is not a job that ever existed — and the
-// container also holds `quota:<requester>` rows, which no request may reach by id.
-const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The id shape every row in this container is reached by; the repository owns it.
+const { JOB_ID } = bulkDownloads;
 
 // Stricter than eagle-search: an unknown body key is a typo the caller wants to hear about, not a
 // field to ignore.
