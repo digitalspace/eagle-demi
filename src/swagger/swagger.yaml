@@ -2965,9 +2965,22 @@ paths:
                         itemsFailed: { type: string }
                         tracking:
                           type: string
-                          description: >-
-                            `null` proves the execution started from a cleared high-water mark,
-                            which is what makes the rebuild a rebuild.
+                          enum: [absent, cleared, set, unknown]
+                          description: |-
+                            What the execution's `initialTrackingState` says about the high-water
+                            mark it started from.
+
+                              * `cleared` — started from a cleared mark, which is what makes the
+                                rebuild a rebuild.
+                              * `set`     — started from a kept mark, so the reset did not take and
+                                the run re-pulled nothing.
+                              * `absent`  — the search API returned no tracking state, so the
+                                execution's start time is the only proof.
+                              * `unknown` — a tracking state that could not be read. Another reset
+                                cannot make it readable, so the run is taken.
+                        message:
+                          type: string
+                          description: Why the row was warned. Only on `warned` rows.
                   error: { type: string, nullable: true }
                   createdAt: { type: string, format: date-time }
                   startedAt: { type: string, format: date-time, nullable: true }

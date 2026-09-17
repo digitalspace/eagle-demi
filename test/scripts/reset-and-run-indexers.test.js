@@ -145,10 +145,14 @@ test('reset-and-run-indexers', async (t) => {
       itemsFailed: 0,
       initialTrackingState: KEPT
     };
-    const r = await drive(service({ history: [STALE, STALE, [started], [tick, FRESH]] }));
+    const svc = service({ history: [STALE, STALE, [started], [tick, FRESH]] });
+    const r = await drive(svc);
     assert.strictEqual(r.code, 0, r.out);
     assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared/);
     assert.ok(!r.out.includes('DEMI_RESET_NOT_APPLIED'), r.out);
+    // Judging the tick instead of the pinned run reads its kept tracking state and posts a second
+    // reset, which the retry ladder then hides behind a green run: pin the count.
+    assert.strictEqual(r.calls.filter(c => c === `POST ${NAME} reset`).length, 1, r.calls.join(' | '));
   });
 
   await t.test('fails when the execution kept its old tracking state', async () => {
@@ -211,6 +215,20 @@ test('reset-and-run-indexers', async (t) => {
       assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=cleared/);
       assert.ok(!r.out.includes('status=reset'), r.out);
     }
+  });
+
+  await t.test('with no reset entry in the history, a pre-reset execution is not the run', async () => {
+    // The skew allowance measures a run against the reset entry's own stamp. With no such entry
+    // there is nothing to measure against, so a tick that started before resetAt is just a
+    // pre-reset execution: reporting it passes the rebuild with the counts of a run that did
+    // nothing. Nothing here carries initialTrackingState, so only the pick decides the verdict.
+    const at = (ms) => new Date(NOW + ms).toISOString();
+    const { initialTrackingState: _drop, ...bare } = FRESH;
+    const straddler = { status: 'success', startTime: at(-1000), itemsProcessed: 0, itemsFailed: 0 };
+    const run = { ...bare, startTime: at(8000) };
+    const r = await drive(service({ history: [STALE, straddler, [run, straddler, STALE]] }));
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=absent/);
   });
 
   await t.test('the reset entry does not pass for a drained indexer', async () => {

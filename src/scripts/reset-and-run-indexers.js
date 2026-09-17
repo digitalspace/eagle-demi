@@ -42,7 +42,11 @@ const resetStampOf = (list) => list
 
 const afterReset = (e, resetAt, stamp) => {
   const t = startedAt(e);
-  return t >= resetAt || (t >= resetAt - RESET_SKEW_MS && t > stamp);
+  if (t >= resetAt) return true;
+  // The skew window only means anything against the reset entry's own stamp. With no reset entry
+  // in the history there is nothing to be newer than, so a run that started before resetAt is a
+  // pre-reset execution, not the one that was asked for.
+  return Number.isFinite(stamp) && t >= resetAt - RESET_SKEW_MS && t > stamp;
 };
 
 // The run that was asked for is the FIRST execution to start after the reset. A scheduled tick can
