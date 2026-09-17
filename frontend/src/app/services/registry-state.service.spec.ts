@@ -43,7 +43,17 @@ function stubFetch(): jasmine.Spy {
 async function settleInitialLoad(service: RegistryStateService): Promise<void> {
   // authReady opens only once /api/me has answered, which is what loadData() waits behind.
   await service.authReady;
-  await new Promise(resolve => setTimeout(resolve, 0));
+  // authSettled() kicks off the constructor's own loadData() without awaiting it (the corpus load
+  // does not need to wait for /me), so authReady can resolve before that load's fetch calls have
+  // all landed. A single tick was not always enough: occasionally one of its calls (observed on
+  // the project leg) arrived after this reset, inflating the next spec's own call count by one and
+  // failing an assertion that expects it to have issued exactly one request. Drain ticks until the
+  // spy's call count stops moving instead of assuming one tick drains it.
+  let previousCount = -1;
+  while (previousCount !== sharedFetchSpy.calls.count()) {
+    previousCount = sharedFetchSpy.calls.count();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
   sharedFetchSpy.calls.reset();
 }
 
