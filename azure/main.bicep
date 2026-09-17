@@ -359,8 +359,7 @@ param devboxSubnetId string = ''
 @description('SSH public key for the devbox admin user.')
 param devboxSshPublicKey string = ''
 
-// Off until the landing-zone side exists: the extension on its own opens no path in, it needs a
-// Bastion Standard with tunneling and an NSG rule for 22 from AzureBastionSubnet.
+// Entra SSH login for the devbox, off by default; see modules/devbox.bicep
 @description('Install the Entra ID SSH extension on the devbox and grant VM login.')
 param devboxEnableEntraSsh bool = false
 

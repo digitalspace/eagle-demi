@@ -219,10 +219,7 @@ test('the devbox cloud-init inputs are frozen', () => {
     + 'repin this hash if the substituted result is provably unchanged.');
 });
 
-// Entra SSH is opt-in because the extension on its own opens no path in: it needs a Bastion
-// Standard with tunneling and an NSG rule for 22, neither of which this repository declares.
-// Ungated, every apply would install an extension nobody can reach and hand out a login role.
-// `az bicep build` compiles the resources either way — the gate is the part it cannot check.
+// Entra SSH login for the devbox, off by default; see modules/devbox.bicep
 test('the devbox Entra SSH extension and login role render only when enabled', () => {
   const extension = /resource aadSshLogin '([^']+)' = if \((.*)\) \{([\s\S]*?)\n\}\n/.exec(DEVBOX_MODULE);
   assert.ok(extension, 'devbox.bicep must declare the AAD SSH extension as a gated resource');
@@ -232,6 +229,7 @@ test('the devbox Entra SSH extension and login role render only when enabled', (
     'a child of the VM, not a standalone resource with a slash-joined name');
   assert.match(extension[3], /^\s+publisher: 'Microsoft\.Azure\.ActiveDirectory'$/m);
   assert.match(extension[3], /^\s+type: 'AADSSHLoginForLinux'$/m);
+  assert.match(extension[3], /^\s+typeHandlerVersion: '1\.0'$/m);
   assert.match(extension[3], /^\s+autoUpgradeMinorVersion: true$/m);
 
   const role = /resource entraSshUserLogin '([^']+)' = if \((.*)\) \{([\s\S]*?)\n\}\n/.exec(DEVBOX_MODULE);

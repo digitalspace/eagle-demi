@@ -196,9 +196,7 @@ param deployDevbox = true
 param devboxSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-servers'
 param devboxSshPublicKey = readEnvironmentVariable('DEVBOX_SSH_PUBLIC_KEY')
 
-// Entra SSH stays off in both environments until a Bastion Standard with tunneling exists and the
-// landing zone allows 22 inbound from AzureBastionSubnet. Turning it on without those installs an
-// extension nothing can reach. The principal id is an Entra user or group object id.
+// Entra SSH login for the devbox, off by default; see modules/devbox.bicep
 param devboxEnableEntraSsh = false
 param devboxEntraSshPrincipalId = ''
 

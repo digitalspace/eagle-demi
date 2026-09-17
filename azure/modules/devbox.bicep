@@ -123,8 +123,6 @@ var cloudInit = replace(
   '__ADMIN_USER__', adminUsername
 )
 
-// Its own NIC. Reusing one left behind by a deleted VM carries that VM's IP config and, worse, its
-// NSG association.
 // Declared BELOW the substitution chain on purpose: a param between `adminUsername` and the
 // replace() above feeds cloudInit, and customData cannot be changed on a VM that already exists.
 @description('Install the Entra ID SSH extension and grant VM login. Off by default: the extension alone opens no path in.')
@@ -137,6 +135,8 @@ param entraSshPrincipalId string = ''
 // with no sudo, so scripts still run through demi-run or `sudo -u demi`.
 var virtualMachineUserLoginRoleId = 'fb879df8-f326-4884-b1cf-06f3ad86be52'
 
+// Its own NIC. Reusing one left behind by a deleted VM carries that VM's IP config and, worse, its
+// NSG association.
 resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
   name: '${vmName}-nic'
   location: location
@@ -226,16 +226,9 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   }
 }
 
-// Entra ID sign-in, added as a child resource rather than through cloud-init: an extension installs
-// into a VM that already exists and never touches osProfile, so it cannot trigger the customData
-// recreate the frozen block above guards against.
-//
-// The VM is deallocated most of the time by the 19:00 Pacific schedule below, and an extension
-// deploy against a deallocated VM fails — run `az vm start --ids <devboxId>` before deploying this.
-//
-// The extension is only half the path. An interactive session also needs a landing-zone Bastion
-// Standard with tunneling enabled, and an NSG rule allowing 22 inbound from AzureBastionSubnet.
-// Neither is declared in this repository; both are landing-zone asks.
+// Deallocated most of the time (19:00 Pacific schedule): run `az vm start --ids <devboxId>` first.
+// Interactive use also needs a landing-zone Bastion Standard with tunneling enabled and an NSG rule
+// allowing 22 inbound from AzureBastionSubnet — neither is declared in this repository.
 resource aadSshLogin 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' = if (enableEntraSsh) {
   parent: devbox
   name: 'AADSSHLoginForLinux'
