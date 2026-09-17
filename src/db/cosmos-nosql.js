@@ -155,7 +155,13 @@ async function query(containerName, spec, options = {}) {
 
   const feedOptions = {};
   if (options.partitionKey !== undefined) feedOptions.partitionKey = options.partitionKey;
-  if (options.maxItemCount) feedOptions.maxItemCount = options.maxItemCount;
+  if (options.maxItemCount) {
+    feedOptions.maxItemCount = options.maxItemCount;
+    // Paging only. On a cross-partition ORDER BY the legacy fetch path drops the continuation
+    // header, so every page came back as the first one; query control emits a composite token
+    // that fetchNext() takes back. Single-partition queries ignore the flag.
+    feedOptions.enableQueryControl = true;
+  }
   if (options.continuationToken) feedOptions.continuationToken = options.continuationToken;
 
   const iterator = container.items.query(spec, feedOptions);

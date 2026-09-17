@@ -156,9 +156,9 @@ async function fetchAll(container, spec, opts = {}) {
   const rows = [];
   let continuationToken;
   do {
-    // No maxItemCount, deliberately: it is what makes cosmos.query page by hand, and the SDK drops
-    // `x-ms-continuation` on a cross-partition query, so a paged read here stops silently at 1,000
-    // rows. Unset takes the SDK's own fetchAll(), which drains the result set itself.
+    // No maxItemCount, deliberately: it is what makes cosmos.query page by hand instead of taking
+    // the SDK's own fetchAll(), which drains the whole result set itself. This call wants the full
+    // set, not a page — paged reads keep their token since query() asks for query control.
     const page = await cosmos.query(container, spec,
       pageOptions({ ...opts, continuationToken }));
     for (const item of page.items) rows.push(item); // spread caps at ~125k args

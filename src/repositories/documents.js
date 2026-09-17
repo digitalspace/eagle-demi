@@ -172,8 +172,8 @@ const RECENT_UPLOAD_DOCUMENTS = 5;
  * The newest dated documents of ONE project, newest first — the candidates for its panel row.
  *
  * Single-partition, so the ORDER BY is served by the SDK's default execution context and the read
- * costs a few RU whatever the corpus holds — this is not the cross-partition case that cannot page.
- * TOP bounds it; no `maxItemCount`, so `cosmos.query` drains the result itself.
+ * costs a few RU whatever the corpus holds. Cross-partition paged reads keep their token too now
+ * that `query()` asks for query control; TOP bounds this one, so `cosmos.query` drains it in one shot.
  *
  * Cosmos gives no order among rows sharing the sort key, so the caller breaks that tie.
  */
