@@ -125,6 +125,18 @@ var cloudInit = replace(
 
 // Its own NIC. Reusing one left behind by a deleted VM carries that VM's IP config and, worse, its
 // NSG association.
+// Declared BELOW the substitution chain on purpose: a param between `adminUsername` and the
+// replace() above feeds cloudInit, and customData cannot be changed on a VM that already exists.
+@description('Install the Entra ID SSH extension and grant VM login. Off by default: the extension alone opens no path in.')
+param enableEntraSsh bool = false
+
+@description('Object id of the Entra user or group that gets Virtual Machine User Login on this VM. Empty grants nobody.')
+param entraSshPrincipalId string = ''
+
+// Virtual Machine User Login, not Administrator Login: an Entra session lands as the Entra user
+// with no sudo, so scripts still run through demi-run or `sudo -u demi`.
+var virtualMachineUserLoginRoleId = 'fb879df8-f326-4884-b1cf-06f3ad86be52'
+
 resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
   name: '${vmName}-nic'
   location: location
@@ -211,6 +223,42 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
         }
       ]
     }
+  }
+}
+
+// Entra ID sign-in, added as a child resource rather than through cloud-init: an extension installs
+// into a VM that already exists and never touches osProfile, so it cannot trigger the customData
+// recreate the frozen block above guards against.
+//
+// The VM is deallocated most of the time by the 19:00 Pacific schedule below, and an extension
+// deploy against a deallocated VM fails — run `az vm start --ids <devboxId>` before deploying this.
+//
+// The extension is only half the path. An interactive session also needs a landing-zone Bastion
+// Standard with tunneling enabled, and an NSG rule allowing 22 inbound from AzureBastionSubnet.
+// Neither is declared in this repository; both are landing-zone asks.
+resource aadSshLogin 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' = if (enableEntraSsh) {
+  parent: devbox
+  name: 'AADSSHLoginForLinux'
+  location: location
+  tags: tags
+  properties: {
+    publisher: 'Microsoft.Azure.ActiveDirectory'
+    type: 'AADSSHLoginForLinux'
+    typeHandlerVersion: '1.0'
+    autoUpgradeMinorVersion: true
+  }
+}
+
+// Without this the extension installs and every sign-in is still refused: the role is what Entra
+// checks at login. Scoped to the VM, so it grants nothing anywhere else.
+resource entraSshUserLogin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableEntraSsh && !empty(entraSshPrincipalId)) {
+  scope: devbox
+  name: guid(devbox.id, entraSshPrincipalId, virtualMachineUserLoginRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions', virtualMachineUserLoginRoleId
+    )
+    principalId: entraSshPrincipalId
   }
 }
 
