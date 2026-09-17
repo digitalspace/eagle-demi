@@ -3,6 +3,9 @@
 process.env.NODE_ENV = 'test';
 // The job reads the endpoint from src/search/ai-search.js, which reads this at call time.
 process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
+// Both keyword indexes on, so the serving list the job hands apply.run has five distinct names.
+process.env.SEARCH_INDEX_ACTIVITIES = 'activities';
+process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS = 'project-notifications';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -71,6 +74,17 @@ test('search definition job', async (t) => {
       indexer: 'projects-indexer', status: 'success',
       itemsProcessed: '361', itemsFailed: '0', tracking: 'null'
     }]);
+  });
+
+  // liveNames is the only thing that makes apply.run refuse a non-additive PUT over an index the
+  // app is serving, so an empty list here would silently drop that guard.
+  await t.test('names the indexes the app is serving, so a non-additive PUT over one is refused', async () => {
+    const h = harness(t, { job: row() });
+
+    await searchDefinitions.run(ID);
+
+    assert.deepStrictEqual(h.applied[0].liveNames,
+      ['chunks', 'projects', 'documents', 'activities', 'project-notifications']);
   });
 
   await t.test('the reset stamp is written BEFORE the reset, so a redelivery can see it', async () => {

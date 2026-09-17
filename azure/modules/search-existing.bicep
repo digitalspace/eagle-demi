@@ -26,11 +26,7 @@ param cosmosAccountId string = ''
 @description('Principal of the identity the existing service runs its indexers as. Empty skips the Cosmos data-plane grant.')
 param indexerPrincipalId string = ''
 
-@description('Adds Search Service Contributor for the API identity, so the app can PUT index, indexer and data-source definitions. Off everywhere: the grant is turned on for the apply window and turned back off after.')
-param grantSearchDefinitionAdmin bool = false
-
 var searchIndexDataContributor = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'
-var searchServiceContributor = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
 var cosmosDataReaderRoleId = '00000000-0000-0000-0000-000000000001'
 
 resource search 'Microsoft.Search/searchServices@2025-05-01' existing = {
@@ -46,30 +42,6 @@ resource searchDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
       searchIndexDataContributor
-    )
-    principalId: apiPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Search Service Contributor — creating, replacing and deleting index, indexer and data-source
-// DEFINITIONS, which Search Index Data Contributor above does not cover.
-//
-// Default false, and false in every param file. The chosen posture is a temporary grant: the apply
-// turns this on, runs, and turns it off again (or `scripts/with-search-admin.sh` does the same pair
-// of role assignments directly, which is faster than a deployment). A standing grant would let a
-// bug or a compromise in the internet-facing API delete any index on the service, and at this scope
-// that includes the eagle-* ones.
-//
-// Same guid() reasoning as the assignment above: the formula matches modules/ai-search.bicep's, so
-// flipping `deploySearch` cannot mint a second assignment for the same principal, role and scope.
-resource searchDefinitionAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantSearchDefinitionAdmin) {
-  scope: search
-  name: guid(search.id, apiPrincipalId, searchServiceContributor)
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      searchServiceContributor
     )
     principalId: apiPrincipalId
     principalType: 'ServicePrincipal'

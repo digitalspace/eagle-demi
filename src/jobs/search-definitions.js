@@ -159,11 +159,6 @@ function indexersFor(only) {
   return [...names];
 }
 
-/** What the app is serving from right now — the names `run()` refuses to PUT non-additively over. */
-function servingNames(cfg) {
-  return [cfg.index, cfg.projectsIndex, cfg.documentsIndex, cfg.activitiesIndex, cfg.notificationsIndex];
-}
-
 /**
  * One job, start to finish.
  *
@@ -233,7 +228,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
       for (const name of only.length > 0 ? only : ['']) {
         await apply.run({
           endpoint, live: Boolean(request.live), only: name,
-          liveNames: servingNames(cfg), log: out.log
+          liveNames: apply.servingNames(cfg), log: out.log
         });
       }
 

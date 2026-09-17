@@ -2854,7 +2854,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  jobId: { type: string, example: 'searchdef:0f0c2b9a-6d0f-4d2a-9f56-1a2b3c4d5e6f' }
+                  jobId: { type: string, example: '0f0c2b9a-6d0f-4d2a-9f56-1a2b3c4d5e6f' }
                   status: { type: string, enum: [queued] }
                   statusUrl: { type: string }
                   request:
@@ -2902,7 +2902,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  jobId: { type: string, example: 'searchdef:0f0c2b9a-6d0f-4d2a-9f56-1a2b3c4d5e6f' }
+                  jobId: { type: string, example: '0f0c2b9a-6d0f-4d2a-9f56-1a2b3c4d5e6f' }
                   status:
                     type: string
                     enum: [queued, running, succeeded, failed, warned]

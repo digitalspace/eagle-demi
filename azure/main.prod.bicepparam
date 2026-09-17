@@ -65,12 +65,6 @@ param existingSearchIndexerPrincipalId = '20211fb1-1d7c-43ab-ae57-fbcd6a5034e7'
 // value is azure/ai-search.prod.bicepparam's `identityId` — one identity, two spellings.
 param existingSearchIndexerIdentityId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-search-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/eagle-search-identity-prod'
 
-// Search Service Contributor for demi-identity-prod. Stays false: the definition apply grants the
-// role for the length of one run and revokes it (`scripts/with-search-admin.sh`), so the
-// internet-facing API does not stand holding the ability to delete an index. Set it true here only
-// to hold that window open across a deploy, and set it back in the same change.
-param grantSearchDefinitionAdmin = false
-
 
 // ── Off in prod ───────────────────────────────────────────────────────────────────────────────
 // The summariser is demo-only. deployFoundry=false is the resource, summaryEnabled=false is the

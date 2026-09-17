@@ -287,6 +287,11 @@ async function runCheck({ endpoint, only, log = console.log }) {
  * definitions.js passes a sink that writes the same lines to the job row and the app logger,
  * because app code does not print to the console.
  */
+/** What the app is serving from right now — the names `run()` refuses to PUT non-additively over. */
+function servingNames(cfg) {
+  return [cfg.index, cfg.projectsIndex, cfg.documentsIndex, cfg.activitiesIndex, cfg.notificationsIndex];
+}
+
 async function run({ endpoint, live, only, liveNames, log = console.log }) {
   const args = { live, only };
 
@@ -436,8 +441,7 @@ async function main() {
     endpoint,
     live: args.live,
     only: args.only,
-    liveNames: [cfg.index, cfg.projectsIndex, cfg.documentsIndex,
-      cfg.activitiesIndex, cfg.notificationsIndex]
+    liveNames: servingNames(cfg)
   });
 }
 
@@ -449,6 +453,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  parseArgs, load, select, run, runCheck, missingFields, assertNotForbidden, readCommittedDataSource,
+  parseArgs, load, select, run, runCheck, servingNames, missingFields, assertNotForbidden, readCommittedDataSource,
   safeJson, notAdditive, INDEX_DIR, INDEXER_DIR, DATASOURCE_DIR
 };

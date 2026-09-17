@@ -217,9 +217,3 @@ param availabilityUrl = 'https://test.projects.eao.gov.bc.ca/demi-search/search?
 param searchIndexActivities = 'activities'
 param searchIndexProjectNotifications = 'project-notifications'
 
-// Search Service Contributor for demi-identity-test. Stays false: the definition apply grants the
-// role for the length of one run and revokes it (`scripts/with-search-admin.sh`), so the
-// internet-facing API does not stand holding the ability to delete an index. Set it true here only
-// to hold that window open across a deploy, and set it back in the same change.
-param grantSearchDefinitionAdmin = false
-

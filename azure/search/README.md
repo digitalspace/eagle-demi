@@ -443,9 +443,8 @@ curl -H "X-Api-Key: $ADMIN_API_KEY" \
 **The grant is open only for that run.** The identity the public API runs as can create and delete
 index definitions while it is held, on every index on the service including the `eagle-*` ones, so
 a job that is still running after the revoke will fail on its next write rather than half-finish
-under a role nobody is watching. `azure/main.bicep` carries `grantSearchDefinitionAdmin` for the
-case where the window has to survive a deploy; it is `false` in both param files and belongs back
-at `false` in the same change that sets it.
+under a role nobody is watching. No bicep parameter holds the grant open: `with-search-admin.sh` is
+the only route, so the window cannot outlive the run it was opened for.
 
 ## Restoring one
 

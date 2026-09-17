@@ -180,13 +180,6 @@ param existingSearchIndexerPrincipalId string = ''
 @description('Resource id of that same identity. Used only when `deploySearch` is false: a data source PUT names the identity by resource id, not principal.')
 param existingSearchIndexerIdentityId string = ''
 
-// Search Service Contributor for the API identity. False in every param file, and meant to stay
-// that way: the grant is temporary, turned on for the window an apply runs in and turned off after.
-// `scripts/with-search-admin.sh` does the same grant and revoke directly, which is the usual route;
-// this parameter is here for the case where the window has to be held open across deploys.
-@description('Grant the API identity Search Service Contributor on the search service, so it can PUT index, indexer and data-source definitions. Temporary: turn it on for an apply, then off.')
-param grantSearchDefinitionAdmin bool = false
-
 // The kill switch for the two id-only indexes, per environment. Empty answers those datasets from
 // Cosmos with CONTAINS; the index name turns keyword ranking on. It lives here rather than only in
 // the module because `appSettings` is a whole-collection PUT — a value set by hand on the app is
@@ -453,7 +446,6 @@ module search './modules/ai-search.bicep' = if (deploySearch) {
     // Both, and they are different things: the indexer authenticates AS the identity (resource
     // ID), while the data-plane role assignment inside the module grants TO its principal.
     apiPrincipalId: identity.outputs.principalId
-    grantSearchDefinitionAdmin: grantSearchDefinitionAdmin
     cosmosAccountId: cosmos.outputs.cosmosAccountId
     peSubnetId: privateEndpointSubnetId
   }
@@ -470,7 +462,6 @@ module existingSearchRole './modules/search-existing.bicep' = if (!deploySearch)
       ? 'demi-search-${environmentName}'
       : first(split(replace(existingSearchEndpoint, 'https://', ''), '.'))
     apiPrincipalId: identity.outputs.principalId
-    grantSearchDefinitionAdmin: grantSearchDefinitionAdmin
     environmentName: environmentName
     cosmosAccountId: cosmos.outputs.cosmosAccountId
     indexerPrincipalId: existingSearchIndexerPrincipalId
