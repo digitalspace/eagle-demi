@@ -61,6 +61,13 @@ param existingSearchEndpoint = 'https://demi-search-prod.search.windows.net'
 // -n eagle-search-identity-prod --query principalId`.
 param existingSearchIndexerPrincipalId = '20211fb1-1d7c-43ab-ae57-fbcd6a5034e7'
 
+// Search Service Contributor for demi-identity-prod. Stays false: the definition apply grants the
+// role for the length of one run and revokes it (`scripts/with-search-admin.sh`), so the
+// internet-facing API does not stand holding the ability to delete an index. Set it true here only
+// to hold that window open across a deploy, and set it back in the same change.
+param grantSearchDefinitionAdmin = false
+
+
 // ── Off in prod ───────────────────────────────────────────────────────────────────────────────
 // The summariser is demo-only. deployFoundry=false is the resource, summaryEnabled=false is the
 // app; deployFoundryPrivateEndpoint is then moot but stated so a future flip of deployFoundry does
