@@ -355,19 +355,15 @@ paths:
       description: >-
         Unauthenticated, like the other health routes, and the value-level twin of
         `/health/search-schema`. That route proves a field exists in the live index; this one counts
-        the rows where it is empty. On 2026-09-17 every schema check was green while
-        `currentPhaseName` and `eacDecision` were null on all 359 production projects, and the
-        public project list showed no phase and no decision for any of them.
+        the rows where it is empty.
 
         The checks are committed in `azure/search/data-checks.json`: per entry an index, a field, an
         OData `$filter` describing the rows that must not be there, and how many are tolerated. Each
         runs as one `top: 0, count: true` query. Nothing is read from the request, so there is no
         body and no parameters.
 
-        The two committed checks count `currentPhaseNameId` and `eacDecisionId`, because the fields
-        the site renders are not filterable and their `_id` twins go null in the same failure.
-
-        Returns counts, never rows, and nothing is cached.
+        Returns counts, never rows, and nothing is cached. Background and the fix for a failure:
+        `docs/runbook-search-outage.md`, "Fields null on every row".
       responses:
         '200':
           description: >-
@@ -375,7 +371,7 @@ paths:
             "count": 0, "max": 0, "ok": true }] }` — every committed check is within its maximum.
         '503':
           description: >-
-            A check is over its maximum (`"count": 359, "max": 0, "ok": false`), or could not run:
+            A check is over its maximum (`"count": 12, "max": 0, "ok": false`), or could not run:
             `"error": "missing"` when the index is not deployed or a kill switch has this app
             serving the dataset from Cosmos, `"error": "check failed"` for any other upstream
             failure (details in the log). Also answered when `SEARCH_ENDPOINT` is unset.

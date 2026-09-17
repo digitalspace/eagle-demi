@@ -1,12 +1,9 @@
 'use strict';
 
 /**
- * The value-level gate, exercised end to end against a stub API.
- *
- * What it has to get right is which HTTP answers stop a release and a scheduled run, and whether
- * the operator reading a red log is told what to do. A 503 that exited 0 would make the whole check
- * decorative; a 503 with no hint sends somebody to the AI Search portal for a fault that is fixed
- * by re-pushing from eagle-api.
+ * The value-level gate, end to end against a stub API: which HTTP answers stop a release, and
+ * whether a red log tells the operator what to do. A 503 with no hint sends somebody to the AI
+ * Search portal for a fault that is fixed by re-pushing from eagle-api.
  */
 
 const test = require('node:test');

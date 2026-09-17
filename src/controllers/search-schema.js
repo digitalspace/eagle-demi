@@ -304,27 +304,10 @@ exports.searchSchema = async (req, res) => {
   return res.status(ok ? 200 : 503).json({ ok, indexes });
 };
 
-/**
- * The committed value checks. A JSON file rather than a list here so an operator can add one
- * without a code review of this controller, and so the shape is reviewable in a diff.
- *
- * Each entry names an index, the field the check is about, an OData `$filter` describing the rows
- * that must NOT be there, and how many of them are tolerated. The filters are committed, never
- * caller-supplied, which is why they go upstream as written.
- */
+/** Committed, never caller-supplied, which is why these filters go upstream as written. */
 const DATA_CHECKS = require('../../azure/search/data-checks.json');
 
-/**
- * One check: how many rows match, against the live index the schema name points at.
- *
- * A missing index is `error: 'missing'` rather than a count of zero. Zero rows is the PASSING
- * answer for every check here, so an index that is not there would otherwise be the greenest
- * result this endpoint can return.
- *
- * An empty live name is the same answer. It means a kill switch has this app serving the dataset
- * from Cosmos, so the index it names is not one this app reads — a committed check against it can
- * no more be evaluated than one against an index the service never had.
- */
+/** One check. A missing or unserved index is `missing`, never a count of zero, which would pass. */
 async function runDataCheck(check, liveNames) {
   const row = { index: check.index, field: check.field };
   const liveName = liveNames.get(check.index);
@@ -338,8 +321,7 @@ async function runDataCheck(check, liveNames) {
 
   try {
     const count = await aiSearch.countMatching(liveName, check.filter);
-    // `null` is "the service answered without a count", which is not the same as zero and must not
-    // pass: the whole point is a number an operator can act on.
+    // `null` is "answered without a count", not zero, and must not pass.
     const ok = Number.isFinite(count) && count <= check.max;
     if (!ok) {
       logger.warn(
@@ -353,29 +335,18 @@ async function runDataCheck(check, liveNames) {
       logger.warn(`[search-data] ${liveName} is not deployed, so ${check.field} could not be checked`);
       return { ...row, ok: false, error: 'missing' };
     }
-    // Same reasoning as `probeIndex`: the upstream text carries the service endpoint and the index
-    // name, and this route is anonymous, so it stays in the log.
+    // Upstream text stays in the log: it names the endpoint and index, and this route is anonymous.
     logger.error(`[search-data] check of ${liveName}.${check.field} failed: ${err.message}`);
     return { ...row, ok: false, error: 'check failed' };
   }
 }
 
 /**
- * GET /health/search-data.
+ * GET /health/search-data — guards against live index rows whose fields are empty, which the
+ * schema probe above cannot see. 200 within every committed maximum, 503 otherwise.
  *
- * The value-level twin of `/health/search-schema`. That one proves a field EXISTS in the live
- * index; this one proves the rows carry something. On 2026-09-17 the public project list showed no
- * phase and no decision for all 359 prod projects: `currentPhaseName` and `eacDecision` were null
- * on every row, because prod Cosmos held those List references as bare id strings and the data
- * source projects `c.currentPhaseName.name`. Every schema check was green throughout — the fields
- * were there, and empty.
- *
- * 200 when every committed check is within its maximum, 503 otherwise, so a CI step and a schedule
- * can gate on the status alone.
- *
- * NOT BOUNDED IN THE REQUEST, and it does not need to be: unlike the POST above it reads nothing
- * from the caller, so the work is the committed list and the same for everyone. Each check is one
- * `top: 0, count: true` query — a data-plane read the app identity already holds.
+ * Needs no request bound: it reads nothing from the caller, so the work is the committed list.
+ * Background: `docs/runbook-search-outage.md`, "Fields null on every row".
  */
 exports.searchData = async (req, res) => {
   const cfg = aiSearch.config();

@@ -17,10 +17,9 @@ is one `top: 0, count: true` query against the live index, counting the rows tha
 must not be there. The endpoint answers 200 when every count is within its maximum
 and 503 when any is over.
 
-This is the half the schema probe cannot see. A schema probe proves a field EXISTS
-in the live index. On 2026-09-17 every schema check was green while
-`currentPhaseName` and `eacDecision` were null on all 359 prod projects, and the
-public project list showed no phase and no decision for any of them.
+This is the half the schema probe cannot see: it proves a field exists, not that
+anything is in it. Background: docs/runbook-search-outage.md, "Fields null on
+every row".
 
 Exit codes:
   0  every check within its maximum (200)

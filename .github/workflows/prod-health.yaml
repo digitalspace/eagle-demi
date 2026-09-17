@@ -1,9 +1,6 @@
-# The two search probes, run against production on a schedule rather than only at deploy time.
-#
-# A deploy gate catches a release that does not fit the live indexes. It cannot catch the live
-# indexes changing under a release that has already shipped, which is what happened on 2026-09-17:
-# `currentPhaseName` and `eacDecision` went null on all 359 prod projects days after the last
-# deploy, and the public project list showed no phase and no decision until somebody noticed.
+# The two search probes, on a schedule rather than only at deploy time: a deploy gate cannot catch
+# the live indexes going wrong under a release that already shipped.
+# Background: docs/runbook-search-outage.md.
 
 name: Probe production search
 

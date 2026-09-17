@@ -1,18 +1,9 @@
 'use strict';
 
 /**
- * The value-level health check.
- *
- * The schema gate next door proves a field is IN the live index. It was green on 2026-09-17 while
- * `currentPhaseName` and `eacDecision` were null on all 359 prod projects, because prod Cosmos held
- * those List references as bare id strings and the data source projects `c.currentPhaseName.name`.
- * The public project list showed no phase and no decision for every project, and nothing reported
- * anything wrong. What is asserted here is that a row count over a committed maximum reaches the
- * status a CI step and a schedule gate on, and that an index that is not there cannot pass as zero.
- *
- * The committed checks count the `Id` twins, not the two fields the site renders: those are
- * `filterable: false` and cannot be counted at all. Same `_id` of the same object, so they are null
- * in the same failure and nothing is lost.
+ * The value-level health check: a row count over a committed maximum has to reach the status a CI
+ * step gates on, and an index that is not there must not pass as a zero.
+ * Background: `docs/runbook-search-outage.md`, "Fields null on every row".
  */
 
 process.env.NODE_ENV = 'test';
@@ -92,8 +83,8 @@ test('search data health', async (t) => {
     await searchSchema.searchData(request(), res);
 
     assert.deepStrictEqual(calls, [
-      { indexName: 'projects-live', filter: 'currentPhaseNameId eq null' },
-      { indexName: 'projects-live', filter: 'eacDecisionId eq null' }
+      { indexName: 'projects-live', filter: 'currentPhaseNameId eq null and isPublished eq true' },
+      { indexName: 'projects-live', filter: 'eacDecisionId eq null and isPublished eq true' }
     ]);
   });
 
@@ -128,8 +119,7 @@ test('search data health', async (t) => {
     assert.strictEqual(out.body.checks.find((c) => c.field === 'eacDecisionId').ok, false);
   });
 
-  // An index that does not exist matches no rows. Reported as a count it would be the greenest
-  // answer this endpoint can give, which is the opposite of what happened.
+  // An index that does not exist matches no rows, so a count would be the greenest answer possible.
   await t.test('an index that is not deployed is a 503, never a passing zero', async (tt) => {
     tt.mock.method(logger, 'warn', () => {});
     tt.mock.method(aiSearch, 'countMatching', async () => {
@@ -150,8 +140,8 @@ test('search data health', async (t) => {
     ]);
   });
 
-  // Not a data fault: a role, a timeout, a bad filter. The service's own message carries the search
-  // endpoint and the index name, and this route is anonymous, so it stays in the log.
+  // Not a data fault: a role, a timeout, a bad filter. The upstream text names the endpoint and the
+  // index, and this route is anonymous, so it must not reach the body.
   await t.test('a check that fails for another reason is a 503 carrying no upstream text',
     async (tt) => {
       tt.mock.method(logger, 'error', () => {});
@@ -203,23 +193,25 @@ test('azure/search/data-checks.json', async (t) => {
     }
   });
 
-  // A field the index declares unfilterable is a 400 on every run, which this endpoint reports as
-  // `check failed` — a check that can never answer, committed and never noticed. `currentPhaseName`
-  // and `eacDecision` themselves are unfilterable, which is why the checks name their Id twins.
-  await t.test('every checked field exists and is filterable in the committed definition', () => {
+  // An unfilterable field is a 400 on every run: a check that can never answer.
+  await t.test('every field a filter names is filterable in the committed definition', () => {
     for (const check of CHECKS) {
       const definition = require(`../../azure/search/indexes/${check.index}.json`);
-      const field = definition.fields.find((f) => f.name === check.field);
-      assert.ok(field, `${check.index} has no field ${check.field}`);
-      assert.strictEqual(field.filterable, true, `${check.field} cannot be filtered on`);
+      const named = definition.fields.filter(
+        (f) => new RegExp(`\\b${f.name}\\b`).test(check.filter));
+      assert.ok(named.some((f) => f.name === check.field),
+        `${check.index} filter does not name ${check.field}`);
+      for (const field of named) {
+        assert.strictEqual(field.filterable, true, `${field.name} cannot be filtered on`);
+      }
     }
   });
 
-  await t.test('the two fields the 2026-09-17 outage emptied are still checked', () => {
+  await t.test('the two fields the public project list renders are still checked', () => {
     for (const field of ['currentPhaseNameId', 'eacDecisionId']) {
       const check = CHECKS.find((c) => c.index === 'projects' && c.field === field);
       assert.ok(check, `${field} is no longer checked, and it is why this gate exists`);
-      assert.strictEqual(check.max, 0, `${field} tolerating a null row would have passed the outage`);
+      assert.strictEqual(check.max, 0, `${field} tolerating a null row would let the empty rows through`);
     }
   });
 });
