@@ -23,6 +23,18 @@ const field = (v) => (v === undefined || v === null ? '-' : v);
 
 const startedAt = (e) => (e && e.startTime ? Date.parse(e.startTime) : NaN);
 
+// The run that was asked for is the FIRST execution to start after the reset. A scheduled tick can
+// start on top of it between two polls, so executionHistory[0] is not it: that tick carries a
+// tracking state and would report a reset that worked as DEMI_RESET_NOT_APPLIED.
+// executionHistory is newest first, so the earliest match is the last one. Watch mode resets
+// nothing and asks about the newest execution.
+function pickRun(list, resetAt, pinnedStart) {
+  if (!resetAt) return list[0] || {};
+  if (pinnedStart !== null) return list.find((e) => startedAt(e) === pinnedStart) || {};
+  const after = list.filter((e) => startedAt(e) >= resetAt);
+  return after[after.length - 1] || {};
+}
+
 /**
  * Reset and run each indexer in turn, waiting for its execution.
  * Returns the process exit code: 0 when every indexer finished or timed out still running.
@@ -45,19 +57,25 @@ async function resetAndRun(opts) {
 
   const headers = { Authorization: `Bearer ${token}` };
 
-  // executionHistory[0], never the top-level `status`: that reads `running` the whole time the
+  // executionHistory, never the top-level `status`: that reads `running` the whole time the
   // indexer is enabled on its schedule, reset or no reset.
-  async function status(name) {
+  async function history(name) {
     const r = await fetchImpl(`${endpoint}/indexers/${name}/status?api-version=${API}`, { headers });
     if (r.status !== 200) throw new Error(`${name} status http${r.status}`);
     const body = await r.json();
-    return (body.executionHistory || [])[0] || {};
+    return body.executionHistory || [];
   }
+
+  const status = async (name) => (await history(name))[0] || {};
 
   // POST with an empty string body, not a bare POST: the REST API answers 411 without a
   // content-length, and `body: ''` is what makes undici send `content-length: 0`.
   const post = (name, op) => fetchImpl(`${endpoint}/indexers/${name}/${op}?api-version=${API}`,
     { method: 'POST', headers, body: '' });
+
+  // One deadline for the whole call, not one per indexer: run-command cuts the call off at 90
+  // minutes however many indexers it carries.
+  const deadline = now() + timeoutMs;
 
   for (const name of names) {
     const before = await status(name);
@@ -117,19 +135,23 @@ async function resetAndRun(opts) {
       }
     }
 
-    const deadline = now() + timeoutMs;
     let tick = 0;
     let last;
     let done = null;
+    let pinnedStart = null;
     do {
       if (tick > 0) await sleep(pollSleepMs);
       tick += 1;
-      const e = await status(name);
-      last = e;
+      const list = await history(name);
+      // The poll line and the "still running" warning below are about the indexer, so they read the
+      // newest execution; only the verdict is pinned to the run that was asked for.
+      last = list[0] || {};
+      const e = pickRun(list, resetAt, pinnedStart);
+      if (pinnedStart === null && resetAt && startedAt(e) >= resetAt) pinnedStart = startedAt(e);
       // run-command truncates at 4 KB, and a several-hour wait would fill that with poll lines
       // long before the result.
       if (tick % pollEvery === 0) {
-        log(`DEMI_POLL ${name} ${e.status || 'none'} items=${field(e.itemsProcessed)}`);
+        log(`DEMI_POLL ${name} ${last.status || 'none'} items=${field(last.itemsProcessed)}`);
       }
       if (startedAt(e) >= resetAt && e.status && e.status !== 'inProgress') {
         done = e;

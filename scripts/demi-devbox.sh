@@ -184,21 +184,15 @@ remote_script() {
 # The LAST DEMI_EXIT line of ONE call's output. Never hand this the output of several calls joined
 # together: every exit line lands in the same text, so a grep for DEMI_EXIT=0 lets a clean step
 # hide a failing one.
+#
+# Within one call a multi-step payload keeps its own `rc` across the loop and ends on
+# `[ $rc -eq 0 ]`, so this single line is already every step's code and-ed together: a `--only a,b`
+# run whose second index is clean cannot pass for the first. The DEMI_STEP lines are for the
+# operator reading the output, not for the verdict.
 remote_ok() {
   local last
   last="$(grep -o 'DEMI_EXIT=[0-9][0-9]*' <<<"$1" | tail -1 || true)"
   [[ "$last" == 'DEMI_EXIT=0' ]]
-}
-
-# One payload now runs several steps, and run-command carries back a single status for the lot, so
-# each step prints its own exit code and the verdict is every one of them. A `--only a,b` run whose
-# second index is clean must not pass for the first.
-remote_steps_ok() {
-  local out="$1" rcs
-  remote_ok "$out" || return 1
-  rcs="$(grep -o 'DEMI_STEP [A-Za-z0-9_-]* [0-9][0-9]*' <<<"$out" | awk '{print $3}' || true)"
-  [[ -n "$rcs" ]] || return 1
-  ! grep -qv '^0$' <<<"$rcs"
 }
 
 devbox_run() {
@@ -260,7 +254,7 @@ only_args() {
 }
 
 # The same names as one space-separated list for the remote loop. A run that named none carries the
-# label `all`, so every step still reports under a name `remote_steps_ok` can read.
+# label `all`, so every step still reports under a name in the output.
 only_labels() {
   local n out=''
   local -a onlies=()
@@ -312,7 +306,7 @@ internal_drift_run() {
   local out rc=0
   out="$(devbox_run "$(multi_only_cmd --check)")" || rc=1
   printf '%s\n' "$out"
-  remote_steps_ok "$out" || rc=1
+  remote_ok "$out" || rc=1
   return "$rc"
 }
 
@@ -419,7 +413,7 @@ internal_dry_run() {
   local out rc=0
   out="$(devbox_run "$(multi_only_cmd '')")" || rc=1
   printf '%s\n' "$out"
-  remote_steps_ok "$out" || rc=1
+  remote_ok "$out" || rc=1
   return "$rc"
 }
 
@@ -465,7 +459,7 @@ put_datasources() {
   # data source added in this commit is not in the devbox checkout until something pulls it.
   out="$(devbox_run "git pull --ff-only && $(datasource_cmd "$1")")" || true
   printf '%s\n' "$out"
-  remote_steps_ok "$out" || die "the data source PUT failed — the indexes are widened but the columns are not projected"
+  remote_ok "$out" || die "the data source PUT failed — the indexes are widened but the columns are not projected"
 }
 
 field_of() { grep -o "$2=[^ ]*" <<<"$1" | tail -1 | cut -d= -f2-; }
@@ -523,7 +517,7 @@ internal_apply_run() {
   fi
   out="$(devbox_run "$cmd")" || true
   printf '%s\n' "$out"
-  remote_steps_ok "$out" || die "the write failed — see the output above"
+  remote_ok "$out" || die "the write failed — see the output above"
 
   [[ -n "$DATASOURCES" ]] || { echo "demi-devbox: no data source to write, no indexer to reset"; return 0; }
 

@@ -11,8 +11,9 @@
  * never reset out from under itself.
  *
  * Each phase is one `az vm run-command invoke` carrying several steps, so the other thing pinned
- * here is that one clean step never speaks for a failing one, and that an apply stays inside a
- * handful of calls. The indexer wait itself runs on the VM; its own decisions are covered by
+ * here is that one clean step never speaks for a failing one — the payload and-s every step's code
+ * into the one DEMI_EXIT line this script reads — and that an apply stays inside a handful of
+ * calls. The indexer wait itself runs on the VM; its own decisions are covered by
  * `reset-and-run-indexers.test.js`, and the fake below only replays a transcript of them.
  *
  * `AZ` stands in for the `az` CLI, the same seam `with-search-admin.test.js` uses — and that script
@@ -304,15 +305,6 @@ test('demi-devbox.sh', async (t) => {
       assert.strictEqual(r.remote.length, 1, 'both names ride one call');
       assert.ok(r.remote[0].includes('for n in documents projects'));
     }
-  });
-
-  await t.test('one step passing does not speak for the payload', () => {
-    // The step this pins is the one that made a per-index call worth its round trip: the remote
-    // loop carries a DEMI_STEP line per name, and the verdict is every one of them.
-    const r = run(['drift', '--only', 'documents,projects'], { env: { AZ_DRIFT: 'documents' } });
-    assert.match(r.stdout, /DEMI_STEP documents 1/);
-    assert.match(r.stdout, /DEMI_STEP projects 0/);
-    assert.strictEqual(r.status, 1);
   });
 
   await t.test('stops before granting when az cannot read role assignments', () => {

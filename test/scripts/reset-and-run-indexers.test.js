@@ -41,9 +41,11 @@ function service({ history, reset = 204, run = [202] } = {}) {
     const [, name, kind] = url.match(/\/indexers\/([^/]+)\/([a-z]+)\?/);
     calls.push(`${init.method || 'GET'} ${name} ${kind}`);
     if (kind === 'status') {
+      // An entry may be an array when a poll has to see more than the newest execution.
       const e = history[Math.min(i, history.length - 1)];
       i += 1;
-      return { status: 200, json: async () => ({ executionHistory: e ? [e] : [] }) };
+      const list = Array.isArray(e) ? e : e ? [e] : [];
+      return { status: 200, json: async () => ({ executionHistory: list }) };
     }
     if (kind === 'reset') return { status: reset, text: async () => 'reset body' };
     return { status: runCodes.length > 1 ? runCodes.shift() : runCodes[0], text: async () => 'run body' };
@@ -125,6 +127,24 @@ test('reset-and-run-indexers', async (t) => {
     assert.strictEqual(r.calls.filter(c => c === `POST ${NAME} run`).length, 2, r.calls.join(' | '));
   });
 
+  await t.test('a scheduled tick that lands on top of the reset run does not hide it', async () => {
+    // The PT5M schedule can start a tick between two polls. That tick is newer than the reset run
+    // and carries a tracking state, so reading executionHistory[0] reports a reset that worked as
+    // DEMI_RESET_NOT_APPLIED and sends the operator back to reset an indexer that is already clean.
+    const started = { status: 'inProgress', startTime: FRESH.startTime, itemsProcessed: 120 };
+    const tick = {
+      status: 'success',
+      startTime: '2026-09-08T21:00:20Z',
+      itemsProcessed: 0,
+      itemsFailed: 0,
+      initialTrackingState: '{"lastTs":123}'
+    };
+    const r = await drive(service({ history: [STALE, STALE, [started], [tick, FRESH]] }));
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=null/);
+    assert.ok(!r.out.includes('DEMI_RESET_NOT_APPLIED'), r.out);
+  });
+
   await t.test('fails when the execution kept its old tracking state', async () => {
     // initialTrackingState carries over when the reset did not take. The run then re-pulls nothing,
     // every new field stays null, and no other step of the apply reports a problem.
@@ -183,6 +203,58 @@ test('reset-and-run-indexers', async (t) => {
     assert.strictEqual(r.code, 0, r.out);
     assert.ok(r.calls.every(c => c.startsWith('GET')), `watch is read-only: ${r.calls.join(' | ')}`);
     assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587/);
+  });
+
+  await t.test('watch mode reports an execution that kept its tracking state', async () => {
+    // Watch resets nothing, so every ordinary tick it follows has initialTrackingState set. Failing
+    // on that would make watch unusable for the runs it exists to follow.
+    const kept = { ...FRESH, initialTrackingState: '{"lastTs":123}' };
+    const r = await drive(service({ history: [kept] }), { mode: 'watch' });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /DEMI_RESULT name=documents-indexer status=success items=61587 failed=0 tracking=set/);
+  });
+
+  await t.test('the timeout covers the whole call, not each indexer in turn', async () => {
+    // demi-devbox.sh gives every indexer in the list the long deadline, and run-command itself cuts
+    // the call off at 90 minutes. A deadline taken per indexer lets one call outlive the call that
+    // carries it, and the "still running is only a warning" result never comes back.
+    const TICK_MS = 30000;
+    const timeoutMs = 300000;
+    const script = [STALE, STALE, RUNNING];
+    const seen = {};
+    let clock = NOW;
+    const fetchImpl = async (url) => {
+      const [, name, kind] = url.match(/\/indexers\/([^/]+)\/([a-z]+)\?/);
+      if (kind !== 'status') return { status: 202, text: async () => '' };
+      // Every status read is an ARM round trip on the VM, so the reads are the wall clock.
+      clock += TICK_MS;
+      const n = seen[name] || 0;
+      seen[name] = n + 1;
+      return {
+        status: 200,
+        json: async () => ({ executionHistory: [script[Math.min(n, script.length - 1)]] })
+      };
+    };
+    const lines = [];
+    const code = await resetAndRun({
+      names: ['documents-indexer', 'chunks-indexer'],
+      endpoint: 'https://demi-search-test.search.windows.net',
+      token: 'fake',
+      fetchImpl,
+      log: (l) => lines.push(l),
+      pollSleepMs: 0,
+      timeoutMs,
+      settleMs: 0,
+      pollEvery: 1,
+      now: () => clock
+    });
+    const out = lines.join('\n');
+    assert.strictEqual(code, 0, out);
+    assert.strictEqual(lines.filter(l => l.startsWith('DEMI_WARN')).length, 2, out);
+    // Outside the budget there are only the second indexer's two setup reads and its first poll.
+    const elapsed = clock - NOW;
+    assert.ok(elapsed <= timeoutMs + 4 * TICK_MS,
+      `waited ${elapsed / 1000}s on a ${timeoutMs / 1000}s budget: ${out}`);
   });
 
   await t.test('a reset the service refuses stops the run', async () => {
