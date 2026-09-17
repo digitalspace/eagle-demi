@@ -201,6 +201,10 @@ param deployDevbox = true
 param devboxSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-servers'
 param devboxSshPublicKey = readEnvironmentVariable('DEVBOX_SSH_PUBLIC_KEY')
 
+// Entra SSH login for the devbox, off by default; see modules/devbox.bicep
+param devboxEnableEntraSsh = false
+param devboxEntraSshPrincipalId = ''
+
 // Pinned to the live budget period — an existing budget rejects startDate updates.
 param budgetStartDate = '2026-08-01'
 

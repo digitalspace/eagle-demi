@@ -222,6 +222,64 @@ test('the devbox cloud-init inputs are frozen', () => {
     + 'repin this hash if the substituted result is provably unchanged.');
 });
 
+// Entra SSH login for the devbox, off by default; see modules/devbox.bicep
+test('the devbox Entra SSH extension and login role render only when enabled', () => {
+  const extension = /resource aadSshLogin '([^']+)' = if \((.*)\) \{([\s\S]*?)\n\}\n/.exec(DEVBOX_MODULE);
+  assert.ok(extension, 'devbox.bicep must declare the AAD SSH extension as a gated resource');
+  assert.strictEqual(extension[2], 'enableEntraSsh',
+    'the extension must be gated on enableEntraSsh alone, so a blank principal still installs nothing extra');
+  assert.match(extension[3], /^\s+parent: devbox$/m,
+    'a child of the VM, not a standalone resource with a slash-joined name');
+  assert.match(extension[3], /^\s+publisher: 'Microsoft\.Azure\.ActiveDirectory'$/m);
+  assert.match(extension[3], /^\s+type: 'AADSSHLoginForLinux'$/m);
+  assert.match(extension[3], /^\s+typeHandlerVersion: '1\.0'$/m);
+  assert.match(extension[3], /^\s+autoUpgradeMinorVersion: true$/m);
+
+  const role = /resource entraSshUserLogin '([^']+)' = if \((.*)\) \{([\s\S]*?)\n\}\n/.exec(DEVBOX_MODULE);
+  assert.ok(role, 'devbox.bicep must declare the VM login role assignment as a gated resource');
+  assert.strictEqual(role[2], 'enableEntraSsh && !empty(entraSshPrincipalId)',
+    'an empty principal id in a roleAssignment fails the apply, so the gate must cover both');
+  assert.match(role[3], /^\s+scope: devbox$/m,
+    'VM scope only — at resource group scope this would grant login on every VM in the group');
+  assert.match(role[3], /^\s+name: guid\(devbox\.id, entraSshPrincipalId, virtualMachineUserLoginRoleId\)$/m,
+    'the name must be deterministic, or a second apply creates a duplicate assignment');
+
+  // Virtual Machine User Login. Administrator Login (1c0163c0-…) would carry sudo, which no one
+  // needs: work on the box runs through demi-run or `sudo -u demi`.
+  assert.match(DEVBOX_MODULE, /^var virtualMachineUserLoginRoleId = 'fb879df8-f326-4884-b1cf-06f3ad86be52'$/m,
+    'the role id must stay Virtual Machine User Login');
+
+  // Both default to off, so an environment that has not asked for this gets nothing.
+  assert.match(DEVBOX_MODULE, /^param enableEntraSsh bool = false$/m);
+  assert.match(DEVBOX_MODULE, /^param entraSshPrincipalId string = ''$/m);
+
+  // main.bicep must pass them through, or the param files above set a value that never arrives.
+  const call = MAIN.split(/^module /m).find(b => b.includes("'./modules/devbox.bicep'"));
+  assert.match(call, /^\s+enableEntraSsh: devboxEnableEntraSsh$/m,
+    'the devbox module gate is not wired to the main.bicep param');
+  assert.match(call, /^\s+entraSshPrincipalId: devboxEntraSshPrincipalId$/m,
+    'the devbox principal id is not wired to the main.bicep param');
+  for (const [name, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+    assert.match(params, /^param devboxEnableEntraSsh = false$/m,
+      `${name} must state the switch explicitly rather than inherit a default that can move`);
+    assert.match(params, /^param devboxEntraSshPrincipalId = ''$/m,
+      `${name} must state the principal explicitly`);
+  }
+});
+
+// The two new params must sit BELOW the substitution chain the test above pins. Declared between
+// `param adminUsername` and `var cloudInit = replace(`, they land inside that span, its hash moves,
+// and the frozen-inputs test fails for a reason that has nothing to do with cloud-init.
+test('the Entra SSH params stay outside the frozen cloud-init span', () => {
+  const chainEnd = DEVBOX_MODULE.indexOf('\nvar cloudInit = replace(');
+  assert.ok(chainEnd > 0, 'devbox.bicep must build cloudInit through a replace() chain');
+  for (const name of ['enableEntraSsh', 'entraSshPrincipalId']) {
+    const at = DEVBOX_MODULE.search(new RegExp(`^param ${name} `, 'm'));
+    assert.ok(at > chainEnd,
+      `param ${name} is declared above the cloudInit chain, which makes it a customData input`);
+  }
+});
+
 // Read off demi-apim-test and demi-apim-prod, both Disabled (2026-09-06). Omitted, the API version's
 // default is Enabled, so every apply proposes switching the deprecated portal back on.
 test('the gateway pins the legacy developer portal off', () => {
