@@ -2,11 +2,22 @@
 set -euo pipefail
 
 # Bicep infrastructure deployment for DEMI.
-# Usage: ./scripts/deploy-infra.sh [test|prod] [--what-if|--live]
+# Usage: ./scripts/deploy-infra.sh [test|prod] [--what-if|--live] [--foundation]
 #
 # WHAT-IF IS THE DEFAULT. Nothing is applied without `--live`, and prod additionally refuses to
 # apply unless CONFIRM_PROD=yes is exported. The old default was the deployment itself, which put
 # the whole-collection appSettings PUT one typo away from every invocation.
+#
+# ── TWO LAYERS, TWO RUNS ──────────────────────────────────────────────────────────────────────
+#
+# Without `--foundation` this deploys the APPLICATION layer only — the function app, the devbox,
+# the secret sync, the availability test — and reads the identity, vault, Cosmos, workspaces,
+# Foundry and search endpoints by name. That is about 45 s of ARM time against about 317 s for the
+# whole template, because everything skipped is a resource that has not changed in months.
+#
+# `--foundation` deploys all of it, and a change to any module the foundation owns needs one:
+# nothing else re-PUTs those resources. The check below refuses an application-only apply when a
+# foundation module has been edited since the last foundation deployment.
 #
 # Separate from `deploy-azure.sh` on purpose. That script is zipdeploy-and-poll for application
 # code and CI runs it on every push to main. Infrastructure is a different lifecycle, a different
@@ -52,8 +63,11 @@ set -euo pipefail
 # through by a `[ -z ]` check, ran a real deployment, and destroyed two live credentials that had
 # no other copy. The guard is stricter now; the habit still matters more than the guard.
 
-ENVIRONMENT="${1:-test}"
-MODE="${2:---what-if}"
+ENVIRONMENT='test'
+MODE='--what-if'
+# Set ONLY by --foundation, never inherited from the caller's environment: the flag on the command
+# line is the whole record of which layer a run deployed.
+DEPLOY_FOUNDATION='false'
 export REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 GREEN='\033[0;32m'
@@ -61,6 +75,30 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
+
+# The environment is positional and optional; the flags are order-independent after it, so
+# `test --foundation --live` and `test --live --foundation` are the same command.
+if [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; then
+  ENVIRONMENT="$1"
+  shift
+fi
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --what-if) MODE='--what-if' ;;
+    --live) MODE='--live' ;;
+    --foundation) DEPLOY_FOUNDATION='true' ;;
+    *)
+      echo -e "${RED}✗ unknown argument '$1'. Use: [test|prod] [--what-if|--live] [--foundation]${NC}" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+# The bicepparam reads this with readEnvironmentVariable: `az` refuses a second --parameters beside
+# a .bicepparam file, so an environment variable is the only way to pass the switch through.
+export DEPLOY_FOUNDATION
 
 case "$ENVIRONMENT" in
   test)
@@ -93,14 +131,6 @@ OC_CONTEXT="${OC_CONTEXT:-epic-${ENVIRONMENT}}"
 # vault. Non-prod used to read `eagle-api-minio-keys`, an eagle-api secret DEMI had no claim on;
 # nothing reads it here now either.
 
-case "$MODE" in
-  --what-if|--live) ;;
-  *)
-    echo -e "${RED}✗ unknown mode '${MODE}'. Use: --what-if (default) | --live${NC}" >&2
-    exit 2
-    ;;
-esac
-
 # The applied-in-prod guard. Deliberately an environment variable rather than a prompt: it survives
 # a terminal with no TTY, and it cannot be answered by a stray keystroke.
 if [ "$ENVIRONMENT" = 'prod' ] && [ "$MODE" = '--live' ] && [ "${CONFIRM_PROD:-}" != 'yes' ]; then
@@ -118,6 +148,42 @@ VAULT="demi-kv-${ENVIRONMENT}"
 DEVBOX="demi-devbox-${ENVIRONMENT}"
 KEY_VAULT_MODULE="${REPO_ROOT}/azure/modules/key-vault.bicep"
 PROBE_HOST="${APIM_HOST:-${API_APP}.azurewebsites.net}"
+
+# The foundation modules. An edit to one of these is only applied by a `--foundation` run, so the
+# list is also what require_foundation_current checks the git history of.
+FOUNDATION_MODULES=(
+  azure/modules/identity.bicep
+  azure/modules/key-vault.bicep
+  azure/modules/cosmos-nosql.bicep
+  azure/modules/observability.bicep
+  azure/modules/audit-logs.bicep
+  azure/modules/foundry.bicep
+  azure/modules/ai-search.bicep
+  azure/modules/search-existing.bicep
+  azure/modules/apim.bicep
+  azure/modules/static-site.bicep
+  azure/modules/document-storage.bicep
+  azure/modules/cost-budget.bicep
+)
+
+# The foundation's other inputs: main.bicep holds the module calls, gates and lookups, and the param
+# files hold the values fed to them. A change here can be foundation-only, application-only, or
+# both, so require_foundation_current can only warn about these — never refuse.
+FOUNDATION_INPUTS=(
+  azure/main.bicep
+  azure/main.test.bicepparam
+  azure/main.prod.bicepparam
+)
+
+# One step counter rather than hardcoded banners: application mode runs the foundation-currency
+# check, foundation mode does not.
+STEP=0
+TOTAL_STEPS=5
+[ "$DEPLOY_FOUNDATION" = 'true' ] || TOTAL_STEPS=6
+step() {
+  STEP=$((STEP + 1))
+  echo -e "${BLUE}[${STEP}/${TOTAL_STEPS}] ${1}${NC}"
+}
 
 # Read one key out of an OpenShift secret. One caller is left: the devbox PUBLIC key, which is not
 # a credential. Every credential this template used to carry now comes from the vault instead.
@@ -153,7 +219,7 @@ expected_secret_names() {
 # missing whether or not this run applies anything. It does start the devbox, which is deallocated
 # between sessions.
 require_vault_secrets() {
-  echo -e "${BLUE}[1/5] Checking ${VAULT} holds the names the app resolves…${NC}"
+  step "Checking ${VAULT} holds the names the app resolves…"
 
   local -a expected=()
   local name
@@ -244,7 +310,7 @@ EOF
 # by name in step 1; what remains is the devbox PUBLIC key, which the param file reads with no
 # fallback, so a missing one fails the bicep build with BCP427 rather than deploying a blank.
 require_secrets() {
-  echo -e "${BLUE}[2/5] Sourcing the remaining template parameters…${NC}"
+  step "Sourcing the remaining template parameters…"
 
   # Only where the param file switches the VM on. Elsewhere the parameter is never evaluated.
   if ! grep -Eq '^param deployDevbox *= *true' "$PARAM_FILE"; then
@@ -288,11 +354,96 @@ EOF
   echo -e "${GREEN}  ✓ DEVBOX_SSH_PUBLIC_KEY${NC} (${#DEVBOX_SSH_PUBLIC_KEY} chars)"
 }
 
+# An application-only run applies no foundation module, so an edit to one that has never been
+# deployed leaves the environment describing a template it does not match — and nothing later in
+# this script would notice. The last foundation deployment's name carries the commit it ran from,
+# which is the only record of that: `demi-cicd-*` has no resource-group read, so this cannot be a
+# CI check.
+require_foundation_current() {
+  step "Checking the foundation is current…"
+
+  # what-if applies nothing, so a stale foundation is a warning there and a refusal on --live.
+  refuse_or_warn() {
+    if [ "$MODE" = '--live' ]; then
+      echo -e "${RED}    Refusing to apply. Run: ./scripts/deploy-infra.sh ${ENVIRONMENT} --foundation --live${NC}" >&2
+      exit 3
+    fi
+    echo -e "${YELLOW}    what-if only, so this is a warning — --live refuses here. Run --foundation first.${NC}" >&2
+  }
+
+  # `az` is handed the working tree (-f azure/main.bicep), so an uncommitted or untracked edit is
+  # applied by a --foundation run and dropped by an application one, exactly like a committed edit.
+  # git log cannot see either, which is what git status is here for.
+  local dirty inputs_dirty inputs_changed=''
+  dirty=$(git -C "$REPO_ROOT" status --porcelain -- "${FOUNDATION_MODULES[@]}" 2>/dev/null || true)
+  inputs_dirty=$(git -C "$REPO_ROOT" status --porcelain -- "${FOUNDATION_INPUTS[@]}" 2>/dev/null || true)
+
+  local last sha='' changed
+  last=$(az deployment group list -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --only-show-errors \
+    --query "[?starts_with(name, 'infra-fnd-') && properties.provisioningState=='Succeeded'] | sort_by(@, &properties.timestamp) | [-1].name" \
+    -o tsv 2>/dev/null || true)
+
+  if [ -n "$last" ] && [ "$last" != 'None' ]; then
+    # infra-fnd-<sha>-<hhmmss>
+    sha="${last#infra-fnd-}"
+    sha="${sha%-*}"
+    if [ "$sha" = 'manual' ] || ! git -C "$REPO_ROOT" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+      sha=''
+    fi
+  fi
+
+  # Advisory, both modes: these files change for application work too, so a refusal here would
+  # block ordinary app deploys. The reader is the one who knows which half an edit touched.
+  if [ -n "$sha" ]; then
+    inputs_changed=$(git -C "$REPO_ROOT" log --oneline "${sha}..HEAD" -- "${FOUNDATION_INPUTS[@]}" 2>/dev/null || true)
+  fi
+  if [ -n "$inputs_dirty" ] || [ -n "$inputs_changed" ]; then
+    echo -e "${YELLOW}  ? main.bicep or a .bicepparam changed:${NC}" >&2
+    [ -n "$inputs_changed" ] && sed 's/^/      /' <<<"$inputs_changed" >&2
+    [ -n "$inputs_dirty" ] && sed 's/^...//; s/^/      uncommitted /' <<<"$inputs_dirty" >&2
+    echo -e "${YELLOW}    If any of these touched a foundation module call, gate or lookup, run --foundation first.${NC}" >&2
+  fi
+
+  if [ -n "$dirty" ]; then
+    echo -e "${RED}  ✗ foundation modules have uncommitted changes — az deploys the working tree:${NC}" >&2
+    sed 's/^...//; s/^/      /' <<<"$dirty" >&2
+    refuse_or_warn
+    return 0
+  fi
+
+  if [ -z "$last" ] || [ "$last" = 'None' ]; then
+    echo -e "${RED}  ✗ ${RESOURCE_GROUP} holds no successful infra-fnd-* deployment${NC}" >&2
+    echo -e "${YELLOW}    Nothing has deployed the foundation from this template yet.${NC}" >&2
+    refuse_or_warn
+    return 0
+  fi
+
+  if [ -z "$sha" ]; then
+    echo -e "${YELLOW}  ? ${last} names a commit this checkout does not hold — nothing to compare against.${NC}" >&2
+    echo -e "${YELLOW}    Fetch that commit, or run --foundation.${NC}" >&2
+    return 0
+  fi
+
+  changed=$(git -C "$REPO_ROOT" log --oneline "${sha}..HEAD" -- "${FOUNDATION_MODULES[@]}" 2>/dev/null || true)
+  if [ -n "$changed" ]; then
+    echo -e "${RED}  ✗ foundation modules changed since ${last} (${sha}):${NC}" >&2
+    sed 's/^/      /' <<<"$changed" >&2
+    refuse_or_warn
+    return 0
+  fi
+
+  echo -e "${GREEN}  ✓ no foundation module changed since ${last}${NC}"
+}
+
+# The layer is in the deployment NAME, not only in its parameters: require_foundation_current below
+# reads the name back to find which commit the foundation was last deployed from.
 run_deployment() {
-  local name="infra-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo manual)-$(date -u +%H%M%S)"
+  local prefix='infra-app-'
+  [ "$DEPLOY_FOUNDATION" = 'true' ] && prefix='infra-fnd-'
+  local name="${prefix}$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo manual)-$(date -u +%H%M%S)"
 
   if [ "$MODE" = '--what-if' ]; then
-    echo -e "${BLUE}[3/5] what-if against ${RESOURCE_GROUP}…${NC}"
+    step "what-if against ${RESOURCE_GROUP}…"
     echo -e "${YELLOW}  Reminder: @secure() values render as '*******' in both before and after.${NC}"
     echo -e "${YELLOW}  A blanked credential is INVISIBLE here. That is what step 4 is for.${NC}"
     az deployment group what-if -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" \
@@ -300,14 +451,14 @@ run_deployment() {
     exit 0
   fi
 
-  echo -e "${BLUE}[3/5] Deploying ${name}…${NC}"
+  step "Deploying ${name}…"
   az deployment group create -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" \
     -f "${REPO_ROOT}/azure/main.bicep" -p "$PARAM_FILE" -n "$name" --no-wait --only-show-errors
 
   # Poll the record rather than trusting the CLI's exit code, for the same reason deploy-azure.sh
   # does: --no-wait returns as soon as ARM accepts the request, which is not the same fact as the
   # deployment succeeding.
-  echo -e "${BLUE}[4/5] Waiting…${NC}"
+  step "Waiting…"
   local state
   if ! az deployment group wait -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" \
         -n "$name" --created --timeout 1800 --only-show-errors; then
@@ -329,7 +480,7 @@ run_deployment() {
 # catches the failure that started all of this — a deploy that reports success while having
 # emptied a credential.
 assert_secrets_survived() {
-  echo -e "${BLUE}[5/5] Verifying live app settings…${NC}"
+  step "Verifying live app settings…"
   local failed=0 len value
   # The one plain setting worth asserting: absent, src/seed/sources.js silently repoints this
   # environment's seed at eagle-DEV.
@@ -427,9 +578,12 @@ assert_secrets_survived() {
   fi
 }
 
-echo -e "${BLUE}DEMI infrastructure → ${ENVIRONMENT} (${RESOURCE_GROUP})${NC}"
+LAYER='application layer only'
+[ "$DEPLOY_FOUNDATION" = 'true' ] && LAYER='foundation and application'
+echo -e "${BLUE}DEMI infrastructure → ${ENVIRONMENT} (${RESOURCE_GROUP}) — ${LAYER}${NC}"
 require_vault_secrets
 require_secrets
+[ "$DEPLOY_FOUNDATION" = 'true' ] || require_foundation_current
 run_deployment
 assert_secrets_survived
 echo -e "${GREEN}✓ done. App code deploys separately — see scripts/deploy-azure.sh.${NC}"

@@ -119,7 +119,9 @@ session that made it.
 ## Rotating ADMIN_API_KEY
 
 Owner: Daniel Truong — the only holder of a prod write login, and the only person who can run
-`CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`.
+`CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`. That command deploys the application
+layer, which is all a rotation needs; `--foundation` deploys everything and is only required after
+a change to one of the foundation modules listed in the README.
 
 `ADMIN_API_KEY` is a Key Vault reference on the app, not a stored value. The app setting
 reads `@Microsoft.KeyVault(SecretUri=https://demi-kv-prod.vault.azure.net/secrets/admin-api-key)`

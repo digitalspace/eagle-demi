@@ -9,6 +9,10 @@ using './main.bicep'
 param environmentName = 'test'
 param location = 'canadacentral'
 
+// False deploys the application layer only and reads the foundation by name; a foundation edit
+// needs `./scripts/deploy-infra.sh test --foundation`, which is what sets DEPLOY_FOUNDATION.
+param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
+
 // Direct-to-NRS object store. asnpnn/ozwdez, NOT the "test bucket" zdspnb: the corpus (92,472
 // objects, 257 GB) exists ONLY under asnpnn/ozwdez/, zdspnb holds zero objects under any DEMI
 // prefix, and eagle-api on OpenShift TEST reads asnpnn too (its eagle-api-minio-keys secret).

@@ -372,6 +372,13 @@ param devboxEnableEntraSsh bool = false
 @description('Object id of the Entra user or group that gets Virtual Machine User Login on the devbox.')
 param devboxEntraSshPrincipalId string = ''
 
+// The resources below never change between releases, and ARM re-PUTs every one of them on every
+// run — about 293 s of the 317 s a full deploy takes. False deploys only the application layer and
+// reads the rest by name; true deploys everything. Foundation edits need a run with it on, which
+// `scripts/deploy-infra.sh --foundation` sets through DEPLOY_FOUNDATION.
+@description('Deploy the foundation layer: identity, vault, Cosmos, observability, audit logs, Foundry, search, APIM, static site, document storage, budget.')
+param deployFoundation bool = false
+
 // Mandatory Cost Management Tags applied across ALL resources
 // Created out of band in the vault, shared by the gateway (named value) and the app (app setting).
 var apimGatewaySecretName = 'apim-gateway-secret'
@@ -384,13 +391,121 @@ var defaultTags = {
   CostCenter: 'c4b0a8'
 }
 
+// ── Foundation lookups ────────────────────────────────────────────────────────────────────────
+//
+// What the application layer borrows from the foundation when this run does not deploy it. Each
+// name and apiVersion below is the one the owning module declares — a mismatch here reads a
+// different resource, or a different property shape, and the app settings drift silently.
+//
+// An `existing` resource compiles to a reference at its use site, so nothing is read in a run that
+// takes the module-output branch. A missing resource in application mode fails the deployment with
+// ResourceNotFound, which is the correct loud failure: the environment has no foundation yet.
+
+resource identityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: 'demi-identity-${environmentName}'
+}
+
+resource vaultExisting 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
+  name: 'demi-kv-${environmentName}'
+}
+
+resource cosmosExisting 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = {
+  name: 'demi-cosmos-${environmentName}'
+}
+
+resource logsWorkspaceExisting 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: 'demi-logs-${environmentName}'
+}
+
+resource auditWorkspaceExisting 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: 'demi-audit-${environmentName}'
+}
+
+resource appInsightsExisting 'Microsoft.Insights/components@2020-02-02' existing = {
+  name: 'demi-insights-${environmentName}'
+}
+
+resource actionGroupExisting 'Microsoft.Insights/actionGroups@2023-01-01' existing = {
+  name: 'demi-alerts-${environmentName}'
+}
+
+resource auditDcrExisting 'Microsoft.Insights/dataCollectionRules@2023-03-11' existing = {
+  name: 'demi-audit-dcr-${environmentName}'
+}
+
+resource foundryExisting 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
+  name: 'demi-foundry-${environmentName}'
+}
+
+// One var per borrowed value. Everything below the foundation modules reads these and never a
+// module output, so the value an application-only run writes is the value a full run writes.
+var identityId = deployFoundation ? identity!.outputs.identityId : identityExisting.id
+var identityPrincipalId = deployFoundation ? identity!.outputs.principalId : identityExisting.properties.principalId
+var identityClientId = deployFoundation ? identity!.outputs.clientId : identityExisting.properties.clientId
+
+var cosmosEndpoint = deployFoundation ? cosmos!.outputs.cosmosEndpoint : cosmosExisting.properties.documentEndpoint
+var cosmosAccountId = deployFoundation ? cosmos!.outputs.cosmosAccountId : cosmosExisting.id
+
+var vaultName = deployFoundation ? keyVault!.outputs.vaultName : vaultExisting.name
+var vaultUri = deployFoundation ? keyVault!.outputs.vaultUri : vaultExisting.properties.vaultUri
+
+// Both branches of every secret URI below compose from the same vault URI — key-vault.bicep builds
+// its outputs as `${vault.properties.vaultUri}secrets/<name>`, and so does this. They have to stay
+// character-identical: `appSettings` is a whole-collection PUT, so a URI that differs by so much as
+// a trailing slash rewrites a live Key Vault reference on the next application deploy.
+var secretUriBase = '${vaultUri}secrets/'
+var adminApiKeySecretUri = deployFoundation ? keyVault!.outputs.adminApiKeySecretUri : '${secretUriBase}admin-api-key'
+var doclingApiKeySecretUri = deployFoundation ? keyVault!.outputs.doclingApiKeySecretUri : '${secretUriBase}docling-api-key'
+var minioAccessKeySecretUri = deployFoundation ? keyVault!.outputs.minioAccessKeySecretUri : '${secretUriBase}minio-access-key'
+var minioSecretKeySecretUri = deployFoundation ? keyVault!.outputs.minioSecretKeySecretUri : '${secretUriBase}minio-secret-key'
+var trackClientSecretUri = deployFoundation ? keyVault!.outputs.trackClientSecretUri : '${secretUriBase}track-client-secret'
+var roleSyncClientSecretUri = deployFoundation ? keyVault!.outputs.roleSyncClientSecretUri : '${secretUriBase}role-sync-client-secret'
+
+// The three OPTIONAL secrets. An environment that does not name one gets an EMPTY app setting, not
+// a reference to a secret nobody created — same `contains` test key-vault.bicep applies, kept here
+// so an application-only run cannot hand prod a live reference where a full run hands it ''.
+var notifyApiKeySecretUri = deployFoundation
+  ? keyVault!.outputs.notifyApiKeySecretUri
+  : (contains(optionalSecretNames, 'notify-api-key') ? '${secretUriBase}notify-api-key' : '')
+var edgeSecretUri = deployFoundation
+  ? keyVault!.outputs.edgeSecretUri
+  : (contains(optionalSecretNames, 'edge-secret') ? '${secretUriBase}edge-secret' : '')
+var accessGateSecretUri = deployFoundation
+  ? keyVault!.outputs.accessGateSecretUri
+  : (contains(optionalSecretNames, 'access-gate-password') ? '${secretUriBase}access-gate-password' : '')
+
+var appInsightsConnectionString = deployFoundation ? observability!.outputs.connectionString : appInsightsExisting.properties.ConnectionString
+var appInsightsId = deployFoundation ? observability!.outputs.appInsightsId : appInsightsExisting.id
+var actionGroupId = deployFoundation ? observability!.outputs.actionGroupId : actionGroupExisting.id
+var appLogsWorkspaceName = deployFoundation ? observability!.outputs.workspaceName : logsWorkspaceExisting.name
+var appLogsWorkspaceCustomerId = deployFoundation ? observability!.outputs.workspaceCustomerId : logsWorkspaceExisting.properties.customerId
+
+var auditDcrEndpoint = deployFoundation ? auditLogs!.outputs.dcrEndpoint : auditDcrExisting.properties.endpoints.logsIngestion
+var auditDcrImmutableId = deployFoundation ? auditLogs!.outputs.dcrImmutableId : auditDcrExisting.properties.immutableId
+var auditWorkspaceId = deployFoundation ? auditLogs!.outputs.workspaceId : auditWorkspaceExisting.id
+var auditWorkspaceName = deployFoundation ? auditLogs!.outputs.workspaceName : auditWorkspaceExisting.name
+var auditWorkspaceCustomerId = deployFoundation ? auditLogs!.outputs.workspaceCustomerId : auditWorkspaceExisting.properties.customerId
+
+var foundryEndpoint = deployFoundry
+  ? (deployFoundation ? foundry!.outputs.foundryEndpoint : foundryExisting.properties.endpoint)
+  : ''
+
+// Composed rather than borrowed, because the NAME is the value: each of these is built from
+// `environmentName` inside its own module too, so reading it back would only add a lookup that can
+// fail. The model name is declared here and passed DOWN to foundry.bicep for the same reason — the
+// app setting has to be right in a run that deploys no Foundry account to read it from.
+var foundryModelName = 'gpt-4.1-mini'
+var foundryDeployment = deployFoundry ? foundryModelName : ''
+var searchEndpoint = deploySearch ? 'https://demi-search-${environmentName}.search.windows.net' : existingSearchEndpoint
+var budgetName = 'demi-budget-${environmentName}'
+
 // 1. User-assigned managed identity — the principal for EVERY data plane.
 //
 // User-assigned rather than system-assigned, and the distinction is load-bearing: the identity
 // outlives the app, so a redeploy does not invalidate the role assignments below, and the app can
 // name it with AZURE_CLIENT_ID. `demi-identity-dev`, principal c2de07f1-…, is the identity the
 // live API actually runs as.
-module identity './modules/identity.bicep' = {
+module identity './modules/identity.bicep' = if (deployFoundation) {
   name: 'deploy-identity'
   params: {
     location: location
@@ -403,14 +518,14 @@ module identity './modules/identity.bicep' = {
 // Declared after identity because the secrets-read grant needs its principal. `peSubnetId` is
 // required here, so an environment with no private endpoint subnet fails the deploy rather than
 // creating a vault policy makes unreachable.
-module keyVault './modules/key-vault.bicep' = {
+module keyVault './modules/key-vault.bicep' = if (deployFoundation) {
   name: 'deploy-key-vault'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
     peSubnetId: privateEndpointSubnetId
-    identityPrincipalId: identity.outputs.principalId
+    identityPrincipalId: identityPrincipalId
     optionalSecretNames: optionalSecretNames
   }
 }
@@ -418,35 +533,35 @@ module keyVault './modules/key-vault.bicep' = {
 // 2. Cosmos DB for NoSQL — the system of record. Serverless, keyless (`disableLocalAuth`), reached
 // only through a private endpoint. The module also carries the SQL role assignment that lets the
 // identity read and write it.
-module cosmos './modules/cosmos-nosql.bicep' = {
+module cosmos './modules/cosmos-nosql.bicep' = if (deployFoundation) {
   name: 'deploy-cosmos-nosql'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
     peSubnetId: privateEndpointSubnetId
-    apiPrincipalId: identity.outputs.principalId
+    apiPrincipalId: identityPrincipalId
     readerPrincipalId: readerPrincipalId
     deployEnrichment: deployEnrichment
     // Control-plane auditing. This reverses the usual reading order — cosmos is module 2 and
     // auditLogs is module 6 — but Bicep orders on output references, not declaration, and
     // auditLogs depends only on identity and observability, so there is no cycle.
-    auditWorkspaceId: auditLogs.outputs.workspaceId
+    auditWorkspaceId: auditWorkspaceId
   }
 }
 
 // 3. Azure AI Search — the Deep Search query layer. Basic tier, one replica, one partition.
-module search './modules/ai-search.bicep' = if (deploySearch) {
+module search './modules/ai-search.bicep' = if (deployFoundation && deploySearch) {
   name: 'deploy-ai-search'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
-    identityId: identity.outputs.identityId
+    identityId: identityId
     // Both, and they are different things: the indexer authenticates AS the identity (resource
     // ID), while the data-plane role assignment inside the module grants TO its principal.
-    apiPrincipalId: identity.outputs.principalId
-    cosmosAccountId: cosmos.outputs.cosmosAccountId
+    apiPrincipalId: identityPrincipalId
+    cosmosAccountId: cosmosAccountId
     peSubnetId: privateEndpointSubnetId
   }
 }
@@ -455,41 +570,41 @@ module search './modules/ai-search.bicep' = if (deploySearch) {
 // the shared private link to OUR Cosmos account — the indexer has no other route to it, since the
 // account is publicNetworkAccess: Disabled. Nothing else about the service is touched: no identity,
 // no `semanticSearch`, no private endpoint — a re-PUT of any of those would fight whoever owns it.
-module existingSearchRole './modules/search-existing.bicep' = if (!deploySearch) {
+module existingSearchRole './modules/search-existing.bicep' = if (deployFoundation && !deploySearch) {
   name: 'grant-existing-search'
   params: {
     searchName: empty(existingSearchEndpoint)
       ? 'demi-search-${environmentName}'
       : first(split(replace(existingSearchEndpoint, 'https://', ''), '.'))
-    apiPrincipalId: identity.outputs.principalId
+    apiPrincipalId: identityPrincipalId
     environmentName: environmentName
-    cosmosAccountId: cosmos.outputs.cosmosAccountId
+    cosmosAccountId: cosmosAccountId
     indexerPrincipalId: existingSearchIndexerPrincipalId
   }
 }
 
 // 4. Phase 3b document storage — see `deployDocumentStorage`. Not deployed in dev.
-module documentStorage './modules/document-storage.bicep' = if (deployDocumentStorage) {
+module documentStorage './modules/document-storage.bicep' = if (deployFoundation && deployDocumentStorage) {
   name: 'deploy-document-storage'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
     peSubnetId: privateEndpointSubnetId
-    apiPrincipalId: identity.outputs.principalId
+    apiPrincipalId: identityPrincipalId
     readerPrincipalId: readerPrincipalId
   }
 }
 
 // 5. Azure Monitor — Log Analytics workspace plus workspace-based Application Insights. Deployed
 // before the apps because they consume its connection string; nothing else depends on it.
-module observability './modules/observability.bicep' = {
+module observability './modules/observability.bicep' = if (deployFoundation) {
   name: 'deploy-observability'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
-    apiPrincipalId: identity.outputs.principalId
+    apiPrincipalId: identityPrincipalId
     // Same list the budget alerts use — one place to change who gets told.
     contactEmails: contactEmails
     deployReconcileDriftAlert: deployReconcileDriftAlert
@@ -501,32 +616,33 @@ module observability './modules/observability.bicep' = {
 // 5b. Audit and usage-analytics store. A SECOND Log Analytics workspace, deliberately: the one
 // above is capped with `dailyQuotaGb` and stops collecting once the cap is hit, which is correct
 // for application logs and unacceptable for a compliance record. See modules/audit-logs.bicep.
-module auditLogs './modules/audit-logs.bicep' = {
+module auditLogs './modules/audit-logs.bicep' = if (deployFoundation) {
   name: 'deploy-audit-logs'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
-    apiPrincipalId: identity.outputs.principalId
+    apiPrincipalId: identityPrincipalId
     // The audit writer reports its own failures to the APPLICATION logger, so the alert that
     // catches a dropped batch has to query that workspace rather than the audit one.
-    appLogsWorkspaceId: observability.outputs.workspaceId
+    appLogsWorkspaceId: observability!.outputs.workspaceId
     // One action group for both alerts, owned by observability because it deploys first.
-    alertActionGroupId: observability.outputs.actionGroupId
+    alertActionGroupId: actionGroupId
   }
 }
 
 // 6. Microsoft Foundry — the summariser behind `GET /api/search/summary`, and the only resource
 // here that touches a model. Retrieval stays lexical BM25 in `demi-search-dev`.
-module foundry './modules/foundry.bicep' = if (deployFoundry) {
+module foundry './modules/foundry.bicep' = if (deployFoundation && deployFoundry) {
   name: 'deploy-foundry'
   params: {
+    modelName: foundryModelName
     // `location` is deliberately NOT passed: the module defaults to canadaeast, the only Canadian
     // region offering a Standard (in-country) deployment. `peLocation` is where the private endpoint
     // goes, and a PE is a NIC in its subnet — so it stays canadacentral with everything else.
     environmentName: environmentName
     tags: defaultTags
-    identityPrincipalId: identity.outputs.principalId
+    identityPrincipalId: identityPrincipalId
     // Empty skips the PE via the module's own gate — see deployFoundryPrivateEndpoint above.
     peSubnetId: deployFoundryPrivateEndpoint ? privateEndpointSubnetId : ''
     peLocation: location
@@ -541,21 +657,21 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     environmentName: environmentName
     tags: defaultTags
     minioHost: minioHost
-    minioAccessKeySecretUri: keyVault.outputs.minioAccessKeySecretUri
-    minioSecretKeySecretUri: keyVault.outputs.minioSecretKeySecretUri
+    minioAccessKeySecretUri: minioAccessKeySecretUri
+    minioSecretKeySecretUri: minioSecretKeySecretUri
     minioBucketName: minioBucketName
     minioKeyPrefix: minioKeyPrefix
-    adminApiKeySecretUri: keyVault.outputs.adminApiKeySecretUri
-    doclingApiKeySecretUri: keyVault.outputs.doclingApiKeySecretUri
+    adminApiKeySecretUri: adminApiKeySecretUri
+    doclingApiKeySecretUri: doclingApiKeySecretUri
     eagleApiBase: eagleApiBase
     reconcileSchedule: reconcileSchedule
     trackApiBase: trackApiBase
     trackClientId: trackClientId
-    trackClientSecretUri: keyVault.outputs.trackClientSecretUri
+    trackClientSecretUri: trackClientSecretUri
     roleSyncClientId: roleSyncClientId
-    roleSyncClientSecretUri: keyVault.outputs.roleSyncClientSecretUri
+    roleSyncClientSecretUri: roleSyncClientSecretUri
     notifyApiBase: notifyApiBase
-    notifyApiKeySecretUri: keyVault.outputs.notifyApiKeySecretUri
+    notifyApiKeySecretUri: notifyApiKeySecretUri
     syncTeamsSchedule: syncTeamsSchedule
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule
@@ -563,7 +679,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     searchDefinitionsQueue: searchDefinitionsQueue
     // The identity the SEARCH service runs indexers as, which is only ours when we deployed the
     // service: prod's `demi-search-prod` runs as `eagle-search-identity-prod`.
-    dataSourceIdentityId: deploySearch ? identity.outputs.identityId : existingSearchIndexerIdentityId
+    dataSourceIdentityId: deploySearch ? identityId : existingSearchIndexerIdentityId
     bulkMaxDocuments: bulkMaxDocuments
     bulkAnonMaxDocuments: bulkAnonMaxDocuments
     bulkMaxBytes: bulkMaxBytes
@@ -580,37 +696,36 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     allowedClients: allowedClients
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
-    edgeSecretUri: keyVault.outputs.edgeSecretUri
-    accessGateSecretUri: keyVault.outputs.accessGateSecretUri
+    edgeSecretUri: edgeSecretUri
+    accessGateSecretUri: accessGateSecretUri
     virtualNetworkSubnetId: apiFlexSubnetId
-    identityId: identity.outputs.identityId
-    identityClientId: identity.outputs.clientId
-    identityPrincipalId: identity.outputs.principalId
-    cosmosEndpoint: cosmos.outputs.cosmosEndpoint
-    searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
+    identityId: identityId
+    identityClientId: identityClientId
+    identityPrincipalId: identityPrincipalId
+    cosmosEndpoint: cosmosEndpoint
+    searchEndpoint: searchEndpoint
     searchIndexActivities: searchIndexActivities
     searchIndexProjectNotifications: searchIndexProjectNotifications
-    appInsightsConnectionString: observability.outputs.connectionString
+    appInsightsConnectionString: appInsightsConnectionString
     enrichmentSources: enrichmentSources
     summaryEnabled: summaryEnabled
-    foundryEndpoint: deployFoundry ? foundry!.outputs.foundryEndpoint : ''
-    foundryDeployment: deployFoundry ? foundry!.outputs.deploymentName : ''
-    auditDcrEndpoint: auditLogs.outputs.dcrEndpoint
-    auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
-    auditWorkspaceId: auditLogs.outputs.workspaceId
-    auditWorkspaceCustomerId: auditLogs.outputs.workspaceCustomerId
+    foundryEndpoint: foundryEndpoint
+    foundryDeployment: foundryDeployment
+    auditDcrEndpoint: auditDcrEndpoint
+    auditDcrImmutableId: auditDcrImmutableId
+    auditWorkspaceId: auditWorkspaceId
+    auditWorkspaceCustomerId: auditWorkspaceCustomerId
     analyticsDcrEndpoint: analyticsDcrEndpoint
     analyticsDcrImmutableId: analyticsDcrImmutableId
     analyticsWorkspaceCustomerId: analyticsWorkspaceCustomerId
-    appLogsWorkspaceCustomerId: observability.outputs.workspaceCustomerId
-    // From the budget module rather than rebuilt from environmentName: one place owns the name.
-    budgetName: costBudget.outputs.budgetName
+    appLogsWorkspaceCustomerId: appLogsWorkspaceCustomerId
+    budgetName: budgetName
     frontendHostNames: frontendHostNames
     linkBaseUrl: linkBaseUrl
     // VaultName/SecretName rather than SecretUri: the secret is created out of band, so no module
     // outputs its versioned identifier. Empty until APIM is deployed, which disables the app's
     // gateway trust branch entirely.
-    apimGatewaySecretRef: deployApim ? '@Microsoft.KeyVault(VaultName=${keyVault.outputs.vaultName};SecretName=${apimGatewaySecretName})' : ''
+    apimGatewaySecretRef: deployApim ? '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=${apimGatewaySecretName})' : ''
   }
 }
 
@@ -624,18 +739,18 @@ module secretSync './modules/secret-sync.bicep' = if (deploySecretSync && !empty
     environmentName: environmentName
     tags: defaultTags
     virtualNetworkSubnetId: apiFlexSubnetId
-    identityId: identity.outputs.identityId
-    identityClientId: identity.outputs.clientId
-    identityPrincipalId: identity.outputs.principalId
-    keyVaultName: keyVault.outputs.vaultName
-    keyVaultUri: keyVault.outputs.vaultUri
+    identityId: identityId
+    identityClientId: identityClientId
+    identityPrincipalId: identityPrincipalId
+    keyVaultName: vaultName
+    keyVaultUri: vaultUri
     syncNamespaces: syncNamespaces
-    appInsightsConnectionString: observability.outputs.connectionString
+    appInsightsConnectionString: appInsightsConnectionString
   }
 }
 
 // 7c. The gateway. After the Flex app because it fronts it, and skipped whenever that app is.
-module apim './modules/apim.bicep' = if (deployApim && !empty(apiFlexSubnetId)) {
+module apim './modules/apim.bicep' = if (deployFoundation && deployApim && !empty(apiFlexSubnetId)) {
   name: 'deploy-apim'
   params: {
     location: location
@@ -644,13 +759,15 @@ module apim './modules/apim.bicep' = if (deployApim && !empty(apiFlexSubnetId)) 
     // Same list the cost and audit alerts notify; APIM takes one address, not an array.
     publisherEmail: contactEmails[0]
     apiHostName: apiFunctionFlex!.outputs.apiFunctionAppHostName
-    keyVaultName: keyVault.outputs.vaultName
+    keyVaultName: vaultName
     gatewaySecretName: apimGatewaySecretName
     // Another repository's estate: the module's own !empty() gate skips the analytics API when
     // eagle-analytics has not been deployed here.
     analyticsBackendUrl: analyticsBackendUrl
-    analyticsSharedHeaderSecretUri: keyVault.outputs.analyticsSharedHeaderSecretUri
-    analyticsAuditHeaderSecretUri: keyVault.outputs.analyticsAuditHeaderSecretUri
+    // Gateway and vault are both foundation, so these two read the module directly rather than
+    // through a lookup var — there is no run that deploys one without the other.
+    analyticsSharedHeaderSecretUri: keyVault!.outputs.analyticsSharedHeaderSecretUri
+    analyticsAuditHeaderSecretUri: keyVault!.outputs.analyticsAuditHeaderSecretUri
     analyticsBrowserOrigins: analyticsAdminOrigins
   }
 }
@@ -664,8 +781,8 @@ module availability './modules/availability.bicep' = if (!empty(availabilityUrl)
     environmentName: environmentName
     tags: defaultTags
     targetUrl: availabilityUrl
-    appInsightsId: observability.outputs.appInsightsId
-    actionGroupId: observability.outputs.actionGroupId
+    appInsightsId: appInsightsId
+    actionGroupId: actionGroupId
   }
 }
 
@@ -681,11 +798,11 @@ module devbox './modules/devbox.bicep' = if (deployDevbox && !empty(devboxSubnet
     sshPublicKey: devboxSshPublicKey
     enableEntraSsh: devboxEnableEntraSsh
     entraSshPrincipalId: devboxEntraSshPrincipalId
-    identityId: identity.outputs.identityId
-    identityClientId: identity.outputs.clientId
+    identityId: identityId
+    identityClientId: identityClientId
     // The same expressions the API app gets, so demi-run cannot drift from the running app.
-    cosmosEndpoint: cosmos.outputs.cosmosEndpoint
-    searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
+    cosmosEndpoint: cosmosEndpoint
+    searchEndpoint: searchEndpoint
     eagleApiBase: eagleApiBase
   }
 }
@@ -694,7 +811,7 @@ module devbox './modules/devbox.bicep' = if (deployDevbox && !empty(devboxSubnet
 // the security headers and the routing rules are supplied by the Front Door profile in
 // eagle-search; this template owns only the origin. See modules/static-site.bicep for the one
 // data-plane command ARM cannot express.
-module staticSite './modules/static-site.bicep' = if (deployStaticSite) {
+module staticSite './modules/static-site.bicep' = if (deployFoundation && deployStaticSite) {
   name: 'deploy-static-site'
   params: {
     location: location
@@ -706,7 +823,7 @@ module staticSite './modules/static-site.bicep' = if (deployStaticSite) {
 
 // 9. Cost budget alerts. AI Search Basic is a fixed monthly charge whether queried or idle, which
 // is what moved the ceiling to 100.
-module costBudget './modules/cost-budget.bicep' = {
+module costBudget './modules/cost-budget.bicep' = if (deployFoundation) {
   name: 'deploy-cost-budget'
   params: {
     environmentName: environmentName
@@ -720,14 +837,14 @@ module costBudget './modules/cost-budget.bicep' = {
 // queries and the scope the budget above is defined on. Read-only, and it sees this group only.
 //
 // The name is built from the identity's NAME, not its principal id: a resource name cannot contain
-// a runtime value, and `identity.outputs.principalId` is one. The properties may, and do.
+// a runtime value, and `identityPrincipalId` is one. The properties may, and do.
 var costManagementReaderRoleId = '72fafb9e-0641-4937-9268-a91bfd8191a3'
 
 resource costReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(resourceGroup().id, 'demi-identity-${environmentName}', costManagementReaderRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', costManagementReaderRoleId)
-    principalId: identity.outputs.principalId
+    principalId: identityPrincipalId
     principalType: 'ServicePrincipal'
   }
 }
@@ -735,25 +852,30 @@ resource costReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
 // Outputs
 // Empty when no Flex subnet is supplied, which is the only way to deploy no API app.
 output apiFlexHostName string = !empty(apiFlexSubnetId) ? apiFunctionFlex!.outputs.apiFunctionAppHostName : ''
+// The three below report resources the foundation owns, so an application-only run leaves them
+// EMPTY rather than looking them up: each carries a value ARM assigns (a storage suffix, a web
+// endpoint zone code, a gateway host), and none of them is read except right after a foundation
+// deploy.
+//
 // COPY THIS INTO eagle-search's Front Door parameters. The profile owns the DEMI route but not the
 // origin, so it needs this hostname to add one; it is stable for the life of the storage account.
-output frontendStaticSiteHostName string = deployStaticSite ? staticSite!.outputs.staticSiteHostName : ''
+output frontendStaticSiteHostName string = (deployFoundation && deployStaticSite) ? staticSite!.outputs.staticSiteHostName : ''
 // The publish target for `scripts/deploy-azure.sh frontend` — carries a uniqueString suffix, so it
 // goes into the repository variable AZURE_FRONTEND_STORAGE_ACCOUNT rather than a literal in CI.
-output frontendStorageAccountName string = deployStaticSite ? staticSite!.outputs.storageAccountName : ''
+output frontendStorageAccountName string = (deployFoundation && deployStaticSite) ? staticSite!.outputs.storageAccountName : ''
 // The gateway machine and browser traffic is moved onto. Empty until deployApim is set.
-output apimGatewayUrl string = (deployApim && !empty(apiFlexSubnetId)) ? apim!.outputs.gatewayUrl : ''
+output apimGatewayUrl string = (deployFoundation && deployApim && !empty(apiFlexSubnetId)) ? apim!.outputs.gatewayUrl : ''
 
 // Empty where the environment deploys no sync app. The deploy workflow publishes the package to
 // this name, so it is read rather than rebuilt from environmentName.
 output secretSyncAppName string = (deploySecretSync && !empty(syncNamespaces) && !empty(apiFlexSubnetId)) ? secretSync!.outputs.secretSyncAppName : ''
 // The VM every `az vm run-command invoke` addresses. Empty when the devbox is not deployed.
 output devboxName string = (deployDevbox && !empty(devboxSubnetId)) ? devbox!.outputs.devboxName : ''
-output searchEndpoint string = deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
-output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
-output identityClientId string = identity.outputs.clientId
-output logAnalyticsWorkspaceName string = observability.outputs.workspaceName
-output auditWorkspaceName string = auditLogs.outputs.workspaceName
+output searchEndpoint string = searchEndpoint
+output cosmosEndpoint string = cosmosEndpoint
+output identityClientId string = identityClientId
+output logAnalyticsWorkspaceName string = appLogsWorkspaceName
+output auditWorkspaceName string = auditWorkspaceName
 // The query API addresses a workspace by this GUID, not by name or resource ID — so the future
 // audit read endpoint needs it, and it is otherwise a portal lookup.
-output auditWorkspaceCustomerId string = auditLogs.outputs.workspaceCustomerId
+output auditWorkspaceCustomerId string = auditWorkspaceCustomerId

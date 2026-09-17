@@ -56,12 +56,12 @@ test('the prod availability probe goes through rproxy and reaches AI Search', ()
 const WIRED = [
   ['deployEnrichment', /^\s+deployEnrichment: deployEnrichment$/m,
     'the cosmos module call — without it prod declares the wildfires container'],
-  ['deploySearch', /^module search '\.\/modules\/ai-search\.bicep' = if \(deploySearch\) \{$/m,
+  ['deploySearch', /^module search '\.\/modules\/ai-search\.bicep' = if \(deployFoundation && deploySearch\) \{$/m,
     'the ai-search module gate — without it prod re-PUTs a service it does not own'],
-  ['deploySearch', /^module existingSearchRole '\.\/modules\/search-existing\.bicep' = if \(!deploySearch\) \{$/m,
+  ['deploySearch', /^module existingSearchRole '\.\/modules\/search-existing\.bicep' = if \(deployFoundation && !deploySearch\) \{$/m,
     'the search-existing module gate — without it prod gets no grant and no Cosmos link'],
   ['existingSearchEndpoint',
-    /^\s+searchEndpoint: deploySearch \? search!\.outputs\.searchEndpoint : existingSearchEndpoint$/m,
+    /^var searchEndpoint = deploySearch \? 'https:\/\/demi-search-\$\{environmentName\}\.search\.windows\.net' : existingSearchEndpoint$/m,
     'the SEARCH_ENDPOINT fallback — a different fallback leaves prod pointing at nothing'],
   // The two keyword kill switches. Unwired they are not a failed deploy either: the module default
   // is the switch OFF, so a turn-on set anywhere else is reverted by the next whole-collection PUT.
@@ -70,9 +70,9 @@ const WIRED = [
   ['searchIndexProjectNotifications',
     /^\s+searchIndexProjectNotifications: searchIndexProjectNotifications$/m,
     'the API module call — without it no param file can turn ProjectNotification ranking on'],
-  ['deployFoundry', /^module foundry '\.\/modules\/foundry\.bicep' = if \(deployFoundry\) \{$/m,
+  ['deployFoundry', /^module foundry '\.\/modules\/foundry\.bicep' = if \(deployFoundation && deployFoundry\) \{$/m,
     'the foundry module gate — without it prod creates a model account it never queries'],
-  ['deployStaticSite', /^module staticSite '\.\/modules\/static-site\.bicep' = if \(deployStaticSite\) \{$/m,
+  ['deployStaticSite', /^module staticSite '\.\/modules\/static-site\.bicep' = if \(deployFoundation && deployStaticSite\) \{$/m,
     'the static-site module gate — without it prod creates a $web nothing publishes to'],
   ['keycloakClientId', /^\s+keycloakClientId: keycloakClientId$/m,
     'the API module call — without it no param file can set which client the API trusts'],
@@ -145,13 +145,12 @@ test('the devbox is fed the same endpoints the API app gets', () => {
   assert.ok(block, 'main.bicep must call the devbox module');
 
   const wiring = [
-    ['cosmosEndpoint', /^\s+cosmosEndpoint: cosmos\.outputs\.cosmosEndpoint$/m],
-    ['searchEndpoint',
-      /^\s+searchEndpoint: deploySearch \? search!\.outputs\.searchEndpoint : existingSearchEndpoint$/m],
+    ['cosmosEndpoint', /^\s+cosmosEndpoint: cosmosEndpoint$/m],
+    ['searchEndpoint', /^\s+searchEndpoint: searchEndpoint$/m],
     ['eagleApiBase', /^\s+eagleApiBase: eagleApiBase$/m],
-    ['identityId', /^\s+identityId: identity\.outputs\.identityId$/m],
+    ['identityId', /^\s+identityId: identityId$/m],
     // Not identityId: the CLI needs the client id to name which identity IMDS should hand back.
-    ['identityClientId', /^\s+identityClientId: identity\.outputs\.clientId$/m],
+    ['identityClientId', /^\s+identityClientId: identityClientId$/m],
     ['subnetId', /^\s+subnetId: devboxSubnetId$/m],
     // Without this the VM takes an empty key and Microsoft.Compute refuses it mid-apply.
     ['sshPublicKey', /^\s+sshPublicKey: devboxSshPublicKey$/m]
@@ -469,7 +468,7 @@ test('the not-ours search path still creates the shared private link to Cosmos',
 
   const block = MAIN.split(/^module /m).find(b => b.includes("'./modules/search-existing.bicep'"));
   assert.ok(block, 'main.bicep must call the search-existing module');
-  assert.match(block, /^\s+cosmosAccountId: cosmos\.outputs\.cosmosAccountId$/m,
+  assert.match(block, /^\s+cosmosAccountId: cosmosAccountId$/m,
     'without cosmosAccountId the module\'s own !empty() gate skips the link silently');
 });
 
@@ -512,7 +511,7 @@ test('the eagle-notify key is optional in the vault and empty where it was never
     /value: empty\(notifyApiKeySecretUri\) \? '' : '@Microsoft\.KeyVault\(SecretUri=\$\{notifyApiKeySecretUri\}\)'/,
     'without the empty branch a dark environment gets a Key Vault reference to no secret, which ' +
     'App Service leaves in the setting verbatim');
-  assert.match(MAIN, /^\s+notifyApiKeySecretUri: keyVault\.outputs\.notifyApiKeySecretUri$/m,
+  assert.match(MAIN, /^\s+notifyApiKeySecretUri: notifyApiKeySecretUri$/m,
     'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
 
   // No value for the key anywhere in the templates: it is set by hand in the vault.
@@ -629,9 +628,9 @@ test('the API app reads ADMIN_API_KEY through a Key Vault reference', () => {
   assert.doesNotMatch(API_MODULE, /value: adminApiKey$/m,
     'no app setting may carry the raw adminApiKey value');
 
-  assert.match(MAIN, /^\s+adminApiKeySecretUri: keyVault\.outputs\.adminApiKeySecretUri$/m,
+  assert.match(MAIN, /^\s+adminApiKeySecretUri: adminApiKeySecretUri$/m,
     'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
-  assert.match(MAIN, /^module keyVault '\.\/modules\/key-vault\.bicep' = \{$/m,
+  assert.match(MAIN, /^module keyVault '\.\/modules\/key-vault\.bicep' = if \(deployFoundation\) \{$/m,
     'and the vault module must be instantiated');
 });
 
@@ -671,7 +670,7 @@ test('the API app reads both team-sync secrets through Key Vault references', ()
     assert.doesNotMatch(API_MODULE, new RegExp(`value: ${paramName}$`, 'm'),
       `no app setting may carry the raw ${paramName} value`);
 
-    assert.match(MAIN, new RegExp(`^\\s+${paramName}Uri: keyVault\\.outputs\\.${paramName}Uri$`, 'm'),
+    assert.match(MAIN, new RegExp(`^\\s+${paramName}Uri: ${paramName}Uri$`, 'm'),
       'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
     assert.doesNotMatch(MAIN, new RegExp(`^param ${paramName} `, 'm'),
       `${paramName} must not be a parameter again — the value would sit in ARM deployment history, ` +
@@ -704,7 +703,7 @@ test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
   assert.doesNotMatch(MAIN, /^param edgeSecret /m,
     'the secret must not be a parameter again — a parameter is a value in ARM deployment history, ' +
     'and a forgotten export would blank the live one');
-  assert.match(MAIN, /^\s+edgeSecretUri: keyVault\.outputs\.edgeSecretUri$/m,
+  assert.match(MAIN, /^\s+edgeSecretUri: edgeSecretUri$/m,
     'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
 
   assert.match(KEY_VAULT,
@@ -746,7 +745,7 @@ for (const [settingName, paramName, secretName] of VAULT_SETTINGS) {
     assert.match(setting, new RegExp(`value: '@Microsoft\\.KeyVault\\(SecretUri=\\$\\{${paramName}\\}\\)'`),
       `${settingName} must be a Key Vault reference, not the credential itself`);
 
-    assert.match(MAIN, new RegExp(`^\\s+${paramName}: keyVault\\.outputs\\.${paramName}$`, 'm'),
+    assert.match(MAIN, new RegExp(`^\\s+${paramName}: ${paramName}$`, 'm'),
       'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
     assert.match(KEY_VAULT, new RegExp(`^\\s+'${secretName}'$`, 'm'),
       `key-vault.bicep must list ${secretName} among the names the vault has to hold, or ` +
@@ -787,11 +786,11 @@ test('the secret sync is deployed only where it is asked for and namespaces are 
     'an environment that asks for no sync app or names no namespace must get none, and one with ' +
     'no subnet cannot reach the vault private endpoint at all');
 
-  assert.match(block, /^\s+keyVaultName: keyVault\.outputs\.vaultName$/m,
+  assert.match(block, /^\s+keyVaultName: vaultName$/m,
     'the sync must be told which vault to read, or it has nothing to copy');
   assert.match(block, /^\s+syncNamespaces: syncNamespaces$/m,
     'and which namespaces it owns — empty writes to none while the app still runs');
-  assert.match(block, /^\s+identityPrincipalId: identity\.outputs\.principalId$/m,
+  assert.match(block, /^\s+identityPrincipalId: identityPrincipalId$/m,
     'it reads the vault as the identity that holds the Secrets User grant');
 
   // Prod runs no sync app: its spoke has no route table, so the app could not reach the OpenShift
@@ -829,7 +828,7 @@ test('the API app reads ACCESS_GATE_PASSWORD through a Key Vault reference', () 
   assert.doesNotMatch(MAIN, /^param accessGatePassword /m,
     'the password must not be a parameter again — a parameter is a value in ARM deployment ' +
     'history, and a forgotten export would blank the live one');
-  assert.match(MAIN, /^\s+accessGateSecretUri: keyVault\.outputs\.accessGateSecretUri$/m,
+  assert.match(MAIN, /^\s+accessGateSecretUri: accessGateSecretUri$/m,
     'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
 
   assert.doesNotMatch(KEY_VAULT, /value: accessGatePassword/,
@@ -866,7 +865,7 @@ test('the Flex app reads APIM_GATEWAY_SECRET through a Key Vault reference', () 
   assert.match(setting, /value: apimGatewaySecretRef$/m,
     'the setting must carry the reference parameter, never a literal');
 
-  assert.match(MAIN, /apimGatewaySecretRef: deployApim \? '@Microsoft\.KeyVault\(VaultName=\$\{keyVault\.outputs\.vaultName\};SecretName=\$\{apimGatewaySecretName\}\)' : ''/,
+  assert.match(MAIN, /apimGatewaySecretRef: deployApim \? '@Microsoft\.KeyVault\(VaultName=\$\{vaultName\};SecretName=\$\{apimGatewaySecretName\}\)' : ''/,
     'main.bicep must compose a Key Vault reference, and empty it when APIM is not deployed — an ' +
     'empty value is what disables the app trust branch');
   assert.match(MAIN, /^\s+gatewaySecretName: apimGatewaySecretName$/m,
@@ -1017,10 +1016,10 @@ test('the analytics named values are Key Vault-backed, not literals', () => {
     'the named value must be created after the read grant, or its first deploy fails to resolve');
 
   // The identifiers come from the vault module, and the values are nobody's parameter any more.
-  assert.match(MAIN, /^\s+analyticsSharedHeaderSecretUri: keyVault\.outputs\.analyticsSharedHeaderSecretUri$/m,
+  assert.match(MAIN, /^\s+analyticsSharedHeaderSecretUri: keyVault!\.outputs\.analyticsSharedHeaderSecretUri$/m,
     'main.bicep must pass the vault URI into the apim module — without it the named value is empty ' +
     'and analyticsDeployed reads false, which publishes no analytics API at all');
-  assert.match(MAIN, /^\s+analyticsAuditHeaderSecretUri: keyVault\.outputs\.analyticsAuditHeaderSecretUri$/m,
+  assert.match(MAIN, /^\s+analyticsAuditHeaderSecretUri: keyVault!\.outputs\.analyticsAuditHeaderSecretUri$/m,
     'and the audit one, same consequence');
   assert.doesNotMatch(MAIN, /^param analyticsSharedHeaderValue /m,
     'the value must not be a parameter again');
@@ -1219,7 +1218,7 @@ test('the API app is given the search definition queue and the data source env',
   // The identity differs by environment: ours when we deployed the service, the existing service's
   // own when we did not. Hardcoding either half breaks the other environment's indexers.
   assert.match(MAIN,
-    /^\s+dataSourceIdentityId: deploySearch \? identity\.outputs\.identityId : existingSearchIndexerIdentityId$/m,
+    /^\s+dataSourceIdentityId: deploySearch \? identityId : existingSearchIndexerIdentityId$/m,
     'main.bicep must choose the data source identity by whether it owns the search service');
 });
 
@@ -1253,4 +1252,243 @@ test('the prod data source identity is the identity demi-search-prod runs indexe
   assert.ok(used, 'main.prod.bicepparam must name the identity data sources authenticate as');
   assert.strictEqual(used[1], owner[1],
     'a data source PUT naming an identity the service does not hold leaves the indexer at 403');
+});
+
+// ── The foundation / application split ────────────────────────────────────────────────────────
+//
+// `deployFoundation = false` deploys the application layer alone and reads the rest of the estate
+// by name. `az bicep build` compiles every wrong version of that: a foundation module left ungated
+// is re-PUT on every application deploy, an app module still reading a module output takes a value
+// that only exists in the other mode, and a lookup pointed at the wrong name or apiVersion reads a
+// different resource — or a different property shape — and writes the difference into a
+// whole-collection appSettings PUT.
+//
+// Text-structural, with the same honest limits as the guards above.
+
+const FOUNDATION_MODULES = [
+  ['identity', './modules/identity.bicep'],
+  ['keyVault', './modules/key-vault.bicep'],
+  ['cosmos', './modules/cosmos-nosql.bicep'],
+  ['observability', './modules/observability.bicep'],
+  ['auditLogs', './modules/audit-logs.bicep'],
+  ['foundry', './modules/foundry.bicep'],
+  ['search', './modules/ai-search.bicep'],
+  ['existingSearchRole', './modules/search-existing.bicep'],
+  ['apim', './modules/apim.bicep'],
+  ['staticSite', './modules/static-site.bicep'],
+  ['documentStorage', './modules/document-storage.bicep'],
+  ['costBudget', './modules/cost-budget.bicep']
+];
+
+const APP_MODULES = [
+  ['apiFunctionFlex', './modules/api-function-flex.bicep'],
+  ['secretSync', './modules/secret-sync.bicep'],
+  ['availability', './modules/availability.bicep'],
+  ['devbox', './modules/devbox.bicep']
+];
+
+const moduleBlock = (modulePath) => MAIN.split(/^module /m).find(b => b.includes(`'${modulePath}'`));
+
+test('every foundation module is gated on deployFoundation', () => {
+  assert.match(MAIN, /^param deployFoundation bool = false$/m,
+    'the switch must default to the cheap mode — a param file that forgets it deploys the ' +
+    'application layer only, not a full re-PUT');
+
+  for (const [symbol, modulePath] of FOUNDATION_MODULES) {
+    const block = moduleBlock(modulePath);
+    assert.ok(block, `main.bicep must call ${modulePath}`);
+    assert.match(block.split('\n')[0],
+      new RegExp(`^${symbol} '${modulePath.replace(/[./]/g, '\\$&')}' = if \\(deployFoundation`),
+      `${modulePath} is not gated on deployFoundation — an application-only deploy would re-PUT ` +
+      'it, which is the 293 s of ARM time this split exists to skip');
+  }
+});
+
+test('no application module reads the deployFoundation switch', () => {
+  for (const [, modulePath] of APP_MODULES) {
+    const block = moduleBlock(modulePath);
+    assert.ok(block, `main.bicep must call ${modulePath}`);
+    assert.doesNotMatch(block, /deployFoundation/,
+      `${modulePath} must deploy in BOTH modes and read the same values in both — a mention of ` +
+      'the switch here is either a gate that skips the app layer or a value that differs by mode');
+  }
+});
+
+test('the application modules read the lookup vars, not foundation module outputs', () => {
+  for (const [, modulePath] of APP_MODULES) {
+    const block = moduleBlock(modulePath);
+    for (const [symbol] of FOUNDATION_MODULES) {
+      assert.doesNotMatch(block, new RegExp(`\\b${symbol}!?\\.outputs\\b`),
+        `${modulePath} reads ${symbol}.outputs — that value exists only when deployFoundation is ` +
+        'true, so an application-only deploy writes a different one');
+    }
+  }
+
+  // The inline role assignment is application-side too, and it is not a module block.
+  const costReader = /resource costReaderAssignment [\s\S]*?\n\}/.exec(MAIN);
+  assert.ok(costReader, 'main.bicep must declare the Cost Management Reader assignment');
+  assert.match(costReader[0], /^\s+principalId: identityPrincipalId$/m,
+    'the assignment must name the identity through the lookup var like every other app-side use');
+});
+
+// A lookup at the wrong name reads another resource; at the wrong apiVersion it can read another
+// PROPERTY SHAPE for the same one, and both land in app settings without failing a deploy. The
+// owning module is the source of truth for both, so this compares the two files rather than
+// restating what the lookup should be.
+const LOOKUPS = [
+  ['identityExisting', 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31', 'identity.bicep'],
+  ['vaultExisting', 'Microsoft.KeyVault/vaults@2023-07-01', 'key-vault.bicep'],
+  ['cosmosExisting', 'Microsoft.DocumentDB/databaseAccounts@2024-11-15', 'cosmos-nosql.bicep'],
+  ['logsWorkspaceExisting', 'Microsoft.OperationalInsights/workspaces@2023-09-01', 'observability.bicep'],
+  ['auditWorkspaceExisting', 'Microsoft.OperationalInsights/workspaces@2023-09-01', 'audit-logs.bicep'],
+  ['appInsightsExisting', 'Microsoft.Insights/components@2020-02-02', 'observability.bicep'],
+  ['actionGroupExisting', 'Microsoft.Insights/actionGroups@2023-01-01', 'observability.bicep'],
+  ['auditDcrExisting', 'Microsoft.Insights/dataCollectionRules@2023-03-11', 'audit-logs.bicep'],
+  ['foundryExisting', 'Microsoft.CognitiveServices/accounts@2025-06-01', 'foundry.bicep']
+];
+
+test('every foundation lookup names what the owning module declares', () => {
+  // The name a module gives the resource of that type, with a `var` indirection resolved.
+  const declaredName = (text, type) => {
+    const at = text.indexOf(`'${type}' = {`);
+    if (at === -1) return null;
+    const name = /\n\s+name: (.+)/.exec(text.slice(at));
+    if (!name) return null;
+    const literal = /^'(.*)'$/.exec(name[1].trim());
+    if (literal) return literal[1];
+    const fromVar = new RegExp(`^var ${name[1].trim()} = '(.*)'$`, 'm').exec(text);
+    return fromVar ? fromVar[1] : null;
+  };
+
+  for (const [symbol, type, moduleFile] of LOOKUPS) {
+    const moduleText = fs.readFileSync(path.join(ROOT, 'azure', 'modules', moduleFile), 'utf8');
+
+    const lookup = new RegExp(`^resource ${symbol} '([^']+)' existing = \\{\\n\\s+name: '([^']*)'`, 'm').exec(MAIN);
+    assert.ok(lookup, `main.bicep must declare the ${symbol} lookup`);
+    assert.strictEqual(lookup[1], type,
+      `${symbol} must read ${moduleFile}'s type and apiVersion — another version can hand back ` +
+      'another property shape for the same resource');
+
+    const owned = declaredName(moduleText, type);
+    assert.ok(owned, `${moduleFile} must declare a ${type} resource for the lookup to mirror`);
+    assert.strictEqual(lookup[2], owned,
+      `${symbol} reads '${lookup[2]}' while ${moduleFile} deploys '${owned}' — an ` +
+      'application-only deploy would then write the wrong resource into the app settings');
+  }
+});
+
+// The three optional secrets are the one place the two modes could legitimately disagree: the vault
+// module decides them from `optionalSecretNames`, and main.bicep has to make the same decision the
+// same way. A live reference where prod wants '' goes straight into the whole-collection PUT.
+test('the optional secret URIs are decided identically in both modes', () => {
+  const OPTIONAL = [
+    ['notifyApiKeySecretUri', 'notify-api-key'],
+    ['edgeSecretUri', 'edge-secret'],
+    ['accessGateSecretUri', 'access-gate-password']
+  ];
+
+  for (const [varName, secretName] of OPTIONAL) {
+    const decision = `contains(optionalSecretNames, '${secretName}') ? '\${secretUriBase}${secretName}' : ''`;
+
+    assert.ok(KEY_VAULT.includes(`output ${varName} string = ${decision}`),
+      `key-vault.bicep must decide ${varName} from optionalSecretNames`);
+
+    const block = new RegExp(`^var ${varName} = deployFoundation\\n(?:  .*\\n)+`, 'm').exec(MAIN);
+    assert.ok(block, `main.bicep must carry a ${varName} var with a branch per mode`);
+    assert.ok(block[0].includes(`keyVault!.outputs.${varName}`),
+      `the foundation branch of ${varName} must come from the vault module`);
+    assert.ok(block[0].includes(decision),
+      `the application branch of ${varName} must apply the SAME contains() test as ` +
+      'key-vault.bicep, or an application-only deploy writes a reference where a full deploy ' +
+      'writes an empty string');
+  }
+});
+
+test('both param files pin deployFoundation to the environment variable', () => {
+  const pin = /^param deployFoundation = bool\(readEnvironmentVariable\('DEPLOY_FOUNDATION', 'false'\)\)$/m;
+  assert.match(TEST_PARAMS, pin,
+    'test must read the switch from the environment — `az` refuses a second --parameters beside a ' +
+    '.bicepparam, so there is no other way to pass it');
+  assert.match(PROD_PARAMS, pin,
+    'and prod the same, defaulting to the application layer when the variable is unset');
+});
+
+test('deploy-infra.sh sets DEPLOY_FOUNDATION only under --foundation', () => {
+  assert.match(DEPLOY, /^DEPLOY_FOUNDATION='false'$/m,
+    'the default must be application-only, and must not be inherited from the caller');
+  assert.match(DEPLOY, /^\s+--foundation\) DEPLOY_FOUNDATION='true' ;;$/m,
+    'the flag is the only thing that turns the foundation on');
+  assert.strictEqual((DEPLOY.match(/DEPLOY_FOUNDATION=/g) || []).length, 2,
+    'two assignments exactly: the default and the flag — a third is a mode nothing on the command ' +
+    'line explains');
+  assert.match(DEPLOY, /^export DEPLOY_FOUNDATION$/m,
+    'the bicepparam reads it with readEnvironmentVariable, so it has to be exported');
+
+  // The deployment name is the only record of which layer a run applied, and the currency check
+  // reads it back.
+  assert.match(DEPLOY, /^\s+local prefix='infra-app-'$/m);
+  assert.match(DEPLOY, /^\s+\[ "\$DEPLOY_FOUNDATION" = 'true' \] && prefix='infra-fnd-'$/m,
+    'a foundation run must be named infra-fnd-<sha>-<hhmmss>, an application run infra-app-');
+
+  assert.match(DEPLOY, /^\[ "\$DEPLOY_FOUNDATION" = 'true' \] \|\| require_foundation_current$/m,
+    'the currency check runs in application mode only — a --foundation run is the fix for it');
+  assert.match(DEPLOY, /starts_with\(name, 'infra-fnd-'\) && properties\.provisioningState=='Succeeded'/,
+    'it has to read the last SUCCESSFUL foundation deployment, not the last attempt');
+
+  // The list the check walks is the same set of modules the template gates.
+  for (const [, modulePath] of FOUNDATION_MODULES) {
+    assert.ok(DEPLOY.includes(`  azure/${modulePath.replace('./', '')}\n`),
+      `${modulePath} is gated on deployFoundation but not in FOUNDATION_MODULES — an edit to it ` +
+      'would pass the currency check and never be applied');
+  }
+
+  // The guards that predate the split run in both modes: none of them is about which layer is
+  // being deployed.
+  assert.match(DEPLOY, /^require_vault_secrets$/m);
+  assert.match(DEPLOY, /^require_secrets$/m);
+  assert.match(DEPLOY, /^assert_secrets_survived$/m);
+  assert.match(DEPLOY, /\[ "\$\{CONFIRM_PROD:-\}" != 'yes' \]/,
+    'the prod apply guard is not conditional on the layer either');
+});
+
+// The currency check is the only thing standing between an application-only apply and a foundation
+// edit that is never PUT, so what it can SEE is the whole guard. `az` deploys the working tree;
+// git history is a different set of facts, and main.bicep plus the param files are foundation
+// inputs the module list does not name.
+test('the currency check reads the working tree, not just the commit history', () => {
+  assert.match(DEPLOY, /dirty=\$\(git -C "\$REPO_ROOT" status --porcelain -- "\$\{FOUNDATION_MODULES\[@\]\}"/,
+    'an uncommitted edit to a foundation module is as unapplied as a committed one — git log ' +
+    'cannot see it, so the check has to ask git status too');
+
+  const dirtyBlock = /if \[ -n "\$dirty" \]; then[\s\S]*?\n {2}fi\n/.exec(DEPLOY);
+  assert.ok(dirtyBlock, 'the uncommitted-module finding needs its own branch');
+  assert.match(dirtyBlock[0], /^\s+refuse_or_warn$/m,
+    'an uncommitted foundation edit takes the same route as a committed one: refuse on --live, ' +
+    'warn on what-if');
+
+  assert.strictEqual((DEPLOY.match(/^\s+refuse_or_warn$/gm) || []).length, 3,
+    'exactly three findings refuse: no recorded foundation deploy, committed module changes, and ' +
+    'uncommitted module changes — a fourth means the advisory input warning started refusing');
+});
+
+test('the currency check also watches main.bicep and both param files', () => {
+  for (const input of ['azure/main.bicep', 'azure/main.test.bicepparam', 'azure/main.prod.bicepparam']) {
+    assert.ok(DEPLOY.includes(`  ${input}\n`),
+      `${input} decides what the foundation deploys — a budget bump or a re-pointed module call ` +
+      'there is invisible to a check that only walks the module files');
+  }
+
+  assert.match(DEPLOY, /inputs_dirty=\$\(git -C "\$REPO_ROOT" status --porcelain -- "\$\{FOUNDATION_INPUTS\[@\]\}"/,
+    'uncommitted input edits count the same as committed ones');
+  assert.match(DEPLOY, /inputs_changed=\$\(git -C "\$REPO_ROOT" log --oneline "\$\{sha\}\.\.HEAD" -- "\$\{FOUNDATION_INPUTS\[@\]\}"/,
+    'committed input edits are measured from the recorded foundation deployment, like the modules');
+
+  // These three files change for application-only work as often as for foundation work, so they
+  // can only ever advise. A refusal here would block every ordinary app deploy.
+  const inputsBlock = /if \[ -n "\$inputs_dirty" \] \|\| \[ -n "\$inputs_changed" \]; then[\s\S]*?\n {2}fi\n/.exec(DEPLOY);
+  assert.ok(inputsBlock, 'the input warning needs its own branch');
+  assert.doesNotMatch(inputsBlock[0], /refuse_or_warn|exit 3/,
+    'a change to main.bicep or a param file warns in BOTH modes — it never refuses');
+  assert.match(inputsBlock[0], /run --foundation first/,
+    'the warning has to say what to do about it');
 });
