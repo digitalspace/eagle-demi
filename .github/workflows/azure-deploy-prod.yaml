@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       allow_missing_schema_probe:
-        description: 'first deploy after the /health/search-schema endpoint; skips the gate when the running app answers 404'
+        description: 'first deploy after the /health/search-schema or /health/search-data endpoint; skips those gates when the running app answers 404'
         required: false
         default: false
         type: boolean
@@ -170,12 +170,43 @@ jobs:
       # The dispatch input is the only way a 404 passes, and it has to be ticked per run: a 404 on
       # any other release means the deployed app has no route and nothing checked the live indexes.
       - name: Probe the live indexes with this tag's index definitions
+        id: schema_probe
         env:
           SEARCH_SCHEMA_ALLOW_MISSING: ${{ inputs.allow_missing_schema_probe && '1' || '0' }}
         run: ./scripts/search-schema-probe.sh "$API_BASE_URL" release/azure/search/indexes
 
+      # This repo's checks, not the tag's: they describe what the live data must look like now.
+      - name: Check the values in the live indexes
+        id: data_probe
+        env:
+          SEARCH_DATA_ALLOW_MISSING: ${{ inputs.allow_missing_schema_probe && '1' || '0' }}
+        run: ./scripts/search-data-probe.sh "$API_BASE_URL"
+
+      # Its own summary: the schema fix below is widening an index, and it would send an operator
+      # to the search service for a fault that lives in eagle-api's data.
+      - name: Report the failed data check to the job summary
+        if: failure() && steps.data_probe.outcome == 'failure'
+        run: |
+          {
+            echo "### ❌ Production rows do not carry the values the site reads"
+            echo ""
+            echo "Do NOT widen an index for this. The fields are there and empty."
+            echo ""
+            echo "Null List reference ids mean eagle-api pushed those projects before its List"
+            echo "refs were resolved. Re-push from the eagle-api pod, then wait one indexer"
+            echo "tick (PT5M) and re-run this workflow:"
+            echo ""
+            echo '```'
+            echo "LOG_LEVEL=info node scripts/demi-repush.js --kind project --live --concurrency 1"
+            echo '```'
+            echo ""
+            echo "The failing checks are named in the step log above."
+            echo ""
+            echo "Runbook: \`docs/runbook-search-outage.md\`, \"Fields null on every row\"."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Report the failed gate to the job summary
-        if: failure()
+        if: failure() && steps.schema_probe.outcome == 'failure'
         run: |
           {
             echo "### ❌ The live search indexes were not proved to fit \`${{ inputs.version }}\`"

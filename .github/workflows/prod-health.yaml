@@ -1,0 +1,37 @@
+# Data probe only, on a schedule rather than only at deploy time: a deploy gate cannot catch
+# the live index data going wrong under a release that already shipped.
+# Schema probe runs at deploy time only, not here: main's index files can be ahead of prod between releases.
+# Background: docs/runbook-search-outage.md.
+
+name: Probe production search data
+
+on:
+  schedule:
+    # Off the hour so this is not queued behind everything else scheduled at :00.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: prod-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  API_BASE_URL: https://demi-api-fc-prod.azurewebsites.net
+
+jobs:
+  probe:
+    name: Probe the live prod index data
+    runs-on: ubuntu-latest
+    # NO `environment:`, deliberately. The probe is unauthenticated GETs and POSTs against public
+    # health routes and returns counts, never rows, so there is no credential to gate and an approval
+    # would mean this never runs on its schedule.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # No setup-node and no install: the probe reads JSON and curl, on the runner's own node.
+      - name: Check the values in the live indexes
+        run: ./scripts/search-data-probe.sh "$API_BASE_URL"

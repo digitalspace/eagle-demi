@@ -35,6 +35,34 @@ curl -s https://www.projects.eao.gov.bc.ca/demi-search/health/search-schema
 `{"ok":true}` means every committed field is in the live index. A 503 names the index and the
 missing fields. On an older build the curl answers 404; use the search curl above.
 
+## Fields null on every row
+
+A different fault with the same look. Search works, the page renders, and one column is blank
+everywhere — on 2026-09-17 the public project list showed no phase and no decision for all 359
+production projects. The `projects` index had `currentPhaseName` and `eacDecision` null on every
+row, because production Cosmos held those List references as bare id strings and the data source
+projects `c.currentPhaseName.name`. Nothing above finds this: the fields exist in the index, so the
+schema probe is green. Ask the data probe instead, which counts the empty rows:
+
+```bash
+scripts/search-data-probe.sh https://demi-api-fc-prod.azurewebsites.net
+```
+
+The lines name `currentPhaseNameId` and `eacDecisionId` rather than the two fields the page shows.
+Those two cannot be filtered on, so the probe counts their `_id` twins, which the data source pulls
+off the same object and which go null in the same failure and no other.
+
+A `FAIL` line means eagle-api pushed those projects before its List references were resolved. Fix it
+at the source — re-push from the eagle-api pod, then wait one `PT5M` indexer tick and run the probe
+again:
+
+```bash
+LOG_LEVEL=info node scripts/demi-repush.js --kind project --live --concurrency 1
+```
+
+Do not reset the indexer for this. The rows in Cosmos are wrong; re-indexing them changes nothing.
+The checks and how to add one: `azure/search/README.md`, "Data checks".
+
 ## 2. Read the real error
 
 The public body is deliberately generic; the upstream text is in Log Analytics

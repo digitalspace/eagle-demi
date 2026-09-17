@@ -303,3 +303,66 @@ exports.searchSchema = async (req, res) => {
 
   return res.status(ok ? 200 : 503).json({ ok, indexes });
 };
+
+/** Committed, never caller-supplied, which is why these filters go upstream as written. */
+const DATA_CHECKS = require('../../azure/search/data-checks.json');
+
+/** One check. A missing or unserved index is `missing`, never a count of zero, which would pass. */
+async function runDataCheck(check, liveNames) {
+  const row = { index: check.index, field: check.field };
+  const liveName = liveNames.get(check.index);
+  if (!liveName) {
+    logger.warn(
+      `[search-data] ${check.index} is not an index this app is serving, so the committed check on ` +
+      `${check.field} could not run`
+    );
+    return { ...row, ok: false, error: 'missing' };
+  }
+
+  try {
+    const count = await aiSearch.countMatching(liveName, check.filter);
+    // `null` is "answered without a count", not zero, and must not pass.
+    const ok = Number.isFinite(count) && count <= check.max;
+    if (!ok) {
+      logger.warn(
+        `[search-data] ${liveName}.${check.field}: ${count} rows match \`${check.filter}\`, ` +
+        `over the committed maximum of ${check.max}` + (check.note ? ` — ${check.note}` : '')
+      );
+    }
+    return { ...row, count, max: check.max, ok };
+  } catch (err) {
+    if (aiSearch.isMissingIndex(err, liveName)) {
+      logger.warn(`[search-data] ${liveName} is not deployed, so ${check.field} could not be checked`);
+      return { ...row, ok: false, error: 'missing' };
+    }
+    // Upstream text stays in the log: it names the endpoint and index, and this route is anonymous.
+    logger.error(`[search-data] check of ${liveName}.${check.field} failed: ${err.message}`);
+    return { ...row, ok: false, error: 'check failed' };
+  }
+}
+
+/**
+ * GET /health/search-data — guards against live index rows whose fields are empty, which the
+ * schema probe above cannot see. 200 within every committed maximum, 503 otherwise.
+ *
+ * Needs no request bound: it reads nothing from the caller, so the work is the committed list.
+ * Background: `docs/runbook-search-outage.md`, "Fields null on every row".
+ */
+exports.searchData = async (req, res) => {
+  const cfg = aiSearch.config();
+  if (!cfg.configured) {
+    return res.status(503).json({ ok: false, error: 'Search is not configured.' });
+  }
+
+  const liveNames = new Map(INDEXES.map(entry => [entry.schema, entry.liveName(cfg)]));
+
+  const checks = [];
+  let ok = true;
+  for (const check of DATA_CHECKS) {
+    const result = await runDataCheck(check, liveNames);
+    checks.push(result);
+    if (!result.ok) ok = false;
+  }
+
+  return res.status(ok ? 200 : 503).json({ ok, checks });
+};

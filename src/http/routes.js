@@ -86,6 +86,10 @@ const routes = [
   { method: 'get', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
   { method: 'post', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
 
+  // Guards against live index rows whose fields are empty. Anonymous like the probes above, and it
+  // reads nothing from the request, so it carries none of their request multiplier.
+  { method: 'get', path: '/health/search-data', guards: [], load: () => searchSchemaController().searchData },
+
   { method: 'get', path: '/config', guards: [], load: () => configController().getConfig },
   // The PUBLIC site's config, and a separate document rather than more keys on /config: the two
   // answer different frontends, so neither key set can widen the other, and this one refuses to
