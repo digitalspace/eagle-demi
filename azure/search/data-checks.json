@@ -1,0 +1,16 @@
+[
+  {
+    "index": "projects",
+    "field": "currentPhaseNameId",
+    "filter": "currentPhaseNameId eq null",
+    "max": 0,
+    "note": "List ref must be resolved at push time; the Id twin is null whenever the name is"
+  },
+  {
+    "index": "projects",
+    "field": "eacDecisionId",
+    "filter": "eacDecisionId eq null",
+    "max": 0,
+    "note": "List ref must be resolved at push time; the Id twin is null whenever the name is"
+  }
+]

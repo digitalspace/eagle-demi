@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       allow_missing_schema_probe:
-        description: 'first deploy after the /health/search-schema endpoint; skips the gate when the running app answers 404'
+        description: 'first deploy after the /health/search-schema or /health/search-data endpoint; skips those gates when the running app answers 404'
         required: false
         default: false
         type: boolean
@@ -173,6 +173,18 @@ jobs:
         env:
           SEARCH_SCHEMA_ALLOW_MISSING: ${{ inputs.allow_missing_schema_probe && '1' || '0' }}
         run: ./scripts/search-schema-probe.sh "$API_BASE_URL" release/azure/search/indexes
+
+      # The other half. The step above proves the live indexes carry the fields this tag selects;
+      # this one counts the rows whose values are missing, which no schema check can see. On
+      # 2026-09-17 `currentPhaseName` and `eacDecision` were null on all 359 prod projects and the
+      # public project list showed neither, behind a green schema probe.
+      #
+      # This repo's checks, not the tag's: they describe what the live data must look like now, and
+      # a release is not the thing that changes that.
+      - name: Check the values in the live indexes
+        env:
+          SEARCH_DATA_ALLOW_MISSING: ${{ inputs.allow_missing_schema_probe && '1' || '0' }}
+        run: ./scripts/search-data-probe.sh "$API_BASE_URL"
 
       - name: Report the failed gate to the job summary
         if: failure()

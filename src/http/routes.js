@@ -85,6 +85,15 @@ const routes = [
   { method: 'get', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
   { method: 'post', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
 
+  // The value-level twin, and anonymous for the same reason: the prod deploy job and the scheduled
+  // health workflow both call it holding nothing. It reads NOTHING from the request — the checks
+  // are committed in `azure/search/data-checks.json` — so the anonymous-request multiplier the POST
+  // above has to cap does not exist here, and the answer is a count per check, never a row.
+  //
+  // Its own gap: a schema probe proves a field is in the live index. It was green on 2026-09-17
+  // while `currentPhaseName` and `eacDecision` were null on all 359 prod projects.
+  { method: 'get', path: '/health/search-data', guards: [], load: () => searchSchemaController().searchData },
+
   { method: 'get', path: '/config', guards: [], load: () => configController().getConfig },
   // The PUBLIC site's config, and a separate document rather than more keys on /config: the two
   // answer different frontends, so neither key set can widen the other, and this one refuses to

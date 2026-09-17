@@ -1,0 +1,44 @@
+# The two search probes, run against production on a schedule rather than only at deploy time.
+#
+# A deploy gate catches a release that does not fit the live indexes. It cannot catch the live
+# indexes changing under a release that has already shipped, which is what happened on 2026-09-17:
+# `currentPhaseName` and `eacDecision` went null on all 359 prod projects days after the last
+# deploy, and the public project list showed no phase and no decision until somebody noticed.
+
+name: Probe production search
+
+on:
+  schedule:
+    # Off the hour so this is not queued behind everything else scheduled at :00.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: prod-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  API_BASE_URL: https://demi-api-fc-prod.azurewebsites.net
+
+jobs:
+  probe:
+    name: Probe the live prod indexes
+    runs-on: ubuntu-latest
+    # NO `environment:`, deliberately. Both probes are unauthenticated GETs and POSTs against public
+    # health routes and return counts, never rows, so there is no credential to gate and an approval
+    # would mean this never runs on its schedule.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # No setup-node and no install: the probes read JSON and curl, on the runner's own node.
+      - name: Probe the live index schemas
+        run: ./scripts/search-schema-probe.sh "$API_BASE_URL"
+
+      # Always, so a schema failure does not hide a data failure. They have different fixes.
+      - name: Check the values in the live indexes
+        if: always()
+        run: ./scripts/search-data-probe.sh "$API_BASE_URL"

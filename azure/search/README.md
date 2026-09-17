@@ -114,6 +114,55 @@ new one — there is nothing in it that a rename would correct. Renaming one wou
 it, and that means someone handling the `connectionString` the export deliberately redacts, for no
 change in behaviour. Old and new indexers share them.
 
+## Data checks
+
+An index can carry every field the app selects and still hold nothing in them. On 2026-09-17 the
+public project list showed no phase and no decision for all 359 production projects:
+`currentPhaseName` and `eacDecision` were null on every row of the `projects` index, because
+production Cosmos held those List references as bare id strings and the data source projects
+`c.currentPhaseName.name`. The schema probe was green throughout — the fields were there, empty.
+
+`data-checks.json` is the list of value checks. Each entry names an index, the field it is about, an
+OData `$filter` describing the rows that must not be there, and how many are tolerated:
+
+```json
+{ "index": "projects", "field": "currentPhaseNameId", "filter": "currentPhaseNameId eq null", "max": 0 }
+```
+
+**The checks count the `Id` twins, not the two fields the site renders.** `currentPhaseName` and
+`eacDecision` are `filterable: false`, so they cannot be counted at all. Their twins can, and they
+are null in the same failure and never in any other: the data source projects
+`c.currentPhaseName.name AS currentPhaseName` beside `c.currentPhaseName._id AS currentPhaseNameId`,
+so a bare id string in Cosmos leaves both undefined. Counting the twin needs no index change.
+
+`GET /health/search-data` runs them. Per entry it sends one `top: 0, count: true` query to the live
+index the app settings point at, and answers 200 when every count is within its maximum, 503 when
+any is over or an index is not deployed. Counts only — it returns no rows, needs no credential, and
+uses the data-plane read the app identity already has.
+
+`scripts/search-data-probe.sh <base-url>` calls it and prints one line per check:
+
+```
+projects currentPhaseNameId 0/0 ok
+projects eacDecisionId 0/0 ok
+```
+
+It exits 0 on a 200 and 1 on anything else, and a failure prints the usual cause: eagle-api pushed a
+project before its List references were resolved, so re-push from the eagle-api pod and wait one
+`PT5M` indexer tick. `docs/runbook-search-outage.md` has the command.
+
+It runs in two places. `verify-search-schema` in `azure-deploy-prod.yaml` runs it after the schema
+probe, so a release is blocked while production data is wrong. `prod-health.yaml` runs both probes
+against production every six hours, which is what catches the rows going empty between deploys — the
+2026-09-17 failure appeared days after the release that was serving it.
+
+Adding a check means adding an entry. The filter has to name the field, and the field has to be
+`filterable: true` in the index definition, or the query is a 400 the endpoint reports as
+`check failed` — a check that can never answer. `test/controllers/search-data.test.js` holds every
+entry against the committed definition, so that is caught before it is committed rather than on the
+next production run. Filterable cannot be turned on in place; it is a rebuild, not a widening, so
+prefer a filterable field that goes null in the same failure over changing an index.
+
 ## Adding a field — the order that matters
 
 **Know which kind of change you are making before you start** — the line is not where you would

@@ -8,7 +8,7 @@ definitions agreed with each other, and the live index was the one that disagree
 Live indexes are widened by hand — `scripts/demi-devbox.sh apply --env <env>` — because no CI
 identity holds Search Service Contributor. So these guards check, they do not fix.
 
-## Three checks
+## The checks
 
 **Before a production deploy.** `verify-search-schema` in `azure-deploy-prod.yaml` builds a probe
 body from the deployed tag's `azure/search/indexes/*.json` and POSTs it to the API that is
@@ -91,17 +91,24 @@ the public path also depends on the OpenShift rproxy, which these workflows do n
 ```
 scripts/search-schema-probe.sh https://demi-api-fc-prod.azurewebsites.net
 scripts/search-schema-probe.sh https://demi-api-fc-prod.azurewebsites.net release/azure/search/indexes
+scripts/search-data-probe.sh https://demi-api-fc-prod.azurewebsites.net
 scripts/search-smoke.sh https://demi-api-fc-prod.azurewebsites.net
 scripts/search-select-changed.sh main
 ```
+
+`search-data-probe.sh` is the value-level twin of the schema probe: it counts rows whose fields are
+empty rather than checking that the fields exist. It runs after the schema probe in the prod deploy
+job and every six hours in `prod-health.yaml`. The checks it runs and why they name the fields they
+do: `azure/search/README.md`, "Data checks".
 
 The probe's optional second argument is the directory of index definitions to build the body from;
 it defaults to `azure/search/indexes` beside the script. That is what lets the workflow's copy of
 the script ask about another checkout's definitions. An empty first argument is a usage error in
 both scripts, not a pass — a gate that asked nothing must not report success.
 
-All three print their contract with `--help`. Tests: `test/scripts/search-schema-probe.test.js` and
-`test/scripts/search-smoke.test.js` drive the two HTTP scripts against a stub server;
-`test/scripts/search-select-changed.test.js` drives the third against a throwaway git repository.
+All of them print their contract with `--help`. Tests: `test/scripts/search-schema-probe.test.js`,
+`test/scripts/search-data-probe.test.js` and `test/scripts/search-smoke.test.js` drive the three
+HTTP scripts against a stub server; `test/scripts/search-select-changed.test.js` drives the last
+against a throwaway git repository.
 
 Runbook for an outage in progress: `eagle-demi.wiki/Runbook-Search-Outage.md`.

@@ -303,3 +303,95 @@ exports.searchSchema = async (req, res) => {
 
   return res.status(ok ? 200 : 503).json({ ok, indexes });
 };
+
+/**
+ * The committed value checks. A JSON file rather than a list here so an operator can add one
+ * without a code review of this controller, and so the shape is reviewable in a diff.
+ *
+ * Each entry names an index, the field the check is about, an OData `$filter` describing the rows
+ * that must NOT be there, and how many of them are tolerated. The filters are committed, never
+ * caller-supplied, which is why they go upstream as written.
+ */
+const DATA_CHECKS = require('../../azure/search/data-checks.json');
+
+/**
+ * One check: how many rows match, against the live index the schema name points at.
+ *
+ * A missing index is `error: 'missing'` rather than a count of zero. Zero rows is the PASSING
+ * answer for every check here, so an index that is not there would otherwise be the greenest
+ * result this endpoint can return.
+ *
+ * An empty live name is the same answer. It means a kill switch has this app serving the dataset
+ * from Cosmos, so the index it names is not one this app reads — a committed check against it can
+ * no more be evaluated than one against an index the service never had.
+ */
+async function runDataCheck(check, liveNames) {
+  const row = { index: check.index, field: check.field };
+  const liveName = liveNames.get(check.index);
+  if (!liveName) {
+    logger.warn(
+      `[search-data] ${check.index} is not an index this app is serving, so the committed check on ` +
+      `${check.field} could not run`
+    );
+    return { ...row, ok: false, error: 'missing' };
+  }
+
+  try {
+    const count = await aiSearch.countMatching(liveName, check.filter);
+    // `null` is "the service answered without a count", which is not the same as zero and must not
+    // pass: the whole point is a number an operator can act on.
+    const ok = Number.isFinite(count) && count <= check.max;
+    if (!ok) {
+      logger.warn(
+        `[search-data] ${liveName}.${check.field}: ${count} rows match \`${check.filter}\`, ` +
+        `over the committed maximum of ${check.max}` + (check.note ? ` — ${check.note}` : '')
+      );
+    }
+    return { ...row, count, max: check.max, ok };
+  } catch (err) {
+    if (aiSearch.isMissingIndex(err, liveName)) {
+      logger.warn(`[search-data] ${liveName} is not deployed, so ${check.field} could not be checked`);
+      return { ...row, ok: false, error: 'missing' };
+    }
+    // Same reasoning as `probeIndex`: the upstream text carries the service endpoint and the index
+    // name, and this route is anonymous, so it stays in the log.
+    logger.error(`[search-data] check of ${liveName}.${check.field} failed: ${err.message}`);
+    return { ...row, ok: false, error: 'check failed' };
+  }
+}
+
+/**
+ * GET /health/search-data.
+ *
+ * The value-level twin of `/health/search-schema`. That one proves a field EXISTS in the live
+ * index; this one proves the rows carry something. On 2026-09-17 the public project list showed no
+ * phase and no decision for all 359 prod projects: `currentPhaseName` and `eacDecision` were null
+ * on every row, because prod Cosmos held those List references as bare id strings and the data
+ * source projects `c.currentPhaseName.name`. Every schema check was green throughout — the fields
+ * were there, and empty.
+ *
+ * 200 when every committed check is within its maximum, 503 otherwise, so a CI step and a schedule
+ * can gate on the status alone.
+ *
+ * NOT BOUNDED IN THE REQUEST, and it does not need to be: unlike the POST above it reads nothing
+ * from the caller, so the work is the committed list and the same for everyone. Each check is one
+ * `top: 0, count: true` query — a data-plane read the app identity already holds.
+ */
+exports.searchData = async (req, res) => {
+  const cfg = aiSearch.config();
+  if (!cfg.configured) {
+    return res.status(503).json({ ok: false, error: 'Search is not configured.' });
+  }
+
+  const liveNames = new Map(INDEXES.map(entry => [entry.schema, entry.liveName(cfg)]));
+
+  const checks = [];
+  let ok = true;
+  for (const check of DATA_CHECKS) {
+    const result = await runDataCheck(check, liveNames);
+    checks.push(result);
+    if (!result.ok) ok = false;
+  }
+
+  return res.status(ok ? 200 : 503).json({ ok, checks });
+};

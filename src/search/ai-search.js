@@ -2070,6 +2070,9 @@ module.exports = {
   // The controller's fallback test: a 404 for an index that was never created is a configuration
   // state the Cosmos read can answer, not a search that failed.
   isMissingIndex,
+  // The value-level health check's one primitive. A schema probe proves a field EXISTS; this counts
+  // the rows whose value is wrong, which is the half that stayed green through 2026-09-17.
+  countMatching,
   // Exported so the guard test can hold each `select` and `searchFields` against the committed
   // index definition, the same invariant DOCUMENT_SELECT carries: a name the index does not
   // declare is a 400 on every query, not a missing field in the response.
