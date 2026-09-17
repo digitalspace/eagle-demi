@@ -66,6 +66,50 @@ test('groupByDocument', async (t) => {
       'the same number without the flag is the 12th passage, not page 12');
   });
 
+  // WHY THE LEAD PAIR IS NOT ENOUGH. A row carries up to MAX_SNIPPETS passages of one document and
+  // they are rarely on the same page, so a card that labels them all from the lead number prints
+  // the first passage's page under the second passage's text.
+  await t.test('each passage carries the page of the chunk that produced it', () => {
+    const [row] = groupByDocument([
+      { ...chunk('d1', 3, 'on three'), pageNumbered: true },
+      { ...chunk('d1', 7, 'on seven'), pageNumbered: true }
+    ]);
+    assert.deepStrictEqual(row.passages, [
+      { text: 'on three', pageNumber: 3, pageNumbered: true },
+      { text: 'on seven', pageNumber: 7, pageNumbered: true }
+    ]);
+    assert.strictEqual(row.pageNumber, 3, 'and the lead pair still answers for the lead passage');
+  });
+
+  // The same gate the lead pair has, applied per passage: without page provenance the number is the
+  // Nth passage of the document, and printing "Page 2" off it sends the reader to the wrong page.
+  await t.test('an un-numbered document has no page on any passage', () => {
+    const [row] = groupByDocument([
+      { ...chunk('d1', 1, 'first'), pageNumbered: false },
+      { ...chunk('d1', 2, 'second'), pageNumbered: false }
+    ]);
+    assert.deepStrictEqual(row.passages.map(p => p.pageNumber), [null, null],
+      'the sequence number is not a page, so nothing is offered as one');
+    assert.deepStrictEqual(row.passages.map(p => p.pageNumbered), [false, false]);
+    assert.deepStrictEqual(row.passages.map(p => p.text), ['first', 'second'],
+      'the text still rides every entry');
+  });
+
+  // The two arrays are read side by side, so a length that drifts silently mislabels every passage
+  // after the drift. The cap and the snippet-less chunk are the two places it could drift.
+  await t.test('passages and snippets stay the same length', () => {
+    const [capped] = groupByDocument(
+      Array.from({ length: 7 }, (_, i) => chunk('d1', i, `s${i}`)));
+    assert.strictEqual(capped.passages.length, capped.snippets.length);
+    assert.strictEqual(capped.passages.length, MAX_SNIPPETS, 'both stop at the cap');
+    assert.deepStrictEqual(capped.passages.map(p => p.text), capped.snippets,
+      'same texts in the same order, so index N means the same passage in both');
+
+    const [sparse] = groupByDocument([chunk('d2', 1, ''), chunk('d2', 2, 'has text')]);
+    assert.deepStrictEqual(sparse.passages.map(p => p.text), sparse.snippets,
+      'a chunk with no snippet adds to neither array');
+  });
+
   await t.test('snippets are capped, matchCount is not', () => {
     const rows = groupByDocument(
       Array.from({ length: 7 }, (_, i) => chunk('d1', i, `s${i}`)), 10);

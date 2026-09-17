@@ -62,6 +62,23 @@ function windowFor(pageSize, ceiling) {
 }
 
 /**
+ * One passage of the row: the snippet text with the page of the chunk it came from.
+ *
+ * `pageNumber` is null whenever `pageNumbered` is false, which the lead pair does not do — it is
+ * passed through raw for readers that already check the flag themselves. An entry here is rendered
+ * as a label per snippet, and the number on an un-numbered document is a passage sequence, so
+ * carrying it would print a page the passage is not on.
+ */
+function passageFrom(row) {
+  const pageNumbered = row.pageNumbered === true;
+  return {
+    text: row.snippet,
+    pageNumber: pageNumbered ? row.pageNumber ?? null : null,
+    pageNumbered
+  };
+}
+
+/**
  * Group mapped chunk rows into document rows, preserving order.
  *
  * NO PAGE-SIZE TRUNCATION, and this is the one deliberate divergence from the eagle-search original
@@ -79,6 +96,11 @@ function windowFor(pageSize, ceiling) {
  * sequence — the chunker increments it per emitted block — and rendering "jump to page N" from one
  * would send the reader to a page the passage is not on. Both fields ride the row so the caller can
  * tell the two apart; the flag is the whole gate on that label.
+ *
+ * THE LEAD PAIR ANSWERS FOR THE LEAD SNIPPET ONLY, which is why `passages` sits beside `snippets`:
+ * one entry per snippet, same order, each with the page of the chunk that produced it. The passages
+ * of one row are rarely on one page, so labelling them all from the lead number puts the first
+ * passage's page under the second passage's text. `snippets` is unchanged beside it.
  *
  * `matchCount` is the count of that document's passages IN THIS WINDOW, which is the honest count
  * of what this page found — not necessarily of what the corpus holds. A document whose passages
@@ -138,13 +160,18 @@ function groupByDocument(rows) {
         content: '',
         snippet: row.snippet || '',
         snippets: [],
+        // Same texts as `snippets`, same order, each with the page of the chunk that produced it.
+        passages: [],
         matchCount: 0
       });
     }
 
     const doc = byDocument.get(id);
     doc.matchCount++;
-    if (row.snippet && doc.snippets.length < MAX_SNIPPETS) doc.snippets.push(row.snippet);
+    if (row.snippet && doc.snippets.length < MAX_SNIPPETS) {
+      doc.snippets.push(row.snippet);
+      doc.passages.push(passageFrom(row));
+    }
   }
 
   return [...byDocument.values()];
