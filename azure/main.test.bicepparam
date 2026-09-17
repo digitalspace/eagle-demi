@@ -201,7 +201,7 @@ param budgetStartDate = '2026-08-01'
 
 // Same probe as prod, test-shaped: monitors the real user path and its executions keep one
 // Flex instance warm — cheaper than alwaysReady and doubles as monitoring.
-param availabilityUrl = 'https://eagle-test.apps.silver.devops.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1'
+param availabilityUrl = 'https://test.projects.eao.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1'
 
 // Turns the two id-only indexes on (PR #381, PUT by hand per azure/search/README.md). Empty
 // falls back to Cosmos CONTAINS.
