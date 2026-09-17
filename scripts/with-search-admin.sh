@@ -31,23 +31,99 @@
 #   RG=c4b0a8-test-rg SERVICE=demi-search-test IDENTITY=demi-identity-test \
 #     scripts/with-search-admin.sh -- <command>
 #
+# Usage 2 — `apply`, the same grant and revoke around the Function app's own apply route. No VM, and
+# no ARM round trip per step, so the window is minutes rather than the better part of an hour:
+#
+#   ADMIN_API_KEY=... scripts/with-search-admin.sh apply --env test --only projects \
+#     --datasources demi-projects-ds --live
+#
+# The route is POST /admin/search-definitions/apply through the APIM `/machine` path, which answers
+# 202 with a job id; this polls the job until it stops moving, then revokes. ADMIN_API_KEY is the
+# same admin key the rest of the tooling uses (deploy-infra.sh) and is never printed or put on a
+# command line — it is handed to curl in a config file, because argv is readable by anything on
+# the box. `/machine` also wants a subscription key: export APIM_SUBSCRIPTION_KEY when the gateway
+# is enforcing one.
+#
 set -euo pipefail
 
 # The `az` seam exists so the revoke-on-failure path is testable without touching a real tenant.
 # A trap nobody can exercise is a trap nobody knows works.
 AZ="${AZ:-az}"
-
-SUBSCRIPTION="${SUBSCRIPTION:-7897ceb1-9a86-4639-87d7-7f9ff67142b3}"
-RG="${RG:-c4b0a8-test-rg}"
-SERVICE="${SERVICE:-demi-search-test}"
-IDENTITY="${IDENTITY:-demi-identity-test}"
+# Same seam for the API half: `apply` is HTTP, and a test that cannot fake the calls cannot prove
+# the revoke fires when the job fails.
+CURL="${CURL:-curl}"
 
 # Search Service Contributor. The built-in GUID is stable across clouds and tenants.
 ROLE_ID='7ca78c08-252a-4471-8644-bb5ff32d4ba0'
 
-if [[ "${1:-}" == "--" ]]; then shift; fi
-if [[ $# -eq 0 ]]; then
-  echo "usage: $0 -- <command...>" >&2
+MODE='command'
+ENV_NAME='test'
+ONLY=''
+DATASOURCES=''
+LIVE='false'
+CHECK='false'
+
+if [[ "${1:-}" == "apply" ]]; then
+  MODE='apply'
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --env)         ENV_NAME="${2:-}"; shift 2 ;;
+      # Repeatable or comma-separated, because both spellings are already in the operator's fingers
+      # from apply-search-definitions.js and demi-devbox.sh.
+      --only)        ONLY="${ONLY:+${ONLY},}${2:-}"; shift 2 ;;
+      --datasources) DATASOURCES="${DATASOURCES:+${DATASOURCES},}${2:-}"; shift 2 ;;
+      --live)        LIVE='true'; shift ;;
+      --check)       CHECK='true'; shift ;;
+      *) echo "with-search-admin: unknown apply option '$1'" >&2; exit 2 ;;
+    esac
+  done
+  case "$ENV_NAME" in
+    test|prod) ;;
+    *) echo "with-search-admin: unknown --env '${ENV_NAME}', want test|prod" >&2; exit 2 ;;
+  esac
+else
+  if [[ "${1:-}" == "--" ]]; then shift; fi
+  if [[ $# -eq 0 ]]; then
+    echo "usage: $0 -- <command...>" >&2
+    echo "       $0 apply --env <test|prod> [--only a,b] [--datasources x,y] [--live] [--check]" >&2
+    exit 2
+  fi
+fi
+
+# Defaults are the test environment's, kept for the devbox flow, which has always been invoked with
+# these exported by demi-devbox.sh. `apply --env prod` names the prod ones instead.
+if [[ "$ENV_NAME" == 'prod' ]]; then
+  SUBSCRIPTION="${SUBSCRIPTION:-be5924ac-1083-4a1b-be92-7b444882cfd9}"
+  # The resource groups differ by environment (`c4b0a8-test-rg` vs `rg-demi-prod`), so the group is
+  # read off the service rather than guessed. demi-devbox.sh resolves it the same way.
+  RG="${RG:-$("$AZ" resource list --subscription "$SUBSCRIPTION" \
+    --resource-type Microsoft.Search/searchServices \
+    --query "[?name=='demi-search-prod'].resourceGroup | [0]" -o tsv)}"
+else
+  SUBSCRIPTION="${SUBSCRIPTION:-7897ceb1-9a86-4639-87d7-7f9ff67142b3}"
+  RG="${RG:-c4b0a8-test-rg}"
+fi
+SERVICE="${SERVICE:-demi-search-${ENV_NAME}}"
+IDENTITY="${IDENTITY:-demi-identity-${ENV_NAME}}"
+
+if [[ -z "$RG" ]]; then
+  echo "with-search-admin: could not resolve the resource group for ${SERVICE}" >&2
+  exit 1
+fi
+
+# The gateway, not the app: direct azurewebsites.net access is platform-403'd since the APIM
+# cutover, and the key is only accepted on the `/machine` path — `/api` is the anonymous one.
+APIM_HOST="${APIM_HOST:-demi-apim-${ENV_NAME}.azure-api.net}"
+API_BASE_URL="${API_BASE_URL:-https://${APIM_HOST}/machine}"
+API_BASE_URL="${API_BASE_URL%/}"
+
+# Check the key before granting. A window opened for a call that cannot authenticate is the worst
+# of both: no work done, and the role standing for the length of the mistake.
+if [[ "$MODE" == 'apply' && -z "${ADMIN_API_KEY:-}" ]]; then
+  echo "with-search-admin: ADMIN_API_KEY is not exported — not granting anything." >&2
+  echo "with-search-admin: read it from the vault on the devbox:" >&2
+  echo "  az keyvault secret show --vault-name <vault> --name admin-api-key --query value -o tsv" >&2
   exit 2
 fi
 
@@ -76,6 +152,7 @@ ASSIGNMENT_ID=''
 # net loss.
 revoke() {
   local status=$?
+  rm -f "${CURL_CONFIG:-}"
   if [[ -n "$ASSIGNMENT_ID" ]]; then
     echo "with-search-admin: revoking" >&2
     # `|| true`: a failed revoke must not mask the command's own exit status, and it must still be
@@ -131,4 +208,125 @@ if [[ -z "$readable" ]]; then
   echo "with-search-admin: RBAC has not replicated yet, not that the command is wrong." >&2
 fi
 
-"$@"
+if [[ "$MODE" != 'apply' ]]; then
+  "$@"
+  exit $?
+fi
+
+# ---------------------------------------------------------------------------------------------
+# The apply route
+#
+# The app does the work the devbox used to do: it already holds SEARCH_ENDPOINT, it is inside the
+# VNet, and with the grant above it can write definitions. What is left here is enqueue, wait,
+# revoke. The wait matters — the role has to stay until the job stops, and go the moment it does.
+
+# The key is handed over in a config file, never on the command line: argv shows up in /proc for
+# every process on the box, and this key is long-lived.
+CURL_CONFIG="$(mktemp)"
+chmod 600 "$CURL_CONFIG"
+{
+  printf 'header = "X-Api-Key: %s"\n' "$ADMIN_API_KEY"
+  # APIM stamps a subscription on the /machine path. Optional here: the gateway is not enforcing
+  # one in every environment yet, and an empty header would be worse than none.
+  if [[ -n "${APIM_SUBSCRIPTION_KEY:-}" ]]; then
+    printf 'header = "Ocp-Apim-Subscription-Key: %s"\n' "$APIM_SUBSCRIPTION_KEY"
+  fi
+} > "$CURL_CONFIG"
+
+# One field out of a JSON body. node, not jq: jq is not installed everywhere this runs, and the
+# rest of scripts/ already reads JSON this way.
+json_field() {
+  node -e '
+    let doc = {};
+    try { doc = JSON.parse(process.argv[1]); } catch { doc = {}; }
+    const value = doc[process.argv[2]];
+    process.stdout.write(value == null ? "" : String(value));
+  ' "$1" "$2"
+}
+
+# `-w` puts the status code on its own last line, so one call carries both halves and a 500 with a
+# JSON error body is still readable.
+http_json() {
+  "$CURL" -sS --config "$CURL_CONFIG" -w '\n%{http_code}' \
+    --max-time "${APPLY_HTTP_TIMEOUT:-120}" "$@"
+}
+
+BODY="$(ONLY="$ONLY" DATASOURCES="$DATASOURCES" LIVE="$LIVE" CHECK="$CHECK" node -e '
+  const list = (value) => (value || "").split(",").map((v) => v.trim()).filter(Boolean);
+  process.stdout.write(JSON.stringify({
+    only: list(process.env.ONLY),
+    datasources: list(process.env.DATASOURCES),
+    live: process.env.LIVE === "true",
+    check: process.env.CHECK === "true"
+  }));
+')"
+
+echo "with-search-admin: POST ${API_BASE_URL}/admin/search-definitions/apply ${BODY}" >&2
+
+RESPONSE="$(http_json -X POST -H 'Content-Type: application/json' --data "$BODY" \
+  "${API_BASE_URL}/admin/search-definitions/apply")" || {
+  echo "with-search-admin: the apply request did not complete" >&2
+  exit 1
+}
+CODE="${RESPONSE##*$'\n'}"
+RESPONSE="${RESPONSE%$'\n'*}"
+
+if [[ "$CODE" != '202' && "$CODE" != '200' ]]; then
+  echo "with-search-admin: the apply was refused (HTTP ${CODE})" >&2
+  echo "  ${RESPONSE}" >&2
+  exit 1
+fi
+
+JOB_ID="$(json_field "$RESPONSE" jobId)"
+if [[ -z "$JOB_ID" ]]; then
+  # Same reasoning as the empty assignment id above: an accepted request with no id cannot be
+  # followed, so the only honest thing is to stop rather than revoke under a job that is running.
+  echo "with-search-admin: the apply was accepted but named no job — it may still be running:" >&2
+  echo "  ${RESPONSE}" >&2
+  exit 1
+fi
+
+JOB_URL="${API_BASE_URL}/admin/search-definitions/jobs/${JOB_ID}"
+echo "with-search-admin: job ${JOB_ID} — ${JOB_URL}" >&2
+
+DEADLINE=$(( $(date +%s) + ${APPLY_TIMEOUT:-3600} ))
+STATUS=''
+while true; do
+  POLL="$(http_json "$JOB_URL")" || {
+    echo "with-search-admin: could not read ${JOB_URL} — the job may still be running." >&2
+    exit 1
+  }
+  POLL_CODE="${POLL##*$'\n'}"
+  POLL="${POLL%$'\n'*}"
+  if [[ "$POLL_CODE" != '200' ]]; then
+    echo "with-search-admin: job status returned HTTP ${POLL_CODE} — the job may still be running." >&2
+    echo "  ${POLL}" >&2
+    exit 1
+  fi
+
+  STATUS="$(json_field "$POLL" status)"
+  case "$STATUS" in
+    queued|running|pending|inProgress) ;;
+    *) break ;;
+  esac
+
+  # Checked after the poll, so a job that finishes on the last tick is still read as finished.
+  if (( $(date +%s) >= DEADLINE )); then
+    echo "with-search-admin: job ${JOB_ID} is still ${STATUS} after ${APPLY_TIMEOUT:-3600}s — giving up and revoking." >&2
+    echo "with-search-admin: it keeps running WITHOUT the role, so it will fail on its next write. Follow it:" >&2
+    echo "  curl -H \"X-Api-Key: \$ADMIN_API_KEY\" ${JOB_URL}" >&2
+    exit 1
+  fi
+  sleep "${APPLY_POLL_SLEEP:-15}"
+done
+
+case "$STATUS" in
+  ready|succeeded|success|complete|completed|done)
+    echo "with-search-admin: job ${JOB_ID} ${STATUS}" >&2
+    ;;
+  *)
+    ERROR="$(json_field "$POLL" error)"
+    echo "with-search-admin: job ${JOB_ID} ended ${STATUS}${ERROR:+ — ${ERROR}}" >&2
+    exit 1
+    ;;
+esac
