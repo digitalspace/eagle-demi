@@ -125,7 +125,7 @@ jobs:
           CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD")
           echo "$CHANGED"
           TOUCHED=false
-          if grep -q '^azure/search/' <<<"$CHANGED"; then
+          if grep '^azure/search/' <<<"$CHANGED" | grep -qvE '\.md$'; then
             TOUCHED=true
           fi
           # Values, not diff lines: the constants are multi-line concatenations, so a widening
