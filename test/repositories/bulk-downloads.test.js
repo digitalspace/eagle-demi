@@ -223,6 +223,9 @@ test('listExpired', async (t) => {
     // A row still 'running' past the cutoff is an instance that died with retries exhausted; the
     // worker never released its slot, so the sweep must see it.
     assert.match(spec.query, /c\.status = 'running' AND c\.startedAt < @cutoff/);
+    // The container also holds search-definition job rows, which go `running` for hours on a
+    // chunks rebuild. Without this the zip sweep would stamp a live one `expired`.
+    assert.match(spec.query, /IS_DEFINED\(c\.documentIds\)/);
     // The sweep empties `parts` and a cancelled row keeps its status, so without this the same
     // rows come back on the next page and the sweep never finishes.
     assert.match(spec.query, /ARRAY_LENGTH\(c\.parts\) > 0/);

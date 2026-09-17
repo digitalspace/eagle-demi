@@ -203,6 +203,11 @@ const config = {
   // same "off" as above — and off here means the re-stamp is SKIPPED, not done inline, unless the
   // opt-in below says otherwise.
   chunkRestampQueue:    process.env.CHUNK_RESTAMP_QUEUE || '',
+
+  // Queue the search-definition apply runs on (src/jobs/search-definitions.js). Empty is the same
+  // "off": POST /admin/search-definitions/apply answers 503 rather than accept work nothing will
+  // pick up, and the devbox recipe in docs/runbook-search-outage.md is the way through.
+  searchDefinitionsQueue: process.env.SEARCH_DEFINITIONS_QUEUE || '',
   // Walk the chunks on the request instead, for `func start` with no storage account behind it.
   // An opt-in rather than the fallback: a deployed environment that lost its queue name would
   // otherwise put a multi-minute walk back inside eagle-api's 10-second push and block the

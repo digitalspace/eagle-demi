@@ -17,6 +17,10 @@
  * The container also holds one QUOTA row per requester, id `quota:<requesterKey>`. It shares the
  * container because the quota is only ever read by id, so it costs a point read and no second
  * container — and because a UUID job id can never collide with a prefixed one.
+ *
+ * Search-definition jobs (`searchdef:<uuid>`, src/jobs/search-definitions.js) share it on the same
+ * terms: point reads by id, a prefix no UUID can collide with, and their own controller. Only
+ * `listExpired` sees more than one row at a time, and it names the fields that tell them apart.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -24,6 +28,11 @@ const documents = require('./documents');
 
 const CONTAINER = 'bulkDownloads';
 const PARTITION_FIELD = 'id';
+
+// Job ids are UUIDs a controller minted. Anything else is not a job that ever existed — and the
+// container also holds `quota:<requester>` and `searchdef:<uuid>` rows, which no request may reach
+// by bare id. Shared by both controllers so one id shape is enforced in one place.
+const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Every status a job row may carry. A patch condition takes no parameters, so `patchIfStatus`
 // interpolates; this is what keeps the interpolated values off the callers' hands.
@@ -71,7 +80,11 @@ async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 
       `c.slotReleasedAt FROM c ` +
       `WHERE (c.status IN (${names.join(', ')}) AND c.finishedAt < @cutoff ` +
       `AND ARRAY_LENGTH(c.parts) > 0) ` +
-      "OR (c.status = 'running' AND c.startedAt < @cutoff)",
+      // IS_DEFINED(c.documentIds) because the container also holds the search-definition job rows
+      // (`searchdef:` ids, src/jobs/search-definitions.js), and one of those still 'running' past
+      // the cutoff is not a dead zip: the sweep would stamp it `expired` and take its status away.
+      // The first clause needs no such guard — those rows carry no `parts`.
+      "OR (c.status = 'running' AND c.startedAt < @cutoff AND IS_DEFINED(c.documentIds))",
     parameters: [
       ...names.map((name, i) => ({ name, value: String(statuses[i]) })),
       { name: '@cutoff', value: String(cutoffIso) }
@@ -198,6 +211,7 @@ async function releaseSlot(requesterKey) {
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
+  JOB_ID,
   getById,
   create,
   patch,

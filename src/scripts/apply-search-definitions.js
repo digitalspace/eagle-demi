@@ -256,7 +256,7 @@ function missingFields(liveBody, committedBody) {
  * why this exists. An absent live index counts every committed field as missing rather than
  * skipping it, because "the index does not exist" is the loudest possible drift, not a pass.
  */
-async function runCheck({ endpoint, only }) {
+async function runCheck({ endpoint, only, log = console.log }) {
   const { indexes } = select(only);
   let drifted = 0;
   for (const { body } of indexes) {
@@ -270,9 +270,9 @@ async function runCheck({ endpoint, only }) {
       : missingFields(safeJson(live.text) || {}, body);
     if (missing.length > 0) {
       drifted++;
-      console.log(`drift ${body.name}: missing fields ${missing.join(',')}`);
+      log(`drift ${body.name}: missing fields ${missing.join(',')}`);
     } else {
-      console.log(`ok ${body.name}`);
+      log(`ok ${body.name}`);
     }
   }
   return drifted;
@@ -282,8 +282,12 @@ async function runCheck({ endpoint, only }) {
  * Apply the definitions. Exported so the guard below and the dry-run split are reachable from a
  * test — the property that the committed names do not collide with the live ones can be asserted
  * from the files alone, but that says nothing about whether this function still CHECKS it.
+ *
+ * `log` is the report's only exit. It defaults to console.log for the CLI; src/jobs/search-
+ * definitions.js passes a sink that writes the same lines to the job row and the app logger,
+ * because app code does not print to the console.
  */
-async function run({ endpoint, live, only, liveNames }) {
+async function run({ endpoint, live, only, liveNames, log = console.log }) {
   const args = { live, only };
 
   // THE NAMES THE APP IS CURRENTLY POINTED AT. PUTting one of these would rewrite a schema that is
@@ -294,10 +298,10 @@ async function run({ endpoint, live, only, liveNames }) {
 
   const { indexes, indexers } = select(args.only);
 
-  console.log(`endpoint : ${endpoint}`);
-  console.log(`live now : ${[...serving].join(', ') || '(none configured)'}`);
-  console.log(`mode     : ${args.live ? 'LIVE — will PUT' : 'dry run'}`);
-  console.log('');
+  log(`endpoint : ${endpoint}`);
+  log(`live now : ${[...serving].join(', ') || '(none configured)'}`);
+  log(`mode     : ${args.live ? 'LIVE — will PUT' : 'dry run'}`);
+  log('');
 
   // GATES WRITING, NOT REPORTING. This used to run before the dry-run split below, so a dry run
   // refused too — and after the index rename made the committed names the live ones, that meant the
@@ -345,7 +349,7 @@ async function run({ endpoint, live, only, liveNames }) {
     const servingNote = !serving.has(body.name) || state === 'absent' ? ''
       : added === undefined ? '  ** SERVING TRAFFIC — --live refuses a non-additive change **'
         : `  ** SERVING TRAFFIC — additive, +${added} field(s) **`;
-    console.log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}${servingNote}`);
+    log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}${servingNote}`);
     if (!args.live) continue;
     const put = await call(endpoint, 'PUT', `/indexes/${body.name}?api-version=${API_VERSION}`, body);
     if (put.status >= 300) throw new Error(`PUT /indexes/${body.name} -> ${put.status} ${put.text.slice(0, 400)}`);
@@ -378,7 +382,7 @@ async function run({ endpoint, live, only, liveNames }) {
     const committedDs = readCommittedDataSource(body.dataSourceName);
     const liveQuery = (safeJson(ds.text)?.container || {}).query || null;
     if (committedDs && liveQuery !== null && committedDs.container.query !== liveQuery) {
-      console.log(
+      log(
         `  !! data source ${body.dataSourceName} DIFFERS from the committed copy. The indexer will\n` +
         `     keep projecting the LIVE query, so any field added to the index but not to the live\n` +
         `     data source stays null and nothing reports an error.\n` +
@@ -392,28 +396,28 @@ async function run({ endpoint, live, only, liveNames }) {
     const existing = await call(endpoint, 'GET', `/indexers/${body.name}?api-version=${API_VERSION}`);
     assertNotForbidden(existing.status, existing.text, `indexer ${body.name}`);
     const state = existing.status === 200 ? 'exists' : existing.status === 404 ? 'absent' : `HTTP ${existing.status}`;
-    console.log(`indexer  ${body.name.padEnd(24)} ${state}   -> ${body.targetIndexName}  (ds ${body.dataSourceName} ok)`);
+    log(`indexer  ${body.name.padEnd(24)} ${state}   -> ${body.targetIndexName}  (ds ${body.dataSourceName} ok)`);
     if (!args.live) continue;
     const put = await call(endpoint, 'PUT', `/indexers/${body.name}?api-version=${API_VERSION}`, body);
     if (put.status >= 300) throw new Error(`PUT /indexers/${body.name} -> ${put.status} ${put.text.slice(0, 400)}`);
     applied++;
   }
 
-  console.log('');
+  log('');
   // Repeated at the END because the per-indexer warning above scrolls past on a full run, and this
   // is the one failure that produces a green report and null fields.
   if (driftedDataSources > 0) {
-    console.log(
+    log(
       `WARNING: ${driftedDataSources} data source(s) differ from the committed copy — see above. ` +
       `Indexes applied here can still be filled with the OLD column set.`);
   }
   if (!args.live) {
-    console.log('dry run — nothing was written. Re-run with --live to apply.');
+    log('dry run — nothing was written. Re-run with --live to apply.');
     return;
   }
-  console.log(`applied ${applied} definition(s).`);
-  console.log('The indexers run on their own PT5M schedule; nothing else has to be triggered.');
-  console.log('REVOKE the Search Service Contributor grant now — this script is done with it.');
+  log(`applied ${applied} definition(s).`);
+  log('The indexers run on their own PT5M schedule; nothing else has to be triggered.');
+  log('REVOKE the Search Service Contributor grant now — this script is done with it.');
 }
 
 async function main() {

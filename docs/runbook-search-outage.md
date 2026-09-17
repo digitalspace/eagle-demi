@@ -66,6 +66,14 @@ comparison, because the index has to satisfy whatever is deployed next as well.
 
 ## 4. Fix it
 
+The primary path is the API: `POST /api/admin/search-definitions/apply` with
+`{"only":["documents"],"live":true}` runs the apply inside the Function app and answers a job id to
+poll at `GET /api/admin/search-definitions/jobs/{id}` (README, "Applying definitions through the
+API"). It still needs the temporary Search Service Contributor grant, and it does the same steps in
+the same order. Use the devbox commands below as break-glass — when the Function app itself is the
+thing that is broken, when its queue is not configured, or when you need a shell for something the
+route does not do.
+
 ```bash
 scripts/demi-devbox.sh apply --env prod --only documents
 ```

@@ -130,6 +130,28 @@ scripts/demi-devbox.sh apply --env prod --only chunks --datasources demi-chunks-
 scripts/demi-devbox.sh watch --env prod --datasources demi-chunks-ds
 ```
 
+### Applying definitions through the API
+
+`POST /api/admin/search-definitions/apply` runs the same apply inside the Function app, which is
+the primary path. Nothing goes through ARM, so a run costs what the search service costs and
+nothing more. `sysadmin` only, and the work runs on a queue: the answer is 202 with a job id and
+`GET /api/admin/search-definitions/jobs/{id}` is the poll.
+
+```bash
+curl -sS -X POST "$DEMI_API/admin/search-definitions/apply" \
+  -H "X-Api-Key: $DEMI_KEY" -H 'content-type: application/json' \
+  -d '{"only":["projects"],"datasources":["demi-projects-ds"],"live":true}'
+```
+
+`check: true` reports drift and writes nothing; neither flag is a dry run; `live: true` PUTs and
+then resets and runs the indexers it touched. The wait stops at 25 minutes — short of the host's
+30-minute function timeout — and a job whose indexer is still running finishes `warned` with the
+indexer named, which for `chunks` is the normal outcome. The rebuild carries on either way.
+
+The identity still needs Search Service Contributor at the service scope for the duration of the
+run; `scripts/with-search-admin.sh` is what grants and revokes it. Set `SEARCH_DEFINITIONS_QUEUE`
+to the storage queue name or the route answers 503 and the devbox recipe above is the way through.
+
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
 npm run db:seed-nosql -- --only projects --live   # projects only

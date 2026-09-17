@@ -37,7 +37,7 @@ function packagedEntries() {
 /** The minimum tree `package-api.py` accepts: entry points plus every required data directory. */
 function scaffold(repo) {
   for (const d of ['api', 'azure/search/indexes', 'azure/search/indexers',
-    'frontend/public/assets/geojson']) {
+    'azure/search/datasources', 'frontend/public/assets/geojson']) {
     fs.mkdirSync(path.join(repo, d), { recursive: true });
   }
   for (const f of ['index.js', 'host.json', 'package.json']) {
@@ -46,6 +46,7 @@ function scaffold(repo) {
   fs.writeFileSync(path.join(repo, 'api', 'index.js'), '//');
   fs.writeFileSync(path.join(repo, 'azure/search/indexes', 'projects.json'), '{}');
   fs.writeFileSync(path.join(repo, 'azure/search/indexers', 'projects-indexer.json'), '{}');
+  fs.writeFileSync(path.join(repo, 'azure/search/datasources', 'demi-projects-ds.json'), '{}');
   fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson', 'a.json'), '{}');
   // A NESTED directory, because a re-included path lives under an excluded one — geojson is
   // inside `frontend`. Blocking the excluded realpaths wholesale in the re-include walk would
@@ -373,14 +374,25 @@ test('API deploy package', async (t) => {
     const packagedIndexers = [...entries].filter(e => e.startsWith('azure/search/indexers/')).sort();
     assert.deepStrictEqual(packagedIndexers, indexersOnDisk, 'every committed indexer definition must be packaged');
 
-    // DATA SOURCES MUST NOT SHIP, and the reason is where the two scripts that read them run.
-    // `put-search-datasources.js` and the DIFFERS comparison in `apply-search-definitions.js` both
-    // execute on the devbox, and `/opt/eagle-demi` there is a git checkout, so the directory is
-    // already present — `scripts/demi-devbox.sh apply` copies the files it needs out of it. Nothing
-    // in the Function container reads them, and nothing there could use them anyway: the data plane
-    // is private-endpoint only and Kudu has no managed-identity endpoint to authenticate with.
-    const packagedDatasources = [...entries].filter(e => e.startsWith('azure/search/datasources/'));
-    assert.deepStrictEqual(packagedDatasources, [], 'data source definitions must not be packaged');
+    // DATA SOURCES SHIP TOO, since POST /admin/search-definitions/apply runs the apply inside this
+    // package: the DIFFERS comparison in `apply-search-definitions.js` reads the committed copy,
+    // and `put-search-datasources.js` PUTs it. They used to be devbox-only, where
+    // `/opt/eagle-demi` is a git checkout that already holds them. They carry no credential —
+    // `connectionString` is null on disk and composed from app settings at PUT time.
+    const datasourcesOnDisk = fs.readdirSync(path.join(REPO_ROOT, 'azure', 'search', 'datasources'))
+      .filter(f => f.endsWith('.json'))
+      .map(f => `azure/search/datasources/${f}`)
+      .sort();
+    assert.ok(datasourcesOnDisk.length > 0, 'the repo must hold data source definitions for this to mean anything');
+    const packagedDatasources = [...entries].filter(e => e.startsWith('azure/search/datasources/')).sort();
+    assert.deepStrictEqual(packagedDatasources, datasourcesOnDisk, 'every committed data source must be packaged');
+
+    // And none of them may carry a real connection string into a world-readable package.
+    for (const entry of datasourcesOnDisk) {
+      const ds = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, entry), 'utf8'));
+      assert.strictEqual(ds.credentials.connectionString, null,
+        `${entry} must ship with no connection string`);
+    }
   });
 
   await t.test('does not ship non-runtime directories', () => {
@@ -396,9 +408,10 @@ test('API deploy package', async (t) => {
     const azureExtras = [...entries]
       .filter(e => e.startsWith('azure/')
         && !e.startsWith('azure/search/indexes/')
-        && !e.startsWith('azure/search/indexers/'));
+        && !e.startsWith('azure/search/indexers/')
+        && !e.startsWith('azure/search/datasources/'));
     assert.deepStrictEqual(azureExtras, [],
-      `only azure/search/{indexes,indexers} may be packaged, found: ${azureExtras.join(', ')}`);
+      `only azure/search/{indexes,indexers,datasources} may be packaged, found: ${azureExtras.join(', ')}`);
   });
 
   await t.test('never ships an operator credential file, at any depth', () => {

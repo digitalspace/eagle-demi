@@ -2793,6 +2793,150 @@ paths:
             rate-limited by Azure, retry in a few minutes` when Cost Management refused and
             nothing is cached yet.
 
+  /api/admin/search-definitions/apply:
+    post:
+      summary: Apply the committed search definitions
+      description: |-
+        PUTs the index and indexer definitions this build carries onto the search service, then
+        resets the indexers and waits for them. `sysadmin` only: a live run rewrites what the
+        search service serves.
+
+        Asynchronous, always: a `chunks` rebuild runs for hours and the platform cuts a request off
+        at about 230 seconds. The answer is 202 with a job id; poll
+        `GET /api/admin/search-definitions/jobs/{id}`.
+
+        Three shapes of run. `check: true` reads the live schema and reports drift, writing
+        nothing. The default (neither flag) is a dry run: it reports what WOULD be written.
+        `live: true` PUTs, then resets and runs the indexers for the definitions it touched, so the
+        index is rebuilt from scratch and is incomplete until the run finishes.
+
+        The service identity needs Search Service Contributor at the service scope for the
+        duration, which it does not hold permanently; a run outside a grant window fails on the
+        first PUT with a 403. `docs/runbook-search-outage.md` has the grant recipe and the devbox
+        fallback for when this app itself is down.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                only:
+                  type: array
+                  description: >-
+                    Index names (`chunks`) or indexer names (`chunks-indexer`); either resolves to
+                    the same pair. Empty or absent means every committed definition.
+                  items:
+                    type: string
+                datasources:
+                  type: array
+                  description: >-
+                    Committed data sources to PUT as well (`demi-projects-ds`). Only on a live run
+                    — a data source carries the query that decides which Cosmos columns the indexer
+                    projects, so a field added to an index but not to the data source stays null.
+                  items:
+                    type: string
+                live:
+                  type: boolean
+                  default: false
+                check:
+                  type: boolean
+                  default: false
+      responses:
+        '202':
+          description: The job was recorded and queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId: { type: string, format: uuid }
+                  status: { type: string, enum: [queued] }
+                  statusUrl: { type: string }
+                  request:
+                    $ref: '#/components/schemas/SearchDefinitionRequest'
+        '400':
+          description: >-
+            An unknown body parameter, a name this build does not carry, a non-boolean `live` or
+            `check`, both of them together, or `datasources` on a `check` run.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires the `sysadmin` role.
+        '503':
+          description: >-
+            No queue is configured in this environment, or the job was recorded but could not be
+            queued — in which case it is marked `failed` rather than left waiting.
+
+  /api/admin/search-definitions/jobs/{id}:
+    get:
+      summary: Search definition job status
+      description: >-
+        The run's status, its step log and one result per indexer. `resetIssuedAt` is when the
+        reset went out; a job that carries it has indexers rebuilding whatever happens to this
+        invocation. `warned` means the run finished but something needs a look — drift on a check
+        run, or an indexer still running when the wait ended.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId: { type: string, format: uuid }
+                  status:
+                    type: string
+                    enum: [queued, running, succeeded, failed, warned]
+                  request:
+                    $ref: '#/components/schemas/SearchDefinitionRequest'
+                  steps:
+                    type: array
+                    description: The run's report, oldest first, capped at 200 lines.
+                    items: { type: string }
+                  stepsDropped:
+                    type: integer
+                    description: Lines past the cap. The full transcript is in the application log.
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        indexer: { type: string }
+                        status: { type: string }
+                        itemsProcessed: { type: string }
+                        itemsFailed: { type: string }
+                        tracking:
+                          type: string
+                          description: >-
+                            `null` proves the execution started from a cleared high-water mark,
+                            which is what makes the rebuild a rebuild.
+                  error: { type: string, nullable: true }
+                  createdAt: { type: string, format: date-time }
+                  startedAt: { type: string, format: date-time, nullable: true }
+                  resetIssuedAt: { type: string, format: date-time, nullable: true }
+                  finishedAt: { type: string, format: date-time, nullable: true }
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires the `sysadmin` role.
+        '404':
+          description: No such job, or the id is not a job id.
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -2855,6 +2999,18 @@ components:
         p95DurationMs:
           type: number
       description: One AppRequests summary row.
+    SearchDefinitionRequest:
+      type: object
+      description: What the run was asked to do, as recorded on the job.
+      properties:
+        only:
+          type: array
+          items: { type: string }
+        datasources:
+          type: array
+          items: { type: string }
+        live: { type: boolean }
+        check: { type: boolean }
     BulkDownloadAccepted:
       type: object
       properties:

@@ -77,10 +77,14 @@ def package_api(repo_root, zip_path):
     path_exclude_dirs = {os.path.join("src", "secret-sync")}
 
     # Runtime data living under excluded directories: the boundary seeder reads the geojson,
-    # eagle-query.js the indexes at REQUIRE time, apply-search-definitions.js the indexers.
+    # eagle-query.js the indexes at REQUIRE time, apply-search-definitions.js the indexers, and
+    # both it and put-search-datasources.js the data sources — the search-definition apply now runs
+    # in this package (src/jobs/search-definitions.js), not only on the devbox checkout. The
+    # committed data sources carry `connectionString: null`; the real one is composed at PUT time.
     include_subpaths = {os.path.join("frontend", "public", "assets", "geojson"),
                         os.path.join("azure", "search", "indexes"),
-                        os.path.join("azure", "search", "indexers")}
+                        os.path.join("azure", "search", "indexers"),
+                        os.path.join("azure", "search", "datasources")}
 
     print(f"Packaging {repo_root} -> {zip_path}...")
     count = 0
