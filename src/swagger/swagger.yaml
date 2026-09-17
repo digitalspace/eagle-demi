@@ -218,6 +218,15 @@ paths:
             every document extracted before page provenance, where `pageNumber` is only the Nth
             passage of the document. The flag is a property of the document's extraction, so every
             passage of one document agrees on it.
+
+
+            A DocumentChunk row groups several passages of one document, and `pageNumber` above is
+            the LEAD passage's. `passages` carries one entry per element of `snippets`, in the same
+            order, shaped `{text, pageNumber, pageNumbered}`, each taken from the chunk that
+            produced that snippet — so a card can label every snippet with its own page instead of
+            the lead's. `pageNumber` is null on an entry whose `pageNumbered` is false, where the
+            only number available is a passage sequence. `snippets` is unchanged and holds the same
+            texts in the same order.
         '400':
           description: Unknown dataset, unsupported query parameter, or dataset=Comment with no period.
         '502':

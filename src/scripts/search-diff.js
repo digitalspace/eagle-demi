@@ -435,7 +435,7 @@ const EXPECTED_KEY_DELTA = {
     // would let a regression that drops them again pass as a declared difference, which is the
     // failure mode the list is supposed to prevent rather than cause. An entry removed is how a
     // gap gets closed; that is the whole contract of this table.
-    demiOnly: ['chunkId', 'content', 'pageNumber', 'projectName', 'snippet'],
+    demiOnly: ['chunkId', 'content', 'pageNumber', 'pageNumbered', 'passages', 'projectName', 'snippet'],
     eagleOnly: ['documentTypeId', 'read']
   }
 };

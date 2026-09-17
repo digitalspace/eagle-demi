@@ -2539,6 +2539,7 @@ test('the answer matches the request that was made', async (t) => {
       content: '',
       snippet: 'a river',
       snippets: ['a river'],
+      passages: [{ text: 'a river', pageNumber: null, pageNumbered: false }],
       matchCount: 1
     }], 'no s3Key, no read[], no _etag, no vis, and no withheld label');
   });
@@ -2564,6 +2565,8 @@ test('the answer matches the request that was made', async (t) => {
     const [row] = out.body[0].searchResults;
     assert.strictEqual(row.pageNumber, 12);
     assert.strictEqual(row.pageNumbered, true);
+    assert.deepStrictEqual(row.passages, [{ text: 'a river', pageNumber: 12, pageNumbered: true }],
+      'and the passage carries the same page, which is what labels the snippet it sits beside');
   });
 
   await t.test('a summary citation is built from redacted parent rows', async () => {
