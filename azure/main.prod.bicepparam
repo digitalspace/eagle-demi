@@ -8,6 +8,10 @@ using './main.bicep'
 param environmentName = 'prod'
 param location = 'canadacentral'
 
+// False deploys the application layer only and reads the foundation by name; a foundation edit
+// needs `./scripts/deploy-infra.sh prod --foundation`, which is what sets DEPLOY_FOUNDATION.
+param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
+
 // ── Object store ──────────────────────────────────────────────────────────────────────────────
 // The NRS store, shared with eagle-api and outliving any Azure environment. Prod's objects sit at
 // the root of bucket `ozwdez` with no prefix — which is the same path test reaches as

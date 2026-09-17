@@ -43,8 +43,10 @@ param peSubnetId string = ''
 @description('Region of the PE subnet. A private endpoint lives with its SUBNET, not with the resource it targets — this is canadacentral while the account is canadaeast.')
 param peLocation string = resourceGroup().location
 
+// No default: main.bicep owns the name, because the API's FOUNDRY_DEPLOYMENT setting has to be
+// right in a run that deploys no account to read it back from.
 @description('Model to deploy. A small chat model: the job is compressing eight retrieved chunks into three sentences, not open-ended reasoning. See the Standard-SKU note above the deployment resource before changing it.')
-param modelName string = 'gpt-4.1-mini'
+param modelName string
 
 @description('Model version. Pinned rather than floating, so a summary that regresses is attributable to a deliberate change.')
 param modelVersion string = '2025-04-14'
