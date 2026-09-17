@@ -166,6 +166,15 @@ FOUNDATION_MODULES=(
   azure/modules/cost-budget.bicep
 )
 
+# The foundation's other inputs: main.bicep holds the module calls, gates and lookups, and the param
+# files hold the values fed to them. A change here can be foundation-only, application-only, or
+# both, so require_foundation_current can only warn about these — never refuse.
+FOUNDATION_INPUTS=(
+  azure/main.bicep
+  azure/main.test.bicepparam
+  azure/main.prod.bicepparam
+)
+
 # One step counter rather than hardcoded banners: application mode runs the foundation-currency
 # check, foundation mode does not.
 STEP=0
@@ -362,10 +371,45 @@ require_foundation_current() {
     echo -e "${YELLOW}    what-if only, so this is a warning — --live refuses here. Run --foundation first.${NC}" >&2
   }
 
-  local last sha changed
+  # `az` is handed the working tree (-f azure/main.bicep), so an uncommitted or untracked edit is
+  # applied by a --foundation run and dropped by an application one, exactly like a committed edit.
+  # git log cannot see either, which is what git status is here for.
+  local dirty inputs_dirty inputs_changed=''
+  dirty=$(git -C "$REPO_ROOT" status --porcelain -- "${FOUNDATION_MODULES[@]}" 2>/dev/null || true)
+  inputs_dirty=$(git -C "$REPO_ROOT" status --porcelain -- "${FOUNDATION_INPUTS[@]}" 2>/dev/null || true)
+
+  local last sha='' changed
   last=$(az deployment group list -g "$RESOURCE_GROUP" --subscription "$SUBSCRIPTION" --only-show-errors \
     --query "[?starts_with(name, 'infra-fnd-') && properties.provisioningState=='Succeeded'] | sort_by(@, &properties.timestamp) | [-1].name" \
     -o tsv 2>/dev/null || true)
+
+  if [ -n "$last" ] && [ "$last" != 'None' ]; then
+    # infra-fnd-<sha>-<hhmmss>
+    sha="${last#infra-fnd-}"
+    sha="${sha%-*}"
+    if [ "$sha" = 'manual' ] || ! git -C "$REPO_ROOT" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+      sha=''
+    fi
+  fi
+
+  # Advisory, both modes: these files change for application work too, so a refusal here would
+  # block ordinary app deploys. The reader is the one who knows which half an edit touched.
+  if [ -n "$sha" ]; then
+    inputs_changed=$(git -C "$REPO_ROOT" log --oneline "${sha}..HEAD" -- "${FOUNDATION_INPUTS[@]}" 2>/dev/null || true)
+  fi
+  if [ -n "$inputs_dirty" ] || [ -n "$inputs_changed" ]; then
+    echo -e "${YELLOW}  ? main.bicep or a .bicepparam changed:${NC}" >&2
+    [ -n "$inputs_changed" ] && sed 's/^/      /' <<<"$inputs_changed" >&2
+    [ -n "$inputs_dirty" ] && sed 's/^...//; s/^/      uncommitted /' <<<"$inputs_dirty" >&2
+    echo -e "${YELLOW}    If any of these touched a foundation module call, gate or lookup, run --foundation first.${NC}" >&2
+  fi
+
+  if [ -n "$dirty" ]; then
+    echo -e "${RED}  ✗ foundation modules have uncommitted changes — az deploys the working tree:${NC}" >&2
+    sed 's/^...//; s/^/      /' <<<"$dirty" >&2
+    refuse_or_warn
+    return 0
+  fi
 
   if [ -z "$last" ] || [ "$last" = 'None' ]; then
     echo -e "${RED}  ✗ ${RESOURCE_GROUP} holds no successful infra-fnd-* deployment${NC}" >&2
@@ -374,11 +418,7 @@ require_foundation_current() {
     return 0
   fi
 
-  # infra-fnd-<sha>-<hhmmss>
-  sha="${last#infra-fnd-}"
-  sha="${sha%-*}"
-
-  if [ "$sha" = 'manual' ] || ! git -C "$REPO_ROOT" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+  if [ -z "$sha" ]; then
     echo -e "${YELLOW}  ? ${last} names a commit this checkout does not hold — nothing to compare against.${NC}" >&2
     echo -e "${YELLOW}    Fetch that commit, or run --foundation.${NC}" >&2
     return 0

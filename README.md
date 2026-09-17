@@ -596,6 +596,22 @@ CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live
 `--live` is required to apply in every environment; prod additionally refuses without
 `CONFIRM_PROD=yes`.
 
+The plain command deploys the application layer only — the Function App, the secret sync, the
+availability test and the devbox. `--foundation` deploys everything, and is required after a change
+to one of the twelve foundation modules under `azure/modules/`: `identity`, `key-vault`,
+`cosmos-nosql`, `observability`, `audit-logs`, `foundry`, `ai-search`, `search-existing`, `apim`,
+`static-site`, `document-storage`, `cost-budget`.
+
+```bash
+# foundation and application together
+CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --foundation --live
+```
+
+An application run compares those modules against the commit the last `--foundation` run deployed
+from. If any of them changed, or has an uncommitted edit, it refuses under `--live` and warns under
+what-if. A change to `azure/main.bicep` or a `.bicepparam` file only warns, because those files
+change for application work too.
+
 ### Secrets live in Key Vault
 
 `demi-kv-<env>` holds the credentials the API resolves at runtime as

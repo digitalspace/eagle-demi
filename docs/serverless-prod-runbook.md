@@ -34,10 +34,14 @@ Flex instance warm), and the reconcile drift alert.
 
 ## Deploy
 
-1. `./scripts/deploy-infra.sh prod` (what-if is the default). Expect ONLY creates: FC1 plan
-   `demi-plan-fc-prod`, app `demi-api-fc-prod`, its storage, `demi-apim-prod` and children.
+Both steps take `--foundation`: without it the script deploys the application layer alone, and
+`demi-apim-prod` is a foundation module. `--foundation` deploys everything, and is required after
+any change to one of the foundation modules listed in the README.
+
+1. `./scripts/deploy-infra.sh prod --foundation` (what-if is the default). Expect ONLY creates: FC1
+   plan `demi-plan-fc-prod`, app `demi-api-fc-prod`, its storage, `demi-apim-prod` and children.
    Anything touching `plan-eagle-search-prod` or `eagle-search-api-prod` = stop and read.
-2. `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`. If the APIM named value fails 403,
+2. `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --foundation --live`. If the APIM named value fails 403,
    that is the same-deployment RBAC propagation race — plain rerun succeeds.
 3. Deploy the release tag to `demi-api-fc-prod` through the prod workflow's Flex step
    (`gh workflow run "Deploy to Prod" -f version=<tag>`, GH environment approval gate).

@@ -1450,3 +1450,45 @@ test('deploy-infra.sh sets DEPLOY_FOUNDATION only under --foundation', () => {
   assert.match(DEPLOY, /\[ "\$\{CONFIRM_PROD:-\}" != 'yes' \]/,
     'the prod apply guard is not conditional on the layer either');
 });
+
+// The currency check is the only thing standing between an application-only apply and a foundation
+// edit that is never PUT, so what it can SEE is the whole guard. `az` deploys the working tree;
+// git history is a different set of facts, and main.bicep plus the param files are foundation
+// inputs the module list does not name.
+test('the currency check reads the working tree, not just the commit history', () => {
+  assert.match(DEPLOY, /dirty=\$\(git -C "\$REPO_ROOT" status --porcelain -- "\$\{FOUNDATION_MODULES\[@\]\}"/,
+    'an uncommitted edit to a foundation module is as unapplied as a committed one — git log ' +
+    'cannot see it, so the check has to ask git status too');
+
+  const dirtyBlock = /if \[ -n "\$dirty" \]; then[\s\S]*?\n {2}fi\n/.exec(DEPLOY);
+  assert.ok(dirtyBlock, 'the uncommitted-module finding needs its own branch');
+  assert.match(dirtyBlock[0], /^\s+refuse_or_warn$/m,
+    'an uncommitted foundation edit takes the same route as a committed one: refuse on --live, ' +
+    'warn on what-if');
+
+  assert.strictEqual((DEPLOY.match(/^\s+refuse_or_warn$/gm) || []).length, 3,
+    'exactly three findings refuse: no recorded foundation deploy, committed module changes, and ' +
+    'uncommitted module changes — a fourth means the advisory input warning started refusing');
+});
+
+test('the currency check also watches main.bicep and both param files', () => {
+  for (const input of ['azure/main.bicep', 'azure/main.test.bicepparam', 'azure/main.prod.bicepparam']) {
+    assert.ok(DEPLOY.includes(`  ${input}\n`),
+      `${input} decides what the foundation deploys — a budget bump or a re-pointed module call ` +
+      'there is invisible to a check that only walks the module files');
+  }
+
+  assert.match(DEPLOY, /inputs_dirty=\$\(git -C "\$REPO_ROOT" status --porcelain -- "\$\{FOUNDATION_INPUTS\[@\]\}"/,
+    'uncommitted input edits count the same as committed ones');
+  assert.match(DEPLOY, /inputs_changed=\$\(git -C "\$REPO_ROOT" log --oneline "\$\{sha\}\.\.HEAD" -- "\$\{FOUNDATION_INPUTS\[@\]\}"/,
+    'committed input edits are measured from the recorded foundation deployment, like the modules');
+
+  // These three files change for application-only work as often as for foundation work, so they
+  // can only ever advise. A refusal here would block every ordinary app deploy.
+  const inputsBlock = /if \[ -n "\$inputs_dirty" \] \|\| \[ -n "\$inputs_changed" \]; then[\s\S]*?\n {2}fi\n/.exec(DEPLOY);
+  assert.ok(inputsBlock, 'the input warning needs its own branch');
+  assert.doesNotMatch(inputsBlock[0], /refuse_or_warn|exit 3/,
+    'a change to main.bicep or a param file warns in BOTH modes — it never refuses');
+  assert.match(inputsBlock[0], /run --foundation first/,
+    'the warning has to say what to do about it');
+});
