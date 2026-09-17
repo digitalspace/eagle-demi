@@ -93,7 +93,10 @@ site down or fills the index with nulls:
    The script refuses to reset while an execution is in progress: a `PT5M` tick that finishes after
    the reset writes its old high-water mark back and silently undoes it. After the reset it also
    waits for any execution that straddled it to drain before asking for a run, which is what stops
-   a run finishing with `items=0`.
+   a run finishing with `items=0`. The service applies a reset in its own time, so the script also
+   waits 5 seconds before the run, and if the run still started from the old high-water mark it
+   resets again and waits longer — up to three tries, each logged as `DEMI_RESET_RETRY`. After the
+   third it prints `DEMI_RESET_NOT_APPLIED` and stops.
 
 Steps 1 and 2 travel in one run-command call, step 3 in another, so an apply is three or four calls
 in total rather than one per index plus one per poll. The whole wait for step 3 happens on the
