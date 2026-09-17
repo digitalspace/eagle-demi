@@ -59,7 +59,8 @@ scripts/demi-devbox.sh drift --env prod     # or --env test
 ```
 
 It runs `apply-search-definitions.js --check` on the devbox under a temporary Search Service
-Contributor grant, and revokes the grant afterwards. The comparison is against the definitions in
+Contributor grant, and revokes the grant afterwards. One run-command call, however many indexes
+`--only` names. The comparison is against the definitions in
 the devbox checkout, which tracks `main` — if prod is running an older tag, that is still the right
 comparison, because the index has to satisfy whatever is deployed next as well.
 
@@ -82,11 +83,26 @@ site down or fills the index with nulls:
 3. **Reset and run that indexer**, and wait for the run to finish. A schema-only change re-pulls
    nothing on its own — the high-water mark is `_ts` — so the reset is what fills the new column.
    The script refuses to reset while an execution is in progress: a `PT5M` tick that finishes after
-   the reset writes its old high-water mark back and silently undoes it.
+   the reset writes its old high-water mark back and silently undoes it. After the reset it also
+   waits for any execution that straddled it to drain before asking for a run, which is what stops
+   a run finishing with `items=0`.
+
+Steps 1 and 2 travel in one run-command call, step 3 in another, so an apply is three or four calls
+in total rather than one per index plus one per poll. The whole wait for step 3 happens on the
+devbox; what comes back is a `DEMI_RESULT` line per indexer with its row counts.
 
 Then re-run step 1's curl. `documents-indexer` reports around 61,500 rows processed when it has done
 its job; `projects-indexer` around 393. `chunks-indexer` is hours and about 1.1M rows — do not reset
 it to fix a metadata index.
+
+An indexer that is still running when the wait's deadline passes is a warning, not a failure: the
+run was posted and it is working. Re-read it with `watch`. For `chunks-indexer` skip the wait
+altogether — run-command itself gives up after 90 minutes:
+
+```bash
+scripts/demi-devbox.sh apply --env prod --only chunks --datasources demi-chunks-ds --no-wait
+scripts/demi-devbox.sh watch --env prod --datasources demi-chunks-ds
+```
 
 Prerequisites, if the script stops early:
 
@@ -113,5 +129,5 @@ to: a wider index serves a narrower `$select` perfectly well.
 ## Afterwards
 
 - Run `scripts/demi-devbox.sh drift --env prod` as the last step of every prod release, and after
-  any deploy that touches `azure/search/` or search code.
+  any deploy that touches `azure/search/` or search code. It is one call and takes under a minute.
 - Field-by-field background, and every hand recipe this script wraps: `azure/search/README.md`.

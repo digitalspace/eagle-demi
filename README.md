@@ -116,6 +116,20 @@ index, data source, indexer reset and run. It reads the resource group, the tena
 identity off the resources themselves, so a prod run cannot inherit the test defaults. Outage
 symptoms and the rest of the response: `docs/runbook-search-outage.md`.
 
+Each phase is one `az vm run-command invoke`, and every invoke is a 20-45 s round trip through ARM.
+That is why a drift check is a single call and an apply is three or four, whatever `--only` names:
+the per-index steps loop inside one payload, and the wait for the indexer runs on the devbox
+(`src/scripts/reset-and-run-indexers.js`) rather than as a call per poll.
+
+`chunks-indexer` takes hours and run-command gives up after 90 minutes, so reset it with
+`--no-wait`: the script posts the reset and the run, releases the role grant, and prints the
+`watch` command to pick the wait back up later.
+
+```bash
+scripts/demi-devbox.sh apply --env prod --only chunks --datasources demi-chunks-ds --no-wait
+scripts/demi-devbox.sh watch --env prod --datasources demi-chunks-ds
+```
+
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
 npm run db:seed-nosql -- --only projects --live   # projects only

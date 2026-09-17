@@ -33,6 +33,12 @@
 #      a `PT5M` tick that was already running writes its old high-water mark back when it finishes
 #      and silently undoes the clear (hit 2026-09-07).
 #
+# Each phase is ONE `az vm run-command invoke`, and each invoke is a 20-45 s ARM long poll. That is
+# why the per-index steps are a loop inside one payload and why the indexer wait runs on the VM
+# (`src/scripts/reset-and-run-indexers.js`) instead of a poll per tick from here: an apply is 3-4
+# calls, a drift is 1. `--no-wait` stops after the run is posted, which is the only workable mode
+# for chunks-indexer — run-command itself gives up after 90 minutes.
+#
 # A data source named by `--datasources` is PUT BEFORE step 1: step 2 only covers data sources that
 # already exist and differ, and a new indexer's dry run refuses while its data source is missing.
 # That early PUT also makes it equal to the committed copy, so step 2 can no longer see it — the
@@ -49,7 +55,8 @@
 # ENV VARS: `DEVBOX_RUNNER` (path to an external `run --env <env> -- <command>` wrapper; when unset
 # this calls `az vm run-command invoke` itself), `DEVBOX_CHECKOUT` (default `/opt/eagle-demi`),
 # `DS_RG` (Cosmos account's resource group, only needed when the subscription holds more than one
-# account), `INDEXER_POLL_SLEEP`, `INDEXER_TIMEOUT`, `AZ` (the `az` seam the tests drive).
+# account), `INDEXER_POLL_SLEEP`, `INDEXER_TIMEOUT`, `INDEXER_TIMEOUT_LONG`, `AZ` (the `az` seam the
+# tests drive).
 set -euo pipefail
 
 AZ="${AZ:-az}"
@@ -69,30 +76,41 @@ DEVBOX_CHECKOUT="${DEVBOX_CHECKOUT:-/opt/eagle-demi}"
 # script runs inside it.
 INDEXER_POLL_SLEEP="${INDEXER_POLL_SLEEP:-30}"
 INDEXER_TIMEOUT="${INDEXER_TIMEOUT:-1800}"
+# chunks-indexer re-pulls ~1.1M rows. 80 minutes is as long as one wait can be: run-command stops
+# at 90. Anything longer than that has to go through `--no-wait` plus `watch`.
+INDEXER_TIMEOUT_LONG="${INDEXER_TIMEOUT_LONG:-4800}"
 
 ENV_NAME='test'
 ONLY=''
 ASSUME_YES=0
 DATASOURCES=''
+NO_WAIT=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/demi-devbox.sh <drift|apply> [--env test|prod] [--only <index,...>]
-                              [--datasources <name,...>] [--yes]
+Usage: scripts/demi-devbox.sh <drift|apply|watch> [--env test|prod] [--only <index,...>]
+                              [--datasources <name,...>] [--yes] [--no-wait]
 
   drift    read-only: run apply-search-definitions.js --check on the devbox and exit 1 when a
            committed field is missing from the live index. Run it after any deploy that touches
            azure/search/ or search code, and before a prod release.
   apply    dry-run, print, confirm, then PUT the indexes, PUT the data sources whose committed
            SELECT differs, and reset + run those indexers. --yes skips the prompt.
+  watch    read-only: wait for the current execution of the indexers that read --datasources.
+           What to run after an `apply --no-wait`.
 
   --env    test (default) or prod
   --only   index or indexer names, comma separated: documents, projects, chunks
   --yes    do not prompt before the writing half of `apply`
+  --no-wait
+           post the indexer reset and run, then stop without waiting. Use it for chunks: that run
+           takes hours, and holding the role grant open for them is the wider risk. Follow with
+           `watch`.
   --datasources
            data source names to PUT before the dry run, comma separated. Needed when adding an
            indexer whose data source does not exist yet: its dry run refuses on the missing name.
            Written first, behind their own prompt, and their indexers are reset with the rest.
+           Also names the indexers `watch` follows.
 
 Env    Subscription                            Search service      Devbox
 test   7897ceb1-9a86-4639-87d7-7f9ff67142b3    demi-search-test    demi-devbox-test
@@ -164,12 +182,23 @@ remote_script() {
 }
 
 # The LAST DEMI_EXIT line of ONE call's output. Never hand this the output of several calls joined
-# together: `--only documents,projects` makes one call per index and every exit line lands in the
-# same text, so a grep for DEMI_EXIT=0 lets a clean index hide a failing one.
+# together: every exit line lands in the same text, so a grep for DEMI_EXIT=0 lets a clean step
+# hide a failing one.
 remote_ok() {
   local last
   last="$(grep -o 'DEMI_EXIT=[0-9][0-9]*' <<<"$1" | tail -1 || true)"
   [[ "$last" == 'DEMI_EXIT=0' ]]
+}
+
+# One payload now runs several steps, and run-command carries back a single status for the lot, so
+# each step prints its own exit code and the verdict is every one of them. A `--only a,b` run whose
+# second index is clean must not pass for the first.
+remote_steps_ok() {
+  local out="$1" rcs
+  remote_ok "$out" || return 1
+  rcs="$(grep -o 'DEMI_STEP [A-Za-z0-9_-]* [0-9][0-9]*' <<<"$out" | awk '{print $3}' || true)"
+  [[ -n "$rcs" ]] || return 1
+  ! grep -qv '^0$' <<<"$rcs"
 }
 
 devbox_run() {
@@ -230,6 +259,37 @@ only_args() {
   done
 }
 
+# The same names as one space-separated list for the remote loop. A run that named none carries the
+# label `all`, so every step still reports under a name `remote_steps_ok` can read.
+only_labels() {
+  local n out=''
+  local -a onlies=()
+  mapfile -t onlies < <(only_args)
+  for n in "${onlies[@]}"; do out="${out:+${out} }${n:-all}"; done
+  printf '%s' "$out"
+}
+
+# One payload for every `--only` name. A call per index used to be most of an apply's wall time:
+# each `az vm run-command invoke` is a 20-45 s ARM long poll whatever it carries.
+multi_only_cmd() {
+  local flag="$1"
+  printf 'git pull --ff-only && { rc=0; for n in %s; do if [ "$n" = all ]; then o=""; else o="--only $n"; fi; node src/scripts/apply-search-definitions.js %s$o; s=$?; echo "DEMI_STEP $n $s"; [ $s -eq 0 ] || rc=$s; done; [ $rc -eq 0 ]; }' \
+    "$(only_labels)" "${flag:+${flag} }"
+}
+
+# The indexers that read the named data sources, one per name, in the order given.
+resets_for() {
+  local ds indexer out=''
+  for ds in ${1//,/ }; do
+    indexer="$(indexer_for_datasource "$ds")" || die "no committed indexer reads data source ${ds}"
+    out="${out:+${out},}${indexer}"
+  done
+  printf '%s' "$out"
+}
+
+# chunks-indexer re-pulls ~1.1M rows and takes hours; everything else is minutes.
+has_long_indexer() { [[ ",${1}," == *",chunks-indexer,"* ]]; }
+
 # ---------------------------------------------------------------------------------------------
 # drift
 
@@ -249,15 +309,10 @@ do_drift() {
 
 # Runs on this machine, inside the grant, one hop from the devbox.
 internal_drift_run() {
-  local only cmd out rc=0
-  local -a onlies=()
-  mapfile -t onlies < <(only_args)
-  for only in "${onlies[@]}"; do
-    cmd="git pull --ff-only && node src/scripts/apply-search-definitions.js --check${only:+ --only $only}"
-    out="$(devbox_run "$cmd")" || rc=1
-    printf '%s\n' "$out"
-    remote_ok "$out" || rc=1
-  done
+  local out rc=0
+  out="$(devbox_run "$(multi_only_cmd --check)")" || rc=1
+  printf '%s\n' "$out"
+  remote_steps_ok "$out" || rc=1
   return "$rc"
 }
 
@@ -319,13 +374,9 @@ do_apply() {
     fi
   done
 
-  local resets='' indexer
+  local resets=''
   if [[ -n "$write_ds" ]]; then
-    for ds in ${write_ds//,/ }; do
-      indexer="$(indexer_for_datasource "$ds")" \
-        || die "no committed indexer reads data source ${ds}"
-      resets="${resets:+${resets},}${indexer}"
-    done
+    resets="$(resets_for "$write_ds")"
   fi
 
   echo ''
@@ -334,9 +385,10 @@ do_apply() {
   if [[ -n "$write_ds" ]]; then
     echo "  - PUT data source(s): ${write_ds}"
     echo "  - reset and run indexer(s): ${resets}"
-    if [[ ",${resets}," == *",chunks-indexer,"* ]]; then
+    if has_long_indexer "$resets"; then
       echo "  !! chunks-indexer re-pulls ~1.1M rows and takes hours. --only documents or --only"
-      echo "     projects if that is not what you meant."
+      echo "     projects if that is not what you meant, and --no-wait if it is: run-command gives"
+      echo "     up after 90 minutes and the role grant stays open until it does."
     fi
   else
     echo "  - no data source differs, so no indexer reset"
@@ -348,19 +400,26 @@ do_apply() {
     [[ "$answer" == "y" || "$answer" == "Y" ]] || die "aborted — nothing was written"
   fi
 
-  with_grant "$0" __apply-run --env "$ENV_NAME" ${ONLY:+--only "$ONLY"} --datasources "$write_ds"
+  local -a wait_flag=()
+  if [[ "$NO_WAIT" -eq 1 ]]; then wait_flag=(--no-wait); fi
+  with_grant "$0" __apply-run --env "$ENV_NAME" ${ONLY:+--only "$ONLY"} --datasources "$write_ds" \
+    "${wait_flag[@]+"${wait_flag[@]}"}"
+}
+
+# Read-only: no reset, no run, just the wait. What to run after `apply --no-wait`.
+do_watch() {
+  resolve_env
+  preflight_rbac
+  [[ -n "$DATASOURCES" ]] \
+    || die "watch needs --datasources: the indexers it follows are the ones that read them"
+  with_grant "$0" __watch-run --env "$ENV_NAME" --datasources "$DATASOURCES"
 }
 
 internal_dry_run() {
-  local only cmd out rc=0
-  local -a onlies=()
-  mapfile -t onlies < <(only_args)
-  for only in "${onlies[@]}"; do
-    cmd="git pull --ff-only && node src/scripts/apply-search-definitions.js${only:+ --only $only}"
-    out="$(devbox_run "$cmd")" || rc=1
-    printf '%s\n' "$out"
-    remote_ok "$out" || rc=1
-  done
+  local out rc=0
+  out="$(devbox_run "$(multi_only_cmd '')")" || rc=1
+  printf '%s\n' "$out"
+  remote_steps_ok "$out" || rc=1
   return "$rc"
 }
 
@@ -386,94 +445,66 @@ resolve_datasource_env() {
     || die "${SERVICE} has no user-assigned identity; a data source PUT without one breaks the indexer"
 }
 
-put_datasources() {
+# The remote half of a data source PUT, so it can be appended to the live apply instead of costing
+# its own run-command call. DS_DIR at a temp copy holding ONLY the named files:
+# put-search-datasources.js PUTs everything in the directory it is given, and `--only documents`
+# must not rewrite the chunks data source on the way past.
+datasource_cmd() {
   local list="$1" ds copies=''
-  resolve_datasource_env
-  # DS_DIR at a temp copy holding ONLY the files that differ. put-search-datasources.js PUTs
-  # everything in the directory it is given, and `--only documents` must not rewrite the chunks
-  # data source on the way past.
   for ds in ${list//,/ }; do
     copies="${copies} azure/search/datasources/${ds}.json"
   done
-  local cmd out
-  # `git pull` here as well as in the dry run: the pre-create step runs BEFORE the dry run, and a
-  # data source added in this commit is not in the devbox checkout until something pulls it.
-  cmd="git pull --ff-only && rm -rf /tmp/demi-ds && mkdir -p /tmp/demi-ds && cp${copies} /tmp/demi-ds/ && \
-DS_SUB='${SUBSCRIPTION}' DS_RG='${COSMOS_RG}' DS_IDENTITY_ID='${DS_IDENTITY_ID}' DS_DIR=/tmp/demi-ds \
-node src/scripts/put-search-datasources.js"
-  out="$(devbox_run "$cmd")" || true
-  printf '%s\n' "$out"
-  remote_ok "$out" || die "the data source PUT failed — the indexes are widened but the columns are not projected"
+  printf '{ rm -rf /tmp/demi-ds && mkdir -p /tmp/demi-ds && cp%s /tmp/demi-ds/ && DS_SUB=%s DS_RG=%s DS_IDENTITY_ID=%s DS_DIR=/tmp/demi-ds node src/scripts/put-search-datasources.js; s=$?; echo "DEMI_STEP datasources $s"; [ $s -eq 0 ]; }' \
+    "$copies" "'${SUBSCRIPTION}'" "'${COSMOS_RG}'" "'${DS_IDENTITY_ID}'"
 }
 
-indexer_status() {
-  local name="$1" out
-  # Read `executionHistory[0]`, never the top-level `status`: that reads `running` the whole time
-  # the indexer is enabled on its schedule, reset or no reset.
-  local js='const n=process.argv[1];
-const ai=require("./src/search/ai-search");
-const ep=(process.env.SEARCH_ENDPOINT||"").replace(/\/+$/,"");
-ai.getToken().then(async (t)=>{
-  const r=await fetch(ep+"/indexers/"+n+"/status?api-version=2024-07-01",{headers:{Authorization:"Bearer "+t}});
-  if(r.status!==200){console.log("STATUS=http"+r.status);process.exit(1);}
-  const j=await r.json();
-  const e=(j.executionHistory||[])[0]||{};
-  console.log("STATUS="+(e.status||"none")+" START="+(e.startTime||"-")+" ITEMS="+(e.itemsProcessed===undefined?"-":e.itemsProcessed)+" FAILED="+(e.itemsFailed===undefined?"-":e.itemsFailed));
-}).catch((err)=>{console.log("STATUS=error");console.error(err.message);process.exit(1);});'
-  out="$(devbox_run "node -e '${js}' -- '${name}'")" || true
+put_datasources() {
+  local out
+  resolve_datasource_env
+  # `git pull` here as well as in the apply: the pre-create step runs BEFORE the dry run, and a
+  # data source added in this commit is not in the devbox checkout until something pulls it.
+  out="$(devbox_run "git pull --ff-only && $(datasource_cmd "$1")")" || true
   printf '%s\n' "$out"
+  remote_steps_ok "$out" || die "the data source PUT failed — the indexes are widened but the columns are not projected"
 }
 
 field_of() { grep -o "$2=[^ ]*" <<<"$1" | tail -1 | cut -d= -f2-; }
 
-reset_and_run_indexer() {
-  local name="$1" out status start_before start_now deadline
-  out="$(indexer_status "$name")"
-  remote_ok "$out" || die "could not read ${name} status — refusing to reset blind"
-  status="$(field_of "$out" STATUS)"
-  start_before="$(field_of "$out" START)"
-  echo "demi-devbox: ${name} last execution ${status} (${start_before})"
-  [[ "$status" != "inProgress" ]] \
-    || die "${name} is running now. A tick that finishes after a reset writes its old high-water mark back and undoes the clear. Wait for it, then re-run."
-
-  # POST with an empty string body, not a bare POST: the REST API answers 411 without a
-  # content-length, and passing `body: ""` is what makes undici send `content-length: 0`.
-  local js='const n=process.argv[1];
-const ai=require("./src/search/ai-search");
-const ep=(process.env.SEARCH_ENDPOINT||"").replace(/\/+$/,"");
-ai.getToken().then(async (t)=>{
-  const h={Authorization:"Bearer "+t};
-  const reset=await fetch(ep+"/indexers/"+n+"/reset?api-version=2024-07-01",{method:"POST",headers:h,body:""});
-  console.log("RESET="+reset.status);
-  if(reset.status>=300){console.error(await reset.text());process.exit(1);}
-  const run=await fetch(ep+"/indexers/"+n+"/run?api-version=2024-07-01",{method:"POST",headers:h,body:""});
-  console.log("RUN="+run.status);
-  if(run.status>=300){console.error(await run.text());process.exit(1);}
-}).catch((err)=>{console.error(err.message);process.exit(1);});'
-  out="$(devbox_run "node -e '${js}' -- '${name}'")" || true
+# Reset, run and wait for every indexer in ONE call. The wait itself runs on the VM
+# (src/scripts/reset-and-run-indexers.js): a poll from here costs a 20-45 s ARM round trip per
+# tick, which is how a 360-row index used to take an hour and then miss its own deadline.
+run_indexers_remote() {
+  local list="$1" mode="${2:-reset}" out line timeout="$INDEXER_TIMEOUT" busy
+  if has_long_indexer "$list"; then timeout="$INDEXER_TIMEOUT_LONG"; fi
+  out="$(devbox_run "git pull --ff-only && \
+DEMI_MODE='${mode}' DEMI_POLL_SLEEP='${INDEXER_POLL_SLEEP}' DEMI_TIMEOUT='${timeout}' \
+DEMI_NO_WAIT='${NO_WAIT}' node src/scripts/reset-and-run-indexers.js ${list//,/ }")" || true
   printf '%s\n' "$out"
-  remote_ok "$out" || die "reset/run of ${name} failed"
 
-  deadline=$((SECONDS + INDEXER_TIMEOUT))
-  while true; do
-    sleep "$INDEXER_POLL_SLEEP"
-    out="$(indexer_status "$name")"
-    remote_ok "$out" || die "lost contact with ${name} while waiting for its run"
-    status="$(field_of "$out" STATUS)"
-    start_now="$(field_of "$out" START)"
-    echo "demi-devbox: ${name} ${status} items=$(field_of "$out" ITEMS) failed=$(field_of "$out" FAILED)"
-    # A new execution, not the one that was already there: the PT5M schedule keeps appending
-    # steady-state ticks with itemsProcessed 0, so "success" alone proves nothing.
-    if [[ "$start_now" != "$start_before" && "$status" == "success" ]]; then
-      echo "demi-devbox: ${name} finished, $(field_of "$out" ITEMS) processed"
-      return 0
+  if ! remote_ok "$out"; then
+    busy="$(grep -o 'DEMI_BUSY [A-Za-z0-9_-]*' <<<"$out" | head -1 | awk '{print $2}' || true)"
+    if [[ -n "$busy" ]]; then
+      die "${busy} is running now. A tick that finishes after a reset writes its old high-water mark back and undoes the clear. Wait for it, then re-run."
     fi
-    if [[ "$start_now" != "$start_before" && "$status" == *Failure* ]]; then
-      die "${name} run ended ${status} — read its executionHistory[0].errors on the devbox"
+    if grep -q 'DEMI_RESET_NOT_APPLIED' <<<"$out"; then
+      die "the reset did not take — the execution kept its old high-water mark, so nothing was re-pulled"
     fi
-    [[ "$SECONDS" -lt "$deadline" ]] \
-      || die "${name} did not finish within ${INDEXER_TIMEOUT}s. It is still running; check its status before resetting again."
-  done
+    die "reset and run of ${list} failed — see the output above"
+  fi
+
+  while read -r line; do
+    echo "demi-devbox: $(field_of "$line" name) finished, $(field_of "$line" items) processed"
+  done < <(grep '^DEMI_RESULT ' <<<"$out" || true)
+
+  # Still running at the deadline is not a failure: the run was posted and the indexer is working.
+  while read -r line; do
+    echo "demi-devbox: ${line#DEMI_WARN }"
+  done < <(grep '^DEMI_WARN ' <<<"$out" || true)
+
+  if [[ "$NO_WAIT" -eq 1 && "$mode" == 'reset' ]]; then
+    echo "demi-devbox: reset and run posted for ${list}; not waiting. Follow it with:"
+    echo "  scripts/demi-devbox.sh watch --env ${ENV_NAME} --datasources ${DATASOURCES}"
+  fi
 }
 
 internal_put_datasources() {
@@ -482,25 +513,28 @@ internal_put_datasources() {
 }
 
 internal_apply_run() {
-  local only cmd out
-  local -a onlies=()
-  mapfile -t onlies < <(only_args)
-  for only in "${onlies[@]}"; do
-    cmd="git pull --ff-only && node src/scripts/apply-search-definitions.js --live${only:+ --only $only}"
-    out="$(devbox_run "$cmd")" || true
-    printf '%s\n' "$out"
-    remote_ok "$out" || die "apply-search-definitions --live failed${only:+ for ${only}}"
-  done
+  local cmd out resets
+  cmd="$(multi_only_cmd --live)"
+  # One payload, so the ordering azure/search/README.md asks for — indexes first, then the data
+  # sources — is the `&&` inside it. A failed index PUT short-circuits before the columns change.
+  if [[ -n "$DATASOURCES" ]]; then
+    resolve_datasource_env
+    cmd="${cmd} && $(datasource_cmd "$DATASOURCES")"
+  fi
+  out="$(devbox_run "$cmd")" || true
+  printf '%s\n' "$out"
+  remote_steps_ok "$out" || die "the write failed — see the output above"
 
   [[ -n "$DATASOURCES" ]] || { echo "demi-devbox: no data source to write, no indexer to reset"; return 0; }
 
-  put_datasources "$DATASOURCES"
+  resets="$(resets_for "$DATASOURCES")"
+  run_indexers_remote "$resets"
+}
 
-  local ds indexer
-  for ds in ${DATASOURCES//,/ }; do
-    indexer="$(indexer_for_datasource "$ds")" || die "no committed indexer reads data source ${ds}"
-    reset_and_run_indexer "$indexer"
-  done
+internal_watch_run() {
+  local resets
+  resets="$(resets_for "$DATASOURCES")"
+  run_indexers_remote "$resets" watch
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -513,6 +547,7 @@ while [[ $# -gt 0 ]]; do
     --only) ONLY="${2:-}"; shift 2 ;;
     --datasources) DATASOURCES="${2:-}"; shift 2 ;;
     --yes|-y) ASSUME_YES=1; shift ;;
+    --no-wait) NO_WAIT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "demi-devbox: unknown argument '$1'" >&2; usage >&2; exit 2 ;;
   esac
@@ -523,7 +558,8 @@ done
 case "$ACTION" in
   drift) do_drift ;;
   apply) do_apply ;;
-  __drift-run|__dry-run|__apply-run|__put-datasources)
+  watch) do_watch ;;
+  __drift-run|__dry-run|__apply-run|__put-datasources|__watch-run)
     [[ "${DEMI_DEVBOX_INTERNAL:-}" == '1' ]] || die "${ACTION} is internal; use drift or apply"
     RG="${DEMI_RG:?}"; VM_RG="${DEMI_VM_RG:?}"; TENANT="${DEMI_TENANT:?}"
     case "$ENV_NAME" in
@@ -537,6 +573,7 @@ case "$ACTION" in
       __dry-run) internal_dry_run ;;
       __apply-run) internal_apply_run ;;
       __put-datasources) internal_put_datasources ;;
+      __watch-run) internal_watch_run ;;
     esac
     ;;
   -h|--help|'') usage; [[ -n "$ACTION" ]] || exit 1 ;;
