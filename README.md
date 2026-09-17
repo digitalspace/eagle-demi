@@ -149,8 +149,23 @@ then resets and runs the indexers it touched. The wait stops at 25 minutes — s
 indexer named, which for `chunks` is the normal outcome. The rebuild carries on either way.
 
 The identity still needs Search Service Contributor at the service scope for the duration of the
-run; `scripts/with-search-admin.sh` is what grants and revokes it. Set `SEARCH_DEFINITIONS_QUEUE`
-to the storage queue name or the route answers 503 and the devbox recipe above is the way through.
+run; `scripts/with-search-admin.sh` is what grants and revokes it. `SEARCH_DEFINITIONS_QUEUE`,
+`DS_SUB`, `DS_RG` and `DS_IDENTITY_ID` come from `azure/main.bicep` — no queue name and the route
+answers 503, and the devbox recipe above is the way through.
+
+`scripts/with-search-admin.sh apply --env <env>` does the grant, the POST, the poll and the revoke
+in one command:
+
+```bash
+ADMIN_API_KEY=... scripts/with-search-admin.sh apply --env test --only projects \
+  --datasources demi-projects-ds --live
+```
+
+It calls `https://demi-apim-<env>.azure-api.net/machine/admin/search-definitions/apply`. The
+`/machine` product takes the route without the `/api` prefix, because the APIM backend already
+carries it. `queued` and `running` are polled through; `succeeded` and `warned` exit 0, `failed`
+and anything else exit 1. A `warned` run prints the per-indexer results and the warning — for
+`chunks` that is the usual end, and the rebuild carries on after the role is revoked.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write

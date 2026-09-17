@@ -38,11 +38,16 @@
 #     --datasources demi-projects-ds --live
 #
 # The route is POST /admin/search-definitions/apply through the APIM `/machine` path, which answers
-# 202 with a job id; this polls the job until it stops moving, then revokes. ADMIN_API_KEY is the
-# same admin key the rest of the tooling uses (deploy-infra.sh) and is never printed or put on a
-# command line — it is handed to curl in a config file, because argv is readable by anything on
-# the box. `/machine` also wants a subscription key: export APIM_SUBSCRIPTION_KEY when the gateway
-# is enforcing one.
+# 202 with a job id; this polls the job until it stops moving, then revokes. APIM's backend already
+# carries the `/api` prefix (azure/modules/apim.bicep: `serviceUrl` is `https://<app>/api`), so the
+# path here is the route without it. The job ends `succeeded`, `warned` or `failed`
+# (src/jobs/search-definitions.js); `warned` exits 0 — it is what a chunks run normally ends as,
+# the definitions are written and the indexer is still going past the 25-minute wait.
+#
+# ADMIN_API_KEY is the same admin key the rest of the tooling uses (deploy-infra.sh) and is never
+# printed or put on a command line — it is handed to curl in a config file, because argv is readable
+# by anything on the box. `/machine` also wants a subscription key: export APIM_SUBSCRIPTION_KEY when
+# the gateway is enforcing one.
 #
 set -euo pipefail
 
@@ -244,6 +249,20 @@ json_field() {
   ' "$1" "$2"
 }
 
+# One line per indexer out of the job's `results`, which is where the per-indexer verdict lives —
+# the top-level status only says whether any of them needs a look.
+job_results() {
+  node -e '
+    let doc = {};
+    try { doc = JSON.parse(process.argv[1]); } catch { doc = {}; }
+    const results = Array.isArray(doc.results) ? doc.results : [];
+    for (const r of results) {
+      const counts = r.itemsProcessed == null ? "" : ` items=${r.itemsProcessed} failed=${r.itemsFailed}`;
+      process.stdout.write(`  ${r.indexer} ${r.status}${counts}\n`);
+    }
+  ' "$1" >&2
+}
+
 # `-w` puts the status code on its own last line, so one call carries both halves and a 500 with a
 # JSON error body is still readable.
 http_json() {
@@ -305,8 +324,10 @@ while true; do
   fi
 
   STATUS="$(json_field "$POLL" status)"
+  # The two non-terminal statuses the job writes, spelled as it spells them. A wider list would
+  # read a status this app never emits as "still going" and hold the role until the deadline.
   case "$STATUS" in
-    queued|running|pending|inProgress) ;;
+    queued|running) ;;
     *) break ;;
   esac
 
@@ -321,12 +342,21 @@ while true; do
 done
 
 case "$STATUS" in
-  ready|succeeded|success|complete|completed|done)
-    echo "with-search-admin: job ${JOB_ID} ${STATUS}" >&2
+  succeeded)
+    echo "with-search-admin: job ${JOB_ID} succeeded" >&2
+    job_results "$POLL"
+    ;;
+  warned)
+    # Not a failure, and the common end of a chunks run: the definitions are written and the reset
+    # is issued, but an indexer was still running when the job's 25-minute wait ran out. The
+    # rebuild carries on without the role — it needs the data plane, not the control plane.
+    echo "with-search-admin: job ${JOB_ID} finished WITH WARNINGS — read the results below." >&2
+    job_results "$POLL"
     ;;
   *)
     ERROR="$(json_field "$POLL" error)"
     echo "with-search-admin: job ${JOB_ID} ended ${STATUS}${ERROR:+ — ${ERROR}}" >&2
+    job_results "$POLL"
     exit 1
     ;;
 esac

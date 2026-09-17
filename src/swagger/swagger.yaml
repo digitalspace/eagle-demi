@@ -2854,7 +2854,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  jobId: { type: string, format: uuid }
+                  jobId: { type: string, example: 'searchdef:0f0c2b9a-6d0f-4d2a-9f56-1a2b3c4d5e6f' }
                   status: { type: string, enum: [queued] }
                   statusUrl: { type: string }
                   request:
@@ -2878,8 +2878,13 @@ paths:
       description: >-
         The run's status, its step log and one result per indexer. `resetIssuedAt` is when the
         reset went out; a job that carries it has indexers rebuilding whatever happens to this
-        invocation. `warned` means the run finished but something needs a look — drift on a check
-        run, or an indexer still running when the wait ended.
+        invocation.
+
+        `queued` and `running` are the two statuses a poller waits on. `succeeded`, `warned` and
+        `failed` are the three it stops at, and `warned` is a finish, not a failure: the run
+        completed but something needs a look — drift on a check run, or an indexer still running
+        when the 25-minute wait ended, which is the normal end of a `chunks` rebuild.
+        `scripts/with-search-admin.sh apply` exits 0 on `warned` and prints the results.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -2889,7 +2894,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       responses:
         '200':
           description: Job status.
@@ -2898,7 +2902,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  jobId: { type: string, format: uuid }
+                  jobId: { type: string, example: 'searchdef:0f0c2b9a-6d0f-4d2a-9f56-1a2b3c4d5e6f' }
                   status:
                     type: string
                     enum: [queued, running, succeeded, failed, warned]

@@ -252,6 +252,13 @@ param bulkCleanupSchedule string = ''
 @description('Storage queue the chunk parent-field re-stamp worker triggers on. Empty registers no worker, and the document write then skips the re-stamp.')
 param chunkRestampQueue string = ''
 
+// ── Search definition apply ──────────────────────────────────────────────────
+@description('Storage queue the search definition apply worker triggers on, e.g. `search-definitions`. Empty registers no worker and POST /admin/search-definitions/apply answers 503.')
+param searchDefinitionsQueue string = ''
+
+@description('Resource id of the user-assigned identity the search service runs its indexers as. Written into every data source the apply PUTs, so an empty value makes the indexer fail its next run on "Ensure managed identity is enabled".')
+param dataSourceIdentityId string = ''
+
 // Feature on means cleanup on: a queue with no sweep fills the container with zips nothing
 // deletes. An explicit schedule still wins, so an environment can move the hour.
 var cleanupSchedule = empty(bulkCleanupSchedule) && !empty(bulkDownloadsQueue)
@@ -301,7 +308,7 @@ resource deployContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
 
 // Shared by every queue below, so its condition is the OR of theirs — an environment that runs
 // only one of the two features still needs the service.
-resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue)) {
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue) || !empty(searchDefinitionsQueue)) {
   parent: apiStorage
   name: 'default'
 }
@@ -334,6 +341,20 @@ resource chunkRestampQueueResource 'Microsoft.Storage/storageAccounts/queueServi
 resource chunkRestampPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(chunkRestampQueue)) {
   parent: queueService
   name: '${chunkRestampQueue}-poison'
+}
+
+// Search definition apply jobs waiting to run. One job id per message, and the row the id names is
+// re-read by the worker — a redelivery cannot change what was asked for.
+resource searchDefinitionsQueueResource 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(searchDefinitionsQueue)) {
+  parent: queueService
+  name: searchDefinitionsQueue
+}
+
+// Declared rather than left to the runtime: an apply that burned its attempts left the search
+// service part-way through a definition change, which is the message a human has to see.
+resource searchDefinitionsPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(searchDefinitionsQueue)) {
+  parent: queueService
+  name: '${searchDefinitionsQueue}-poison'
 }
 
 resource blobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -587,6 +608,28 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'CHUNK_RESTAMP_QUEUE'
           value: chunkRestampQueue
+        }
+        // Search definition apply. Same shape: the worker is registered only when the name is set,
+        // and without it the apply route answers 503 and the devbox recipe is the way through.
+        {
+          name: 'SEARCH_DEFINITIONS_QUEUE'
+          value: searchDefinitionsQueue
+        }
+        // What src/scripts/put-search-datasources.js needs to build a data source's connection
+        // string: the Cosmos account it names lives in this deployment's subscription and group,
+        // and the identity is the one the SEARCH service runs indexers as, which in prod is not
+        // this app's (main.bicep passes it).
+        {
+          name: 'DS_SUB'
+          value: subscription().subscriptionId
+        }
+        {
+          name: 'DS_RG'
+          value: resourceGroup().name
+        }
+        {
+          name: 'DS_IDENTITY_ID'
+          value: dataSourceIdentityId
         }
         {
           name: 'BULK_MAX_DOCUMENTS'

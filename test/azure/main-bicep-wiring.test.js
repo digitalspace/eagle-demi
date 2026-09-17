@@ -21,6 +21,7 @@ const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bi
 const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
 const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
+const AI_SEARCH_PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'ai-search.prod.bicepparam'), 'utf8');
 
 const { summaryLine } = require('../../src/scripts/reconcile-eagle');
 
@@ -121,7 +122,9 @@ const WIRED = [
   ['analyticsDcrImmutableId', /^\s+analyticsDcrImmutableId: analyticsDcrImmutableId$/m,
     'the API module call — an endpoint with no immutable ID addresses no rule, so the app reads OFF'],
   ['analyticsWorkspaceCustomerId', /^\s+analyticsWorkspaceCustomerId: analyticsWorkspaceCustomerId$/m,
-    'the API module call — without it GET /admin/audit never sees the rows written since the repoint']
+    'the API module call — without it GET /admin/audit never sees the rows written since the repoint'],
+  ['searchDefinitionsQueue', /^\s+searchDefinitionsQueue: searchDefinitionsQueue$/m,
+    'the API module call — without it the app setting reads empty and the apply route answers 503']
 ];
 
 for (const [name, wiring, why] of WIRED) {
@@ -1136,4 +1139,60 @@ test('the availability probe matches on a key the search response still carries'
     `the probe requires ${JSON.stringify(match[1])}, which search.js no longer emits`);
   assert.match(AVAILABILITY, /PassIfTextFound: true/,
     'the match has to mean "present", not "absent"');
+});
+
+// The search definition apply needs four settings and a queue, and `az bicep build` compiles an app
+// that is missing any of them. Each one fails quietly in its own way: no queue name and the route
+// answers 503; no DS_* and put-search-datasources.js writes the literal string "undefined" into a
+// data source, which the service accepts and the indexer then fails on. Text-structural, with the
+// same limits as the guards above.
+test('the API app is given the search definition queue and the data source env', () => {
+  const setting = (name, value) =>
+    new RegExp(`name: '${name}'\\n\\s+value: ${value}$`, 'm');
+
+  assert.match(API_MODULE, setting('SEARCH_DEFINITIONS_QUEUE', 'searchDefinitionsQueue'),
+    'the queue name the worker triggers on must come from the parameter, not a literal');
+  assert.match(API_MODULE, setting('DS_SUB', 'subscription\\(\\).subscriptionId'));
+  assert.match(API_MODULE, setting('DS_RG', 'resourceGroup\\(\\).name'),
+    'DS_RG names the Cosmos account\'s group, which is the group this template deploys into');
+  assert.match(API_MODULE, setting('DS_IDENTITY_ID', 'dataSourceIdentityId'),
+    'the data source identity is the SEARCH service\'s, so it cannot be hardcoded to ours');
+
+  // The identity differs by environment: ours when we deployed the service, the existing service's
+  // own when we did not. Hardcoding either half breaks the other environment's indexers.
+  assert.match(MAIN,
+    /^\s+dataSourceIdentityId: deploySearch \? identity\.outputs\.identityId : existingSearchIndexerIdentityId$/m,
+    'main.bicep must choose the data source identity by whether it owns the search service');
+});
+
+test('the search definition queue is declared where the worker will look for it', () => {
+  assert.match(API_MODULE,
+    /queueServices\/queues@[\d-]+' = if \(!empty\(searchDefinitionsQueue\)\) \{\n\s+parent: queueService\n\s+name: searchDefinitionsQueue$/m,
+    'the queue must be named from the param, or the worker triggers on a queue nothing declared');
+  assert.match(API_MODULE, /name: '\$\{searchDefinitionsQueue\}-poison'$/m,
+    'a job that burns its attempts left the search service part-way through a definition change');
+
+  // The queue service is shared, and its condition is the OR of every queue's. Left out, the queue
+  // above has no parent in an environment that runs only this feature.
+  const queueService = /^resource queueService '[^']+' = if \((.+)\) \{$/m.exec(API_MODULE);
+  assert.ok(queueService, 'api-function-flex.bicep must declare the queue service');
+  assert.ok(queueService[1].includes('!empty(searchDefinitionsQueue)'),
+    'the queue service must deploy for an environment that sets only the search definition queue');
+
+  assert.match(TEST_PARAMS, /^param searchDefinitionsQueue = 'search-definitions'$/m,
+    'test is where an apply is rehearsed; without the queue it falls back to the devbox');
+  assert.match(PROD_PARAMS, /^param searchDefinitionsQueue = ''$/m,
+    'prod stays explicitly off until test has rehearsed the route');
+});
+
+// One identity, two spellings: search-existing.bicep grants Cosmos Data Reader to the PRINCIPAL,
+// and a data source names the same identity by RESOURCE ID. They are set in different files, so
+// nothing but this stops prod granting one identity and PUTting another.
+test('the prod data source identity is the identity demi-search-prod runs indexers as', () => {
+  const owner = /^param identityId = '([^']+)'$/m.exec(AI_SEARCH_PROD_PARAMS);
+  const used = /^param existingSearchIndexerIdentityId = '([^']+)'$/m.exec(PROD_PARAMS);
+  assert.ok(owner, 'ai-search.prod.bicepparam must name the identity the service runs as');
+  assert.ok(used, 'main.prod.bicepparam must name the identity data sources authenticate as');
+  assert.strictEqual(used[1], owner[1],
+    'a data source PUT naming an identity the service does not hold leaves the indexer at 403');
 });

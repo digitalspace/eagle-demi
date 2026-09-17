@@ -177,6 +177,9 @@ param existingSearchEndpoint string = ''
 @description('Principal of the identity the existing search service runs its indexers as. Used only when `deploySearch` is false; grants it Cosmos Data Reader.')
 param existingSearchIndexerPrincipalId string = ''
 
+@description('Resource id of that same identity. Used only when `deploySearch` is false: a data source PUT names the identity by resource id, not principal.')
+param existingSearchIndexerIdentityId string = ''
+
 // Search Service Contributor for the API identity. False in every param file, and meant to stay
 // that way: the grant is temporary, turned on for the window an apply runs in and turned off after.
 // `scripts/with-search-admin.sh` does the same grant and revoke directly, which is the usual route;
@@ -262,6 +265,9 @@ param bulkCleanupSchedule string = ''
 // a deployed environment can arrive at by losing a setting.
 @description('Storage queue the chunk parent-field re-stamp worker triggers on, e.g. `chunk-restamp`. Empty skips the re-stamp and flags the document `parentFieldsPending` — it does NOT patch inline; repair with backfill-chunk-parent-fields.js --pending.')
 param chunkRestampQueue string = ''
+
+@description('Storage queue the search definition apply worker triggers on, e.g. `search-definitions`. Empty answers POST /admin/search-definitions/apply with 503, and the devbox recipe in docs/runbook-search-outage.md is the way through.')
+param searchDefinitionsQueue string = ''
 
 @description('Deploy the log alert that fires when a bulk job fails.')
 param deployBulkDownloadPoisonAlert bool = false
@@ -556,6 +562,10 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule
     chunkRestampQueue: chunkRestampQueue
+    searchDefinitionsQueue: searchDefinitionsQueue
+    // The identity the SEARCH service runs indexers as, which is only ours when we deployed the
+    // service: prod's `demi-search-prod` runs as `eagle-search-identity-prod`.
+    dataSourceIdentityId: deploySearch ? identity.outputs.identityId : existingSearchIndexerIdentityId
     bulkMaxDocuments: bulkMaxDocuments
     bulkAnonMaxDocuments: bulkAnonMaxDocuments
     bulkMaxBytes: bulkMaxBytes

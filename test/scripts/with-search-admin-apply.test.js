@@ -48,6 +48,7 @@ exit 0
  * Stands in for `curl`. Answers the enqueue POST with a job id, then walks $CURL_STATUSES one entry
  * per poll — so a test names the job's whole life as a list. The body and the status code are
  * printed the way the script asks for them, body first and `%{http_code}` on its own last line.
+ * $CURL_JOB_RESULTS is the `results` array the job records, one entry per indexer.
  */
 const FAKE_CURL = `#!/usr/bin/env bash
 echo "curl $*" >> "\${CALL_LOG}"
@@ -59,10 +60,10 @@ if [[ "$url" == *"/apply" ]]; then
 fi
 n=0
 [[ -f "\${CALL_LOG}.n" ]] && n="$(cat "\${CALL_LOG}.n")"
-read -r -a statuses <<< "\${CURL_STATUSES:-ready}"
+read -r -a statuses <<< "\${CURL_STATUSES:-succeeded}"
 status="\${statuses[$n]:-\${statuses[-1]}}"
 echo "$((n + 1))" > "\${CALL_LOG}.n"
-echo "{\\"id\\":\\"job-1\\",\\"status\\":\\"\${status}\\",\\"error\\":\\"\${CURL_JOB_ERROR:-}\\"}"
+echo "{\\"id\\":\\"job-1\\",\\"status\\":\\"\${status}\\",\\"error\\":\\"\${CURL_JOB_ERROR:-}\\",\\"results\\":\${CURL_JOB_RESULTS:-[]}}"
 echo "\${CURL_GET_CODE:-200}"
 exit 0
 `;
@@ -123,7 +124,7 @@ test('with-search-admin.sh apply', async (t) => {
     // Revoking while the job is still queued or running is the same outage as never granting: the
     // app loses the role mid-apply. The revoke has to follow the last poll, not the POST.
     const r = run(['apply', '--env', 'test', '--only', 'projects'],
-      { env: { CURL_STATUSES: 'queued running ready' } });
+      { env: { CURL_STATUSES: 'queued running succeeded' } });
     assert.strictEqual(r.status, 0, r.stderr);
     assert.strictEqual(r.calls.filter(isPoll).length, 3, 'it must poll until the job stops moving');
     const deleted = indexOf(r.calls, isDelete);
@@ -137,6 +138,35 @@ test('with-search-admin.sh apply', async (t) => {
     assert.notStrictEqual(r.status, 0, 'a failed apply must not report success');
     assert.strictEqual(r.calls.filter(isDelete).length, 1, 'a failed job must still revoke');
     assert.match(r.stderr, /index put rejected/, 'the operator needs the job error, not just a code');
+  });
+
+  await t.test('treats `warned` as a success, with the per-indexer results', async () => {
+    // What a chunks run normally ends as: the definitions are written, the reset is issued, and the
+    // indexer is still going when the job's 25-minute wait runs out. Exiting non-zero here would
+    // have the operator chase a run that did its job, and the results say which indexer to watch.
+    const r = run(['apply', '--env', 'test', '--only', 'chunks', '--live'], {
+      env: {
+        CURL_STATUSES: 'running warned',
+        CURL_JOB_RESULTS: '[{"indexer":"chunks-indexer","status":"stillRunning"},' +
+          '{"indexer":"projects-indexer","status":"success","itemsProcessed":"412","itemsFailed":"0"}]'
+      }
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr, /WARNING|WITH WARNINGS/, 'a warned job has to say so, not pass silently');
+    assert.match(r.stderr, /chunks-indexer stillRunning/, 'the indexer still running must be named');
+    assert.match(r.stderr, /projects-indexer success items=412 failed=0/);
+    assert.strictEqual(r.calls.filter(isDelete).length, 1, 'a warned job still revokes');
+  });
+
+  await t.test('ends on a status the job never emits instead of polling through it', async () => {
+    // The job writes queued, running, succeeded, warned or failed (src/jobs/search-definitions.js).
+    // Anything else is the two sides having drifted apart, and reading it as "still going" holds the
+    // role open to the deadline while reading it as done would report an unknown state as success.
+    const r = run(['apply', '--env', 'test', '--only', 'projects'],
+      { env: { CURL_STATUSES: 'ready' } });
+    assert.notStrictEqual(r.status, 0, 'an unknown status is not a success');
+    assert.strictEqual(r.calls.filter(isPoll).length, 1, 'it must not keep polling an unknown status');
+    assert.strictEqual(r.calls.filter(isDelete).length, 1);
   });
 
   await t.test('revokes when the POST itself is rejected', async () => {

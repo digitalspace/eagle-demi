@@ -61,6 +61,10 @@ param existingSearchEndpoint = 'https://demi-search-prod.search.windows.net'
 // -n eagle-search-identity-prod --query principalId`.
 param existingSearchIndexerPrincipalId = '20211fb1-1d7c-43ab-ae57-fbcd6a5034e7'
 
+// The same identity by resource id, which is what a data source's `identity` block names. The
+// value is azure/ai-search.prod.bicepparam's `identityId` — one identity, two spellings.
+param existingSearchIndexerIdentityId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-search-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/eagle-search-identity-prod'
+
 // Search Service Contributor for demi-identity-prod. Stays false: the definition apply grants the
 // role for the length of one run and revokes it (`scripts/with-search-admin.sh`), so the
 // internet-facing API does not stand holding the ability to delete an index. Set it true here only
@@ -182,6 +186,12 @@ param deployBulkDownloadPoisonAlert = false
 // type the document no longer has. Infrastructure deploys before the code that reads it, so the
 // queue exists by the time the first message is sent.
 param chunkRestampQueue = 'chunk-restamp'
+
+// ── Search definition apply ───────────────────────────────────────────────────────────────────
+// OFF: turn on ('search-definitions') after test has rehearsed the route. Until then an index change
+// here runs from demi-devbox-prod. The route is sysadmin-only and still needs the temporary Search
+// Service Contributor grant, so the queue existing does not by itself let anything write a definition.
+param searchDefinitionsQueue = ''
 
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.
