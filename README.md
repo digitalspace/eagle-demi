@@ -161,11 +161,30 @@ ADMIN_API_KEY=... scripts/with-search-admin.sh apply --env test --only projects 
   --datasources demi-projects-ds --live
 ```
 
+`ADMIN_API_KEY` is the env var name, not the break-glass key. Mint one for the run instead — a
+registry key whose only role is `sysadmin`, which is all this route needs:
+
+```bash
+curl -sS -X POST "$DEMI_API/admin/api-keys" -H "X-Api-Key: $DEMI_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"name":"search-definitions <who> <date>","roles":["sysadmin"],"allowWrite":true}'
+```
+
+The plaintext comes back once and nowhere else. Export it as `ADMIN_API_KEY`, run the apply, then
+`DELETE /admin/api-keys/<keyId>`. A key per run is one that can be revoked the moment the run is
+over and that names who ran it in the audit record; the break-glass key out of Key Vault is
+neither, and every copy of it taken for a routine apply is another place it can leak from. Only a
+caller that already holds `sysadmin` can mint one.
+
 It calls `https://demi-apim-<env>.azure-api.net/machine/admin/search-definitions/apply`. The
 `/machine` product takes the route without the `/api` prefix, because the APIM backend already
 carries it. `queued` and `running` are polled through; `succeeded` and `warned` exit 0, `failed`
-and anything else exit 1. A `warned` run prints the per-indexer results and the warning — for
+and anything else exit 1, and a revoke that fails exits 3 — the grant is still standing and the
+message says how to delete it. A `warned` run prints the per-indexer results and the warning — for
 `chunks` that is the usual end, and the rebuild carries on after the role is revoked.
+
+A run is refused with 409 while another is `queued` or `running`, and `live` needs an explicit
+`--only`: an empty one means every definition, which resets every indexer including `chunks`.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write

@@ -36,7 +36,12 @@ const { logger } = require('../utils/logger');
  * prefix is what keeps these rows off GET /bulk-downloads/:id, whose id check is a bare UUID —
  * the same trick the `quota:` rows in that container use.
  */
-const JOB_PREFIX = 'searchdef:';
+const JOB_PREFIX = jobs.SEARCH_DEF_PREFIX;
+
+// And the row says it too. The prefix is only an id convention, so a row that somehow carries a
+// `searchdef:` id without being one of these jobs is still refused: `run()` resets indexers, and
+// it may only do that for a request this module itself recorded.
+const JOB_KIND = jobs.SEARCH_DEF_KIND;
 
 // A finished job is never re-run: a redelivered message for one has nothing left to do.
 const TERMINAL = ['succeeded', 'failed', 'warned'];
@@ -96,7 +101,7 @@ async function enqueue(jobId) {
 function newJob({ only, datasources: dataSourceNames, live, check, requesterId }) {
   return {
     id: `${JOB_PREFIX}${crypto.randomUUID()}`,
-    kind: 'searchDefinitions',
+    kind: JOB_KIND,
     status: 'queued',
     request: { only, datasources: dataSourceNames, live, check },
     requesterId,
@@ -174,9 +179,24 @@ function indexersFor(only) {
  */
 async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   const id = String(jobId);
+  // WHAT THE MESSAGE MAY NAME, decided before the read. This queue and the zip queue read the same
+  // container, so a message carrying a bulk-download UUID would otherwise be point-read here and
+  // then patched to `running`, `failed` and so on — this handler rewriting another worker's row
+  // and taking a caller's zip away from them. A message that names nothing this job owns is
+  // dropped, not retried: nothing about it will be different on redelivery.
+  if (!id.startsWith(JOB_PREFIX)) {
+    logger.error(`[search-definitions] refusing a message that is not a ${JOB_PREFIX} job id: ${id}`);
+    return;
+  }
   const job = await jobs.getById(id);
   if (!job) {
     logger.error(`[search-definitions] no job row for ${id} (attempt ${attempt}/${maxAttempts})`);
+    return;
+  }
+  // The id got past the prefix check, so this is a row somebody wrote with a colliding id rather
+  // than a job this module created. Refused before the first patch, for the same reason.
+  if (job.kind !== JOB_KIND) {
+    logger.error(`[search-definitions] ${id} is not a ${JOB_KIND} row (kind=${job.kind}) — refusing`);
     return;
   }
   if (TERMINAL.includes(job.status)) {
@@ -282,6 +302,6 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
 }
 
 module.exports = {
-  JOB_PREFIX, WAIT_TIMEOUT_MS,
+  JOB_PREFIX, JOB_KIND, WAIT_TIMEOUT_MS,
   enabled, enqueue, newJob, knownNames, knownDataSourceNames, indexersFor, run
 };

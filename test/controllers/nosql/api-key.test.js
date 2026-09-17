@@ -71,3 +71,41 @@ test('minting a compliance key', async (t) => {
     assert.strictEqual(res.statusCode, 201);
   });
 });
+
+/**
+ * Who may mint a `sysadmin` key.
+ *
+ * Same shape as the compliance gate above and the same reason: `requireAdmin` passes `staff` and
+ * `demi-admin` too, and `sysadmin` is grantable — so without a caller check either of them mints
+ * itself a key that administers the service, this route included.
+ */
+test('minting a sysadmin key', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('a demi-admin cannot mint a sysadmin key', async (t) => {
+    const { res, stored } = await mint(
+      ['demi-admin'], { name: 'ops', roles: ['sysadmin'], allowWrite: true }, t);
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.deepStrictEqual(res.body, { error: 'sysadmin is not grantable by this caller' });
+    assert.deepStrictEqual(stored, [], 'a refused mint writes nothing');
+  });
+
+  await t.test('a staff caller cannot either', async (t) => {
+    const { res, stored } = await mint(
+      ['staff'], { name: 'ops', roles: ['sysadmin'], allowWrite: true }, t);
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.deepStrictEqual(stored, [], 'a refused mint writes nothing');
+  });
+
+  await t.test('a sysadmin can mint a sysadmin key', async (t) => {
+    // The search definition apply is run with one of these, minted for the run and revoked after,
+    // so the gate has to refuse the caller without making the role unmintable.
+    const { res, stored } = await mint(
+      ['sysadmin'], { name: 'search-definitions run', roles: ['sysadmin'], allowWrite: true }, t);
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.deepStrictEqual(stored[0].roles, ['sysadmin']);
+  });
+});

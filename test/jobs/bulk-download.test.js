@@ -1187,3 +1187,53 @@ test('the bulk download worker', async (t) => {
       'paging somebody on delivery 1 of 3 makes the alert noise');
   });
 });
+
+test('the bulk download worker and the rows it does not own', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('a searchdef id on the zip queue is refused before the row is read', async () => {
+    // The `bulkDownloads` container holds three kinds of row and this worker owns one of them. A
+    // search-definition job patched to `ready` here reads as terminal to its own handler, which
+    // then walks away from a chunks rebuild that is hours in.
+    const reads = [];
+    const patches = [];
+    t.mock.method(bulkDownloads, 'getById', async (id) => {
+      reads.push(id);
+      return { id, kind: 'searchDefinitions', status: 'running' };
+    });
+    t.mock.method(bulkDownloads, 'patch', async (id, fields) => { patches.push(fields); });
+    t.mock.method(bulkDownloads, 'patchIfStatus', async (id, fields) => {
+      patches.push(fields);
+      return true;
+    });
+
+    assert.strictEqual(await worker.run(`${bulkDownloads.SEARCH_DEF_PREFIX}abc`), null);
+
+    assert.deepStrictEqual(reads, [], 'a prefixed id must not even be read');
+    assert.deepStrictEqual(patches, [], 'and nothing on that row may be rewritten');
+  });
+
+  await t.test('a row of another kind under a bare id is refused after the read', async () => {
+    // The id shape is a convention, so the row has the last word. The claim is what this asserts
+    // on: it is the worker's first write, an etag-conditioned replace that takes ownership of the
+    // row, and everything else it would do follows from having taken it.
+    const claims = [];
+    const patches = [];
+    // `queued`, so the claim is genuinely available: a status the worker already declines would
+    // make this pass whether the kind is checked or not.
+    t.mock.method(bulkDownloads, 'getById', async (id) => (
+      { id, kind: 'searchDefinitions', status: 'queued' }
+    ));
+    t.mock.method(cosmos, 'replace', async (container, id, pk, item) => { claims.push(item); return item; });
+    t.mock.method(bulkDownloads, 'patch', async (id, fields) => { patches.push(fields); });
+    t.mock.method(bulkDownloads, 'patchIfStatus', async (id, fields) => {
+      patches.push(fields);
+      return true;
+    });
+
+    assert.strictEqual(await worker.run('job-1'), null);
+
+    assert.deepStrictEqual(claims, [], 'the kind on the row decides, not the shape of the id');
+    assert.deepStrictEqual(patches, [], 'and a row it does not own is never written to');
+  });
+});

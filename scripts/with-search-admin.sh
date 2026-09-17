@@ -118,7 +118,8 @@ if [[ -z "$RG" ]]; then
 fi
 
 # The gateway, not the app: direct azurewebsites.net access is platform-403'd since the APIM
-# cutover, and the key is only accepted on the `/machine` path — `/api` is the anonymous one.
+# cutover. `X-Api-Key` is accepted on both APIM APIs — `/machine` is the one for callers that have
+# no browser session, and it is the path this script uses, but the key would work on `/api` too.
 APIM_HOST="${APIM_HOST:-demi-apim-${ENV_NAME}.azure-api.net}"
 API_BASE_URL="${API_BASE_URL:-https://${APIM_HOST}/machine}"
 API_BASE_URL="${API_BASE_URL%/}"
@@ -127,8 +128,9 @@ API_BASE_URL="${API_BASE_URL%/}"
 # of both: no work done, and the role standing for the length of the mistake.
 if [[ "$MODE" == 'apply' && -z "${ADMIN_API_KEY:-}" ]]; then
   echo "with-search-admin: ADMIN_API_KEY is not exported — not granting anything." >&2
-  echo "with-search-admin: read it from the vault on the devbox:" >&2
-  echo "  az keyvault secret show --vault-name <vault> --name admin-api-key --query value -o tsv" >&2
+  echo "with-search-admin: mint a key for this run rather than reusing the break-glass one:" >&2
+  echo "  POST /admin/api-keys {\"name\":\"search-definitions <who> <date>\",\"roles\":[\"sysadmin\"]}" >&2
+  echo "with-search-admin: export the plaintext it returns as ADMIN_API_KEY, and revoke it afterwards." >&2
   exit 2
 fi
 
@@ -142,6 +144,22 @@ PRINCIPAL_ID="$("$AZ" identity show --subscription "$SUBSCRIPTION" -g "$RG" -n "
 if [[ -z "$PRINCIPAL_ID" ]]; then
   echo "with-search-admin: could not resolve principalId for $IDENTITY in $RG" >&2
   exit 1
+fi
+
+# A grant from an earlier run that was killed does not go away on its own: the trap below cannot
+# fire on SIGKILL or a lost VM, and the role then stands with nobody watching it. Report it and
+# carry on — this run creates and revokes its OWN assignment, so refusing here would only mean an
+# operator working around the script, and the stale grant would still be there afterwards.
+# Filtered by role name rather than id because that is the string the message has to print.
+STALE="$("$AZ" role assignment list --subscription "$SUBSCRIPTION" --scope "$SCOPE" \
+  --assignee "$PRINCIPAL_ID" \
+  --query "[?roleDefinitionName=='Search Service Contributor'].id" -o tsv 2>/dev/null || true)"
+if [[ -n "$STALE" ]]; then
+  echo "with-search-admin: WARNING — ${IDENTITY} ALREADY holds Search Service Contributor on ${SERVICE}:" >&2
+  echo "$STALE" | sed 's/^/  /' >&2
+  echo "with-search-admin: probably left behind by a run that was killed. This run does not remove it," >&2
+  echo "with-search-admin: so that grant outlives this window until somebody does:" >&2
+  echo "  az role assignment delete --ids <id above>" >&2
 fi
 
 ASSIGNMENT_ID=''
@@ -163,8 +181,14 @@ revoke() {
     # `|| true`: a failed revoke must not mask the command's own exit status, and it must still be
     # reported loudly rather than swallowed.
     "$AZ" role assignment delete --ids "$ASSIGNMENT_ID" >/dev/null 2>&1 || {
-      echo "with-search-admin: REVOKE FAILED — remove it by hand:" >&2
+      echo "with-search-admin: REVOKE FAILED — Search Service Contributor IS STILL GRANTED to" >&2
+      echo "with-search-admin: ${IDENTITY} on ${SERVICE}. It stands until somebody deletes it:" >&2
       echo "  az role assignment delete --ids $ASSIGNMENT_ID" >&2
+      # Overrides the command's own status, success included. A run that did its work and left the
+      # public API able to rewrite the search service has not succeeded, and a 0 here is what would
+      # let CI and the operator move on without reading the lines above. 3 is this script's only
+      # other code for "the grant is still standing" (1 is a refusal, 2 a missing key).
+      status=3
     }
   fi
   exit "$status"

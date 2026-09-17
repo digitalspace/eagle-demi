@@ -22,6 +22,7 @@ const ID = `${searchDefinitions.JOB_PREFIX}6f1c4b9e-0d2a-4d9d-9c3e-1f5f9a2b7c40`
 function row(overrides = {}) {
   return {
     id: ID,
+    kind: searchDefinitions.JOB_KIND,
     status: 'queued',
     request: { only: ['projects'], datasources: [], live: true, check: false },
     ...overrides
@@ -199,6 +200,38 @@ test('search definition job', async (t) => {
 
     assert.deepStrictEqual(h.applied, []);
     assert.deepStrictEqual(h.patches, []);
+  });
+
+  await t.test('a bulk-download id on this queue is refused before the row is read', async () => {
+    // Both workers read the `bulkDownloads` container. A zip job's UUID arriving here — a
+    // misrouted message, or a caller that can reach the queue — must not become this handler
+    // patching that row to `running` and then `failed`, which takes a caller's download away and
+    // makes the zip worker's own writes race a second owner.
+    const reads = [];
+    const patches = [];
+    t.mock.method(jobs, 'getById', async (id) => {
+      reads.push(id);
+      return { id, status: 'queued', documentIds: ['doc-1'] };
+    });
+    t.mock.method(jobs, 'patch', async (id, fields) => { patches.push(fields); });
+
+    await searchDefinitions.run('6f1c4b9e-0d2a-4d9d-9c3e-1f5f9a2b7c40');
+
+    assert.deepStrictEqual(reads, [], 'a row this job does not own must not even be read');
+    assert.deepStrictEqual(patches, [], 'and nothing on it may be rewritten');
+  });
+
+  await t.test('a prefixed id whose row is another kind is refused after the read', async () => {
+    // The prefix is an id convention, not a guarantee about the row. A row that carries one
+    // without being a search-definition job still names no request this module recorded, so
+    // running it would reset indexers on nobody's say-so.
+    const patches = [];
+    t.mock.method(jobs, 'getById', async (id) => ({ id, kind: 'somethingElse', status: 'queued' }));
+    t.mock.method(jobs, 'patch', async (id, fields) => { patches.push(fields); });
+
+    await searchDefinitions.run(ID);
+
+    assert.deepStrictEqual(patches, [], 'a row of the wrong kind is never touched');
   });
 });
 

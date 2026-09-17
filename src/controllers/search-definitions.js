@@ -13,20 +13,34 @@ const jobs = require('../repositories/bulk-downloads');
 const searchDefinitions = require('../jobs/search-definitions');
 const { serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
+// Required as a MODULE, not destructured: the test replaces it with `t.mock.method`, which cannot
+// reach a destructured binding.
+const audit = require('../utils/audit');
 
 // Stricter than a shrug at unknown keys: a misspelled `datasource` would silently apply nothing to
 // the data sources and report success, which is the failure mode this whole path exists to end.
 const ALLOWED_BODY_KEYS = ['only', 'datasources', 'live', 'check'];
 
-/** A list of known names, or the 400 that says which one is not known. */
+// Comfortably above every name this package carries and far below anything worth scanning. The
+// list is checked against it BEFORE the names are read, because the 400 below quotes back the
+// entries it did not recognise — an unbounded list would be reflected into the response and, for
+// `only`, would be one `apply.run()` per entry.
+const MAX_NAMES = 20;
+
+/** A list of known names, deduplicated, or the 400 that says what is wrong with it. */
 function names(value, field, known) {
   if (value === undefined) return { value: [] };
   if (!Array.isArray(value)) return { error: `${field} must be an array of names.` };
+  if (value.length > MAX_NAMES) {
+    return { error: `${field} takes at most ${MAX_NAMES} names.` };
+  }
   const unknown = value.filter(name => typeof name !== 'string' || !known.includes(name));
   if (unknown.length > 0) {
     return { error: `${field} names nothing this package carries: ${unknown.join(', ')}. Known: ${known.join(', ')}.` };
   }
-  return { value };
+  // A repeat is not a second thing to do: the job PUTs once per entry, so `['chunks','chunks']`
+  // would apply and reset the same indexer twice.
+  return { value: [...new Set(value)] };
 }
 
 function flag(value, field) {
@@ -63,8 +77,29 @@ exports.applySearchDefinitions = async (req, res) => {
       return res.status(400).json({ error: 'check writes nothing, so it cannot take datasources.' });
     }
 
+    // An empty `only` means "every definition", which on a live run resets every indexer — chunks
+    // included, and that is hours of rebuild during which search serves a partial index. Nobody
+    // asks for that by leaving a field out, so it has to be named.
+    if (live.value && only.value.length === 0) {
+      return res.status(400).json({
+        error: 'live needs a non-empty only list: applying everything resets every indexer, chunks included.'
+      });
+    }
+
     if (!searchDefinitions.enabled()) {
       return res.status(503).json({ error: 'search definition apply disabled' });
+    }
+
+    // ONE APPLY AT A TIME. Two runs PUT the same definitions and reset the same indexers, and the
+    // second reset throws away the high-water mark the first is rebuilding from. Checked before
+    // the row is written, so the request that loses never gets a row or a message.
+    const active = await jobs.listActiveSearchDefinitionJobs();
+    if (active.length > 0) {
+      const running = active[0];
+      return res.status(409).json({
+        error: `a search definition apply is already ${running.status}.`,
+        jobId: String(running.id).slice(searchDefinitions.JOB_PREFIX.length)
+      });
     }
 
     const user = (req && req.user) || {};
@@ -95,6 +130,22 @@ exports.applySearchDefinitions = async (req, res) => {
 
     logger.info(`[search-definitions] job queued job=${job.id} only=${only.value.join(',') || 'all'} ` +
       `live=${live.value} check=${check.value}`);
+
+    // Written once the work is actually queued, and with the stored row id, so the seven-year
+    // record names a row somebody can still go and read. This is the privileged action the route
+    // exists for — it decides what the search service serves — so it belongs beside apikey.create
+    // in EagleAudit_CL rather than only in the app log, which is kept for weeks.
+    audit.auditEvent(req, {
+      action: 'searchDefinitions.apply',
+      targetType: 'searchDefinitions',
+      targetId: job.id,
+      detail: {
+        only: only.value,
+        datasources: datasources.value,
+        live: live.value,
+        check: check.value
+      }
+    });
 
     return res.status(202).json({
       jobId: id,

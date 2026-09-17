@@ -34,6 +34,16 @@ const PARTITION_FIELD = 'id';
 // by bare id. Shared by both controllers so one id shape is enforced in one place.
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// The id prefix and the `kind` field that tell a search-definition row from a zip row. They live
+// here, with the container, because both workers and both controllers have to agree on them and a
+// second copy of either string is a way for the two kinds to start reaching each other's rows.
+const SEARCH_DEF_PREFIX = 'searchdef:';
+const SEARCH_DEF_KIND = 'searchDefinitions';
+
+// What `queued` and `running` mean for a search-definition job: the run is not over, so a second
+// apply must not start. Every other status in STATUSES is terminal for that kind.
+const ACTIVE_STATUSES = ['queued', 'running'];
+
 // Every status a job row may carry. A patch condition takes no parameters, so `patchIfStatus`
 // interpolates; this is what keeps the interpolated values off the callers' hands.
 const STATUSES = ['queued', 'running', 'ready', 'failed', 'expired', 'cancelled'];
@@ -88,6 +98,26 @@ async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 
     parameters: [
       ...names.map((name, i) => ({ name, value: String(statuses[i]) })),
       { name: '@cutoff', value: String(cutoffIso) }
+    ]
+  }, { maxItemCount: limit });
+  return items;
+}
+
+/**
+ * The search-definition jobs that are still going.
+ *
+ * A prefix match on the id, which is also the partition key, so this reads the container's own
+ * index rather than scanning rows. `limit` is a page: the caller only needs to know whether there
+ * is one, so there is no reason to drain the set.
+ */
+async function listActiveSearchDefinitionJobs({ limit = 10 } = {}) {
+  const names = ACTIVE_STATUSES.map((_, i) => `@status${i}`);
+  const { items } = await cosmos.query(CONTAINER, {
+    query: `SELECT c.id, c.status, c.createdAt FROM c ` +
+      `WHERE STARTSWITH(c.id, @prefix) AND c.status IN (${names.join(', ')})`,
+    parameters: [
+      { name: '@prefix', value: SEARCH_DEF_PREFIX },
+      ...names.map((name, i) => ({ name, value: ACTIVE_STATUSES[i] }))
     ]
   }, { maxItemCount: limit });
   return items;
@@ -212,7 +242,10 @@ module.exports = {
   CONTAINER,
   PARTITION_FIELD,
   JOB_ID,
+  SEARCH_DEF_PREFIX,
+  SEARCH_DEF_KIND,
   getById,
+  listActiveSearchDefinitionJobs,
   create,
   patch,
   patchIfStatus,

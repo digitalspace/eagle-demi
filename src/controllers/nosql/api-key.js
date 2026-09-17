@@ -44,6 +44,9 @@ exports.GRANTABLE_ROLES = GRANTABLE_ROLES;
  */
 const APIM_ROW_ID = /^apim:[a-z0-9-]+$/;
 
+/** The top admin role. Named once so the mint gate below and its test read the same string. */
+const SYSADMIN_ROLE = 'sysadmin';
+
 exports.createApiKey = async (req, res) => {
   try {
     const { name, roles, projectScope, expiresAt, id } = req.body || {};
@@ -65,6 +68,14 @@ exports.createApiKey = async (req, res) => {
     // (docs/rbac-architecture.md §1, condition 3). The list stays grantable; the caller is gated.
     if (roles.includes(SEALED_TOKEN) && !holdsSealed(rolesFor(req))) {
       return res.status(400).json({ error: `${SEALED_TOKEN} is not grantable by this caller` });
+    }
+
+    // Same gate, same reason, for the role that opens every admin route there is. `requireAdmin`
+    // passes staff and demi-admin as well, so without this a staff caller mints itself a key that
+    // administers the service — including this route, and including the search definition apply
+    // that decides what the search service serves.
+    if (roles.includes(SYSADMIN_ROLE) && !rolesFor(req).includes(SYSADMIN_ROLE)) {
+      return res.status(400).json({ error: `${SYSADMIN_ROLE} is not grantable by this caller` });
     }
 
     // A typo here used to mint a key with a junk expiry; verify() now fails closed on one, so

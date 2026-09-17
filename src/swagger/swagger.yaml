@@ -2862,11 +2862,22 @@ paths:
         '400':
           description: >-
             An unknown body parameter, a name this build does not carry, a non-boolean `live` or
-            `check`, both of them together, or `datasources` on a `check` run.
+            `check`, both of them together, or `datasources` on a `check` run. `live: true` requires
+            a non-empty `only`. `only` and `datasources` are deduplicated and capped at 20 entries.
         '401':
           description: Unauthorized.
         '403':
           description: Forbidden. Requires the `sysadmin` role.
+        '409':
+          description: >-
+            Another search-definition job is queued or running; the body carries the blocking
+            `jobId`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId: { type: string, example: '0f0c2b9a-6d0f-4d2a-9f56-1a2b3c4d5e6f' }
         '503':
           description: >-
             No queue is configured in this environment, or the job was recorded but could not be

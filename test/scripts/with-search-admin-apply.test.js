@@ -36,7 +36,7 @@ case "$1 $2" in
   "role assignment")
     case "$3" in
       create) echo "${ASSIGNMENT_ID}" ;;
-      list)   echo "${ASSIGNMENT_ID}" ;;
+      list)   [[ -n "\${AZ_LIST_EMPTY:-}" ]] || echo "${ASSIGNMENT_ID}" ;;
       delete) [[ -n "\${AZ_DELETE_FAILS:-}" ]] && exit 1 ;;
     esac ;;
   "resource list")           echo "rg-from-lookup" ;;
@@ -220,8 +220,9 @@ test('with-search-admin.sh apply', async (t) => {
   });
 
   await t.test('goes through the APIM machine path for the environment', async () => {
-    // Direct azurewebsites.net access is platform-403'd since the APIM cutover, and `/api` is the
-    // anonymous path — the key is only accepted on `/machine`.
+    // Direct azurewebsites.net access is platform-403'd since the APIM cutover. `/machine` is the
+    // API for callers with no browser session, which is what this script is; `X-Api-Key` is
+    // accepted on `/api` too, so the path is a choice rather than the only one that works.
     const r = run(['apply', '--env', 'prod', '--only', 'projects'],
       { env: { SUBSCRIPTION: 'sub-x', RG: 'rg-x' } });
     assert.strictEqual(r.status, 0, r.stderr);
@@ -230,6 +231,37 @@ test('with-search-admin.sh apply', async (t) => {
       `machine path missing: ${post}`);
     // And it grants on the environment it is calling, not on the test default.
     assert.match(r.calls.find(isCreate), /searchServices\/demi-search-prod/);
+  });
+
+  await t.test('a revoke that fails takes the run down with it, apply or no apply', async () => {
+    // The apply succeeded, so without this the script exits 0 and the operator moves on — while
+    // the INTERNET-FACING API keeps Search Service Contributor indefinitely. A distinct code (3)
+    // so a caller can tell "the grant is still standing" from "the apply was refused" (1).
+    const r = run(['apply', '--env', 'test', '--only', 'projects'],
+      { env: { AZ_DELETE_FAILS: '1' } });
+
+    assert.strictEqual(r.status, 3, 'a leaked grant is not a successful run');
+    assert.match(r.stderr, /STILL GRANTED/, 'the message has to say the window is still open');
+    assert.ok(r.stderr.includes(ASSIGNMENT_ID), 'and name the assignment, not a placeholder');
+    assert.match(r.stderr, /az role assignment delete --ids/, 'and how to close it');
+  });
+
+  await t.test('warns when the identity already holds the role before this run grants it', async () => {
+    // A run that was killed cannot fire its revoke trap, and the grant it made then stands with
+    // nobody watching. This run revokes only its OWN assignment, so the old one has to be named.
+    const r = run(['apply', '--env', 'test', '--only', 'projects']);
+
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr, /ALREADY holds Search Service Contributor/);
+    assert.strictEqual(r.calls.filter(isCreate).length, 1,
+      'a stale grant is a warning, not a reason to refuse the run');
+  });
+
+  await t.test('says nothing about a stale grant when there is none', async () => {
+    const r = run(['apply', '--env', 'test', '--only', 'projects'], { env: { AZ_LIST_EMPTY: '1' } });
+
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.ok(!/ALREADY holds/.test(r.stderr), 'a clean scope must not raise a stale-grant warning');
   });
 
   await t.test('still runs a plain command when given one', async () => {

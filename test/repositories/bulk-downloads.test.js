@@ -245,3 +245,31 @@ test('listExpired', async (t) => {
     assert.deepStrictEqual(spec.parameters[0], { name: '@status0', value: 'expired' });
   });
 });
+
+test('listActiveSearchDefinitionJobs', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('selects search-definition rows by id prefix and the two live statuses', async () => {
+    // This is what refuses a second apply. Dropping the prefix would count a zip job as an apply
+    // in flight and refuse every run; dropping the status clause would count finished ones and
+    // refuse every run after the first.
+    let spec = null;
+    let options = null;
+    t.mock.method(cosmos, 'query', async (container, querySpec, queryOptions) => {
+      spec = querySpec;
+      options = queryOptions;
+      return { items: [] };
+    });
+
+    assert.deepStrictEqual(await bulkDownloads.listActiveSearchDefinitionJobs(), []);
+
+    assert.match(spec.query, /STARTSWITH\(c\.id, @prefix\)/);
+    assert.match(spec.query, /c\.status IN \(@status0, @status1\)/);
+    assert.deepStrictEqual(
+      spec.parameters.map(p => p.value),
+      [bulkDownloads.SEARCH_DEF_PREFIX, 'queued', 'running']
+    );
+    // The caller only needs to know whether there is one, so there is no reason to drain the set.
+    assert.strictEqual(options.maxItemCount, 10);
+  });
+});

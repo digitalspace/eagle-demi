@@ -190,7 +190,9 @@ test('with-search-admin.sh', async (t) => {
     const r = run(['--', 'true']);
     const kinds = r.calls.map(c => c.split(' ').slice(0, 3).join(' '));
     const created = kinds.indexOf('role assignment create');
-    const listed = kinds.indexOf('role assignment list');
+    // The FIRST list is the stale-grant check, which runs before the create on purpose. The poll
+    // is the one after it.
+    const listed = kinds.findIndex((kind, i) => kind === 'role assignment list' && i > created);
     assert.ok(created >= 0 && listed > created, 'the readiness poll must follow the create');
   });
 });
