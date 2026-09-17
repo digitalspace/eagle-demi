@@ -142,6 +142,17 @@ async function resetAndRun(opts) {
 
     for (let attempt = 1; ; attempt += 1) {
       if (mode === 'reset') {
+        // A scheduled tick can start on top of the run a retry is about to replace. Resetting into
+        // it is what DEMI_BUSY refuses on the first attempt, so wait it out here too.
+        if (attempt > 1 && (await status(name)).status === 'inProgress') {
+          const drain = await waitForRun(name, 0);
+          if (!drain.done) {
+            done = null;
+            last = drain.last;
+            break;
+          }
+        }
+
         const reset = await post(name, 'reset');
         log(`DEMI_RESET ${name} ${reset.status}`);
         if (reset.status >= 300) {
