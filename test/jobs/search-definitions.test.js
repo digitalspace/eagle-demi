@@ -33,8 +33,9 @@ function row(overrides = {}) {
  * Everything that would reach the search service, replaced. The patches are collected in order,
  * because the ORDER of the `resetIssuedAt` write against the reset is the property under test.
  */
-function harness(t, { job, code = 0, resetLog = [] } = {}) {
+function harness(t, { job, code = 0, resetLog = [], claimed = true } = {}) {
   const patches = [];
+  const claims = [];
   const applied = [];
   const resets = [];
   // What the row had been patched with by the time the reset was issued — the stamp has to be in
@@ -42,6 +43,12 @@ function harness(t, { job, code = 0, resetLog = [] } = {}) {
   const patchedByReset = [];
   t.mock.method(jobs, 'getById', async () => job);
   t.mock.method(jobs, 'patch', async (id, fields) => { patches.push(fields); });
+  // The conditional write that claims a queued row. `claimed: false` is the row another delivery
+  // already took.
+  t.mock.method(jobs, 'patchIfStatus', async (id, fields, statuses) => {
+    claims.push({ fields, statuses });
+    return claimed;
+  });
   t.mock.method(aiSearch, 'getToken', async () => 'token');
   t.mock.method(apply, 'run', async (options) => { applied.push(options); });
   t.mock.method(datasources, 'putDataSources', async () => 1);
@@ -51,7 +58,7 @@ function harness(t, { job, code = 0, resetLog = [] } = {}) {
     for (const line of resetLog) options.log(line);
     return code;
   });
-  return { patches, applied, resets, patchedByReset, final: () => patches[patches.length - 1] };
+  return { patches, claims, applied, resets, patchedByReset, final: () => patches[patches.length - 1] };
 }
 
 test('search definition job', async (t) => {
@@ -96,6 +103,43 @@ test('search definition job', async (t) => {
     assert.ok(h.patches.some(p => p.resetIssuedAt), 'the job must record when the reset was issued');
     assert.ok(h.patchedByReset[0].some(p => p.resetIssuedAt),
       'a stamp written after the reset cannot stop a redelivery from resetting again');
+  });
+
+  await t.test('the row is claimed out of `queued`, not just stamped `running`', async () => {
+    // A bare patch cannot tell "nobody has this job" from "another delivery is applying it right
+    // now", so two deliveries of the same message would both PUT the definitions.
+    const h = harness(t, { job: row() });
+
+    await searchDefinitions.run(ID);
+
+    assert.deepStrictEqual(h.claims[0].statuses, ['queued']);
+    assert.strictEqual(h.claims[0].fields.status, 'running');
+    assert.ok(h.claims[0].fields.startedAt, 'the claim is what dates the run');
+  });
+
+  await t.test('a replayed message for a job another delivery already claimed is dropped', async () => {
+    const h = harness(t, { job: row({ status: 'running' }), claimed: false });
+
+    await searchDefinitions.run(ID, { attempt: 2, maxAttempts: 3 });
+
+    assert.deepStrictEqual(h.applied, [], 'a second apply would re-PUT what the first is applying');
+    assert.deepStrictEqual(h.resets, [], 'and a second reset would throw away its rebuild');
+    assert.deepStrictEqual(h.patches, [], "the row another delivery owns is not rewritten");
+  });
+
+  await t.test('a live row with no only list fails without applying or resetting anything', async () => {
+    // The route refuses this pair, so a row carrying it was not written by this build. Applying
+    // everything live resets every indexer, chunks included — hours of partial search results.
+    const h = harness(t, {
+      job: row({ request: { only: [], datasources: [], live: true, check: false } })
+    });
+
+    await searchDefinitions.run(ID);
+
+    assert.strictEqual(h.final().status, 'failed');
+    assert.match(h.final().error, /only/);
+    assert.deepStrictEqual(h.applied, []);
+    assert.deepStrictEqual(h.resets, []);
   });
 
   await t.test('a redelivery past the reset watches instead of resetting again', async () => {

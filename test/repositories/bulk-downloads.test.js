@@ -187,6 +187,21 @@ test('a terminal status write', async (t) => {
     assert.strictEqual(patched.mock.callCount(), 0, 'the condition is interpolated, so it is checked');
   });
 
+  await t.test('accepts the terminal statuses a search-definition job reaches', async () => {
+    // `succeeded` and `warned` are what src/jobs/search-definitions.js finishes a run as. While
+    // they were missing from the allow-list, a conditional patch naming one threw instead of
+    // running, so a claim or a cancel against a finished apply could not be expressed at all.
+    let condition = null;
+    t.mock.method(cosmos, 'patch', async (container, id, pk, operations, cond) => {
+      condition = cond;
+      return {};
+    });
+
+    await bulkDownloads.patchIfStatus('searchdef:job-1', { status: 'cancelled' }, ['succeeded', 'warned']);
+
+    assert.strictEqual(condition, "FROM c WHERE c.status IN ('succeeded', 'warned')");
+  });
+
   await t.test('says so when somebody else already finished the job', async () => {
     t.mock.method(cosmos, 'patch', refuse(412));
 
@@ -263,6 +278,9 @@ test('listActiveSearchDefinitionJobs', async (t) => {
 
     assert.deepStrictEqual(await bulkDownloads.listActiveSearchDefinitionJobs(), []);
 
+    // The caller has to tell a run in flight from a row whose worker died, and `startedAt` is the
+    // only stamp that says which — a projection without it makes every `running` row look live.
+    assert.match(spec.query, /SELECT c\.id, c\.status, c\.createdAt, c\.startedAt/);
     assert.match(spec.query, /STARTSWITH\(c\.id, @prefix\)/);
     assert.match(spec.query, /c\.status IN \(@status0, @status1\)/);
     assert.deepStrictEqual(

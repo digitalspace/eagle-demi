@@ -44,9 +44,13 @@ const SEARCH_DEF_KIND = 'searchDefinitions';
 // apply must not start. Every other status in STATUSES is terminal for that kind.
 const ACTIVE_STATUSES = ['queued', 'running'];
 
-// Every status a job row may carry. A patch condition takes no parameters, so `patchIfStatus`
-// interpolates; this is what keeps the interpolated values off the callers' hands.
-const STATUSES = ['queued', 'running', 'ready', 'failed', 'expired', 'cancelled'];
+// Every status a job row in this container may carry — a zip job's (`ready`, `cancelled`) and a
+// search-definition job's (`succeeded`, `warned`) alike, because both kinds are patched through
+// `patchIfStatus`. A patch condition takes no parameters, so `patchIfStatus` interpolates; this
+// list is what keeps the interpolated values off the callers' hands.
+const STATUSES = [
+  'queued', 'running', 'ready', 'succeeded', 'warned', 'failed', 'expired', 'cancelled'
+];
 
 // Rolling window for the per-day cap, and how long a quota row outlives its last use. Two days, so
 // an in-flight count that leaked (a job whose worker never ran) clears itself.
@@ -109,11 +113,15 @@ async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 
  * A prefix match on the id, which is also the partition key, so this reads the container's own
  * index rather than scanning rows. `limit` is a page: the caller only needs to know whether there
  * is one, so there is no reason to drain the set.
+ *
+ * `startedAt` comes back with the row because `running` alone does not say a run is in flight: a
+ * worker the host killed leaves that status behind for the rest of the row's TTL. The caller dates
+ * the row against the worker's own wait ceiling (src/jobs/search-definitions.js).
  */
 async function listActiveSearchDefinitionJobs({ limit = 10 } = {}) {
   const names = ACTIVE_STATUSES.map((_, i) => `@status${i}`);
   const { items } = await cosmos.query(CONTAINER, {
-    query: `SELECT c.id, c.status, c.createdAt FROM c ` +
+    query: `SELECT c.id, c.status, c.createdAt, c.startedAt FROM c ` +
       `WHERE STARTSWITH(c.id, @prefix) AND c.status IN (${names.join(', ')})`,
     parameters: [
       { name: '@prefix', value: SEARCH_DEF_PREFIX },

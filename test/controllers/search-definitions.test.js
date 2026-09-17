@@ -292,6 +292,61 @@ test('POST /admin/search-definitions/apply', async (t) => {
     assert.strictEqual(response.statusCode, 409);
     assert.deepStrictEqual(taken.sent, []);
   });
+
+  await t.test('a running row whose worker died is not a run in flight', async () => {
+    // A worker the host killed mid-run leaves `running` on the row for the rest of its 30-day TTL,
+    // and nothing is coming to finish it. Counting that row as active refuses every apply for a
+    // month, with a hand-edited Cosmos document as the only way out.
+    const dead = new Date(Date.now() - searchDefinitions.WAIT_TIMEOUT_MS - 60 * 60 * 1000).toISOString();
+    const taken = accept(t, {
+      active: [{
+        id: `${searchDefinitions.JOB_PREFIX}00000000-0000-4000-8000-000000000001`,
+        status: 'running', createdAt: dead, startedAt: dead
+      }]
+    });
+    const response = res();
+
+    await controller.applySearchDefinitions(post({ only: ['projects'], live: true }), response);
+
+    assert.strictEqual(response.statusCode, 202);
+    assert.strictEqual(taken.sent.length, 1, 'the new run was queued');
+  });
+
+  await t.test('a running row still inside the wait window blocks', async () => {
+    // The other side of the same rule: a chunks rebuild legitimately holds `running` for hours,
+    // and a staleness window that swallowed it would let two applies reset the same indexer.
+    const started = new Date(Date.now() - 60 * 1000).toISOString();
+    const taken = accept(t, {
+      active: [{
+        id: `${searchDefinitions.JOB_PREFIX}00000000-0000-4000-8000-000000000002`,
+        status: 'running', createdAt: started, startedAt: started
+      }]
+    });
+    const response = res();
+
+    await controller.applySearchDefinitions(post({ only: ['projects'], live: true }), response);
+
+    assert.strictEqual(response.statusCode, 409);
+    assert.deepStrictEqual(taken.sent, []);
+  });
+
+  await t.test('a queued row is dated from when it was created, having never started', async () => {
+    // A `queued` row has no startedAt, so reading only that stamp would make every queued row
+    // stale at once and the 409 would never fire before a worker picked the job up.
+    const made = new Date(Date.now() - 60 * 1000).toISOString();
+    const taken = accept(t, {
+      active: [{
+        id: `${searchDefinitions.JOB_PREFIX}00000000-0000-4000-8000-000000000003`,
+        status: 'queued', createdAt: made
+      }]
+    });
+    const response = res();
+
+    await controller.applySearchDefinitions(post({ only: ['projects'], live: true }), response);
+
+    assert.strictEqual(response.statusCode, 409);
+    assert.deepStrictEqual(taken.sent, []);
+  });
 });
 
 test('GET /admin/search-definitions/jobs/:id', async (t) => {

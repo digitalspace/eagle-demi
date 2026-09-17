@@ -56,6 +56,11 @@ const MAX_STEPS = 200;
 // job stays `running` with nothing coming to finish it.
 const WAIT_TIMEOUT_MS = 25 * 60 * 1000;
 
+// How long past that ceiling a row may sit before the run behind it is presumed dead. The ceiling
+// is the longest a live worker goes without writing the row, so anything beyond it plus the margin
+// for the queue handoff and the final patch is a worker that is not coming back.
+const STALE_AFTER_MS = WAIT_TIMEOUT_MS + 10 * 60 * 1000;
+
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 /** Whether the queue exists to send to — the NAME, the setting api/index.js guards the trigger on. */
@@ -85,6 +90,25 @@ function knownNames() {
 /** The data sources this package carries. Nothing else may be PUT: there is no committed copy. */
 function knownDataSourceNames() {
   return apply.load(apply.DATASOURCE_DIR).map(d => d.body.name);
+}
+
+/**
+ * Is this `queued` or `running` row a run nothing is working on?
+ *
+ * The 409 that keeps applies one-at-a-time reads the row's status, and a worker the host killed
+ * mid-run leaves `running` there for the rest of the row's 30-day TTL. Without this the next apply
+ * is refused for a month and a hand-edited Cosmos document is the only way out.
+ *
+ * A row with no readable stamp is NOT stale: refusing an apply costs a caller a retry, while
+ * starting a second one resets an indexer another run is rebuilding.
+ */
+function isStale(job, now = Date.now()) {
+  if (!job) return false;
+  // `queued` has never started, so its own age is what says the message was never picked up.
+  const stamp = job.status === 'queued' ? job.createdAt : (job.startedAt || job.createdAt);
+  const at = Date.parse(stamp || '');
+  if (!Number.isFinite(at)) return false;
+  return now - at > STALE_AFTER_MS;
 }
 
 async function enqueue(jobId) {
@@ -224,7 +248,30 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   };
 
   try {
-    await jobs.patch(id, { status: 'running', startedAt: new Date().toISOString() });
+    // The route refuses this pair before it writes a row, so one that carries it came from
+    // somewhere else — an older build, or a row written by hand. Applying everything live resets
+    // every indexer, chunks included, which is hours with search serving a partial index.
+    if (request.live && only.length === 0) {
+      await finish('failed', {
+        error: 'live needs a non-empty only list: applying everything resets every indexer, chunks included.'
+      });
+      return;
+    }
+
+    // CLAIM the row rather than stamping it. A plain patch cannot tell "nobody has this job" from
+    // "another delivery is applying it right now", so a redelivered message would start a second
+    // apply of the same definitions. A redelivery past the reset stamp is the resume case above
+    // and keeps its own path — its row is already `running` and has work left to watch.
+    if (!resuming) {
+      const claimed = await jobs.patchIfStatus(
+        id, { status: 'running', startedAt: new Date().toISOString() }, ['queued']
+      );
+      if (!claimed) {
+        logger.warn(`[search-definitions] ${id} is not queued any more — another delivery has it; ` +
+          'dropping this message');
+        return;
+      }
+    }
 
     const cfg = aiSearch.config();
     if (!cfg.configured) throw new Error('SEARCH_ENDPOINT is not set — nothing to apply against');
@@ -302,6 +349,6 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
 }
 
 module.exports = {
-  JOB_PREFIX, JOB_KIND, WAIT_TIMEOUT_MS,
-  enabled, enqueue, newJob, knownNames, knownDataSourceNames, indexersFor, run
+  JOB_PREFIX, JOB_KIND, WAIT_TIMEOUT_MS, STALE_AFTER_MS,
+  enabled, enqueue, newJob, knownNames, knownDataSourceNames, indexersFor, isStale, run
 };

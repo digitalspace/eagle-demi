@@ -93,7 +93,11 @@ exports.applySearchDefinitions = async (req, res) => {
     // ONE APPLY AT A TIME. Two runs PUT the same definitions and reset the same indexers, and the
     // second reset throws away the high-water mark the first is rebuilding from. Checked before
     // the row is written, so the request that loses never gets a row or a message.
-    const active = await jobs.listActiveSearchDefinitionJobs();
+    // A row is only in the way while something is still working on it: a worker the host killed
+    // leaves `running` behind for the rest of the row's 30-day TTL, and refusing every apply for a
+    // month is not "one at a time", it is an outage nobody can clear from the API.
+    const active = (await jobs.listActiveSearchDefinitionJobs())
+      .filter(job => !searchDefinitions.isStale(job));
     if (active.length > 0) {
       const running = active[0];
       return res.status(409).json({

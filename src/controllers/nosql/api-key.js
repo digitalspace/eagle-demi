@@ -15,7 +15,7 @@
 const apiKeys = require('../../repositories/api-keys');
 const { generateKey, defaultExpiry } = require('../../helpers/api-key');
 const {
-  AUTHENTICATED_ROLES, WRITE_ROLES, SEALED_TOKEN, rolesFor, holdsSealed
+  AUTHENTICATED_ROLES, SECURE_ROLES, WRITE_ROLES, SEALED_TOKEN, rolesFor, holdsSealed
 } = require('../../helpers/access-sql');
 const { forgetCachedKey } = require('../../helpers/auth');
 const { logger } = require('../../utils/logger');
@@ -44,7 +44,7 @@ exports.GRANTABLE_ROLES = GRANTABLE_ROLES;
  */
 const APIM_ROW_ID = /^apim:[a-z0-9-]+$/;
 
-/** The top admin role. Named once so the mint gate below and its test read the same string. */
+/** The top admin role. Named once so the mint gates below and their tests read the same string. */
 const SYSADMIN_ROLE = 'sysadmin';
 
 exports.createApiKey = async (req, res) => {
@@ -63,19 +63,29 @@ exports.createApiKey = async (req, res) => {
       return res.status(400).json({ error: `Unknown role(s): ${unknown.join(', ')}` });
     }
 
+    const held = rolesFor(req);
+
     // The compartment issues its own keys. This route's gate is `requireAdmin`, which every staff,
     // sysadmin and demi-admin caller passes, so without this any of them mints itself into level 0
     // (docs/rbac-architecture.md §1, condition 3). The list stays grantable; the caller is gated.
-    if (roles.includes(SEALED_TOKEN) && !holdsSealed(rolesFor(req))) {
+    if (roles.includes(SEALED_TOKEN) && !holdsSealed(held)) {
       return res.status(400).json({ error: `${SEALED_TOKEN} is not grantable by this caller` });
     }
 
-    // Same gate, same reason, for the role that opens every admin route there is. `requireAdmin`
-    // passes staff and demi-admin as well, so without this a staff caller mints itself a key that
-    // administers the service — including this route, and including the search definition apply
-    // that decides what the search service serves.
-    if (roles.includes(SYSADMIN_ROLE) && !rolesFor(req).includes(SYSADMIN_ROLE)) {
-      return res.status(400).json({ error: `${SYSADMIN_ROLE} is not grantable by this caller` });
+    // Same gate, same reason, for every PRIVILEGED role: a caller may only hand out privilege it
+    // already holds. `requireAdmin` passes staff and demi-admin too, so without this a staff caller
+    // mints itself `demi-admin` — every admin route, this one and the search definition apply
+    // included — or `demi-service-read`, which reads every row at every level with no compartment
+    // exclusion. `sysadmin` is the exception because it is the top role and the only issuer the
+    // machine roles have: nothing holds `demi-service-read` or `demi-service-write` but the keys
+    // minted here, so gating them on the holder would make them unmintable.
+    const escalating = held.includes(SYSADMIN_ROLE)
+      ? []
+      : roles.filter(role => SECURE_ROLES.includes(role) && !held.includes(role));
+    if (escalating.length > 0) {
+      return res.status(400).json({
+        error: `${escalating.join(', ')} is not grantable by this caller`
+      });
     }
 
     // A typo here used to mint a key with a junk expiry; verify() now fails closed on one, so

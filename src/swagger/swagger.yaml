@@ -2870,8 +2870,9 @@ paths:
           description: Forbidden. Requires the `sysadmin` role.
         '409':
           description: >-
-            Another search-definition job is queued or running; the body carries the blocking
-            `jobId`.
+            Another search-definition job is queued or running, so this one is refused; the body
+            carries the blocking `jobId`. A row whose worker has gone quiet for longer than the wait
+            timeout plus 10 minutes (about 35 minutes) is treated as stale and ignored.
           content:
             application/json:
               schema:
