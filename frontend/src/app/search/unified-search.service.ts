@@ -1,7 +1,8 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { RegistryStateService } from '../services/registry-state.service';
-import type { PassageHit, PassageRow } from './grid-types';
+import type { FilterValues, PassageHit, PassageRow } from './grid-types';
 import { RECORD_TYPES, type RecordType } from './grid-url';
+import { toWireFilters } from './search-filters';
 import { RECORD_DATASETS, type OptionSource, type SearchMeta } from './record-types';
 
 /** Shortest keyword worth a round trip. One character matches most of the corpus. */
@@ -31,8 +32,12 @@ export interface SearchRequest {
   pageNum: number;
   pageSize: number;
   sortBy?: string | null;
-  /** Raw filter ids to comma-joined values. The `and[]` wrapping happens here. */
-  filters?: Record<string, string>;
+  /** Filter ids to the values the reader picked. The `and[]` wrapping happens here. */
+  filters?: FilterValues;
+  /** Filter ids holding a year, which becomes the `<id>Start`/`<id>End` range the index takes. */
+  yearIds?: string[];
+  /** Filter ids holding typed text, which is one value rather than a comma-separated list. */
+  textIds?: string[];
   fuzzy?: boolean;
 }
 
@@ -58,9 +63,9 @@ export function searchKeyword(keywords: string): string {
 }
 
 /**
- * The query string the search endpoint takes, in the order it has always been written. A filter
- * value holding several picks is split on commas into one `and[]` each, which is how the backend
- * reads an OR within one field.
+ * The query string the search endpoint takes, in the order it has always been written. The one
+ * place filters are wrapped as `and[]`: a value holding several picks is split on commas into one
+ * `and[]` each, which is how the backend reads an OR within one field.
  */
 export function buildSearchQuery(request: SearchRequest): string {
   let query = `search?dataset=${request.dataset}`;
@@ -68,7 +73,8 @@ export function buildSearchQuery(request: SearchRequest): string {
   if (request.pageNum !== null) query += `&pageNum=${request.pageNum - 1}`;
   if (request.pageSize !== null) query += `&pageSize=${request.pageSize}`;
   if (request.sortBy) query += `&sortBy=${request.sortBy}`;
-  for (const [key, value] of Object.entries(request.filters ?? {})) {
+  const wire = toWireFilters(request.filters ?? {}, request.yearIds, request.textIds);
+  for (const [key, value] of Object.entries(wire)) {
     for (const item of value.split(',')) {
       // An `&` inside a value would end the parameter, so only that case is escaped. Everything
       // else is passed through as written, which is what the backend's parser expects.
@@ -205,7 +211,10 @@ export class UnifiedSearchService {
       this.counts.set(counts);
       return counts;
     } catch (err) {
+      // An aborted read was superseded by the next pause; anything else is a failure worth a trace,
+      // because the badges keep showing the last totals and nothing else says they are stale.
       if (isAbortError(err)) return null;
+      warnCounts(err);
       return null;
     }
   }
@@ -267,7 +276,8 @@ export class UnifiedSearchService {
    */
   private async countsFromSearches(keywords: string, signal: AbortSignal): Promise<TypeCounts> {
     const encoded = encodeURIComponent(keywords);
-    const totals = await Promise.all(
+    // Settled, not all: one dataset that fails costs its own badge rather than the other three.
+    const settled = await Promise.allSettled(
       RECORD_TYPES.map((id) =>
         this.getJson<SearchEnvelope[]>(
           `${this.basePath()}/${buildSearchQuery({
@@ -282,7 +292,14 @@ export class UnifiedSearchService {
     );
     const out = unknownCounts();
     RECORD_TYPES.forEach((id, index) => {
-      const value = totals[index]?.[0]?.meta?.[0]?.searchResultsTotal;
+      const result = settled[index];
+      if (result.status === 'rejected') {
+        // An abort cancelled all four at once: that is the caller's to swallow, not a failure.
+        if (isAbortError(result.reason)) throw result.reason;
+        warnCounts(result.reason);
+        return;
+      }
+      const value = result.value?.[0]?.meta?.[0]?.searchResultsTotal;
       out[id] = typeof value === 'number' ? value : null;
     });
     return out;
@@ -319,6 +336,11 @@ export class HttpStatusError extends Error {
 /** Cancellation, however the platform spells it. Safari uses a plain Error with this name. */
 function isAbortError(err: unknown): boolean {
   return Boolean(err) && (err as { name?: string }).name === 'AbortError';
+}
+
+/** A count is a badge rather than the page, so a failed read is logged and the page carries on. */
+function warnCounts(err: unknown): void {
+  console.warn('[search] counts read failed; tab totals may be stale', err);
 }
 
 /** What an aborted request rejects with, in the shape `isAbortError` reads. */

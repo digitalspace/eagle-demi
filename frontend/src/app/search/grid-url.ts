@@ -151,13 +151,3 @@ export function serializeGridParams(
 
   return toSearchParams(out);
 }
-
-/** Filters in the shape the API takes them: `and[<id>]=a,b`. */
-export function toApiFilters(filters: FilterValues): Record<string, string> {
-  const wire: Record<string, string> = {};
-  for (const [id, value] of Object.entries(filters)) {
-    const joined = Array.isArray(value) ? value.join(',') : value;
-    if (joined) wire[`and[${id}]`] = joined;
-  }
-  return wire;
-}

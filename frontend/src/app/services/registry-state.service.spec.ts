@@ -49,8 +49,20 @@ async function settleInitialLoad(service: RegistryStateService): Promise<void> {
   // the project leg) arrived after this reset, inflating the next spec's own call count by one and
   // failing an assertion that expects it to have issued exactly one request. Drain ticks until the
   // spy's call count stops moving instead of assuming one tick drains it.
+  // Capped: a repeating fetch inside the load window would otherwise spin here until the whole
+  // suite times out, which reads as an infrastructure failure rather than the bug it is.
+  const maxTicks = 50;
   let previousCount = -1;
+  let ticks = 0;
   while (previousCount !== sharedFetchSpy.calls.count()) {
+    if (ticks >= maxTicks) {
+      fail(
+        `initial load still issuing requests after ${maxTicks} ticks ` +
+          `(${sharedFetchSpy.calls.count()} calls so far): something inside loadData() repeats`
+      );
+      break;
+    }
+    ticks += 1;
     previousCount = sharedFetchSpy.calls.count();
     await new Promise(resolve => setTimeout(resolve, 0));
   }

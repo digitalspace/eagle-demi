@@ -68,6 +68,24 @@ describe('UnifiedSearchService', () => {
           '&and[type]=a&and[type]=b&and[region]=Peace&fuzzy=false',
       );
     });
+
+    it('wraps the filters the shared mapping produced, years and typed names included', () => {
+      expect(
+        buildSearchQuery({
+          dataset: 'Project',
+          keywords: 'site',
+          pageNum: 1,
+          pageSize: 25,
+          filters: { dateUpdated: '2018', nameContains: 'Site C', type: ['a', 'b'] },
+          yearIds: ['dateUpdated'],
+          textIds: ['nameContains'],
+        }),
+      ).toBe(
+        'search?dataset=Project&keywords=site&pageNum=0&pageSize=25' +
+          '&and[nameContains]=Site%20C&and[type]=a&and[type]=b' +
+          '&and[dateUpdatedStart]=2018-01-01&and[dateUpdatedEnd]=2018-12-31&fuzzy=false',
+      );
+    });
   });
 
   it('issues one search at the exact URL and fills the signals', async () => {
@@ -180,6 +198,36 @@ describe('UnifiedSearchService', () => {
     await service.loadCounts('dam');
     expect(fetchSpy).toHaveBeenCalledTimes(4);
     expect(urlsOf(fetchSpy).every((url) => !url.includes('/search/counts'))).toBeTrue();
+  });
+
+  it('logs a counts endpoint failure rather than leaving stale badges unexplained', async () => {
+    const warn = spyOn(console, 'warn');
+    fetchSpy.and.resolveTo(jsonResponse({ error: 'boom' }, 500));
+
+    const counts = await service.loadCounts('site');
+
+    expect(counts).toBeNull();
+    expect(service.counts()).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the badges of the datasets that answered when one of the four fails', async () => {
+    const warn = spyOn(console, 'warn');
+    fetchSpy.and.callFake((url: string) => {
+      if (String(url).includes('/search/counts')) {
+        return Promise.resolve(jsonResponse({ error: 'not found' }, 404));
+      }
+      return Promise.resolve(
+        String(url).includes('dataset=RecentActivity')
+          ? jsonResponse({ error: 'boom' }, 500)
+          : jsonResponse(searchEnvelope([{}], 7)),
+      );
+    });
+
+    const counts = await service.loadCounts('site');
+
+    expect(counts).toEqual({ projects: 7, documents: 7, activities: null, notifications: 7 });
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('reads grouped passages off a DocumentChunk search', async () => {

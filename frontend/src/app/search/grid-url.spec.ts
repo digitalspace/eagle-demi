@@ -5,7 +5,6 @@ import {
   INSIDE_SORT,
   parseGridParams,
   serializeGridParams,
-  toApiFilters,
   toggleSortDirection,
 } from './grid-url';
 
@@ -85,15 +84,6 @@ describe('grid-url', () => {
       });
 
       expect(params.toString()).toBe(`sortBy=${encodeURIComponent(DEFAULT_SORT)}`);
-    });
-  });
-
-  describe('toApiFilters', () => {
-    it('wraps each filter id and drops the empty ones', () => {
-      expect(toApiFilters({ type: ['a', 'b'], region: 'Peace', milestone: '', phase: [] })).toEqual({
-        'and[type]': 'a,b',
-        'and[region]': 'Peace',
-      });
     });
   });
 

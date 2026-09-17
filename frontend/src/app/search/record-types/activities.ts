@@ -64,23 +64,27 @@ function projectHref(row: Row): string | undefined {
   return id === '' ? undefined : projectPath(id);
 }
 
-const ENTITIES: Record<string, string> = {
-  '&nbsp;': ' ',
-  '&amp;': '&',
-  '&lt;': '<',
-  '&gt;': '>',
-  '&quot;': '"',
-  '&#39;': "'",
-};
+/**
+ * Markup out, entities decoded, in the one order that is safe: the parser drops the tags and
+ * decodes in a single pass, so nothing decodes an entity back into a tag after the strip.
+ * `textContent` would run `<p>a</p><p>b</p>` together as "ab", so each element leaves a separator
+ * behind it.
+ */
+function htmlToText(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  for (const element of Array.from(doc.body.querySelectorAll('*'))) element.after(' ');
+  return doc.body.textContent ?? '';
+}
 
 /**
  * The update's body as words. `content` is stored as HTML, and the row clamps, excerpts and
  * highlights plain text, so the markup comes out here rather than being rendered and measured.
+ *
+ * Twice, because one pass leaves an encoded `&lt;img …&gt;` standing as the text `<img …>`: the
+ * second pass reads that as the markup it now spells and drops it.
  */
 export function plainText(value: unknown): string {
-  return String(value ?? '')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#39;/g, (entity) => ENTITIES[entity] ?? entity)
+  return htmlToText(htmlToText(String(value ?? '')))
     .replace(/\s+/g, ' ')
     .trim();
 }
