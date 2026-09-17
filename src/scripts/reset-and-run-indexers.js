@@ -16,6 +16,11 @@ const MAX_DRAIN_POLLS = 20;
 // carried a tracking state, reset again and wait longer. Length = the attempt cap.
 const RUN_WAIT_MS = [5000, 20000, 40000];
 
+// The service stamps its own clock on the reset, half a second off the client's resetAt on test
+// (2026-09-17) and either side of it. A run inside that window still counts, if it is newer than
+// the reset entry.
+const RESET_SKEW_MS = 2000;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function num(value, fallback) {
@@ -27,15 +32,34 @@ const field = (v) => (v === undefined || v === null ? '-' : v);
 
 const startedAt = (e) => (e && e.startTime ? Date.parse(e.startTime) : NaN);
 
+// The reset's own pseudo-entry is not an execution: it reports status `reset` with items 0, and
+// taking it as the verdict would pass an indexer that never ran.
+const runsOnly = (list) => list.filter((e) => e && e.status !== 'reset');
+
+const resetStampOf = (list) => list
+  .filter((e) => e && e.status === 'reset')
+  .reduce((max, e) => (startedAt(e) > max ? startedAt(e) : max), -Infinity);
+
+const afterReset = (e, resetAt, stamp) => {
+  const t = startedAt(e);
+  if (t >= resetAt) return true;
+  // The skew window only means anything against the reset entry's own stamp. With no reset entry
+  // in the history there is nothing to be newer than, so a run that started before resetAt is a
+  // pre-reset execution, not the one that was asked for.
+  return Number.isFinite(stamp) && t >= resetAt - RESET_SKEW_MS && t > stamp;
+};
+
 // The run that was asked for is the FIRST execution to start after the reset. A scheduled tick can
 // start on top of it between two polls, so executionHistory[0] is not it: that tick carries a
 // tracking state and would report a reset that worked as DEMI_RESET_NOT_APPLIED.
 // executionHistory is newest first, so the earliest match is the last one. Watch mode resets
 // nothing and asks about the newest execution.
 function pickRun(list, resetAt, pinnedStart) {
-  if (!resetAt) return list[0] || {};
-  if (pinnedStart !== null) return list.find((e) => startedAt(e) === pinnedStart) || {};
-  const after = list.filter((e) => startedAt(e) >= resetAt);
+  const runs = runsOnly(list);
+  if (!resetAt) return runs[0] || {};
+  if (pinnedStart !== null) return runs.find((e) => startedAt(e) === pinnedStart) || {};
+  const stamp = resetStampOf(list);
+  const after = runs.filter((e) => afterReset(e, resetAt, stamp));
   return after[after.length - 1] || {};
 }
 
@@ -71,7 +95,7 @@ async function resetAndRun(opts) {
     return body.executionHistory || [];
   }
 
-  const status = async (name) => (await history(name))[0] || {};
+  const status = async (name) => runsOnly(await history(name))[0] || {};
 
   // POST with an empty string body, not a bare POST: the REST API answers 411 without a
   // content-length, and `body: ''` is what makes undici send `content-length: 0`.
@@ -82,11 +106,24 @@ async function resetAndRun(opts) {
   // minutes however many indexers it carries. The retries below share it.
   const deadline = now() + timeoutMs;
 
-  // `initialTrackingState` is null on an execution that started from a cleared high-water mark.
-  // We could not confirm that api-version 2024-07-01 returns the field, so it only decides when
-  // it is there; when it is absent the startTime comparison is the whole proof.
-  const trackingOf = (e) => (e.initialTrackingState === undefined ? 'absent'
-    : e.initialTrackingState === null ? 'null' : 'set');
+  // `initialTrackingState` is a JSON string on a real execution (`highWaterMark` -1 from a cleared
+  // mark, the container's `_ts` otherwise); null belongs to the reset entry, never a run. A state
+  // we cannot read is not a verdict: another reset cannot make it readable, so the run is taken.
+  const trackingOf = (e) => {
+    const raw = e.initialTrackingState;
+    if (raw === undefined) return 'absent';
+    if (raw === null) return 'cleared';
+    let state = raw;
+    if (typeof raw === 'string') {
+      try {
+        state = JSON.parse(raw);
+      } catch {
+        return 'unknown';
+      }
+    }
+    if (!state || typeof state !== 'object' || state.highWaterMark === undefined) return 'unknown';
+    return Number(state.highWaterMark) === -1 ? 'cleared' : 'set';
+  };
 
   // An execution that was already in flight when the reset landed writes its old high-water mark
   // back when it finishes and silently undoes the clear. Wait for it to drain.
@@ -110,17 +147,18 @@ async function resetAndRun(opts) {
       if (tick > 0) await sleepImpl(pollSleepMs);
       tick += 1;
       const list = await history(name);
+      const stamp = resetStampOf(list);
       // The poll line and the "still running" warning below are about the indexer, so they read the
       // newest execution; only the verdict is pinned to the run that was asked for.
-      last = list[0] || {};
+      last = runsOnly(list)[0] || {};
       const e = pickRun(list, resetAt, pinnedStart);
-      if (pinnedStart === null && resetAt && startedAt(e) >= resetAt) pinnedStart = startedAt(e);
+      if (pinnedStart === null && resetAt && afterReset(e, resetAt, stamp)) pinnedStart = startedAt(e);
       // run-command truncates at 4 KB, and a several-hour wait would fill that with poll lines
       // long before the result.
       if (tick % pollEvery === 0) {
         log(`DEMI_POLL ${name} ${last.status || 'none'} items=${field(last.itemsProcessed)}`);
       }
-      if (startedAt(e) >= resetAt && e.status && e.status !== 'inProgress') return { done: e, last };
+      if (afterReset(e, resetAt, stamp) && e.status && e.status !== 'inProgress') return { done: e, last };
     } while (now() < deadline);
     return { done: null, last };
   }
@@ -172,8 +210,8 @@ async function resetAndRun(opts) {
         if (run.status === 409) {
           // Already running. It is the run that was asked for when it started after the reset;
           // otherwise let it drain and ask again, or the wait below watches a pre-reset execution.
-          const e = await status(name);
-          if (!(startedAt(e) >= resetAt)) {
+          const list = await history(name);
+          if (!afterReset(runsOnly(list)[0] || {}, resetAt, resetStampOf(list))) {
             for (let i = 0; i < MAX_DRAIN_POLLS; i += 1) {
               await sleepImpl(pollSleepMs);
               const w = await status(name);
@@ -219,6 +257,7 @@ async function resetAndRun(opts) {
       log(`DEMI_RESET_NOT_APPLIED ${name}`);
       return 1;
     }
+    if (tracking === 'unknown') log(`DEMI_WARN ${name} tracking state unreadable`);
 
     log(`DEMI_RESULT name=${name} status=${done.status} items=${field(done.itemsProcessed)}`
       + ` failed=${field(done.itemsFailed)} tracking=${tracking}`);
