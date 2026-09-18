@@ -1,39 +1,63 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { RegistryStateService } from './services/registry-state.service';
 import { GROUPS, SCREENS } from './shell/screens';
 import { SignInComponent } from './shell/sign-in.component';
 import { HowBuiltComponent } from './shell/how-built.component';
+import { readNavOpen, writeNavOpen } from './shell/prefs';
+
+/**
+ * Below this the navigation rail goes off-canvas: a fixed 250px rail leaves a 390px phone about
+ * 140px for the screen itself.
+ */
+export const SHELL_NARROW_QUERY = '(max-width: 899.98px)';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   imports: [RouterOutlet, RouterLink, RouterLinkActive, SignInComponent, HowBuiltComponent],
   templateUrl: './app.component.html',
-  changeDetection: ChangeDetectionStrategy.Eager
+  styleUrl: './app.component.css',
+  changeDetection: ChangeDetectionStrategy.Eager,
+  host: { '(document:keydown.escape)': 'closeDrawer()' }
 })
 export class AppComponent {
   service = inject(RegistryStateService);
   private router = inject(Router);
+  private destroyRef = inject(DestroyRef);
 
   readonly sections = GROUPS.map(heading => ({ heading, items: SCREENS.filter(s => s.group === heading) }));
 
   screenKey = signal(this.keyOf(this.router.url));
   isMap = computed(() => this.screenKey() === 'map');
-  navOpen = signal(true);
+  /** Desktop only: off-canvas the drawer has its own open state. */
+  navOpen = signal(readNavOpen());
+  narrow = signal(false);
+  drawerOpen = signal(false);
+  /** Collapsed and off-canvas-closed come to the same thing for the page: no rail in the row. */
+  navHidden = computed(() => this.narrow() ? !this.drawerOpen() : !this.navOpen());
   // Keycloak check-sso is async; rendering the gate before it settles flashes sign-in at staff.
   authSettled = signal(false);
   accountOpen = signal(false);
   infoOpen = signal(false);
 
   constructor() {
+    const query = window.matchMedia(SHELL_NARROW_QUERY);
+    this.narrow.set(query.matches);
+    const onChange = (event: MediaQueryListEvent) => {
+      this.narrow.set(event.matches);
+      if (!event.matches) this.drawerOpen.set(false);
+    };
+    query.addEventListener('change', onChange);
+    this.destroyRef.onDestroy(() => query.removeEventListener('change', onChange));
+
     this.service.authReady.then(() => this.authSettled.set(true));
     this.router.events.pipe(takeUntilDestroyed()).subscribe(event => {
       if (!(event instanceof NavigationEnd)) return;
       const next = this.keyOf(event.urlAfterRedirects);
       // Search state is global to the service, so each screen starts clean. Map arrivals may carry a
-      // saved lasso from My account; `?q=` carries a handoff such as the map's Documents button.
+      // saved lasso from My account; `?q=` carries the words from an older deep link.
       // The map keeps its filters but renders no type picker, so the one filter it cannot show or
       // undo still goes.
       if (next !== 'map') this.service.clearFilters();
@@ -61,6 +85,20 @@ export class AppComponent {
     const letters = parts.length > 1 ? parts[0][0] + parts[1][0] : parts[0]?.slice(0, 2) || 'BC';
     return letters.toUpperCase();
   });
+
+  closeDrawer() {
+    this.drawerOpen.set(false);
+  }
+
+  toggleNav() {
+    if (this.narrow()) {
+      this.drawerOpen.set(!this.drawerOpen());
+      return;
+    }
+    const open = !this.navOpen();
+    this.navOpen.set(open);
+    writeNavOpen(open);
+  }
 
   logout() {
     this.accountOpen.set(false);

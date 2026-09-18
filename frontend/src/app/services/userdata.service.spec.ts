@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { UserdataService, SavedLasso } from './userdata.service';
+import { UserdataService, SavedLasso, SavedQuery } from './userdata.service';
 import { RegistryStateService } from './registry-state.service';
 
 const jsonResponse = (payload: unknown, status = 200) =>
@@ -12,6 +12,13 @@ const LASSO: SavedLasso = {
   name: 'Peace Valley',
   ring: [[-121, 56], [-120, 56], [-120.5, 56.5]],
   updatedAt: '2026-08-30T00:00:00.000Z'
+};
+
+const QUERY: SavedQuery = {
+  slug: 'reports-2024',
+  name: 'Reports 2024',
+  params: 'record=documents&type=Report',
+  savedAt: '2026-09-01T00:00:00.000Z'
 };
 
 describe('UserdataService', () => {
@@ -36,13 +43,16 @@ describe('UserdataService', () => {
   });
 
   it('GETs /me/data and fills the signals', async () => {
-    fetchSpy.and.resolveTo(jsonResponse({ prefs: { landing: 'index', perPage: 24 }, lassos: [LASSO] }));
+    fetchSpy.and.resolveTo(
+      jsonResponse({ prefs: { landing: 'search', perPage: 24 }, lassos: [LASSO], queries: [QUERY] })
+    );
 
     await service.loadMyData();
 
     expect(fetchSpy.calls.mostRecent().args[0]).toBe('/api/me/data');
     expect(service.lassos()).toEqual([LASSO]);
-    expect(service.prefs()).toEqual({ landing: 'index', perPage: 24 });
+    expect(service.queries()).toEqual([QUERY]);
+    expect(service.prefs()).toEqual({ landing: 'search', perPage: 24 });
     expect(service.loading()).toBeFalse();
     expect(service.error()).toBe('');
   });
@@ -99,16 +109,30 @@ describe('UserdataService', () => {
     expect(init.method).toBe('DELETE');
   });
 
-  it('PUTs prefs without a reload', async () => {
-    fetchSpy.and.resolveTo(jsonResponse({ landing: 'content', perPage: 12 }));
+  it('percent-encodes what PUT /me/queries would refuse in params', async () => {
+    fetchSpy.and.callFake(() => Promise.resolve(jsonResponse({ prefs: null, lassos: [], queries: [QUERY] })));
 
-    expect(await service.putPrefs({ landing: 'content', perPage: 12 })).toBeTrue();
+    expect(await service.saveQuery('Peace', '?keywords=Site C & D&record=projects')).toBeTrue();
+
+    const [url, init] = fetchSpy.calls.first().args as [string, RequestInit];
+    expect(url).toBe('/api/me/queries');
+    expect(JSON.parse(init.body as string)).toEqual({
+      name: 'Peace',
+      params: 'keywords=Site%20C%20&%20D&record=projects'
+    });
+    expect(service.queries()).toEqual([QUERY]);
+  });
+
+  it('PUTs prefs without a reload', async () => {
+    fetchSpy.and.resolveTo(jsonResponse({ landing: 'search', perPage: 12 }));
+
+    expect(await service.putPrefs({ landing: 'search', perPage: 12 })).toBeTrue();
 
     const [url, init] = fetchSpy.calls.first().args as [string, RequestInit];
     expect(url).toBe('/api/me/prefs');
     expect(init.method).toBe('PUT');
-    expect(JSON.parse(init.body as string)).toEqual({ landing: 'content', perPage: 12 });
+    expect(JSON.parse(init.body as string)).toEqual({ landing: 'search', perPage: 12 });
     expect(fetchSpy.calls.count()).toBe(1);
-    expect(service.prefs()).toEqual({ landing: 'content', perPage: 12 });
+    expect(service.prefs()).toEqual({ landing: 'search', perPage: 12 });
   });
 });

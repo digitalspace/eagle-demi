@@ -1,0 +1,46 @@
+/* Navigation rail. `data-drawer` is set only below SHELL_NARROW_QUERY, so the overlay rules keyed on
+   it are dormant at desktop widths, where the rail sits in the flex row until it is collapsed. */
+
+/* Containing block for the drawer, so it covers the body only — the header, and the button that
+   closes it again, stay reachable. */
+.app__body {
+  position: relative;
+}
+
+.app-sidebar[data-drawer] {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1900; /* over Leaflet's panes (1000), under the header and its menus (2000) */
+  width: min(var(--eao-sidebar-width), 84vw);
+  flex-basis: auto;
+  box-shadow: var(--surface-shadow-medium);
+}
+
+/* Taken out of the page, not slid off it or narrowed to a stub: an off-screen rail still holds
+   focus and is still read out, and a stub still costs the content column its width. */
+.app-sidebar[data-collapsed] {
+  display: none;
+}
+
+.app-header__menu {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--layout-padding-xsmall);
+  background: transparent;
+  color: var(--typography-color-primary-invert);
+  border: none;
+  border-radius: var(--layout-border-radius-small);
+  cursor: pointer;
+}
+
+.app-header__menu:hover {
+  background: var(--theme-primary-gold);
+  color: var(--surface-color-primary-default);
+}
+
+.app-header__menu:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--theme-primary-gold);
+  outline-offset: var(--layout-margin-hair);
+}

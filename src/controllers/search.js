@@ -421,6 +421,61 @@ function firstValue(raw) {
   return Array.isArray(raw) ? raw[0] : raw;
 }
 
+/** One day, in ms — the step from a date's midnight to the next one. */
+const DAY_MS = 86400000;
+
+/** Midnight UTC of the day a wire date names, or null when no `Date` can read it. */
+function utcDayStart(value) {
+  const d = new Date(String(value));
+  if (isNaN(d.getTime())) return null;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/**
+ * `and[dateAddedStart]`/`and[dateAddedEnd]` as the half-open window the INDEX path builds for the
+ * same two keys (`eagleQuery`'s `rangeTerm`): whole UTC days, the start inclusive and the end
+ * covering its own day by running to the midnight after it. A caller who asks for one day gets that
+ * day, not nothing.
+ *
+ * `applied` names the keys this consumed, so the generic dropped report stays honest: a key sent
+ * EMPTY (`and[dateAddedStart]=`) is a cleared filter and counts as consumed — the index path adds no
+ * clause for it either — while a value no `Date` can read is left out and reported dropped rather
+ * than silently widening the page to every update.
+ *
+ * @returns {{dateAddedFrom?: string, dateAddedBefore?: string, applied: string[]}}
+ */
+function activityWindow(query) {
+  const bounds = { applied: [] };
+  for (const key of ['dateAddedStart', 'dateAddedEnd']) {
+    const raw = filterValue(query, key);
+    if (raw === null) continue;
+    if (raw.trim() === '') { bounds.applied.push(key); continue; }
+    const day = utcDayStart(raw);
+    if (day === null) continue;
+    bounds.applied.push(key);
+    if (key === 'dateAddedStart') bounds.dateAddedFrom = new Date(day).toISOString();
+    else bounds.dateAddedBefore = new Date(day + DAY_MS).toISOString();
+  }
+  return bounds;
+}
+
+/**
+ * `and[documentUrl]` — "Documents attached", a presence question with `true` and `false` as its
+ * WHOLE value space, exactly as `eagleQuery` PRESENCE_KEYS reads it on the index path. A URL, or
+ * any other value, is not a question this filter can ask: it is left unapplied and reported
+ * dropped, because filtering on the URL itself would make one key mean two things.
+ *
+ * @returns {{hasDocument?: boolean, applied: string[]}}
+ */
+function documentFilter(query) {
+  const raw = filterValue(query, 'documentUrl');
+  if (raw === null) return { applied: [] };
+  // Sent with nothing after the `=` is a cleared checkbox: consumed, and no narrowing.
+  if (raw.trim() === '') return { applied: ['documentUrl'] };
+  if (raw !== 'true' && raw !== 'false') return { applied: [] };
+  return { hasDocument: raw === 'true', applied: ['documentUrl'] };
+}
+
 /**
  * The eagle-search wire shape for a Cosmos row: the REDACTED row as stored, plus the keys
  * eagle-public indexes on.
@@ -796,9 +851,19 @@ const COSMOS_DATASETS = {
     // reporting it dropped. The KEYWORD path already filters type through the `activities` index;
     // this is the same filter on the read that answers when there are no keywords.
     const types = filterValues(query, 'type');
+    // The other two filters the activities list offers: "Documents attached" and the posted-on
+    // range. Both are questions the `activities` index answers for a keyword search, and the
+    // keywordless page is the same page — a filter panel that narrows nothing here would return
+    // the whole corpus and look like a filter that matched everything.
+    const { hasDocument, applied: documentApplied } = documentFilter(query);
+    const { dateAddedFrom, dateAddedBefore, applied: windowApplied } = activityWindow(query);
+
+    const criteria = { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore };
     const [rows, count] = await Promise.all([
-      updatesRepo.list(access, { projectId, keywords, types, pageNum, pageSize, sortBy }),
-      updatesRepo.count(access, { projectId, keywords, types })
+      updatesRepo.list(access, { ...criteria, pageNum, pageSize, sortBy }),
+      // The SAME criteria as the page: a total built from a looser predicate describes rows the
+      // page cannot hold, and eagle-public pages against it.
+      updatesRepo.count(access, criteria)
     ]);
     return {
       searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
@@ -807,7 +872,12 @@ const COSMOS_DATASETS = {
       // `!== null`, not truthy: `filterValues` answers `[]` (still not `null`) for `and[type]=` sent
       // empty, and that key was still SEEN — reporting it dropped here, unlike the index path, would
       // read as "the container could not filter on type" when it is really "nothing to narrow by".
-      applied: [...(projectId ? ['project'] : []), ...(types !== null ? ['type'] : [])]
+      applied: [
+        ...(projectId ? ['project'] : []),
+        ...(types !== null ? ['type'] : []),
+        ...documentApplied,
+        ...windowApplied
+      ]
     };
   },
 

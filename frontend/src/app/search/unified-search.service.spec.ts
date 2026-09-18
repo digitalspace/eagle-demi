@@ -6,6 +6,7 @@ import {
   PROPONENT_COMPANY_TYPE,
   UnifiedSearchService,
   buildSearchQuery,
+  passageRowFrom,
   searchKeyword,
 } from './unified-search.service';
 
@@ -84,6 +85,23 @@ describe('UnifiedSearchService', () => {
         'search?dataset=Project&keywords=site&pageNum=0&pageSize=25' +
           '&and[nameContains]=Site%20C&and[type]=a&and[type]=b' +
           '&and[dateUpdatedStart]=2018-01-01&and[dateUpdatedEnd]=2018-12-31&fuzzy=false',
+      );
+    });
+
+    it('escapes a pick the query string would otherwise swallow or change', () => {
+      expect(
+        buildSearchQuery({
+          dataset: 'Document',
+          keywords: '',
+          pageNum: 1,
+          pageSize: 25,
+          // A `#` starts the fragment, which is never sent; a `+` reaches the backend as a space.
+          filters: { type: 'a#b,c+d', milestone: 'Energy-Petroleum & Natural Gas' },
+        }),
+      ).toBe(
+        'search?dataset=Document&pageNum=0&pageSize=25' +
+          '&and[type]=a%23b&and[type]=c%2Bd&and[milestone]=Energy-Petroleum%20%26%20Natural%20Gas' +
+          '&fuzzy=false',
       );
     });
   });
@@ -230,52 +248,36 @@ describe('UnifiedSearchService', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('reads grouped passages off a DocumentChunk search', async () => {
-    fetchSpy.and.resolveTo(
-      jsonResponse(
-        searchEnvelope(
-          [
-            {
-              documentId: 'doc-1',
-              documentName: 'Application Part A',
-              datePosted: '2024-03-01',
-              documentType: 'Application',
-              matchCount: 5,
-              passages: [
-                { text: 'first hit', pageNumber: 12, pageNumbered: true },
-                { text: 'second hit', pageNumber: 0, pageNumbered: false },
-              ],
-            },
-          ],
-          1,
-        ),
-      ),
-    );
-
-    const rows = await service.searchPassages(
-      { keywords: 'fish habitat', pageNum: 1, pageSize: 25, sortBy: '-matches' },
-      (row) => `/api/documents/${row['documentId']}/download`,
-    );
-
-    expect(urlsOf(fetchSpy)[0]).toBe(
-      '/api/search?dataset=DocumentChunk&keywords=fish%20habitat&pageNum=0&pageSize=25&sortBy=-matches&fuzzy=true',
-    );
-    expect(rows).toEqual([
+  it('reads a grouped DocumentChunk row as one passage row', () => {
+    const row = passageRowFrom(
       {
-        id: 'doc-1',
-        name: 'Application Part A',
-        href: '/api/documents/doc-1/download',
-        date: '2024-03-01',
-        type: 'Application',
-        author: null,
+        documentId: 'doc-1',
+        documentName: 'Application Part A',
+        datePosted: '2024-03-01',
+        documentType: 'Application',
+        matchCount: 5,
         passages: [
-          { locator: 12, text: 'first hit', pageNumbered: true },
-          // No real page number, so the locator is the passage's place in what came back.
-          { locator: 2, text: 'second hit', pageNumbered: false },
+          { text: 'first hit', pageNumber: 12, pageNumbered: true },
+          { text: 'second hit', pageNumber: 0, pageNumbered: false },
         ],
-        total: 5,
       },
-    ]);
+      '',
+    );
+
+    expect(row).toEqual({
+      id: 'doc-1',
+      name: 'Application Part A',
+      href: '',
+      date: '2024-03-01',
+      type: 'Application',
+      author: null,
+      passages: [
+        { locator: 12, text: 'first hit', pageNumbered: true },
+        // No real page number, so the locator is the passage's place in what came back.
+        { locator: 2, text: 'second hit', pageNumbered: false },
+      ],
+      total: 5,
+    });
   });
 
   it('reads the dropdown lists in one page', async () => {
@@ -293,7 +295,7 @@ describe('UnifiedSearchService', () => {
 
     expect(urlsOf(fetchSpy)[0]).toBe(
       `/api/search?dataset=Organization&pageNum=0&pageSize=250&sortBy=+name` +
-        `&and[companyType]=${PROPONENT_COMPANY_TYPE}&fuzzy=false`,
+        `&and[companyType]=${encodeURIComponent(PROPONENT_COMPANY_TYPE)}&fuzzy=false`,
     );
   });
 });

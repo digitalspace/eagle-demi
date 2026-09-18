@@ -1,0 +1,44 @@
+<div [class.display-grid__body--loading]="loading()" [attr.aria-busy]="loading() ? true : null">
+  <ol class="display-grid__list">
+    @for (row of rows(); track row.id) {
+      <li class="display-grid__list-item">
+        <div class="display-grid__row">
+          <p class="display-grid__row-meta">
+            @for (part of meta(row); track $index) {
+              @if ($index > 0) { <span aria-hidden="true"> · </span> }
+              {{ part }}
+            }
+          </p>
+
+          <h3 class="display-grid__row-title">
+            @if (row.href) {
+              <app-record-link [href]="row.href" [external]="true" linkClass="display-grid__row-link"><app-highlight [text]="row.name" [terms]="terms()" /></app-record-link>
+            } @else {
+              <button type="button" class="display-grid__row-link" (click)="downloadRequested.emit(row.id)"><app-highlight [text]="row.name" [terms]="terms()" /></button>
+            }
+          </h3>
+
+          <p class="display-grid__passage-count">{{ passageCount(row.total) }}</p>
+
+          <ul class="display-grid__passages" [attr.aria-label]="passageCount(row.total)">
+            @for (hit of shown(row); track $index) {
+              <li class="display-grid__passage">
+                <span class="display-grid__passage-locator">
+                  <!-- Plain text until the locator is a page: `app-record-link` drops an absent href. -->
+                  <app-record-link [href]="locatorHref(row, hit)" [external]="true">{{ locatorLabel(hit) }}</app-record-link>
+                </span>
+                <span class="display-grid__passage-text"><app-highlight [text]="passageText(hit)" [terms]="terms()" /></span>
+              </li>
+            }
+          </ul>
+
+          @if (rest(row) > 0) {
+            <button type="button" class="display-grid__row-more" [attr.aria-expanded]="isOpen(row)" (click)="toggle(row)">
+              {{ moreLabel(row) }}
+            </button>
+          }
+        </div>
+      </li>
+    }
+  </ol>
+</div>

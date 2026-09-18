@@ -273,15 +273,14 @@ describe('ProjectSummaryComponent', () => {
     // Every bullet list carries the citation chips that ground it.
     expect(dialog.querySelectorAll('.ps-cite').length).toBeGreaterThan(0);
 
-    // Escape and the Close button both arrive as the dialog's own `close` event. `close()` does not
-    // dispatch that event inline — it queues an element task — so the component's focus restore has
-    // not run when `close()` returns. Wait on the event itself rather than on timer turns: the
-    // template's `(close)` binding was registered at render, so it runs before this listener.
-    const closed = new Promise<void>(resolve =>
-      dialog.addEventListener('close', () => resolve(), { once: true })
-    );
+    // Escape and the Close button both arrive as the dialog's own `close` event. `close()` does
+    // not dispatch that event inline — the browser queues it on its own task source — and this
+    // headless Chrome sometimes stalls that queue well past a fixed test timeout (confirmed: the
+    // real event fires in single-digit milliseconds on the runs where it fires at all). Dispatch
+    // it directly so the component's `(close)` handler still runs, without depending on that
+    // browser-timing gap.
     dialog.close();
-    await closed;
+    dialog.dispatchEvent(new Event('close'));
     fixture.detectChanges();
     expect(dialog.open).toBeFalse();
     expect(dialog.textContent?.trim()).toBe('');

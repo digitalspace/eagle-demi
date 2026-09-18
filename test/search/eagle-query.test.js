@@ -357,12 +357,83 @@ test('eagle-query nameContains', async (t) => {
 
     assert.deepStrictEqual(project.dropped, []);
     assert.deepStrictEqual(document.dropped, []);
-    assert.ok(project.filter.includes("search.ismatch('sediment*', 'name', 'full', 'any')"),
+    assert.ok(
+      project.filter.includes("search.ismatch('sediment*', 'name,nameTokens', 'full', 'any')"),
       project.filter);
-    assert.ok(document.filter.includes("search.ismatch('sediment*', 'displayName', 'full', 'any')"),
+    assert.ok(
+      document.filter.includes("search.ismatch('sediment*', " +
+        "'displayName,documentFileName,fileNameTokens', 'full', 'any')"),
       document.filter);
     // The ACL clause is still ANDed on, exactly as it is for a term filter.
     assert.ok(project.filter.includes("read/any(r: search.in(r, 'public', ','))"));
+  });
+
+  // THE bug this field list exists for. `name` and `displayName` are analyzed with en.microsoft,
+  // which removes "mine" at index and at query time, so the clause over those fields alone asked
+  // for no term and answered 0 rows while 32 project names held the word. `nameTokens` and
+  // `fileNameTokens` are the same text under the `filename` analyzer, which keeps it.
+  await t.test('a name made only of stopwords still names a field that holds the word', () => {
+    const project = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'mine' }, 'Project', anonAcl());
+    const document = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'mine' }, 'Document', anonAcl());
+
+    assert.deepStrictEqual(project.dropped, []);
+    assert.deepStrictEqual(document.dropped, []);
+    // No `*`: a stopword carries no prefix, so the term is the literal the `filename` analyzer
+    // holds. The field list is what makes it reachable.
+    assert.ok(project.filter.includes("search.ismatch('mine', 'name,nameTokens', 'full', 'any')"),
+      project.filter);
+    assert.ok(
+      document.filter.includes("search.ismatch('mine', " +
+        "'displayName,documentFileName,fileNameTokens', 'full', 'any')"),
+      document.filter);
+  });
+
+  // The mixed case: "mine report" used to answer the same rows as "report" alone, because the
+  // stopword arm of the conjunction could match nothing. Both words are still required.
+  await t.test('a stopword beside a real word is still required, not ignored', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[nameContains]': 'mine report' }, 'Document', anonAcl());
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(
+      filter.includes("search.ismatch('mine AND report*', " +
+        "'displayName,documentFileName,fileNameTokens', 'full', 'any')"),
+      filter);
+  });
+
+  // A row count over a hidden field answers what the value is, so the clause may name a field only
+  // if the caller can read EVERY field in it. `nameTokens` is public in the committed catalog, so
+  // it is hidden here for the length of the call and put back.
+  await t.test('one field hidden from this caller drops the whole key', () => {
+    const catalog = catalogFor('index-projects');
+    const restore = catalog.nameTokens.defaultVis;
+    catalog.nameTokens.defaultVis = 0;
+    try {
+      const { filter, dropped } = eagleQuery.buildFilter(
+        { 'and[nameContains]': 'sediment' }, 'Project', anonAcl(), anonymous());
+
+      assert.deepStrictEqual(dropped, ['nameContains']);
+      assert.ok(!filter.includes('search.ismatch'), filter);
+    } finally {
+      catalog.nameTokens.defaultVis = restore;
+    }
+  });
+
+  // Every field named has to be one the index can actually search — a stray name is a 400 on every
+  // request carrying the key, which is the one failure the unit test above cannot see.
+  await t.test('every field in the list is searchable in the committed index', () => {
+    const indexes = { Project: 'projects.json', Document: 'documents.json' };
+    for (const [dataset, fields] of Object.entries(eagleQuery.NAME_CONTAINS_FIELDS)) {
+      const definition = JSON.parse(fs.readFileSync(
+        path.join(__dirname, '../../azure/search/indexes', indexes[dataset]), 'utf8'));
+      for (const name of fields) {
+        const field = definition.fields.find(f => f.name === name);
+        assert.ok(field, `${dataset}: ${name} is not a field of ${indexes[dataset]}`);
+        assert.strictEqual(field.searchable, true, `${dataset}: ${name} is not searchable`);
+      }
+    }
   });
 
   // Every word required, the prefix on each so a half-typed word still hits. A one-character word
@@ -371,7 +442,7 @@ test('eagle-query nameContains', async (t) => {
   await t.test('words are ANDed and words of two or more characters match as a prefix', () => {
     const { filter } = eagleQuery.buildFilter(
       { 'and[nameContains]': 'Site C dam' }, 'Project', anonAcl());
-    assert.ok(filter.startsWith("search.ismatch('Site* AND C AND dam*', 'name', 'full', 'any')"),
+    assert.ok(filter.startsWith("search.ismatch('Site* AND C AND dam*', 'name,nameTokens', 'full', 'any')"),
       filter);
 
     // The boundary itself: two characters is the shortest word that prefixes, and the swagger says
@@ -379,7 +450,7 @@ test('eagle-query nameContains', async (t) => {
     // or 3.
     const { filter: twoChar } = eagleQuery.buildFilter(
       { 'and[nameContains]': 'BC Hydro' }, 'Project', anonAcl());
-    assert.ok(twoChar.startsWith("search.ismatch('BC* AND Hydro*', 'name', 'full', 'any')"),
+    assert.ok(twoChar.startsWith("search.ismatch('BC* AND Hydro*', 'name,nameTokens', 'full', 'any')"),
       twoChar);
   });
 
@@ -392,7 +463,8 @@ test('eagle-query nameContains', async (t) => {
     assert.deepStrictEqual(dropped, []);
     assert.ok(
       filter.startsWith(
-        "search.ismatch('Notice* AND of AND Commencement*', 'displayName', 'full', 'any')"),
+        "search.ismatch('Notice* AND of AND Commencement*', " +
+        "'displayName,documentFileName,fileNameTokens', 'full', 'any')"),
       filter);
   });
 
@@ -406,14 +478,15 @@ test('eagle-query nameContains', async (t) => {
     // One single quote doubled for the OData literal; the brackets and the typed star separate
     // words rather than survive as text. The `*` on each word is the one this file appends.
     assert.ok(
-      filter.startsWith("search.ismatch('O''Brien* AND 2019*', 'displayName', 'full', 'any')"),
+      filter.startsWith("search.ismatch('O''Brien* AND 2019*', " +
+      "'displayName,documentFileName,fileNameTokens', 'full', 'any')"),
       filter);
 
     // A hyphen breaks the word: the analyzer holds `site` and `c` as separate index tokens, so the
     // hyphenated prefix would match nothing.
     const { filter: hyphen } = eagleQuery.buildFilter(
       { 'and[nameContains]': 'Site-C' }, 'Project', anonAcl());
-    assert.ok(hyphen.startsWith("search.ismatch('Site* AND C', 'name', 'full', 'any')"), hyphen);
+    assert.ok(hyphen.startsWith("search.ismatch('Site* AND C', 'name,nameTokens', 'full', 'any')"), hyphen);
   });
 
   // A comma is a word break here, not a multi-select. `valuesOf` would split this into two
@@ -492,7 +565,7 @@ test('eagle-query nameContains', async (t) => {
   await t.test('the nested and={} shape is read too', () => {
     const { filter } = eagleQuery.buildFilter(
       { and: { nameContains: 'sediment' } }, 'Project', anonAcl());
-    assert.ok(filter.includes("search.ismatch('sediment*', 'name', 'full', 'any')"), filter);
+    assert.ok(filter.includes("search.ismatch('sediment*', 'name,nameTokens', 'full', 'any')"), filter);
   });
 });
 

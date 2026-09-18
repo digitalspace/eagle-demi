@@ -62,7 +62,7 @@ One PR each on `main`. Every phase runs lint, test and build.
 1. Engine, no UI. `frontend/src/app/search/`: `grid-types.ts`, `grid-url.ts`, `search-filters.ts`, `record-types/*.ts`, `unified-search.service.ts`. Specs: URL round trip, `filterIds` reach the wire as `and[id]=`, counts 404 fallback, abort on a newer pause, `passages[]` read. Done when the specs pass and no existing file is touched.
 2. Grid, Projects and Documents, new `/search` route. Nav untouched. Specs: sort changes the URL, a filter change resets to page 1, narrow layout renders cards, tab switch keeps the keyword and clears filters, copy link. Done when real rows load from test with one request per pause per type.
 3. Activities, Notifications, inside scope, download. A spec per type; passage list shows "Page N" only when `pageNumbered`; scope switch absent when the flag is off. Done when four tabs and both scopes work on test.
-4. Retire the old screens. Section 4 plus a routing spec for `/index` and `/content` with `q` preserved. Done when nothing references `IndexSearchComponent` or `ContentSearchComponent` and the sidebar shows one Search entry.
+4. Retire the old screens. Section 4 plus a routing spec for `/index` and `/content` with `q` preserved. Done when nothing references `IndexSearchComponent` or `ContentSearchComponent` and the sidebar shows one Search entry. Done 2026-09-18: `/index` goes to `/search`, `/content` to `/search?record=documents&scope=inside`, both carrying `q` as `keywords`.
 5. Tour, help, wiki. Specs: tour advances, Escape closes, focus returns; dialog traps focus.
 
 ## 6. Open decisions

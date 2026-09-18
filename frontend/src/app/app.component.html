@@ -8,11 +8,13 @@
       <span class="skeleton skeleton--circle" style="height: 2rem; width: 2rem; margin-left: auto;"></span>
     </header>
     <div class="app__body">
-      <nav class="eao-sidebar app-sidebar" aria-hidden="true">
-        @for (i of [1, 2, 3, 4, 5, 6]; track i) {
-          <span class="skeleton skeleton--text" style="width: 60%; margin: var(--layout-margin-small) var(--layout-margin-medium);"></span>
-        }
-      </nav>
+      @if (!narrow() && navOpen()) {
+        <nav class="eao-sidebar app-sidebar" aria-hidden="true">
+          @for (i of [1, 2, 3, 4, 5, 6]; track i) {
+            <span class="skeleton skeleton--text" style="width: 60%; margin: var(--layout-margin-small) var(--layout-margin-medium);"></span>
+          }
+        </nav>
+      }
       <main class="app__main"></main>
     </div>
   </div>
@@ -22,6 +24,9 @@
   <div class="app">
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="eao-header app-header">
+      <button type="button" class="app-header__menu" (click)="toggleNav()" aria-label="Main navigation" aria-controls="app-nav" [attr.aria-expanded]="!navHidden()">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="17" x2="20" y2="17"></line></svg>
+      </button>
       <img class="eao-header__mark app-header__mark" src="assets/bcgov-header-vert.png" alt="Government of British Columbia">
       <div class="app-header__centre">
         <p class="eao-header__title app-header__title">DEMI — Digital File Library &amp; Registry</p>
@@ -55,17 +60,14 @@
     </header>
 
     <div class="app__body">
-      <nav class="eao-sidebar app-sidebar" aria-label="DEMI" [attr.data-open]="navOpen()">
-        <button type="button" class="app-sidebar__toggle" (click)="navOpen.set(!navOpen())" aria-label="Toggle navigation" [attr.aria-expanded]="navOpen()">{{ navOpen() ? '‹' : '›' }}</button>
-        @if (navOpen()) {
-          @for (section of sections; track section.heading) {
-            <div>
-              <div class="eao-sidebar__divider app-sidebar__heading">{{ section.heading }}</div>
-              @for (item of section.items; track item.key) {
-                <a class="app-sidebar__link" [routerLink]="item.path" routerLinkActive #rla="routerLinkActive" [attr.aria-current]="rla.isActive ? 'page' : null">{{ item.label }}</a>
-              }
-            </div>
-          }
+      <nav id="app-nav" class="eao-sidebar app-sidebar" aria-label="DEMI" [attr.data-drawer]="narrow() ? (drawerOpen() ? 'open' : 'closed') : null" [attr.data-collapsed]="navHidden() ? '' : null" [attr.inert]="navHidden() ? '' : null">
+        @for (section of sections; track section.heading) {
+          <div>
+            <div class="eao-sidebar__divider app-sidebar__heading">{{ section.heading }}</div>
+            @for (item of section.items; track item.key) {
+              <a class="app-sidebar__link" [routerLink]="item.path" routerLinkActive #rla="routerLinkActive" [attr.aria-current]="rla.isActive ? 'page' : null" (click)="closeDrawer()">{{ item.label }}</a>
+            }
+          </div>
         }
       </nav>
 

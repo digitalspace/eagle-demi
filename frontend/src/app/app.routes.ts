@@ -1,4 +1,4 @@
-import { Route, Router, Routes } from '@angular/router';
+import { ActivatedRouteSnapshot, Route, Router, Routes } from '@angular/router';
 import { inject } from '@angular/core';
 import { ConfigService } from './services/config.service';
 import { readPrefs } from './shell/prefs';
@@ -8,11 +8,27 @@ import { readPrefs } from './shell/prefs';
 const screen = (path: string, loadComponent: Route['loadComponent']): Route =>
   ({ path, loadComponent });
 
+/**
+ * The index and document content screens are one page now. `q` was the words they searched for,
+ * so it arrives as `keywords`; the rest of their screen state has no equivalent on the grid.
+ */
+const legacySearch = (path: string, queryParams: Record<string, string>): Route => ({
+  path,
+  canActivate: [(route: ActivatedRouteSnapshot) => {
+    const keywords = String(route.queryParams['q'] ?? '');
+    return inject(Router).createUrlTree(['/search'], {
+      queryParams: keywords ? { ...queryParams, keywords } : queryParams
+    });
+  }],
+  children: []
+});
+
 export const routes: Routes = [
   screen('workspace', () => import('./components/my-workspace/my-workspace.component').then(m => m.MyWorkspaceComponent)),
   screen('map', () => import('./components/map-explorer/map-explorer.component').then(m => m.MapExplorerComponent)),
-  screen('index', () => import('./components/index-search/index-search.component').then(m => m.IndexSearchComponent)),
-  screen('content', () => import('./components/content-search/content-search.component').then(m => m.ContentSearchComponent)),
+  screen('search', () => import('./components/unified-search/unified-search.component').then(m => m.UnifiedSearchComponent)),
+  legacySearch('index', {}),
+  legacySearch('content', { record: 'documents', scope: 'inside' }),
   screen('summary', () => import('./components/summarizer/summarizer.component').then(m => m.SummarizerComponent)),
   screen('projects', () => import('./components/project-picker/project-picker.component').then(m => m.ProjectPickerComponent)),
   screen('projects/:id', () => import('./components/project-summary/project-summary.component').then(m => m.ProjectSummaryComponent)),
@@ -34,7 +50,6 @@ export const routes: Routes = [
     }],
     children: []
   },
-  { path: 'search', redirectTo: 'index', pathMatch: 'full' },
   // The profile screen was folded into My account; old links and bookmarks still resolve.
   { path: 'profile', redirectTo: 'workspace', pathMatch: 'full' },
   {

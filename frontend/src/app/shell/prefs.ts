@@ -4,19 +4,35 @@ export interface Prefs { landing: string; perPage: number; }
 
 export const LANDING_OPTIONS = [
   { key: 'map', label: 'Map Explorer' },
-  { key: 'index', label: 'Index Search' },
-  { key: 'content', label: 'Document Content Search' },
+  { key: 'search', label: 'Search' },
   { key: 'summary', label: 'AI Search Summary' }
 ];
 
 export const PER_PAGE_OPTIONS = [6, 12, 24];
 export const PREFS_KEY = 'demi.prefs';
+export const NAV_KEY = 'demi.navOpen';
 export const DEFAULT_PREFS: Prefs = { landing: 'map', perPage: 6 };
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Private-browsing quota or a blocked store: the choice still holds for this page view.
+  }
+}
 
 /** Read `demi.prefs` from localStorage, validated against known screens/page sizes. */
 export function readPrefs(): Prefs {
   try {
-    const raw = localStorage.getItem(PREFS_KEY);
+    const raw = readStored(PREFS_KEY);
     const saved = raw ? JSON.parse(raw) : null;
     if (!saved) return { ...DEFAULT_PREFS };
     return {
@@ -29,9 +45,17 @@ export function readPrefs(): Prefs {
 }
 
 export function writePrefs(prefs: Prefs) {
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-  } catch {
-    // Private-browsing quota or a blocked store: the choice still holds for this page view.
-  }
+  writeStored(PREFS_KEY, JSON.stringify(prefs));
+}
+
+/**
+ * Sidebar state, kept in this browser only: it describes a window, not the account, and
+ * `PUT /me/prefs` rejects keys outside its allow-list. Default open.
+ */
+export function readNavOpen(): boolean {
+  return readStored(NAV_KEY) !== 'false';
+}
+
+export function writeNavOpen(open: boolean) {
+  writeStored(NAV_KEY, String(open));
 }

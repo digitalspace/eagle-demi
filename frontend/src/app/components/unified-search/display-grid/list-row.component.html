@@ -1,0 +1,58 @@
+<div class="display-grid__row">
+  <p class="display-grid__row-meta">
+    @for (part of meta(); track $index) {
+      @if ($index > 0) { <span aria-hidden="true"> · </span> }
+      @if (part.href) {
+        <app-record-link [href]="part.href">{{ part.text }}</app-record-link>
+      } @else {
+        {{ part.text }}
+      }
+    }
+  </p>
+
+  <h3 class="display-grid__row-title">
+    <app-record-link data-record-name [href]="href()" [external]="external()"
+                     linkClass="display-grid__row-link"><app-highlight [text]="title()" [terms]="terms()" /></app-record-link>
+  </h3>
+
+  @if (pairs().length > 0) {
+    <dl class="display-grid__row-fields">
+      @for (field of pairs(); track field.label) {
+        <div>
+          <dt>{{ field.label }}</dt>
+          <dd>{{ field.value }}</dd>
+        </div>
+      }
+    </dl>
+  }
+
+  @if (body()) {
+    <p class="display-grid__row-body"><app-highlight [text]="shownBody()" [terms]="terms()" /></p>
+  }
+
+  @if (long()) {
+    <button type="button" class="display-grid__row-more" [attr.aria-expanded]="expanded()" (click)="toggle()">
+      {{ expanded() ? 'Show less' : 'Show more' }}
+    </button>
+  }
+
+  @if (attachments().length > 0) {
+    <div class="display-grid__row-docs">
+      <p class="display-grid__row-docs-count">{{ docsLabel() }}</p>
+      <ul [attr.aria-label]="docsLabel()">
+        @for (attachment of attachments(); track attachment.href) {
+          <li>
+            <!-- No file glyph: this app ships no Material Icons font, and the ligature would
+                 render as the word `insert_drive_file`. -->
+            <a [href]="attachment.href" download>{{ attachment.name }}</a>
+            <!-- Empty on a record that states no type or size: an empty flex item would still
+                 take a line of its own on a phone. -->
+            @if (attachmentMeta(attachment)) {
+              <span class="display-grid__row-docs-meta">{{ attachmentMeta(attachment) }}</span>
+            }
+          </li>
+        }
+      </ul>
+    </div>
+  }
+</div>

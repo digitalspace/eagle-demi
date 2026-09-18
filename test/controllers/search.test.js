@@ -1336,7 +1336,8 @@ test('Search Controller Tests', async (t) => {
     const out = await refusal({ dataset: 'Project', 'and[nameContains]': 'a'.repeat(200) });
 
     assert.strictEqual(out.status, 200);
-    assert.ok(sent.filter.includes(`search.ismatch('${'a'.repeat(200)}*', 'name', 'full', 'any')`),
+    assert.ok(sent.filter.includes(
+      `search.ismatch('${'a'.repeat(200)}*', 'name,nameTokens', 'full', 'any')`),
       sent.filter);
   });
 });

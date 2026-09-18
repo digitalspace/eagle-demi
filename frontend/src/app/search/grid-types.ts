@@ -27,6 +27,16 @@ export type GridCell =
 /** Which row template a list-mode record type draws itself with. */
 export type RowTemplate = 'activity' | 'notification';
 
+/** A file hanging off one record, listed under its row. */
+export interface ListRowAttachment {
+  name: string;
+  href: string;
+  /** File type as the record states it, e.g. `PDF`. */
+  type?: string;
+  /** Already formatted, e.g. `1.2 MB`. */
+  size?: string;
+}
+
 export interface GridColumn<Row = unknown> {
   key: string;
   label: string;
@@ -67,6 +77,18 @@ export type FilterValues = Record<string, FilterValue>;
 export interface SortState {
   key: string;
   dir: 'asc' | 'desc';
+}
+
+/** One entry of the sort select, which the layouts without column headings offer instead. */
+export interface SortOption {
+  /** Signed field name, as the URL spells a sort: `-datePosted`. */
+  value: string;
+  label: string;
+}
+
+/** `-datePosted` as the sort select's value. */
+export function sortValueOf(sort: SortState): string {
+  return `${sort.dir === 'desc' ? '-' : '+'}${sort.key}`;
 }
 
 /** `-datePosted` as the header reads it. */
@@ -128,8 +150,11 @@ export const PASSAGE_LOCATOR = {
     return `${hit.pageNumbered ? 'Page' : 'Passage'} ${hit.locator}`;
   },
 
-  /** No link where the locator is not a page: a fragment the viewer ignores is a broken promise. */
+  /**
+   * No link where the locator is not a page: a fragment the viewer ignores is a broken promise.
+   * Nor where the file has no address of its own, as a presigned download does not.
+   */
   href(row: PassageRow, hit: PassageHit): string | undefined {
-    return hit.pageNumbered ? `${row.href}#page=${hit.locator}` : undefined;
+    return hit.pageNumbered && row.href ? `${row.href}#page=${hit.locator}` : undefined;
   },
 };

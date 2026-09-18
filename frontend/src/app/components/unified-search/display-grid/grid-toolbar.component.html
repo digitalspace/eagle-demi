@@ -1,0 +1,64 @@
+<div class="display-grid__bar">
+  <div class="display-grid__bar-group">
+    <!-- The one live region: the count is what every control in this bar changes. -->
+    <p class="display-grid__count" role="status">{{ countText() }}</p>
+    <ng-content />
+  </div>
+
+  <div class="display-grid__bar-group display-grid__bar-group--tools">
+    <button type="button" class="display-grid__tool" [class.display-grid__tool--on]="filterCount() > 0"
+            [class.display-grid__tool--open]="panelOpen()" [attr.aria-expanded]="panelOpen()"
+            [attr.aria-controls]="panelId" (click)="toggledPanel.emit()">
+      More filters
+      @if (filterCount() > 0) { <span class="display-grid__badge">{{ filterCount() }}</span> }
+    </button>
+
+    @if (columns().length > 0) {
+      <div class="display-grid__menu-anchor" (keydown)="onKeydown($event)">
+        <button type="button" class="display-grid__tool" [class.display-grid__tool--open]="columnsOpen()"
+                aria-haspopup="true" [attr.aria-expanded]="columnsOpen()" (click)="toggleColumns()">Columns</button>
+        @if (columnsOpen()) {
+          <div class="display-grid__menu" role="group" aria-label="Columns shown">
+            <p class="display-grid__menu-title">Columns shown</p>
+            @for (column of columns(); track column.key) {
+              <label class="display-grid__option">
+                <!-- The link column cannot be hidden: without it a row has nothing to open. -->
+                <input type="checkbox" [checked]="isShown(column)" [disabled]="!!column.locked"
+                       (change)="toggledColumn.emit(column.key)">
+                {{ column.label }}
+                @if (column.locked) { <span class="display-grid__visually-hidden"> (required)</span> }
+              </label>
+            }
+          </div>
+        }
+      </div>
+    }
+
+    <button type="button" class="display-grid__tool" (click)="openSaveDialog($event)">Save this query</button>
+
+    <div class="display-grid__menu-anchor" (keydown)="onKeydown($event)">
+      <button type="button" class="display-grid__tool" [class.display-grid__tool--open]="queriesOpen()"
+              aria-haspopup="true" [attr.aria-expanded]="queriesOpen()" (click)="toggleQueries()">Saved queries</button>
+      @if (queriesOpen()) {
+        <div class="display-grid__menu" role="group" aria-label="Saved queries">
+          <p class="display-grid__menu-title">Saved queries</p>
+          @if (queries().length === 0) {
+            <p class="saved-query__empty">No saved queries yet</p>
+          }
+          @for (query of queries(); track query.slug) {
+            <div class="saved-query__row">
+              <button type="button" class="saved-query__open" (click)="openQuery(query)">
+                <span class="saved-query__name">{{ query.name }}</span>
+                <span class="saved-query__record">{{ recordLabel(query) }}</span>
+              </button>
+              <button type="button" class="saved-query__delete" [attr.aria-label]="'Delete ' + query.name"
+                      (click)="deleteQuery(query)">Delete</button>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  </div>
+</div>
+
+<app-saved-query-dialog />
