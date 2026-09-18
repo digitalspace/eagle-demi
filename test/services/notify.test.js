@@ -28,6 +28,7 @@ const realFetch = global.fetch;
 const realBase = config.notifyApiBase;
 const realKey = config.notifyApiKey;
 const realLinkBase = config.linkBaseUrl;
+const realReaderLinks = config.notifyUpdateReaderLinks;
 
 function wire(handler) {
   const calls = [];
@@ -43,12 +44,14 @@ function restore() {
   config.notifyApiBase = realBase;
   config.notifyApiKey = realKey;
   config.linkBaseUrl = realLinkBase;
+  config.notifyUpdateReaderLinks = realReaderLinks;
 }
 
 function configure() {
   config.notifyApiBase = 'https://notify-api-test.azurewebsites.net';
   config.notifyApiKey = 'test-function-key';
   config.linkBaseUrl = 'https://test.projects.eao.gov.bc.ca';
+  config.notifyUpdateReaderLinks = false;
 }
 
 test('notify.updatePublished', async (t) => {
@@ -88,6 +91,28 @@ test('notify.updatePublished', async (t) => {
     assert.strictEqual(body.serviceName, 'eao:updates');
     assert.strictEqual(body.url, 'https://test.projects.eao.gov.bc.ca/news');
     assert.strictEqual(body.projectName, null);
+  });
+
+  await t.test('with reader links on, a project update links its own reader page', async () => {
+    configure();
+    config.notifyUpdateReaderLinks = true;
+    const calls = wire(() => ({ ok: true, status: 202 }));
+
+    await notify.updatePublished(ITEM, 'Nicomen Wind Energy');
+
+    assert.strictEqual(JSON.parse(calls[0].opts.body).url,
+      'https://test.projects.eao.gov.bc.ca/updates/5cf00c03a266b7e1877504db');
+  });
+
+  await t.test('with reader links on, a site-wide update links its own reader page', async () => {
+    configure();
+    config.notifyUpdateReaderLinks = true;
+    const calls = wire(() => ({ ok: true, status: 202 }));
+
+    await notify.updatePublished({ ...ITEM, projectId: null }, null);
+
+    assert.strictEqual(JSON.parse(calls[0].opts.body).url,
+      'https://test.projects.eao.gov.bc.ca/updates/5cf00c03a266b7e1877504db');
   });
 
   await t.test('the excerpt is capped at 500 characters', () => {

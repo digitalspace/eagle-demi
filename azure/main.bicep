@@ -49,6 +49,9 @@ param linkBaseUrl string = ''
 @description('eagle-notify base URL DEMI announces published Updates to. Empty leaves the push dark.')
 param notifyApiBase string = ''
 
+@description('Update emails link eagle-public\'s /updates/<id> reader page instead of the project page. Only the React line serves that route: keep false while linkBaseUrl serves the Angular site.')
+param notifyUpdateReaderLinks bool = false
+
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
@@ -672,6 +675,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     roleSyncClientSecretUri: roleSyncClientSecretUri
     notifyApiBase: notifyApiBase
     notifyApiKeySecretUri: notifyApiKeySecretUri
+    notifyUpdateReaderLinks: notifyUpdateReaderLinks
     syncTeamsSchedule: syncTeamsSchedule
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule
