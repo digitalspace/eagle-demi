@@ -16,8 +16,11 @@ import {
 } from '../mocks/mock-project-summary.data';
 import { MOCK_PROJECTS } from '../mocks/mock-registry.data';
 
-/** Why there is no generated summary. `null` alongside a record means there is one. */
-export type SummaryReason = 'missing' | 'disabled' | 'error';
+/**
+ * Why there is no generated summary. `null` alongside a record means there is one.
+ * `signin` is a gate, not a failure: the route is staff-only.
+ */
+export type SummaryReason = 'missing' | 'disabled' | 'error' | 'signin';
 
 /** An Eagle ObjectId. Anything else in a lookup field is already the label. */
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
@@ -197,12 +200,25 @@ export class ProjectSummaryService {
       return;
     }
 
+    // Staff-only route. An anonymous request would 401 into the interceptor's refresh-and-replay
+    // and read on the page as a failure, so it is never sent — as in registry loadSummary().
+    await this.registry.authReady;
+    if (!this.registry.isStaff()) {
+      this.summaryReason.set('signin');
+      return;
+    }
+
     this.summaryLoading.set(true);
     try {
       const res = await fetch(`${this.registry.getBasePath()}/projects/${encodeURIComponent(projectId)}/summary`);
       // 404 is the documented "no row generated yet" answer, not an error worth an alert.
       if (res.status === 404) {
         this.summaryReason.set('missing');
+        return;
+      }
+      // Token held at the gate above, rejected here: it expired mid-visit. Still a sign-in gate.
+      if (res.status === 401 || res.status === 403) {
+        this.summaryReason.set('signin');
         return;
       }
       if (!res.ok) throw new Error(`Summary API returned status ${res.status}`);

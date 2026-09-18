@@ -150,6 +150,103 @@ describe('ProjectSummaryService list lookup', () => {
   });
 });
 
+describe('ProjectSummaryService summary gate', () => {
+  let service: ProjectSummaryService;
+  let registry: RegistryStateService;
+  let fetchSpy: jasmine.Spy;
+
+  /** Summary reads the service issued, so "it did not ask" is checked against calls, not state. */
+  const summaryUrls = () =>
+    fetchSpy.calls.allArgs().map(args => String(args[0])).filter(url => url.endsWith('/summary'));
+
+  /** Stub, inject, and settle auth. `staff` is the signed-in staff session the route requires. */
+  async function setUp(staff: boolean, summary: () => Response) {
+    fetchSpy = spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/summary')) return Promise.resolve(summary());
+      return Promise.resolve(jsonResponse([{ searchResults: [], count: 0 }]));
+    });
+
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService, ProjectSummaryService]
+    });
+    registry = TestBed.inject(RegistryStateService);
+    await registry.authReady;
+    registry.isAuthenticated.set(staff);
+    service = TestBed.inject(ProjectSummaryService);
+    // Root-provided, so a previous spec's load would otherwise stand.
+    service.loadedId.set(null);
+    service.summary.set(null);
+    service.summaryReason.set(null);
+    service.lists.set(null);
+    service.organizations.set(null);
+    fetchSpy.calls.reset();
+  }
+
+  async function settle(turns = 5) {
+    for (let i = 0; i < turns; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  it('sends no request at all when nobody is signed in', async () => {
+    // A 401 the page provoked itself is not information: it is a staff route, asked anonymously.
+    await setUp(false, () => jsonResponse({ message: 'Unauthorized' }, 401));
+
+    service.load('272');
+    await settle();
+
+    expect(summaryUrls()).toEqual([]);
+    expect(service.summaryReason()).toBe('signin');
+    expect(service.summary()).toBeNull();
+  });
+
+  it('reads a 401 from an expired session as a sign-in gate, not a failure', async () => {
+    await setUp(true, () => jsonResponse({ message: 'Unauthorized' }, 401));
+
+    service.load('272');
+    await settle();
+
+    expect(summaryUrls().length).toBe(1);
+    expect(service.summaryReason()).toBe('signin');
+  });
+
+  it('reads a 403 the same way', async () => {
+    await setUp(true, () => jsonResponse({ message: 'Forbidden' }, 403));
+
+    service.load('272');
+    await settle();
+
+    expect(service.summaryReason()).toBe('signin');
+  });
+
+  it('still keeps a real outage an error', async () => {
+    await setUp(true, () => jsonResponse({ message: 'boom' }, 500));
+
+    service.load('272');
+    await settle();
+
+    expect(service.summaryReason()).toBe('error');
+  });
+
+  it('still reads 404 as no row generated yet', async () => {
+    await setUp(true, () => jsonResponse({ error: 'not found' }, 404));
+
+    service.load('272');
+    await settle();
+
+    expect(service.summaryReason()).toBe('missing');
+  });
+
+  it('loads the record for a signed-in staff reader', async () => {
+    await setUp(true, () => jsonResponse({ projectId: '272', sections: {} }));
+
+    service.load('272');
+    await settle();
+
+    expect(service.summaryReason()).toBeNull();
+    expect(service.summary()?.projectId).toBe('272');
+  });
+});
+
 describe('ProjectSummaryService project list', () => {
   let service: ProjectSummaryService;
   let registry: RegistryStateService;
