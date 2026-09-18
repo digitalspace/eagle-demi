@@ -59,7 +59,6 @@ export class ProjectSummaryComponent implements OnInit {
   private dialogRef = viewChild<ElementRef<HTMLDialogElement>>('conditionDialog');
 
   ngOnInit() {
-    this.registry.activePage.set('summary');
     const id = this.route.snapshot.paramMap.get('id') || '';
     this.projectId.set(id);
     if (id) this.service.load(id);

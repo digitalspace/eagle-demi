@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { SummaryCitation } from '../../models/registry.models';
@@ -17,12 +17,8 @@ import { SummaryCitation } from '../../models/registry.models';
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
 })
-export class SummarizerComponent implements OnInit {
+export class SummarizerComponent {
   service = inject(RegistryStateService);
-
-  ngOnInit() {
-    this.service.activePage.set('summary');
-  }
 
   /**
    * Submit on Enter or on the button — NOT on input.

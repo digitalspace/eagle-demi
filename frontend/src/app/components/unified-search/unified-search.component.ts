@@ -396,7 +396,6 @@ export class UnifiedSearchComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    this.registry.activePage.set('search');
     this.url.setDefaults(this.defaultsFor(this.state().record));
     void this.loadOptions();
   }

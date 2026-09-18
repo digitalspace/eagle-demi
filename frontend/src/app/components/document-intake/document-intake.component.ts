@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { RegistryStateService } from '../../services/registry-state.service';
 
 @Component({
@@ -9,14 +9,10 @@ import { RegistryStateService } from '../../services/registry-state.service';
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
 })
-export class DocumentIntakeComponent implements OnInit {
+export class DocumentIntakeComponent {
   service = inject(RegistryStateService);
 
   dragging = signal<boolean>(false);
-
-  ngOnInit() {
-    this.service.activePage.set('intake');
-  }
 
   onProjectChange(event: Event) {
     this.service.intakeProjectId.set((event.target as HTMLSelectElement).value);
