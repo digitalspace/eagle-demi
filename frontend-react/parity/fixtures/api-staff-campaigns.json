@@ -1,0 +1,45 @@
+{
+  "activeId": "sample-campaign-1",
+  "campaigns": [
+    {
+      "id": "sample-campaign-1",
+      "status": "sending",
+      "serviceName": "project-updates",
+      "serviceLabel": "Project updates",
+      "templateName": "Weekly project digest",
+      "templateVersion": 4,
+      "audience": 1180,
+      "sent": 640,
+      "failed": 2,
+      "createdAt": "2026-09-03T17:30:00Z",
+      "createdBy": "sample-staff"
+    },
+    {
+      "id": "sample-campaign-2",
+      "status": "sending",
+      "serviceName": "comment-periods",
+      "serviceLabel": "Comment periods",
+      "templateName": "Comment period opening",
+      "templateVersion": 2,
+      "audience": 104,
+      "sent": 0,
+      "failed": 0,
+      "createdAt": "2026-09-03T16:05:00Z",
+      "createdBy": "sample-staff"
+    },
+    {
+      "id": "sample-campaign-3",
+      "status": "done",
+      "serviceName": "project-updates",
+      "serviceLabel": "Project updates",
+      "templateName": "Weekly project digest",
+      "templateVersion": 3,
+      "audience": 1175,
+      "sent": 1175,
+      "failed": 1,
+      "createdAt": "2026-08-27T17:30:00Z",
+      "completedAt": "2026-08-27T18:02:00Z",
+      "createdBy": "sample-staff"
+    }
+  ]
+}

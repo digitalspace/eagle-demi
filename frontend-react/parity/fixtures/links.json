@@ -1,0 +1,32 @@
+[
+  {
+    "id": "sample-eac",
+    "url": "https://example.invalid/projects/sample-one",
+    "note": "printed handout",
+    "shortUrl": "https://example.invalid/s/sample-eac",
+    "createdAt": "2026-08-24T00:00:00.000Z",
+    "createdBy": "sample.one@example.invalid",
+    "updatedAt": null,
+    "personal": false
+  },
+  {
+    "id": "sample-open-house",
+    "url": "https://example.invalid/projects/sample-two/engagement",
+    "note": "open house poster, autumn round",
+    "shortUrl": "https://example.invalid/s/sample-open-house",
+    "createdAt": "2026-09-02T00:00:00.000Z",
+    "createdBy": "sample.two@example.invalid",
+    "updatedAt": "2026-09-09T00:00:00.000Z",
+    "personal": false
+  },
+  {
+    "id": "sample-draft",
+    "url": "https://example.invalid/projects/sample-three",
+    "note": null,
+    "shortUrl": "https://example.invalid/s/sample-draft",
+    "createdAt": "2026-09-11T00:00:00.000Z",
+    "createdBy": "sample.three@example.invalid",
+    "updatedAt": null,
+    "personal": true
+  }
+]

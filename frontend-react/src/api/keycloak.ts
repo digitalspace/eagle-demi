@@ -72,6 +72,35 @@ export function getToken(): string | undefined {
   return auth.authenticated ? client?.token : undefined;
 }
 
+/** Claims the account, sessions and short-links screens read straight off the access token. */
+export interface SessionClaims {
+  /** Keycloak's own session id, falling back to the token's `sid`. '' when there is neither. */
+  sessionId: string;
+  preferredUsername: string;
+  name?: string;
+  email?: string;
+  idirUsername?: string;
+  groups?: string[];
+  issuedAt?: number;
+  expiresAt?: number;
+}
+
+/** Null when signed out, so nothing stale is rendered. */
+export function getSessionClaims(): SessionClaims | null {
+  const claims = auth.authenticated ? client?.tokenParsed : undefined;
+  if (!claims) return null;
+  return {
+    sessionId: client?.sessionId || (claims['sid'] as string) || '',
+    preferredUsername: (claims['preferred_username'] as string) || '',
+    name: claims['name'] as string | undefined,
+    email: claims['email'] as string | undefined,
+    idirUsername: claims['idir_username'] as string | undefined,
+    groups: claims['groups'] as string[] | undefined,
+    issuedAt: claims.iat,
+    expiresAt: claims.exp,
+  };
+}
+
 /** Realm roles worth showing a person: the token's list without Keycloak's own boilerplate. */
 export function getVisibleRoles(): string[] {
   return auth.roles.filter((role) => !KEYCLOAK_BUILTIN_ROLES.includes(role));

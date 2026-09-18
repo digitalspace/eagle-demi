@@ -242,7 +242,8 @@ describe('the account menu', () => {
 
     await user.click(screen.getByRole('menuitem', { name: 'My account' }));
 
-    expect(router.state.location.pathname).toBe('/workspace');
+    // The account screen is a lazy route of its own now, so the navigation settles a tick later.
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspace'));
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 });

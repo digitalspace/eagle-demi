@@ -75,7 +75,7 @@ describe('bearer attachment', () => {
     expect(authHeader(fetchMock.mock.calls[0]!)).toBeNull();
   });
 
-  it('sends the token to eagle-notify when the caller asks for it', async () => {
+  it('sends the token to eagle-notify when the caller names it as the base', async () => {
     const { api, notifyBase } = await loadClient({
       API_PATH: '/api',
       API_LOCATION: 'https://demi-api.example.com',
@@ -83,9 +83,37 @@ describe('bearer attachment', () => {
     });
     const fetchMock = respond(json({ ok: true }));
 
-    await api(`${notifyBase()}/subscriptions`, { bearer: true });
+    await api(`${notifyBase()}/subscriptions`, { bearerFor: notifyBase()! });
 
     expect(authHeader(fetchMock.mock.calls[0]!)).toBe('Bearer staff-token');
+  });
+
+  // The opt-in is a base, not a switch: a URL that came from somewhere else still has to be inside
+  // it, or a value reaching this call from a response or a query string would carry the token off.
+  it('withholds the token from another origin even with the notify base opted in', async () => {
+    const { api, notifyBase } = await loadClient({
+      API_PATH: '/api',
+      API_LOCATION: 'https://demi-api.example.com',
+      NOTIFY_API_LOCATION: 'https://notify.example.com',
+    });
+    const fetchMock = respond(json({ ok: true }));
+
+    await api('https://evil.test/collect', { bearerFor: notifyBase()! });
+
+    expect(authHeader(fetchMock.mock.calls[0]!)).toBeNull();
+  });
+
+  it('withholds the token from a path outside the opted-in base on the same origin', async () => {
+    const { api, notifyBase } = await loadClient({
+      API_PATH: '/api',
+      API_LOCATION: 'https://demi-api.example.com',
+      NOTIFY_API_LOCATION: 'https://notify.example.com/api',
+    });
+    const fetchMock = respond(json({ ok: true }));
+
+    await api('https://notify.example.com/public/unsubscribe', { bearerFor: notifyBase()! });
+
+    expect(authHeader(fetchMock.mock.calls[0]!)).toBeNull();
   });
 
   it('strips a caller-supplied Authorization header from a host outside the API', async () => {
@@ -133,6 +161,33 @@ describe('bearer attachment', () => {
   });
 });
 
+describe('notifyBase', () => {
+  const baseFor = async (location?: string) =>
+    (await loadClient({ API_PATH: '/api', API_LOCATION: '', NOTIFY_API_LOCATION: location })).notifyBase();
+
+  it('accepts an absolute https service', async () => {
+    expect(await baseFor('https://notify.example.com/')).toBe('https://notify.example.com');
+  });
+
+  it('has no base when nothing is configured', async () => {
+    expect(await baseFor()).toBeNull();
+  });
+
+  // A relative path is the Vite proxy. A build has no proxy, only this origin, which is the DEMI
+  // API — and the notify screen sends a bearer token.
+  it('accepts a relative path in a dev build only', async () => {
+    expect(await baseFor('/notify-api')).toBe(`${window.location.origin}/notify-api`);
+
+    vi.stubEnv('DEV', false);
+    expect(await baseFor('/notify-api')).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
+  it('refuses an http service', async () => {
+    expect(await baseFor('http://notify.example.com')).toBeNull();
+  });
+});
+
 describe('401 handling', () => {
   it('refreshes once and replays the request', async () => {
     const { api } = await loadClient({ API_PATH: '/api', API_LOCATION: '' });
@@ -175,7 +230,7 @@ describe('401 handling', () => {
     });
     const fetchMock = respond(json({ error: 'nope' }, 401));
 
-    await expect(api(`${notifyBase()}/subscriptions`, { bearer: true })).rejects.toMatchObject({
+    await expect(api(`${notifyBase()}/subscriptions`, { bearerFor: notifyBase()! })).rejects.toMatchObject({
       status: 401,
     });
 

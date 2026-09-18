@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, jsonBody } from './client';
+import { READ_TIMEOUT_MS, api, jsonBody } from './client';
 import { writePrefs, type Prefs } from '../shell/prefs';
 import { useSession } from '../session/session';
 
@@ -29,7 +29,7 @@ export interface MyData {
 const PARAMS_UNSAFE = /[^A-Za-z0-9_.%&=+,:*-]/gu;
 
 /** Budget for `GET /me/data`; a hung API must not hold the screens open. */
-export const MY_DATA_TIMEOUT_MS = 5000;
+export const MY_DATA_TIMEOUT_MS = READ_TIMEOUT_MS;
 
 export const MY_DATA_KEY = ['me', 'data'];
 

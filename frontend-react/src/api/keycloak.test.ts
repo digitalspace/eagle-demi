@@ -10,6 +10,7 @@ const keycloak = vi.hoisted(() => ({
   updateToken: vi.fn<(minValidity: number) => Promise<boolean>>(async () => true),
   token: 'staff-token' as string | undefined,
   idToken: 'id-token' as string | undefined,
+  sessionId: undefined as string | undefined,
   tokenParsed: { realm_access: { roles: ['staff'] }, preferred_username: 'idir\\jane' } as unknown,
 }));
 
@@ -28,6 +29,9 @@ vi.mock('keycloak-js', () => ({
     }
     get idToken() {
       return keycloak.idToken;
+    }
+    get sessionId() {
+      return keycloak.sessionId;
     }
     get tokenParsed() {
       return keycloak.tokenParsed;
@@ -59,6 +63,7 @@ beforeEach(() => {
   keycloak.updateToken.mockResolvedValue(true);
   keycloak.token = 'staff-token';
   keycloak.idToken = 'id-token';
+  keycloak.sessionId = undefined;
   keycloak.tokenParsed = { realm_access: { roles: ['staff'] }, preferred_username: 'idir\\jane' };
 });
 
@@ -194,6 +199,59 @@ describe('login', () => {
     expect(keycloak.login).toHaveBeenCalledWith({
       redirectUri: window.location.origin + window.location.pathname,
     });
+  });
+});
+
+describe('getSessionClaims', () => {
+  const TOKEN = {
+    realm_access: { roles: ['staff'] },
+    sid: 'from-sid',
+    preferred_username: 'idir\\jane',
+    name: 'Jane Smith',
+    email: 'jane.smith@gov.bc.ca',
+    idir_username: 'JSMITH',
+    groups: ['EAO'],
+    iat: 1_767_225_600,
+    exp: 1_767_229_200,
+  };
+
+  /** A remembered login that Keycloak resumes, which is the only way claims exist. */
+  async function signedIn() {
+    keycloak.tokenParsed = TOKEN;
+    localStorage.setItem('isLoggedIn', 'true');
+    const module = await loadKeycloak();
+    await module.initKeycloak();
+    return module;
+  }
+
+  it('maps every claim the screens read', async () => {
+    keycloak.sessionId = 'kc-session';
+    const { getSessionClaims } = await signedIn();
+
+    expect(getSessionClaims()).toEqual({
+      sessionId: 'kc-session',
+      preferredUsername: 'idir\\jane',
+      name: 'Jane Smith',
+      email: 'jane.smith@gov.bc.ca',
+      idirUsername: 'JSMITH',
+      groups: ['EAO'],
+      issuedAt: TOKEN.iat,
+      expiresAt: TOKEN.exp,
+    });
+  });
+
+  // keycloak-js only fills sessionId when the provider hands it one; the token carries the same id.
+  it('falls back to the token’s sid when the client has no session id', async () => {
+    const { getSessionClaims } = await signedIn();
+
+    expect(getSessionClaims()?.sessionId).toBe('from-sid');
+  });
+
+  it('has nothing to map for a signed-out visitor', async () => {
+    const { initKeycloak, getSessionClaims } = await loadKeycloak();
+
+    expect(await initKeycloak()).toBe(false);
+    expect(getSessionClaims()).toBeNull();
   });
 });
 

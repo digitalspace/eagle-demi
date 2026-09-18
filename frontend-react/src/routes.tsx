@@ -58,7 +58,7 @@ export const routes: RouteObject[] = [
     path: '/',
     Component: Shell,
     children: [
-      screen('workspace', 'me'),
+      { path: 'workspace', lazy: async () => ({ Component: (await import('./screens/Workspace')).Workspace }) },
       screen('map', 'map'),
       screen('search', 'search'),
       legacySearch('index', {}),
@@ -66,13 +66,13 @@ export const routes: RouteObject[] = [
       screen('summary', 'summary'),
       { path: 'projects', lazy: async () => ({ Component: (await import('./screens/ProjectPicker')).ProjectPicker }) },
       screen('projects/:id', 'project'),
-      screen('notify', 'notify'),
-      screen('links', 'links'),
-      screen('rbac', 'rbac'),
+      { path: 'notify', lazy: async () => ({ Component: (await import('./screens/Notify')).Notify }) },
+      { path: 'links', lazy: async () => ({ Component: (await import('./screens/ShortLinks')).ShortLinks }) },
+      { path: 'rbac', lazy: async () => ({ Component: (await import('./screens/AccessModel')).AccessModel }) },
       // '/api' is the API proxy path locally, so the screen lives at /developers.
       { path: 'developers', lazy: async () => ({ Component: (await import('./screens/ApiDocs')).ApiDocs }) },
       { path: 'keys', lazy: async () => ({ Component: (await import('./screens/ApiKeys')).ApiKeys }) },
-      screen('sessions', 'sessions'),
+      { path: 'sessions', lazy: async () => ({ Component: (await import('./screens/Sessions')).Sessions }) },
       // The spec is a route under the API base; typing /api-docs here would land on the SPA
       // catch-all, so bounce to the API path, which works relative (via the edge) and absolute.
       {

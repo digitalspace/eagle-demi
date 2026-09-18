@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { api } from '../api/client';
+import { READ_TIMEOUT_MS, api } from '../api/client';
 import {
   authEnabled,
   getAuthSnapshot,
@@ -12,7 +12,7 @@ import {
 import { SessionContext, type Session } from './session';
 
 /** Budget for `GET /me`. The gate waits on this read, so a hung API must not hold it open. */
-export const ME_TIMEOUT_MS = 5000;
+export const ME_TIMEOUT_MS = READ_TIMEOUT_MS;
 
 interface Me {
   level?: unknown;

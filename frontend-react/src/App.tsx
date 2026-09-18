@@ -8,9 +8,12 @@ import { SignIn } from './shell/SignIn';
 
 const router = createBrowserRouter(routes);
 
-// No retry: the Angular screens each made one read and showed their own error, so a silent second
-// attempt would change what a failure looks like.
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+// No retry and no refetch on focus: the Angular screens each read once and showed their own error,
+// so a silent second attempt would change what a failure looks like — and coming back to the tab
+// would paint error states Angular never reaches.
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+});
 
 export function App() {
   return (

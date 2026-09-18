@@ -1,0 +1,14 @@
+{
+  "subscribers": { "confirmed": 1284, "unconfirmed": 37, "unsubscribed": 92 },
+  "services": [
+    { "serviceName": "project-updates", "confirmed": 1180 },
+    { "serviceName": "comment-periods", "confirmed": 104 }
+  ],
+  "confirmationsByDay": [
+    { "day": "2026-09-01", "count": 12 },
+    { "day": "2026-09-02", "count": 9 }
+  ],
+  "bounces": { "addresses": 14, "hard": 6 },
+  "sending": { "usedThisHour": 42, "hourlyBudget": 500 },
+  "templates": 3
+}

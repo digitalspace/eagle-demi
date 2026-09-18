@@ -1,0 +1,6 @@
+{
+  "templates": [
+    { "id": "weekly-digest", "name": "Weekly project digest", "subject": "This week on EPIC" },
+    { "id": "comment-open", "name": "Comment period opening", "subject": "A comment period is open" }
+  ]
+}

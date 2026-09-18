@@ -54,7 +54,9 @@ export function isLocalBase(base) {
 const DEFAULTS = {
   angular: 'http://localhost:4200',
   react: 'http://localhost:4300',
-  routes: '/workspace,/keys',
+  // Every other screen is photographed loaded by a state below, beside its own empty, error and
+  // dialog shots, so one `--only` covers a whole screen rather than half of it.
+  routes: '/keys',
   widths: '1440,1024,400',
   out: path.join(HERE, 'out'),
   timeout: 15000,
@@ -365,10 +367,27 @@ export const SHELL_STATES = [
 ];
 
 /**
- * States a screen reaches only through its own data or a click: the route captures above show each
- * screen loaded, and these show the rest. `responses` replaces what the API answers with; `prepare`
- * drives the page once it has settled. Same selectors work on both apps, because the React port
- * keeps the Angular markup.
+ * A native confirm() is browser chrome and never lands in a screenshot, so the question itself is
+ * written out beside the shot and the page is photographed with nothing sent.
+ */
+function confirmRecorder(selector) {
+  return async (page, width, timeout, out) => {
+    const asked = [];
+    page.on('dialog', async (dialog) => {
+      asked.push(dialog.message());
+      await dialog.dismiss();
+    });
+    // The click resolves only once the dialog has been answered, so `asked` is filled by here.
+    await page.click(selector);
+    mkdirSync(out, { recursive: true });
+    writeFileSync(path.join(out, 'confirm.txt'), asked.join('\n') + '\n');
+  };
+}
+
+/**
+ * Each screen loaded, and every state it reaches only through its own data or a click. `responses`
+ * replaces what the API answers with; `prepare` drives the page once it has settled. Same selectors
+ * work on both apps, because the React port keeps the Angular markup.
  */
 export const SCREEN_STATES = [
   {
@@ -404,20 +423,37 @@ export const SCREEN_STATES = [
     }
   },
   {
-    // A native confirm() is browser chrome and never lands in a screenshot, so the question itself
-    // is written out beside the shot and the page is photographed with nothing sent.
     name: 'keys-revoke-confirm',
     route: '/keys',
-    prepare: async (page, width, timeout, out) => {
-      const asked = [];
-      page.on('dialog', async (dialog) => {
-        asked.push(dialog.message());
-        await dialog.dismiss();
-      });
-      // The click resolves only once the dialog has been answered, so `asked` is filled by here.
-      await page.click('.row-actions button:text-is("Revoke")');
-      mkdirSync(out, { recursive: true });
-      writeFileSync(path.join(out, 'confirm.txt'), asked.join('\n') + '\n');
+    prepare: confirmRecorder('.row-actions button:text-is("Revoke")')
+  },
+  {
+    name: 'notify-loaded',
+    route: '/notify'
+  },
+  {
+    name: 'notify-empty',
+    route: '/notify',
+    responses: [
+      { match: /^\/notify-api\/api\/staff\/stats$/, file: 'api-staff-stats-empty.json' },
+      { match: /^\/notify-api\/api\/staff\/campaigns$/, file: 'api-staff-campaigns-empty.json' }
+    ]
+  },
+  {
+    name: 'notify-error',
+    route: '/notify',
+    responses: [
+      { match: /^\/notify-api\/api\/staff\/stats$/, status: 500, file: 'api-error.json' },
+      { match: /^\/notify-api\/api\/staff\/campaigns$/, status: 500, file: 'api-error.json' }
+    ]
+  },
+  {
+    // More than one template, so the first click opens the picker rather than sending anything.
+    name: 'notify-template-picker',
+    route: '/notify',
+    prepare: async (page, width, timeout) => {
+      await page.click('button:text-is("Send test email")');
+      await page.waitForSelector('select[aria-label="Template to test"]', { timeout });
     }
   },
   {
@@ -451,6 +487,57 @@ export const SCREEN_STATES = [
       await page.fill('#pp-search', 'sample b');
       await page.waitForFunction(() => document.querySelectorAll('.pp-result').length === 1, null, { timeout });
     }
+  },
+  {
+    // Keycloak is off for a capture run, so this is the screen with no session: the token claims
+    // are empty and the row offers the pill rather than Sign out. There is no other state to reach.
+    name: 'sessions-loaded',
+    route: '/sessions'
+  },
+  {
+    name: 'links-loaded',
+    route: '/links'
+  },
+  {
+    name: 'links-empty',
+    route: '/links',
+    responses: [{ match: /^\/api\/links$/, file: 'links-empty.json' }]
+  },
+  {
+    name: 'links-error',
+    route: '/links',
+    responses: [{ match: /^\/api\/links$/, status: 500, file: 'api-error.json' }]
+  },
+  {
+    name: 'links-form-open',
+    route: '/links',
+    prepare: async (page, width, timeout) => {
+      await page.click('button:text-is("New short link")');
+      await page.waitForSelector('button:text-is("Create link")', { timeout });
+    }
+  },
+  {
+    name: 'links-repoint',
+    route: '/links',
+    prepare: async (page, width, timeout) => {
+      await page.click('.row-actions button:text-is("Repoint")');
+      await page.waitForSelector('input[aria-label="New destination"]', { timeout });
+    }
+  },
+  {
+    name: 'links-delete-confirm',
+    route: '/links',
+    prepare: confirmRecorder('.row-actions button:text-is("Delete")')
+  },
+  {
+    name: 'workspace-loaded',
+    route: '/workspace'
+  },
+  {
+    // The simulator sits behind a session, and a capture run has none, so both apps show the rules
+    // and the sign-in note. The engine's answer cannot be photographed without a real token.
+    name: 'rbac-signed-out',
+    route: '/rbac'
   }
 ];
 

@@ -18,7 +18,8 @@ export class ApiError extends Error {
   }
 }
 
-function serverError(body: string): string | null {
+/** The `error` string a DEMI error body carries, or null when it has none. */
+export function serverError(body: string): string | null {
   try {
     const { error } = JSON.parse(body) as { error?: unknown };
     return typeof error === 'string' && error ? error : null;
@@ -34,12 +35,21 @@ export function apiPath(): string {
   return new URL(API_PATH, base).href.replace(/\/$/, '');
 }
 
-/** The eagle-notify base, or null when it is unset or unparseable. */
+/**
+ * The eagle-notify base, or null when the configured location is not one this app will send a
+ * bearer token to: an absolute https origin, or a relative path in a dev build, where it is the
+ * Vite proxy. Anything else — unset, http, another scheme, unparseable — is refused rather than
+ * resolved against this origin, which is the DEMI API and not eagle-notify.
+ */
 export function notifyBase(): string | null {
-  const location = config().NOTIFY_API_LOCATION;
+  const location = config().NOTIFY_API_LOCATION?.trim();
   if (!location) return null;
+  if (location.startsWith('/')) {
+    return import.meta.env.DEV ? new URL(location, window.location.origin).href.replace(/\/$/, '') : null;
+  }
   try {
-    return new URL(location, window.location.origin).href.replace(/\/$/, '');
+    const url = new URL(location);
+    return url.protocol === 'https:' ? url.href.replace(/\/$/, '') : null;
   } catch {
     return null;
   }
@@ -74,18 +84,25 @@ export function jsonBody(body: unknown, method = 'POST'): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
 }
 
+/** The budget a read asks for by passing `timeoutMs`; a call that omits it has none. */
+export const READ_TIMEOUT_MS = 5000;
+
 export interface ApiInit extends RequestInit {
   /** Budget in ms. A fresh signal is made per attempt, so a replay is never born already aborted. */
   timeoutMs?: number;
-  /** Send the bearer to a host outside the DEMI API, as the notify screen does by hand. */
-  bearer?: boolean;
+  /**
+   * Base of a host outside the DEMI API that may have the bearer, as eagle-notify does. The token
+   * is attached only when the request URL is inside this base, so a caller that opts in for one
+   * service cannot hand the token to a URL that came from somewhere else.
+   */
+  bearerFor?: string;
 }
 
 export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
-  const { timeoutMs, bearer = false, ...rest } = init;
+  const { timeoutMs, bearerFor, ...rest } = init;
   const url = new URL(path.startsWith('/') ? apiPath() + path : path, window.location.origin);
   const allowed = isAllowedUrl(url);
-  const attach = allowed || bearer;
+  const attach = allowed || matchesBase(url, bearerFor ?? null);
 
   const send = () =>
     fetch(url, {
