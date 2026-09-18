@@ -158,11 +158,14 @@
     <!--
       404 and `reason: 'disabled'` read the same to a reader: there is no generated summary here.
       One line, not an error banner — the facts above are the page, and they are complete.
+      Signed out is its own line: staff-only is not the same as broken.
     -->
     <p class="ps-note" role="status">
-      {{ service.summaryReason() === 'error'
-        ? 'The generated summary could not be loaded. The project record above is unaffected.'
-        : 'No generated summary for this project yet.' }}
+      @switch (service.summaryReason()) {
+        @case ('signin') { Sign in to view the generated summary. The project record above is public. }
+        @case ('error') { The generated summary could not be loaded. The project record above is unaffected. }
+        @default { No generated summary for this project yet. }
+      }
     </p>
   }
 

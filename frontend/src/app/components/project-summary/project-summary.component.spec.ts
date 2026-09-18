@@ -33,13 +33,16 @@ describe('ProjectSummaryComponent', () => {
    * its own empty state, so a spec that stubbed only the one it cares about would leave the others
    * hanging on their loading sentinel and assert against a skeleton.
    */
-  function routeFetch(handler: (url: string) => Response) {
-    spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL) =>
+  function routeFetch(handler: (url: string) => Response): jasmine.Spy {
+    return spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL) =>
       Promise.resolve(handler(String(input)))
     );
   }
 
-  async function render(): Promise<HTMLElement> {
+  /** Every URL the page asked for, so "it never sent that request" is checkable. */
+  const urlsAsked = (spy: jasmine.Spy) => spy.calls.allArgs().map(args => String(args[0]));
+
+  async function render(opts: { staff?: boolean } = {}): Promise<HTMLElement> {
     await TestBed.configureTestingModule({
       imports: [ProjectSummaryComponent],
       providers: [
@@ -53,6 +56,9 @@ describe('ProjectSummaryComponent', () => {
 
     const registry = TestBed.inject(RegistryStateService);
     await registry.authReady;
+    // The summary is staff-only, so the page only asks for it with a session behind it. Default
+    // on: every spec below this one is about what a staff reader sees.
+    registry.isAuthenticated.set(opts.staff !== false);
     service = TestBed.inject(ProjectSummaryService);
     // Root-provided and cached by project id, so a previous spec's load would otherwise stand.
     service.loadedId.set(null);
@@ -95,6 +101,67 @@ describe('ProjectSummaryComponent', () => {
     // Nothing generated may render without a record behind it.
     expect(el.querySelectorAll('.ps-card--action').length).toBe(0);
     expect(el.querySelector('.ps-footer')).toBeNull();
+  });
+
+  it('asks a signed-out reader to sign in, and never sends the staff-only summary request', async () => {
+    // The route is staff-only. Sending it anyway returns 401, which used to render as "could not
+    // be loaded" — a failure message for a page that is working exactly as designed.
+    const fetchSpy = routeFetch(url => {
+      if (url.includes('dataset=List')) return listSearch();
+      if (url.includes('/search?')) return json([{ searchResults: [], count: 0 }]);
+      return json(MOCK_PROJECT_SUMMARY_FACTS);
+    });
+
+    const el = await render({ staff: false });
+
+    expect(urlsAsked(fetchSpy).filter(url => url.includes('/summary'))).toEqual([]);
+    expect(squash(el.querySelector('.ps-note')?.textContent))
+      .toBe('Sign in to view the generated summary. The project record above is public.');
+  });
+
+  it('asks the reader to sign in again when the session expired mid-visit', async () => {
+    // Staff on the way in, 401 on the way out: the token lapsed between the gate and the request.
+    routeFetch(url => {
+      if (url.includes('/summary')) return json({ message: 'Unauthorized' }, 401);
+      if (url.includes('dataset=List')) return listSearch();
+      if (url.includes('/search?')) return json([{ searchResults: [], count: 0 }]);
+      return json(MOCK_PROJECT_SUMMARY_FACTS);
+    });
+
+    const el = await render();
+
+    expect(squash(el.querySelector('.ps-note')?.textContent))
+      .toBe('Sign in to view the generated summary. The project record above is public.');
+  });
+
+  it('keeps the error line for a summary read that actually failed', async () => {
+    routeFetch(url => {
+      if (url.includes('/summary')) return json({ message: 'boom' }, 500);
+      if (url.includes('dataset=List')) return listSearch();
+      if (url.includes('/search?')) return json([{ searchResults: [], count: 0 }]);
+      return json(MOCK_PROJECT_SUMMARY_FACTS);
+    });
+
+    const el = await render();
+
+    expect(squash(el.querySelector('.ps-note')?.textContent))
+      .toBe('The generated summary could not be loaded. The project record above is unaffected.');
+  });
+
+  it('renders the generated summary for a staff reader, note and all', async () => {
+    routeFetch(url => {
+      if (url.includes('/summary')) return json(MOCK_PROJECT_SUMMARY);
+      if (url.includes('dataset=List')) return listSearch();
+      if (url.includes('/search?')) return json([{ searchResults: [], count: 0 }]);
+      return json(MOCK_PROJECT_SUMMARY_FACTS);
+    });
+
+    const el = await render();
+
+    // `.ps-note` is also a section's own empty-state line, so check the wording, not the element.
+    const notes = Array.from(el.querySelectorAll('.ps-note')).map(n => squash(n.textContent));
+    expect(notes.some(text => text.startsWith('Sign in to view'))).toBeFalse();
+    expect(el.querySelector('.ps-footer')).not.toBeNull();
   });
 
   // The screen is reached from the picker and from a deep link; both need the way back.
