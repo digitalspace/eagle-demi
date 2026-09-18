@@ -180,6 +180,22 @@ describe('AppComponent', () => {
     expect(service.searchQuery()).toBe('');
   });
 
+  // The corpus in memory was read under the words being left behind, so clearing them is only half
+  // the job: the screen arriving has to read it again or it shows rows that match the old search.
+  it('re-reads the search on arrival when text was typed', async () => {
+    await renderAs(true, false);
+    const service = TestBed.inject(RegistryStateService);
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/workspace');
+    service.searchQuery.set('cariboo');
+    const loadData = spyOn(service, 'loadData');
+
+    await router.navigateByUrl('/search');
+
+    expect(service.searchQuery()).toBe('');
+    expect(loadData).toHaveBeenCalledTimes(1);
+  });
+
   it('does not re-read the search on arrival when there is nothing typed', async () => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);

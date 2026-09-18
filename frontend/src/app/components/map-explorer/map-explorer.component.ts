@@ -495,8 +495,6 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngOnInit() {
-    this.service.activePage.set('map');
-    
     // Proactively load administrative names (without heavy geometries) so they are immediately searchable
     this.service.loadBoundaryGeometry('regionalDistricts', 'metadata');
     this.service.loadBoundaryGeometry('municipalities', 'metadata');

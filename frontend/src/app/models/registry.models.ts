@@ -56,22 +56,6 @@ export interface Document {
 }
 
 /**
- * A passage of extracted text from inside a document — the unit Deep Search matches on.
- * `snippet` is Typesense's highlighted span; `content` is the whole passage it came from.
- */
-export interface DocumentChunk {
-  id: string;
-  documentId: string;
-  projectId: string | number;
-  projectName: string;
-  documentName: string;
-  documentType: string;
-  pageNumber: number;
-  content: string;
-  snippet: string;
-}
-
-/**
  * One `[n]` citation in an AI summary, resolved back to the chunk it points at.
  *
  * The model only ever emits a source NUMBER — it never sees a chunk id, so it cannot invent one.

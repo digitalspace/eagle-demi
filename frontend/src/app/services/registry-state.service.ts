@@ -158,11 +158,7 @@ export class RegistryStateService {
   gatingFilter = signal<Set<string>>(new Set());
   sectorFilter = signal<Set<string>>(new Set());
   regionFilter = signal<Set<string>>(new Set());
-  activePage = signal<'map' | 'search' | 'intake' | 'summary'>('map');
-
   intakeProjectId = signal<string>('');
-  intakeProjectSearchQuery = signal<string>('');
-  showIntakeDropdown = signal<boolean>(false);
   activeIngestion = signal<{ fileName: string, progress: number, status: string, docId?: string } | null>(null);
 
   // Datasets (using Signals - null representing loading sentinel)
@@ -461,16 +457,6 @@ export class RegistryStateService {
     return result;
   });
 
-  // Geospatial Statistics Computations
-  viewportCount = computed(() => {
-    const inViewIds = new Set(this.mapInViewProjectIds());
-    return (this.filteredProjects() || []).filter(p => inViewIds.has(p.id)).length;
-  });
-
-  stagedCount = computed(() => {
-    return (this.projects() || []).filter(p => p.gatingState === 'staged').length;
-  });
-
   intakeProjectValid = computed(() => {
     const id = this.intakeProjectId();
     if (!id) return false;
@@ -480,16 +466,6 @@ export class RegistryStateService {
       return list.some(p => String(p.id) === String(id));
     }
     return false;
-  });
-
-  filteredIntakeProjects = computed(() => {
-    const q = this.intakeProjectSearchQuery().toLowerCase().trim();
-    const list = this.projects() || [];
-    if (!q) return list;
-    return list.filter(p => 
-      (p.name && p.name.toLowerCase().includes(q)) || 
-      (p.id && String(p.id).toLowerCase().includes(q))
-    );
   });
 
   constructor() {
@@ -973,26 +949,6 @@ export class RegistryStateService {
       return [];
     } finally {
       this.isLoadingBoundaries.set(false);
-    }
-  }
-
-  async loadBoundariesByBBox(type: string, bbox: string): Promise<any[]> {
-    const basePath = this.getBasePath();
-
-    let apiType = '';
-    if (type === 'regionalDistricts') apiType = 'Regional District';
-    else if (type === 'municipalities') apiType = 'Municipality';
-    else if (type === 'electoralDistricts') apiType = 'Electoral District';
-    else apiType = type;
-
-    try {
-      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}&bbox=${encodeURIComponent(bbox)}`);
-      if (!res.ok) throw new Error(`Failed to load BBox boundaries for ${type}`);
-      const data = await res.json();
-      return data;
-    } catch (err) {
-      console.error(`Failed to load BBox boundaries for ${type}:`, err);
-      return [];
     }
   }
 
