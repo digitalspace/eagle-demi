@@ -14,7 +14,10 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead, credentialField, systemAccess, TIER } = require('../helpers/access-sql');
 const projects = require('./projects');
-const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice } = require('./_sql');
+const {
+  eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
+  pageSlice
+} = require('./_sql');
 
 const CONTAINER = 'updates';
 const PARTITION_FIELD = 'id';
@@ -45,7 +48,7 @@ const UNPINNED = {
   params: []
 };
 
-/** eagle-api answers `?top=true` with at most this many rows in total — see listTop. */
+/** eagle-api answers `?top=true` with at most this many rows in total — listTop's default. */
 const TOP_ROWS = 4;
 
 /** Nobody has claimed the notification yet. An absent field and an explicit null both count. */
@@ -118,9 +121,72 @@ function keywordCriteria(keywords) {
   }];
 }
 
-function criteriaFor(projectId, keywords) {
+/**
+ * `and[type]` as an IN over the stored `type`.
+ *
+ * No `types` key, and an emptied one (`and[type]=`), both add no clause — an empty `and[type]=` has
+ * to read the same way here as it does on the index path, where `eagleQuery.buildFilter` drops a
+ * key that produced zero terms instead of narrowing to none. A cleared filter-panel checkbox means
+ * "show everything", not "show nothing".
+ */
+function typeCriteria(types) {
+  if (!types || !types.length) return [];
+  return [inList('type', types.map(String), '@type')];
+}
+
+/**
+ * "Documents attached" — `and[documentUrl]`, which asks whether the field is FILLED rather than
+ * what it holds.
+ *
+ * The mirror writes `documentUrl: null` when Eagle sent none and older rows carry `''`, so both
+ * spellings of "no attachment" are named. The two clauses are exact complements by construction,
+ * because the index path answers the same key with a complementary pair
+ * (`eagle-query` PRESENCE_KEYS / `presenceTerm`) and one URL must not mean two different things
+ * depending on whether keywords are on.
+ */
+const HAS_DOCUMENT = (() => {
+  const filled = isDefinedAndNotNull('documentUrl');
+  return { clause: `(${filled.clause} AND c.documentUrl != '')`, params: [] };
+})();
+const NO_DOCUMENT = { clause: `(NOT ${HAS_DOCUMENT.clause})`, params: [] };
+
+function documentCriteria(hasDocument) {
+  if (hasDocument === true) return [HAS_DOCUMENT];
+  if (hasDocument === false) return [NO_DOCUMENT];
+  return [];
+}
+
+/**
+ * The posted-on window: `dateAddedFrom` inclusive, `dateAddedBefore` exclusive.
+ *
+ * Both arrive as ISO instants already rounded to whole UTC days by the caller
+ * (`controllers/search.js` `activityWindow`), which is what makes `and[dateAddedEnd]` cover its own
+ * day — the same arithmetic `eagle-query`'s `rangeTerm` does for the index path.
+ *
+ * A STRING compare, like `comment-periods.js` listOpen: `dateAdded` is stored as the ISO text
+ * eagle-api pushed, Cosmos has no date type, and ISO-8601 in UTC sorts as text the way it sorts as
+ * time — which is also why `DEFAULT_ORDER` can order by it. A row with no `dateAdded` at all
+ * compares as undefined and drops out, which is the fail-closed direction for a dated window.
+ */
+function dateCriteria(dateAddedFrom, dateAddedBefore) {
+  return [
+    ...(dateAddedFrom ? [{
+      clause: 'c.dateAdded >= @dateAddedFrom',
+      params: [{ name: '@dateAddedFrom', value: dateAddedFrom }]
+    }] : []),
+    ...(dateAddedBefore ? [{
+      clause: 'c.dateAdded < @dateAddedBefore',
+      params: [{ name: '@dateAddedBefore', value: dateAddedBefore }]
+    }] : [])
+  ];
+}
+
+function criteriaFor({ projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }) {
   return [
     ...(projectId ? [eq(SCOPE_FIELD, String(projectId), '@projectId')] : []),
+    ...typeCriteria(types),
+    ...documentCriteria(hasDocument),
+    ...dateCriteria(dateAddedFrom, dateAddedBefore),
     ...keywordCriteria(keywords)
   ];
 }
@@ -128,13 +194,20 @@ function criteriaFor(projectId, keywords) {
 /**
  * The updates this caller may see, newest first.
  *
- * @param {object} [opts.projectId]  an EAGLE project id — see SCOPE_FIELD
+ * @param {object}   [opts.projectId]        an EAGLE project id — see SCOPE_FIELD
+ * @param {string[]} [opts.types]            `and[type]` values, ORed together — see typeCriteria
+ * @param {boolean}  [opts.hasDocument]      `and[documentUrl]` — see documentCriteria
+ * @param {string}   [opts.dateAddedFrom]    inclusive ISO lower bound — see dateCriteria
+ * @param {string}   [opts.dateAddedBefore]  EXCLUSIVE ISO upper bound — see dateCriteria
  */
-async function list(access, { projectId, keywords, pageNum, pageSize, sortBy } = {}) {
+async function list(access, {
+  projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore,
+  pageNum, pageSize, sortBy
+} = {}) {
   const spec = selectWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor(projectId, keywords),
+    criteria: criteriaFor({ projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }),
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
     orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, SORT_ALIASES)
   });
@@ -168,11 +241,13 @@ async function listByIds(access, ids) {
 }
 
 /** The same predicate as the read, so the total cannot describe rows the page may not carry. */
-async function count(access, { projectId, keywords } = {}) {
+async function count(access, {
+  projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore
+} = {}) {
   const spec = countWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor(projectId, keywords)
+    criteria: criteriaFor({ projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore })
   });
   const { items } = await cosmos.query(CONTAINER, spec, {});
   return items[0] || 0;

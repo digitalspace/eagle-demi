@@ -34,22 +34,37 @@ export class ConfigService {
   private configuration: AppConfig = {};
 
   async init(): Promise<void> {
-    this.configuration = (window as any)['__env'] || {};
+    this.configuration = (window as unknown as { __env?: AppConfig }).__env || {};
+    const apiBase = this.apiBase();
 
-    if (this.configuration.configEndpoint === true) {
-      try {
-        let configUrl = '/api/config';
-        if (this.configuration.API_PATH) {
-          configUrl = `${this.configuration.API_PATH.replace(/\/$/, '')}/config`;
-        } else if (this.configuration.API_LOCATION) {
-          configUrl = `${this.configuration.API_LOCATION.replace(/\/$/, '')}/api/config`;
-        }
-        const liveConfig = await firstValueFrom(this.http.get<AppConfig>(configUrl));
-        this.configuration = { ...this.configuration, ...liveConfig };
-        console.log('[ConfigService] Dynamic configuration loaded from ' + configUrl + ':', this.configuration);
-      } catch (e) {
-        console.warn('[ConfigService] Failed to load runtime config, fallback to window.__env:', e);
-      }
+    // The public document is the feature-flag mirror the public site boots on (CONTENT_SEARCH and
+    // friends). It is unauthenticated and carries no API location, so it is read whichever way this
+    // app is configured, and it sits under window.__env: a key this app sets for itself still wins.
+    const [publicConfig, liveConfig] = await Promise.all([
+      this.load(`${apiBase}/config/public`),
+      this.configuration.configEndpoint === true ? this.load(`${apiBase}/config`) : Promise.resolve(null)
+    ]);
+
+    this.configuration = { ...publicConfig, ...this.configuration, ...liveConfig };
+  }
+
+  /** Where both config documents live, given whatever base the page was booted with. */
+  private apiBase(): string {
+    if (this.configuration.API_PATH) {
+      return this.configuration.API_PATH.replace(/\/$/, '');
+    }
+    if (this.configuration.API_LOCATION) {
+      return `${this.configuration.API_LOCATION.replace(/\/$/, '')}/api`;
+    }
+    return '/api';
+  }
+
+  private async load(url: string): Promise<AppConfig | null> {
+    try {
+      return await firstValueFrom(this.http.get<AppConfig>(url));
+    } catch (e) {
+      console.warn(`[ConfigService] ${url} did not answer, falling back to window.__env:`, e);
+      return null;
     }
   }
 

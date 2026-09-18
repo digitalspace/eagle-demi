@@ -148,18 +148,40 @@ paths:
           in: query
           required: false
           description: >-
-            "Has an attachment", on dataset=RecentActivity. `true` keeps the updates carrying a
-            document link, `false` keeps the ones without; an empty string and an absent value both
-            count as without. Any other value is reported under `meta[0].dropped.filter` — this key
-            asks whether the field is filled, never what it holds.
+            "Has an attachment", on dataset=RecentActivity, and it applies on both the keyword path
+            and the keywordless one. `true` keeps the updates carrying a document link, `false`
+            keeps the ones without; an empty string and an absent value both count as without. Any
+            other value is reported under `meta[0].dropped.filter` — this key asks whether the field
+            is filled, never what it holds.
           schema:
             type: boolean
+        - name: and[dateAddedStart]
+          in: query
+          required: false
+          description: >-
+            Posted on or after this date, on dataset=RecentActivity, on both the keyword path and
+            the keywordless one. A whole UTC day: the named day is included. A date no calendar can
+            read is reported under `meta[0].dropped.filter` rather than narrowing nothing quietly,
+            and an empty value is no filter.
+          schema:
+            type: string
+            format: date
+        - name: and[dateAddedEnd]
+          in: query
+          required: false
+          description: >-
+            Posted on or before this date, on the same terms as `and[dateAddedStart]`. The named day
+            is included in full, so start and end on the same date answer that one day.
+          schema:
+            type: string
+            format: date
         - name: and[nameContains]
           in: query
           required: false
           description: >-
             Free text the name must contain. Applies to dataset=Project, which matches on the
-            project name, and to dataset=Document, which matches on the document name. Sending it
+            project name, and to dataset=Document, which matches on the document name and on the
+            file name the document arrived as. Sending it
             on any other dataset is a 400, as is a value longer than 200 characters.
             The text is split into words on spaces and on punctuation, every word has to appear,
             and a word of two or more characters matches as a prefix, so `sed sam` finds
@@ -168,8 +190,10 @@ paths:
             inside its words: "Kitimat LNG, Phase 2" and "Site C (Phase 2)" match those projects.
             A hyphen separates words too, so "Site-C" asks for both "Site" and "C". An apostrophe
             is the exception and stays inside the word, so "dam's" is one word.
-            Common English words the search analyzer removes ("of", "and", "the") are matched
-            as whole words rather than prefixes, so "Notice of Commencement" still finds that title.
+            Common English words the search analyzer removes ("of", "and", "the", "mine", "this")
+            are matched as whole words rather than prefixes, and the search also runs over a copy of
+            the name that keeps every word, so "Notice of Commencement" finds that title and "mine"
+            on its own finds every name holding the word.
             An empty value, or one that is only punctuation, is no filter. This is a separate key
             from `and[name]` and `and[displayName]`, which still match the whole name exactly.
           schema:
@@ -2229,7 +2253,8 @@ paths:
     get:
       summary: Everything stored for the calling user
       description: |-
-        One bootstrap read: preferences and saved map areas in a single response. The owner is
+        One bootstrap read: preferences, saved map areas and saved search queries in a single
+        response. The owner is
         taken from the bearer token, never from the request — there is no way to ask for another
         user's data. `prefs` falls back to the defaults (`map`, 6) when the user has saved none.
 
@@ -2306,6 +2331,67 @@ paths:
           description: Unauthorized.
         '404':
           description: The caller has no saved area with that slug.
+
+  /api/me/queries:
+    put:
+      summary: Save a search query
+      description: |-
+        Upsert by name, the same way `/api/me/lassos` works: the name is slugified to `a-z0-9-`
+        and that slug is the key, so saving the same name twice replaces the query rather than
+        adding a second one. `params` is a search query string with no leading `?`, e.g.
+        `record=documents&keywords=wildlife&scope=inside`. No `requireWrite` — this is the
+        caller's own scratch data.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, params]
+              properties:
+                name:
+                  type: string
+                  maxLength: 80
+                params:
+                  type: string
+                  maxLength: 2000
+      responses:
+        '200':
+          description: The saved query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryItem'
+        '400':
+          description: |-
+            The name is empty or over 80 characters, `params` is missing, over 2000 characters or
+            carries a character outside `A-Z a-z 0-9 _ . % & = + , : * -`, the body is over 64 KB,
+            an unknown field was sent, or the user already holds 50 saved queries. The body says
+            which.
+        '401':
+          description: Unauthorized.
+
+  /api/me/queries/{slug}:
+    delete:
+      summary: Delete a saved search query
+      description: Deletes from the caller's own partition only.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Saved query deleted.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: The caller has no saved query with that slug.
 
   /api/me/prefs:
     put:
@@ -3601,6 +3687,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LassoItem'
+        queries:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryItem'
 
     LassoItem:
       type: object
@@ -3619,6 +3709,25 @@ components:
             items:
               type: number
         updatedAt:
+          type: string
+          format: date-time
+
+    QueryItem:
+      type: object
+      properties:
+        slug:
+          type: string
+          description: 'Derived from the name: `a-z0-9-`. The delete key, and unique per user.'
+        name:
+          type: string
+          maxLength: 80
+        params:
+          type: string
+          maxLength: 2000
+          description: >-
+            A search query string with no leading `?`, e.g.
+            `record=documents&keywords=wildlife&scope=inside`.
+        savedAt:
           type: string
           format: date-time
 

@@ -165,6 +165,8 @@ const gatedRoutes = [
   { method: 'get', path: '/me/data', gate: null },
   { method: 'put', path: '/me/lassos', gate: null },
   { method: 'delete', path: '/me/lassos/:slug', gate: null },
+  { method: 'put', path: '/me/queries', gate: null },
+  { method: 'delete', path: '/me/queries/:slug', gate: null },
   { method: 'put', path: '/me/prefs', gate: null }
 ];
 
@@ -371,6 +373,19 @@ test('access gate coverage', async (t) => {
     assert.ok(download, 'resolveDownload no longer returns a literal body — re-check what it emits');
     assert.ok(!/\bdoc\b(?!\s*\.)/.test(download[1]),
       'the download body names the stored document row bare, so it ships read[] and s3Key');
+  });
+
+  await t.test('every /me route in the router is on the list above', () => {
+    // The list is checked route by route below, so a new /me route that nobody added to it would
+    // be gated by nothing but the router's own text. Enumerate from the router, not from the list.
+    const listed = new Set(gatedRoutes.map(r => `${r.method} ${r.path}`));
+    const missing = routeChains()
+      .filter(r => r.path.startsWith('/me/'))
+      .map(r => `${r.method} ${r.path}`)
+      .filter(key => !listed.has(key));
+
+    assert.deepStrictEqual(missing, [],
+      'these /me routes are not in gatedRoutes, so nothing checks the gate they carry');
   });
 
   await t.test('each /links and /me route carries the gate its verb requires', () => {

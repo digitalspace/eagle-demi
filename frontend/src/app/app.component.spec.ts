@@ -1,10 +1,11 @@
 import { TestBed } from '@angular/core/testing';
-import { AppComponent } from './app.component';
+import { AppComponent, SHELL_NARROW_QUERY } from './app.component';
 import { provideRouter, Router } from '@angular/router';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { routes } from './app.routes';
 import { RegistryStateService } from './services/registry-state.service';
+import { NAV_KEY, PREFS_KEY } from './shell/prefs';
 
 // Any payload loadData() accepts. A fresh Response per call: a body can only be read once.
 const okResponse = () => new Response(JSON.stringify([{ searchResults: [] }]), {
@@ -18,6 +19,11 @@ describe('AppComponent', () => {
   let fetchSpy: jasmine.Spy;
 
   beforeEach(async () => {
+    // The sidebar state is read from localStorage at construction, so a spec that collapses it
+    // would otherwise decide the layout of the ones that follow.
+    localStorage.removeItem(NAV_KEY);
+    localStorage.removeItem(PREFS_KEY);
+
     // AppComponent injects RegistryStateService, whose constructor kicks off I/O:
     // initKeycloak() -> authSettled() -> loadData(). Unstubbed, that issued a real request,
     // karma answered 404, and the rejection settled after this spec had finished — which jasmine 7
@@ -34,8 +40,21 @@ describe('AppComponent', () => {
     }).compileComponents();
   });
 
-  /** Renders the shell for the given auth state and returns its root element. */
-  const renderAs = async (authenticated: boolean, unauthorized: boolean) => {
+  /**
+   * Renders the shell for the given auth state and returns its root element. `narrow` answers the
+   * shell's own media query, so the viewport karma happens to run at cannot decide the layout.
+   */
+  const renderAs = async (authenticated: boolean, unauthorized: boolean, narrow = false) => {
+    const realMatchMedia = window.matchMedia.bind(window);
+    spyOn(window, 'matchMedia').and.callFake((query: string) => query === SHELL_NARROW_QUERY
+      ? {
+          matches: narrow,
+          media: query,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined
+        } as unknown as MediaQueryList
+      : realMatchMedia(query));
+
     const service = TestBed.inject(RegistryStateService);
     const fixture = TestBed.createComponent(AppComponent);
     // The gate renders nothing until Keycloak settles (authReady); settling also resets the
@@ -73,7 +92,7 @@ describe('AppComponent', () => {
     expect(headings).toEqual(['Discover', 'Account', 'Operate', 'Reference']);
 
     // Every screen is in the sidebar; My account and sessions also keep their account-menu shortcuts.
-    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(12);
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(11);
   });
 
   // The two generated-summary screens are named apart: one summarises a search, one a project.
@@ -143,7 +162,7 @@ describe('AppComponent', () => {
     await router.navigateByUrl('/map');
     setAllFilters(service);
 
-    await router.navigateByUrl('/index');
+    await router.navigateByUrl('/workspace');
 
     expect(service.gatingFilter().size).toBe(0);
     expect(service.sectorFilter().size).toBe(0);
@@ -157,7 +176,7 @@ describe('AppComponent', () => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);
     const router = TestBed.inject(Router);
-    await router.navigateByUrl('/index');
+    await router.navigateByUrl('/workspace');
     service.searchQuery.set('cariboo');
 
     await router.navigateByUrl('/map');
@@ -169,7 +188,7 @@ describe('AppComponent', () => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);
 
-    await TestBed.inject(Router).navigateByUrl('/index?q=Cariboo%20Gold');
+    await TestBed.inject(Router).navigateByUrl('/workspace?q=Cariboo%20Gold');
 
     expect(service.searchQuery()).toBe('Cariboo Gold');
   });
@@ -191,11 +210,11 @@ describe('AppComponent', () => {
     .map(c => String(c.args[0]))
     .filter(u => u.includes('dataset=Document&'));
 
-  /** Loads `?q=mine` on a screen with a picker, optionally under a type, then resets the spy. */
+  /** Loads `?q=mine` on a screen other than the map, optionally under a type, then resets the spy. */
   const arriveWithLoadedSearch = async (docType: string) => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);
-    await TestBed.inject(Router).navigateByUrl('/index?q=mine');
+    await TestBed.inject(Router).navigateByUrl('/workspace?q=mine');
     service.selectedDocType.set(docType);
     await service.loadData();
     fetchSpy.calls.reset();
@@ -252,7 +271,7 @@ describe('AppComponent', () => {
     // banner still promising the document results were complete.
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);
-    await TestBed.inject(Router).navigateByUrl('/index?q=mine');
+    await TestBed.inject(Router).navigateByUrl('/workspace?q=mine');
     fetchSpy.and.callFake((input: any) => Promise.resolve(
       String(input).includes('dataset=DocumentChunk')
         ? new Response('bad gateway', { status: 502 })
@@ -278,7 +297,112 @@ describe('AppComponent', () => {
     const { el, fixture } = await renderAs(true, false);
     await TestBed.inject(Router).navigateByUrl('/map');
     fixture.detectChanges();
-    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(12);
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(11);
+  });
+
+  const menuButton = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('.app-header__menu');
+  const sidebar = (el: HTMLElement) => el.querySelector<HTMLElement>('.app-sidebar')!;
+
+  it('opens the navigation drawer from the header below the breakpoint', async () => {
+    const { el, fixture } = await renderAs(true, false, true);
+    const button = menuButton(el)!;
+    expect(button.getAttribute('aria-label')).toBe('Main navigation');
+    expect(button.getAttribute('aria-controls')).toBe(sidebar(el).id);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+
+    button.click();
+    fixture.detectChanges();
+
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    expect(sidebar(el).getAttribute('data-drawer')).toBe('open');
+    expect(sidebar(el).hasAttribute('inert')).toBe(false);
+    expect(getComputedStyle(sidebar(el)).display).not.toBe('none');
+  });
+
+  // Translated off-screen is not closed: the links would still take tab focus and still be read out.
+  it('takes the closed drawer out of the page below the breakpoint', async () => {
+    const { el } = await renderAs(true, false, true);
+
+    expect(sidebar(el).getAttribute('data-drawer')).toBe('closed');
+    expect(sidebar(el).hasAttribute('inert')).toBe(true);
+    expect(getComputedStyle(sidebar(el)).display).toBe('none');
+  });
+
+  it('closes the drawer on Escape and on following a link inside it', async () => {
+    const { el, fixture } = await renderAs(true, false, true);
+    const open = () => {
+      menuButton(el)!.click();
+      fixture.detectChanges();
+      expect(menuButton(el)!.getAttribute('aria-expanded')).toBe('true');
+    };
+
+    open();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    fixture.detectChanges();
+    expect(menuButton(el)!.getAttribute('aria-expanded')).toBe('false');
+
+    open();
+    el.querySelector<HTMLAnchorElement>('.app-sidebar__link')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(menuButton(el)!.getAttribute('aria-expanded')).toBe('false');
+    expect(sidebar(el).getAttribute('data-drawer')).toBe('closed');
+  });
+
+  it('leaves the rail in place above the breakpoint', async () => {
+    const { el } = await renderAs(true, false);
+
+    expect(menuButton(el)!.getAttribute('aria-expanded')).toBe('true');
+    expect(sidebar(el).hasAttribute('data-drawer')).toBe(false);
+    expect(sidebar(el).hasAttribute('inert')).toBe(false);
+    expect(getComputedStyle(sidebar(el)).position).toBe('static');
+  });
+
+  // A 250px rail leaves a 1280px window too little for the search table, and a collapsed stub
+  // would still cost that column its width.
+  it('collapses the rail out of the row from the header above the breakpoint', async () => {
+    const { el, fixture } = await renderAs(true, false);
+    const button = menuButton(el)!;
+
+    button.click();
+    fixture.detectChanges();
+
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(getComputedStyle(sidebar(el)).display).toBe('none');
+    expect(localStorage.getItem(NAV_KEY)).toBe('false');
+  });
+
+  // The state describes one browser window, and PUT /me/prefs refuses keys outside its allow-list.
+  it('keeps the collapsed rail out of the account prefs', async () => {
+    const { el, fixture } = await renderAs(true, false);
+
+    menuButton(el)!.click();
+    fixture.detectChanges();
+
+    expect(localStorage.getItem(PREFS_KEY)).toBeNull();
+  });
+
+  it('starts collapsed above the breakpoint when this browser collapsed it before', async () => {
+    localStorage.setItem(NAV_KEY, 'false');
+
+    const { el } = await renderAs(true, false);
+
+    expect(menuButton(el)!.getAttribute('aria-expanded')).toBe('false');
+    expect(getComputedStyle(sidebar(el)).display).toBe('none');
+  });
+
+  // Off-canvas the button owns the drawer, so a collapsed desktop rail must not reach it.
+  it('opens the drawer below the breakpoint while the desktop rail is collapsed', async () => {
+    localStorage.setItem(NAV_KEY, 'false');
+    const { el, fixture } = await renderAs(true, false, true);
+    expect(sidebar(el).getAttribute('data-drawer')).toBe('closed');
+
+    menuButton(el)!.click();
+    fixture.detectChanges();
+
+    expect(sidebar(el).getAttribute('data-drawer')).toBe('open');
+    expect(getComputedStyle(sidebar(el)).display).not.toBe('none');
+    expect(localStorage.getItem(NAV_KEY)).toBe('false');
   });
 
   // `.visually-hidden` is position:absolute with no inset. Unpositioned, this scroll container is

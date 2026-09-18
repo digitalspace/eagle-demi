@@ -1,0 +1,32 @@
+<div class="display-grid__footer-group" role="group" aria-label="Rows per page">
+  <span class="display-grid__footer-label">Per page</span>
+  @for (size of sizes; track size) {
+    <button type="button" class="display-grid__page-chip" [class.display-grid__page-chip--current]="size === pageSize()"
+            [attr.aria-pressed]="size === pageSize()" [title]="'Show ' + size + ' records per page'"
+            (click)="pageSizeChange.emit(size)">{{ size }}</button>
+  }
+</div>
+
+<nav aria-label="Result pages">
+  <ul class="display-grid__pager">
+    <li>
+      <button type="button" class="display-grid__page-chip" [disabled]="current() === 1"
+              aria-label="Previous page" (click)="change(current() - 1)"><span aria-hidden="true">&#8249;</span></button>
+    </li>
+    @for (entry of entries(); track $index) {
+      <li>
+        @if (entry === 'ellipsis') {
+          <span class="display-grid__page-gap" aria-hidden="true">…</span>
+        } @else {
+          <button type="button" class="display-grid__page-chip" [class.display-grid__page-chip--current]="entry === current()"
+                  [attr.aria-label]="'Go to page ' + entry" [attr.aria-current]="entry === current() ? 'page' : null"
+                  (click)="change(entry)">{{ entry }}</button>
+        }
+      </li>
+    }
+    <li>
+      <button type="button" class="display-grid__page-chip" [disabled]="current() >= totalPages()"
+              aria-label="Next page" (click)="change(current() + 1)"><span aria-hidden="true">&#8250;</span></button>
+    </li>
+  </ul>
+</nav>

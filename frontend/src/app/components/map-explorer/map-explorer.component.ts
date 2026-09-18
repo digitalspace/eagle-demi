@@ -993,10 +993,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  /** Hand the project's name to Index Search, which is where documents are listed. */
+  /** Hand the project's name to Search, which is where documents are listed. */
   viewProjectDocuments(proj: Project) {
     this.setActiveTab('documents');
-    this.router.navigate(['/index'], { queryParams: { q: proj.name } });
+    this.router.navigate(['/search'], { queryParams: { keywords: proj.name } });
   }
 
   getProjDocCount(projId: string | number): number {

@@ -823,7 +823,7 @@ describe('RegistryStateService', () => {
       expect(service.chunkFilterState()).toBeNull();
     });
 
-    // Each state carries its own callout in content-search.component.html. Folding one reason into
+    // Each state carries its own callout on screen. Folding one reason into
     // another's state would put the wrong words on screen with every spec above still green, so
     // the mapping and the whole set of answers are pinned here.
     it('gives each documented reason its own state, and answers nothing outside the four', () => {
@@ -1684,13 +1684,13 @@ describe('RegistryStateService — server preference sync', () => {
   });
 
   it('overwrites the browser copy with the preferences /me/data returned', async () => {
-    const service = makeService(() => okResponse({ prefs: { landing: 'index', perPage: 24 }, lassos: [] }));
+    const service = makeService(() => okResponse({ prefs: { landing: 'search', perPage: 24 }, lassos: [] }));
     await service.authReady;
     service.isAuthenticated.set(true);
 
     await (service as any).loadUserData();
 
-    expect(JSON.parse(localStorage.getItem('demi.prefs')!)).toEqual({ landing: 'index', perPage: 24 });
+    expect(JSON.parse(localStorage.getItem('demi.prefs')!)).toEqual({ landing: 'search', perPage: 24 });
   });
 
   it('keeps the browser copy when the read fails', async () => {

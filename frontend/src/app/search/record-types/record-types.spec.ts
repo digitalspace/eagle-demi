@@ -3,6 +3,7 @@ import { buildSearchQuery } from '../unified-search.service';
 import {
   ATTACHMENTS_FILTER_ID,
   attachmentsFilterDropped,
+  attachmentsOf,
   isoDay,
   plainText,
   projectOf,
@@ -25,6 +26,19 @@ describe('record types', () => {
     for (const id of RECORD_TYPES) {
       expect(recordConfig(id).id).toBe(id);
     }
+  });
+
+  it('lists the one file an update links to, named after its last path segment', () => {
+    expect(attachmentsOf({ [ATTACHMENTS_FILTER_ID]: '/api/document/1/fetch/Fish%20plan.pdf' })).toEqual([
+      { name: 'Fish plan.pdf', href: '/api/document/1/fetch/Fish%20plan.pdf' },
+    ]);
+  });
+
+  it('links no file for a folder listing, a missing url or an unsafe scheme', () => {
+    expect(attachmentsOf({})).toEqual([]);
+    expect(attachmentsOf({ [ATTACHMENTS_FILTER_ID]: '/docs?folder=17' })).toEqual([]);
+    // Split so the scheme this guard exists to reject is not a literal in the source.
+    expect(attachmentsOf({ [ATTACHMENTS_FILTER_ID]: `java${'script'}:alert(1)` })).toEqual([]);
   });
 
   it('sends no record type with a selection column', () => {

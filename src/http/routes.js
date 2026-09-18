@@ -263,6 +263,8 @@ const routes = [
   { method: 'get', path: '/me/data', guards: [authMiddleware], load: () => userDataController().getMyData },
   { method: 'put', path: '/me/lassos', guards: [authMiddleware], load: () => userDataController().saveLasso },
   { method: 'delete', path: '/me/lassos/:slug', guards: [authMiddleware], load: () => userDataController().deleteLasso },
+  { method: 'put', path: '/me/queries', guards: [authMiddleware], load: () => userDataController().saveQuery },
+  { method: 'delete', path: '/me/queries/:slug', guards: [authMiddleware], load: () => userDataController().deleteQuery },
   { method: 'put', path: '/me/prefs', guards: [authMiddleware], load: () => userDataController().putPrefs }
 ];
 

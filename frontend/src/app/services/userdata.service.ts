@@ -11,9 +11,26 @@ export interface SavedLasso {
   updatedAt: string;
 }
 
+/** `GET /me/data` saved-query row. `params` replays the search at `/search?<params>`. */
+export interface SavedQuery {
+  slug: string;
+  name: string;
+  params: string;
+  savedAt: string;
+}
+
 interface MyData {
   prefs: Prefs;
   lassos: SavedLasso[];
+  queries: SavedQuery[];
+}
+
+/** The only characters `PUT /me/queries` accepts in `params`; the rest must arrive encoded. */
+const PARAMS_UNSAFE = /[^A-Za-z0-9_.%&=+,:*-]/gu;
+
+/** Strips a leading `?` and percent-encodes what the API would refuse. */
+export function toQueryParams(search: string): string {
+  return search.replace(/^\?/, '').replace(PARAMS_UNSAFE, (char) => encodeURIComponent(char));
 }
 
 @Injectable({ providedIn: 'root' })
@@ -21,6 +38,7 @@ export class UserdataService {
   private registry = inject(RegistryStateService);
 
   lassos = signal<SavedLasso[]>([]);
+  queries = signal<SavedQuery[]>([]);
   /** null until `/me/data` has answered — the API always sends prefs, defaulted when unset. */
   prefs = signal<Prefs | null>(null);
   error = signal<string>('');
@@ -47,6 +65,7 @@ export class UserdataService {
         signal: AbortSignal.timeout(UserdataService.myDataTimeoutMs)
       });
       this.lassos.set(data.lassos || []);
+      this.queries.set(data.queries || []);
       this.prefs.set(data.prefs || null);
     } catch (err) {
       this.error.set((err as Error).message);
@@ -62,6 +81,18 @@ export class UserdataService {
 
   async deleteLasso(slug: string): Promise<boolean> {
     return this.write(`/me/lassos/${encodeURIComponent(slug)}`, { method: 'DELETE' });
+  }
+
+  /** `search` is the current query string; any key beyond `name` and `params` is a 400. */
+  async saveQuery(name: string, search: string): Promise<boolean> {
+    return this.write('/me/queries', {
+      method: 'PUT',
+      ...this.json({ name, params: toQueryParams(search) })
+    });
+  }
+
+  async deleteQuery(slug: string): Promise<boolean> {
+    return this.write(`/me/queries/${encodeURIComponent(slug)}`, { method: 'DELETE' });
   }
 
   /** No reload: the caller already holds the values, and localStorage is written before this runs. */

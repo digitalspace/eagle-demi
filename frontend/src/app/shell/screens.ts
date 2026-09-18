@@ -15,8 +15,7 @@ export const SCREENS: Screen[] = [
   { key: 'me', label: 'Overview', group: 'Account', path: '/workspace' },
   { key: 'sessions', label: 'Active sessions', group: 'Account', path: '/sessions' },
   { key: 'map', label: 'Map Explorer', group: 'Discover', path: '/map' },
-  { key: 'index', label: 'Index Search', group: 'Discover', path: '/index' },
-  { key: 'content', label: 'Document Content Search', group: 'Discover', path: '/content' },
+  { key: 'search', label: 'Search', group: 'Discover', path: '/search' },
   { key: 'summary', label: 'AI Search Summary', group: 'Discover', path: '/summary' },
   // The picker; /projects/:id under it is the same screen, so both share this key and info panel.
   { key: 'project', label: 'AI Project Summary', group: 'Discover', path: '/projects' },
@@ -45,15 +44,10 @@ export const TECH: Record<string, Tech> = {
     chips: ['Leaflet + markercluster', 'OpenStreetMap tiles (keyless)', 'DataBC Wildfire WFS (live)', 'AI Search — projects (GeographyPoint)', 'Cosmos DB — boundaries'],
     note: 'Centroids are stored and returned as [longitude, latitude] end to end; boundary geometry comes from the boundaries container as GeoJSON. Tiles stay on OSM in every environment — CARTO watermarks every tile without an API key. The fire layer polls DataBC’s WFS straight from the browser; the backend’s own wildfire sync only tags project search results.'
   },
-  index: {
-    title: 'Index Search',
-    chips: ['Azure AI Search (Basic)', 'projects, documents indexes', 'Cosmos DB NoSQL', '_ts high-water indexers', 'read[] ACL filter'],
-    note: 'Indexers pull from Cosmos every five minutes; nothing is pushed. Counts use the same WHERE fragment as the read, so totals never leak hidden records.'
-  },
-  content: {
-    title: 'Document Content Search',
-    chips: ['AI Search — chunks index', 'Docling extraction (off-platform)', 'deterministic chunk ids', 'lexical BM25', 'MinIO / S3 download'],
-    note: 'Ids take the form <documentId>::p<page>::c<index>, so a passage always resolves back to its page and re-ingest reconciles rather than duplicating. "Open document" resolves a five-minute presigned URL under the same ACL as the row.'
+  search: {
+    title: 'Search',
+    chips: ['Azure AI Search (Basic)', 'projects, documents, chunks indexes', 'Cosmos DB NoSQL', '_ts high-water indexers', 'read[] ACL filter', 'MinIO / S3 download'],
+    note: 'Indexers pull from Cosmos every five minutes; nothing is pushed. Counts use the same WHERE fragment as the read, so totals never leak hidden records. "Inside documents" searches extracted passages instead of record fields, over the chunks index and lexical BM25: ids take the form <documentId>::p<page>::c<index>, so a passage always resolves back to its page and re-ingest reconciles rather than duplicating. A download link resolves a five-minute presigned URL under the same ACL as the row.'
   },
   summary: {
     title: 'AI Search Summary',

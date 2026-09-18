@@ -366,13 +366,26 @@ function valuesOf(rawValue) {
 }
 
 /**
- * `and[nameContains]` -> the searchable field it runs against, per dataset.
+ * `and[nameContains]` -> the searchable fields it runs against, per dataset.
  *
  * A SEPARATE KEY from `and[name]` and `and[displayName]`, which keep meaning `field eq 'value'`.
  * Those two answer "this exact name"; a saved URL using one must not start meaning the other.
  * Only these two datasets have the grid cell people type a fragment of a name into.
+ *
+ * A LIST, not one field, because the prose fields are analyzed with `en.microsoft`, whose stopword
+ * list (ANALYZER_STOPWORDS in ai-search.js) removes 'mine', 'this', 'of' and 25 more at both index
+ * and query time: `nameContains=mine` over `name` alone asks for nothing and answers 0 rows, though
+ * 32 project names hold the word. `nameTokens` and `fileNameTokens` are the same text under the
+ * `filename` analyzer, which keeps every word — the fix the keyword path already made
+ * (PROJECT_SEARCH_FIELDS in ai-search.js). No reindex: both twins are already populated.
+ *
+ * `documentFileName` is in the Document list because the name people read and the file the document
+ * arrived as are both "the document name" to whoever types in that cell.
  */
-const NAME_CONTAINS_FIELDS = Object.freeze({ Project: 'name', Document: 'displayName' });
+const NAME_CONTAINS_FIELDS = Object.freeze({
+  Project: Object.freeze(['name', 'nameTokens']),
+  Document: Object.freeze(['displayName', 'documentFileName', 'fileNameTokens'])
+});
 
 const NAME_CONTAINS_KEY = 'nameContains';
 
@@ -403,9 +416,13 @@ function nameContainsText(rawValue) {
  * `'full', 'any'` rather than the two-argument form: the query carries explicit `AND` operators and
  * trailing `*`, and under the default simple syntax `AND` would match as the word "and". Same call
  * shape the document-scope leg in `ai-search.js` uses.
+ *
+ * The fields join on a comma, which is the field list `search.ismatch` takes. A word satisfies the
+ * query by matching in ANY of them, so a word the prose field's analyzer strips still lands on the
+ * `filename`-analyzed twin beside it.
  */
-function nameContainsClause(field, lucene) {
-  return `search.ismatch(${quote(lucene)}, ${quote(field)}, 'full', 'any')`;
+function nameContainsClause(fields, lucene) {
+  return `search.ismatch(${quote(lucene)}, ${quote(fields.join(','))}, 'full', 'any')`;
 }
 
 /**
@@ -508,7 +525,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     // is handled before the alias and field lookup below. A dataset with no name cell reports it
     // dropped, the same answer any key that index cannot express gets.
     if (key === NAME_CONTAINS_KEY) {
-      const containsField = NAME_CONTAINS_FIELDS[dataset];
+      const containsFields = NAME_CONTAINS_FIELDS[dataset];
       const text = nameContainsText(rawValue);
       // Over the cap is a REFUSED filter, so it is reported before the no-words test below: a
       // 300-character value must not read as an empty cell and widen the request to everything.
@@ -518,13 +535,14 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
       // a clause over no terms is a 400 from the service.
       const lucene = buildContainsQuery(text);
       if (!lucene) continue;
-      // A dataset with no name cell, or one this caller may not read, reports the key dropped
-      // rather than silently searching a different field.
-      if (!containsField || !fieldVisible(dataset, containsField, access)) {
+      // A dataset with no name cell, or one whose fields this caller may not read, reports the key
+      // dropped rather than silently searching a different field. EVERY field has to pass, not any:
+      // a clause naming a hidden field counts rows against it just as a clause over it alone would.
+      if (!containsFields || !containsFields.every(f => fieldVisible(dataset, f, access))) {
         dropped.push(key);
         continue;
       }
-      groups.push(nameContainsClause(containsField, lucene));
+      groups.push(nameContainsClause(containsFields, lucene));
       continue;
     }
 

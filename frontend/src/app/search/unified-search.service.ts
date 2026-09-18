@@ -74,11 +74,18 @@ export function buildSearchQuery(request: SearchRequest): string {
   if (request.pageSize !== null) query += `&pageSize=${request.pageSize}`;
   if (request.sortBy) query += `&sortBy=${request.sortBy}`;
   const wire = toWireFilters(request.filters ?? {}, request.yearIds, request.textIds);
+  const textIds = request.textIds ?? [];
   for (const [key, value] of Object.entries(wire)) {
+    // A typed name arrives percent-encoded from `toWireFilters`, which is what keeps a comma in it
+    // from splitting; escaping it again would search for the escapes. Every other value arrives as
+    // the reader wrote it, so each pick is escaped here - a `#` would otherwise start the fragment
+    // and never be sent, and a `+` would reach the backend's parser as a space.
+    if (textIds.includes(key)) {
+      query += `&and[${key}]=${value}`;
+      continue;
+    }
     for (const item of value.split(',')) {
-      // An `&` inside a value would end the parameter, so only that case is escaped. Everything
-      // else is passed through as written, which is what the backend's parser expects.
-      query += `&and[${key}]=${item.includes('&') ? encodeURIComponent(item) : item}`;
+      query += `&and[${key}]=${encodeURIComponent(item)}`;
     }
   }
   query += `&fuzzy=${request.fuzzy === true}`;
@@ -186,15 +193,6 @@ export class UnifiedSearchService {
       this.loading.set(false);
       return null;
     }
-  }
-
-  /** Grouped passages for one keyword: a `DocumentChunk` search read as document rows. */
-  async searchPassages(
-    request: Omit<SearchRequest, 'dataset'>,
-    hrefFor: (row: SearchRow) => string,
-  ): Promise<PassageRow[] | null> {
-    const result = await this.search({ ...request, dataset: 'DocumentChunk', fuzzy: true });
-    return result ? result.rows.map((row) => passageRowFrom(row, hrefFor(row))) : null;
   }
 
   /**

@@ -1,0 +1,28 @@
+<button type="button" class="display-grid__control display-grid__pick" [class.display-grid__control--on]="picked().length > 0"
+        [attr.aria-label]="'Filter by ' + label()" aria-haspopup="dialog" [attr.aria-expanded]="open()"
+        [attr.title]="fullList()" (click)="toggleOpen()" (keydown)="onKeydown($event)">
+  <span class="display-grid__pick-label">{{ buttonText() }}</span>
+  <span class="display-grid__pick-caret" aria-hidden="true">▼</span>
+</button>
+
+@if (open()) {
+  <div class="display-grid__picker" role="group" [attr.aria-label]="'Filter by ' + label()" (keydown)="onKeydown($event)">
+    <div class="display-grid__picker-head">
+      <p class="display-grid__picker-title">Filter by {{ label() }}</p>
+      @if (picked().length > 0) {
+        <button type="button" class="display-grid__picker-clear" [attr.aria-label]="'Clear ' + label()" (click)="clear()">Clear</button>
+      }
+    </div>
+    @if (typeahead()) {
+      <input type="text" class="display-grid__control" autocomplete="off"
+             [attr.placeholder]="'Search ' + label().toLowerCase()" [attr.aria-label]="'Search ' + label().toLowerCase()"
+             [value]="typed()" (input)="onType($event)">
+    }
+    @for (option of shown(); track option.value) {
+      <label class="display-grid__option">
+        <input type="checkbox" [checked]="selected().includes(option.value)" (change)="toggleValue(option.value)">
+        {{ option.label }}
+      </label>
+    }
+  </div>
+}

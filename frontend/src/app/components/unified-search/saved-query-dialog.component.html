@@ -1,0 +1,22 @@
+<!--
+  The dialog stays in the DOM and only its fields are bound: behind an `@if`, `showModal()` would
+  run against an element Angular has not created yet and the modal would never open.
+-->
+<dialog #dialog class="saved-query" aria-labelledby="saved-query-title" (close)="onClose()">
+  <form class="saved-query__sheet" (submit)="onSubmit($event)">
+    <h2 id="saved-query-title" class="saved-query__title">Save this query</h2>
+
+    <label class="saved-query__label" for="saved-query-name">Name</label>
+    <input id="saved-query-name" class="saved-query__input" type="text" autocomplete="off"
+           [value]="name()" [attr.maxlength]="maxLength" (input)="onInput($event)">
+    <p class="saved-query__hint">1 to {{ maxLength }} characters.</p>
+
+    @if (error()) { <p class="saved-query__error" role="alert">{{ error() }}</p> }
+
+    <div class="saved-query__actions">
+      <button type="button" class="saved-query__button" (click)="close()">Cancel</button>
+      <button type="submit" class="saved-query__button saved-query__button--primary"
+              [disabled]="!valid() || saving()">Save</button>
+    </div>
+  </form>
+</dialog>

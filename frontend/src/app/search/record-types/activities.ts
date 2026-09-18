@@ -1,4 +1,4 @@
-import type { GridColumn, ValueOption } from '../grid-types';
+import type { GridColumn, ListRowAttachment, ValueOption } from '../grid-types';
 import {
   RECORD_DATASETS,
   projectPath,
@@ -87,6 +87,24 @@ export function plainText(value: unknown): string {
   return htmlToText(htmlToText(String(value ?? '')))
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** Schemes a row may hand an anchor. Anything else is a record trying to run script. */
+const SAFE_SCHEME = /^(https?:|\/)/i;
+
+/** The one file an update links to, where it links to a file at all. */
+export function attachmentsOf(row: Row): ListRowAttachment[] {
+  const url = row[ATTACHMENTS_FILTER_ID];
+  // A `docs?folder` link is a folder listing rather than a file, which the news page skips too.
+  if (typeof url !== 'string' || !SAFE_SCHEME.test(url) || url.includes('docs?folder')) return [];
+  const last = (url.split('?')[0] ?? '').split('/').pop() ?? '';
+  let name = last;
+  try {
+    name = decodeURIComponent(last);
+  } catch {
+    // A stray percent sign is not a reason to drop the link; show the segment as it is written.
+  }
+  return [{ name: name || 'Attached document', href: url }];
 }
 
 /**

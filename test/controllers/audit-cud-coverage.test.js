@@ -463,6 +463,34 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(removed[0].TargetId, 'lasso:skeena-estuary');
   });
 
+  await t.test('saving and deleting a search query write one row each', async () => {
+    t.mock.method(userdata, 'getItem', async () => null);
+    t.mock.method(userdata, 'countByType', async () => 0);
+    t.mock.method(userdata, 'put', async (userId, item) => item);
+
+    const saved = await rowsFrom(() => userDataController.saveQuery({
+      body: { name: 'Recent permits', params: 'record=documents&keywords=wildlife' },
+      query: {}, params: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(saved.length, 1);
+    assert.strictEqual(saved[0].Action, 'userdata.query.save');
+    assert.strictEqual(saved[0].TargetId, 'query:recent-permits');
+    assert.strictEqual(saved[0].Detail.paramsLength, 34);
+    // What a user searched for is their data, not a row kept for seven years.
+    assert.ok(!JSON.stringify(saved[0].Detail).includes('wildlife'),
+      'the query string reached the audit row');
+
+    t.mock.method(userdata, 'remove', async () => true);
+    const removed = await rowsFrom(() => userDataController.deleteQuery({
+      params: { slug: 'recent-permits' }, query: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(removed.length, 1);
+    assert.strictEqual(removed[0].Action, 'userdata.query.delete');
+    assert.strictEqual(removed[0].TargetId, 'query:recent-permits');
+  });
+
   await t.test('the wildfire sync writes one row, not one per project', async () => {
     // The real sync runs, with only its network leg and its two repositories stood in for — a
     // wholesale stub of syncWildfiresData cannot see the per-project patch this also asserts.

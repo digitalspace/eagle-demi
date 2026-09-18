@@ -214,10 +214,10 @@ describe('MyWorkspaceComponent', () => {
     const putPrefs = spyOn(userdata, 'putPrefs').and.resolveTo(true);
     signedIn();
 
-    fixture.componentInstance.setLanding({ target: { value: 'index' } } as unknown as Event);
+    fixture.componentInstance.setLanding({ target: { value: 'search' } } as unknown as Event);
 
-    expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({ landing: 'index', perPage: 6 });
-    expect(putPrefs).toHaveBeenCalledWith({ landing: 'index', perPage: 6 });
+    expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({ landing: 'search', perPage: 6 });
+    expect(putPrefs).toHaveBeenCalledWith({ landing: 'search', perPage: 6 });
   });
 
   it('does not call the API for an anonymous visitor', () => {
@@ -234,7 +234,7 @@ describe('MyWorkspaceComponent', () => {
   it('puts every preference back to its default on reset', () => {
     const putPrefs = spyOn(userdata, 'putPrefs').and.resolveTo(true);
     signedIn();
-    fixture.componentInstance.setLanding({ target: { value: 'index' } } as unknown as Event);
+    fixture.componentInstance.setLanding({ target: { value: 'search' } } as unknown as Event);
 
     const el = fixture.nativeElement as HTMLElement;
     Array.from(el.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Reset to defaults')!.click();
@@ -245,11 +245,11 @@ describe('MyWorkspaceComponent', () => {
 
   it('starts the editor from the account copy once /me/data has answered', () => {
     signedIn();
-    userdata.prefs.set({ landing: 'content', perPage: 24 });
+    userdata.prefs.set({ landing: 'search', perPage: 24 });
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect((el.querySelector('#pref-landing') as HTMLSelectElement).value).toBe('content');
+    expect((el.querySelector('#pref-landing') as HTMLSelectElement).value).toBe('search');
     expect((el.querySelector('#pref-per-page') as HTMLSelectElement).value).toBe('24');
   });
 });

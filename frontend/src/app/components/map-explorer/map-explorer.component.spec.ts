@@ -83,13 +83,13 @@ describe('MapExplorerComponent wildfire panel', () => {
     expect(text).not.toContain('Nearby fires');
   });
 
-  it('hands the project name to Index Search through ?q=', () => {
+  it('hands the project name to Search through ?keywords=', () => {
     const router = TestBed.inject(Router);
     const navigate = spyOn(router, 'navigate').and.resolveTo(true);
 
     fixture.componentInstance.viewProjectDocuments(project());
 
-    expect(navigate).toHaveBeenCalledWith(['/index'], { queryParams: { q: 'Test Project' } });
+    expect(navigate).toHaveBeenCalledWith(['/search'], { queryParams: { keywords: 'Test Project' } });
     expect(service.searchQuery()).toBe('');
   });
 });

@@ -1,0 +1,47 @@
+<div class="display-grid__panel" [id]="panelId" [hidden]="!open()" aria-label="Advanced filters">
+  <h2 class="display-grid__panel-heading">Advanced filters</h2>
+  <div class="display-grid__panel-grid">
+    @for (field of fields(); track field.id) {
+      @switch (field.kind) {
+        @case ('toggle') {
+          <label class="display-grid__panel-field">
+            <span class="display-grid__panel-label">{{ field.label }}</span>
+            <span class="display-grid__panel-toggle">
+              <input type="checkbox" [checked]="asText(field.id) === 'true'" (change)="onToggle(field, $event)">
+            </span>
+          </label>
+        }
+        @case ('date') {
+          <label class="display-grid__panel-field">
+            <span class="display-grid__panel-label">{{ field.label }} <span class="display-grid__panel-format">{{ dateFormat }}</span></span>
+            <input type="text" inputmode="numeric" class="display-grid__panel-control" [placeholder]="dateFormat"
+                   [attr.aria-invalid]="invalid(field) ? true : null"
+                   [attr.aria-describedby]="invalid(field) ? errorId(field) : null"
+                   [value]="draftOf(field)" (input)="onDate(field, $event)">
+            @if (invalid(field)) {
+              <span [id]="errorId(field)" role="alert" class="display-grid__panel-error">Use {{ dateFormat }}, for example 2025-06-01</span>
+            }
+          </label>
+        }
+        @case ('select') {
+          <label class="display-grid__panel-field">
+            <span class="display-grid__panel-label">{{ field.label }}</span>
+            <select class="display-grid__panel-control" [value]="asText(field.id)" (change)="onSelect(field, $event)">
+              <option value="">All</option>
+              @for (option of field.options ?? []; track option.value) {
+                <option [value]="option.value" [selected]="option.value === asText(field.id)">{{ option.label }}</option>
+              }
+            </select>
+          </label>
+        }
+        @default {
+          <label class="display-grid__panel-field">
+            <span class="display-grid__panel-label">{{ field.label }}</span>
+            <input type="text" autocomplete="off" [attr.maxlength]="textMax" class="display-grid__panel-control"
+                   [attr.placeholder]="field.placeholder" [value]="asText(field.id)" (input)="onText(field, $event)">
+          </label>
+        }
+      }
+    }
+  </div>
+</div>
