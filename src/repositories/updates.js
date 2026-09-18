@@ -118,9 +118,23 @@ function keywordCriteria(keywords) {
   }];
 }
 
-function criteriaFor(projectId, keywords) {
+/**
+ * `and[type]` as an IN over the stored `type`.
+ *
+ * No `types` key, and an emptied one (`and[type]=`), both add no clause — an empty `and[type]=` has
+ * to read the same way here as it does on the index path, where `eagleQuery.buildFilter` drops a
+ * key that produced zero terms instead of narrowing to none. A cleared filter-panel checkbox means
+ * "show everything", not "show nothing".
+ */
+function typeCriteria(types) {
+  if (!types || !types.length) return [];
+  return [inList('type', types.map(String), '@type')];
+}
+
+function criteriaFor(projectId, keywords, types) {
   return [
     ...(projectId ? [eq(SCOPE_FIELD, String(projectId), '@projectId')] : []),
+    ...typeCriteria(types),
     ...keywordCriteria(keywords)
   ];
 }
@@ -128,13 +142,14 @@ function criteriaFor(projectId, keywords) {
 /**
  * The updates this caller may see, newest first.
  *
- * @param {object} [opts.projectId]  an EAGLE project id — see SCOPE_FIELD
+ * @param {object}   [opts.projectId]  an EAGLE project id — see SCOPE_FIELD
+ * @param {string[]} [opts.types]      `and[type]` values, ORed together — see typeCriteria
  */
-async function list(access, { projectId, keywords, pageNum, pageSize, sortBy } = {}) {
+async function list(access, { projectId, keywords, types, pageNum, pageSize, sortBy } = {}) {
   const spec = selectWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor(projectId, keywords),
+    criteria: criteriaFor(projectId, keywords, types),
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
     orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, SORT_ALIASES)
   });
@@ -168,11 +183,11 @@ async function listByIds(access, ids) {
 }
 
 /** The same predicate as the read, so the total cannot describe rows the page may not carry. */
-async function count(access, { projectId, keywords } = {}) {
+async function count(access, { projectId, keywords, types } = {}) {
   const spec = countWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor(projectId, keywords)
+    criteria: criteriaFor(projectId, keywords, types)
   });
   const { items } = await cosmos.query(CONTAINER, spec, {});
   return items[0] || 0;

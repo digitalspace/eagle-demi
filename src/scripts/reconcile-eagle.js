@@ -9,7 +9,10 @@
  * equally be one Eagle merely unpublished, and eagle-api gives an anonymous caller no way to tell
  * the two apart (see `unpublishedOrDeleted` below), so there is nothing here it is safe to delete.
  *
- *   node src/scripts/reconcile-eagle.js [--json] [--comments]
+ *   node src/scripts/reconcile-eagle.js [--json] [--comments] [--engage] [--drop-orphans]
+ *
+ * `--drop-orphans` IS THE ONE THING HERE THAT WRITES. Everything else above still holds; see
+ * `engageOrphans` for what it deletes and why that one set is safe when no other is.
  *
  * It covers the containers the Eagle push and the backfill write: projects, documents, comment
  * periods, lists (both kinds), notifications, updates, and — only with `--comments`, which costs
@@ -45,14 +48,142 @@ const { logger } = require('../utils/logger');
 const LABELS = ['projects', 'documents', 'commentPeriods', 'lists', 'notifications', 'updates',
   'comments'];
 
+/**
+ * The ENGAGE API a period's `metURL` slug is resolved against. NOT the public site host —
+ * `engage.eao.gov.bc.ca` is the single-page app, and its nginx answers 200 with `index.html` for
+ * every unknown path, so a check pointed there calls every slug alive. The API is the one that
+ * answers `/api/slugs/<slug>`. Verified 2026-09-17:
+ *   test  https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api
+ *   prod  https://epic-engage-web-prod.apps.gold.devops.gov.bc.ca/api
+ * Both come from the site's own `/config/config.js`, which names the API as `VITE_API_URL` — read
+ * it rather than composing a hostname, because the public host and the API host are different
+ * services and only one of them answers this question.
+ *
+ * UNSET MEANS SKIP. Guessing a host and getting it wrong reports every live period as an orphan,
+ * which is the one outcome a delete flag must not be offered alongside.
+ */
+const ENGAGE_API_BASE = process.env.ENGAGE_API_BASE || '';
+
+/** How long one slug lookup may take before it counts as unknown rather than as an answer. */
+const ENGAGE_TIMEOUT_MS = parseInt(process.env.ENGAGE_TIMEOUT_MS || '15000', 10);
+
 function parseArgs(argv) {
-  const args = { json: false, comments: false };
+  const args = { json: false, comments: false, engage: false, dropOrphans: false };
   for (const a of argv) {
     if (a === '--json') args.json = true;
     else if (a === '--comments') args.comments = true;
+    else if (a === '--engage') args.engage = true;
+    // The destructive half, and it implies the sweep: there is nothing to drop without one.
+    else if (a === '--drop-orphans') { args.engage = true; args.dropOrphans = true; }
     else throw new Error(`[reconcile] unknown argument: ${a}`);
   }
   return args;
+}
+
+/**
+ * The engagement slug an `isMet` period points at, from the `metURL` the mirror stores.
+ *
+ * The last non-empty path segment, with any query or fragment cut first. `null` for a URL with no
+ * segment to take — which is reported as unknown, never as an orphan.
+ */
+function slugOf(metURL) {
+  const raw = String(metURL || '').trim();
+  if (!raw) return null;
+  const path = raw.split('#')[0].split('?')[0];
+  const segments = path.replace(/^[a-z]+:\/\/[^/]+/i, '').split('/').filter(Boolean);
+  return segments.length ? decodeURIComponent(segments[segments.length - 1]) : null;
+}
+
+/**
+ * Does ENGAGE still resolve this slug?
+ *
+ * THREE ANSWERS, AND ONLY ONE OF THEM IS "GONE". ENGAGE answers a slug it does not hold with
+ * `400 {"message": "No engagement slug found for <slug>"}` — verified against the prod API on
+ * 2026-09-17 — and that exact shape is the only thing this reads as gone. A 401 (the test host
+ * sits behind basic auth), a 404, a 5xx, an HTML body from a host that is not the API, a timeout
+ * or a DNS failure are all UNKNOWN: they say the check could not run, not that the engagement was
+ * deleted, and a delete driven off them would destroy live rows.
+ *
+ * A timeout and an outright network failure are both UNKNOWN, and both stay non-destructive — but
+ * they are not the same fact, so `reason` names which one it was rather than folding them into one
+ * `catch`. Never retried: a slug is checked at most once per reconcile run.
+ *
+ * @returns {Promise<{state: 'gone'|'live'|'unknown', reason?: string}>}
+ */
+async function slugState(base, slug, deps = {}) {
+  const get = deps.fetch || fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ENGAGE_TIMEOUT_MS);
+  try {
+    const res = await get(`${base.replace(/\/+$/, '')}/slugs/${encodeURIComponent(slug)}`,
+      { signal: controller.signal });
+    if (res.status === 400) {
+      // The body is read, not assumed: a 400 from a proxy in front of ENGAGE is not ENGAGE saying
+      // the slug is gone, and the two are indistinguishable by status code alone.
+      const body = await res.text();
+      return { state: /no engagement slug found/i.test(body) ? 'gone' : 'unknown' };
+    }
+    return { state: res.ok ? 'live' : 'unknown' };
+  } catch (err) {
+    return { state: 'unknown', reason: err.name === 'AbortError' ? 'timeout' : err.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The `isMet` periods whose ENGAGE engagement no longer exists.
+ *
+ * WHY THESE ARE SAFE TO DELETE WHEN NO OTHER DIFF IS: every other set here is ambiguous because
+ * eagle-api cannot tell an anonymous caller "unpublished" from "deleted". This one is not. The row
+ * says it is run in ENGAGE and names the engagement; ENGAGE says there is no such engagement. The
+ * row therefore renders a link that 404s for every visitor, and there is no reading of it under
+ * which it is correct.
+ *
+ * Cause, as far as it is known: ENGAGE's `delete_from_epic` returns early when
+ * `project_tracking_id` is unset, so an engagement deleted before its first successful push leaves
+ * the mirror row behind with nothing to retract it.
+ *
+ * Scale, measured on test 2026-09-17: 18 of 38 `isMet` periods point at a slug ENGAGE no longer
+ * holds, and one of the two periods open that day was among them — so a rail that renders open
+ * periods ships a dead external link on half its rows without this.
+ *
+ * @param {object[]} periodRows  every mirrored period
+ * @param {object}   opts        {base, drop, periodsRepo, deps}
+ * @returns {Promise<{checked, dead, unknown, unknownReasons, dropped, failures}>}
+ */
+async function engageOrphans(periodRows, { base, drop = false, periodsRepo, deps = {} } = {}) {
+  // `unknownReasons` is keyed by period id, and only set for a round trip that actually failed —
+  // a metURL with no slug never made one, so it has nothing to attribute a timeout or an error to.
+  const result = { checked: 0, dead: [], unknown: [], unknownReasons: {}, dropped: [], failures: [] };
+  // `isMet` is the whole population: a period run here has no slug to resolve and no dead link
+  // to ship.
+  const met = periodRows.filter(row => row.isMet === true);
+
+  for (const row of met) {
+    const slug = slugOf(row.metURL);
+    if (!slug) {
+      result.unknown.push(String(row.id));
+      continue;
+    }
+    result.checked++;
+    const { state, reason } = await slugState(base, slug, deps);
+    if (state === 'unknown') {
+      result.unknown.push(String(row.id));
+      if (reason) result.unknownReasons[String(row.id)] = reason;
+    }
+    if (state !== 'gone') continue;
+
+    result.dead.push(String(row.id));
+    if (!drop) continue;
+    try {
+      await periodsRepo.deleteById(row.id, row.projectId);
+      result.dropped.push(String(row.id));
+    } catch (err) {
+      result.failures.push(`[reconcile] could not drop orphan period ${row.id}: ${err.message}`);
+    }
+  }
+  return result;
 }
 
 /**
@@ -83,6 +214,12 @@ function diff(rows, keyOf, eagleIds, pushOwned = () => true, parentPublished = (
 
 /** Every id set a diff produced, as one drift number. */
 function driftOf(summary) {
+  // A dead ENGAGE slug is in Eagle AND in DEMI, so every id-set diff reads it as clean — but it is
+  // a link that 404s for every visitor, so the nightly alert has to see it. The ones that were
+  // dropped are no longer drift; the ones only reported still are.
+  const orphans = summary.engageOrphans
+    ? summary.engageOrphans.dead.length - summary.engageOrphans.dropped.length
+    : 0;
   return LABELS.reduce((total, label) => {
     const s = summary[label];
     if (!s) return total;
@@ -90,7 +227,7 @@ function driftOf(summary) {
     // wrong parent — so it counts here or the alert stays quiet about it.
     return total + s.unpublishedOrDeleted.length + s.eagleOnly.length +
       (s.misfiledParent ? s.misfiledParent.length : 0);
-  }, 0);
+  }, orphans);
 }
 
 /**
@@ -113,6 +250,13 @@ function summaryLine(summary) {
     `unresolvedParent=${d.unresolvedParent.length} ` +
     counts('commentPeriods') + counts('lists') + counts('notifications') + counts('updates') +
     counts('comments') +
+    // `skipped`, not zero, for the same reason `comments` says it: a sweep that never ran must not
+    // read as a sweep that found nothing.
+    (summary.engageOrphans
+      ? `engageOrphans: dead=${summary.engageOrphans.dead.length} ` +
+        `dropped=${summary.engageOrphans.dropped.length} ` +
+        `unknown=${summary.engageOrphans.unknown.length} `
+      : 'engageOrphans: skipped ') +
     `parentFieldsPending=${summary.parentFieldsPending} ` +
     `drift=${summary.drift}`;
 }
@@ -250,6 +394,19 @@ async function reconcile(argv = [], deps = {}) {
       id => admit(eaglePeriodProject.get(id)) !== null),
     misfiledParent: misfiledPeriods
   };
+
+  // OPT-IN, like `--comments`, and for the same reason: one ENGAGE round trip per `isMet` period.
+  // Absent `ENGAGE_API_BASE` it does not run at all — see the constant.
+  if (args.engage) {
+    const base = deps.engageApiBase !== undefined ? deps.engageApiBase : ENGAGE_API_BASE;
+    if (!base) {
+      summary.failures.push('ENGAGE_API_BASE is unset — the dead-slug sweep did not run');
+    } else {
+      summary.engageOrphans = await engageOrphans(periodRows,
+        { base, drop: args.dropOrphans, periodsRepo, deps });
+      summary.failures.push(...summary.engageOrphans.failures);
+    }
+  }
   summary.lists = {
     inDemi: listRows.length, inEagle: eagleListIds.size,
     ...diff(listRows, row => String(row.id), eagleListIds)
@@ -360,6 +517,30 @@ function report(summary, { json } = {}) {
         'public search — that is close-unpublished-track-projects.js, not the push');
     }
   }
+  const orphans = summary.engageOrphans;
+  if (orphans) {
+    const preview = ids => ids.slice(0, 20).join(', ') + (ids.length > 20 ? ', …' : '');
+    lines.push(`engageOrphans: ${orphans.checked} isMet period(s) resolved against ENGAGE`);
+    lines.push(`  dead (ENGAGE no longer holds the slug)${orphans.dropped.length ? '' : ', NOT dropped'}: ` +
+      `${orphans.dead.length}${orphans.dead.length ? ` — ${preview(orphans.dead)}` : ''}`);
+    if (orphans.dropped.length) {
+      lines.push(`  dropped from the mirror: ${orphans.dropped.length} — ${preview(orphans.dropped)}`);
+    }
+    if (orphans.unknown.length) {
+      // NEVER a delete list. These are the periods ENGAGE did not answer for — an unreachable host,
+      // a 401, a metURL with no slug in it — and "could not check" is not "gone".
+      lines.push(`  unknown (ENGAGE gave no usable answer, left alone): ${orphans.unknown.length} — ` +
+        preview(orphans.unknown));
+      // A slow ENGAGE and an unreachable one both land here, but not for the same reason — count
+      // them apart so the alert says which one to go chase.
+      const reasons = Object.values(orphans.unknownReasons || {});
+      if (reasons.length) {
+        const counts = reasons.reduce((acc, r) => acc.set(r, (acc.get(r) || 0) + 1), new Map());
+        lines.push('    reason: ' +
+          [...counts].map(([reason, n]) => `${reason}=${n}`).join(', '));
+      }
+    }
+  }
   for (const f of summary.failures) lines.push(`  ✗ ${f}`);
   if (json) {
     const ids = s => ({
@@ -377,20 +558,32 @@ function report(summary, { json } = {}) {
  * One run, logging exactly what the CLI logs — the nightly schedule and the CLI must not be able
  * to produce different output, because the log alert matches only one of the two lines.
  *
- * No `live` option: this script changes nothing in any mode. See the header.
+ * `--drop-orphans` is the only mode that writes, and the nightly timer never passes it: a scheduled
+ * job that deletes rows off a third party's answer is not something an alert can undo.
  *
  * @param {object} [opts] {json} full id sets, {comments} sweep the comment container too (one
- *   eagle-api round trip per comment period), {deps} the same test seam `reconcile` takes
+ *   eagle-api round trip per comment period), {engage} resolve every `isMet` period's slug,
+ *   {dropOrphans} delete the ones ENGAGE no longer holds, {deps} the test seam `reconcile` takes
  */
-async function run({ json = false, comments: sweepComments = false, deps } = {}) {
-  const summary = await reconcile(sweepComments ? ['--comments'] : [], deps);
+async function run({ json = false, comments: sweepComments = false, engage = false,
+  dropOrphans = false, deps } = {}) {
+  const argv = [
+    ...(sweepComments ? ['--comments'] : []),
+    ...(dropOrphans ? ['--drop-orphans'] : engage ? ['--engage'] : [])
+  ];
+  const summary = await reconcile(argv, deps);
   logger.info(report(summary, { json }));
   // Its own record, so a log alert matches this line and not the report body around it.
   logger.info(summaryLine(summary));
   return summary;
 }
 
-module.exports = { parseArgs, diff, summaryLine, reconcile, report, run };
+module.exports = {
+  parseArgs, diff, summaryLine, reconcile, report, run,
+  // Exported for the tests: the slug parse and the three-way ENGAGE answer are where a wrong call
+  // turns into a deleted row, so both are asserted directly as well as through `reconcile`.
+  slugOf, slugState, engageOrphans
+};
 
 if (require.main === module) {
   const { initCosmosClient } = require('../db/cosmos-nosql');
@@ -404,7 +597,8 @@ if (require.main === module) {
   }
   initCosmosClient();
 
-  run({ json: args.json, comments: args.comments })
+  run({ json: args.json, comments: args.comments, engage: args.engage,
+    dropOrphans: args.dropOrphans })
     .catch(err => {
       logger.error(`[reconcile] ${err.stack || err.message}`);
       process.exit(1);

@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  parseArgs, diff, summaryLine, reconcile, report, run
+  parseArgs, diff, summaryLine, reconcile, report, run, slugOf
 } = require('../../src/scripts/reconcile-eagle');
 const { logger } = require('../../src/utils/logger');
 const { documentAdmission } = require('../../src/scripts/seed-nosql');
@@ -178,10 +178,16 @@ function updatesDrift() {
 }
 
 test('parseArgs', async (t) => {
-  await t.test('takes --json and --comments', () => {
-    assert.deepStrictEqual(parseArgs([]), { json: false, comments: false });
-    assert.deepStrictEqual(parseArgs(['--json']), { json: true, comments: false });
-    assert.deepStrictEqual(parseArgs(['--comments']), { json: false, comments: true });
+  await t.test('takes --json, --comments, --engage and --drop-orphans', () => {
+    const base = { json: false, comments: false, engage: false, dropOrphans: false };
+    assert.deepStrictEqual(parseArgs([]), base);
+    assert.deepStrictEqual(parseArgs(['--json']), { ...base, json: true });
+    assert.deepStrictEqual(parseArgs(['--comments']), { ...base, comments: true });
+    assert.deepStrictEqual(parseArgs(['--engage']), { ...base, engage: true });
+    // The delete flag IMPLIES the sweep: there is nothing to drop without one, and a
+    // `--drop-orphans` that quietly did nothing is worse than one that refuses.
+    assert.deepStrictEqual(parseArgs(['--drop-orphans']),
+      { ...base, engage: true, dropOrphans: true });
   });
 
   await t.test('rejects an unknown argument rather than ignoring it', () => {
@@ -567,15 +573,16 @@ test('summaryLine is the alert contract', async (t) => {
       'lists: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'notifications: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'updates: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'comments: skipped parentFieldsPending=0 drift=5');
+      'comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=5');
   });
 
   // A container the run did not sweep must not read as a clean one: `comments` costs an eagle-api
   // round trip per period, so it is off unless asked for, and zeros there would say "no drift".
   await t.test('a container the run skipped says so instead of reporting zero', async () => {
-    assert.match(summaryLine(await reconcile([], makeDeps())), /comments: skipped parentFieldsPending=0 drift=/);
+    assert.match(summaryLine(await reconcile([], makeDeps())),
+      /comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=/);
     assert.match(summaryLine(await reconcile(['--comments'], makeDeps())),
-      /comments: unpublishedOrDeleted=1 eagleOnly=0 parentFieldsPending=0 drift=6/);
+      /comments: unpublishedOrDeleted=1 eagleOnly=0 engageOrphans: skipped parentFieldsPending=0 drift=6/);
   });
 
   await t.test('documents whose chunks never got re-stamped reach the alert line', async () => {
@@ -596,7 +603,7 @@ test('summaryLine is the alert contract', async (t) => {
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 ' +
       'commentPeriods: skipped lists: skipped notifications: skipped updates: skipped ' +
-      'comments: skipped parentFieldsPending=0 drift=0');
+      'comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=0');
   });
 
   // The alert rule reads `drift=` out of this line with a regex (azure/modules/observability.bicep).
@@ -637,4 +644,193 @@ test('run passes --json through to the report', async (t) => {
 
   assert.ok(lines.some(line => line.includes('"eagleOnly"')),
     '--json is the only way to get the full id sets, and the CLI still passes it');
+});
+
+/**
+ * The ENGAGE dead-slug guard.
+ *
+ * ENGAGE deletes an engagement without telling DEMI when its `delete_from_epic` returns early on an
+ * unset `project_tracking_id`, so the mirror keeps a period whose `metURL` 404s for every visitor.
+ * The id-set diffs cannot see it — the row is in Eagle AND in DEMI — so this is the only thing that
+ * looks, and it is also the only thing in this script that can delete.
+ *
+ * `fetch` is the stub point rather than the repository, because what decides whether a row lives or
+ * dies is how an ENGAGE RESPONSE is read: the production hazard is a 200 of SPA HTML from
+ * `engage.eao.gov.bc.ca`, which is not the API and answers every path that way.
+ */
+const ENGAGE_BASE = 'https://engage-api.example/api';
+
+const GONE = (slug) => ({
+  status: 400, ok: false,
+  text: async () => JSON.stringify({ message: `No engagement slug found for ${slug}` })
+});
+const LIVE = { status: 200, ok: true, text: async () => '{"id":1}' };
+
+/** `metURL`s pointing at ENGAGE, plus the `isMet: false` row that has no slug to resolve. */
+const MET_PERIODS = [
+  { id: 'CP-live', projectId: '207', isMet: true, metURL: 'https://engage.example/alive-slug' },
+  { id: 'CP-dead', projectId: '207', isMet: true, metURL: 'https://engage.example/dead-slug' },
+  { id: 'CP-here', projectId: '207', isMet: false, metURL: '' }
+];
+
+/** The same deps as every other case, with the periods and the ENGAGE responses swapped in. */
+function engageDeps({ rows = MET_PERIODS, respond, deleted = [] } = {}) {
+  return makeDeps({
+    engageApiBase: ENGAGE_BASE,
+    fetch: async (url) => respond(url),
+    commentPeriods: {
+      listByProject: async (projectId, access) => {
+        assertSystem(access);
+        return projectId === '207' ? rows : [];
+      },
+      deleteById: async (id, projectId) => { deleted.push(`${id}@${projectId}`); }
+    }
+  });
+}
+
+/** ENGAGE knows `alive-slug` and nothing else. */
+const respondOnlyAliveSlug = (url) =>
+  (url.endsWith('/slugs/alive-slug') ? LIVE : GONE(url.split('/').pop()));
+
+test('the ENGAGE dead-slug guard', async (t) => {
+  await t.test('resolves only isMet periods, and reports the dead one without touching it',
+    async () => {
+      const deleted = [];
+      const summary = await reconcile(['--engage'],
+        engageDeps({ respond: respondOnlyAliveSlug, deleted }));
+
+      assert.deepStrictEqual(summary.engageOrphans.dead, ['CP-dead']);
+      assert.strictEqual(summary.engageOrphans.checked, 2,
+        'the isMet: false period has no engagement and costs no round trip');
+      // REPORT-ONLY IS THE DEFAULT. `--engage` sweeps; only `--drop-orphans` writes.
+      assert.deepStrictEqual(deleted, []);
+      assert.deepStrictEqual(summary.engageOrphans.dropped, []);
+    });
+
+  await t.test('--drop-orphans deletes the dead row at its own partition, and only that row',
+    async () => {
+      const deleted = [];
+      const summary = await reconcile(['--drop-orphans'],
+        engageDeps({ respond: respondOnlyAliveSlug, deleted }));
+
+      // The partition key rides along: `commentPeriods` is partitioned on the parent, and a delete
+      // aimed at the wrong one is a 404 that reads as a successful no-op.
+      assert.deepStrictEqual(deleted, ['CP-dead@207']);
+      assert.deepStrictEqual(summary.engageOrphans.dropped, ['CP-dead']);
+    });
+
+  // THE PRODUCTION HAZARD. `engage.eao.gov.bc.ca` is the single-page app, and its nginx answers 200
+  // with index.html for every unknown path — so a check pointed there calls every slug alive, and
+  // one pointed at the test host gets 401 for all of them. Neither may ever delete anything.
+  await t.test('an answer that is not ENGAGE saying "gone" is UNKNOWN, never an orphan',
+    async () => {
+      for (const [label, response] of [
+        ['SPA index.html on 200', { status: 200, ok: true, text: async () => '<!DOCTYPE html>' }],
+        ['basic auth on the test host', { status: 401, ok: false, text: async () => 'nope' }],
+        ['a 400 from something that is not ENGAGE',
+          { status: 400, ok: false, text: async () => 'Bad Request' }],
+        ['a 5xx', { status: 502, ok: false, text: async () => 'gateway' }]
+      ]) {
+        const deleted = [];
+        const summary = await reconcile(['--drop-orphans'],
+          engageDeps({ respond: async () => response, deleted }));
+
+        assert.deepStrictEqual(deleted, [], `${label} must delete nothing`);
+        assert.deepStrictEqual(summary.engageOrphans.dead, [], `${label} is not an orphan`);
+        // A 200 is a LIVE slug and says nothing is wrong; the rest are answers nobody can act on.
+        assert.deepStrictEqual(summary.engageOrphans.unknown,
+          response.status === 200 ? [] : ['CP-live', 'CP-dead'],
+          `${label} is reported as unresolved`);
+      }
+    });
+
+  await t.test('a thrown fetch is unknown too, not an orphan', async () => {
+    const deleted = [];
+    const summary = await reconcile(['--drop-orphans'], engageDeps({
+      respond: async () => { throw new Error('ENOTFOUND'); }, deleted
+    }));
+
+    assert.deepStrictEqual(deleted, []);
+    assert.deepStrictEqual(summary.engageOrphans.dead, []);
+    assert.strictEqual(summary.engageOrphans.unknown.length, 2);
+  });
+
+  // A SLOW ENGAGE IS NOT AN UNREACHABLE ONE. Both are unresolved and both stay untouched, but the
+  // report has to tell them apart or a run that is merely slow reads identically to one where the
+  // host is down.
+  await t.test('a timeout and a network failure are both unknown, for different reasons', async () => {
+    const timedOut = await reconcile(['--engage'], engageDeps({
+      respond: async () => { const e = new Error('aborted'); e.name = 'AbortError'; throw e; }
+    }));
+    assert.strictEqual(timedOut.engageOrphans.unknownReasons['CP-live'], 'timeout');
+    assert.strictEqual(timedOut.engageOrphans.unknownReasons['CP-dead'], 'timeout');
+
+    const unreachable = await reconcile(['--engage'], engageDeps({
+      respond: async () => { throw new Error('ENOTFOUND'); }
+    }));
+    assert.strictEqual(unreachable.engageOrphans.unknownReasons['CP-live'], 'ENOTFOUND');
+    assert.notStrictEqual(
+      timedOut.engageOrphans.unknownReasons['CP-live'],
+      unreachable.engageOrphans.unknownReasons['CP-live'],
+      'the same "unknown" state must not erase which failure caused it');
+  });
+
+  await t.test('an isMet period whose metURL carries no slug is unknown, and costs no round trip',
+    async () => {
+      let calls = 0;
+      const summary = await reconcile(['--engage'], engageDeps({
+        rows: [{ id: 'CP-nourl', projectId: '207', isMet: true, metURL: '' }],
+        respond: async () => { calls++; return LIVE; }
+      }));
+
+      assert.strictEqual(calls, 0);
+      assert.deepStrictEqual(summary.engageOrphans.unknown, ['CP-nourl']);
+      assert.deepStrictEqual(summary.engageOrphans.dead, []);
+    });
+
+  await t.test('a reported orphan is drift; a dropped one is not', async () => {
+    const reported = await reconcile(['--engage'], engageDeps({ respond: respondOnlyAliveSlug }));
+    const dropped = await reconcile(['--drop-orphans'],
+      engageDeps({ respond: respondOnlyAliveSlug }));
+
+    assert.strictEqual(reported.drift, dropped.drift + 1,
+      'the alert must stay lit while a dead link is still in the mirror, and go out once it is not');
+    assert.match(summaryLine(reported), /engageOrphans: dead=1 dropped=0 unknown=0/);
+  });
+
+  await t.test('without ENGAGE_API_BASE the sweep does not run, and says so', async () => {
+    const summary = await reconcile(['--engage'],
+      makeDeps({ engageApiBase: '', fetch: async () => LIVE }));
+
+    assert.strictEqual(summary.engageOrphans, undefined);
+    // `skipped`, not zero — the same rule `comments` follows.
+    assert.match(summaryLine(summary), /engageOrphans: skipped/);
+    assert.ok(summary.failures.some(f => /ENGAGE_API_BASE is unset/.test(f)));
+  });
+
+  await t.test('no flag means no ENGAGE traffic at all', async () => {
+    let calls = 0;
+    const summary = await reconcile([],
+      engageDeps({ respond: async () => { calls++; return LIVE; } }));
+
+    assert.strictEqual(calls, 0);
+    assert.strictEqual(summary.engageOrphans, undefined);
+  });
+});
+
+test('slugOf reads the engagement slug off a metURL', async (t) => {
+  await t.test('takes the last path segment, whatever rides after it', () => {
+    assert.strictEqual(slugOf('https://engage.example/my-engagement'), 'my-engagement');
+    assert.strictEqual(slugOf('https://engage.example/e/my-engagement/'), 'my-engagement');
+    assert.strictEqual(slugOf('https://engage.example/my-engagement?utm=x'), 'my-engagement');
+    assert.strictEqual(slugOf('https://engage.example/my-engagement#top'), 'my-engagement');
+    assert.strictEqual(slugOf('https://engage.example/a%20slug'), 'a slug');
+  });
+
+  await t.test('answers null rather than a guess when there is no segment', () => {
+    const noSlug = ['', null, undefined, '   ', 'https://engage.example', 'https://engage.example/'];
+    for (const raw of noSlug) {
+      assert.strictEqual(slugOf(raw), null, `${JSON.stringify(raw)} carries no slug`);
+    }
+  });
 });

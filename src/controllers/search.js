@@ -392,6 +392,28 @@ function filterValue(query, key) {
 }
 
 /**
+ * EVERY value of one filter key, in either wire shape, split the way a multi-select means it.
+ *
+ * `filterValue` above is for point lookups and deliberately takes the first value only. This is for
+ * the keys a grid column offers several of at once — `and[type]=News,Other`, or the same key
+ * repeated — and it is `eagleQuery.valuesOf` doing the splitting, the same function the INDEX path
+ * runs, so one URL cannot mean two things depending on which path answered it.
+ *
+ * `null` for "the caller did not send this key" versus `[]` for "sent it, but `valuesOf` split it
+ * into nothing" — `and[type]=` is the latter. What each answer means is the CALLER's call, same as
+ * the index path: `eagleQuery.buildFilter` applies no clause and drops nothing for either one, so a
+ * consumer that wants that same "no filter" reading treats both the same, as `typeCriteria` does.
+ */
+function filterValues(query, key) {
+  const raw = [];
+  for (const [k, v] of eagleQuery.andParams(query || {})) {
+    if (k === key) raw.push(v);
+  }
+  if ((query || {})[key] !== undefined) raw.push(query[key]);
+  return raw.length ? eagleQuery.valuesOf(raw) : null;
+}
+
+/**
  * One value from a query parameter `querystring.parse` may have handed back as an ARRAY — a
  * repeated key stays an array there, and a string method called on it throws.
  */
@@ -490,6 +512,43 @@ async function updateProjects(access, rows) {
  *
  * @returns {Promise<{searchResults: object[], count: number, applied?: string[]}>}
  */
+/**
+ * The values `and[status]` takes on `dataset=CommentPeriod`. Anything else is a 400.
+ *
+ * ONE value, and the set is the gate rather than an `=== 'open'` test, so adding `closed` later is
+ * one entry here and a branch — not a second place for an unknown value to leak through.
+ */
+const PERIOD_STATUSES = new Set(['open']);
+
+/** How far back "closed recently" reaches, for the count that rides along with the open rail. */
+const CLOSED_WINDOW_DAYS = 30;
+
+/**
+ * Every period open right now, with the number that closed in the last CLOSED_WINDOW_DAYS beside it.
+ *
+ * `count` IS the answer, not a page of a larger set — `listOpen` is capped, like the RecentActivity
+ * strip above, because a continuation token across every partition is not a page anybody pages.
+ * `closedCount` is measured separately and is NOT a total for these rows; the envelope carries it
+ * under its own key so the two numbers cannot be read as one.
+ */
+async function openPeriods({ access, pageSize }) {
+  // ONE capture, given to both reads below: two separate `new Date()` calls, milliseconds apart,
+  // could each land on a different side of a period's boundary and break the complement the two
+  // reads are meant to form — see `countClosedSince`'s doc.
+  const now = new Date();
+  const since = new Date(now.getTime() - CLOSED_WINDOW_DAYS * 86400000);
+  const [rows, closedCount] = await Promise.all([
+    commentPeriodsRepo.listOpen(access, { limit: pageSize, now }),
+    commentPeriodsRepo.countClosedSince(access, since, now)
+  ]);
+  return {
+    searchResults: await periodRows(access, rows),
+    count: rows.length,
+    closedCount,
+    applied: ['status']
+  };
+}
+
 const COSMOS_DATASETS = {
   /** Every lookup row. eagle-public asks for all 250-odd in one page and resolves ids client-side. */
   List: (ctx) => listRows(ctx, listsRepo.KINDS.LIST),
@@ -511,6 +570,23 @@ const COSMOS_DATASETS = {
     // `filterQuery`, NOT `query`: `commentPeriods.projectId` holds the DEMI project id, so the
     // Eagle ObjectId eagle-public sends has to be the one `resolveProjectFilter` already translated.
     const [projectId] = eagleQuery.projectIdsFrom(filterQuery);
+
+    // BEFORE the no-project guard below, which answers empty: "every open period" is the one read
+    // this dataset has that names no project, and the guard would swallow it.
+    const status = filterValue(query, 'status');
+    if (status !== null) {
+      // REFUSED, never answered. An unrecognised status falling through would hand back the whole
+      // corpus under a 200, which reads exactly like "every period matches your filter".
+      if (!PERIOD_STATUSES.has(status)) {
+        return {
+          error: `and[status] must be one of ${[...PERIOD_STATUSES].join(', ')}, not '${status}'`
+        };
+      }
+      // A project filter alongside it keeps the per-project read below and reports `status` as
+      // dropped: the open list is cross-partition by construction and cannot also be scoped.
+      if (!projectId) return openPeriods({ access, pageSize });
+    }
+
     if (!projectId) {
       return { searchResults: [], count: 0, applied: [] };
     }
@@ -545,6 +621,21 @@ const COSMOS_DATASETS = {
   },
 
   async RecentActivity({ access, query, pageNum, pageSize, sortBy }) {
+    // A POINT READ on the `/id` partition — what serves eagle-public's `/updates/:id` route cold,
+    // with no list to page and nothing for keywords to rank. Same branch, same shape and the same
+    // `count: 0` miss as CommentPeriod and ProjectNotification.
+    const id = filterValue(query, '_id');
+    if (id) {
+      const row = await updatesRepo.getById(access, id);
+      const rows = row ? [row] : [];
+      return {
+        searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
+          await updateProjects(access, rows)),
+        count: rows.length,
+        applied: ['_id']
+      };
+    }
+
     if (String(query.top) === 'true') {
       const rows = await updatesRepo.listTop(access);
       // The count IS the answer here, not a page of a larger set: `listTop` returns the whole strip.
@@ -563,15 +654,22 @@ const COSMOS_DATASETS = {
     // switched off (see KEYWORD_INDEX_DATASETS): the container is small, so the repository answers
     // with CONTAINS — a substring match, without ranking, stemming or a half-typed last word.
     const keywords = query.keywords || query.q || '';
+    // `and[type]` is a real column on this container, so the Cosmos path applies it instead of
+    // reporting it dropped. The KEYWORD path already filters type through the `activities` index;
+    // this is the same filter on the read that answers when there are no keywords.
+    const types = filterValues(query, 'type');
     const [rows, count] = await Promise.all([
-      updatesRepo.list(access, { projectId, keywords, pageNum, pageSize, sortBy }),
-      updatesRepo.count(access, { projectId, keywords })
+      updatesRepo.list(access, { projectId, keywords, types, pageNum, pageSize, sortBy }),
+      updatesRepo.count(access, { projectId, keywords, types })
     ]);
     return {
       searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
         await updateProjects(access, rows)),
       count,
-      applied: projectId ? ['project'] : []
+      // `!== null`, not truthy: `filterValues` answers `[]` (still not `null`) for `and[type]=` sent
+      // empty, and that key was still SEEN — reporting it dropped here, unlike the index path, would
+      // read as "the container could not filter on type" when it is really "nothing to narrow by".
+      applied: [...(projectId ? ['project'] : []), ...(types !== null ? ['type'] : [])]
     };
   },
 
@@ -621,8 +719,9 @@ const KEYWORD_INDEX_DATASETS = {
     index: () => aiSearch.config().activitiesIndex,
     search: (opts) => aiSearch.searchActivities(opts),
     // `?top=true` is the home-page strip, which eagle-api answers whole and by pinned-ness rather
-    // than by relevance. It stays a Cosmos read whatever else the caller sent.
-    cosmosOnly: (query) => String(query.top) === 'true',
+    // than by relevance. It stays a Cosmos read whatever else the caller sent, and so does
+    // `and[_id]`: a point read of one record, which keywords say nothing about.
+    cosmosOnly: (query) => String(query.top) === 'true' || filterValue(query, '_id') !== null,
     // `updates.projectId` holds the EAGLE project id, so the UNTRANSLATED ids are the ones to
     // filter with — the mirror image of the Cosmos branch. Flattened onto `project` because that
     // is the one form `buildFilter` applies.
@@ -1498,7 +1597,14 @@ exports.search = async (req, res) => {
         const applied = new Set(result.applied || []);
         noteDropped('filter', eagleQuery.filterKeysIn(req.query).filter(key => !applied.has(key)));
 
-        return res.json([{ searchResults: result.searchResults, count: result.count }]);
+        return res.json([{
+          searchResults: result.searchResults,
+          count: result.count,
+          // A SECOND measurement, not a second total: the open-period rail counts what closed
+          // recently as well, and `meta[0].searchResultsTotal` can only carry one number. Omitted
+          // by every other branch, so a caller that does not ask for it never sees the key.
+          ...(result.closedCount === undefined ? {} : { closedCount: result.closedCount })
+        }]);
       } catch (err) {
         logger.error(`[search] ${dataset} read failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, `${dataset} search is unavailable`));
