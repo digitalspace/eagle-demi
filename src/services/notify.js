@@ -30,10 +30,15 @@ function excerptOf(content) {
     .slice(0, EXCERPT_CHARS);
 }
 
-/** Where a reader lands. No project means the update is site-wide, so the news page. */
-function urlFor(projectId) {
-  return projectId
-    ? `${config.linkBaseUrl}/p/${projectId}/project-details`
+/**
+ * Where a reader lands. With reader links on, the update's own page: `item.id` is the Eagle `_id`
+ * eagle-public's `/updates/:id` reads back through `RecentActivity` `and[_id]`. Otherwise the
+ * project page, or the news page for a site-wide update.
+ */
+function urlFor(item) {
+  if (config.notifyUpdateReaderLinks) return `${config.linkBaseUrl}/updates/${item.id}`;
+  return item.projectId
+    ? `${config.linkBaseUrl}/p/${item.projectId}/project-details`
     : `${config.linkBaseUrl}/news`;
 }
 
@@ -81,7 +86,7 @@ async function post(body) {
 async function updatePublished(item, projectName) {
   return post({
     ...eventFor(item),
-    url: urlFor(item.projectId),
+    url: urlFor(item),
     projectName: projectName || null,
     excerpt: excerptOf(item.content)
   });

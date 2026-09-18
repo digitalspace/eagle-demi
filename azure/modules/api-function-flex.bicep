@@ -194,6 +194,9 @@ param notifyApiBase string = ''
 @description('Key Vault URI of the eagle-notify function key. Not the value: the app resolves it through a Key Vault reference. Empty leaves the push dark.')
 param notifyApiKeySecretUri string = ''
 
+@description('Update emails link /updates/<id> instead of the project page. See main.bicep.')
+param notifyUpdateReaderLinks bool = false
+
 // @secure() only to satisfy the linter's name heuristic — the value is a Key Vault reference, not
 // a secret; the vault holds the secret itself.
 @description('Key Vault reference for the APIM gateway secret. Empty disables the gateway trust branch.')
@@ -580,6 +583,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'NOTIFY_API_KEY'
           value: empty(notifyApiKeySecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${notifyApiKeySecretUri})'
+        }
+        {
+          name: 'NOTIFY_UPDATE_READER_LINKS'
+          value: notifyUpdateReaderLinks ? 'true' : 'false'
         }
         // The realm-management service account the sync grants `project:<id>` roles with. Distinct
         // from KEYCLOAK_CLIENT_ID, which is the client whose user tokens this API accepts.

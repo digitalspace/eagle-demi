@@ -382,6 +382,9 @@ const config = {
   // sends nothing and the mirror never claims a notification, so wiring it later still notifies.
   notifyApiBase:         process.env.NOTIFY_API_BASE || '',
   notifyApiKey:          secretFromEnv('NOTIFY_API_KEY'),
+  // On: an update email links eagle-public's reader page `/updates/<id>`. Only the React line has
+  // that route, so it stays off wherever linkBaseUrl still serves the Angular site.
+  notifyUpdateReaderLinks: process.env.NOTIFY_UPDATE_READER_LINKS === 'true',
 
   // Track team feed → `project:<id>` realm roles (src/scripts/sync-track-teams.js). Two
   // client-credentials identities in the realm above: one reads Track, one holds

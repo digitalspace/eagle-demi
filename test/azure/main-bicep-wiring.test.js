@@ -539,6 +539,20 @@ test('prod names neither the eagle-notify host nor its vault secret', () => {
     'naming the secret prod never set makes the deploy check demand a credential prod does not use');
 });
 
+// Reader links point update emails at /updates/:id, which only eagle-public's React line serves.
+// Prod and test still serve the Angular site there, so turning it on sends every email to a 404.
+test('update reader links reach the app setting and stay off in test and prod', () => {
+  assert.match(MAIN, /^\s+notifyUpdateReaderLinks: notifyUpdateReaderLinks$/m,
+    'main.bicep must pass the flag to the API module, or a bicepparam value never lands');
+  assert.match(API_MODULE,
+    /name: 'NOTIFY_UPDATE_READER_LINKS'\s+value: notifyUpdateReaderLinks \? 'true' : 'false'/,
+    'src/config.js reads exactly the string true');
+  assert.doesNotMatch(TEST_PARAMS, /^param notifyUpdateReaderLinks = true/m,
+    'test.projects.eao.gov.bc.ca serves the Angular site, which has no /updates route');
+  assert.doesNotMatch(PROD_PARAMS, /^param notifyUpdateReaderLinks = true/m,
+    'projects.eao.gov.bc.ca serves the Angular site, which has no /updates route');
+});
+
 // Two params, one feature, and each is useless alone: the schedule is what writes the drift line,
 // the bool is what watches for it. An environment with the alert and no run has an alarm that can
 // never fire; one with the run and no alert writes a line nobody reads. Nothing in `az bicep build`
