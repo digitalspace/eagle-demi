@@ -392,6 +392,28 @@ function filterValue(query, key) {
 }
 
 /**
+ * EVERY value of one filter key, in either wire shape, split the way a multi-select means it.
+ *
+ * `filterValue` above is for point lookups and deliberately takes the first value only. This is for
+ * the keys a grid column offers several of at once — `and[type]=News,Other`, or the same key
+ * repeated — and it is `eagleQuery.valuesOf` doing the splitting, the same function the INDEX path
+ * runs, so one URL cannot mean two things depending on which path answered it.
+ *
+ * `null` for "the caller did not send this key" versus `[]` for "sent it, but `valuesOf` split it
+ * into nothing" — `and[type]=` is the latter. What each answer means is the CALLER's call, same as
+ * the index path: `eagleQuery.buildFilter` applies no clause and drops nothing for either one, so a
+ * consumer that wants that same "no filter" reading treats both the same, as `typeCriteria` does.
+ */
+function filterValues(query, key) {
+  const raw = [];
+  for (const [k, v] of eagleQuery.andParams(query || {})) {
+    if (k === key) raw.push(v);
+  }
+  if ((query || {})[key] !== undefined) raw.push(query[key]);
+  return raw.length ? eagleQuery.valuesOf(raw) : null;
+}
+
+/**
  * One value from a query parameter `querystring.parse` may have handed back as an ARRAY — a
  * repeated key stays an array there, and a string method called on it throws.
  */
@@ -476,6 +498,24 @@ function cosmosRows(entity, rows, access, schemaName, decorate) {
 }
 
 /**
+ * One `projects` INDEX hit, redacted for this caller. The catalog is keyed on INDEX field names
+ * because the data source renames columns (docs/rbac-architecture.md §2 item 9).
+ *
+ * The index has no map type, so the dials arrive as a JSON string. A malformed one fails closed to
+ * no dials — every field at its `defaultVis`, never the raw row. `dialsForIndex` restates the stored
+ * keys as index ones, or a dial would be inert on exactly the renamed fields.
+ */
+function redactIndexProject(hit, access) {
+  let dials;
+  try {
+    dials = JSON.parse(hit.vis || '{}');
+  } catch {
+    dials = {};
+  }
+  return redactForAccess('index-projects', { ...hit, vis: dialsForIndex(dials) }, access);
+}
+
+/**
  * Label update rows with the project each announces, under the CALLER's access — same rule as
  * `labelWithProjectNames`, one id space over: `updates.projectId` holds the EAGLE id, so the lookup
  * is `listByEagleIds` and not `listByIds`.
@@ -545,6 +585,161 @@ async function updateProjects(access, rows) {
  *
  * @returns {Promise<{searchResults: object[], count: number, applied?: string[]}>}
  */
+/**
+ * The values `and[status]` takes on `dataset=CommentPeriod`. Anything else is a 400.
+ *
+ * ONE value, and the set is the gate rather than an `=== 'open'` test, so adding `closed` later is
+ * one entry here and a branch — not a second place for an unknown value to leak through.
+ */
+const PERIOD_STATUSES = new Set(['open']);
+
+/** How far back "closed recently" reaches, for the count that rides along with the open rail. */
+const CLOSED_WINDOW_DAYS = 30;
+
+/**
+ * Every period open right now, with the number that closed in the last CLOSED_WINDOW_DAYS beside it.
+ *
+ * `count` IS the answer, not a page of a larger set — `listOpen` is capped, like the RecentActivity
+ * strip above, because a continuation token across every partition is not a page anybody pages.
+ * `closedCount` is measured separately and is NOT a total for these rows; the envelope carries it
+ * under its own key so the two numbers cannot be read as one.
+ */
+async function openPeriods({ access, pageSize }) {
+  // ONE capture, given to both reads below: two separate `new Date()` calls, milliseconds apart,
+  // could each land on a different side of a period's boundary and break the complement the two
+  // reads are meant to form — see `countClosedSince`'s doc.
+  const now = new Date();
+  const since = new Date(now.getTime() - CLOSED_WINDOW_DAYS * 86400000);
+  const [rows, closedCount] = await Promise.all([
+    commentPeriodsRepo.listOpen(access, { limit: pageSize, now }),
+    commentPeriodsRepo.countClosedSince(access, since, now)
+  ]);
+  return {
+    searchResults: await periodRows(access, rows),
+    count: rows.length,
+    closedCount,
+    applied: ['status']
+  };
+}
+
+/** The most rows `top=true` and dataset=HomeFeed answer. A longer list is a page, not a strip. */
+const TOP_MAX_ROWS = 20;
+
+/**
+ * `pageSize` on a strip read: absent is `updatesRepo.TOP_ROWS`, so every existing `top=true` caller
+ * is unchanged. Anything but an integer from 1 to TOP_MAX_ROWS is REFUSED rather than clamped.
+ */
+function stripLimit(query) {
+  const raw = firstValue(query.pageSize);
+  if (raw === undefined) return { limit: updatesRepo.TOP_ROWS };
+  const n = Number(raw);
+  if (!/^\d+$/.test(String(raw)) || n < 1 || n > TOP_MAX_ROWS) {
+    return { error: `pageSize must be an integer from 1 to ${TOP_MAX_ROWS} here, not '${raw}'` };
+  }
+  return { limit: n };
+}
+
+/** The update type the home feed carries beside decisions; comment periods have their own rail. */
+const FEED_UPDATE_TYPE = 'News';
+
+const byDateDesc = (a, b) => Date.parse(b.date) - Date.parse(a.date);
+const isoDate = (value) => (value ? new Date(value).toISOString() : null);
+
+/**
+ * The newest project decisions this caller may see, dated no later than today, as feed rows.
+ *
+ * From the `projects` INDEX, not Cosmos: `decisionDate` is filterable and sortable there and is not
+ * an indexed path on the container, where an ORDER BY on it cannot run at all.
+ */
+async function projectDecisionRows(access, limit, now) {
+  const acl = filterFor(access, 'id');
+  if (acl.empty) return [];
+  // Through the same builders as a `dataset=Project` URL, so the ACL and the field gates are theirs.
+  const { filter } = eagleQuery.buildFilter(
+    { 'and[decisionDateEnd]': now.toISOString() }, 'Project', acl, access);
+  const { orderby } = eagleQuery.buildOrderBy('-decisionDate', 'Project', false, access);
+  const { items } = await aiSearch.searchProjects({
+    filter, orderby, skip: 0, keywords: '', matchAll: true, top: limit
+  });
+  return items
+    .map(hit => redactIndexProject(hit, access))
+    .filter(doc => doc.decisionDate)
+    .map(doc => {
+      const projectId = doc.legacyEagleId || String(doc.id);
+      return {
+        kind: 'decision',
+        id: projectId,
+        projectId,
+        projectName: doc.name || doc.displayName || null,
+        date: isoDate(doc.decisionDate),
+        headline: doc.eacDecision || null,
+        content: null,
+        documentUrl: null
+      };
+    });
+}
+
+/** Notification decisions as feed rows. A notification names its project loosely, by label. */
+async function notificationDecisionRows(access, limit, now) {
+  const rows = await notificationsRepo.listDecisions(access, { limit, now });
+  const dated = redactAllForAccess('notifications', rows, access).filter(n => n.decisionDate);
+  // A mirrored row with a garbage date would make isoDate throw and 502 the whole home page.
+  const valid = dated.filter(n => !Number.isNaN(new Date(n.decisionDate).getTime()));
+  if (valid.length < dated.length) {
+    logger.warn('[search] home feed dropped notification decisions with an unparseable decisionDate', {
+      ids: dated.filter(n => !valid.includes(n)).map(n => String(n.id))
+    });
+  }
+  return valid
+    .map(n => ({
+      kind: 'decision',
+      id: String(n.id),
+      projectId: n.associatedProjectId || null,
+      projectName: n.associatedProjectName || n.name || null,
+      date: isoDate(n.decisionDate),
+      headline: n.decision || null,
+      content: null,
+      documentUrl: null
+    }));
+}
+
+/**
+ * The home feed: pinned updates first, exactly as the `top=true` strip, then the newest News updates
+ * and decisions merged by date to fill the rest. Every half reads under the caller's own access.
+ */
+async function homeFeed({ access, query }) {
+  if (query.keywords || query.q) return { error: 'dataset=HomeFeed does not take keywords' };
+  const { limit, error } = stripLimit(query);
+  if (error) return { error };
+
+  const now = new Date();
+  const [top, projectDecisions, notificationDecisions] = await Promise.all([
+    updatesRepo.listTop(access, { limit, types: [FEED_UPDATE_TYPE] }),
+    projectDecisionRows(access, limit, now),
+    notificationDecisionRows(access, limit, now)
+  ]);
+
+  const project = await updateProjects(access, top);
+  const updates = cosmosRows('updates', top, access, 'RecentActivity', project).map(row => ({
+    kind: 'update',
+    id: row._id,
+    projectId: row.project ? row.project._id : null,
+    projectName: row.project ? row.project.name : null,
+    date: isoDate(row.dateAdded),
+    headline: row.headline || null,
+    content: row.content || null,
+    documentUrl: row.documentUrl || null
+  }));
+
+  // `listTop` answers pinned rows first; those hold their place, and only the rest compete on date.
+  const pinnedCount = top.filter(row => row.pinned === true).length;
+  const rest = [...updates.slice(pinnedCount), ...projectDecisions, ...notificationDecisions]
+    .sort(byDateDesc)
+    .slice(0, limit - pinnedCount);
+  const rows = [...updates.slice(0, pinnedCount), ...rest];
+  return { searchResults: rows, count: rows.length, applied: [] };
+}
+
 const COSMOS_DATASETS = {
   /** Every lookup row. eagle-public asks for all 250-odd in one page and resolves ids client-side. */
   List: (ctx) => listRows(ctx, listsRepo.KINDS.LIST),
@@ -566,6 +761,23 @@ const COSMOS_DATASETS = {
     // `filterQuery`, NOT `query`: `commentPeriods.projectId` holds the DEMI project id, so the
     // Eagle ObjectId eagle-public sends has to be the one `resolveProjectFilter` already translated.
     const [projectId] = eagleQuery.projectIdsFrom(filterQuery);
+
+    // BEFORE the no-project guard below, which answers empty: "every open period" is the one read
+    // this dataset has that names no project, and the guard would swallow it.
+    const status = filterValue(query, 'status');
+    if (status !== null) {
+      // REFUSED, never answered. An unrecognised status falling through would hand back the whole
+      // corpus under a 200, which reads exactly like "every period matches your filter".
+      if (!PERIOD_STATUSES.has(status)) {
+        return {
+          error: `and[status] must be one of ${[...PERIOD_STATUSES].join(', ')}, not '${status}'`
+        };
+      }
+      // A project filter alongside it keeps the per-project read below and reports `status` as
+      // dropped: the open list is cross-partition by construction and cannot also be scoped.
+      if (!projectId) return openPeriods({ access, pageSize });
+    }
+
     if (!projectId) {
       return { searchResults: [], count: 0, applied: [] };
     }
@@ -600,8 +812,25 @@ const COSMOS_DATASETS = {
   },
 
   async RecentActivity({ access, query, pageNum, pageSize, sortBy }) {
+    // A POINT READ on the `/id` partition — what serves eagle-public's `/updates/:id` route cold,
+    // with no list to page and nothing for keywords to rank. Same branch, same shape and the same
+    // `count: 0` miss as CommentPeriod and ProjectNotification.
+    const id = filterValue(query, '_id');
+    if (id) {
+      const row = await updatesRepo.getById(access, id);
+      const rows = row ? [row] : [];
+      return {
+        searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
+          await updateProjects(access, rows)),
+        count: rows.length,
+        applied: ['_id']
+      };
+    }
+
     if (String(query.top) === 'true') {
-      const rows = await updatesRepo.listTop(access);
+      const { limit, error } = stripLimit(query);
+      if (error) return { error };
+      const rows = await updatesRepo.listTop(access, { limit });
       // The count IS the answer here, not a page of a larger set: `listTop` returns the whole strip.
       return {
         searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
@@ -618,6 +847,10 @@ const COSMOS_DATASETS = {
     // switched off (see KEYWORD_INDEX_DATASETS): the container is small, so the repository answers
     // with CONTAINS — a substring match, without ranking, stemming or a half-typed last word.
     const keywords = query.keywords || query.q || '';
+    // `and[type]` is a real column on this container, so the Cosmos path applies it instead of
+    // reporting it dropped. The KEYWORD path already filters type through the `activities` index;
+    // this is the same filter on the read that answers when there are no keywords.
+    const types = filterValues(query, 'type');
     // The other two filters the activities list offers: "Documents attached" and the posted-on
     // range. Both are questions the `activities` index answers for a keyword search, and the
     // keywordless page is the same page — a filter panel that narrows nothing here would return
@@ -625,7 +858,7 @@ const COSMOS_DATASETS = {
     const { hasDocument, applied: documentApplied } = documentFilter(query);
     const { dateAddedFrom, dateAddedBefore, applied: windowApplied } = activityWindow(query);
 
-    const criteria = { projectId, keywords, hasDocument, dateAddedFrom, dateAddedBefore };
+    const criteria = { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore };
     const [rows, count] = await Promise.all([
       updatesRepo.list(access, { ...criteria, pageNum, pageSize, sortBy }),
       // The SAME criteria as the page: a total built from a looser predicate describes rows the
@@ -636,13 +869,20 @@ const COSMOS_DATASETS = {
       searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
         await updateProjects(access, rows)),
       count,
+      // `!== null`, not truthy: `filterValues` answers `[]` (still not `null`) for `and[type]=` sent
+      // empty, and that key was still SEEN — reporting it dropped here, unlike the index path, would
+      // read as "the container could not filter on type" when it is really "nothing to narrow by".
       applied: [
         ...(projectId ? ['project'] : []),
+        ...(types !== null ? ['type'] : []),
         ...documentApplied,
         ...windowApplied
       ]
     };
   },
+
+  /** Pinned updates, then News updates and decisions by date. See homeFeed. */
+  HomeFeed: homeFeed,
 
   async ProjectNotification({ access, query, pageNum, pageSize, sortBy }) {
     const id = filterValue(query, '_id');
@@ -690,8 +930,9 @@ const KEYWORD_INDEX_DATASETS = {
     index: () => aiSearch.config().activitiesIndex,
     search: (opts) => aiSearch.searchActivities(opts),
     // `?top=true` is the home-page strip, which eagle-api answers whole and by pinned-ness rather
-    // than by relevance. It stays a Cosmos read whatever else the caller sent.
-    cosmosOnly: (query) => String(query.top) === 'true',
+    // than by relevance. It stays a Cosmos read whatever else the caller sent, and so does
+    // `and[_id]`: a point read of one record, which keywords say nothing about.
+    cosmosOnly: (query) => String(query.top) === 'true' || filterValue(query, '_id') !== null,
     // `updates.projectId` holds the EAGLE project id, so the UNTRANSLATED ids are the ones to
     // filter with — the mirror image of the Cosmos branch. Flattened onto `project` because that
     // is the one form `buildFilter` applies.
@@ -1049,20 +1290,8 @@ exports.search = async (req, res) => {
 
             if (items.length > 0) {
               const searchResults = items.map(hit => {
-                // Redact the INDEX row, then map, exactly as the Cosmos branch below does. The
-                // catalog is keyed on INDEX field names because the data source renames columns
-                // (docs/rbac-architecture.md §2 item 9).
-                // The index has no map type, so the dials arrive as a JSON string. A malformed one
-                // fails closed to no dials — every field at its `defaultVis`, never the raw row.
-                // `dialsForIndex` restates the stored keys as index ones; the data source renames
-                // columns, so an untranslated dial would be inert on exactly the renamed fields.
-                let dials;
-                try {
-                  dials = JSON.parse(hit.vis || '{}');
-                } catch {
-                  dials = {};
-                }
-                const doc = redactForAccess('index-projects', { ...hit, vis: dialsForIndex(dials) }, access);
+                // Redact the INDEX row, then map, exactly as the Cosmos branch below does.
+                const doc = redactIndexProject(hit, access);
                 return {
                 // THE EAGLE ObjectId — eagle-public re-fetches the project from eagle-api by it.
                 // Falls back to the DEMI id for a Track-only project. See
@@ -1567,7 +1796,14 @@ exports.search = async (req, res) => {
         const applied = new Set(result.applied || []);
         noteDropped('filter', eagleQuery.filterKeysIn(req.query).filter(key => !applied.has(key)));
 
-        return res.json([{ searchResults: result.searchResults, count: result.count }]);
+        return res.json([{
+          searchResults: result.searchResults,
+          count: result.count,
+          // A SECOND measurement, not a second total: the open-period rail counts what closed
+          // recently as well, and `meta[0].searchResultsTotal` can only carry one number. Omitted
+          // by every other branch, so a caller that does not ask for it never sees the key.
+          ...(result.closedCount === undefined ? {} : { closedCount: result.closedCount })
+        }]);
       } catch (err) {
         logger.error(`[search] ${dataset} read failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, `${dataset} search is unavailable`));

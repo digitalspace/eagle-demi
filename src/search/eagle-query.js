@@ -870,6 +870,9 @@ module.exports = {
   filterKeysIn,
   canScopeToProject,
   andParams,
+  // The ONE multi-select splitter. Exported so the Cosmos branches read `a,b` the same way
+  // `buildFilter` does — a second copy would let the two paths disagree about one URL.
+  valuesOf,
   projectIdsFrom,
   withProjectIds,
   reportDropped,

@@ -216,6 +216,17 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("type eq 'Mines'"));
   });
 
+  // `and[type]=` with nothing after the `=` splits to zero values, same as the key being absent —
+  // it must add no clause AND must not be reported dropped, the same "no filter" reading the Cosmos
+  // path's `typeCriteria` gives `updates.js` `and[type]`. See `src/repositories/updates.js`.
+  await t.test('an empty and[type]= adds no clause and is not reported dropped', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[type]': '' }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, []);
+    assert.strictEqual(filter, ANON_FILTER);
+  });
+
   await t.test('the decision date range is half-open, on the project index too', () => {
     const { filter, dropped } = eagleQuery.buildFilter({
       'and[decisionDateStart]': '2010-01-01',
