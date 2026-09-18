@@ -7,7 +7,7 @@ This repository houses:
 1. **demi-api** — the authoritative REST API and geospatial search service for projects, documents,
    chunks and administrative boundaries, running on Azure Functions Flex Consumption
    (`@azure/functions` v4 on Node.js 22).
-2. **demi-frontend** — the Angular document intake and search frontend, published to the `$web`
+2. **demi-frontend** — the Angular search frontend, published to the `$web`
    container of a Storage static website and served through the Front Door profile that lives in
    `eagle-search`.
 

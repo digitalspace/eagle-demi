@@ -658,8 +658,8 @@ describe('RegistryStateService', () => {
 });
 
 /**
- * `isStaff` is the single predicate deciding staff-only nav, the /intake route guard, and the
- * gating filters on projects and documents. It replaced a `currentRole` signal that a header
+ * `isStaff` is the single predicate deciding staff-only nav and the gating filters on projects
+ * and documents. It replaced a `currentRole` signal that a header
  * toggle could set independently of Keycloak — the two drifted apart in both directions, and
  * nothing covered either of them.
  */

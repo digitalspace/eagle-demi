@@ -158,8 +158,6 @@ export class RegistryStateService {
   gatingFilter = signal<Set<string>>(new Set());
   sectorFilter = signal<Set<string>>(new Set());
   regionFilter = signal<Set<string>>(new Set());
-  intakeProjectId = signal<string>('');
-  activeIngestion = signal<{ fileName: string, progress: number, status: string, docId?: string } | null>(null);
 
   // Datasets (using Signals - null representing loading sentinel)
   projects = signal<Project[] | null>(null);
@@ -455,17 +453,6 @@ export class RegistryStateService {
 
     console.log('[Registry filteredProjects] Filtered projects result count:', result.length);
     return result;
-  });
-
-  intakeProjectValid = computed(() => {
-    const id = this.intakeProjectId();
-    if (!id) return false;
-    if (/^[a-f0-9]{24}$/i.test(id)) return true;
-    const list = this.projects();
-    if (list) {
-      return list.some(p => String(p.id) === String(id));
-    }
-    return false;
   });
 
   constructor() {
@@ -1507,106 +1494,6 @@ export class RegistryStateService {
       console.warn('[Registry] Presigned download unavailable; using the public EPIC copy:', failure);
     }
     return epicPublicDownloadUrl(documentId);
-  }
-
-  // Handle ingestion
-  async uploadDocument(file: File) {
-    if (!this.intakeProjectValid()) return;
-
-    this.activeIngestion.set({ fileName: file.name, progress: 10, status: 'Uploading...' });
-
-    const formData = new FormData();
-    formData.append('upfile', file);
-    formData.append('project', this.intakeProjectId());
-
-    try {
-      const basePath = this.getBasePath();
-      
-      // Sim upload progress
-      const intervalSim = setInterval(() => {
-        const cur = this.activeIngestion();
-        if (cur && cur.progress < 40) {
-          this.activeIngestion.set({ ...cur, progress: cur.progress + 5, status: 'Uploading...' });
-        } else {
-          clearInterval(intervalSim);
-        }
-      }, 300);
-
-      const response = await fetch(`${basePath}/documents/extract`, {
-        method: 'POST',
-        body: formData
-      });
-
-      clearInterval(intervalSim);
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Upload failed (status: ${response.status})`);
-      }
-      
-      const data = await response.json();
-
-      this.activeIngestion.set({ fileName: file.name, progress: 50, status: 'Queued for extraction...', docId: data.docId });
-      this.pollExtractionStatus(data.docId);
-    } catch (err: any) {
-      this.activeIngestion.set({ fileName: file.name, progress: 100, status: `Error: ${err.message}` });
-    }
-  }
-
-  pollExtractionStatus(docId: string) {
-    const basePath = this.getBasePath();
-    // Bounded. Extraction is a batch job that may not be running at all, and an unbounded
-    // poll left the UI pinned at 95% "Extracting..." forever with no way to tell the
-    // difference between slow and never.
-    const POLL_INTERVAL_MS = 2500;
-    const MAX_POLL_MS = 5 * 60 * 1000;
-    const maxAttempts = Math.ceil(MAX_POLL_MS / POLL_INTERVAL_MS);
-    let attempts = 0;
-
-    const interval = setInterval(async () => {
-      attempts++;
-      try {
-        const res = await fetch(`${basePath}/documents/${docId}`);
-        if (!res.ok) return;
-        const doc = await res.json();
-
-        const cur = this.activeIngestion();
-        let currentProg = cur ? cur.progress : 50;
-        if (currentProg < 95) currentProg += 5;
-
-        if (doc.contentExtracted) {
-          clearInterval(interval);
-          this.activeIngestion.set({ fileName: doc.displayName, progress: 100, status: 'Extraction complete!' });
-          this.loadData();
-          return;
-        }
-        if (doc.contentExtractionError) {
-          clearInterval(interval);
-          this.activeIngestion.set({ fileName: doc.displayName, progress: 100, status: `Extraction failed: ${doc.contentExtractionError}` });
-          return;
-        }
-        if (attempts >= maxAttempts) {
-          clearInterval(interval);
-          this.activeIngestion.set({
-            fileName: doc.displayName,
-            progress: 100,
-            status: 'Upload succeeded, but text extraction has not completed. The file is stored and will be processed when the extraction job next runs.'
-          });
-          this.loadData();
-          return;
-        }
-        this.activeIngestion.set({ fileName: doc.displayName, progress: currentProg, status: 'Extracting text layout with Docling...' });
-      } catch {
-        if (attempts >= maxAttempts) {
-          clearInterval(interval);
-          this.activeIngestion.set({
-            fileName: '',
-            progress: 100,
-            status: 'Upload succeeded, but the extraction status could not be confirmed.'
-          });
-        }
-      }
-    }, POLL_INTERVAL_MS);
   }
 
   // Geospatial coordinate validation and healing helper
