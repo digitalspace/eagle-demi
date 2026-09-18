@@ -13,7 +13,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
 
 const CONTAINER = 'notifications';
 const PARTITION_FIELD = 'id';
@@ -82,6 +82,28 @@ async function listByIds(access, ids, { full = false } = {}) {
   return items;
 }
 
+/**
+ * Notifications carrying a decision dated no later than `now`, newest first, at most `limit`.
+ *
+ * Sorted HERE: `decisionDate` is not an indexed path, so Cosmos cannot ORDER BY it. The container
+ * holds a few dozen rows, so the filter's scan is cheap.
+ */
+async function listDecisions(access, { limit, now }) {
+  const spec = selectWhere({
+    access,
+    partitionField: SCOPE_FIELD,
+    criteria: [
+      isDefinedAndNotNull('decisionDate'),
+      { clause: 'c.decisionDate <= @now', params: [{ name: '@now', value: now.toISOString() }] }
+    ],
+    select: selectFor(CONTAINER, access, PARTITION_FIELD)
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items
+    .sort((a, b) => Date.parse(b.decisionDate) - Date.parse(a.decisionDate))
+    .slice(0, limit);
+}
+
 async function count(access, filters = {}) {
   const { items } = await cosmos.query(CONTAINER,
     countWhere({ access, partitionField: SCOPE_FIELD, criteria: criteriaFor(filters) }), {});
@@ -101,6 +123,7 @@ module.exports = {
   getById,
   list,
   listByIds,
+  listDecisions,
   count,
   upsert
 };
