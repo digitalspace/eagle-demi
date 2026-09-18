@@ -10,8 +10,8 @@ import {
 } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import type { GridColumn } from '../../../search/grid-types';
-import { DEFAULT_RECORD, RECORD_TYPES, toSearchParams } from '../../../search/grid-url';
-import { recordConfig } from '../../../search/record-types';
+import { toSearchParams } from '../../../search/grid-url';
+import { savedQueryRecordLabel, savedQueryUrl } from '../../../search/saved-query';
 import { UserdataService, type SavedQuery } from '../../../services/userdata.service';
 import { ADVANCED_FILTERS_ID } from './advanced-filters.component';
 import { SavedQueryDialogComponent } from '../saved-query-dialog.component';
@@ -94,15 +94,13 @@ export class GridToolbarComponent {
     this.saveDialog()?.open(event.currentTarget as HTMLElement, this.currentParams());
   }
 
-  /** The record type a saved query replays, read back out of its own params. */
   recordLabel(query: SavedQuery): string {
-    const record = new URLSearchParams(query.params).get('record');
-    return recordConfig(RECORD_TYPES.find((type) => type === record) ?? DEFAULT_RECORD).label;
+    return savedQueryRecordLabel(query);
   }
 
   openQuery(query: SavedQuery): void {
     this.queriesOpen.set(false);
-    void this.router.navigateByUrl(`/search?${query.params}`);
+    void this.router.navigateByUrl(savedQueryUrl(query));
   }
 
   deleteQuery(query: SavedQuery): void {

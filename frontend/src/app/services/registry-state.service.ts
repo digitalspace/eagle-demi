@@ -1740,13 +1740,6 @@ export class RegistryStateService {
   }
 
   /**
-   * Log out — and, now that the role toggle is gone, the ONLY way to see the public site.
-   *
-   * Local state is cleared BEFORE the redirect rather than left to it. This used to lean entirely
-   * on `window.location.href`, so every path that did not navigate — a null client, a blocked
-   * redirect — left the header reading "Logged in as …" over a session that no longer existed.
-   */
-  /**
    * Drop every trace of the session from local state.
    *
    * Split out of `logout()` so it can be asserted without a test navigating the runner away — the
@@ -1765,24 +1758,46 @@ export class RegistryStateService {
     this.resetSelection();
   }
 
+  /**
+   * The end-session URL for this session, or null when there is no Keycloak client to end.
+   *
+   * Split out of `logout()` for the reason `clearAuthState()` is: it can be read back in a test
+   * without navigating the runner away.
+   *
+   * `client_id` + `post_logout_redirect_uri` is the pair this realm acts on — it answers 302 back
+   * to the app. A bare `redirect_uri` is ignored, which left the browser sitting on Keycloak's "Do
+   * you want to log out?" page, and an id_token_hint that has expired is a 400, so the hint goes
+   * only when a token is in hand. These are the parameters keycloak-js puts in `createLogoutUrl`;
+   * they are built here so the URL is a value this code can be asked for.
+   */
+  logoutUrl(): string | null {
+    if (!this.keycloak) return null;
+
+    const params = new URLSearchParams({
+      client_id: this.config.KEYCLOAK_CLIENT_ID || 'eagle-admin-console',
+      post_logout_redirect_uri: window.location.origin
+    });
+    if (this.keycloak.idToken) params.set('id_token_hint', this.keycloak.idToken);
+
+    return `${this.config.KEYCLOAK_URL}/realms/${this.config.KEYCLOAK_REALM}/protocol/openid-connect/logout?${params}`;
+  }
+
+  /**
+   * Log out — and, now that the role toggle is gone, the ONLY way to see the public site.
+   *
+   * Local state is cleared BEFORE the redirect rather than left to it. This used to lean entirely
+   * on `window.location.href`, so every path that did not navigate — a null client, a blocked
+   * redirect — left the header reading "Logged in as …" over a session that no longer existed.
+   */
   logout() {
     this.clearAuthState();
 
-    if (this.keycloak) {
-      const idToken = this.keycloak.idToken;
-      const clientId = this.config.KEYCLOAK_CLIENT_ID || 'eagle-admin-console';
-      const redirectUri = window.location.origin;
+    const keycloak = this.keycloak;
+    // Read before clearToken(), which drops the id token the hint is built from.
+    const logoutUrl = this.logoutUrl();
 
-      this.keycloak.clearToken();
-
-      let logoutUrl = `${this.config.KEYCLOAK_URL}/realms/${this.config.KEYCLOAK_REALM}/protocol/openid-connect/logout`;
-      
-      if (idToken) {
-        logoutUrl += `?id_token_hint=${idToken}&post_logout_redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${encodeURIComponent(clientId)}`;
-      } else {
-        logoutUrl += `?redirect_uri=${encodeURIComponent(redirectUri)}&client_id=${encodeURIComponent(clientId)}`;
-      }
-
+    if (keycloak && logoutUrl) {
+      keycloak.clearToken();
       window.location.href = logoutUrl;
       return;
     }

@@ -4,7 +4,8 @@ import { DatePipe } from '@angular/common';
 import type * as Leaflet from 'leaflet';
 import 'leaflet';
 import { RegistryStateService, visibleRoles } from '../../services/registry-state.service';
-import { UserdataService, SavedLasso } from '../../services/userdata.service';
+import { UserdataService, SavedLasso, SavedQuery } from '../../services/userdata.service';
+import { savedQuerySummary, savedQueryUrl } from '../../search/saved-query';
 import { LinksService, ShortLink, isMine } from '../../services/links.service';
 import { Prefs, LANDING_OPTIONS, PER_PAGE_OPTIONS, DEFAULT_PREFS, readPrefs, writePrefs } from '../../shell/prefs';
 
@@ -117,6 +118,18 @@ export class MyWorkspaceComponent implements OnInit, OnDestroy {
       this.selectedSlug.set((areas[i + 1] ?? areas[i - 1])?.slug ?? null);
     }
     return this.userdata.deleteLasso(area.slug);
+  }
+
+  querySummary(query: SavedQuery): string {
+    return savedQuerySummary(query);
+  }
+
+  openQuery(query: SavedQuery) {
+    return this.router.navigateByUrl(savedQueryUrl(query));
+  }
+
+  deleteQuery(query: SavedQuery) {
+    return this.userdata.deleteQuery(query.slug);
   }
 
   setLanding(event: Event) {

@@ -98,6 +98,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   availableRegions = ['Vancouver Island', 'Lower Mainland', 'Thompson', 'Kootenay', 'Cariboo', 'Skeena', 'Omineca', 'Okanagan', 'Peace'];
 
   public map: any = null;
+  /** The map is built in a timeout after the view, so effects that draw on it track this instead of `map`. */
+  private readonly mapReady = signal(false);
   private regionsLayer: any = null;
   private boundariesLayers = new Map<string, any>();
   private markerClusterGroup: any = null;
@@ -389,7 +391,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       const layers = this.service.activeBoundaryLayers();
       const cache = this.service.loadedBoundariesGeoJSON(); // Synchronously track cache updates!
       const regionsGeojson = this.service.regionalBoundariesGeoJSON();
-      
+      this.mapReady();
+
       if (!this.map) return;
 
       // Handle environmental regions ('regions' layer)
@@ -446,6 +449,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     // takes the shape off the map with it.
     effect(() => {
       const ring = this.service.lassoPolygon();
+      this.mapReady();
       if (!this.map) return;
       if (this.lassoLayer) {
         try {
@@ -468,6 +472,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     // Reactive effect to render or remove active B.C. Wildfires
     effect(() => {
       const active = this.showWildfires();
+      this.mapReady();
       if (!this.map) return;
       if (active) {
         this.loadWildfiresOnMap();
@@ -482,6 +487,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     // Invasive species observations come as tiles, so the layer only goes on and off the map.
     effect(() => {
       const active = this.showInvasives();
+      this.mapReady();
       if (!this.map) return;
       if (active) {
         this.map.addLayer(this.invasivesWmsLayer());
@@ -643,6 +649,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         this.loadRegionalBoundaries();
       }
 
+      this.mapReady.set(true);
     } catch (err) {
       console.error('Leaflet Map initialization failed:', err);
     }
@@ -653,6 +660,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       if (this.map) {
         this.map.remove();
         this.map = null;
+        this.mapReady.set(false);
         this.regionsLayer = null;
         this.boundariesLayers.clear();
         this.markerClusterGroup = null;

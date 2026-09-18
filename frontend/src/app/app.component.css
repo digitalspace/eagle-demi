@@ -18,10 +18,27 @@
   box-shadow: var(--surface-shadow-medium);
 }
 
-/* Taken out of the page, not slid off it or narrowed to a stub: an off-screen rail still holds
-   focus and is still read out, and a stub still costs the content column its width. */
+/* Off-canvas and closed, the drawer is taken out of the page rather than slid off it: an
+   off-screen rail still holds focus and is still read out. Set only below the breakpoint. Above it
+   a collapsed rail narrows to a strip instead (`.app-sidebar[data-open='false']`), which keeps its
+   toggle on screen — a rail hidden this way has no control left that can bring it back. */
 .app-sidebar[data-collapsed] {
   display: none;
+}
+
+/* Animate the rail's collapse/expand (vendor toggles flex-basis + width only, via
+   .app-sidebar[data-open='false']). Desktop only — below SHELL_NARROW_QUERY the rail goes
+   off-canvas instead (.app-sidebar[data-drawer]) and has no width change to animate. */
+@media (prefers-reduced-motion: no-preference) and (min-width: 900px) {
+  .app-sidebar {
+    transition: flex-basis 180ms cubic-bezier(0.2, 0, 0, 1), width 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+}
+
+/* Vendor already clips .app-sidebar with overflow: hidden; stop link labels wrapping to a second
+   line as the width animates, so they clip cleanly instead of reflowing mid-transition. */
+.app-sidebar__link {
+  white-space: nowrap;
 }
 
 .app-header__menu {

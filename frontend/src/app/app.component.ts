@@ -35,8 +35,13 @@ export class AppComponent {
   navOpen = signal(readNavOpen());
   narrow = signal(false);
   drawerOpen = signal(false);
-  /** Collapsed and off-canvas-closed come to the same thing for the page: no rail in the row. */
-  navHidden = computed(() => this.narrow() ? !this.drawerOpen() : !this.navOpen());
+  /** What the rail's own toggle shows and flips: the drawer off-canvas, the rail above it. */
+  navExpanded = computed(() => this.narrow() ? this.drawerOpen() : this.navOpen());
+  /**
+   * Off-canvas and closed the rail leaves the page entirely. Collapsed above the breakpoint it
+   * stays in the row as a narrow strip, because the toggle inside it is the only way to reopen it.
+   */
+  navHidden = computed(() => this.narrow() && !this.drawerOpen());
   // Keycloak check-sso is async; rendering the gate before it settles flashes sign-in at staff.
   authSettled = signal(false);
   accountOpen = signal(false);

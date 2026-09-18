@@ -5,7 +5,7 @@ import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter, Router } from '@angular/router';
 import { MyWorkspaceComponent } from './my-workspace.component';
 import { RegistryStateService } from '../../services/registry-state.service';
-import { UserdataService, SavedLasso } from '../../services/userdata.service';
+import { UserdataService, SavedLasso, SavedQuery } from '../../services/userdata.service';
 import { LinksService, ShortLink } from '../../services/links.service';
 import { PREFS_KEY } from '../../shell/prefs';
 
@@ -14,6 +14,9 @@ const SKEENA: number[][] = [[-128, 54], [-127, 54], [-127.5, 54.8]];
 
 const lasso = (slug: string, name: string, ring: number[][]): SavedLasso =>
   ({ slug, name, ring, updatedAt: '2026-08-30T00:00:00.000Z' });
+
+const query = (slug: string, name: string, params: string): SavedQuery =>
+  ({ slug, name, params, savedAt: '2026-08-30T00:00:00.000Z' });
 
 const link = (id: string, createdBy: string, personal = false): ShortLink => ({
   id,
@@ -53,6 +56,7 @@ describe('MyWorkspaceComponent', () => {
     spyOn(links, 'load').and.resolveTo();
     router = TestBed.inject(Router);
     spyOn(router, 'navigate').and.resolveTo(true);
+    spyOn(router, 'navigateByUrl').and.resolveTo(true);
     fixture = TestBed.createComponent(MyWorkspaceComponent);
   });
 
@@ -149,6 +153,59 @@ describe('MyWorkspaceComponent', () => {
     expect(remove).toHaveBeenCalledWith('peace-valley');
   });
 
+  it('lists every saved query with what it narrows to, and counts them', () => {
+    const el = signedIn();
+    userdata.queries.set([
+      query('dam-docs', 'Dam documents', 'record=documents&keywords=dam&type=Letter'),
+      query('open-projects', 'Open projects', 'record=projects')
+    ]);
+    fixture.detectChanges();
+
+    const row = Array.from(el.querySelectorAll('li')).find(li => li.textContent?.includes('Dam documents'))!;
+    expect(el.textContent).toContain('Open projects');
+    expect(row.textContent).toContain('Documents · “dam” · 1 filter');
+    expect(Array.from(el.querySelectorAll('.panel__title .pill--info')).map(p => p.textContent?.trim())).toEqual(['2']);
+  });
+
+  it('opens a saved query on the search screen with the params it was saved with', () => {
+    const el = signedIn();
+    userdata.queries.set([query('dam-docs', 'Dam documents', 'record=documents&keywords=dam')]);
+    fixture.detectChanges();
+
+    const open = Array.from(el.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Open in search');
+    expect(open!.getAttribute('aria-label')).toBe('Open Dam documents in search');
+    open!.click();
+
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/search?record=documents&keywords=dam');
+  });
+
+  it('deletes a saved query by its slug and drops its row', () => {
+    const el = signedIn();
+    userdata.queries.set([
+      query('dam-docs', 'Dam documents', 'record=documents'),
+      query('open-projects', 'Open projects', 'record=projects')
+    ]);
+    fixture.detectChanges();
+
+    const remove = spyOn(userdata, 'deleteQuery').and.resolveTo(true);
+    const row = Array.from(el.querySelectorAll('li')).find(li => li.textContent?.includes('Dam documents'))!;
+    Array.from(row.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Delete')!.click();
+    // The API reload the delete triggers is stubbed out, so stand in for it.
+    userdata.queries.set([query('open-projects', 'Open projects', 'record=projects')]);
+    fixture.detectChanges();
+
+    expect(remove).toHaveBeenCalledWith('dam-docs');
+    expect(el.textContent).not.toContain('Dam documents');
+    expect(el.textContent).toContain('Open projects');
+  });
+
+  it('points at Search when no query has been saved', () => {
+    const el = signedIn();
+    expect(el.textContent).toContain('Run a search on');
+    expect(Array.from(el.querySelectorAll('.panel__title .pill--info')).map(p => p.textContent?.trim())).toEqual(['0']);
+    expect(Array.from(el.querySelectorAll('button')).some(b => b.textContent?.trim() === 'Open in search')).toBe(false);
+  });
+
   // The API lowercases createdBy; the token claim is not guaranteed to be, so a case-sensitive
   // comparison would leave this list empty for everyone.
   it('lists my links only, badging the personal one', () => {
@@ -159,7 +216,8 @@ describe('MyWorkspaceComponent', () => {
     expect(fixture.componentInstance.myLinks().map(l => l.id)).toEqual(['mine-a']);
     expect(el.textContent).toContain('mine-a');
     expect(el.textContent).not.toContain('theirs-a');
-    expect(el.querySelectorAll('.pill--info').length).toBe(1);
+    // Scoped to the link rows: the saved-query heading carries a count pill of the same kind.
+    expect(el.querySelectorAll('.kv-row__key .pill--info').length).toBe(1);
   });
 
   it('renders real roles as chips in one wrapping row, dropping the Keycloak boilerplate', () => {
