@@ -41,6 +41,7 @@ paths:
               - Comment
               - RecentActivity
               - ProjectNotification
+              - HomeFeed
         - name: q
           in: query
           required: false
@@ -98,10 +99,28 @@ paths:
           in: query
           required: false
           description: >-
-            `true` on dataset=RecentActivity answers the home-page strip: up to four rows, pinned
-            first, newest by dateAdded.
+            `true` on dataset=RecentActivity answers the home-page strip: up to `pageSize` rows
+            (four when absent), pinned first, newest by dateAdded.
           schema:
             type: boolean
+        - name: pageSize
+          in: query
+          required: false
+          description: >-
+            Rows per page, 10 when absent. On `top=true` and on dataset=HomeFeed it is the whole
+            row count instead: an integer from 1 to 20, four when absent. Any other value is a 400
+            there, never clamped.
+
+
+            dataset=HomeFeed answers the home-page feed: pinned updates first, as on `top=true`,
+            then the newest News updates and decisions (a project's EA decision, or a project
+            notification's decision) merged by date, newest first. A decision dated after today is
+            left out. Every row has one shape: `{kind, id, projectId, projectName, date, headline,
+            content, documentUrl}`, where `kind` is `update` or `decision` and any absent value is
+            null. HomeFeed takes no keywords and no filters.
+          schema:
+            type: integer
+            minimum: 1
         - name: _id
           in: query
           required: false

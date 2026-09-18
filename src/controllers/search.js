@@ -443,6 +443,24 @@ function cosmosRows(entity, rows, access, schemaName, decorate) {
 }
 
 /**
+ * One `projects` INDEX hit, redacted for this caller. The catalog is keyed on INDEX field names
+ * because the data source renames columns (docs/rbac-architecture.md §2 item 9).
+ *
+ * The index has no map type, so the dials arrive as a JSON string. A malformed one fails closed to
+ * no dials — every field at its `defaultVis`, never the raw row. `dialsForIndex` restates the stored
+ * keys as index ones, or a dial would be inert on exactly the renamed fields.
+ */
+function redactIndexProject(hit, access) {
+  let dials;
+  try {
+    dials = JSON.parse(hit.vis || '{}');
+  } catch {
+    dials = {};
+  }
+  return redactForAccess('index-projects', { ...hit, vis: dialsForIndex(dials) }, access);
+}
+
+/**
  * Label update rows with the project each announces, under the CALLER's access — same rule as
  * `labelWithProjectNames`, one id space over: `updates.projectId` holds the EAGLE id, so the lookup
  * is `listByEagleIds` and not `listByIds`.
@@ -549,6 +567,124 @@ async function openPeriods({ access, pageSize }) {
   };
 }
 
+/** The most rows `top=true` and dataset=HomeFeed answer. A longer list is a page, not a strip. */
+const TOP_MAX_ROWS = 20;
+
+/**
+ * `pageSize` on a strip read: absent is `updatesRepo.TOP_ROWS`, so every existing `top=true` caller
+ * is unchanged. Anything but an integer from 1 to TOP_MAX_ROWS is REFUSED rather than clamped.
+ */
+function stripLimit(query) {
+  const raw = firstValue(query.pageSize);
+  if (raw === undefined) return { limit: updatesRepo.TOP_ROWS };
+  const n = Number(raw);
+  if (!/^\d+$/.test(String(raw)) || n < 1 || n > TOP_MAX_ROWS) {
+    return { error: `pageSize must be an integer from 1 to ${TOP_MAX_ROWS} here, not '${raw}'` };
+  }
+  return { limit: n };
+}
+
+/** The update type the home feed carries beside decisions; comment periods have their own rail. */
+const FEED_UPDATE_TYPE = 'News';
+
+const byDateDesc = (a, b) => Date.parse(b.date) - Date.parse(a.date);
+const isoDate = (value) => (value ? new Date(value).toISOString() : null);
+
+/**
+ * The newest project decisions this caller may see, dated no later than today, as feed rows.
+ *
+ * From the `projects` INDEX, not Cosmos: `decisionDate` is filterable and sortable there and is not
+ * an indexed path on the container, where an ORDER BY on it cannot run at all.
+ */
+async function projectDecisionRows(access, limit, now) {
+  const acl = filterFor(access, 'id');
+  if (acl.empty) return [];
+  // Through the same builders as a `dataset=Project` URL, so the ACL and the field gates are theirs.
+  const { filter } = eagleQuery.buildFilter(
+    { 'and[decisionDateEnd]': now.toISOString() }, 'Project', acl, access);
+  const { orderby } = eagleQuery.buildOrderBy('-decisionDate', 'Project', false, access);
+  const { items } = await aiSearch.searchProjects({
+    filter, orderby, skip: 0, keywords: '', matchAll: true, top: limit
+  });
+  return items
+    .map(hit => redactIndexProject(hit, access))
+    .filter(doc => doc.decisionDate)
+    .map(doc => {
+      const projectId = doc.legacyEagleId || String(doc.id);
+      return {
+        kind: 'decision',
+        id: projectId,
+        projectId,
+        projectName: doc.name || doc.displayName || null,
+        date: isoDate(doc.decisionDate),
+        headline: doc.eacDecision || null,
+        content: null,
+        documentUrl: null
+      };
+    });
+}
+
+/** Notification decisions as feed rows. A notification names its project loosely, by label. */
+async function notificationDecisionRows(access, limit, now) {
+  const rows = await notificationsRepo.listDecisions(access, { limit, now });
+  const dated = redactAllForAccess('notifications', rows, access).filter(n => n.decisionDate);
+  // A mirrored row with a garbage date would make isoDate throw and 502 the whole home page.
+  const valid = dated.filter(n => !Number.isNaN(new Date(n.decisionDate).getTime()));
+  if (valid.length < dated.length) {
+    logger.warn('[search] home feed dropped notification decisions with an unparseable decisionDate', {
+      ids: dated.filter(n => !valid.includes(n)).map(n => String(n.id))
+    });
+  }
+  return valid
+    .map(n => ({
+      kind: 'decision',
+      id: String(n.id),
+      projectId: n.associatedProjectId || null,
+      projectName: n.associatedProjectName || n.name || null,
+      date: isoDate(n.decisionDate),
+      headline: n.decision || null,
+      content: null,
+      documentUrl: null
+    }));
+}
+
+/**
+ * The home feed: pinned updates first, exactly as the `top=true` strip, then the newest News updates
+ * and decisions merged by date to fill the rest. Every half reads under the caller's own access.
+ */
+async function homeFeed({ access, query }) {
+  if (query.keywords || query.q) return { error: 'dataset=HomeFeed does not take keywords' };
+  const { limit, error } = stripLimit(query);
+  if (error) return { error };
+
+  const now = new Date();
+  const [top, projectDecisions, notificationDecisions] = await Promise.all([
+    updatesRepo.listTop(access, { limit, types: [FEED_UPDATE_TYPE] }),
+    projectDecisionRows(access, limit, now),
+    notificationDecisionRows(access, limit, now)
+  ]);
+
+  const project = await updateProjects(access, top);
+  const updates = cosmosRows('updates', top, access, 'RecentActivity', project).map(row => ({
+    kind: 'update',
+    id: row._id,
+    projectId: row.project ? row.project._id : null,
+    projectName: row.project ? row.project.name : null,
+    date: isoDate(row.dateAdded),
+    headline: row.headline || null,
+    content: row.content || null,
+    documentUrl: row.documentUrl || null
+  }));
+
+  // `listTop` answers pinned rows first; those hold their place, and only the rest compete on date.
+  const pinnedCount = top.filter(row => row.pinned === true).length;
+  const rest = [...updates.slice(pinnedCount), ...projectDecisions, ...notificationDecisions]
+    .sort(byDateDesc)
+    .slice(0, limit - pinnedCount);
+  const rows = [...updates.slice(0, pinnedCount), ...rest];
+  return { searchResults: rows, count: rows.length, applied: [] };
+}
+
 const COSMOS_DATASETS = {
   /** Every lookup row. eagle-public asks for all 250-odd in one page and resolves ids client-side. */
   List: (ctx) => listRows(ctx, listsRepo.KINDS.LIST),
@@ -637,7 +773,9 @@ const COSMOS_DATASETS = {
     }
 
     if (String(query.top) === 'true') {
-      const rows = await updatesRepo.listTop(access);
+      const { limit, error } = stripLimit(query);
+      if (error) return { error };
+      const rows = await updatesRepo.listTop(access, { limit });
       // The count IS the answer here, not a page of a larger set: `listTop` returns the whole strip.
       return {
         searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
@@ -672,6 +810,9 @@ const COSMOS_DATASETS = {
       applied: [...(projectId ? ['project'] : []), ...(types !== null ? ['type'] : [])]
     };
   },
+
+  /** Pinned updates, then News updates and decisions by date. See homeFeed. */
+  HomeFeed: homeFeed,
 
   async ProjectNotification({ access, query, pageNum, pageSize, sortBy }) {
     const id = filterValue(query, '_id');
@@ -1079,20 +1220,8 @@ exports.search = async (req, res) => {
 
             if (items.length > 0) {
               const searchResults = items.map(hit => {
-                // Redact the INDEX row, then map, exactly as the Cosmos branch below does. The
-                // catalog is keyed on INDEX field names because the data source renames columns
-                // (docs/rbac-architecture.md §2 item 9).
-                // The index has no map type, so the dials arrive as a JSON string. A malformed one
-                // fails closed to no dials — every field at its `defaultVis`, never the raw row.
-                // `dialsForIndex` restates the stored keys as index ones; the data source renames
-                // columns, so an untranslated dial would be inert on exactly the renamed fields.
-                let dials;
-                try {
-                  dials = JSON.parse(hit.vis || '{}');
-                } catch {
-                  dials = {};
-                }
-                const doc = redactForAccess('index-projects', { ...hit, vis: dialsForIndex(dials) }, access);
+                // Redact the INDEX row, then map, exactly as the Cosmos branch below does.
+                const doc = redactIndexProject(hit, access);
                 return {
                 // THE EAGLE ObjectId — eagle-public re-fetches the project from eagle-api by it.
                 // Falls back to the DEMI id for a Track-only project. See

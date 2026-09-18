@@ -45,7 +45,7 @@ const UNPINNED = {
   params: []
 };
 
-/** eagle-api answers `?top=true` with at most this many rows in total — see listTop. */
+/** eagle-api answers `?top=true` with at most this many rows in total — listTop's default. */
 const TOP_ROWS = 4;
 
 /** Nobody has claimed the notification yet. An absent field and an explicit null both count. */
@@ -194,29 +194,29 @@ async function count(access, { projectId, keywords, types } = {}) {
 }
 
 /**
- * The home-page strip: pinned updates newest first, topped up with unpinned ones to TOP_ROWS.
+ * The home-page strip: pinned updates newest first, topped up with unpinned ones to `limit`.
  *
- * FOUR ROWS IN TOTAL, not four of each. That is what eagle-api's `/api/public/recentActivity?top=true`
- * answers (`api/controllers/recentActivity.js:75-81` runs the pinned and unpinned pipelines at
- * `$limit: 4` each and then slices the unpinned to `4 - pinned.length`), and this endpoint replaces
- * that URL — eight rows would silently double the strip.
+ * `limit` ROWS IN TOTAL, not of each — what eagle-api's `/api/public/recentActivity?top=true` answers
+ * at its fixed four (`api/controllers/recentActivity.js:75-81`). `types` narrows only the unpinned
+ * top-up: a pinned row is an editor's choice and leads whatever its type.
  */
-async function listTop(access) {
+async function listTop(access, { limit = TOP_ROWS, types } = {}) {
   // Translated once for both halves of the strip, not per query.
   const scoped = await inEagleIdSpace(access);
-  const [pinned, unpinned] = await Promise.all([PINNED, UNPINNED].map(async (state) => {
-    const spec = selectWhere({
-      access: scoped,
-      partitionField: SCOPE_FIELD,
-      criteria: [state],
-      select: selectFor(CONTAINER, access, PARTITION_FIELD),
-      orderBy: DEFAULT_ORDER
-    });
-    const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ pageSize: TOP_ROWS }));
-    return items.slice(0, TOP_ROWS);
-  }));
+  const [pinned, unpinned] = await Promise.all([[PINNED], [UNPINNED, ...typeCriteria(types)]]
+    .map(async (criteria) => {
+      const spec = selectWhere({
+        access: scoped,
+        partitionField: SCOPE_FIELD,
+        criteria,
+        select: selectFor(CONTAINER, access, PARTITION_FIELD),
+        orderBy: DEFAULT_ORDER
+      });
+      const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ pageSize: limit }));
+      return items.slice(0, limit);
+    }));
 
-  return [...pinned, ...unpinned.slice(0, Math.max(0, TOP_ROWS - pinned.length))];
+  return [...pinned, ...unpinned.slice(0, Math.max(0, limit - pinned.length))];
 }
 
 /**
