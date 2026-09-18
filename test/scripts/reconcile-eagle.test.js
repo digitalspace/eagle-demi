@@ -833,4 +833,23 @@ test('slugOf reads the engagement slug off a metURL', async (t) => {
       assert.strictEqual(slugOf(raw), null, `${JSON.stringify(raw)} carries no slug`);
     }
   });
+
+  await t.test('answers null, not a throw, on a malformed percent escape', () => {
+    assert.strictEqual(slugOf('https://engage.example/bad%zz'), null);
+  });
+});
+
+test('a malformed metURL escape is unknown, and does not fail the sibling period', async () => {
+  const summary = await reconcile(['--engage'], engageDeps({
+    rows: [
+      { id: 'CP-badescape', projectId: '207', isMet: true, metURL: 'https://engage.example/bad%zz' },
+      MET_PERIODS[0]
+    ],
+    respond: respondOnlyAliveSlug
+  }));
+
+  assert.deepStrictEqual(summary.engageOrphans.unknown, ['CP-badescape']);
+  // The sibling with a good slug still made its round trip and resolved live.
+  assert.strictEqual(summary.engageOrphans.checked, 1);
+  assert.deepStrictEqual(summary.engageOrphans.dead, []);
 });

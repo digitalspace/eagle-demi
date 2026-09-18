@@ -84,14 +84,22 @@ function parseArgs(argv) {
  * The engagement slug an `isMet` period points at, from the `metURL` the mirror stores.
  *
  * The last non-empty path segment, with any query or fragment cut first. `null` for a URL with no
- * segment to take — which is reported as unknown, never as an orphan.
+ * segment to take, OR one whose segment is not a valid percent escape — both are reported as
+ * unknown, never as an orphan.
  */
 function slugOf(metURL) {
   const raw = String(metURL || '').trim();
   if (!raw) return null;
   const path = raw.split('#')[0].split('?')[0];
   const segments = path.replace(/^[a-z]+:\/\/[^/]+/i, '').split('/').filter(Boolean);
-  return segments.length ? decodeURIComponent(segments[segments.length - 1]) : null;
+  if (!segments.length) return null;
+  try {
+    return decodeURIComponent(segments[segments.length - 1]);
+  } catch {
+    // A malformed escape (e.g. `%zz`) throws URIError; the caller must not see that, or one bad
+    // mirrored URL fails the whole reconcile run instead of reporting this one period as unknown.
+    return null;
+  }
 }
 
 /**
