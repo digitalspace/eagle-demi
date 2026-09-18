@@ -28,7 +28,7 @@ const PER_PAGE_OPTIONS = [6, 12, 24];
 /** The SCREENS keys in frontend/src/app/shell/screens.ts, plus the `/developers` path that one
  * of them routes to — a landing preference is only ever one of these. */
 const LANDING_SCREENS = [
-  'map', 'index', 'content', 'summary', 'notify', 'links', 'rbac', 'developers', 'api', 'keys',
+  'map', 'search', 'summary', 'notify', 'links', 'rbac', 'developers', 'api', 'keys',
   'profile', 'sessions'
 ];
 const DEFAULT_PREFS = { landing: 'map', perPage: 6 };

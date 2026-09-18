@@ -185,6 +185,8 @@ test('user data controller', async (t) => {
 
     assert.deepStrictEqual(res.body.prefs, { landing: 'links', perPage: 24 });
     assert.strictEqual(res.body.lassos.length, 1);
+    assert.strictEqual(res.body.lassos[0].slug, 'mine');
+    assert.strictEqual(res.body.lassos[0].name, 'Mine');
     assert.deepStrictEqual(Object.keys(res.body.lassos[0]).sort(), ['name', 'ring', 'slug', 'updatedAt']);
   });
 
@@ -221,6 +223,8 @@ test('user data controller', async (t) => {
     await controller.getMyData(req(), res);
 
     assert.strictEqual(res.body.lassos.length, 1);
+    assert.strictEqual(res.body.lassos[0].slug, 'mine');
+    assert.strictEqual(res.body.lassos[0].name, 'Mine');
     assert.deepStrictEqual(res.body.queries, [{
       slug: 'wildlife-docs',
       name: 'Wildlife Docs',
@@ -367,13 +371,13 @@ test('user data controller', async (t) => {
     t.mock.method(userdata, 'put', async (userId, item) => { owner = userId; record = item; return item; });
 
     const res = mockRes();
-    await controller.putPrefs(req({ body: { landing: 'index', perPage: 12 } }), res);
+    await controller.putPrefs(req({ body: { landing: 'search', perPage: 12 } }), res);
 
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(owner, ME);
     assert.strictEqual(record.id, 'prefs');
     assert.strictEqual(record.type, 'prefs');
-    assert.deepStrictEqual(res.body, { landing: 'index', perPage: 12 });
+    assert.deepStrictEqual(res.body, { landing: 'search', perPage: 12 });
   });
 
   await t.test('an unknown screen, an unoffered page size or a stray key is a 400', async () => {
@@ -382,6 +386,7 @@ test('user data controller', async (t) => {
 
     const bodies = [
       { landing: 'nope', perPage: 6 },
+      { landing: 'index', perPage: 6 },
       { landing: 'MAP', perPage: 6 },
       { landing: 6, perPage: 6 },
       { perPage: 6 },
