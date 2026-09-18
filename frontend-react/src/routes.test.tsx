@@ -3,25 +3,40 @@ import { render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { PREFS_KEY } from './shell/prefs';
 import { apiDocsTarget, routes } from './routes';
+import { json } from './test-http';
+import { queryWrapper } from './test-query';
 
 /**
  * The index search and document content screens were folded into one page, so their links and
  * bookmarks have to land on the same results the reader asked for.
  */
+function renderRouter(router: ReturnType<typeof createMemoryRouter>) {
+  const Wrapper = queryWrapper();
+  render(
+    <Wrapper>
+      <RouterProvider router={router} />
+    </Wrapper>,
+  );
+}
+
 async function go(url: string): Promise<string> {
   const router = createMemoryRouter(routes, { initialEntries: [url] });
-  render(<RouterProvider router={router} />);
+  renderRouter(router);
   await screen.findByRole('banner');
   return router.state.location.pathname + router.state.location.search;
 }
 
 beforeEach(() => {
   window.__env = { ENVIRONMENT: 'test', API_PATH: '/api' };
+  // The shell reads the shared project corpus on every screen, and each ported screen reads too:
+  // an empty list answers them all, so no test here reaches the network.
+  vi.stubGlobal('fetch', vi.fn(async () => json([])));
 });
 
 afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   delete window.__env;
 });
 
@@ -77,7 +92,7 @@ describe('redirects', () => {
     } as unknown as Location);
 
     const router = createMemoryRouter(routes, { initialEntries: ['/api-docs'] });
-    render(<RouterProvider router={router} />);
+    renderRouter(router);
     await screen.findByRole('banner');
 
     expect(replace).toHaveBeenCalledWith('/api/api-docs');
@@ -119,7 +134,7 @@ describe('the swagger bounce target', () => {
     } as unknown as Location);
 
     const router = createMemoryRouter(routes, { initialEntries: ['/api-docs'] });
-    render(<RouterProvider router={router} />);
+    renderRouter(router);
     await screen.findByRole('banner');
 
     expect(replace).toHaveBeenCalledWith('/api/api-docs');

@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createBrowserRouter, RouterProvider } from 'react-router';
 import { routes } from './routes';
 import { SessionProvider } from './session/SessionProvider';
@@ -7,11 +8,17 @@ import { SignIn } from './shell/SignIn';
 
 const router = createBrowserRouter(routes);
 
+// No retry: the Angular screens each made one read and showed their own error, so a silent second
+// attempt would change what a failure looks like.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
 export function App() {
   return (
-    <SessionProvider>
-      <Gate />
-    </SessionProvider>
+    <QueryClientProvider client={queryClient}>
+      <SessionProvider>
+        <Gate />
+      </SessionProvider>
+    </QueryClientProvider>
   );
 }
 

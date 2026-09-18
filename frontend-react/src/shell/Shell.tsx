@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
+import { LOAD_ERROR_MESSAGE, useProjects } from '../api/projects';
 import { config } from '../config';
 import { AccountMenu } from './AccountMenu';
 import { HowBuilt } from './HowBuilt';
@@ -40,8 +41,12 @@ export function Shell() {
   const [infoOpen, setInfoOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   const c = config();
+  const projects = useProjects();
 
   const screenKey = screenKeyOf(pathname);
+  // One outage, one alert: a screen that reports this read itself gets no bar above it as well.
+  const showLoadError =
+    projects.isError && !SCREENS.some((screen) => screen.key === screenKey && screen.ownsLoadError);
   /** What the rail's own toggle shows and flips: the drawer off-canvas, the rail above it. */
   const navExpanded = narrow ? drawerOpen : navOpen;
   /**
@@ -205,6 +210,17 @@ export function Shell() {
             className="app__main"
             style={screenKey === 'map' ? MAP_MAIN : SCREEN_MAIN}
           >
+            {/* An empty list is otherwise indistinguishable from a filtered-to-nothing result. */}
+            {showLoadError && (
+              <div className="callout callout--warning alert-row" role="alert">
+                <p>
+                  {LOAD_ERROR_MESSAGE}{' '}
+                  <button type="button" onClick={() => void projects.refetch()}>
+                    Retry
+                  </button>
+                </p>
+              </div>
+            )}
             <Outlet />
           </main>
         </div>

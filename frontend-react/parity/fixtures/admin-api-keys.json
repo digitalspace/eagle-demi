@@ -1,13 +1,35 @@
 [
   {
-    "id": "sample-key-1",
-    "name": "Sample integration key",
+    "id": "ak_00000000",
+    "name": "sample-map-frontend",
     "roles": ["demi-service-read"],
     "projectScope": null,
     "createdAt": "2026-01-15T00:00:00.000Z",
-    "createdBy": "sample.user@example.com",
-    "expiresAt": "2027-01-15T00:00:00.000Z",
+    "createdBy": "sample.one@example.invalid",
+    "expiresAt": "2028-01-15T00:00:00.000Z",
     "revokedAt": null,
     "lastUsedAt": "2026-06-01T00:00:00.000Z"
+  },
+  {
+    "id": "ak_11111111",
+    "name": "sample-batch-writer",
+    "roles": ["demi-service-write"],
+    "projectScope": ["901", "902"],
+    "createdAt": "2026-02-01T00:00:00.000Z",
+    "createdBy": "sample.two@example.invalid",
+    "expiresAt": "2026-10-05T00:00:00.000Z",
+    "revokedAt": null,
+    "lastUsedAt": null
+  },
+  {
+    "id": "ak_22222222",
+    "name": "sample-retired-client",
+    "roles": ["public"],
+    "projectScope": null,
+    "createdAt": "2025-11-20T00:00:00.000Z",
+    "createdBy": "sample.three@example.invalid",
+    "expiresAt": "2027-11-20T00:00:00.000Z",
+    "revokedAt": "2026-05-04T00:00:00.000Z",
+    "lastUsedAt": "2026-04-30T00:00:00.000Z"
   }
 ]

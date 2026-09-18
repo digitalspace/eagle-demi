@@ -64,14 +64,14 @@ export const routes: RouteObject[] = [
       legacySearch('index', {}),
       legacySearch('content', { record: 'documents', scope: 'inside' }),
       screen('summary', 'summary'),
-      screen('projects', 'project'),
+      { path: 'projects', lazy: async () => ({ Component: (await import('./screens/ProjectPicker')).ProjectPicker }) },
       screen('projects/:id', 'project'),
       screen('notify', 'notify'),
       screen('links', 'links'),
       screen('rbac', 'rbac'),
       // '/api' is the API proxy path locally, so the screen lives at /developers.
-      screen('developers', 'api'),
-      screen('keys', 'keys'),
+      { path: 'developers', lazy: async () => ({ Component: (await import('./screens/ApiDocs')).ApiDocs }) },
+      { path: 'keys', lazy: async () => ({ Component: (await import('./screens/ApiKeys')).ApiKeys }) },
       screen('sessions', 'sessions'),
       // The spec is a route under the API base; typing /api-docs here would land on the SPA
       // catch-all, so bounce to the API path, which works relative (via the edge) and absolute.

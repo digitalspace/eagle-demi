@@ -6,7 +6,7 @@
 //   node parity/capture.mjs [--angular <url>] [--react <url>] [--routes <list>] [--widths <list>]
 //                           [--out <dir>] [--timeout <ms>] [--dry-run] [--help]
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -126,12 +126,14 @@ function help() {
   --out <dir>        Output directory            (default parity/out)
   --timeout <ms>     Per-screen wait budget      (default ${DEFAULTS.timeout})
   --state-route <r>  Screen the shell states sit on (default ${DEFAULTS.stateRoute})
-  --only <routes|states>  Capture just the route screens or just the shell states
+  --only <routes|states|screens>  Capture just the route screens, the shell states or the
+                     per-screen states (empty, error, dialogs, a typed filter)
+  --states <list>    Capture only the named states, e.g. projects-empty,projects-error
   --dry-run          Launch the browser and print the plan; visit no app
   --help             This text
 
-Output: <out>/<screen>/<width>/{angular,react}.png and
-        <out>/_shell/<state>/<width>/{angular,react}.png, full page.
+Output: <out>/<screen>/<width>/{angular,react}.png, <out>/_shell/<state>/<width>/ and
+        <out>/_screens/<state>/<width>/, full page.
 API calls are answered from parity/fixtures; env.js is rewritten in flight so both apps
 boot with Keycloak off. Both base URLs must be on this machine. Playwright is resolved by
 name, or from PLAYWRIGHT_MODULE. Exit code is non-zero if any capture fails.`);
@@ -145,6 +147,7 @@ function parseArgs(argv) {
     else if (a === '--dry-run') args.dryRun = true;
     else if (a === '--only') args.only = argv[++i];
     else if (a === '--state-route') args.stateRoute = argv[++i];
+    else if (a === '--states') args.states = argv[++i];
     else if (a === '--angular') args.angular = argv[++i];
     else if (a === '--react') args.react = argv[++i];
     else if (a === '--routes') args.routes = argv[++i];
@@ -156,8 +159,8 @@ function parseArgs(argv) {
       process.exit(2);
     }
   }
-  if (!['all', 'routes', 'states'].includes(args.only)) {
-    console.error(`--only must be "routes" or "states", got "${args.only}"`);
+  if (!['all', 'routes', 'states', 'screens'].includes(args.only)) {
+    console.error(`--only must be "routes", "states" or "screens", got "${args.only}"`);
     process.exit(2);
   }
   return args;
@@ -183,10 +186,13 @@ export function screenName(route) {
  * A new screen only needs a new file here, never a change to this script.
  */
 export function fixtureNameFor(urlString) {
-  const { pathname } = new URL(urlString);
+  const { pathname, searchParams } = new URL(urlString);
   const match = /^\/(?:notify-)?api(\/.*)?$/.exec(pathname);
   if (!match) return null;
-  return `${screenName(match[1] || '')}.json`;
+  // `dataset` is the only query parameter that changes what a path answers with: /api/search is
+  // the project list, the List name table and more, depending on it.
+  const dataset = searchParams.get('dataset');
+  return `${screenName(match[1] || '')}${dataset ? `-${dataset.toLowerCase()}` : ''}.json`;
 }
 
 /**
@@ -200,7 +206,23 @@ export async function routeApi(page, misses, state = {}) {
   const isApiCall = (url) => /^\/(?:notify-)?api(\/|$)/.test(new URL(url).pathname);
 
   await page.route(isApiCall, async (route) => {
-    const name = fixtureNameFor(route.request().url());
+    const request = route.request();
+    const target = new URL(request.url());
+    // A state's own answers win, so one screen can be photographed loaded, empty and failing from
+    // the same fixture directory. `match` is tested against the path and query together.
+    const override = (state.responses || []).find(
+      (rule) => rule.match.test(target.pathname + target.search) && (!rule.method || rule.method === request.method())
+    );
+    if (override) {
+      await route.fulfill({
+        status: override.status ?? 200,
+        contentType: 'application/json',
+        body: override.file ? readFileSync(path.join(FIXTURE_DIR, override.file), 'utf-8') : '{}'
+      });
+      return;
+    }
+
+    const name = fixtureNameFor(request.url());
 
     if (name === 'me.json' && state.meDelayMs) {
       await new Promise((resolve) => setTimeout(resolve, state.meDelayMs));
@@ -342,6 +364,120 @@ export const SHELL_STATES = [
   }
 ];
 
+/**
+ * States a screen reaches only through its own data or a click: the route captures above show each
+ * screen loaded, and these show the rest. `responses` replaces what the API answers with; `prepare`
+ * drives the page once it has settled. Same selectors work on both apps, because the React port
+ * keeps the Angular markup.
+ */
+export const SCREEN_STATES = [
+  {
+    name: 'keys-empty',
+    route: '/keys',
+    responses: [{ match: /^\/api\/admin\/api-keys$/, file: 'admin-api-keys-empty.json' }]
+  },
+  {
+    name: 'keys-error',
+    route: '/keys',
+    responses: [{ match: /^\/api\/admin\/api-keys$/, status: 500, file: 'api-error.json' }]
+  },
+  {
+    name: 'keys-mint-open',
+    route: '/keys',
+    prepare: async (page, width, timeout) => {
+      await page.click('button:text-is("Mint a key")');
+      await page.waitForSelector('input[placeholder="epic-map-frontend"]', { timeout });
+    }
+  },
+  {
+    name: 'keys-minted',
+    route: '/keys',
+    responses: [
+      { match: /^\/api\/admin\/api-keys$/, method: 'POST', status: 201, file: 'admin-api-keys-minted.json' }
+    ],
+    prepare: async (page, width, timeout) => {
+      await page.click('button:text-is("Mint a key")');
+      await page.fill('input[placeholder="epic-map-frontend"]', 'sample-new-consumer');
+      await page.click('label:has(code:text-is("demi-service-read")) input[type="checkbox"]');
+      await page.click('button:text-is("Mint key")');
+      await page.waitForSelector('button:text-is("Copy secret")', { timeout });
+    }
+  },
+  {
+    // A native confirm() is browser chrome and never lands in a screenshot, so the question itself
+    // is written out beside the shot and the page is photographed with nothing sent.
+    name: 'keys-revoke-confirm',
+    route: '/keys',
+    prepare: async (page, width, timeout, out) => {
+      const asked = [];
+      page.on('dialog', async (dialog) => {
+        asked.push(dialog.message());
+        await dialog.dismiss();
+      });
+      // The click resolves only once the dialog has been answered, so `asked` is filled by here.
+      await page.click('.row-actions button:text-is("Revoke")');
+      mkdirSync(out, { recursive: true });
+      writeFileSync(path.join(out, 'confirm.txt'), asked.join('\n') + '\n');
+    }
+  },
+  {
+    name: 'projects-empty',
+    route: '/projects',
+    responses: [{ match: /dataset=Project/, file: 'search-project-empty.json' }]
+  },
+  {
+    // React retries a 5xx twice a second apart, and the network is idle inside each gap, so the
+    // shot landed on its skeleton. Wait for the picker's own alert; `.alert-row` is the shell's.
+    name: 'projects-error',
+    route: '/projects',
+    responses: [{ match: /dataset=Project/, status: 500, file: 'api-error.json' }],
+    ready: '.callout--warning[role="alert"]:not(.alert-row)'
+  },
+  {
+    // The shell's own callout, which sits above whatever screen is on: both apps read the project
+    // corpus on /map, so a refused read there is the one request that fails them both. A 400, not a
+    // 500: a 500 is retried twice with a real delay before either app settles on the message.
+    name: 'shell-load-error',
+    route: '/map',
+    widths: [1440, 400],
+    responses: [{ match: /dataset=Project/, status: 400, file: 'api-error.json' }],
+    ready: '.alert-row'
+  },
+  {
+    name: 'projects-filtered',
+    route: '/projects',
+    prepare: async (page, width, timeout) => {
+      await page.waitForSelector('.pp-result', { timeout });
+      await page.fill('#pp-search', 'sample b');
+      await page.waitForFunction(() => document.querySelectorAll('.pp-result').length === 1, null, { timeout });
+    }
+  }
+];
+
+async function captureScreenStates({ browser, label, base, widths, out, timeout, misses, failures, only }) {
+  for (const state of SCREEN_STATES.filter((s) => !only || only.includes(s.name))) {
+    for (const width of state.widths || widths) {
+      const dir = path.join(out, '_screens', state.name, String(width));
+      const { context, page, pageErrors } = await newPage({
+        browser, width, label, misses, failures, state
+      });
+      try {
+        await page.goto(new URL(state.route, base).href, { waitUntil: 'domcontentloaded', timeout });
+        await settle(page, { ...state, activeNav: width >= NARROW_BREAKPOINT }, timeout);
+        if (state.prepare) await state.prepare(page, width, timeout, dir);
+        mkdirSync(dir, { recursive: true });
+        await page.screenshot({ path: path.join(dir, `${label}.png`), fullPage: true });
+        console.log(`ok   ${label.padEnd(8)}${String(width).padEnd(6)}_screens/${state.name}`);
+      } catch (err) {
+        const detail = pageErrors.length ? ` (page error: ${pageErrors[0]})` : '';
+        failures.push(`${label} ${width} _screens/${state.name}: ${err.message}${detail}`);
+        console.error(`FAIL ${label.padEnd(8)}${String(width).padEnd(6)}_screens/${state.name}`);
+      }
+      await context.close();
+    }
+  }
+}
+
 async function newPage({ browser, width, label, misses, failures, state = {} }) {
   const context = await browser.newContext({ viewport: { width, height: VIEWPORT_HEIGHT } });
   const page = await context.newPage();
@@ -419,7 +555,14 @@ async function dryRun(chromium, args, routes, widths) {
   console.log('route'.padEnd(24) + 'screen');
   for (const route of routes) console.log(route.padEnd(24) + screenName(route));
   console.log('\nfixtures');
-  for (const name of ['config-public.json', 'config.json', 'me.json', 'me-data.json']) {
+  for (const name of [
+    'config-public.json',
+    'config.json',
+    'me.json',
+    'me-data.json',
+    'search-project.json',
+    'search-list.json'
+  ]) {
     console.log(`  ${name.padEnd(22)}${existsSync(path.join(FIXTURE_DIR, name)) ? 'present' : 'MISSING'}`);
   }
 }
@@ -460,15 +603,21 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
   try {
     for (const [label, base] of [['angular', args.angular], ['react', args.react]]) {
-      if (args.only !== 'states') {
+      if (args.only === 'all' || args.only === 'routes') {
         await captureApp({
           browser, label, base, routes, widths, out: args.out, timeout: args.timeout, misses, failures
         });
       }
-      if (args.only !== 'routes') {
+      if (args.only === 'all' || args.only === 'states') {
         await captureStates({
           browser, label, base, route: args.stateRoute, out: args.out,
           timeout: args.timeout, misses, failures
+        });
+      }
+      if (args.only === 'all' || args.only === 'screens') {
+        await captureScreenStates({
+          browser, label, base, widths, out: args.out, timeout: args.timeout, misses, failures,
+          only: args.states ? args.states.split(',').map((name) => name.trim()) : null
         });
       }
     }

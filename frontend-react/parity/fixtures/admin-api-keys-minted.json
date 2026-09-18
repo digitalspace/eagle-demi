@@ -1,0 +1,12 @@
+{
+  "id": "ak_33333333",
+  "name": "sample-new-consumer",
+  "roles": ["demi-service-read"],
+  "projectScope": null,
+  "createdAt": "2026-09-01T00:00:00.000Z",
+  "createdBy": "sample.one@example.invalid",
+  "expiresAt": "2027-09-01T00:00:00.000Z",
+  "revokedAt": null,
+  "lastUsedAt": null,
+  "key": "demi_sample_00000000_PLACEHOLDER-NOT-A-REAL-SECRET"
+}

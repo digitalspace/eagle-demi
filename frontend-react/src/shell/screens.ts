@@ -9,6 +9,8 @@ export interface Screen {
   /** null = reachable by router and the account menu, but not listed in the sidebar. */
   group: Group | null;
   path: string;
+  /** The screen shows a failed projects read in its own card, so the shell bar would repeat it. */
+  ownsLoadError?: boolean;
 }
 
 export const SCREENS: Screen[] = [
@@ -18,7 +20,7 @@ export const SCREENS: Screen[] = [
   { key: 'search', label: 'Search', group: 'Discover', path: '/search' },
   { key: 'summary', label: 'AI Search Summary', group: 'Discover', path: '/summary' },
   // The picker; /projects/:id under it is the same screen, so both share this key and info panel.
-  { key: 'project', label: 'AI Project Summary', group: 'Discover', path: '/projects' },
+  { key: 'project', label: 'AI Project Summary', group: 'Discover', path: '/projects', ownsLoadError: true },
   { key: 'notify', label: 'eagle-notify', group: 'Operate', path: '/notify' },
   { key: 'links', label: 'Short URLs', group: 'Operate', path: '/links' },
   { key: 'rbac', label: 'Access model', group: 'Reference', path: '/rbac' },

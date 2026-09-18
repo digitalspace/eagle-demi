@@ -1,0 +1,33 @@
+[
+  {
+    "count": 5,
+    "meta": [{ "searchResultsTotal": 5 }],
+    "searchResults": [
+      {
+        "id": "901",
+        "name": "Sample Alpha Transmission Line",
+        "region": "Sample Region North",
+        "proponent": { "name": "Sample Energy Co" },
+        "currentPhaseName": "000000000000000000000001"
+      },
+      {
+        "id": "902",
+        "name": "Sample Beta Quarry",
+        "region": "Sample Region South",
+        "currentPhaseName": "000000000000000000000002"
+      },
+      {
+        "id": "903",
+        "name": "Sample Delta Pipeline",
+        "proponent": { "name": "Sample Pipelines Ltd" }
+      },
+      {
+        "id": "904",
+        "name": "sample gamma wind farm",
+        "region": "Sample Region West",
+        "currentPhaseName": "000000000000000000000099"
+      },
+      { "id": "905", "name": "Sample Epsilon Terminal" }
+    ]
+  }
+]

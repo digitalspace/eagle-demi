@@ -1,15 +1,37 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
+import { PROJECT_LIST_ERROR } from '../api/project-summary';
 import { routes } from '../routes';
+import { json } from '../test-http';
+import { queryWrapper } from '../test-query';
 import { stubNarrow } from '../test-setup';
 import { NAV_KEY } from './prefs';
 
 function renderShell(at = '/keys') {
   const router = createMemoryRouter(routes, { initialEntries: [at] });
-  render(<RouterProvider router={router} />);
+  const Wrapper = queryWrapper();
+  render(
+    <Wrapper>
+      <RouterProvider router={router} />
+    </Wrapper>,
+  );
   return router;
+}
+
+/**
+ * The screen under the shell reads from the API too, so every read is answered here: these tests
+ * never reach the network, and none of them races a rejection landing mid-assertion. A read whose
+ * URL holds `failing` is refused with a 400 — not a 500, which both apps retry twice with a real
+ * delay before it settles as an error.
+ */
+function stubApi(failing?: string) {
+  const fetchMock = vi.fn(async (input: unknown) =>
+    failing && String(input).includes(failing) ? json({ error: 'unknown parameter' }, 400) : json([]),
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
 }
 
 const nav = () => screen.getByRole('navigation', { name: 'DEMI' });
@@ -19,10 +41,12 @@ const navLinks = () => within(nav()).queryAllByRole('link');
 
 beforeEach(() => {
   window.__env = { ENVIRONMENT: 'test', API_PATH: '/api', KEYCLOAK_REALM: 'eao-epic' };
+  stubApi();
 });
 
 afterEach(() => {
   localStorage.clear();
+  vi.unstubAllGlobals();
   delete window.__env;
 });
 
@@ -246,5 +270,61 @@ describe('the how-built panel', () => {
     await user.keyboard('{Escape}');
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+describe('the data-load failure callout', () => {
+  const callout = () => screen.queryByRole('alert');
+
+  it('stays hidden while the corpus loads', async () => {
+    renderShell();
+    await screen.findByRole('banner');
+
+    expect(callout()).not.toBeInTheDocument();
+  });
+
+  it('says the list is empty rather than filtered when the load fails', async () => {
+    stubApi('dataset=Project');
+    renderShell();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('the list below is empty, not filtered');
+    expect(alert).toHaveClass('callout', 'callout--warning', 'alert-row');
+  });
+
+  // One outage read by one shared query: the picker already says so in its own card.
+  it('stays off a screen that reports the same failure itself', async () => {
+    stubApi('dataset=Project');
+    renderShell('/projects');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(PROJECT_LIST_ERROR);
+    expect(document.querySelectorAll('.alert-row')).toHaveLength(0);
+  });
+
+  it('shows on a registry screen, which carries no callout of its own', async () => {
+    stubApi('dataset=Project');
+    renderShell('/map');
+
+    expect(await screen.findByRole('alert')).toHaveClass('alert-row');
+  });
+
+  it('re-reads the corpus on Retry, and drops the callout once it answers', async () => {
+    const user = userEvent.setup();
+    let refuse = true;
+    const fetchMock = vi.fn(async (input: unknown) =>
+      refuse && String(input).includes('dataset=Project')
+        ? json({ error: 'unknown parameter' }, 400)
+        : json([]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderShell();
+    await screen.findByRole('alert');
+
+    refuse = false;
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(callout()).not.toBeInTheDocument());
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
   });
 });

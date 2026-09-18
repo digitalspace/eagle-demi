@@ -7,12 +7,16 @@ const backdrop: CSSProperties = {
   zIndex: 950,
   background: 'rgba(0,0,0,0.35)',
   display: 'grid',
+  // An `auto` track sizes to the dialog's 34rem max-content, so `max-width: 100%` below would
+  // resolve against 34rem and overflow a narrow viewport. A 1fr track is the padded width.
+  gridTemplateColumns: 'minmax(0, 1fr)',
   placeItems: 'center',
   padding: 'var(--layout-padding-large)',
 };
 const dialog: CSSProperties = {
   width: '34rem',
   maxWidth: '100%',
+  overflowWrap: 'anywhere',
   maxHeight: '80vh',
   overflowY: 'auto',
   boxSizing: 'border-box',

@@ -1,6 +1,5 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import './styles.css';
 
@@ -8,8 +7,6 @@ import { App } from './App';
 import { initConfig } from './config';
 import { ErrorBoundary } from './ErrorBoundary';
 import { correlationHosts, init as initTelemetry } from './telemetry';
-
-const queryClient = new QueryClient();
 
 async function start() {
   const root = createRoot(document.getElementById('root')!);
@@ -25,9 +22,7 @@ async function start() {
   root.render(
     <StrictMode>
       <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
-          <App />
-        </QueryClientProvider>
+        <App />
       </ErrorBoundary>
     </StrictMode>,
   );
