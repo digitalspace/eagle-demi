@@ -137,7 +137,10 @@ paths:
             dataset=CommentPeriod only, and only with no `project`: `open` answers every comment
             period open right now across all projects, soonest to close first, capped at `pageSize`.
             The response carries `closedCount` beside `count` — how many periods closed in the last
-            30 days. Any other value is a 400; this filter is never silently ignored. Sent
+            30 days. Each row carries `projectName`, the parent project's name, read in one query
+            for the whole page; it is absent when the project is not visible to the caller or the
+            period belongs to a project notification. Any other value is a 400; this filter is
+            never silently ignored. Sent
             alongside a project it is reported under `meta[0].dropped.filter`, because the
             per-project read cannot also sweep every partition.
           schema:

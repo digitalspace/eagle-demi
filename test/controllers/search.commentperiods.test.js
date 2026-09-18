@@ -178,6 +178,45 @@ test('GET /search?dataset=CommentPeriod&and[status]=open', async (t) => {
       'a filter the branch consumed must not also be reported as ignored');
   });
 
+  await t.test('each open row carries its project name', async () => {
+    stubCosmos(t, { projects: [PROJECT_ROW], commentPeriods: [OPEN_NOW] });
+
+    const { body } = await get(OPEN);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.projectName, PROJECT_ROW.name);
+    assert.strictEqual(row.project, PROJECT_ROW.eagleId);
+  });
+
+  await t.test('a row whose project does not resolve keeps the row and omits the name', async () => {
+    stubCosmos(t, { projects: [], commentPeriods: [OPEN_NOW] });
+
+    const { body } = await get(OPEN);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row._id, PERIOD_EAGLE_ID, 'the period is still answered');
+    assert.ok(!('projectName' in row), 'a name that was not read must not be made up');
+  });
+
+  await t.test('project names come from one read for the page, not one per row', async () => {
+    const other = { id: '208', eagleId: 'P-208', name: 'Bear Creek Quarry', read: PUBLIC_ACL };
+    const rows = [
+      OPEN_NOW,
+      periodRow({ id: 'CP-2', eagleId: 'CP-2', projectId: '208',
+        dateStarted: daysOut(-2), dateCompleted: daysOut(4) }),
+      periodRow({ id: 'CP-3', eagleId: 'CP-3', projectId: '207',
+        dateStarted: daysOut(-2), dateCompleted: daysOut(6) })
+    ];
+    const seen = stubCosmos(t, { projects: [PROJECT_ROW, other], commentPeriods: rows });
+
+    const { body } = await get(OPEN);
+
+    assert.deepStrictEqual(body[0].searchResults.map(r => r.projectName),
+      [PROJECT_ROW.name, other.name, PROJECT_ROW.name]);
+    assert.strictEqual(specsFor(seen, 'projects').length, 1,
+      'three rows over two projects are still one projects read');
+  });
+
   // AN UNKNOWN STATUS IS THE DANGEROUS ONE: falling through would answer the whole corpus under a
   // 200, which reads exactly like "every period matches your filter".
   await t.test('an unknown status is a 400, never a full corpus', async () => {
