@@ -21,7 +21,9 @@ paths:
         RecentActivity and ProjectNotification when `q` carries keywords. The rest are Cosmos
         list reads of the mirrored Eagle records, on the same envelope: a one-element array of
         `{searchResults, count, meta}`, where `meta[0].searchResultsTotal` is the measured total to
-        page against. An unknown dataset, or any query parameter not listed here, is a 400.
+        page against. `closedCount` joins that envelope on the one read that measures a second
+        number — see `and[status]`; it is absent everywhere else rather than zero. An unknown
+        dataset, or any query parameter not listed here, is a 400.
       parameters:
         - name: dataset
           in: query
@@ -104,10 +106,24 @@ paths:
           in: query
           required: false
           description: >-
-            Fetch one record by Eagle id, on CommentPeriod, Comment and ProjectNotification. Also
-            accepted as `and[_id]`.
+            Fetch one record by Eagle id, on CommentPeriod, Comment, ProjectNotification and
+            RecentActivity. Also accepted as `and[_id]`. Answers `count: 0` and no rows when the id
+            matches nothing this caller may read, never a page of other records.
           schema:
             type: string
+        - name: and[status]
+          in: query
+          required: false
+          description: >-
+            dataset=CommentPeriod only, and only with no `project`: `open` answers every comment
+            period open right now across all projects, soonest to close first, capped at `pageSize`.
+            The response carries `closedCount` beside `count` — how many periods closed in the last
+            30 days. Any other value is a 400; this filter is never silently ignored. Sent
+            alongside a project it is reported under `meta[0].dropped.filter`, because the
+            per-project read cannot also sweep every partition.
+          schema:
+            type: string
+            enum: [open]
         - name: and[type]
           in: query
           required: false
@@ -116,8 +132,12 @@ paths:
             DocumentChunk, which filters on the copy of the id each chunk carries from its parent
             document. Several ids comma-separated are a multi-select and are ORed.
             Also narrows dataset=ProjectNotification, with `and[region]`, `and[pcp]` and
-            `and[decision]`. A key the dataset does not consume is reported under
-            `meta[0].dropped.filter` rather than ignored.
+            `and[decision]`.
+            On dataset=RecentActivity it is the update's own type LABEL, not an id — `News`,
+            `Public Comment Period`, `Project Notification Public Comment Period` — and it applies
+            on both the keyword path and the keywordless one.
+            A key the dataset does not consume is reported under `meta[0].dropped.filter` rather
+            than ignored.
           schema:
             type: string
         - name: and[milestone]

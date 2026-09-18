@@ -104,6 +104,26 @@ test('comment periods list by project', async (t) => {
   });
 });
 
+test('comment periods list open — row limit guard', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  // Zero, negative or non-numeric all fall back to the rail's own default BY RULE — never through
+  // `||`, which would also catch zero but let a negative through to Cosmos as `maxItemCount`.
+  for (const limit of [0, -1, -20, NaN, '5']) {
+    await t.test(`limit=${limit} falls back to the default, not to Cosmos`, async () => {
+      const seen = capture(t, rows(1));
+      await commentPeriods.listOpen(ANON, { limit });
+      assert.strictEqual(seen.options.maxItemCount, commentPeriods.DEFAULT_OPEN_ROWS);
+    });
+  }
+
+  await t.test('a positive integer limit is honoured', async () => {
+    const seen = capture(t, rows(1));
+    await commentPeriods.listOpen(ANON, { limit: 3 });
+    assert.strictEqual(seen.options.maxItemCount, 3);
+  });
+});
+
 test('comments list by period', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 

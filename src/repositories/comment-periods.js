@@ -20,6 +20,9 @@ const PARTITION_FIELD = 'projectId';
 const SORTABLE = ['dateStarted', 'dateCompleted', 'dateAdded'];
 const DEFAULT_ORDER = 'c.dateStarted DESC';
 
+/** `listOpen` when the caller named no limit. A rail, not a registry — see `listOpen`. */
+const DEFAULT_OPEN_ROWS = 20;
+
 /** Point read. With the project it is single-partition; without, the predicate runs in the query. */
 async function getById(access, id, projectId) {
   if (projectId) {
@@ -87,6 +90,78 @@ async function listByIds(access, ids) {
   return items;
 }
 
+/**
+ * The periods that are open RIGHT NOW, across every project — the home page's engagement rail.
+ *
+ * THE ONE CROSS-PARTITION LIST in this container. Every other read here binds a parent and passes
+ * `partitionKey`; this one cannot, because "open" is not a property of any single project. The
+ * fan-out is the cost of that, so the read is capped rather than paged: a continuation token over
+ * every partition is not a page anybody asks for twice.
+ *
+ * Measured on `demi-cosmos-test`, 2026-09-17: 3.27 RU and 29-49 ms warm for the open page, against
+ * 2.89 RU for a single-partition read of the same container. The fan-out is nearly free because
+ * this container is small — that is the assumption to re-check if it ever stops being one.
+ *
+ * `dateStarted <= now <= dateCompleted`, both bounds inclusive, against ONE `@now` so the window
+ * cannot straddle two clock reads. `dateCompleted` is also the order — soonest to close first,
+ * which is the order the rail renders and the reason a period is worth showing at all.
+ *
+ * @param {number} [opts.limit]  rows, clamped by `pageOptions` to MAX_PAGE_SIZE
+ * @param {Date}   [opts.now]    shared clock read — pass the SAME value `countClosedSince` gets,
+ *   so the two reads agree on "now" instead of each capturing its own a moment apart
+ */
+async function listOpen(access, { limit, now } = {}) {
+  const nowIso = (now instanceof Date ? now : new Date()).toISOString();
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [{
+      // ONE bound value, read twice: two `new Date()` calls could land either side of a boundary
+      // and admit a period that is neither started nor unfinished at any single instant.
+      clause: '(c.dateStarted <= @now AND c.dateCompleted >= @now)',
+      params: [{ name: '@now', value: nowIso }]
+    }],
+    select: selectFor(CONTAINER, access, PARTITION_FIELD),
+    orderBy: 'c.dateCompleted ASC'
+  });
+
+  // Only a positive integer counts as a caller-named limit — zero, negative or non-numeric all
+  // fall back to the documented default BY RULE, not by `||` accidentally catching zero too.
+  const pageSize = Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_OPEN_ROWS;
+  // No `partitionKey`, and NEVER an absent pageSize: `pageOptions` drops `maxItemCount` for an
+  // undefined one, which puts `cosmos.query` on the fetchAll path and drains the container.
+  const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ pageSize }));
+  return items;
+}
+
+/**
+ * How many periods closed since `since` — the "and N closed recently" line beside the open rail.
+ *
+ * `dateCompleted < @now` is the exact complement of `listOpen`'s `>= @now` ONLY because both reads
+ * are given the same `now` — see `openPeriods` in `controllers/search.js`, which captures it once
+ * and passes it to both. A period cannot be counted as both open and recently closed on the same
+ * request. Cross-partition, like `listOpen`, and a COUNT rather than a page because nothing renders
+ * these rows.
+ *
+ * @param {string|Date} since  the start of the window, inclusive
+ * @param {Date}        now    the SAME clock read passed to `listOpen` for this request
+ */
+async function countClosedSince(access, since, now) {
+  const spec = countWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [{
+      clause: '(c.dateCompleted >= @since AND c.dateCompleted < @closedNow)',
+      params: [
+        { name: '@since', value: new Date(since).toISOString() },
+        { name: '@closedNow', value: (now instanceof Date ? now : new Date()).toISOString() }
+      ]
+    }]
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items[0] || 0;
+}
+
 /** The same predicate as the read, so the total cannot describe rows the page may not carry. */
 async function countByProject(projectId, access) {
   const spec = countWhere({ access, partitionField: PARTITION_FIELD, criteria: criteriaFor(projectId) });
@@ -140,9 +215,12 @@ module.exports = {
   CONTAINER,
   PARTITION_FIELD,
   SORTABLE,
+  DEFAULT_OPEN_ROWS,
   getById,
   listByProject,
   listByIds,
+  listOpen,
+  countClosedSince,
   countByProject,
   aclRowsForProject,
   setAclForProject,
