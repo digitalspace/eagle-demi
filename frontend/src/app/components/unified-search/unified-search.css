@@ -163,17 +163,24 @@
   color: var(--typography-color-link);
 }
 
+/* A button, not a link: this app has no long-form help page for a link to go to, so the dialog is
+   the whole destination. Styled as the link the design draws. */
 .unified-search .unified-search__help {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
   font: var(--typography-regular-small-body);
   color: var(--typography-color-link);
+  cursor: pointer;
 }
 
 .unified-search .unified-search__help-icon {
-  font-size: 17px;
+  width: 17px;
+  height: 17px;
 }
 
 /* Document scope switch, in the toolbar's scope slot */

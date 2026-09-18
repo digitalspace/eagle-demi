@@ -57,7 +57,8 @@
             <thead>
               <tr app-grid-header [columns]="columns()" [sort]="sort()" (sorted)="sorted.emit($event)"></tr>
               @if (showFilterRow()) {
-                <tr app-filter-row class="display-grid__filter-row" [columns]="columns()" [values]="filters()"
+                <tr app-filter-row class="display-grid__filter-row" data-tour="filterrow"
+                    [columns]="columns()" [values]="filters()"
                     (changed)="filterChanged.emit($event)"></tr>
               }
             </thead>

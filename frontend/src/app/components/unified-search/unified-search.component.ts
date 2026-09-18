@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   OnInit,
   computed,
   effect,
@@ -45,6 +46,8 @@ import { ChipRowComponent, type GridChip } from './display-grid/chip-row.compone
 import { DisplayGridComponent, type SortChange } from './display-grid/display-grid.component';
 import type { FilterChange } from './display-grid/filter-row.component';
 import { GridToolbarComponent } from './display-grid/grid-toolbar.component';
+import { GuidedTourComponent } from './display-grid/guided-tour.component';
+import { SearchHelpDialogComponent } from './display-grid/search-help-dialog.component';
 import { toTerms } from './display-grid/highlight';
 import type { ListRowData, ListRowField, ListRowMeta } from './display-grid/list-row.component';
 import { PassageListComponent } from './display-grid/passage-list.component';
@@ -116,7 +119,9 @@ function optionText(options: ValueOption[], value: unknown): string {
     ChipRowComponent,
     DisplayGridComponent,
     GridToolbarComponent,
+    GuidedTourComponent,
     PassageListComponent,
+    SearchHelpDialogComponent,
   ],
   templateUrl: './unified-search.component.html',
   styleUrls: ['./unified-search.css'],
@@ -220,6 +225,22 @@ export class UnifiedSearchComponent implements OnInit {
   );
 
   private grid = viewChild(DisplayGridComponent);
+
+  private help = viewChild(SearchHelpDialogComponent);
+  private tour = viewChild(GuidedTourComponent);
+  private helpButton = viewChild<ElementRef<HTMLButtonElement>>('helpButton');
+
+  /** Whether the help dialog is showing, which the link that opened it has to report. */
+  helpOpen = computed(() => this.help()?.opened() ?? false);
+
+  /** Both the dialog and the tour hand focus back to the link that opened them. */
+  openHelp(): void {
+    this.help()?.open(this.helpButton()?.nativeElement);
+  }
+
+  startTour(): void {
+    this.tour()?.start(this.helpButton()?.nativeElement);
+  }
 
   /**
    * The record's own fields first, then the column filters the layout left nowhere else to live:

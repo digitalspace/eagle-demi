@@ -1,5 +1,5 @@
 import { Injectable, Injector, signal, computed, effect, untracked, inject, WritableSignal } from '@angular/core';
-import { Project, Document, DocumentChunk, SummaryCitation } from '../models/registry.models';
+import { Project, Document, SummaryCitation } from '../models/registry.models';
 import { MOCK_PROJECTS, MOCK_DOCUMENTS } from '../mocks/mock-registry.data';
 import { ConfigService, AppConfig } from './config.service';
 import { UserdataService } from './userdata.service';
@@ -43,70 +43,6 @@ export const epicPublicDownloadUrl = (documentId: string): string =>
  * exists on the public EPIC site; a DEMI-native upload carries a uuid and exists nowhere else.
  */
 export const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
-
-/**
- * doctype List rows -> one option per LABEL, alphabetical.
- *
- * The lookup holds a row per legislation, so one label carries several ids. They are comma-joined
- * because `and[type]=a,b` is a multi-select the API ORs into one clause — one request, not one per
- * id. A row with no name or no id is dropped: it can be neither read nor filtered on.
- */
-export function groupDocTypes(rows: any[]): { value: string; label: string }[] {
-  const idsByLabel = new Map<string, string[]>();
-
-  for (const row of rows || []) {
-    const label = String(row?.name ?? '').trim();
-    const id = String(row?._id ?? row?.id ?? '').trim();
-    if (!label || !id) continue;
-    const ids = idsByLabel.get(label) || [];
-    if (!ids.includes(id)) ids.push(id);
-    idsByLabel.set(label, ids);
-  }
-
-  return [...idsByLabel.entries()]
-    .map(([label, ids]) => ({ value: ids.join(','), label }))
-    .sort((a, b) => a.label.localeCompare(b.label));
-}
-
-/** What the passage leg of `loadData()` came back with. Null there means it was never issued. */
-type ChunkLeg = { ok: true; payload: any } | { ok: false; status: number | null };
-
-/** Every answer `chunkFilterStateFrom` can give, and the only values the callout markup reads. */
-export type ChunkFilterState = 'applied' | 'dropped' | 'dropped-missing' | 'dropped-unstamped';
-
-/**
- * How much of the picked document type reached the PASSAGES, read off `meta[0]` of the
- * DocumentChunk answer.
- *
- * `dropped.filter` naming `type` is the only thing that says anything about this filter: the
- * chunks query carried no type clause, so the passages below are every type. The three drop states
- * are the same fact with different causes, and the user gets different words for each. The causes
- * are the three reasons swagger.yaml documents on the DocumentChunk 200, and the API may report
- * more than one at a time:
- *
- * - `dropped-missing` — `chunk-parent-fields-missing`: the live chunks index does not carry the
- *   type column at all, an index definition that has not been applied to the deployment. Waiting
- *   does not clear it, so the message says the passage index cannot filter by type yet. It wins
- *   over the other two, which are about rows in an index that at least has the column.
- * - `dropped-unstamped` — `chunk-parent-fields-unstamped` (chunks in scope have no copy of the
- *   parent's type yet) or `chunk-parent-fields-unknown` (the stamp count could not be read). Both
- *   clear on their own, so the message says the passage index is still being filled in.
- * - `dropped` — no reason named above: the words match more documents than the query can be scoped
- *   to. Narrowing the search is what changes it, and the plain "filter was not applied" message
- *   stands. A reason this function does not know lands here too, which reads true of all of them.
- *
- * Anything else is `applied` — including a `chunk-parent-fields-*` reason on its own, which the
- * API does not emit without dropping `type`, and which by itself says nothing about this filter.
- * `degraded.unstampedChunks` is NOT read — the API is dropping that count.
- */
-export function chunkFilterStateFrom(meta: any): ChunkFilterState {
-  const droppedKeys = meta?.dropped?.filter;
-  if (!Array.isArray(droppedKeys) || !droppedKeys.includes('type')) return 'applied';
-  const reasons = meta?.degraded?.reasons;
-  const named = (reason: string) => Array.isArray(reasons) && reasons.includes(`chunk-parent-fields-${reason}`);
-  if (named('missing')) return 'dropped-missing';
-  return named('unstamped') || named('unknown') ? 'dropped-unstamped' : 'dropped';
-}
 
 /** Boundary layer id -> the denormalised project field naming that boundary. */
 const BOUNDARY_PROPS = {
@@ -222,8 +158,6 @@ export class RegistryStateService {
   gatingFilter = signal<Set<string>>(new Set());
   sectorFilter = signal<Set<string>>(new Set());
   regionFilter = signal<Set<string>>(new Set());
-  // `filteredDocuments` constrains documents to map-matched projects whenever this is NOT
-  // 'search'; 'summary' and 'intake' therefore take the map path.
   activePage = signal<'map' | 'search' | 'intake' | 'summary'>('map');
 
   intakeProjectId = signal<string>('');
@@ -234,9 +168,6 @@ export class RegistryStateService {
   // Datasets (using Signals - null representing loading sentinel)
   projects = signal<Project[] | null>(null);
   documents = signal<Document[] | null>(null);
-  // Matches inside extracted document TEXT — this is what makes Deep Search "deep" rather than
-  // a metadata search. Populated only when there is a query; null is the loading sentinel.
-  documentChunks = signal<DocumentChunk[] | null>(null);
 
   // True while loadData() is in flight. The lists are no longer blanked on a re-search, so this is
   // what tells a screen to dim the rows it already has instead of flashing placeholders at them.
@@ -249,12 +180,9 @@ export class RegistryStateService {
   }
 
   projectsLoading = computed(() => this.loadPhase(this.filteredProjects()));
-  documentsLoading = computed(() => this.loadPhase(this.filteredDocuments()));
-  chunksLoading = computed(() => this.loadPhase(this.documentChunks()));
 
   // Selected Items (using Signals)
   selectedProject = signal<Project | null>(null);
-  selectedDocument = signal<Document | null>(null);
 
   // Map viewport states
   mapInViewProjectIds = signal<(string | number)[]>([]);
@@ -320,66 +248,14 @@ export class RegistryStateService {
   // a column showing `results.length` is really showing pageSize and reads as "that is all there
   // is". Null when the backend did not report one — the keywordless Cosmos list path has no total.
   projectMatchCount = signal<number | null>(null);
-  documentMatchCount = signal<number | null>(null);
-  chunkMatchCount = signal<number | null>(null);
 
-  /**
-   * How much of the picked type reached the passages — see `chunkFilterStateFrom`. Null whenever no
-   * type is picked: with nothing to narrow by there is no filter to report on, and a stale mark
-   * would accuse a page that is fine.
-   */
-  chunkFilterState = signal<ChunkFilterState | null>(null);
-
-  /**
-   * Non-null when the passage leg of the last load failed while the other legs answered. Its own
-   * signal, not `loadError`: the documents on screen are real and complete, so the page-wide
-   * banner would overstate the outage — but an empty passage panel with no message reads as
-   * "nothing matched", which is exactly what a 502 under a type filter is not.
-   */
-  chunkLoadError = signal<string | null>(null);
-
-  /**
-   * The document type the search is narrowed to — Eagle List ObjectIds, comma-joined. Empty is
-   * "All types".
-   */
-  selectedDocType = signal<string>('');
-
-  /** Empty until `loadDocTypes()` answers, and when it failed: no options means no picker. */
-  docTypeOptions = signal<{ value: string; label: string }[]>([]);
-  private docTypesLoad: Promise<void> | null = null;
-  private docTypesAbort: AbortController | null = null;
-  // Bumped by `clearAuthState()`. Read before any signal an authenticated response fills, so a
-  // reply that lands after the logout is discarded instead of handed to whoever is at the screen
-  // now. The abort alone is not enough: a fetch that has already resolved cannot be cancelled.
-  private authSession = 0;
-
-  // One freshness key per leg, because the legs fail on their own. A single key for the whole
-  // load let a passage failure discard what the documents leg had actually loaded, so the next
-  // screen kept type-narrowed rows and counts under a picker reading "All types".
-  //
-  // The picked type is part of the key, not decoration: the rows in memory belong to a query AND
-  // a type, so without it a type change with the same words returns the previous rows untouched.
-  // `null` means never loaded; `''` means loaded with no type picked.
+  // One freshness key per leg, because the legs fail on their own. `null` means never loaded.
   private loadedProjectQuery: string | null = null;
   private loadedDocumentQuery: string | null = null;
-  private loadedDocumentDocType: string | null = null;
-  private loadedChunkQuery: string | null = null;
-  private loadedChunkDocType: string | null = null;
   // Cancels the in-flight search when a newer one starts. Without this the last request to
   // RESOLVE wins each signal rather than the last one issued, and fetchWithRetry's backoff sleeps
   // make that window seconds wide — so a stale response can overwrite a fresh one.
   private searchAbort: AbortController | null = null;
-
-  /**
-   * Whether the rows, counts and chunk-filter banner in memory were read under a document type.
-   * A route change that drops the picked type has to reload them even when the words are the same.
-   *
-   * Read off the DOCUMENTS leg: it owns the rows and the count the picker is describing, and it
-   * answers even when the passage leg does not.
-   */
-  hasLoadedDocType(): boolean {
-    return !!this.loadedDocumentDocType;
-  }
 
   // Computed alphabetical list of boundary names in active layer
   activeBoundaryNames = computed(() => {
@@ -583,38 +459,6 @@ export class RegistryStateService {
 
     console.log('[Registry filteredProjects] Filtered projects result count:', result.length);
     return result;
-  });
-
-  filteredDocuments = computed(() => {
-    const query = this.debouncedSearchQuery().toLowerCase().trim();
-    const gating = this.gatingFilter();
-    const staff = this.isStaff();
-    
-    // Track active filtered projects to align document list with active map/region filters!
-    const projs = this.filteredProjectsNoQuery() || [];
-    const matchedProjectIds = new Set(projs.map(p => p.id));
-
-    const docs = this.documents();
-    if (docs === null) return null;
-
-    return docs.filter(d => {
-      // Unify filtering: only show documents belonging to projects that match our current filters (sector, region, etc.)
-      if (this.activePage() !== 'search' && !matchedProjectIds.has(d.projectId)) return false;
-
-      // 1. Role access gating
-      if (!staff && d.gatingState !== 'admitted') return false;
-
-      // 2. Gating filter selection
-      if (gating.size && !gating.has(d.gatingState || '')) return false;
-
-      // 3. Concatenate search text fields to bypass JSON stringify and speed up search
-      if (query) {
-        const textToSearch = `${d.displayName || ''} ${d.documentFileName || ''} ${d.documentType || ''} ${d.projectName || ''} ${d.orcsCode || ''} ${d.gatingState || ''} ${d.textSnippet || ''} ${(d as any).description || ''}`;
-        if (!this.fuzzyMatch(textToSearch, query)) return false;
-      }
-
-      return true;
-    });
   });
 
   // Geospatial Statistics Computations
@@ -1237,7 +1081,6 @@ export class RegistryStateService {
   // Load datasets from Express api, falling back to rich mock data if empty/fails
   async loadData() {
     this.loadError.set(null);
-    this.chunkLoadError.set(null);
 
     const buildMockProjects = () => {
       return this.mockProjects.map(p => {
@@ -1283,10 +1126,6 @@ export class RegistryStateService {
       console.log('[Registry] Standalone demo mode active. Loading mock dataset.');
       this.projects.set(buildMockProjects());
       this.documents.set(this.mockDocuments);
-      // No mock chunks: extracted text has no fixture, and [] reads as "none" rather than
-      // hanging on the loading sentinel forever. The summary signals are NOT touched here —
-      // `loadSummary()` owns them and has its own mock-mode branch.
-      this.documentChunks.set([]);
       return;
     }
 
@@ -1294,21 +1133,16 @@ export class RegistryStateService {
     // after the first load (two ~370 kB uncompressed responses at ~2 s each), so only a changed
     // query or an empty cache goes back to the API.
     const q = this.searchQuery();
-    const docType = this.selectedDocType();
 
-    // A type narrows documents and passages only — the project read carries no `and[type]`, so on
-    // a type change it would return byte-identical rows. Same words, list already in memory: keep
-    // it rather than re-issue the request and re-map 500 rows.
+    // Same words, list already in memory: keep it rather than re-issue the request and re-map
+    // 500 rows.
     const projectsCached = q === this.loadedProjectQuery && this.projects() !== null;
     // Gated on the project leg as well: a document row carries the project NAME resolved against
     // the list below, so reusing rows while that list is re-read would show names from the old one.
     const documentsCached = projectsCached && q === this.loadedDocumentQuery &&
-      docType === this.loadedDocumentDocType && this.documents() !== null;
-    // No query means no passage leg was issued, so there is nothing of its own to be stale.
-    const chunksCached = !q || (q === this.loadedChunkQuery &&
-      docType === this.loadedChunkDocType && this.documentChunks() !== null);
+      this.documents() !== null;
 
-    if (projectsCached && documentsCached && chunksCached && !this.searching()) {
+    if (projectsCached && documentsCached && !this.searching()) {
       return;
     }
 
@@ -1335,9 +1169,9 @@ export class RegistryStateService {
         console.log('[Registry loadData] Fetching projects from URL:', `${basePath}/search?${projParams}`);
       }
 
-      // Issued together, not in sequence. Nothing here depends on anything else here, and three
-      // serial round trips cost the user three times the latency for no reason. `null` where the
-      // project leg is skipped, so the mapping below can tell "no request" from "empty answer".
+      // Issued together, not in sequence. Neither leg depends on the other, and two serial round
+      // trips cost the user twice the latency for no reason. `null` where the project leg is
+      // skipped, so the mapping below can tell "no request" from "empty answer".
       const projPromise = projectsCached
         ? Promise.resolve(null)
         : this.fetchWithRetry(`${basePath}/search?${projParams}`, { signal })
@@ -1346,17 +1180,13 @@ export class RegistryStateService {
             return res.json();
           });
 
-      // `and[type]` is the only spelling the endpoint filters on, and the value may be several ids
-      // for one label — `,` is the multi-select separator, so the pair still costs one request.
-      const typeParam = docType ? `&and%5Btype%5D=${encodeURIComponent(docType)}` : '';
-
-      let docParams = `dataset=Document&pageSize=500${typeParam}`;
+      let docParams = `dataset=Document&pageSize=500`;
       if (q) {
         docParams += `&keywords=${encodeURIComponent(q)}&fuzzy=true`;
       }
 
-      // Reused on the same terms as the project list: a Retry after a passage failure asks for the
-      // passages only, and re-reading 500 document rows it already has costs the user a second wait.
+      // Reused on the same terms as the project list: re-reading 500 document rows it already has
+      // costs the user a second wait.
       const docPromise = documentsCached
         ? Promise.resolve(null)
         : this.fetchWithRetry(`${basePath}/search?${docParams}`, { signal })
@@ -1365,80 +1195,12 @@ export class RegistryStateService {
             return res.json();
           });
 
-      // Full-text matches from inside the documents. Only meaningful with a query, and a failure
-      // here must not take the whole page down — metadata results are still worth showing. That is
-      // why this leg keeps its own catch instead of riding the shared one below.
-      // A failure answers with its status rather than a bare null, because null already means
-      // "no query, so no passage leg was issued". Collapsing the two rendered a 502 as an empty
-      // panel that read "nothing matched".
-      const chunkPromise: Promise<ChunkLeg | null> = q
-        ? this.fetchWithRetry(
-          `${basePath}/search?dataset=DocumentChunk&pageSize=50&keywords=${encodeURIComponent(q)}&fuzzy=true${typeParam}`,
-          { signal }
-        )
-          .then(async (res) => (res.ok
-            ? { ok: true as const, payload: await res.json() }
-            : { ok: false as const, status: res.status }))
-          .catch((chunkErr) => {
-            if (this.isAbortError(chunkErr)) throw chunkErr;
-            console.warn('[Registry] Full-text chunk search failed:', chunkErr);
-            return { ok: false as const, status: null };
-          })
-        : Promise.resolve(null);
-
       // NO summary leg here. The summariser lives on its own page with its own query and its own
-      // fetch (`loadSummary`), so an ordinary keyword search costs three requests per debounce and
+      // fetch (`loadSummary`), so an ordinary keyword search costs two requests per debounce and
       // never a model call. It briefly rode along on this fan-out, gated on `isAuthenticated()`
       // alone — which meant an authenticated-but-unauthorized user fired a guaranteed 401 on every
       // keystroke, straight into the interceptor's refresh-and-replay.
-      const [apiProjects, apiDocuments, apiChunks] = await Promise.all([
-        projPromise, docPromise, chunkPromise
-      ]);
-
-      if (apiChunks?.ok) {
-        const resultsChunk = apiChunks.payload[0]?.searchResults || [];
-        this.chunkMatchCount.set(apiChunks.payload[0]?.count ?? null);
-        // Set with the rows it describes, not at the top of the load: the previous passages stay
-        // on screen through a refresh, and blanking the mark early would present them as complete
-        // for the length of the request. A load that answers without the mark clears it.
-        this.chunkFilterState.set(
-          docType ? chunkFilterStateFrom(apiChunks.payload[0]?.meta?.[0]) : null
-        );
-        this.documentChunks.set(resultsChunk.map((c: any) => ({
-          id: String(c._id),
-          documentId: String(c.documentId || ''),
-          // `project` is the {_id, name} pair eagle-public's row templates bind. The bare id it
-          // used to be is still accepted so a rollback of the API needs no frontend deploy.
-          // `projectId` is the DEMI id — the Cosmos partition key `fetchDocument`/`getDownloadUrl`
-          // pass back, and the id-space `Project.id` holds. `project._id` is the EAGLE ObjectId
-          // eagle-public's row templates route on, so it is NOT a source for this field; it is only
-          // read as a rollback fallback, from before the API carried both.
-          projectId: c.projectId || c.project?._id || c.project || '',
-          projectName: c.projectName || 'Associated Project',
-          documentName: c.documentName || 'Untitled Document',
-          documentType: c.documentType || 'PDF Document',
-          pageNumber: Number(c.pageNumber) || 0,
-          content: c.content || '',
-          snippet: c.snippet || ''
-        })));
-      } else if (apiChunks) {
-        // The leg ran and failed. Clear the counts and the filter mark — both describe passages
-        // nobody has — and say so, instead of leaving an empty list that claims no matches.
-        this.chunkMatchCount.set(null);
-        this.chunkFilterState.set(null);
-        this.documentChunks.set([]);
-        this.chunkLoadError.set(
-          apiChunks.status === null
-            ? 'Could not search inside the documents — a connection or server error. The document ' +
-              'results below are complete; the passage list is empty, not filtered.'
-            : `Could not search inside the documents (server error ${apiChunks.status}). The ` +
-              'document results below are complete; the passage list is empty, not filtered.'
-        );
-      } else {
-        this.chunkMatchCount.set(null);
-        this.chunkFilterState.set(null);
-        this.documentChunks.set([]);
-      }
+      const [apiProjects, apiDocuments] = await Promise.all([projPromise, docPromise]);
 
       // Skipped entirely when the project list was reused: no rows to re-map, and the count
       // signal still belongs to the query that fetched it.
@@ -1506,19 +1268,16 @@ export class RegistryStateService {
       }
 
       // Skipped entirely when the document list was reused, same as the projects above: no rows
-      // to re-map, and the count signal still belongs to the query and type that fetched it.
+      // to re-map.
       if (apiDocuments) {
         const resultsDoc = apiDocuments[0]?.searchResults || [];
-        this.documentMatchCount.set(apiDocuments[0]?.count ?? null);
 
         if (Array.isArray(resultsDoc) && resultsDoc.length > 0) {
           const mappedDocs: Document[] = resultsDoc.map((d: any) => {
-            // See the chunk mapping above. `projectId` is the DEMI id and is what the two consumers
-            // of this field compare against `Project.id`: `filteredDocuments` (line 446) and
-            // `map-explorer.getProjDocCount`. Taking it from `project._id` — which the envelope
-            // change made an EAGLE ObjectId — compared across id-spaces and matched nothing, so the
-            // per-project document counts read 0 and the document list emptied on every page but
-            // /search. The fallbacks are for a rolled-back API only.
+            // `projectId` is the DEMI id, and `map-explorer.getProjDocCount` compares it against
+            // `Project.id`. Taking it from `project._id` — which the envelope change made an EAGLE
+            // ObjectId — compared across id-spaces and matched nothing, so the per-project document
+            // counts read 0. The fallbacks are for a rolled-back API only.
             const projId = d.projectId || d.project?._id || d.project || '';
             const matchedProj = (this.projects() || []).find(p => p.id === projId || p.legacyEagleId === projId);
             const resolvedProjectName = matchedProj ? matchedProj.name : (d.projectName || 'Associated Project');
@@ -1560,18 +1319,8 @@ export class RegistryStateService {
         }
       }
 
-      // A failed passage leg leaves ITS key unset, and only its own. Committing it would answer the
-      // next pick of the same query or type from a corpus that is missing its passages, so the
-      // Retry control and the picker would both be no-ops with nothing left to try. Clearing the
-      // other legs' keys instead told the app the documents on screen were unfiltered when they
-      // were not, and cost a full re-read on every Retry.
-      if (!this.chunkLoadError()) {
-        this.loadedChunkQuery = q;
-        this.loadedChunkDocType = docType;
-      }
       // Reaching here means these two answered — whether they were fetched or reused.
       this.loadedDocumentQuery = q;
-      this.loadedDocumentDocType = docType;
       this.loadedProjectQuery = q;
       this.searching.set(false);
     } catch (err) {
@@ -1582,13 +1331,9 @@ export class RegistryStateService {
 
       this.searching.set(false);
 
-      // Nothing loaded, so nothing is cached. Leaving the failed query and type as the cache key
-      // makes going back to them — one click, after reverting a type — a guarded no-op: banner
-      // cleared, list still empty, no way left to retry.
+      // Nothing loaded, so nothing is cached. Leaving the failed query as the cache key makes
+      // going back to it a guarded no-op: banner cleared, list still empty, no way left to retry.
       this.loadedDocumentQuery = null;
-      this.loadedDocumentDocType = null;
-      this.loadedChunkQuery = null;
-      this.loadedChunkDocType = null;
       // The project list is cleared below, so its key goes too.
       this.loadedProjectQuery = null;
 
@@ -1599,9 +1344,6 @@ export class RegistryStateService {
       this.projects.set([]);
       this.documents.set([]);
       this.projectMatchCount.set(null);
-      this.documentMatchCount.set(null);
-      this.chunkMatchCount.set(null);
-      this.chunkFilterState.set(null);
       this.loadError.set(
         'Could not load registry data from the API. This is a connection or server error — ' +
         'the list below is empty, not filtered.'
@@ -1691,98 +1433,8 @@ export class RegistryStateService {
     }
   }
 
-  /**
-   * The document type lookup, read once per session. `and[type]=doctype` and not `type=doctype`:
-   * only the `and[...]` spelling reaches the filter, and an unknown bare parameter is a 400.
-   */
-  async loadDocTypes(): Promise<void> {
-    if (this.docTypesLoad) return this.docTypesLoad;
-
-    // The session this answer will belong to, captured before the request goes out.
-    const session = this.authSession;
-    const abort = new AbortController();
-    this.docTypesAbort = abort;
-
-    this.docTypesLoad = (async () => {
-      // Mock mode issues no search request for a type to narrow, so it gets no picker.
-      if (this.config.USE_MOCK_DATA) return;
-      try {
-        const res = await this.fetchWithRetry(
-          `${this.getBasePath()}/search?dataset=List&and%5Btype%5D=doctype&pageSize=250`,
-          { signal: abort.signal }
-        );
-        if (!res.ok) throw new Error(`List API returned status ${res.status}`);
-        const data = await res.json();
-        // Logged out while this was in flight: the options are an authenticated read, so filling
-        // the picker now would put the last session's types in front of the next user.
-        if (session !== this.authSession) return;
-        const options = groupDocTypes(data?.[0]?.searchResults || []);
-        this.docTypeOptions.set(options);
-        // A 200 carrying no rows is a List that is not seeded yet, not an answer: caching it hides
-        // the picker for the rest of the session. Dropped so the next screen entry asks again.
-        if (!options.length) this.docTypesLoad = null;
-      } catch (err) {
-        // A logout cancelled this one. `clearAuthState()` has already dropped the cached promise,
-        // and nothing failed that anyone should hear about.
-        if (this.isAbortError(err)) return;
-
-        // An extra on a screen that works without it: a failed lookup hides the picker rather than
-        // taking the search down, and is retried on the next screen entry.
-        console.warn('[Registry loadDocTypes] failed:', err);
-        // Only this session's cached promise may be cleared. A newer session may already have
-        // started its own lookup, and un-caching that one costs it a duplicate request.
-        if (session === this.authSession) this.docTypesLoad = null;
-      } finally {
-        if (this.docTypesAbort === abort) this.docTypesAbort = null;
-      }
-    })();
-
-    return this.docTypesLoad;
-  }
-
-  /** Pick a type — or '' for all of them — and re-run the current search under it. */
-  setDocType(value: string) {
-    if (value === this.selectedDocType()) return;
-    this.selectedDocType.set(value);
-    this.loadData();
-  }
-
-  /**
-   * Drop the type filter WITHOUT loading. For callers that are about to load anyway.
-   *
-   * A route change clears the filters before it knows the new `?q=`, so loading from here would
-   * fetch the old query's documents and passages for a screen that renders neither — and when the
-   * two queries match, that stale read wins and empties the lists. Clearing the signal alone is
-   * enough: `loadData()` keys its cache on the picked type, so the next load misses and refetches.
-   */
-  clearDocType() {
-    this.selectedDocType.set('');
-  }
-
-  /**
-   * Container counts from `GET /db/stats`.
-   *
-   * The route is behind authMiddleware, so an anonymous caller gets a 401 straight into the
-   * fetch interceptor's refresh-and-replay — same reason loadSummary() gates on isStaff().
-   * Counts documents and projects, NOT chunks: there is no passage total to read here.
-   */
-  dbStats = signal<{ projects: number; trackProjects: number; unlinkedProjects: number; documents: number; boundaries: number } | null>(null);
-
-  async loadDbStats() {
-    if (!this.isStaff() || this.config.USE_MOCK_DATA) return;
-    try {
-      const res = await fetch(`${this.getBasePath()}/db/stats`);
-      if (!res.ok) return;
-      const data = await res.json();
-      this.dbStats.set(data?.stats ?? null);
-    } catch (err) {
-      console.warn('[Registry loadDbStats] failed:', err);
-    }
-  }
-
   resetSelection() {
     this.selectedProject.set(null);
-    this.selectedDocument.set(null);
   }
 
   /** Tick or untick one value of a multi-select filter. */
@@ -1806,14 +1458,10 @@ export class RegistryStateService {
     this.boundaryFilter.set({});
     this.lassoPolygon.set(null);
     this.lassoLabel.set(null);
-    // Unlike the filters above this one is server-side. Dropping it here costs no request: the
-    // caller — a route change on its way to its own `loadData()` — owns the single load.
-    this.clearDocType();
   }
 
   selectProject(proj: Project | null) {
     this.selectedProject.set(proj);
-    this.selectedDocument.set(null);
 
     // The AI Search branch of `GET /search` omits `eaCertificate`; hydrate it from the point read,
     // id-guarded so a slow response never clobbers a newer pick.
@@ -1828,11 +1476,6 @@ export class RegistryStateService {
         })
         .catch(() => {});
     }
-  }
-
-  selectDocument(doc: Document | null) {
-    this.selectedDocument.set(doc);
-    this.selectedProject.set(null);
   }
 
   /**
@@ -2269,19 +1912,6 @@ export class RegistryStateService {
   clearAuthState() {
     this.loadedProjectQuery = null;
     this.loadedDocumentQuery = null;
-    this.loadedDocumentDocType = null;
-    this.loadedChunkQuery = null;
-    this.loadedChunkDocType = null;
-    this.selectedDocType.set('');
-    // The options are an authenticated read, so they belong to the session that fetched them. The
-    // in-flight promise goes too, or `loadDocTypes()` hands the next user the old answer. Ending
-    // the session is all three of these: cancel the request, drop the cache, and retire the token
-    // so a lookup already past the network cannot refill the picker after the logout.
-    this.authSession++;
-    this.docTypesAbort?.abort();
-    this.docTypesAbort = null;
-    this.docTypeOptions.set([]);
-    this.docTypesLoad = null;
     sessionStorage.removeItem('isLoggedIn');
     localStorage.removeItem('isLoggedIn');
 

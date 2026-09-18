@@ -29,7 +29,7 @@
       </button>
       <img class="eao-header__mark app-header__mark" src="assets/bcgov-header-vert.png" alt="Government of British Columbia">
       <div class="app-header__centre">
-        <p class="eao-header__title app-header__title">DEMI — Digital File Library &amp; Registry</p>
+        <p class="eao-header__title app-header__title">DEMI<span class="app-header__title-rest"> — Digital File Library &amp; Registry</span></p>
         @if (service.config.ENVIRONMENT; as env) {
           <span class="app-header__env">{{ env }}</span>
         }
@@ -37,7 +37,7 @@
       <div class="eao-header__actions">
         <button type="button" (click)="infoOpen.set(!infoOpen())" aria-label="How this screen is built" style="display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.85rem; border-radius: var(--layout-border-radius-circular); background: var(--theme-primary-gold); color: var(--surface-color-primary-default); border: none; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16.5"></line><circle cx="12" cy="7.6" r="1.1" fill="currentColor" stroke="none"></circle></svg>
-          How this is built
+          <span class="app-header__how-label">How this is built</span>
         </button>
         <div class="account">
           <button type="button" class="account__chip" (click)="accountOpen.set(!accountOpen())" [attr.aria-expanded]="accountOpen()" aria-label="Account menu">

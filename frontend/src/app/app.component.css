@@ -44,3 +44,55 @@
   outline: var(--layout-border-width-medium) solid var(--theme-primary-gold);
   outline-offset: var(--layout-margin-hair);
 }
+
+/* The title block is the only part of the header row allowed to shrink; the mark, the menu and the
+   actions keep their size, so nothing pushes the row past the viewport and scrolls the page. */
+.app-header__mark,
+.app-header__env,
+.eao-header__actions {
+  flex: 0 0 auto;
+}
+
+.app-header__centre {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-header__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Same breakpoint as SHELL_NARROW_QUERY: where the rail goes off-canvas, the action label goes with
+   it and leaves the row to the service name. The button keeps its aria-label, so the icon is named. */
+@media (max-width: 899.98px) {
+  .app-header__how-label {
+    display: none;
+  }
+}
+
+/* Phone: the long half of the service name is dropped rather than truncated to initials. */
+@media (max-width: 599.98px) {
+  .app-header {
+    gap: var(--layout-margin-small);
+    padding-inline: var(--layout-padding-small);
+  }
+
+  .app-header__mark {
+    height: 44px;
+  }
+
+  .app-header__centre {
+    gap: var(--layout-margin-hair);
+  }
+
+  .app-header__title {
+    font: var(--typography-bold-large-body);
+  }
+
+  .app-header__title-rest {
+    display: none;
+  }
+}

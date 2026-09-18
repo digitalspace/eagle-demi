@@ -56,21 +56,15 @@ export class AppComponent {
     this.router.events.pipe(takeUntilDestroyed()).subscribe(event => {
       if (!(event instanceof NavigationEnd)) return;
       const next = this.keyOf(event.urlAfterRedirects);
-      // Search state is global to the service, so each screen starts clean. Map arrivals may carry a
-      // saved lasso from My account; `?q=` carries the words from an older deep link.
-      // The map keeps its filters but renders no type picker, so the one filter it cannot show or
-      // undo still goes.
+      // Search state is global to the service, so each screen starts clean. Map arrivals may carry
+      // a saved lasso from My account, so the map keeps its filters.
       if (next !== 'map') this.service.clearFilters();
-      else this.service.clearDocType();
-      const q = new URL(event.urlAfterRedirects, location.origin).searchParams.get('q') ?? '';
-      const queryChanged = q !== this.service.searchQuery();
-      // The corpus in memory was narrowed by the type just dropped, so its rows, counts and
-      // dropped callout belong to a filter the picker no longer shows. Re-read them even
-      // when the words are unchanged. The query is applied first, so this load never carries the
-      // one being left behind.
-      const wasTypeFiltered = this.service.hasLoadedDocType();
-      if (queryChanged) this.service.searchQuery.set(q);
-      if (queryChanged || wasTypeFiltered) this.service.loadData();
+      // The corpus in memory was read under the words being left behind, so the screen arriving
+      // has to read it again. Guarded: with nothing typed there is nothing to clear or re-read.
+      if (this.service.searchQuery()) {
+        this.service.searchQuery.set('');
+        this.service.loadData();
+      }
       this.screenKey.set(next);
       this.accountOpen.set(false);
     });

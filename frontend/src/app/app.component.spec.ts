@@ -14,10 +14,6 @@ const okResponse = () => new Response(JSON.stringify([{ searchResults: [] }]), {
 });
 
 describe('AppComponent', () => {
-  // The service installs its own window.fetch wrapper over this spy, so a later read of
-  // window.fetch is the wrapper, not the spy. Keep the handle the spy was created with.
-  let fetchSpy: jasmine.Spy;
-
   beforeEach(async () => {
     // The sidebar state is read from localStorage at construction, so a spec that collapses it
     // would otherwise decide the layout of the ones that follow.
@@ -28,7 +24,7 @@ describe('AppComponent', () => {
     // initKeycloak() -> authSettled() -> loadData(). Unstubbed, that issued a real request,
     // karma answered 404, and the rejection settled after this spec had finished — which jasmine 7
     // reports as a run-level ERROR. See registry-state.service.spec.ts for the full note.
-    fetchSpy = spyOn(window, 'fetch').and.callFake(() => Promise.resolve(okResponse()));
+    spyOn(window, 'fetch').and.callFake(() => Promise.resolve(okResponse()));
 
     await TestBed.configureTestingModule({
       imports: [AppComponent],
@@ -184,15 +180,16 @@ describe('AppComponent', () => {
     expect(service.searchQuery()).toBe('');
   });
 
-  it('takes the search text from ?q= on arrival', async () => {
+  it('does not re-read the search on arrival when there is nothing typed', async () => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);
+    const loadData = spyOn(service, 'loadData');
 
-    await TestBed.inject(Router).navigateByUrl('/workspace?q=Cariboo%20Gold');
+    await TestBed.inject(Router).navigateByUrl('/workspace');
+    await new Promise(resolve => setTimeout(resolve, 0));
 
-    expect(service.searchQuery()).toBe('Cariboo Gold');
+    expect(loadData).not.toHaveBeenCalled();
   });
-
   it('keeps a lasso set before arriving on the map', async () => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);
@@ -203,94 +200,6 @@ describe('AppComponent', () => {
     await router.navigateByUrl('/map');
 
     expect(service.lassoPolygon()).toEqual(RING);
-  });
-
-  /** Document reads issued since the last `fetchSpy.calls.reset()`. */
-  const docReads = () => fetchSpy.calls.all()
-    .map(c => String(c.args[0]))
-    .filter(u => u.includes('dataset=Document&'));
-
-  /** Loads `?q=mine` on a screen other than the map, optionally under a type, then resets the spy. */
-  const arriveWithLoadedSearch = async (docType: string) => {
-    await renderAs(true, false);
-    const service = TestBed.inject(RegistryStateService);
-    await TestBed.inject(Router).navigateByUrl('/workspace?q=mine');
-    service.selectedDocType.set(docType);
-    await service.loadData();
-    fetchSpy.calls.reset();
-    return service;
-  };
-
-  it('re-reads the search on arrival when it drops a document type', async () => {
-    // The type goes because the map renders no picker. The rows, counts and dropped callout
-    // in memory were read under it, so they are stale under a picker that now says "All types".
-    const service = await arriveWithLoadedSearch('id2018');
-
-    await TestBed.inject(Router).navigateByUrl('/map?q=mine');
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    expect(service.selectedDocType()).toBe('');
-    // One load, not two, and it carries the arriving `?q=` rather than the query being left
-    // behind: when the two match, nothing supersedes a stale read and its answer lands here.
-    expect(docReads().length).toBe(1);
-    expect(docReads()[0]).not.toContain('and%5Btype%5D');
-    expect(docReads()[0]).toContain('keywords=mine');
-  });
-
-  it('re-reads a changed query once, under the arriving words, when a type was in force', async () => {
-    const service = await arriveWithLoadedSearch('id2018');
-
-    await TestBed.inject(Router).navigateByUrl('/map?q=caribou');
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    // The query is applied before the load, so the changed words and the dropped type ride the
-    // same single request — never the query the user is leaving.
-    expect(docReads().length).toBe(1);
-    expect(docReads()[0]).toContain('keywords=caribou');
-    expect(docReads()[0]).not.toContain('and%5Btype%5D');
-    expect(service.searchQuery()).toBe('caribou');
-  });
-
-  it('keeps the loaded search on arrival when the query is unchanged and no type was in force', async () => {
-    const service = await arriveWithLoadedSearch('');
-    // Counted at the service, not in the requests: `loadData()` keeps its own cache guard, so a
-    // needless call from here issues nothing and would pass a request count either way.
-    const loadData = spyOn(service, 'loadData');
-
-    await TestBed.inject(Router).navigateByUrl('/map?q=mine');
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    expect(loadData).not.toHaveBeenCalled();
-    expect(service.searchQuery()).toBe('mine');
-  });
-
-  it('re-reads the search on arrival when only the passage leg failed under a type', async () => {
-    // The passage leg fails on its own, and the documents beside it were still read under the
-    // type. One freshness key for the whole load threw that away with the passages, so the map —
-    // which renders no picker — kept type-narrowed rows and counts under "All types", below a
-    // banner still promising the document results were complete.
-    await renderAs(true, false);
-    const service = TestBed.inject(RegistryStateService);
-    await TestBed.inject(Router).navigateByUrl('/workspace?q=mine');
-    fetchSpy.and.callFake((input: any) => Promise.resolve(
-      String(input).includes('dataset=DocumentChunk')
-        ? new Response('bad gateway', { status: 502 })
-        : okResponse()));
-    service.selectedDocType.set('id2018');
-    await service.loadData();
-    expect(service.chunkLoadError()).toContain('502');
-    fetchSpy.calls.reset();
-    fetchSpy.and.callFake(() => Promise.resolve(okResponse()));
-
-    await TestBed.inject(Router).navigateByUrl('/map?q=mine');
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    expect(service.selectedDocType()).toBe('');
-    expect(docReads().length).toBe(1);
-    expect(docReads()[0]).not.toContain('and%5Btype%5D');
-    // The banner describes passages read under a filter that is gone, and claims the documents
-    // next to it are complete. The load that drops the type takes it with it.
-    expect(service.chunkLoadError()).toBeNull();
   });
 
   it('keeps the sidebar open when navigating to the map', async () => {
