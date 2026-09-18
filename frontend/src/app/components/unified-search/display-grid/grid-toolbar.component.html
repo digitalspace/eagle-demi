@@ -6,7 +6,8 @@
   </div>
 
   <div class="display-grid__bar-group display-grid__bar-group--tools">
-    <button type="button" class="display-grid__tool" [class.display-grid__tool--on]="filterCount() > 0"
+    <button type="button" class="display-grid__tool" data-tour="more"
+            [class.display-grid__tool--on]="filterCount() > 0"
             [class.display-grid__tool--open]="panelOpen()" [attr.aria-expanded]="panelOpen()"
             [attr.aria-controls]="panelId" (click)="toggledPanel.emit()">
       More filters
@@ -15,7 +16,8 @@
 
     @if (columns().length > 0) {
       <div class="display-grid__menu-anchor" (keydown)="onKeydown($event)">
-        <button type="button" class="display-grid__tool" [class.display-grid__tool--open]="columnsOpen()"
+        <button type="button" class="display-grid__tool" data-tour="columns"
+                [class.display-grid__tool--open]="columnsOpen()"
                 aria-haspopup="true" [attr.aria-expanded]="columnsOpen()" (click)="toggleColumns()">Columns</button>
         @if (columnsOpen()) {
           <div class="display-grid__menu" role="group" aria-label="Columns shown">

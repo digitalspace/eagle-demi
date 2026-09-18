@@ -1,0 +1,51 @@
+@if (open() && step() && geometry()) {
+  @let tour = step()!;
+  @let geo = geometry()!;
+
+  <div #root class="display-grid__overlay display-grid__tour">
+    <div aria-hidden="true" class="display-grid__tour-panel"
+         [style.top.px]="0" [style.left.px]="0" [style.right.px]="0" [style.height.px]="geo.panelTopHeight"></div>
+    <div aria-hidden="true" class="display-grid__tour-panel"
+         [style.top.px]="geo.panelSideTop" [style.left.px]="0"
+         [style.width.px]="geo.panelLeftWidth" [style.height.px]="geo.panelSideHeight"></div>
+    <div aria-hidden="true" class="display-grid__tour-panel"
+         [style.top.px]="geo.panelSideTop" [style.left.px]="geo.panelRightLeft"
+         [style.right.px]="0" [style.height.px]="geo.panelSideHeight"></div>
+    <div aria-hidden="true" class="display-grid__tour-panel"
+         [style.top.px]="geo.panelBottomTop" [style.left.px]="0" [style.right.px]="0" [style.bottom.px]="0"></div>
+
+    <div aria-hidden="true" class="display-grid__tour-ring"
+         [style.top.px]="geo.ringTop" [style.left.px]="geo.ringLeft"
+         [style.width.px]="geo.ringWidth" [style.height.px]="geo.ringHeight"></div>
+
+    <div #card role="dialog" aria-modal="true" [attr.aria-label]="tour.title"
+         aria-describedby="guided-tour-body" tabindex="-1" class="display-grid__tour-card"
+         [style.width.px]="geo.cardWidth" [style.left.px]="geo.cardLeft"
+         [style.top.px]="geo.cardTop" [style.bottom.px]="geo.cardBottom">
+      <!--
+        A move keeps focus on the card, and refocusing the element already focused fires nothing a
+        reader would hear. The step is spoken from here instead.
+      -->
+      <p aria-live="polite" class="display-grid__visually-hidden">
+        Step {{ index() + 1 }} of {{ steps().length }}. {{ tour.title }}
+      </p>
+      <p class="display-grid__tour-count">Step {{ index() + 1 }} of {{ steps().length }}</p>
+      <h2 class="display-grid__tour-title">{{ tour.title }}</h2>
+      <p id="guided-tour-body" class="display-grid__tour-body">{{ tour.body }}</p>
+      <div class="display-grid__tour-actions">
+        <button type="button" class="display-grid__tour-skip" (click)="end()">Skip tour</button>
+        <span class="display-grid__tour-walk">
+          <button type="button" class="display-grid__tour-back" [disabled]="index() === 0"
+                  (click)="move(-1)">Back</button>
+          <!--
+            Always `move`: it re-reads the page, so a step that has appeared since this card
+            rendered is walked to rather than treated as the end.
+          -->
+          <button type="button" class="display-grid__tour-next" (click)="move(1)">
+            {{ onLastStep() ? 'Done' : 'Next' }}
+          </button>
+        </span>
+      </div>
+    </div>
+  </div>
+}

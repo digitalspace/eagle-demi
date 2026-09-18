@@ -63,12 +63,12 @@ One PR each on `main`. Every phase runs lint, test and build.
 2. Grid, Projects and Documents, new `/search` route. Nav untouched. Specs: sort changes the URL, a filter change resets to page 1, narrow layout renders cards, tab switch keeps the keyword and clears filters, copy link. Done when real rows load from test with one request per pause per type.
 3. Activities, Notifications, inside scope, download. A spec per type; passage list shows "Page N" only when `pageNumbered`; scope switch absent when the flag is off. Done when four tabs and both scopes work on test.
 4. Retire the old screens. Section 4 plus a routing spec for `/index` and `/content` with `q` preserved. Done when nothing references `IndexSearchComponent` or `ContentSearchComponent` and the sidebar shows one Search entry. Done 2026-09-18: `/index` goes to `/search`, `/content` to `/search?record=documents&scope=inside`, both carrying `q` as `keywords`.
-5. Tour, help, wiki. Specs: tour advances, Escape closes, focus returns; dialog traps focus.
+5. Tour, help, wiki. Specs: tour advances, Escape closes, focus returns; dialog traps focus. Done 2026-09-18: the guided tour and the help dialog are on the page, opened by a Search help button beside the record tabs.
 
-## 6. Open decisions
+## 6. Decisions
 
-1. One nav entry merging the two "How this is built" stories, or panel text switching per tab. Before phase 4.
-2. Bulk download: out, or a sixth phase.
-3. "Copy passage id", `/db/stats`, chunk retry: drop, or a home in the toolbar.
-4. Phase 3 with mixed "Page N" coverage until about 2026-09-22, or wait.
-5. Full port or narrow (phases 1 and 2 only). Before phase 1.
+1. One nav entry. The sidebar shows a single Search entry and the two "How this is built" stories are merged (#412).
+2. Bulk download stays out of the unified search page. The bulk download feature DEMI already has is a separate thing and keeps its own screen.
+3. "Copy passage id", `/db/stats` and the chunk retry are dropped. Nothing in the toolbar replaces them.
+4. Phase 3 shipped with mixed "Page N" coverage rather than waiting. The test re-extraction finishes around 2026-09-22, after which every passage carries its page.
+5. Full port, not phases 1 and 2 alone.
