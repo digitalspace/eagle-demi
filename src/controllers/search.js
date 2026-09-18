@@ -1061,6 +1061,7 @@ async function periodRows(access, rows) {
     ? redactAllForAccess('projects', await projectsRepo.listByIds(access, demiIds), access)
     : [];
   const eagleIdByDemiId = new Map(parents.map(p => [String(p.id), p.eagleId ? String(p.eagleId) : null]));
+  const nameByDemiId = new Map(parents.filter(p => p.name).map(p => [String(p.id), p.name]));
 
   const unmatched = demiIds.filter(id => !eagleIdByDemiId.has(id));
   const notificationParents = unmatched.length
@@ -1071,8 +1072,15 @@ async function periodRows(access, rows) {
     eagleIdByDemiId.set(String(parent.id), String(parent.id));
   }
 
-  return cosmosRows('commentPeriods', rows, access, 'CommentPeriod',
-    (row) => ({ project: eagleIdByDemiId.get(String(row.projectId)) || null }));
+  // `projectName` rides on the parent read above, so the home page rail needs no read per card.
+  // Absent, never invented, when the parent is hidden, unnamed, or a notification.
+  return cosmosRows('commentPeriods', rows, access, 'CommentPeriod', (row) => {
+    const name = nameByDemiId.get(String(row.projectId));
+    return {
+      project: eagleIdByDemiId.get(String(row.projectId)) || null,
+      ...(name ? { projectName: name } : {})
+    };
+  });
 }
 
 /**
