@@ -876,3 +876,49 @@ describe('MapExplorerComponent invasive species overlay', () => {
     expect(card.textContent).toBe('No observation here.');
   });
 });
+
+// The other suites stub initMap, which hides anything that depends on the map existing.
+// This one builds the real Leaflet map, the way "Apply on map" arrives at the screen.
+describe('MapExplorerComponent lasso arriving before the map', () => {
+  let fixture: ComponentFixture<MapExplorerComponent>;
+  let service: RegistryStateService;
+
+  beforeEach(async () => {
+    spyOn(window, 'fetch').and.callFake(() =>
+      Promise.resolve(new Response(JSON.stringify([{ searchResults: [] }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+    );
+
+    await TestBed.configureTestingModule({
+      imports: [MapExplorerComponent],
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), provideRouter([])]
+    }).compileComponents();
+
+    service = TestBed.inject(RegistryStateService);
+  });
+
+  afterEach(() => {
+    // Leaflet binds to the #demi-map element, so the map has to go before the next fixture claims the id.
+    fixture?.destroy();
+  });
+
+  // initMap runs in a 50 ms timeout, so give it that plus room for the first paint.
+  const settle = async () => {
+    await new Promise(resolve => setTimeout(resolve, 400));
+    fixture.detectChanges();
+  };
+
+  it('draws a ring that was committed before the component existed', async () => {
+    service.lassoPolygon.set([[-121, 56], [-120, 56], [-120.5, 56.5], [-121, 56]]);
+
+    fixture = TestBed.createComponent(MapExplorerComponent);
+    fixture.detectChanges();
+    await settle();
+
+    const component = fixture.componentInstance as any;
+    expect(component.map).withContext('the real map must have initialised').toBeTruthy();
+    expect(component.lassoLayer).withContext('saved area is on the map when it opens').toBeTruthy();
+  });
+});

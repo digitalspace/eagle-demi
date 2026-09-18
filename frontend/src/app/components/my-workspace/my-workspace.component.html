@@ -1,12 +1,12 @@
 <div class="screen-header">
   <div class="screen-header__text">
     <h1>My account</h1>
-    <p>Everything DEMI keeps for you: saved map areas, your short links, and the preferences that follow you to another browser.</p>
+    <p>Everything DEMI keeps for you: saved map areas, saved queries, your short links, and the preferences that follow you to another browser.</p>
   </div>
 </div>
 
 @if (!service.isAuthenticated()) {
-  <div class="callout callout--warning">Not signed in. Sign in with an IDIR account to see your saved areas and links.</div>
+  <div class="callout callout--warning">Not signed in. Sign in with an IDIR account to see your saved areas, queries and links.</div>
 }
 
 @if (userdata.error()) {
@@ -108,6 +108,34 @@
 </section>
 
 <section class="panel panel--padded">
+  <h2 class="panel__title panel__title--inline">
+    Saved queries
+    <span class="pill pill--info">{{ userdata.queries().length }}</span>
+  </h2>
+  <p class="panel__lede">Searches you saved on <a routerLink="/search">Search</a>. Only you can see them.</p>
+  <ul style="list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto;">
+    @for (query of userdata.queries(); track query.slug) {
+      <li class="kv-row" style="padding: 6px 8px; align-items: center;">
+        <span>
+          <span class="cell__title" style="display: block;">{{ query.name }}</span>
+          <span class="cell__sub">{{ querySummary(query) }} · {{ query.savedAt | date:'dd MMM' }}</span>
+        </span>
+        <span class="row-actions">
+          <button type="button" (click)="openQuery(query)" [attr.aria-label]="'Open ' + query.name + ' in search'"
+            [style]="linkButtonStyle">Open in search</button>
+          <button type="button" (click)="deleteQuery(query)" [attr.aria-label]="'Delete ' + query.name"
+            [style]="linkButtonStyle">Delete</button>
+        </span>
+      </li>
+    } @empty {
+      <li class="cell__sub" style="list-style: none;">
+        @if (userdata.loading()) { Loading… } @else { Run a search on <a routerLink="/search">Search</a> and save it to keep it here. }
+      </li>
+    }
+  </ul>
+</section>
+
+<section class="panel panel--padded">
   <h2 class="panel__title panel__title--inline">My short links</h2>
   <p class="panel__lede">Short URLs you created. Repoint or delete them on <a routerLink="/links">Short URLs</a>.</p>
   <div class="kv-grid">
@@ -129,4 +157,4 @@
   </div>
 </section>
 
-<p class="footnote">Saved areas are stored with your account. Preferences are stored with your account and in this browser; signed out, only the browser copy is used. Short links are readable by anyone holding the URL; marking one personal only keeps it off other people's lists.</p>
+<p class="footnote">Saved areas and saved queries are stored with your account. Preferences are stored with your account and in this browser; signed out, only the browser copy is used. Short links are readable by anyone holding the URL; marking one personal only keeps it off other people's lists.</p>

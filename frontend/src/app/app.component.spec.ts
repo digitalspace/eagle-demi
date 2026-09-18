@@ -226,7 +226,23 @@ describe('AppComponent', () => {
   });
 
   const menuButton = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('.app-header__menu');
+  const railToggle = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('.app-sidebar__toggle')!;
   const sidebar = (el: HTMLElement) => el.querySelector<HTMLElement>('.app-sidebar')!;
+
+  // Above the breakpoint the rail is already on screen and carries its own toggle, so the header
+  // hamburger was a second control for the same thing, sitting left of the BC mark.
+  it('keeps the header hamburger off the header above the breakpoint', async () => {
+    const { el } = await renderAs(true, false);
+
+    expect(menuButton(el)).toBeNull();
+    expect(railToggle(el)).toBeTruthy();
+  });
+
+  it('gives the header a hamburger below the breakpoint, where there is no rail to toggle', async () => {
+    const { el } = await renderAs(true, false, true);
+
+    expect(menuButton(el)).toBeTruthy();
+  });
 
   it('opens the navigation drawer from the header below the breakpoint', async () => {
     const { el, fixture } = await renderAs(true, false, true);
@@ -277,31 +293,51 @@ describe('AppComponent', () => {
   it('leaves the rail in place above the breakpoint', async () => {
     const { el } = await renderAs(true, false);
 
-    expect(menuButton(el)!.getAttribute('aria-expanded')).toBe('true');
+    expect(railToggle(el).getAttribute('aria-expanded')).toBe('true');
     expect(sidebar(el).hasAttribute('data-drawer')).toBe(false);
     expect(sidebar(el).hasAttribute('inert')).toBe(false);
     expect(getComputedStyle(sidebar(el)).position).toBe('static');
   });
 
-  // A 250px rail leaves a 1280px window too little for the search table, and a collapsed stub
-  // would still cost that column its width.
-  it('collapses the rail out of the row from the header above the breakpoint', async () => {
+  // A 250px rail leaves a 1280px window too little for the search table. Collapsed it narrows to a
+  // strip and STAYS IN THE ROW: the toggle inside it is the only control that reopens it, so a rail
+  // taken out of the page here is a rail that cannot come back.
+  it('collapses the rail to a strip from its own toggle above the breakpoint', async () => {
     const { el, fixture } = await renderAs(true, false);
-    const button = menuButton(el)!;
+    const openWidth = sidebar(el).getBoundingClientRect().width;
 
-    button.click();
+    railToggle(el).click();
     fixture.detectChanges();
 
-    expect(button.getAttribute('aria-expanded')).toBe('false');
-    expect(getComputedStyle(sidebar(el)).display).toBe('none');
+    expect(railToggle(el).getAttribute('aria-expanded')).toBe('false');
+    expect(sidebar(el).getAttribute('data-open')).toBe('false');
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(0);
+    expect(getComputedStyle(sidebar(el)).display).not.toBe('none');
     expect(localStorage.getItem(NAV_KEY)).toBe('false');
+
+    const collapsedWidth = sidebar(el).getBoundingClientRect().width;
+    expect(collapsedWidth).toBeGreaterThan(0);
+    expect(collapsedWidth).toBeLessThan(openWidth);
+  });
+
+  it('reopens the rail from the toggle left on the collapsed strip', async () => {
+    const { el, fixture } = await renderAs(true, false);
+
+    railToggle(el).click();
+    fixture.detectChanges();
+    railToggle(el).click();
+    fixture.detectChanges();
+
+    expect(railToggle(el).getAttribute('aria-expanded')).toBe('true');
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(11);
+    expect(localStorage.getItem(NAV_KEY)).toBe('true');
   });
 
   // The state describes one browser window, and PUT /me/prefs refuses keys outside its allow-list.
   it('keeps the collapsed rail out of the account prefs', async () => {
     const { el, fixture } = await renderAs(true, false);
 
-    menuButton(el)!.click();
+    railToggle(el).click();
     fixture.detectChanges();
 
     expect(localStorage.getItem(PREFS_KEY)).toBeNull();
@@ -312,8 +348,9 @@ describe('AppComponent', () => {
 
     const { el } = await renderAs(true, false);
 
-    expect(menuButton(el)!.getAttribute('aria-expanded')).toBe('false');
-    expect(getComputedStyle(sidebar(el)).display).toBe('none');
+    expect(railToggle(el).getAttribute('aria-expanded')).toBe('false');
+    expect(sidebar(el).getAttribute('data-open')).toBe('false');
+    expect(getComputedStyle(sidebar(el)).display).not.toBe('none');
   });
 
   // Off-canvas the button owns the drawer, so a collapsed desktop rail must not reach it.

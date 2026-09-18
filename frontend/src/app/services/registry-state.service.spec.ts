@@ -728,6 +728,62 @@ describe('RegistryStateService — isStaff', () => {
   });
 });
 
+/**
+ * The end-session redirect. Keycloak on test.loginproxy ignores `redirect_uri` here: it answered
+ * 200 with its own "Do you want to log out?" page and the browser never came back, so signing out
+ * left staff stranded on the identity provider.
+ */
+describe('RegistryStateService — logoutUrl', () => {
+  let service: RegistryStateService;
+
+  beforeEach(async () => {
+    localStorage.clear();
+    sharedFetchSpy = stubFetch();
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService]
+    });
+    Object.assign(TestBed.inject(ConfigService).config, {
+      KEYCLOAK_URL: 'https://test.loginproxy.gov.bc.ca/auth',
+      KEYCLOAK_REALM: 'eao-epic',
+      KEYCLOAK_CLIENT_ID: 'eagle-admin-console'
+    });
+    service = TestBed.inject(RegistryStateService);
+    await settleInitialLoad(service);
+  });
+
+  // The pair the realm acts on. Verified against the live endpoint: these two alone answer 302.
+  it('asks Keycloak to send the browser back to this origin when there is no id token', () => {
+    service.keycloak = { idToken: null, clearToken: () => undefined };
+
+    const url = new URL(service.logoutUrl()!);
+
+    expect(url.pathname).toBe('/auth/realms/eao-epic/protocol/openid-connect/logout');
+    expect(url.searchParams.get('post_logout_redirect_uri')).toBe(window.location.origin);
+    expect(url.searchParams.get('client_id')).toBe('eagle-admin-console');
+    expect(url.searchParams.has('redirect_uri')).toBe(false);
+    // An id_token_hint Keycloak cannot validate is a 400, so it goes only when there is a token.
+    expect(url.searchParams.has('id_token_hint')).toBe(false);
+  });
+
+  it('carries the id token as a hint when the session still has one', () => {
+    service.keycloak = { idToken: 'an-id-token', clearToken: () => undefined };
+
+    const url = new URL(service.logoutUrl()!);
+
+    expect(url.searchParams.get('id_token_hint')).toBe('an-id-token');
+    expect(url.searchParams.get('post_logout_redirect_uri')).toBe(window.location.origin);
+    expect(url.searchParams.get('client_id')).toBe('eagle-admin-console');
+    expect(url.searchParams.has('redirect_uri')).toBe(false);
+  });
+
+  // logout() falls back to a reload in this case; there is no session endpoint to visit.
+  it('has no URL to visit when the Keycloak client never loaded', () => {
+    service.keycloak = null;
+
+    expect(service.logoutUrl()).toBeNull();
+  });
+});
+
 describe('RegistryStateService — loadSummary gating', () => {
   let service: RegistryStateService;
 
