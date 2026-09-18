@@ -627,8 +627,15 @@ async function projectDecisionRows(access, limit, now) {
 /** Notification decisions as feed rows. A notification names its project loosely, by label. */
 async function notificationDecisionRows(access, limit, now) {
   const rows = await notificationsRepo.listDecisions(access, { limit, now });
-  return redactAllForAccess('notifications', rows, access)
-    .filter(n => n.decisionDate)
+  const dated = redactAllForAccess('notifications', rows, access).filter(n => n.decisionDate);
+  // A mirrored row with a garbage date would make isoDate throw and 502 the whole home page.
+  const valid = dated.filter(n => !Number.isNaN(new Date(n.decisionDate).getTime()));
+  if (valid.length < dated.length) {
+    logger.warn('[search] home feed dropped notification decisions with an unparseable decisionDate', {
+      ids: dated.filter(n => !valid.includes(n)).map(n => String(n.id))
+    });
+  }
+  return valid
     .map(n => ({
       kind: 'decision',
       id: String(n.id),

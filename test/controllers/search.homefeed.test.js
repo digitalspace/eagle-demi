@@ -19,6 +19,7 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const aiSearch = require('../../src/search/ai-search');
+const { logger } = require('../../src/utils/logger');
 const {
   PROJECT_ROW, PROJECT_EAGLE_ID, NOTIFICATION_EAGLE_ID, specsFor, boundValues, get, getAsStaff, updateRow, notificationRow
 } = require('../helpers/search-reads');
@@ -156,6 +157,53 @@ test('GET /search?dataset=HomeFeed', async (t) => {
       assert.strictEqual(rows[2].headline, 'No further EAO review required');
       assert.strictEqual(body[0].count, 4);
     });
+
+  await t.test('a decision newer than every unpinned update sorts above it, below the pinned rows',
+    async () => {
+      stubFeed(t, {
+        updates: [
+          update('pin-2', 2, { pinned: true }),
+          update('pin-1', 1, { pinned: true }),
+          update('news-3', 3)
+        ],
+        notifications: [notificationRow({ decision: 'Certificate Issued', decisionDate: day(7) })]
+      });
+      stubDecisions(t);
+
+      const { body } = await get('/api/search?dataset=HomeFeed&pageSize=4');
+
+      // The pinned rows are the oldest here, so only the pinned count keeps them in front.
+      assert.deepStrictEqual(body[0].searchResults.map(r => `${r.kind}:${r.id}`), [
+        'update:pin-2',
+        'update:pin-1',
+        `decision:${NOTIFICATION_EAGLE_ID}`,
+        'update:news-3'
+      ]);
+    });
+
+  await t.test('a notification with an unparseable decisionDate is dropped, not a 502', async (st) => {
+    const warn = st.mock.method(logger, 'warn', () => {});
+    stubFeed(t, {
+      updates: [update('news-9', 9)],
+      notifications: [
+        notificationRow({ id: 'bad-date', decision: 'Certificate Issued', decisionDate: 'not a date' }),
+        notificationRow({ decision: 'Certificate Issued', decisionDate: day(7) })
+      ]
+    });
+    stubDecisions(t, [projectHit()]);
+
+    const { status, body } = await get('/api/search?dataset=HomeFeed&pageSize=5');
+
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body[0].searchResults.map(r => `${r.kind}:${r.id}`), [
+      'update:news-9',
+      `decision:${NOTIFICATION_EAGLE_ID}`,
+      `decision:${PROJECT_EAGLE_ID}`
+    ]);
+    const dropped = warn.mock.calls.filter(c => /unparseable decisionDate/.test(c.arguments[0]));
+    assert.strictEqual(dropped.length, 1);
+    assert.deepStrictEqual(dropped[0].arguments[1].ids, ['bad-date']);
+  });
 
   await t.test('only News fills the unpinned slots; a pinned row of any type still leads',
     async () => {
