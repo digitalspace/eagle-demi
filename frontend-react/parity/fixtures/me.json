@@ -1,0 +1,8 @@
+{
+  "roles": ["sysadmin"],
+  "level": 0,
+  "tier": "privileged",
+  "privileged": true,
+  "staffUi": true,
+  "credentials": []
+}

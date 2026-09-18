@@ -1,0 +1,115 @@
+/* Navigation rail. `data-drawer` is set only below SHELL_NARROW_QUERY, so the overlay rules keyed on
+   it are dormant at desktop widths, where the rail sits in the flex row until it is collapsed. */
+
+/* Containing block for the drawer, so it covers the body only — the header, and the button that
+   closes it again, stay reachable. */
+.app__body {
+  position: relative;
+}
+
+.app-sidebar[data-drawer] {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1900; /* over Leaflet's panes (1000), under the header and its menus (2000) */
+  width: min(var(--eao-sidebar-width), 84vw);
+  flex-basis: auto;
+  box-shadow: var(--surface-shadow-medium);
+}
+
+/* Off-canvas and closed, the drawer is taken out of the page rather than slid off it: an
+   off-screen rail still holds focus and is still read out. Set only below the breakpoint. Above it
+   a collapsed rail narrows to a strip instead (`.app-sidebar[data-open='false']`), which keeps its
+   toggle on screen — a rail hidden this way has no control left that can bring it back. */
+.app-sidebar[data-collapsed] {
+  display: none;
+}
+
+/* Animate the rail's collapse/expand (vendor toggles flex-basis + width only, via
+   .app-sidebar[data-open='false']). Desktop only — below SHELL_NARROW_QUERY the rail goes
+   off-canvas instead (.app-sidebar[data-drawer]) and has no width change to animate. */
+@media (prefers-reduced-motion: no-preference) and (min-width: 900px) {
+  .app-sidebar {
+    transition: flex-basis 180ms cubic-bezier(0.2, 0, 0, 1), width 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+}
+
+/* Vendor already clips .app-sidebar with overflow: hidden; stop link labels wrapping to a second
+   line as the width animates, so they clip cleanly instead of reflowing mid-transition. */
+.app-sidebar__link {
+  white-space: nowrap;
+}
+
+.app-header__menu {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--layout-padding-xsmall);
+  background: transparent;
+  color: var(--typography-color-primary-invert);
+  border: none;
+  border-radius: var(--layout-border-radius-small);
+  cursor: pointer;
+}
+
+.app-header__menu:hover {
+  background: var(--theme-primary-gold);
+  color: var(--surface-color-primary-default);
+}
+
+.app-header__menu:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--theme-primary-gold);
+  outline-offset: var(--layout-margin-hair);
+}
+
+/* The title block is the only part of the header row allowed to shrink; the mark, the menu and the
+   actions keep their size, so nothing pushes the row past the viewport and scrolls the page. */
+.app-header__mark,
+.app-header__env,
+.eao-header__actions {
+  flex: 0 0 auto;
+}
+
+.app-header__centre {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-header__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Same breakpoint as SHELL_NARROW_QUERY: where the rail goes off-canvas, the action label goes with
+   it and leaves the row to the service name. The button keeps its aria-label, so the icon is named. */
+@media (max-width: 899.98px) {
+  .app-header__how-label {
+    display: none;
+  }
+}
+
+/* Phone: the long half of the service name is dropped rather than truncated to initials. */
+@media (max-width: 599.98px) {
+  .app-header {
+    gap: var(--layout-margin-small);
+    padding-inline: var(--layout-padding-small);
+  }
+
+  .app-header__mark {
+    height: 44px;
+  }
+
+  .app-header__centre {
+    gap: var(--layout-margin-hair);
+  }
+
+  .app-header__title {
+    font: var(--typography-bold-large-body);
+  }
+
+  .app-header__title-rest {
+    display: none;
+  }
+}

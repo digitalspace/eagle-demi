@@ -1,0 +1,116 @@
+/**
+ * EPIC components. Hand-written — the patterns EAO uses that the B.C. Design System has
+ * no component for. Load after vendor/components.css and eagle.css.
+ *
+ * Every value here is a B.C. token or an --eao-* token. The EPIC apps that these were
+ * lifted from use a pre-BCDS palette (#036, #38598a, #00274e, and a typo'd gold #FCB118);
+ * the shapes are kept, those colours are not — see DESIGN.md.
+ */
+
+/* Header — dark blue bar under a gold rule. The B.C. Design System header is white with
+   a grey hairline; this is the older government treatment that every EPIC app still uses,
+   and it is the most recognisable thing about an EAO service. */
+.eao-header {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-medium);
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--layout-padding-small) var(--layout-padding-large);
+  background: var(--surface-color-primary-default);
+  color: var(--typography-color-primary-invert);
+  border-bottom: var(--layout-border-width-large) solid var(--theme-primary-gold);
+}
+
+.eao-header__mark {
+  /* The visual identity sets the floor for the horizontal mark at 25px. */
+  height: var(--eao-header-mark-height);
+  width: auto;
+}
+
+.eao-header__title {
+  font: var(--typography-bold-large-body);
+  margin: 0;
+}
+
+.eao-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  margin-inline-start: auto;
+}
+
+.eao-header a {
+  color: var(--theme-primary-gold);
+  text-decoration: underline;
+}
+
+.eao-header a:hover {
+  text-decoration: none;
+}
+
+/* Sidebar — the eagle-admin navigation rail. Sections nest one level; the current item is
+   gold, hover inverts to gold-on-blue. The left-rounded corners are deliberate: the rail
+   runs to the viewport edge, so only the inner corners are drawn. */
+.eao-sidebar {
+  box-sizing: border-box;
+  width: var(--eao-sidebar-width);
+  padding: var(--layout-padding-medium) 0 var(--layout-padding-medium) var(--layout-padding-xsmall);
+  background: var(--surface-color-background-dark-blue);
+  color: var(--typography-color-primary-invert);
+  font: var(--typography-regular-body);
+}
+
+.eao-sidebar a {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  border-radius: var(--layout-border-radius-medium) 0 0 var(--layout-border-radius-medium);
+  color: inherit;
+  text-decoration: none;
+}
+
+.eao-sidebar a:hover {
+  background: var(--theme-primary-gold);
+  color: var(--surface-color-primary-default);
+}
+
+.eao-sidebar a[aria-current] {
+  color: var(--theme-primary-gold);
+  font: var(--typography-bold-body);
+}
+
+.eao-sidebar a[aria-current]:hover {
+  color: var(--surface-color-primary-default);
+}
+
+/* A nested run of links belonging to one project. */
+.eao-sidebar__group {
+  background: var(--surface-color-primary-pressed);
+  border-radius: var(--layout-border-radius-medium) 0 0 var(--layout-border-radius-medium);
+  margin: var(--layout-margin-xsmall) 0 var(--layout-margin-small);
+}
+
+.eao-sidebar__group a {
+  padding-inline-start: var(--layout-padding-large);
+  font: var(--typography-regular-small-body);
+}
+
+.eao-sidebar__divider {
+  margin-top: var(--layout-margin-small);
+  padding: var(--layout-padding-small) var(--layout-padding-medium) var(--layout-padding-xsmall);
+  border-top: var(--layout-border-width-small) solid var(--eao-on-dark-divider);
+  color: var(--eao-on-dark-muted);
+  font: var(--typography-bold-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Keyboard focus is gold on both, because the B.C. active blue is invisible against
+   these dark surfaces. */
+.eao-header a:focus-visible,
+.eao-sidebar a:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--theme-primary-gold);
+  outline-offset: var(--layout-margin-hair);
+}

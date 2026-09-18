@@ -1,0 +1,903 @@
+@import '@bcgov/design-tokens/css/variables.css';
+@import '@bcgov/bc-sans/css/BC_Sans.css';
+@import './styles/vendor/eagle.css';
+@import './styles/vendor/components.css';
+@import './styles/vendor/demi-admin.css';
+
+/* App shell layout, from the 2026-08-28-revision handoff (DEMI Demo.dc.html:16-26). */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--surface-color-background-light-gray);
+}
+
+.app {
+  height: 100vh;
+}
+
+.app__body {
+  min-height: 0;
+}
+
+/* `position: relative` is load-bearing, not decoration. `.visually-hidden` is absolutely
+   positioned with no inset, so without a positioned ancestor its containing block is the initial
+   containing block: it is laid out at its static offset measured from the DOCUMENT, which for a
+   label far down this scrolling column is ~3,800px. The document then grew to match and the window
+   scrolled thousands of pixels past a shell that is only 100vh tall. Positioning the scroll
+   container keeps every absolute descendant inside it. */
+.app__main {
+  overflow-y: auto;
+  position: relative;
+}
+
+.app-sidebar {
+  overflow-y: auto;
+}
+
+/* Leaflet panes/controls climb to z-index 1000; the header and its menus must sit above. */
+.app-header {
+  position: relative;
+  z-index: 2000;
+}
+
+.account__menu {
+  z-index: 2100;
+}
+
+/* Loading placeholders. A skeleton must be the same box as the thing it stands in, or the
+   layout jumps when the data lands — the pop-in this replaces. */
+.skeleton {
+  display: block;
+  border-radius: var(--layout-border-radius-small);
+  background-color: var(--surface-color-border-default);
+  background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  background-repeat: no-repeat;
+  background-size: 12rem 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton--text {
+  display: inline-block;
+  height: 1em;
+  vertical-align: middle;
+}
+
+.skeleton--circle {
+  border-radius: var(--layout-border-radius-circular);
+}
+
+@keyframes skeleton-shimmer {
+  from { background-position: -12rem 0; }
+  to { background-position: calc(100% + 12rem) 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background-image: none;
+  }
+}
+
+/* A realm role is one unbroken mono token, so without this a long one runs past its chip. */
+.role-chip {
+  overflow-wrap: anywhere;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Hidden until focused, so keyboard users can jump past the header/nav without seeing clutter. */
+.skip-link {
+  position: absolute;
+  top: -3rem;
+  left: 0;
+  z-index: 2500;
+  padding: 0.6rem 1rem;
+  background: var(--surface-color-primary-default);
+  color: var(--surface-color-background-white);
+  border-radius: 0 0 var(--layout-border-radius-small) 0;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* Map Explorer rail rows. Declared before the selected rule below so that rule's tint and bar win;
+   for the same reason the borders live here rather than inline on the button. */
+.demi-row {
+  box-sizing: border-box;
+  background: var(--surface-color-background-white);
+  border: none;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+/* The rail clips its own overflow, so this bar sits inside the row instead of hanging off it. */
+.demi-row.kv-row--selected {
+  margin-left: 0;
+}
+
+/* The tint alone reads as nothing, so the current row also carries a bar. Gold, not blue: it is the
+   same accent the selected map marker wears, and it holds against the white and the tinted row. */
+.kv-row--selected {
+  background: var(--surface-color-background-light-blue);
+  border-left: 3px solid var(--theme-primary-gold);
+  /* The row's padding is inline, so the bar is hung outside it rather than shifting the text. */
+  margin-left: -3px;
+}
+
+.kv-row--selected .cell__title {
+  font: var(--typography-bold-body);
+  color: var(--surface-color-primary-default);
+}
+
+.kv-row--selected .cell__sub {
+  color: var(--typography-color-primary);
+}
+
+/* Nothing here may resize the icon geometrically: Leaflet positions it with an inline
+   `transform: translate3d(...)`, so a stylesheet `transform` is ignored and a `scale` property
+   multiplies that offset and throws the marker across the map. Rings grow it instead. */
+.demi-marker {
+  background: var(--surface-color-primary-default);
+  border: 2px solid var(--surface-color-background-white);
+  border-radius: 50%;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.demi-marker--staged {
+  background: var(--icons-color-danger);
+  box-shadow: 0 0 8px rgba(206, 62, 57, 0.8);
+}
+
+/* Selection is persistent, so it keeps the blue fill and gains a ring; the gold fill below stays
+   hover's own transient language. */
+.demi-marker--selected {
+  border-color: var(--surface-color-background-white);
+  box-shadow:
+    0 0 0 3px var(--surface-color-background-white),
+    0 0 0 6px var(--theme-primary-gold),
+    0 0 16px rgba(0, 0, 0, 0.45);
+}
+
+/* One expanding ring on arrival, so the eye is told where the selection landed. */
+.demi-marker--arriving::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border: 2px solid var(--theme-primary-gold);
+  border-radius: 50%;
+  animation: demi-marker-pulse 700ms ease-out;
+}
+
+@keyframes demi-marker-pulse {
+  from { transform: scale(1); opacity: 0.9; }
+  to { transform: scale(2.6); opacity: 0; }
+}
+
+/* The ring above is the standing cue, so the pulse is pure decoration and can go. */
+@media (prefers-reduced-motion: reduce) {
+  .demi-marker--arriving::after { content: none; }
+}
+
+/* Everything that is not the selection recedes: project markers, cluster bubbles, wildfire pills.
+   The fade rides on `filter`, not `opacity`: markercluster writes `opacity: 1` inline on every icon
+   it manages, so a stylesheet `opacity` reached only the wildfire pills — the "some things" bug. */
+.demi-map--selection .leaflet-marker-icon:not(.demi-marker--selected) {
+  filter: grayscale(70%) opacity(0.5);
+}
+
+/* A near-black digit survives a fade its mid-tone disc does not, so a dimmed bubble was leaving the
+   count stranded on the basemap. Fading the count further sends the number down with its ground. */
+.demi-map--selection .marker-cluster span {
+  opacity: 0.35;
+}
+
+/* Boundary polygons and spiderfy legs are both drawn into the overlay pane (canvas, since the map
+   is preferCanvas), so they cannot be dimmed apart. They compete for attention, so the pane recedes
+   as one — softly, because the boundaries are the context the selection is being read against. The
+   tile pane below them keeps full strength: dimming it would take the place-names with it. */
+.demi-map--selection .leaflet-overlay-pane {
+  opacity: 0.5;
+}
+
+/* A fire-of-note pulses to be looked at, which is exactly wrong while a project is selected. */
+.demi-map--selection .wildfire-marker-pill.fire-of-note {
+  animation: none;
+}
+
+.demi-marker:hover, .demi-marker.active {
+  background: var(--theme-primary-gold);
+  border-color: var(--surface-color-primary-default);
+  box-shadow: 0 0 0 3px rgba(252, 186, 25, 0.55), 0 0 12px rgba(252, 186, 25, 0.8);
+}
+
+/* Leaflet ships its own Helvetica stack, so every string the map draws — cluster counts, tooltips,
+   attribution — was set in a different face from the rest of the app. */
+.leaflet-container {
+  font-family: var(--typography-font-families-bc-sans), sans-serif;
+}
+
+/* The count needs solid ground under it. At the vendor's 0.6 alpha the basemap's own place-names
+   read through the disc and the digit looks like a rendering fault rather than a number. The outer
+   ring keeps its translucency — nothing is written on it. */
+.marker-cluster div {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
+}
+
+.marker-cluster-small div { background-color: rgb(110, 204, 57); }
+.marker-cluster-medium div { background-color: rgb(240, 194, 12); }
+.marker-cluster-large div { background-color: rgb(241, 128, 23); }
+
+/* Leaflet map: markers, clusters, tooltips — carried over from the pre-redesign styles.css. */
+.map-container {
+  flex: 1;
+  height: 100%;
+  position: relative;
+  background: #e5e9f0;
+}
+
+#map {
+  width: 100%;
+  height: 100%;
+}
+
+.map-overlay-widget {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: var(--surface-color-background-white);
+  border: 1px solid var(--surface-color-border-default);
+  padding: 1.25rem;
+  border-radius: 12px;
+  z-index: 1000;
+  width: 300px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.wildfire-marker-icon {
+  background: transparent;
+  border: none;
+}
+
+.wildfire-marker-pill {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  border: 2px solid #ffffff;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  cursor: pointer;
+}
+
+.wildfire-marker-pill:hover {
+  transform: scale(1.3);
+  box-shadow: 0 0 12px rgba(230, 57, 70, 0.9);
+  z-index: 1000;
+}
+
+.wildfire-marker-pill.fire-of-note {
+  animation: firePulse 1.5s infinite alternate ease-in-out;
+  border-color: #ffb703 !important;
+}
+
+@keyframes firePulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 8px rgba(217, 4, 41, 0.7);
+  }
+  100% {
+    transform: scale(1.3);
+    box-shadow: 0 0 18px rgba(255, 183, 3, 1);
+  }
+}
+
+/* Disable default browser focus outline squares on clicked Leaflet vector layers (polygons) */
+.leaflet-interactive:focus,
+path.leaflet-interactive:focus,
+svg.leaflet-zoom-animated:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Route host elements are display:block; the map screen needs the host to stretch and shrink. */
+.app__main > app-map-explorer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ============================================================================
+   screen: Project summary (/projects/:id)
+
+   One 880px reading column, following the reference status page. Classes rather than the inline
+   styles the other screens use: this page needs a media query (the card grid drops to one column
+   under 600px), :focus-visible, :hover and dialog::backdrop, none of which a style attribute can
+   express. Same place map-explorer's own screen classes live. Every value is a design token.
+   ============================================================================ */
+
+.ps {
+  max-width: 55rem; /* 880px at the 16px root */
+  margin: 0 auto;
+}
+
+.ps__header {
+  margin-bottom: var(--layout-margin-large);
+}
+
+.ps__eyebrow {
+  margin: 0 0 var(--layout-margin-xsmall);
+}
+
+.ps__title {
+  font: var(--typography-bold-h2);
+  margin: 0;
+}
+
+.ps__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
+  font: var(--typography-regular-body);
+  color: var(--typography-color-secondary);
+  margin: var(--layout-margin-xsmall) 0 0;
+}
+
+/* The status card. The 5px bar states the decision a second time in colour; the label beside it
+   is the primary carrier, so nothing is lost when the colour is not perceived. */
+.ps-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-large);
+  justify-content: space-between;
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-left: 5px solid var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-medium);
+  padding: var(--layout-padding-large);
+  margin-bottom: var(--layout-margin-large);
+}
+
+.ps-status--success { border-left-color: var(--support-border-color-success); }
+.ps-status--warning { border-left-color: var(--support-border-color-warning); }
+.ps-status--neutral { border-left-color: var(--surface-color-border-medium); }
+
+.ps-status__body {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+
+.ps-status__label {
+  font: var(--typography-bold-h5);
+  margin: 0;
+}
+
+.ps-status__sentence {
+  font: var(--typography-regular-body);
+  margin: 0;
+}
+
+.ps-status__dates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+  margin: 0;
+  text-align: right;
+}
+
+.ps-status__dates dt {
+  font: var(--typography-bold-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--typography-color-secondary);
+}
+
+.ps-status__dates dd {
+  font: var(--typography-bold-small-body);
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-badge-row {
+  margin: var(--layout-margin-small) 0;
+}
+
+.ps-section {
+  padding: var(--layout-margin-large) 0;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.ps-section:last-child {
+  border-bottom: none;
+}
+
+.ps-section__title {
+  font: var(--typography-bold-h4);
+  margin: 0 0 var(--layout-margin-small);
+}
+
+/* The federal registry's facts: one line above anything generated, links inline with the text. */
+.ps-federal {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  margin: 0 0 var(--layout-margin-medium);
+}
+
+.ps-section__lede {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  max-width: 46rem;
+  margin: 0 0 var(--layout-margin-medium);
+}
+
+/* A one-line answer, not an alert: no generated summary is a normal state of this page. */
+.ps-note {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  background: var(--surface-color-background-light-gray);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-small);
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  margin: 0 0 var(--layout-margin-large);
+}
+
+/* Timeline. Undated phase rows carry an em dash rather than being hidden — the phase happened,
+   the registry just holds no date for it. */
+.ps-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ps-timeline__row {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: var(--layout-margin-medium);
+  padding: var(--layout-padding-small) 0;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  font: var(--typography-regular-small-body);
+}
+
+.ps-timeline__row:last-child {
+  border-bottom: none;
+}
+
+.ps-timeline__date {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-timeline__label {
+  display: block;
+  min-width: 0;
+}
+
+.ps-timeline__mark {
+  margin-left: var(--layout-margin-xsmall);
+}
+
+/* Card grid — two columns, one under 600px. */
+.ps-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--layout-margin-medium);
+}
+
+@media (max-width: 600px) {
+  .ps-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ps-timeline__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .ps-status__dates {
+    text-align: left;
+  }
+}
+
+.ps-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--layout-margin-xsmall);
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  padding: var(--layout-padding-medium);
+  text-align: left;
+}
+
+.ps-card--wide {
+  grid-column: 1 / -1;
+}
+
+.ps-card--action {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ps-card--action:hover {
+  border-color: var(--surface-color-border-active);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+
+.ps-card--action:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ps-card--action {
+    transition: none;
+  }
+}
+
+.ps-card__category {
+  color: var(--typography-color-secondary);
+}
+
+.ps-card__title {
+  font: var(--typography-bold-small-body);
+}
+
+.ps-card__text {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  margin: 0;
+}
+
+/* Gold underline, never gold text: gold on white is about 1.7:1 and cannot carry a label. */
+.ps-card__cue {
+  font: var(--typography-bold-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--typography-color-link);
+  border-bottom: 2px solid var(--theme-primary-gold);
+  margin-top: auto;
+  padding-top: var(--layout-margin-xsmall);
+}
+
+.ps-card__link {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-link);
+  text-decoration: underline;
+}
+
+.ps-card__link--button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.ps-card__link--button:disabled {
+  color: var(--typography-color-disabled);
+  cursor: default;
+}
+
+.ps-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-large);
+  margin: 0;
+}
+
+.ps-figures dt {
+  font: var(--typography-bold-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--typography-color-secondary);
+}
+
+.ps-figures dd {
+  font: var(--typography-bold-h5);
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ps-list__row {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: var(--layout-margin-medium);
+  padding: var(--layout-padding-small) 0;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.ps-list__row:last-child {
+  border-bottom: none;
+}
+
+.ps-list__date {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-list__title {
+  display: block;
+  font: var(--typography-bold-small-body);
+}
+
+.ps-list__text {
+  display: block;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+@media (max-width: 600px) {
+  .ps-list__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}
+
+.ps-unmatched {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-small);
+  font: var(--typography-regular-small-body);
+  padding: var(--layout-padding-small) 0;
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  margin: var(--layout-margin-medium) 0 0;
+}
+
+.ps-unmatched__name {
+  font: var(--typography-bold-small-body);
+}
+
+.ps-unmatched__note {
+  color: var(--typography-color-secondary);
+}
+
+/* The fold the chips sit behind. Inside a card this is the flex item, and a flex item does not
+   shrink below its content unless it is told it may — without these three it hangs off the card. */
+.ps-sources {
+  align-self: stretch;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: var(--layout-margin-small);
+}
+
+/* `list-item` is the summary's own display, and it is what draws the disclosure triangle: set it
+   to inline-block and the marker goes with it, leaving a gold label that looks like nothing. */
+.ps-sources__summary {
+  display: list-item;
+  width: fit-content;
+  font: var(--typography-bold-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--typography-color-link);
+  cursor: pointer;
+}
+
+.ps-sources__summary:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: 2px;
+}
+
+/* Citation chips. Same contract as the AI Summary sources table: a number, the document it points
+   at, and a leg that mints a presigned URL under the caller's own access. */
+.ps-cites {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall);
+  margin: var(--layout-margin-xsmall) 0 0;
+  padding: 0;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ps-cites li {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ps-cite {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--layout-margin-xsmall);
+  max-width: 100%;
+  min-width: 0;
+  background: var(--surface-color-background-light-gray);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-circular);
+  padding: 3px 12px;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-primary);
+  cursor: pointer;
+  text-align: left;
+  /* A registry chip is an anchor rather than a button; the chip is the affordance, not an underline. */
+  text-decoration: none;
+}
+
+.ps-cite:hover {
+  background: var(--surface-color-background-light-blue);
+}
+
+.ps-cite:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: 2px;
+}
+
+.ps-cite:disabled {
+  cursor: default;
+  color: var(--typography-color-secondary);
+}
+
+.ps-cite__n {
+  font: var(--typography-bold-label);
+}
+
+.ps-cite__doc {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 20rem;
+}
+
+.ps-cite__page,
+.ps-cite__action {
+  color: var(--typography-color-secondary);
+  white-space: nowrap;
+}
+
+.ps-cite__action {
+  color: var(--typography-color-link);
+  text-decoration: underline;
+}
+
+/* Condition modal. Native <dialog>: Escape and the top layer come free, and the sheet scrolls
+   inside a viewport-bounded box so a long condition never pushes Close out of reach. */
+.ps-dialog {
+  width: min(38rem, calc(100vw - 2rem));
+  max-height: 85vh;
+  padding: 0;
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  background: var(--surface-color-background-white);
+  color: var(--typography-color-primary);
+}
+
+.ps-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.ps-dialog__sheet {
+  padding: var(--layout-padding-large);
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.ps-dialog__title {
+  font: var(--typography-bold-h4);
+  margin: var(--layout-margin-xsmall) 0 0;
+}
+
+.ps-dialog__bullets {
+  font: var(--typography-regular-body);
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.ps-dialog__bullets li {
+  margin-bottom: var(--layout-margin-small);
+}
+
+.ps-dialog__footnote {
+  margin-top: var(--layout-margin-medium);
+}
+
+.ps-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--layout-margin-medium);
+}
+
+.ps-button {
+  background: var(--surface-color-primary-default);
+  color: var(--surface-color-background-white);
+  border: none;
+  border-radius: var(--layout-border-radius-small);
+  padding: 0.6rem 1.2rem;
+  font: var(--typography-bold-small-body);
+  cursor: pointer;
+}
+
+.ps-button:hover {
+  background: var(--surface-color-primary-hover);
+}
+
+.ps-button:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: 2px;
+}
+
+.ps-footer {
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  padding-top: var(--layout-margin-medium);
+  margin-bottom: var(--layout-margin-large);
+}
+
+.ps-footer p {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  margin: 0 0 var(--layout-margin-xsmall);
+}
+
+.ps-footer a {
+  color: var(--typography-color-link);
+}
+
+.ps__back {
+  display: inline-block;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-link);
+  margin-bottom: var(--layout-margin-small);
+}
+
+/* Project picker. A list of links: hover and focus are the only styling it needs, and neither
+   can be a style attribute. */
+.pp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pp-result {
+  display: block;
+  padding: var(--layout-padding-small);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  color: var(--typography-color-primary);
+  text-decoration: none;
+}
+
+.pp-list li:last-child .pp-result,
+.pp-list .pp-result:last-child {
+  border-bottom: none;
+}
+
+.pp-result:hover {
+  background: var(--surface-color-background-light-gray);
+}
+
+.pp-result:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: -2px;
+}
+
+.pp-result__name {
+  display: block;
+  font: var(--typography-bold-small-body);
+}
+
+.pp-result__meta {
+  display: block;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}

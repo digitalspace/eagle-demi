@@ -1,0 +1,15 @@
+# Compiled output
+/dist
+
+# Node
+/node_modules
+npm-debug.log
+yarn-error.log
+
+# Test and build caches
+/coverage
+*.tsbuildinfo
+
+# System files
+.DS_Store
+Thumbs.db

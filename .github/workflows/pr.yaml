@@ -95,6 +95,38 @@ jobs:
       - name: Build Frontend
         run: yarn --cwd frontend build
 
+  # The React app that will replace frontend/. Both are built until the cutover.
+  test-frontend-react:
+    name: Test & Build React Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Before setup-node: its Yarn 4 cache detection reads the corepack shim (actions/setup-node#1027).
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'yarn'
+          cache-dependency-path: frontend-react/yarn.lock
+
+      - name: Install dependencies
+        run: yarn --cwd frontend-react install --immutable
+
+      - name: Lint
+        run: yarn --cwd frontend-react lint
+
+      - name: Test
+        run: yarn --cwd frontend-react test
+
+      - name: Build
+        run: yarn --cwd frontend-react build
+
   # A schema-touching PR is the only kind that can take production search down (2026-09-08), and it
   # takes it down at DEPLOY time, long after review. Nothing in the other jobs can see it: they test
   # the code against the committed JSON, and both sides of that comparison move in the same PR.
