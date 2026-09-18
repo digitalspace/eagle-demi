@@ -295,6 +295,17 @@ narrowed or revoked, so the cost does not grow with the number of closed project
 grant. `--live` refuses until the P3-2 team-grant model lands. CLI:
 `yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
 
+### Update notifications
+
+When an Update is published, the API tells eagle-notify, which emails subscribers. It sends nothing
+until both `NOTIFY_API_BASE` and `NOTIFY_API_KEY` are set.
+
+The email links to `LINK_BASE_URL` plus a path. By default the path is the project page
+(`/p/<projectId>/project-details`), or `/news` for an update with no project. Set
+`NOTIFY_UPDATE_READER_LINKS=true` (Bicep param `notifyUpdateReaderLinks`) to link the update's own
+page, `/updates/<id>`, instead. Only the React line of eagle-public has that page. Keep the flag off
+while `LINK_BASE_URL` serves the Angular site, which is the case in test and prod today.
+
 ---
 
 ## Tests

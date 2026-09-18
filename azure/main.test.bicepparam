@@ -162,6 +162,8 @@ param roleSyncClientId = 'demi-role-sync'
 // Where a published Update is announced. The key is the vault's `notify-api-key`, named in
 // optionalSecretNames above.
 param notifyApiBase = 'https://notify-api-test.azurewebsites.net'
+// notifyUpdateReaderLinks stays at its false default: test.projects.eao.gov.bc.ca serves the
+// Angular release site (eagle-edge sites[0]), which has no /updates/:id route. Checked 2026-09-18.
 
 // ── Public site access curtain ─────────────────────────────────────────────────────────────────
 // The password POST /api/gate accepts is the vault's `access-gate-password`, named in
