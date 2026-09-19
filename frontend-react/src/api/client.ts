@@ -18,6 +18,11 @@ export class ApiError extends Error {
   }
 }
 
+/** What a failed request or mutation should read as on screen. */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** The `error` string a DEMI error body carries, or null when it has none. */
 export function serverError(body: string): string | null {
   try {

@@ -20,3 +20,8 @@ export function takePendingLasso(): PendingLasso | null {
   pending = null;
   return lasso;
 }
+
+/** A saved area belongs to the person who saved it; a sign-out must not hand it to the next one. */
+export function clearPendingLasso(): void {
+  pending = null;
+}

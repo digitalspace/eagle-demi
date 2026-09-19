@@ -59,7 +59,8 @@ export const routes: RouteObject[] = [
     Component: Shell,
     children: [
       { path: 'workspace', lazy: async () => ({ Component: (await import('./screens/Workspace')).Workspace }) },
-      screen('map', 'map'),
+      // Lazy on its own: maplibre is about 1 MB, and only this screen draws a map.
+      { path: 'map', lazy: async () => ({ Component: (await import('./screens/MapExplorer')).MapExplorer }) },
       screen('search', 'search'),
       legacySearch('index', {}),
       legacySearch('content', { record: 'documents', scope: 'inside' }),

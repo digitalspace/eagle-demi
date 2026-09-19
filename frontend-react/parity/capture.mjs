@@ -141,6 +141,7 @@ function help() {
   --only <routes|states|screens>  Capture just the route screens, the shell states or the
                      per-screen states (empty, error, dialogs, a typed filter)
   --states <list>    Capture only the named states, e.g. projects-empty,projects-error
+  --apps <list>      Which apps to photograph      (default angular,react)
   --dry-run          Launch the browser and print the plan; visit no app
   --help             This text
 
@@ -155,7 +156,7 @@ name, or from PLAYWRIGHT_MODULE. Exit code is non-zero if any capture fails.`);
 }
 
 function parseArgs(argv) {
-  const args = { ...DEFAULTS, dryRun: false, help: false, only: 'all' };
+  const args = { ...DEFAULTS, dryRun: false, help: false, only: 'all', apps: 'angular,react' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') args.help = true;
@@ -163,6 +164,7 @@ function parseArgs(argv) {
     else if (a === '--only') args.only = argv[++i];
     else if (a === '--state-route') args.stateRoute = argv[++i];
     else if (a === '--states') args.states = argv[++i];
+    else if (a === '--apps') args.apps = argv[++i];
     else if (a === '--angular') args.angular = argv[++i];
     else if (a === '--react') args.react = argv[++i];
     else if (a === '--routes') args.routes = argv[++i];
@@ -250,6 +252,68 @@ export async function routeApi(page, misses, state = {}) {
     }
     if (name) misses.add(name);
     await route.fulfill({ contentType: 'application/json', body: '{}' });
+  });
+}
+
+// Basemap tile hosts: Esri for the React map, OpenStreetMap for the Angular one. A capture run
+// must not depend on the internet, and nobody's imagery belongs in a parity shot, so both are
+// answered here with a blank pixel and the map settles on an empty ground.
+const TILE_HOSTS = new Set(['server.arcgisonline.com', 'tile.openstreetmap.org']);
+
+const BLANK_TILE = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64'
+);
+
+export const isTileRequest = (url) => TILE_HOSTS.has(new URL(url).hostname);
+
+async function routeTiles(page) {
+  await page.route(isTileRequest, (route) =>
+    route.fulfill({ status: 200, contentType: 'image/png', body: BLANK_TILE })
+  );
+}
+
+// DataBC serves the wildfire points, the invasive-species tiles and the GetFeatureInfo answers
+// behind the overlays. A capture run must not reach it: the fixtures below are the whole of what
+// those overlays are photographed against.
+export const DATA_HOSTS = new Set(['openmaps.gov.bc.ca']);
+
+export const isDataBcRequest = (url) => DATA_HOSTS.has(new URL(url).hostname);
+
+/** Which fixture answers a DataBC request, by what the query string asks for. */
+export function dataBcFixture(url) {
+  const query = new URL(url).search;
+  if (/request=GetFeatureInfo/i.test(query)) return 'databc-featureinfo.json';
+  if (/request=GetMap/i.test(query)) return 'tile';
+  if (/resultType=hits/i.test(query)) return 'hits';
+  if (/request=GetFeature/i.test(query)) return 'databc-wildfires.json';
+  return null;
+}
+
+/** The `hits` envelope a WFS answers a count with, which is all the species counter reads. */
+const HITS_XML =
+  '<?xml version="1.0" encoding="UTF-8"?>' +
+  '<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" ' +
+  'numberMatched="128" numberReturned="0"/>';
+
+async function routeDataBc(page, misses) {
+  await page.route(isDataBcRequest, async (route) => {
+    const name = dataBcFixture(route.request().url());
+    if (name === 'tile') {
+      await route.fulfill({ status: 200, contentType: 'image/png', body: BLANK_TILE });
+      return;
+    }
+    if (name === 'hits') {
+      await route.fulfill({ status: 200, contentType: 'text/xml', body: HITS_XML });
+      return;
+    }
+    const file = name ? path.join(FIXTURE_DIR, name) : null;
+    if (file && existsSync(file)) {
+      await route.fulfill({ contentType: 'application/json', body: readFileSync(file, 'utf-8') });
+      return;
+    }
+    if (name) misses.add(name);
+    await route.fulfill({ contentType: 'application/json', body: '{"features":[]}' });
   });
 }
 
@@ -457,6 +521,89 @@ function confirmRecorder(selector) {
   };
 }
 
+// --- Map Explorer -----------------------------------------------------------------------------
+// The shared project fixture carries no coordinates, so every row would land on one BC-centre
+// fallback pin. This one spreads them over the province and puts two side by side, so a capture
+// shows single pins and a bubble.
+const MAP_CORPUS = [{ match: /dataset=Project/, file: 'search-project-map.json' }];
+
+/** Both apps draw a project pin with this class, and the selected card with this region. */
+const MAP_MARKER = '.demi-marker';
+/** The rail's "N of M projects" line, which both apps put beside the sort control. */
+const RAIL_COUNT = 'div:has(> label:has(select[aria-label="Sort results"])) > .cell__title';
+
+/** One line, whatever the element wraps onto: a chip carries its own remove button's ✕. */
+const lineOf = async (page, selector) =>
+  (await page.locator(selector).first().innerText()).replace(/\s+/g, ' ').trim();
+const MAP_CARD = '[role="region"][aria-labelledby="demi-selected-title"]';
+const MAP_SECTOR = 'Energy Transmission';
+
+/** Long enough for a fly-to to land; neither app reports the camera coming to rest. */
+const MAP_CAMERA_MS = 1500;
+
+const waitForMap = (page, width, timeout) => page.waitForSelector(MAP_MARKER, { timeout });
+
+// Neither app puts a class on the Layers panel, so it is found by the heading it opens with; the
+// same holds for one filter section. Both apps use these words.
+const LAYERS_PANEL = 'div:has(> .micro-label:text-is("Boundary overlays"))';
+const WILDFIRE_MARKER = '.wildfire-marker-pill';
+const DISTRICT_SECTION = 'div:has(> button:has-text("Regional district"))';
+
+async function openLayers(page, timeout) {
+  await page.locator('button:has-text("Layers")').first().click();
+  await page.waitForSelector(LAYERS_PANEL, { timeout });
+}
+
+const checkbox = (page, panel, label) =>
+  page.locator(`${panel} label:has-text("${label}") input[type="checkbox"]`).first();
+
+/** Every URL a page asked for, so a state can prove an overlay reached the network. */
+const requestLog = new WeakMap();
+
+const requestsMatching = (page, pattern) =>
+  (requestLog.get(page) || []).filter((url) => pattern.test(url));
+
+const boundaryReads = (page) =>
+  requestsMatching(page, /geojson|\/boundaries/).map((url) => new URL(url).pathname);
+
+const wmsTiles = (page) => requestsMatching(page, /request=GetMap/i);
+
+async function selectMapProject(page, timeout) {
+  await page.click('.demi-row:has-text("Sample Delta Pipeline")');
+  await page.waitForSelector(MAP_CARD, { timeout });
+  await page.waitForTimeout(MAP_CAMERA_MS);
+}
+
+// Both apps arm the lasso from a pressed-state button with this word on it, and both draw with
+// pointer events on the map container: React's own handlers, Angular's through Leaflet. So one
+// gesture drives both — a real mouse drag, which Chromium turns into the pointer stream each
+// listens for. Fewer than this many points is discarded as a stray click by both (LASSO_MIN_POINTS).
+const LASSO_BUTTON = 'button[aria-pressed]:has-text("Lasso")';
+const LASSO_CHIP = 'button[aria-label="Remove filter"]:has-text("Lasso area")';
+const LASSO_STEPS = 12;
+
+async function armLasso(page, timeout) {
+  await page.locator(LASSO_BUTTON).first().click();
+  await page.waitForSelector(`${LASSO_BUTTON}[aria-pressed="true"]`, { timeout });
+}
+
+/** Drag a rough circle inside the map pane, big enough to enclose pins and to commit. */
+async function drawLasso(page) {
+  const box = await page.locator('#demi-map').boundingBox();
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const radius = Math.min(box.width, box.height) * 0.3;
+  const at = (i) => {
+    const angle = (i / LASSO_STEPS) * 2 * Math.PI;
+    return [cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)];
+  };
+
+  await page.mouse.move(...at(0));
+  await page.mouse.down();
+  for (let i = 1; i <= LASSO_STEPS; i++) await page.mouse.move(...at(i));
+  await page.mouse.up();
+}
+
 /**
  * Each screen loaded, and every state it reaches only through its own data or a click. `responses`
  * replaces what the API answers with; `prepare` drives the page once it has settled. Same selectors
@@ -551,6 +698,170 @@ export const SCREEN_STATES = [
     widths: [1440, 400],
     responses: [{ match: /dataset=Project/, status: 400, file: 'api-error.json' }],
     ready: '.alert-row'
+  },
+  {
+    // The province-wide opening view. A pin on the page is the proof the map got past its worker
+    // and its style: neither app draws one until the source has been loaded and tiled.
+    name: 'map-loaded',
+    route: '/map',
+    widths: [1440, 1024, 400],
+    responses: MAP_CORPUS,
+    prepare: waitForMap
+  },
+  {
+    name: 'map-selected',
+    route: '/map',
+    widths: [1440],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await selectMapProject(page, timeout);
+    }
+  },
+  {
+    name: 'map-all-fields',
+    route: '/map',
+    widths: [1440],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await selectMapProject(page, timeout);
+      await page.click(`${MAP_CARD} button:has-text("All fields")`);
+      await page.waitForSelector(`${MAP_CARD} .kv-row`, { timeout });
+    }
+  },
+  {
+    name: 'map-filtered',
+    route: '/map',
+    widths: [1440],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await page.click('button:has-text("Filters")');
+      // Both apps open the Sector section first, so its options are on the page already.
+      await page.click(`label:has-text("${MAP_SECTOR} (2)") input[type="checkbox"]`);
+      await page.waitForSelector('button[aria-label="Remove filter"]', { timeout });
+    }
+  },
+  {
+    // Words nothing in the corpus answers. The corpus is served, not emptied: both apps re-filter
+    // the API's answer themselves, and only a loaded corpus has sectors to suggest instead.
+    name: 'map-empty',
+    route: '/map',
+    widths: [1440],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await page.fill('#demi-search-map', 'zzz nothing here matches');
+      await page.waitForSelector('text=No projects match', { timeout });
+      // The rail settles on the debounced query, which arrives after the message itself.
+      await page.waitForTimeout(MAP_CAMERA_MS);
+    }
+  },
+  {
+    name: 'map-layers-open',
+    route: '/map',
+    widths: [1440, 1024, 400],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await openLayers(page, timeout);
+    },
+    fact: async (page) => `layer rows: ${await page.locator(`${LAYERS_PANEL} label`).count()}`
+  },
+  {
+    name: 'map-boundary-overlay',
+    route: '/map',
+    widths: [1440, 1024, 400],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await openLayers(page, timeout);
+      await checkbox(page, LAYERS_PANEL, 'Regional districts').click();
+      await page.waitForTimeout(MAP_CAMERA_MS);
+    },
+    // The boundary read is what the overlay is drawn from; both apps fetch the same asset.
+    fact: async (page) => `boundary reads: ${boundaryReads(page).join(', ') || 'none'}`
+  },
+  {
+    name: 'map-wildfires',
+    route: '/map',
+    widths: [1440, 1024, 400],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await openLayers(page, timeout);
+      await checkbox(page, LAYERS_PANEL, 'Active wildfires').click();
+      await page.waitForSelector(WILDFIRE_MARKER, { timeout });
+    },
+    fact: async (page) => `wildfire markers: ${await page.locator(WILDFIRE_MARKER).count()}`
+  },
+  {
+    name: 'map-invasives',
+    route: '/map',
+    widths: [1440, 1024, 400],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await openLayers(page, timeout);
+      await checkbox(page, LAYERS_PANEL, 'Invasive species observations').click();
+      await page.fill('#demi-invasives-species', 'Baby');
+      await page.waitForTimeout(MAP_CAMERA_MS);
+    },
+    // A WMS tile request only happens once the raster layer is on the map and being drawn.
+    fact: async (page) => {
+      const tile = wmsTiles(page).at(-1);
+      return tile ? `WMS tile: ${decodeURIComponent(tile).slice(0, 160)}` : 'WMS tile: none';
+    }
+  },
+  {
+    name: 'map-boundary-filter',
+    route: '/map',
+    widths: [1440, 1024, 400],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await page.locator('button:has-text("Filters")').first().click();
+      await page.locator(`${DISTRICT_SECTION} > button`).first().click();
+      await page.locator(`${DISTRICT_SECTION} label input[type="checkbox"]`).first().click();
+      await page.waitForSelector('button[aria-label="Remove filter"]', { timeout });
+    },
+    fact: async (page) =>
+      `chip: ${await lineOf(page, 'button[aria-label="Remove filter"]')}`
+  },
+  {
+    // Armed but nothing drawn yet: the button's pressed state and whatever hint each app shows.
+    name: 'map-lasso-armed',
+    route: '/map',
+    widths: [1440, 1024, 400],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      await armLasso(page, timeout);
+    },
+    fact: async (page) =>
+      `lasso armed: ${await page.locator(LASSO_BUTTON).first().getAttribute('aria-pressed')}`
+  },
+  {
+    // A lasso committed by a real drag, which is the only way either app makes one. Both run
+    // signed out here, so neither offers to save it: the chip is the whole of the committed state.
+    name: 'map-lasso-committed',
+    route: '/map',
+    widths: [1440, 1024, 400],
+    responses: MAP_CORPUS,
+    prepare: async (page, width, timeout) => {
+      await waitForMap(page, width, timeout);
+      // The opening camera is still easing when the first pin lands; a ring drawn then encloses
+      // different ground in each app. Neither reports the camera coming to rest, so this waits.
+      await page.waitForTimeout(MAP_CAMERA_MS);
+      await armLasso(page, timeout);
+      await drawLasso(page);
+      await page.waitForSelector(LASSO_CHIP, { timeout });
+      await page.waitForTimeout(MAP_CAMERA_MS);
+    },
+    // The chip says an area is on; the rail count says how much of the corpus it kept.
+    fact: async (page) =>
+      `chip: ${await lineOf(page, LASSO_CHIP)}; rail count: ${await lineOf(page, RAIL_COUNT)}`
   },
   {
     name: 'projects-filtered',
@@ -678,7 +989,7 @@ async function captureScreenStates({ browser, label, base, widths, out, timeout,
   for (const state of SCREEN_STATES.filter((s) => !only || only.includes(s.name))) {
     for (const width of state.widths || widths) {
       const dir = path.join(out, '_screens', state.name, String(width));
-      const { context, page, pageErrors } = await newPage({
+      const { context, page, pageErrors, consoleErrors, failedRequests } = await newPage({
         browser, width, label, misses, failures, state
       });
       try {
@@ -687,6 +998,22 @@ async function captureScreenStates({ browser, label, base, widths, out, timeout,
         if (state.prepare) await state.prepare(page, width, timeout, dir);
         const size = await shoot(page, dir, label, width);
         console.log(`ok   ${label.padEnd(8)}${String(width).padEnd(6)}_screens/${state.name.padEnd(26)}${size}`);
+        // What the state claims it drew, read back off the page, so a green run is more than a
+        // screenshot nobody looked at.
+        if (state.fact) {
+          const fact = await state.fact(page);
+          writeFileSync(path.join(dir, `${label}-fact.txt`), `${fact}\n`);
+          console.log(`fact ${label.padEnd(8)}${String(width).padEnd(6)}${state.name}: ${fact}`);
+        }
+        const noise = [
+          ...pageErrors.map((line) => `page error: ${line}`),
+          ...consoleErrors.map((line) => `console error: ${line}`),
+          ...failedRequests.map((line) => `request failed: ${line}`)
+        ];
+        if (noise.length) {
+          writeFileSync(path.join(dir, `${label}-issues.txt`), noise.join('\n') + '\n');
+          console.log(`note ${label.padEnd(8)}${String(width).padEnd(6)}${state.name}: ${noise.length} issue(s)`);
+        }
       } catch (err) {
         const detail = pageErrors.length ? ` (page error: ${pageErrors[0]})` : '';
         failures.push(`${label} ${width} _screens/${state.name}: ${err.message}${detail}`);
@@ -701,10 +1028,23 @@ async function newPage({ browser, width, label, misses, failures, state = {} }) 
   const context = await browser.newContext({ viewport: { width, height: VIEWPORT_HEIGHT } });
   const page = await context.newPage();
   const pageErrors = [];
+  const consoleErrors = [];
+  const failedRequests = [];
   page.on('pageerror', (err) => pageErrors.push(String(err.message || err)));
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  const requests = [];
+  requestLog.set(page, requests);
+  page.on('request', (request) => requests.push(request.url()));
+  page.on('requestfailed', (request) =>
+    failedRequests.push(`${request.url()} ${request.failure()?.errorText ?? ''}`.trim())
+  );
   await routeEnv(page, failures, label, state.env);
+  await routeTiles(page);
+  await routeDataBc(page, misses);
   await routeApi(page, misses, state);
-  return { context, page, pageErrors };
+  return { context, page, pageErrors, consoleErrors, failedRequests };
 }
 
 async function captureApp({ browser, label, base, routes, widths, out, timeout, misses, failures }) {
@@ -819,7 +1159,9 @@ async function main() {
   const failures = [];
   const browser = await chromium.launch({ headless: true });
   try {
+    const apps = splitList(args.apps);
     for (const [label, base] of [['angular', args.angular], ['react', args.react]]) {
+      if (!apps.includes(label)) continue;
       if (args.only === 'all' || args.only === 'routes') {
         await captureApp({
           browser, label, base, routes, widths, out: args.out, timeout: args.timeout, misses, failures

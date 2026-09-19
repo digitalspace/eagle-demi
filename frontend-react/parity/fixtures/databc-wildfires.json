@@ -1,0 +1,54 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-122.75, 53.9] },
+      "properties": {
+        "FIRE_NUMBER": "C50123",
+        "INCIDENT_NAME": "Sample Creek",
+        "FIRE_STATUS": "Out of Control",
+        "FIRE_OF_NOTE_IND": "Y",
+        "FIRE_CAUSE": "Lightning",
+        "CURRENT_SIZE": 1240.5,
+        "FIRE_CENTRE": 1,
+        "GEOGRAPHIC_DESCRIPTION": "20 km west of Sample Lake",
+        "IGNITION_DATE": "2026-07-18T16:20:00Z"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-119.4, 50.6] },
+      "properties": {
+        "FIRE_NUMBER": "K20455",
+        "FIRE_STATUS": "Being Held",
+        "FIRE_CAUSE": "Person",
+        "CURRENT_SIZE": 86,
+        "FIRE_CENTRE": 2,
+        "GEOGRAPHIC_DESCRIPTION": "Near Sample Valley"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-127.1, 54.6] },
+      "properties": {
+        "FIRE_NUMBER": "R10088",
+        "FIRE_STATUS": "Under Control",
+        "FIRE_CAUSE": "Lightning",
+        "CURRENT_SIZE": 12,
+        "FIRE_CENTRE": 5
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-123.6, 49.4] },
+      "properties": {
+        "FIRE_NUMBER": "V60012",
+        "FIRE_STATUS": "Out",
+        "FIRE_CAUSE": "Unknown",
+        "CURRENT_SIZE": 3,
+        "FIRE_CENTRE": 3
+      }
+    }
+  ]
+}

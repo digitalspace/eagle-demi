@@ -1,5 +1,7 @@
 import Keycloak from 'keycloak-js';
 import { config } from '../config';
+import { boundaryCache } from './boundaries';
+import { clearPendingLasso } from '../map/pending-lasso';
 
 const STAFF_ROLES = ['sysadmin', 'staff', 'demi-admin'];
 
@@ -185,6 +187,8 @@ async function start(): Promise<boolean> {
 
   remember();
   const claims = client.tokenParsed;
+  // Before the store updates: the screens that read cached rows render off the change below.
+  boundaryCache.setOwner((claims?.['preferred_username'] as string) || '');
   setAuth({
     authenticated: true,
     roles: claims?.realm_access?.roles ?? [],
@@ -300,10 +304,14 @@ function keepTokenFresh(): void {
   }, REFRESH_INTERVAL_MS);
 }
 
+/** Sign-out and session-over alike: nothing the last session could read stays behind for the next. */
 function clearAuthState(): void {
   clearInterval(refreshTimer);
   refreshTimer = undefined;
   forget();
+  boundaryCache.clear();
+  boundaryCache.setOwner('');
+  clearPendingLasso();
   setAuth(SIGNED_OUT);
 }
 

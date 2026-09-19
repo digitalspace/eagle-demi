@@ -28,6 +28,18 @@ vi.mock('../api/keycloak', () => ({
   getSessionClaims: () => claims(),
 }));
 
+// The real one needs WebGL. What matters here is that it is lazy, which ring it is handed, and
+// that swapping areas does not build a second map.
+const built = vi.hoisted(() => vi.fn());
+vi.mock('../map/MiniMap', async () => {
+  const { useEffect } = await import('react');
+  const FakeMiniMap = ({ ring }: { ring: number[][] }) => {
+    useEffect(built, []);
+    return <div data-testid="mini-map" data-ring={JSON.stringify(ring)} />;
+  };
+  return { default: FakeMiniMap };
+});
+
 const navigate = vi.fn();
 vi.mock('react-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-router')>()),
@@ -84,6 +96,7 @@ const areaRows = () => screen.getAllByRole('listitem').filter((row) => row.query
 beforeEach(() => {
   vi.unstubAllGlobals();
   navigate.mockClear();
+  built.mockClear();
   claims.mockReturnValue(CLAIMS);
   localStorage.clear();
 });
@@ -95,7 +108,7 @@ describe('Workspace', () => {
 
     expect(await screen.findByRole('button', { name: /Skeena/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Peace/ })).toBeTruthy();
-    expect(screen.getByRole('group', { name: 'Map of Skeena' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Map of Skeena' })).toBeTruthy();
   });
 
   it('swaps the preview to the area picked from the list', async () => {
@@ -104,7 +117,34 @@ describe('Workspace', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /Peace/ }));
 
-    expect(screen.getByRole('group', { name: 'Map of Peace' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Map of Peace' })).toBeTruthy();
+  });
+
+  it('draws the selected area on the preview map and redraws it on a swap', async () => {
+    loaded();
+    renderWorkspace();
+
+    const drawn = await screen.findByTestId('mini-map');
+    expect(JSON.parse(drawn.dataset['ring'] as string)).toEqual(LASSOS[0].ring);
+
+    await userEvent.click(screen.getByRole('button', { name: /Peace/ }));
+
+    expect(JSON.parse(screen.getByTestId('mini-map').dataset['ring'] as string)).toEqual(
+      LASSOS[1].ring,
+    );
+    // The same map, re-framed: rebuilding it would throw away the WebGL context and its worker.
+    expect(built).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the map out of the page when the account has no saved area', async () => {
+    serve({
+      '/api/me/data': () => json({ ...MY_DATA, lassos: [] }),
+      '/api/links': () => json(LINKS),
+    });
+    renderWorkspace();
+
+    expect(await screen.findByText(/Draw a lasso on/)).toBeTruthy();
+    expect(screen.queryByTestId('mini-map')).toBeNull();
   });
 
   it('marks only the selected row', async () => {
@@ -134,7 +174,7 @@ describe('Workspace', () => {
     await userEvent.click(within(skeena).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(screen.queryByRole('button', { name: /Skeena/ })).toBeNull());
-    expect(screen.getByRole('group', { name: 'Map of Peace' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Map of Peace' })).toBeTruthy();
   });
 
   it('deletes a saved area by its slug', async () => {

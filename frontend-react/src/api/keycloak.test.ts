@@ -380,6 +380,18 @@ describe('refresh sharing', () => {
     }
   });
 
+  // The 401 path refreshes before it replays; a refresh that fails is the session ending.
+  it('drops the cached rows when the refresh behind a 401 fails', async () => {
+    const { refreshToken } = await signedIn();
+    const { boundaryCache } = await import('./boundaries');
+    boundaryCache.set('municipalities', [{ name: 'Victoria' }]);
+    keycloak.updateToken.mockRejectedValue(new Error('refresh token expired'));
+
+    await expect(refreshToken()).rejects.toThrow('refresh token expired');
+
+    expect(boundaryCache.get('municipalities')).toBeUndefined();
+  });
+
   it('signs the store out when the keep-fresh tick fails', async () => {
     vi.useFakeTimers();
     try {
@@ -433,6 +445,20 @@ describe('logout', () => {
     expect(getToken()).toBeUndefined();
     expect(localStorage.getItem('isLoggedIn')).toBeNull();
     expect(keycloak.clearToken).toHaveBeenCalled();
+  });
+
+  it('drops the rows and the handed-over area the session could read', async () => {
+    const { logout } = await signedIn();
+    const { boundaryCache } = await import('./boundaries');
+    const { setPendingLasso, takePendingLasso } = await import('../map/pending-lasso');
+    boundaryCache.set('municipalities', [{ name: 'Victoria' }]);
+    setPendingLasso({ ring: [[-125, 54]], label: 'Skeena' });
+
+    logout();
+
+    expect(boundaryCache.get('municipalities')).toBeUndefined();
+    expect(takePendingLasso()).toBeNull();
+    expect(localStorage.getItem('demi_boundaries_cache:idir\\jane')).toBeNull();
   });
 
   // No client means no end-session endpoint to visit. Reload anyway, so privileged rows still

@@ -14,6 +14,7 @@ import {
   type MintRequest,
 } from '../api/api-keys';
 import { checkbox, linkButton, primaryButton, secondaryButton, stack, textInput } from './controls';
+import { errorMessage } from '../api/client';
 
 /** Status to pill modifier, from the demo spec's KEY_PILL. */
 const PILL: Record<KeyStatus, string> = {
@@ -39,8 +40,6 @@ function scopeLabel(key: ApiKey): string {
   return key.projectScope && key.projectScope.length ? key.projectScope.join(', ') : 'All projects';
 }
 
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 export function ApiKeys() {
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: API_KEYS_QUERY, queryFn: listApiKeys });
@@ -63,7 +62,7 @@ export function ApiKeys() {
   /** The mint route refuses a write role unless allowWrite is confirmed, so the box only appears then. */
   const needsAllowWrite = grantsWrite(roles);
 
-  const readError = query.error ? message(query.error) : '';
+  const readError = query.error ? errorMessage(query.error) : '';
   const shown = error || readError;
 
   const reload = () => queryClient.invalidateQueries({ queryKey: API_KEYS_QUERY });
@@ -76,7 +75,7 @@ export function ApiKeys() {
       await reload();
       return true;
     } catch (err) {
-      setError(message(err));
+      setError(errorMessage(err));
       return false;
     }
   }
@@ -88,7 +87,7 @@ export function ApiKeys() {
       await reload();
       return true;
     } catch (err) {
-      setError(message(err));
+      setError(errorMessage(err));
       return false;
     }
   }

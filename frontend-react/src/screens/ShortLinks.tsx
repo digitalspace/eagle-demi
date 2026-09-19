@@ -10,6 +10,7 @@ import {
   type ShortLink,
 } from '../api/links';
 import { getSessionClaims } from '../api/keycloak';
+import { errorMessage } from '../api/client';
 import { linkButton, primaryButton, stack, textInput } from './controls';
 import { dayMonth } from '../dates';
 
@@ -26,8 +27,6 @@ const editInput: CSSProperties = {
   borderRadius: 'var(--layout-border-radius-small)',
   font: 'var(--typography-regular-small-body)',
 };
-
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** Mine first, then everyone's. Empty groups are dropped rather than shown as a bare heading. */
 function linkGroups(links: ShortLink[], me: string): { title: string; rows: ShortLink[] }[] {
@@ -64,7 +63,7 @@ export function ShortLinks() {
   /** The read failure already dismissed, so a later one is shown again rather than swallowed. */
   const [dismissedRead, setDismissedRead] = useState<unknown>(null);
 
-  const readError = query.error && query.error !== dismissedRead ? message(query.error) : '';
+  const readError = query.error && query.error !== dismissedRead ? errorMessage(query.error) : '';
   const shown = error || readError;
 
   const reload = () => queryClient.invalidateQueries({ queryKey: LINKS_QUERY });
@@ -76,7 +75,7 @@ export function ShortLinks() {
       await reload();
       return true;
     } catch (err) {
-      setError(message(err));
+      setError(errorMessage(err));
       return false;
     }
   }

@@ -1,6 +1,7 @@
-import { useState, type CSSProperties } from 'react';
+import { Suspense, lazy, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { getSessionClaims } from '../api/keycloak';
+import { errorMessage } from '../api/client';
 import { isMine, useLinks } from '../api/links';
 import { useDeleteLasso, useDeleteQuery, useMyData, useSavePrefs, type SavedLasso } from '../api/me';
 import { setPendingLasso } from '../map/pending-lasso';
@@ -34,7 +35,6 @@ const rowButton: CSSProperties = {
   cursor: 'pointer',
 };
 
-/** The map is a later slice; the container and its label stay so the panel keeps its shape. */
 const mapPreview: CSSProperties = {
   height: 260,
   border: 'var(--layout-border-width-small) solid var(--surface-color-border-default)',
@@ -42,14 +42,16 @@ const mapPreview: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
+  overflow: 'hidden',
 };
+
+/** Kept out of this screen's chunk: a workspace with no saved area never loads the map library. */
+const MiniMap = lazy(() => import('../map/MiniMap'));
 
 function initialsOf(name: string): string {
   const words = name.split(/\s+/).filter(Boolean);
   return words.slice(0, 2).map((word) => word[0].toUpperCase()).join('') || '—';
 }
-
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 export function Workspace() {
   const navigate = useNavigate();
@@ -136,7 +138,7 @@ export function Workspace() {
         </div>
       )}
 
-      {failure && <div className="callout callout--warning">{message(failure)}</div>}
+      {failure && <div className="callout callout--warning">{errorMessage(failure)}</div>}
 
       <div className="panel-grid" style={panelGrid}>
         <section className="panel panel--padded">
@@ -277,9 +279,13 @@ export function Workspace() {
                 </li>
               ))}
             </ul>
-            {/* role="group", not img: the container is a live map whose children stay reachable. */}
-            <div role="group" aria-label={`Map of ${selected?.name}`} style={mapPreview}>
-              <span className="cell__sub">Map preview</span>
+            {/* The preview has nothing to click: to a reader it is a picture of the saved area. */}
+            <div role="img" aria-label={`Map of ${selected?.name}`} style={mapPreview}>
+              {selected && (
+                <Suspense fallback={<span className="cell__sub">Loading map…</span>}>
+                  <MiniMap ring={selected.ring} />
+                </Suspense>
+              )}
             </div>
           </div>
         ) : (

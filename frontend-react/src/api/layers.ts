@@ -69,6 +69,8 @@ export function wildfiresUrl(): string {
 
 /** DataBC's current fires. Fetched afresh every time the overlay goes on: the set changes hourly. */
 export async function fetchWildfires(signal?: AbortSignal): Promise<FeatureCollection> {
+  // DataBC's gateway only answers CORS when a Referer header is present, so the default
+  // referrer policy (strict-origin-when-cross-origin) has to stay; no-referrer breaks it.
   const res = await fetch(wildfiresUrl(), { signal });
   if (!res.ok) throw new Error(`Wildfire layer unavailable (HTTP ${res.status})`);
   const data: unknown = await res.json();
@@ -161,7 +163,7 @@ export const INVASIVES_SLD =
   '<CssParameter name="stroke-dasharray">4 2</CssParameter></Stroke></PolygonSymbolizer>' +
   '<PointSymbolizer><Graphic><Mark><WellKnownName>circle</WellKnownName>' +
   `<Stroke><CssParameter name="stroke">${INVASIVES_GREEN}</CssParameter>` +
-  '<CssParameter name="stroke-width">1.5</CssParameter></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>' +
+  '<CssParameter name="stroke-width">1.5</CssParameter></Stroke></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>' +
   '</FeatureTypeStyle></UserStyle></NamedLayer></StyledLayerDescriptor>';
 
 /** The style's two rules, as CQL, so the count can be split the same way the map is. */
@@ -174,11 +176,14 @@ export const INVASIVES_FILTER_DEBOUNCE_MS = 400;
 /** The tiles sit over the basemap but under the project markers. */
 export const INVASIVES_RASTER_OPACITY = 0.7;
 
-/** A CQL string literal: quotes double, and % and _ are wildcards unless escaped. */
+/**
+ * A CQL string literal: quotes double, and % and _ are wildcards unless escaped. The backslash is
+ * escaped first, or a typed one would turn the wildcard escape that follows it back into a wildcard.
+ */
 export function invasivesCql(species: string): string {
   const term = species.trim();
   if (!term) return '';
-  const literal = term.replace(/'/g, "''").replace(/[%_]/g, (match) => `\\${match}`);
+  const literal = term.replace(/'/g, "''").replace(/[\\%_]/g, (match) => `\\${match}`);
   return `INVASIVE_PLANT ILIKE '%${literal}%'`;
 }
 
@@ -305,6 +310,12 @@ export async function fetchInvasiveObservation(
 ): Promise<InvasiveObservation | null> {
   const res = await fetch(featureInfoUrl(view, species), { signal });
   if (!res.ok) throw new Error(`Observation lookup failed (HTTP ${res.status})`);
+  // A WMS exception answers HTTP 200 with an XML content-type where JSON was asked; treat it as
+  // a failed read rather than let it fall through to a raw JSON parse error.
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('json')) {
+    throw new Error(`Observation lookup failed (content-type ${contentType || 'unknown'})`);
+  }
   const data = (await res.json()) as { features?: { properties?: Props }[] } | null;
   return parseInvasiveObservation(data?.features?.[0]?.properties ?? null);
 }

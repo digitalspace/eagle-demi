@@ -84,13 +84,56 @@ export function toFeatureCollection(rows: BoundaryRow[]): FeatureCollection<Boun
   };
 }
 
-const CACHE_KEY = 'demi_boundaries_cache';
+const CACHE_KEY_PREFIX = 'demi_boundaries_cache';
+
+/** Which rows a person may see depends on who they are, so each signer-in gets their own store. */
+const ANONYMOUS_OWNER = 'anonymous';
+let owner = ANONYMOUS_OWNER;
+
+function cacheKey(): string {
+  return `${CACHE_KEY_PREFIX}:${owner}`;
+}
+
+/** A position is a pair of finite numbers; anything above it is a ring, a polygon or a list of them. */
+function isCoordinates(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  if (typeof value[0] === 'number') {
+    return value.length >= 2 && value.every((n) => typeof n === 'number' && Number.isFinite(n));
+  }
+  return value.every(isCoordinates);
+}
+
+function isGeometry(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const geometry = value as { type?: unknown; coordinates?: unknown };
+  return typeof geometry.type === 'string' && isCoordinates(geometry.coordinates);
+}
+
+function isRow(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  for (const field of ['_id', 'name', 'type', 'code']) {
+    if (row[field] !== undefined && typeof row[field] !== 'string') return false;
+  }
+  return (
+    (row['geometry'] === undefined || isGeometry(row['geometry'])) &&
+    (row['simplifiedGeometry'] === undefined || isGeometry(row['simplifiedGeometry']))
+  );
+}
+
+function isCache(value: unknown): value is Record<string, BoundaryRow[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).every((rows) => Array.isArray(rows) && rows.every(isRow));
+}
 
 function restore(): Record<string, BoundaryRow[]> {
   try {
-    const raw = window.localStorage?.getItem(CACHE_KEY);
+    const raw = window.localStorage?.getItem(cacheKey());
     const parsed: unknown = raw ? JSON.parse(raw) : null;
-    if (parsed && typeof parsed === 'object') return parsed as Record<string, BoundaryRow[]>;
+    if (parsed === null) return {};
+    if (isCache(parsed)) return parsed;
+    // Not what this module wrote: drop it rather than hand the map something to choke on.
+    window.localStorage?.removeItem(cacheKey());
   } catch {
     // A corrupt or blocked store costs a refetch, nothing more.
   }
@@ -104,7 +147,7 @@ function persist(cache: Record<string, BoundaryRow[]>): void {
       // Geometry is megabytes and would blow the quota; only the names survive a reload.
       stripped[key] = rows.map(({ geometry: _g, simplifiedGeometry: _s, ...rest }) => rest);
     }
-    window.localStorage?.setItem(CACHE_KEY, JSON.stringify(stripped));
+    window.localStorage?.setItem(cacheKey(), JSON.stringify(stripped));
   } catch {
     // Quota or private mode: the in-memory cache still works for this visit.
   }
@@ -125,7 +168,18 @@ export const boundaryCache = {
   },
   clear(): void {
     cache = {};
-    persist(cache);
+    try {
+      window.localStorage?.removeItem(cacheKey());
+    } catch {
+      // Blocked store: the in-memory cache is already empty, which is what this visit reads.
+    }
+  },
+  /** The signed-in `preferred_username`, or '' for a signed-out visitor. */
+  setOwner(name: string): void {
+    const next = name || ANONYMOUS_OWNER;
+    if (next === owner) return;
+    owner = next;
+    cache = restore();
   },
 };
 

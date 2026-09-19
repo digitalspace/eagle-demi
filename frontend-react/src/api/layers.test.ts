@@ -5,6 +5,7 @@ import {
   fetchInvasiveMatches,
   fetchInvasiveObservation,
   fetchWildfires,
+  INVASIVES_SLD,
   invasivesCql,
   invasivesTileUrl,
   parseHits,
@@ -22,7 +23,8 @@ const VIEW: MapView = {
   pixel: { x: 400.4, y: 299.7 },
 };
 
-const jsonAnswer = (body: unknown) => ({ ok: true, json: async () => body }) as Response;
+const jsonAnswer = (body: unknown) =>
+  ({ ok: true, headers: new Headers({ 'content-type': 'application/json' }), json: async () => body }) as Response;
 const textAnswer = (body: string) => ({ ok: true, text: async () => body }) as Response;
 
 const hitsXml = (matched: number) =>
@@ -51,6 +53,19 @@ describe('invasivesCql', () => {
 
   it('filters on nothing when only whitespace was typed', () => {
     expect(invasivesCql('   ')).toBe('');
+  });
+
+  // A typed backslash escaped last would have turned the escape in front of the % into a literal
+  // one, handing the wildcard straight back to the server.
+  it('escapes a typed backslash before the wildcard it sits in front of', () => {
+    expect(invasivesCql('a\\%b')).toBe("INVASIVE_PLANT ILIKE '%a\\\\\\%b%'");
+  });
+});
+
+describe('INVASIVES_SLD', () => {
+  it('parses as well-formed XML', () => {
+    const doc = new DOMParser().parseFromString(INVASIVES_SLD, 'application/xml');
+    expect(doc.getElementsByTagName('parsererror')).toHaveLength(0);
   });
 });
 
@@ -170,17 +185,19 @@ describe('invasive observation', () => {
     await expect(fetchInvasiveObservation(VIEW)).resolves.toBeNull();
   });
 
-  // GeoServer answers an error with an XML exception report, so the JSON parse rejects. A failed
-  // read must not read as a click that found bare ground.
+  // GeoServer answers an exception report as HTTP 200 with an XML content-type where JSON was
+  // asked. The content-type check must catch it before the JSON parse would, so `json` here is
+  // never called; if it were, it would throw a raw SyntaxError instead of this message.
   it('fails loudly when the service answers an exception report', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
+      headers: new Headers({ 'content-type': 'application/vnd.ogc.se_xml' }),
       json: async () => {
         throw new SyntaxError('Unexpected token <');
       },
     } as unknown as Response);
 
-    await expect(fetchInvasiveObservation(VIEW)).rejects.toThrow();
+    await expect(fetchInvasiveObservation(VIEW)).rejects.toThrow('Observation lookup failed');
   });
 
   it('fails loudly on a refused read', async () => {
@@ -261,6 +278,15 @@ describe('wildfires', () => {
     fetchMock.mockResolvedValue(jsonAnswer({ error: 'service unavailable' }));
 
     await expect(fetchWildfires()).resolves.toEqual({ type: 'FeatureCollection', features: [] });
+  });
+
+  // DataBC's gateway answers CORS only when a Referer header goes out; no-referrer breaks it.
+  it('sends no referrerPolicy, so the browser default carries the Referer', async () => {
+    fetchMock.mockResolvedValue(jsonAnswer({ type: 'FeatureCollection', features: [] }));
+
+    await fetchWildfires();
+
+    expect(fetchMock.mock.calls[0][1]).not.toHaveProperty('referrerPolicy');
   });
 
   it('names the incident and the fire number together', () => {

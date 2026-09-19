@@ -129,7 +129,7 @@ describe('loadBoundaries', () => {
 
     await loadBoundaries('regionalDistricts');
 
-    const stored = JSON.parse(window.localStorage.getItem('demi_boundaries_cache') ?? '{}');
+    const stored = JSON.parse(window.localStorage.getItem('demi_boundaries_cache:anonymous') ?? '{}');
     expect(stored.regionalDistricts).toEqual([{ name: 'Capital', code: 'CRD' }]);
   });
 });
@@ -159,6 +159,66 @@ describe('loadBoundaryGeometry', () => {
   it('asks nothing for the all-boundaries placeholder', async () => {
     await expect(loadBoundaryGeometry('electoralDistricts', 'all')).resolves.toBeNull();
     expect(apiMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('the stored cache', () => {
+  const ANONYMOUS_KEY = 'demi_boundaries_cache:anonymous';
+  const JANE_KEY = 'demi_boundaries_cache:idir\\jane';
+
+  /** A fresh module, because the store is read once as it loads. */
+  const reload = async () => {
+    vi.resetModules();
+    return import('./boundaries');
+  };
+
+  it('reads back rows it wrote', async () => {
+    window.localStorage.setItem(ANONYMOUS_KEY, JSON.stringify({ municipalities: [{ name: 'Victoria', code: 'VIC' }] }));
+
+    const { boundaryCache: reloaded } = await reload();
+
+    expect(reloaded.get('municipalities')).toEqual([{ name: 'Victoria', code: 'VIC' }]);
+  });
+
+  it('drops a planted string where rows belong', async () => {
+    window.localStorage.setItem(ANONYMOUS_KEY, JSON.stringify({ municipalities: 'not rows' }));
+
+    const { boundaryCache: reloaded } = await reload();
+
+    expect(reloaded.get('municipalities')).toBeUndefined();
+    expect(window.localStorage.getItem(ANONYMOUS_KEY)).toBeNull();
+  });
+
+  it('drops a planted row whose geometry is not coordinates', async () => {
+    const planted = {
+      municipalities: [{ name: 'Victoria', geometry: { type: 'Polygon', coordinates: [[['x', null]]] } }],
+    };
+    window.localStorage.setItem(ANONYMOUS_KEY, JSON.stringify(planted));
+
+    const { boundaryCache: reloaded } = await reload();
+
+    expect(reloaded.get('municipalities')).toBeUndefined();
+    expect(window.localStorage.getItem(ANONYMOUS_KEY)).toBeNull();
+  });
+
+  it('keeps one store per signed-in person', async () => {
+    const { boundaryCache: reloaded } = await reload();
+    reloaded.setOwner('idir\\jane');
+    reloaded.set('municipalities', [{ name: 'Victoria' }]);
+
+    reloaded.setOwner('idir\\bob');
+
+    expect(reloaded.get('municipalities')).toBeUndefined();
+    expect(window.localStorage.getItem(JANE_KEY)).toContain('Victoria');
+  });
+
+  it('takes the key away when the cache is cleared', async () => {
+    const { boundaryCache: reloaded } = await reload();
+    reloaded.set('municipalities', [{ name: 'Victoria' }]);
+
+    reloaded.clear();
+
+    expect(window.localStorage.getItem(ANONYMOUS_KEY)).toBeNull();
   });
 });
 
