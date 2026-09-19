@@ -19,18 +19,38 @@ function renderRouter(router: ReturnType<typeof createMemoryRouter>) {
   );
 }
 
+const PROJECT_ID = '272';
+
+const PROJECT = {
+  id: PROJECT_ID,
+  name: 'Site C Clean Energy Project',
+  proponentName: 'BC Hydro',
+};
+
 async function go(url: string): Promise<string> {
   const router = createMemoryRouter(routes, { initialEntries: [url] });
   renderRouter(router);
-  await screen.findByRole('banner');
+  // All, not one: the project summary screen puts its own <header> inside the shell's <main>, and
+  // Testing Library's element-to-role map calls every <header> a banner, so that route matches two.
+  // A browser exposes only the shell's; findByRole would still throw on the second element here.
+  await screen.findAllByRole('banner');
   return router.state.location.pathname + router.state.location.search;
 }
 
 beforeEach(() => {
   window.__env = { ENVIRONMENT: 'test', API_PATH: '/api' };
   // The shell reads the shared project corpus on every screen, and each ported screen reads too:
-  // an empty list answers them all, so no test here reaches the network.
-  vi.stubGlobal('fetch', vi.fn(async () => json([])));
+  // an empty list answers them all. The deep project link is the exception — it has to land on a
+  // real project record, or the test proves only that the shell rendered.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: unknown) => {
+      const url = String(input);
+      if (url.includes(`/projects/${PROJECT_ID}/summary`)) return Promise.resolve(json({ summary: null }));
+      if (url.includes(`/projects/${PROJECT_ID}`)) return Promise.resolve(json(PROJECT));
+      return Promise.resolve(json([]));
+    }),
+  );
 });
 
 afterEach(() => {
@@ -150,7 +170,9 @@ describe('the screens', () => {
   });
 
   it('keeps a deep project link on the project screen', async () => {
-    expect(await go('/projects/272')).toBe('/projects/272');
-    expect(await screen.findByRole('heading', { level: 1, name: 'AI Project Summary' })).toBeInTheDocument();
+    expect(await go(`/projects/${PROJECT_ID}`)).toBe(`/projects/${PROJECT_ID}`);
+    // The project's own record, not just the screen's chrome: the id in the URL has to reach the read.
+    expect(await screen.findByRole('heading', { level: 1, name: PROJECT.name })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /All projects/ })).toBeInTheDocument();
   });
 });

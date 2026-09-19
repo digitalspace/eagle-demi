@@ -1,3 +1,4 @@
+import { config } from '../config';
 import { ApiError, api, type ApiInit } from './client';
 
 /** What the loader asks for. The API caps list reads at 1000 whatever is sent. */
@@ -49,3 +50,54 @@ export const searchRetry = {
     failureCount < SEARCH_RETRIES && isRetryableSearchError(error),
   retryDelay: SEARCH_RETRY_DELAY_MS,
 } as const;
+
+/** One `[n]` citation in an AI summary, resolved server-side back to the chunk it points at. */
+export interface SummaryCitation {
+  n: number;
+  chunkId: string;
+  documentId: string;
+  projectId: string;
+  pageNumber: number;
+  /**
+   * Hydrated server-side, under the caller's access, for cited chunks only. Names are a disclosure
+   * about the row they describe, so they are resolved behind the same ACL.
+   */
+  documentName: string;
+  projectName: string;
+}
+
+export interface SummaryAnswer {
+  summary: string | null;
+  citations: SummaryCitation[];
+  estimatedCostCad: number | null;
+  usage: { prompt_tokens?: number; completion_tokens?: number } | null;
+  /** `summary: null` with a reason is a legitimate answer, not a failure. */
+  reason: string | null;
+}
+
+/**
+ * Ask the summariser. Reads `/search/summary` and nothing else, so no result list is disturbed.
+ *
+ * No client budget on purpose: the answer takes seconds, and the only ceiling either app sets is
+ * the dev proxy's 350 s (`vite.config.ts`, `proxy.conf.js`). A read timeout here would cut off
+ * answers that are still coming.
+ */
+export async function fetchSearchSummary(query: string, init?: ApiInit): Promise<SummaryAnswer> {
+  // Demo mode must not reach the API. A null answer with a reason reads as "nothing to show"
+  // rather than hanging on the loading state.
+  if (config().USE_MOCK_DATA) {
+    return { summary: null, citations: [], estimatedCostCad: null, usage: null, reason: 'mock_mode' };
+  }
+
+  const data = await api<Partial<SummaryAnswer> | null>(
+    `/search/summary?keywords=${encodeURIComponent(query)}&fuzzy=true`,
+    init,
+  );
+  return {
+    summary: data?.summary ?? null,
+    citations: data?.citations ?? [],
+    estimatedCostCad: data?.estimatedCostCad ?? null,
+    usage: data?.usage ?? null,
+    reason: data?.reason ?? null,
+  };
+}

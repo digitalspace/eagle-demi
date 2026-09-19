@@ -11,7 +11,7 @@ import {
 } from '../api/links';
 import { getSessionClaims } from '../api/keycloak';
 import { linkButton, primaryButton, stack, textInput } from './controls';
-import { dayMonth } from './dates';
+import { dayMonth } from '../dates';
 
 const SKELETON_ROWS = [1, 2, 3, 4];
 

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { useProjects } from '../api/projects';
 import type { Project } from '../api/types';
-import { fetchLists, joinLabels, PROJECT_LIST_ERROR } from '../api/project-summary';
+import { joinLabels, useLists, PROJECT_LIST_ERROR } from '../api/project-summary';
 
 /** Rows drawn at once. The filter still runs over all 411; a 411-row list is a wall, not a list. */
 export const MAX_ROWS = 50;
@@ -31,7 +30,7 @@ export function ProjectPicker() {
   // would default them differently, which is how this list came to name a region the registry
   // screens never showed.
   const projects = useProjects();
-  const lists = useQuery({ queryKey: ['lists'], queryFn: fetchLists });
+  const lists = useLists();
 
   const [query, setQuery] = useState('');
   const search = useRef<HTMLInputElement>(null);

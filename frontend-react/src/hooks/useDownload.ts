@@ -12,10 +12,12 @@ export function useDownload() {
   const [error, setError] = useState<string | null>(null);
   const busy = useRef(false);
 
-  const start = useCallback(async (documentId: string, projectId?: string) => {
+  // `rowId` names the row when it is not the document: two citations can cite one document, and
+  // keying on the document would mark both rows busy.
+  const start = useCallback(async (documentId: string, projectId?: string, rowId?: string) => {
     if (!documentId || busy.current) return;
     busy.current = true;
-    setBusyId(documentId);
+    setBusyId(rowId ?? documentId);
     setError(null);
     try {
       const url = await getDownloadUrl(documentId, projectId);

@@ -1,0 +1,167 @@
+{
+  "id": "summary-901",
+  "projectId": "901",
+  "generatedAt": "2026-02-03T14:05:00.000Z",
+  "model": "sample-model",
+  "estimatedCostCad": 0.0123,
+  "usage": { "promptTokens": 9000, "completionTokens": 1200 },
+  "facts": {
+    "documentTotal": 42,
+    "amendments": [
+      {
+        "documentId": "doc-amd-1",
+        "displayName": "Sample Amendment 1 - Route Change",
+        "datePosted": "2016-03-02T00:00:00.000Z"
+      },
+      {
+        "documentId": "doc-amd-2",
+        "displayName": "Sample Amendment 2 - Schedule Extension",
+        "datePosted": "2019-07-18T00:00:00.000Z"
+      }
+    ],
+    "inspections": {
+      "count": 3,
+      "latest": {
+        "documentId": "doc-insp-1",
+        "displayName": "Sample Inspection Record",
+        "datePosted": "2021-06-01T00:00:00.000Z"
+      }
+    },
+    "selfReports": { "count": 7 },
+    "keyDocuments": [
+      {
+        "documentId": "doc-cert",
+        "displayName": "Sample Certificate E14-02",
+        "role": "certificate",
+        "datePosted": "2014-10-14T00:00:00.000Z"
+      },
+      {
+        "documentId": "doc-sched-b",
+        "displayName": "Sample Schedule B - Conditions",
+        "role": "scheduleB",
+        "datePosted": "2014-10-14T00:00:00.000Z"
+      },
+      {
+        "documentId": "doc-app-fr",
+        "displayName": "Sample Application Materials",
+        "role": "application",
+        "languageFlag": "fr"
+      }
+    ]
+  },
+  "sections": {
+    "status": {
+      "sentence": "The certificate is in force and the project is in construction, with two amendments issued since the original decision.",
+      "citations": [1]
+    },
+    "conditions": {
+      "sourceDocumentId": "doc-sched-b",
+      "items": [
+        {
+          "n": 1,
+          "category": "Water",
+          "title": "Watercourse crossings",
+          "oneLiner": "Crossings are built and monitored to an approved plan.",
+          "bullets": [
+            "Prepare a crossing plan before construction starts.",
+            "Report monitoring results each quarter."
+          ],
+          "citations": [1]
+        },
+        {
+          "n": 2,
+          "category": "Wildlife",
+          "title": "Habitat offsetting",
+          "oneLiner": "Lost habitat is offset at an agreed ratio.",
+          "bullets": ["Offset plan approved before clearing."],
+          "citations": [1]
+        },
+        {
+          "n": 3,
+          "category": "Consultation",
+          "title": "Ongoing engagement",
+          "oneLiner": "Engagement continues through construction.",
+          "bullets": ["Meet quarterly with participating nations."],
+          "citations": [2]
+        }
+      ]
+    },
+    "amendments": [
+      {
+        "documentId": "doc-amd-1",
+        "sentence": "The first amendment moved part of the route away from a wetland.",
+        "citations": [1]
+      }
+    ],
+    "timelineEvents": [
+      { "date": "2017-04-11T00:00:00.000Z", "label": "Construction started", "citations": [1] }
+    ],
+    "compliance": {
+      "sourceDocumentId": "doc-insp-1",
+      "paragraph": "Inspections recorded minor deficiencies, all closed within the reporting period.",
+      "citations": [1]
+    },
+    "nations": [
+      { "name": "Sample First Nation", "organizationId": "org-1", "citations": [1] },
+      { "name": "Sample Unmatched Nation", "organizationId": null, "citations": [2] }
+    ],
+    "federal": {
+      "source": "iaac",
+      "sourceDocumentId": "iaac:158078",
+      "items": [
+        {
+          "n": 1,
+          "category": "Fish",
+          "title": "Fish habitat offsetting",
+          "oneLiner": "Federal conditions require an offsetting plan.",
+          "bullets": ["Plan filed before in-water work."],
+          "citations": [3]
+        }
+      ],
+      "facts": {
+        "status": "Decision statement issued",
+        "cearId": "158078",
+        "projectUrl": "https://example.invalid/registry/p/158078",
+        "latest": {
+          "title": "Sample Annual Report",
+          "date": "2021-02-10",
+          "docId": "900"
+        },
+        "decision": {
+          "title": "Sample Decision Statement",
+          "date": "2014-10-14",
+          "docId": "901",
+          "pdfUrl": "https://example.invalid/registry/d/901.pdf",
+          "format": "pdf",
+          "pageCount": 12
+        }
+      }
+    }
+  },
+  "citations": [
+    {
+      "n": 1,
+      "chunkId": "doc-sched-b::p4::c2",
+      "documentId": "doc-sched-b",
+      "pageNumber": 4,
+      "documentName": "Sample Schedule B - Conditions"
+    },
+    {
+      "n": 2,
+      "chunkId": "doc-cert::p2::c1",
+      "documentId": "doc-cert",
+      "pageNumber": 2,
+      "documentName": "Sample Certificate E14-02"
+    },
+    {
+      "n": 3,
+      "chunkId": "iaac:158078::p9::c1",
+      "documentId": "iaac:158078",
+      "pageNumber": 9,
+      "documentName": "Sample Decision Statement",
+      "source": "iaac",
+      "url": "https://example.invalid/registry/d/901.pdf",
+      "format": "pdf"
+    }
+  ]
+}

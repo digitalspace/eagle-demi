@@ -1,27 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { json, respond, urlOf } from '../test-http';
 import { ApiError } from './client';
+import type { AppConfig } from '../config';
 import {
   SEARCH_PAGE_SIZE,
+  fetchSearchSummary,
   isRetryableSearchError,
   searchDataset,
   searchQueryString,
   searchRetry,
 } from './search';
 
+const EMPTY_ANSWER = { summary: null, citations: [], estimatedCostCad: null, usage: null, reason: null };
+
 vi.mock('./keycloak', () => ({
   getToken: () => 'staff-token',
   refreshToken: async () => true,
 }));
 
-async function bootConfig() {
+async function bootConfig(extra: AppConfig = {}) {
   respond();
-  window.__env = { API_PATH: '/api', API_LOCATION: '' };
+  window.__env = { API_PATH: '/api', API_LOCATION: '', ...extra };
   const { initConfig } = await import('../config');
   await initConfig();
 }
 
-beforeEach(bootConfig);
+beforeEach(() => bootConfig());
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -76,6 +80,48 @@ describe('reading the envelope', () => {
     respond(json({ error: 'index offline' }, 503));
 
     await expect(searchDataset('Project', '')).rejects.toThrow('index offline');
+  });
+});
+
+describe('asking the summariser', () => {
+  it('answers demo mode from config alone, without reaching the API', async () => {
+    await bootConfig({ USE_MOCK_DATA: true });
+    const fetchMock = respond();
+
+    expect(await fetchSearchSummary('watercourse crossing')).toEqual({ ...EMPTY_ANSWER, reason: 'mock_mode' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('asks for fuzzy keywords, encoded', async () => {
+    const fetchMock = respond(json({ summary: 'Crossings are monitored.' }));
+
+    await fetchSearchSummary('coal & mine');
+
+    expect(urlOf(fetchMock.mock.calls[0]!)).toContain('/api/search/summary?keywords=coal%20%26%20mine&fuzzy=true');
+  });
+
+  it('fills in the fields a partial answer left out', async () => {
+    respond(json({ summary: 'Crossings are monitored.' }));
+
+    expect(await fetchSearchSummary('crossings')).toEqual({
+      ...EMPTY_ANSWER,
+      summary: 'Crossings are monitored.',
+    });
+  });
+
+  it('reads a null body as an empty answer rather than throwing', async () => {
+    respond(json(null));
+
+    expect(await fetchSearchSummary('crossings')).toEqual(EMPTY_ANSWER);
+  });
+
+  it('hands the caller-supplied signal on to fetch', async () => {
+    const fetchMock = respond(json({ summary: 'Crossings are monitored.' }));
+    const { signal } = new AbortController();
+
+    await fetchSearchSummary('crossings', { signal });
+
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).signal).toBe(signal);
   });
 });
 

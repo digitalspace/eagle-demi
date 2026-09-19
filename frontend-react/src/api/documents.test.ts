@@ -5,6 +5,7 @@ import { json, respond, urlOf } from '../test-http';
 import { queryWrapper } from '../test-query';
 import { epicPublicDownloadUrl, fetchDocument, getDownloadUrl, mapDocument, useDocuments } from './documents';
 import type { Project } from './types';
+import { localIso } from '../test-dates';
 
 vi.mock('./keycloak', () => ({
   getToken: () => 'staff-token',
@@ -79,7 +80,7 @@ describe('mapping a document row', () => {
         description: 'Official document extracted from central registry.',
         documentSource: 'Sample Source',
         type: 'Letter',
-        datePosted: '2026-03-04T00:00:00Z',
+        datePosted: localIso(2026, 2, 4),
         highlighted: { description: '<mark>Official</mark>' },
       },
       [],
@@ -88,6 +89,17 @@ describe('mapping a document row', () => {
     expect(row.textSnippet).toBe('Sample Source · Letter · 2026-03-04');
     // The text was replaced, so marking inside it would point at words we wrote.
     expect(row.highlighted?.textSnippet).toBe('');
+  });
+
+  // The API sends a day for some rows and a full instant for others; a day must not slide back one
+  // in BC, where UTC midnight is still the previous afternoon.
+  it('reads a date-only posting date as the day it says', () => {
+    const row = mapDocument(
+      { _id: 'd1', description: 'Unnamed Document', documentSource: 'Sample Source', datePosted: '2026-03-04' },
+      [],
+    );
+
+    expect(row.textSnippet).toBe('Sample Source · 2026-03-04');
   });
 
   it('keeps a real description and its markup', () => {

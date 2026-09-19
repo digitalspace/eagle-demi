@@ -14,7 +14,7 @@ import {
   type Prefs,
 } from '../shell/prefs';
 import { linkButton, secondaryButton } from './controls';
-import { dayMonth } from './dates';
+import { dayMonth } from '../dates';
 
 const panelGrid: CSSProperties = { gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' };
 

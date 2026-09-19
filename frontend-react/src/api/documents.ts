@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { config } from '../config';
+import { isoDay } from '../dates';
 import { ApiError, api } from './client';
 import { searchDataset, searchRetry } from './search';
 import { useProjects } from './projects';
@@ -40,7 +41,7 @@ export function mapDocument(d: RawDocument, projects: Project[]): Document {
   let textSnippet = d.description || d.textSnippet || '';
   let snippetHtml = d.highlighted?.description || '';
   if (!textSnippet || PLACEHOLDER_SNIPPET.test(textSnippet)) {
-    const posted = d.datePosted ? new Date(d.datePosted).toLocaleDateString('en-CA') : '';
+    const posted = isoDay(d.datePosted);
     textSnippet = [d.documentSource, d.type !== 'None' ? d.type : '', posted].filter(Boolean).join(' · ');
     snippetHtml = '';
   }

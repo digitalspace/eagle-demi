@@ -1,0 +1,25 @@
+[
+  {
+    "count": 2,
+    "searchResults": [
+      {
+        "id": "org-1",
+        "name": "Sample First Nation",
+        "companyType": "Indigenous Group",
+        "address1": "1 Sample Road",
+        "city": "Sample Town",
+        "province": "BC",
+        "postal": "V0V 0V0",
+        "country": "Canada",
+        "website": "https://example.invalid/sample-first-nation"
+      },
+      {
+        "id": "org-2",
+        "name": "Sample Second Nation",
+        "companyType": "Indigenous Group",
+        "city": "Sample City",
+        "province": "BC"
+      }
+    ]
+  }
+]

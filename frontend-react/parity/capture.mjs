@@ -64,9 +64,19 @@ const DEFAULTS = {
   stateRoute: '/keys'
 };
 
-// One height for every width. Shots are full-page, so this only decides how much of a screen
-// sits above the fold, which is what sticky headers and the rail react to.
+// The height a page is booted and settled at, so the same amount sits above the fold in both apps,
+// which is what the sticky header and the rail react to.
 const VIEWPORT_HEIGHT = 900;
+
+/**
+ * `fullPage: true` photographs the DOCUMENT, and in both apps the document is exactly one viewport
+ * tall: `.app { height: 100vh }` with the column below it scrolling inside `.app__main`
+ * (frontend-react/src/styles.css:15,29 and frontend/src/styles.css:18,32). Every shot was therefore
+ * 900px and nothing below the fold was ever compared. The fix belongs here and not in the app CSS:
+ * the inner scroll container is the layout both apps ship. So each shot measures its own content
+ * and grows the viewport to fit before firing.
+ */
+const MAX_VIEWPORT_HEIGHT = 12000;
 
 // The real header. The loading skeleton carries the same class with aria-hidden, so matching on
 // `.eao-header` alone would photograph a still-booting page as if it had loaded.
@@ -135,7 +145,10 @@ function help() {
   --help             This text
 
 Output: <out>/<screen>/<width>/{angular,react}.png, <out>/_shell/<state>/<width>/ and
-        <out>/_screens/<state>/<width>/, full page.
+        <out>/_screens/<state>/<width>/. Each page settles at ${VIEWPORT_HEIGHT}px, then the
+        viewport grows to the content's own height (cap ${MAX_VIEWPORT_HEIGHT}px) so the shot
+        reaches below the fold; a shot with a modal open keeps the settled height. A PNG shorter
+        than the content it was measured at fails.
 API calls are answered from parity/fixtures; env.js is rewritten in flight so both apps
 boot with Keycloak off. Both base URLs must be on this machine. Playwright is resolved by
 name, or from PLAYWRIGHT_MODULE. Exit code is non-zero if any capture fails.`);
@@ -281,6 +294,66 @@ async function settle(page, { ready = READY_SELECTOR, activeNav = true, awaitNet
 
 /** Wait for the rail to agree with the route once it is on the page. */
 const waitForActiveNav = (page, timeout) => page.waitForSelector(ACTIVE_NAV_SELECTOR, { timeout });
+
+/**
+ * How tall this page's content really is, and whether a modal is holding it.
+ *
+ * The document alone under-reports (see MAX_VIEWPORT_HEIGHT), so every scrolling ancestor of
+ * `<main>` is measured too: its distance down the page plus its own scrollHeight is how far its
+ * content reaches. A dialog is reported rather than measured — see `shoot`.
+ */
+function measurePage(page) {
+  return page.evaluate(() => {
+    let content = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+    for (let el = document.querySelector('main'); el && el !== document.body; el = el.parentElement) {
+      if (!/(auto|scroll)/.test(getComputedStyle(el).overflowY)) continue;
+      content = Math.max(content, el.getBoundingClientRect().top + window.scrollY + el.scrollHeight);
+    }
+    return {
+      content: Math.ceil(content),
+      modal: !!document.querySelector('dialog[open], [role="dialog"]')
+    };
+  });
+}
+
+/** A PNG's pixel height, straight out of the IHDR chunk, so the assertion reads the real file. */
+export function pngHeight(file) {
+  const head = readFileSync(file).subarray(0, 24);
+  if (head.readUInt32BE(0) !== 0x89504e47) throw new Error(`${file} is not a PNG`);
+  return head.readUInt32BE(20);
+}
+
+/**
+ * Take the shot, growing the viewport to whatever the page's content needs first and putting it
+ * back after. A shot with a modal open keeps the booted height: the dialogs are capped at 85vh
+ * (styles.css `.ps-dialog__sheet`, `.how-built__sheet`), so resizing would photograph a different
+ * dialog than the one the state is about.
+ */
+async function shoot(page, dir, label, width) {
+  const { content, modal } = await measurePage(page);
+  const target = modal ? VIEWPORT_HEIGHT : Math.max(VIEWPORT_HEIGHT, Math.min(content, MAX_VIEWPORT_HEIGHT));
+  if (!modal && content > MAX_VIEWPORT_HEIGHT) {
+    throw new Error(`content is ${content}px, past the ${MAX_VIEWPORT_HEIGHT}px cap; the page is not a screenshot`);
+  }
+
+  if (target !== VIEWPORT_HEIGHT) {
+    await page.setViewportSize({ width, height: target });
+    // Two frames: one for the resize to land, one for the layout it triggers to paint.
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  }
+  mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${label}.png`);
+  try {
+    await page.screenshot({ path: file, fullPage: true });
+  } finally {
+    if (target !== VIEWPORT_HEIGHT) await page.setViewportSize({ width, height: VIEWPORT_HEIGHT });
+  }
+
+  const shot = pngHeight(file);
+  const want = modal ? VIEWPORT_HEIGHT : content;
+  if (shot < want) throw new Error(`shot is ${shot}px but the content needs ${want}px`);
+  return `${shot}px${modal ? ' (modal, not resized)' : ''}`;
+}
 
 /** Tab from the skip link until the first rail link has focus, so the ring is what is photographed. */
 async function focusFirstNavLink(page) {
@@ -489,6 +562,66 @@ export const SCREEN_STATES = [
     }
   },
   {
+    name: 'project-loaded',
+    route: '/projects/901'
+  },
+  {
+    // No stored summary row. The facts above it are the page, and they stay complete.
+    name: 'project-empty',
+    route: '/projects/901',
+    responses: [{ match: /^\/api\/projects\/901\/summary$/, status: 404, file: 'api-error.json' }],
+    ready: '.ps-note'
+  },
+  {
+    // The project record itself refused. A 400, not a 500: React never retries this read
+    // (App.tsx's client sets `retry: false`), but Angular retries a 5xx twice a second apart
+    // (registry-state.service.ts:1412 through fetchWithRetry), so a 500 would photograph the two
+    // apps in different places. On a 400 they both land on the message at once.
+    name: 'project-error',
+    route: '/projects/901',
+    responses: [{ match: /^\/api\/projects\/901$/, status: 400, file: 'api-error.json' }],
+    ready: '.callout--warning[role="alert"]:not(.alert-row)'
+  },
+  {
+    name: 'project-condition-dialog',
+    route: '/projects/901',
+    prepare: async (page, width, timeout) => {
+      await page.click('.ps-card--action');
+      await page.waitForSelector('.ps-dialog__sheet', { timeout });
+    }
+  },
+  {
+    // The answer only exists once someone asks, so every summariser state goes through the box.
+    name: 'summary-loaded',
+    route: '/summary',
+    prepare: async (page, width, timeout) => {
+      await page.fill('#demi-search-summary', 'watercourse crossing');
+      await page.click('button:text-is("Ask")');
+      await page.waitForSelector('.pill--info', { timeout });
+    }
+  },
+  {
+    name: 'summary-empty',
+    route: '/summary',
+    responses: [{ match: /^\/api\/search\/summary/, file: 'search-summary-empty.json' }],
+    prepare: async (page, width, timeout) => {
+      await page.fill('#demi-search-summary', 'nothing matches this');
+      await page.click('button:text-is("Ask")');
+      await page.waitForSelector('.callout', { timeout });
+    }
+  },
+  {
+    name: 'summary-error',
+    route: '/summary',
+    responses: [{ match: /^\/api\/search\/summary/, status: 500, file: 'api-error.json' }],
+    prepare: async (page, width, timeout) => {
+      await page.fill('#demi-search-summary', 'watercourse crossing');
+      await page.click('button:text-is("Ask")');
+      // Both apps retry a 5xx twice a second apart before the message lands, so this waits it out.
+      await page.waitForSelector('.callout', { timeout: Math.max(timeout, 10000) });
+    }
+  },
+  {
     // Keycloak is off for a capture run, so this is the screen with no session: the token claims
     // are empty and the row offers the pill rather than Sign out. There is no other state to reach.
     name: 'sessions-loaded',
@@ -552,9 +685,8 @@ async function captureScreenStates({ browser, label, base, widths, out, timeout,
         await page.goto(new URL(state.route, base).href, { waitUntil: 'domcontentloaded', timeout });
         await settle(page, { ...state, activeNav: width >= NARROW_BREAKPOINT }, timeout);
         if (state.prepare) await state.prepare(page, width, timeout, dir);
-        mkdirSync(dir, { recursive: true });
-        await page.screenshot({ path: path.join(dir, `${label}.png`), fullPage: true });
-        console.log(`ok   ${label.padEnd(8)}${String(width).padEnd(6)}_screens/${state.name}`);
+        const size = await shoot(page, dir, label, width);
+        console.log(`ok   ${label.padEnd(8)}${String(width).padEnd(6)}_screens/${state.name.padEnd(26)}${size}`);
       } catch (err) {
         const detail = pageErrors.length ? ` (page error: ${pageErrors[0]})` : '';
         failures.push(`${label} ${width} _screens/${state.name}: ${err.message}${detail}`);
@@ -586,9 +718,8 @@ async function captureApp({ browser, label, base, routes, widths, out, timeout, 
         await page.goto(new URL(route, base).href, { waitUntil: 'domcontentloaded', timeout });
         // Off-canvas there is no rail link on the page to mark, so there is nothing to wait for.
         await settle(page, { activeNav: width >= NARROW_BREAKPOINT }, timeout);
-        mkdirSync(dir, { recursive: true });
-        await page.screenshot({ path: path.join(dir, `${label}.png`), fullPage: true });
-        console.log(`ok   ${label.padEnd(8)}${String(width).padEnd(6)}${route}`);
+        const size = await shoot(page, dir, label, width);
+        console.log(`ok   ${label.padEnd(8)}${String(width).padEnd(6)}${route.padEnd(34)}${size}`);
       } catch (err) {
         const detail = pageErrors.length ? ` (page error: ${pageErrors[0]})` : '';
         failures.push(`${label} ${width} ${route}: ${err.message}${detail}`);
@@ -613,12 +744,11 @@ async function captureStates({ browser, label, base, route, out, timeout, misses
         const awaitNetworkIdle = state.awaitNetworkIdle ?? true;
         await settle(page, { ready: state.ready, activeNav, awaitNetworkIdle }, timeout);
         if (state.prepare) await state.prepare(page, width, timeout);
-        mkdirSync(dir, { recursive: true });
-        await page.screenshot({ path: path.join(dir, `${label}.png`), fullPage: true });
+        const size = await shoot(page, dir, label, width);
         // Let the delayed response land inside a page that is still open to receive it, rather
         // than closing the context out from under an in-flight route handler.
         if (state.thenReady) await page.waitForSelector(state.thenReady, { timeout });
-        console.log(`ok   ${label.padEnd(8)}${String(width).padEnd(6)}_shell/${state.name}`);
+        console.log(`ok   ${label.padEnd(8)}${String(width).padEnd(6)}_shell/${state.name.padEnd(27)}${size}`);
       } catch (err) {
         const detail = pageErrors.length ? ` (page error: ${pageErrors[0]})` : '';
         failures.push(`${label} ${width} _shell/${state.name}: ${err.message}${detail}`);
@@ -637,7 +767,7 @@ async function dryRun(chromium, args, routes, widths) {
   console.log('dry-run: chromium launched and closed\n');
   console.log(`angular  ${args.angular}`);
   console.log(`react    ${args.react}`);
-  console.log(`widths   ${widths.join(', ')} (height ${VIEWPORT_HEIGHT})`);
+  console.log(`widths   ${widths.join(', ')} (settled at ${VIEWPORT_HEIGHT}, grown to fit up to ${MAX_VIEWPORT_HEIGHT})`);
   console.log(`out      ${args.out}\n`);
   console.log('route'.padEnd(24) + 'screen');
   for (const route of routes) console.log(route.padEnd(24) + screenName(route));

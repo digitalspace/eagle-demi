@@ -255,7 +255,8 @@ describe('the how-built panel', () => {
   it('describes the screen the deep link belongs to', async () => {
     const user = userEvent.setup();
     renderShell('/projects/272');
-    await screen.findByRole('banner');
+    // All, not one: the project summary screen carries its own <header> under the shell's.
+    await screen.findAllByRole('banner');
 
     await openPanel(user);
 
