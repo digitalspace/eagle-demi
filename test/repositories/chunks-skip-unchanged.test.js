@@ -35,6 +35,8 @@ const MARKDOWN = ['# One', section('turbidity'), '# Two', section('flow'), '# Th
  */
 function fakeContainer(t) {
   const rows = new Map();
+  // Cosmos's own `_ts`, kept apart so a row read back as an item is not hashed with it.
+  const writtenAt = new Map();
   const calls = [];
   t.mock.method(cosmos, 'query', async (container, spec, options) => {
     cosmos.assertQuerySpec(spec, container);
@@ -44,7 +46,8 @@ function fakeContainer(t) {
     const items = spec.query.includes('VALUE c.id')
       ? ids
       : ids.map(id => ({
-        id, itemHash: rows.get(id).itemHash, parentStampedAt: rows.get(id).parentStampedAt
+        id, itemHash: rows.get(id).itemHash, parentStampedAt: rows.get(id).parentStampedAt,
+        _ts: writtenAt.get(id)
       }));
     return { items, continuationToken: undefined };
   });
@@ -52,7 +55,10 @@ function fakeContainer(t) {
     calls.push(operations);
     const skippedIds = [];
     for (const op of operations) {
-      if (op.operationType === 'Upsert') rows.set(op.resourceBody.id, op.resourceBody);
+      if (op.operationType === 'Upsert') {
+        rows.set(op.resourceBody.id, op.resourceBody);
+        writtenAt.set(op.resourceBody.id, Math.floor(Date.now() / 1000));
+      }
       if (op.operationType === 'Delete') rows.delete(op.id);
       if (op.operationType === 'Patch') {
         const row = rows.get(op.id);
@@ -69,7 +75,7 @@ function fakeContainer(t) {
   };
   t.mock.method(cosmos, 'bulkVerified', apply);
   const upserts = () => calls.flat().filter(op => op.operationType === 'Upsert');
-  return { rows, calls, upserts, apply };
+  return { rows, writtenAt, calls, upserts, apply };
 }
 
 function postJson(markdown) {
@@ -145,6 +151,150 @@ for (const [name, post] of [['JSON ingest', postJson], ['NDJSON ingest', postNdj
     });
   });
 }
+
+/**
+ * A chunk a failed delete or purge took out of the index but left in Cosmos is never re-read by
+ * the `_ts` high-water mark, so an identical re-post must rewrite it rather than skip it forever.
+ */
+for (const [name, post] of [['JSON ingest', postJson], ['NDJSON ingest', postNdjson]]) {
+  test(`${name} heals an unchanged chunk the index lost`, async (t) => {
+    t.afterEach(() => t.mock.restoreAll());
+    const settled = 31 * 60_000;
+
+    await t.test('only the chunk missing from the index is rewritten', async (tt) => {
+      const store = ingestHarness(tt);
+      await post(MARKDOWN);
+      const [lost, ...held] = [...store.rows.keys()];
+      tt.mock.method(aiSearch, 'indexedChunkIds', async () => new Set(held));
+      store.calls.length = 0;
+
+      tt.mock.timers.tick(settled);
+      assert.strictEqual((await post(MARKDOWN)).statusCode, 200);
+
+      assert.ok(held.length > 0, 'one chunk only, so "only the lost one" is vacuous');
+      assert.deepStrictEqual(store.upserts().map(op => op.resourceBody.id), [lost]);
+    });
+
+    await t.test('chunks the index holds are still skipped', async (tt) => {
+      const store = ingestHarness(tt);
+      await post(MARKDOWN);
+      tt.mock.method(aiSearch, 'indexedChunkIds', async (ids) => new Set(ids));
+      store.calls.length = 0;
+
+      tt.mock.timers.tick(settled);
+      await post(MARKDOWN);
+
+      assert.deepStrictEqual(store.calls.flat(), []);
+    });
+
+    await t.test('a chunk is looked up from 30 minutes after its write, not before', async (tt) => {
+      const store = ingestHarness(tt);
+      await post(MARKDOWN);
+      const lookup = tt.mock.method(aiSearch, 'indexedChunkIds', async (ids) => new Set(ids));
+      store.calls.length = 0;
+
+      tt.mock.timers.tick(29 * 60_000);
+      await post(MARKDOWN);
+      assert.strictEqual(lookup.mock.callCount(), 0);
+
+      tt.mock.timers.tick(60_000);
+      await post(MARKDOWN);
+      assert.strictEqual(lookup.mock.callCount(), 1);
+      assert.deepStrictEqual(store.calls.flat(), []);
+    });
+
+    await t.test('a row with no _ts is not settled, so it is not looked up', async (tt) => {
+      const store = ingestHarness(tt);
+      await post(MARKDOWN);
+      store.writtenAt.clear();
+      const lookup = tt.mock.method(aiSearch, 'indexedChunkIds', async () => new Set());
+      store.calls.length = 0;
+
+      tt.mock.timers.tick(settled);
+      await post(MARKDOWN);
+
+      assert.strictEqual(lookup.mock.callCount(), 0);
+      assert.deepStrictEqual(store.calls.flat(), []);
+    });
+
+    await t.test('an index that cannot answer keeps the skip', async (tt) => {
+      const store = ingestHarness(tt);
+      await post(MARKDOWN);
+      tt.mock.method(aiSearch, 'indexedChunkIds', async () => null);
+      store.calls.length = 0;
+
+      tt.mock.timers.tick(settled);
+      await post(MARKDOWN);
+
+      assert.deepStrictEqual(store.calls.flat(), []);
+    });
+  });
+}
+
+/**
+ * An index that lost most of a document reads as indexer lag, and a real gap heals a capped number
+ * of chunks per ingest: either way a settled re-post never turns into a blind re-upsert.
+ */
+test('healing is capped', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const cap = chunks.MAX_HEALED_PER_INGEST;
+  const MANY = Array.from({ length: 4 * cap }, (_, i) => `# Part ${i}\n\n${section(`p${i}`)}`)
+    .join('\n\n');
+
+  async function settledStore(tt) {
+    const store = ingestHarness(tt);
+    await postJson(MANY);
+    store.calls.length = 0;
+    tt.mock.timers.tick(31 * 60_000);
+    return store;
+  }
+
+  await t.test('an index missing most chunks rewrites none', async (tt) => {
+    const store = await settledStore(tt);
+    const held = [...store.rows.keys()].slice(0, cap);
+    tt.mock.method(aiSearch, 'indexedChunkIds', async () => new Set(held));
+    const warned = tt.mock.method(logger, 'warn', () => {});
+
+    assert.strictEqual((await postJson(MANY)).statusCode, 200);
+
+    assert.ok(store.rows.size > 2 * (cap + 5), `only ${store.rows.size} chunks; vacuous`);
+    assert.deepStrictEqual(store.calls.flat(), []);
+    assert.ok(warned.mock.calls.some(c => /indexer lag/.test(c.arguments[0])));
+  });
+
+  await t.test('a gap under half heals at most the cap per ingest', async (tt) => {
+    const store = await settledStore(tt);
+    const ids = [...store.rows.keys()];
+    const lost = ids.slice(0, cap + 5);
+    tt.mock.method(aiSearch, 'indexedChunkIds', async () => new Set(ids.slice(cap + 5)));
+
+    await postJson(MANY);
+
+    assert.deepStrictEqual(store.upserts().map(op => op.resourceBody.id), lost.slice(0, cap));
+  });
+
+  // A streamed ingest writes in flushes of 200, and the cap is per ingest, not per flush.
+  await t.test('a streamed ingest heals at most the cap across all its flushes', async (tt) => {
+    const LONG = Array.from({ length: 600 }, (_, i) => `# Part ${i}\n\n${section(`p${i}`)}`)
+      .join('\n\n');
+    const store = ingestHarness(tt);
+    await postNdjson(LONG);
+    store.calls.length = 0;
+    tt.mock.timers.tick(31 * 60_000);
+    const ids = [...store.rows.keys()];
+    // Every fifth chunk lost: under half of each flush, and over the cap in total.
+    tt.mock.method(aiSearch, 'indexedChunkIds', async () => new Set(ids.filter((_, i) => i % 5)));
+    const warned = tt.mock.method(logger, 'warn', () => {});
+
+    assert.strictEqual((await postNdjson(LONG)).statusCode, 200);
+
+    assert.ok(ids.length > 200 && ids.length / 5 > cap, `${ids.length} chunks; vacuous`);
+    assert.strictEqual(store.upserts().length, cap);
+    const healed = warned.mock.calls.map(c => /healed=(\d+)/.exec(c.arguments[0]))
+      .filter(Boolean).reduce((sum, m) => sum + Number(m[1]), 0);
+    assert.strictEqual(healed, cap);
+  });
+});
 
 test('a skipped re-post keeps the stamp contract', async (t) => {
   t.afterEach(() => t.mock.restoreAll());

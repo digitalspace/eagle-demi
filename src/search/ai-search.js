@@ -1962,6 +1962,54 @@ async function deleteDocuments(ids) {
   return failed;
 }
 
+/** `search.in` batches of chunk ids; `|` is its delimiter, so such an id is looked up alone. */
+function chunkIdBatches(ids) {
+  const batches = ids.filter(id => id.includes('|')).map(id => [id]);
+  const listed = ids.filter(id => !id.includes('|'));
+  for (let start = 0; start < listed.length; start += INDEX_BATCH_ROWS) {
+    batches.push(listed.slice(start, start + INDEX_BATCH_ROWS));
+  }
+  return batches;
+}
+
+/** The `{id, chunkId}` index rows of one `chunkIdBatches` batch. Throws when the lookup fails. */
+async function lookupChunkRows(index, batch) {
+  const filter = batch[0].includes('|')
+    ? `chunkId eq ${quote(batch[0])}`
+    : `search.in(chunkId, ${quote(batch.join('|'))}, '|')`;
+  // `request` POSTs, so a 1000-id filter (~70 KB) rides in the body, not the URL.
+  const found = await request(`/indexes/${index}/docs/search?api-version=${API_VERSION}`, {
+    search: '*', filter, select: 'id,chunkId', top: batch.length
+  });
+  return (found.value || []).filter(row => row && row.id);
+}
+
+/**
+ * Which of `chunkIds` the chunks index holds, so an ingest can tell a stored chunk that is also
+ * searchable from one a failed delete or purge left in Cosmos only. Never throws: `null` when there
+ * is no index to ask. The ids of a batch whose lookup failed count as held, so nothing is rewritten
+ * on a guess.
+ *
+ * @param {string[]} chunkIds  Cosmos chunk ids
+ * @returns {Promise<Set<string>|null>}
+ */
+async function indexedChunkIds(chunkIds) {
+  const { configured, index } = config();
+  const ids = chunkIds.map(String);
+  if (!configured) return null;
+  if (ids.length === 0) return new Set();
+  const found = await mapLimit(chunkIdBatches(ids), UNINDEX_CONCURRENCY, async (batch) => {
+    try {
+      return (await lookupChunkRows(index, batch)).map(row => String(row.chunkId));
+    } catch (err) {
+      logger.warn(`[ai-search] could not look up ${batch.length} chunk keys in ${index} ` +
+        `(${err.message}); those unchanged chunks are skipped without the index check.`);
+      return batch;
+    }
+  });
+  return new Set([].concat(...found));
+}
+
 /**
  * Remove chunk rows from the chunks index by their Cosmos chunk id.
  *
@@ -1992,27 +2040,10 @@ async function deleteChunksByIds(chunkIds) {
     return { stillIndexed: [], indexUnconfigured: ids };
   }
 
-  // `|` is the `search.in` delimiter below, so such an id is looked up on its own with `eq`.
-  const piped = ids.filter(id => id.includes('|'));
-  const listed = ids.filter(id => !id.includes('|'));
-  const batches = piped.map(id => [id]);
-  for (let start = 0; start < listed.length; start += INDEX_BATCH_ROWS) {
-    batches.push(listed.slice(start, start + INDEX_BATCH_ROWS));
-  }
-  const filterFor = (batch) => (batch[0].includes('|')
-    ? `chunkId eq ${quote(batch[0])}`
-    : `search.in(chunkId, ${quote(batch.join('|'))}, '|')`);
-
   const unindexBatch = async (batch) => {
-    let found;
+    let rows;
     try {
-      // `request` POSTs, so a 1000-id filter (~70 KB) rides in the body, not the URL.
-      found = await request(`/indexes/${index}/docs/search?api-version=${API_VERSION}`, {
-        search: '*',
-        filter: filterFor(batch),
-        select: 'id,chunkId',
-        top: batch.length
-      });
+      rows = await lookupChunkRows(index, batch);
     } catch (err) {
       logger.error(
         `[ai-search] could not look up ${batch.length} chunk keys in ${index} (${err.message}). ` +
@@ -2021,7 +2052,6 @@ async function deleteChunksByIds(chunkIds) {
       return batch;
     }
 
-    const rows = (found.value || []).filter(row => row && row.id);
     if (rows.length === 0) return [];
     const chunkIdOf = new Map(rows.map(row => [String(row.id), String(row.chunkId)]));
     const rejected = await deleteDocuments(rows.map(row => row.id));
@@ -2031,7 +2061,7 @@ async function deleteChunksByIds(chunkIds) {
     return kept;
   };
 
-  const failed = await mapLimit(batches, UNINDEX_CONCURRENCY, unindexBatch);
+  const failed = await mapLimit(chunkIdBatches(ids), UNINDEX_CONCURRENCY, unindexBatch);
   return { stillIndexed: [].concat(...failed), indexUnconfigured: [] };
 }
 
@@ -2200,6 +2230,7 @@ module.exports = {
   UNKNOWN_STATUS_TTL_MS,
   deleteChunksForDocument,
   deleteChunksByIds,
+  indexedChunkIds,
   deleteFromIndex,
   deleteDocuments,
   writeAcls,
