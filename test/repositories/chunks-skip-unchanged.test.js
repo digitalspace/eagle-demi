@@ -48,7 +48,7 @@ function fakeContainer(t) {
       }));
     return { items, continuationToken: undefined };
   });
-  t.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
+  const apply = async (container, operations) => {
     calls.push(operations);
     const skippedIds = [];
     for (const op of operations) {
@@ -66,9 +66,10 @@ function fakeContainer(t) {
     }
     return { succeeded: operations.length - skippedIds.length, failed: 0, skippedIds,
       statusCounts: {}, requestCharge: 1 };
-  });
+  };
+  t.mock.method(cosmos, 'bulkVerified', apply);
   const upserts = () => calls.flat().filter(op => op.operationType === 'Upsert');
-  return { rows, calls, upserts };
+  return { rows, calls, upserts, apply };
 }
 
 function postJson(markdown) {
@@ -315,7 +316,8 @@ for (const [name, post] of [['JSON ingest', postJson], ['NDJSON ingest', postNdj
       const { dropped } = await seeded(tt);
       tt.mock.method(aiSearch, 'deleteChunksByIds', async () => ({ ...NONE_KEPT, stillIndexed: [dropped[0]] }));
       // Swapped on the harness's own mock: a second mock of the same method leaks past the test.
-      // Only the surplus delete fails, so both paths reach the surplus check.
+      // Only a write carrying a Delete fails: the JSON path's one write, the NDJSON path's surplus
+      // delete once its batches have landed.
       cosmos.bulkVerified.mock.mockImplementation(async (container, operations) => {
         const failed = operations.some(op => op.operationType === 'Delete') ? 1 : 0;
         return { succeeded: operations.length - failed, failed, skippedIds: [],
@@ -329,6 +331,34 @@ for (const [name, post] of [['JSON ingest', postJson], ['NDJSON ingest', postNdj
 
       assert.strictEqual(res.statusCode, 500);
       assert.strictEqual(countedFailures().length, before + 1);
+    });
+
+    await t.test('an unindexed chunk whose Cosmos delete failed is removed by the next post', async (tt) => {
+      const { store, dropped } = await seeded(tt);
+      const [stuck] = dropped;
+      const unindex = tt.mock.method(aiSearch, 'deleteChunksByIds', async () => NONE_KEPT);
+      tt.mock.method(logger, 'error', () => {});
+      // The index let `stuck` go; Cosmos then refused its delete, once.
+      const { apply } = store;
+      let refused = false;
+      cosmos.bulkVerified.mock.mockImplementation(async (container, operations) => {
+        const refuse = !refused && operations.some(op => op.id === stuck && op.operationType === 'Delete');
+        refused = refused || refuse;
+        const sent = refuse ? operations.filter(op => op.id !== stuck) : operations;
+        const result = await apply(container, sent);
+        return refuse
+          ? { ...result, failed: 1, failedIds: [stuck], statusCounts: { 429: 1 } }
+          : result;
+      });
+      const before = countedFailures().length;
+
+      assert.strictEqual((await post(SHORTER)).statusCode, 500, 'reported as a success');
+      assert.strictEqual(countedFailures().length, before + 1);
+      assert.ok(store.rows.has(stuck));
+
+      assert.strictEqual((await post(SHORTER)).statusCode, 200);
+      assert.deepStrictEqual(unindex.mock.calls[1].arguments[0], [stuck]);
+      assert.ok(!store.rows.has(stuck), 'left in Cosmos unindexed, for an indexer reset to re-add');
     });
 
     await t.test('a retry after dying between the two deletes finds the surplus again', async (tt) => {
@@ -361,5 +391,26 @@ test('a Delete Cosmos answers 404 counts as deleted', async (t) => {
   assert.deepStrictEqual(sent.map(op => op.id), ['gone'], 'retried, or sent the kept id');
   assert.strictEqual(result.failed, 0);
   assert.strictEqual(result.succeeded, 1);
+  t.mock.restoreAll();
+});
+
+// The 404 pass is for Delete only: a missing row is what a delete asked for, but an Upsert that
+// finds no container or partition wrote nothing.
+test('an Upsert Cosmos answers 404 is still a failure', async (t) => {
+  t.mock.method(cosmos, 'query', async () => ({ items: [], continuationToken: undefined }));
+  t.mock.method(cosmos, 'bulk', async (container, operations) =>
+    operations.map(() => ({ statusCode: 404, requestCharge: 1 })));
+  t.mock.method(logger, 'error', () => {});
+  t.mock.method(logger, 'warn', () => {});
+  const real = cosmos.bulkVerified;
+  t.mock.method(cosmos, 'bulkVerified', (container, operations, opts) =>
+    real(container, operations, { ...opts, sleepFn: async () => {} }));
+
+  const result = await chunks.replaceForDocument(systemAccess(), DOC, [
+    { id: 'new', documentId: DOC, content: 'text', read: ['staff'] }
+  ]);
+
+  assert.strictEqual(result.failed, 1);
+  assert.strictEqual(result.succeeded, 0);
   t.mock.restoreAll();
 });

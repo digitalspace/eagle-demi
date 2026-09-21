@@ -20,10 +20,14 @@ const { logger } = require('../utils/logger');
 
 /**
  * Remove a document, its chunks, and both search-index entries.
- * Cleanup is best-effort and reported rather than thrown: the row is already gone.
+ * Cleanup is best-effort and reported rather than thrown.
+ *
+ * Index first, then Cosmos, row last: a request that dies part way leaves the row, so a retried
+ * DELETE finds the chunks again. The other order leaves index rows nothing can reach.
  */
 async function purgeDocument({ id, projectId, s3Key } = {}) {
-  await documents.deleteById(id, projectId);
+  const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(id);
+  const removedFromSearch = await aiSearch.deleteFromIndex(aiSearch.indexes().documents, id);
 
   let removedChunks = 0;
   try {
@@ -33,8 +37,7 @@ async function purgeDocument({ id, projectId, s3Key } = {}) {
     logger.error(`[purge] chunk removal failed for document ${id}: ${err.message}`);
   }
 
-  const removedFromSearch = await aiSearch.deleteFromIndex(aiSearch.indexes().documents, id);
-  const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(id);
+  await documents.deleteById(id, projectId);
 
   return {
     removedChunks,

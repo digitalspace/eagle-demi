@@ -884,9 +884,10 @@ test('ai-search delete propagation', async (t) => {
     assert.deepStrictEqual(waits, [2000, 2000], 'two stalled rounds wait before the third gives up');
   });
 
-  await t.test('a count that lags one round does not stop the drain', async (tt) => {
-    // Round 2 still reports the pre-delete total; round 3 has caught up.
-    const counts = [2000, 2000, 1000];
+  await t.test('a count that lags does not stop the drain, and progress resets the lag', async (tt) => {
+    // Lags one round, catches up, then lags the two rounds allowed. Three stalls in all, so a
+    // stall count that progress does not reset gives up before the last page.
+    const counts = [3000, 3000, 2000, 2000, 2000, 1000];
     const page = Array.from({ length: 1000 }, (_, i) => ({ id: `KEY-${i}` }));
     let probes = 0;
     const calls = captureFetch(tt, () => {
@@ -896,8 +897,49 @@ test('ai-search delete propagation', async (t) => {
     });
 
     assert.strictEqual(
-      await aiSearch.deleteChunksForDocument('lagging', { sleepFn: async () => {} }), 2000);
-    assert.strictEqual(calls.filter(c => c.url.includes('/docs/index')).length, 2);
+      await aiSearch.deleteChunksForDocument('lagging', { sleepFn: async () => {} }), 3000);
+    assert.strictEqual(probes, counts.length, 'the drain stopped before the scripted end');
+    assert.strictEqual(calls.filter(c => c.url.includes('/docs/index')).length, 3);
+  });
+
+  // Every round lags twice then moves: never three stalls in a row, but minutes of waiting in
+  // one request for a large document.
+  const { logger } = require('../../src/utils/logger');
+  const lagEveryRound = (tt) => {
+    let searches = 0;
+    const page = Array.from({ length: 1000 }, (_, i) => ({ id: `KEY-${i}` }));
+    const calls = captureFetch(tt, () => {
+      if (calls[calls.length - 1].url.includes('/docs/index')) return { json: {} };
+      const remaining = 100000 - 1000 * Math.floor(searches++ / 3);
+      return { json: { value: page, '@odata.count': remaining } };
+    });
+  };
+
+  await t.test('total stall wait is capped for the whole call', async (tt) => {
+    lagEveryRound(tt);
+    const waits = [];
+    tt.mock.method(logger, 'warn', () => {});
+
+    const removed = await aiSearch.deleteChunksForDocument('slow', { sleepFn: async (ms) => waits.push(ms) });
+
+    assert.strictEqual(waits.reduce((a, b) => a + b, 0), 20000, 'waited past the budget');
+    assert.strictEqual(removed, 6000);
+  });
+
+  await t.test('strict throws where rows may be left, so the caller can answer 503', async (tt) => {
+    lagEveryRound(tt);
+    tt.mock.method(logger, 'warn', () => {});
+    await assert.rejects(
+      aiSearch.deleteChunksForDocument('slow', { strict: true, sleepFn: async () => {} }),
+      err => err.code === 'INDEX_DELETE_INCOMPLETE' && err.deleted === 6000);
+  });
+
+  await t.test('strict returns the count once the document drains', async (tt) => {
+    const calls = captureFetch(tt, (i) => (i === 0
+      ? { json: { value: [{ id: 'K1' }], '@odata.count': 1 } }
+      : { json: {} }));
+    assert.strictEqual(await aiSearch.deleteChunksForDocument('d1', { strict: true }), 1);
+    assert.strictEqual(calls.length, 2);
   });
 
   await t.test('the round cap bounds a document that never drains', async (tt) => {
@@ -2043,10 +2085,22 @@ test('deleteChunksByIds', async (t) => {
     assert.strictEqual(calls[0].body.filter, "search.in(chunkId, 'x'' or true or ''', '|')");
   });
 
-  await t.test('an id carrying the delimiter is reported, never sent', async (tt) => {
-    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
-    assert.deepStrictEqual(await aiSearch.deleteChunksByIds(['a|b', 'c']), kept(['a|b']));
-    assert.deepStrictEqual(listed(calls[0].body.filter), ['c']);
+  // `|` splits a `search.in` list, so such an id is looked up alone with `eq` and deleted by key.
+  // Reporting it instead failed every re-ingest of that document.
+  await t.test('an id carrying the delimiter is looked up alone and deleted', async (tt) => {
+    const calls = captureFetch(tt, (i) => {
+      const call = calls[i];
+      if (call.url.includes('/docs/index')) return { json: { value: [{ key: 'KEY-P', status: true }] } };
+      return call.body.filter.startsWith('chunkId eq')
+        ? { json: { value: [{ id: 'KEY-P', chunkId: "a|b'" }] } }
+        : { json: { value: [] } };
+    });
+
+    assert.deepStrictEqual(await aiSearch.deleteChunksByIds(["a|b'", 'c']), kept([]));
+    const filters = calls.filter(c => c.url.includes('/docs/search')).map(c => c.body.filter).sort();
+    assert.deepStrictEqual(filters, ["chunkId eq 'a|b'''", "search.in(chunkId, 'c', '|')"]);
+    const deletes = calls.filter(c => c.url.includes('/docs/index')).map(c => c.body.value);
+    assert.deepStrictEqual(deletes, [[{ '@search.action': 'delete', id: 'KEY-P' }]]);
   });
 
   await t.test('a failed lookup reports the batch as still indexed', async (tt) => {

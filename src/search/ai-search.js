@@ -1832,6 +1832,8 @@ const DELETE_MAX_ROUNDS = 500;
 /** `deleteChunksForDocument` rounds in a row whose count may lag its deletes before it gives up. */
 const DELETE_STALL_ROUNDS = 2;
 const DELETE_STALL_WAIT_MS = 2000;
+/** Total stall wait one `deleteChunksForDocument` call may spend: it runs inside an HTTP request. */
+const DELETE_STALL_BUDGET_MS = 20000;
 
 /** Lookup+delete batches in flight at once: a 38,090-chunk document is 38 batches, too slow in a row. */
 const UNINDEX_CONCURRENCY = 4;
@@ -1995,14 +1997,16 @@ async function deleteChunksByIds(chunkIds) {
     return { stillIndexed: [], indexUnconfigured: ids };
   }
 
-  // `|` is the `search.in` delimiter below, so such an id cannot be looked up. Reported, so its
-  // chunk stays in Cosmos rather than leaving a row nothing can find again.
-  const unsearchable = ids.filter(id => id.includes('|'));
-  const searchable = ids.filter(id => !id.includes('|'));
-  const batches = [];
-  for (let start = 0; start < searchable.length; start += INDEX_BATCH_ROWS) {
-    batches.push(searchable.slice(start, start + INDEX_BATCH_ROWS));
+  // `|` is the `search.in` delimiter below, so such an id is looked up on its own with `eq`.
+  const piped = ids.filter(id => id.includes('|'));
+  const listed = ids.filter(id => !id.includes('|'));
+  const batches = piped.map(id => [id]);
+  for (let start = 0; start < listed.length; start += INDEX_BATCH_ROWS) {
+    batches.push(listed.slice(start, start + INDEX_BATCH_ROWS));
   }
+  const filterFor = (batch) => (batch[0].includes('|')
+    ? `chunkId eq ${quote(batch[0])}`
+    : `search.in(chunkId, ${quote(batch.join('|'))}, '|')`);
 
   const unindexBatch = async (batch) => {
     let found;
@@ -2010,7 +2014,7 @@ async function deleteChunksByIds(chunkIds) {
       // `request` POSTs, so a 1000-id filter (~70 KB) rides in the body, not the URL.
       found = await request(`/indexes/${index}/docs/search?api-version=${API_VERSION}`, {
         search: '*',
-        filter: `search.in(chunkId, ${quote(batch.join('|'))}, '|')`,
+        filter: filterFor(batch),
         select: 'id,chunkId',
         top: batch.length
       });
@@ -2033,7 +2037,7 @@ async function deleteChunksByIds(chunkIds) {
   };
 
   const failed = await mapLimit(batches, UNINDEX_CONCURRENCY, unindexBatch);
-  return { stillIndexed: unsearchable.concat(...failed), indexUnconfigured: [] };
+  return { stillIndexed: [].concat(...failed), indexUnconfigured: [] };
 }
 
 /** The index names, so callers name them once and never hardcode a string. */
@@ -2053,12 +2057,30 @@ function indexes() {
  * `HttpServerUtility.UrlTokenEncode` — standard base64, `+`/`/` swapped for `-`/`_`, and the `=`
  * padding replaced by a DIGIT COUNT of the stripped padding (`…YzA=` indexes as `…YzA1`).
  * Re-implementing that here would delete nothing while reporting success the day it drifts.
+ *
+ * Runs BEFORE the Cosmos chunks go, so a caller that stops short can retry and find them again.
+ * Best-effort by default: logs and returns the count removed. `opts.strict` throws instead
+ * (`code: 'INDEX_DELETE_INCOMPLETE'`) whenever rows may be left, so the caller can keep its Cosmos
+ * chunks and answer a retryable 503.
  */
 async function deleteChunksForDocument(documentId, opts = {}) {
+  const { deleted, complete } = await drainIndexedChunks(documentId, opts);
+  if (!complete && opts.strict) {
+    const err = new Error(`search index still holds chunks of document ${documentId} ` +
+      `after ${deleted} deletions`);
+    err.code = 'INDEX_DELETE_INCOMPLETE';
+    err.deleted = deleted;
+    throw err;
+  }
+  return deleted;
+}
+
+/** The body of `deleteChunksForDocument`: `complete` is false wherever rows may be left behind. */
+async function drainIndexedChunks(documentId, opts) {
   const { configured, index } = config();
   if (!configured) {
     warnUnconfigured();
-    return 0;
+    return { deleted: 0, complete: false };
   }
 
   const id = String(documentId);
@@ -2070,6 +2092,7 @@ async function deleteChunksForDocument(documentId, opts = {}) {
   let deleted = 0;
   let previousRemaining = Infinity;
   let stalled = 0;
+  let stalledMs = 0;
 
   try {
     for (let round = 1; round <= maxRounds; round++) {
@@ -2084,20 +2107,23 @@ async function deleteChunksForDocument(documentId, opts = {}) {
       });
 
       const keys = (found.value || []).map(d => d.id).filter(Boolean);
-      if (keys.length === 0) return deleted;
+      if (keys.length === 0) return { deleted, complete: true };
 
       const remaining = found['@odata.count'] ?? keys.length;
       // Deletes are not read-your-write on this service, so the count can lag the last delete: a
       // stalled round waits and reads again. A total that stays put past that means the delete is
-      // not landing, and more rounds of the same call will not change it.
+      // not landing, and more rounds of the same call will not change it. The budget bounds the
+      // sum: a lag on every round of a large document would otherwise wait minutes in one request.
       if (round > 1 && remaining >= previousRemaining) {
-        if (++stalled > DELETE_STALL_ROUNDS) {
+        const overBudget = stalledMs + DELETE_STALL_WAIT_MS > DELETE_STALL_BUDGET_MS;
+        if (++stalled > DELETE_STALL_ROUNDS || overBudget) {
           logger.warn(
             `[ai-search] document ${id} still reports ${remaining} indexed chunks after ` +
             `${deleted} deletions; stopping without progress. Its remaining text stays searchable.`
           );
-          return deleted;
+          return { deleted, complete: false };
         }
+        stalledMs += DELETE_STALL_WAIT_MS;
         await sleep(DELETE_STALL_WAIT_MS);
         continue;
       }
@@ -2109,17 +2135,17 @@ async function deleteChunksForDocument(documentId, opts = {}) {
       });
       deleted += keys.length;
 
-      if (remaining <= keys.length) return deleted;
+      if (remaining <= keys.length) return { deleted, complete: true };
     }
 
     logger.warn(
       `[ai-search] document ${id} exceeded ${maxRounds} delete rounds after ${deleted} deletions. ` +
       'Re-run the delete to clear the remainder.'
     );
-    return deleted;
+    return { deleted, complete: false };
   } catch (err) {
-    // Best-effort by design: the Cosmos rows are already gone and the caller has already
-    // succeeded. Loud, because the consequence is searchable text for a deleted document.
+    // Reported, not thrown: see `opts.strict`. Loud, because the consequence is searchable text
+    // for a deleted document.
     //
     // Returns what was actually removed before the failure, not 0 — a later round throwing does not
     // un-delete the earlier ones, and reporting 0 would understate `indexEntriesRemoved` in the
@@ -2128,7 +2154,7 @@ async function deleteChunksForDocument(documentId, opts = {}) {
       `[ai-search] could not remove indexed chunks for document ${id} (${err.message}) ` +
       `after deleting ${deleted}. Its remaining text stays searchable until this is retried.`
     );
-    return deleted;
+    return { deleted, complete: false };
   }
 }
 
