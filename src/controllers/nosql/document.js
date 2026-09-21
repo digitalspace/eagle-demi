@@ -1229,6 +1229,8 @@ const PARENT_FIELD_REFRESH_BATCHES = 25;
 const CAP_REJECTED = 'chunk ingest rejected: chunk cap exceeded';
 const REPEATED_REJECTED = 'chunk ingest rejected: repeated failures';
 
+const INDEX_DELETE_INCOMPLETE = 'chunk ingest incomplete: search index delete failed, retry';
+
 const INGEST_FAILURES_CLEARED = { chunkIngestFailures: 0, chunkIngestFailedAt: null };
 
 function capExceededMessage() {
@@ -1274,11 +1276,26 @@ async function tryRecordIngestFailure(document, message, fields = {}) {
   }
 }
 
+/** Logged, never thrown: the ingest-failure alert matches this line. */
+function logIngestFailure(document, message) {
+  logger.error(`[Document Controller] Chunk ingest failed: ${message}`, { documentId: document.id });
+}
+
 /** A 500 the host will retry: logged for the ingest-failure alert and counted by the guard. */
 async function failIngest(res, document, message) {
-  logger.error(`[Document Controller] Chunk ingest failed: ${message}`, { documentId: document.id });
+  logIngestFailure(document, message);
   await tryRecordIngestFailure(document, message);
   return res.status(500).json({ error: message });
+}
+
+/**
+ * A 503 for dropped chunks the search index kept, when Cosmos wrote everything else. Not counted
+ * by the guard: an index outage says nothing about the document, and must not lock it out.
+ */
+function failIndexDelete(res, document, statusCounts) {
+  const message = `${INDEX_DELETE_INCOMPLETE} (${JSON.stringify(statusCounts)})`;
+  logIngestFailure(document, message);
+  return res.status(503).json({ error: message });
 }
 
 /**
@@ -1567,8 +1584,13 @@ async function ingestChunksStreaming(req, res, doc) {
   if (err) return failWrite(err);
 
   // Only now is the surviving set knowable. Without this a re-extraction yielding fewer chunks
-  // leaves orphans, and AI Search never sees deletes.
-  const surplus = await chunks.deleteSurplus(systemAccess(), doc.id, keepIds);
+  // leaves orphans, and AI Search never sees deletes. A chunk the index would not let go stays in
+  // Cosmos and fails the request, so the retry finds it again.
+  const surplus = await chunks.deleteSurplus(systemAccess(), doc.id, keepIds,
+    { unindex: aiSearch.deleteChunksByIds });
+  if (surplus && chunks.onlyIndexKept(surplus)) {
+    return failIndexDelete(res, doc, surplus.statusCounts);
+  }
   if (surplus && surplus.failed) {
     return fail(500, `surplus chunk delete incomplete: ${surplus.failed} failed ` +
       `(${JSON.stringify(surplus.statusCounts)})`);
@@ -1726,12 +1748,17 @@ exports.ingestChunks = async (req, res) => {
 
     // systemAccess() so reconciliation sees every pre-existing chunk. A caller-scoped read could
     // miss chunks it may not see and then leave them orphaned behind the new set.
-    const result = await chunks.replaceForDocument(systemAccess(), doc.id, items);
+    // `unindex`: dropped chunks leave the search index first; see the streaming path.
+    const result = await chunks.replaceForDocument(systemAccess(), doc.id, items,
+      { unindex: aiSearch.deleteChunksByIds });
 
     // bulkVerified REPORTS partial failure, it does not throw. Ignoring `failed` is exactly the bug
     // that once reported 60,578 documents written when 56,317 landed — here it would mark a
     // document extracted while part of its text is missing, and the work list would never offer it
     // again. Record the failure and 500 so the worker retries the whole document.
+    if (result && chunks.onlyIndexKept(result)) {
+      return failIndexDelete(res, doc, result.statusCounts);
+    }
     if (result && result.failed) {
       const detail = `chunk write incomplete: ${result.failed} of ${items.length} failed ` +
         `(${JSON.stringify(result.statusCounts)})`;

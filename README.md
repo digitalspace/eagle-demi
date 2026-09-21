@@ -380,7 +380,14 @@ POST /api/documents/:id/chunks     { markdown }  |  { error }
 The server chunks the markdown (`src/chunker.js` is the only chunking implementation) and copies
 `read[]` from the **live** document, so an extraction host can never widen a document's visibility.
 Chunk ids are deterministic (`<documentId>::p<page>::c<index>`) and `chunks.replaceForDocument`
-reconciles, so the route is idempotent and an interrupted backfill simply restarts.
+reconciles, so the route is idempotent and an interrupted backfill simply restarts. Chunks a
+re-ingest drops are deleted from the AI Search `chunks` index first, then from Cosmos, because the
+indexer never sees a Cosmos delete. A chunk the index would not delete stays in Cosmos and the
+route answers 503, so the retry finds it again. That 503 does not count toward the repeated-failure
+lockout, so a search outage cannot lock a document out; a Cosmos write failure is still a counted
+500. Known gap: an indexer run already in flight can
+read a chunk before the index delete and write it back after, and that row stays searchable until
+the document's chunks are removed by document id.
 
 > **Do not change `TARGET_CHUNK_SIZE`, `MAX_CHUNK_SIZE` or `OVERLAP_SIZE`.** Chunk ids derive from
 > the split, so changing a constant orphans every chunk already written instead of reconciling with

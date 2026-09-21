@@ -559,26 +559,88 @@ async function reStampAfterWrite(access, docs, failedIds = [], opts = {}) {
 }
 
 /**
+ * `cosmos.bulk` with a Delete that finds no row counted as landed: the row is gone, which is what
+ * the delete asked for. `bulkVerified` would otherwise retry it and then report it lost.
+ */
+async function bulkGoneIsDeleted(operations) {
+  const results = await cosmos.bulk(CONTAINER, operations);
+  return results.map((r, i) => (r && r.statusCode === 404 && operations[i].operationType === 'Delete'
+    ? { ...r, statusCode: 204 }
+    : r));
+}
+
+/**
+ * Take `surplusIds` out of the search index BEFORE they leave Cosmos, and keep in Cosmos every id
+ * the index still holds.
+ *
+ * The other order is not retry-safe: a request that dies between the two deletes (the HTTP cap, a
+ * recycle) leaves a retry nothing in Cosmos to find, and the index rows stay searchable for good.
+ * This way the next attempt finds those chunks again. A row gone from the index but still in
+ * Cosmos is not re-added: the indexer's `_ts` high-water mark skips an unchanged row.
+ *
+ * @param {Function} [unindex]  (chunkIds) => { [reason]: chunk ids kept in the index }, reasons
+ *   from INDEX_KEPT; absent = no index to clear
+ */
+async function unindexFirst(surplusIds, unindex) {
+  if (!unindex || surplusIds.length === 0) return { deletable: surplusIds, kept: {} };
+  const kept = await unindex(surplusIds);
+  const held = new Set(Object.values(kept).flat().map(String));
+  return { deletable: surplusIds.filter(id => !held.has(id)), kept };
+}
+
+/** Why the index kept a chunk: it would not delete it, or no index is configured to ask. */
+const INDEX_KEPT = ['stillIndexed', 'indexUnconfigured'];
+
+/**
+ * Write `operations`, then count the chunks kept back for the index as failed too, so the caller's
+ * single `failed` check turns the request into a retry. Each reason gets its own status count.
+ */
+async function writeVerified(operations, kept) {
+  let result = operations.length === 0
+    ? noWrites()
+    : await cosmos.bulkVerified(CONTAINER, operations, { bulkFn: bulkGoneIsDeleted });
+  for (const [reason, ids] of Object.entries(kept)) {
+    if (ids.length === 0) continue;
+    result = {
+      ...result,
+      failed: result.failed + ids.length,
+      failedIds: [...(result.failedIds || []), ...ids],
+      statusCounts: { ...result.statusCounts, [reason]: ids.length }
+    };
+  }
+  return result;
+}
+
+/** True when every failed chunk is one the index kept, i.e. Cosmos wrote everything it was sent. */
+function onlyIndexKept(result) {
+  const counts = result.statusCounts || {};
+  const kept = INDEX_KEPT.reduce((sum, reason) => sum + (counts[reason] || 0), 0);
+  return result.failed > 0 && result.failed === kept;
+}
+
+const deleteOp = (pk) => (id) => ({ operationType: 'Delete', partitionKey: pk, id });
+
+/**
  * Delete every chunk of this document whose id is NOT in `keepIds` — the tail half of a streamed
  * replace.
  *
  * Skipping this is not a cosmetic leak: AI Search indexers never see deletes (`_ts` high-water
  * mark only), so an orphaned chunk stays searchable forever and a document keeps answering queries
- * with text it no longer contains.
+ * with text it no longer contains. Hence `opts.unindex`, run first — see `unindexFirst`.
  */
-async function deleteSurplus(access, documentId, keepIds) {
+async function deleteSurplus(access, documentId, keepIds, opts = {}) {
   const pk = String(documentId);
   const keep = new Set(Array.from(keepIds, String));
 
-  const operations = (await idsForDocument(access, documentId))
-    .filter(id => !keep.has(String(id)))
-    .map(id => ({ operationType: 'Delete', partitionKey: pk, id: String(id) }));
+  const surplus = (await idsForDocument(access, documentId))
+    .map(String)
+    .filter(id => !keep.has(id));
 
-  if (operations.length === 0) return noWrites();
-  return cosmos.bulkVerified(CONTAINER, operations);
+  const { deletable, kept } = await unindexFirst(surplus, opts.unindex);
+  return writeVerified(deletable.map(deleteOp(pk)), kept);
 }
 
-async function replaceForDocument(access, documentId, chunkItems) {
+async function replaceForDocument(access, documentId, chunkItems, opts = {}) {
   const pk = String(documentId);
 
   assertAcl(chunkItems);
@@ -589,18 +651,14 @@ async function replaceForDocument(access, documentId, chunkItems) {
   const operations = changedUpserts(documentId, chunkItems, stored);
   logSkipped(documentId, chunkItems.length, operations.length);
 
-  for (const id of stored.keys()) {
-    if (!keep.has(id)) {
-      operations.push({ operationType: 'Delete', partitionKey: pk, id });
-    }
-  }
+  const surplus = [...stored.keys()].filter(id => !keep.has(id));
+  const { deletable, kept } = await unindexFirst(surplus, opts.unindex);
+  operations.push(...deletable.map(deleteOp(pk)));
 
   // Same shape as bulkVerified's return — `failed` is a COUNT, so callers can test it uniformly.
-  if (operations.length === 0) return noWrites();
-
   // bulkVerified, never bulk: bulk does not throw on partial failure, and counting what was SENT
   // is the bug that reported 60,578 documents written when 56,317 existed.
-  return cosmos.bulkVerified(CONTAINER, operations);
+  return writeVerified(operations, kept);
 }
 
 /** Remove every chunk of a document. Used when the document itself is hard-deleted. */
@@ -635,5 +693,6 @@ module.exports = {
   replaceForDocument,
   upsertBatch,
   deleteSurplus,
+  onlyIndexKept,
   removeForDocument
 };
