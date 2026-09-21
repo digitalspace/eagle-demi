@@ -27,7 +27,7 @@ const {
   SASProtocol,
   generateBlobSASQueryParameters
 } = require('@azure/storage-blob');
-const { DefaultAzureCredential } = require('@azure/identity');
+const { createCredential } = require('../utils/azure-credential');
 
 const config = require('../config');
 const { contentDisposition } = require('./content-disposition');
@@ -60,7 +60,7 @@ function getServiceClient() {
     requireConfig();
     serviceClient = new BlobServiceClient(
       `https://${config.azureStorageAccount}.blob.core.windows.net`,
-      new DefaultAzureCredential()
+      createCredential()
     );
   }
   return serviceClient;

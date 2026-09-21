@@ -32,6 +32,8 @@ const { execFileSync } = require('node:child_process');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SCRIPT = path.join(REPO_ROOT, 'scripts', 'package-secret-sync.sh');
 const REPO_MODULES = path.join(REPO_ROOT, 'node_modules');
+// Shared files the script copies in beside src/secret-sync. Each must stay free of src/config.js.
+const SHARED = [path.join('src', 'utils', 'azure-credential.js')];
 
 // Stand-ins for dependencies the API itself does not install. Each exports the names the sync code
 // destructures at module scope; a dependency missing from both this map and node_modules fails the
@@ -115,7 +117,8 @@ test('the packaged layout loads its entry point', (t) => {
   const strays = files
     .map((file) => path.relative(stage, file))
     .filter((file) => !file.startsWith('node_modules' + path.sep))
-    .filter((file) => !file.startsWith(path.join('src', 'secret-sync') + path.sep));
+    .filter((file) => !file.startsWith(path.join('src', 'secret-sync') + path.sep))
+    .filter((file) => !SHARED.includes(file));
   assert.deepStrictEqual(strays, [], 'the sync app must require nothing outside src/secret-sync');
 });
 
@@ -124,10 +127,13 @@ test('the packaged layout carries no file the app does not require', () => {
   try {
     stageFromScript(stage);
     const staged = fs.readdirSync(path.join(stage, 'src'), { recursive: true });
-    // src/secret-sync itself, and nothing else at any depth: src/config.js is the API's
+    // src/secret-sync and the SHARED files, nothing else at any depth: src/config.js is the API's
     // configuration and src/utils/logger.js is what used to drag it in.
-    const outside = staged.filter((file) => file !== 'secret-sync' && !file.startsWith('secret-sync' + path.sep));
-    assert.deepStrictEqual(outside, [], 'only src/secret-sync belongs in the zip');
+    const allowed = SHARED.map((file) => path.relative('src', file));
+    const outside = staged
+      .filter((file) => file !== 'secret-sync' && !file.startsWith('secret-sync' + path.sep))
+      .filter((file) => !allowed.includes(file) && !allowed.some((a) => a.startsWith(file + path.sep)));
+    assert.deepStrictEqual(outside, [], 'only src/secret-sync and the shared files belong in the zip');
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
   }
