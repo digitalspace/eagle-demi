@@ -1297,6 +1297,15 @@ paths:
           description: Parent project id, the partition key. Avoids a cross-partition lookup.
           schema:
             type: string
+        - name: force
+          in: query
+          required: false
+          description: >-
+            `true` lets a sysadmin's ingest through the repeated-failure guard (see 409). Use it
+            once the cause of the earlier failures is fixed. Ignored for any other role.
+          schema:
+            type: string
+            enum: ['true']
       requestBody:
         required: true
         content:
@@ -1338,10 +1347,24 @@ paths:
           description: Unauthorized.
         '404':
           description: Document not found.
+        '409':
+          description: >-
+            Repeated-failure guard: the document has failed ingest `CHUNK_INGEST_MAX_FAILURES`
+            times (default 3) inside `CHUNK_INGEST_FAILURE_WINDOW_MS` (default 24 h). Failures
+            include transient errors such as throttling, not only size. Nothing is read or
+            written. Fix the cause, then a sysadmin retries with `?force=true`. A reported `error`
+            is never blocked.
+        '413':
+          description: >-
+            The markdown yields more than `MAX_CHUNKS_PER_DOCUMENT` chunks (default 25000). Nothing
+            is kept: on the NDJSON path any batches already written are removed, with their AI
+            Search rows, and the document is marked not extracted. Counts as a
+            failure for the 409 guard.
         '500':
           description: >-
-            Part of the write did not land. The shortfall is recorded on the document and
-            `contentExtracted` is NOT set, so the work list still offers it.
+            Part of the write did not land, or the write threw. The failure is recorded on the
+            document, counts toward the 409 guard, and `contentExtracted` is NOT set, so the work
+            list still offers it.
     get:
       summary: A document's extracted text, in page order
       description: >-

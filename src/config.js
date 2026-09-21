@@ -150,6 +150,17 @@ const config = {
   minChunkSize:    parseInt(process.env.MIN_CHUNK_SIZE    || '100',  10),
   overlapSize:     parseInt(process.env.OVERLAP_SIZE      || '200',  10),
 
+  // Chunk ingest guards (POST /documents/:id/chunks). The cap stops a runaway chunker before it
+  // writes. The largest real markdown is 2,198 table lines averaging 28,817 characters (63.3M); run
+  // through chunkMarkdown at the sizes above, that shape gives 16.7k-17.6k chunks and 63M of
+  // 600-character prose paragraphs 21k, so it holds with 16% to spare. ai-search
+  // deleteChunksForDocument clears at most 25,000 per document, so nothing above that could be
+  // fully removed again anyway.
+  maxChunksPerDocument:       intFromEnv('MAX_CHUNKS_PER_DOCUMENT', 25000),
+  // A host that retries 5xx forever is stopped after this many failures inside the window.
+  chunkIngestMaxFailures:     intFromEnv('CHUNK_INGEST_MAX_FAILURES', 3),
+  chunkIngestFailureWindowMs: intFromEnv('CHUNK_INGEST_FAILURE_WINDOW_MS', 24 * 60 * 60 * 1000),
+
   // Docling request timeout in ms (large docs can take minutes)
   doclingTimeout: parseInt(process.env.DOCLING_TIMEOUT_MS || '300000', 10),
 

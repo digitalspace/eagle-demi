@@ -307,6 +307,56 @@ resource chunkRestampPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
   }
 }
 
+// Chunk ingest is failing over and over. In September 2026 a retry loop on chunk writes burned 4-8M
+// RU an hour on demi-cosmos-test for five days, and the first thing to notice was the budget alert,
+// a day or two late. The Cosmos RU alert in cosmos-alerts.bicep sees the cost; this one sees the
+// cause, and names it. The lines come from src/controllers/nosql/document.js: `chunk write
+// incomplete` when a batch lands short, `chunk ingest rejected: …` (`chunk cap exceeded`, `repeated
+// failures`) when the guard refuses a document, and `Chunk ingest failed: …`, the catch-all that
+// wraps both. The catch-all is the line the September loop actually wrote — `Bulk request errored`,
+// 90 hours of it, at most 7 an hour — so without it this rule would have stayed quiet throughout.
+//
+// Unconditional: every environment that ingests writes these lines. Five in an hour, not one: one
+// document that is too big is a warning worth reading in the log, while a loop writes these
+// continuously. The window is an hour and the check every fifteen minutes, so the windows overlap
+// and a loop keeps the alert raised rather than firing once per line.
+resource chunkIngestFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'demi-chunk-ingest-failures-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI chunk ingest is failing repeatedly'
+    description: 'Five or more `chunk write incomplete`, `chunk ingest rejected` or `Chunk ingest failed` lines in an hour. A retry loop on chunk writes spends Cosmos RU for as long as it runs: check the Cosmos RU alert and the documents named in the lines, and stop the push that keeps resending them.'
+    // Warning, like the other job alerts: nothing is down, but money is being spent.
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT1H'
+    criteria: {
+      allOf: [
+        {
+          // `AppTraces`, not `traces`, and `contains`, not `has` — see reconcileDriftAlert above.
+          // `contains` is case-insensitive, so `chunk ingest failed` matches the capitalised line.
+          query: 'AppTraces | where Message contains "chunk write incomplete" or Message contains "chunk ingest rejected" or Message contains "chunk ingest failed"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 5
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
 // Search is down. On 2026-09-08 every `dataset=Document` query answered 502 for 65 minutes and
 // nothing raised a hand: the cause sat in `AppTraces` as `[search] document search failed` and was
 // found by eye. This rule reads that line.

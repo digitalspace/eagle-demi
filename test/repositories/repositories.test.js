@@ -385,7 +385,8 @@ test('chunks repository', async (t) => {
 
   await t.test('replaceForDocument upserts new chunks and deletes only the surplus', async (tt) => {
     tt.mock.method(cosmos, 'query', async () => ({
-      items: ['d1::p0::c0', 'd1::p0::c1', 'd1::p0::c2'], continuationToken: undefined
+      items: [{ id: 'd1::p0::c0' }, { id: 'd1::p0::c1' }, { id: 'd1::p0::c2' }],
+      continuationToken: undefined
     }));
     let ops = null;
     tt.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
@@ -420,7 +421,7 @@ test('chunks repository', async (t) => {
 
   await t.test('removeForDocument deletes every chunk of the document', async (tt) => {
     tt.mock.method(cosmos, 'query', async () => ({
-      items: ['d1::p0::c0', 'd1::p0::c1'], continuationToken: undefined
+      items: [{ id: 'd1::p0::c0' }, { id: 'd1::p0::c1' }], continuationToken: undefined
     }));
     let ops = null;
     tt.mock.method(cosmos, 'bulkVerified', async (container, operations) => {

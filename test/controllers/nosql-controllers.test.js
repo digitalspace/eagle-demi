@@ -13,6 +13,7 @@ const documentController = require('../../src/controllers/nosql/document');
 const chunksRepo = require('../../src/repositories/chunks');
 const { TIER, SECURE_ROLES } = require('../../src/helpers/access-sql');
 const config = require('../../src/config');
+const { logger } = require('../../src/utils/logger');
 
 // The redactor allowlists `sources.*` by ENRICHMENT_SOURCES; test deploys name wildfire.
 config.enrichmentSources = ['wildfire'];
@@ -30,6 +31,13 @@ function mockRes() {
 }
 
 const ANON = { query: {}, params: {}, body: {} };
+
+// Sets one config value for the calling (sub)test only.
+function withConfig(t, key, value) {
+  const prev = config[key];
+  config[key] = value;
+  t.after(() => { config[key] = prev; });
+}
 const ADMIN_USER = { realm_access: { roles: ['sysadmin'] } };
 // `demi-service-write` is level 2 — the tier every WRITE_ROLES holder maps to.
 const WRITER_USER = { realm_access: { roles: ['demi-service-write'] } };
@@ -739,7 +747,8 @@ test('chunk ingest route', async (t) => {
       body: {
         // Page 2 is long enough to need two chunks, so the page count cannot be read off the
         // chunks and the ids have to keep them apart.
-        markdown: ['First page.', 'B'.repeat(5000), 'Third page.'].join('\f'),
+        markdown: [`First page ${'a'.repeat(120)}`, 'B'.repeat(5000), `Third page ${'c'.repeat(120)}`]
+          .join('\f'),
         extraction: { path: 'text', engine: 'pypdfium2', at: '2026-09-15T00:00:00.000Z' }
       },
       user: ADMIN_USER
@@ -941,6 +950,218 @@ test('chunk ingest route', async (t) => {
     );
     assert.strictEqual(res.statusCode, 400);
   });
+
+  const HOUR = 60 * 60 * 1000;
+  const failedAgo = (ms) => new Date(Date.now() - ms).toISOString();
+  const jsonReq = (query = {}) =>
+    ({ params: { id: 'd1' }, query, body: { markdown: 'r'.repeat(9000) }, user: ADMIN_USER });
+
+  await t.test('more chunks than the cap is a 413 before anything is written', async (st) => {
+    // A runaway chunker once produced 38,090 chunks for one document; the throttled write 500ed
+    // and the host retried it for five days.
+    withConfig(st, 'maxChunksPerDocument', 2);
+    stubDoc(t);
+    const patches = [];
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patches.push(fields); return {};
+    });
+    const replace = t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ failed: 0 }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq(), res);
+
+    assert.strictEqual(res.statusCode, 413);
+    assert.match(res.body.error, /chunk ingest rejected: chunk cap exceeded/);
+    assert.strictEqual(replace.mock.callCount(), 0);
+    assert.strictEqual(patches.length, 1);
+    assert.match(patches[0].contentExtractionError, /chunk cap exceeded/);
+    assert.strictEqual(patches[0].chunkIngestFailures, 1, 'a cap rejection counts as a failure');
+  });
+
+  await t.test('a partial write still 500s and adds to the failure count', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 1, chunkIngestFailedAt: failedAgo(HOUR) });
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async (a, id, items) =>
+      ({ succeeded: items.length - 1, failed: 1, statusCounts: { 429: 1 } }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq(), res);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.match(res.body.error, /^chunk write incomplete: /);
+    assert.strictEqual(patched.chunkIngestFailures, 2);
+    assert.ok(Date.now() - Date.parse(patched.chunkIngestFailedAt) < HOUR);
+  });
+
+  await t.test('a failure outside the window starts the count again', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 5, chunkIngestFailedAt: failedAgo(25 * HOUR) });
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+      ({ succeeded: 0, failed: 1, statusCounts: { 429: 1 } }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq(), res);
+
+    assert.strictEqual(res.statusCode, 500, 'old failures must not block a new attempt');
+    assert.strictEqual(patched.chunkIngestFailures, 1);
+  });
+
+  await t.test('a partial write logs a line the ingest-failure alert matches', async () => {
+    // Mirrors the KQL in azure/modules/observability.bicep (`contains` is case-insensitive).
+    stubDoc(t);
+    t.mock.method(documents, 'patchExtraction', async () => ({}));
+    t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+      ({ succeeded: 0, failed: 1, statusCounts: { 429: 1 } }));
+    const errors = t.mock.method(logger, 'error', () => {});
+
+    await documentController.ingestChunks(jsonReq(), mockRes());
+
+    const lines = errors.mock.calls.map(c => String(c.arguments[0]).toLowerCase());
+    assert.ok(lines.some(l => l.includes('chunk write incomplete')), `logged: ${lines}`);
+  });
+
+  await t.test('a thrown write adds to the failure count, without its detail', async () => {
+    // A query still throttled after the SDK's own retries throws rather than reporting `failed`.
+    stubDoc(t, { ...DOC, chunkIngestFailures: 2, chunkIngestFailedAt: failedAgo(HOUR) });
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () => {
+      throw Object.assign(new Error('Request rate is large at https://acct.documents.azure.com'),
+        { code: 429 });
+    });
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq(), res);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.strictEqual(patched.chunkIngestFailures, 3, 'the third failure trips the guard');
+    assert.doesNotMatch(patched.contentExtractionError, /azure\.com/,
+      'the stored error is read back by callers, so the driver message stays in the log');
+  });
+
+  await t.test('a thrown write still 500s when the failure cannot be recorded', async () => {
+    stubDoc(t);
+    t.mock.method(documents, 'patchExtraction', async () => { throw new Error('throttled'); });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () => { throw new Error('throttled'); });
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq(), res);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.strictEqual(res.body.error, 'Internal server error.');
+  });
+
+  await t.test('three failed ingests in a row block the fourth with a 409', async () => {
+    // Stateful stand-in for the document row, so the count travels between requests the way it
+    // does in Cosmos.
+    let row = { ...DOC };
+    t.mock.method(documents, 'getById', async () => row);
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      row = { ...row, ...fields }; return {};
+    });
+    const replace = t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+      ({ succeeded: 0, failed: 1, statusCounts: { 429: 1 } }));
+
+    const post = async () => {
+      const res = mockRes();
+      await documentController.ingestChunks(jsonReq(), res);
+      return res.statusCode;
+    };
+    const statuses = [await post(), await post(), await post(), await post()];
+
+    assert.deepStrictEqual(statuses, [500, 500, 500, 409]);
+    assert.strictEqual(replace.mock.callCount(), 3, 'the blocked request must write nothing');
+    assert.strictEqual(row.chunkIngestFailures, 3, 'a 409 is not itself counted');
+  });
+
+  await t.test('the 409 names the guard so an alert can match it', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: failedAgo(HOUR) });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+      assert.fail('a blocked document must not be written'));
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq(), res);
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.match(res.body.error, /chunk ingest rejected: repeated failures/);
+    assert.match(res.body.error, /transient/, 'a throttled write counts too, not only size');
+    assert.match(res.body.error, /sysadmin can retry with \?force=true/);
+  });
+
+  await t.test('force=true from a non-sysadmin still gets the 409', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: failedAgo(HOUR) });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+      assert.fail('a blocked document must not be written'));
+
+    const res = mockRes();
+    await documentController.ingestChunks({ ...jsonReq({ force: 'true' }), user: WRITER_USER }, res);
+
+    assert.strictEqual(res.statusCode, 409);
+  });
+
+  await t.test('a cap rejection still 413s when the failure cannot be recorded', async (st) => {
+    withConfig(st, 'maxChunksPerDocument', 2);
+    t.mock.method(documents, 'getById', async () => DOC);
+    t.mock.method(documents, 'patchExtraction', async () => { throw new Error('throttled'); });
+    const warn = t.mock.method(logger, 'warn', () => {});
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq(), res);
+
+    assert.strictEqual(res.statusCode, 413);
+    assert.match(res.body.error, /^chunk ingest rejected: chunk cap exceeded/);
+    assert.ok(warn.mock.calls.some(c => /failure not recorded/.test(c.arguments[0])));
+  });
+
+  await t.test('a partial write still 500s with its detail when the failure cannot be recorded',
+    async () => {
+      t.mock.method(documents, 'getById', async () => DOC);
+      t.mock.method(documents, 'patchExtraction', async () => { throw new Error('throttled'); });
+      t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+        ({ succeeded: 0, failed: 1, statusCounts: { 429: 1 } }));
+
+      const res = mockRes();
+      await documentController.ingestChunks(jsonReq(), res);
+
+      assert.strictEqual(res.statusCode, 500);
+      assert.match(res.body.error, /^chunk write incomplete: /);
+    });
+
+  await t.test('force=true gets past the guard, and success clears the count', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: failedAgo(HOUR) });
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq({ force: 'true' }), res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(patched.chunkIngestFailures, 0);
+    assert.strictEqual(patched.chunkIngestFailedAt, null);
+    assert.ok(Object.keys(patched).length <= 10, 'cosmos.patch refuses more than ten operations');
+  });
+
+  await t.test('a host-reported error is still recorded while the guard is tripped', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: failedAgo(HOUR) });
+
+    const res = mockRes();
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: { error: 'gave up' }, user: ADMIN_USER }, res);
+
+    assert.strictEqual(res.body.recordedError, true);
+  });
 });
 
 test('chunk ingest — NDJSON streaming path', async (t) => {
@@ -1004,7 +1225,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
       t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
 
       // The marker arrives in the third block, after two blocks of page 1 have already been fed.
-      const blocks = ['Page one opens.', 'a'.repeat(2600), `${'a'.repeat(2600)}\fPage two.`];
+      const blocks = ['Page one opens.', 'a'.repeat(2600), `${'a'.repeat(2600)}\fPage two ${'b'.repeat(120)}`];
       await documentController.ingestChunks(streamReq(ndjson(blocks)), mockRes());
 
       assert.deepStrictEqual(written.map(c => c.pageNumber), [1, 1, 2],
@@ -1031,11 +1252,11 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     });
     t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
 
-    // 24,000 characters of page 1 before the first marker, then two short pages.
+    // 24,000 characters of page 1 before the first marker, then two more pages.
     const blocks = [
       ...Array.from({ length: 6 }, (_, i) => `Page one para ${i} ${'q'.repeat(4000)}`),
-      '\fSecond page text.',
-      '\fThird page.'
+      `\fSecond page text ${'s'.repeat(120)}`,
+      `\fThird page ${'t'.repeat(120)}`
     ];
     await documentController.ingestChunks(streamReq(ndjson(blocks)), mockRes());
 
@@ -1226,6 +1447,136 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     assert.strictEqual(patched.contentExtracted, true);
     assert.strictEqual(patched.contentExtractionError, null);
     assert.strictEqual(patched.extraction.path, 'unknown', 'an unknown path is recorded, not trusted');
+  });
+
+  // ~2,600 characters each, one chunk per block.
+  const paras = (n) => Array.from({ length: n }, (_, i) => `Para ${i} ${'q'.repeat(2600)}`);
+
+  await t.test('a stream over the cap is a 413 before its first batch is written', async (st) => {
+    withConfig(st, 'maxChunksPerDocument', 3);
+    stubDoc(t);
+    const patches = [];
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patches.push(fields); return {};
+    });
+    const upsert = t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+    const remove = t.mock.method(chunksRepo, 'removeForDocument', async () => ({ failed: 0 }));
+    const unindex = t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);
+
+    const res = mockRes();
+    await documentController.ingestChunks(streamReq(ndjson(paras(10))), res);
+
+    assert.strictEqual(res.statusCode, 413);
+    assert.match(res.body.error, /chunk ingest rejected: chunk cap exceeded/);
+    assert.strictEqual(upsert.mock.callCount(), 0);
+    assert.strictEqual(remove.mock.callCount(), 0, 'nothing was written, so nothing to remove');
+    assert.strictEqual(unindex.mock.callCount(), 0, 'the previous extraction stays whole');
+    assert.strictEqual(patches.length, 1);
+    assert.strictEqual(patches[0].chunkIngestFailures, 1);
+    assert.ok(!patches[0].contentExtracted);
+  });
+
+  await t.test('batches written before the cap was reached are removed again', async (st) => {
+    // The stream cannot be counted ahead, so up to `cap` chunks may land first.
+    withConfig(st, 'maxChunksPerDocument', 250);
+    stubDoc(t);
+    let written = 0;
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      written += items.length; return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    const patches = [];
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patches.push(fields); return {};
+    });
+    const remove = t.mock.method(chunksRepo, 'removeForDocument', async () => ({ failed: 0 }));
+    // The indexer's `_ts` high-water mark never sees a delete, so the rows must go explicitly.
+    const unindex = t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 250);
+    t.mock.method(chunksRepo, 'deleteSurplus', async () =>
+      assert.fail('an over-cap stream must not reconcile as if it succeeded'));
+
+    const res = mockRes();
+    await documentController.ingestChunks(streamReq(ndjson(paras(400))), res);
+
+    assert.strictEqual(res.statusCode, 413);
+    assert.ok(written > 0 && written <= 250, `wrote ${written} chunks against a cap of 250`);
+    assert.strictEqual(remove.mock.callCount(), 1);
+    assert.strictEqual(remove.mock.calls[0].arguments[1], 'd1');
+    assert.deepStrictEqual(unindex.mock.calls.map(c => c.arguments[0]), ['d1']);
+    assert.strictEqual(patches.length, 1);
+    assert.strictEqual(patches[0].contentExtracted, false, 'the document must stop claiming chunks');
+    assert.strictEqual(patches[0].contentPageCount, 0);
+    assert.strictEqual(patches[0].chunkIngestFailures, 1);
+    assert.strictEqual(patches[0].contentExtractionError,
+      'chunk ingest rejected: chunk cap exceeded (limit 250 chunks per document)');
+    assert.ok(Object.keys(patches[0]).length <= 10, 'cosmos.patch refuses more than ten operations');
+  });
+
+  await t.test('an over-cap cleanup that falls short is recorded and still 413s', async (st) => {
+    withConfig(st, 'maxChunksPerDocument', 250);
+    stubDoc(t);
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'removeForDocument', async () =>
+      ({ succeeded: 246, failed: 4, statusCounts: { 429: 4 } }));
+    t.mock.method(aiSearch, 'deleteChunksForDocument', async () => { throw new Error('boom'); });
+
+    const res = mockRes();
+    await documentController.ingestChunks(streamReq(ndjson(paras(400))), res);
+
+    assert.strictEqual(res.statusCode, 413);
+    assert.match(res.body.error, /^chunk ingest rejected: chunk cap exceeded/);
+    assert.match(patched.contentExtractionError, /4 chunks not removed; index delete failed$/);
+    assert.strictEqual(patched.contentExtracted, false);
+  });
+
+  await t.test('a tripped guard 409s a stream without reading or writing it', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: new Date().toISOString() });
+    const upsert = t.mock.method(chunksRepo, 'upsertBatch', async () => ({ failed: 0 }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(streamReq(ndjson(paras(2))), res);
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.match(res.body.error, /chunk ingest rejected: repeated failures/);
+    assert.strictEqual(upsert.mock.callCount(), 0);
+  });
+
+  await t.test('a failed batch adds to the failure count', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 2, chunkIngestFailedAt: new Date().toISOString() });
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'upsertBatch', async () =>
+      ({ succeeded: 0, failed: 1, statusCounts: { 429: 1 } }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(streamReq(ndjson(paras(2))), res);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.match(res.body.error, /^chunk write incomplete: /);
+    assert.strictEqual(patched.chunkIngestFailures, 3);
+  });
+
+  await t.test('a completed stream clears the failure count', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 1, chunkIngestFailedAt: new Date().toISOString() });
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    await documentController.ingestChunks(streamReq(ndjson(paras(2))), mockRes());
+
+    assert.strictEqual(patched.chunkIngestFailures, 0);
+    assert.strictEqual(patched.chunkIngestFailedAt, null);
   });
 });
 

@@ -16,9 +16,11 @@
  * so scoping on it is free.
  */
 
+const crypto = require('crypto');
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, selectWhere, pageOptions } = require('./_sql');
+const { logger } = require('../utils/logger');
+const { eq, inList, selectWhere, pageOptions } = require('./_sql');
 
 /**
  * `chunks` is the only chunk container. A second one, `chunks_fts`, briefly existed because a
@@ -210,6 +212,70 @@ async function idsForDocument(access, documentId) {
 }
 
 /**
+ * Hash of what a stored chunk holds, written as `itemHash` so a re-post of identical chunks skips
+ * the upsert. On serverless every upsert is billed, and one retrying client re-posted a document
+ * 553 times.
+ *
+ * Every field except the ones rewritten on each ingest: `extractedAt` is the call's clock and
+ * `parentStampedAt` the walk's, so hashing either makes every re-post look changed. Leaving a field
+ * OUT by name rather than listing the ones IN means a field added later is hashed by default: the
+ * cost of forgetting it is one extra write, not a skipped change.
+ */
+const HASH_FIELD = 'itemHash';
+const UNHASHED_FIELDS = new Set([HASH_FIELD, 'extractedAt', STAMPED_AT_FIELD]);
+
+function itemHashOf(item) {
+  const keys = Object.keys(item).filter(k => !UNHASHED_FIELDS.has(k)).sort();
+  const canonical = JSON.stringify(Object.fromEntries(keys.map(k => [k, item[k]])));
+  return crypto.createHash('sha256').update(canonical).digest('base64');
+}
+
+/** `id -> { hash, stampedAt }` for the named chunks of one document, or all of them when `ids` is
+ * omitted. Single-partition, and the projection is three short strings, never `content`. */
+async function storedHashes(access, documentId, ids) {
+  const criteria = [eq('documentId', String(documentId), '@documentId')];
+  if (ids) criteria.push(inList('id', ids.map(String), '@id'));
+  const spec = selectWhere({
+    access, partitionField: SCOPE_FIELD, criteria,
+    select: `c.id, c.${HASH_FIELD}, c.${STAMPED_AT_FIELD}`
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(documentId) });
+  return new Map(items.map(row => [
+    String(row.id), { hash: row[HASH_FIELD], stampedAt: row[STAMPED_AT_FIELD] }
+  ]));
+}
+
+/**
+ * Whether a stored row already holds this item. The row keeps its older stamp: every patch nulls
+ * `itemHash`, so a match means no walk has written the row since its ingest, and a walk stamped
+ * between the two stamps with other values is outranked by the walk for the later change, which
+ * has yet to reach this row. A row with no stamp accepts every walk, so it is rewritten.
+ */
+function isUnchanged(row, item, hash) {
+  if (!row || row.hash !== hash) return false;
+  return item[STAMPED_AT_FIELD] === undefined || typeof row.stampedAt === 'string';
+}
+
+/** Upsert operations for the items not already stored as they are; a stored row with no hash
+ * counts as changed, so the first re-post after this shipped rewrites once. */
+function changedUpserts(documentId, chunkItems, stored) {
+  const pk = String(documentId);
+  const operations = [];
+  for (const item of chunkItems) {
+    const hash = itemHashOf(item);
+    if (isUnchanged(stored.get(String(item.id)), item, hash)) continue;
+    operations.push({ operationType: 'Upsert', partitionKey: pk, resourceBody: { ...item, [HASH_FIELD]: hash } });
+  }
+  return operations;
+}
+
+function logSkipped(documentId, total, sent) {
+  if (sent < total) {
+    logger.info(`[chunks] doc=${documentId} unchanged=${total - sent} upserted=${sent}`);
+  }
+}
+
+/**
  * `{id, …CHUNK_PARENT_FIELDS}` for every chunk of one document. Single-partition, and the
  * projection is the id plus four short strings — never `content`, which is why this is a read the
  * backfill can afford once per document.
@@ -251,6 +317,11 @@ function chunkMatchesParent(chunk, fields) {
  * @param {string} documentId
  * @param {Array}  chunkItems  fully-formed items; each MUST carry a non-empty read[]
  */
+/** `bulkVerified`'s return shape for a call that had nothing to send. */
+function noWrites() {
+  return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0 };
+}
+
 function assertAcl(chunkItems) {
   for (const item of chunkItems) {
     // Fail closed: a chunk with no ladder token matches nobody but privileged callers.
@@ -267,15 +338,19 @@ function assertAcl(chunkItems) {
  * is chunked as it arrives, so the "what should survive" question can only be answered at the end.
  * Pair every streamed ingest with `deleteSurplus`, or a re-extraction that yields fewer chunks
  * leaves the old tail in place.
+ *
+ * Reads the stored hashes of THIS batch's ids only, one query per flush: a whole-document read per
+ * flush would grow with every batch already written.
  */
 async function upsertBatch(access, documentId, chunkItems) {
   assertAcl(chunkItems);
-  if (chunkItems.length === 0) return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0 };
+  if (chunkItems.length === 0) return noWrites();
 
-  const pk = String(documentId);
-  return cosmos.bulkVerified(CONTAINER, chunkItems.map(resourceBody => ({
-    operationType: 'Upsert', partitionKey: pk, resourceBody
-  })));
+  const stored = await storedHashes(access, documentId, chunkItems.map(i => i.id));
+  const operations = changedUpserts(documentId, chunkItems, stored);
+  logSkipped(documentId, chunkItems.length, operations.length);
+  if (operations.length === 0) return noWrites();
+  return cosmos.bulkVerified(CONTAINER, operations);
 }
 
 /**
@@ -340,16 +415,19 @@ async function setFieldsForDocument(access, documentId, fields, opts = {}) {
 async function setFieldsForChunks(
   access, documentId, ids, fields, { stampedAt, maxAttempts, maxBackoffMs } = {}
 ) {
+  if (Object.keys(fields).length === 0) {
+    throw new TypeError('[chunks] a chunk patch requires at least one field');
+  }
   const guarded = stampedAt !== undefined;
-  const patchFields = guarded
-    ? { ...fields, [STAMPED_AT_FIELD]: assertStampedAt(stampedAt) }
-    : fields;
+  // The patched row no longer matches the hash its ingest wrote, so the next re-post must rewrite it.
+  const patchFields = {
+    ...fields,
+    [HASH_FIELD]: null,
+    ...(guarded ? { [STAMPED_AT_FIELD]: assertStampedAt(stampedAt) } : {})
+  };
   const operations = Object.entries(patchFields).map(([key, value]) => ({
     op: 'set', path: `/${key}`, value
   }));
-  if (operations.length === 0) {
-    throw new TypeError('[chunks] a chunk patch requires at least one field');
-  }
   if (!ids || ids.length === 0) {
     return { succeeded: 0, failed: 0, skippedNewer: 0, statusCounts: {}, requestCharge: 0, chunks: 0 };
   }
@@ -496,7 +574,7 @@ async function deleteSurplus(access, documentId, keepIds) {
     .filter(id => !keep.has(String(id)))
     .map(id => ({ operationType: 'Delete', partitionKey: pk, id: String(id) }));
 
-  if (operations.length === 0) return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0 };
+  if (operations.length === 0) return noWrites();
   return cosmos.bulkVerified(CONTAINER, operations);
 }
 
@@ -505,23 +583,20 @@ async function replaceForDocument(access, documentId, chunkItems) {
 
   assertAcl(chunkItems);
 
-  const existing = new Set(await idsForDocument(access, documentId));
+  const stored = await storedHashes(access, documentId);
   const keep = new Set(chunkItems.map(i => String(i.id)));
 
-  const operations = chunkItems.map(resourceBody => ({
-    operationType: 'Upsert',
-    partitionKey: pk,
-    resourceBody
-  }));
+  const operations = changedUpserts(documentId, chunkItems, stored);
+  logSkipped(documentId, chunkItems.length, operations.length);
 
-  for (const id of existing) {
-    if (!keep.has(String(id))) {
-      operations.push({ operationType: 'Delete', partitionKey: pk, id: String(id) });
+  for (const id of stored.keys()) {
+    if (!keep.has(id)) {
+      operations.push({ operationType: 'Delete', partitionKey: pk, id });
     }
   }
 
   // Same shape as bulkVerified's return — `failed` is a COUNT, so callers can test it uniformly.
-  if (operations.length === 0) return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0 };
+  if (operations.length === 0) return noWrites();
 
   // bulkVerified, never bulk: bulk does not throw on partial failure, and counting what was SENT
   // is the bug that reported 60,578 documents written when 56,317 existed.

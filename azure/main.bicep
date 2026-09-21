@@ -268,6 +268,12 @@ param searchDefinitionsQueue string = ''
 @description('Deploy the log alert that fires when a bulk job fails.')
 param deployBulkDownloadPoisonAlert bool = false
 
+// Serverless Cosmos in canadacentral lists at 0.3812 CAD per million RU (Azure retail prices API,
+// meter `1M RUs`, 2026-09-21). 3M RU/h is ~1.1 CAD an hour, ~27 a day. Test idles at a few hundred
+// RU an hour; a runaway ingest loop ran 4-8M. Each .bicepparam sets its own.
+@description('Request units in one hour above which the Cosmos spend alert fires.')
+param cosmosRuPerHourAlert int = 3000000
+
 @description('Most documents one authenticated bulk job may ask for.')
 param bulkMaxDocuments int = 2500
 
@@ -631,6 +637,19 @@ module auditLogs './modules/audit-logs.bicep' = if (deployFoundation) {
     appLogsWorkspaceId: observability!.outputs.workspaceId
     // One action group for both alerts, owned by observability because it deploys first.
     alertActionGroupId: actionGroupId
+  }
+}
+
+// 5c. Cosmos RU alert. After cosmos and observability both, which is why it is not inside either —
+// see the header of modules/cosmos-alerts.bicep.
+module cosmosAlerts './modules/cosmos-alerts.bicep' = if (deployFoundation) {
+  name: 'deploy-cosmos-alerts'
+  params: {
+    environmentName: environmentName
+    tags: defaultTags
+    cosmosAccountId: cosmosAccountId
+    actionGroupId: actionGroupId
+    ruPerHourThreshold: cosmosRuPerHourAlert
   }
 }
 

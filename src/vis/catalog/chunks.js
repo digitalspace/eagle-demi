@@ -51,6 +51,10 @@ module.exports = {
   // chunks index does not declare it.
   parentStampedAt: { defaultVis: 0, maxVis: 0 },
 
+  // Hash of the stored row (`chunks.itemHashOf`) that lets a re-post skip unchanged chunks. 0/0 for
+  // the same reason: bookkeeping between writers, no response carries it.
+  itemHash: { defaultVis: 0, maxVis: 0 },
+
   // The extracted text itself, and the ACL snapshot taken from the parent at ingest.
   content: { defaultVis: 0, maxVis: 0 },
   read: { defaultVis: 0, maxVis: 0 },
