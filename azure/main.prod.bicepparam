@@ -69,6 +69,11 @@ param existingSearchIndexerPrincipalId = '20211fb1-1d7c-43ab-ae57-fbcd6a5034e7'
 // value is azure/ai-search.prod.bicepparam's `identityId` — one identity, two spellings.
 param existingSearchIndexerIdentityId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-search-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/eagle-search-identity-prod'
 
+// Turns the two id-only indexes on (PR #381, PUT by hand per azure/search/README.md). Empty
+// falls back to Cosmos CONTAINS.
+param searchIndexActivities = 'activities'
+param searchIndexProjectNotifications = 'project-notifications'
+
 
 // ── Off in prod ───────────────────────────────────────────────────────────────────────────────
 // The summariser is demo-only. deployFoundry=false is the resource, summaryEnabled=false is the
