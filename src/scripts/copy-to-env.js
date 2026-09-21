@@ -26,7 +26,7 @@
 
 const fs = require('fs');
 const { CosmosClient } = require('@azure/cosmos');
-const { DefaultAzureCredential } = require('@azure/identity');
+const { createCredential } = require('../utils/azure-credential');
 
 const DATABASE_ID = process.env.COSMOS_NOSQL_DATABASE || 'demi';
 const PAGE_SIZE = 100;
@@ -45,10 +45,7 @@ const CHECKPOINT = arg('checkpoint', './copy-checkpoint.json');
 const LIVE = process.argv.includes('--live');
 
 function client(endpoint) {
-  const credentialOptions = process.env.AZURE_CLIENT_ID
-    ? { managedIdentityClientId: process.env.AZURE_CLIENT_ID }
-    : undefined;
-  return new CosmosClient({ endpoint, aadCredentials: new DefaultAzureCredential(credentialOptions) });
+  return new CosmosClient({ endpoint, aadCredentials: createCredential() });
 }
 
 function loadCheckpoint() {

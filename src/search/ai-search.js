@@ -245,13 +245,8 @@ async function getToken() {
   }
 
   if (!credential) {
-    const { DefaultAzureCredential } = require('@azure/identity');
     // AZURE_CLIENT_ID selects the user-assigned identity, exactly as the Cosmos client does.
-    credential = new DefaultAzureCredential(
-      process.env.AZURE_CLIENT_ID
-        ? { managedIdentityClientId: process.env.AZURE_CLIENT_ID }
-        : undefined
-    );
+    credential = require('../utils/azure-credential').createCredential();
   }
 
   const result = await credential.getToken('https://search.azure.com/.default');

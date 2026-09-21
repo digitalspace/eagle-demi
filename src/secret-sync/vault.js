@@ -3,16 +3,17 @@
 /**
  * Key Vault reads for one run.
  *
- * `DefaultAzureCredential` with the user-assigned client id: the app carries exactly one
- * user-assigned identity (`demi-identity-<env>`, which already holds Key Vault Secrets User), and
- * the credential has no other way to choose between several.
+ * The user-assigned client id picks the identity: the app carries exactly one user-assigned
+ * identity (`demi-identity-<env>`, which already holds Key Vault Secrets User), and the credential
+ * has no other way to choose between several. src/utils/azure-credential.js is the one file outside
+ * src/secret-sync the package script copies in.
  *
  * A missing secret is `null`, not a throw — the caller decides what a missing name means, and for
  * this sync it means "leave the live copy alone and fail the run". Any other error still throws.
  */
 
 const { SecretClient } = require('@azure/keyvault-secrets');
-const { DefaultAzureCredential } = require('@azure/identity');
+const { createCredential } = require('../utils/azure-credential');
 
 /**
  * @returns {Function} async (name) => { value, version } | null
@@ -23,8 +24,9 @@ function createVaultReader({
 } = {}) {
   if (!vaultUri) throw new Error('KEY_VAULT_URI is not set');
 
-  const client = new SecretClient(vaultUri, new DefaultAzureCredential({
-    managedIdentityClientId: clientId
+  const client = new SecretClient(vaultUri, createCredential({
+    AZURE_CLIENT_ID: clientId,
+    IDENTITY_ENDPOINT: process.env.IDENTITY_ENDPOINT
   }));
 
   // Per READER, not per process: a reader is made once per run, so a value rotated between runs is

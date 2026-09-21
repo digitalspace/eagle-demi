@@ -32,7 +32,7 @@ const config = require('../config');
 const { getBuffer: readFromMinio } = require('../storage/minio');
 const azure = require('../storage/azureBlob');
 const { BlobServiceClient } = require('@azure/storage-blob');
-const { DefaultAzureCredential } = require('@azure/identity');
+const { createCredential } = require('../utils/azure-credential');
 const { mapLimit } = require('../utils/worker-pool');
 
 function parseArgs(argv) {
@@ -67,7 +67,7 @@ function loadKeys(keysFile, limit) {
 function getContainerClient() {
   return new BlobServiceClient(
     `https://${config.azureStorageAccount}.blob.core.windows.net`,
-    new DefaultAzureCredential()
+    createCredential()
   ).getContainerClient(config.azureStorageContainer);
 }
 

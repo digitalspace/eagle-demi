@@ -7,7 +7,8 @@
 # points back down at src/secret-sync/index.js — and the sources keep their paths, so a path printed
 # in a stack trace is the path in this repo.
 #
-# src/secret-sync is the WHOLE of the app. Nothing else of src/ is copied, and nothing else may be:
+# src/secret-sync is the WHOLE of the app, plus src/utils/azure-credential.js, which requires only
+# @azure/identity. Nothing else of src/ is copied, and nothing else may be:
 # src/config.js is the API's configuration and throws under this app's host.json and app settings,
 # so anything that reaches it (src/utils/logger.js did) makes the entry point unloadable. The sync
 # has its own logger for that reason. test/secret-sync/package-loads.test.js holds the line.
@@ -29,6 +30,8 @@ mkdir -p "$STAGE/src"
 cp "$REPO_ROOT/src/secret-sync/host.json" "$STAGE/host.json"
 cp "$REPO_ROOT/src/secret-sync/package.json" "$STAGE/package.json"
 cp -R "$REPO_ROOT/src/secret-sync" "$STAGE/src/secret-sync"
+mkdir -p "$STAGE/src/utils"
+cp "$REPO_ROOT/src/utils/azure-credential.js" "$STAGE/src/utils/azure-credential.js"
 
 # npm rather than yarn: this package has no lockfile of its own and is not a yarn workspace of the
 # API. `--omit=dev` because there are no dev dependencies to begin with and the flag keeps it so.
