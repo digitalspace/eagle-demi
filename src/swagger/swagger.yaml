@@ -1363,10 +1363,12 @@ paths:
             is never blocked.
         '413':
           description: >-
-            The markdown yields more than `MAX_CHUNKS_PER_DOCUMENT` chunks (default 25000). Nothing
-            is kept: on the NDJSON path any batches already written are removed, with their AI
-            Search rows, and the document is marked not extracted. Counts as a
-            failure for the 409 guard.
+            One of two limits. A JSON body over 10 MB is refused (`request
+            entity too large`); nothing is recorded, so send large documents as NDJSON. Or the
+            markdown yields more than `MAX_CHUNKS_PER_DOCUMENT` chunks (default 25000): nothing is
+            kept, because on the NDJSON path any batches already written are removed with their
+            AI Search rows, and the document is marked not extracted. The chunk-cap case counts
+            as a failure for the 409 guard.
         '500':
           description: >-
             Part of the write did not land, or the write threw. The failure is recorded on the
@@ -1379,6 +1381,8 @@ paths:
             counts) or `SEARCH_ENDPOINT` is not set (`indexUnconfigured`). They stay in Cosmos and
             `contentExtracted` is NOT set, so a retry removes them from both. Does NOT count toward
             the 409 guard. A Cosmos write failure in the same request makes it a 500 instead.
+            Also answered when an over-cap NDJSON stream's AI Search rows could not all be
+            removed: its chunks stay in Cosmos until a retry removes both.
     get:
       summary: A document's extracted text, in page order
       description: >-

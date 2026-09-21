@@ -394,9 +394,10 @@ re-ingest drops are deleted from the AI Search `chunks` index first, then from C
 indexer never sees a Cosmos delete. A chunk the index would not delete stays in Cosmos and the
 route answers 503, so the retry finds it again. That 503 does not count toward the repeated-failure
 lockout, so a search outage cannot lock a document out; a Cosmos write failure is still a counted
-500. Known gap: an indexer run already in flight can
-read a chunk before the index delete and write it back after, and that row stays searchable until
-the document's chunks are removed by document id.
+500. Known gap: an indexer run already in flight can read a chunk before the index delete and
+write it back after. The index also takes about 1 s to make a new write searchable, so the lookup
+before the delete can miss a row the indexer wrote just before it. Either way that row stays
+searchable until the document's chunks are removed by document id.
 
 > **Do not change `TARGET_CHUNK_SIZE`, `MAX_CHUNK_SIZE` or `OVERLAP_SIZE`.** Chunk ids derive from
 > the split, so changing a constant orphans every chunk already written instead of reconciling with

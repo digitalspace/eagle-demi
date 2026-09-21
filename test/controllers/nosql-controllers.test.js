@@ -39,6 +39,11 @@ function withConfig(t, key, value) {
   t.after(() => { config[key] = prev; });
 }
 const ADMIN_USER = { realm_access: { roles: ['sysadmin'] } };
+
+/** cosmos.patch throws a RangeError above ten operations; checked per call on the mocked patch. */
+function eachPatchFits() {
+  return documents.patchExtraction.mock.calls.every(c => Object.keys(c.arguments[2]).length <= 10);
+}
 // `demi-service-write` is level 2 — the tier every WRITE_ROLES holder maps to.
 const WRITER_USER = { realm_access: { roles: ['demi-service-write'] } };
 const STAFF_USER = { realm_access: { roles: ['staff'] } };
@@ -538,10 +543,28 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     assert.strictEqual(res.body.removedFromSearch, 1);
   });
 
+  await t.test('delete clears the index before Cosmos, and the row goes last', async () => {
+    // A request that dies part way must leave the row, so a retried DELETE finds the chunks again.
+    const order = [];
+    t.mock.method(aiSearch, 'deleteChunksForDocument', async () => { order.push('chunk index'); return 2; });
+    t.mock.method(aiSearch, 'deleteFromIndex', async () => { order.push('document index'); return 1; });
+    t.mock.method(chunksRepo, 'removeForDocument', async () => {
+      order.push('chunks'); return { succeeded: 2, failed: 0 };
+    });
+    t.mock.method(documents, 'getById', async () => ({ id: 'd1', projectId: '207' }));
+    t.mock.method(documents, 'deleteById', async () => { order.push('row'); return true; });
+
+    const res = mockRes();
+    await documentController.deleteDocument({ params: { id: 'd1' }, query: {} }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(order, ['chunk index', 'document index', 'chunks', 'row']);
+  });
+
   await t.test('a failed index removal does not fail the delete', async () => {
-    // The record is already gone from Cosmos. Throwing here would leave the caller unable to tell
-    // what happened — and with no nightly full sync left to reconcile it, the response is now the
-    // ONLY signal that the row is still searchable.
+    // Throwing here would leave the caller unable to tell what happened — and with no nightly full
+    // sync left to reconcile it, the response is now the ONLY signal that the row is still
+    // searchable.
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 0);
     t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);
     t.mock.method(documents, 'getById', async () => ({ id: 'd1', projectId: '207' }));
@@ -710,7 +733,7 @@ test('chunk ingest route', async (t) => {
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ succeeded: 1 }));
 
@@ -724,7 +747,7 @@ test('chunk ingest route', async (t) => {
     assert.strictEqual(patched.contentExtractionError, null);
     assert.ok(patched.contentPageCount >= 1);
     // Five fields — cosmos.patch throws a RangeError above ten operations.
-    assert.ok(Object.keys(patched).length <= 10);
+    assert.ok(eachPatchFits());
     assert.strictEqual(res.body.chunks, patched.contentPageCount);
   });
 
@@ -735,7 +758,7 @@ test('chunk ingest route', async (t) => {
     let written = null;
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async (access, id, items) => {
       written = items; return { succeeded: items.length, failed: 0, statusCounts: {} };
@@ -761,7 +784,7 @@ test('chunk ingest route', async (t) => {
     assert.strictEqual(patched.pageNumbered, true);
     assert.strictEqual(patched.pageCount, 3, 'three pages, which is not the four chunks');
     // cosmos.patch throws a RangeError above ten operations, and this is the widest patch there is.
-    assert.ok(Object.keys(patched).length <= 10);
+    assert.ok(eachPatchFits());
   });
 
   await t.test('an extraction with no page markers writes neither field', async () => {
@@ -772,7 +795,7 @@ test('chunk ingest route', async (t) => {
     let written = null;
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async (access, id, items) => {
       written = items; return { succeeded: items.length, failed: 0, statusCounts: {} };
@@ -793,11 +816,58 @@ test('chunk ingest route', async (t) => {
   // a CPU path and only text-poor ones reach OCR. Without recording which, a text-layer artefact
   // and an OCR error are indistinguishable afterwards, and no claim about OCR quality can be
   // evidenced or disproved.
+  const ingestOk = async (a, id, items) => ({ succeeded: items.length, failed: 0, statusCounts: {} });
+
+  await t.test('the success patch lands in two, the done fields last', async () => {
+    // One patch sat at Cosmos' ten-operation limit, so the next field added would have 500ed every
+    // ingest. Done last: if the second patch fails, the document stays on the work list.
+    stubDoc(t);
+    t.mock.method(chunksRepo, 'replaceForDocument', ingestOk);
+
+    const res = mockRes();
+    await documentController.ingestChunks({
+      params: { id: 'd1' }, query: {}, user: ADMIN_USER,
+      body: {
+        markdown: `One ${'a'.repeat(120)}\fTwo ${'b'.repeat(120)}`,
+        extraction: { path: 'text', engine: 'pypdfium2' }
+      }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    const sent = documents.patchExtraction.mock.calls.map(c => c.arguments[2]);
+    assert.strictEqual(sent.length, 2);
+    assert.deepStrictEqual(Object.keys(sent[0]).sort(),
+      ['extraction', 'extractionMethod', 'pageCount', 'pageNumbered']);
+    assert.strictEqual(sent[1].contentExtracted, true);
+    assert.strictEqual(sent[1].chunkIngestFailedAt, null);
+  });
+
+  await t.test('a throw after the success patch is not counted as a failed ingest', async () => {
+    stubDoc(t);
+    t.mock.method(chunksRepo, 'replaceForDocument', ingestOk);
+    t.mock.method(logger, 'error', () => {});
+    const res = mockRes();
+    const json = res.json;
+    res.json = function (data) {
+      if (this.statusCode === 200) throw new Error('response lost');
+      return json.call(this, data);
+    };
+
+    await documentController.ingestChunks({
+      params: { id: 'd1' }, query: {}, user: ADMIN_USER, body: { markdown: 'z'.repeat(200) }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 500);
+    const counted = documents.patchExtraction.mock.calls
+      .filter(c => c.arguments[2].chunkIngestFailures > 0);
+    assert.deepStrictEqual(counted, [], 'chunks that landed were counted toward the lockout');
+  });
+
   await t.test('extraction provenance round-trips onto the document when supplied', async () => {
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ succeeded: 1 }));
 
@@ -823,7 +893,7 @@ test('chunk ingest route', async (t) => {
     assert.strictEqual(patched.extraction.at, '2026-07-31T21:00:00.000Z');
     assert.ok(patched.extraction.options.includes('force_ocr'));
     // cosmos.patch throws a RangeError above ten operations.
-    assert.ok(Object.keys(patched).length <= 10);
+    assert.ok(eachPatchFits());
   });
 
   // Absent provenance must stay ABSENT rather than becoming an empty object: "no field" is the
@@ -833,7 +903,7 @@ test('chunk ingest route', async (t) => {
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ succeeded: 1 }));
 
@@ -851,7 +921,7 @@ test('chunk ingest route', async (t) => {
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ succeeded: 1 }));
 
@@ -911,7 +981,7 @@ test('chunk ingest route', async (t) => {
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async () =>
       assert.fail('a failed extraction must not write chunks'));
@@ -982,7 +1052,7 @@ test('chunk ingest route', async (t) => {
     stubDoc(t, { ...DOC, chunkIngestFailures: 1, chunkIngestFailedAt: failedAgo(HOUR) });
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async (a, id, items) =>
       ({ succeeded: items.length - 1, failed: 1, statusCounts: { 429: 1 } }));
@@ -1000,7 +1070,7 @@ test('chunk ingest route', async (t) => {
     stubDoc(t, { ...DOC, chunkIngestFailures: 5, chunkIngestFailedAt: failedAgo(25 * HOUR) });
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async () =>
       ({ succeeded: 0, failed: 1, statusCounts: { 429: 1 } }));
@@ -1031,7 +1101,7 @@ test('chunk ingest route', async (t) => {
     stubDoc(t, { ...DOC, chunkIngestFailures: 2, chunkIngestFailedAt: failedAgo(HOUR) });
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async () => {
       throw Object.assign(new Error('Request rate is large at https://acct.documents.azure.com'),
@@ -1139,7 +1209,7 @@ test('chunk ingest route', async (t) => {
     stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: failedAgo(HOUR) });
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'replaceForDocument', async (a, id, items) =>
       ({ succeeded: items.length, failed: 0, statusCounts: {} }));
@@ -1150,7 +1220,7 @@ test('chunk ingest route', async (t) => {
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(patched.chunkIngestFailures, 0);
     assert.strictEqual(patched.chunkIngestFailedAt, null);
-    assert.ok(Object.keys(patched).length <= 10, 'cosmos.patch refuses more than ten operations');
+    assert.ok(eachPatchFits(), 'cosmos.patch refuses more than ten operations');
   });
 
   await t.test('a host-reported error is still recorded while the guard is tripped', async () => {
@@ -1216,7 +1286,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
       stubDoc(t);
       let patched = null;
       t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-        patched = fields; return {};
+        patched = { ...patched, ...fields }; return {};
       });
       const written = [];
       t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
@@ -1244,7 +1314,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     const written = [];
     t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
@@ -1277,7 +1347,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     const written = [];
     t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
@@ -1433,7 +1503,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     stubDoc(t);
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
       ({ succeeded: items.length, failed: 0, statusCounts: {} }));
@@ -1489,9 +1559,14 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
       patches.push(fields); return {};
     });
-    const remove = t.mock.method(chunksRepo, 'removeForDocument', async () => ({ failed: 0 }));
+    const order = [];
+    const remove = t.mock.method(chunksRepo, 'removeForDocument', async () => {
+      order.push('cosmos'); return { failed: 0 };
+    });
     // The indexer's `_ts` high-water mark never sees a delete, so the rows must go explicitly.
-    const unindex = t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 250);
+    const unindex = t.mock.method(aiSearch, 'deleteChunksForDocument', async () => {
+      order.push('index'); return 250;
+    });
     t.mock.method(chunksRepo, 'deleteSurplus', async () =>
       assert.fail('an over-cap stream must not reconcile as if it succeeded'));
 
@@ -1503,6 +1578,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     assert.strictEqual(remove.mock.callCount(), 1);
     assert.strictEqual(remove.mock.calls[0].arguments[1], 'd1');
     assert.deepStrictEqual(unindex.mock.calls.map(c => c.arguments[0]), ['d1']);
+    assert.deepStrictEqual(order, ['index', 'cosmos'], 'Cosmos went first, so a retry finds nothing');
     assert.strictEqual(patches.length, 1);
     assert.strictEqual(patches[0].contentExtracted, false, 'the document must stop claiming chunks');
     assert.strictEqual(patches[0].contentPageCount, 0);
@@ -1512,45 +1588,73 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     assert.ok(Object.keys(patches[0]).length <= 10, 'cosmos.patch refuses more than ten operations');
   });
 
-  await t.test('an over-cap cleanup that falls short is recorded and still 413s', async (st) => {
+  await t.test('an over-cap Cosmos cleanup that falls short is recorded and still 413s', async (st) => {
     withConfig(st, 'maxChunksPerDocument', 250);
     stubDoc(t);
     t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
       ({ succeeded: items.length, failed: 0, statusCounts: {} }));
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'removeForDocument', async () =>
       ({ succeeded: 246, failed: 4, statusCounts: { 429: 4 } }));
-    t.mock.method(aiSearch, 'deleteChunksForDocument', async () => { throw new Error('boom'); });
+    t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 250);
 
     const res = mockRes();
     await documentController.ingestChunks(streamReq(ndjson(paras(400))), res);
 
     assert.strictEqual(res.statusCode, 413);
     assert.match(res.body.error, /^chunk ingest rejected: chunk cap exceeded/);
-    assert.match(patched.contentExtractionError, /4 chunks not removed; index delete failed$/);
+    assert.match(patched.contentExtractionError, /; 4 chunks not removed$/);
     assert.strictEqual(patched.contentExtracted, false);
   });
 
-  await t.test('a tripped guard 409s a stream without reading or writing it', async () => {
-    stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: new Date().toISOString() });
-    const upsert = t.mock.method(chunksRepo, 'upsertBatch', async () => ({ failed: 0 }));
+  await t.test('an over-cap index delete that stops short keeps Cosmos: an uncounted 503', async (st) => {
+    withConfig(st, 'maxChunksPerDocument', 250);
+    stubDoc(t);
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+    const remove = t.mock.method(chunksRepo, 'removeForDocument', async () => ({ failed: 0 }));
+    const unindex = t.mock.method(aiSearch, 'deleteChunksForDocument', async () => {
+      throw Object.assign(new Error('search index still holds chunks'), { code: 'INDEX_DELETE_INCOMPLETE' });
+    });
+    t.mock.method(logger, 'error', () => {});
+    t.mock.method(logger, 'warn', () => {});
 
     const res = mockRes();
-    await documentController.ingestChunks(streamReq(ndjson(paras(2))), res);
+    await documentController.ingestChunks(streamReq(ndjson(paras(400))), res);
+
+    assert.strictEqual(res.statusCode, 503);
+    assert.match(res.body.error, /search index delete failed, retry/);
+    assert.deepStrictEqual(unindex.mock.calls[0].arguments[1], { strict: true });
+    assert.strictEqual(remove.mock.callCount(), 0, 'Cosmos chunks left, so no retry can find the rows');
+    assert.strictEqual(documents.patchExtraction.mock.callCount(), 0, 'a search failure was counted');
+  });
+
+  await t.test('a tripped guard 409s a stream without writing it', async () => {
+    stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: new Date().toISOString() });
+    const upsert = t.mock.method(chunksRepo, 'upsertBatch', async () => ({ failed: 0 }));
+    const req = streamReq(ndjson(paras(2)));
+
+    const res = mockRes();
+    await documentController.ingestChunks(req, res);
 
     assert.strictEqual(res.statusCode, 409);
     assert.match(res.body.error, /chunk ingest rejected: repeated failures/);
     assert.strictEqual(upsert.mock.callCount(), 0);
+    // A lockout refreshed by each retry would never lapse.
+    assert.strictEqual(documents.patchExtraction.mock.callCount(), 0, 'the 409 moved the lockout');
+    // The answer only goes out once the handler returns; an unread body cuts the client off first.
+    assert.ok(req.stream.readableEnded, 'the body was left unread behind the 409');
   });
+
 
   await t.test('a failed batch adds to the failure count', async () => {
     stubDoc(t, { ...DOC, chunkIngestFailures: 2, chunkIngestFailedAt: new Date().toISOString() });
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'upsertBatch', async () =>
       ({ succeeded: 0, failed: 1, statusCounts: { 429: 1 } }));
@@ -1567,7 +1671,7 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     stubDoc(t, { ...DOC, chunkIngestFailures: 1, chunkIngestFailedAt: new Date().toISOString() });
     let patched = null;
     t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
-      patched = fields; return {};
+      patched = { ...patched, ...fields }; return {};
     });
     t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
       ({ succeeded: items.length, failed: 0, statusCounts: {} }));

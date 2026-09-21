@@ -596,6 +596,8 @@ const INDEX_KEPT = ['stillIndexed', 'indexUnconfigured'];
  * single `failed` check turns the request into a retry. Each reason gets its own status count.
  */
 async function writeVerified(operations, kept) {
+  // bulkVerified, never bulk: bulk does not throw on partial failure, and counting what was SENT
+  // is the bug that reported 60,578 documents written when 56,317 existed.
   let result = operations.length === 0
     ? noWrites()
     : await cosmos.bulkVerified(CONTAINER, operations, { bulkFn: bulkGoneIsDeleted });
@@ -656,8 +658,6 @@ async function replaceForDocument(access, documentId, chunkItems, opts = {}) {
   operations.push(...deletable.map(deleteOp(pk)));
 
   // Same shape as bulkVerified's return — `failed` is a COUNT, so callers can test it uniformly.
-  // bulkVerified, never bulk: bulk does not throw on partial failure, and counting what was SENT
-  // is the bug that reported 60,578 documents written when 56,317 existed.
   return writeVerified(operations, kept);
 }
 
