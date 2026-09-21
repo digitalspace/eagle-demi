@@ -22,12 +22,8 @@ function queueClientFor({ name, setting, feature }) {
   const url = `https://${account}.queue.core.windows.net/${name}`;
   if (!clients.has(url)) {
     const { QueueClient } = require('@azure/storage-queue');
-    const { DefaultAzureCredential } = require('@azure/identity');
-    // The client id is required when several user-assigned identities are attached — same reason
-    // as src/db/cosmos-nosql.js.
-    clients.set(url, new QueueClient(
-      url, new DefaultAzureCredential({ managedIdentityClientId: process.env.AZURE_CLIENT_ID })
-    ));
+    const { createCredential } = require('../utils/azure-credential');
+    clients.set(url, new QueueClient(url, createCredential()));
   }
   return clients.get(url);
 }

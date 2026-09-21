@@ -53,15 +53,9 @@ function initCosmosClient() {
   try {
     // Required lazily so that merely importing this module does not pull in @azure/identity
     // in environments (tests) that never connect.
-    const { DefaultAzureCredential } = require('@azure/identity');
-    const credentialOptions = process.env.AZURE_CLIENT_ID
-      ? { managedIdentityClientId: process.env.AZURE_CLIENT_ID }
-      : undefined;
+    const { createCredential } = require('../utils/azure-credential');
 
-    clientInstance = new CosmosClient({
-      endpoint,
-      aadCredentials: new DefaultAzureCredential(credentialOptions)
-    });
+    clientInstance = new CosmosClient({ endpoint, aadCredentials: createCredential() });
     databaseInstance = clientInstance.database(DATABASE_ID);
     logger.info(`[Cosmos] Connected to database "${DATABASE_ID}" at ${endpoint}`);
     return databaseInstance;
