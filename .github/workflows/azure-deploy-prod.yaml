@@ -37,6 +37,9 @@ jobs:
   deploy-extractor:
     name: Deploy extractor (Azure Function App)
     runs-on: ubuntu-latest
+    # After the schema check: the rollback job only redeploys the API, so an extractor shipped ahead
+    # of a failed check would stay on the new tag.
+    needs: verify-search-schema
     environment: prod
     timeout-minutes: 25
     env:

@@ -179,6 +179,16 @@ test('public config over the dispatcher', async (t) => {
     });
   });
 
+  await t.test('a served config is cached for a minute, not the edge default', async () => {
+    t.mock.method(configRepository, 'getPublic', async () => STORED);
+
+    await withServer(async (call) => {
+      const res = await call('/api/config/public');
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('cache-control'), 'public, max-age=60');
+    });
+  });
+
   await t.test('an unseeded document is a 503 the edge will not cache', async () => {
     t.mock.method(configRepository, 'getPublic', async () => null);
 
