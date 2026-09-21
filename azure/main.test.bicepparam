@@ -77,6 +77,13 @@ param bulkFetchConcurrency = 1
 // the 10-second push out on large documents and earned a duplicate push.
 param chunkRestampQueue = 'chunk-restamp'
 
+// ── Cosmos RU alert ───────────────────────────────────────────────────────────────────────────
+// 3M RU in an hour, ~1.1 CAD at 0.3812 CAD per million (see main.bicep), ~27 a day. Measured
+// 2026-08-20 to 2026-09-13: median 256 RU/h, p99 1.4M, and the 2026-09-10 loop ran 4-8M. 3M clears
+// the p99 about twice over and sits under the bottom of the loop's range. A heavy legitimate ingest
+// hour can cross it too; that email is cheap and the loop it catches is not.
+param cosmosRuPerHourAlert = 3000000
+
 // ── Search definition apply ───────────────────────────────────────────────────────────────────
 // The queue POST /admin/search-definitions/apply hands the run to. Without it the route answers
 // 503 and every index change goes back through the devbox.

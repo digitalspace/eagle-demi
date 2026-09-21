@@ -84,6 +84,11 @@ module.exports = {
 
   eaglePushedAt: { defaultVis: 2, maxVis: 2 },
 
+  // The chunk ingest repeated-failure guard (controllers/nosql/document.js). Operators read them to
+  // see why an ingest 409s; they describe the pipeline, not the document, so never public.
+  chunkIngestFailures: { defaultVis: 2, maxVis: 2 },
+  chunkIngestFailedAt: { defaultVis: 2, maxVis: 2 },
+
   // Writers need it back for optimistic concurrency; every WRITE_ROLES holder is level 2 or lower.
   _etag: { defaultVis: 2, maxVis: 2 }
 };

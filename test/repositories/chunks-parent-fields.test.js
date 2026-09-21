@@ -217,7 +217,8 @@ test('chunks.setParentFieldsForDocument', async (t) => {
       { op: 'set', path: '/milestoneId', value: DOCUMENT.milestoneId },
       { op: 'set', path: '/projectPhaseId', value: DOCUMENT.projectPhaseId },
       { op: 'set', path: '/documentAuthorTypeId', value: DOCUMENT.documentAuthorTypeId },
-      { op: 'set', path: '/parentFieldsVersion', value: chunks.CHUNK_PARENT_FIELDS_VERSION }
+      { op: 'set', path: '/parentFieldsVersion', value: chunks.CHUNK_PARENT_FIELDS_VERSION },
+      { op: 'set', path: '/itemHash', value: null }
     ]);
   });
 
@@ -304,7 +305,7 @@ test('a guarded re-stamp only overwrites chunks older than itself', async (t) =>
       { op: 'set', path: '/parentStampedAt', value: STAMPED_AT });
     assert.deepStrictEqual(opsOf(sent)[0].resourceBody.operations.map(op => op.path),
       ['/projectId', '/typeId', '/milestoneId', '/projectPhaseId', '/documentAuthorTypeId',
-        '/parentFieldsVersion', '/parentStampedAt']);
+        '/parentFieldsVersion', '/itemHash', '/parentStampedAt']);
   });
 
   await t.test('a 412 is "already newer", counted apart from a failure', async () => {
@@ -538,7 +539,7 @@ test('chunks.reStampAfterWrite', async (t) => {
     assert.strictEqual(sent.length, 1);
     assert.deepStrictEqual(sent[0].operations[0].resourceBody.operations.map(op => op.path),
       ['/projectId', '/typeId', '/milestoneId', '/projectPhaseId', '/documentAuthorTypeId',
-        '/parentFieldsVersion']);
+        '/parentFieldsVersion', '/itemHash']);
     t2.mock.restoreAll();
   });
 });
@@ -556,7 +557,8 @@ test('chunks.setAclForDocument still writes read[] and its isPublished mirror', 
     assert.strictEqual(result.chunks, 1);
     assert.deepStrictEqual(sent[0].operations[0].resourceBody.operations, [
       { op: 'set', path: '/read', value: ['public', 'sysadmin'] },
-      { op: 'set', path: '/isPublished', value: true }
+      { op: 'set', path: '/isPublished', value: true },
+      { op: 'set', path: '/itemHash', value: null }
     ]);
   });
 

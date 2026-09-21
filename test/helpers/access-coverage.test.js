@@ -334,8 +334,8 @@ test('access gate coverage', async (t) => {
     // below instead. +1 for the PUT /documents/:id refusal of a non-string parent field, then +3
     // for the 404 (row deleted under edit), 409 (staff PUT write-race exhausted) and 503 (eagle
     // push write-race exhausted) sites. +3 for GET /documents/recent-uploads: its 400, its memo
-    // hit and its ranked payload.
-    assert.strictEqual(emissions.length, 40,
+    // hit and its ranked payload. +2 for the chunk ingest 409 guard and 413 cap.
+    assert.strictEqual(emissions.length, 42,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits

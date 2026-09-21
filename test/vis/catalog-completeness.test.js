@@ -279,7 +279,9 @@ test('the documents catalog covers every field the seed and the controller write
     for (const key of ['createdAt', 'isDeleted', 'sourceSystem', 'read',
       'extractionMethod', 'extraction', 'ownRead',
       // The clock the eagle-api push orders pushes by.
-      'eaglePushedAt']) {
+      'eaglePushedAt',
+      // The chunk ingest repeated-failure guard.
+      'chunkIngestFailures', 'chunkIngestFailedAt']) {
       assert.ok(key in documentCatalog, `${key} is not catalogued`);
     }
   });
@@ -327,10 +329,10 @@ test('chunks catalog covers the chunker output', async (t) => {
   await t.test('the ingest-written fields are catalogued', () => {
     // Both ingest paths in controllers/nosql/document.js add these five to the chunker's output,
     // plus the parent document's filter columns — the list itself, so a field added there is
-    // classified here or this fails.
+    // classified here or this fails. `itemHash` is added by the chunks repository on write.
     const { CHUNK_PARENT_FIELDS, STAMPED_AT_FIELD } = require('../../src/repositories/chunks');
     for (const key of ['id', 'documentId', 'projectId', 'read', 'extractedAt',
-      ...CHUNK_PARENT_FIELDS, 'parentFieldsVersion', STAMPED_AT_FIELD]) {
+      ...CHUNK_PARENT_FIELDS, 'parentFieldsVersion', STAMPED_AT_FIELD, 'itemHash']) {
       assert.ok(key in chunkCatalog, `${key} is not catalogued`);
     }
   });

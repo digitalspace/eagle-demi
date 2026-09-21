@@ -402,6 +402,26 @@ buffers `application/json`, so an NDJSON body arrives unread and the handler rea
 `req.stream`. Both paths share `createChunkAccumulator`, so a document chunks identically whichever
 door it came through.
 
+Two guards stop a bad document from being retried forever:
+
+- **Chunk cap (413).** A document that yields more than `MAX_CHUNKS_PER_DOCUMENT` chunks (default
+  25,000) is refused. On the NDJSON path any batches already written are removed from Cosmos and
+  AI Search, and the document is marked not extracted.
+- **Repeated failures (409).** After `CHUNK_INGEST_MAX_FAILURES` failed ingests (default 3) inside
+  `CHUNK_INGEST_FAILURE_WINDOW_MS` (default 24 h), further posts are refused without reading the
+  body. Failures include transient ones such as throttling, not only size.
+
+To clear the counter after a fix is deployed, re-post the document as a sysadmin with
+`?force=true`; a successful ingest resets it. Or patch `chunkIngestFailures: 0` and
+`chunkIngestFailedAt: null` on the document row. The counter also expires on its own once the last
+failure is older than the window.
+
+A re-post skips chunks whose stored `itemHash` already matches and writes nothing for them; the
+chunk keeps its older parent stamp. A re-stamp walk clears `itemHash`, so the next re-post
+rewrites every chunk a walk touched. Skipping also means a re-post does not put back a chunk that
+is in Cosmos but missing from AI Search. The recovery for that is a `chunks-indexer` reset (see the devbox `apply` command
+above), not a re-ingest.
+
 **Nothing inside Azure extracts text today.** `src/extract.js` holds the only in-repo docling client
 and PDF page-batching code; extraction for new projects is deliberately deferred, not cancelled. Do
 not delete it as dead code.
@@ -971,10 +991,21 @@ Everything below mails one action group, `demi-alerts-<env>`, created in
 | `demi-logs-quota-<env>` | `Usage` | 2 | Billable ingest over 24h passed 80% of the workspace's daily cap |
 | `demi-reconcile-drift-<env>` | `AppTraces` | 2 | The nightly reconcile line says `drift=` over 0. Prod only |
 | `demi-bulk-download-failed-<env>` | `AppTraces` | 2 | A bulk download job failed after its retries. Test only |
+| `demi-chunk-ingest-failures-<env>` | `AppTraces` | 2 | Five or more `chunk write incomplete`, `chunk ingest rejected` or `Chunk ingest failed` lines in an hour |
+| `demi-cosmos-ru-<env>` | Cosmos `TotalRequestUnits` metric | 2 | Cosmos used more than `cosmosRuPerHourAlert` RU in the last hour: 3M on test and prod |
 | `demi-search-failures-<env>` | `AppTraces` | 1 | Three or more search errors in five minutes: `[search] … failed`, `[search/summary] … failed`, or `[ai-search] … retried without it` |
 | `demi-search-5xx-ratio-<env>` | `AppRequests` | 1 | Over 20% of `/search` requests answered 5xx in five minutes, over at least five requests |
 | `demi-search-availability-<env>` | `availabilityResults` | 1 | The web test below dropped under 90% over fifteen minutes |
 | `demi-audit-drop-<env>` | `AppTraces` | 1 | Audit rows stopped landing — see `audit-logs.bicep` |
+
+The two chunk and Cosmos rules are the answer to a retry loop in September 2026 that held
+`demi-cosmos-test` at 4-8M RU an hour, about 70 CAD a day, for five days. The budget alert was the
+first to notice, and its cost data lags 24-48 hours. The metric rule checks every fifteen minutes.
+Serverless Cosmos in canadacentral lists at 0.3812 CAD per million RU, so 3M RU an hour is about
+1.1 CAD an hour. Both environments use 3M: prod's busiest hour in the 30 days to 2026-09-21 was
+1.73M RU, test's p99 hour 1.4M, and the loop ran 4-8M. The metric rule lives in `azure/modules/cosmos-alerts.bicep`, not in
+`observability.bicep`: Cosmos already depends on observability through the audit workspace, so
+passing the Cosmos id back the other way would create a cycle.
 
 The two search rules are the answer to 2026-09-08, when every `dataset=Document` query returned 502
 for 65 minutes and the only record of it was a log line nobody was reading. They overlap on purpose:

@@ -185,6 +185,12 @@ param deployBulkDownloadPoisonAlert = false
 // queue exists by the time the first message is sent.
 param chunkRestampQueue = 'chunk-restamp'
 
+// ── Cosmos RU alert ───────────────────────────────────────────────────────────────────────────
+// Same as test: prod's busiest hour in the 30 days to 2026-09-21 was 1.73M RU (median 678,
+// p99 760k), and the test loop ran 4-8M. 3M clears the real peak by ~70% and still sits under the
+// bottom of the loop's range. ~1.1 CAD an hour, ~27 a day, at 0.3812 CAD per million.
+param cosmosRuPerHourAlert = 3000000
+
 // ── Search definition apply ───────────────────────────────────────────────────────────────────
 // OFF: turn on ('search-definitions') after test has rehearsed the route. Until then an index change
 // here runs from demi-devbox-prod. The route is sysadmin-only and still needs the temporary Search

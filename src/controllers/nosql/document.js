@@ -1225,6 +1225,98 @@ const HOLD_WARN_CHARS = 10 * 1024 * 1024;
  */
 const PARENT_FIELD_REFRESH_BATCHES = 25;
 
+// Alerts match these two strings; keep them verbatim.
+const CAP_REJECTED = 'chunk ingest rejected: chunk cap exceeded';
+const REPEATED_REJECTED = 'chunk ingest rejected: repeated failures';
+
+const INGEST_FAILURES_CLEARED = { chunkIngestFailures: 0, chunkIngestFailedAt: null };
+
+function capExceededMessage() {
+  return `${CAP_REJECTED} (limit ${config.maxChunksPerDocument} chunks per document)`;
+}
+
+/**
+ * The 413 both ingest doors answer with once a document has more chunks than the cap. `stored` is
+ * appended to the recorded error only, and `fields` rides the same patch.
+ */
+async function rejectOverCap(res, document, detail, { stored = '', fields = {} } = {}) {
+  logger.warn(`[Document Controller] ${CAP_REJECTED}`, {
+    documentId: document.id, limit: config.maxChunksPerDocument, ...detail
+  });
+  const message = capExceededMessage();
+  await tryRecordIngestFailure(document, stored ? `${message}; ${stored}` : message, fields);
+  return res.status(413).json({ error: message });
+}
+
+/** Consecutive chunk-ingest failures still inside the window; 0 once the last one has aged out. */
+function recentIngestFailures(document) {
+  const age = Date.now() - Date.parse(document.chunkIngestFailedAt);
+  return age < config.chunkIngestFailureWindowMs ? (document.chunkIngestFailures || 0) : 0;
+}
+
+/**
+ * Record a failed ingest on the document and count it toward the repeated-failure guard. Never
+ * throws: a failure that cannot be recorded must not change the answer the caller gets.
+ */
+async function tryRecordIngestFailure(document, message, fields = {}) {
+  try {
+    // Read-then-write: overlapping failed requests can undercount, which only delays the lockout.
+    await documents.patchExtraction(document.id, document.projectId, {
+      ...fields,
+      contentExtractionError: message.slice(0, 500),
+      chunkIngestFailures: recentIngestFailures(document) + 1,
+      chunkIngestFailedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    logger.warn('[Document Controller] chunk ingest failure not recorded', {
+      documentId: document.id, error: err.message
+    });
+  }
+}
+
+/** A 500 the host will retry: logged for the ingest-failure alert and counted by the guard. */
+async function failIngest(res, document, message) {
+  logger.error(`[Document Controller] Chunk ingest failed: ${message}`, { documentId: document.id });
+  await tryRecordIngestFailure(document, message);
+  return res.status(500).json({ error: message });
+}
+
+/**
+ * Undo an over-cap stream's written batches: every Cosmos chunk of the document, then its AI Search
+ * rows, which the indexer's `_ts` high-water mark never removes on its own. Returns the patch that
+ * stops the document claiming chunks, plus any shortfall for the stored error.
+ */
+async function removeOverCapChunks(document) {
+  const shortfall = [];
+  try {
+    const removed = await chunks.removeForDocument(systemAccess(), document.id);
+    if (removed && removed.failed) {
+      logger.warn('[Document Controller] over-cap chunks not fully removed', {
+        documentId: document.id, failed: removed.failed, statusCounts: removed.statusCounts
+      });
+      shortfall.push(`${removed.failed} chunks not removed`);
+    }
+  } catch (err) {
+    logger.warn('[Document Controller] over-cap chunk removal failed', {
+      documentId: document.id, error: err.message
+    });
+    shortfall.push('chunk removal failed');
+  }
+  try {
+    // Logs and returns a count rather than throwing; the catch is for a fault before its own.
+    await aiSearch.deleteChunksForDocument(document.id);
+  } catch (err) {
+    logger.warn('[Document Controller] over-cap index delete failed', {
+      documentId: document.id, error: err.message
+    });
+    shortfall.push('index delete failed');
+  }
+  return {
+    stored: shortfall.join('; '),
+    fields: { contentExtracted: false, contentPageCount: 0 }
+  };
+}
+
 /**
  * How new the parent values a NEW chunk is born with are, so a walk running behind this ingest
  * cannot overwrite them with the values it set out with.
@@ -1310,6 +1402,8 @@ async function ingestChunksStreaming(req, res, doc) {
   // Returns an error string on partial failure, null on success.
   const collect = async (emitted) => {
     for (const { pageNumber, chunkIndex, content } of emitted) {
+      // Checked per chunk so the batch holding chunk cap+1 is never flushed.
+      if (keepIds.length >= config.maxChunksPerDocument) return capExceededMessage();
       const id = chunks.chunkId(doc.id, pageNumber, chunkIndex);
       keepIds.push(id);
       batch.push({
@@ -1402,12 +1496,18 @@ async function ingestChunksStreaming(req, res, doc) {
   const fail = async (status, message) => {
     // Recorded on the document, not just returned: a 500 the host retries is fine, but a silent
     // shortfall that leaves the document looking extracted is the failure mode this guards.
-    if (status >= 500) {
-      await documents.patchExtraction(doc.id, doc.projectId, {
-        contentExtractionError: message.slice(0, 500)
-      });
-    }
+    if (status >= 500) return failIngest(res, doc, message);
     return res.status(status).json({ error: message });
+  };
+
+  // For the error strings collect() and flush() return. Earlier batches of an over-cap stream are
+  // already written; they are removed whole, because their ids overwrote any previous extraction's
+  // rows of the same id, so what is left of that extraction would be a partial, mixed document.
+  const failWrite = async (message) => {
+    if (!message.startsWith(CAP_REJECTED)) return fail(500, message);
+    const detail = { streamed: true, flushedBatches: flushed };
+    if (flushed === 0) return rejectOverCap(res, doc, detail);
+    return rejectOverCap(res, doc, detail, await removeOverCapChunks(doc));
   };
 
   const rl = readline.createInterface({ input: req.stream, crlfDelay: Infinity });
@@ -1444,7 +1544,7 @@ async function ingestChunksStreaming(req, res, doc) {
       }
 
       const batchErr = await feed(block);
-      if (batchErr) return fail(500, batchErr);
+      if (batchErr) return failWrite(batchErr);
     }
   } finally {
     rl.close();
@@ -1458,13 +1558,13 @@ async function ingestChunksStreaming(req, res, doc) {
   // so there were none. This is where a marker-free stream settles, however long it ran.
   if (!acc) {
     const startErr = await startAccumulator(false);
-    if (startErr) return fail(500, startErr);
+    if (startErr) return failWrite(startErr);
   }
 
   const tailErr = await collect(acc.end());
-  if (tailErr) return fail(500, tailErr);
+  if (tailErr) return failWrite(tailErr);
   const err = await flush();
-  if (err) return fail(500, err);
+  if (err) return failWrite(err);
 
   // Only now is the surviving set knowable. Without this a re-extraction yielding fewer chunks
   // leaves orphans, and AI Search never sees deletes.
@@ -1479,6 +1579,7 @@ async function ingestChunksStreaming(req, res, doc) {
     contentExtractedAt: new Date().toISOString(),
     contentPageCount: keepIds.length,
     contentExtractionError: null,
+    ...INGEST_FAILURES_CLEARED,
     extractionMethod: 'docling',
     // Only when the markers were there, so a document extracted before page provenance keeps the
     // shape it has. `contentPageCount` is the CHUNK count and has always been; `pageCount` is the
@@ -1530,9 +1631,10 @@ async function ingestChunksStreaming(req, res, doc) {
  * this existed, which is itself the honest signal for "unknown path".
  */
 exports.ingestChunks = async (req, res) => {
+  let doc;
   try {
     const access = resolveAccess(req);
-    const doc = await documents.getById(access, req.params.id, req.query.project);
+    doc = await documents.getById(access, req.params.id, req.query.project);
     if (!doc) {
       return res.status(404).json({ error: 'Document not found' });
     }
@@ -1543,11 +1645,25 @@ exports.ingestChunks = async (req, res) => {
     // Guarded on `req.is` existing rather than called bare: Express always supplies it, but the
     // outer catch turns a bare TypeError here into a 500 that reads as a database fault, and it
     // would fire on every JSON ingest. Cheaper to ask than to debug.
-    if (typeof req.is === 'function' && req.is('application/x-ndjson')) {
+    const streaming = typeof req.is === 'function' && req.is('application/x-ndjson');
+    const { markdown, error, extraction } = (!streaming && req.body) || {};
+
+    // A host-reported `error` writes no chunks, so it is always let through to be recorded.
+    const failures = recentIngestFailures(doc);
+    const force = req.query.force === 'true' && access.roles.includes('sysadmin');
+    if (!error && failures >= config.chunkIngestMaxFailures && !force) {
+      logger.warn(`[Document Controller] ${REPEATED_REJECTED}`, { documentId: doc.id, failures });
+      return res.status(409).json({
+        error: `${REPEATED_REJECTED}: ${failures} failed ingests since ${doc.chunkIngestFailedAt}. ` +
+          'Failures include transient errors such as throttling, not only size. Fix the cause, ' +
+          'then a sysadmin can retry with ?force=true'
+      });
+    }
+
+    if (streaming) {
       return await ingestChunksStreaming(req, res, doc);
     }
 
-    const { markdown, error, extraction } = req.body || {};
     const provenance = sanitizeExtraction(extraction);
 
     // A failed extraction reports itself rather than going silent, so --retry-failed can find it.
@@ -1604,6 +1720,10 @@ exports.ingestChunks = async (req, res) => {
       extractedAt: new Date().toISOString()
     }));
 
+    if (items.length > config.maxChunksPerDocument) {
+      return rejectOverCap(res, doc, { chunks: items.length, streamed: false });
+    }
+
     // systemAccess() so reconciliation sees every pre-existing chunk. A caller-scoped read could
     // miss chunks it may not see and then leave them orphaned behind the new set.
     const result = await chunks.replaceForDocument(systemAccess(), doc.id, items);
@@ -1615,10 +1735,7 @@ exports.ingestChunks = async (req, res) => {
     if (result && result.failed) {
       const detail = `chunk write incomplete: ${result.failed} of ${items.length} failed ` +
         `(${JSON.stringify(result.statusCounts)})`;
-      await documents.patchExtraction(doc.id, doc.projectId, {
-        contentExtractionError: detail.slice(0, 500)
-      });
-      return res.status(500).json({ error: detail });
+      return failIngest(res, doc, detail);
     }
 
     // RU is the variable cost on a serverless account and nothing in the app was reading it, against
@@ -1632,6 +1749,7 @@ exports.ingestChunks = async (req, res) => {
       contentExtractedAt: new Date().toISOString(),
       contentPageCount: items.length,
       contentExtractionError: null,
+      ...INGEST_FAILURES_CLEARED,
       extractionMethod: 'docling',
       // See the streaming path: `contentPageCount` counts chunks, `pageCount` counts pages.
       ...(pageNumbered ? { pageNumbered: true, pageCount: pageCountOf(markdown) } : {}),
@@ -1653,6 +1771,9 @@ exports.ingestChunks = async (req, res) => {
     return res.json({ id: doc.id, chunks: items.length, extraction: provenance || null });
   } catch (err) {
     logger.error(`[Document Controller] Chunk ingest failed: ${err.message}`);
+    // A thrown fault (a query still throttled after SDK retries) is retried by the host like any
+    // other 500, so it counts toward the guard. Generic text: the stored error can be read back.
+    if (doc) await tryRecordIngestFailure(doc, 'chunk ingest failed: internal error');
     return serverError(res, err, 'document controller failed');
   }
 };

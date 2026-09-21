@@ -21,8 +21,9 @@
  *  - marker-free input, which is every extraction taken before page provenance: a sequence number.
  *    The host flattened the pages before posting, so nothing here can know where one ended, and
  *    the UI labels it "Passage" for that reason.
- *  - input carrying PAGE_MARKER between consecutive pages: the real 1-based PDF page. Blocks are
- *    cut at every marker, so a chunk holds text from one page only and "Page N" is quotable.
+ *  - input carrying PAGE_MARKER between consecutive pages: the real 1-based PDF page the chunk's
+ *    text starts on. A page with at least MIN_CHUNK_SIZE characters closes its block, so a chunk
+ *    only spans pages when shorter ones merged into it (backward where a block is held).
  */
 
 const {
@@ -64,20 +65,40 @@ function pageCountOf(text) {
 }
 
 /**
- * Split a single block of text into overlapping sub-chunks.
+ * Split a single block of text into overlapping sub-chunks, each with its offset in the block.
  * @param {string} text
- * @returns {string[]}
+ * @returns {{ start: number, text: string }[]}
  */
 function splitText(text) {
-  if (text.length <= MAX_CHUNK_SIZE) return [text];
+  if (text.length <= MAX_CHUNK_SIZE) return [{ start: 0, text }];
   const chunks = [];
   const step   = MAX_CHUNK_SIZE - OVERLAP_SIZE;
   for (let start = 0; start < text.length; start += step) {
     const end = Math.min(start + MAX_CHUNK_SIZE, text.length);
-    chunks.push(text.slice(start, end));
+    chunks.push({ start, text: text.slice(start, end) });
     if (end === text.length) break;
   }
   return chunks;
+}
+
+/** The page `offset` of a block falls on. `pages` lists where each page's text starts in it. */
+function pageAt(pages, offset) {
+  let page = pages[0].page;
+  for (const p of pages) {
+    if (p.at > offset) break;
+    page = p.page;
+  }
+  return page;
+}
+
+/** Join two held blocks with the section separator, keeping their page starts aligned. */
+function joinHeld(a, b) {
+  if (!a) return b;
+  const shift = a.text.length + 2;
+  const pages = a.pages.concat(b.pages
+    .map(p => ({ at: p.at + shift, page: p.page }))
+    .filter((p, i) => i > 0 || p.page !== a.pages[a.pages.length - 1].page));
+  return { text: `${a.text}\n\n${b.text}`, pages };
 }
 
 /**
@@ -102,47 +123,43 @@ function splitText(text) {
  * the whole document has to agree on which, so a decision made halfway through would number the
  * blocks before it differently from the ones after. `chunkMarkdown` reads it off the whole string;
  * the streaming ingest door holds blocks until the first page marker or end of stream, no fixed
- * probe window (`ingestChunksStreaming`). In page mode
- * `pageNumber` is the real 1-based page, several blocks can share one, and a block never spans a
- * marker. Otherwise it is the block sequence number it has always been.
+ * probe window (`ingestChunksStreaming`). In page mode `pageNumber` is the real 1-based page the
+ * chunk's text starts on, several chunks can share one, and a page of at least MIN_CHUNK_SIZE
+ * characters closes the block it ends. A shorter page joins the block before it, so a divider or
+ * plate page never shifts the next page's citation; it joins the next page's text only when there
+ * is no block before it (document start) or joining would push that block past MAX_CHUNK_SIZE. A
+ * chunk per sub-floor page turned a form-feed-dense file into ~38k chunks of ~50 bytes. Otherwise
+ * `pageNumber` is the block sequence number it has always been.
  *
  * @param {{ pageMarkers?: boolean }} [options]
  */
 function createChunkAccumulator(options = {}) {
   const pageMarkers = options.pageMarkers === true;
-  let buffer = '';
+  // Held blocks are `{ text, pages }`, where `pages` marks the offset each page's text starts at.
+  let buffer = null;
   let pending = null;
   let pageNumber = pageMarkers ? 1 : 0;
   let chunkIndex = 0;
-  // Chunks emitted for the page being accumulated. Only page mode reads it: the size floor's
-  // exception is per PAGE there, not per document — see `emit`.
-  let chunksOnPage = 0;
+  // Characters the page being read has contributed; decides whether its end closes a block.
+  let pageChars = 0;
   // Tail of the last emitted chunk, prepended to the next one. Per-accumulator, so it cannot leak
   // text from one document into another.
   let carry = '';
+  let carryPage = 0;
 
   function emit(block, out) {
-    const parts = splitText(block);
-    for (let i = 0; i < parts.length; i++) {
+    for (const part of splitText(block.text)) {
       // `own` is this block's OWN contribution, before any overlap is prepended. Every size test
       // below measures it rather than the final content — see the MIN_CHUNK_SIZE note.
-      const own = parts[i].trim();
-      // Only a trailing sliver from splitText can land here, and an index entry of a few
-      // characters matches everything and means nothing. `chunkIndex` doubles as the running
-      // total, so this is the same "not the very first chunk" test the whole-string version made
-      // against result.length.
+      const own = part.text.trim();
+      // Only a trailing sliver from splitText, or a document's whole text, can land here short,
+      // and an index entry of a few characters matches everything and means nothing. The first
+      // chunk is exempt so a document is never empty.
       //
       // Measured against `own`, NEVER against `own + carry`: 200 characters of overlap would
       // otherwise lift every sliver over the floor, and the chunk that survived would be almost
       // entirely text already indexed under its neighbour.
-      //
-      // IN PAGE MODE THE EXEMPT UNIT IS THE PAGE, not the document, and for the same reason: a
-      // page's text has nowhere to merge to any more — the boundary flush is what stops a block
-      // spanning one — so the floor would silently delete a cover page, a plate caption or a
-      // signature page from the index. A document is never empty either way; the first chunk of a
-      // page is simply also exempt.
-      const firstOfUnit = pageMarkers ? chunksOnPage === 0 : chunkIndex === 0;
-      if (!own || (!firstOfUnit && own.length < MIN_CHUNK_SIZE)) continue;
+      if (!own || (chunkIndex > 0 && own.length < MIN_CHUNK_SIZE)) continue;
 
       // Furniture — a chunk that is nothing but rules, dot leaders or form underscores — carries no
       // words, so it can never be the right answer to a query and only spends an index entry. This
@@ -155,46 +172,52 @@ function createChunkAccumulator(options = {}) {
       // from "never extracted", which is the STARVED signal the audit relies on.
       if (chunkIndex > 0 && isSeparatorFurniture(own)) continue;
 
+      const ownStart = part.start + part.text.search(/\S/);
+      const page = pageMarkers ? pageAt(block.pages, ownStart) : pageNumber;
+
       // The overlap itself, and the bug this fixes. `splitText` already overlaps consecutive
       // pieces of ONE oversized block (`step = MAX - OVERLAP`), but it returns any block under
       // MAX unchanged — and blocks are emitted at TARGET (2500), well under MAX (4000). So on the
       // common path it returned a single piece and consecutive chunks shared nothing at all.
-      // Only i === 0 needs this; later parts already carry splitText's own overlap.
+      // Only the first part needs this; later parts already carry splitText's own overlap.
       //
       // Joined with '\n\n' because that is exactly how the two blocks sat in the source: `push()`
       // accumulates sections with the same separator. Reproducing it means a phrase that spanned
       // the boundary now appears in this chunk the way it was written, which is the entire point —
       // any other joiner would put a break through the middle of the phrase being rescued.
-      const content = (i === 0 && carry) ? `${carry}\n\n${own}` : own;
+      //
+      // In page mode the overlap must sit on the page the chunk is numbered with: page N's wording
+      // in a chunk that says N+1 sends a reader following the citation to the wrong page. The cost
+      // is a sentence running across a page break is indexed once, under the page it started on.
+      const withCarry = part.start === 0 && carry && (!pageMarkers || carryPage === page);
+      const content = withCarry ? `${carry}\n\n${own}` : own;
 
-      out.push({ pageNumber, chunkIndex, content });
+      out.push({ pageNumber: page, chunkIndex, content });
       chunkIndex++;
-      chunksOnPage++;
       // Tail of this chunk's own text, so overlap never compounds across successive chunks.
       carry = own.slice(-OVERLAP_SIZE);
+      if (pageMarkers) carryPage = pageAt(block.pages, ownStart + own.length - carry.length);
     }
-    // Only when the blocks ARE the numbering. In page mode the marker steps the page, so several
-    // blocks share one page number and the numbers match the PDF's.
+    // Only when the blocks ARE the numbering. In page mode the marker steps the page.
     if (!pageMarkers) pageNumber++;
   }
 
-  /**
-   * Emit everything held: the completed block, then whatever the buffer has. `end()` and a page
-   * boundary are the same operation — nothing may be carried past either — so they share it.
-   */
-  function flushHeld(out) {
-    if (buffer) {
-      // The tail joins the previous block rather than becoming a stub of its own — unless it is
-      // the only content there is, in which case a short document still gets one chunk.
-      if (pending !== null && buffer.length < MIN_CHUNK_SIZE) {
-        pending += `\n\n${buffer}`;
-      } else {
-        if (pending !== null) emit(pending, out);
-        pending = buffer;
-      }
-      buffer = '';
+  /** Move the buffer to `pending`. A short buffer joins the previous block instead of being a stub. */
+  function settle(out) {
+    if (!buffer) return;
+    if (pending && buffer.text.length < MIN_CHUNK_SIZE) {
+      pending = joinHeld(pending, buffer);
+    } else {
+      if (pending) emit(pending, out);
+      pending = buffer;
     }
-    if (pending !== null) {
+    buffer = null;
+  }
+
+  /** Emit everything held. A short document still gets its one chunk. */
+  function flushHeld(out) {
+    settle(out);
+    if (pending) {
       emit(pending, out);
       pending = null;
     }
@@ -212,29 +235,29 @@ function createChunkAccumulator(options = {}) {
     // indexed text. MIN_CHUNK_SIZE means only "too small to be worth its own chunk", after
     // merging.
     if (!trimmed) return;
-    buffer = buffer ? `${buffer}\n\n${trimmed}` : trimmed;
-    if (buffer.length >= TARGET_CHUNK_SIZE) {
-      if (pending !== null) emit(pending, out);
+    pageChars += trimmed.length;
+    buffer = joinHeld(buffer, { text: trimmed, pages: [{ at: 0, page: pageNumber }] });
+    if (buffer.text.length >= TARGET_CHUNK_SIZE) {
+      if (pending) emit(pending, out);
       pending = buffer;
-      buffer = '';
+      buffer = null;
     }
   }
 
   /**
-   * Close the page being accumulated and step to the next one.
-   *
-   * THE OVERLAP IS DROPPED HERE, deliberately. `carry` rescues a phrase cut in half by a boundary
-   * the CHUNKER invented; a page break is a boundary the DOCUMENT has. Prepending the tail of
-   * page N to the first chunk of page N+1 would put page N's wording in a chunk whose id and
-   * `pageNumber` both say N+1, so a reader following "Page 12" would land on a sentence printed on
-   * page 11 — and the citation, which is the entire point of real page numbers, would be wrong.
-   * The cost is a sentence running across the break: it is indexed once, under the page it started
-   * on, rather than in both.
+   * Step to the next page. A page with enough text closes its block, so the next page starts a
+   * fresh one. A shorter page (an empty one included) joins the held block before it; with none, or
+   * no room under MAX_CHUNK_SIZE, its text stays to merge forward with the next page.
    */
   function endPage(out) {
-    flushHeld(out);
-    carry = '';
-    chunksOnPage = 0;
+    if (pageChars >= MIN_CHUNK_SIZE) {
+      settle(out);
+    } else if (buffer && pending && pending.text.length + 2 + buffer.text.length <= MAX_CHUNK_SIZE) {
+      // The MAX bound keeps a run of short pages from growing one held block without limit.
+      pending = joinHeld(pending, buffer);
+      buffer = null;
+    }
+    pageChars = 0;
     pageNumber++;
   }
 
@@ -243,9 +266,9 @@ function createChunkAccumulator(options = {}) {
     push(section) {
       const out = [];
       if (pageMarkers && hasPageMarkers(section)) {
-        // SPLIT FIRST, so no block can span a marker. Sections arrive split on blank lines and a
+        // SPLIT FIRST, so every page boundary is seen. Sections arrive split on blank lines and a
         // page ends wherever it ends, as often mid-section as not. Two markers in a row are an
-        // EMPTY PAGE, which `split` yields as an empty part: it contributes no chunk and still
+        // EMPTY PAGE, which `split` yields as an empty part: it contributes no text and still
         // consumes its number, which is what keeps the pages after it aligned with the PDF.
         const pages = section.split(PAGE_MARKER);
         for (let i = 0; i < pages.length; i++) {

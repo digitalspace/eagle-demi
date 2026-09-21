@@ -373,19 +373,89 @@ test('page markers', async (t) => {
     assert.strictEqual(pagesIn(firstOfPageTwo), 'W');
   });
 
-  await t.test('a page too short to earn its own chunk is still indexed', () => {
-    // Marker-free, these three merge into one chunk. Cut into pages they cannot merge, so the
-    // MIN_CHUNK_SIZE floor would delete a cover page or a plate caption from the index outright.
-    assert.deepStrictEqual(
-      chunkMarkdown(['Cover.', 'Body.', 'Appendix C.'].join(PAGE_MARKER)).map(c => c.content),
-      ['Cover.', 'Body.', 'Appendix C.']);
+  await t.test('short pages with no block before them merge forward, cited from page 1', () => {
+    // Every word survives, but a sub-floor page no longer becomes a chunk of its own: one chunk per
+    // form feed turned a 2 MB file into ~38k chunks of ~50 bytes. Nothing is held before page 1,
+    // so these merge forward and the chunk is cited from the page its text starts on.
+    const chunks = chunkMarkdown(['Cover.', 'Body.', 'Appendix C.'].join(PAGE_MARKER));
+
+    assert.deepStrictEqual(chunks.map(c => [c.pageNumber, c.content]),
+      [[1, 'Cover.\n\nBody.\n\nAppendix C.']]);
+  });
+
+  await t.test('a short page mid-document joins the block before it, not the next page', () => {
+    // Merged forward, the plate page would open page 3's chunk and cite page 3's text as page 2.
+    const chunks = chunkMarkdown([page(1, 'Q'), 'Plate 4: site map.', page(3, 'Z')].join(PAGE_MARKER));
+    const opening = chunks.find(c => c.content.includes('Page 3 opens.'));
+
+    assert.strictEqual(opening.pageNumber, 3);
+    assert.ok(opening.content.startsWith('Page 3 opens.'));
+    assert.ok(chunks.some(c => c.pageNumber === 1 && c.content.endsWith('Plate 4: site map.')));
+  });
+
+  await t.test('a short cover page joins the first long page and keeps its page number', () => {
+    const doc = ['Cover.', page(2, 'W'), page(3, 'Z')].join(PAGE_MARKER);
+    const chunks = chunkMarkdown(doc);
+
+    assert.deepStrictEqual(chunks.map(c => c.pageNumber), [1, 2, 3, 3]);
+    assert.ok(chunks[0].content.startsWith('Cover.\n\nPage 2 opens.'));
+    assert.deepStrictEqual(chunks.slice(1).map(pagesIn), ['W', 'Z', 'Z'],
+      'only the short page may share a chunk; long pages still close their own blocks');
+  });
+
+  await t.test('a short last page joins the block before it', () => {
+    const chunks = chunkMarkdown([page(1, 'Q'), 'Appendix C.'].join(PAGE_MARKER));
+
+    assert.deepStrictEqual(chunks.map(c => c.pageNumber), [1, 1]);
+    assert.ok(chunks[1].content.endsWith('Appendix C.'));
   });
 
   await t.test('an empty page spends its number and emits nothing', () => {
     // Two markers in a row are a page with nothing on it. Skipping its number would shift every
     // page after it off the PDF by one.
     assert.deepStrictEqual(
-      chunkMarkdown(`First.${PAGE_MARKER}${PAGE_MARKER}Third.`).map(c => c.pageNumber), [1, 3]);
+      chunkMarkdown([page(1, 'Q'), '', page(3, 'Z')].join(PAGE_MARKER)).map(c => c.pageNumber),
+      [1, 1, 3, 3]);
+  });
+
+  await t.test('dense page markers chunk to the target size, not one chunk per page', () => {
+    // The 2026-09-16 incident shape: ~2 MB with a form feed every ~50 bytes.
+    const doc = Array.from({ length: 40000 }, (_, i) => `Line ${i} of the form. ${'x'.repeat(20)}`)
+      .join(PAGE_MARKER);
+    const chunks = chunkMarkdown(doc);
+
+    // Each form feed becomes a '\n\n' separator, so allow 10% over length / TARGET. Before the fix
+    // this was 40,000 chunks.
+    assert.ok(chunks.length <= Math.ceil(doc.length / TARGET * 1.1),
+      `${chunks.length} chunks for ${doc.length} characters`);
+  });
+
+  await t.test('a chunk merged from short pages is numbered with the page its text starts on', () => {
+    const lines = Array.from({ length: 200 }, (_, i) => `Page ${i + 1} text ${'y'.repeat(30)}.`);
+    const chunks = chunkMarkdown(lines.join(PAGE_MARKER));
+    const firstPageIn = c => Number(c.content.match(/Page (\d+) text/)[1]);
+
+    assert.ok(chunks.length > 1, 'fixture must span several chunks');
+    assert.deepStrictEqual(chunks.map(c => c.pageNumber), chunks.map(firstPageIn));
+  });
+
+  await t.test('an oversized block split after merged pages numbers each piece by its own start', () => {
+    // Three short pages merge into page 4's single long section; the split piece that holds only
+    // page 4's text must not inherit page 1.
+    const doc = ['One.', 'Two.', 'Three.', 'W'.repeat(MAX * 2)].join(PAGE_MARKER);
+
+    assert.deepStrictEqual(chunkMarkdown(doc).map(c => c.pageNumber), [1, 4, 4]);
+  });
+
+  await t.test('the streaming door merges short pages identically', () => {
+    const doc = Array.from({ length: 300 }, (_, i) => `Short page ${i}.\n\nIts second line.`)
+      .join(PAGE_MARKER);
+    const acc = createChunkAccumulator({ pageMarkers: true });
+    const streamed = [];
+    for (const section of doc.split(/\n{2,}/)) streamed.push(...acc.push(section));
+    streamed.push(...acc.end());
+
+    assert.deepStrictEqual(streamed, chunkMarkdown(doc));
   });
 
   await t.test('the streaming door chunks a paged document identically', () => {
