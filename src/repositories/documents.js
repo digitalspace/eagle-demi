@@ -469,7 +469,7 @@ async function projectedRowsForProject(access, projectId, fields) {
 const seededCriteria = () => [eq('sourceSystem', 'eagle', '@sourceSystem')];
 
 /**
- * `{id, projectId}` for every Eagle-seeded document in the container — the seeder's reconcile
+ * `{id, projectId, read, isPublished}` for every Eagle-seeded document — the seeder's reconcile
  * set, ~61k rows. Scoped to `sourceSystem: 'eagle'` so a row this seed never produced (an
  * epic.submit upload) can never be computed as surplus and deleted.
  *
@@ -481,7 +481,7 @@ async function listSeededIds(access) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: seededCriteria(),
-    select: 'c.id, c.projectId'
+    select: 'c.id, c.projectId, c.read, c.isPublished'
   });
   return fetchAll(CONTAINER, spec);
 }

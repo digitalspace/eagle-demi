@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Diff the published Eagle id sets against the rows the Eagle push mirrored into DEMI.
+ * Diff the published Eagle id sets against the rows the Eagle push mirrored into DEMI, and for an
+ * id on both sides, the ACL DEMI holds against the one the mirror would write from Eagle's `read[]`.
  *
  * Only the document and comment-period pushes carry a tombstone (`isDeleted: true`); every other
  * container is hard-deleted with none, so the push cannot tell DEMI those rows are gone. This
@@ -40,6 +41,7 @@ const notifications = require('../repositories/notifications');
 const updates = require('../repositories/updates');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
+const { seedAcl } = require('../seed/transform');
 const { eachCommentPage } = require('./seed-public-reads');
 const { systemAccess, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
@@ -220,6 +222,33 @@ function diff(rows, keyOf, eagleIds, pushOwned = () => true, parentPublished = (
   };
 }
 
+/** Same members, any order. */
+function sameSet(a, b) {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every(x => right.has(x));
+}
+
+/**
+ * Ids in both Eagle and DEMI whose DEMI `read[]` is not what the mirror would write from Eagle's,
+ * or whose `isPublished` has come apart from its own `read[]`. Every id-set diff passes these.
+ *
+ * @param {Map}      eagleRead     Eagle id -> that record's `read[]`; an id without one is skipped
+ * @param {function} parentReadOf  row -> the DEMI parent ACL the mirror narrows against, or null
+ */
+function aclMismatch(rows, keyOf, eagleRead, parentReadOf = () => null) {
+  return rows.filter(row => {
+    const upstream = eagleRead.get(keyOf(row));
+    if (!upstream) return false;
+    const read = Array.isArray(row.read) ? row.read : [];
+    const parent = parentReadOf(row);
+    const expected = parent
+      ? documents.constrainToProject(seedAcl(upstream), parent)
+      : seedAcl(upstream);
+    return !sameSet(read, expected) || row.isPublished !== read.includes('public');
+  }).map(keyOf);
+}
+
 /** Every id set a diff produced, as one drift number. */
 function driftOf(summary) {
   // A dead ENGAGE slug is in Eagle AND in DEMI, so every id-set diff reads it as clean — but it is
@@ -234,7 +263,7 @@ function driftOf(summary) {
     // A misfiled row is drift the id-set diffs cannot see — present in both, stored under the
     // wrong parent — so it counts here or the alert stays quiet about it.
     return total + s.unpublishedOrDeleted.length + s.eagleOnly.length +
-      (s.misfiledParent ? s.misfiledParent.length : 0);
+      (s.misfiledParent ? s.misfiledParent.length : 0) + (s.aclMismatch ? s.aclMismatch.length : 0);
   }, orphans);
 }
 
@@ -249,13 +278,15 @@ function summaryLine(summary) {
   const counts = (label) => {
     const s = summary[label];
     return s
-      ? `${label}: unpublishedOrDeleted=${s.unpublishedOrDeleted.length} eagleOnly=${s.eagleOnly.length} `
+      ? `${label}: unpublishedOrDeleted=${s.unpublishedOrDeleted.length} eagleOnly=${s.eagleOnly.length} ` +
+        `aclMismatch=${(s.aclMismatch || []).length} `
       : `${label}: skipped `;
   };
   return '[reconcile] ' +
     `projects: unpublishedOrDeleted=${p.unpublishedOrDeleted.length} eagleOnly=${p.eagleOnly.length} ` +
+    `aclMismatch=${(p.aclMismatch || []).length} ` +
     `documents: unpublishedOrDeleted=${d.unpublishedOrDeleted.length} eagleOnly=${d.eagleOnly.length} ` +
-    `unresolvedParent=${d.unresolvedParent.length} ` +
+    `unresolvedParent=${d.unresolvedParent.length} aclMismatch=${(d.aclMismatch || []).length} ` +
     counts('commentPeriods') + counts('lists') + counts('notifications') + counts('updates') +
     counts('comments') +
     // `skipped`, not zero, for the same reason `comments` says it: a sweep that never ran must not
@@ -306,11 +337,17 @@ async function reconcile(argv = [], deps = {}) {
   const summary = {
     eagle: src.EAGLE_API_BASE, projects: {}, documents: {}, drift: 0, failures: []
   };
+  // Eagle id -> its `read[]`, across every dataset: Eagle ids are unique across its collections.
+  const eagleRead = new Map();
+  const noteRead = (row) => {
+    if (Array.isArray(row.read) && row.read.length) eagleRead.set(String(row._id), row.read);
+  };
 
   // Eagle first: `fetchAllPages` throws when a fetch falls short of the reported
   // `searchResultsTotal`, so a truncated read can never be mistaken for a shrunken corpus.
   const eagleProjects = await src.fetchEagleProjects();
   const eagleProjectIds = new Set(eagleProjects.map(p => String(p._id)));
+  eagleProjects.forEach(noteRead);
   // The registry seed-nosql builds. A Track row's dangling epic_guid resolves here exactly as it
   // does there, which is why this and not `eagleProjectIds` is the parent test: DEMI holds a
   // project row for such a guid, so a child under one is drift rather than unresolvable.
@@ -326,6 +363,7 @@ async function reconcile(argv = [], deps = {}) {
       const id = String(doc._id);
       eagleDocumentIds.add(id);
       eagleDocumentProject.set(id, doc.project != null ? String(doc.project) : null);
+      noteRead(doc);
     }
   });
 
@@ -342,8 +380,15 @@ async function reconcile(argv = [], deps = {}) {
   const documentDiff = diff(documentRows, row => String(row.id), eagleDocumentIds, undefined,
     id => admit(eagleDocumentProject.get(id)) !== null);
 
-  summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff };
-  summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff };
+  // The mirrors narrow a document or period to its DEMI project's ACL; a notification parent has
+  // none, so a row under one keeps Eagle's own.
+  const projectRead = new Map(projectRows.map(row => [String(row.id), row.read]));
+  const projectReadOf = row => projectRead.get(String(row.projectId)) || null;
+
+  summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff,
+    aclMismatch: aclMismatch(projectRows, row => String(row.eagleId), eagleRead) };
+  summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff,
+    aclMismatch: aclMismatch(documentRows, row => String(row.id), eagleRead, projectReadOf) };
 
   // The public-read containers, enumerated through the SAME repository reads a request uses. Their
   // rows carry `id === eagleId`, and every one of them is the backfill's or the push's, so there is
@@ -374,15 +419,17 @@ async function reconcile(argv = [], deps = {}) {
   const updateRows = await updatesRepo.list(access, {});
 
   // One `lists` container holds both kinds, so both id sets are one comparison.
-  const eagleListIds = await eagleIds(src, 'Organization', await eagleIds(src, 'List'));
+  const eagleListIds = await eagleIds(src, 'Organization',
+    await eagleIds(src, 'List', new Set(), noteRead), noteRead);
   // The period's own parent ref rides along: it is the only thing that says whether the mirror
   // could have resolved a parent for it.
   const eaglePeriodProject = new Map(); // period id -> its Eagle parent ref
   const eaglePeriodIds = await eagleIds(src, 'CommentPeriod', new Set(), row => {
     eaglePeriodProject.set(String(row._id), row.project != null ? String(row.project) : null);
+    noteRead(row);
   });
-  const eagleNotificationIds = await eagleIds(src, 'ProjectNotification');
-  const eagleUpdateIds = await eagleIds(src, 'RecentActivity');
+  const eagleNotificationIds = await eagleIds(src, 'ProjectNotification', new Set(), noteRead);
+  const eagleUpdateIds = await eagleIds(src, 'RecentActivity', new Set(), noteRead);
 
   // Rows that ARE mirrored, under a parent the admission rule would not choose. Nothing above sees
   // these: they are in both Eagle and DEMI, so every id-set diff reads them as clean. They are the
@@ -400,7 +447,8 @@ async function reconcile(argv = [], deps = {}) {
     inDemi: periodRows.length, inEagle: eaglePeriodIds.size,
     ...diff(periodRows, row => String(row.id), eaglePeriodIds, undefined,
       id => admit(eaglePeriodProject.get(id)) !== null),
-    misfiledParent: misfiledPeriods
+    misfiledParent: misfiledPeriods,
+    aclMismatch: aclMismatch(periodRows, row => String(row.id), eagleRead, projectReadOf)
   };
 
   // OPT-IN, like `--comments`, and for the same reason: one ENGAGE round trip per `isMet` period.
@@ -417,15 +465,18 @@ async function reconcile(argv = [], deps = {}) {
   }
   summary.lists = {
     inDemi: listRows.length, inEagle: eagleListIds.size,
-    ...diff(listRows, row => String(row.id), eagleListIds)
+    ...diff(listRows, row => String(row.id), eagleListIds),
+    aclMismatch: aclMismatch(listRows, row => String(row.id), eagleRead)
   };
   summary.notifications = {
     inDemi: notificationRows.length, inEagle: eagleNotificationIds.size,
-    ...diff(notificationRows, row => String(row.id), eagleNotificationIds)
+    ...diff(notificationRows, row => String(row.id), eagleNotificationIds),
+    aclMismatch: aclMismatch(notificationRows, row => String(row.id), eagleRead)
   };
   summary.updates = {
     inDemi: updateRows.length, inEagle: eagleUpdateIds.size,
-    ...diff(updateRows, row => String(row.id), eagleUpdateIds)
+    ...diff(updateRows, row => String(row.id), eagleUpdateIds),
+    aclMismatch: aclMismatch(updateRows, row => String(row.id), eagleRead)
   };
 
   summary.failures.push(...(await truncatedReads(access, [
@@ -458,15 +509,23 @@ async function reconcile(argv = [], deps = {}) {
         for (const row of items) {
           eagleCommentIds.add(String(row._id));
           unresolvedComments.add(String(row._id));
+          noteRead(row);
         }
       });
     }
+    // A comment is narrowed to its period's ACL, as the comment mirror does.
+    const periodReadOf = new Map();
     for (const period of periodRows) {
       const rows = await commentsRepo.listByPeriod(period.id, access, {});
       ceiling = ceiling || rows.length >= MAX_PAGE_SIZE;
       commentRows.push(...rows);
-      await eachCommentPage(period.id, { sources: src },
-        (items) => { for (const row of items) eagleCommentIds.add(String(row._id)); });
+      for (const row of rows) periodReadOf.set(String(row.id), period.read);
+      await eachCommentPage(period.id, { sources: src }, (items) => {
+        for (const row of items) {
+          eagleCommentIds.add(String(row._id));
+          noteRead(row);
+        }
+      });
     }
     if (ceiling) {
       summary.failures.push('a period filled a comment page — the comments diff below is computed ' +
@@ -475,7 +534,9 @@ async function reconcile(argv = [], deps = {}) {
     summary.comments = {
       inDemi: commentRows.length, inEagle: eagleCommentIds.size,
       ...diff(commentRows, row => String(row.id), eagleCommentIds, undefined,
-        id => !unresolvedComments.has(id))
+        id => !unresolvedComments.has(id)),
+      aclMismatch: aclMismatch(commentRows, row => String(row.id), eagleRead,
+        row => periodReadOf.get(String(row.id)) || null)
     };
   }
 
@@ -520,6 +581,10 @@ function report(summary, { json } = {}) {
       line('misfiledParent (mirrored, but stored under a parent the admission rule would not ' +
         'choose — re-mirror to move them)', s.misfiledParent);
     }
+    if (s.aclMismatch && s.aclMismatch.length) {
+      line('aclMismatch (in both, but DEMI read[]/isPublished is not what the mirror writes from ' +
+        'Eagle\'s read[] — re-push from Eagle to repair)', s.aclMismatch);
+    }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +
         'public search — that is close-unpublished-track-projects.js, not the push');
@@ -553,7 +618,7 @@ function report(summary, { json } = {}) {
   if (json) {
     const ids = s => ({
       unpublishedOrDeleted: s.unpublishedOrDeleted.map(r => r.id), eagleOnly: s.eagleOnly,
-      unresolvedParent: s.unresolvedParent
+      unresolvedParent: s.unresolvedParent, aclMismatch: s.aclMismatch || []
     });
     const full = {};
     for (const label of LABELS) if (summary[label]) full[label] = ids(summary[label]);
@@ -587,7 +652,7 @@ async function run({ json = false, comments: sweepComments = false, engage = fal
 }
 
 module.exports = {
-  parseArgs, diff, summaryLine, reconcile, report, run,
+  parseArgs, diff, aclMismatch, summaryLine, reconcile, report, run,
   // Exported for the tests: the slug parse and the three-way ENGAGE answer are where a wrong call
   // turns into a deleted row, so both are asserted directly as well as through `reconcile`.
   slugOf, slugState, engageOrphans

@@ -119,7 +119,8 @@ time. A row carrying neither timestamp is written.
 ## Checking the result
 
 `src/scripts/reconcile-eagle.js` diffs the ids Eagle publishes against the rows DEMI holds, for
-these containers as well as projects and documents. It reports and deletes nothing.
+these containers as well as projects and documents. For ids on both sides it also compares
+`read[]` and `isPublished` (`aclMismatch`, see the README). It reports and deletes nothing.
 
 ```bash
 node src/scripts/reconcile-eagle.js              # comment periods, lists, notifications, updates
