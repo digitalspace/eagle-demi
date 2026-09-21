@@ -6,12 +6,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  parseArgs, diff, summaryLine, reconcile, report, run, slugOf
+  parseArgs, diff, aclMismatch, summaryLine, reconcile, report, run, slugOf
 } = require('../../src/scripts/reconcile-eagle');
 const { logger } = require('../../src/utils/logger');
 const { documentAdmission } = require('../../src/scripts/seed-nosql');
 const { buildRegistry, buildProjectIndex } = require('../../src/merge/project');
-const { MAX_PAGE_SIZE } = require('../../src/helpers/access-sql');
+const { MAX_PAGE_SIZE, readForLevel } = require('../../src/helpers/access-sql');
 
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
@@ -224,7 +224,93 @@ test('diff', async (t) => {
   });
 });
 
+test('aclMismatch', async (t) => {
+  const PUBLIC = readForLevel(4);
+  const STAFF = readForLevel(2);
+  const byId = row => row.id;
+  const eagle = (read) => new Map([['a', read]]);
+
+  await t.test('compares read[] as sets, not in order', () => {
+    const rows = [{ id: 'a', read: [...PUBLIC].reverse(), isPublished: true }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(PUBLIC)), []);
+  });
+
+  await t.test('public in Eagle but private in DEMI is a mismatch', () => {
+    const rows = [{ id: 'a', read: STAFF, isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(PUBLIC)), ['a']);
+  });
+
+  await t.test('private in Eagle but public in DEMI is a mismatch', () => {
+    const rows = [{ id: 'a', read: PUBLIC, isPublished: true }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(STAFF)), ['a']);
+  });
+
+  await t.test('isPublished out of step with its own read[] is a mismatch', () => {
+    const rows = [{ id: 'a', read: PUBLIC, isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(PUBLIC)), ['a']);
+  });
+
+  await t.test('a row narrowed to its DEMI parent is what the mirror writes, not a mismatch', () => {
+    const rows = [{ id: 'a', read: STAFF, isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(PUBLIC), () => STAFF), []);
+  });
+
+  await t.test('an Eagle record carrying no read[] is not compared', () => {
+    const rows = [{ id: 'a', read: STAFF, isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, new Map()), []);
+  });
+});
+
 test('reconcile', async (t) => {
+  // Every id here is in both Eagle and DEMI, so each id-set diff reads them as clean.
+  await t.test('reports ACL drift on ids both sides hold', async () => {
+    const PUBLIC = readForLevel(4);
+    const STAFF = readForLevel(2);
+    const withRead = (rows, reads) => rows.map(row => ({ ...row, ...reads[row._id || row.id] }));
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({
+        fetchEagleProjects: async () => EAGLE_PROJECTS.map(p => ({ ...p, read: PUBLIC })),
+        streamEagleDocuments: async (onPage) => {
+          await onPage(EAGLE_DOCS.map(d => ({ ...d, read: PUBLIC })));
+          return { count: EAGLE_DOCS.length, total: EAGLE_DOCS.length };
+        }
+      }, { ...EAGLE_BY_DATASET, List: [{ _id: 'L1', read: STAFF }] }),
+      projects: {
+        listWithEagleId: async () => withRead(PROJECT_ROWS, {
+          207: { read: PUBLIC, isPublished: true },
+          // Public in Eagle, private in DEMI.
+          'eagle-P2': { read: STAFF, isPublished: false }
+        }),
+        countWithEagleId: async () => PROJECT_ROWS.length
+      },
+      documents: {
+        ...makeDeps().documents,
+        listSeededIds: async () => withRead(DOCUMENT_ROWS, {
+          // Under public 207, so it should be public too.
+          D1: { read: STAFF, isPublished: false },
+          // Under private eagle-P2: the mirror narrows it to staff, so this is in step.
+          D2: { read: STAFF, isPublished: false }
+        })
+      },
+      lists: {
+        ...makeDeps().lists,
+        // Private in Eagle, public in DEMI.
+        listByKind: async (kind) => kind === 'List'
+          ? [{ id: 'L1', kind: 'List', read: PUBLIC, isPublished: true }]
+          : LIST_ROWS[kind]
+      }
+    }));
+
+    assert.deepStrictEqual(summary.projects.aclMismatch, ['P2']);
+    assert.deepStrictEqual(summary.documents.aclMismatch, ['D1']);
+    assert.deepStrictEqual(summary.lists.aclMismatch, ['L1']);
+    assert.strictEqual(summary.drift, 8, 'the five id-set drifts plus three ACL mismatches');
+    assert.match(summaryLine(summary),
+      /projects: unpublishedOrDeleted=1 eagleOnly=0 aclMismatch=1 /);
+    assert.match(report(summary), /aclMismatch \(in both, .*\): 1 — D1/);
+    assert.match(report(summary, { json: true }), /"aclMismatch": \[\s*"P2"\s*\]/);
+  });
+
   await t.test('reports drift both ways', async () => {
     const summary = await reconcile([], makeDeps());
 
@@ -567,12 +653,12 @@ test('summaryLine is the alert contract', async (t) => {
   await t.test('carries every count and a drift total', async () => {
     const summary = await reconcile([], makeDeps());
     assert.strictEqual(summaryLine(summary),
-      '[reconcile] projects: unpublishedOrDeleted=1 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=1 eagleOnly=3 unresolvedParent=1 ' +
-      'commentPeriods: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'lists: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'notifications: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'updates: unpublishedOrDeleted=0 eagleOnly=0 ' +
+      '[reconcile] projects: unpublishedOrDeleted=1 eagleOnly=0 aclMismatch=0 ' +
+      'documents: unpublishedOrDeleted=1 eagleOnly=3 unresolvedParent=1 aclMismatch=0 ' +
+      'commentPeriods: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
+      'lists: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
+      'notifications: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
+      'updates: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
       'comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=5');
   });
 
@@ -582,7 +668,7 @@ test('summaryLine is the alert contract', async (t) => {
     assert.match(summaryLine(await reconcile([], makeDeps())),
       /comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=/);
     assert.match(summaryLine(await reconcile(['--comments'], makeDeps())),
-      /comments: unpublishedOrDeleted=1 eagleOnly=0 engageOrphans: skipped parentFieldsPending=0 drift=6/);
+      /comments: unpublishedOrDeleted=1 eagleOnly=0 aclMismatch=0 engageOrphans: skipped parentFieldsPending=0 drift=6/);
   });
 
   await t.test('documents whose chunks never got re-stamped reach the alert line', async () => {
@@ -600,8 +686,8 @@ test('summaryLine is the alert contract', async (t) => {
       summaryLine({ projects: { unpublishedOrDeleted: [], eagleOnly: [] },
         documents: { unpublishedOrDeleted: [], eagleOnly: [], unresolvedParent: [] },
         drift: 0, parentFieldsPending: 0 }),
-      '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 ' +
+      '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
+      'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 aclMismatch=0 ' +
       'commentPeriods: skipped lists: skipped notifications: skipped updates: skipped ' +
       'comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=0');
   });

@@ -255,10 +255,19 @@ from its `read[]`, so an anonymous caller cannot tell the two apart, and purging
 destroy an unpublished row along with its chunks and index entries. A purge needs a probe that
 separates them — a tombstone, or a credential that reads unpublished rows. A document whose own
 project is unpublished/gone is not counted as `eagleOnly` drift either — seed-nosql drops it the
-same way — it reports separately as `unresolvedParent`. One line is what a log alert matches:
+same way — it reports separately as `unresolvedParent`.
+
+For an id both sides hold, `aclMismatch` lists rows whose DEMI `read[]` is not what the mirror
+would write from Eagle's `read[]`, or whose `isPublished` no longer matches its own `read[]`. The
+two ACLs are compared as sets, so order does not matter. A document, comment period or comment is
+first narrowed to its DEMI parent's ACL, the same way the mirrors do, so a row under a private
+project is not reported. These count toward `drift=`. The fix is a re-push from Eagle; this script
+does not rewrite them, and nothing writes back to Eagle.
+
+One line is what a log alert matches:
 
 ```
-[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 commentPeriods: unpublishedOrDeleted=0 eagleOnly=0 lists: unpublishedOrDeleted=0 eagleOnly=0 notifications: unpublishedOrDeleted=0 eagleOnly=0 comments: skipped drift=0
+[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 aclMismatch=0 commentPeriods: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 lists: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 notifications: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 updates: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=0
 ```
 
 It covers the containers the Eagle push and the backfill write. Comments are behind `--comments`

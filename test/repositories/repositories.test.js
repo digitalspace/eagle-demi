@@ -531,7 +531,7 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     const { spec } = calls[0];
     assert.match(spec.query, /c\.sourceSystem = @sourceSystem/);
     assert.ok(spec.parameters.some(p => p.name === '@sourceSystem' && p.value === 'eagle'));
-    assert.match(spec.query, /^SELECT c\.id, c\.projectId FROM c/);
+    assert.match(spec.query, /^SELECT c\.id, c\.projectId, c\.read, c\.isPublished FROM c/);
     // A cross-partition ORDER BY takes the SDK's query-plan path, which never copies
     // `x-ms-continuation` into the merged headers — fetchAll then stops at the first page.
     assert.doesNotMatch(spec.query, /ORDER BY/,
@@ -560,7 +560,7 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     await projects.listWithEagleId(SYSTEM);
 
     const { spec } = calls[0];
-    assert.match(spec.query, /^SELECT c\.id, c\.eagleId, c\.sourceSystem FROM c/);
+    assert.match(spec.query, /^SELECT c\.id, c\.eagleId, c\.sourceSystem, c\.read, c\.isPublished FROM c/);
     assert.match(spec.query, /IS_DEFINED\(c\.eagleId\) AND NOT IS_NULL\(c\.eagleId\)/);
     assert.doesNotMatch(spec.query, /c\.sourceSystem = /,
       'filtering by sourceSystem here reports ~350 matched projects as missing from DEMI');

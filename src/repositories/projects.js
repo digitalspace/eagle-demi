@@ -224,7 +224,7 @@ async function countEagleOnlyIds(access) {
 const eagleIdCriteria = () => [isDefinedAndNotNull('eagleId')];
 
 /**
- * `{id, eagleId, sourceSystem}` for every project mirroring an Eagle record — the reconcile's
+ * `{id, eagleId, sourceSystem, read, isPublished}` for every project mirroring an Eagle record — the reconcile's
  * membership set.
  *
  * WIDER than `listEagleOnlyIds` on purpose. A Track-sourced row also carries an `eagleId` when the
@@ -239,7 +239,7 @@ async function listWithEagleId(access) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: eagleIdCriteria(),
-    select: 'c.id, c.eagleId, c.sourceSystem'
+    select: 'c.id, c.eagleId, c.sourceSystem, c.read, c.isPublished'
   });
   return fetchAll(CONTAINER, spec);
 }
