@@ -32,14 +32,7 @@ async function getToken() {
     return tokenCache.token;
   }
 
-  if (!credential) {
-    const { DefaultAzureCredential } = require('@azure/identity');
-    credential = new DefaultAzureCredential(
-      process.env.AZURE_CLIENT_ID
-        ? { managedIdentityClientId: process.env.AZURE_CLIENT_ID }
-        : undefined
-    );
-  }
+  if (!credential) credential = require('../utils/azure-credential').createCredential();
 
   const result = await credential.getToken('https://cognitiveservices.azure.com/.default');
   if (!result || !result.token) throw new Error('no token returned for the Foundry data plane');
