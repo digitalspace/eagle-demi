@@ -1365,6 +1365,13 @@ paths:
             Part of the write did not land, or the write threw. The failure is recorded on the
             document, counts toward the 409 guard, and `contentExtracted` is NOT set, so the work
             list still offers it.
+        '503':
+          description: >-
+            Every chunk was written, but chunks a re-ingest drops could not be removed from the AI
+            Search index: the index would not delete them (`stillIndexed` in the error's status
+            counts) or `SEARCH_ENDPOINT` is not set (`indexUnconfigured`). They stay in Cosmos and
+            `contentExtracted` is NOT set, so a retry removes them from both. Does NOT count toward
+            the 409 guard. A Cosmos write failure in the same request makes it a 500 instead.
     get:
       summary: A document's extracted text, in page order
       description: >-

@@ -871,14 +871,33 @@ test('ai-search delete propagation', async (t) => {
     assert.strictEqual(calls[5].body.value.length, 500);
   });
 
-  // Deletes are not read-your-write here, so re-seeing keys is normal. A total that never falls is
-  // not: it means nothing is landing, and 24 more identical rounds will not change that.
+  // Deletes are not read-your-write here, so a count that lags is normal. A total that never falls
+  // is not: it means nothing is landing, and more identical rounds will not change that.
   await t.test('a round that makes no progress stops rather than looping', async (tt) => {
     const page = Array.from({ length: 1000 }, (_, i) => ({ id: `KEY-${i}` }));
     const calls = captureFetch(tt, () => ({ json: { value: page, '@odata.count': 2000 } }));
+    const waits = [];
 
-    assert.strictEqual(await aiSearch.deleteChunksForDocument('stuck'), 1000);
-    assert.strictEqual(calls.length, 3, 'search, delete, then one probe that showed no progress');
+    assert.strictEqual(
+      await aiSearch.deleteChunksForDocument('stuck', { sleepFn: async (ms) => waits.push(ms) }), 1000);
+    assert.strictEqual(calls.length, 5, 'search, delete, then three probes that showed no progress');
+    assert.deepStrictEqual(waits, [2000, 2000], 'two stalled rounds wait before the third gives up');
+  });
+
+  await t.test('a count that lags one round does not stop the drain', async (tt) => {
+    // Round 2 still reports the pre-delete total; round 3 has caught up.
+    const counts = [2000, 2000, 1000];
+    const page = Array.from({ length: 1000 }, (_, i) => ({ id: `KEY-${i}` }));
+    let probes = 0;
+    const calls = captureFetch(tt, () => {
+      const last = calls[calls.length - 1];
+      if (last.url.includes('/docs/index')) return { json: {} };
+      return { json: { value: page, '@odata.count': counts[probes++] } };
+    });
+
+    assert.strictEqual(
+      await aiSearch.deleteChunksForDocument('lagging', { sleepFn: async () => {} }), 2000);
+    assert.strictEqual(calls.filter(c => c.url.includes('/docs/index')).length, 2);
   });
 
   await t.test('the round cap bounds a document that never drains', async (tt) => {
@@ -894,6 +913,21 @@ test('ai-search delete propagation', async (t) => {
 
     assert.strictEqual(await aiSearch.deleteChunksForDocument('endless', { maxRounds: 4 }), 4000);
     assert.strictEqual(calls.length, 8, 'four rounds, then stop');
+  });
+
+  // A document once held 38,090 chunks; a fixed 25-round cap left 13,090 of them searchable.
+  await t.test('a document past 25,000 chunks drains without a caller-set cap', async (tt) => {
+    let remaining = 30000;
+    const page = Array.from({ length: 1000 }, (_, i) => ({ id: `KEY-${i}` }));
+    captureFetch(tt, (i) => {
+      if (i % 2 === 1) {
+        remaining -= 1000;
+        return { json: {} };
+      }
+      return { json: { value: page, '@odata.count': remaining } };
+    });
+
+    assert.strictEqual(await aiSearch.deleteChunksForDocument('huge'), 30000);
   });
 });
 
@@ -1947,6 +1981,108 @@ test('writeAcls', async (t) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
     assert.strictEqual(await aiSearch.writeAcls('documents', []), 0);
     assert.strictEqual(calls.length, 0);
+  });
+});
+
+/**
+ * `deleteChunksByIds` — a re-ingest's dropped chunks, named by Cosmos id, removed from the index.
+ */
+test('deleteChunksByIds', async (t) => {
+  const kept = (stillIndexed) => ({ stillIndexed, indexUnconfigured: [] });
+  // The values inside `search.in(chunkId, '<list>', '|')`, unescaped — not a count of pipes, which
+  // an off-by-one in the join would still satisfy.
+  const listed = (filter) => {
+    const m = /^search\.in\(chunkId, '((?:[^']|'')*)', '\|'\)$/.exec(filter);
+    assert.ok(m, `not a search.in filter: ${filter}`);
+    return m[1].replace(/''/g, "'").split('|');
+  };
+
+  await t.test('index keys are read back by chunkId, then deleted', async (tt) => {
+    const calls = captureFetch(tt, (i) => i === 0
+      ? { json: { value: [{ id: 'KEY-A', chunkId: 'd::p0::c1' }] } }
+      : { json: { value: [{ key: 'KEY-A', status: true }] } });
+
+    assert.deepStrictEqual(await aiSearch.deleteChunksByIds(['d::p0::c1', 'd::p0::c2']), kept([]));
+    assert.strictEqual(calls[0].init.method, 'POST', 'a 1000-id filter does not fit a URL');
+    assert.deepStrictEqual(listed(calls[0].body.filter), ['d::p0::c1', 'd::p0::c2']);
+    assert.strictEqual(calls[0].body.select, 'id,chunkId');
+    assert.strictEqual(calls[0].body.top, 2);
+    assert.deepStrictEqual(calls[1].body.value, [{ '@search.action': 'delete', id: 'KEY-A' }]);
+  });
+
+  await t.test('ids are looked up in batches of 1000, each asking for all of its rows', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    const ids = Array.from({ length: 1500 }, (_, i) => `d::p0::c${i}`);
+    await aiSearch.deleteChunksByIds(ids);
+
+    const batches = calls.map(c => listed(c.body.filter));
+    assert.deepStrictEqual(batches.map(b => b.length), [1000, 500]);
+    assert.deepStrictEqual(calls.map(c => c.body.top), [1000, 500]);
+    assert.deepStrictEqual(batches.flat(), ids);
+  });
+
+  await t.test('batches run four at a time, not one after another', async (tt) => {
+    let inFlight = 0;
+    let peak = 0;
+    const originalFetch = global.fetch;
+    global.fetch = async () => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise(r => setImmediate(r));
+      inFlight--;
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ value: [] }) };
+    };
+    tt.after(() => { global.fetch = originalFetch; });
+
+    await aiSearch.deleteChunksByIds(Array.from({ length: 9000 }, (_, i) => `d::p0::c${i}`));
+    assert.strictEqual(peak, 4);
+  });
+
+  await t.test('a quote in an id cannot escape the filter literal', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    await aiSearch.deleteChunksByIds(["x' or true or '"]);
+    assert.strictEqual(calls[0].body.filter, "search.in(chunkId, 'x'' or true or ''', '|')");
+  });
+
+  await t.test('an id carrying the delimiter is reported, never sent', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    assert.deepStrictEqual(await aiSearch.deleteChunksByIds(['a|b', 'c']), kept(['a|b']));
+    assert.deepStrictEqual(listed(calls[0].body.filter), ['c']);
+  });
+
+  await t.test('a failed lookup reports the batch as still indexed', async (tt) => {
+    captureFetch(tt, () => ({ throws: new Error('timeout') }));
+    assert.deepStrictEqual(await aiSearch.deleteChunksByIds(['a', 'b']), kept(['a', 'b']));
+  });
+
+  await t.test('a refused delete is reported by chunk id, not index key', async (tt) => {
+    captureFetch(tt, (i) => i === 0
+      ? { json: { value: [{ id: 'KEY-A', chunkId: 'a' }, { id: 'KEY-B', chunkId: 'b' }] } }
+      : { json: { value: [{ key: 'KEY-A', status: true }, { key: 'KEY-B', status: false,
+        statusCode: 500 }] } });
+    assert.deepStrictEqual(await aiSearch.deleteChunksByIds(['a', 'b']), kept(['b']));
+  });
+
+  // A key with no chunk id behind it would come back where a chunk id belongs, and the caller
+  // would then delete a chunk whose row is still indexed.
+  await t.test('a refused key the lookup did not return reports its whole batch', async (tt) => {
+    captureFetch(tt, (i) => i === 0
+      ? { json: { value: [{ id: 'KEY-A', chunkId: 'a' }] } }
+      : { json: { value: [{ key: 'KEY-Z', status: false, statusCode: 500 }] } });
+    assert.deepStrictEqual(await aiSearch.deleteChunksByIds(['a', 'b']), kept(['a', 'b']));
+  });
+
+  await t.test('with no SEARCH_ENDPOINT every id is refused and nothing is sent', async (tt) => {
+    const saved = process.env.SEARCH_ENDPOINT;
+    process.env.SEARCH_ENDPOINT = '';
+    tt.after(() => { process.env.SEARCH_ENDPOINT = saved; });
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    const { logger } = require('../../src/utils/logger');
+    const warned = tt.mock.method(logger, 'warn', () => {});
+
+    assert.deepStrictEqual(await aiSearch.deleteChunksByIds(['a', 'b']),
+      { stillIndexed: [], indexUnconfigured: ['a', 'b'] });
+    assert.strictEqual(calls.length, 0);
+    assert.match(warned.mock.calls[0].arguments[0], /refused to delete 2 chunk rows/);
   });
 });
 
