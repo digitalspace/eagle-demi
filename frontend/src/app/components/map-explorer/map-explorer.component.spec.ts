@@ -904,15 +904,35 @@ describe('MapExplorerComponent lasso arriving before the map', () => {
     fixture?.destroy();
   });
 
-  // initMap runs in a 50 ms timeout, so give it that plus room for the first paint.
+  // initMap runs in a 50 ms timeout; wait for the map to say it is ready, capped so a map that never starts fails.
   const settle = async () => {
-    await new Promise(resolve => setTimeout(resolve, 400));
+    const component = fixture.componentInstance as any;
+    const deadline = Date.now() + 3000;
+    while (!component.mapReady() && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
     fixture.detectChanges();
   };
 
   it('draws a ring that was committed before the component existed', async () => {
     service.lassoPolygon.set([[-121, 56], [-120, 56], [-120.5, 56.5], [-121, 56]]);
 
+    fixture = TestBed.createComponent(MapExplorerComponent);
+    fixture.detectChanges();
+    await settle();
+
+    const component = fixture.componentInstance as any;
+    expect(component.map).withContext('the real map must have initialised').toBeTruthy();
+    expect(component.lassoLayer).withContext('saved area is on the map when it opens').toBeTruthy();
+  });
+
+  it('draws the ring even when an earlier map explorer was torn down before its map started', async () => {
+    // Another spec that ends inside the 50 ms init delay leaves exactly this behind.
+    const earlier = TestBed.createComponent(MapExplorerComponent);
+    earlier.detectChanges();
+    earlier.destroy();
+
+    service.lassoPolygon.set([[-121, 56], [-120, 56], [-120.5, 56.5], [-121, 56]]);
     fixture = TestBed.createComponent(MapExplorerComponent);
     fixture.detectChanges();
     await settle();
