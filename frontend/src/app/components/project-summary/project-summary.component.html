@@ -21,7 +21,7 @@
                    own PDF and never reaches the document download. -->
               <a class="ps-cite" [href]="c.url" target="_blank" rel="noopener" [attr.title]="c.documentName">
                 <span class="ps-cite__n">[{{ c.n }}]</span>
-                <span class="ps-cite__doc">IAAC registry, p.&nbsp;{{ c.pageNumber }}</span>
+                <span class="ps-cite__doc">{{ citeDoc(c) }}</span>
                 <span class="ps-cite__action">{{ citeAction(c) }}<span class="visually-hidden"> (opens in a new tab)</span></span>
               </a>
             } @else if (c.source === 'iaac') {
@@ -29,7 +29,7 @@
                    there is no DEMI document behind it to fall back to. -->
               <span class="ps-cite" [attr.title]="c.documentName">
                 <span class="ps-cite__n">[{{ c.n }}]</span>
-                <span class="ps-cite__doc">IAAC registry, p.&nbsp;{{ c.pageNumber }}</span>
+                <span class="ps-cite__doc">{{ citeDoc(c) }}</span>
                 <span class="ps-cite__action">{{ citeAction(c) }}</span>
               </span>
             } @else {

@@ -634,6 +634,9 @@ describe('ProjectSummaryComponent', () => {
     const chip = el.querySelector('dialog .ps-cite')!;
     expect(squash(chip.textContent)).toContain('Open registry page');
     expect(squash(chip.textContent)).not.toContain('Open PDF');
+    // The page text is cut into pages by length, so a page number would point at nothing.
+    expect(squash(chip.textContent)).toContain('IAAC registry');
+    expect(squash(chip.textContent)).not.toContain('p.');
 
     // A modal left open sits in the top layer and takes the focus every later spec asserts on.
     el.querySelector('dialog')!.close();

@@ -311,6 +311,11 @@ export class ProjectSummaryComponent implements OnInit {
     return (numbers || []).map(n => lookup.get(n)).filter((c): c is ProjectSummaryCitation => !!c);
   }
 
+  /** The chip's source label. A registry page is cut into pages by length, so its numbers mean nothing. */
+  citeDoc(citation: ProjectSummaryCitation): string {
+    return citation.format === 'html' ? 'IAAC registry' : `IAAC registry, p.\u00a0${citation.pageNumber}`;
+  }
+
   /** What a citation chip offers. A registry page is not a file, so it must not say PDF. */
   citeAction(citation: ProjectSummaryCitation): string {
     return citation.format === 'html' ? 'Open registry page' : 'Open PDF';
