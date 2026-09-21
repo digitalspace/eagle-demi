@@ -15,9 +15,9 @@ body from the deployed tag's `azure/search/indexes/*.json` and POSTs it to the A
 currently serving production (`scripts/search-schema-probe.sh`). The endpoint
 `/health/search-schema` — it arrives with PR #349 — runs the select against the live index with
 `top: 0`, together with the orders it derives from the app's own query builder, and answers 503
-naming the missing fields. A 503 stops the release before `deploy-api` runs. The probe sends no
-`orderby` of its own: an index's `sortable` flags are not the set the app can order by, and a list
-built from them would block a release over fields no query sorts on.
+naming the missing fields. A 503 stops the release before `deploy-extractor` or `deploy-api`
+runs. The probe sends no `orderby` of its own: an index's `sortable` flags are not the set the app
+can order by, and a list built from them would block a release over fields no query sorts on.
 
 Before it posts, the probe GETs `/health/search-schema` on the target app and keeps only the
 indexes the app reports back. Index definitions in the directory that the deployed app does not

@@ -476,6 +476,13 @@ paths:
       responses:
         '200':
           description: The public site's configuration — the allowlisted keys the document carries.
+          headers:
+            Cache-Control:
+              description: >-
+                `public, max-age=60`. Without a directive Front Door would hold the answer for days
+                after a config push.
+              schema:
+                type: string
           content:
             application/json:
               schema:

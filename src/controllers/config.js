@@ -193,7 +193,9 @@ exports.getPublicConfig = async (req, res) => {
       .json({ error: 'Public configuration is unavailable.' });
   }
 
-  res.json(pickPublicKeys(stored));
+  // Front Door holds a response with no directive for 1 to 3 days; a minute bounds how long a
+  // pushed change waits to reach the public site.
+  res.set('Cache-Control', 'public, max-age=60').json(pickPublicKeys(stored));
 };
 
 /**
