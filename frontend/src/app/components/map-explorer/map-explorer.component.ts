@@ -120,6 +120,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   invasivesSpeciesList = signal<string[]>([]);
   private speciesListRequested = false;
   private invasivesFilterTimer: any = null;
+  // Leaflet finds the container by id, so a late init from a torn-down instance claims the next one's.
+  private initMapTimer: any = null;
   /** The filter the newest count request was made for, so a slow earlier answer is dropped. */
   private invasivesCountCql = '';
 
@@ -508,7 +510,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngAfterViewInit() {
-    setTimeout(() => {
+    this.initMapTimer = setTimeout(() => {
+      this.initMapTimer = null;
       this.initMap();
     }, 50);
   }
@@ -601,6 +604,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   ngOnDestroy() {
     this.sizeObserver?.disconnect();
     if (this.invasivesFilterTimer) clearTimeout(this.invasivesFilterTimer);
+    if (this.initMapTimer) clearTimeout(this.initMapTimer);
     this.destroyMap();
   }
 
