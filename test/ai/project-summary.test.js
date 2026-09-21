@@ -1971,6 +1971,36 @@ test('generateProjectSummary', async (t) => {
     ], 'newest first, and the event both batches reported only once');
   });
 
+  await t.test('stores a one-batch timeline as the reply gave it', async () => {
+    // The merge exists to join batches. One batch has nothing to join, and the page sorts the
+    // timeline against the fact rows anyway, so the reply's own order reaches the record.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      events: [
+        { date: '2014-10-14', label: 'Certificate issued', citations: [1] },
+        { date: '2016-08-09', label: 'Certificate amended', citations: [2] }
+      ]
+    }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(2, 'The certificate was amended on August 9, 2016.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 1, 'both pages fit one batch');
+    assert.deepStrictEqual(record.sections.timelineEvents, [
+      { date: '2014-10-14', label: 'Certificate issued', citations: [1] },
+      { date: '2016-08-09', label: 'Certificate amended', citations: [2] }
+    ], 'oldest first, as the reply listed them');
+  });
+
   await t.test('reads only the pages that carry a full date for the timeline', async () => {
     // Project 302's English assessment report is 680k tokens over 12 window-sized batches, at about
     // twelve minutes a batch on a host that evaluates the prompt on CPU. Most of those pages carry
