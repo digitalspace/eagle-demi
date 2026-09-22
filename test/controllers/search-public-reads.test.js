@@ -188,14 +188,14 @@ test('GET /search?dataset=CommentPeriod', async (t) => {
     assert.ok(!bound.includes('353'), 'and never becomes the shadowing project id');
   });
 
-  await t.test('a period under a notification this caller cannot see carries no parent', async () => {
+  await t.test('a period under a notification this caller cannot see is withheld', async () => {
     // The lookup is ACL-enforcing on the notification too, and a period row that survived the
-    // period ACL must not be labelled with a parent the caller may not read.
+    // period ACL must not reach a caller who may not read its parent.
     stubCosmos(t, { notifications: [], commentPeriods: [periodRow({ projectId: 'PN1' })] });
 
     const { body } = await get('/api/search?dataset=CommentPeriod&and%5Bproject%5D=PN1');
 
-    assert.strictEqual(body[0].searchResults[0].project, null);
+    assert.deepStrictEqual(body[0].searchResults, []);
   });
 
   await t.test('and[_id] fetches one period', async () => {

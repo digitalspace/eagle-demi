@@ -14,12 +14,10 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { catalogFor } = require('../vis/catalog');
-const { visible } = require('../vis/redact');
-const { levelOf } = require('../vis/level');
+const { logger } = require('../utils/logger');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem
+  upsertWithEtag, createItem, assertFilterable
 } = require('./_sql');
 
 const CONTAINER = 'projects';
@@ -40,16 +38,10 @@ const CRITERIA_FIELDS = {
  * hidden value is. All three are `defaultVis: 4` today, so nothing reaches the throw.
  */
 function buildCriteria(opts, access) {
-  const catalog = catalogFor('projects');
-  const level = levelOf(access);
-
   return Object.entries(CRITERIA_FIELDS)
     .filter(([field]) => opts[field])
     .map(([field, param]) => {
-      const entry = catalog[field];
-      if (!entry || !visible(level, entry.defaultVis)) {
-        throw new Error(`[projects] cannot filter on a field this caller cannot see: ${field}`);
-      }
+      assertFilterable(CONTAINER, field, access);
       return eq(field, opts[field], param);
     });
 }
@@ -145,6 +137,29 @@ async function listByIds(access, ids) {
 
   const { items } = await cosmos.query(CONTAINER, spec, {});
   return items;
+}
+
+/** The most ids `listIdsByName` answers; a wider match is cut here and logged. */
+const NAME_MATCH_MAX_IDS = 500;
+
+/**
+ * Ids of the projects this caller may see whose name contains `text`, case-insensitive — eagle-api's
+ * CommentPeriod keyword search matched `project.name` the same way.
+ */
+async function listIdsByName(access, text) {
+  assertFilterable(CONTAINER, 'name', access);
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [{ clause: 'CONTAINS(c.name, @name, true)', params: [{ name: '@name', value: String(text) }] }],
+    select: 'VALUE c.id'
+  });
+  // One past the cap, so "cut" is measured rather than guessed from a full page.
+  const ids = await cosmos.queryPage(CONTAINER, spec, { size: NAME_MATCH_MAX_IDS + 1 });
+  if (ids.length > NAME_MATCH_MAX_IDS) {
+    logger.warn('[projects] name match cut at its id cap', { text: String(text), cap: NAME_MATCH_MAX_IDS });
+  }
+  return ids.slice(0, NAME_MATCH_MAX_IDS).map(String);
 }
 
 /**
@@ -352,6 +367,8 @@ module.exports = {
   EAGLE_OBJECT_ID,
   getByEagleId,
   listByIds,
+  listIdsByName,
+  NAME_MATCH_MAX_IDS,
   listByEagleIds,
   listWithCentroid,
   countWithCentroid,

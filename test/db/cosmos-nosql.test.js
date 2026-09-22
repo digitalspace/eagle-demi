@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
+const { logger } = require('../../src/utils/logger');
 
 // The previous data layer accepted a Cosmos-SQL-shaped string and "translated" it by
 // substring matching, silently discarding any predicate it did not recognise — so
@@ -291,6 +292,77 @@ test('queryFirst drains pages instead of trusting the first one', async (t) => {
   await t.test('a spec that is not parameterised is refused before any page is read', async () => {
     await assert.rejects(() => db.queryFirst('documents', 'c.isPublished = true'),
       /Refusing to query/);
+  });
+});
+
+// A cross-partition fetchNext can answer short while rows remain; one page is not a full page.
+test('queryPage drains one iterator until the page is full', async (t) => {
+  const { module: db, pages, queries } = loadWithSdkStub(t);
+  const spec = {
+    query: 'SELECT * FROM c WHERE c.projectId = @p OFFSET @skip LIMIT @size',
+    parameters: [{ name: '@p', value: '207' }, { name: '@skip', value: 0 }, { name: '@size', value: 3 }]
+  };
+
+  await t.test('short and empty pages are drained into one full page', async () => {
+    const before = queries.length;
+    pages.push({ resources: [{ id: 'a' }] }, { resources: [] }, { resources: [{ id: 'b' }, { id: 'c' }, { id: 'd' }] });
+
+    const rows = await db.queryPage('commentPeriods', spec, { size: 3 });
+
+    assert.deepStrictEqual(rows.map(r => r.id), ['a', 'b', 'c']);
+    assert.strictEqual(queries.length - before, 1, 'one iterator');
+    assert.strictEqual(queries.at(-1).feedOptions.maxItemCount, 3);
+    pages.length = 0;
+  });
+
+  await t.test('an exhausted iterator answers what it held', async () => {
+    pages.push({ resources: [{ id: 'a' }] });
+
+    assert.deepStrictEqual((await db.queryPage('commentPeriods', spec, { size: 3 })).map(r => r.id), ['a']);
+  });
+
+  await t.test('the drain is bounded and logs when it is cut', async () => {
+    const warn = t.mock.method(logger, 'warn', () => {});
+    for (let i = 0; i < db.LOOKUP_MAX_PAGES + 5; i++) pages.push({ resources: [] });
+
+    const rows = await db.queryPage('commentPeriods', spec, { size: 3 });
+
+    assert.deepStrictEqual(rows, []);
+    assert.strictEqual(pages.length, 5, `stopped after ${db.LOOKUP_MAX_PAGES} fetches`);
+    assert.match(warn.mock.calls.at(-1).arguments[0], /page drain hit its fetch bound/);
+    pages.length = 0;
+    warn.mock.restore();
+  });
+
+  // The SDK's OFFSET stage empties every inner fetch it skips, with hasMoreResults() still true.
+  await t.test('a deep page drains past LOOKUP_MAX_PAGES empty fetches of skipped rows', async () => {
+    const empties = db.LOOKUP_MAX_PAGES + 5;
+    for (let i = 0; i < empties; i++) pages.push({ resources: [] });
+    pages.push({ resources: [{ id: 'x' }, { id: 'y' }, { id: 'z' }] });
+
+    const rows = await db.queryPage('commentPeriods', spec, { size: 3, skip: 3 * empties });
+
+    assert.deepStrictEqual(rows.map(r => r.id), ['x', 'y', 'z']);
+    pages.length = 0;
+  });
+
+  await t.test('the skip-scaled bound still stops a runaway iterator', async () => {
+    const warn = t.mock.method(logger, 'warn', () => {});
+    const bound = db.LOOKUP_MAX_PAGES + 10;
+    for (let i = 0; i < bound + 10; i++) pages.push({ resources: [] });
+
+    const rows = await db.queryPage('commentPeriods', spec, { size: 3, skip: 30 });
+
+    assert.deepStrictEqual(rows, []);
+    assert.strictEqual(pages.length, 10, `stopped after ${bound} fetches`);
+    assert.match(warn.mock.calls.at(-1).arguments[0], /page drain hit its fetch bound/);
+    pages.length = 0;
+    warn.mock.restore();
+  });
+
+  await t.test('a missing or non-positive size is refused', async () => {
+    await assert.rejects(() => db.queryPage('commentPeriods', spec, {}), /positive size/);
+    await assert.rejects(() => db.queryPage('commentPeriods', spec, { size: 0 }), /positive size/);
   });
 });
 

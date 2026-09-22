@@ -12,6 +12,8 @@ const searchController = require('../../src/controllers/search');
 const aiSearch = require('../../src/search/ai-search');
 const updatesRepo = require('../../src/repositories/updates');
 const notificationsRepo = require('../../src/repositories/notifications');
+const commentPeriodsRepo = require('../../src/repositories/comment-periods');
+const projectsRepo = require('../../src/repositories/projects');
 
 // Same fake response as the other search controller tests — `res.json` is replaced by the search
 // handler, so it has to be a writable property.
@@ -65,6 +67,11 @@ function stubAllLegs(t, overrides = {}) {
     seen.notificationsCount = filters;
     return 88;
   });
+  t.mock.method(projectsRepo, 'listIdsByName', async () => ['207']);
+  t.mock.method(commentPeriodsRepo, 'countAll', async (access, filters) => {
+    seen.CommentPeriod = filters;
+    return 5;
+  });
   for (const [name, fn] of Object.entries(overrides)) t.mock.method(aiSearch, name, fn);
   return seen;
 }
@@ -82,13 +89,13 @@ test('GET /search/counts answers one badge per record type', async (t) => {
 
     assert.strictEqual(out.status, undefined, '200');
     assert.deepStrictEqual(out.body[0].counts, {
-      Project: 12, Document: 340, RecentActivity: 3, ProjectNotification: 9
+      Project: 12, Document: 340, RecentActivity: 3, ProjectNotification: 9, CommentPeriod: 5
     });
     assert.deepStrictEqual(out.body[0].meta[0],
       { unavailable: [], degraded: [], cached: false });
 
     // The keyword reaches every leg. A badge counted without it is the corpus total.
-    for (const name of ['Project', 'Document', 'RecentActivity', 'ProjectNotification']) {
+    for (const name of ['Project', 'Document', 'RecentActivity', 'ProjectNotification', 'CommentPeriod']) {
       assert.strictEqual(seen[name].keywords, 'caribou', `${name} was counted on the keyword`);
     }
     assert.strictEqual(seen.Document.countOnly, true,
@@ -152,7 +159,7 @@ test('GET /search/counts answers one badge per record type', async (t) => {
   });
 });
 
-// This endpoint counts all four record types at once and filters belong to one type, so there is
+// This endpoint counts every record type at once and filters belong to one type, so there is
 // no filter it could honour. Accepting one and answering the unfiltered total is the failure these
 // cover: the caller would read the number as filtered and nothing in the body says otherwise.
 test('a filter /search accepts is refused here, not counted without', async (t) => {
@@ -285,6 +292,20 @@ test('a badge that cannot be measured is unknown, never zero', async (t) => {
     assert.strictEqual(out.body[0].counts.Project, null);
     assert.deepStrictEqual(out.body[0].meta[0].unavailable, ['Project']);
     assert.strictEqual(out.body[0].counts.Document, 340, 'the other three still answer');
+  });
+
+  await t.test('a failed CommentPeriod count answers null and names itself', async (tt) => {
+    withIndexes(tt, {});
+    stubAllLegs(tt);
+    tt.mock.method(commentPeriodsRepo, 'countAll', async () => { throw new Error('cosmos unavailable'); });
+
+    const { out, res } = capture();
+    await searchController.counts(anonymous({ keywords: 'caribou' }), res);
+
+    assert.strictEqual(out.status, undefined);
+    assert.strictEqual(out.body[0].counts.CommentPeriod, null);
+    assert.deepStrictEqual(out.body[0].meta[0].unavailable, ['CommentPeriod']);
+    assert.strictEqual(out.body[0].counts.Project, 12);
   });
 
   // `notificationsRepo.count` takes no keywords, so there is no Cosmos number to fall back to: the

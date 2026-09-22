@@ -14,7 +14,7 @@ const { sortEntries } = require('../search/eagle-query');
 const { visibilityFor, andClauses, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
-const { ANONYMOUS_LEVEL, LEVELS } = require('../vis/level');
+const { ANONYMOUS_LEVEL, LEVELS, levelOf } = require('../vis/level');
 
 /**
  * A criterion is a SQL fragment plus its parameters — the same shape as readClause/scopeClause,
@@ -84,6 +84,17 @@ function selectWhere({ access, partitionField, criteria = [], select = '*', orde
   if (orderBy) query += ` ORDER BY ${orderBy}`;
 
   return { query, parameters: predicate.params };
+}
+
+/**
+ * Throws unless this caller may see `field` of `entity`: a filter on a hidden field answers, through
+ * which rows match, what the hidden value is. Refused, not dropped, so the caller is not misled.
+ */
+function assertFilterable(entity, field, access) {
+  const entry = catalogFor(entity)[field];
+  if (!entry || !visible(levelOf(access), entry.defaultVis)) {
+    throw new Error(`[${entity}] cannot filter on a field this caller cannot see: ${field}`);
+  }
 }
 
 /**
@@ -266,6 +277,7 @@ function pageSlice({ pageNum, pageSize } = {}) {
 module.exports = {
   eq,
   inList,
+  assertFilterable,
   orderByFrom,
   pageSlice,
   upsertItem,
