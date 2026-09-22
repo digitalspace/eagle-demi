@@ -662,6 +662,56 @@ describe('MapExplorer selected card', () => {
     );
   });
 
+  it('points the field list chevron up while shut and down once open, the way the card grows', async () => {
+    const user = await open(/Copper Ridge/);
+    const panel = card('Copper Ridge');
+    // The drawn chevron points down; a half turn points it up.
+    const chevron = () => within(panel).getByTestId('card-fields-chevron');
+    expect(chevron().style.transform).toBe('rotate(180deg)');
+
+    await user.click(within(panel).getByRole('button', { name: /All fields/ }));
+
+    expect(chevron().style.transform).toBe('none');
+  });
+
+  it('keeps the fields on screen, out of reach, while the card shrinks after "Less"', async () => {
+    const user = await open(/Copper Ridge/);
+    const panel = card('Copper Ridge');
+    await user.click(within(panel).getByRole('button', { name: /All fields/ }));
+
+    await user.click(within(panel).getByRole('button', { name: /Less/ }));
+
+    expect(panel).toHaveAttribute('data-expanded', 'closing');
+    expect(within(panel).getByText(/Track is the master registry/).closest('[inert]')).not.toBeNull();
+    expect(within(panel).getByRole('button', { name: /All fields/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+
+    fireEvent.transitionEnd(panel, { propertyName: 'max-height' });
+
+    expect(panel).toHaveAttribute('data-expanded', 'false');
+    expect(within(panel).queryByText(/Track is the master registry/)).toBeNull();
+    expect(within(panel).getByText('Sector')).toBeInTheDocument();
+  });
+
+  it('stays open when "All fields" is pressed again before the close has run', async () => {
+    const user = await open(/Copper Ridge/);
+    const panel = card('Copper Ridge');
+    await user.click(within(panel).getByRole('button', { name: /All fields/ }));
+    await user.click(within(panel).getByRole('button', { name: /Less/ }));
+
+    await user.click(within(panel).getByRole('button', { name: /All fields/ }));
+    const fields = () => within(panel).getByText(/Track is the master registry/);
+    expect(fields().closest('[inert]')).toBeNull();
+
+    // The end of the grow the reopen started.
+    fireEvent.transitionEnd(panel, { propertyName: 'max-height' });
+
+    expect(panel).toHaveAttribute('data-expanded', 'true');
+    expect(fields().closest('[inert]')).toBeNull();
+  });
+
   it('lists the field rows tagged with their source, and narrows to one source on a tab', async () => {
     answer([
       project({
@@ -909,6 +959,26 @@ describe('MapExplorer copy id', () => {
     await act(async () => copy.resolve());
 
     expect(timers).not.toHaveBeenCalledWith(expect.any(Function), 2000);
+  });
+});
+
+describe('MapExplorer card field close backstop', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('swaps the fields back for the facts even when no transition end arrives', async () => {
+    renderScreen(<MapExplorer />);
+    await tick(0);
+    fireEvent.click(railRow(/Copper Ridge/));
+    const panel = card('Copper Ridge');
+    fireEvent.click(within(panel).getByRole('button', { name: /All fields/ }));
+    fireEvent.click(within(panel).getByRole('button', { name: /Less/ }));
+    expect(panel).toHaveAttribute('data-expanded', 'closing');
+
+    await tick(220);
+
+    expect(panel).toHaveAttribute('data-expanded', 'false');
+    expect(within(panel).getByText('Sector')).toBeInTheDocument();
   });
 });
 

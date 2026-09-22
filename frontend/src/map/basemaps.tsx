@@ -2,11 +2,12 @@
    constants they share (style, bounds, basemap list) are the same unit of change. */
 import { useCallback, useId, useRef, useState, type ReactNode } from 'react';
 import {
-  AttributionControl,
   Layer,
   NavigationControl,
   ScaleControl,
   Source,
+  useControl,
+  type MapLib,
 } from '@vis.gl/react-maplibre';
 import type { StyleSpecification } from 'maplibre-gl';
 import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
@@ -112,6 +113,26 @@ export function Basemaps({ basemap }: { basemap: string }) {
   );
 }
 
+/**
+ * The base map credit as a compact "i" at every width. MapLibre opens a compact credit the first
+ * time it has text, and shuts it only on a drag; this starts it shut, so it opens on a click alone.
+ */
+export function createCredit({ mapLib }: { mapLib: Pick<MapLib, 'AttributionControl'> }) {
+  const control = new mapLib.AttributionControl({ compact: true });
+  const updateCompact = control._updateCompact;
+  control._updateCompact = () => {
+    const wasCompact = control._container.classList.contains('maplibregl-compact');
+    updateCompact();
+    if (!wasCompact) control._updateCompactMinimize();
+  };
+  return control;
+}
+
+export function CreditControl() {
+  useControl(createCredit, { position: 'bottom-right' });
+  return null;
+}
+
 interface MapControlsProps {
   basemap: string;
   onBasemapChange: (name: string) => void;
@@ -136,9 +157,10 @@ export function MapControls({ basemap, onBasemapChange, children }: MapControlsP
 
   return (
     <>
+      {/* First: MapLibre stacks each later bottom control above the last, so the credit stays lowest. */}
+      <CreditControl />
       <NavigationControl position="bottom-right" showCompass={false} />
       <ScaleControl position="bottom-right" />
-      <AttributionControl position="bottom-right" />
 
       <div className="map-controls">
         {children}

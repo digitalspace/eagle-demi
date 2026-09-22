@@ -97,6 +97,8 @@ const COPIED_RESET_MS = 2000;
 const MARKER_PULSE_MS = 700;
 /** How long the card's exit takes; matches `demi-card-out` in map-explorer.css. */
 const CARD_EXIT_MS = 140;
+/** How long the card takes to grow or shrink; matches its `max-height` transition in map-explorer.css. */
+const CARD_RESIZE_MS = 220;
 /** Room left around a cluster's projects when the camera fits them, in pixels. */
 const CLUSTER_FIT_PADDING = 80;
 /** Six placeholder rows, sized like the real one, so the list does not resize when it lands. */
@@ -138,6 +140,9 @@ export function MapExplorer() {
   const [openSections, setOpenSections] = useState<string[]>(['sector']);
   const [basemap, setBasemap] = useState(DEFAULT_BASEMAP);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
+  /** After "Less", the fields stay while the card shrinks, so the close runs like the open. */
+  const [fieldsClosing, setFieldsClosing] = useState(false);
+  const fieldsShown = detailsExpanded || fieldsClosing;
   const [sourceTab, setSourceTab] = useState<SourceTab>('all');
   /** Bumped on every copy, so a second copy restarts the "Copied" timer; 0 shows "Copy id". */
   const [copies, setCopies] = useState(0);
@@ -364,6 +369,7 @@ export function MapExplorer() {
         return null;
       });
       setDetailsExpanded(false);
+      setFieldsClosing(false);
     },
     [setSelectedId, narrow, view],
   );
@@ -705,6 +711,13 @@ export function MapExplorer() {
     }
     rowElement(selected.id)?.scrollIntoView({ block: 'nearest' });
   }, [selected, loaded]);
+
+  /** Backstop for the fields' close: `transitionend` never arrives when the max height does not change. */
+  useEffect(() => {
+    if (!fieldsClosing) return;
+    const timer = window.setTimeout(() => setFieldsClosing(false), CARD_RESIZE_MS);
+    return () => window.clearTimeout(timer);
+  }, [fieldsClosing]);
 
   /** Backstop for the card's exit: `animationend` never arrives where the animation never runs. */
   useEffect(() => {
@@ -1355,9 +1368,14 @@ export function MapExplorer() {
             className={`demi-map-card${selected ? '' : ' demi-map-card--closing'}`}
             role="region"
             aria-labelledby="demi-selected-title"
-            data-expanded={detailsExpanded ? 'true' : 'false'}
+            data-expanded={detailsExpanded ? 'true' : fieldsClosing ? 'closing' : 'false'}
             onAnimationEnd={(event) => {
               if (event.target === event.currentTarget) setClosing(null);
+            }}
+            onTransitionEnd={(event) => {
+              if (event.target === event.currentTarget && event.propertyName === 'max-height') {
+                setFieldsClosing(false);
+              }
             }}
           >
             <div className="demi-map-card__head">
@@ -1381,7 +1399,7 @@ export function MapExplorer() {
             <div className="demi-map-card__body">
               <div className="cell__sub">{shown.description}</div>
 
-              {!detailsExpanded ? (
+              {!fieldsShown ? (
                 <div className="demi-map-card__facts">
                   <div>
                     <div className="micro-label">Sector</div>
@@ -1407,7 +1425,8 @@ export function MapExplorer() {
                   )}
                 </div>
               ) : (
-                <>
+                // Inert while it closes: on screen for the shrink, out of reach already.
+                <div inert={fieldsClosing}>
                   <div className="demi-map-card__tabs" role="group" aria-label="Field source">
                     {SOURCE_TABS.map((tab) => (
                       <button
@@ -1440,7 +1459,7 @@ export function MapExplorer() {
                     Track is the master registry. EPIC rows are the legacy Eagle values DEMI keeps
                     so old links resolve; DEMI rows are derived here.
                   </p>
-                </>
+                </div>
               )}
 
               {/* MapLibre clustering has no spiderfy, so a shared centroid is unpickable on the
@@ -1476,10 +1495,17 @@ export function MapExplorer() {
                 type="button"
                 className="demi-map-card__toggle"
                 aria-expanded={detailsExpanded}
-                onClick={() => setDetailsExpanded((open) => !open)}
+                onClick={() => {
+                  setFieldsClosing(detailsExpanded);
+                  setDetailsExpanded(!detailsExpanded);
+                }}
               >
                 {detailsExpanded ? 'Less' : 'All fields'}
-                <span style={{ display: 'inline-flex', transform: detailsExpanded ? 'rotate(180deg)' : 'none' }}>
+                {/* The fields open upward, as the card grows up from the map's foot: up to open, down to shut. */}
+                <span
+                  data-testid="card-fields-chevron"
+                  style={{ display: 'inline-flex', transform: detailsExpanded ? 'none' : 'rotate(180deg)' }}
+                >
                   <svg
                     width="12"
                     height="12"

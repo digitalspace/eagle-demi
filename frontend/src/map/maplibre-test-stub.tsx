@@ -6,6 +6,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
   type ReactNode,
   type Ref,
 } from 'react';
@@ -358,13 +359,54 @@ function Popup({ children, longitude, latitude, onClose }: PopupProps) {
   );
 }
 
-function Nothing() {
+type ControlPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+/** Each corner's controls, top to bottom, as MapLibre stacks them in the DOM. */
+const corners: Record<string, string[]> = {};
+
+export function cornerControls(position: ControlPosition): string[] {
+  return [...(corners[position] ?? [])];
+}
+
+/** Mounted in effect order, like the real `useControl`; MapLibre puts each new bottom control on top. */
+function useCornerControl(name: string, position: ControlPosition = 'top-right') {
+  useEffect(() => {
+    const stack = (corners[position] ??= []);
+    if (position.startsWith('bottom')) stack.unshift(name);
+    else stack.push(name);
+    return () => {
+      stack.splice(stack.indexOf(name), 1);
+    };
+  }, [name, position]);
+}
+
+function NavigationControl({ position }: { position?: ControlPosition }) {
+  useCornerControl('navigation', position);
   return null;
 }
 
-/** Rendered, unlike the other controls: whether the tiles are credited is worth asserting. */
-function AttributionControl({ compact }: { compact?: boolean }) {
-  return <div data-testid="attribution" data-compact={String(Boolean(compact))} />;
+function ScaleControl({ position }: { position?: ControlPosition }) {
+  useCornerControl('scale', position);
+  return null;
+}
+
+/** Stands in for `mapLib` in `useControl` factories; only the controls the app builds itself. */
+const fakeMapLib = {
+  AttributionControl: class {
+    readonly corner = 'attribution';
+    _container = document.createElement('details');
+    _updateCompact = vi.fn();
+    _updateCompactMinimize = vi.fn();
+  },
+};
+
+function useControl(
+  onCreate: (context: { map: typeof fakeMap; mapLib: typeof fakeMapLib }) => { corner?: string },
+  opts?: { position?: ControlPosition },
+) {
+  const [control] = useState(() => onCreate({ map: fakeMap, mapLib: fakeMapLib }));
+  useCornerControl(control.corner ?? 'control', opts?.position);
+  return control;
 }
 
 export function mapLibreStub() {
@@ -374,9 +416,9 @@ export function mapLibreStub() {
     Layer,
     Marker,
     Popup,
-    NavigationControl: Nothing,
-    ScaleControl: Nothing,
-    AttributionControl,
+    NavigationControl,
+    ScaleControl,
     useMap: () => ({ current: fakeMap }),
+    useControl,
   };
 }

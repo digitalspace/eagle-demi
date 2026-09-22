@@ -778,8 +778,8 @@
 }
 
 /* Stacking inside the map screen: pins and clusters 600, wildfire pills 640, the selected pin 650,
-   a hovered pin 660, popups 680, MapLibre's control corners 690, this card 700, the control menus
-   and the filters drawer 800. Dialogs sit above all of it. */
+   a hovered pin 660, popups 680, MapLibre's control corners 690, this card 700, the control menus,
+   the opened map credit and the filters drawer 800. Dialogs sit above all of it. */
 .demi-map .maplibregl-popup {
   z-index: 680;
 }
@@ -789,6 +789,16 @@
 .demi-map .maplibregl-ctrl-bottom-left,
 .demi-map .maplibregl-ctrl-bottom-right {
   z-index: 690;
+}
+
+/* Opened from its "i", the credit is read like a control menu, so it rises over the card too. */
+.demi-map .maplibregl-ctrl-bottom-right:has(> .maplibregl-compact-show) {
+  z-index: 800;
+}
+
+/* Solid there, so the card's text never shows through it. */
+.demi-map .maplibregl-ctrl.maplibregl-ctrl-attrib.maplibregl-compact-show {
+  background: var(--surface-color-background-white);
 }
 
 .demi-map-card {

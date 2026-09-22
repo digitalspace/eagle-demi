@@ -1,12 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import * as maplibre from 'maplibre-gl';
 
 vi.mock('@vis.gl/react-maplibre', async () =>
   (await import('./maplibre-test-stub')).mapLibreStub(),
 );
 
-const { MapControls, DEFAULT_BASEMAP, basemapSource } = await import('./basemaps');
+const { MapControls, DEFAULT_BASEMAP, basemapSource, createCredit } = await import('./basemaps');
+const { cornerControls } = await import('./maplibre-test-stub');
 
 const picker = () => screen.getByRole('button', { name: 'Base map' });
 
@@ -72,6 +74,55 @@ describe('MapControls base map picker', () => {
     await userEvent.click(document.body);
 
     expect(screen.queryByRole('radio', { name: 'World Imagery' })).toBeNull();
+  });
+});
+
+describe('MapControls attribution', () => {
+  it('puts the base map credit lowest in the corner, under the zoom and scale', () => {
+    renderControls();
+
+    expect(cornerControls('bottom-right').at(-1)).toBe('attribution');
+  });
+});
+
+/** Just enough map for MapLibre's own AttributionControl: a desktop-wide canvas and one base map. */
+function creditOnDesktopMap() {
+  const handlers: Record<string, ((event: object) => void)[]> = {};
+  const tileManagers: Record<string, object> = {};
+  const map = {
+    style: { tileManagers },
+    _getUIString: () => 'Toggle attribution',
+    getCanvasContainer: () => ({ offsetWidth: 1440 }),
+    on: (type: string, handler: (event: object) => void) => {
+      (handlers[type] ??= []).push(handler);
+    },
+    off: vi.fn(),
+  };
+  const credit = createCredit({ mapLib: maplibre }).onAdd(map as never);
+  document.body.append(credit);
+  onTestFinished(() => credit.remove());
+
+  // As the real map does: the base map's tiles, and so its credit, arrive after the control.
+  tileManagers['basemap'] = { used: true, getSource: () => ({ attribution: 'Sources: Esri' }) };
+  handlers['sourcedata']?.forEach((handler) => handler({ dataType: 'source', sourceDataType: 'metadata' }));
+  return credit;
+}
+
+describe('createCredit', () => {
+  it('shows only the "i" once the credit arrives, even on a wide map', () => {
+    const credit = creditOnDesktopMap();
+
+    expect(credit).toHaveClass('maplibregl-compact');
+    expect(credit).not.toHaveClass('maplibregl-compact-show');
+    expect(credit).toHaveTextContent('Sources: Esri');
+  });
+
+  it('opens the credit on a press of the "i"', async () => {
+    const credit = creditOnDesktopMap();
+
+    await userEvent.click(within(credit).getByLabelText('Toggle attribution'));
+
+    expect(credit).toHaveClass('maplibregl-compact-show');
   });
 });
 
