@@ -21,16 +21,19 @@ const path = require('node:path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
+// Kept until the suite ends: the load test below unpacks the same zip the name checks read.
+const PKG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-'));
+const PKG_ZIP = path.join(PKG_DIR, 'api.zip');
+test.after(() => fs.rmSync(PKG_DIR, { recursive: true, force: true }));
+
 /** Build the package once and return its entry list. */
 function packagedEntries() {
-  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-')), 'api.zip');
-  execFileSync('python3', [path.join(REPO_ROOT, 'scripts', 'package-api.py'), REPO_ROOT, out], {
+  execFileSync('python3', [path.join(REPO_ROOT, 'scripts', 'package-api.py'), REPO_ROOT, PKG_ZIP], {
     stdio: 'pipe'
   });
   // `unzip -Z1` lists entry names without extracting — the package is ~26 MB and extracting it
   // for a name check would dominate the suite's runtime.
-  const listing = execFileSync('unzip', ['-Z1', out], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  fs.rmSync(path.dirname(out), { recursive: true, force: true });
+  const listing = execFileSync('unzip', ['-Z1', PKG_ZIP], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   return new Set(listing.split('\n').filter(Boolean));
 }
 
@@ -47,6 +50,7 @@ function scaffold(repo) {
   fs.writeFileSync(path.join(repo, 'azure/search/indexes', 'projects.json'), '{}');
   fs.writeFileSync(path.join(repo, 'azure/search/indexers', 'projects-indexer.json'), '{}');
   fs.writeFileSync(path.join(repo, 'azure/search/datasources', 'demi-projects-ds.json'), '{}');
+  fs.writeFileSync(path.join(repo, 'azure/search', 'data-checks.json'), '{}');
   fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson', 'a.json'), '{}');
   // A NESTED directory, because a re-included path lives under an excluded one — geojson is
   // inside `frontend`. Blocking the excluded realpaths wholesale in the re-include walk would
@@ -409,9 +413,45 @@ test('API deploy package', async (t) => {
       .filter(e => e.startsWith('azure/')
         && !e.startsWith('azure/search/indexes/')
         && !e.startsWith('azure/search/indexers/')
-        && !e.startsWith('azure/search/datasources/'));
+        && !e.startsWith('azure/search/datasources/')
+        && e !== 'azure/search/data-checks.json');
     assert.deepStrictEqual(azureExtras, [],
-      `only azure/search/{indexes,indexers,datasources} may be packaged, found: ${azureExtras.join(', ')}`);
+      `only azure/search/{indexes,indexers,datasources,data-checks.json} may be packaged, found: ${azureExtras.join(', ')}`);
+  });
+
+  await t.test('every controller loads from the unpacked package', () => {
+    // src/http/routes.js requires controllers lazily, so booting the app never touches them. A file
+    // a controller requires at load and the packager dropped 500s only its route, only in Azure:
+    // azure/search/data-checks.json did, on GET /health/search-data. The name checks above list
+    // known paths; this finds the next one nobody listed.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-unpacked-'));
+    try {
+      // node_modules is most of the zip and not what is under test; the repo's copy stands in.
+      execFileSync('unzip', ['-q', PKG_ZIP, '-x', 'node_modules/*', '-d', dir]);
+      fs.symlinkSync(path.join(REPO_ROOT, 'node_modules'), path.join(dir, 'node_modules'));
+      // Listed from the working tree, not the zip, so a controller the packager drops is RED too.
+      const controllers = fs.readdirSync(path.join(REPO_ROOT, 'src', 'controllers'), { recursive: true })
+        .filter(f => f.endsWith('.js'))
+        .map(f => path.join(dir, 'src', 'controllers', f));
+      assert.ok(controllers.length > 0, 'the repo must hold controllers for this test to mean anything');
+      const probe = `
+        const failed = [];
+        for (const f of ${JSON.stringify(controllers)}) {
+          try { require(f); } catch (err) { failed.push(f.slice(${JSON.stringify(dir.length + 1)}) + ': ' + err.message.split('\\n')[0]); }
+        }
+        process.stdout.write('@@' + JSON.stringify(failed));
+        process.exit(0);
+      `;
+      const out = execFileSync(process.execPath, ['-e', probe], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, NODE_ENV: 'test', APPLICATIONINSIGHTS_CONNECTION_STRING: '' }
+      });
+      const failed = JSON.parse(out.slice(out.indexOf('@@') + 2));
+      assert.deepStrictEqual(failed, [], 'every controller must load from the packaged tree');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   await t.test('never ships an operator credential file, at any depth', () => {

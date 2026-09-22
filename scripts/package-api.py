@@ -85,6 +85,8 @@ def package_api(repo_root, zip_path):
                         os.path.join("azure", "search", "indexes"),
                         os.path.join("azure", "search", "indexers"),
                         os.path.join("azure", "search", "datasources")}
+    # Loose files, same reason: search-schema.js requires data-checks.json at load.
+    include_files = {os.path.join("azure", "search", "data-checks.json")}
 
     print(f"Packaging {repo_root} -> {zip_path}...")
     count = 0
@@ -138,13 +140,21 @@ def package_api(repo_root, zip_path):
             if found == 0:
                 raise SystemExit(f"ERROR: required data directory is empty: {sub}")
 
+        for rel in sorted(include_files):
+            full_path = os.path.join(repo_root, rel)
+            if not os.path.isfile(full_path):
+                raise SystemExit(f"ERROR: required data file is missing: {rel}")
+            z.write(full_path, rel)
+            count += 1
+            extra += 1
+
         # The deploy id goes IN the package: an app setting cannot do this job, because the old
         # worker serves for ~2 minutes and reports the new value. 0644 or the worker cannot read it.
         stamp = zipfile.ZipInfo("build-id.txt")
         stamp.external_attr = 0o100644 << 16  # S_IFREG | 0644
         z.writestr(stamp, os.environ.get("BUILD_ID", "unknown"))
 
-    print(f"Packaged {count} files into {zip_path} ({extra} from re-included data dirs)")
+    print(f"Packaged {count} files into {zip_path} ({extra} from re-included data paths)")
 
 if __name__ == "__main__":
     root = sys.argv[1] if len(sys.argv) > 1 else "."
