@@ -43,8 +43,8 @@ export const TECH: Record<string, Tech> = {
   },
   map: {
     title: 'Map Explorer',
-    chips: ['Leaflet + markercluster', 'OpenStreetMap tiles (keyless)', 'DataBC Wildfire WFS (live)', 'AI Search — projects (GeographyPoint)', 'Cosmos DB — boundaries'],
-    note: 'Centroids are stored and returned as [longitude, latitude] end to end; boundary geometry comes from the boundaries container as GeoJSON. Tiles stay on OSM in every environment — CARTO watermarks every tile without an API key. The fire layer polls DataBC’s WFS straight from the browser; the backend’s own wildfire sync only tags project search results.'
+    chips: ['MapLibre GL + clustered GeoJSON', 'Esri tiles (keyless)', 'DataBC Wildfire WFS (live)', 'AI Search — projects (GeographyPoint)', 'Cosmos DB — boundaries'],
+    note: 'Centroids are stored and returned as [longitude, latitude] end to end; boundary geometry comes from the boundaries container as GeoJSON. Tiles come from Esri’s keyless ArcGIS Online services in every environment, each credited with its own providers. The fire layer polls DataBC’s WFS straight from the browser; the backend’s own wildfire sync only tags project search results.'
   },
   search: {
     title: 'Search',

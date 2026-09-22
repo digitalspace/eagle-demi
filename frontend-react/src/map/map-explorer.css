@@ -714,8 +714,20 @@
   font: var(--typography-regular-small-body);
 }
 
-/* Stacking inside the map screen: pins and clusters 600, the selected pin 650, this card 700, the
-   control menus and the filters drawer 800. Dialogs sit above all of it. */
+/* Stacking inside the map screen: pins and clusters 600, the selected pin 650, a hovered pin 660,
+   popups 680, MapLibre's control corners 690, this card 700, the control menus and the filters
+   drawer 800. Dialogs sit above all of it. */
+.demi-map .maplibregl-popup {
+  z-index: 680;
+}
+
+.demi-map .maplibregl-ctrl-top-left,
+.demi-map .maplibregl-ctrl-top-right,
+.demi-map .maplibregl-ctrl-bottom-left,
+.demi-map .maplibregl-ctrl-bottom-right {
+  z-index: 690;
+}
+
 .demi-map-card {
   position: absolute;
   left: var(--layout-padding-medium);
@@ -739,14 +751,28 @@
 }
 
 /* Narrow enough that the rail leaves the map a sliver: the card floats over the screen rather than
-   over the canvas, which is too thin to hold it. */
+   over the canvas, which is too thin to hold it. It stops short of the map's icon column, so the
+   base map button, the zoom buttons and the attribution stay in reach, and short of the header, so
+   its close button is never under it on a landscape phone. The labelled control buttons are wider
+   than that column, so they drop under the card here rather than cover its close button. */
 @media (max-width: 48rem) {
+  .map-controls {
+    z-index: 690;
+  }
+
   .demi-map-card {
+    --demi-map-card-cap: calc(100dvh - var(--app-header-height) - 2 * var(--layout-padding-medium));
     position: fixed;
     left: var(--layout-padding-medium);
-    right: var(--layout-padding-medium);
+    /* The 44px control buttons, their own inset, then the gutter. */
+    right: calc(44px + 2 * var(--layout-padding-medium));
     width: auto;
     max-width: none;
+    max-height: min(28rem, 75%, var(--demi-map-card-cap));
+  }
+
+  .demi-map-card[data-expanded='true'] {
+    max-height: var(--demi-map-card-cap);
   }
 }
 

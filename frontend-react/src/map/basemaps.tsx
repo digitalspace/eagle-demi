@@ -44,24 +44,27 @@ interface Basemap {
   attribution: string;
 }
 
+// Each service's own copyrightText, from its MapServer info (`<service>/MapServer?f=json`).
 const BASEMAPS: Basemap[] = [
   {
     name: 'Light Gray',
     path: 'Canvas/World_Light_Gray_Base',
     maxzoom: 16,
-    attribution: 'Tiles &copy; Esri',
+    attribution:
+      'Esri, HERE, Garmin, (c) OpenStreetMap contributors, and the GIS user community',
   },
   {
     name: 'World Topographic',
     path: 'World_Topo_Map',
     maxzoom: 16,
-    attribution: 'Tiles &copy; Esri',
+    attribution:
+      'Sources: Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), (c) OpenStreetMap contributors, and the GIS User Community',
   },
   {
     name: 'World Imagery',
     path: 'World_Imagery',
     maxzoom: 17,
-    attribution: 'Tiles &copy; Esri',
+    attribution: 'Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
   },
 ];
 

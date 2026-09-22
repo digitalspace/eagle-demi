@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { screenKeyOf } from './screenKey';
 import { GROUPS, SCREENS, TECH } from './screens';
+import pkg from '../../package.json';
 
 describe('SCREENS', () => {
   it('gives every screen a group the sidebar renders', () => {
@@ -20,6 +21,15 @@ describe('SCREENS', () => {
     const missing = SCREENS.filter((screen) => !TECH[screen.key]);
 
     expect(missing).toEqual([]);
+  });
+
+  it('credits the map screen to the map library the app ships', () => {
+    const chips = TECH.map.chips.join(' | ');
+
+    expect(Object.keys(pkg.dependencies)).toContain('maplibre-gl');
+    expect(chips).toContain('MapLibre');
+    expect(chips).toContain('Esri tiles');
+    expect(chips).not.toMatch(/Leaflet|OpenStreetMap/);
   });
 });
 

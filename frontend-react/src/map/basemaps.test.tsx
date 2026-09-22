@@ -6,7 +6,7 @@ vi.mock('@vis.gl/react-maplibre', async () =>
   (await import('./maplibre-test-stub')).mapLibreStub(),
 );
 
-const { MapControls, DEFAULT_BASEMAP } = await import('./basemaps');
+const { MapControls, DEFAULT_BASEMAP, basemapSource } = await import('./basemaps');
 
 const picker = () => screen.getByRole('button', { name: 'Base map' });
 
@@ -54,5 +54,26 @@ describe('MapControls base map picker', () => {
     await userEvent.click(document.body);
 
     expect(screen.queryByRole('radio', { name: 'World Imagery' })).toBeNull();
+  });
+});
+
+describe('basemapSource attribution', () => {
+  // The providers each Esri service names in its own copyrightText.
+  it.each([
+    ['Light Gray', ['Esri', 'HERE', 'Garmin', 'OpenStreetMap contributors']],
+    ['World Topographic', ['Esri', 'Intermap', 'GEBCO', 'USGS', 'NRCAN', 'OpenStreetMap contributors']],
+    ['World Imagery', ['Esri', 'Vantor', 'Earthstar Geographics']],
+  ])('credits %s with its own data providers', (name, providers) => {
+    const { attribution } = basemapSource(name);
+
+    for (const provider of providers) expect(attribution).toContain(provider);
+  });
+
+  it('gives every base map a different credit', () => {
+    const credits = ['Light Gray', 'World Topographic', 'World Imagery'].map(
+      (name) => basemapSource(name).attribution,
+    );
+
+    expect(new Set(credits).size).toBe(3);
   });
 });

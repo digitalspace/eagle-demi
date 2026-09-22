@@ -62,6 +62,18 @@
   outline-offset: var(--layout-margin-hair);
 }
 
+/* The header row is as tall as its mark: the mark, padding-small above and below, and the 2px
+   rule under it (src/styles/vendor/demi-admin.css). Anything fixed to the viewport clears it with
+   --app-header-height. */
+:root {
+  --app-header-mark-height: 60px;
+  --app-header-height: calc(var(--app-header-mark-height) + 2 * var(--layout-padding-small) + 2px);
+}
+
+.app-header__mark {
+  height: var(--app-header-mark-height);
+}
+
 /* The title block is the only part of the header row allowed to shrink; the mark, the menu and the
    actions keep their size, so nothing pushes the row past the viewport and scrolls the page. */
 .app-header__mark,
@@ -97,8 +109,8 @@
     padding-inline: var(--layout-padding-small);
   }
 
-  .app-header__mark {
-    height: 44px;
+  :root {
+    --app-header-mark-height: 44px;
   }
 
   .app-header__centre {
