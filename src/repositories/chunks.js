@@ -230,18 +230,18 @@ function itemHashOf(item) {
   return crypto.createHash('sha256').update(canonical).digest('base64');
 }
 
-/** `id -> { hash, stampedAt }` for the named chunks of one document, or all of them when `ids` is
- * omitted. Single-partition, and the projection is three short strings, never `content`. */
+/** `id -> { hash, stampedAt, ts }` for the named chunks of one document, or all of them when `ids`
+ * is omitted. Single-partition, and the projection is four short fields, never `content`. */
 async function storedHashes(access, documentId, ids) {
   const criteria = [eq('documentId', String(documentId), '@documentId')];
   if (ids) criteria.push(inList('id', ids.map(String), '@id'));
   const spec = selectWhere({
     access, partitionField: SCOPE_FIELD, criteria,
-    select: `c.id, c.${HASH_FIELD}, c.${STAMPED_AT_FIELD}`
+    select: `c.id, c.${HASH_FIELD}, c.${STAMPED_AT_FIELD}, c._ts`
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(documentId) });
   return new Map(items.map(row => [
-    String(row.id), { hash: row[HASH_FIELD], stampedAt: row[STAMPED_AT_FIELD] }
+    String(row.id), { hash: row[HASH_FIELD], stampedAt: row[STAMPED_AT_FIELD], ts: row._ts }
   ]));
 }
 
@@ -256,22 +256,80 @@ function isUnchanged(row, item, hash) {
   return item[STAMPED_AT_FIELD] === undefined || typeof row.stampedAt === 'string';
 }
 
-/** Upsert operations for the items not already stored as they are; a stored row with no hash
- * counts as changed, so the first re-post after this shipped rewrites once. */
-function changedUpserts(documentId, chunkItems, stored) {
-  const pk = String(documentId);
-  const operations = [];
-  for (const item of chunkItems) {
-    const hash = itemHashOf(item);
-    if (isUnchanged(stored.get(String(item.id)), item, hash)) continue;
-    operations.push({ operationType: 'Upsert', partitionKey: pk, resourceBody: { ...item, [HASH_FIELD]: hash } });
+/**
+ * Seconds a written chunk may be missing from the index before that counts as a gap, not lag. The
+ * indexer runs PT5M; checking sooner would rewrite every chunk of a fast retry, the cost the hash
+ * exists to avoid.
+ */
+const INDEX_SETTLE_SECONDS = 30 * 60;
+
+// ~19 chunks is the average document, so a typical lost document heals in one ingest while an
+// indexer outage costs at most this many writes per ingest.
+const MAX_HEALED_PER_INGEST = 20;
+
+/** One ingest's heal allowance; a streamed ingest passes the same one to every `upsertBatch`. */
+function healBudget() {
+  return { left: MAX_HEALED_PER_INGEST };
+}
+
+/**
+ * The unchanged ids to rewrite because the index should hold them by now but does not. A delete or
+ * purge that took a chunk out of the index and then failed in Cosmos leaves a row the `_ts`
+ * high-water mark never re-reads, so only a rewrite puts it back. No `indexed` lookup, or one that
+ * failed (`null`): none.
+ *
+ * Costs one index query per 1000 settled ids. A `$count` by documentId first is not a sound
+ * shortcut: index rows Cosmos no longer holds can make the two counts match while a chunk is lost.
+ *
+ * More missing than the cap AND more than half of what was asked reads as indexer lag (an outage,
+ * a halted run, a rebuilt index), not a gap, so nothing is rewritten: rewriting then would be the
+ * blind re-upsert the hash exists to stop. A document that lost more than that stays for a purge.
+ *
+ * @param {Function} [indexed]  (chunkIds) => Set of those the index holds, or null
+ */
+async function missingFromIndex(documentId, ids, stored, indexed, budget) {
+  if (!indexed || budget.left <= 0) return [];
+  const now = Date.now() / 1000;
+  const settled = ids.filter((id) => {
+    const { ts } = stored.get(id);
+    return ts != null && now - ts >= INDEX_SETTLE_SECONDS;
+  });
+  if (settled.length === 0) return [];
+  const held = await indexed(settled);
+  if (!held) return [];
+  const missing = settled.filter(id => !held.has(id));
+  if (missing.length > MAX_HEALED_PER_INGEST && missing.length * 2 > settled.length) {
+    logger.warn(`[chunks] doc=${documentId} index lacks ${missing.length} of ${settled.length} ` +
+      'settled chunks; read as indexer lag, none rewritten');
+    return [];
   }
+  const healed = missing.slice(0, budget.left);
+  budget.left -= healed.length;
+  return healed;
+}
+
+/** Upsert operations for the items not already stored and indexed as they are; a stored row with
+ * no hash counts as changed, so the first re-post after this shipped rewrites once. */
+async function changedUpserts(documentId, chunkItems, stored, opts = {}) {
+  const pk = String(documentId);
+  const hashed = chunkItems.map(item => ({ item, id: String(item.id), hash: itemHashOf(item) }));
+  const unchanged = hashed.filter(h => isUnchanged(stored.get(h.id), h.item, h.hash)).map(h => h.id);
+  const healed = new Set(await missingFromIndex(documentId, unchanged, stored, opts.indexed,
+    opts.healBudget || healBudget()));
+  const skip = new Set(unchanged.filter(id => !healed.has(id)));
+  const operations = hashed.filter(h => !skip.has(h.id)).map(({ item, hash }) => (
+    { operationType: 'Upsert', partitionKey: pk, resourceBody: { ...item, [HASH_FIELD]: hash } }));
+  logSkipped(documentId, chunkItems.length, operations.length, healed.size);
   return operations;
 }
 
-function logSkipped(documentId, total, sent) {
+function logSkipped(documentId, total, sent, healed) {
+  if (healed > 0) {
+    logger.warn(`[chunks] doc=${documentId} healed=${healed} unchanged chunks the index lacked`);
+  }
   if (sent < total) {
-    logger.info(`[chunks] doc=${documentId} unchanged=${total - sent} upserted=${sent}`);
+    logger.info(`[chunks] doc=${documentId} unchanged=${total - sent} ` +
+      `upserted=${sent - healed} healed=${healed}`);
   }
 }
 
@@ -340,15 +398,15 @@ function assertAcl(chunkItems) {
  * leaves the old tail in place.
  *
  * Reads the stored hashes of THIS batch's ids only, one query per flush: a whole-document read per
- * flush would grow with every batch already written.
+ * flush would grow with every batch already written. `opts.indexed`: see `missingFromIndex`; pass
+ * one `opts.healBudget` to every batch of an ingest, or each batch heals up to the cap.
  */
-async function upsertBatch(access, documentId, chunkItems) {
+async function upsertBatch(access, documentId, chunkItems, opts = {}) {
   assertAcl(chunkItems);
   if (chunkItems.length === 0) return noWrites();
 
   const stored = await storedHashes(access, documentId, chunkItems.map(i => i.id));
-  const operations = changedUpserts(documentId, chunkItems, stored);
-  logSkipped(documentId, chunkItems.length, operations.length);
+  const operations = await changedUpserts(documentId, chunkItems, stored, opts);
   if (operations.length === 0) return noWrites();
   return cosmos.bulkVerified(CONTAINER, operations);
 }
@@ -576,7 +634,8 @@ async function bulkGoneIsDeleted(operations) {
  * The other order is not retry-safe: a request that dies between the two deletes (the HTTP cap, a
  * recycle) leaves a retry nothing in Cosmos to find, and the index rows stay searchable for good.
  * This way the next attempt finds those chunks again. A row gone from the index but still in
- * Cosmos is not re-added: the indexer's `_ts` high-water mark skips an unchanged row.
+ * Cosmos is not re-added by the indexer, whose `_ts` high-water mark skips an unchanged row; the
+ * next ingest that finds it missing rewrites it (`missingFromIndex`).
  *
  * @param {Function} [unindex]  (chunkIds) => { [reason]: chunk ids kept in the index }, reasons
  *   from INDEX_KEPT; absent = no index to clear
@@ -650,8 +709,7 @@ async function replaceForDocument(access, documentId, chunkItems, opts = {}) {
   const stored = await storedHashes(access, documentId);
   const keep = new Set(chunkItems.map(i => String(i.id)));
 
-  const operations = changedUpserts(documentId, chunkItems, stored);
-  logSkipped(documentId, chunkItems.length, operations.length);
+  const operations = await changedUpserts(documentId, chunkItems, stored, opts);
 
   const surplus = [...stored.keys()].filter(id => !keep.has(id));
   const { deletable, kept } = await unindexFirst(surplus, opts.unindex);
@@ -694,5 +752,8 @@ module.exports = {
   upsertBatch,
   deleteSurplus,
   onlyIndexKept,
+  MAX_HEALED_PER_INGEST,
+  healBudget,
+  INDEX_SETTLE_SECONDS,
   removeForDocument
 };

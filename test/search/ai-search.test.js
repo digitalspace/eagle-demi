@@ -2141,6 +2141,59 @@ test('deleteChunksByIds', async (t) => {
 });
 
 /**
+ * `indexedChunkIds` — which stored chunks the index holds, so a re-ingest can rewrite the ones a
+ * failed delete left in Cosmos only. It must never delete, and `null` means "do not know".
+ */
+test('indexedChunkIds', async (t) => {
+  await t.test('answers the chunk ids the index returned, and only looks', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [{ id: 'KEY-A', chunkId: 'a' }] } }));
+    assert.deepStrictEqual(await aiSearch.indexedChunkIds(['a', 'b']), new Set(['a']));
+    assert.strictEqual(calls.length, 1);
+    assert.ok(calls[0].url.includes('/docs/search'));
+    assert.strictEqual(calls[0].body.filter, "search.in(chunkId, 'a|b', '|')");
+  });
+
+  await t.test('an id carrying the delimiter is looked up alone with eq', async (tt) => {
+    const calls = captureFetch(tt, (i) => (calls[i].body.filter.startsWith('chunkId eq')
+      ? { json: { value: [{ id: 'KEY-P', chunkId: 'a|b' }] } }
+      : { json: { value: [] } }));
+    assert.deepStrictEqual(await aiSearch.indexedChunkIds(['a|b', 'c']), new Set(['a|b']));
+    assert.deepStrictEqual(calls.map(c => c.body.filter).sort(),
+      ["chunkId eq 'a|b'", "search.in(chunkId, 'c', '|')"]);
+  });
+
+  await t.test('1500 ids are two lookups, each asking for all of its rows', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    await aiSearch.indexedChunkIds(Array.from({ length: 1500 }, (_, i) => `c${i}`));
+    assert.deepStrictEqual(calls.map(c => c.body.top), [1000, 500]);
+  });
+
+  await t.test('a failed batch counts as held and keeps the answered ones', async (tt) => {
+    const ids = Array.from({ length: 1500 }, (_, i) => `c${i}`);
+    captureFetch(tt, (i) => (i === 0
+      ? { json: { value: [{ id: 'KEY-0', chunkId: 'c0' }] } }
+      : { throws: new Error('timeout') }));
+    const { logger } = require('../../src/utils/logger');
+    tt.mock.method(logger, 'warn', () => {});
+
+    const held = await aiSearch.indexedChunkIds(ids);
+
+    assert.ok(held.has('c0'));
+    assert.ok(!held.has('c1'), 'an answered batch lost its missing ids');
+    assert.ok(ids.slice(1000).every(id => held.has(id)));
+  });
+
+  await t.test('with no SEARCH_ENDPOINT it answers null and sends nothing', async (tt) => {
+    const saved = process.env.SEARCH_ENDPOINT;
+    process.env.SEARCH_ENDPOINT = '';
+    tt.after(() => { process.env.SEARCH_ENDPOINT = saved; });
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    assert.strictEqual(await aiSearch.indexedChunkIds(['a']), null);
+    assert.strictEqual(calls.length, 0);
+  });
+});
+
+/**
  * `deleteDocuments` — bulk key deletes on the chunks index, for rows whose parent is gone.
  *
  * The indexer is a `_ts` high-water mark and cannot see a delete, so a chunk nothing owns any more

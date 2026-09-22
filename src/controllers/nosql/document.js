@@ -1436,6 +1436,7 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
   const startedAt = new Date().toISOString();
   let provenance = null;
   let batch = [];
+  const healBudget = chunks.healBudget();
   let seenHeader = false;
   // The values stamped onto the chunks, from the freshest read of the row this stream has done,
   // carrying the token that says how new they are.
@@ -1516,7 +1517,8 @@ async function ingestChunksStreaming(req, res, doc, ingest) {
     if (batch.length === 0) return null;
     const sending = batch;
     batch = [];
-    const result = await chunks.upsertBatch(systemAccess(), doc.id, sending);
+    const result = await chunks.upsertBatch(systemAccess(), doc.id, sending,
+      { indexed: aiSearch.indexedChunkIds, healBudget });
     if (result && result.failed) {
       return `chunk write incomplete: ${result.failed} of ${sending.length} failed ` +
         `(${JSON.stringify(result.statusCounts)})`;
@@ -1784,9 +1786,10 @@ exports.ingestChunks = async (req, res) => {
 
     // systemAccess() so reconciliation sees every pre-existing chunk. A caller-scoped read could
     // miss chunks it may not see and then leave them orphaned behind the new set.
-    // `unindex`: dropped chunks leave the search index first; see the streaming path.
+    // `unindex`: dropped chunks leave the search index first; see the streaming path. `indexed`:
+    // an unchanged chunk the index lost is rewritten, not skipped.
     const result = await chunks.replaceForDocument(systemAccess(), doc.id, items,
-      { unindex: aiSearch.deleteChunksByIds });
+      { unindex: aiSearch.deleteChunksByIds, indexed: aiSearch.indexedChunkIds });
 
     // bulkVerified REPORTS partial failure, it does not throw. Ignoring `failed` is exactly the bug
     // that once reported 60,578 documents written when 56,317 landed — here it would mark a
