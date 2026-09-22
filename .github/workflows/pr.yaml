@@ -65,7 +65,7 @@ jobs:
   test-frontend:
     name: Test & Build Frontend
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -87,45 +87,28 @@ jobs:
       - name: Lint Frontend
         run: yarn --cwd frontend lint
 
-      # This job ran no tests until 2026-08-07, which is how PR #70 bumped jasmine-core across a
-      # major and merged green with its 44 specs never executed. `--no-watch` or `ng test` never exits.
       - name: Test Frontend
-        run: yarn --cwd frontend test --no-watch
+        run: yarn --cwd frontend test
 
       - name: Build Frontend
         run: yarn --cwd frontend build
 
-  # The React app that will replace frontend/. Both are built until the cutover.
-  test-frontend-react:
-    name: Test & Build React Frontend
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      # The app never imports Playwright, so it lives outside frontend/ and the smoke finds it through
+      # PLAYWRIGHT_MODULE. Pinned so the gate does not move with each npm release.
+      - name: Install Playwright Chromium
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save --no-package-lock playwright@1.63.0
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps --only-shell chromium
 
-      # Before setup-node: its Yarn 4 cache detection reads the corepack shim (actions/setup-node#1027).
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: 'yarn'
-          cache-dependency-path: frontend-react/yarn.lock
-
-      - name: Install dependencies
-        run: yarn --cwd frontend-react install --immutable
-
-      - name: Lint
-        run: yarn --cwd frontend-react lint
-
-      - name: Test
-        run: yarn --cwd frontend-react test
-
-      - name: Build
-        run: yarn --cwd frontend-react build
+      - name: Smoke test the build
+        working-directory: frontend
+        run: |
+          yarn preview --host 127.0.0.1 --port 4173 --strictPort &
+          server=$!
+          trap 'kill "$server"' EXIT
+          timeout 60 bash -c 'until curl -sf -o /dev/null http://127.0.0.1:4173/; do sleep 1; done'
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/pw/node_modules/playwright/index.mjs" \
+            node scripts/e2e-smoke.mjs --base http://127.0.0.1:4173
 
   # A schema-touching PR is the only kind that can take production search down (2026-09-08), and it
   # takes it down at DEPLOY time, long after review. Nothing in the other jobs can see it: they test

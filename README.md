@@ -7,7 +7,7 @@ This repository houses:
 1. **demi-api** — the authoritative REST API and geospatial search service for projects, documents,
    chunks and administrative boundaries, running on Azure Functions Flex Consumption
    (`@azure/functions` v4 on Node.js 22).
-2. **demi-frontend** — the Angular search frontend, published to the `$web`
+2. **demi-frontend** — the React search frontend, published to the `$web`
    container of a Storage static website and served through the Front Door profile that lives in
    `eagle-search`.
 
@@ -349,7 +349,7 @@ implementation:
 | Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-test` |
 | Search | **Azure AI Search** `demi-search-test` — Basic, keyless, private endpoint only. Live indexes `chunks`, `projects`, `documents` since the cutover on 2026-08-22. The retired `demi-*` indexes are still present and still indexing — they are the rollback target (`azure/search/README.md`) |
 | Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
-| Frontend | Angular, built to `frontend/dist`, published to the `$web` container of the `demiweb…` storage account (`azure/modules/static-site.bicep`) and served through the Front Door profile in `eagle-search` |
+| Frontend | React (Vite), built to `frontend/dist`, published to the `$web` container of the `demiweb…` storage account (`azure/modules/static-site.bicep`) and served through the Front Door profile in `eagle-search` |
 | Edge | Azure Front Door Standard, profile `eagle-edge-<env>` — **owned by `eagle-search`**, not by this repo. It supplies TLS, the security headers and the SPA fallback rewrite that `$web` cannot |
 | IaC | Bicep — `azure/main.bicep`, `azure/modules/` |
 
@@ -1139,7 +1139,7 @@ a substitute for keeping secrets in app settings.
 unlike push protection, those sit behind paid Secret Protection.
 
 **Reading the Dependabot count.** The raw number overstates the exposure. Only `frontend/dist` is
-deployed, never `frontend/node_modules`, so advisories on the Angular build toolchain are a CI
+deployed, never `frontend/node_modules`, so advisories on the frontend build toolchain are a CI
 supply-chain concern and not a production one. The API is the opposite — its package includes
 `node_modules`, so a root-lockfile advisory does reach `demi-api-fc-test`. Group by
 `dependency.manifest_path` and `dependency.scope` before deciding anything:
@@ -1151,10 +1151,8 @@ gh api "repos/digitalspace/eagle-demi/dependabot/alerts?state=open&per_page=100"
         |group_by(.man+.scope)|map({manifest:.[0].man,scope:.[0].scope,n:length})'
 ```
 
-Grouping and routine version updates come from `.github/dependabot.yml`. Angular is no longer
-ignored there — the freeze was lifted on 2026-08-06 with the move to Angular 22 — but it is still
-grouped, because the framework and its toolchain are version-locked and a half-bumped pair does not
-build.
+Grouping and routine version updates come from `.github/dependabot.yml`. Minor and patch updates
+are grouped for each lockfile. Majors arrive one per pull request.
 
 **GitHub Code Quality is not enabled.** It went GA on 2026-07-20 and bills $10 per active committer
 per month, counted org-wide, and it is not in the free public-repo set. It is also UI-only, with no
@@ -1164,9 +1162,21 @@ REST API, so it cannot be scripted. CodeQL above provides the same analysis engi
 
 ## Frontend
 
-Angular app under `frontend/`, built to `frontend/dist`. Every route requires a Keycloak session
-with `staff`, `sysadmin` or `demi-admin`; there is no anonymous screen. Screen list, routes and
-backend calls: [[Frontend]] on the wiki.
+React app under `frontend/`, built with Vite to `frontend/dist`. Every route requires a Keycloak
+session with `staff`, `sysadmin` or `demi-admin`; there is no anonymous screen. Screen list, routes
+and backend calls: [[Frontend]] on the wiki.
+
+```bash
+cd frontend
+yarn dev                  # dev server on :4200, proxies /api and /notify-api (vite.config.ts)
+yarn lint && yarn test && yarn build
+yarn preview --host 127.0.0.1 &
+node scripts/e2e-smoke.mjs   # every screen and old URL against the build, Keycloak off
+```
+
+The smoke script needs Playwright where Node can find it, or `PLAYWRIGHT_MODULE` set to its
+`index.mjs`. It is not a dependency of the app. It swaps in a Keycloak-off `env.js` and serves every
+API call from `parity/fixtures/`, so nothing on disk changes and no API is called.
 
 - **Interactive map explorer** over project coordinates and administrative overlays.
 - **Static boundary GeoJSON** — `regional_districts.geojson`, `municipalities.geojson`,

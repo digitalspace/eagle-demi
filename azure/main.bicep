@@ -98,7 +98,7 @@ param frontendHostNames array = []
 @description('Principal id of the CI identity (demi-cicd-<env>) that publishes the frontend bundle into $web. Empty skips the role assignment, and the publish step then gets a 403.')
 param frontendUploaderPrincipalId string = ''
 
-// The `$web` origin for DEMI's own Angular frontend. Prod does not have one — eagle-public is the
+// The `$web` origin for DEMI's own frontend. Prod does not have one — eagle-public is the
 // consumer there — so a prod deploy would otherwise create a storage account nothing ever publishes to.
 @description('Deploy the frontend static-site storage account.')
 param deployStaticSite bool = true
@@ -830,7 +830,7 @@ module devbox './modules/devbox.bicep' = if (deployDevbox && !empty(devboxSubnet
   }
 }
 
-// 8. Angular frontend — a Storage static website, no App Service and no plan. TLS, the hostname,
+// 8. Frontend — a Storage static website, no App Service and no plan. TLS, the hostname,
 // the security headers and the routing rules are supplied by the Front Door profile in
 // eagle-search; this template owns only the origin. See modules/static-site.bicep for the one
 // data-plane command ARM cannot express.

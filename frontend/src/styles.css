@@ -1,6 +1,3 @@
-@import 'leaflet/dist/leaflet.css';
-@import 'leaflet.markercluster/dist/MarkerCluster.css';
-@import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 @import '@bcgov/design-tokens/css/variables.css';
 @import '@bcgov/bc-sans/css/BC_Sans.css';
 @import './styles/vendor/eagle.css';
@@ -74,6 +71,8 @@ html, body {
   to { background-position: calc(100% + 12rem) 0; }
 }
 
+/* Short motion plays for everyone here, but the shimmer runs until the data lands, so it still
+   honours the preference. */
 @media (prefers-reduced-motion: reduce) {
   .skeleton {
     animation: none;
@@ -145,89 +144,9 @@ html, body {
   color: var(--typography-color-primary);
 }
 
-/* Nothing here may resize the icon geometrically: Leaflet positions it with an inline
-   `transform: translate3d(...)`, so a stylesheet `transform` is ignored and a `scale` property
-   multiplies that offset and throws the marker across the map. Rings grow it instead. */
-.demi-marker {
-  background: var(--surface-color-primary-default);
-  border: 2px solid var(--surface-color-background-white);
-  border-radius: 50%;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-  transition: background 0.15s ease, box-shadow 0.15s ease;
-}
-
-.demi-marker--staged {
-  background: var(--icons-color-danger);
-  box-shadow: 0 0 8px rgba(206, 62, 57, 0.8);
-}
-
-/* Selection is persistent, so it keeps the blue fill and gains a ring; the gold fill below stays
-   hover's own transient language. */
-.demi-marker--selected {
-  border-color: var(--surface-color-background-white);
-  box-shadow:
-    0 0 0 3px var(--surface-color-background-white),
-    0 0 0 6px var(--theme-primary-gold),
-    0 0 16px rgba(0, 0, 0, 0.45);
-}
-
-/* One expanding ring on arrival, so the eye is told where the selection landed. */
-.demi-marker--arriving::after {
-  content: '';
-  position: absolute;
-  inset: -6px;
-  border: 2px solid var(--theme-primary-gold);
-  border-radius: 50%;
-  animation: demi-marker-pulse 700ms ease-out;
-}
-
-@keyframes demi-marker-pulse {
-  from { transform: scale(1); opacity: 0.9; }
-  to { transform: scale(2.6); opacity: 0; }
-}
-
-/* The ring above is the standing cue, so the pulse is pure decoration and can go. */
-@media (prefers-reduced-motion: reduce) {
-  .demi-marker--arriving::after { content: none; }
-}
-
-/* Everything that is not the selection recedes: project markers, cluster bubbles, wildfire pills.
-   The fade rides on `filter`, not `opacity`: markercluster writes `opacity: 1` inline on every icon
-   it manages, so a stylesheet `opacity` reached only the wildfire pills — the "some things" bug. */
-.demi-map--selection .leaflet-marker-icon:not(.demi-marker--selected) {
-  filter: grayscale(70%) opacity(0.5);
-}
-
-/* A near-black digit survives a fade its mid-tone disc does not, so a dimmed bubble was leaving the
-   count stranded on the basemap. Fading the count further sends the number down with its ground. */
-.demi-map--selection .marker-cluster span {
-  opacity: 0.35;
-}
-
-/* Boundary polygons and spiderfy legs are both drawn into the overlay pane (canvas, since the map
-   is preferCanvas), so they cannot be dimmed apart. They compete for attention, so the pane recedes
-   as one — softly, because the boundaries are the context the selection is being read against. The
-   tile pane below them keeps full strength: dimming it would take the place-names with it. */
-.demi-map--selection .leaflet-overlay-pane {
-  opacity: 0.5;
-}
-
 /* A fire-of-note pulses to be looked at, which is exactly wrong while a project is selected. */
 .demi-map--selection .wildfire-marker-pill.fire-of-note {
   animation: none;
-}
-
-.demi-marker:hover, .demi-marker.active {
-  background: var(--theme-primary-gold);
-  border-color: var(--surface-color-primary-default);
-  box-shadow: 0 0 0 3px rgba(252, 186, 25, 0.55), 0 0 12px rgba(252, 186, 25, 0.8);
-}
-
-/* Leaflet ships its own Helvetica stack, so every string the map draws — cluster counts, tooltips,
-   attribution — was set in a different face from the rest of the app. */
-.leaflet-container {
-  font-family: var(--typography-font-families-bc-sans), sans-serif;
 }
 
 /* The count needs solid ground under it. At the vendor's 0.6 alpha the basemap's own place-names
@@ -543,12 +462,6 @@ svg.leaflet-zoom-animated:focus {
 .ps-card--action:focus-visible {
   outline: 2px solid var(--surface-color-primary-default);
   outline-offset: 2px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ps-card--action {
-    transition: none;
-  }
 }
 
 .ps-card__category {

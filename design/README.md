@@ -18,7 +18,7 @@ How a design mockup becomes code in this repo.
 Read `design/handoffs/<name>/README.md` first. It is the spec: tokens, layout, per-screen data
 shapes, interaction notes. Then:
 
-**Reuse what exists. Do not rebuild it.** Angular templates here use plain CSS classes, not
+**Reuse what exists. Do not rebuild it.** Screens here use plain CSS classes, not
 components. A handoff describing a pattern already styled in
 `frontend/src/styles/vendor/demi-admin.css` means *use that class*, not invent new markup:
 

@@ -1,5 +1,7 @@
 # Convert eagle-demi/frontend from Angular to React
 
+Status: slices 1 to 6 done. The React app now lives in `frontend/`, and the Angular app is gone; the last commit with both is `0038d3e`. Where this plan says `frontend-react/`, read `frontend/`. Still open: the post-merge checks under Verification (staging deploy, real Keycloak login on test).
+
 ## Context
 
 `frontend/` is the "DEMI Demo" app: Angular 22, 12 screens behind one Keycloak sign-in gate, 11,036 LOC of TypeScript, 2,923 LOC of templates, 4,133 LOC of CSS, 33 Karma specs. Every other new EPIC frontend is React (`eagle-demi-admin`, `eagle-public` `react` line). The unified search screen here was itself ported from eagle-public's React source into Angular, so the same feature is now kept in two frameworks. Moving this app to React ends that, lets it share the admin panel's auth, config and API code, and drops Karma and zone.js.
@@ -80,7 +82,7 @@ Tracking across the work: this plan lives at `docs/react-conversion-plan.md` and
 
 - Per slice: `yarn lint`, `yarn test`, `yarn build` in `frontend-react/`; `scripts/sync-design-css.sh --check`.
 - Local browser check with Keycloak off (`public/env.js`: `configEndpoint=false`, `KEYCLOAK_ENABLED=false`, `API_LOCATION=''`, `API_PATH='/api'`), each ported screen side by side with the Angular build on another port, through the parity harness in `frontend-react/parity/`. Restore `env.js` after.
-- Before cutover: a smoke script modelled on `eagle-demi-admin/scripts/e2e-smoke.mjs` that loads all 12 routes and the redirects and checks each `<h1>`.
+- Before cutover: a smoke script modelled on `eagle-demi-admin/scripts/e2e-smoke.mjs` that loads all 12 routes and the redirects and checks each `<h1>`. Done: `frontend/scripts/e2e-smoke.mjs`, run against `yarn preview`.
 - After cutover merges: staging deploy to test, then real Keycloak login on test, reload to confirm the session holds, one search, one document download, one map lasso, one notify call.
 - Prod deploy is out of scope; it follows the normal tagged release.
 

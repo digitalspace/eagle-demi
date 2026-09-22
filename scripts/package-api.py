@@ -59,7 +59,7 @@ def package_api(repo_root, zip_path):
     # Pruned at the REPO ROOT ONLY: "dist" at every depth also strips node_modules/**/dist, and
     # `scripts` here is deploy tooling while `src/scripts` IS runtime — the `rel_root` guard below.
     root_exclude_dirs = {".git", ".claude", ".yarn", "frontend", "extraction-host", "extractor",
-                         ".angular", "dist", "coverage", ".deploy_archives", "tmp", "__pycache__",
+                         "dist", "coverage", ".deploy_archives", "tmp", "__pycache__",
                          "test", "azure", ".github", ".vscode", "scripts", "public"}
 
     # Root-level files with no runtime role. Root-scoped for the same reason as the dirs: a nested

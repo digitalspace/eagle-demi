@@ -2,6 +2,8 @@
 
 Plan written 2026-09-17. Replaces the index search and content search screens in `frontend/` with one search page ported from eagle-public (`react` branch, PRs #881 to #889).
 
+Status: superseded. The Angular port shipped, then the whole app moved to React (`docs/react-conversion-plan.md`). The search screen now comes from the eagle-public React source, not from this Angular port. File and line references below point at the Angular app, which was removed from `frontend/` after commit `0038d3e`.
+
 ## Findings
 
 Target framework is Angular 22.1.3 (`frontend/package.json:17-30`), Karma + Jasmine, CI runs `yarn --cwd frontend lint`, `test --no-watch` and `build` (`.github/workflows/pr.yaml:88-96`). No React, no TanStack Query.

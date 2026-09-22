@@ -38,15 +38,15 @@ page records what we run now, what the options are, and which one to move to.
 | Boundaries | Cosmos, served as GeoJSON | Cosmos, served as GeoJSON in two detail tiers | none |
 | Drawing | freehand lasso | freehand lasso | none |
 
-The Angular map is the line being replaced. Files:
+The Angular map was replaced. Its files, at commit `0038d3e`:
 `frontend/src/app/components/map-explorer/map-explorer.component.ts`,
-`frontend/src/index.html`; React `frontend-react/src/screens/MapExplorer.tsx` with the
-map modules under `frontend-react/src/map/`; eagle-public
+`frontend/src/index.html`. React: `frontend/src/screens/MapExplorer.tsx` with the
+map modules under `frontend/src/map/`. eagle-public:
 `src/app/pages/projects/projlist-map.tsx`.
 
 ### Build cost
 
-From `yarn build` in `frontend-react` on 2026-09-19, uncompressed then gzipped:
+From `yarn build` of the React app on 2026-09-19, uncompressed then gzipped:
 
 | Chunk | Size | Gzipped |
 |---|---|---|
@@ -159,8 +159,8 @@ one real fix in its last ten commits and still has no rectangle, circle, freehan
 snapping. `ol/interaction/Draw` ships and versions with OpenLayers, so that risk
 disappears rather than being managed. OpenLayers also speaks every protocol BC Gov
 publishes without a plugin, tree-shakes smaller than MapLibre, and is plain
-TypeScript, so DEMI's Angular frontend and eagle-public's React frontend can import
-the same layer definitions.
+TypeScript, so DEMI's frontend (Angular at the time) and eagle-public's React frontend
+could import the same layer definitions.
 
 The cost is that there is no React binding worth using. That is roughly 30 lines: a
 `useRef` div, a `useEffect` that builds `new Map({target})`, and
@@ -182,13 +182,11 @@ reports usage data from whatever page it runs on.
 
 1. **Scripts loading from unpkg.com at runtime.** A public service depending on a third
    party CDN staying up, with no `integrity` hash on the markercluster and Keycloak
-   tags. Fixed on the React line, which bundles everything it runs from its own build.
-   Still true of `frontend/src/index.html` while the Angular map is live.
+   tags. Fixed: the React app bundles everything it runs from its own build.
 2. **Basemap tiles drawn from `tile.openstreetmap.org` directly.** Not allowed by the
-   OSM Foundation's tile usage policy. Fixed on the React line by the keyless Esri
-   raster basemaps above. Still true of the Angular map outside prod, which uses CARTO.
-3. **`proj4` and `@types/proj4` are in `frontend/package.json` and nothing imports
-   them.** Still true. Delete them.
+   OSM Foundation's tile usage policy. Fixed by the keyless Esri raster basemaps above.
+3. **`proj4` and `@types/proj4` were in `frontend/package.json` and nothing imported
+   them.** Fixed: the React app does not depend on them.
 4. **The Front Door CSP does not allow the Esri tile host.**
    The policy is `var demiCsp` in `digitalspace/eagle-edge`, `azure/main.bicep`. It
    needs `server.arcgisonline.com` in `connect-src`: maplibre-gl 6 reads raster tiles

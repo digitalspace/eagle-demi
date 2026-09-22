@@ -1,9 +1,0 @@
-<label>
-  <span class="display-grid__visually-hidden">Filter by {{ label() }}</span>
-  <select class="display-grid__control" [class.display-grid__control--on]="!!value()" [value]="value()" (change)="onChange($event)">
-    <option value="">Any date</option>
-    @for (year of newestFirst(); track year) {
-      <option [value]="year" [selected]="year === value()">{{ year }}</option>
-    }
-  </select>
-</label>

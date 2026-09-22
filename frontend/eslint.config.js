@@ -1,43 +1,41 @@
-// @ts-check
-const { defineConfig } = require("eslint/config");
-const tseslint = require("typescript-eslint");
-const angular = require("angular-eslint");
+import js from '@eslint/js';
+import globals from 'globals';
+import tseslint from 'typescript-eslint';
+import reactHooks from 'eslint-plugin-react-hooks';
+import reactRefresh from 'eslint-plugin-react-refresh';
+import jsxA11y from 'eslint-plugin-jsx-a11y';
 
-module.exports = defineConfig([
+const base = [js.configs.recommended, ...tseslint.configs.recommended, ...tseslint.configs.stylistic];
+
+const rules = {
+  '@typescript-eslint/no-explicit-any': 'warn',
+  '@typescript-eslint/no-unused-vars': [
+    'error',
+    {
+      argsIgnorePattern: '^_',
+      varsIgnorePattern: '^_',
+      caughtErrorsIgnorePattern: '^_',
+    },
+  ],
+};
+
+export default tseslint.config(
+  { ignores: ['dist', 'coverage'] },
   {
-    files: ["**/*.ts"],
-    extends: [
-      tseslint.configs.recommended,
-      angular.configs.tsRecommended,
-    ],
-    processor: angular.processInlineTemplates,
-    rules: {
-      "@typescript-eslint/no-explicit-any": "off",
-      "@typescript-eslint/no-unused-vars": [
-        "warn",
-        {
-          "argsIgnorePattern": "^_",
-          "varsIgnorePattern": "^_",
-          "caughtErrors": "none"
-        }
-      ],
-      "@angular-eslint/no-output-on-prefix": "off",
-      // Angular 22 makes OnPush the default, and the v22 migration wrote an explicit
-      // `ChangeDetectionStrategy.Eager` on every component to preserve v21 behaviour. Only
-      // map-explorer and summarizer hold local signals; the rest read service signals and mutate
-      // plain fields from async callbacks, which OnPush would stop rendering. Converting them is a
-      // change-detection rewrite with no test that would catch a regression — a separate change
-      // from a security upgrade. Turn this back on when that happens.
-      "@angular-eslint/prefer-on-push-component-change-detection": "off"
-    }
+    files: ['**/*.{ts,tsx}'],
+    extends: [...base, reactHooks.configs.flat['recommended-latest'], reactRefresh.configs.vite],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: globals.browser,
+    },
+    rules,
   },
   {
-    files: ["**/*.html"],
-    extends: [
-      angular.configs.templateRecommended
-    ],
-    rules: {
-      "@angular-eslint/template/eqeqeq": "off"
-    }
-  }
-]);
+    files: ['**/*.tsx'],
+    extends: [jsxA11y.flatConfigs.recommended],
+  },
+  {
+    files: ['vite.config.ts'],
+    languageOptions: { globals: globals.node },
+  },
+);

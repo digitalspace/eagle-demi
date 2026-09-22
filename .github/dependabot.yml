@@ -37,7 +37,7 @@ updates:
           - minor
           - patch
 
-  # The Angular frontend. Only `frontend/dist` is deployed, never node_modules,
+  # The React frontend. Only `frontend/dist` is deployed, never node_modules,
   # so build-tooling advisories here are a CI supply-chain concern rather than a
   # production one. The bundled runtime packages are the exception.
   - package-ecosystem: npm
@@ -45,64 +45,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    # The Angular toolchain was frozen here while the app sat on 19.2.25, which is
-    # past end-of-life. The freeze was lifted 2026-08-06, when the frontend moved to
-    # Angular 22 and TypeScript 6.
-    #
-    # What the freeze taught, and why the `angular` group below lists every scope:
-    # framework and toolchain are version-locked to each other, so they move in one
-    # PR or not at all. Two matcher traps, both hit for real on 2026-08-05:
-    #
-    #  1. `groups.patterns` and `ignore.dependency-name` do NOT share a matcher.
-    #     `@angular*` matched the group but silently did not match the ignore, so
-    #     PRs #33/#34/#40 bumped Angular 19.2.25 to 20.3.x.
-    #  2. Narrowing that to `@angular/*` then stopped covering `@angular-devkit/*`,
-    #     which is a DIFFERENT SCOPE. PR #42 bumped @angular-devkit/build-angular
-    #     19.2.27 to 21.2.19, pulling in @angular/build@21, and the build failed
-    #     with: "@angular/build supports Angular versions ^21.0.0, but detected
-    #     Angular version 19.2.25 instead."
-    #
-    # `zone.js` stays in the group for the same reason it was in the ignore: it is on
-    # 0.x, where a breaking change ships as a MINOR (0.15 -> 0.16 needs a newer
-    # Angular), so a semver-major filter would let it through on its own.
     groups:
-      # First matching group wins, so Angular is listed ahead of the catch-all.
-      # One grouped PR is what you want here, not eight.
-      angular:
-        patterns:
-          - '@angular/*'
-          - '@angular-devkit/*'
-          - '@angular-eslint/*'
-          - 'angular-eslint'
-          - 'zone.js'
-      # Same rule as the API group, for the same reason — PR #42 carried
-      # @types/jasmine 5 -> 6 and jasmine-core 5 -> 6 alongside ordinary bumps.
-      build-tooling:
+      # Same rule as the API group: React, Vite and TypeScript majors arrive one
+      # per PR with their changelog.
+      frontend-dependencies:
         patterns:
           - '*'
         update-types:
           - minor
           - patch
-    ignore:
-      # jasmine-core 7 CANNOT be used here, and it is not our code that stops it:
-      # zone.js's testing patch assigns to the jasmine globals, and jasmine 7 makes
-      # them read-only. `patchJasmine` throws
-      # "Cannot assign to read only property 'describe'" during zone-testing setup,
-      # so ZERO specs run — measured 2026-08-23 on jasmine-core 7.0.1 with
-      # zone.js 0.16.2, which is the LATEST zone.js. The control passes: the same
-      # tree on jasmine-core 6.3.0 runs 46 of 46 green.
-      #
-      # PR #113 was that bump, and closed unmergeable. Lift this the moment a
-      # zone.js release says it supports jasmine 7 — the minor and patch stream
-      # below still flows, so 6.x security fixes still arrive.
-      - dependency-name: jasmine-core
-        update-types:
-          - version-update:semver-major
-      # Types follow the runtime it types. @types/jasmine has no 7.x published at
-      # all, so this is belt-and-braces rather than a second decision.
-      - dependency-name: '@types/jasmine'
-        update-types:
-          - version-update:semver-major
 
   # Keeps the action versions bumped in PR #26 (checkout v7, setup-node v7,
   # azure/login v3, azure/cli v3, arm-deploy v2) from going stale again — that

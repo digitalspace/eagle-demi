@@ -75,7 +75,7 @@ deploy_frontend() {
          echo -e "${RED}  grant Storage Account Contributor on this account and re-run.${NC}" >&2
          return 1; }
 
-  echo -e "\n${BLUE}[2/4] Building Angular frontend production bundle...${NC}"
+  echo -e "\n${BLUE}[2/4] Building frontend production bundle...${NC}"
   # env.js is rewritten in the SOURCE by scripts/point-env-js.sh, before this build, so `yarn build`
   # copies the corrected file.
   yarn --cwd "$REPO_ROOT/frontend" build
@@ -104,8 +104,8 @@ deploy_frontend() {
   # "everything else", so a pattern-only scheme ships whatever it forgot with no Cache-Control.
   blob_upload "$nostore"
 
-  # PASS 2: content-hashed filenames only. `outputHashing: all` hashes what Angular EMITS — the .js
-  # and .css — so assets, favicon.ico and env.js are copied through unhashed and must stay out.
+  # PASS 2: content-hashed filenames only. Vite hashes every .js and .css it emits into assets/;
+  # public/ is copied through unhashed, and its one .js, env.js, is re-stamped by pass 3.
   local ext
   for ext in js css; do
     blob_upload "$immutable" "*.${ext}"
