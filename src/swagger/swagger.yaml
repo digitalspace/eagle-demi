@@ -49,9 +49,13 @@ paths:
             Search query string. Also accepted as `keywords`. On RecentActivity it matches the
             headline, the content and the notification name; on ProjectNotification it matches the
             name, the description, the proponent and the coded fields. Both rank the rows by
-            relevance and match the last word as a prefix, the same as Project and Document. The
-            other Cosmos datasets ignore it. RecentActivity still answers `top=true` from Cosmos,
-            where `q` matches the headline and the content case-insensitively and does not rank.
+            relevance and match the last word as a prefix, the same as Project and Document. On
+            CommentPeriod with no `project`, it matches the period's `informationLabel` or its
+            project's name, case-insensitively as a substring, with double quotes removed and runs
+            of spaces collapsed; it does not rank. The project-name match needs at least 2
+            characters and reads at most 500 matching projects. The other Cosmos datasets ignore
+            it. RecentActivity still answers `top=true` from Cosmos, where `q` matches the headline
+            and the content case-insensitively and does not rank.
           schema:
             type: string
         - name: prefix
@@ -134,18 +138,41 @@ paths:
           in: query
           required: false
           description: >-
-            dataset=CommentPeriod only, and only with no `project`: `open` answers every comment
-            period open right now across all projects, soonest to close first, capped at `pageSize`.
-            The response carries `closedCount` beside `count` — how many periods closed in the last
-            30 days. Each row carries `projectName`, the parent project's name, read in one query
-            for the whole page; it is absent when the project is not visible to the caller or the
-            period belongs to a project notification. Any other value is a 400; this filter is
-            never silently ignored. Sent
-            alongside a project it is reported under `meta[0].dropped.filter`, because the
-            per-project read cannot also sweep every partition.
+            dataset=CommentPeriod only, and only with no `project`. With no `project` the read
+            lists every comment period the caller may see, across all projects, paged by `pageNum`
+            and `pageSize`, with the total in `meta[0].searchResultsTotal`; this filter narrows it.
+            Any `pageNum` is reachable: the page is read with OFFSET and LIMIT, and the read is
+            allowed one extra fetch for every `pageSize` rows it skips. A page that still runs
+            out of fetches comes back short and is logged. `pageSize` is 10 when absent. When the
+            request carries `sortBy`, any `and[...]` filter such as `and[status]`, or `q`, a
+            `pageSize` above 500 is refused with 400 for every caller. An unauthenticated request
+            asking for more than 100 is always refused with 400. Otherwise an authenticated
+            request is clamped to 1000. A `pageNum` past the end answers an empty page.
+            Deleted periods are never listed or counted. Status comes from the dates against the
+            server clock: `open` has started and not ended (`dateStarted` ≤ now ≤
+            `dateCompleted`), `upcoming` has not started (`dateStarted` after now), `closed` has
+            ended (`dateCompleted` before now); a period missing either date is none of them. A
+            `dateCompleted` at exactly midnight Pacific time (America/Vancouver) means that whole
+            day, as eagle-public shows it: the period stays `open` until that Pacific day ends.
+
+
+            `open` with no `sortBy`, no `q` and no `pageNum` is the home-page rail instead: every
+            period open right now, soonest to close first, capped at `pageSize` and not paged.
+            That response carries `closedCount` beside `count` — how many periods closed in the
+            last 30 days. Send `sortBy`, `q` or `pageNum` to get `open` as a filter on the paged
+            list.
+
+
+            Each row carries `projectName`, the parent project's name, read in one query for the
+            whole page; it is absent when the project is not visible to the caller or the period
+            belongs to a project notification. A caller without an admin or service role is not
+            sent a period whose parent project or notification it cannot see. Any other value, an
+            empty value or more than one value is a 400. Sent alongside a project it is reported
+            under `meta[0].dropped.filter`, because the per-project read cannot also sweep every
+            partition.
           schema:
             type: string
-            enum: [open]
+            enum: [open, upcoming, closed]
         - name: and[type]
           in: query
           required: false
@@ -248,7 +275,11 @@ paths:
             One key, `-` for descending. On Project, `-dateUpdated` is the most recently changed
             record first. On RecentActivity `-score` orders by dateAdded, and on
             ProjectNotification `-_id` orders by notificationReceivedDate — neither field is stored,
-            and an ORDER BY on a field a row lacks drops the row.
+            and an ORDER BY on a field a row lacks drops the row. On CommentPeriod, `dateStarted`,
+            `dateCompleted` or `dateAdded` in either direction, the first usable key only;
+            `-dateStarted` when none is usable, and any key not used is reported under
+            `meta[0].dropped.sort`. The `open` rail (see `and[status]`) always orders by
+            `dateCompleted` ascending.
           schema:
             type: string
       responses:
@@ -305,8 +336,8 @@ paths:
     get:
       summary: How many records of each type one query matches
       description: >-
-        One request for the record-type badges the search page shows, so a page of four tabs costs
-        one call rather than four. Same access rules as `/api/search`: every count is measured under
+        One request for the record-type badges the search page shows, so a page of five tabs costs
+        one call rather than five. Same access rules as `/api/search`: every count is measured under
         the caller's own ACL. A count of `null` means UNKNOWN, never zero — the leg that would have
         measured it could not, and the record type is named under `meta[0].unavailable`. A type
         named under `meta[0].degraded` was counted by a substring match in the database rather than
@@ -315,7 +346,7 @@ paths:
 
 
         TAKES NO FILTERS. The four parameters below are the whole list: filters belong to one
-        record type and this endpoint answers all four at once, so a filter key `/api/search`
+        record type and this endpoint answers every type at once, so a filter key `/api/search`
         accepts — `dataset`, `and[...]`, `pageSize`, `sortBy`, `project`, `top`, `docIds`,
         `period`, `fuzzy` — is a 400 here rather than a number counted without it.
       parameters:
@@ -339,11 +370,12 @@ paths:
           in: query
           required: false
           description: >-
-            Comma-separated record types to answer, defaulting to all four. An unknown name is a
-            400, as it is on `/api/search`.
+            Comma-separated record types to answer, defaulting to all five. An unknown name is a
+            400, as it is on `/api/search`. `CommentPeriod` counts every comment period the caller
+            may see, matching `q` as the CommentPeriod list does, whatever its status.
           schema:
             type: string
-            default: Project,Document,RecentActivity,ProjectNotification
+            default: Project,Document,RecentActivity,ProjectNotification,CommentPeriod
       responses:
         '200':
           description: >-

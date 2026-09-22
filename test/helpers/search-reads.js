@@ -45,12 +45,15 @@ const PARTITION_FIELD = {
   updates: 'id'
 };
 
+/** One spec's bound parameters, by name. */
+const bound = (spec) => Object.fromEntries((spec.parameters || []).map(p => [p.name, p.value]));
+
 /**
  * Serve Cosmos by CONTAINER, and record every spec.
  *
  * `rows` is keyed by container name; a `VALUE COUNT(1)` query is answered from `counts`, defaulting
  * to the number of rows served, so a branch that builds its total from a different predicate than
- * its read is still visible in `seen`.
+ * its read is still visible in `seen`. A `VALUE c.id` query answers the served rows' ids.
  */
 function stubCosmos(t, rows, counts = {}) {
   const seen = [];
@@ -64,6 +67,12 @@ function stubCosmos(t, rows, counts = {}) {
       String(row[PARTITION_FIELD[container]]) === String(options.partitionKey));
 
     if (/COUNT\(1\)/.test(spec.query)) return { items: [counts[container] ?? served.length] };
+    if (/^SELECT VALUE c\.id /.test(spec.query)) {
+      // The name predicate is APPLIED, so a lookup that matched every project would show.
+      const name = bound(spec)['@name'];
+      return { items: served.filter(row => name === undefined ||
+        String(row.name || '').toLowerCase().includes(String(name).toLowerCase())).map(row => row.id) };
+    }
     return { items: served.slice() };
   };
 
@@ -73,10 +82,21 @@ function stubCosmos(t, rows, counts = {}) {
   // path. Same spec, so the assertions below still read it out of `seen`.
   t.mock.method(cosmos, 'queryFirst', async (container, spec, options = {}) =>
     run(container, spec, options).items[0] ?? null);
+  // A drained page: `OFFSET @skip LIMIT @size` is honoured over the served rows, as Cosmos would.
+  t.mock.method(cosmos, 'queryPage', async (container, spec, options = {}) => {
+    const { items } = run(container, spec, options);
+    const params = bound(spec);
+    const skip = params['@skip'] ?? 0;
+    return items.slice(skip, skip + (params['@size'] ?? options.size));
+  });
   t.mock.method(cosmos, 'readItem', async (container, id) =>
     (rows[container] || []).find(r => String(r.id) === String(id)) || null);
   return seen;
 }
+
+/** `stubCosmos` serving these periods under PROJECT_ROW, the CommentPeriod suites' usual corpus. */
+const stubPeriods = (t, periods, counts) =>
+  stubCosmos(t, { projects: [PROJECT_ROW], commentPeriods: periods }, counts);
 
 /** The specs a container saw, read query first. */
 const specsFor = (seen, container) =>
@@ -96,12 +116,12 @@ async function get(path) {
   return { status, body: payload };
 }
 
-/** The same call under a staff credential, so the two visibility levels can be compared. */
-async function getAsStaff(t, path) {
+/** The same call under a credential (staff unless `roles` says otherwise), to compare visibility levels. */
+async function getAsStaff(t, path, roles = ['staff']) {
   const { keyId, plaintext, hash } = generateKey('test');
   forgetCachedKey(keyId);
   t.mock.method(apiKeys, 'getById', async () => ({
-    id: keyId, name: 'reader', hash, roles: ['staff'],
+    id: keyId, name: 'reader', hash, roles,
     projectScope: null, expiresAt: null, revokedAt: null
   }));
   t.mock.method(apiKeys, 'touchLastUsed', async () => {});
@@ -232,8 +252,10 @@ module.exports = {
   PROJECT_ROW,
   PARTITION_FIELD,
   stubCosmos,
+  stubPeriods,
   specsFor,
   boundValues,
+  bound,
   get,
   getAsStaff,
   listRow,

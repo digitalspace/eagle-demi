@@ -2,7 +2,7 @@
 
 // Searches go to Azure AI Search. A KEYWORDLESS project list is a read, not a search, and comes
 // from the Cosmos NoSQL repositories — see wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
-const { resolveAccess } = require('../helpers/access-sql');
+const { resolveAccess, isPrivileged, pageSizeFor } = require('../helpers/access-sql');
 // Which container owns an Eagle id, said once for the mirrors, the seed and this read path.
 const { pickParent } = require('../helpers/parent-admit');
 const { redactForAccess, redactAllForAccess } = require('../vis/redact');
@@ -573,26 +573,6 @@ async function updateProjects(access, rows) {
   };
 }
 
-/**
- * The Cosmos-backed `/search` datasets — the reads eagle-public used to make against eagle-api's
- * own `/api/search`, `/api/organization`, `/api/commentperiod`, `/api/public/comment` and
- * `/api/public/recentActivity`.
- *
- * Every one answers `{searchResults, count}` on the SAME envelope the Project bare-list branch
- * uses, so `res.json`'s wrapper attaches `meta[0].searchResultsTotal` and eagle-public can page.
- * `applied` names the filter keys the branch consumed; everything else the caller sent is reported
- * as dropped, because a filter panel that quietly does nothing returns the whole corpus.
- *
- * @returns {Promise<{searchResults: object[], count: number, applied?: string[]}>}
- */
-/**
- * The values `and[status]` takes on `dataset=CommentPeriod`. Anything else is a 400.
- *
- * ONE value, and the set is the gate rather than an `=== 'open'` test, so adding `closed` later is
- * one entry here and a branch — not a second place for an unknown value to leak through.
- */
-const PERIOD_STATUSES = new Set(['open']);
-
 /** How far back "closed recently" reaches, for the count that rides along with the open rail. */
 const CLOSED_WINDOW_DAYS = 30;
 
@@ -614,12 +594,56 @@ async function openPeriods({ access, pageSize }) {
     commentPeriodsRepo.listOpen(access, { limit: pageSize, now }),
     commentPeriodsRepo.countClosedSince(access, since, now)
   ]);
+  const searchResults = await periodRows(access, rows);
+  return { searchResults, count: searchResults.length, closedCount, applied: ['status'] };
+}
+
+/**
+ * A keyword parameter's first value (a repeated key arrives as an array), whitespace collapsed: the
+ * string `/search/counts` caches on.
+ */
+const keywordText = (raw) => String(firstValue(raw) || '').replace(/\s+/g, ' ').trim();
+
+/** `keywordText` without double quotes: eagle-api took quoted keywords, and CONTAINS has no phrases. */
+const periodKeywords = (raw) => keywordText(String(firstValue(raw) || '').replace(/"/g, ''));
+
+/** Shorter keywords match most project names, so they match period labels only. */
+const PERIOD_NAME_MATCH_MIN_CHARS = 2;
+
+/** Substring match on the label, or on the parent project's name resolved under the caller's access. */
+async function periodListFilters(access, keywords, status) {
+  return {
+    status,
+    keywords,
+    keywordProjectIds: keywords.length >= PERIOD_NAME_MATCH_MIN_CHARS
+      ? await projectsRepo.listIdsByName(access, keywords)
+      : [],
+    now: new Date()
+  };
+}
+
+/** Every period this caller may see, across all projects, paged and counted on one predicate. */
+async function periodList({ access, keywords, status, pageNum, pageSize, sortBy }) {
+  const filters = await periodListFilters(access, keywords, status);
+  const [rows, count] = await Promise.all([
+    commentPeriodsRepo.listAll(access, { ...filters, pageNum, pageSize, sortBy }),
+    commentPeriodsRepo.countAll(access, filters)
+  ]);
+  logger.debug('[search] CommentPeriod list', {
+    rows: rows.length, count, status: filters.status || null, keywordProjects: filters.keywordProjectIds.length
+  });
   return {
     searchResults: await periodRows(access, rows),
-    count: rows.length,
-    closedCount,
-    applied: ['status']
+    count,
+    applied: status ? ['status'] : []
   };
+}
+
+/** The `sortBy` entries a period read did not order by: it takes the first allowed key only. */
+function periodSortDropped(sortBy) {
+  const names = eagleQuery.sortEntries(sortBy).map(entry => entry.replace(/^[+-]/, ''));
+  const used = names.find(name => commentPeriodsRepo.SORTABLE.includes(name));
+  return names.filter(name => name !== used);
 }
 
 /** The most rows `top=true` and dataset=HomeFeed answer. A longer list is a page, not a strip. */
@@ -740,6 +764,16 @@ async function homeFeed({ access, query }) {
   return { searchResults: rows, count: rows.length, applied: [] };
 }
 
+/**
+ * The Cosmos-backed `/search` datasets — the reads eagle-public used to make against eagle-api's
+ * own `/api/search`, `/api/organization`, `/api/commentperiod`, `/api/public/comment` and
+ * `/api/public/recentActivity`.
+ *
+ * Every one answers `{searchResults, count}` on the SAME envelope the Project bare-list branch
+ * uses, so `res.json`'s wrapper attaches `meta[0].searchResultsTotal` and eagle-public can page.
+ * `applied` names the filter keys the branch consumed; everything else the caller sent is reported
+ * as dropped, because a filter panel that quietly does nothing returns the whole corpus.
+ */
 const COSMOS_DATASETS = {
   /** Every lookup row. eagle-public asks for all 250-odd in one page and resolves ids client-side. */
   List: (ctx) => listRows(ctx, listsRepo.KINDS.LIST),
@@ -751,42 +785,47 @@ const COSMOS_DATASETS = {
     const id = filterValue(query, '_id');
     if (id) {
       const row = await commentPeriodsRepo.getById(access, id);
-      return {
-        searchResults: await periodRows(access, row ? [row] : []),
-        count: row ? 1 : 0,
-        applied: ['_id']
-      };
+      const searchResults = await periodRows(access, row ? [row] : []);
+      return { searchResults, count: searchResults.length, applied: ['_id'] };
     }
 
     // `filterQuery`, NOT `query`: `commentPeriods.projectId` holds the DEMI project id, so the
     // Eagle ObjectId eagle-public sends has to be the one `resolveProjectFilter` already translated.
     const [projectId] = eagleQuery.projectIdsFrom(filterQuery);
 
-    // BEFORE the no-project guard below, which answers empty: "every open period" is the one read
-    // this dataset has that names no project, and the guard would swallow it.
-    const status = filterValue(query, 'status');
-    if (status !== null) {
-      // REFUSED, never answered. An unrecognised status falling through would hand back the whole
-      // corpus under a 200, which reads exactly like "every period matches your filter".
-      if (!PERIOD_STATUSES.has(status)) {
-        return {
-          error: `and[status] must be one of ${[...PERIOD_STATUSES].join(', ')}, not '${status}'`
-        };
-      }
-      // A project filter alongside it keeps the per-project read below and reports `status` as
-      // dropped: the open list is cross-partition by construction and cannot also be scoped.
-      if (!projectId) return openPeriods({ access, pageSize });
+    const statuses = filterValues(query, 'status');
+    // REFUSED, never answered. An unrecognised status falling through would hand back the whole
+    // corpus under a 200, which reads exactly like "every period matches your filter".
+    if (statuses !== null && statuses.length > 1) {
+      return { error: `and[status] takes one value, not ${statuses.join(', ')}` };
     }
+    const status = statuses === null ? null : (statuses[0] || '');
+    if (status !== null && !commentPeriodsRepo.STATUSES.includes(status)) {
+      return {
+        error: `and[status] must be one of ${commentPeriodsRepo.STATUSES.join(', ')}, not '${status}'`
+      };
+    }
+    const sortDropped = periodSortDropped(sortBy);
 
+    // A project filter keeps the per-project read below and reports `status` as dropped.
     if (!projectId) {
-      return { searchResults: [], count: 0, applied: [] };
+      const capped = pageSizeFor(access, pageSize);
+      if (capped.error) return { error: capped.error };
+      const keywords = periodKeywords(query.keywords || query.q);
+      // The home rail sends none of these; the search tab always sends `sortBy` and `pageNum`.
+      const rail = query.sortBy === undefined && query.pageNum === undefined && !keywords;
+      if (status === 'open' && rail) return openPeriods({ access, pageSize: capped.pageSize });
+      return {
+        ...await periodList({ access, keywords, status, pageNum, pageSize: capped.pageSize, sortBy }),
+        sortDropped
+      };
     }
 
     const [rows, count] = await Promise.all([
       commentPeriodsRepo.listByProject(projectId, access, { pageNum, pageSize, sortBy }),
       commentPeriodsRepo.countByProject(projectId, access)
     ]);
-    return { searchResults: await periodRows(access, rows), count, applied: ['project'] };
+    return { searchResults: await periodRows(access, rows), count, applied: ['project'], sortDropped };
   },
 
   async Comment({ access, query, pageNum, pageSize, sortBy }) {
@@ -1072,9 +1111,21 @@ async function periodRows(access, rows) {
     eagleIdByDemiId.set(String(parent.id), String(parent.id));
   }
 
+  // The period's own ACL admits it only through the publish cascade; if that cascade failed, a
+  // period of a hidden parent still reads public. The parent read above is the second check.
+  const withheld = isPrivileged(access.roles || [])
+    ? []
+    : rows.filter(row => !eagleIdByDemiId.has(String(row.projectId)));
+  if (withheld.length > 0) {
+    logger.warn('[search] CommentPeriod withheld: parent not visible to this caller', {
+      periodIds: withheld.map(row => String(row.id)),
+      projectIds: Array.from(new Set(withheld.map(row => String(row.projectId))))
+    });
+  }
+
   // `projectName` rides on the parent read above, so the home page rail needs no read per card.
   // Absent, never invented, when the parent is hidden, unnamed, or a notification.
-  return cosmosRows('commentPeriods', rows, access, 'CommentPeriod', (row) => {
+  return cosmosRows('commentPeriods', rows.filter(row => !withheld.includes(row)), access, 'CommentPeriod', (row) => {
     const name = nameByDemiId.get(String(row.projectId));
     return {
       project: eagleIdByDemiId.get(String(row.projectId)) || null,
@@ -1803,6 +1854,7 @@ exports.search = async (req, res) => {
         // it, so anything left here is a key the container has no axis for.
         const applied = new Set(result.applied || []);
         noteDropped('filter', eagleQuery.filterKeysIn(req.query).filter(key => !applied.has(key)));
+        noteDropped('sort', result.sortDropped);
 
         return res.json([{
           searchResults: result.searchResults,
@@ -1828,12 +1880,12 @@ exports.search = async (req, res) => {
 };
 
 /** The record types the unified search page shows a badge for, in the order the tabs sit in. */
-const COUNTS_DATASETS = ['Project', 'Document', 'RecentActivity', 'ProjectNotification'];
+const COUNTS_DATASETS = ['Project', 'Document', 'RecentActivity', 'ProjectNotification', 'CommentPeriod'];
 
 /**
  * EVERY parameter `/search/counts` reads, and the whole gate — not a widening of the `/search` set.
  *
- * Filters are per record type and this endpoint counts all four at once, so there is no filter it
+ * Filters are per record type and this endpoint counts every type at once, so there is no filter it
  * could honour. `and[type]=Letter`, `dataset`, `pageSize`, `sortBy` and the rest are REFUSED here
  * rather than accepted and dropped: a badge answered under a filter the caller believes was
  * applied is a wrong number with nothing to say so.
@@ -1841,8 +1893,8 @@ const COUNTS_DATASETS = ['Project', 'Document', 'RecentActivity', 'ProjectNotifi
 const COUNTS_PARAMS = new Set(['keywords', 'q', 'prefix', 'datasets']);
 
 /**
- * How long one caller's badge row is reused. The page asks on a debounced keystroke, and four
- * index counts per pause against a 1-SU service is the cost this exists to bound. Short enough
+ * How long one caller's badge row is reused. The page asks on a debounced keystroke, and one count per
+ * type per pause against a 1-SU service is the cost this exists to bound. Short enough
  * that a newly published record shows up within a page view.
  */
 const COUNTS_TTL_MS = 45 * 1000;
@@ -1964,12 +2016,19 @@ const COUNT_LEGS = {
       warnKeywordFallback('ProjectNotification', 'missing');
       return { count: null };
     }
+  },
+
+  // The same predicate the unscoped list reads with no status, so the badge is that tab's total.
+  async CommentPeriod({ access, keywords }) {
+    return {
+      count: await commentPeriodsRepo.countAll(access, await periodListFilters(access, periodKeywords(keywords)))
+    };
   }
 };
 
 /**
  * Every badge, in parallel, one failure at a time. `allSettled` because a tab whose index is down
- * must not take the other three with it — the page shows three numbers and one blank, never a 500.
+ * must not take the others with it — the page shows one blank badge, never a 500.
  */
 async function computeCounts(access, keywords, prefix) {
   const settled = await Promise.allSettled(
@@ -2000,8 +2059,8 @@ async function computeCounts(access, keywords, prefix) {
 /**
  * `GET /api/search/counts?keywords=&prefix=&datasets=…` — the record-type badges on one request.
  *
- * ALL FOUR are computed whatever `datasets` names, and the cache key says nothing about them: the
- * page asks for all four on every pause, so a narrower request is served from the same entry rather
+ * EVERY type is computed whatever `datasets` names, and the cache key says nothing about them: the
+ * page asks for all of them on every pause, so a narrower request is served from the same entry rather
  * than splitting the cache into subsets that each pay full price. `datasets` slices the answer.
  *
  * No `Cache-Control`, which is what `/search` sends: these counts are ACL-scoped, and a shared cache
@@ -2024,10 +2083,7 @@ exports.counts = async (req, res) => {
 
     // Whitespace only. Lowercasing would widen the cache but change the string the analyzer is
     // handed, and the key has to name the query that was actually run.
-    // A REPEATED `keywords` takes the first value, as every other repeated key on this API does:
-    // `.trim()` on the array `querystring.parse` hands back would be a 500 on a 200-shaped request.
-    const keywords = String(firstValue(req.query.keywords || req.query.q) || '')
-      .trim().replace(/\s+/g, ' ');
+    const keywords = keywordText(req.query.keywords || req.query.q);
     // Same default as `/search`: on unless the caller sends the exact string `false`.
     const prefix = req.query.prefix !== 'false';
     const access = resolveAccess(req);
