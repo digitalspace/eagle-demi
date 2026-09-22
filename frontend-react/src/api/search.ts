@@ -8,6 +8,25 @@ export const SEARCH_RETRY_DELAY_MS = 1000;
 
 export type Dataset = 'Project' | 'Document';
 
+/** One `/search` answer as the API sends it, before a loader picks out what it needs. */
+export interface WireEnvelope<T, M = unknown> {
+  searchResults?: T[];
+  count?: number;
+  meta?: M[];
+}
+
+/**
+ * Rows to ask for in the one `List` read. There are about 250, so this fits in a single request;
+ * the API caps a page at 1000 and refuses over 100 anonymously.
+ */
+const LIST_PAGE_SIZE = 1000;
+
+/** Every Eagle `List` row, in one request. */
+export async function fetchListRows<T>(init?: ApiInit): Promise<T[]> {
+  const body = await api<WireEnvelope<T>[] | null>(`/search?dataset=List&pageSize=${LIST_PAGE_SIZE}`, init);
+  return body?.[0]?.searchResults ?? [];
+}
+
 /** One `/search` envelope. `count` is the index-wide total, NOT the number of rows returned. */
 export interface SearchEnvelope<T> {
   searchResults: T[];
@@ -30,7 +49,7 @@ export async function searchDataset<T>(
   query: string,
   init?: ApiInit,
 ): Promise<SearchEnvelope<T>> {
-  const body = await api<{ searchResults?: T[]; count?: number }[] | null>(
+  const body = await api<WireEnvelope<T>[] | null>(
     `/search?${searchQueryString(dataset, query)}`,
     init,
   );

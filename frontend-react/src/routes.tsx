@@ -3,16 +3,6 @@ import { config } from './config';
 import { readPrefs } from './shell/prefs';
 import { Shell } from './shell/Shell';
 
-// No route guard: App renders the sign-in screen instead of the router until isStaff is true, so
-// every route is gated once, in one place.
-const screen = (path: string, key: string): RouteObject => ({
-  path,
-  lazy: async () => {
-    const { ScreenPending } = await import('./shell/ScreenPending');
-    return { Component: () => <ScreenPending screenKey={key} /> };
-  },
-});
-
 /** Angular's UrlTree serializer percent-encodes; URLSearchParams would write a space as `+`. */
 const queryString = (params: Record<string, string>): string =>
   Object.entries(params)
@@ -53,6 +43,7 @@ export function apiDocsTarget(apiPath: unknown): string {
   return target;
 }
 
+// No route guard: App renders the sign-in screen instead of the router until isStaff is true.
 export const routes: RouteObject[] = [
   {
     path: '/',
@@ -61,7 +52,7 @@ export const routes: RouteObject[] = [
       { path: 'workspace', lazy: async () => ({ Component: (await import('./screens/Workspace')).Workspace }) },
       // Lazy on its own: maplibre is about 1 MB, and only this screen draws a map.
       { path: 'map', lazy: async () => ({ Component: (await import('./screens/MapExplorer')).MapExplorer }) },
-      screen('search', 'search'),
+      { path: 'search', lazy: async () => ({ Component: (await import('./screens/UnifiedSearch')).UnifiedSearch }) },
       legacySearch('index', {}),
       legacySearch('content', { record: 'documents', scope: 'inside' }),
       { path: 'summary', lazy: async () => ({ Component: (await import('./screens/Summarizer')).Summarizer }) },

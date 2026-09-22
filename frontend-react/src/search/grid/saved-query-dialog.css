@@ -1,0 +1,145 @@
+/* The Save-this-query dialog, and the saved-query rows the grid toolbar lists in its own menu. */
+
+.saved-query {
+  max-width: 28rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--layout-border-radius-medium);
+  background: var(--theme-gray-white);
+  box-shadow: var(--surface-shadow-medium);
+}
+
+.saved-query::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
+
+.saved-query__sheet {
+  display: flex;
+  flex-direction: column;
+  padding: var(--layout-padding-large);
+}
+
+.saved-query__title {
+  margin: 0 0 var(--layout-margin-small);
+  font: var(--typography-bold-body);
+  color: var(--typography-color-primary);
+}
+
+.saved-query__label {
+  margin-bottom: var(--layout-margin-hair);
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+}
+
+.saved-query__input {
+  height: var(--grid-control-h);
+  padding: 0 var(--layout-padding-xsmall);
+  border: var(--layout-border-width-medium) solid var(--theme-gray-50);
+  border-radius: var(--layout-border-radius-small);
+  background: var(--theme-gray-white);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+.saved-query__input:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-primary-default);
+  outline-offset: 1px;
+}
+
+.saved-query__hint {
+  margin: var(--layout-margin-hair) 0 0;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.saved-query__error {
+  margin: var(--layout-margin-small) 0 0;
+  padding: var(--layout-padding-xsmall);
+  border-left: var(--layout-border-width-medium) solid var(--support-border-color-danger);
+  background: var(--theme-gray-10);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-danger);
+}
+
+.saved-query__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--layout-padding-small);
+  margin-top: var(--layout-padding-medium);
+}
+
+.saved-query__button {
+  height: var(--grid-control-h);
+  padding: 0 var(--layout-padding-medium);
+  border: var(--layout-border-width-medium) solid var(--theme-gray-50);
+  border-radius: var(--layout-border-radius-small);
+  background: var(--theme-gray-white);
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+  cursor: pointer;
+}
+
+.saved-query__button--primary {
+  border-color: var(--surface-color-primary-default);
+  background: var(--surface-color-primary-default);
+  color: var(--theme-gray-white);
+}
+
+.saved-query__button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Rows inside the toolbar's Saved queries menu. */
+
+.saved-query__empty {
+  margin: 0;
+  padding: var(--layout-padding-xsmall) 0;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.saved-query__row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--layout-padding-hair);
+}
+
+.saved-query__open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: var(--layout-padding-xsmall);
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.saved-query__open:hover {
+  background: var(--theme-gray-10);
+}
+
+.saved-query__name {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+}
+
+.saved-query__record {
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.saved-query__delete {
+  padding: 0 var(--layout-padding-xsmall);
+  border: none;
+  background: none;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-link);
+  cursor: pointer;
+}
+
+.saved-query__delete:hover {
+  text-decoration: underline;
+}

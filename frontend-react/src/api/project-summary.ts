@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, api, type ApiInit } from './client';
 import { trackException } from '../telemetry';
+import { fetchListRows } from './search';
 
 /**
  * A lookup field as the project record actually carries it: a bare Eagle `List` ObjectId, a
@@ -31,12 +32,6 @@ const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 /** Said to a reader who is looking at an id, so the page never shows one without saying why. */
 const UNRESOLVED_HINT = 'Not in the registry’s list of names: ';
-
-/**
- * Rows to ask for in the one `List` read. There are about 250 and the page is staff-only, so this
- * fits in a single request — the API caps a page at 1000 and refuses over 100 anonymously.
- */
-const LIST_PAGE_SIZE = 1000;
 
 /** Said in place of a list the read could not deliver, so an outage never reads as an empty registry. */
 export const PROJECT_LIST_ERROR = 'The project list could not be loaded. Reload the page to try again.';
@@ -94,9 +89,6 @@ interface SearchRow {
   name?: string;
 }
 
-interface SearchEnvelope {
-  searchResults?: SearchRow[];
-}
 
 /**
  * Every Eagle `List` row as id -> name, in one request.
@@ -107,8 +99,7 @@ interface SearchEnvelope {
  */
 export async function fetchLists(init?: ApiInit): Promise<Map<string, string>> {
   try {
-    const body = await api<SearchEnvelope[]>(`/search?dataset=List&pageSize=${LIST_PAGE_SIZE}`, init);
-    const rows = body?.[0]?.searchResults || [];
+    const rows = await fetchListRows<SearchRow>(init);
     // A nameless row is dropped rather than mapped to '': an id with its "not in the list"
     // tooltip says more than a blank.
     return new Map(rows.filter((row) => row.name).map((row) => [String(row.id ?? row._id), String(row.name)]));

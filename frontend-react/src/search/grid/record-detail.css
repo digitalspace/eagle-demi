@@ -1,0 +1,157 @@
+/* The record detail dialog, and the grid rows that open it. */
+
+.record-detail {
+  width: min(45rem, calc(100vw - 2rem));
+  max-width: min(45rem, calc(100vw - 2rem));
+  max-height: min(42rem, calc(100vh - 4rem));
+  padding: 0;
+  border: none;
+  border-radius: var(--layout-border-radius-medium);
+  background: var(--theme-gray-white);
+  box-shadow: var(--surface-shadow-medium);
+  overflow: hidden;
+}
+
+.record-detail::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
+
+.record-detail__sheet {
+  display: flex;
+  flex-direction: column;
+  /* The sheet, not the dialog, is the scroll box, so the title and the actions stay put. */
+  max-height: min(42rem, calc(100vh - 4rem));
+}
+
+.record-detail__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--layout-padding-small);
+  padding: var(--layout-padding-large) var(--layout-padding-large) var(--layout-padding-small);
+  border-bottom: var(--layout-border-width-small) solid var(--theme-gray-30);
+}
+
+.record-detail__title {
+  margin: 0;
+  font: var(--typography-bold-body);
+  color: var(--typography-color-primary);
+}
+
+.record-detail__close {
+  flex: none;
+  padding: 0 var(--layout-padding-xsmall);
+  border: none;
+  background: none;
+  font: var(--typography-bold-body);
+  line-height: 1;
+  color: var(--typography-color-secondary);
+  cursor: pointer;
+}
+
+.record-detail__close:hover {
+  color: var(--typography-color-primary);
+}
+
+.record-detail__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--layout-padding-medium) var(--layout-padding-large);
+}
+
+.record-detail__meta {
+  margin: 0 0 var(--layout-margin-small);
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+}
+
+.record-detail__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--layout-padding-small);
+  margin: 0;
+}
+
+.record-detail__fields dt {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.record-detail__fields dd {
+  margin: 0;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+}
+
+.record-detail__prose {
+  margin: var(--layout-padding-medium) 0 0;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+  white-space: pre-wrap;
+}
+
+.record-detail__docs {
+  margin-top: var(--layout-padding-medium);
+}
+
+.record-detail__docs-count {
+  margin: 0 0 var(--layout-margin-hair);
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-secondary);
+}
+
+.record-detail__docs ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.record-detail__docs li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-padding-xsmall);
+  padding: var(--layout-padding-hair) 0;
+  font: var(--typography-regular-small-body);
+}
+
+.record-detail__docs-meta {
+  color: var(--typography-color-secondary);
+}
+
+.record-detail__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--layout-padding-small);
+  padding: var(--layout-padding-small) var(--layout-padding-large) var(--layout-padding-large);
+}
+
+.record-detail__button {
+  display: inline-flex;
+  align-items: center;
+  height: var(--grid-control-h);
+  padding: 0 var(--layout-padding-medium);
+  border: var(--layout-border-width-medium) solid var(--theme-gray-50);
+  border-radius: var(--layout-border-radius-small);
+  background: var(--theme-gray-white);
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-primary);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.record-detail__button--primary {
+  border-color: var(--surface-color-primary-default);
+  background: var(--surface-color-primary-default);
+  color: var(--theme-gray-white);
+}
+
+/* The rows that open the dialog. A press anywhere but on another control opens the record. */
+.display-grid__row--pressable {
+  cursor: pointer;
+}
+
+.display-grid__row--pressable:focus-visible {
+  outline: var(--layout-border-width-medium) solid var(--surface-color-primary-default);
+  outline-offset: -2px;
+}

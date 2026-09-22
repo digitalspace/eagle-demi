@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { PREFS_KEY } from './shell/prefs';
@@ -36,6 +36,13 @@ async function go(url: string): Promise<string> {
   await screen.findAllByRole('banner');
   return router.state.location.pathname + router.state.location.search;
 }
+
+// Each screen is a lazy route, and the first visit pays for transforming its whole module graph,
+// which can outlast findAllByRole's wait. Loading them all once here moves that cost out of the tests.
+beforeAll(async () => {
+  const screens = routes.flatMap((route) => route.children ?? []);
+  await Promise.all(screens.map((route) => (typeof route.lazy === 'function' ? route.lazy() : null)));
+}, 60_000);
 
 beforeEach(() => {
   window.__env = { ENVIRONMENT: 'test', API_PATH: '/api' };
