@@ -10,6 +10,7 @@ import { useDocuments } from '../api/documents';
 import type { Project } from '../api/types';
 import { trackException } from '../telemetry';
 import { readPrefs } from '../shell/prefs';
+import { useNarrow } from '../shell/useNarrow';
 import {
   BC_CENTER,
   Basemaps,
@@ -82,6 +83,7 @@ import {
 } from '../api/layers';
 import { bboxOf, bboxOfPositions, type Geometry, type Position } from '../map/geojson';
 import { highlightField } from '../map/highlight';
+import { useEscapeLayer } from '../map/use-dismissable';
 import '../map/map-explorer.css';
 
 const SOURCE_ID = 'projects';
@@ -99,6 +101,8 @@ const CARD_EXIT_MS = 140;
 const CLUSTER_FIT_PADDING = 80;
 /** Six placeholder rows, sized like the real one, so the list does not resize when it lands. */
 const SKELETON_ROWS = [1, 2, 3, 4, 5, 6];
+/** Same breakpoint as the narrow rules in map-explorer.css: below it the list and the map take turns. */
+export const MAP_NARROW_QUERY = '(max-width: 48rem)';
 
 interface MapFeature {
   key: string;
@@ -126,7 +130,6 @@ function clusterSize(count: number): string {
 export function MapExplorer() {
   const perPage = readPrefs().perPage;
   const mapRef = useRef<MapRef>(null);
-  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
 
   const [query, setQuery] = useState('');
@@ -136,12 +139,27 @@ export function MapExplorer() {
   const [basemap, setBasemap] = useState(DEFAULT_BASEMAP);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [sourceTab, setSourceTab] = useState<SourceTab>('all');
-  const [copiedId, setCopiedId] = useState(false);
+  /** Bumped on every copy, so a second copy restarts the "Copied" timer; 0 shows "Copy id". */
+  const [copies, setCopies] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [features, setFeatures] = useState<MapFeature[]>([]);
   /** Holds the control stack, a sibling of the map rather than a child of its clipped canvas. */
   const [controlsHost, setControlsHost] = useState<HTMLDivElement | null>(null);
   const signatureRef = useRef('');
+
+  const narrow = useNarrow(MAP_NARROW_QUERY);
+  /** The pane a narrow screen shows. Both show above the breakpoint, whatever this says. */
+  const [view, setView] = useState<'list' | 'map'>('map');
+  // Chosen during render, before the pane it hides turns inert and drops focus to the page.
+  const [wasNarrow, setWasNarrow] = useState(narrow);
+  if (wasNarrow !== narrow) {
+    setWasNarrow(narrow);
+    if (narrow) setView(document.activeElement?.closest('.demi-map-rail') ? 'list' : 'map');
+  }
+  const listButtonRef = useRef<HTMLButtonElement>(null);
+  const cardTitleRef = useRef<HTMLHeadingElement>(null);
+  /** The project a narrow list pick hid the row of, so its card takes focus once shown. */
+  const focusCardFor = useRef<string | null>(null);
 
   /** The control each panel was opened from, so Escape hands focus back to it. */
   const openers = useRef<Record<string, HTMLElement | null>>({});
@@ -202,6 +220,7 @@ export function MapExplorer() {
   );
   const regions = useRegionalBoundaries(activeLayers.includes('regions'));
   const wildfires = useWildfires(wildfiresOn);
+  const fires = useMemo(() => wildfirePins(wildfires.data), [wildfires.data]);
   const speciesList = useInvasiveSpecies(invasivesOn);
 
   const boundaryRows = useMemo<BoundaryGeometries>(
@@ -292,10 +311,12 @@ export function MapExplorer() {
   // One ring on the pin a new selection landed on, so the eye is told where it went. Started here
   // rather than in a handler because a selection can also arrive from the URL or the lasso.
   const [arrivingId, setArrivingId] = useState<string | null>(null);
-  const pulsedFor = useRef<string | null>(null);
+  // Previous selection kept in state, not a ref: a ref written during render survives a render
+  // React throws away, and that selection would then never pulse.
+  const [pulsedFor, setPulsedFor] = useState<string | null>(null);
   const selectionKey = selectedId === null ? null : String(selectedId);
-  if (pulsedFor.current !== selectionKey) {
-    pulsedFor.current = selectionKey;
+  if (pulsedFor !== selectionKey) {
+    setPulsedFor(selectionKey);
     setArrivingId(selectionKey);
   }
   // The project whose card is playing its exit. Held so a close fades out with its content still
@@ -336,18 +357,37 @@ export function MapExplorer() {
     (returnFocus = true) => {
       setClosing(shownRef.current);
       setSelectedId((current) => {
-        if (returnFocus && current !== null) rowElement(current)?.focus();
+        if (returnFocus && current !== null) {
+          // A narrow map hides the list, and with it the row; its switch is the way back.
+          (narrow && view === 'map' ? listButtonRef.current : rowElement(current))?.focus();
+        }
         return null;
       });
       setDetailsExpanded(false);
     },
-    [setSelectedId],
+    [setSelectedId, narrow, view],
   );
 
   function selectProject(project: Project) {
-    if (selectedId !== null && String(selectedId) === String(project.id)) clearSelection();
-    else setSelectedId(project.id);
+    if (selectedId !== null && String(selectedId) === String(project.id)) return clearSelection();
+    setSelectedId(project.id);
+    if (narrow) {
+      setView('map');
+      focusCardFor.current = String(project.id);
+    }
   }
+
+  useEffect(() => {
+    if (focusCardFor.current === null) return;
+    // Another selection (a pin, the URL, the lasso) took over before this one resolved.
+    if (focusCardFor.current !== selectionKey) {
+      focusCardFor.current = null;
+      return;
+    }
+    if (!selected) return;
+    focusCardFor.current = null;
+    cardTitleRef.current?.focus();
+  }, [selected, selectionKey]);
 
   /* ------------------------------------------------------------------------------- lasso */
 
@@ -383,41 +423,37 @@ export function MapExplorer() {
     setLasso(null);
   }, [setLasso]);
 
+  // Each panel hands focus back to the control it was opened from, not to the document.
+  useEscapeLayer(savingOpen, () => {
+    setSavingOpen(false);
+    returnFocus('saving');
+  });
+  useEscapeLayer(filtersOpen, () => {
+    setFiltersOpen(false);
+    returnFocus('filters');
+  });
+
   /**
-   * Escape order, as the Angular app's screen (0038d3e) had it: an armed drawing tool owns Escape first, then an
-   * open panel, then the selection. The base map menu closes itself from the capture phase, so it
-   * never reaches this.
+   * Escape order: an open panel first, then an armed drawing tool, then the selection. Panels take
+   * the key from the capture phase (`useEscapeLayer`), so an open one closes before this runs.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (lassoArmed) return escapeLasso();
-      // Each panel hands focus back to the control it was opened from, not to the document.
-      if (savedOpen) {
-        setSavedOpen(false);
-        return returnFocus('saved');
-      }
-      if (savingOpen) {
-        setSavingOpen(false);
-        return returnFocus('saving');
-      }
-      if (filtersOpen) {
-        setFiltersOpen(false);
-        return returnFocus('filters');
-      }
       if (selectedId !== null) clearSelection();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [lassoArmed, escapeLasso, savedOpen, savingOpen, filtersOpen, selectedId, clearSelection]);
+  }, [lassoArmed, escapeLasso, selectedId, clearSelection]);
 
   /** Read on open rather than on arrival: most visits never touch this menu. */
   function toggleSaved(): void {
     const open = !savedOpen;
-    if (open) rememberOpener('saved');
     setSavedOpen(open);
     if (open) void myData.refetch();
   }
+  const closeSaved = useCallback(() => setSavedOpen(false), []);
 
   async function saveArea(name: string): Promise<void> {
     if (!lasso || saveLasso.isPending) return;
@@ -436,17 +472,21 @@ export function MapExplorer() {
     setSavedOpen(false);
   }
 
-  useEffect(() => () => {
-    if (copiedTimer.current) clearTimeout(copiedTimer.current);
-  }, []);
+  // Started here rather than in the copy handler, which resumes after its await and may do so after
+  // the screen has gone: a timer started from an effect is always cleared with it.
+  useEffect(() => {
+    if (copies === 0) return;
+    const timer = setTimeout(() => setCopies(0), COPIED_RESET_MS);
+    return () => clearTimeout(timer);
+  }, [copies]);
 
   // Read back what the clustering worker produced, once per painted frame so clusters split and
   // merge during a camera move rather than swapping all at once when it ends. maplibre paces
   // `render`, and the signature check below makes a frame that changed nothing free.
   const refreshFeatures = useCallback(() => {
     const map = mapRef.current;
-    // `isSourceLoaded` throws for a source the style has not got yet, and the first frames render
-    // before React has added it.
+    // `isSourceLoaded` throws for a source the style has not got yet (the first frames render before
+    // React adds it), and a source still clustering answers with a partial set: wait for both.
     if (!map || !map.getSource(SOURCE_ID) || !map.isSourceLoaded(SOURCE_ID)) return;
 
     const seen = new Set<string>();
@@ -470,8 +510,10 @@ export function MapExplorer() {
       });
     }
 
+    // Sorted, so the same set answered in a different tile order is still the same frame.
     const signature = next
       .map((item) => `${item.key}@${item.lng.toFixed(4)},${item.lat.toFixed(4)}x${item.count}`)
+      .sort()
       .join('|');
     if (signature === signatureRef.current) return;
     signatureRef.current = signature;
@@ -731,19 +773,70 @@ export function MapExplorer() {
     if (!shown) return;
     try {
       await navigator.clipboard.writeText(String(shown.id));
-      setCopiedId(true);
-      if (copiedTimer.current) clearTimeout(copiedTimer.current);
-      copiedTimer.current = setTimeout(() => setCopiedId(false), COPIED_RESET_MS);
+      setCopies((count) => count + 1);
     } catch {
       // Clipboard refused (no permission, or an insecure context). The id is still on screen.
     }
   }
 
   return (
-    <div className="demi-map-screen">
+    <div className="demi-map-screen" data-view={narrow ? view : undefined}>
       <h1 className="visually-hidden">Map Explorer</h1>
 
-      <div className="demi-map-rail">
+      {narrow && (
+        <div className="demi-map-views">
+          <div className="demi-map-views__switch" role="group" aria-label="Show projects as">
+            <button
+              type="button"
+              ref={listButtonRef}
+              aria-pressed={view === 'list'}
+              onClick={() => setView('list')}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden="true"
+              >
+                <line x1="9" y1="6" x2="20" y2="6" />
+                <line x1="9" y1="12" x2="20" y2="12" />
+                <line x1="9" y1="18" x2="20" y2="18" />
+                <circle cx="4.5" cy="6" r="1" />
+                <circle cx="4.5" cy="12" r="1" />
+                <circle cx="4.5" cy="18" r="1" />
+              </svg>
+              List{' '}
+              {sorted && (
+                <>
+                  <span className="pill pill--info">{sorted.length}</span>{' '}
+                  <span className="visually-hidden">projects</span>
+                </>
+              )}
+            </button>
+            <button type="button" aria-pressed={view === 'map'} onClick={() => setView('map')}>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden="true"
+              >
+                <polygon points="3,6 9,3 15,6 21,3 21,18 15,21 9,18 3,21" />
+                <line x1="9" y1="3" x2="9" y2="18" />
+                <line x1="15" y1="6" x2="15" y2="21" />
+              </svg>
+              Map
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="demi-map-rail" inert={narrow && view === 'map'}>
         <div className="demi-map-rail__search">
           <div className="demi-map-rail__box">
             <svg
@@ -1015,7 +1108,7 @@ export function MapExplorer() {
         </div>
       </div>
 
-      <div className="demi-map-canvas">
+      <div className="demi-map-canvas" inert={narrow && view === 'list'}>
         <div
           id="demi-map"
           className={`demi-map${selectionOnMap ? ' demi-map--selection' : ''}`}
@@ -1032,7 +1125,6 @@ export function MapExplorer() {
             onLoad={() => setLoaded(true)}
             onRender={refreshFeatures}
             onIdle={refreshFeatures}
-            onMoveEnd={refreshFeatures}
             onSourceData={onSourceData}
             interactiveLayerIds={boundaryFillIds}
             onMouseMove={(event: MapLayerMouseEvent) => {
@@ -1085,7 +1177,7 @@ export function MapExplorer() {
               />
             ))}
 
-            {wildfiresOn && <WildfireMarkers fires={wildfirePins(wildfires.data)} />}
+            {wildfiresOn && <WildfireMarkers fires={fires} />}
 
             {observation && (
               <Popup
@@ -1168,6 +1260,7 @@ export function MapExplorer() {
                     <SavedAreasPanel
                       open={savedOpen}
                       onToggle={toggleSaved}
+                      onClose={closeSaved}
                       areas={savedAreas}
                       loading={myData.isFetching}
                       onApply={applySavedArea}
@@ -1223,7 +1316,6 @@ export function MapExplorer() {
                     data-project-id={feature.id}
                     tabIndex={-1}
                     aria-hidden="true"
-                    aria-label={project?.name}
                     onClick={() => (isSelected ? clearSelection(false) : selectPin(feature))}
                   >
                     {/* Named on hover, the way the public project map names its pins. The rail row
@@ -1237,6 +1329,7 @@ export function MapExplorer() {
                   longitude={feature.lng}
                   latitude={feature.lat}
                   anchor="center"
+                  style={{ zIndex: 600 }}
                 >
                   <button
                     type="button"
@@ -1268,7 +1361,12 @@ export function MapExplorer() {
             }}
           >
             <div className="demi-map-card__head">
-              <h2 id="demi-selected-title" className="panel__title panel__title--inline">
+              <h2
+                id="demi-selected-title"
+                ref={cardTitleRef}
+                tabIndex={-1}
+                className="panel__title panel__title--inline"
+              >
                 {shown.name}
               </h2>
               <span className={`pill pill--caps ${pillClass(shown.gatingState)}`}>
@@ -1372,7 +1470,7 @@ export function MapExplorer() {
                 Documents ({docCount(shown.id)})
               </button>
               <button type="button" className="demi-map-card__copy" onClick={copyProjectId}>
-                {copiedId ? 'Copied' : 'Copy id'}
+                {copies > 0 ? 'Copied' : 'Copy id'}
               </button>
               <button
                 type="button"

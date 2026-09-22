@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { useProjects } from '../api/projects';
 import type { Project } from '../api/types';
 import { joinLabels, useLists, PROJECT_LIST_ERROR } from '../api/project-summary';
+import { projectPath } from '../search/record-types';
 
 /** Rows drawn at once. The filter still runs over all 411; a 411-row list is a wall, not a list. */
 export const MAX_ROWS = 50;
@@ -170,7 +171,7 @@ export function ProjectPicker() {
                 <li key={item.row.id}>
                   <Link
                     className="pp-result"
-                    to={`/projects/${item.row.id}`}
+                    to={projectPath(String(item.row.id))}
                     onKeyDown={(event) => {
                       if (event.key === 'ArrowDown') moveFocus(index, 1, event);
                       if (event.key === 'ArrowUp') moveFocus(index, -1, event);

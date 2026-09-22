@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderHook, waitFor } from '@testing-library/react';
+import { useFilterSources } from '../search/search-api';
+import { queryWrapper } from '../test-query';
 import {
-  fetchLists,
   fetchOrganizations,
   fetchProjectFacts,
   fetchProjectSummary,
   joinLabels,
+  listNames,
   resolveListLabel,
+  useLists,
 } from './project-summary';
 import { json, respond, urlOf } from '../test-http';
 
@@ -73,24 +77,47 @@ describe('joinLabels', () => {
   });
 });
 
-describe('fetchLists', () => {
-  it('reads every List row in one page and indexes it by id', async () => {
-    const fetchMock = respond(json([{ searchResults: [{ id: 'a1', name: 'Pre-Application' }] }]));
-
-    expect(await fetchLists()).toEqual(new Map([['a1', 'Pre-Application']]));
-    expect(urlOf(fetchMock.mock.calls[0])).toContain('dataset=List');
+describe('listNames', () => {
+  it('indexes List rows by id, falling back to _id', () => {
+    expect(listNames([{ id: 'a1', name: 'Pre-Application' }, { _id: 'a2', name: 'Application Review' }])).toEqual(
+      new Map([
+        ['a1', 'Pre-Application'],
+        ['a2', 'Application Review'],
+      ]),
+    );
   });
 
-  it('drops a row with no name so the id shows with its explanation instead of a blank', async () => {
-    respond(json([{ searchResults: [{ id: 'a1' }, { id: 'a2', name: 'Application Review' }] }]));
+  it('drops a row with no name so the id shows with its explanation instead of a blank', () => {
+    expect(listNames([{ id: 'a1' }, { id: 'a2', name: 'Application Review' }])).toEqual(
+      new Map([['a2', 'Application Review']]),
+    );
+  });
+});
 
-    expect(await fetchLists()).toEqual(new Map([['a2', 'Application Review']]));
+describe('useLists', () => {
+  it('shares one List request with the search filters', async () => {
+    const fetchMock = vi.fn(async (input: unknown) =>
+      String(input).includes('dataset=List')
+        ? json([{ searchResults: [{ id: 'a1', name: 'Pre-Application' }] }])
+        : json([{ searchResults: [] }]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => ({ names: useLists(), sources: useFilterSources() }), {
+      wrapper: queryWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.names.data).toEqual(new Map([['a1', 'Pre-Application']])));
+    expect(result.current.sources.lists).toEqual([{ id: 'a1', name: 'Pre-Application' }]);
+    expect(fetchMock.mock.calls.map(urlOf).filter((url) => url.includes('dataset=List'))).toHaveLength(1);
   });
 
   it('settles on an empty table when the lookup fails, rather than leaving labels pending', async () => {
     respond(json({ error: 'boom' }, 500));
 
-    expect(await fetchLists()).toEqual(new Map());
+    const { result } = renderHook(() => useLists(), { wrapper: queryWrapper() });
+
+    await waitFor(() => expect(result.current.data).toEqual(new Map()));
   });
 });
 

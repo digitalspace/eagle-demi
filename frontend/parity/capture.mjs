@@ -72,9 +72,9 @@ const VIEWPORT_HEIGHT = 900;
  * `fullPage: true` photographs the DOCUMENT, and in both apps the document is exactly one viewport
  * tall: `.app { height: 100vh }` with the column below it scrolling inside `.app__main`
  * (React `frontend/src/styles.css:15,29`; Angular `frontend/src/styles.css:18,32` at 0038d3e).
- * Every shot was therefore 900px and nothing below the fold was ever compared. The fix belongs here and not in the app CSS:
- * the inner scroll container is the layout both apps ship. So each shot measures its own content
- * and grows the viewport to fit before firing.
+ * Every shot was therefore 900px and nothing below the fold was ever compared. The fix belongs
+ * here and not in the app CSS: the inner scroll container is the layout both apps ship. So each
+ * shot measures its own content and grows the viewport to fit before firing.
  */
 const MAX_VIEWPORT_HEIGHT = 12000;
 

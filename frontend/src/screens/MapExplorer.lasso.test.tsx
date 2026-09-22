@@ -253,6 +253,49 @@ describe('MapExplorer Escape order', () => {
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Copper Ridge' })).toBeNull());
   });
 
+  it('closes an open map panel before it disarms the lasso', async () => {
+    const user = userEvent.setup();
+    await mount();
+    await user.click(lassoButton());
+    await user.click(screen.getByRole('button', { name: /^Layers/ }));
+    expect(screen.getByRole('button', { name: /^Layers/ })).toHaveAttribute('aria-expanded', 'true');
+
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: /^Layers/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(lassoButton()).toHaveAttribute('aria-pressed', 'true');
+
+    await user.keyboard('{Escape}');
+    expect(lassoButton()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('closes the filters drawer before it disarms the lasso', async () => {
+    const user = userEvent.setup();
+    await mount();
+    await user.click(lassoButton());
+    await user.click(screen.getByRole('button', { name: /^Filters/ }));
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('button', { name: 'Close filters' })).toBeNull();
+    expect(lassoButton()).toHaveAttribute('aria-pressed', 'true');
+
+    await user.keyboard('{Escape}');
+    expect(lassoButton()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('closes the saved areas panel on a press outside it, like the other map panels', async () => {
+    const user = userEvent.setup();
+    withAreas(SKEENA);
+    await mount();
+    await user.click(screen.getByRole('button', { name: 'Saved areas' }));
+
+    await user.click(screen.getByRole('textbox', { name: 'Search projects' }));
+
+    expect(screen.getByRole('button', { name: 'Saved areas' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
   it('closes an open panel before it reaches the selection', async () => {
     const user = userEvent.setup();
     withAreas(SKEENA);

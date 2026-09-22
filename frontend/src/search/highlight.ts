@@ -39,16 +39,14 @@ interface Span {
 
 /** Every match of every term, overlaps merged, in reading order. */
 function matchSpans(text: string, terms: string[]): Span[] {
-  const haystack = text.toLowerCase();
   const found: Span[] = [];
 
   for (const term of terms) {
-    const needle = term.toLowerCase();
-    if (needle.length < MIN_TERM_LENGTH) continue;
-    let at = haystack.indexOf(needle);
-    while (at !== -1) {
-      found.push({ from: at, to: at + needle.length });
-      at = haystack.indexOf(needle, at + needle.length);
+    if (term.length < MIN_TERM_LENGTH) continue;
+    // A case-blind regex, not `toLowerCase()`: lowering "İ" adds a character and shifts every offset after it.
+    const needle = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+    for (const match of text.matchAll(needle)) {
+      found.push({ from: match.index, to: match.index + match[0].length });
     }
   }
 

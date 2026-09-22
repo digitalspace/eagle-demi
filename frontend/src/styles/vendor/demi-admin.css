@@ -320,12 +320,6 @@ code {
   white-space: nowrap;
 }
 
-/* ui: ProposalBanner */
-
-.proposal-banner {
-  margin-bottom: var(--layout-margin-large);
-}
-
 /* ui: StatCard */
 
 .stat-grid {
@@ -453,10 +447,6 @@ code {
   color: var(--typography-color-secondary);
 }
 
-.cell__mono--wrap {
-  word-break: break-word;
-}
-
 .cell--muted {
   color: var(--typography-color-secondary);
 }
@@ -491,11 +481,6 @@ code {
   border: var(--layout-border-width-small) solid transparent;
   color: var(--typography-color-primary);
   white-space: nowrap;
-}
-
-.pill--caps {
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .pill--success {
@@ -828,7 +813,7 @@ code {
 }
 
 .traffic-row {
-  grid-template-columns: minmax(10rem, 16rem) minmax(6rem, 1fr) 5rem;
+  grid-template-columns: minmax(10rem, 16rem) minmax(6rem, 1fr) 6rem;
 }
 
 .coverage-row__value {
@@ -896,68 +881,148 @@ code {
   border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
 }
 
-/* screen: Data export */
-
-.choice-row {
-  display: flex;
-  gap: var(--layout-margin-medium);
-  align-items: flex-start;
-  padding: var(--layout-padding-medium) var(--layout-padding-large);
-  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
-}
-
-.choice-row:last-child {
-  border-bottom: none;
-}
-
-.choice-row__text {
-  flex: 1;
-}
-
-.choice-row__count {
-  flex: 0 0 auto;
-  font: var(--typography-regular-label);
-  color: var(--typography-color-secondary);
-  white-space: nowrap;
-}
-
-/* screen: Audit log */
+/* screen: Audit log, Site analytics — the filter bar above a panel */
 
 .filter-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
   gap: var(--layout-margin-small);
   margin-bottom: var(--layout-margin-medium);
 }
 
-.filter-pill {
+/* A BCDS field fills its container, so each gets a lane; the apply button keeps its own width. */
+.filter-row > *:not(button) {
+  flex: 0 1 14rem;
+}
+
+/* screen: Analytics — chart surface, builder and dashboard grid */
+
+/*
+ * Categorical series colours. Slot 1 is the B.C. blue token; 2 to 8 are a validated
+ * categorical default, because the B.C. palette ships no data-visualisation set.
+ */
+.chart {
+  --series-1: var(--theme-blue-80);
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-other: var(--theme-gray-80);
+}
+
+.hydrating {
+  margin: var(--layout-margin-large);
+  color: var(--typography-color-secondary);
+}
+
+/* Named for screen readers only: a table header or control whose purpose is clear from its position. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Takes focus after a delete, so the keyboard user lands somewhere visible. */
+.removal-status {
+  margin: 0 0 var(--layout-margin-small);
+  color: var(--typography-color-secondary);
+  font: var(--typography-regular-small-body);
+}
+
+.chart__summary {
+  margin: 0 0 var(--layout-margin-small);
+  color: var(--typography-color-secondary);
+  font: var(--typography-regular-small-body);
+}
+
+.chart__plot {
+  /* Recharts measures its container, so the width has to come from the layout, not the SVG. */
+  width: 100%;
+}
+
+.chart__legend {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px var(--layout-padding-medium);
-  background: var(--surface-color-background-white);
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
+  margin: var(--layout-margin-small) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--typography-color-secondary);
+  font: var(--typography-regular-small-body);
+}
+
+.chart__legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+}
+
+.chart__swatch {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: var(--layout-border-radius-small);
+}
+
+.chart__table {
+  overflow-x: auto;
+}
+
+.skeleton {
+  border-radius: var(--layout-border-radius-small);
+  background: var(--surface-color-background-light-gray);
+}
+
+.builder {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--layout-margin-small);
+  align-items: flex-end;
+  padding: var(--layout-padding-medium);
+}
+
+.builder__wide {
+  grid-column: 1 / -1;
+}
+
+.filter-rule {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(7rem, 0.6fr) minmax(10rem, 1.4fr) auto;
+  gap: var(--layout-margin-small);
+  align-items: flex-end;
+  margin-bottom: var(--layout-margin-small);
+}
+
+.widget-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--layout-margin-medium);
+  margin-bottom: var(--layout-margin-large);
+}
+
+.widget {
+  padding: var(--layout-padding-medium);
   border: var(--layout-border-width-small) solid var(--surface-color-border-default);
   border-radius: var(--layout-border-radius-medium);
-  cursor: pointer;
+  background: var(--surface-color-background-white);
 }
 
-.filter-pill:hover {
-  border-color: var(--surface-color-primary-default);
+.widget__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--layout-margin-small);
+  margin-bottom: var(--layout-margin-small);
 }
 
-.filter-pill__value {
-  font: var(--typography-bold-small-body);
-  color: var(--typography-color-primary);
-}
-
-.filter-pill__caret {
-  font-size: 0.6rem;
-  color: var(--typography-color-secondary);
-}
-
-.event__time {
-  font: var(--typography-regular-label);
-  color: var(--typography-color-secondary);
-  margin-top: 6px;
-  font-variant-numeric: tabular-nums;
+.widget__title {
+  margin: 0;
+  font: var(--typography-bold-h5);
 }

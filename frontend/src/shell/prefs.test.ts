@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_PREFS,
+  LANDING_OPTIONS,
+  landingPath,
   NAV_KEY,
   PREFS_KEY,
   readNavOpen,
@@ -8,6 +10,7 @@ import {
   writeNavOpen,
   writePrefs,
 } from './prefs';
+import { SCREENS } from './screens';
 
 afterEach(() => localStorage.clear());
 
@@ -39,6 +42,32 @@ describe('readPrefs', () => {
     localStorage.setItem(PREFS_KEY, 'not json');
 
     expect(readPrefs()).toEqual(DEFAULT_PREFS);
+  });
+});
+
+describe('landingPath', () => {
+  it.each([
+    ['me', '/workspace'],
+    ['sessions', '/sessions'],
+    ['map', '/map'],
+    ['search', '/search'],
+    ['summary', '/summary'],
+    ['project', '/projects'],
+    ['notify', '/notify'],
+    ['links', '/links'],
+    ['rbac', '/rbac'],
+    ['api', '/developers'],
+    ['keys', '/keys'],
+  ])('sends landing key %s to %s', (key, path) => {
+    expect(landingPath(key)).toBe(path);
+  });
+
+  it.each(LANDING_OPTIONS.map(o => o.key))('resolves offered landing option %s to a screen', key => {
+    expect(SCREENS.map(s => s.path)).toContain(landingPath(key));
+  });
+
+  it('sends a key with no screen to the default landing', () => {
+    expect(landingPath('profile')).toBe('/map');
   });
 });
 

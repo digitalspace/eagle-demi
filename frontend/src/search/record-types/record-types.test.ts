@@ -2,7 +2,6 @@ import { RECORD_TYPES, type RecordType } from '../grid-url';
 import { buildSearchQuery } from '../search-api';
 import {
   ATTACHMENTS_FILTER_ID,
-  attachmentsFilterDropped,
   attachmentsOf,
   isoDay,
   plainText,
@@ -10,7 +9,7 @@ import {
   subjectName,
 } from './activities';
 import { proponentName } from './projects';
-import { RECORD_TYPE_CONFIGS, recordConfig, type RecordTypeConfig } from './index';
+import { RECORD_TYPE_CONFIGS, projectPath, recordConfig, type RecordTypeConfig } from './index';
 
 /** Every filter id a record type can put on the wire: its column filters and its panel fields. */
 function filterIdsOf(config: RecordTypeConfig): string[] {
@@ -41,10 +40,8 @@ describe('record types', () => {
     expect(attachmentsOf({ [ATTACHMENTS_FILTER_ID]: `java${'script'}:alert(1)` })).toEqual([]);
   });
 
-  it('sends no record type with a selection column', () => {
-    for (const id of RECORD_TYPES) {
-      expect(recordConfig(id).selectable, `${id} is selectable`).toBe(false);
-    }
+  it('escapes a project id in its page path, so a crafted id cannot change the route', () => {
+    expect(projectPath('a/../b?x=1')).toBe('/projects/a%2F..%2Fb%3Fx%3D1');
   });
 
   it('names a distinct dataset per record type', () => {
@@ -164,16 +161,6 @@ describe('activities helpers', () => {
       expect(subjectName({ project: 'p1', projectNotification: { name: 'Coal Mine s.11' } })).toBe(
         'Coal Mine s.11',
       );
-    });
-  });
-
-  describe('attachmentsFilterDropped', () => {
-    it('is true when the response says the index dropped the attachments field', () => {
-      expect(attachmentsFilterDropped([{ dropped: [ATTACHMENTS_FILTER_ID] }])).toBe(true);
-    });
-
-    it('is false when the response drops some other field', () => {
-      expect(attachmentsFilterDropped([{ dropped: ['dateUpdated'] }])).toBe(false);
     });
   });
 });

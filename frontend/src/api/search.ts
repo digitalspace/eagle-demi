@@ -1,4 +1,6 @@
+import { queryOptions } from '@tanstack/react-query';
 import { config } from '../config';
+import { trackException } from '../telemetry';
 import { ApiError, api, type ApiInit } from './client';
 
 /** What the loader asks for. The API caps list reads at 1000 whatever is sent. */
@@ -21,11 +23,37 @@ export interface WireEnvelope<T, M = unknown> {
  */
 const LIST_PAGE_SIZE = 1000;
 
+/** A `List` row as the screens read one. Every field is optional. */
+export interface ListRow {
+  id?: string | number;
+  _id?: string;
+  code?: string;
+  name?: string;
+  type?: string;
+  legislation?: number | string;
+}
+
 /** Every Eagle `List` row, in one request. */
-export async function fetchListRows<T>(init?: ApiInit): Promise<T[]> {
-  const body = await api<WireEnvelope<T>[] | null>(`/search?dataset=List&pageSize=${LIST_PAGE_SIZE}`, init);
+export async function fetchListRows(init?: ApiInit): Promise<ListRow[]> {
+  const body = await api<WireEnvelope<ListRow>[] | null>(`/search?dataset=List&pageSize=${LIST_PAGE_SIZE}`, init);
   return body?.[0]?.searchResults ?? [];
 }
+
+export const isAbortError = (error: unknown) => (error as { name?: string } | null)?.name === 'AbortError';
+
+/** The one `List` read, shared by every screen that turns List ids into names. A failure is traced here, once. */
+export const listRowsQuery = queryOptions({
+  queryKey: ['search', 'List'],
+  queryFn: async ({ signal }) => {
+    try {
+      return await fetchListRows({ signal });
+    } catch (error) {
+      if (!isAbortError(error)) trackException(error, { lookup: 'List' });
+      throw error;
+    }
+  },
+  staleTime: Infinity,
+});
 
 /** One `/search` envelope. `count` is the index-wide total, NOT the number of rows returned. */
 export interface SearchEnvelope<T> {
@@ -61,7 +89,7 @@ export async function searchDataset<T>(
 export function isRetryableSearchError(error: unknown): boolean {
   if (error instanceof ApiError) return error.status >= 500 || error.status === 429;
   // A cancelled request is not a failure; retrying it resurrects a search already moved past.
-  return !(error instanceof Error && error.name === 'AbortError');
+  return !isAbortError(error);
 }
 
 export const searchRetry = {

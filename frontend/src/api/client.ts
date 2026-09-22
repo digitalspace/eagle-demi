@@ -79,7 +79,10 @@ function matchesBase(url: URL, base: string | null): boolean {
   }
 }
 
-/** Only the DEMI API, as `isApiUrl` in the Angular app (0038d3e). eagle-notify is a different host and opts in. */
+/**
+ * Only the DEMI API, as `isApiUrl` in the Angular app (0038d3e). eagle-notify is a different host
+ * and opts in.
+ */
 export function isAllowedUrl(url: URL): boolean {
   return matchesBase(url, apiPath());
 }

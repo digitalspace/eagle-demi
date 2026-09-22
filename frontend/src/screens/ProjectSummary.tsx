@@ -461,7 +461,8 @@ export function ProjectSummary() {
                           ) : (
                             phase.name
                           )}
-                          {/* A space on each side of the chevron, as the Angular app's template (0038d3e) had. */}
+                          {/* A space on each side of the chevron, as the Angular app's template
+                              (0038d3e) had. */}
                           {index < phaseSequence.rows.length - 1 && (
                             <>
                               {' '}
@@ -824,7 +825,8 @@ export function ProjectSummary() {
             <p>
               Generated {dayMonthYearTime(summary.generatedAt)}
               {summary.model && ` by ${summary.model}`}
-              {/* A null estimate prints nothing, as the Angular app's currency pipe (0038d3e) did — never CA$0.0000. */}
+              {/* A null estimate prints nothing, as the Angular app's currency pipe (0038d3e) did:
+                  never CA$0.0000. */}
               {typeof summary.estimatedCostCad === 'number' && `, est. ${cad(summary.estimatedCostCad)}`}. Estimated from
               list rates, not billed amounts. Generated once and stored — this page makes no model call.
             </p>

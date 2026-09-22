@@ -3,7 +3,6 @@ import {
   RECORD_DATASETS,
   projectPath,
   type RecordTypeConfig,
-  type SearchMeta,
 } from './record-type';
 
 type Row = Record<string, unknown>;
@@ -11,16 +10,8 @@ type Row = Record<string, unknown>;
 /** Activities are dated with `dateAdded`, not the shared `datePosted` the other tabs sort by. */
 export const ACTIVITIES_SORT = '-dateAdded';
 
-/**
- * The index field behind "Documents attached". An index without it answers a query that names it
- * under `meta[0].dropped`.
- */
+/** The index field behind "Documents attached". */
 export const ATTACHMENTS_FILTER_ID = 'documentUrl';
-
-/** Whether a response said the index carries no `documentUrl`, so the control can narrow nothing. */
-export function attachmentsFilterDropped(meta?: SearchMeta[] | null): boolean {
-  return !!meta?.[0]?.dropped?.includes(ATTACHMENTS_FILTER_ID);
-}
 
 /**
  * `RecentActivity.type` is free text, written from the fixed list the admin app offers, so the
@@ -159,7 +150,6 @@ export const activitiesConfig: RecordTypeConfig = {
     { id: ATTACHMENTS_FILTER_ID, label: 'Documents attached', kind: 'toggle' },
   ],
   optionsFrom: () => ({ type: KIND_OPTIONS }),
-  selectable: false,
   headerless: false,
   rowTemplate: 'activity',
 };

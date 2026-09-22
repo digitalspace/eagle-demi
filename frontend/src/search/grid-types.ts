@@ -20,7 +20,7 @@ export type GridCell =
   | { kind: 'download'; text: string; documentId: string };
 
 /** Which row template a list-mode record type draws itself with. */
-export type RowTemplate = 'activity' | 'notification';
+export type RowTemplate = 'activity';
 
 /** A file hanging off one record, listed under its row. */
 export interface ListRowAttachment {
@@ -124,8 +124,6 @@ export interface PassageHit {
 export interface PassageRow {
   id: string;
   name: string;
-  /** The file itself. Already scheme-checked by the caller. */
-  href: string;
   date: string | null;
   type: string | null;
   author: string | null;
@@ -135,21 +133,9 @@ export interface PassageRow {
 }
 
 /**
- * Where a passage sits in its file, in one place. The index does not record page numbers on every
- * document yet, so a hit is only the Nth passage the search returned and the locator is a label.
- * Once a row carries `pageNumbered` the label names the page and links into the file at it,
- * because a browser's PDF viewer honours a `#page=` fragment.
+ * Where a passage sits in its file. The index does not record page numbers on every document yet,
+ * so without one a hit is only the Nth passage the search returned.
  */
-export const PASSAGE_LOCATOR = {
-  label(hit: PassageHit): string {
-    return `${hit.pageNumbered ? 'Page' : 'Passage'} ${hit.locator}`;
-  },
-
-  /**
-   * No link where the locator is not a page: a fragment the viewer ignores is a broken promise.
-   * Nor where the file has no address of its own, as a presigned download does not.
-   */
-  href(row: PassageRow, hit: PassageHit): string | undefined {
-    return hit.pageNumbered && row.href ? `${row.href}#page=${hit.locator}` : undefined;
-  },
-};
+export function passageLabel(hit: PassageHit): string {
+  return `${hit.pageNumbered ? 'Page' : 'Passage'} ${hit.locator}`;
+}

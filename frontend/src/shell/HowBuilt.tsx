@@ -1,4 +1,5 @@
 import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEscapeLayer } from '../map/use-dismissable';
 import { TECH, TECH_CHIP } from './screens';
 
 const backdrop: CSSProperties = {
@@ -66,14 +67,8 @@ export function HowBuilt({ screenKey, onClose }: { screenKey: string; onClose: (
   const tech = TECH[screenKey] ?? TECH['map'];
 
   // Focus moves into the dialog on open; the overlay has no focus trap, Escape and the backdrop close it.
-  useEffect(() => {
-    panel.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+  useEffect(() => panel.current?.focus(), []);
+  useEscapeLayer(true, onClose);
 
   return (
     <div style={backdrop} role="presentation" onClick={onClose}>

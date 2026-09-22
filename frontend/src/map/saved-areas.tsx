@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { SavedLasso } from '../api/me';
+import { useDismissable } from './use-dismissable';
 
 /**
  * Naming the area that is drawn. Rendered only while open, so cancelling and reopening starts with
@@ -70,6 +71,7 @@ function NameForm({
 export function SavedAreasPanel({
   open,
   onToggle,
+  onClose,
   areas,
   loading,
   onApply,
@@ -77,14 +79,26 @@ export function SavedAreasPanel({
 }: {
   open: boolean;
   onToggle: () => void;
+  /** Kept stable by the caller: a new function re-arms the Escape and outside-press listeners. */
+  onClose: () => void;
   areas: SavedLasso[];
   loading: boolean;
   onApply: (area: SavedLasso) => void;
   onDelete: (area: SavedLasso) => void;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  useDismissable(open, panelRef, toggleRef, onClose, { swallowClosingClick: true });
+
   return (
-    <div className="demi-saved-areas">
-      <button type="button" className="map-control-btn" aria-expanded={open} onClick={onToggle}>
+    <div className="demi-saved-areas" ref={panelRef}>
+      <button
+        type="button"
+        ref={toggleRef}
+        className="map-control-btn"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
         Saved areas
       </button>
 

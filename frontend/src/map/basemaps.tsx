@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components -- one map module: the components and the
    constants they share (style, bounds, basemap list) are the same unit of change. */
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useId, useRef, useState, type ReactNode } from 'react';
 import {
   AttributionControl,
   Layer,
@@ -124,12 +124,14 @@ export function MapControls({ basemap, onBasemapChange, children }: MapControlsP
   const [layersOpen, setLayersOpen] = useState(false);
   const layersRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
+  const radioName = useId();
 
   useDismissable(
     layersOpen,
     layersRef,
     toggleRef,
     useCallback(() => setLayersOpen(false), []),
+    { swallowClosingClick: true },
   );
 
   return (
@@ -164,7 +166,7 @@ export function MapControls({ basemap, onBasemapChange, children }: MapControlsP
                   <label className="map-layers-menu__row" key={entry.name}>
                     <input
                       type="radio"
-                      name="basemap"
+                      name={radioName}
                       value={entry.name}
                       checked={entry.name === active}
                       onChange={() => onBasemapChange(entry.name)}

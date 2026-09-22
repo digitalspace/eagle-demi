@@ -18,6 +18,56 @@
   background: var(--surface-color-background-white);
 }
 
+/* `data-view` is set only below MAP_NARROW_QUERY (48rem). There the list and the map share one
+   cell under the switch and take turns; the pane out of view is `inert`, and keeps its size and
+   scroll position so the map never re-fits and the list never jumps back to the top. */
+.demi-map-screen[data-view] {
+  --demi-map-views-height: 4rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.demi-map-screen[data-view] > .demi-map-rail,
+.demi-map-screen[data-view] > .demi-map-canvas {
+  grid-area: 2 / 1;
+  min-width: 0;
+  border-right: 0;
+}
+
+.demi-map-screen[data-view] > [inert] {
+  visibility: hidden;
+}
+
+/* MapLibre sets `visibility: visible` on an open attribution, which would show through the list. */
+.demi-map-screen[data-view] > [inert] .maplibregl-ctrl-attrib.maplibregl-compact-show {
+  visibility: hidden;
+}
+
+.demi-map-views {
+  box-sizing: border-box;
+  height: var(--demi-map-views-height);
+  display: flex;
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-views__switch {
+  flex: 1;
+}
+
+/* Inset, because the switch clips its buttons to its rounded border. */
+.demi-map-views__switch button:focus-visible {
+  outline-offset: -4px;
+}
+
+.demi-map-views__switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
 .demi-map-rail {
   position: relative;
   flex: 0 1 20rem;
@@ -682,10 +732,17 @@
   color: var(--surface-color-background-white);
   padding: 0;
   cursor: pointer;
+  transition: transform 0.15s ease;
 }
 
 .wildfire-marker-pill.fire-of-note {
+  border-color: #ffb703;
   animation: demi-fire-pulse 1.6s ease-in-out infinite;
+}
+
+/* A fire of note pulses to be looked at, which is exactly wrong while a project is selected. */
+.demi-map--selection .wildfire-marker-pill.fire-of-note {
+  animation: none;
 }
 
 @keyframes demi-fire-pulse {
@@ -702,6 +759,12 @@
   }
 }
 
+@media (hover: hover) {
+  .wildfire-marker-pill:hover {
+    transform: scale(1.3);
+  }
+}
+
 .demi-fire-card h4,
 .demi-observation-card h4 {
   margin: 0 0 4px;
@@ -714,9 +777,9 @@
   font: var(--typography-regular-small-body);
 }
 
-/* Stacking inside the map screen: pins and clusters 600, the selected pin 650, a hovered pin 660,
-   popups 680, MapLibre's control corners 690, this card 700, the control menus and the filters
-   drawer 800. Dialogs sit above all of it. */
+/* Stacking inside the map screen: pins and clusters 600, wildfire pills 640, the selected pin 650,
+   a hovered pin 660, popups 680, MapLibre's control corners 690, this card 700, the control menus
+   and the filters drawer 800. Dialogs sit above all of it. */
 .demi-map .maplibregl-popup {
   z-index: 680;
 }
@@ -761,7 +824,10 @@
   }
 
   .demi-map-card {
-    --demi-map-card-cap: calc(100dvh - var(--app-header-height) - 2 * var(--layout-padding-medium));
+    --demi-map-card-cap: calc(
+      100dvh - var(--app-header-height) - var(--demi-map-views-height, 0px) - 2 *
+        var(--layout-padding-medium)
+    );
     position: fixed;
     left: var(--layout-padding-medium);
     /* The 44px control buttons, their own inset, then the gutter. */
@@ -773,6 +839,12 @@
 
   .demi-map-card[data-expanded='true'] {
     max-height: var(--demi-map-card-cap);
+  }
+
+  /* Three buttons do not fit on one line of a phone-width card. Two classes: the base rule for the
+     foot comes later in this file. */
+  .demi-map-card .demi-map-card__foot {
+    flex-wrap: wrap;
   }
 }
 
@@ -900,15 +972,21 @@
   text-align: left;
 }
 
-.demi-map-card__tabs {
+/* The card's field-source tabs and the narrow list/map switch are the same segmented control. */
+.demi-map-card__tabs,
+.demi-map-views__switch {
   display: flex;
   border: var(--layout-border-width-small) solid var(--surface-color-border-default);
   border-radius: var(--layout-border-radius-small);
   overflow: hidden;
+}
+
+.demi-map-card__tabs {
   margin-top: var(--layout-margin-medium);
 }
 
-.demi-map-card__tabs button {
+.demi-map-card__tabs button,
+.demi-map-views__switch button {
   flex: 1;
   border: none;
   padding: 0.4rem 0.6rem;
@@ -918,7 +996,8 @@
   cursor: pointer;
 }
 
-.demi-map-card__tabs button[aria-pressed='true'] {
+.demi-map-card__tabs button[aria-pressed='true'],
+.demi-map-views__switch button[aria-pressed='true'] {
   background: var(--surface-color-primary-default);
   color: var(--surface-color-background-white);
 }
@@ -992,8 +1071,9 @@
 /* --- Pins and clusters: the public site's map art ----------------------------------------- */
 
 .demi-marker {
-  width: 36px;
-  height: 36px;
+  --map-pin-size: 36px;
+  width: var(--map-pin-size);
+  height: var(--map-pin-size);
   padding: 0;
   border: 0;
   background: none;
@@ -1072,14 +1152,19 @@
   text-overflow: ellipsis;
 }
 
-/* Beats the inline z-index maplibre needs on the marker wrapper, so the named pin rises over its
-   neighbours while staying under the details card at 700. */
-.maplibregl-marker:has(.demi-marker:hover) {
-  z-index: 660 !important;
+/* The selected art grows to 1.45x on hover, so its label sits clear of the grown pin, not on it. */
+.demi-marker--selected .demi-marker__label {
+  margin-bottom: calc(var(--map-pin-size) * 0.45 + 4px);
 }
 
 /* Touch leaves `:hover` stuck on the last thing tapped, so the pointer rules are hover-only. */
 @media (hover: hover) {
+  /* Beats the inline z-index maplibre needs on the marker wrapper, so the named pin rises over its
+     neighbours while staying under the details card at 700. */
+  .maplibregl-marker:has(.demi-marker:hover) {
+    z-index: 660 !important;
+  }
+
   .demi-marker:hover .demi-marker__label {
     transform: translate(-50%, 0);
     opacity: 1;
@@ -1093,6 +1178,10 @@
 
   .demi-marker--selected:hover::before {
     transform: scale(1.45);
+  }
+
+  .demi-map--selection .demi-marker:not(.demi-marker--selected):hover::before {
+    filter: grayscale(70%) opacity(0.5) drop-shadow(0 0 2px var(--surface-color-primary-default));
   }
 
   .demi-cluster:hover {
@@ -1151,9 +1240,10 @@
 }
 
 /* Everything that is not the selection recedes. The fade rides on `filter`, not `opacity`:
-   maplibre writes `opacity` inline on a marker element it is animating. A cluster's count is text
-   in the button itself, so the one rule takes the digit down with its disc. */
-.demi-map--selection .demi-marker:not(.demi-marker--selected),
+   maplibre writes `opacity` inline on a marker element it is animating. A pin fades its art only,
+   so its hover label stays legible; a cluster's count is text in the button itself, so the one
+   rule takes the digit down with its disc. */
+.demi-map--selection .demi-marker:not(.demi-marker--selected)::before,
 .demi-map--selection .demi-cluster {
   filter: grayscale(70%) opacity(0.5);
 }

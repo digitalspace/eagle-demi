@@ -560,16 +560,22 @@ export function useMapExplorerState(perPage: number) {
     setVisibleCount(perPage);
   }, [perPage]);
 
-  /** Turning an overlay off drops that layer's picks; the other layers keep filtering. */
   const toggleLayer = useCallback((layer: string) => {
-    setActiveLayers((current) => {
-      if (!current.includes(layer)) return [...current, layer];
-      if ((BOUNDARY_LAYERS as string[]).includes(layer)) {
-        setFilters((filters) => (filters[layer as BoundaryLayer].length ? { ...filters, [layer]: [] } : filters));
-      }
-      return current.filter((entry) => entry !== layer);
-    });
+    setActiveLayers((current) =>
+      current.includes(layer) ? current.filter((entry) => entry !== layer) : [...current, layer],
+    );
   }, []);
+
+  // Turning an overlay off drops that layer's picks; the other layers keep filtering. Done in
+  // render, not an effect, so no frame filters by an overlay the map has stopped drawing.
+  const [prunedFor, setPrunedFor] = useState(activeLayers);
+  if (prunedFor !== activeLayers) {
+    setPrunedFor(activeLayers);
+    const off = BOUNDARY_LAYERS.filter(
+      (layer) => filters[layer].length && !activeLayers.includes(layer),
+    );
+    if (off.length) setFilters({ ...filters, ...Object.fromEntries(off.map((layer) => [layer, []])) });
+  }
 
   const clearFilter = useCallback((id: string) => {
     if (id === LASSO_CHIP_ID) {

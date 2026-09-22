@@ -19,6 +19,12 @@ describe('toWireFilters', () => {
     });
   });
 
+  it('leaves off the wire a year that is not four digits', () => {
+    for (const year of ['abc', '20181', '2018,2019', '2018-01-01']) {
+      expect(toWireFilters({ dateUpdated: year }, ['dateUpdated']), year).toEqual({});
+    }
+  });
+
   it('leaves a bound the advanced panel already set alone', () => {
     expect(
       toWireFilters({ dateUpdated: '2018', dateUpdatedStart: '2018-06-01' }, ['dateUpdated']),

@@ -107,9 +107,10 @@ export function GuidedTour({ opener, onEnd }: { opener: RefObject<HTMLElement | 
   }, [step, tick, walk.steps, end, lock]);
 
   // The card is the only thing a reader can reach while the tour runs, and a move keeps focus there.
+  // Keyed on `shown`, not `spot`: a resize remeasures, and must not pull focus off a button mid-keystroke.
   useLayoutEffect(() => {
-    if (spot) card.current?.focus();
-  }, [spot, walk.index]);
+    if (shown) card.current?.focus();
+  }, [shown, walk.index]);
 
   useEffect(() => {
     const element = step ? targetOf(step) : null;

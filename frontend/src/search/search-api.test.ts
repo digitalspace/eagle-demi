@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderHook, waitFor } from '@testing-library/react';
 import { json } from '../test-http';
+import { queryWrapper } from '../test-query';
 import { trackException } from '../telemetry';
-import { buildSearchQuery, passageRowFrom, readCounts, resetCountsProbe, searchKeyword } from './search-api';
+import {
+  buildSearchQuery,
+  passageRowFrom,
+  readCounts,
+  resetCountsProbe,
+  searchKeyword,
+  useFilterSources,
+} from './search-api';
 
 vi.mock('../telemetry', () => ({ trackException: vi.fn() }));
 
@@ -164,7 +173,6 @@ describe('passageRowFrom', () => {
           { text: 'second hit', pageNumber: 0, pageNumbered: false },
         ],
       },
-      '',
     );
 
     expect(row.passages).toEqual([
@@ -174,5 +182,63 @@ describe('passageRowFrom', () => {
     ]);
     expect(row.id).toBe('doc-1');
     expect(row.total).toBe(5);
+  });
+});
+
+describe('useFilterSources', () => {
+  const organizations = (from: number, count: number) =>
+    Array.from({ length: count }, (_, index) => ({ _id: `o${from + index}`, name: `Org ${from + index}` }));
+
+  it('pages the proponent organizations past one full page', async () => {
+    const mock = stubFetch((url) => {
+      if (!url.includes('dataset=Organization')) return json([{ searchResults: [] }]);
+      const page = Number(/pageNum=(\d+)/.exec(url)?.[1]);
+      return json([{ searchResults: page === 0 ? organizations(0, 500) : organizations(500, 20), count: 520 }]);
+    });
+
+    const { result } = renderHook(() => useFilterSources(), { wrapper: queryWrapper() });
+
+    await waitFor(() => expect(result.current.orgs).toHaveLength(520));
+    const reads = sent(mock).filter((url) => url.includes('dataset=Organization'));
+    expect(reads.map((url) => /pageNum=\d+&pageSize=\d+/.exec(url)?.[0])).toEqual([
+      'pageNum=0&pageSize=500',
+      'pageNum=1&pageSize=500',
+    ]);
+  });
+
+  it('pages on to a short page when the envelope sends no count', async () => {
+    stubFetch((url) => {
+      if (!url.includes('dataset=Organization')) return json([{ searchResults: [] }]);
+      const page = Number(/pageNum=(\d+)/.exec(url)?.[1]);
+      return json([{ searchResults: page < 2 ? organizations(page * 500, 500) : organizations(1000, 7) }]);
+    });
+
+    const { result } = renderHook(() => useFilterSources(), { wrapper: queryWrapper() });
+
+    await waitFor(() => expect(result.current.orgs).toHaveLength(1007));
+  });
+
+  it('stops paging at the page cap when every page comes back full', async () => {
+    const mock = stubFetch((url) =>
+      url.includes('dataset=Organization')
+        ? json([{ searchResults: organizations(0, 500) }])
+        : json([{ searchResults: [] }]),
+    );
+
+    const { result } = renderHook(() => useFilterSources(), { wrapper: queryWrapper() });
+
+    await waitFor(() => expect(result.current.orgs).toHaveLength(10_000));
+    expect(sent(mock).filter((url) => url.includes('dataset=Organization'))).toHaveLength(20);
+  });
+
+  it('traces a failed organization read and reports it', async () => {
+    stubFetch((url) =>
+      url.includes('dataset=Organization') ? json({ error: 'boom' }, 500) : json([{ searchResults: [] }]),
+    );
+
+    const { result } = renderHook(() => useFilterSources(), { wrapper: queryWrapper() });
+
+    await waitFor(() => expect(result.current.failed).toBe(true));
+    expect(trackException).toHaveBeenCalledWith(expect.anything(), { lookup: 'Organization' });
   });
 });

@@ -1,10 +1,4 @@
-import {
-  PASSAGE_LOCATOR,
-  columnFiltersForPanel,
-  sortStateOf,
-  type GridColumn,
-  type PassageRow,
-} from './grid-types';
+import { columnFiltersForPanel, passageLabel, sortStateOf, type GridColumn } from './grid-types';
 
 describe('sortStateOf', () => {
   it('reads a leading minus as a descending sort on the field', () => {
@@ -57,30 +51,9 @@ describe('columnFiltersForPanel', () => {
   });
 });
 
-describe('PASSAGE_LOCATOR', () => {
-  const row: PassageRow = {
-    id: 'd1',
-    name: 'Application Part A',
-    href: '/api/documents/d1/download',
-    date: null,
-    type: null,
-    author: null,
-    passages: [],
-    total: 2,
-  };
-
-  it('links into the file at the page a real page number names', () => {
-    expect(PASSAGE_LOCATOR.href(row, { locator: 12, text: 'hit', pageNumbered: true })).toBe(
-      '/api/documents/d1/download#page=12',
-    );
-  });
-
-  it('offers no link where the locator is only the passage place in the results', () => {
-    expect(PASSAGE_LOCATOR.href(row, { locator: 2, text: 'hit' })).toBeUndefined();
-  });
-
+describe('passageLabel', () => {
   it('labels a real page number as a page and anything else as a passage', () => {
-    expect(PASSAGE_LOCATOR.label({ locator: 12, text: 'hit', pageNumbered: true })).toBe('Page 12');
-    expect(PASSAGE_LOCATOR.label({ locator: 2, text: 'hit' })).toBe('Passage 2');
+    expect(passageLabel({ locator: 12, text: 'hit', pageNumbered: true })).toBe('Page 12');
+    expect(passageLabel({ locator: 2, text: 'hit' })).toBe('Passage 2');
   });
 });

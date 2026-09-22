@@ -21,6 +21,22 @@ cd /tmp/demi-angular/frontend && yarn install && yarn start --host 127.0.0.1 --p
 cd frontend && yarn dev --host 127.0.0.1 --port 4300
 ```
 
+If `git worktree add` fails with `invalid reference: 0038d3e`, the pull request was squash merged
+and your clone never had the branch. GitHub keeps every pull request's commits under
+`refs/pull/<n>/head`, where `<n>` is the cutover pull request number. Fetch it, then run the
+`git worktree add` line again:
+
+```
+git fetch origin pull/<n>/head
+```
+
+If the branch was rebased before merge, `0038d3e` may not be in that history. Take the parent of
+the commit that deleted the Angular app instead:
+
+```
+git worktree add /tmp/demi-angular "$(git log -1 --diff-filter=D --format=%H FETCH_HEAD -- frontend/angular.json)^"
+```
+
 Then, from `frontend/`:
 
 ```

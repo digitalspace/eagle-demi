@@ -1,5 +1,8 @@
 import type { FilterValues, ValueOption } from './grid-types';
 
+/** A year filter as the URL may carry it: four digits, nothing else. */
+export const isYear = (value: string) => /^\d{4}$/.test(value);
+
 /**
  * Filters as the API takes them: raw ids, because the search service is what wraps them as `and[]`.
  *
@@ -27,8 +30,9 @@ export function toWireFilters(
       continue;
     }
     if (!joined) continue;
-    if (yearIds.includes(id)) years[id] = joined;
-    else wire[id] = joined;
+    if (!yearIds.includes(id)) wire[id] = joined;
+    // Anything else would reach the index as a date like `abc-01-01`.
+    else if (isYear(joined)) years[id] = joined;
   }
   for (const [id, year] of Object.entries(years)) {
     if (wire[`${id}Start`] === undefined) wire[`${id}Start`] = `${year}-01-01`;
@@ -50,7 +54,7 @@ const FIRST_ACT_YEAR = 1995;
 export function yearOptions(chosen: string): ValueOption[] {
   const years: number[] = [];
   for (let year = new Date().getFullYear(); year >= FIRST_ACT_YEAR; year -= 1) years.push(year);
-  if (/^\d{4}$/.test(chosen) && !years.includes(Number(chosen))) {
+  if (isYear(chosen) && !years.includes(Number(chosen))) {
     years.push(Number(chosen));
     years.sort((a, b) => b - a);
   }

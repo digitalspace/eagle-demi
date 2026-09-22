@@ -12,7 +12,7 @@
   top: 0;
   bottom: 0;
   left: 0;
-  z-index: 1900; /* over Leaflet's panes (1000), under the header and its menus (2000) */
+  z-index: 1900; /* over the map screen's stack (800 at most), under the header and its menus (2000) */
   width: min(var(--eao-sidebar-width), 84vw);
   flex-basis: auto;
   box-shadow: var(--surface-shadow-medium);

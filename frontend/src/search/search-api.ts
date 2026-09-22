@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, api } from '../api/client';
-import { fetchListRows, type WireEnvelope } from '../api/search';
+import { isAbortError, listRowsQuery, type WireEnvelope } from '../api/search';
 import { trackException } from '../telemetry';
 import type { FilterValues, PassageHit, PassageRow } from './grid-types';
 import { RECORD_TYPES, type RecordType } from './grid-url';
@@ -14,8 +14,11 @@ export const MIN_KEYWORD_LENGTH = 2;
 /** How long typing has to stop before a request goes out. */
 export const SEARCH_DEBOUNCE_MS = 300;
 
-/** One page holds every row of these small collections; callers need all of them at once. */
-const ALL_ROWS_PAGE_SIZE = 250;
+/** The most rows search returns for a filtered read: it refuses a larger page rather than trimming it. */
+const ORGANIZATION_PAGE_SIZE = 500;
+
+/** Stops a server that ignores `pageNum` from paging forever: 10,000 organizations. */
+const ORGANIZATION_MAX_PAGES = 20;
 
 /** The company types whose organizations fill the proponent filter. */
 export const PROPONENT_COMPANY_TYPE = 'Proponent/Certificate Holder';
@@ -43,7 +46,6 @@ export interface SearchRequest {
 export interface SearchResult {
   rows: SearchRow[];
   total: number | null;
-  meta: SearchMeta[] | null;
 }
 
 /** A count per record type. `null` is "unknown", which the tab renders without a badge. */
@@ -97,7 +99,7 @@ function rowsFrom(payload: SearchEnvelope[] | null | undefined): SearchRow[] {
 }
 
 /** A grouped `DocumentChunk` row as the passage list reads one. */
-export function passageRowFrom(row: SearchRow, href: string): PassageRow {
+export function passageRowFrom(row: SearchRow): PassageRow {
   const passages = Array.isArray(row['passages']) ? (row['passages'] as Record<string, unknown>[]) : [];
   const hits: PassageHit[] = passages.map((passage, index) => {
     const pageNumbered = passage['pageNumbered'] === true;
@@ -112,7 +114,6 @@ export function passageRowFrom(row: SearchRow, href: string): PassageRow {
   return {
     id: String(row['documentId'] ?? row['_id'] ?? ''),
     name: String(row['documentName'] ?? ''),
-    href,
     date: (row['datePosted'] as string | null) ?? null,
     type: (row['documentType'] as string | null) ?? null,
     author: (row['documentAuthorType'] as string | null) ?? null,
@@ -129,7 +130,6 @@ export async function runSearch(request: SearchRequest, signal?: AbortSignal): P
   return {
     rows: rowsFrom(payload),
     total: payload?.[0]?.meta?.[0]?.searchResultsTotal ?? null,
-    meta: payload?.[0]?.meta ?? null,
   };
 }
 
@@ -164,8 +164,6 @@ function traceCounts(error: unknown): void {
   trackException(error, { area: 'UnifiedSearch', action: 'counts' });
 }
 
-const isAbort = (error: unknown) => (error as { name?: string } | null)?.name === 'AbortError';
-
 /**
  * What the tabs showed before `search/counts` existed: one one-row search per type, read for its
  * total. Four requests instead of one, which is why it is the fallback and not the path.
@@ -185,7 +183,7 @@ async function countsFromSearches(keywords: string, signal?: AbortSignal): Promi
   RECORD_TYPES.forEach((id, index) => {
     const result = settled[index];
     if (result.status === 'rejected') {
-      if (isAbort(result.reason)) throw result.reason;
+      if (isAbortError(result.reason)) throw result.reason;
       traceCounts(result.reason);
       return;
     }
@@ -221,7 +219,7 @@ export function useTypeCounts(keywords: string): TypeCounts | null {
       try {
         return await readCounts(term, signal);
       } catch (error) {
-        if (!isAbort(error)) traceCounts(error);
+        if (!isAbortError(error)) traceCounts(error);
         throw error;
       }
     },
@@ -233,35 +231,49 @@ export function useTypeCounts(keywords: string): TypeCounts | null {
   return data ?? kept;
 }
 
-/** Dropdown list items. One page holds them all. */
-const loadLists = (signal?: AbortSignal) => fetchListRows<OptionSource>({ signal });
-
 /** Every organization of the proponent company type, for the proponent filter dropdown. */
 async function loadOrganizations(signal?: AbortSignal): Promise<OptionSource[]> {
-  const query = buildSearchQuery({
-    dataset: 'Organization',
-    keywords: '',
-    pageNum: 1,
-    pageSize: ALL_ROWS_PAGE_SIZE,
-    sortBy: '+name',
-    filters: { companyType: PROPONENT_COMPANY_TYPE },
-  });
-  return rowsFrom(await api<SearchEnvelope[] | null>(`/${query}`, { signal })) as OptionSource[];
+  const rows: OptionSource[] = [];
+  for (let pageNum = 1; pageNum <= ORGANIZATION_MAX_PAGES; pageNum += 1) {
+    const query = buildSearchQuery({
+      dataset: 'Organization',
+      keywords: '',
+      pageNum,
+      pageSize: ORGANIZATION_PAGE_SIZE,
+      sortBy: '+name',
+      filters: { companyType: PROPONENT_COMPANY_TYPE },
+    });
+    const envelope = (await api<SearchEnvelope[] | null>(`/${query}`, { signal }))?.[0];
+    const page = (envelope?.searchResults ?? []) as OptionSource[];
+    rows.push(...page);
+    // A short page is the last; `count`, when sent, stops a full last page from costing one more empty read.
+    const count = envelope?.count;
+    if (page.length < ORGANIZATION_PAGE_SIZE || (count !== undefined && rows.length >= count)) break;
+  }
+  return rows;
+}
+
+async function traceOrganizations(signal?: AbortSignal): Promise<OptionSource[]> {
+  try {
+    return await loadOrganizations(signal);
+  } catch (error) {
+    if (!isAbortError(error)) trackException(error, { lookup: 'Organization' });
+    throw error;
+  }
 }
 
 const EMPTY: OptionSource[] = [];
 
-/** The `List` and `Organization` rows every record type builds its dropdowns from. */
-export function useFilterSources(): { lists: OptionSource[]; orgs: OptionSource[] } {
-  const lists = useQuery({
-    queryKey: ['search', 'List'],
-    queryFn: ({ signal }) => loadLists(signal),
-    staleTime: Infinity,
-  });
+/**
+ * The `List` and `Organization` rows every record type builds its dropdowns from. `failed` says a
+ * read came back with nothing, so the page can say why a dropdown is short.
+ */
+export function useFilterSources(): { lists: OptionSource[]; orgs: OptionSource[]; failed: boolean } {
+  const lists = useQuery(listRowsQuery);
   const orgs = useQuery({
     queryKey: ['search', 'Organization', PROPONENT_COMPANY_TYPE],
-    queryFn: ({ signal }) => loadOrganizations(signal),
+    queryFn: ({ signal }) => traceOrganizations(signal),
     staleTime: Infinity,
   });
-  return { lists: lists.data ?? EMPTY, orgs: orgs.data ?? EMPTY };
+  return { lists: lists.data ?? EMPTY, orgs: orgs.data ?? EMPTY, failed: lists.isError || orgs.isError };
 }

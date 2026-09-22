@@ -44,6 +44,12 @@ export function readPrefs(): Prefs {
   }
 }
 
+/** Route path for a landing key; screen keys are not paths (`me` is /workspace). Unknown key: the default. */
+export function landingPath(key: string): string {
+  const byKey = (k: string) => SCREENS.find(s => s.key === k);
+  return (byKey(key) ?? byKey(DEFAULT_PREFS.landing)!).path;
+}
+
 export function writePrefs(prefs: Prefs) {
   writeStored(PREFS_KEY, JSON.stringify(prefs));
 }

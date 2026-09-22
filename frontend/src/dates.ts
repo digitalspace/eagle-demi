@@ -39,7 +39,10 @@ export function dayMonthYear(iso: string | null | undefined): string {
   return date ? `${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}` : '';
 }
 
-/** `date:'d MMM y, HH:mm'` as the Angular app (0038d3e) rendered it: "5 Sep 2024, 14:03", 24-hour clock. */
+/**
+ * `date:'d MMM y, HH:mm'` as the Angular app (0038d3e) rendered it: "5 Sep 2024, 14:03",
+ * 24-hour clock.
+ */
 export function dayMonthYearTime(iso: string | null | undefined): string {
   const date = parse(iso);
   if (!date) return '';
@@ -54,7 +57,8 @@ export function isoDay(iso: string | null | undefined): string {
 
 /**
  * `currency:'CAD':'symbol':'1.4-4'` as the Angular app (0038d3e) rendered it under its default
- * en-US locale, where the CAD symbol is "CA$". Four decimals because a single answer costs a fraction of a cent.
+ * en-US locale, where the CAD symbol is "CA$". Four decimals because a single answer costs a
+ * fraction of a cent.
  */
 export function cad(amount: number): string {
   return new Intl.NumberFormat('en-US', {

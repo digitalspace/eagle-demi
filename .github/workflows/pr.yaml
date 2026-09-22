@@ -103,10 +103,14 @@ jobs:
       - name: Smoke test the build
         working-directory: frontend
         run: |
-          yarn preview --host 127.0.0.1 --port 4173 --strictPort &
+          # vite itself, not `yarn preview`: $! must be the server so kill -0 and the trap reach it.
+          node_modules/.bin/vite preview --host 127.0.0.1 --port 4173 --strictPort &
           server=$!
-          trap 'kill "$server"' EXIT
-          timeout 60 bash -c 'until curl -sf -o /dev/null http://127.0.0.1:4173/; do sleep 1; done'
+          trap 'kill "$server" 2>/dev/null' EXIT
+          timeout 60 bash -c 'until curl -sf -o /dev/null http://127.0.0.1:4173/; do
+            kill -0 "$1" 2>/dev/null || { echo "vite preview exited before serving" >&2; exit 1; }
+            sleep 1
+          done' _ "$server"
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/pw/node_modules/playwright/index.mjs" \
             node scripts/e2e-smoke.mjs --base http://127.0.0.1:4173
 

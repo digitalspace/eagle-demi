@@ -237,6 +237,26 @@ describe('Layers panel', () => {
     expect(screen.queryByRole('checkbox', { name: 'Active wildfires' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Layers/ })).toHaveFocus();
   });
+
+  it('gives Escape to the filters drawer opened after it, then to itself', async () => {
+    const user = userEvent.setup();
+    await mount();
+    await openPanel(user);
+    // From the keyboard: a press on the Filters button would close the panel as an outside press.
+    screen.getByRole('button', { name: /^Filters/ }).focus();
+    await user.keyboard('{Enter}');
+    const wildfires = () => screen.queryByRole('checkbox', { name: 'Active wildfires' });
+    const drawer = () => screen.queryByRole('heading', { name: 'Filters' });
+    expect(wildfires()).toBeInTheDocument();
+    expect(drawer()).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    expect(drawer()).not.toBeInTheDocument();
+    expect(wildfires()).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    expect(wildfires()).not.toBeInTheDocument();
+  });
 });
 
 describe('boundary overlays', () => {
@@ -356,6 +376,18 @@ describe('wildfires', () => {
     // The name arrives as markup and stays a string.
     expect(popup).toHaveTextContent('<img src=x onerror="alert(1)">');
     expect(popup.querySelector('img')).toBeNull();
+  });
+
+  // Over plain pins at 600, under the selected pin at 650 and the popups at 680.
+  it('stacks the pills inside the map band, between plain and selected pins', async () => {
+    const user = userEvent.setup();
+    await mount();
+    await openPanel(user);
+
+    await user.click(screen.getByRole('checkbox', { name: 'Active wildfires' }));
+
+    const [pill] = await screen.findAllByTestId('wildfire-marker');
+    expect(pill.closest('[data-testid="marker"]')).toHaveAttribute('data-z', '640');
   });
 });
 

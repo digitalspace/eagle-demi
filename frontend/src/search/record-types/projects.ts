@@ -105,6 +105,5 @@ export const projectsConfig: RecordTypeConfig = {
       CEAAInvolvement: ofType(LIST_TYPES.CEAAInvolvement),
     };
   },
-  selectable: false,
   headerless: false,
 };

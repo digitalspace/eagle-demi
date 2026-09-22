@@ -180,6 +180,24 @@ describe('GuidedTour', () => {
     expect(screen.getByRole('dialog')).toHaveFocus();
   });
 
+  it('leaves focus on the button the reader is on when the page is resized', async () => {
+    await startTour();
+    const next = screen.getByRole('button', { name: 'Next' });
+    next.focus();
+
+    relayout();
+
+    expect(next).toHaveFocus();
+  });
+
+  it('puts focus back on the card when the walk moves', async () => {
+    const { user } = await startTour();
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(screen.getByRole('dialog')).toHaveFocus();
+  });
+
   it('hands focus back to the control that started it when skipped', async () => {
     const { user } = await startTour();
 

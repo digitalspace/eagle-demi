@@ -1,10 +1,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { PREFS_KEY } from './shell/prefs';
 import { apiDocsTarget, routes } from './routes';
 import { json } from './test-http';
 import { queryWrapper } from './test-query';
+import { stubNarrow } from './test-setup';
 
 /**
  * The index search and document content screens were folded into one page, so their links and
@@ -37,14 +38,7 @@ async function go(url: string): Promise<string> {
   return router.state.location.pathname + router.state.location.search;
 }
 
-// Each screen is a lazy route, and the first visit pays for transforming its whole module graph,
-// which can outlast findAllByRole's wait. Loading them all once here moves that cost out of the tests.
-beforeAll(async () => {
-  const screens = routes.flatMap((route) => route.children ?? []);
-  await Promise.all(screens.map((route) => (typeof route.lazy === 'function' ? route.lazy() : null)));
-}, 60_000);
-
-beforeEach(() => {
+function stubBackend() {
   window.__env = { ENVIRONMENT: 'test', API_PATH: '/api' };
   // The shell reads the shared project corpus on every screen, and each ported screen reads too:
   // an empty list answers them all. The deep project link is the exception — it has to land on a
@@ -58,7 +52,25 @@ beforeEach(() => {
       return Promise.resolve(json([]));
     }),
   );
-});
+}
+
+// Each screen is a lazy route, and the first visit pays for transforming its whole module graph,
+// which can outlast findAllByRole's wait. Loading them all once here moves that cost out of the tests.
+// So does the first render through the router, the shell and a screen, which on a loaded machine
+// took over a second in whichever test ran first.
+beforeAll(async () => {
+  const screens = routes.flatMap((route) => route.children ?? []);
+  await Promise.all(screens.map((route) => (typeof route.lazy === 'function' ? route.lazy() : null)));
+  stubNarrow(false);
+  stubBackend();
+  renderRouter(createMemoryRouter(routes, { initialEntries: ['/search'] }));
+  await screen.findAllByRole('banner', {}, { timeout: 30_000 });
+  cleanup();
+  vi.unstubAllGlobals();
+  delete window.__env;
+}, 60_000);
+
+beforeEach(stubBackend);
 
 afterEach(() => {
   localStorage.clear();
@@ -104,10 +116,21 @@ describe('redirects', () => {
     expect(await go('/')).toBe('/map');
   });
 
-  it('opens on the saved landing screen', async () => {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ landing: 'search', perPage: 6 }));
+  it.each([
+    ['map', '/map'],
+    ['search', '/search'],
+    ['summary', '/summary'],
+  ])('opens on the saved landing screen %s at %s', async (landing, path) => {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ landing, perPage: 6 }));
 
-    expect(await go('/')).toBe('/search');
+    expect(await go('/')).toBe(path);
+  });
+
+  // The screen key is not the path: 'me' lives at /workspace.
+  it('opens a landing screen at its path, not its key', async () => {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ landing: 'me', perPage: 6 }));
+
+    expect(await go('/')).toBe('/workspace');
   });
 
   // The spec is a route under the API base; the SPA catch-all would otherwise swallow it.

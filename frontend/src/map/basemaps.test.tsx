@@ -47,6 +47,24 @@ describe('MapControls base map picker', () => {
     expect(picker()).toHaveFocus();
   });
 
+  // One shared name would join both maps' radios into one group, so picking in one unticks the other.
+  it('gives each map its own radio group', async () => {
+    render(
+      <>
+        <MapControls basemap={DEFAULT_BASEMAP} onBasemapChange={vi.fn()} />
+        <MapControls basemap={DEFAULT_BASEMAP} onBasemapChange={vi.fn()} />
+      </>,
+    );
+    const [first, second] = screen.getAllByRole('button', { name: 'Base map' });
+
+    await userEvent.click(first);
+    const firstName = screen.getByRole('radio', { name: DEFAULT_BASEMAP }).getAttribute('name');
+    await userEvent.click(second);
+    const secondName = screen.getByRole('radio', { name: DEFAULT_BASEMAP }).getAttribute('name');
+
+    expect(firstName).not.toBe(secondName);
+  });
+
   it('closes on a press outside it', async () => {
     renderControls();
 

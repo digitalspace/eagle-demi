@@ -104,6 +104,5 @@ export const documentsConfig: RecordTypeConfig = {
     return options;
   },
   // Bulk download is out of scope for this page, so no row carries a selection checkbox.
-  selectable: false,
   headerless: false,
 };

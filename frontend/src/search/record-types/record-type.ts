@@ -32,11 +32,9 @@ export const RECORD_DATASETS: Record<RecordId, string> = {
   notifications: 'ProjectNotification',
 };
 
-/** `meta[0]` of a search envelope: the totals, and what the index could not honour. */
+/** `meta[0]` of a search envelope. */
 export interface SearchMeta {
   searchResultsTotal?: number;
-  /** Fields the query named that the index does not carry, so the backend ignored them. */
-  dropped?: string[];
 }
 
 export interface RecordTypeConfig<Row = Record<string, unknown>> {
@@ -57,8 +55,6 @@ export interface RecordTypeConfig<Row = Record<string, unknown>> {
   advancedFields: AdvancedField[];
   /** Dropdown values per filter id, built from the cached `List` and `Organization` reads. */
   optionsFrom: (lists: OptionSource[], orgs: OptionSource[]) => Record<string, ValueOption[]>;
-  /** Whether rows carry a selection checkbox. */
-  selectable: boolean;
   /** No column headings and no filter row: the column filters move into the panel. */
   headerless: boolean;
   /** Which row template a headerless type draws itself with. */
@@ -116,5 +112,5 @@ export const NOTIFICATION_DECISIONS: OptionSource[] = [
 
 /** The project's own page in this app. */
 export function projectPath(id: string): string {
-  return `/projects/${id}`;
+  return `/projects/${encodeURIComponent(id)}`;
 }

@@ -1,11 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RouterProvider, createMemoryRouter } from 'react-router';
 import type { AppConfig } from '../config';
 import type { SavedQuery } from '../api/me';
 import { ANONYMOUS_SESSION, SessionContext } from '../session/session';
+import { NARROW_QUERY } from '../search/grid/DisplayGrid';
 import { resetCountsProbe } from '../search/search-api';
+import { trackException } from '../telemetry';
 import { stubNarrow } from '../test-setup';
 import { json } from '../test-http';
 import { withQueryClient } from '../test-query';
@@ -16,13 +18,18 @@ vi.mock('../config', async (original) => ({
   ...(await original<typeof import('../config')>()),
   config: () => flags,
 }));
+vi.mock('../telemetry', async (original) => ({
+  ...(await original<typeof import('../telemetry')>()),
+  trackException: vi.fn(),
+}));
 
 const DOCUMENTS = [
   { _id: 'doc-1', displayName: 'Site C Application', datePosted: '2024-03-01T00:00:00Z' },
   { _id: 'doc-2', displayName: 'Ajax Decision', datePosted: '2023-06-01T00:00:00Z' },
 ];
 
-const COUNTS = { Project: 3, Document: 9, RecentActivity: 4, ProjectNotification: 0 };
+/** No `ProjectNotification`: the endpoint omits a type it could not measure. */
+const COUNTS = { Project: 3, Document: 9, RecentActivity: 0 };
 
 const envelope = (rows: unknown[], total = rows.length) =>
   json([{ searchResults: rows, meta: [{ searchResultsTotal: total }] }]);
@@ -77,6 +84,18 @@ function renderAt(url: string) {
   return { search: () => new URLSearchParams(router.state.location.search) };
 }
 
+// The first render in a worker pays for compiling React and the whole grid, which on a loaded
+// machine outlasts findBy's 1 s wait in whichever test runs first. One render here moves that cost
+// out of the tests.
+beforeAll(async () => {
+  stubNarrow(false);
+  stubApi();
+  renderAt('/search');
+  await screen.findByRole('button', { name: 'Site C Application' }, { timeout: 30_000 });
+  cleanup();
+  vi.unstubAllGlobals();
+}, 60_000);
+
 beforeEach(() => {
   resetCountsProbe();
   // jsdom implements neither dialog method nor ResizeObserver.
@@ -98,6 +117,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  // Cleared so a trace assertion sees only calls its own test made.
+  vi.mocked(trackException).mockClear();
   for (const key of Object.keys(flags)) delete flags[key];
 });
 
@@ -118,7 +139,9 @@ describe('UnifiedSearch', () => {
     const tabs = within(screen.getByRole('group', { name: 'Record type' }));
     expect(await tabs.findByRole('button', { name: /Documents\s*9/ })).toBeTruthy();
     expect(tabs.getByRole('button', { name: /Projects\s*3/ })).toBeTruthy();
-    expect(tabs.getByRole('button', { name: /Project notifications\s*0/ })).toBeTruthy();
+    expect(tabs.getByRole('button', { name: /Activities & updates\s*0/ })).toBeTruthy();
+    const unknown = tabs.getByRole('button', { name: /^Project notifications/ });
+    expect(unknown.querySelector('.unified-search__pill-count')).toBeNull();
   });
 
   it('keeps the keyword and drops the filters and sort when the record type changes', async () => {
@@ -196,7 +219,7 @@ describe('UnifiedSearch', () => {
 
     await user.click(screen.getByRole('button', { name: 'Remove Search dam' }));
     // Past the debounce, so a draft still holding the old word would have written it back.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
 
     expect(search().get('keywords')).toBeNull();
     expect(searchesFor(fetchMock, 'Document').slice(before).filter((url) => url.includes('keywords=dam'))).toEqual([]);
@@ -327,17 +350,21 @@ describe('UnifiedSearch', () => {
 
   it('keeps the last rows and badges up when a search fails, with no empty message', async () => {
     const fetchMock = stubApi();
-    const user = userEvent.setup();
     renderAt('/search');
     await screen.findByRole('button', { name: 'Site C Application' });
     const tabs = within(screen.getByRole('group', { name: 'Record type' }));
     await tabs.findByRole('button', { name: /Documents\s*9/ });
     fetchMock.mockImplementation(async () => json({ error: 'The index is down' }, 400));
-
-    await user.type(screen.getByRole('searchbox'), 'dam');
+    // The typed keyword goes out after the 300 ms debounce; run that clock rather than wait it out.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'dam' } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    vi.useRealTimers();
 
     expect(await screen.findByText('The index is down')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Site C Application' })).toBeTruthy();
+    expect(screen.getByText('1–2 of 2 documents matching')).toBeTruthy();
     expect(tabs.getByRole('button', { name: /Documents\s*9/ })).toBeTruthy();
     expect(document.querySelector('.display-grid__empty')).toBeNull();
   });
@@ -509,6 +536,24 @@ describe('UnifiedSearch', () => {
     });
   });
 
+  // The popup is a plain group, not a menu, so the button reports open or shut and names no popup type.
+  it.each([
+    ['Columns', 'Columns shown'],
+    ['Saved queries', 'Saved queries'],
+  ])('reports the %s popup as expanded without claiming a menu', async (name, group) => {
+    stubApi();
+    const user = userEvent.setup();
+    renderAt('/search');
+
+    const toggle = await screen.findByRole('button', { name });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await user.click(toggle);
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.hasAttribute('aria-haspopup')).toBe(false);
+    expect(screen.getByRole('group', { name: group })).toBeTruthy();
+  });
+
   describe('saved queries', () => {
     it('saves the address as it stands under the typed name, then hands focus back', async () => {
       const fetchMock = stubApi();
@@ -554,7 +599,7 @@ describe('UnifiedSearch', () => {
       expect((await menu.findByRole('alert')).textContent).toBe('Delete refused');
     });
 
-    it('lists the saved queries by record type, opens one and deletes another', async () => {
+    it('lists a saved query under its record type, sends its delete, and opens it', async () => {
       const fetchMock = stubApi();
       const user = userEvent.setup();
       const { search } = renderAt('/search');
@@ -569,6 +614,7 @@ describe('UnifiedSearch', () => {
       await user.click(open);
       expect(search().get('record')).toBe('activities');
       expect(search().get('keywords')).toBe('dam');
+      expect(screen.getByRole('searchbox')).toHaveValue('dam');
       expect(screen.queryByRole('group', { name: 'Saved queries' })).toBeNull();
     });
   });
@@ -624,6 +670,119 @@ describe('UnifiedSearch', () => {
     const panel = within(screen.getByLabelText('Advanced filters'));
     expect(panel.getByLabelText('Project type')).toBeTruthy();
     expect(panel.getByLabelText('Notification decision')).toBeTruthy();
+  });
+
+  it('leaves the name filter off a search inside the documents, which cannot take it', async () => {
+    flags['CONTENT_SEARCH'] = true;
+    const fetchMock = stubApi({
+      DocumentChunk: [{ documentId: 'doc-9', documentName: 'Caribou Plan', matchCount: 1, passages: [{ text: 'habitat' }] }],
+    });
+    renderAt('/search?scope=inside&keywords=habitat&nameContains=ajax');
+    await screen.findByText('Passage 1');
+
+    expect(searchesFor(fetchMock, 'DocumentChunk').at(-1)).not.toContain('nameContains');
+    expect(screen.queryByRole('button', { name: /^Remove Name/ })).toBeNull();
+  });
+
+  it('lays out by its own breakpoint, not the shell one', async () => {
+    // Narrow for the shell, wide for the grid: a 800px window.
+    window.matchMedia = (media: string) =>
+      ({ matches: media !== NARROW_QUERY, media, addEventListener: () => undefined, removeEventListener: () => undefined }) as unknown as MediaQueryList;
+    stubApi();
+    renderAt('/search');
+
+    const name = await screen.findByRole('button', { name: 'Site C Application' });
+    expect(name.closest('table')).not.toBeNull();
+  });
+
+  it('leaves the fields a document does not carry off its phone card', async () => {
+    stubNarrow(true);
+    stubApi({ Document: [{ _id: 'doc-1', displayName: 'Site C Application', milestone: 'Application' }] });
+    renderAt('/search');
+
+    const card = (await screen.findByRole('button', { name: 'Site C Application' })).closest('.display-grid__card') as HTMLElement;
+    expect([...card.querySelectorAll('dt')].map((term) => term.textContent)).toEqual(['Milestone']);
+  });
+
+  it('keeps a locked column on screen when the address hides it', async () => {
+    stubApi();
+    renderAt('/search?cols=displayName,milestone');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    const headers = screen.getAllByRole('columnheader').map((cell) => cell.textContent ?? '');
+    expect(headers.some((text) => text.startsWith('Name'))).toBe(true);
+    expect(headers.some((text) => text.startsWith('Milestone'))).toBe(false);
+  });
+
+  it('marks the sort in force on the header, not a sort the address named and the record cannot use', async () => {
+    stubApi();
+    renderAt('/search?sortBy=%2Bbogus');
+
+    const headers = await screen.findAllByRole('columnheader');
+    const sorted = headers.filter((cell) => cell.getAttribute('aria-sort'));
+    expect(sorted.map((cell) => [cell.textContent?.replace(/[▲▼⇅]/g, ''), cell.getAttribute('aria-sort')])).toEqual([
+      ['Date posted', 'descending'],
+    ]);
+  });
+
+  it('counts only the filters the record declares when it says why nothing matched', async () => {
+    stubApi({ Document: [] });
+    renderAt('/search?utm_source=x');
+
+    expect(await screen.findByText('No documents found')).toBeTruthy();
+  });
+
+  it('offers no chip for a year the address spells wrong, and drops it from the address', async () => {
+    const fetchMock = stubApi();
+    const { search } = renderAt('/search?datePosted=abc&keywords=dam');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    expect(screen.queryByRole('button', { name: /^Remove Date posted/ })).toBeNull();
+    expect(searchesFor(fetchMock, 'Document').some((url) => url.includes('abc'))).toBe(false);
+    await waitFor(() => expect(search().get('datePosted')).toBeNull());
+    expect(search().get('keywords')).toBe('dam');
+  });
+
+  it('moves a page past the last one back to the last page once the total is known', async () => {
+    stubApi({}, { total: 60 });
+    const { search } = renderAt('/search?currentPage=99');
+
+    await waitFor(() => expect(search().get('currentPage')).toBe('3'));
+  });
+
+  it('moves focus to the next chip when one is removed, and to the search box when none is left', async () => {
+    stubApi();
+    const user = userEvent.setup();
+    renderAt('/search?keywords=dam&nameContains=ajax');
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Search dam' }));
+    const name = screen.getByRole('button', { name: 'Remove Name ajax' });
+    await waitFor(() => expect(name).toHaveFocus());
+
+    await user.click(name);
+    await waitFor(() => expect(screen.getByRole('searchbox')).toHaveFocus());
+  });
+
+  it('moves focus to the search box on Clear all', async () => {
+    stubApi();
+    const user = userEvent.setup();
+    renderAt('/search?nameContains=ajax');
+
+    await user.click(await screen.findByRole('button', { name: 'Clear all' }));
+
+    await waitFor(() => expect(screen.getByRole('searchbox')).toHaveFocus());
+  });
+
+  it('says so and traces it when the filter choices cannot be read', async () => {
+    const fetchMock = stubApi();
+    const answer = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: unknown, init?: RequestInit) =>
+      String(input).includes('dataset=List') ? json({ error: 'List is down' }, 500) : answer(input, init),
+    );
+    renderAt('/search');
+
+    expect(await screen.findByText(/Some filter choices could not be loaded/)).toBeTruthy();
+    expect(trackException).toHaveBeenCalledWith(expect.anything(), { lookup: 'List' });
   });
 
   it('says what matched nothing, naming the keyword', async () => {

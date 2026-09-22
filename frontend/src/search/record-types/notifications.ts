@@ -48,7 +48,5 @@ export const notificationsConfig: RecordTypeConfig = {
     pcp: toOptions(PCP_STATES),
     decision: toOptions(NOTIFICATION_DECISIONS),
   }),
-  selectable: false,
   headerless: true,
-  rowTemplate: 'notification',
 };

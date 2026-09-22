@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
+import { EAGLE_OBJECT_ID } from '../api/documents';
 import { config as appConfig } from '../config';
 import { useDownload } from '../hooks/useDownload';
 import {
@@ -50,7 +51,7 @@ import {
   useTypeCounts,
   type SearchResult,
 } from '../search/search-api';
-import { yearOptions } from '../search/search-filters';
+import { isYear, yearOptions } from '../search/search-filters';
 import { useGridUrlState } from '../search/use-grid-url-state';
 import { useSettled } from '../search/use-settled';
 import '../search/unified-search.css';
@@ -85,8 +86,6 @@ interface SearchKey {
   filters: string;
 }
 
-const OBJECT_ID = /^[0-9a-f]{24}$/i;
-
 /** A date in the grid is YYYY-MM-DD, read in UTC: the stored date is a day, not an instant. */
 function gridDate(value: unknown): string {
   if (!value) return '';
@@ -101,7 +100,7 @@ function pickText(options: ValueOption[], pick: unknown): string {
   const label = options.find((option) => option.value === raw)?.label;
   if (label !== undefined) return label;
   // A bare ObjectId in an Author cell tells the reader less than a blank.
-  return OBJECT_ID.test(raw) ? '' : raw;
+  return EAGLE_OBJECT_ID.test(raw) ? '' : raw;
 }
 
 function optionText(options: ValueOption[], value: unknown): string {
@@ -146,7 +145,7 @@ export function UnifiedSearch() {
   const { state } = url;
   const config = recordConfig(state.record);
 
-  const { lists, orgs } = useFilterSources();
+  const { lists, orgs, failed: sourcesFailed } = useFilterSources();
   const download = useDownload();
   const [panelOpen, setPanelOpen] = useState(false);
   // Both the help dialog and the tour hand focus back to the button that opened them.
@@ -168,6 +167,7 @@ export function UnifiedSearch() {
 
   /* The field holds what is being typed; the URL holds what has been searched for. */
   const [draft, setDraft] = useState(state.keywords);
+  const searchInput = useRef<HTMLInputElement>(null);
   const settledDraft = useSettled(draft, SEARCH_DEBOUNCE_MS);
   const [lastUrlKeyword, setLastUrlKeyword] = useState(state.keywords);
   if (state.keywords !== lastUrlKeyword) {
@@ -186,14 +186,35 @@ export function UnifiedSearch() {
 
   const counts = useTypeCounts(settledDraft);
 
-  const scopeTakes = (id: string) => !inside || !NAMES_ONLY_FILTERS.includes(id);
-  const filters = Object.fromEntries(
-    Object.entries(state.filters).filter(([id]) => DECLARED_FILTERS[state.record].includes(id) && scopeTakes(id)),
-  );
   const options = useMemo(() => config.optionsFrom(lists, orgs), [config, lists, orgs]);
 
+  const idsOfKind = (kind: 'year' | 'text') =>
+    config.columns.filter((column) => column.filter === kind).map((column) => column.filterId ?? column.key);
+  const yearIds = idsOfKind('year');
+  const textIds = idsOfKind('text');
+
+  const scopeTakes = (id: string) => !inside || !NAMES_ONLY_FILTERS.includes(id);
+  const filters = Object.fromEntries(
+    Object.entries(state.filters).filter(
+      ([id, value]) =>
+        DECLARED_FILTERS[state.record].includes(id) &&
+        scopeTakes(id) &&
+        (!yearIds.includes(id) || isYear(asText(value))),
+    ),
+  );
+  // A year the address spells wrong is ignored above; dropping it from the URL keeps the link honest.
+  const { setFilter } = url;
+  const badYear = yearIds.find((id) => state.filters[id] !== undefined && !isYear(asText(state.filters[id])));
+  useEffect(() => {
+    if (badYear) setFilter(badYear, null);
+  }, [badYear, setFilter]);
+
+  // A locked column stays on screen whatever `cols=` says: without it a row has nothing to open.
+  const hiddenColumns = state.hiddenColumns.filter(
+    (key) => !config.columns.some((column) => column.key === key && column.locked),
+  );
   const columns: GridColumn<Row>[] = config.columns
-    .filter((column) => scopeTakes(column.filterId ?? column.key) && !state.hiddenColumns.includes(column.key))
+    .filter((column) => scopeTakes(column.filterId ?? column.key) && !hiddenColumns.includes(column.key))
     .map((column) => {
       const id = column.filterId ?? column.key;
       const picks = options[id] ?? column.options;
@@ -209,11 +230,6 @@ export function UnifiedSearch() {
 
   const advancedFields: AdvancedField[] = config.advancedFields
     .map((field) => (field.kind === 'select' ? { ...field, options: options[field.id] ?? field.options } : field));
-
-  const idsOfKind = (kind: 'year' | 'text') =>
-    config.columns.filter((column) => column.filter === kind).map((column) => column.filterId ?? column.key);
-  const yearIds = idsOfKind('year');
-  const textIds = idsOfKind('text');
 
   // A sort the URL names that this record cannot sort by falls back to the record's own.
   const sortKey = state.sortBy.replace(/^[+-]/, '');
@@ -262,9 +278,19 @@ export function UnifiedSearch() {
 
   const rows = insidePrompt ? NO_ROWS : (shown?.rows ?? NO_ROWS);
   // Held across draws: the passage list folds every passage when it is handed a new array.
-  const passageRows = useMemo(() => rows.map((row) => passageRowFrom(row, '')), [rows]);
+  const passageRows = useMemo(() => rows.map((row) => passageRowFrom(row)), [rows]);
   const total = shown?.total ?? 0;
   const loading = search.isFetching && !insidePrompt;
+
+  // A page past the last one (a stale link, `?currentPage=99`) is moved to the last page once the
+  // total is known, or the grid reads as empty and the pager has nowhere to go.
+  const { setPage } = url;
+  const answeredTotal = search.data && !search.isPlaceholderData ? search.data.total : null;
+  useEffect(() => {
+    if (answeredTotal === null) return;
+    const lastPage = Math.max(1, Math.ceil(answeredTotal / state.pageSize));
+    if (state.currentPage > lastPage) setPage(lastPage);
+  }, [answeredTotal, state.currentPage, state.pageSize, setPage]);
 
   const labelOfFilter = (id: string) =>
     config.columns.find((item) => (item.filterId ?? item.key) === id)?.label ??
@@ -374,7 +400,7 @@ export function UnifiedSearch() {
   }
 
   const noun = config.noun ?? config.label.toLowerCase();
-  const filterCount = Object.keys(state.filters).length;
+  const filterCount = Object.keys(filters).length;
   const emptyMessage = term
     ? `Nothing in ${noun} matches “${term}”`
     : filterCount > 0
@@ -423,6 +449,7 @@ export function UnifiedSearch() {
             type="search"
             className="unified-search__input"
             placeholder="Search projects, documents and updates"
+            ref={searchInput}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
           />
@@ -480,6 +507,11 @@ export function UnifiedSearch() {
 
       {error && <div className="callout callout--warning">{error}</div>}
       {download.error && <div className="callout callout--warning">{download.error}</div>}
+      {sourcesFailed && (
+        <div className="callout callout--warning">
+          Some filter choices could not be loaded, so their lists may be short. Reload the page to try again.
+        </div>
+      )}
 
       <DisplayGrid
         caption={`${config.label} matching this search`}
@@ -488,8 +520,8 @@ export function UnifiedSearch() {
         loading={loading}
         keywords={state.keywords}
         emptyMessage={search.isError ? '' : emptyMessage}
-        sort={sortStateOf(state.sortBy)}
-        filters={state.filters}
+        sort={sortStateOf(sortBy)}
+        filters={filters}
         narrowExtras={narrowExtras}
         template={inside ? 'list' : config.template}
         headerless={config.headerless}
@@ -513,17 +545,15 @@ export function UnifiedSearch() {
             page={state.currentPage}
             pageSize={state.pageSize}
             total={total}
-            loading={search.data === undefined}
+            loading={shown === undefined}
             narrowed={!!term || filterCount > 0}
             columns={config.columns}
-            hiddenColumns={state.hiddenColumns}
-            filterCount={panelFields.filter((field) => state.filters[field.id] != null).length}
+            hiddenColumns={hiddenColumns}
+            filterCount={panelFields.filter((field) => filters[field.id] != null).length}
             panelOpen={panelOpen}
             onToggleColumn={(key) =>
               url.setHiddenColumns(
-                state.hiddenColumns.includes(key)
-                  ? state.hiddenColumns.filter((hidden) => hidden !== key)
-                  : [...state.hiddenColumns, key],
+                hiddenColumns.includes(key) ? hiddenColumns.filter((hidden) => hidden !== key) : [...hiddenColumns, key],
               )
             }
             onTogglePanel={() => setPanelOpen((open) => !open)}
@@ -548,12 +578,12 @@ export function UnifiedSearch() {
           </GridToolbar>
         )}
         resetKey={fieldsKey}
-        chips={<ChipRow chips={chips} onRemove={removeChip} onClearAll={clearAll} />}
+        chips={<ChipRow chips={chips} onRemove={removeChip} onClearAll={clearAll} fallbackFocus={searchInput} />}
         panel={(panelFields) => (
           <AdvancedFilters
             key={fieldsKey}
             fields={panelFields}
-            values={state.filters}
+            values={filters}
             open={panelOpen}
             onChange={(id, value) => url.setFilter(id, value)}
           />

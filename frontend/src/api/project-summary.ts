@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, api, type ApiInit } from './client';
 import { trackException } from '../telemetry';
-import { fetchListRows } from './search';
+import { EAGLE_OBJECT_ID } from './documents';
+import { listRowsQuery, type ListRow, type WireEnvelope } from './search';
 
 /**
  * A lookup field as the project record actually carries it: a bare Eagle `List` ObjectId, a
@@ -27,9 +28,6 @@ export interface LabelLine {
   parts: ResolvedLabel[];
 }
 
-/** An Eagle ObjectId. Anything else in a lookup field is already the label. */
-const OBJECT_ID = /^[0-9a-f]{24}$/i;
-
 /** Said to a reader who is looking at an id, so the page never shows one without saying why. */
 const UNRESOLVED_HINT = 'Not in the registry’s list of names: ';
 
@@ -53,7 +51,7 @@ export function resolveListLabel(value: ListRef | undefined, lists: Map<string, 
   const text = String(value).trim();
   // Not an id, so it is the label already: mock fixtures, Track's own string columns and any
   // record the backfill resolved all land here untouched.
-  if (!text || !OBJECT_ID.test(text)) return { text, unresolved: false, pending: false };
+  if (!text || !EAGLE_OBJECT_ID.test(text)) return { text, unresolved: false, pending: false };
 
   // Withheld rather than shown and swapped a moment later — the id would flash on every load.
   if (!lists) return { text: '', unresolved: false, pending: true };
@@ -83,37 +81,27 @@ export function joinLabels(
   };
 }
 
-interface SearchRow {
-  id?: string | number;
-  _id?: string | number;
-  name?: string;
-}
-
-
 /**
- * Every Eagle `List` row as id -> name, in one request.
+ * Every Eagle `List` row as id -> name.
  *
  * The project record stores List ObjectIds in `currentPhaseName` and friends, so without this the
- * page renders ids. A failed read gives an empty table rather than a retry: ids then render with
- * the tooltip that explains them, which is a worse page than names but still the page.
+ * page renders ids. A nameless row is dropped rather than mapped to '': an id with its "not in the
+ * list" tooltip says more than a blank.
  */
-export async function fetchLists(init?: ApiInit): Promise<Map<string, string>> {
-  try {
-    const rows = await fetchListRows<SearchRow>(init);
-    // A nameless row is dropped rather than mapped to '': an id with its "not in the list"
-    // tooltip says more than a blank.
-    return new Map(rows.filter((row) => row.name).map((row) => [String(row.id ?? row._id), String(row.name)]));
-  } catch (err) {
-    trackException(err, { lookup: 'List' });
-    return new Map();
-  }
+export function listNames(rows: ListRow[]): Map<string, string> {
+  return new Map(rows.filter((row) => row.name).map((row) => [String(row.id ?? row._id), String(row.name)]));
 }
 
-const listsKey = ['lists'] as const;
+const NO_NAMES = new Map<string, string>();
 
-/** The `List` name table, read once per session and shared by the picker and the summary page. */
-export function useLists() {
-  return useQuery({ queryKey: listsKey, queryFn: ({ signal }) => fetchLists({ signal }) });
+/**
+ * The `List` name table, read once per session and shared by the picker, the summary page and the
+ * search filters. A failed read gives an empty table rather than a pending one: ids then render with
+ * the tooltip that explains them, which is a worse page than names but still the page.
+ */
+export function useLists(): { data: Map<string, string> | undefined } {
+  const query = useQuery({ ...listRowsQuery, select: listNames });
+  return { data: query.isError ? NO_NAMES : query.data };
 }
 
 // The Project summary screen ------------------------------------------------------------------
@@ -413,7 +401,7 @@ interface RawOrganization extends Omit<OrganizationRow, 'id' | 'name'> {
  */
 export async function fetchOrganizations(init?: ApiInit): Promise<Map<string, OrganizationRow>> {
   try {
-    const body = await api<{ searchResults?: RawOrganization[] }[]>(
+    const body = await api<WireEnvelope<RawOrganization>[] | null>(
       '/search?dataset=Organization&and[companyType]=Indigenous Group&pageSize=500',
       init,
     );

@@ -1,9 +1,12 @@
 import { redirect, type RouteObject } from 'react-router';
 import { config } from './config';
-import { readPrefs } from './shell/prefs';
+import { landingPath, readPrefs } from './shell/prefs';
 import { Shell } from './shell/Shell';
 
-/** The Angular app's UrlTree serializer (0038d3e) percent-encoded; URLSearchParams would write a space as `+`. */
+/**
+ * The Angular app's UrlTree serializer (0038d3e) percent-encoded; URLSearchParams would write a
+ * space as `+`.
+ */
 const queryString = (params: Record<string, string>): string =>
   Object.entries(params)
     .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
@@ -78,9 +81,8 @@ export const routes: RouteObject[] = [
       { path: 'profile', loader: () => redirect('/workspace') },
       {
         // Redirect target follows the saved "default landing screen" preference (My account screen).
-        // readPrefs() already validates the saved key against SCREENS and falls back to 'map'.
         index: true,
-        loader: () => redirect(`/${readPrefs().landing}`),
+        loader: () => redirect(landingPath(readPrefs().landing)),
       },
       { path: '*', loader: () => redirect('/map') },
     ],

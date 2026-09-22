@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
+import { useDismissable } from '../map/use-dismissable';
 import { config } from '../config';
 import { logout } from '../api/keycloak';
 import { useSession } from '../session/session';
@@ -15,6 +16,7 @@ function initialsOf(userName: string): string {
 export function AccountMenu() {
   const [open, setOpen] = useState(false);
   const wrapper = useRef<HTMLDivElement>(null);
+  const chip = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { userName } = useSession();
@@ -27,18 +29,17 @@ export function AccountMenu() {
     setOpen(false);
   }
 
+  useDismissable(
+    open,
+    wrapper,
+    chip,
+    useCallback(() => setOpen(false), []),
+  );
+
   useEffect(() => {
     if (!open) return;
 
-    const onPointerDown = (event: MouseEvent) => {
-      if (!wrapper.current?.contains(event.target as Node)) setOpen(false);
-    };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-        wrapper.current?.querySelector('button')?.focus();
-        return;
-      }
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
       const items = Array.from(wrapper.current?.querySelectorAll<HTMLElement>(ITEM_SELECTOR) ?? []);
       if (items.length === 0) return;
@@ -48,12 +49,8 @@ export function AccountMenu() {
       items[(at + step + items.length) % items.length].focus();
     };
 
-    document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
+    return () => document.removeEventListener('keydown', onKeyDown);
   }, [open]);
 
   const go = (to: string) => {
@@ -65,6 +62,7 @@ export function AccountMenu() {
     <div className="account" ref={wrapper}>
       <button
         type="button"
+        ref={chip}
         className="account__chip"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}

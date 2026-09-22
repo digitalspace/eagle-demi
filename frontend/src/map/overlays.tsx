@@ -94,9 +94,10 @@ export function linePaint(style: BoundaryStyle, hasSelection: boolean): LineLaye
     : ['case', hover, 3, style.width];
   // Dimming the unpicked shapes: MapLibre cannot data-drive `line-dasharray`, which is how Leaflet
   // drew the same recession.
-  const opacity: ExpressionSpecification | number = hasSelection
+  // Full strength on hover so the edge holds against the darker hover fill.
+  const opacity: ExpressionSpecification = hasSelection
     ? ['case', selected, 1, hover, 0.6, 0.4]
-    : style.lineOpacity;
+    : ['case', hover, 1, style.lineOpacity];
 
   return { 'line-color': style.colour, 'line-width': width, 'line-opacity': opacity };
 }
@@ -172,7 +173,14 @@ export function WildfireMarkers({ fires }: { fires: Fire[] }) {
   return (
     <>
       {fires.map((fire) => (
-        <Marker key={fire.key} longitude={fire.lng} latitude={fire.lat} anchor="center">
+        // Over plain pins, under the selected and hovered ones: the band in map-explorer.css.
+        <Marker
+          key={fire.key}
+          longitude={fire.lng}
+          latitude={fire.lat}
+          anchor="center"
+          style={{ zIndex: 640 }}
+        >
           <button
             type="button"
             className={`wildfire-marker-pill${fire.card.fireOfNote ? ' fire-of-note' : ''}`}
@@ -279,6 +287,7 @@ export function LayersPanel(props: LayersPanelProps) {
     panelRef,
     toggleRef,
     useCallback(() => setOpen(false), []),
+    { swallowClosingClick: true },
   );
 
   return (

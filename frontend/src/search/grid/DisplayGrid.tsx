@@ -166,12 +166,13 @@ export function DisplayGrid(props: DisplayGridProps) {
     const text = dateColumn ? textOf(row, dateColumn) : '';
     return text ? [{ text }] : [];
   };
-  const cardFields = (row: Row): ListRowField[] => [
-    ...columns
-      .filter((column) => !column.link && !column.date)
-      .map((column) => ({ label: column.label, value: textOf(row, column) })),
-    ...props.narrowExtras(row),
-  ];
+  const cardFields = (row: Row): ListRowField[] =>
+    [
+      ...columns
+        .filter((column) => !column.link && !column.date)
+        .map((column) => ({ label: column.label, value: textOf(row, column) })),
+      ...props.narrowExtras(row),
+    ].filter((field) => field.value !== '');
 
   const [detail, setDetail] = useState<RecordDetail | null>(null);
   // What was pressed to open the sheet, so focus goes back to it rather than to the top.
@@ -466,7 +467,6 @@ export function GridToolbar(props: GridToolbarProps) {
               type="button"
               className={`display-grid__tool${columnsOpen ? ' display-grid__tool--open' : ''}`}
               data-tour="columns"
-              aria-haspopup="true"
               aria-expanded={columnsOpen}
               onClick={() => setColumnsOpen((open) => !open)}
             >
@@ -502,7 +502,6 @@ export function GridToolbar(props: GridToolbarProps) {
             ref={queriesToggle}
             type="button"
             className={`display-grid__tool${queriesOpen ? ' display-grid__tool--open' : ''}`}
-            aria-haspopup="true"
             aria-expanded={queriesOpen}
             onClick={() => setQueriesOpen((open) => !open)}
           >

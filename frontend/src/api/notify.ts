@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ApiError, api, notifyBase, type ApiInit } from './client';
+import { ApiError, api, errorMessage, notifyBase, serverError, type ApiInit } from './client';
 
 /** `GET staff/stats` — eagle-notify api/src/stats.js `summarise()`. */
 export interface NotifyStats {
@@ -62,16 +62,6 @@ export function notifyEndpointHost(): string {
   return url.host + url.pathname;
 }
 
-/** eagle-notify's own `error` code, as the Angular app's notify screen (0038d3e) read it. */
-function reasonOf(body: string): string {
-  try {
-    const { error } = JSON.parse(body) as { error?: unknown };
-    return typeof error === 'string' ? error : '';
-  } catch {
-    return '';
-  }
-}
-
 /** Reasons this screen has wording for. Anything else shows the status alone. */
 const NOTIFY_REASON: Record<string, string> = {
   send_budget_exhausted: 'Send budget exhausted, try later',
@@ -84,8 +74,12 @@ const NOTIFY_REASON: Record<string, string> = {
  * service's output and never reaches the page.
  */
 export function notifyMessage(err: unknown): string {
-  if (!(err instanceof ApiError)) return err instanceof Error ? err.message : String(err);
-  return NOTIFY_REASON[reasonOf(err.body)] ?? `eagle-notify returned HTTP ${err.status}`;
+  if (!(err instanceof ApiError)) return errorMessage(err);
+  // eagle-notify's own `error` code, read as the Angular app's notify screen (0038d3e) read it.
+  const reason = serverError(err.body);
+  // hasOwn: a server code like `constructor` must not resolve to an Object.prototype member.
+  const known = reason && Object.hasOwn(NOTIFY_REASON, reason) ? NOTIFY_REASON[reason] : undefined;
+  return known || `eagle-notify returned HTTP ${err.status}`;
 }
 
 /** 0 when the request never reached eagle-notify, which reads as unreachable rather than refused. */
@@ -103,7 +97,10 @@ function notifyCall<T>(path: string, init: ApiInit = {}): Promise<T> {
   return api<T>(`${base}/${path}`, { ...init, bearerFor: base });
 }
 
-/** Stats and campaigns arrive together, as one loading state and one error, as in the Angular app (0038d3e). */
+/**
+ * Stats and campaigns arrive together, as one loading state and one error, as in the Angular app
+ * (0038d3e).
+ */
 export function useNotifyOverview() {
   return useQuery({
     queryKey: NOTIFY_QUERY,

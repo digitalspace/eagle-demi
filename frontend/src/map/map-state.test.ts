@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
 import type { Project } from '../api/types';
 import {
   boundarySection,
@@ -7,6 +8,7 @@ import {
   matchesBoundary,
   matchesRegion,
   searchProjects,
+  useMapExplorerState,
 } from './map-state';
 
 function project(over: Partial<Project> & { id: string | number }): Project {
@@ -264,5 +266,33 @@ describe('boundarySection', () => {
       'District 50', 'District 51', 'District 52', 'District 53', 'District 54',
       'District 55', 'District 56', 'District 57', 'District 58', 'District 59',
     ]);
+  });
+});
+
+describe('useMapExplorerState layers', () => {
+  it('keeps both overlays when a boundary pick and a layer toggle land in one batch', () => {
+    const { result } = renderHook(() => useMapExplorerState(10));
+
+    act(() => {
+      result.current.toggleValue('regionalDistricts', 'Capital');
+      result.current.toggleLayer('municipalities');
+    });
+
+    expect(result.current.activeLayers).toEqual(['regions', 'regionalDistricts', 'municipalities']);
+    expect(result.current.filters.regionalDistricts).toEqual(['Capital']);
+  });
+
+  it('drops only the picks of the overlay turned off', () => {
+    const { result } = renderHook(() => useMapExplorerState(10));
+    act(() => {
+      result.current.toggleValue('regionalDistricts', 'Capital');
+      result.current.toggleValue('municipalities', 'Victoria');
+    });
+
+    act(() => result.current.toggleLayer('regionalDistricts'));
+
+    expect(result.current.activeLayers).toEqual(['regions', 'municipalities']);
+    expect(result.current.filters.regionalDistricts).toEqual([]);
+    expect(result.current.filters.municipalities).toEqual(['Victoria']);
   });
 });

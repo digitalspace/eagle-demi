@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link } from 'react-router';
 import {
-  PASSAGE_LOCATOR,
   gridCollator,
+  passageLabel,
   type AdvancedField,
   type FilterValue,
   type FilterValues,
@@ -75,26 +75,50 @@ export interface GridChip {
   raw?: string;
 }
 
+const chipKey = (chip: GridChip) => `${chip.id}:${chip.raw ?? chip.value ?? ''}`;
+
+/**
+ * The removed chip's button leaves the page with focus on it, so focus moves on to the chip that
+ * took its place, or to `fallbackFocus` once no chip is left.
+ */
 export function ChipRow({
   chips,
   onRemove,
   onClearAll,
+  fallbackFocus,
 }: {
   chips: GridChip[];
   onRemove: (chip: GridChip) => void;
   onClearAll: () => void;
+  fallbackFocus: RefObject<HTMLElement | null>;
 }) {
+  const row = useRef<HTMLDivElement>(null);
+  // Compared by content: the caller builds a new array every render, press or not.
+  const shown = chips.map(chipKey).join('\n');
+  // Where focus goes if the next change to the chips leaves fewer than when the press happened.
+  const refocus = useRef<{ index: number; count: number; shown: string } | null>(null);
+  useLayoutEffect(() => {
+    const pending = refocus.current;
+    if (!pending || shown === pending.shown) return;
+    refocus.current = null;
+    if (chips.length >= pending.count) return;
+    const left = row.current?.querySelectorAll<HTMLElement>('.display-grid__chip') ?? [];
+    (left[Math.min(pending.index, left.length - 1)] ?? fallbackFocus.current)?.focus();
+  }, [shown, chips.length, fallbackFocus]);
   if (chips.length === 0) return null;
   return (
-    <div className="display-grid__chips">
+    <div className="display-grid__chips" ref={row}>
       <span className="display-grid__chips-label">Narrowed by</span>
-      {chips.map((chip) => (
+      {chips.map((chip, index) => (
         <button
-          key={`${chip.id}:${chip.raw ?? chip.value ?? ''}`}
+          key={chipKey(chip)}
           type="button"
           className="display-grid__chip"
           aria-label={chip.value ? `Remove ${chip.label} ${chip.value}` : `Remove ${chip.label}`}
-          onClick={() => onRemove(chip)}
+          onClick={() => {
+            refocus.current = { index, count: chips.length, shown };
+            onRemove(chip);
+          }}
         >
           <span aria-hidden="true">
             {chip.value ? (
@@ -110,7 +134,14 @@ export function ChipRow({
           </span>
         </button>
       ))}
-      <button type="button" className="display-grid__chips-clear" onClick={onClearAll}>
+      <button
+        type="button"
+        className="display-grid__chips-clear"
+        onClick={() => {
+          refocus.current = { index: 0, count: chips.length, shown };
+          onClearAll();
+        }}
+      >
         Clear all
       </button>
     </div>
@@ -250,7 +281,11 @@ function ValuePicker({
   const [typed, setTyped] = useState('');
   const anchor = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
-  const close = useCallback(() => setOpen(false), []);
+  // The narrowing belongs to one opening; the next one starts with every option.
+  const close = useCallback(() => {
+    setOpen(false);
+    setTyped('');
+  }, []);
   useDismissable(open, anchor, button, close);
   const picked = options.filter((option) => selected.includes(option.value));
   const term = typed.trim().toLowerCase();
@@ -266,10 +301,9 @@ function ValuePicker({
         type="button"
         className={`display-grid__control display-grid__pick${picked.length > 0 ? ' display-grid__control--on' : ''}`}
         aria-label={`Filter by ${label}`}
-        aria-haspopup="dialog"
         aria-expanded={open}
         title={picked.length ? picked.map((option) => option.label).join(', ') : undefined}
-        onClick={() => setOpen((was) => !was)}
+        onClick={() => (open ? close() : setOpen(true))}
       >
         <span className="display-grid__pick-label">{buttonText}</span>
         <span className="display-grid__pick-caret" aria-hidden="true">
@@ -681,25 +715,15 @@ export function PassageList({
                     ))}
                 </p>
                 <h3 className="display-grid__row-title">
-                  {row.href ? (
-                    <RecordLink href={row.href} external className="display-grid__row-link">
-                      <Highlight text={row.name} terms={terms} />
-                    </RecordLink>
-                  ) : (
-                    <button type="button" className="display-grid__row-link" onClick={() => onDownload(row.id)}>
-                      <Highlight text={row.name} terms={terms} />
-                    </button>
-                  )}
+                  <button type="button" className="display-grid__row-link" onClick={() => onDownload(row.id)}>
+                    <Highlight text={row.name} terms={terms} />
+                  </button>
                 </h3>
                 <p className="display-grid__passage-count">{count}</p>
                 <ul className="display-grid__passages" aria-label={count}>
                   {shown.map((hit, index) => (
                     <li key={index} className="display-grid__passage">
-                      <span className="display-grid__passage-locator">
-                        <RecordLink href={PASSAGE_LOCATOR.href(row, hit)} external>
-                          {PASSAGE_LOCATOR.label(hit)}
-                        </RecordLink>
-                      </span>
+                      <span className="display-grid__passage-locator">{passageLabel(hit)}</span>
                       <span className="display-grid__passage-text">
                         <Highlight text={hit.text.replace(MARK_TAG, '')} terms={terms} />
                       </span>

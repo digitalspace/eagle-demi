@@ -26,6 +26,20 @@ describe('highlightParts', () => {
     ]);
   });
 
+  it('keeps the mark on the match after a letter whose lower case is longer', () => {
+    expect(highlightParts('İzmir River', ['river'])).toEqual([
+      { text: 'İzmir ', hit: false },
+      { text: 'River', hit: true },
+    ]);
+  });
+
+  it('matches a term holding regex characters as plain text', () => {
+    expect(highlightParts('s.11 (b) sx11', ['s.11'])).toEqual([
+      { text: 's.11', hit: true },
+      { text: ' (b) sx11', hit: false },
+    ]);
+  });
+
   it('merges two terms that overlap into one run', () => {
     expect(highlightParts('sediment', ['sediment', 'diment'])).toEqual([{ text: 'sediment', hit: true }]);
   });

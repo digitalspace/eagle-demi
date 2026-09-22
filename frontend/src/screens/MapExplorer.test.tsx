@@ -1,3 +1,4 @@
+import { Profiler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -239,6 +240,147 @@ describe('MapExplorer selection', () => {
     const moved = card('Copper Ridge North');
     expect(within(moved).getByRole('button', { name: 'Copper Ridge' })).toBeInTheDocument();
     expect(within(moved).queryByRole('button', { name: 'Alder Wind' })).toBeNull();
+  });
+});
+
+describe('MapExplorer narrow screen', () => {
+  const listButton = () => screen.getByRole('button', { name: /^List/ });
+  const mapButton = () => screen.getByRole('button', { name: 'Map' });
+  const mapRegion = () => screen.getByRole('region', { name: /^Map of B\.C\./ });
+
+  it('opens on the map, with the list out of reach until it is switched to', async () => {
+    const user = userEvent.setup();
+    stubNarrow(true);
+    await mount();
+
+    expect(mapButton()).toHaveAttribute('aria-pressed', 'true');
+    expect(listButton()).toHaveAttribute('aria-pressed', 'false');
+    expect(listButton()).toHaveAccessibleName('List 2 projects');
+    expect(rail().closest('[inert]')).not.toBeNull();
+    expect(mapRegion().closest('[inert]')).toBeNull();
+
+    await user.click(listButton());
+
+    expect(listButton()).toHaveAttribute('aria-pressed', 'true');
+    expect(mapButton()).toHaveAttribute('aria-pressed', 'false');
+    expect(rail().closest('[inert]')).toBeNull();
+    expect(mapRegion().closest('[inert]')).not.toBeNull();
+    expect(document.activeElement).toBe(listButton());
+  });
+
+  it('takes a picked row to the map and puts focus on its card', async () => {
+    const user = userEvent.setup();
+    stubNarrow(true);
+    await mount();
+
+    await user.click(listButton());
+    await user.click(railRow(/Copper Ridge/));
+
+    expect(mapButton()).toHaveAttribute('aria-pressed', 'true');
+    expect(mapRegion().closest('[inert]')).toBeNull();
+    expect(document.activeElement).toBe(
+      within(card('Copper Ridge')).getByRole('heading', { name: 'Copper Ridge' }),
+    );
+  });
+
+  it('hands focus to the List switch when the card closes, since the row is hidden', async () => {
+    const user = userEvent.setup();
+    stubNarrow(true);
+    await mount();
+
+    await user.click(listButton());
+    await user.click(railRow(/Copper Ridge/));
+    await user.click(screen.getByRole('button', { name: 'Clear selection' }));
+
+    await cardGone('Copper Ridge');
+    expect(document.activeElement).toBe(listButton());
+    expect(mapButton()).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('stays on the list when the selected row is picked again, which deselects it', async () => {
+    const user = userEvent.setup();
+    stubNarrow(true);
+    await mount();
+
+    await user.click(listButton());
+    await user.click(railRow(/Copper Ridge/));
+    await user.click(listButton());
+    await user.click(railRow(/Copper Ridge/));
+
+    expect(listButton()).toHaveAttribute('aria-pressed', 'true');
+    expect(railRow(/Copper Ridge/)).toHaveAttribute('aria-selected', 'false');
+    expect(document.activeElement).toBe(railRow(/Copper Ridge/));
+  });
+
+  it('gives a later pin pick no focus when the row picked first never resolved', async () => {
+    const user = userEvent.setup();
+    stubNarrow(true);
+    await mount();
+
+    await user.click(listButton());
+    // The list re-reads as the pick lands, and the picked project is gone from the answer.
+    answer([ENERGY]);
+    await user.click(railRow(/Copper Ridge/));
+    await user.click(pin('2'));
+
+    expect(card('Alder Wind')).toBeInTheDocument();
+    expect(document.activeElement).not.toBe(
+      within(card('Alder Wind')).getByRole('heading', { name: 'Alder Wind' }),
+    );
+  });
+
+  /** A viewport that crosses the breakpoint mid-spec, telling `useNarrow` as a browser would. */
+  function resizableViewport() {
+    let matches = false;
+    const listeners = new Set<() => void>();
+    window.matchMedia = (media: string) =>
+      ({
+        get matches() {
+          return matches;
+        },
+        media,
+        addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+        removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+      }) as unknown as MediaQueryList;
+    return (narrow: boolean) =>
+      act(() => {
+        matches = narrow;
+        listeners.forEach((listener) => listener());
+      });
+  }
+
+  it('narrows onto the list when focus is in the rail, so focus is not stranded', async () => {
+    const resize = resizableViewport();
+    await mount();
+    const search = screen.getByRole('textbox', { name: 'Search projects' });
+    search.focus();
+
+    resize(true);
+
+    expect(listButton()).toHaveAttribute('aria-pressed', 'true');
+    expect(rail().closest('[inert]')).toBeNull();
+    expect(document.activeElement).toBe(search);
+  });
+
+  it('narrows onto the map when focus is elsewhere', async () => {
+    const resize = resizableViewport();
+    await mount();
+    screen.getByRole('textbox', { name: 'Search projects' }).focus();
+    resize(true);
+    resize(false);
+    screen.getByRole('button', { name: /^Layers/ }).focus();
+
+    resize(true);
+
+    expect(mapButton()).toHaveAttribute('aria-pressed', 'true');
+    expect(rail().closest('[inert]')).not.toBeNull();
+  });
+
+  it('shows both panes and no switch on a wide screen', async () => {
+    await mount();
+
+    expect(screen.queryByRole('group', { name: 'Show projects as' })).toBeNull();
+    expect(document.querySelector('[inert]')).toBeNull();
   });
 });
 
@@ -671,11 +813,29 @@ describe('MapExplorer markers', () => {
     expect(screen.getByTestId('map-cluster')).toHaveTextContent('2');
   });
 
-  it('names the project on its pin, on the hover label and for assistive tech', async () => {
+  // The pin is hidden from assistive tech, which reads the rail row instead; only sighted hover
+  // needs the name on the map.
+  it('names the project on its pin with the hover label', async () => {
     await mount();
 
-    expect(pin('1')).toHaveAttribute('aria-label', 'Copper Ridge');
     expect(pin('1').querySelector('.demi-marker__label')).toHaveTextContent('Copper Ridge');
+  });
+
+  it('gives a hidden pin no accessible name', async () => {
+    await mount();
+
+    expect(pin('1')).toHaveAttribute('aria-hidden', 'true');
+    expect(pin('1')).not.toHaveAttribute('aria-label');
+  });
+
+  it('stacks a cluster bubble in the pin band', async () => {
+    fakeMap.setFeatures([clusterFeature]);
+    await mount();
+
+    expect(screen.getByTestId('map-cluster').closest('[data-testid="marker"]')).toHaveAttribute(
+      'data-z',
+      '600',
+    );
   });
 
   it('leaves a cluster bubble unnamed, since it stands for no one project', async () => {
@@ -685,6 +845,70 @@ describe('MapExplorer markers', () => {
     const cluster = screen.getByTestId('map-cluster');
     expect(cluster.querySelector('.demi-marker__label')).toBeNull();
     expect(cluster).not.toHaveAttribute('aria-label');
+  });
+});
+
+describe('MapExplorer marker read-back', () => {
+  /** A single-project point, shaped as the clustered source answers it. */
+  const point = (id: string, coordinates: [number, number]) => ({
+    type: 'Feature' as const,
+    geometry: { type: 'Point' as const, coordinates },
+    properties: { id },
+  });
+
+  /** Mounts inside a profiler, so a spec can tell whether a painted frame re-rendered the screen. */
+  async function mountProfiled() {
+    const commits = vi.fn();
+    renderScreen(
+      <Profiler id="map" onRender={commits}>
+        <MapExplorer />
+      </Profiler>,
+    );
+    await settle();
+    commits.mockClear();
+    return commits;
+  }
+
+  it('leaves the markers alone on a painted frame that changed nothing', async () => {
+    const commits = await mountProfiled();
+
+    act(() => fakeMap.repaint());
+
+    expect(commits).not.toHaveBeenCalled();
+  });
+
+  it('leaves the markers alone when the same pins come back in another order', async () => {
+    fakeMap.setFeatures([point('1', [-124, 50]), point('2', [-120, 56])]);
+    const commits = await mountProfiled();
+
+    act(() => fakeMap.setFeatures([point('2', [-120, 56]), point('1', [-124, 50])]));
+
+    expect(commits).not.toHaveBeenCalled();
+  });
+});
+
+describe('MapExplorer copy id', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('starts no reset timer when the copy lands after the screen has gone', async () => {
+    const copy = { resolve: (): void => undefined };
+    const writeText = vi.fn(() => new Promise<void>((resolve) => (copy.resolve = resolve)));
+    const view = renderScreen(<MapExplorer />);
+    await tick(0);
+    fireEvent.click(railRow(/Copper Ridge/));
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy id' }));
+    view.unmount();
+    // Only the "Copied" reset runs 2s; the query cache's own clean-up timers are not the screen's.
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+
+    await act(async () => copy.resolve());
+
+    expect(timers).not.toHaveBeenCalledWith(expect.any(Function), 2000);
   });
 });
 
