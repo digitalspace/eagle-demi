@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      skip_schema_probe:
+        description: 'Break-glass only. Skips the /health/search-schema and /health/search-data gates. Tick only when the running app answers the probe with 500 (not 503, not 404), main contains this tag, and scripts/demi-devbox.sh drift --env <env> exits 0 (drift checks main''s index definitions, not the tag''s). The run log, summary and release notes name who skipped them.'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: deploy-azure-prod
@@ -143,6 +148,10 @@ jobs:
     # somebody has decided to ship.
     environment: prod
     timeout-minutes: 10
+    # Read by publish-release, so a skipped gate is named on the release itself.
+    outputs:
+      schema_probe_skipped: ${{ steps.skip_record.outputs.skipped }}
+      schema_probe_skip_note: ${{ steps.skip_record.outputs.note }}
     steps:
       - name: Validate version format
         env:
@@ -172,8 +181,28 @@ jobs:
       # No setup-node and no install: the probe reads JSON and curls, on the runner's own node.
       # The dispatch input is the only way a 404 passes, and it has to be ticked per run: a 404 on
       # any other release means the deployed app has no route and nothing checked the live indexes.
+      # Skipping, not failing: a skipped job would skip every job that needs it, deploys included.
+      # Both actors: a re-run keeps the original dispatcher's inputs, so `github.actor` alone would
+      # hide who pressed re-run.
+      - name: Record the skipped search gates
+        id: skip_record
+        if: inputs.skip_schema_probe
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          line="skip_schema_probe: the search schema and data gates were skipped for $INPUT_VERSION (dispatched by $ACTOR, run by $TRIGGERING_ACTOR). The live indexes were not checked by this run."
+          echo "::warning::$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "skipped=true"
+            echo "note=$line"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Probe the live indexes with this tag's index definitions
         id: schema_probe
+        if: ${{ !inputs.skip_schema_probe }}
         env:
           SEARCH_SCHEMA_ALLOW_MISSING: ${{ inputs.allow_missing_schema_probe && '1' || '0' }}
         run: ./scripts/search-schema-probe.sh "$API_BASE_URL" release/azure/search/indexes
@@ -181,6 +210,7 @@ jobs:
       # This repo's checks, not the tag's: they describe what the live data must look like now.
       - name: Check the values in the live indexes
         id: data_probe
+        if: ${{ !inputs.skip_schema_probe }}
         env:
           SEARCH_DATA_ALLOW_MISSING: ${{ inputs.allow_missing_schema_probe && '1' || '0' }}
         run: ./scripts/search-data-probe.sh "$API_BASE_URL"
@@ -422,7 +452,8 @@ jobs:
     runs-on: ubuntu-latest
     # LAST, and only on a fully successful deploy: a job with `needs` runs only when every one of
     # them succeeded. Add a deploy job above and it belongs in this list too.
-    needs: [deploy-extractor, deploy-api]
+    # verify-search-schema already gates both deploys; listed here only to read its outputs.
+    needs: [deploy-extractor, deploy-api, verify-search-schema]
     timeout-minutes: 5
     # Job-level permissions REPLACE the workflow-level block, which is what keeps `contents: read`
     # on the deploy jobs. No environment: a second approval gate here would gate only bookkeeping.
@@ -449,6 +480,20 @@ jobs:
             echo ""
             echo "Its GitHub release is now published and marked latest."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Name the skipped search gates in the release notes
+        if: needs.verify-search-schema.outputs.schema_probe_skipped == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ github.repository }}
+          NOTE: ${{ needs.verify-search-schema.outputs.schema_probe_skip_note }}
+        run: |
+          set -euo pipefail
+          notes="$(mktemp)"
+          gh release view "$VERSION" --repo "$REPO" --json body --jq .body > "$notes"
+          printf '\n%s\n' "$NOTE" >> "$notes"
+          gh release edit "$VERSION" --repo "$REPO" --notes-file "$notes"
 
       - name: Report publish failure to job summary
         if: failure()
