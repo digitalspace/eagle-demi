@@ -240,6 +240,26 @@ describe('ProjectSummary', () => {
     expect(registryLink).toHaveTextContent('IAAC registry, p. 9');
   });
 
+  it('labels a registry page citation as a page, with no page number', async () => {
+    // An older decision was never filed as a file: the registry prints it on the document page.
+    const sections = { ...SUMMARY.sections, status: { ...SUMMARY.sections.status, citations: [3] } };
+    stub({ summary: json({ ...SUMMARY, sections }) });
+
+    renderProject();
+
+    await screen.findByText('The certificate is in force.');
+    await userEvent.click(sourcesToggles()[0]);
+
+    const chip = screen
+      .getAllByRole('link', { name: /IAAC registry/ })
+      .find((link) => link.getAttribute('href') === 'https://iaac.example/900')!;
+    expect(chip).toHaveTextContent('Open registry page');
+    expect(chip).not.toHaveTextContent('Open PDF');
+    // The page text is cut into pages by length, so a page number would point at nothing.
+    expect(chip).toHaveTextContent('IAAC registry');
+    expect(chip).not.toHaveTextContent('p.');
+  });
+
   it('opens the condition dialog from the card and closes it again', async () => {
     stub();
 

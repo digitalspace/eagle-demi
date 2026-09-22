@@ -327,7 +327,7 @@ export function ProjectSummary() {
                 // and never reaches the document download.
                 <a className="ps-cite" href={c.url} target="_blank" rel="noopener" title={c.documentName}>
                   <span className="ps-cite__n">[{c.n}]</span>
-                  <span className="ps-cite__doc">IAAC registry, p.&nbsp;{c.pageNumber}</span>
+                  <span className="ps-cite__doc">{citeDoc(c)}</span>
                   <span className="ps-cite__action">
                     {citeAction(c)}
                     <span className="visually-hidden"> (opens in a new tab)</span>
@@ -338,7 +338,7 @@ export function ProjectSummary() {
                 // it to fall back to: not a link anywhere.
                 <span className="ps-cite" title={c.documentName}>
                   <span className="ps-cite__n">[{c.n}]</span>
-                  <span className="ps-cite__doc">IAAC registry, p.&nbsp;{c.pageNumber}</span>
+                  <span className="ps-cite__doc">{citeDoc(c)}</span>
                   <span className="ps-cite__action">{citeAction(c)}</span>
                 </span>
               ) : (
@@ -871,6 +871,11 @@ export function ProjectSummary() {
       </dialog>
     </>
   );
+}
+
+/** The chip's source label. A registry page is cut into pages by length, so its numbers mean nothing. */
+function citeDoc(citation: ProjectSummaryCitation): string {
+  return citation.format === 'html' ? 'IAAC registry' : `IAAC registry, p.\u00a0${citation.pageNumber}`;
 }
 
 /** What a citation chip offers. A registry page is not a file, so it must not say PDF. */
