@@ -40,6 +40,24 @@ endpoint into an environment, where the app already running is necessarily older
 for the probe, and the log says the release shipped ungated. Any later 404 means the deployed app
 lost the route.
 
+A 5xx also stops it. No input lets a 5xx pass the probe; the only way past is to skip both gates.
+That can lock a fix out: `v0.114.1` answers 500 on both endpoints because its build left out
+`azure/search/data-checks.json`, so the release that fixes it could not pass the gate. For that
+case only, tick `skip_schema_probe`. Use it for a 500 only, not a 503 (a 503 that names missing
+fields is real drift: widen the index) and not a 404 (use `allow_missing_schema_probe`).
+
+It skips both the schema and the data probe, and the job still succeeds, so `deploy-extractor`,
+`deploy-api`, the rollback and the publish run as usual. The run log shows a warning and the job
+summary shows the same line, naming the tag, who dispatched the run and who ran it (they differ
+on a re-run). The publish step adds that line to the release notes.
+
+Before you tick it, make sure `main` contains the tag, then run
+`scripts/demi-devbox.sh drift --env <env>` and get exit 0. `drift` pulls `main` on the devbox and
+checks `main`'s index definitions, not the tag's, which is why the tag must already be on `main`.
+It exits 1 when any field in those definitions is missing from the live index. The data probe is
+skipped too, so after the deploy, run a few searches on the site by hand and check that results
+come back with their fields filled in.
+
 **After a deploy.** `scripts/search-smoke.sh` asks three real queries: Document, Project, and
 Document filtered by a project. Each must answer 200, and the two unfiltered ones must report
 `searchResultsTotal > 0`. The filtered one may legitimately match nothing, so only its status
@@ -82,6 +100,7 @@ is what makes forgetting it visible.
 | `SEARCH_SMOKE_PROJECT_ID` | repository or environment variable | `5e31dc4462cdea0021d974b4` (Fording River Extension, Castle) |
 | `DEMI_ENV` | env var read by the probe script | `prod`; only names the environment in the "widen it with" hint |
 | `SEARCH_SCHEMA_ALLOW_MISSING` | env var read by the probe script; the prod workflow's `allow_missing_schema_probe` input sets it | unset — a 404 fails |
+| `skip_schema_probe` | prod workflow input | false; both gates run |
 
 Both smoke targets are the Function App's own host, not `www.projects.eao.gov.bc.ca/demi-search`:
 the public path also depends on the OpenShift rproxy, which these workflows do not deploy.
@@ -109,6 +128,7 @@ both scripts, not a pass — a gate that asked nothing must not report success.
 All of them print their contract with `--help`. Tests: `test/scripts/search-schema-probe.test.js`,
 `test/scripts/search-data-probe.test.js` and `test/scripts/search-smoke.test.js` drive the three
 HTTP scripts against a stub server; `test/scripts/search-select-changed.test.js` drives the last
-against a throwaway git repository.
+against a throwaway git repository. `test/workflows/azure-deploy-prod.test.js` checks that
+`skip_schema_probe` defaults to false, turns off both gates, and leaves the job itself unconditional.
 
 Runbook for an outage in progress: `eagle-demi.wiki/Runbook-Search-Outage.md`.
