@@ -124,6 +124,7 @@ function loadWithSdkStub(t) {
 
   const patches = [];
   const upserts = [];
+  const deletes = [];
   // Pages `items.query` hands back, in order, one per fetchNext(); the feed options of each call
   // land in `queries` so a test can see what the iterator was opened with. `hasMoreResults()`
   // mirrors the real iterator: true while pages remain, which is what a drain loop reads — the SDK
@@ -157,6 +158,10 @@ function loadWithSdkStub(t) {
                 patch: async (body, options) => {
                   patches.push({ id, partitionKey, body, options });
                   return { resource: { id } };
+                },
+                delete: async (options) => {
+                  deletes.push({ id, partitionKey, options });
+                  return {};
                 }
               })
             })
@@ -183,7 +188,7 @@ function loadWithSdkStub(t) {
     else process.env.COSMOS_ENDPOINT = endpoint;
   });
 
-  return { module: require(MODULE), patches, upserts, pages, queries };
+  return { module: require(MODULE), patches, upserts, deletes, pages, queries };
 }
 
 test('patch() carries optimistic concurrency to the SDK', async (t) => {
@@ -438,6 +443,23 @@ test('upsert carries optimistic concurrency to the SDK', async (t) => {
  * a decision Cosmos already made and then hands the caller a skipped chunk counted as a lost one,
  * which is what sends the repair after rows that are already current.
  */
+test('remove carries optimistic concurrency to the SDK', async (t) => {
+  const { module: db, deletes } = loadWithSdkStub(t);
+
+  await t.test('an etag becomes an IfMatch access condition', async () => {
+    assert.strictEqual(await db.remove('links', 'nicomen', 'nicomen', { etag: '"0x8DC1"' }), true);
+
+    assert.deepStrictEqual(deletes.at(-1).options,
+      { accessCondition: { type: 'IfMatch', condition: '"0x8DC1"' } });
+  });
+
+  await t.test('no etag is an unconditional delete, as every existing caller expects', async () => {
+    await db.remove('links', 'nicomen', 'nicomen');
+
+    assert.deepStrictEqual(deletes.at(-1).options, {});
+  });
+});
+
 test('bulk carries a per-operation Patch condition to the SDK', async () => {
   const sent = [];
   const container = {

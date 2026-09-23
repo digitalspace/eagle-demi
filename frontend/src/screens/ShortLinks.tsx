@@ -1,5 +1,6 @@
 import { Fragment, useState, type CSSProperties } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import {
   LINKS_QUERY,
   createLink,
@@ -10,7 +11,7 @@ import {
   type ShortLink,
 } from '../api/links';
 import { getSessionClaims } from '../api/keycloak';
-import { errorMessage } from '../api/client';
+import { ApiError, errorMessage } from '../api/client';
 import { linkButton, primaryButton, stack, textInput } from './controls';
 import { dayMonth } from '../dates';
 
@@ -27,6 +28,17 @@ const editInput: CSSProperties = {
   borderRadius: 'var(--layout-border-radius-small)',
   font: 'var(--typography-regular-small-body)',
 };
+
+/** The `projectId` a 409 names when a project holds the code, else null. */
+function holderOf(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  try {
+    const { projectId } = JSON.parse(err.body) as { projectId?: unknown };
+    return typeof projectId === 'string' && projectId ? projectId : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Mine first, then everyone's. Empty groups are dropped rather than shown as a bare heading. */
 function linkGroups(links: ShortLink[], me: string): { title: string; rows: ShortLink[] }[] {
@@ -57,6 +69,16 @@ export function ShortLinks() {
   const [editingCode, setEditingCode] = useState('');
   const [editUrl, setEditUrl] = useState('');
 
+  /** Holders named by a 409, for rows the list read before a project claimed them. Code to project id. */
+  const [claimed, setClaimed] = useState<Record<string, string>>({});
+  /** The staff project page for a project-held row, '' for a row staff edit here. */
+  const projectPage = (link: ShortLink) => {
+    const projectId = link.projectId ?? claimed[link.id];
+    return projectId ? `/projects/${encodeURIComponent(projectId)}` : '';
+  };
+  /** A row that turns out to be project-held drops its open repoint. */
+  const isRepointing = (link: ShortLink) => editingCode === link.id && !projectPage(link);
+
   /** The row the clipboard last answered for, and what it said. */
   const [copy, setCopy] = useState<{ code: string; ok: boolean } | null>(null);
 
@@ -68,7 +90,8 @@ export function ShortLinks() {
 
   const reload = () => queryClient.invalidateQueries({ queryKey: LINKS_QUERY });
 
-  async function write(send: () => Promise<unknown>): Promise<boolean> {
+  /** `link` names the row written, so a project-held refusal can lock it. */
+  async function write(send: () => Promise<unknown>, link?: ShortLink): Promise<boolean> {
     setError('');
     try {
       await send();
@@ -76,6 +99,11 @@ export function ShortLinks() {
       return true;
     } catch (err) {
       setError(errorMessage(err));
+      const projectId = link && holderOf(err);
+      if (link && projectId) {
+        setClaimed((held) => ({ ...held, [link.id]: projectId }));
+        setEditingCode('');
+      }
       return false;
     }
   }
@@ -105,15 +133,15 @@ export function ShortLinks() {
     setError('');
   }
 
-  async function saveRepoint(code: string) {
+  async function saveRepoint(link: ShortLink) {
     const url = editUrl.trim();
     if (!url) return;
-    if (await write(() => repointLink(code, url))) setEditingCode('');
+    if (await write(() => repointLink(link.id, url), link)) setEditingCode('');
   }
 
   async function remove(link: ShortLink) {
     if (!confirm(`Delete ${link.shortUrl}? Anything already printed with this link stops working.`)) return;
-    await write(() => removeLink(link.id));
+    await write(() => removeLink(link.id), link);
   }
 
   async function copyLink(link: ShortLink) {
@@ -204,18 +232,20 @@ export function ShortLinks() {
       <section
         className="panel panel--scroll"
         aria-busy={loading ? 'true' : undefined}
-        style={{ opacity: loading && links.length ? 0.6 : undefined }}
+        // Positioned so a row's visually-hidden label stays inside the scroll box, as .app__main does.
+        style={{ position: 'relative', opacity: loading && links.length ? 0.6 : undefined }}
       >
         {loading && !links.length && <p className="visually-hidden">Loading short links…</p>}
-        <table style={{ minWidth: '52rem', tableLayout: 'fixed', width: '100%' }}>
+        {/* Widths exclude each cell's 2rem padding; at the minimum Note keeps about 8rem. Long words wrap anywhere. */}
+        <table style={{ minWidth: '52rem', tableLayout: 'fixed', width: '100%', overflowWrap: 'anywhere' }}>
           <thead>
             <tr>
-              <th style={{ width: '15rem' }}>Short link</th>
-              <th style={{ width: '15rem' }}>Destination</th>
-              <th style={{ width: '13rem' }}>Note</th>
-              <th style={{ width: '7rem' }}>Created by</th>
-              <th style={{ width: '5.5rem' }}>Created</th>
-              <th style={{ width: '10rem', textAlign: 'right' }} />
+              <th style={{ width: '10rem' }}>Short link</th>
+              <th style={{ width: '8rem' }}>Destination</th>
+              <th>Note</th>
+              <th style={{ width: '5rem' }}>Created by</th>
+              <th style={{ width: '4.5rem' }}>Created</th>
+              <th style={{ width: '6.5rem', textAlign: 'right' }} />
             </tr>
           </thead>
           <tbody>
@@ -235,7 +265,7 @@ export function ShortLinks() {
                   <tr key={link.id}>
                     <td>
                       <a href={link.shortUrl} target="_blank" rel="noopener noreferrer">
-                        <code className="cell__mono" style={{ overflowWrap: 'anywhere', color: 'inherit' }}>
+                        <code className="cell__mono" style={{ color: 'inherit' }}>
                           {link.shortUrl}
                         </code>
                       </a>
@@ -244,9 +274,14 @@ export function ShortLinks() {
                           Personal
                         </span>
                       )}
+                      {projectPage(link) && (
+                        <span className="pill pill--info" style={{ marginLeft: '0.35rem' }}>
+                          {link.projectRole === 'legacy' ? 'Old project code' : 'Project'}
+                        </span>
+                      )}
                     </td>
                     <td className="cell--truncate cell--muted">
-                      {editingCode === link.id ? (
+                      {isRepointing(link) ? (
                         <input
                           type="url"
                           aria-label="New destination"
@@ -261,11 +296,11 @@ export function ShortLinks() {
                     <td>{link.note || '—'}</td>
                     <td className="cell--muted">{link.createdBy}</td>
                     <td className="cell--muted cell--nowrap">{dayMonth(link.createdAt) || '—'}</td>
-                    <td className="cell--right cell--nowrap">
-                      <span className="row-actions">
-                        {editingCode === link.id ? (
+                    <td className="cell--right">
+                      <span className="row-actions" style={{ flexWrap: 'wrap' }}>
+                        {isRepointing(link) ? (
                           <>
-                            <button type="button" onClick={() => void saveRepoint(link.id)} style={linkButton}>
+                            <button type="button" onClick={() => void saveRepoint(link)} style={linkButton}>
                               Save
                             </button>
                             <button type="button" onClick={() => setEditingCode('')} style={cancelButton}>
@@ -277,12 +312,20 @@ export function ShortLinks() {
                             <button type="button" onClick={() => void copyLink(link)} style={linkButton}>
                               {copy?.code === link.id ? (copy.ok ? 'Copied' : 'Copy failed') : 'Copy'}
                             </button>
-                            <button type="button" onClick={() => startRepoint(link)} style={linkButton}>
-                              Repoint
-                            </button>
-                            <button type="button" onClick={() => void remove(link)} style={linkButton}>
-                              Delete
-                            </button>
+                            {projectPage(link) ? (
+                              <Link to={projectPage(link)} style={linkButton}>
+                                Edit on the project page <span className="visually-hidden">for {link.id}</span>
+                              </Link>
+                            ) : (
+                              <>
+                                <button type="button" onClick={() => startRepoint(link)} style={linkButton}>
+                                  Repoint
+                                </button>
+                                <button type="button" onClick={() => void remove(link)} style={linkButton}>
+                                  Delete
+                                </button>
+                              </>
+                            )}
                           </>
                         )}
                       </span>

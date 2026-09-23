@@ -26,7 +26,12 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
-const { shortUrlFor } = require('../../helpers/short-links');
+const links = require('../../repositories/links');
+const {
+  CUSTOM_CODE, shortUrlFor, claimCode, carryShortLink, projectTarget, defaultProjectUrl, repointProjectLinks
+} = require('../../helpers/short-links');
+const { validateDestination } = require('../../helpers/link-url');
+const config = require('../../config');
 const { writeGuarded } = require('../../helpers/etag-write');
 const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
@@ -181,7 +186,12 @@ exports.getProject = async (req, res) => {
     const body = redactForAccess('projects', project, access);
     // Only the code is stored; the masthead's copy button needs the URL, and the base host is
     // per-environment config, not a stored value that could go stale.
-    if (body.shortCode) body.shortUrl = shortUrlFor(body.shortCode);
+    // `shortLinkUrl` is where that link lands; shown exactly where the link itself is.
+    if (body.shortCode) {
+      body.shortUrl = shortUrlFor(body.shortCode);
+      body.shortLinkUrl = projectTarget(project);
+      body.shortLinkCustom = Boolean(project.shortLinkUrl);
+    }
     return res.json(body);
   } catch (err) {
     return serverError(res, err, 'project controller failed');
@@ -204,9 +214,10 @@ exports.createProject = async (req, res) => {
     // nothing reaches level 2 or above by being created.
     const read = readForLevel(1);
     const now = new Date().toISOString();
-
-    const saved = await projects.upsert({
-      id: String(trackProjectId),
+    const id = String(trackProjectId);
+    const reread = () => projects.getById(systemAccess(), id);
+    const row = {
+      id,
       trackProjectId: Number(trackProjectId),
       eagleId: null,
       sourceSystem: 'track',
@@ -237,7 +248,22 @@ exports.createProject = async (req, res) => {
       sources: {},
       createdAt: now,
       updatedAt: now
+    };
+    // The upsert replaces a row already under this id; its codes are printed, so they carry over,
+    // guarded so a short-code PUT landing in between is not written back over.
+    const written = await writeGuarded({
+      existing: await reread(),
+      reread,
+      attempt: async (current) => ({
+        status: 'saved',
+        saved: await projects.upsert(carryShortLink({ ...row }, current),
+          current ? { etag: current._etag } : { create: true })
+      }),
+      onLost: (_current, attempt) =>
+        logger.warn('[Project Controller] project create lost its etag race, rebuilding', { id, attempt })
     });
+    if (written.status === 'conflict') return writeConflict(res, 'project create', id);
+    const { saved } = written;
 
     auditEvent(req, {
       action: 'project.create',
@@ -281,6 +307,9 @@ exports.updateProject = async (req, res) => {
       // be able to send them back: an old `eaglePushedAt` makes every later push read as stale, and
       // clearing `cascadePendingAt` loses a cascade the push recorded as still owed.
       eaglePushedAt: _ignoredPushedAt, cascadePendingAt: _ignoredCascadePending,
+      // The code has a link record behind it, so only `PUT /projects/:id/short-code` moves it.
+      shortCode: _ignoredShortCode, shortCodeSource: _ignoredShortCodeSource,
+      legacyShortCodes: _ignoredLegacyShortCodes, shortLinkUrl: _ignoredShortLinkUrl,
       _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
       _ts: _ignoredTs, _etag: _ignoredEtag, sources: _ignoredSources,
       ...changes
@@ -549,7 +578,7 @@ function mergeEaglePush(doc, existing) {
   if (existing && existing.vis) merged.vis = existing.vis;
   // And the same for the code: dropping it would leave a printed link pointing at nothing once
   // the nightly sync minted a second one.
-  if (existing && existing.shortCode) merged.shortCode = existing.shortCode;
+  carryShortLink(merged, existing);
   // The merge rebuilds the record from the push, so without this a retry of a push whose cascade
   // failed would clear the marker saying that cascade is still owed.
   if (existing && existing.cascadePendingAt) merged.cascadePendingAt = existing.cascadePendingAt;
@@ -684,6 +713,139 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
     if (err.status === 400) return res.status(400).json({ error: err.message });
     return serverError(res, err, 'project controller failed');
   }
+}
+
+/**
+ * Staff set a project's short code, where it lands, or both. The previous code moves to
+ * `legacyShortCodes` and its link record stays, so a printed copy still resolves; moving back to
+ * one of those reuses its record. `shortCodeSource: 'staff'` keeps the nightly sync off it.
+ * A new target (`url`, or null for the public page) repoints every record the project holds; the
+ * public page sent as a `url` is stored as that default (null), not pinned.
+ */
+exports.setShortCode = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const { shortCode: raw, url: rawUrl } = req.body || {};
+    const hasCode = raw !== undefined && raw !== null;
+    const hasUrl = rawUrl !== undefined;
+    if (!hasCode && !hasUrl) {
+      return res.status(400).json({ error: 'Send shortCode, url, or both' });
+    }
+    const code = hasCode && typeof raw === 'string' ? raw.toLowerCase() : null;
+    if (hasCode && !CUSTOM_CODE.test(code || '')) {
+      return res.status(400).json({ error: 'shortCode must be 3-64 characters of a-z 0-9 _ - (case-insensitive)' });
+    }
+    let url = null;
+    if (hasUrl && rawUrl !== null) {
+      const destination = validateDestination(rawUrl, config.linkAllowedHosts);
+      if (!destination.ok) return res.status(400).json({ error: destination.reason });
+      url = destination.url;
+    }
+
+    const existing = await projects.getById(access, req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Project not found' });
+    if (!existing.eagleId) {
+      return res.status(400).json({ error: 'An Eagle id is needed before a short code can be set' });
+    }
+    if (url === new URL(defaultProjectUrl(existing)).href) url = null;
+
+    const codeMoves = hasCode && !(existing.shortCode === code && existing.shortCodeSource === 'staff');
+    const urlMoves = hasUrl && (existing.shortLinkUrl || null) !== url;
+    const next = urlMoves ? { ...existing, shortLinkUrl: url } : existing;
+    const by = (req.user && req.user.preferred_username) || 'unknown';
+    // Claimed before the row is written, at the new target: a write that fails leaves a record the
+    // retry adopts. One still at the old target is the same project's; the claim moves it.
+    if (codeMoves && existing.shortCode !== code &&
+        !(await claimCode(next, code, { links, projects },
+          { createdBy: by, alsoUrl: projectTarget(existing) }))) {
+      return res.status(409).json({ error: 'Code already in use' });
+    }
+
+    let saved = existing;
+    if (codeMoves || urlMoves) {
+      const written = await writeGuarded({
+        existing,
+        reread: () => projects.getById(access, req.params.id),
+        attempt: async (current) => {
+          if (!current) return { status: 'missing' };
+          const row = { ...current, updatedAt: new Date().toISOString() };
+          if (codeMoves) {
+            const legacy = new Set(current.legacyShortCodes || []);
+            if (current.shortCode) legacy.add(current.shortCode);
+            legacy.delete(code);
+            Object.assign(row, { shortCode: code, shortCodeSource: 'staff', legacyShortCodes: [...legacy] });
+          }
+          if (urlMoves) row.shortLinkUrl = url;
+          return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }) };
+        },
+        onLost: (_current, attempt) =>
+          logger.warn('[Project Controller] short link update lost its etag race, rebuilding',
+            { id: req.params.id, attempt })
+      });
+
+      if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+      if (written.status === 'conflict') return writeConflict(res, 'project short link', req.params.id);
+      saved = written.saved;
+
+      const change = {
+        from: existing.shortCode || null,
+        to: saved.shortCode || null,
+        fromUrl: projectTarget(existing),
+        toUrl: projectTarget(saved)
+      };
+      logger.info('[Project Controller] project short link changed', { id: saved.id, by, ...change });
+      auditEvent(req, {
+        action: 'project.shortCode',
+        targetType: 'project',
+        targetId: saved.id,
+        projectId: saved.id,
+        detail: change
+      });
+    }
+
+    // Run on a no-op too: a retry after a 503 finishes the records the first call missed.
+    const settled = await settleLinks(req.params.id, saved, access, by);
+    if (!settled) {
+      return res.status(503).json({ error: 'A short link was being written by another request. Try again.' });
+    }
+
+    return res.json(shortCodeBody(redactForAccess('projects', settled, access), settled));
+  } catch (err) {
+    return serverError(res, err, 'project controller failed');
+  }
+};
+
+/**
+ * Points every record the project holds at its target, then re-reads the row: a concurrent PUT that
+ * stored another target in between must not be left with records at this one. The re-read target
+ * gets one more pass. Null when a record moved under the repoint or the target is still moving.
+ */
+async function settleLinks(id, saved, access, by) {
+  let current = saved;
+  for (let pass = 0; pass < 2; pass++) {
+    const { lost } = await repointProjectLinks(current, { links }, { by });
+    if (lost.length) {
+      logger.warn('[Project Controller] project links changed under the repoint, asking for a retry', { id, lost });
+      return null;
+    }
+    const reread = await projects.getById(access, id);
+    if (!reread || projectTarget(reread) === projectTarget(current)) return reread || current;
+    logger.warn('[Project Controller] project short link target moved during the repoint, following it',
+      { id, from: projectTarget(current), to: projectTarget(reread), pass });
+    current = reread;
+  }
+  return null;
+}
+
+/** `row` is the stored project the redacted one came from; the target is derived, not a field. */
+function shortCodeBody(project, row) {
+  return {
+    shortCode: project.shortCode || null,
+    shortUrl: project.shortCode ? shortUrlFor(project.shortCode) : null,
+    legacyShortCodes: project.legacyShortCodes || [],
+    url: projectTarget(row),
+    shortLinkCustom: Boolean(row.shortLinkUrl)
+  };
 }
 
 exports.deleteProject = async (req, res) => {

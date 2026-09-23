@@ -79,7 +79,9 @@ const UNGATED = {
     'Rows carry no per-document ACL. GET /api/links is route-gated (authMiddleware only, no ' +
     'ACL predicate needed since every row is staff-visible); create/repoint/delete are ' +
     'admin/write-gated; and /s/:code is a deliberately PUBLIC point read with no caller tier to ' +
-    'filter for — the destination itself, not the row, is what gets validated.',
+    'filter for — the destination itself, not the row, is what gets validated. Its one read of ' +
+    'the PROJECTS container, listProjectCodes, is gated like any other: it composes selectWhere ' +
+    'with the access it is handed, asserted below.',
   'bulk-downloads.js':
     'Job rows are not application data: a row records what its own requester asked for, carries no ' +
     'read[] and is never listed. The unguessable job id is the capability, and the controller binds ' +
@@ -160,6 +162,8 @@ const gatedRoutes = [
   // credential cannot store prose that renders as EAO's account of a project.
   { method: 'get', path: '/projects/:id/summary', gate: null },
   { method: 'put', path: '/projects/:id/summary', gate: 'requireWrite' },
+  // Staff only: the machine writer holds requireWrite but not requireAdmin.
+  { method: 'put', path: '/projects/:id/short-code', gate: 'requireAdmin' },
   // The only route that returns full chunk text. authMiddleware, never passiveAuth.
   { method: 'get', path: '/documents/:id/chunks', gate: null },
   { method: 'get', path: '/me/data', gate: null },
@@ -289,12 +293,31 @@ test('access gate coverage', async (t) => {
    * a response that emits a stored project without `redactForAccess` ships `read[]`, `vis`, the
    * raw `sources` payloads and the Cosmos system fields to whoever asked.
    */
+  await t.test('the links list tags rows only through the caller\'s own project access', () => {
+    const repo = code(fs.readFileSync(path.join(REPO_DIR, 'links.js'), 'utf8'));
+    const fn = repo.slice(repo.indexOf('async function listProjectCodes'));
+    assert.match(fn, /^async function listProjectCodes\(access = systemAccess\(\)\)/);
+    assert.match(fn, /selectWhere\(\{\s*access,/, 'listProjectCodes must compose the access it is handed');
+    const controller = code(fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'link.js'), 'utf8'));
+    const calls = controller.match(/listProjectCodes\([^)]*\)/g) || [];
+    assert.deepStrictEqual(calls, ['listProjectCodes(resolveAccess(req)'],
+      'GET /links must tag through the caller\'s access, never the systemAccess default');
+  });
+
   await t.test('every project response site redacts', () => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 31,
+    assert.strictEqual(emissions.length, 40,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
+    // The short-link sites by name: the count alone passes when one is swapped for a wider one.
+    for (const site of [
+      "shortCodeBody(redactForAccess('projects', settled, access), settled)",
+      "{ error: 'A short link was being written by another request. Try again.' }",
+      "{ error: 'Send shortCode, url, or both' }"
+    ]) {
+      assert.ok(emissions.includes(site), `missing short-link response site: ${site}`);
+    }
 
     // A site emitting a stored row names it BARE (`redactForAccess('projects', saved, access)`) or
     // maps over the page. The negative lookahead for a dot is what separates that from a literal

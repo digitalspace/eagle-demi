@@ -153,6 +153,8 @@ const routes = [
   { method: 'put', path: '/projects/:id', guards: [authMiddleware, requireWrite], load: () => projectController().updateProject },
   // Ladder moves — docs/rbac-architecture.md §1, "Widening is an act". Nothing else raises a level.
   { method: 'put', path: '/projects/:id/level', guards: [authMiddleware, requireWrite], load: () => projectController().setLevel },
+  // Staff only: requireAdmin is the existing gate that leaves out the machine writer.
+  { method: 'put', path: '/projects/:id/short-code', guards: [authMiddleware, requireAdmin], load: () => projectController().setShortCode },
   { method: 'delete', path: '/projects/:id', guards: [authMiddleware, requireWrite], load: () => projectController().deleteProject },
   // Classifying a field is narrower than writing one: `requireWrite` admits staff and the machine
   // writer, `sysadmin` is who may change the policy itself.

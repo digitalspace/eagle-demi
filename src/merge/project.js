@@ -21,6 +21,10 @@
 
 const { readForLevel } = require('../helpers/access-sql');
 
+/** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
+const eagleOnlyProjectId = (eagleId) => `eagle-${eagleId}`;
+const isEagleOnlyProjectId = (id) => String(id).startsWith(eagleOnlyProjectId(''));
+
 /**
  * Fields Track owns. Track wins for these, but ONLY when it actually supplies a value:
  * an empty Track field must never blank a populated Eagle one. That is the whole reason this
@@ -412,7 +416,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   const isPublished = read.includes('public');
 
   const merged = {
-    id: `eagle-${eagleId}`,
+    id: eagleOnlyProjectId(eagleId),
     trackProjectId: null,
     eagleId,
     sourceSystem: 'eagle',
@@ -560,6 +564,8 @@ module.exports = {
   resolveProjectAcl,
   mergeTrackProject,
   mergeEagleOnlyProject,
+  eagleOnlyProjectId,
+  isEagleOnlyProjectId,
   buildRegistry,
   buildProjectIndex,
   notificationShadowedProjects

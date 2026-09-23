@@ -488,14 +488,17 @@ test('seed() end to end with stubbed sources', async (t) => {
     // The printed-poster case: minting a second code would leave the first pointing nowhere the
     // project knows about.
     const { written, repos } = makeRepos();
-    repos.projects.getById = async (_access, id) => (
-      id === '207' ? { id: '207', shortCode: 'kq7bt2rm' } : null);
+    repos.projects.getById = async (_access, id) => (id === '207' ? {
+      id: '207', shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['kq7bt2rm']
+    } : null);
 
     const summary = await seed(['--live', '--only', 'projects'],
       { sources: stubSources, repos, now: NOW });
 
     const matched = written.projects.find(p => p.id === '207');
-    assert.strictEqual(matched.shortCode, 'kq7bt2rm');
+    assert.strictEqual(matched.shortCode, 'site-c');
+    assert.strictEqual(matched.shortCodeSource, 'staff');
+    assert.deepStrictEqual(matched.legacyShortCodes, ['kq7bt2rm'], 'an old print still resolves');
     assert.deepStrictEqual(written.links, [], 'nothing left to mint');
     assert.strictEqual(summary.stages.projects.shortLinks, 0);
   });

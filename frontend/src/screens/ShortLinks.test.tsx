@@ -275,3 +275,92 @@ describe('ShortLinks', () => {
     expect(screen.queryByRole('button', { name: 'Copied' })).not.toBeInTheDocument();
   });
 });
+
+describe('ShortLinks project codes', () => {
+  // The server's wording; the screen keys on the 409 status and projectId, never on this text.
+  const HELD = 'This code belongs to a project. Edit it on the project instead.';
+  const editOnProject = (code: string) => ({ name: `Edit on the project page for ${code}` });
+  const rowOf = (code: string) => screen.getAllByRole('row').find((row) => row.textContent?.includes(code))!;
+
+  it.each([
+    ['current', 'Project'],
+    ['legacy', 'Old project code'],
+  ] as const)('shows a %s project code read-only, linked to the project editor', async (projectRole, pill) => {
+    stub([{ ...link('site-c', 'system'), projectId: '272', projectRole }]);
+
+    renderScreen(<ShortLinks />, signedIn);
+    await screen.findByText('Shared links');
+
+    const row = rowOf('site-c');
+    expect(within(row).getByRole('link', editOnProject('site-c'))).toHaveAttribute('href', '/projects/272');
+    expect(within(row).getByText(pill)).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Repoint' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+  });
+
+  async function refusedList() {
+    stub([link('site-c', 'system')], () => json({ error: HELD, projectId: '272' }, 409));
+    const user = userEvent.setup();
+    renderScreen(<ShortLinks />, signedIn);
+    await screen.findByText('Shared links');
+    return user;
+  }
+
+  it('locks a row whose repoint is refused because a project holds the code', async () => {
+    const user = await refusedList();
+
+    await user.click(screen.getByRole('button', { name: 'Repoint' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText(HELD)).toBeInTheDocument();
+    expect(within(rowOf('site-c')).getByRole('link', editOnProject('site-c'))).toHaveAttribute(
+      'href',
+      '/projects/272',
+    );
+    expect(screen.queryByLabelText('New destination')).not.toBeInTheDocument();
+  });
+
+  it('locks a row whose delete is refused because a project holds the code', async () => {
+    const user = await refusedList();
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText(HELD)).toBeInTheDocument();
+    expect(within(rowOf('site-c')).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    expect(within(rowOf('site-c')).getByText('Project')).toBeInTheDocument();
+  });
+
+  it('drops an open repoint when the row turns out to be held by a project', async () => {
+    let rows = [link('site-c', 'system'), link('other', 'system')];
+    const fetchMock = vi.fn((_input: unknown, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        rows = [{ ...link('site-c', 'system'), projectId: '272', projectRole: 'current' as const }];
+        return Promise.resolve(noContent());
+      }
+      return Promise.resolve(json(rows));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    renderScreen(<ShortLinks />, signedIn);
+    await screen.findByText('Shared links');
+
+    await user.click(within(rowOf('site-c')).getByRole('button', { name: 'Repoint' }));
+    await user.click(within(rowOf('other')).getByRole('button', { name: 'Delete' }));
+
+    expect(await within(rowOf('site-c')).findByRole('link', editOnProject('site-c'))).toBeInTheDocument();
+    expect(screen.queryByLabelText('New destination')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a row editable after a 409 that names no project', async () => {
+    stub([link('mine-a', 'j.okafor')], () => json({ error: 'Code already in use' }, 409));
+    const user = userEvent.setup();
+
+    renderScreen(<ShortLinks />, signedIn);
+    await screen.findByText('My links');
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText('Code already in use')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Repoint' })).toBeInTheDocument();
+  });
+});

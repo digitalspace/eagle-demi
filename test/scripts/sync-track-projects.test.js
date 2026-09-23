@@ -17,12 +17,13 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { syncProjects, trackChanges } = require('../../src/scripts/sync-track-projects');
+const { HEAL_CAP, syncProjects, trackChanges } = require('../../src/scripts/sync-track-projects');
 const { needsClosing } = require('../../src/scripts/close-unpublished-track-projects');
 const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
 const config = require('../../src/config');
+const { logger } = require('../../src/utils/logger');
 
 const NOW = '2026-09-02T00:00:00.000Z';
 
@@ -62,31 +63,106 @@ function storedProject(overrides = {}) {
     ...mergeTrackProject(FLAT, null, { now: '2026-08-01T00:00:00.000Z' }),
     read: readForLevel(4),
     isPublished: true,
-    // Already minted: a stored row without one is the migration case, tested on its own below.
-    shortCode: 'kq7bt2rm',
+    // Already minted from the name: a row without one, or on a pre-slug random code, is the
+    // migration case, tested on its own below.
+    shortCode: 'nicomen-wind-energy',
+    shortCodeSource: 'name',
     vis: { eacExpires: 3 },
     regionalDistrict: 'Thompson-Nicola',
     ...overrides
   };
 }
 
-/** The links repository, in memory. Only `create` is reached: a project link is minted once. */
-function fakeLinks() {
+const conflict = () => Object.assign(new Error('Conflict'), { code: 409 });
+const preconditionFailed = () => Object.assign(new Error('Precondition failed'), { code: 412 });
+
+/**
+ * The links repository, in memory. A code is a Cosmos id, so a second create of one is a 409, and
+ * a write carrying a revision no longer stored is a 412. `seed` records are already there.
+ */
+function fakeLinks(seed = []) {
+  let revision = 0;
+  const stamp = (record) => ({ ...record, _etag: `"l${++revision}"` });
   const created = [];
+  const byId = new Map(seed.map(record => [record.id, stamp(record)]));
+  const guard = (id, etag) => {
+    if (etag && byId.get(id)._etag !== etag) throw preconditionFailed();
+  };
   return {
-    created,
-    create: async (record) => { created.push(record); return record; }
+    created, byId,
+    create: async (record) => {
+      if (byId.has(record.id)) throw conflict();
+      const saved = stamp(record);
+      created.push(saved);
+      byId.set(record.id, saved);
+      return saved;
+    },
+    getById: async (id) => byId.get(id) || null,
+    repoint: async (id, url, { etag } = {}) => {
+      if (!byId.has(id)) return null;
+      guard(id, etag);
+      const saved = stamp({ ...byId.get(id), url });
+      byId.set(id, saved);
+      return saved;
+    },
+    remove: async (id, { etag } = {}) => {
+      if (!byId.has(id)) return false;
+      guard(id, etag);
+      return byId.delete(id);
+    }
   };
 }
 
-/** The projects repository, in memory. `deleteById` throws: this sync deletes nothing, ever. */
-function fakeProjects(rows = []) {
-  const items = rows.map(r => JSON.parse(JSON.stringify(r)));
+/** A shared link record, as `/links` or an older mint left it. */
+const linkRecord = (id, url) => ({ id, url, personal: false, createdBy: 'system' });
+
+/**
+ * The projects repository, in memory, holding Cosmos's etag rule: a write carrying a revision
+ * that is no longer stored gets a 412. `writes` and `patches` record only the writes that landed.
+ * `midRun` runs once the sync has read its list, to land another writer's change behind it.
+ * `deleteById` throws: this sync deletes nothing, ever.
+ */
+function fakeProjects(rows = [], { midRun } = {}) {
+  let revision = 0;
+  const stamp = (row) => ({ ...structuredClone(row), _etag: `"${++revision}"` });
+  const items = structuredClone(rows);
   const writes = [];
+  const patches = [];
+  const find = (id) => items.find(p => String(p.id) === String(id)) || null;
+  const store = (row) => {
+    const saved = stamp(row);
+    const at = items.findIndex(p => String(p.id) === String(row.id));
+    if (at >= 0) items[at] = saved; else items.push(saved);
+    return structuredClone(saved);
+  };
+  const guard = (id, etag) => {
+    const current = find(id);
+    if (current && current._etag !== etag) {
+      throw Object.assign(new Error('Precondition failed'), { code: 412 });
+    }
+  };
   return {
-    items, writes,
-    listVisible: async () => ({ items }),
-    upsert: async (project) => { writes.push(project); return project; },
+    items, writes, patches, store,
+    listVisible: async () => {
+      const snapshot = structuredClone(items);
+      if (midRun) midRun(store, find);
+      return { items: snapshot };
+    },
+    getById: async (_access, id) => structuredClone(find(id)),
+    upsert: async (row, { etag, create } = {}) => {
+      if (create && find(row.id)) throw conflict();
+      guard(row.id, etag);
+      writes.push(row);
+      return store(row);
+    },
+    patchShortLink: async (id, { shortCode, shortCodeSource, legacyShortCodes }, etag) => {
+      guard(id, etag);
+      patches.push({ id, shortCode, shortCodeSource, legacyShortCodes });
+      return store({ ...find(id), shortCode, shortCodeSource, legacyShortCodes });
+    },
+    listShortCodeOwners: async (code) => items
+      .filter(p => p.shortCode === code || (p.legacyShortCodes || []).includes(code))
+      .map(p => String(p.id)),
     deleteById: async () => { throw new Error('the project sync must never delete'); }
   };
 }
@@ -129,7 +205,7 @@ test('a changed name leaves the level where it was', async () => {
   const projects = fakeProjects([storedProject()]);
   const renamed = { ...API_PROJECT, name: 'Nicomen Wind Energy Project' };
 
-  const summary = await syncProjects([renamed], { live: true, deps: { projects }, now: NOW });
+  const summary = await syncProjects([renamed], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
   assert.strictEqual(summary.updated, 1);
   assert.strictEqual(summary.created, 0);
@@ -150,7 +226,7 @@ test('a changed name leaves the level where it was', async () => {
 test('a project Track has not changed is not written at all', async () => {
   const projects = fakeProjects([storedProject()]);
 
-  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
   assert.deepStrictEqual(projects.writes, [], 'a nightly rewrite of 384 unchanged rows is churn');
   assert.strictEqual(summary.updated, 0);
@@ -182,6 +258,8 @@ test('project short links', async (t) => {
     assert.strictEqual(link.personal, false, 'a project link is everyone\'s');
     assert.strictEqual(projects.writes.length, 1, 'the code is only real once the project holds it');
     assert.strictEqual(projects.writes[0].shortCode, link.id);
+    assert.strictEqual(summary.updated, 0, 'a mint alone is not an update');
+    assert.strictEqual(projects.writes[0].updatedAt, stored.updatedAt);
   });
 
   await t.test('a project with no Eagle id has no public page, so no link', async () => {
@@ -205,8 +283,143 @@ test('project short links', async (t) => {
     await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
       { live: true, deps: { projects, links }, now: NOW });
 
-    assert.strictEqual(projects.writes[0].shortCode, 'kq7bt2rm');
+    assert.strictEqual(projects.writes[0].name, 'Renamed', 'the premise: the name moved');
+    assert.strictEqual(projects.writes[0].shortCode, 'nicomen-wind-energy',
+      'a printed slug outlives a rename');
     assert.deepStrictEqual(links.created, [], 'an upsert must not mint a second code');
+  });
+
+  /**
+   * Before slugs every project got a random code, and some are printed. The sync swaps each for
+   * the name slug once, and the old code keeps its link record so the print still resolves.
+   */
+  await t.test('a pre-slug random code is swapped for the name slug and kept as legacy', async () => {
+    const stored = storedProject({ shortCode: 'kq7bt2rm' });
+    delete stored.shortCodeSource;
+    const projects = fakeProjects([stored]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects, links }, now: NOW });
+
+    assert.deepStrictEqual(links.created.map(l => l.id), ['nicomen-wind-energy']);
+    const [written] = projects.writes;
+    assert.strictEqual(written.shortCode, 'nicomen-wind-energy');
+    assert.deepStrictEqual(written.legacyShortCodes, ['kq7bt2rm']);
+    assert.strictEqual(written.shortCodeSource, 'name');
+    assert.strictEqual(summary.shortLinks, 1);
+    assert.strictEqual(summary.failures, 0, 'the old link record is not touched');
+  });
+
+  await t.test('a migrated project is left alone on the next night', async () => {
+    const stored = storedProject({ shortCode: 'kq7bt2rm' });
+    delete stored.shortCodeSource;
+    const first = fakeProjects([stored]);
+    await syncProjects([API_PROJECT],
+      { live: true, deps: { projects: first, links: fakeLinks() }, now: NOW });
+    const second = fakeProjects([first.writes[0]]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects: second, links }, now: NOW });
+
+    assert.deepStrictEqual(second.writes, []);
+    assert.deepStrictEqual(links.created, []);
+    assert.strictEqual(summary.shortLinks, 0);
+  });
+
+  await t.test('a staff code that looks random is never migrated', async () => {
+    const projects = fakeProjects([storedProject({ shortCode: 'kemess23', shortCodeSource: 'staff' })]);
+    const links = fakeLinks();
+
+    await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
+      { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(projects.writes[0].shortCode, 'kemess23');
+    assert.deepStrictEqual(links.created, []);
+  });
+
+  await t.test('a staff code set while the run is going survives it', async () => {
+    const stored = storedProject({ shortCode: 'kq7bt2rm' });
+    delete stored.shortCodeSource;
+    const projects = fakeProjects([stored], {
+      midRun: (store, find) => store({
+        ...find('207'), shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['kq7bt2rm']
+      })
+    });
+
+    const summary = await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
+      { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    const [after] = projects.items;
+    assert.strictEqual(after.name, 'Renamed', 'the Track change still lands');
+    assert.strictEqual(after.shortCode, 'site-c', 'the run-start snapshot must not undo it');
+    assert.strictEqual(after.shortCodeSource, 'staff');
+    assert.deepStrictEqual(after.legacyShortCodes, ['kq7bt2rm']);
+    assert.strictEqual(summary.failures, 0);
+  });
+
+  await t.test('a slug minted by a write that lost to a staff code is released', async () => {
+    const stored = storedProject({ shortCode: 'kq7bt2rm' });
+    delete stored.shortCodeSource;
+    const projects = fakeProjects([stored], {
+      midRun: (store, find) => store({ ...find('207'), shortCode: 'site-c', shortCodeSource: 'staff' })
+    });
+    const links = fakeLinks();
+
+    // A rename, so the retry still writes: the release cannot wait for the write to give up.
+    const summary = await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
+      { live: true, deps: { projects, links }, now: NOW });
+
+    assert.deepStrictEqual(links.created.map(l => l.id), ['renamed'],
+      'the premise: the first try minted before its write lost');
+    assert.strictEqual(links.byId.has('renamed'), false, 'no project holds it, so it goes');
+    assert.strictEqual(projects.items[0].name, 'Renamed', 'the retry landed');
+    assert.strictEqual(projects.items[0].shortCode, 'site-c');
+    assert.strictEqual(summary.shortLinks, 0);
+    assert.strictEqual(summary.failures, 0);
+  });
+
+  await t.test('a write that loses every try leaves no slug behind', async () => {
+    const stored = storedProject();
+    delete stored.shortCode;
+    const projects = fakeProjects([stored]);
+    projects.upsert = async () => { throw preconditionFailed(); };
+    const links = fakeLinks();
+
+    const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(links.created.length, 3, 'the premise: each try minted');
+    assert.deepStrictEqual([...links.byId.keys()], []);
+    assert.strictEqual(summary.failures, 1);
+  });
+
+  await t.test('a dry run does not count a migration that keeps its code', async () => {
+    const taken = ['', '-2', '-3', '-4', '-5']
+      .map(suffix => linkRecord(`nicomen-wind-energy${suffix}`, 'https://www.gov.bc.ca/elsewhere'));
+    const stored = storedProject({ shortCode: 'kq7bt2rm' });
+    delete stored.shortCodeSource;
+
+    const dry = await syncProjects([API_PROJECT],
+      { deps: { projects: fakeProjects([stored]), links: fakeLinks(taken) }, now: NOW });
+    const projects = fakeProjects([stored]);
+    const live = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects, links: fakeLinks(taken) }, now: NOW });
+
+    assert.strictEqual(projects.writes[0].shortCodeSource, 'random',
+      'the premise: every slug is taken, so the live run keeps the code');
+    assert.strictEqual(live.shortLinks, 0);
+    assert.strictEqual(dry.shortLinks, 0, 'the dry figure matches the live one');
+  });
+
+  await t.test('the sync never resets a custom target', async () => {
+    const projects = fakeProjects([storedProject({ shortLinkUrl: 'https://www.gov.bc.ca/site-c' })]);
+
+    await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
+      { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    assert.strictEqual(projects.writes[0].name, 'Renamed', 'the premise: the row was written');
+    assert.strictEqual(projects.writes[0].shortLinkUrl, 'https://www.gov.bc.ca/site-c');
   });
 
   await t.test('a dry run mints nothing', async () => {
@@ -219,7 +432,8 @@ test('project short links', async (t) => {
 
     assert.deepStrictEqual(links.created, []);
     assert.deepStrictEqual(projects.writes, []);
-    assert.strictEqual(summary.updated, 1, 'and it still reports the write a live run would make');
+    assert.strictEqual(summary.shortLinks, 1, 'and it still reports the mint a live run would make');
+    assert.strictEqual(summary.updated, 0, 'a mint alone is not an update');
   });
 });
 
@@ -240,7 +454,7 @@ test('Track work phases', async (t) => {
     const projects = fakeProjects([storedProject()]);
 
     const summary = await syncProjects([API_PROJECT],
-      { live: true, deps: { projects }, now: NOW, phases: phaseMap() });
+      { live: true, deps: { projects, links: fakeLinks() }, now: NOW, phases: phaseMap() });
 
     assert.strictEqual(summary.updated, 1);
     assert.strictEqual(summary.phases, 1);
@@ -253,7 +467,7 @@ test('Track work phases', async (t) => {
     const projects = fakeProjects([storedProject({ phases: PHASES })]);
 
     const summary = await syncProjects([API_PROJECT],
-      { live: true, deps: { projects }, now: NOW, phases: phaseMap() });
+      { live: true, deps: { projects, links: fakeLinks() }, now: NOW, phases: phaseMap() });
 
     assert.deepStrictEqual(projects.writes, []);
     assert.strictEqual(summary.updated, 0);
@@ -265,7 +479,7 @@ test('Track work phases', async (t) => {
     const moved = [{ ...PHASES[0], endDate: '2023-08-01T00:00:00.000Z', isCompleted: true }];
 
     await syncProjects([API_PROJECT],
-      { live: true, deps: { projects }, now: NOW, phases: phaseMap(moved) });
+      { live: true, deps: { projects, links: fakeLinks() }, now: NOW, phases: phaseMap(moved) });
 
     assert.deepStrictEqual(projects.writes[0].phases, moved);
   });
@@ -273,7 +487,7 @@ test('Track work phases', async (t) => {
   await t.test('a run with no phases leaves the stored ones alone', async () => {
     const projects = fakeProjects([storedProject({ phases: PHASES })]);
 
-    const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+    const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
     assert.deepStrictEqual(projects.writes, [],
       'a Track work feed that was down must not erase the rail off every project');
@@ -298,7 +512,27 @@ test('a project DEMI has never seen is created at level 1', async () => {
   assert.strictEqual(summary.shortLinks, 1);
   assert.strictEqual(links.created.length, 1, 'a project born here is minted its link too');
   assert.strictEqual(written.shortCode, links.created[0].id);
-  assert.strictEqual(written.shortCode.length, 8);
+  assert.strictEqual(written.shortCode, 'nicomen-wind-energy', 'the code is the name slug');
+  assert.strictEqual(written.shortCodeSource, 'name');
+});
+
+test('a create retried after a lost try stores a code whose record is there', async () => {
+  const projects = fakeProjects([]);
+  const create = projects.upsert;
+  let tries = 0;
+  // Try 1 is refused as though created behind the run, yet the re-read finds nothing.
+  projects.upsert = async (row, opts) => {
+    if (++tries === 1) throw conflict();
+    return create(row, opts);
+  };
+  const links = fakeLinks();
+
+  await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
+
+  assert.strictEqual(tries, 2, 'the premise: the second try wrote the row');
+  const [written] = projects.writes;
+  assert.strictEqual(written.shortCode, 'nicomen-wind-energy');
+  assert.ok(links.byId.has(written.shortCode), 'the stored code still resolves');
 });
 
 test('a record the feed no longer lists is counted, not deleted', async () => {
@@ -308,7 +542,7 @@ test('a record the feed no longer lists is counted, not deleted', async () => {
     { id: 'eagle-abc', sourceSystem: 'eagle', read: readForLevel(4) }
   ]);
 
-  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
   assert.strictEqual(summary.orphaned, 1, 'the Eagle-only record is not Track\'s to orphan');
   assert.strictEqual(projects.items.length, 3, 'and every row is still there');
@@ -319,10 +553,15 @@ test('a dry run writes nothing and still counts what a live run would do', async
   const projects = fakeProjects([storedProject()]);
   const renamed = { ...API_PROJECT, name: 'Renamed' };
   const fresh = { ...API_PROJECT, id: 412, name: 'Brand New' };
+  const links = fakeLinks([linkRecord('nicomen-wind-energy', 'https://other-host.gov.bc.ca/p/58851172aaecd9001b820335')]);
+  const before = structuredClone([...links.byId]);
 
-  const summary = await syncProjects([renamed, fresh], { deps: { projects }, now: NOW });
+  const summary = await syncProjects([renamed, fresh], { deps: { projects, links }, now: NOW });
 
   assert.deepStrictEqual(projects.writes, []);
+  assert.deepStrictEqual(links.created, [], 'the mint for the new project stays in memory');
+  assert.deepStrictEqual([...links.byId], before, 'and the heal moves no stored record');
+  assert.strictEqual(summary.healed, 1, 'the premise: the heal ran');
   assert.strictEqual(summary.updated, 1);
   assert.strictEqual(summary.created, 1);
   assert.strictEqual(summary.trackProjects, 2);
@@ -352,7 +591,7 @@ test('a row created through POST /projects is left alone, not reclassified', asy
   const projects = fakeProjects([stored]);
   assert.strictEqual(needsClosing(stored), false, 'the premise: nothing would close it today');
 
-  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
   assert.strictEqual(summary.skippedApiRows, 1);
   assert.strictEqual(summary.updated, 0);
@@ -404,7 +643,39 @@ test('a project stored as Eagle-only is re-keyed to its Track id, not duplicated
   assert.strictEqual(summary.shortLinks, 1);
   assert.strictEqual(links.created.length, 1, 'the re-keyed row is minted its link');
   assert.strictEqual(written.shortCode, links.created[0].id);
-  assert.strictEqual(written.shortCode.length, 8);
+  assert.strictEqual(written.shortCode, 'nicomen-wind-energy');
+});
+
+test('a relink carries a staff code, its legacy codes and a custom target to the Track row', async () => {
+  const projects = fakeProjects([eagleOnlyProject({
+    shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['kq7bt2rm'],
+    shortLinkUrl: 'https://www.gov.bc.ca/site-c'
+  })]);
+  const links = fakeLinks();
+
+  await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
+
+  const [written] = projects.writes;
+  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
+  assert.strictEqual(written.shortCode, 'site-c');
+  assert.strictEqual(written.shortCodeSource, 'staff');
+  assert.deepStrictEqual(written.legacyShortCodes, ['kq7bt2rm']);
+  assert.strictEqual(written.shortLinkUrl, 'https://www.gov.bc.ca/site-c');
+  assert.deepStrictEqual(links.created, []);
+});
+
+test('a relink that loses to a staff-pinned row releases the slug it minted', async () => {
+  const projects = fakeProjects([eagleOnlyProject()], {
+    midRun: (store) => store(storedProject({ shortCode: 'site-c', shortCodeSource: 'staff' }))
+  });
+  const links = fakeLinks();
+
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
+
+  assert.deepStrictEqual(links.created.map(l => l.id), ['nicomen-wind-energy'], 'the premise');
+  assert.strictEqual(links.byId.has('nicomen-wind-energy'), false);
+  assert.strictEqual(projects.items.find(p => p.id === '207').shortCode, 'site-c');
+  assert.strictEqual(summary.shortLinks, 0);
 });
 
 test('an empty Track column does not blank a populated row', () => {
@@ -440,6 +711,215 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, shortLinks: 0, failures: 0 },
+      phases: 0, shortLinks: 0, healed: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
+});
+
+/**
+ * Eagle-only rows sit in no Track row, so the Track loop never reaches their pre-slug codes. The
+ * nightly run walks them itself: prod must not need a re-seed to migrate.
+ */
+test('Eagle-only short codes', async (t) => {
+  await t.test('a pre-slug random code is migrated with a patch of the three fields', async () => {
+    const projects = fakeProjects([eagleOnlyProject({ shortCode: 'kq7bt2rm' })]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.deepStrictEqual(projects.patches, [{
+      id: `eagle-${API_PROJECT.epic_guid}`,
+      shortCode: 'nicomen-wind-energy',
+      shortCodeSource: 'name',
+      legacyShortCodes: ['kq7bt2rm']
+    }]);
+    assert.deepStrictEqual(projects.writes, [], 'nothing else on the row is this job\'s');
+    assert.deepStrictEqual(links.created.map(l => l.url),
+      [`${config.linkBaseUrl}/p/${API_PROJECT.epic_guid}`]);
+    assert.strictEqual(summary.shortLinks, 1);
+  });
+
+  await t.test('a pushed row with no code yet is minted one', async () => {
+    const projects = fakeProjects([eagleOnlyProject()]);
+
+    await syncProjects([], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    assert.deepStrictEqual(projects.patches, [{
+      id: `eagle-${API_PROJECT.epic_guid}`,
+      shortCode: 'nicomen-wind-energy',
+      shortCodeSource: 'name',
+      legacyShortCodes: undefined
+    }]);
+    assert.deepStrictEqual(projects.writes, []);
+  });
+
+  await t.test('the next night leaves it alone', async () => {
+    const projects = fakeProjects([eagleOnlyProject({ shortCode: 'kq7bt2rm' })]);
+    await syncProjects([], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+    const again = fakeProjects(projects.items);
+
+    await syncProjects([], { live: true, deps: { projects: again, links: fakeLinks() }, now: NOW });
+
+    assert.deepStrictEqual(again.patches, []);
+  });
+
+  await t.test('a walk that loses to a staff edit is skipped, the staff code kept', async () => {
+    const id = `eagle-${API_PROJECT.epic_guid}`;
+    const projects = fakeProjects([eagleOnlyProject({ shortCode: 'kq7bt2rm' })], {
+      midRun: (store, find) => store({
+        ...find(id), shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['kq7bt2rm']
+      })
+    });
+    const links = fakeLinks();
+
+    const summary = await syncProjects([], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.deepStrictEqual(projects.patches, []);
+    assert.strictEqual(projects.items[0].shortCode, 'site-c');
+    assert.strictEqual(projects.items[0].shortCodeSource, 'staff');
+    assert.strictEqual(links.byId.has('nicomen-wind-energy'), false, 'the lost try\'s slug is released');
+    assert.strictEqual(summary.shortLinks, 0);
+    assert.strictEqual(summary.failures, 0);
+  });
+
+  await t.test('a row already re-keyed to a Track id is dead weight, not migrated', async () => {
+    const projects = fakeProjects([
+      eagleOnlyProject({ shortCode: 'kq7bt2rm' }),
+      storedProject({ eagleId: API_PROJECT.epic_guid })
+    ]);
+
+    await syncProjects([], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    assert.deepStrictEqual(projects.patches, []);
+  });
+});
+
+/**
+ * Old test link records point at the prod host's `/p/<eagleId>`. The nightly run moves each one on
+ * a project with no custom target to `LINK_BASE_URL`, a capped number per run.
+ */
+test('wrong-host link records', async (t) => {
+  const OTHER_HOST = 'https://other-host.gov.bc.ca';
+  assert.notStrictEqual(new URL(config.linkBaseUrl).origin, OTHER_HOST);
+  const GUID = API_PROJECT.epic_guid;
+  const pageOf = (eagleId) => `${config.linkBaseUrl}/p/${eagleId}`;
+  const eagleOnlyAt = (eagleId, shortCode) => eagleOnlyProject({
+    id: `eagle-${eagleId}`, eagleId, shortCode, shortCodeSource: 'name'
+  });
+
+  await t.test('are moved to this host, on Track rows and Eagle-only rows', async () => {
+    const seed = () => [
+      linkRecord('nicomen-wind-energy', pageOf(GUID)),
+      linkRecord('kq7bt2rm', `${OTHER_HOST}/p/${GUID}`),
+      linkRecord('not-ours', `${OTHER_HOST}/p/someone-else`),
+      linkRecord('other-project', `${OTHER_HOST}/p/abc123`)
+    ];
+    const rows = () => [
+      storedProject({ legacyShortCodes: ['kq7bt2rm', 'not-ours'] }),
+      eagleOnlyAt('abc123', 'other-project')
+    ];
+    const links = fakeLinks(seed());
+
+    const summary = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects: fakeProjects(rows()), links }, now: NOW });
+    const dryLinks = fakeLinks(seed());
+    const dry = await syncProjects([API_PROJECT],
+      { deps: { projects: fakeProjects(rows()), links: dryLinks }, now: NOW });
+
+    assert.strictEqual(links.byId.get('kq7bt2rm').url, pageOf(GUID));
+    assert.strictEqual(links.byId.get('other-project').url, pageOf('abc123'));
+    assert.strictEqual(links.byId.get('not-ours').url, `${OTHER_HOST}/p/someone-else`,
+      'a record on another page is not this project\'s default');
+    assert.strictEqual(summary.healed, 2);
+    assert.strictEqual(summary.failures, 0);
+    assert.strictEqual(dry.healed, 2, 'a dry run reports the same count');
+    assert.strictEqual(dryLinks.byId.get('kq7bt2rm').url, `${OTHER_HOST}/p/${GUID}`, 'and moves nothing');
+  });
+
+  await t.test('are left alone on a project with a custom target', async () => {
+    const links = fakeLinks([linkRecord('nicomen-wind-energy', `${OTHER_HOST}/p/${GUID}`)]);
+    const projects = fakeProjects([storedProject({ shortLinkUrl: 'https://www.gov.bc.ca/site-c' })]);
+
+    const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(links.byId.get('nicomen-wind-energy').url, `${OTHER_HOST}/p/${GUID}`);
+    assert.strictEqual(summary.healed, 0);
+  });
+
+  /** `count` Eagle-only rows, each holding one code on another host's copy of its page. */
+  const wrongHostRows = (count) => {
+    const ids = Array.from({ length: count }, (_, i) => `e${i}`);
+    return {
+      links: fakeLinks(ids.map(id => linkRecord(`code-${id}`, `${OTHER_HOST}/p/${id}`))),
+      projects: fakeProjects(ids.map(id => eagleOnlyAt(id, `code-${id}`)))
+    };
+  };
+  const capWarned = (warn) => warn.mock.calls.some(c => /heal cap reached/.test(c.arguments[0]));
+
+  await t.test('stop at the cap, the rest left for the next run', async (t) => {
+    const { links, projects } = wrongHostRows(HEAL_CAP + 1);
+    const warn = t.mock.method(logger, 'warn', () => {});
+
+    const summary = await syncProjects([], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(summary.healed, HEAL_CAP);
+    assert.strictEqual([...links.byId.values()].filter(l => l.url.startsWith(OTHER_HOST)).length, 1);
+    assert.ok(capWarned(warn), 'one record was left over');
+  });
+
+  await t.test('work that exactly fills the cap leaves nothing over, so no warning', async (t) => {
+    const { links, projects } = wrongHostRows(HEAL_CAP);
+    const warn = t.mock.method(logger, 'warn', () => {});
+
+    const summary = await syncProjects([], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(summary.healed, HEAL_CAP);
+    assert.ok(!capWarned(warn));
+  });
+
+  await t.test('a record lost to a race does not spend the cap', async (t) => {
+    const { links, projects } = wrongHostRows(HEAL_CAP + 1);
+    const repoint = links.repoint;
+    links.repoint = async (id, ...rest) => {
+      if (id === 'code-e0') throw preconditionFailed();
+      return repoint(id, ...rest);
+    };
+    t.mock.method(logger, 'warn', () => {});
+
+    const summary = await syncProjects([], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(summary.healed, HEAL_CAP, 'every other record fits under the cap');
+    assert.strictEqual(links.byId.get(`code-e${HEAL_CAP}`).url, pageOf(`e${HEAL_CAP}`));
+  });
+
+  await t.test('a target staff set after the run started is not healed over', async () => {
+    const custom = 'https://www.gov.bc.ca/site-c';
+    const links = fakeLinks([linkRecord('nicomen-wind-energy', `${OTHER_HOST}/p/${GUID}`)]);
+    const projects = fakeProjects([storedProject()], {
+      midRun: (store, find) => store({ ...find('207'), shortLinkUrl: custom })
+    });
+
+    const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(links.byId.get('nicomen-wind-energy').url, `${OTHER_HOST}/p/${GUID}`,
+      'the staff repoint owns this record now');
+    assert.strictEqual(summary.healed, 0);
+  });
+
+  await t.test('a dry run counts a record healed once, as a live run does', async () => {
+    // Two rows holding one code: the second sees the first's move, live or dry.
+    const rows = () => [
+      storedProject({ legacyShortCodes: ['kq7bt2rm'] }),
+      storedProject({ id: '208', shortCode: 'other-code', legacyShortCodes: ['kq7bt2rm'] })
+    ];
+    const feed = [API_PROJECT, { ...API_PROJECT, id: 208 }];
+    const seed = () => [linkRecord('kq7bt2rm', `${OTHER_HOST}/p/${GUID}`)];
+
+    const live = await syncProjects(feed,
+      { live: true, deps: { projects: fakeProjects(rows()), links: fakeLinks(seed()) }, now: NOW });
+    const dry = await syncProjects(feed,
+      { deps: { projects: fakeProjects(rows()), links: fakeLinks(seed()) }, now: NOW });
+
+    assert.strictEqual(live.healed, 1);
+    assert.strictEqual(dry.healed, 1);
+  });
 });
