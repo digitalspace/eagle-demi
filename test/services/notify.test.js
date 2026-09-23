@@ -121,10 +121,14 @@ test('notify.updatePublished', async (t) => {
     const html = '<p>Rock &amp; Roll&rsquo;s &ldquo;Caf&eacute;&rdquo; &#8212; &#x2019;</p>';
     assert.strictEqual(notify.excerptOf(html), 'Rock & Roll’s “Café” — ’');
     assert.strictEqual(notify.summaryOf(html), 'Rock & Roll’s “Café” — ’');
-    // Decoded after the tags go, so escaped markup survives as text.
-    assert.strictEqual(notify.summaryOf('<p>a &lt;b&gt; c</p>'), 'a <b> c');
     // An entity costs one character, not six, against the cap.
     assert.strictEqual(notify.summaryOf(`<p>${'&amp;'.repeat(300)}</p>`), '&'.repeat(280));
+  });
+
+  await t.test('the fallback summary never carries a tag, split, escaped or unclosed', () => {
+    assert.strictEqual(notify.summaryOf('<p><<script>script>alert(1)<</script>/script></p>'), 'scriptalert(1)/script');
+    assert.strictEqual(notify.summaryOf('<p>a &lt;script&gt;alert(1)&lt;/script&gt; b</p>'), 'a scriptalert(1)/script b');
+    assert.strictEqual(notify.summaryOf('<p>Open <script</p>'), 'Open script');
   });
 
   await t.test('block tags break words; inline tags do not', () => {
