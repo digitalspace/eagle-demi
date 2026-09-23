@@ -8,7 +8,10 @@
 const links = require('../../repositories/links');
 const projects = require('../../repositories/projects');
 const { validateDestination } = require('../../helpers/link-url');
-const { CUSTOM_CODE, generateCode, shortUrlFor, isConflict } = require('../../helpers/short-links');
+const { resolveAccess } = require('../../helpers/access-sql');
+const {
+  CUSTOM_CODE, generateCode, shortUrlFor, isConflict, isPreconditionFailed
+} = require('../../helpers/short-links');
 const { logger } = require('../../utils/logger');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
@@ -16,8 +19,28 @@ const config = require('../../config');
 
 const MAX_NOTE_LENGTH = 200;
 /** Project codes are printed, current and legacy alike, so this route never moves or drops one. */
-const PROJECT_CODE_ERROR = 'This code belongs to a project. Change it on the project page instead.';
-const isProjectCode = async (code) => (await projects.listShortCodeOwners(code)).length > 0;
+const PROJECT_CODE_ERROR = 'This code belongs to a project. Edit it on the project instead.';
+const RACED_ERROR = 'This short link changed while saving. Reload and try again.';
+
+/**
+ * A 409 when any project holds `code`, else null. Ownership is judged on every project; the
+ * `projectId` that lets the admin UI send the edit to the project route names the best holder
+ * (`links.ownerRank`) the caller may read, so never a hidden one.
+ */
+async function projectCodeConflict(req, res, code) {
+  const owners = await projects.listShortCodeOwners(code);
+  if (!owners.length) return null;
+  const access = resolveAccess(req);
+  const [owner] = (await Promise.all(owners.map(id => projects.getById(access, id))))
+    .filter(Boolean)
+    .sort((a, b) => links.ownerRank(a, code) - links.ownerRank(b, code));
+  return res.status(409).json(owner ? { error: PROJECT_CODE_ERROR, projectId: String(owner.id) } : { error: PROJECT_CODE_ERROR });
+}
+
+/** A write guarded on the record's etag lost: a project may have adopted the code since the read. */
+async function racedConflict(req, res, code) {
+  return (await projectCodeConflict(req, res, code)) || res.status(409).json({ error: RACED_ERROR });
+}
 
 /**
  * Fixed at module load, never composed per request: helmet runs with `contentSecurityPolicy:
@@ -54,7 +77,17 @@ exports.listLinks = async (req, res) => {
   try {
     // Personal links are hidden from everyone but their creator — the `/s/:code` redirect stays
     // public, so this narrows the list, not access.
-    return res.json((await links.list((req.user && req.user.preferred_username) || '')).map(present));
+    const [rows, held] = await Promise.all([
+      links.list((req.user && req.user.preferred_username) || ''),
+      links.listProjectCodes(resolveAccess(req)).catch((err) => {
+        logger.warn('[demi-api] project code lookup failed, links listed untagged',
+          { error: err.message, stack: err.stack });
+        return new Map();
+      })
+    ]);
+    // A project's code is edited on the project, so its row says which one and in what role, when
+    // the caller may read that project.
+    return res.json(rows.map(row => ({ ...present(row), ...held.get(row.id) })));
   } catch (err) {
     return serverError(res, err, 'short link list failed');
   }
@@ -80,9 +113,8 @@ exports.createLink = async (req, res) => {
     if (personal !== undefined && personal !== null && typeof personal !== 'boolean') {
       return res.status(400).json({ error: 'personal must be a boolean' });
     }
-    if (custom && await isProjectCode(customCode)) {
-      return res.status(409).json({ error: PROJECT_CODE_ERROR });
-    }
+    const held = custom ? await projectCodeConflict(req, res, customCode) : null;
+    if (held) return held;
 
     const record = {
       id: custom ? customCode : generateCode(),
@@ -125,7 +157,8 @@ exports.updateLink = async (req, res) => {
     if (!CUSTOM_CODE.test(code)) {
       return res.status(404).json({ error: 'Short link not found' });
     }
-    if (await isProjectCode(code)) return res.status(409).json({ error: PROJECT_CODE_ERROR });
+    const held = await projectCodeConflict(req, res, code);
+    if (held) return held;
     const destination = validateDestination((req.body || {}).url, config.linkAllowedHosts);
     if (!destination.ok) {
       return res.status(400).json({ error: destination.reason });
@@ -134,7 +167,13 @@ exports.updateLink = async (req, res) => {
     // Read first for the old url: the audit row is what makes a repoint reconstructable, and
     // `patch` hands back only the new state.
     const before = await links.getById(code);
-    const updated = before ? await links.repoint(code, destination.url) : null;
+    let updated = null;
+    try {
+      updated = before ? await links.repoint(code, destination.url, { etag: before._etag }) : null;
+    } catch (err) {
+      if (!isPreconditionFailed(err)) throw err;
+      return racedConflict(req, res, code);
+    }
     if (!updated) {
       return res.status(404).json({ error: 'Short link not found' });
     }
@@ -160,9 +199,16 @@ exports.deleteLink = async (req, res) => {
       return res.status(404).json({ error: 'Short link not found' });
     }
 
-    if (await isProjectCode(code)) return res.status(409).json({ error: PROJECT_CODE_ERROR });
+    const held = await projectCodeConflict(req, res, code);
+    if (held) return held;
     const existing = await links.getById(code);
-    const removed = existing ? await links.remove(code) : false;
+    let removed = false;
+    try {
+      removed = existing ? await links.remove(code, { etag: existing._etag }) : false;
+    } catch (err) {
+      if (!isPreconditionFailed(err)) throw err;
+      return racedConflict(req, res, code);
+    }
     if (!removed) {
       return res.status(404).json({ error: 'Short link not found' });
     }

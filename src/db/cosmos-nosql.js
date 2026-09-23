@@ -405,11 +405,13 @@ async function patch(containerName, id, partitionKey, operations, condition, eta
   return resource;
 }
 
-async function remove(containerName, id, partitionKey) {
+/** `etag` guards the delete like patch's: it lands only on the revision the caller read, else 412. */
+async function remove(containerName, id, partitionKey, { etag } = {}) {
   const container = getContainer(containerName);
   if (!container) return false;
+  const options = etag ? { accessCondition: { type: 'IfMatch', condition: etag } } : {};
   try {
-    await container.item(String(id), partitionKey).delete();
+    await container.item(String(id), partitionKey).delete(options);
     return true;
   } catch (err) {
     if (err.code === 404) return false;

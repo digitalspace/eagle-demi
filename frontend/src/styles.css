@@ -193,6 +193,28 @@ html, body {
 /* Short URL line under the header, and its inline editor. */
 .ps-short {
   margin-top: var(--layout-margin-xsmall);
+  /* Codes may be 64 characters with no hyphen to break at; without this they widen the page. */
+  overflow-wrap: anywhere;
+}
+
+/* Inline flow, not flex: Copy and Edit follow the last line of a wrapped URL instead of dropping below it. */
+.ps-short__line {
+  font: var(--typography-regular-body);
+  color: var(--typography-color-secondary);
+  margin: 0;
+}
+
+.ps-short__line > button,
+.ps-short__line > [role='status']:not(:empty) {
+  margin-left: var(--layout-margin-small);
+}
+
+.ps-short__label {
+  margin-top: var(--layout-margin-small);
+}
+
+.ps-short__reset {
+  align-self: flex-start;
 }
 
 .ps-short__form {
@@ -228,11 +250,12 @@ html, body {
   border-right: var(--layout-border-width-small) solid var(--surface-color-border-default);
   font: var(--typography-regular-body);
   color: var(--typography-color-secondary);
-  white-space: nowrap;
+  min-width: 0;
 }
 
+/* The prefix wraps before the input drops under a usable width. */
 .ps-short__input {
-  flex: 1 1 auto;
+  flex: 1 0 9rem;
   min-width: 0;
   border: none;
   padding: 0.5rem 0.7rem;

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE_DIR = path.join(HERE, 'fixtures');
+export const FIXTURE_DIR = path.join(HERE, 'fixtures');
 
 /**
  * Playwright is not a dependency of this app and must not become one. Resolve it the normal way
