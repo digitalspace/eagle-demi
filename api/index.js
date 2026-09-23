@@ -33,7 +33,7 @@ const { app } = require('@azure/functions');
 // only other caller of either.
 module.exports = {
   reconcileEagle, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads, restampChunksWorker,
-  searchDefinitionsWorker
+  searchDefinitionsWorker, announceUpdates
 };
 
 // Drain buffered audit events before the worker goes away.
@@ -141,6 +141,15 @@ if (process.env.BULK_CLEANUP_SCHEDULE) {
   });
 }
 
+// Announces scheduled Updates once due. Off unless the schedule is set, same guard again.
+if (process.env.ANNOUNCE_UPDATES_SCHEDULE) {
+  app.timer('announceUpdates', {
+    schedule: '%ANNOUNCE_UPDATES_SCHEDULE%',
+    runOnStartup: false,
+    handler: announceUpdates
+  });
+}
+
 // Read from host.json rather than repeated here: the queue extension is what actually decides how
 // many deliveries a message gets, and a copy of the number drifts silently.
 const MAX_DEQUEUE_COUNT = require('../host.json').extensions.queues.maxDequeueCount;
@@ -192,6 +201,16 @@ async function cleanupBulkDownloads() {
     await require('../src/scripts/cleanup-bulk-downloads').run();
   } catch (err) {
     logger.error('[bulk] cleanup run failed', { error: err.message, stack: err.stack });
+  }
+}
+
+/** Swallows the failure for the reason the reconcile does: the next tick is the retry. */
+async function announceUpdates() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    await require('../src/scripts/announce-updates').run();
+  } catch (err) {
+    logger.error('[updates] scheduled announce failed', { error: err.message, stack: err.stack });
   }
 }
 

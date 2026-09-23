@@ -225,3 +225,8 @@ test('an unresolved reference is reported without crashing the app at load', asy
     assert.match(output, /EDGE_SECRET/);
   });
 });
+
+test('the Updates publishDate sort fallback stays on unless set to the exact string false', () => {
+  const read = (value) => readConfig({ UPDATES_PUBLISH_DATE_FALLBACK: value }, c => c.updatesPublishDateFallback);
+  assert.deepStrictEqual(['true', '', 'FALSE', 'off', 'false'].map(read), [true, true, true, true, false]);
+});

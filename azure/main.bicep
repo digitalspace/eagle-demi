@@ -52,6 +52,12 @@ param notifyApiBase string = ''
 @description('Update emails link eagle-public\'s /updates/<id> reader page instead of the project page. Only the React line serves that route: keep false while linkBaseUrl serves the Angular site.')
 param notifyUpdateReaderLinks bool = false
 
+@description('Sorts on an Update\'s publishDate run on dateAdded. Set false once src/scripts/backfill-update-publish-date.js reports undated=0 in a dry run.')
+param updatesPublishDateFallback bool = true
+
+@description('NCRONTAB schedule for the scheduled-Update announce timer. Empty means every 5 minutes wherever notifyApiBase is set, and no timer where it is not.')
+param announceUpdatesSchedule string = ''
+
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
@@ -695,6 +701,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     notifyApiBase: notifyApiBase
     notifyApiKeySecretUri: notifyApiKeySecretUri
     notifyUpdateReaderLinks: notifyUpdateReaderLinks
+    updatesPublishDateFallback: updatesPublishDateFallback
+    announceUpdatesSchedule: announceUpdatesSchedule
     syncTeamsSchedule: syncTeamsSchedule
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule

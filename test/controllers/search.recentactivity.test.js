@@ -56,8 +56,86 @@ test('GET /search?dataset=RecentActivity&and[_id]', async (t) => {
     assert.strictEqual(row._schemaName, 'RecentActivity');
     // The references the News card binds. A point read that skipped `updateProjects` would answer
     // a row whose project is a bare Eagle id the template renders as nothing.
-    assert.deepStrictEqual(row.project, { _id: PROJECT_ROW.eagleId, name: PROJECT_ROW.name });
+    assert.deepStrictEqual(row.project, { _id: PROJECT_ROW.eagleId, name: PROJECT_ROW.name, location: null });
     assert.strictEqual(body[0].meta[0].dropped, undefined, '_id was consumed, not ignored');
+  });
+
+  await t.test('the project carries its location, from the address it is stored under', async () => {
+    stubCosmos(t, { ...rowsFor([NEWS]), projects: [{ ...PROJECT_ROW, address: 'Merritt, BC' }] });
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    assert.strictEqual(body[0].searchResults[0].project.location, 'Merritt, BC');
+  });
+
+  await t.test('the Updates fields reach a public caller', async () => {
+    const fields = {
+      category: 'Engagement',
+      subject: null,
+      shortHeadline: 'Comment period opens',
+      summary: 'Have your say.',
+      regions: ['Lower Mainland'],
+      location: 'Merritt',
+      engagementUrl: 'https://engage.eao.gov.bc.ca/nicomen',
+      status: 'published',
+      publishDate: '2026-09-01T00:00:00.000Z'
+    };
+    stubCosmos(t, rowsFor([updateRow({ id: UPDATE_ID, eagleId: UPDATE_ID, ...fields })]));
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    const [row] = body[0].searchResults;
+    for (const [key, value] of Object.entries(fields)) assert.deepStrictEqual(row[key], value, key);
+  });
+
+  await t.test('attachments and the featured image resolve to names, under the caller\'s access', async () => {
+    const doc = (id, name) => ({ id, projectId: '207', displayName: name, documentFileName: `${id}.pdf`, read: ['public'] });
+    const seen = stubCosmos(t, {
+      ...rowsFor([updateRow({
+        id: UPDATE_ID, eagleId: UPDATE_ID,
+        featuredImage: { document: 'D-img', alt: 'Site map' }, attachments: ['D-1', 'D-hidden']
+      })]),
+      // What Cosmos answers the caller: `D-hidden` is not public, so the ACL predicate leaves it out.
+      documents: [doc('D-img', 'Site map'), doc('D-1', 'Plan')]
+    });
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    const [row] = body[0].searchResults;
+    assert.deepStrictEqual(row.attachments,
+      [{ _id: 'D-1', id: 'D-1', displayName: 'Plan', documentFileName: 'D-1.pdf' }],
+      'a document the caller cannot read drops out');
+    assert.deepStrictEqual(row.featuredImage, {
+      document: { _id: 'D-img', id: 'D-img', displayName: 'Site map', documentFileName: 'D-img.pdf' },
+      alt: 'Site map'
+    });
+    const [lookup] = specsFor(seen, 'documents');
+    assert.match(lookup.query, /c\.read/, 'the lookup carries the caller\'s ACL, never system access');
+    assert.ok(boundValues(lookup).includes('public'));
+    assert.deepStrictEqual(boundValues(lookup).filter(v => /^D-/.test(v)).sort(), ['D-1', 'D-hidden', 'D-img']);
+  });
+
+  await t.test('a featured image the caller cannot read answers null', async () => {
+    stubCosmos(t, {
+      ...rowsFor([updateRow({ id: UPDATE_ID, eagleId: UPDATE_ID, featuredImage: { document: 'D-img', alt: 'x' } })]),
+      documents: []
+    });
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    assert.strictEqual(body[0].searchResults[0].featuredImage, null);
+  });
+
+  await t.test('a scheduled update reads as missing to the public', async () => {
+    stubCosmos(t, rowsFor([updateRow({
+      id: UPDATE_ID, eagleId: UPDATE_ID, status: 'published', publishDate: '2999-01-01T00:00:00.000Z'
+    })]));
+
+    const { status, body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body[0].count, 0);
+    assert.deepStrictEqual(body[0].searchResults, []);
   });
 
   await t.test('a point read is a read of the id partition, not a scan', async () => {

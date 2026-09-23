@@ -307,6 +307,8 @@ test('updates', async (t) => {
     assert.ok(indexed.includes(updates.SCOPE_FIELD), 'the project scope is filtered on');
     assert.ok(indexed.includes('read'), 'the ACL predicate the list, the count and the strip carry');
     assert.ok(indexed.includes('pinned'), 'listTop splits the strip on it');
+    assert.ok(indexed.includes('status') && indexed.includes('publishDate'),
+      'the publish gate every public read carries');
   });
 
   await t.test('a scoped caller reads its own project, by the EAGLE id of it', async () => {
@@ -343,5 +345,124 @@ test('updates', async (t) => {
     await updates.list(ANON);
 
     assert.deepStrictEqual(seen.map(s => s.container), ['updates']);
+  });
+});
+
+test('updates publish gate', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const STAFF = { tier: TIER.PRIVILEGED, roles: ['public', 'staff'], projectScope: null, teams: [], level: 2 };
+  // On publishDate alone, so the range can use its index: a published row without one stays hidden.
+  const GATE = /c\.status = @liveStatus AND c\.publishDate <= @liveNow\)/;
+  // An IDIR sign-in reads like the public: level 3, below staff.
+  const IDIR = { tier: TIER.PUBLIC, roles: ['public', 'idir'], projectScope: null, teams: [], level: 3 };
+
+  function serve() {
+    const seen = [];
+    t.mock.method(cosmos, 'query', async (container, spec) => {
+      seen.push(spec);
+      return { items: /COUNT/.test(spec.query) ? [0] : [] };
+    });
+    return seen;
+  }
+
+  const everyRead = async (access) => {
+    await updates.list(access);
+    await updates.count(access);
+    await updates.listByIds(access, ['u1']);
+    await updates.listTop(access);
+  };
+
+  await t.test('every public read carries it, bound to published and now', async () => {
+    const seen = serve();
+    const before = new Date().toISOString();
+    await everyRead(ANON);
+
+    // list, count, listByIds and both halves of the strip.
+    assert.strictEqual(seen.length, 5);
+    for (const spec of seen) {
+      assert.match(spec.query, GATE);
+      const bound = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
+      assert.strictEqual(bound['@liveStatus'], 'published');
+      assert.ok(bound['@liveNow'] >= before && bound['@liveNow'] <= new Date().toISOString());
+    }
+  });
+
+  await t.test('an IDIR read carries it too', async () => {
+    const seen = serve();
+    await everyRead(IDIR);
+    assert.strictEqual(seen.length, 5);
+    for (const spec of seen) assert.match(spec.query, GATE);
+  });
+
+  await t.test('staff reads see drafts and scheduled rows', async () => {
+    const seen = serve();
+    await everyRead(STAFF);
+    assert.strictEqual(seen.length, 5);
+    for (const spec of seen) assert.doesNotMatch(spec.query, /liveStatus/);
+  });
+
+  await t.test('a point read applies the same gate', async () => {
+    const READ = ['public', 'staff'];
+    const rows = {
+      legacy: { id: 'legacy', read: READ },
+      live: { id: 'live', read: READ, status: 'published', publishDate: '2026-01-01T00:00:00.000Z' },
+      scheduled: { id: 'scheduled', read: READ, status: 'published', publishDate: '2999-01-01T00:00:00.000Z' },
+      undated: { id: 'undated', read: READ, status: 'published', publishDate: null, dateAdded: '2026-01-01T00:00:00.000Z' },
+      undatedAhead: { id: 'undatedAhead', read: READ, status: 'published', dateAdded: '2999-01-01T00:00:00.000Z' },
+      bare: { id: 'bare', read: READ, status: 'published' },
+      draft: { id: 'draft', read: READ, status: 'draft', publishDate: '2026-01-01T00:00:00.000Z' }
+    };
+    t.mock.method(cosmos, 'readItem', async (container, id) => rows[id] || null);
+
+    const seen = {};
+    for (const id of Object.keys(rows)) seen[id] = Boolean(await updates.getById(ANON, id));
+    assert.deepStrictEqual(seen, {
+      legacy: true, live: true, scheduled: false, undated: false, undatedAhead: false, bare: false, draft: false
+    });
+    assert.strictEqual(Boolean(await updates.getById(IDIR, 'scheduled')), false, 'IDIR is gated too');
+
+    assert.ok(await updates.getById(STAFF, 'scheduled'), 'staff preview a scheduled update');
+  });
+});
+
+test('updates publishDate ordering', async (t) => {
+  const config = require('../../src/config');
+  const flag = config.updatesPublishDateFallback;
+  t.afterEach(() => {
+    t.mock.restoreAll();
+    config.updatesPublishDateFallback = flag;
+  });
+
+  function serve() {
+    const seen = [];
+    t.mock.method(cosmos, 'query', async (container, spec) => {
+      seen.push(spec.query);
+      return { items: [] };
+    });
+    return seen;
+  }
+
+  await t.test('after the backfill, the home strip orders both halves by publishDate', async () => {
+    config.updatesPublishDateFallback = false;
+    const seen = serve();
+    await updates.listTop(ANON);
+    assert.strictEqual(seen.length, 2);
+    for (const query of seen) assert.match(query, /ORDER BY c\.publishDate DESC$/);
+  });
+
+  await t.test('after the backfill, a sort on publishDate runs on it', async () => {
+    config.updatesPublishDateFallback = false;
+    const seen = serve();
+    await updates.list(ANON, { sortBy: '-publishDate' });
+    assert.match(seen[0], /ORDER BY c\.publishDate DESC$/);
+  });
+
+  await t.test('before it, both run on dateAdded, which every row has', async () => {
+    config.updatesPublishDateFallback = true;
+    const seen = serve();
+    await updates.listTop(ANON);
+    await updates.list(ANON, { sortBy: '+publishDate' });
+    assert.deepStrictEqual(seen.map(q => /ORDER BY (.+)$/.exec(q)[1]),
+      ['c.dateAdded DESC', 'c.dateAdded DESC', 'c.dateAdded ASC']);
   });
 });

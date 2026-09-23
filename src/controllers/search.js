@@ -525,27 +525,49 @@ function redactIndexProject(hit, access) {
  * A project this caller cannot see yields `null`, which is what eagle-api's own pipeline emits for
  * an orphaned reference (`api/controllers/recentActivity.js:86-90`) and what eagle-public's News
  * model expects.
+ *
+ * Attachments and the featured image are resolved the same way: a document this caller cannot
+ * read drops out, so a public page never links a download that answers 404.
  */
 async function updateProjects(access, rows) {
   const idsOf = (field) => Array.from(new Set(rows.map(r => r[field]).filter(Boolean).map(String)));
   const eagleIds = idsOf('projectId');
   const periodIds = idsOf('pcp');
   const notificationIds = idsOf('projectNotification');
+  // Document ids are Eagle `_id`s on both sides: the document mirror keys its rows by them.
+  const documentIds = Array.from(new Set(rows.flatMap(r => [
+    ...(Array.isArray(r.attachments) ? r.attachments : []),
+    ...(r.featuredImage && r.featuredImage.document ? [r.featuredImage.document] : [])
+  ]).filter(Boolean).map(String)));
 
   // Redacted before anything reads a field off them, like every other repository row on this route.
-  const [projectRows, periodRefs, notificationRefs] = await Promise.all([
+  const [projectRows, periodRefs, notificationRefs, documentRefs] = await Promise.all([
     eagleIds.length ? projectsRepo.listByEagleIds(access, eagleIds) : [],
     periodIds.length ? commentPeriodsRepo.listByIds(access, periodIds) : [],
-    notificationIds.length ? notificationsRepo.listByIds(access, notificationIds) : []
-  ]).then(([p, cp, n]) => [
+    notificationIds.length ? notificationsRepo.listByIds(access, notificationIds) : [],
+    // No project ids to narrow by: an update may attach a document from any project.
+    documentIds.length
+      ? documentsRepo.listByIdsUnscoped(access, documentIds, 'c.id, c.projectId, c.displayName, c.documentFileName, c.vis')
+      : []
+  ]).then(([p, cp, n, d]) => [
     redactAllForAccess('projects', p, access),
     redactAllForAccess('commentPeriods', cp, access),
-    redactAllForAccess('notifications', n, access)
+    redactAllForAccess('notifications', n, access),
+    redactAllForAccess('documents', d, access)
   ]);
 
   const byEagleId = new Map(projectRows.map(p => [String(p.eagleId), p]));
   const byPeriodId = new Map(periodRefs.map(p => [String(p.id), p]));
   const byNotificationId = new Map(notificationRefs.map(n => [String(n.id), n]));
+  const byDocumentId = new Map(documentRefs.map(d => [String(d.id), d]));
+  // `_id` beside `id`: eagle-public reads a document reference by `_id`, like every Eagle row.
+  const documentRef = (id) => {
+    const doc = byDocumentId.get(String(id));
+    return doc
+      ? { _id: String(doc.id), id: String(doc.id), displayName: doc.displayName || null,
+        documentFileName: doc.documentFileName || null }
+      : null;
+  };
 
   return (row) => {
     const project = row.projectId ? byEagleId.get(String(row.projectId)) : null;
@@ -561,8 +583,20 @@ async function updateProjects(access, rows) {
     // the News template reads `pcp.isMet` and `projectNotification.name` off them, and a string
     // answers both with undefined. Unresolved drops the key — `undefined` is not serialised — so a
     // reference this caller may not see reads as no reference at all.
+    const image = row.featuredImage && row.featuredImage.document
+      ? documentRef(row.featuredImage.document)
+      : null;
     return {
-      project: project ? { _id: String(project.eagleId), name: project.name } : null,
+      // `location` on the wire, `address` at rest, as on the Project dataset.
+      project: project
+        ? { _id: String(project.eagleId), name: project.name, location: project.address || null }
+        : null,
+      ...(Array.isArray(row.attachments)
+        ? { attachments: row.attachments.map(documentRef).filter(Boolean) }
+        : {}),
+      ...(row.featuredImage !== undefined
+        ? { featuredImage: image ? { document: image, alt: row.featuredImage.alt || '' } : null }
+        : {}),
       pcp: period
         ? { _id: String(period.id), isMet: period.isMet === true, metURL: period.metURL || '' }
         : undefined,
@@ -667,6 +701,9 @@ function stripLimit(query) {
 const FEED_UPDATE_TYPE = 'News';
 
 const byDateDesc = (a, b) => Date.parse(b.date) - Date.parse(a.date);
+
+/** The update-only feed fields, empty on a decision row so every row keeps the one shape. */
+const NO_UPDATE_FIELDS = Object.freeze({ shortHeadline: null, summary: null, category: null, publishDate: null });
 const isoDate = (value) => (value ? new Date(value).toISOString() : null);
 
 /**
@@ -697,6 +734,7 @@ async function projectDecisionRows(access, limit, now) {
         projectName: doc.name || doc.displayName || null,
         date: isoDate(doc.decisionDate),
         headline: doc.eacDecision || null,
+        ...NO_UPDATE_FIELDS,
         content: null,
         documentUrl: null
       };
@@ -722,6 +760,7 @@ async function notificationDecisionRows(access, limit, now) {
       projectName: n.associatedProjectName || n.name || null,
       date: isoDate(n.decisionDate),
       headline: n.decision || null,
+      ...NO_UPDATE_FIELDS,
       content: null,
       documentUrl: null
     }));
@@ -749,13 +788,19 @@ async function homeFeed({ access, query }) {
     id: row._id,
     projectId: row.project ? row.project._id : null,
     projectName: row.project ? row.project.name : null,
-    date: isoDate(row.dateAdded),
+    // When it went public, which is what a reader means by an update's date.
+    date: isoDate(updatesRepo.publishedAt(row)),
     headline: row.headline || null,
+    shortHeadline: row.shortHeadline || null,
+    summary: row.summary || null,
+    category: row.category || null,
+    publishDate: row.publishDate || null,
     content: row.content || null,
     documentUrl: row.documentUrl || null
   }));
 
-  // `listTop` answers pinned rows first; those hold their place, and only the rest compete on date.
+  // `listTop` answers pinned rows first, newest `publishDate` first; those hold their place, and
+  // only the rest compete on date with the decisions.
   const pinnedCount = top.filter(row => row.pinned === true).length;
   const rest = [...updates.slice(pinnedCount), ...projectDecisions, ...notificationDecisions]
     .sort(byDateDesc)
@@ -957,6 +1002,20 @@ const COSMOS_DATASETS = {
 };
 
 /**
+ * The `activities` index filter for this caller: role ACL and project scope, plus the publish gate
+ * `updatesRepo.liveCriteria` applies to the container. The index holds EAGLE project ids, so a
+ * scoped caller's DEMI ids are translated first.
+ */
+async function updatesIndexAcl(access) {
+  const acl = filterFor(await updatesRepo.inEagleIdSpace(access), 'projectId');
+  if (acl.empty || !updatesRepo.isLiveGated(access)) return acl;
+  const now = new Date().toISOString();
+  // On `publishDate` alone, as updatesRepo.liveCriteria: a gated row without one stays hidden.
+  const live = `(status eq null or (status eq '${updatesRepo.PUBLISHED}' and publishDate le ${now}))`;
+  return { ...acl, filter: acl.filter ? `(${acl.filter}) and ${live}` : live };
+}
+
+/**
  * The two Cosmos datasets a KEYWORD search is answered from the index instead.
  *
  * Only the ranking moves. The index carries ids and the text it ranks on, never the row: every row
@@ -976,10 +1035,7 @@ const KEYWORD_INDEX_DATASETS = {
     // filter with — the mirror image of the Cosmos branch. Flattened onto `project` because that
     // is the one form `buildFilter` applies.
     indexQuery: (query) => eagleQuery.withProjectIds(query, eagleQuery.projectIdsFrom(query)),
-    // Same id space, one layer up: a scoped caller's DEMI ids have to become Eagle ones before the
-    // OData clause compares them against this index.
-    aclAccess: (access) => updatesRepo.inEagleIdSpace(access),
-    aclField: 'projectId',
+    acl: updatesIndexAcl,
     rows: async (access, ids) => {
       const rows = inIdOrder(await updatesRepo.listByIds(access, ids), ids);
       return cosmosRows('updates', rows, access, 'RecentActivity',
@@ -992,10 +1048,9 @@ const KEYWORD_INDEX_DATASETS = {
     // `and[_id]` is a point read of one record, and the keywords say nothing about which one.
     cosmosOnly: (query) => filterValue(query, '_id') !== null,
     indexQuery: (query) => query,
-    aclAccess: (access) => access,
     // NULL, like `notifications.SCOPE_FIELD`: a notification is not project data, so there is no
     // project axis to narrow on and role ACL is the whole filter.
-    aclField: null,
+    acl: async (access) => filterFor(access, null),
     rows: async (access, ids) => notificationRows(access,
       inIdOrder(await notificationsRepo.listByIds(access, ids, { full: true }), ids))
   }
@@ -1793,7 +1848,7 @@ exports.search = async (req, res) => {
           // caller receives is the Cosmos one, and it reports its own keys below.
           const notedBefore = { filter: droppedKeys.filter.length, sort: droppedKeys.sort.length };
           try {
-            const acl = filterFor(await indexed.aclAccess(access), indexed.aclField);
+            const acl = await indexed.acl(access);
             // Scoped to nothing: 0 is measured, and OData cannot express a filter that matches
             // nothing — see filterFor.
             if (acl.empty) return res.json([{ searchResults: [], count: 0 }]);
@@ -1970,9 +2025,7 @@ const COUNT_LEGS = {
     const index = aiSearch.config().activitiesIndex;
     if (keywords && aiSearch.config().configured && index !== '') {
       try {
-        // The index holds EAGLE project ids, so a scoped caller's DEMI ids are translated first —
-        // the same step the keyword branch of `/search` takes.
-        const acl = filterFor(await updatesRepo.inEagleIdSpace(access), 'projectId');
+        const acl = await updatesIndexAcl(access);
         if (acl.empty) return { count: 0 };
         return {
           count: await aiSearch.countActivities({ filter: acl.filter, keywords, fuzzy: true, prefix })

@@ -147,8 +147,9 @@ test('parseProjectStatus', async (t) => {
     assert.strictEqual(decoded('Secw&eacute;pemc &amp; Stk&#39;eml&uacute;psemc'),
       "Secwépemc & Stk'emlúpsemc");
     assert.strictEqual(decoded('&Eacute;nergie Saguenay'), 'Énergie Saguenay');
+    assert.strictEqual(decoded('Minister&rsquo;s &ldquo;Phase 2&hellip;&rdquo;'), 'Minister’s “Phase 2…”');
     // Not in the table: written through as it stands, never dropped or turned into "undefined".
-    assert.strictEqual(decoded('Phase 2&hellip;'), 'Phase 2&hellip;');
+    assert.strictEqual(decoded('Phase 2&zwnj;'), 'Phase 2&zwnj;');
   });
 });
 

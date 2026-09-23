@@ -173,6 +173,8 @@ function mirrorList(eagleId, doc, repo = listsRepo) {
  * `controllers/nosql/update.js` announces a publication to eagle-notify once per update, guarded by
  * `notifiedAt`. A backfill carries years of already-published updates, and none of them is news, so
  * the claim is taken here rather than left for the next push to spend on a five-year-old headline.
+ * Live rows only: a scheduled update is still news, and the announce timer takes it when it is due.
+ * The claim is marked 'backfill', so a later withdrawal sends no cancellation either.
  */
 async function mirrorUpdate(eagleId, doc, deps) {
   const result = await deps.updateMirror.mirrorFromEagle(eagleId, doc);
@@ -180,8 +182,9 @@ async function mirrorUpdate(eagleId, doc, deps) {
   // there is no `saved` to read a claim off and nothing published to claim for.
   if (result.ignored || result.status === 'conflict') return result;
   const { saved, existing } = result;
-  if (saved.isPublished && !(existing && existing.notifiedAt)) {
-    await deps.updatesRepo.claimForNotify(saved.id, new Date().toISOString());
+  const now = new Date().toISOString();
+  if (saved.isPublished && deps.updatesRepo.isLive(saved, null, now) && !(existing && existing.notifiedAt)) {
+    await deps.updatesRepo.claimForBackfill(saved.id, now);
   }
   return result;
 }

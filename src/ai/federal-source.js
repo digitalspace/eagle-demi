@@ -26,6 +26,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { logger } = require('../utils/logger');
+const { decodeEntities } = require('../helpers/html-entities');
 
 /** The registry's origin. Every href on a document page is relative to it. */
 const REGISTRY_ORIGIN = 'https://iaac-aeic.gc.ca';
@@ -49,47 +50,6 @@ const PDF_TEXT_MAX_BYTES = 16 * 1024 * 1024;
 
 /** A CEAR project reference in a registry link: `.../050/evaluations/proj/80105`. */
 const PROJ_LINK = /\/proj\/(\d+)/;
-
-/** The named entities the registry actually emits, plus the numeric forms. */
-const NAMED_ENTITIES = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–'
-};
-
-/**
- * Accented letters, which the registry writes by name. This is a bilingual site and the decisions
- * name Nations in their own orthography — "Stk'eml&uacute;psemc te Secw&eacute;pemc" — so a read
- * that leaves these escaped stores the escape and quotes it back at a reader.
- */
-const LOWER_LETTERS = {
-  agrave: 'à', aacute: 'á', acirc: 'â', atilde: 'ã', auml: 'ä', aring: 'å', ccedil: 'ç',
-  egrave: 'è', eacute: 'é', ecirc: 'ê', euml: 'ë', igrave: 'ì', iacute: 'í', icirc: 'î',
-  iuml: 'ï', ntilde: 'ñ', ograve: 'ò', oacute: 'ó', ocirc: 'ô', otilde: 'õ', ouml: 'ö',
-  ugrave: 'ù', uacute: 'ú', ucirc: 'û', uuml: 'ü'
-};
-
-/** The same letters both ways round, because `&Eacute;` is a different letter from `&eacute;`. */
-const NAMED_LETTERS = Object.entries(LOWER_LETTERS).reduce((all, [name, letter]) => {
-  all[name] = letter;
-  all[name[0].toUpperCase() + name.slice(1)] = letter.toUpperCase();
-  return all;
-}, {});
-
-/** Registry markup is entity-escaped ("Minister&#39;s"), and a title is compared and stored. */
-function decodeEntities(text) {
-  return String(text).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body) => {
-    if (body[0] === '#') {
-      const code = body[1] === 'x' || body[1] === 'X'
-        ? parseInt(body.slice(2), 16)
-        : parseInt(body.slice(1), 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
-    }
-    // Letters are matched as written; the punctuation entities are not case-sensitive.
-    const named = NAMED_LETTERS[body] !== undefined
-      ? NAMED_LETTERS[body]
-      : NAMED_ENTITIES[body.toLowerCase()];
-    return named === undefined ? whole : named;
-  });
-}
 
 /** Markup to the words in it, on one line. Titles carry `<br />` and `<em>`. */
 function textOf(html) {

@@ -197,6 +197,12 @@ param notifyApiKeySecretUri string = ''
 @description('Update emails link /updates/<id> instead of the project page. See main.bicep.')
 param notifyUpdateReaderLinks bool = false
 
+@description('Sorts on an Update\'s publishDate run on dateAdded until the backfill has run. See main.bicep.')
+param updatesPublishDateFallback bool = true
+
+@description('NCRONTAB schedule for the scheduled-Update announce timer. Empty derives one from notifyApiBase.')
+param announceUpdatesSchedule string = ''
+
 // @secure() only to satisfy the linter's name heuristic — the value is a Key Vault reference, not
 // a secret; the vault holds the secret itself.
 @description('Key Vault reference for the APIM gateway secret. Empty disables the gateway trust branch.')
@@ -261,6 +267,12 @@ param searchDefinitionsQueue string = ''
 
 @description('Resource id of the user-assigned identity the search service runs its indexers as. Written into every data source the apply PUTs, so an empty value makes the indexer fail its next run on "Ensure managed identity is enabled".')
 param dataSourceIdentityId string = ''
+
+// eagle-notify wired means the announce on: eagle-api never pushes again when a scheduled Update
+// goes live, so without the timer it would never reach subscribers. An explicit schedule wins.
+var updatesAnnounceSchedule = empty(announceUpdatesSchedule) && !empty(notifyApiBase)
+  ? '0 */5 * * * *'
+  : announceUpdatesSchedule
 
 // Feature on means cleanup on: a queue with no sweep fills the container with zips nothing
 // deletes. An explicit schedule still wins, so an environment can move the hour.
@@ -587,6 +599,15 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'NOTIFY_UPDATE_READER_LINKS'
           value: notifyUpdateReaderLinks ? 'true' : 'false'
+        }
+        {
+          name: 'UPDATES_PUBLISH_DATE_FALLBACK'
+          value: updatesPublishDateFallback ? 'true' : 'false'
+        }
+        // The scheduled-Update announce (src/scripts/announce-updates.js). Empty is off.
+        {
+          name: 'ANNOUNCE_UPDATES_SCHEDULE'
+          value: updatesAnnounceSchedule
         }
         // The realm-management service account the sync grants `project:<id>` roles with. Distinct
         // from KEYCLOAK_CLIENT_ID, which is the client whose user tokens this API accepts.

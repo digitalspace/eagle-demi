@@ -61,7 +61,7 @@ test('notify.updatePublished', async (t) => {
     configure();
     const calls = wire(() => ({ ok: true, status: 202 }));
 
-    assert.strictEqual(await notify.updatePublished(ITEM, 'Nicomen Wind Energy'), true);
+    assert.strictEqual(await notify.updatePublished(ITEM, 'Nicomen Wind Energy'), notify.OUTCOME.SENT);
     assert.strictEqual(calls.length, 1);
     assert.strictEqual(calls[0].url, 'https://notify-api-test.azurewebsites.net/api/events');
     assert.strictEqual(calls[0].opts.method, 'POST');
@@ -74,11 +74,71 @@ test('notify.updatePublished', async (t) => {
       serviceName: 'project:207',
       title: 'Public comment period opens',
       idempotencyKey: ITEM.id,
+      id: ITEM.id,
       url: 'https://test.projects.eao.gov.bc.ca/p/207/project-details',
       projectName: 'Nicomen Wind Energy',
       // Tags out, whitespace collapsed — the notification is plain text.
-      excerpt: 'The comment period opens on Monday.'
+      excerpt: 'The comment period opens on Monday.',
+      // No Updates fields on the row: the summary fallback, no shortHeadline and no image keys.
+      summary: 'The comment period opens on Monday.'
     });
+  });
+
+  await t.test('the Updates fields are sent as written, with the image as an absolute URL', async () => {
+    configure();
+    const calls = wire(() => ({ ok: true, status: 202 }));
+
+    await notify.updatePublished({
+      ...ITEM,
+      shortHeadline: 'Comment period opens',
+      summary: 'Have your say.'
+    }, null, { document: '5cf00c03a266b7e187750002', alt: 'Site map' });
+
+    const body = JSON.parse(calls[0].opts.body);
+    assert.strictEqual(body.shortHeadline, 'Comment period opens');
+    assert.strictEqual(body.summary, 'Have your say.');
+    assert.strictEqual(body.featuredImageUrl, 'https://test.projects.eao.gov.bc.ca/demi-search/' +
+      'documents/5cf00c03a266b7e187750002/download?redirect=1');
+    assert.strictEqual(body.featuredImageAlt, 'Site map');
+  });
+
+  await t.test('no image without alt text, and none the caller did not pass', async () => {
+    configure();
+    const calls = wire(() => ({ ok: true, status: 202 }));
+    const withImage = { ...ITEM, featuredImage: { document: '5cf00c03a266b7e187750002', alt: 'Site map' } };
+
+    await notify.updatePublished(withImage, null, { document: '5cf00c03a266b7e187750002', alt: '' });
+    await notify.updatePublished(withImage, null);
+
+    for (const call of calls) {
+      const body = JSON.parse(call.opts.body);
+      assert.strictEqual(body.featuredImageUrl, undefined);
+      assert.strictEqual(body.featuredImageAlt, undefined);
+    }
+  });
+
+  await t.test('entities are decoded before the text is trimmed', () => {
+    const html = '<p>Rock &amp; Roll&rsquo;s &ldquo;Caf&eacute;&rdquo; &#8212; &#x2019;</p>';
+    assert.strictEqual(notify.excerptOf(html), 'Rock & Roll’s “Café” — ’');
+    assert.strictEqual(notify.summaryOf(html), 'Rock & Roll’s “Café” — ’');
+    // Decoded after the tags go, so escaped markup survives as text.
+    assert.strictEqual(notify.summaryOf('<p>a &lt;b&gt; c</p>'), 'a <b> c');
+    // An entity costs one character, not six, against the cap.
+    assert.strictEqual(notify.summaryOf(`<p>${'&amp;'.repeat(300)}</p>`), '&'.repeat(280));
+  });
+
+  await t.test('block tags break words; inline tags do not', () => {
+    assert.strictEqual(notify.summaryOf('<ul><li>One</li><li>Two</li></ul><p>Next.</p>'), 'One Two');
+    assert.strictEqual(notify.summaryOf('<div>Head</div><p>Body</p>'), 'Head');
+    assert.strictEqual(notify.summaryOf('<p>Bo<b>ld</b> word</p>'), 'Bold word');
+  });
+
+  await t.test('the fallback summary is the first non-empty paragraph, cut at 280', () => {
+    assert.strictEqual(
+      notify.summaryOf('<p>&nbsp;</p><p> </p><p>First <i>one</i>,<br>two.</p><p>Second.</p>'),
+      'First one, two.');
+    assert.strictEqual(notify.summaryOf('Plain first.\n\nPlain second.'), 'Plain first.');
+    assert.strictEqual(notify.summaryOf(`<p>${'a'.repeat(900)}</p>`).length, 280);
   });
 
   await t.test('an update with no project is site-wide', async () => {
@@ -123,8 +183,8 @@ test('notify.updatePublished', async (t) => {
     configure();
     const calls = wire(() => ({ ok: false, status: 503 }));
 
-    assert.strictEqual(await notify.updatePublished(ITEM, null), false);
-    assert.strictEqual(calls.length, 2, 'two attempts, not more — the caller retries on next push');
+    assert.strictEqual(await notify.updatePublished(ITEM, null), notify.OUTCOME.FAILED);
+    assert.strictEqual(calls.length, 2, 'two attempts, not more — a later tick retries');
   });
 
   await t.test('a network error is retried, and a second attempt can succeed', async () => {
@@ -134,7 +194,7 @@ test('notify.updatePublished', async (t) => {
       return { ok: true, status: 202 };
     });
 
-    assert.strictEqual(await notify.updatePublished(ITEM, null), true);
+    assert.strictEqual(await notify.updatePublished(ITEM, null), notify.OUTCOME.SENT);
     assert.strictEqual(calls.length, 2);
   });
 
@@ -142,29 +202,31 @@ test('notify.updatePublished', async (t) => {
     configure();
     const calls = wire(() => ({ ok: false, status: 400 }));
 
-    assert.strictEqual(await notify.updatePublished(ITEM, null), false);
+    assert.strictEqual(await notify.updatePublished(ITEM, null), notify.OUTCOME.REJECTED);
     assert.strictEqual(calls.length, 1, 'the same rejected body would only be rejected again');
   });
 
   await t.test('never throws, whatever fetch does', async () => {
     configure();
     wire(() => { throw new Error('boom'); });
-    assert.strictEqual(await notify.updatePublished(ITEM, null), false);
+    assert.strictEqual(await notify.updatePublished(ITEM, null), notify.OUTCOME.FAILED);
   });
 });
 
-test('notify.updateCancelled carries the same identity plus cancelled', async (t) => {
+test('notify.updateCancelled carries the same identity, the update id, and cancelled', async (t) => {
   t.afterEach(restore);
 
   configure();
   const calls = wire(() => ({ ok: true, status: 202 }));
 
-  assert.strictEqual(await notify.updateCancelled(ITEM), true);
+  assert.strictEqual(await notify.updateCancelled(ITEM), notify.OUTCOME.SENT);
   assert.deepStrictEqual(JSON.parse(calls[0].opts.body), {
     kind: 'project-updated',
     serviceName: 'project:207',
     title: 'Public comment period opens',
     idempotencyKey: ITEM.id,
+    // eagle-notify cancels every open event for this Update by it.
+    id: ITEM.id,
     cancelled: true
   });
 });
@@ -187,8 +249,8 @@ test('dark until both settings are present', async (t) => {
     config.notifyApiKey = '';
     const calls = wire(() => { throw new Error('must not fetch'); });
 
-    assert.strictEqual(await notify.updatePublished(ITEM, null), true);
-    assert.strictEqual(await notify.updateCancelled(ITEM), true);
+    assert.strictEqual(await notify.updatePublished(ITEM, null), notify.OUTCOME.SENT);
+    assert.strictEqual(await notify.updateCancelled(ITEM), notify.OUTCOME.SENT);
     assert.strictEqual(calls.length, 0);
   });
 });

@@ -4,67 +4,117 @@
  * Update controller — the Eagle mirror for `RecentActivity`, and the only writer of `updates`.
  *
  * DEMI owns Updates, so the publish transition is DEMI's to announce: eagle-notify is told once
- * per publication, and told again when a published update is withdrawn. `notifiedAt` is the claim
- * that makes "once" true across concurrent pushes — see repositories/updates.js.
+ * per update, and told again when an update DEMI announced is withdrawn. `notifiedAt` is the claim
+ * that makes "once" true across concurrent pushes and timer runs — see repositories/updates.js.
  */
 
 const updates = require('../../repositories/updates');
 const projects = require('../../repositories/projects');
 const notifications = require('../../repositories/notifications');
 const { pickParent } = require('../../helpers/parent-admit');
-const { systemAccess } = require('../../helpers/access-sql');
+const { resolveAccess, systemAccess } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const notify = require('../../services/notify');
+const documents = require('../../repositories/documents');
+const { toIsoOrNull } = require('../../seed/transform');
 const {
   eaglePush, refId, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
+/** The project or notification an update announces, by name, for the email's label. */
+async function parentName(item) {
+  if (!item.projectId) return null;
+  // Same precedence as every other parent lookup: an update whose `projectId` is really a
+  // `ProjectNotification` id must be labelled with the notification, not with the Track project
+  // that happens to carry that id in `eagleId`.
+  const [project, notification] = await Promise.all([
+    projects.getByEagleId(systemAccess(), item.projectId),
+    notifications.getById(systemAccess(), item.projectId)
+  ]);
+  const parent = pickParent(project, notification);
+  const named = parent && parent.kind === 'notification' ? notification : project;
+  return named ? named.name : null;
+}
+
 /**
- * Tell eagle-notify what changed, if anything did.
- *
- * Never throws and never fails the push: a mirrored record is worth keeping even when the
- * notification does not land, and a failed send leaves the claim in the state the next push
- * retries from — released for a publication, still held for a cancellation.
+ * The featured image, only when anyone may fetch it: the email links DEMI's download route, which
+ * serves public documents alone. The document id is the Eagle `_id`, as in `featuredImage.document`.
  */
-async function announce(item, existing) {
+async function publicImage(item) {
+  const image = item.featuredImage;
+  if (!image || !image.document) return null;
+  // An anonymous caller's read, the same predicate the download route applies to the email reader.
+  return (await documents.getById(resolveAccess({}), image.document)) ? image : null;
+}
+
+/**
+ * Did DEMI claim this update's email? A claim whose send got no answer may still have gone out, so
+ * any DEMI claim is cancelled. A claim with no marker predates the bookkeeping and counts as a
+ * backfill: nothing to cancel.
+ */
+function announcedByDemi(row) {
+  return Boolean(row) && row.notifiedBy === updates.NOTIFIED_BY.DEMI;
+}
+
+/**
+ * Send a claimed row and record the outcome. A refusal (4xx) keeps the claim and is never retried;
+ * a send with no answer keeps it too, and the timer takes the lease over once it runs out.
+ */
+async function sendClaimed(claimed, now) {
+  const outcome = await notify.updatePublished(claimed, await parentName(claimed), await publicImage(claimed));
+  if (outcome === notify.OUTCOME.SENT) {
+    await updates.markNotify(claimed.id, 'notifySentAt', now);
+  } else if (outcome === notify.OUTCOME.REJECTED) {
+    await updates.markNotify(claimed.id, 'notifyFailedAt', now);
+  } else if (claimed.notifyAttempts >= updates.NOTIFY_MAX_ATTEMPTS) {
+    logger.error('[Update Controller] notify gave up', { id: claimed.id, attempts: claimed.notifyAttempts });
+  }
+}
+
+/**
+ * Tell eagle-notify what changed, if anything did. Never throws and never fails the push: a
+ * mirrored record is worth keeping even when the notification does not land.
+ *
+ * Moving `publishDate` into the future after the email went out sends nothing: no cancellation,
+ * and no second email once the new date passes.
+ */
+async function announce(item, existing, now = new Date().toISOString()) {
   // Not configured: claim NOTHING. A claim taken while dark would suppress the first real
   // notification once the environment is wired up.
   if (!notify.configured()) return;
 
   try {
     if (item.isPublished) {
-      const claimed = await updates.claimForNotify(item.id, new Date().toISOString());
-      if (!claimed) return;
-
-      // Same precedence as every other parent lookup: an update whose `projectId` is really a
-      // `ProjectNotification` id must be labelled with the notification, not with the Track
-      // project that happens to carry that id in `eagleId`.
-      const [project, notification] = item.projectId
-        ? await Promise.all([
-          projects.getByEagleId(systemAccess(), item.projectId),
-          notifications.getById(systemAccess(), item.projectId)
-        ])
-        : [null, null];
-      const parent = pickParent(project, notification);
-      const named = parent && parent.kind === 'notification' ? notification : project;
-      const pushed = await notify.updatePublished(item, named ? named.name : null);
-      if (!pushed) await updates.releaseNotify(item.id);
+      // Not due yet: src/scripts/announce-updates.js announces it once its publishDate passes.
+      if (!updates.isLive(item, null, now)) return;
+      const claimed = await updates.claimForNotify(item.id, now);
+      if (claimed) await sendClaimed(claimed, now);
       return;
     }
 
-    if (existing && existing.notifiedAt) {
-      // Release only once the cancellation is out. Keeping the claim on a failed send is what makes
-      // the next unpublish push try again.
-      const sent = await notify.updateCancelled(item);
-      if (sent) await updates.releaseNotify(item.id);
+    // Once per withdrawal of a DEMI announcement. The claim stays: re-publishing never emails again.
+    // A send with no answer stays unmarked for the timer to retry; a refusal is final, like a send's.
+    if (announcedByDemi(existing) && !existing.notifyCancelledAt) {
+      const outcome = await notify.updateCancelled(item);
+      if (outcome !== notify.OUTCOME.FAILED) await updates.markNotify(item.id, 'notifyCancelledAt', now);
     }
   } catch (err) {
     logger.error('[Update Controller] notify failed', {
       id: item.id, error: err.message, stack: err.stack
     });
   }
+}
+
+/** The send bookkeeping, carried across a whole-item write. `incr` needs a number to start from. */
+function notifyState(existing) {
+  const state = {};
+  for (const field of updates.NOTIFY_STATE_FIELDS) {
+    state[field] = existing && existing[field] !== undefined ? existing[field] : null;
+  }
+  state.notifyAttempts = state.notifyAttempts || 0;
+  return state;
 }
 
 /** The mirror row: the raw Eagle record, plus what DEMI already holds about it. */
@@ -88,6 +138,24 @@ function mirrorItem(eagleId, doc, existing) {
     documentUrl: doc.documentUrl || null,
     pcp: refId(doc.pcp),
     projectNotification: refId(doc.projectNotification),
+    // The Updates fields (PUBLIC-159). Stored as sent; the `shortHeadline`/`summary` fallbacks are
+    // the reader's, so an edit to `headline` or `content` never leaves a stale copy here.
+    category: doc.category || null,
+    subject: doc.subject || null,
+    shortHeadline: doc.shortHeadline || null,
+    summary: doc.summary || null,
+    featuredImage: doc.featuredImage && doc.featuredImage.document
+      ? { document: refId(doc.featuredImage.document), alt: doc.featuredImage.alt || '' }
+      : null,
+    attachments: Array.isArray(doc.attachments) ? doc.attachments.map(refId).filter(Boolean) : [],
+    regions: Array.isArray(doc.regions) ? doc.regions.map(String) : [],
+    location: doc.location || null,
+    // Rendered as a link on a public page, so anything but http(s) is dropped here too.
+    engagementUrl: /^https?:\/\//i.test(doc.engagementUrl || '') ? doc.engagementUrl : null,
+    status: doc.status || null,
+    // Normalised to ISO text: the publish gate compares it as a string, and the index as a date.
+    // Never absent: the gate and every sort on it read `publishDate` alone.
+    publishDate: toIsoOrNull(doc.publishDate) || toIsoOrNull(doc.dateAdded),
     // Stored beside `isPublished` rather than folded into it: `read[]` is what governs visibility
     // and `active` is Eagle's own flag, which the News model renders.
     active: doc.active === true,
@@ -96,8 +164,14 @@ function mirrorItem(eagleId, doc, existing) {
     isPublished: read ? read.includes('public') : doc.active === true,
     read: doc.read,
     // A Cosmos write REPLACES the item, so the claim has to be carried across or every push of
-    // a published update notifies again.
-    notifiedAt: (existing && existing.notifiedAt) || null,
+    // a published update notifies again. Eagle's own `notifiedAt` (set by its backfill on old rows)
+    // seeds an empty claim, so an update Eagle already announced is never announced again.
+    notifiedAt: (existing && existing.notifiedAt) || toIsoOrNull(doc.notifiedAt),
+    // Who holds the claim, carried with it. DEMI cancels only what it sent itself.
+    notifiedBy: existing && existing.notifiedAt
+      ? existing.notifiedBy || null
+      : (toIsoOrNull(doc.notifiedAt) ? updates.NOTIFIED_BY.EAGLE : null),
+    ...notifyState(existing),
     sources: { ...(existing && existing.sources), eagle: doc }
   };
 }
@@ -123,6 +197,8 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
+// The scheduled announce (src/scripts/announce-updates.js) goes through the same claim.
+exports.announce = announce;
 
 /**
  * Receive one Update pushed by eagle-api, keyed by its Eagle `_id`.
