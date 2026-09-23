@@ -9,6 +9,8 @@ const links = require('../../../src/repositories/links');
 const projects = require('../../../src/repositories/projects');
 const linkController = require('../../../src/controllers/nosql/link');
 const config = require('../../../src/config');
+const { logger } = require('../../../src/utils/logger');
+const { canRead, readForLevel } = require('../../../src/helpers/access-sql');
 
 function mockRes() {
   return {
@@ -31,6 +33,12 @@ function mockRes() {
 }
 
 const STAFF = { preferred_username: 'staff.person' };
+/** A caller who reads every level, beside STAFF, who holds no role and reads public rows only. */
+const ADMIN = { preferred_username: 'admin.person', realm_access: { roles: ['sysadmin'] } };
+/** Project 207 at level 1: staff tooling sees it, a caller with no role does not. */
+const HIDDEN_207 = { id: '207', read: readForLevel(1) };
+/** `projects.getById` as the repository answers it: null for a row the caller may not read. */
+const gatedGetById = (row) => async (access, id) => (id === row.id && canRead(row, access, projects.PARTITION_FIELD) ? row : null);
 const DEST = 'https://projects.eao.gov.bc.ca/p/207';
 
 /** `{code: 409}` is what the Cosmos SDK raises for a duplicate id — the only uniqueness check. */
@@ -246,34 +254,136 @@ test('short link controller', async (t) => {
   await t.test('a project\'s code, current or legacy, cannot be repointed or deleted', async () => {
     const owners = { 'site-c': ['207'], kq7bt2rm: ['207'] };
     t.mock.method(projects, 'listShortCodeOwners', async (code) => owners[code] || []);
+    t.mock.method(projects, 'getById', gatedGetById(HIDDEN_207));
     t.mock.method(links, 'getById', async (code) => ({ id: code, url: DEST, note: null }));
     const repoint = t.mock.method(links, 'repoint', async () => ({ id: 'x', url: DEST }));
     const remove = t.mock.method(links, 'remove', async () => true);
 
     const moved = mockRes();
     await linkController.updateLink(
-      { params: { code: 'SITE-C' }, query: {}, user: STAFF, body: { url: DEST } }, moved);
+      { params: { code: 'SITE-C' }, query: {}, user: ADMIN, body: { url: DEST } }, moved);
     const deleted = mockRes();
-    await linkController.deleteLink({ params: { code: 'kq7bt2rm' }, query: {}, user: STAFF }, deleted);
+    await linkController.deleteLink({ params: { code: 'kq7bt2rm' }, query: {}, user: ADMIN }, deleted);
 
     assert.strictEqual(moved.statusCode, 409);
     assert.strictEqual(deleted.statusCode, 409);
     assert.match(deleted.body.error, /belongs to a project/);
+    // The admin UI routes the edit to this project instead.
+    assert.strictEqual(moved.body.projectId, '207');
+    assert.strictEqual(deleted.body.projectId, '207');
     assert.strictEqual(repoint.mock.callCount() + remove.mock.callCount(), 0,
       'a printed project link must never break');
   });
 
   await t.test('a custom code a project holds cannot be minted over it', async () => {
     t.mock.method(projects, 'listShortCodeOwners', async (code) => (code === 'kq7bt2rm' ? ['207'] : []));
+    t.mock.method(projects, 'getById', gatedGetById(HIDDEN_207));
     const create = t.mock.method(links, 'create', async (record) => record);
 
     const res = mockRes();
     await linkController.createLink(
-      { body: { url: DEST, code: 'KQ7BT2RM' }, params: {}, query: {}, user: STAFF }, res);
+      { body: { url: DEST, code: 'KQ7BT2RM' }, params: {}, query: {}, user: ADMIN }, res);
 
     assert.strictEqual(res.statusCode, 409);
     assert.match(res.body.error, /belongs to a project/);
+    assert.strictEqual(res.body.projectId, '207');
     assert.strictEqual(create.mock.callCount(), 0);
+  });
+
+  await t.test('a project code the caller cannot read is still a 409, without the project id', async () => {
+    t.mock.method(projects, 'listShortCodeOwners', async () => ['207']);
+    t.mock.method(projects, 'getById', gatedGetById(HIDDEN_207));
+    t.mock.method(links, 'getById', async (code) => ({ id: code, url: DEST, note: null }));
+    const create = t.mock.method(links, 'create', async (record) => record);
+    const repoint = t.mock.method(links, 'repoint', async () => ({ id: 'x', url: DEST }));
+    const remove = t.mock.method(links, 'remove', async () => true);
+
+    const minted = mockRes();
+    await linkController.createLink(
+      { body: { url: DEST, code: 'site-c' }, params: {}, query: {}, user: STAFF }, minted);
+    const moved = mockRes();
+    await linkController.updateLink(
+      { params: { code: 'site-c' }, query: {}, user: STAFF, body: { url: DEST } }, moved);
+    const deleted = mockRes();
+    await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: STAFF }, deleted);
+
+    for (const res of [minted, moved, deleted]) {
+      assert.strictEqual(res.statusCode, 409, 'ownership is judged on every project');
+      assert.deepStrictEqual(Object.keys(res.body), ['error'], 'a hidden project is not named');
+    }
+    assert.strictEqual(create.mock.callCount() + repoint.mock.callCount() + remove.mock.callCount(), 0);
+  });
+
+  await t.test('the project named is the Track row over its Eagle-only twin, current over legacy', async () => {
+    const rows = {
+      // The twin a relink leaves behind still holds the code as current.
+      'eagle-58851172': { id: 'eagle-58851172', shortCode: 'site-c', read: readForLevel(1) },
+      208: { id: '208', shortCode: 'kemess', legacyShortCodes: ['site-c'], read: readForLevel(1) },
+      207: { id: '207', shortCode: 'site-c', read: readForLevel(1) }
+    };
+    t.mock.method(projects, 'listShortCodeOwners', async () => ['eagle-58851172', '208', '207']);
+    t.mock.method(projects, 'getById', async (access, id) =>
+      (rows[id] && canRead(rows[id], access, projects.PARTITION_FIELD) ? rows[id] : null));
+
+    const res = mockRes();
+    await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: ADMIN }, res);
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.strictEqual(res.body.projectId, '207');
+  });
+
+  await t.test('the project named is the first holder the caller may read', async () => {
+    const rows = {
+      207: { id: '207', shortCode: 'site-c', read: readForLevel(1) },
+      208: { id: '208', legacyShortCodes: ['site-c'], read: readForLevel(4) }
+    };
+    t.mock.method(projects, 'listShortCodeOwners', async () => ['207', '208']);
+    t.mock.method(projects, 'getById', async (access, id) =>
+      (rows[id] && canRead(rows[id], access, projects.PARTITION_FIELD) ? rows[id] : null));
+
+    const staff = mockRes();
+    await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: STAFF }, staff);
+    const admin = mockRes();
+    await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: ADMIN }, admin);
+
+    assert.deepStrictEqual(staff.body, { error: 'This code belongs to a project. Edit it on the project instead.', projectId: '208' });
+    assert.strictEqual(admin.body.projectId, '207');
+  });
+
+  await t.test('a record a project adopts between the holder check and the write is left whole', async () => {
+    let adopter = '207';
+    let holders = [];
+    t.mock.method(projects, 'listShortCodeOwners', async () => holders);
+    t.mock.method(projects, 'getById', gatedGetById(HIDDEN_207));
+    t.mock.method(links, 'getById', async (code) => ({ id: code, url: DEST, note: null, _etag: '"a"' }));
+    // The adoption lands after the read, so the stored revision is no longer "a".
+    const guarded = async (etag) => {
+      holders = adopter ? [adopter] : [];
+      if (etag !== '"b"') throw Object.assign(new Error('Precondition failed'), { code: 412 });
+      return true;
+    };
+    const repoint = t.mock.method(links, 'repoint', async (_code, _url, { etag } = {}) => guarded(etag));
+    const remove = t.mock.method(links, 'remove', async (_code, { etag } = {}) => guarded(etag));
+
+    const moved = mockRes();
+    await linkController.updateLink({ params: { code: 'site-c' }, query: {}, user: ADMIN, body: { url: DEST } }, moved);
+    holders = [];
+    const deleted = mockRes();
+    await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: ADMIN }, deleted);
+
+    assert.deepStrictEqual(repoint.mock.calls[0].arguments[2], { etag: '"a"' });
+    assert.deepStrictEqual(remove.mock.calls[0].arguments[1], { etag: '"a"' });
+    for (const res of [moved, deleted]) {
+      assert.strictEqual(res.statusCode, 409);
+      assert.strictEqual(res.body.projectId, '207', 'the edit is sent to the project that took the code');
+    }
+
+    adopter = null;
+    holders = [];
+    const raced = mockRes();
+    await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: ADMIN }, raced);
+    assert.strictEqual(raced.statusCode, 409);
+    assert.match(raced.body.error, /changed while saving/);
   });
 
   await t.test('a delete that lands answers a message', async () => {
@@ -383,6 +493,7 @@ test('short link controller', async (t) => {
   });
 
   await t.test('every listed row carries its shortUrl', async () => {
+    t.mock.method(links, 'listProjectCodes', async () => new Map());
     t.mock.method(links, 'list', async () => [
       { id: 'aaaaaaaa', url: DEST, note: 'poster', createdAt: '2026-08-02T00:00:00.000Z',
         createdBy: 'staff.person', updatedAt: null, personal: false },
@@ -400,6 +511,62 @@ test('short link controller', async (t) => {
     }
     assert.strictEqual(res.body[1].note, null, 'a missing note reads as null, not undefined');
     assert.strictEqual(res.body[1].personal, false, 'a row minted before the flag is shared');
+  });
+
+  await t.test('a listed row a project holds names the project and its role, others do not', async () => {
+    const row = (id) => ({ id, url: DEST, createdAt: '2026-08-01T00:00:00.000Z', createdBy: 'system' });
+    t.mock.method(links, 'list', async () => [row('site-c'), row('abcd2345'), row('kq7bt2rm')]);
+    const held = t.mock.method(links, 'listProjectCodes', async () => new Map([
+      ['site-c', { projectId: '207', projectRole: 'current' }],
+      ['kq7bt2rm', { projectId: '207', projectRole: 'legacy' }]
+    ]));
+    const perCode = t.mock.method(projects, 'listShortCodeOwners', async () => []);
+
+    const res = mockRes();
+    await linkController.listLinks({ query: {}, user: STAFF }, res);
+
+    assert.deepStrictEqual(res.body.map(r => [r.id, r.projectId, r.projectRole]), [
+      ['site-c', '207', 'current'],
+      ['abcd2345', undefined, undefined],
+      ['kq7bt2rm', '207', 'legacy']
+    ], 'list order kept');
+    assert.ok(!('projectId' in res.body[1]) && !('projectRole' in res.body[1]));
+    assert.deepStrictEqual([held.mock.callCount(), perCode.mock.callCount()], [1, 0],
+      'one owner query per request, not one per row');
+  });
+
+  await t.test('a listed row is tagged only with a project the caller may read', async () => {
+    t.mock.method(links, 'list', async () => [
+      { id: 'site-c', url: DEST, createdAt: '2026-08-01T00:00:00.000Z', createdBy: 'system' }
+    ]);
+    // The repository's contract: owners the caller's access cannot read are not in the map.
+    t.mock.method(links, 'listProjectCodes', async (access) => new Map(
+      canRead(HIDDEN_207, access, projects.PARTITION_FIELD)
+        ? [['site-c', { projectId: '207', projectRole: 'current' }]] : []));
+
+    const lower = mockRes();
+    await linkController.listLinks({ query: {}, user: STAFF }, lower);
+    const admin = mockRes();
+    await linkController.listLinks({ query: {}, user: ADMIN }, admin);
+
+    assert.ok(!('projectId' in lower.body[0]) && !('projectRole' in lower.body[0]),
+      'a lower-level caller gets the row untagged');
+    assert.deepStrictEqual([admin.body[0].projectId, admin.body[0].projectRole], ['207', 'current']);
+  });
+
+  await t.test('a failed owner lookup lists the rows untagged and warns, not a 500', async () => {
+    t.mock.method(links, 'list', async () => [
+      { id: 'site-c', url: DEST, createdAt: '2026-08-01T00:00:00.000Z', createdBy: 'system' }
+    ]);
+    t.mock.method(links, 'listProjectCodes', async () => { throw new Error('projects container down'); });
+    const warn = t.mock.method(logger, 'warn', () => {});
+
+    const res = mockRes();
+    await linkController.listLinks({ query: {}, user: ADMIN }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.body.map(r => [r.id, r.projectId]), [['site-c', undefined]]);
+    assert.ok(warn.mock.calls.some(c => /listed untagged/.test(c.arguments[0])));
   });
 
   await t.test('a personal link is stored, audited and presented as personal', async () => {

@@ -677,6 +677,10 @@ paths:
           description: Unauthorized.
         '403':
           description: Forbidden. Insufficient roles.
+        '503':
+          description: >-
+            Another request kept writing a project under the same id, and nothing was saved. Send
+            the same body again. Body `{ error }`.
 
   /api/projects/{id}:
     get:
@@ -699,7 +703,8 @@ paths:
         '200':
           description: >-
             Project document. It carries `shortCode` and, composed from it, `shortUrl` — the
-            `/s/<code>` link to the project's public page.
+            `/s/<code>` link — plus `shortLinkUrl`, where that link lands, and `shortLinkCustom`,
+            true when staff set that target. All four appear together or not at all.
         '404':
           description: Project not found.
     put:
@@ -895,12 +900,16 @@ paths:
 
   /api/projects/{id}/short-code:
     put:
-      summary: Set a project's short code
+      summary: Set a project's short code or where it lands
       description: >-
-        Set the code in the project's `/s/<code>` link. The code is lowercased. The previous code
-        moves to `legacyShortCodes` and keeps its link record, so a printed copy still resolves.
-        Setting a code back to one of the project's own legacy codes reuses its record. Sending
-        the current code is a no-op. The nightly sync never replaces a code set here.
+        Send `shortCode`, `url`, or both. The code is lowercased. The previous code moves to
+        `legacyShortCodes` and keeps its link record, so a printed copy still resolves. Setting a
+        code back to one of the project's own legacy codes reuses its record. The nightly sync
+        never replaces a code set here. `url` sets where every code the project holds, current
+        and legacy, redirects; `null`, or the public page's own URL, resets it to that page. A new
+        code starts at the project's current target. Sending the current values writes nothing,
+        but still repoints any record left behind by an earlier 503, and writes again any held
+        code whose record is missing, so a retry finishes the job.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -917,15 +926,22 @@ paths:
           application/json:
             schema:
               type: object
-              required: [shortCode]
+              minProperties: 1
               properties:
                 shortCode:
                   type: string
                   pattern: '^[A-Za-z0-9_-]{3,64}$'
                   example: site-c
+                url:
+                  type: string
+                  nullable: true
+                  description: >-
+                    Redirect target, checked against `LINK_ALLOWED_HOSTS` as `POST /api/links`
+                    checks it. `null` means the project's public page.
+                  example: https://www2.gov.bc.ca/gov/content/site-c
       responses:
         '200':
-          description: The code the project now carries.
+          description: The code the project now carries and where it lands.
           content:
             application/json:
               schema:
@@ -933,16 +949,25 @@ paths:
                 properties:
                   shortCode:
                     type: string
+                    nullable: true
                   shortUrl:
                     type: string
+                    nullable: true
                   legacyShortCodes:
                     type: array
                     items:
                       type: string
+                  url:
+                    type: string
+                    description: The effective target, the project page when none is set.
+                  shortLinkCustom:
+                    type: boolean
+                    description: True when a staff-set target is stored, false on the public page.
         '400':
           description: >-
-            `shortCode` is not 3-64 characters of a-z 0-9 _ -, or the project has no Eagle id
-            and so no public page to link to. Body `{ error }`.
+            Neither `shortCode` nor `url` was sent, `shortCode` is not 3-64 characters of
+            a-z 0-9 _ -, `url` failed destination validation, or the project has no Eagle id and so
+            no public page to link to. Body `{ error }`.
         '401':
           description: Unauthorized.
         '403':
@@ -952,7 +977,12 @@ paths:
         '409':
           description: Another link already uses the code. Body `{ error }`.
         '503':
-          description: The project row kept changing under the write. Try again.
+          description: >-
+            Either the project row kept changing under the write, and nothing was saved; or the
+            row was saved, but one of its link records kept changing, a missing link record could
+            not be written again, or another request moved the target twice during the repoint,
+            so some records are not yet at the target. Either way, send the same body again to
+            finish. Body `{ error }`.
 
   /api/projects/{id}/visibility:
     patch:
@@ -2302,7 +2332,10 @@ paths:
       description: |-
         Every short link, newest first. Read-only, so any authenticated caller may list — the rows
         carry no ACL and nothing secret. Each row carries `shortUrl` already composed, so a client
-        never builds it from a second copy of the base URL.
+        never builds it from a second copy of the base URL. A row whose code a project holds also
+        carries `projectId` and `projectRole` when the caller may read that project; edit it
+        through `PUT /api/projects/{id}/short-code`. If the project lookup fails, rows come back
+        without them.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -2358,7 +2391,9 @@ paths:
         '403':
           description: Forbidden. The credential is read-only.
         '409':
-          description: The supplied `code` is already in use.
+          description: >-
+            The supplied `code` is already in use. Body `{ error }`, plus `projectId` when a
+            project holds it and the caller may read that project.
 
   /api/links/{code}:
     put:
@@ -2402,7 +2437,12 @@ paths:
         '404':
           description: Short link not found.
         '409':
-          description: The code is a project's current or legacy short code, so it cannot be moved.
+          description: >-
+            The code is a project's current or legacy short code, so it cannot be moved here.
+            Body `{ error }`, plus `projectId` naming a holder the caller may read, a Track project
+            before its Eagle-only copy and a current holder before a legacy one: change it there.
+            Also sent when the record changed after it was read (a project may have taken the
+            code); nothing was written.
     delete:
       summary: Delete a short link
       description: |-
@@ -2427,7 +2467,10 @@ paths:
         '404':
           description: Short link not found.
         '409':
-          description: The code is a project's current or legacy short code, so it cannot be deleted.
+          description: >-
+            The code is a project's current or legacy short code, so it cannot be deleted.
+            Body `{ error }`, plus `projectId` naming a holder the caller may read, chosen as for
+            PUT. Also sent when the record changed after it was read; nothing was deleted.
 
   /api/me/data:
     get:
@@ -3663,12 +3706,24 @@ components:
           items:
             type: string
           description: >-
-            Codes the project carried before. Each still resolves to the project page.
+            Codes the project carried before. Each still resolves, to the same target as
+            `shortCode`.
         shortUrl:
           type: string
           description: >-
             `shortCode` as a URL, composed per environment. Response only — it is never stored.
           example: https://projects.eao.gov.bc.ca/s/mkq7bt2r
+        shortLinkUrl:
+          type: string
+          description: >-
+            Where the project's codes redirect: the staff-set target, else the project's public
+            page. Present only beside `shortUrl`. Set through `PUT /api/projects/{id}/short-code`;
+            `PUT /api/projects/{id}` ignores it.
+        shortLinkCustom:
+          type: boolean
+          description: >-
+            True when `shortLinkUrl` is a staff-set target, false when it is the public page.
+            Present only beside `shortLinkUrl`. Response only.
     
     ProjectInput:
       type: object
@@ -3840,6 +3895,15 @@ components:
             True when the link is listed to its creator only. It is a listing filter, not access
             control: `GET /s/{code}` stays public, so anyone holding the short URL can still
             follow it.
+        projectId:
+          type: string
+          description: >-
+            Only on a code a project holds, and only when the caller may read that project. That
+            project's id, for `PUT /api/projects/{id}/short-code`.
+        projectRole:
+          type: string
+          enum: [current, legacy]
+          description: Only beside `projectId`. Whether the code is the project's current one.
 
     ShortLinkInput:
       type: object

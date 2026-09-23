@@ -20,7 +20,9 @@
  */
 
 const { readForLevel, systemAccess } = require('../helpers/access-sql');
-const { ensureProjectShortLink, needsSlugMigration } = require('../helpers/short-links');
+const {
+  ensureProjectShortLink, needsSlugMigration, isWrongHostDefault, releaseCreatedCode, repointProjectLinks
+} = require('../helpers/short-links');
 const { writeGuarded } = require('../helpers/etag-write');
 const { TRACK_PRECEDENCE, mergeTrackProject } = require('../merge/project');
 const { trackApiToExtract } = require('../seed/sources');
@@ -28,6 +30,9 @@ const linksRepository = require('../repositories/links');
 const { logger } = require('../utils/logger');
 
 const TRACK_FIELDS = TRACK_PRECEDENCE.map(([target]) => target);
+
+/** Wrong-host link records moved per run, so a bad `LINK_BASE_URL` cannot rewrite every link in one night. */
+const HEAL_CAP = 500;
 
 /**
  * The Track-owned fields whose stored value the feed disagrees with — all scalars, so a plain
@@ -59,6 +64,31 @@ const eagleOf = (row) => (row.sources || {}).eagle || null;
 /** A row with a public page and no code yet, or still on a pre-slug random one. */
 const owesLink = (row) => Boolean(row.eagleId) && (!row.shortCode || needsSlugMigration(row));
 
+/**
+ * The links repository for a dry run: reads go through, writes stay in memory, so the mint and
+ * the heal run the live code and report what a live run would change.
+ */
+function dryLinks(links) {
+  const made = new Map();
+  return {
+    getById: async (code) => made.get(code) || links.getById(code),
+    create: async (record) => {
+      if (made.has(record.id) || await links.getById(record.id)) {
+        throw Object.assign(new Error('Conflict'), { code: 409 });
+      }
+      made.set(record.id, record);
+      return record;
+    },
+    repoint: async (code, url) => {
+      const record = made.get(code) || await links.getById(code);
+      if (!record) return null;
+      const moved = { ...record, url, updatedAt: new Date().toISOString() };
+      made.set(code, moved);
+      return moved;
+    }
+  };
+}
+
 /** Cosmos is private-endpoint-only, so a CLI dry run off-platform has no repository to ask. */
 function projectsRepository() {
   if (process.env.COSMOS_ENDPOINT) return require('../repositories/projects');
@@ -78,37 +108,90 @@ async function syncProjects(apiProjects, opts = {}) {
   const summary = {
     trackProjects: rows.length,
     created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0,
-    shortLinks: 0, failures: 0
+    shortLinks: 0, healed: 0, failures: 0
   };
 
   const repo = deps.projects || projectsRepository();
   if (!repo) return summary;
-  const linkRepos = { links: deps.links || linksRepository, projects: repo };
+  const links = deps.links || linksRepository;
+  const linkRepos = { links: live ? links : dryLinks(links), projects: repo };
   const reread = (id) => () => repo.getById(systemAccess(), id);
   const lost = (id) => (_current, attempt) =>
     logger.warn('[track-projects] project write lost its etag race, rebuilding', { id, attempt });
 
   /** Mints on `project` and says whether its code moved. */
-  const mint = async (project) => {
+  const mint = async (project, claim = null) => {
     const before = project.shortCode;
-    await ensureProjectShortLink(project, linkRepos);
+    await ensureProjectShortLink(project, linkRepos, claim);
     return project.shortCode !== before;
+  };
+
+  /**
+   * `writeGuarded` whose `build(current, mint)` may mint. A slug minted by a try that lost is
+   * released before the retry: the row that won (say a staff-pinned code) may not want it.
+   */
+  const writeMinting = async (id, existing, build) => {
+    const claim = {};
+    const written = await writeGuarded({
+      existing,
+      reread: reread(id),
+      attempt: async (current) => {
+        await releaseCreatedCode(claim, linkRepos);
+        return build(current, (row) => mint(row, claim));
+      },
+      onLost: lost(id)
+    });
+    if (written.status !== 'saved') await releaseCreatedCode(claim, linkRepos);
+    if (written.minted) summary.shortLinks++;
+    return written;
+  };
+
+  let healBudget = HEAL_CAP;
+  let healLeftOver = false;
+  /**
+   * Moves the project's records still on another host's `/p/<eagleId>` onto `LINK_BASE_URL`. The
+   * row is read again before a record moves: a target staff set since the run started wins.
+   */
+  const heal = async (project) => {
+    if (!project.eagleId || project.shortLinkUrl) return;
+    let fresh;
+    let reserved = 0;
+    try {
+      const { repointed } = await repointProjectLinks(project, linkRepos, {
+        only: async (record) => {
+          if (!isWrongHostDefault(project, record.url)) return false;
+          if (fresh === undefined) fresh = await repo.getById(systemAccess(), project.id);
+          if (!fresh || !isWrongHostDefault(fresh, record.url)) return false;
+          if (reserved >= healBudget) {
+            healLeftOver = true;
+            return false;
+          }
+          reserved++;
+          return true;
+        }
+      });
+      healBudget -= repointed.length;
+      summary.healed += repointed.length;
+    } catch (err) {
+      summary.failures++;
+      logger.error(`[track-projects] project ${project.id} link heal failed`, { error: err.message });
+    }
   };
 
   /** Inserts a row this run read as absent. One created behind the run is the next run's. */
   const insert = async (id, row) => {
-    const written = await writeGuarded({
-      existing: null,
-      reread: reread(id),
-      attempt: async (current) => {
-        if (current) return { status: 'exists' };
-        const minted = await mint(row);
-        await repo.upsert(row, { create: true });
-        return { status: 'saved', minted };
-      },
-      onLost: lost(id)
+    if (!live) {
+      if (await mint(row)) summary.shortLinks++;
+      return;
+    }
+    const written = await writeMinting(id, null, async (current, mintRow) => {
+      if (current) return { status: 'exists' };
+      // A copy per try: a lost try's code is released before this one, so it must not ride along.
+      const fresh = { ...row };
+      const minted = await mintRow(fresh);
+      await repo.upsert(fresh, { create: true });
+      return { status: 'saved', minted };
     });
-    if (written.minted) summary.shortLinks++;
     if (written.status !== 'saved') {
       logger.warn('[track-projects] project created behind this run, left for the next', { id });
     }
@@ -155,9 +238,8 @@ async function syncProjects(apiProjects, opts = {}) {
         const merged = mergeTrackProject(track, eagleOf(relink), mergeOpts);
         summary.relinked++;
         rekeyed.add(String(relink.eagleId));
-        if (live) {
-          await insert(id, { ...relink, ...merged, read: relink.read, isPublished: relink.isPublished });
-        }
+        await heal(relink);
+        await insert(id, { ...relink, ...merged, read: relink.read, isPublished: relink.isPublished });
         continue;
       }
 
@@ -168,7 +250,7 @@ async function syncProjects(apiProjects, opts = {}) {
         merged.read = readForLevel(1);
         merged.isPublished = false;
         summary.created++;
-        if (live) await insert(id, merged);
+        await insert(id, merged);
         continue;
       }
 
@@ -180,6 +262,7 @@ async function syncProjects(apiProjects, opts = {}) {
         summary.skippedApiRows++;
         continue;
       }
+      await heal(existing);
 
       const changed = Object.keys(
         trackChanges(existing, mergeTrackProject(track, eagleOf(existing), mergeOpts))
@@ -191,29 +274,24 @@ async function syncProjects(apiProjects, opts = {}) {
       // A mint alone is not an update: it counts in `shortLinks` and leaves `updatedAt` alone.
       if (changed) summary.updated++;
       if (!live) {
-        if (owesLink(existing)) summary.shortLinks++;
+        // A migration with no free slug keeps its code, so only a real move counts.
+        if (owesLink(existing) && await mint({ ...existing })) summary.shortLinks++;
         continue;
       }
 
       // Rebuilt off the row that stored, guarded on its revision: a whole-item write from the
       // run-start snapshot would undo a staff code set while the run was going.
-      const written = await writeGuarded({
-        existing,
-        reread: reread(id),
-        attempt: async (current) => {
-          if (!current) return { status: 'missing' };
-          const changes = trackChanges(current, mergeTrackProject(track, eagleOf(current), mergeOpts));
-          const moved = Object.keys(changes).length > 0;
-          if (!moved && !owesLink(current)) return { status: 'unchanged' };
-          const row = { ...current, ...changes, sources: { ...current.sources, track } };
-          if (moved) row.updatedAt = now;
-          const minted = await mint(row);
-          await repo.upsert(row, { etag: current._etag });
-          return { status: 'saved', minted };
-        },
-        onLost: lost(id)
+      const written = await writeMinting(id, existing, async (current, mintRow) => {
+        if (!current) return { status: 'missing' };
+        const changes = trackChanges(current, mergeTrackProject(track, eagleOf(current), mergeOpts));
+        const moved = Object.keys(changes).length > 0;
+        if (!moved && !owesLink(current)) return { status: 'unchanged' };
+        const row = { ...current, ...changes, sources: { ...current.sources, track } };
+        if (moved) row.updatedAt = now;
+        const minted = await mintRow(row);
+        await repo.upsert(row, { etag: current._etag });
+        return { status: 'saved', minted };
       });
-      if (written.minted) summary.shortLinks++;
       if (written.status === 'conflict' || written.status === 'missing') {
         summary.failures++;
         logger.error(`[track-projects] project ${id} not written`, { status: written.status });
@@ -228,29 +306,25 @@ async function syncProjects(apiProjects, opts = {}) {
     if (!listed.has(id) && project.sourceSystem === 'track') summary.orphaned++;
   }
 
-  // Eagle-only rows are in no Track row, so this is the only nightly pass that mints or migrates
-  // their codes.
+  // Eagle-only rows are in no Track row, so this is the only nightly pass that heals, mints or
+  // migrates their codes.
   for (const row of eagleOnly.values()) {
-    if (!owesLink(row) || rekeyed.has(String(row.eagleId))) continue;
-    if (!live) {
-      summary.shortLinks++;
-      continue;
-    }
+    if (rekeyed.has(String(row.eagleId))) continue;
+    await heal(row);
+    if (!owesLink(row)) continue;
     try {
-      const written = await writeGuarded({
-        existing: row,
-        reread: reread(row.id),
-        attempt: async (current) => {
-          if (!current || !owesLink(current)) return { status: 'skipped' };
-          const next = { ...current };
-          const minted = await mint(next);
-          // A patch of the three fields: nothing else on an Eagle-only row is this job's to write.
-          await repo.patchShortLink(current.id, next, current._etag);
-          return { status: 'saved', minted };
-        },
-        onLost: lost(row.id)
+      if (!live) {
+        if (await mint({ ...row })) summary.shortLinks++;
+        continue;
+      }
+      const written = await writeMinting(row.id, row, async (current, mintRow) => {
+        if (!current || !owesLink(current)) return { status: 'skipped' };
+        const next = { ...current };
+        const minted = await mintRow(next);
+        // A patch of the three fields: nothing else on an Eagle-only row is this job's to write.
+        await repo.patchShortLink(current.id, next, current._etag);
+        return { status: 'saved', minted };
       });
-      if (written.minted) summary.shortLinks++;
       if (written.status === 'conflict') {
         summary.failures++;
         logger.error(`[track-projects] project ${row.id} short code not migrated`, { status: written.status });
@@ -261,7 +335,10 @@ async function syncProjects(apiProjects, opts = {}) {
     }
   }
 
+  if (healLeftOver) {
+    logger.warn('[track-projects] heal cap reached, the rest wait for the next run', { cap: HEAL_CAP });
+  }
   return summary;
 }
 
-module.exports = { trackChanges, syncProjects };
+module.exports = { HEAL_CAP, trackChanges, syncProjects };

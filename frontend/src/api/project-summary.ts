@@ -133,6 +133,10 @@ export interface ProjectFacts {
   shortUrl?: string;
   /** Codes the project used before; each still redirects here. */
   legacyShortCodes?: string[];
+  /** Where the short URL and its old codes lead. */
+  shortLinkUrl?: string;
+  /** True only when staff stored a target other than the project page. */
+  shortLinkCustom?: boolean;
 }
 
 /** A document the summary points at. `datePosted` is an ISO string when the index carried one. */
@@ -332,7 +336,9 @@ export interface TimelineRow {
  */
 export type SummaryReason = 'missing' | 'disabled' | 'error' | 'signin';
 
-export const projectFactsKey = (projectId: string) => ['project-facts', projectId] as const;
+/** Prefix of every project's facts entry. */
+export const PROJECT_FACTS_QUERY = ['project-facts'] as const;
+export const projectFactsKey = (projectId: string) => [...PROJECT_FACTS_QUERY, projectId] as const;
 /** `isStaff` is part of the key: a signed-out session's `signin` answer is not the staff answer. */
 const projectSummaryKey = (projectId: string, isStaff: boolean) =>
   ['project-summary', projectId, isStaff] as const;
@@ -357,11 +363,22 @@ export async function fetchProjectFacts(projectId: string, init?: ApiInit): Prom
 /** What the API accepts once lowercased; mirrors the server's own check. */
 export const SHORT_CODE_PATTERN = /^[a-z0-9_-]{3,64}$/;
 
-export type ShortCodeFields = Required<Pick<ProjectFacts, 'shortCode' | 'shortUrl' | 'legacyShortCodes'>>;
+/** `url` is the effective target: the project page unless staff pointed the link elsewhere. */
+export type ShortCodeFields = Required<
+  Pick<ProjectFacts, 'shortCode' | 'shortUrl' | 'legacyShortCodes' | 'shortLinkCustom'>
+> & {
+  url: string;
+};
+
+/** Only the fields that changed; `url: null` points the link back at the project page. */
+export interface ShortCodeChange {
+  shortCode?: string;
+  url?: string | null;
+}
 
 /** Rejects with the `ApiError` as sent: 400 and 409 are field errors the caller shows inline. */
-export const saveShortCode = (projectId: string, shortCode: string): Promise<ShortCodeFields> =>
-  api<ShortCodeFields>(`/projects/${encodeURIComponent(projectId)}/short-code`, jsonBody({ shortCode }, 'PUT'));
+export const saveShortCode = (projectId: string, change: ShortCodeChange): Promise<ShortCodeFields> =>
+  api<ShortCodeFields>(`/projects/${encodeURIComponent(projectId)}/short-code`, jsonBody(change, 'PUT'));
 
 /** A `{summary: null, reason}` body, which is the switched-off shape `/search/summary` already uses. */
 interface SummaryEnvelope {

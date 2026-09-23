@@ -12,6 +12,10 @@ export interface ShortLink {
   updatedAt: string | null;
   /** Hidden from other users' lists. `/s/:code` still redirects for anyone holding the URL. */
   personal: boolean;
+  /** Set when a project holds the code; the API then refuses repoint and delete here. */
+  projectId?: string;
+  /** `current` is the project's code, `legacy` one it used before. */
+  projectRole?: 'current' | 'legacy';
 }
 
 /** Lowercased both sides: the API stores `createdBy` lowercased, the token claim is not. */

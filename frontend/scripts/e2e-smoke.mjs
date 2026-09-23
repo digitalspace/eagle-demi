@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Smoke test for a built DEMI frontend: every screen and every legacy redirect, Keycloak off.
+// Smoke test for a built DEMI frontend: every screen and every legacy redirect, Keycloak off, plus
+// no sideways scroll on the FITS screens at four widths.
 // Serve the build first (`yarn build && yarn preview --host 127.0.0.1`); this script starts nothing.
 //
 // Usage:
@@ -8,7 +9,10 @@
 // Sign-in, runtime config and every API answer come from the parity harness: env.js is patched in
 // flight and /api/** is served from parity/fixtures/. Nothing on disk is edited.
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
+  FIXTURE_DIR,
   isLocalBase,
   loadChromium,
   READY_SELECTOR,
@@ -44,6 +48,44 @@ export const REDIRECTS = [
   { path: '/profile', to: '/workspace', h1: 'My account' },
   { path: '/api-docs', to: '/api/api-docs' },
   { path: '/no-such-screen', to: '/map', h1: 'Map Explorer' }
+];
+
+// Screens that must not scroll sideways at these widths. The project page also gets a 64-character
+// code with no hyphen to break at, which is what once widened it. `api` swaps the screen's own read
+// for an edited fixture; `panel` must not scroll sideways either, from `panelFrom` px up.
+export const FIT_WIDTHS = [390, 768, 1280, 1440];
+const LONG_CODE = 'sample_project_code_with_no_hyphen_to_break_at_all_sixty_four_ch';
+export const FITS = [
+  {
+    path: '/projects/901',
+    h1: 'Sample Alpha Transmission Line',
+    api: {
+      file: 'projects-901.json',
+      edit: (facts) => ({
+        ...facts,
+        shortCode: LONG_CODE,
+        shortUrl: `https://example.invalid/s/${LONG_CODE}`,
+        legacyShortCodes: ['sample_old_code_that_is_also_long_with_no_hyphen_in_it'],
+        shortLinkUrl: 'https://example.invalid/projects/sample-alpha/a_long_path_segment_with_no_hyphen_at_all',
+        shortLinkCustom: true
+      })
+    }
+  },
+  {
+    path: '/links',
+    h1: 'Short URLs',
+    // Project-held rows carry the pill and the "Edit on the project page" link, the widest cells.
+    api: {
+      file: 'links.json',
+      edit: (rows) => [
+        ...rows,
+        { ...rows[0], id: LONG_CODE, shortUrl: `https://example.invalid/s/${LONG_CODE}`, projectId: '901', projectRole: 'current' },
+        { ...rows[0], id: 'sample-old', shortUrl: 'https://example.invalid/s/sample-old', projectId: '901', projectRole: 'legacy' }
+      ]
+    },
+    panel: '.panel--scroll',
+    panelFrom: 1280
+  }
 ];
 
 function parseArgs(argv) {
@@ -110,6 +152,38 @@ async function check(context, base, entry, timeout) {
   return reasons;
 }
 
+/** Reasons the page scrolls sideways at `width`: the document, or the app's own scrolling <main>. */
+async function checkFit(context, base, entry, width, timeout) {
+  const reasons = [];
+  const page = await context.newPage();
+  try {
+    await page.setViewportSize({ width, height: 900 });
+    if (entry.api) {
+      const body = entry.api.edit(JSON.parse(readFileSync(path.join(FIXTURE_DIR, entry.api.file), 'utf-8')));
+      await page.route((url) => new URL(url).pathname === `/api${entry.path}`, (route) => route.fulfill({ json: body }));
+    }
+    await page.goto(new URL(entry.path, base).toString(), { waitUntil: 'domcontentloaded' });
+    await page
+      .waitForFunction((want) => [...document.querySelectorAll('h1')].some((h) => h.textContent.trim() === want), entry.h1, { timeout })
+      .catch(() => reasons.push(`h1 "${entry.h1}" never rendered`));
+    await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
+    const panel = entry.panel && width >= entry.panelFrom ? entry.panel : null;
+    if (panel && !(await page.$(`${panel} tbody tr`))) reasons.push(`${panel} has no rows to measure`);
+    const wide = await page.evaluate((panel) =>
+      [document.documentElement, document.querySelector('main'), ...(panel ? document.querySelectorAll(panel) : [])]
+        .filter((el) => el && el.scrollWidth > el.clientWidth)
+        .map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${el.className.split(' ').join('.')}` : ''} ${el.scrollWidth}px in ${el.clientWidth}px`),
+      panel
+    );
+    reasons.push(...wide);
+  } catch (e) {
+    reasons.push(String(e.message ?? e));
+  } finally {
+    await page.close();
+  }
+  return reasons;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) return usage();
@@ -149,9 +223,25 @@ async function main() {
     }
   }
 
+  for (const entry of FITS) {
+    for (const width of FIT_WIDTHS) {
+      const reasons = await checkFit(context, args.base, entry, width, args.timeout);
+      const label = `${entry.path} fits ${width}px`;
+      if (reasons.length === 0) {
+        ok++;
+        console.log(`OK   ${label}`);
+      } else {
+        fail++;
+        console.log(`FAIL ${label}: ${reasons.join('; ')}`);
+      }
+    }
+  }
+
   await browser.close();
   if (misses.size) console.log(`no fixture (answered {}): ${[...misses].sort().join(', ')}`);
-  console.log(`smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} ok=${ok} fail=${fail}`);
+  console.log(
+    `smoke: screens=${SCREENS.length} redirects=${REDIRECTS.length} fits=${FITS.length * FIT_WIDTHS.length} ok=${ok} fail=${fail}`
+  );
   process.exit(fail > 0 ? 1 : 0);
 }
 
