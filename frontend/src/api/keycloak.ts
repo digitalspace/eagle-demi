@@ -3,7 +3,7 @@ import { config } from '../config';
 import { boundaryCache } from './boundaries';
 import { clearPendingLasso } from '../map/pending-lasso';
 
-const STAFF_ROLES = ['sysadmin', 'staff', 'demi-admin'];
+export const STAFF_ROLES = ['sysadmin', 'staff', 'demi-admin'];
 
 const KEYCLOAK_BUILTIN_ROLES = ['default-roles-eao-epic', 'offline_access', 'uma_authorization'];
 

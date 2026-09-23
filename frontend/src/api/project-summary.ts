@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ApiError, api, type ApiInit } from './client';
+import { ApiError, api, jsonBody, type ApiInit } from './client';
 import { trackException } from '../telemetry';
 import { EAGLE_OBJECT_ID } from './documents';
 import { listRowsQuery, type ListRow, type WireEnvelope } from './search';
@@ -129,6 +129,10 @@ export interface ProjectFacts {
   decisionDate?: string | null;
   eaCertificate?: string | null;
   phaseHistory?: PhaseHistoryEntry[];
+  shortCode?: string;
+  shortUrl?: string;
+  /** Codes the project used before; each still redirects here. */
+  legacyShortCodes?: string[];
 }
 
 /** A document the summary points at. `datePosted` is an ISO string when the index carried one. */
@@ -328,7 +332,7 @@ export interface TimelineRow {
  */
 export type SummaryReason = 'missing' | 'disabled' | 'error' | 'signin';
 
-const projectFactsKey = (projectId: string) => ['project-facts', projectId] as const;
+export const projectFactsKey = (projectId: string) => ['project-facts', projectId] as const;
 /** `isStaff` is part of the key: a signed-out session's `signin` answer is not the staff answer. */
 const projectSummaryKey = (projectId: string, isStaff: boolean) =>
   ['project-summary', projectId, isStaff] as const;
@@ -349,6 +353,15 @@ export async function fetchProjectFacts(projectId: string, init?: ApiInit): Prom
     throw err;
   }
 }
+
+/** What the API accepts once lowercased; mirrors the server's own check. */
+export const SHORT_CODE_PATTERN = /^[a-z0-9_-]{3,64}$/;
+
+export type ShortCodeFields = Required<Pick<ProjectFacts, 'shortCode' | 'shortUrl' | 'legacyShortCodes'>>;
+
+/** Rejects with the `ApiError` as sent: 400 and 409 are field errors the caller shows inline. */
+export const saveShortCode = (projectId: string, shortCode: string): Promise<ShortCodeFields> =>
+  api<ShortCodeFields>(`/projects/${encodeURIComponent(projectId)}/short-code`, jsonBody({ shortCode }, 'PUT'));
 
 /** A `{summary: null, reason}` body, which is the switched-off shape `/search/summary` already uses. */
 interface SummaryEnvelope {
