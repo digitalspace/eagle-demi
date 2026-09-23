@@ -1,0 +1,8 @@
+{
+  "subscribers": { "confirmed": 0, "unconfirmed": 0, "unsubscribed": 0 },
+  "services": [],
+  "confirmationsByDay": [],
+  "bounces": { "addresses": 0, "hard": 0 },
+  "sending": { "usedThisHour": 0, "hourlyBudget": 500 },
+  "templates": 0
+}

@@ -28,11 +28,11 @@ esac
 
 # frontend/ is a subdir of the eagle-demi repo, unlike eagle-demi-admin where
 # scripts/ sits at repo root — so siblings are two levels up, not one.
-frontend="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-repo_root="$(cd "$frontend/.." && pwd)"
+app="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$app/.." && pwd)"
 kit="${EAGLE_DESIGN_KIT:-$repo_root/../eagle-design-kit}"
 admin="${EAGLE_DEMI_ADMIN:-$repo_root/../eagle-demi-admin}"
-dest="$frontend/src/styles/vendor"
+dest="$app/src/styles/vendor"
 
 # CI checks out only this repo, so siblings never exist there. --check is a
 # local dev convenience in that case, not a gate: skip clean instead of

@@ -65,7 +65,7 @@ jobs:
   test-frontend:
     name: Test & Build Frontend
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -87,13 +87,32 @@ jobs:
       - name: Lint Frontend
         run: yarn --cwd frontend lint
 
-      # This job ran no tests until 2026-08-07, which is how PR #70 bumped jasmine-core across a
-      # major and merged green with its 44 specs never executed. `--no-watch` or `ng test` never exits.
       - name: Test Frontend
-        run: yarn --cwd frontend test --no-watch
+        run: yarn --cwd frontend test
 
       - name: Build Frontend
         run: yarn --cwd frontend build
+
+      # The app never imports Playwright, so it lives outside frontend/ and the smoke finds it through
+      # PLAYWRIGHT_MODULE. Pinned so the gate does not move with each npm release.
+      - name: Install Playwright Chromium
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save --no-package-lock playwright@1.63.0
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps --only-shell chromium
+
+      - name: Smoke test the build
+        working-directory: frontend
+        run: |
+          # vite itself, not `yarn preview`: $! must be the server so kill -0 and the trap reach it.
+          node_modules/.bin/vite preview --host 127.0.0.1 --port 4173 --strictPort &
+          server=$!
+          trap 'kill "$server" 2>/dev/null' EXIT
+          timeout 60 bash -c 'until curl -sf -o /dev/null http://127.0.0.1:4173/; do
+            kill -0 "$1" 2>/dev/null || { echo "vite preview exited before serving" >&2; exit 1; }
+            sleep 1
+          done' _ "$server"
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/pw/node_modules/playwright/index.mjs" \
+            node scripts/e2e-smoke.mjs --base http://127.0.0.1:4173
 
   # A schema-touching PR is the only kind that can take production search down (2026-09-08), and it
   # takes it down at DEPLOY time, long after review. Nothing in the other jobs can see it: they test

@@ -1,0 +1,17 @@
+/* The preview can be a thumbnail, so an opened credit is held inside it. */
+.demi-mini-map {
+  container-type: size;
+  width: 100%;
+  height: 100%;
+}
+
+/* 10px MapLibre margin on each side of the credit. */
+.demi-mini-map .maplibregl-ctrl-attrib.maplibregl-compact-show {
+  max-width: calc(100cqw - 20px);
+}
+
+/* The text scrolls, not the credit, so the "i" pinned to the credit's corner stays in reach. */
+.demi-mini-map .maplibregl-compact-show .maplibregl-ctrl-attrib-inner {
+  max-height: calc(100cqh - 24px);
+  overflow-y: auto;
+}

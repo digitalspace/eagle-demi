@@ -31,10 +31,11 @@ package-lock.json
 
 # Built frontend static & distribution.
 # Anchored to the repo root: an unanchored `public/` also matched frontend/public/, which is
-# Angular's SOURCE asset dir, not build output. That silently untracked the boundary GeoJSON and
+# the frontend's SOURCE asset dir, not build output. That silently untracked the boundary GeoJSON and
 # made `scripts/package-api.py` hard-fail on a clean clone.
 /public/
 dist/
+# Angular build cache. The app is gone; kept so old clones do not show it as untracked.
 .angular/
 
 # Deploy archives

@@ -1,0 +1,50 @@
+/* The base rule the ported stylesheets were written against. eagle-public resets every element to
+   border-box; this app's global sheet does not, so an input or a chip sized at 100% plus padding
+   comes out wider here. The grid restates it inside its own namespace rather than changing the app.
+   Measured: it does not change table row height, which already matches the reference at 32.02 px. */
+.display-grid,
+.display-grid *,
+.display-grid *::before,
+.display-grid *::after {
+  box-sizing: border-box;
+}
+
+/* The footer row is `justify-content: space-between` over two children: the page sizes and the
+   pager. In the reference those two are the row's own children; here an Angular host element sits
+   between, so the row saw one block child, stacked the pair and left the pager hard left. Measured
+   at 1280 wide: footer 81 px tall with the pager at x=303, against the reference's 49 px and the
+   pager at the row's right edge. */
+.display-grid app-grid-footer {
+  display: contents;
+}
+
+/* A file this app opens through a presigned URL is a button, not an anchor; it still reads as the
+   record's name, so it drops the browser's own button chrome: the bevelled border, the grey face,
+   the 6px side padding, the centred text and the smaller form-control font. */
+.display-grid button.display-grid__row-link,
+.display-grid button.display-grid__row-name,
+.display-grid button.display-grid__cell-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* A title with no page to open is a button only so the keyboard can reach the detail sheet. */
+.display-grid button.display-grid__row-name {
+  color: inherit;
+}
+
+/* The shared sheet gives a table cell's name one clipped line through `.display-grid__cell a`,
+   which a button does not match. It also needs its own width: a form control sizes to its content,
+   so a long name ran past the cell instead of ending in an ellipsis. Measured at 1280 wide: the
+   name was 663px in a 251px cell, and the row 35px against the reference's 32.02px. */
+.display-grid__cell button.display-grid__cell-link {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

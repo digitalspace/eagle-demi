@@ -1,0 +1,1259 @@
+/* Layout for Map Explorer. The Angular template carried this as inline styles on every element;
+   the values are the same, moved to classes so the markup stays readable. Typography, pills and
+   row styles come from the shared stylesheet and are not repeated here. */
+
+/* Cluster bubble tints, as on the public site: BC blue light at two strengths. The design tokens
+   carry no translucent blue. */
+:root {
+  --map-cluster-bg: rgba(80, 145, 205, 0.6);
+  --map-cluster-inner-bg: rgba(80, 145, 205, 0.9);
+}
+
+.demi-map-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  background: var(--surface-color-background-white);
+}
+
+/* `data-view` is set only below MAP_NARROW_QUERY (48rem). There the list and the map share one
+   cell under the switch and take turns; the pane out of view is `inert`, and keeps its size and
+   scroll position so the map never re-fits and the list never jumps back to the top. */
+.demi-map-screen[data-view] {
+  --demi-map-views-height: 4rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.demi-map-screen[data-view] > .demi-map-rail,
+.demi-map-screen[data-view] > .demi-map-canvas {
+  grid-area: 2 / 1;
+  min-width: 0;
+  border-right: 0;
+}
+
+.demi-map-screen[data-view] > [inert] {
+  visibility: hidden;
+}
+
+/* MapLibre sets `visibility: visible` on an open attribution, which would show through the list. */
+.demi-map-screen[data-view] > [inert] .maplibregl-ctrl-attrib.maplibregl-compact-show {
+  visibility: hidden;
+}
+
+.demi-map-views {
+  box-sizing: border-box;
+  height: var(--demi-map-views-height);
+  display: flex;
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-views__switch {
+  flex: 1;
+}
+
+/* Inset, because the switch clips its buttons to its rounded border. */
+.demi-map-views__switch button:focus-visible {
+  outline-offset: -4px;
+}
+
+.demi-map-views__switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.demi-map-rail {
+  position: relative;
+  flex: 0 1 20rem;
+  min-width: 15rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-x: hidden;
+  border-right: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-rail__search {
+  position: relative;
+  padding: var(--layout-padding-medium) var(--layout-padding-large);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+/* The icon, the input and the clear button are positioned against this box, not the whole rail. */
+.demi-map-rail__box {
+  position: relative;
+}
+
+.demi-map-rail__magnifier {
+  position: absolute;
+  left: 0.85rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--typography-color-secondary);
+  pointer-events: none;
+}
+
+.demi-map-rail__box > input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.7rem 2.6rem;
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-circular);
+  font: var(--typography-regular-body);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.demi-map-rail__box > button {
+  position: absolute;
+  right: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-secondary);
+  padding: 0.2rem 0.4rem;
+}
+
+.demi-map-rail__filterbar {
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-xsmall);
+  margin-top: var(--layout-margin-small);
+}
+
+.demi-map-rail__filterbar > button:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--surface-color-background-white);
+  color: var(--typography-color-primary);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-small);
+  padding: 0.35rem 0.75rem;
+  font: var(--typography-bold-small-body);
+  cursor: pointer;
+}
+
+.demi-map-rail__filterbar > button + button {
+  background: none;
+  border: none;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-link);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.demi-map-rail__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: var(--layout-margin-xsmall);
+}
+
+.demi-map-rail__chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 0.15rem 0.5rem;
+  border: var(--layout-border-width-small) solid var(--surface-color-primary-default);
+  border-radius: var(--layout-border-radius-circular);
+  font: var(--typography-regular-label);
+  background: var(--surface-color-background-white);
+  color: var(--surface-color-primary-default);
+  cursor: pointer;
+}
+
+.demi-map-rail__chips button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The drawer covers the rail rather than pushing it, so the map never reflows while filtering. */
+.demi-map-filters {
+  position: absolute;
+  inset: 0;
+  z-index: 800;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-color-background-white);
+}
+
+.demi-map-filters__head,
+.demi-map-filters__foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--layout-margin-small);
+}
+
+.demi-map-filters__head {
+  padding: var(--layout-padding-medium) var(--layout-padding-large);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-filters__head h2 {
+  margin: 0;
+}
+
+.demi-map-filters__head button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: var(--typography-bold-body);
+  color: var(--typography-color-secondary);
+}
+
+.demi-map-filters__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.demi-map-filters__body > div {
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-filters__body > div > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--layout-margin-small);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.6rem var(--layout-padding-large);
+  font: inherit;
+}
+
+.demi-map-filters__body > div > div {
+  padding: 0 var(--layout-padding-large) var(--layout-padding-small);
+  max-height: 12rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.demi-map-filters__body input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.35rem 0.6rem;
+  margin-bottom: var(--layout-margin-xsmall);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-small);
+  font: var(--typography-regular-small-body);
+}
+
+.demi-map-filters__body label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font: var(--typography-regular-small-body);
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.demi-map-filters__body label span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.demi-map-filters__foot {
+  padding: var(--layout-padding-small) var(--layout-padding-large);
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-filters__foot > button:first-child {
+  background: none;
+  border: none;
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-link);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.demi-map-filters__foot > button:last-child {
+  background: var(--surface-color-primary-default);
+  color: var(--surface-color-background-white);
+  border: none;
+  border-radius: var(--layout-border-radius-small);
+  padding: 0.5rem 1rem;
+  font: var(--typography-bold-small-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.demi-map-rail__summary {
+  padding: var(--layout-padding-small) var(--layout-padding-large);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--layout-margin-small);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-rail__summary label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-secondary);
+  white-space: nowrap;
+}
+
+.demi-map-rail__summary select {
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-small);
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-primary);
+  padding: 0.3rem 0.55rem;
+  background: var(--surface-color-background-white);
+  cursor: pointer;
+}
+
+.demi-map-rail__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* A re-read behind rows already on screen: they dim rather than being replaced by placeholders. */
+.demi-map-rail__list--refreshing {
+  opacity: 0.6;
+}
+
+.demi-map-rail__list .demi-row--skeleton {
+  cursor: default;
+}
+
+.demi-map-rail__list .demi-row--skeleton .pill {
+  padding: 0;
+}
+
+.demi-map-rail__list .demi-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--layout-padding-small) var(--layout-padding-large);
+  font: inherit;
+  cursor: pointer;
+}
+
+.demi-map-rail__list .demi-row > span:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--layout-margin-small);
+}
+
+.demi-map-rail__list .demi-row > span + span {
+  display: block;
+  margin-top: 2px;
+}
+
+.demi-map-rail__empty {
+  padding: var(--layout-padding-xlarge) var(--layout-padding-large);
+  text-align: center;
+}
+
+.demi-map-rail__empty > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall);
+  justify-content: center;
+  margin-top: var(--layout-margin-small);
+}
+
+.demi-map-rail__empty button,
+.demi-map-rail__more button {
+  background: var(--surface-color-background-white);
+  color: var(--surface-color-primary-default);
+  border: var(--layout-border-width-small) solid var(--surface-color-primary-default);
+  border-radius: var(--layout-border-radius-circular);
+  padding: 0.25rem 0.7rem;
+  font: var(--typography-regular-label);
+  cursor: pointer;
+}
+
+.demi-map-rail__more {
+  padding: var(--layout-padding-medium) var(--layout-padding-large);
+  text-align: center;
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-rail__more button {
+  border-radius: var(--layout-border-radius-small);
+  padding: 0.5rem 1rem;
+  font: var(--typography-bold-small-body);
+}
+
+.demi-map-canvas {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.demi-map {
+  position: absolute;
+  inset: 0;
+}
+
+/* Top-right stack, clear of the zoom and scale controls MapLibre puts bottom-right. */
+.map-controls {
+  position: absolute;
+  top: var(--layout-padding-medium);
+  right: var(--layout-padding-medium);
+  z-index: 800;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* Same chrome as the public site's map buttons: white, rounded, a hairline drawn by the shadow. */
+.map-control-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 44px;
+  background: var(--surface-color-background-white);
+  color: var(--surface-color-primary-default);
+  border: 0;
+  border-radius: 8px;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.1),
+    0 0 0 1px rgba(0, 0, 0, 0.08);
+  padding: 0 0.8rem;
+  font: var(--typography-bold-small-body);
+  cursor: pointer;
+}
+
+.map-control-btn:hover {
+  background: var(--surface-color-background-light-gray);
+}
+
+/* Square icon-only button, the size the public site gives its map buttons. */
+.map-control-btn--icon {
+  justify-content: center;
+  width: 44px;
+  padding: 0;
+}
+
+.map-control-btn--on,
+.map-control-btn--on:hover {
+  background: var(--surface-color-primary-default);
+  color: var(--surface-color-background-white);
+}
+
+/* MapLibre's own zoom, scale and attribution, matched to the buttons above. */
+.maplibregl-ctrl-group {
+  border-radius: 8px;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.1),
+    0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.maplibregl-ctrl-group button {
+  width: 44px;
+  height: 44px;
+}
+
+.maplibregl-ctrl-attrib,
+.maplibregl-ctrl-scale {
+  font-family: var(--typography-font-families-bc-sans), sans-serif;
+}
+
+/* The attribution sets no colour of its own. Both classes, to outrank maplibre's own rule. */
+.maplibregl-ctrl.maplibregl-ctrl-attrib {
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--typography-color-primary);
+}
+
+/* --- Lasso: the save form in the rail, the saved-areas menu in the control stack ----------- */
+
+.demi-lasso-save__slot {
+  margin-top: var(--layout-margin-xsmall);
+}
+
+.demi-lasso-save__open {
+  background: none;
+  border: none;
+  padding: 0;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.demi-lasso-save {
+  display: flex;
+  align-items: stretch;
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-small);
+  overflow: hidden;
+}
+
+.demi-lasso-save input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  font: var(--typography-regular-small-body);
+  background: none;
+}
+
+.demi-lasso-save button {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  border-left: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  padding: 0.25rem 0.6rem;
+  font: var(--typography-bold-small-body);
+  color: var(--surface-color-primary-default);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.demi-lasso-save button[type='button'] {
+  color: var(--typography-color-secondary);
+}
+
+.demi-lasso-save button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.demi-lasso-save__error {
+  color: var(--typography-color-danger);
+  margin-top: 2px;
+}
+
+.demi-saved-areas {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.demi-saved-areas__panel {
+  width: 15rem;
+  box-sizing: border-box;
+  margin-top: 6px;
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  padding: var(--layout-padding-medium);
+}
+
+.demi-saved-areas__panel .micro-label {
+  margin-bottom: var(--layout-margin-xsmall);
+}
+
+.demi-saved-areas__panel p {
+  margin: 0;
+}
+
+.demi-saved-areas__row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 2px 0;
+}
+
+.demi-saved-areas__row button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: var(--typography-regular-small-body);
+  cursor: pointer;
+}
+
+.demi-saved-areas__row button:first-child {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  color: var(--surface-color-primary-default);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.demi-saved-areas__row button:last-child {
+  color: var(--typography-color-secondary);
+}
+
+/* Positioned relative to this, not stacked in flow: a plain block sizes to its widest child, so an
+   in-flow 15rem menu would widen the wrapper and drag the left-aligned button along with it. */
+.map-controls__layers {
+  position: relative;
+}
+
+.map-layers-menu {
+  position: absolute;
+  top: 50px;
+  right: 0;
+  width: 15rem;
+  box-sizing: border-box;
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  padding: var(--layout-padding-medium);
+}
+
+/* Rows sized as on the public site: a 44px target rather than a text-height line. */
+.map-layers-menu__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 0.5rem;
+  border-radius: var(--layout-border-radius-small);
+  font: var(--typography-regular-small-body);
+  cursor: pointer;
+}
+
+.map-layers-menu__row:hover {
+  background: var(--surface-color-background-light-gray);
+}
+
+/* --- Overlays: the Layers panel, wildfire pills and the popups they open ------------------- */
+
+/* Top of the same control stack, so the overlay panel and the base map picker never overlap. */
+.demi-map-layers {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.demi-map-layers__panel {
+  width: 15rem;
+  box-sizing: border-box;
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  padding: var(--layout-padding-medium);
+  text-align: left;
+}
+
+.demi-map-layers__panel > .micro-label {
+  margin-bottom: var(--layout-margin-xsmall);
+}
+
+.demi-map-layers__panel label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font: var(--typography-regular-small-body);
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.demi-map-layers__panel > p {
+  margin: var(--layout-margin-xsmall) 0 0;
+}
+
+.demi-map-layers__species {
+  padding: 2px 0 4px 1.4rem;
+}
+
+.demi-map-layers__species > label {
+  display: block;
+  margin-bottom: 2px;
+  padding: 0;
+}
+
+.demi-map-layers__species input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.35rem 0.6rem;
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-small);
+  font: var(--typography-regular-small-body);
+}
+
+.demi-map-layers__legend {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 4px;
+}
+
+.demi-map-layers__legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* A present observation is a solid danger fill; a confirmed absence is dashed success green, so
+   the two are told apart without relying on the hue. */
+.demi-map-swatch {
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border-radius: 2px;
+}
+
+.demi-map-swatch--present {
+  background: var(--typography-color-danger);
+  opacity: 0.6;
+}
+
+.demi-map-swatch--absent {
+  background: var(--support-border-color-success);
+  background-clip: padding-box;
+  border: 1px dashed var(--support-border-color-success);
+  opacity: 0.45;
+}
+
+.wildfire-marker-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid var(--surface-color-background-white);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+  color: var(--surface-color-background-white);
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.wildfire-marker-pill.fire-of-note {
+  border-color: #ffb703;
+  animation: demi-fire-pulse 1.6s ease-in-out infinite;
+}
+
+/* A fire of note pulses to be looked at, which is exactly wrong while a project is selected. */
+.demi-map--selection .wildfire-marker-pill.fire-of-note {
+  animation: none;
+}
+
+@keyframes demi-fire-pulse {
+  50% {
+    box-shadow: 0 0 0 6px rgba(217, 4, 41, 0.35);
+  }
+}
+
+/* Short motion plays for everyone here, but this pulse never stops, so it still honours the
+   preference. */
+@media (prefers-reduced-motion: reduce) {
+  .wildfire-marker-pill.fire-of-note {
+    animation: none;
+  }
+}
+
+@media (hover: hover) {
+  .wildfire-marker-pill:hover {
+    transform: scale(1.3);
+  }
+}
+
+.demi-fire-card h4,
+.demi-observation-card h4 {
+  margin: 0 0 4px;
+  font: var(--typography-bold-small-body);
+}
+
+.demi-fire-card p,
+.demi-observation-card p {
+  margin: 3px 0;
+  font: var(--typography-regular-small-body);
+}
+
+/* Stacking inside the map screen: pins and clusters 600, wildfire pills 640, the selected pin 650,
+   a hovered pin 660, popups 680, MapLibre's control corners 690, this card 700, the control menus,
+   the opened map credit and the filters drawer 800. Dialogs sit above all of it. */
+.demi-map .maplibregl-popup {
+  z-index: 680;
+}
+
+.demi-map .maplibregl-ctrl-top-left,
+.demi-map .maplibregl-ctrl-top-right,
+.demi-map .maplibregl-ctrl-bottom-left,
+.demi-map .maplibregl-ctrl-bottom-right {
+  z-index: 690;
+}
+
+/* Opened from its "i", the credit is read like a control menu, so it rises over the card too. */
+.demi-map .maplibregl-ctrl-bottom-right:has(> .maplibregl-compact-show) {
+  z-index: 800;
+}
+
+/* Solid there, so the card's text never shows through it. */
+.demi-map .maplibregl-ctrl.maplibregl-ctrl-attrib.maplibregl-compact-show {
+  background: var(--surface-color-background-white);
+}
+
+.demi-map-card {
+  position: absolute;
+  left: var(--layout-padding-medium);
+  bottom: var(--layout-padding-medium);
+  z-index: 700;
+  width: 24rem;
+  max-width: calc(100% - 2rem);
+  /* Tall enough for the description and the fact rows without a scroll on a 900px viewport; the
+     percentage keeps it clear of the controls on a short one. */
+  max-height: min(28rem, 75%);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
+}
+
+.demi-map-card[data-expanded='true'] {
+  max-height: 90%;
+}
+
+/* Narrow enough that the rail leaves the map a sliver: the card floats over the screen rather than
+   over the canvas, which is too thin to hold it. It stops short of the map's icon column, so the
+   base map button, the zoom buttons and the attribution stay in reach, and short of the header, so
+   its close button is never under it on a landscape phone. The labelled control buttons are wider
+   than that column, so they drop under the card here rather than cover its close button. */
+@media (max-width: 48rem) {
+  .map-controls {
+    z-index: 690;
+  }
+
+  .demi-map-card {
+    --demi-map-card-cap: calc(
+      100dvh - var(--app-header-height) - var(--demi-map-views-height, 0px) - 2 *
+        var(--layout-padding-medium)
+    );
+    position: fixed;
+    left: var(--layout-padding-medium);
+    /* The 44px control buttons, their own inset, then the gutter. */
+    right: calc(44px + 2 * var(--layout-padding-medium));
+    width: auto;
+    max-width: none;
+    max-height: min(28rem, 75%, var(--demi-map-card-cap));
+  }
+
+  .demi-map-card[data-expanded='true'] {
+    max-height: var(--demi-map-card-cap);
+  }
+
+  /* Three buttons do not fit on one line of a phone-width card. Two classes: the base rule for the
+     foot comes later in this file. */
+  .demi-map-card .demi-map-card__foot {
+    flex-wrap: wrap;
+  }
+}
+
+/* The card, the panels and the menus all arrive rather than appear. Same easing as the shell rail
+   (src/shell/shell.css), so the whole app moves the one way. */
+.demi-map-card {
+  animation: demi-card-in 180ms cubic-bezier(0.2, 0, 0, 1);
+  transition: max-height 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* `forwards`: the card is still mounted for as long as the exit runs. */
+.demi-map-card--closing {
+  animation: demi-card-out 140ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+@keyframes demi-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes demi-card-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.demi-map-layers__panel,
+.demi-saved-areas__panel,
+.map-layers-menu {
+  animation: demi-panel-in 140ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The drawer comes in over the rail it covers, so it slides from that edge. */
+.demi-map-filters {
+  animation: demi-drawer-in 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes demi-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes demi-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+
+.demi-map-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--layout-margin-small);
+  padding: var(--layout-padding-medium) var(--layout-padding-large) 0;
+}
+
+.demi-map-card__head h2 {
+  margin: 0;
+}
+
+/* Project names run to long hyphenated strings and descriptions carry bare URLs. Left alone those
+   set a minimum width the card cannot shrink below, and the card scrolls sideways. */
+.demi-map-card__head h2,
+.demi-map-card .cell__sub,
+.demi-map-card .cell__title,
+.demi-map-card__facts > div,
+.demi-map-card__twins button,
+.demi-map-card__fields .kv-row__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.demi-map-card__head button {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: var(--typography-bold-body);
+  color: var(--typography-color-secondary);
+  padding: 0 0 0 0.2rem;
+}
+
+.demi-map-card > .cell__sub {
+  padding: 2px var(--layout-padding-large) 0;
+}
+
+.demi-map-card__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--layout-padding-xsmall) var(--layout-padding-large);
+}
+
+.demi-map-card__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-large);
+  margin-top: var(--layout-margin-small);
+}
+
+.demi-map-card__twins {
+  margin-top: var(--layout-margin-small);
+}
+
+.demi-map-card__twins ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.demi-map-card__twins button {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-link);
+  text-decoration: underline;
+  cursor: pointer;
+  text-align: left;
+}
+
+/* The card's field-source tabs and the narrow list/map switch are the same segmented control. */
+.demi-map-card__tabs,
+.demi-map-views__switch {
+  display: flex;
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-small);
+  overflow: hidden;
+}
+
+.demi-map-card__tabs {
+  margin-top: var(--layout-margin-medium);
+}
+
+.demi-map-card__tabs button,
+.demi-map-views__switch button {
+  flex: 1;
+  border: none;
+  padding: 0.4rem 0.6rem;
+  font: var(--typography-bold-small-body);
+  background: var(--surface-color-background-white);
+  color: var(--typography-color-primary);
+  cursor: pointer;
+}
+
+.demi-map-card__tabs button[aria-pressed='true'],
+.demi-map-views__switch button[aria-pressed='true'] {
+  background: var(--surface-color-primary-default);
+  color: var(--surface-color-background-white);
+}
+
+/* One column: the card is 24rem wide, and the shared two-column grid splits a key from its value. */
+.demi-map-card__fields {
+  grid-template-columns: 1fr;
+  margin-top: var(--layout-margin-small);
+}
+
+.demi-map-card__fields .kv-row__key {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--layout-margin-xsmall);
+}
+
+/* Short values sit beside the key; long text stacks under it, full width and left-aligned. */
+.demi-map-card__fields .kv-row--stacked {
+  flex-direction: column;
+  gap: var(--layout-margin-xsmall);
+}
+
+.demi-map-card__fields .kv-row--stacked .kv-row__value {
+  text-align: left;
+  font: var(--typography-regular-small-body);
+  line-height: 1.5;
+}
+
+.demi-map-card__foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--layout-margin-small);
+  flex-wrap: nowrap;
+  padding: var(--layout-padding-small) var(--layout-padding-large) var(--layout-padding-medium);
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.demi-map-card__foot button {
+  border-radius: var(--layout-border-radius-small);
+  padding: 0.55rem 0.9rem;
+  font: var(--typography-bold-small-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.demi-map-card__documents {
+  background: var(--surface-color-primary-default);
+  color: var(--surface-color-background-white);
+  border: none;
+}
+
+.demi-map-card__copy {
+  background: var(--surface-color-background-white);
+  color: var(--surface-color-primary-default);
+  border: var(--layout-border-width-small) solid var(--surface-color-primary-default);
+}
+
+.demi-map-card__toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  color: var(--typography-color-link);
+  border: none;
+  padding: 0.55rem 0;
+}
+
+/* --- Pins and clusters: the public site's map art ----------------------------------------- */
+
+.demi-marker {
+  --map-pin-size: 36px;
+  width: var(--map-pin-size);
+  height: var(--map-pin-size);
+  padding: 0;
+  border: 0;
+  background: none;
+  position: relative;
+  cursor: pointer;
+}
+
+/* The pin is a pseudo-element so hover and selection scale the art, not the button box. */
+.demi-marker::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url('/assets/images/marker-icon-yellow.svg') center / contain no-repeat;
+  transform-origin: bottom center;
+}
+
+/* The public pin carries no status, so a staged project wears the same art in DEMI's danger
+   colour rather than losing the cue. */
+.demi-marker--staged::before {
+  background-image: url('/assets/images/marker-icon-danger.svg');
+}
+
+.demi-marker--selected::before {
+  transform: scale(1.33);
+}
+
+/* One expanding ring on arrival, so the eye is told where the selection landed. The pin is
+   bottom-anchored, so the ring sits on its tip, where the pin meets the ground. */
+.demi-marker--arriving::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0 0 -8px -8px;
+  border: 2px solid var(--theme-primary-gold);
+  border-radius: 50%;
+  animation: demi-marker-pulse 700ms ease-out;
+}
+
+@keyframes demi-marker-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* Copied from the public project map (eagle-public src/app/map/basemaps.css): the name sits on a
+   white chip above the pin. `pointer-events: none` so the chip never swallows a click meant for a
+   pin beside it. */
+.demi-marker__label {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, 4px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  max-width: 14rem;
+  margin-bottom: 4px;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  background: var(--surface-color-background-white);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  color: var(--typography-color-primary);
+  font: var(--typography-regular-small-body);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The selected art grows to 1.45x on hover, so its label sits clear of the grown pin, not on it. */
+.demi-marker--selected .demi-marker__label {
+  margin-bottom: calc(var(--map-pin-size) * 0.45 + 4px);
+}
+
+/* Touch leaves `:hover` stuck on the last thing tapped, so the pointer rules are hover-only. */
+@media (hover: hover) {
+  /* Beats the inline z-index maplibre needs on the marker wrapper, so the named pin rises over its
+     neighbours while staying under the details card at 700. */
+  .maplibregl-marker:has(.demi-marker:hover) {
+    z-index: 660 !important;
+  }
+
+  .demi-marker:hover .demi-marker__label {
+    transform: translate(-50%, 0);
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .demi-marker:hover::before {
+    transform: scale(1.1);
+    filter: drop-shadow(0 0 2px var(--surface-color-primary-default));
+  }
+
+  .demi-marker--selected:hover::before {
+    transform: scale(1.45);
+  }
+
+  .demi-map--selection .demi-marker:not(.demi-marker--selected):hover::before {
+    filter: grayscale(70%) opacity(0.5) drop-shadow(0 0 2px var(--surface-color-primary-default));
+  }
+
+  .demi-cluster:hover {
+    transform: scale(1.1);
+  }
+}
+
+.demi-cluster {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 6px solid var(--map-cluster-bg);
+  border-radius: 50%;
+  background: var(--map-cluster-inner-bg);
+  background-clip: padding-box;
+  color: var(--surface-color-background-white);
+  font-family: var(--typography-font-families-bc-sans), sans-serif;
+  font-weight: 700;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.demi-cluster[data-size='m'] {
+  width: 44px;
+  height: 44px;
+  font-size: 0.875rem;
+}
+
+.demi-cluster[data-size='l'] {
+  width: 54px;
+  height: 54px;
+  border-width: 8px;
+  font-size: 1rem;
+}
+
+/* Runs on insert only, so it plays for a marker the clustering just produced and never for one
+   that was already on screen. */
+.demi-marker,
+.demi-cluster {
+  animation: marker-in 120ms ease-out;
+}
+
+.demi-marker::before,
+.demi-cluster {
+  transition: transform 0.15s ease;
+}
+
+@keyframes marker-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+/* Everything that is not the selection recedes. The fade rides on `filter`, not `opacity`:
+   maplibre writes `opacity` inline on a marker element it is animating. A pin fades its art only,
+   so its hover label stays legible; a cluster's count is text in the button itself, so the one
+   rule takes the digit down with its disc. */
+.demi-map--selection .demi-marker:not(.demi-marker--selected)::before,
+.demi-map--selection .demi-cluster {
+  filter: grayscale(70%) opacity(0.5);
+}

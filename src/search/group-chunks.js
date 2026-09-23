@@ -20,11 +20,10 @@
  * WHAT IT DOES NOT DO: change the ranking. The first chunk of a document sets that document's
  * position, so BM25 order is preserved.
  *
- * DEMI'S OWN FRONTEND IS KEPT WORKING IN THE SAME ROW, not migrated: it reads `snippet` (singular),
- * `pageNumber` and `documentName` off chunk rows (`frontend/src/app/services/
- * registry-state.service.ts:1160-1175`). Those stay, taken from the lead chunk, and `chunkId`
- * carries the id `_id` used to hold. One row, both consumers — the same asymmetry the project-name
- * join already keeps.
+ * DEMI'S OWN FRONTEND READS THE SAME ROW: `documentId`, `documentName` and `passages[]`
+ * (`passageRowFrom` in `frontend/src/search/search-api.ts`). The lead chunk's `snippet` and
+ * `pageNumber` stay on the row too, and `chunkId` carries the id `_id` used to hold. One row, both
+ * consumers — the same asymmetry the project-name join already keeps.
  */
 
 /**

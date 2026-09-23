@@ -1,0 +1,9 @@
+[
+  {
+    "count": 2,
+    "searchResults": [
+      { "id": "000000000000000000000001", "name": "Sample Phase - Application Review" },
+      { "id": "000000000000000000000002", "name": "Sample Phase - Post Decision" }
+    ]
+  }
+]

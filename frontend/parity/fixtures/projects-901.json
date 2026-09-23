@@ -1,0 +1,20 @@
+{
+  "id": "901",
+  "name": "Sample Alpha Transmission Line",
+  "eagleId": "000000000000000000000901",
+  "proponentName": "Sample Energy Co",
+  "region": "Sample Region North",
+  "address": "Sample Town, B.C.",
+  "legislation": "Sample Act 2018",
+  "CEAAInvolvement": "Sample federal coordination",
+  "eacDecision": "Certificate Issued",
+  "currentPhaseName": "000000000000000000000001",
+  "decisionDate": "2014-10-14T00:00:00.000Z",
+  "eaCertificate": "E14-02",
+  "phaseHistory": [
+    "Sample Pre-Application",
+    "Sample Application Review",
+    "000000000000000000000001",
+    { "name": "Sample Effects Assessment", "date": "2013-05-21T00:00:00.000Z" }
+  ]
+}

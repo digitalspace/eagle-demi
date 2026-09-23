@@ -1,0 +1,98 @@
+[
+  {
+    "count": 7,
+    "meta": [],
+    "searchResults": [
+      {
+        "id": "901",
+        "name": "Sample Alpha Transmission Line",
+        "region": "Lower Mainland",
+        "sector": "Energy Transmission",
+        "status": "Under review",
+        "description": "A sample transmission corridor used to photograph this screen.",
+        "centroid": [-123.1, 49.3],
+        "isPublished": true,
+        "eaCertificate": "E98-05",
+        "proponent": { "name": "Sample Energy Co" },
+        "metadata": {
+          "trackAttributes": {
+            "track_project_id": "901",
+            "lead_agency": "BC Environmental Assessment Office",
+            "project_state_name": "Under review"
+          },
+          "eagleAttributes": {
+            "_id": "000000000000000000000901",
+            "responsibleEPD": "Sample Assessment Director",
+            "locationDescription": "Lower Mainland"
+          }
+        }
+      },
+      {
+        "id": "902",
+        "name": "Sample Beta Quarry",
+        "region": "Lower Mainland",
+        "sector": "Mines and Minerals",
+        "status": "Pre-application",
+        "description": "Sits beside Alpha, so the two share a bubble at the province-wide view.",
+        "centroid": [-123.16, 49.34],
+        "isPublished": true,
+        "proponent": { "name": "Sample Aggregates Ltd" },
+        "metadata": {
+          "trackAttributes": { "track_project_id": "902", "project_state_name": "Pre-application" },
+          "eagleAttributes": { "_id": "000000000000000000000902" }
+        }
+      },
+      {
+        "id": "903",
+        "name": "Sample Delta Pipeline",
+        "description": "A sample pipeline in the Peace region, carried here so the selected card shows a real paragraph.",
+        "region": "Peace",
+        "sector": "Energy Transmission",
+        "status": "Under review",
+        "centroid": [-120.5, 55.8],
+        "isPublished": true,
+        "proponent": { "name": "Sample Pipelines Inc" }
+      },
+      {
+        "id": "904",
+        "name": "sample gamma wind farm",
+        "region": "Skeena",
+        "sector": "Wind Power",
+        "status": "Pre-application",
+        "centroid": [-127.6, 53.9],
+        "isPublished": false,
+        "proponent": { "name": "Sample Wind Partners" }
+      },
+      {
+        "id": "905",
+        "name": "Sample Epsilon Terminal",
+        "region": "Vancouver Island",
+        "sector": "Marine Port",
+        "status": "Certified",
+        "centroid": [-125.5, 49.9],
+        "isPublished": true,
+        "proponent": { "name": "Sample Marine Co" }
+      },
+      {
+        "id": "906",
+        "name": "Sample Zeta Mine",
+        "region": "Okanagan",
+        "sector": "Mines and Minerals",
+        "status": "Certified",
+        "centroid": [-118.2, 50.6],
+        "isPublished": true,
+        "proponent": { "name": "Sample Minerals Co" }
+      },
+      {
+        "id": "907",
+        "name": "Sample Eta Resort",
+        "region": "Cariboo",
+        "sector": "Tourist Destination Resorts",
+        "status": "Under review",
+        "centroid": [-121.9, 52.1],
+        "isPublished": true,
+        "proponent": { "name": "Sample Resorts Ltd" }
+      }
+    ]
+  }
+]

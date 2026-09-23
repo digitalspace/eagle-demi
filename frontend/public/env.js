@@ -17,7 +17,7 @@
   window.__env.API_PATH = '/api';
   window.__env.DEV_PROXY_TARGET = 'https://demi-apim-test.azure-api.net';
 
-  // eagle-notify staff API. Relative locally (dev proxy, see proxy.conf.js); deploy rewrites it
+  // eagle-notify staff API. Relative locally (dev proxy, see vite.config.ts); deploy rewrites it
   // to the notify-api host, whose CORS list must carry this site's origin.
   window.__env.NOTIFY_API_LOCATION = '/notify-api';
   window.__env.DEV_NOTIFY_PROXY_TARGET = 'https://notify-api-test.azurewebsites.net';

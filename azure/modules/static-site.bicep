@@ -1,4 +1,4 @@
-// Storage static website — the origin for the DEMI Angular frontend.
+// Storage static website — the origin for the DEMI frontend.
 //
 // Replaces `demi-frontend-<env>` (Linux App Service + a dedicated B1 plan running
 // `npx pm2 serve --spa`). The bundle is static files; the plan was the only compute it ever paid

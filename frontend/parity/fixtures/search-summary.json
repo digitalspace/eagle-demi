@@ -1,0 +1,34 @@
+{
+  "summary": "Watercourse crossings on the sampled projects are built to an approved crossing plan, with quarterly monitoring reported to the office. Two of the sampled records also require an offsetting plan before any in-water work begins.",
+  "citations": [
+    {
+      "n": 1,
+      "chunkId": "doc-sched-b::p4::c2",
+      "documentId": "doc-sched-b",
+      "projectId": "901",
+      "pageNumber": 4,
+      "documentName": "Sample Schedule B - Conditions",
+      "projectName": "Sample Alpha Transmission Line"
+    },
+    {
+      "n": 2,
+      "chunkId": "doc-cert::p2::c1",
+      "documentId": "doc-cert",
+      "projectId": "901",
+      "pageNumber": 2,
+      "documentName": "Sample Certificate E14-02",
+      "projectName": "Sample Alpha Transmission Line"
+    },
+    {
+      "n": 3,
+      "chunkId": "doc-assess::p31::c4",
+      "documentId": "doc-assess",
+      "projectId": "902",
+      "pageNumber": 31,
+      "documentName": "Sample Assessment Report",
+      "projectName": "Sample Beta Quarry"
+    }
+  ],
+  "estimatedCostCad": 0.0123,
+  "usage": { "prompt_tokens": 9000, "completion_tokens": 1200 }
+}

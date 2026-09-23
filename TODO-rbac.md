@@ -157,25 +157,26 @@ Acceptance
 
 Branch: `feat/entra-msal-frontend`. Follows P4-3.
 
-- [ ] `frontend/package.json:25` — replace the `keycloak-js` dependency with `@azure/msal-browser`.
-- [ ] `frontend/src/app/services/registry-state.service.ts:823-831` — replace the Keycloak
-      `init({ onLoad: 'check-sso', pkceMethod: 'S256', silentCheckSsoRedirectUri })` with MSAL
-      `initialize()` + `ssoSilent()`; keep `authSettled()` (`:708`) as the single barrier so data
-      loading still waits for auth.
-- [ ] `:632-695` — the `window.fetch` patch: `this.keycloak.token` (`:659`) becomes an MSAL
-      `acquireTokenSilent` result and `updateToken(30)` (`:671`) becomes that call's own refresh.
-      Keep `isApiUrl` (`:617`) exactly as is — it is the guard that stops the bearer reaching the
-      DataBC WFS.
-- [ ] `loginKeycloak()` (`:866`) and `logout()` (`:1964`) move to MSAL equivalents; method names may
-      stay so templates are untouched.
-- [ ] `visLevel` still comes from `/api/me` — no claim parsing in the browser.
+- [ ] `frontend/package.json:23` — replace the `keycloak-js` dependency with `@azure/msal-browser`.
+- [ ] `frontend/src/api/keycloak.ts` `initKeycloak()` (`:120`) — replace the Keycloak
+      `init({ onLoad, pkceMethod: 'S256', silentCheckSsoRedirectUri })` (`:163`) with MSAL
+      `initialize()` + `ssoSilent()`. `SessionProvider` (`frontend/src/session/SessionProvider.tsx:57`)
+      awaits it before `/me`; keep that the single barrier so data loading still waits for auth.
+- [ ] `getToken()` (`:73`) becomes an MSAL `acquireTokenSilent` result, and `refreshToken()`
+      (`:281`) plus `keepTokenFresh()` (`:299`) become that call's own refresh. The bearer is
+      attached in `frontend/src/api/client.ts` `api()` (`:109`); keep `isAllowedUrl` (`:86`)
+      exactly as is — it is the guard that stops the bearer reaching the DataBC WFS.
+- [ ] `login()` (`:212`) and `logout()` (`:253`) move to MSAL equivalents; names may stay so
+      callers are untouched.
+- [ ] Access level still comes from `/api/me` (`SessionProvider.tsx:36`) — no claim parsing in the
+      browser.
 
-Tests — `frontend/src/app/services/registry-state.service.spec.ts`
+Tests — these React tests already cover the behaviour and must pass unchanged after the port
 
-- [ ] `'the interceptor attaches no token to a third-party URL'` calls the patched `fetch` with a
-      DataBC URL and asserts no Authorization header. Fails on a regression of the `isApiUrl` guard.
-- [ ] `'a 401 triggers exactly one silent refresh for concurrent calls'` — the `refreshPromise`
-      single-flight (`:632`, `:670-690`) must survive the port. Fails if each call refreshes.
+- [ ] `frontend/src/api/client.test.ts` 'bearer attachment' block, e.g. 'withholds the token from
+      another origin even with the notify base opted in'. Fails on a regression of `isAllowedUrl`.
+- [ ] `frontend/src/api/keycloak.test.ts` 'sends one request when two callers ask at once' — the
+      `refreshing` single-flight must survive the port. Fails if each call refreshes.
 
 Acceptance
 

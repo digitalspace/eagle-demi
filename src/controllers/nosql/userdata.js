@@ -25,8 +25,8 @@ const SLUG = /^[a-z0-9-]{1,80}$/;
 const PARAMS = /^[A-Za-z0-9_.%&=+,:*-]*$/;
 
 const PER_PAGE_OPTIONS = [6, 12, 24];
-/** The SCREENS keys in frontend/src/app/shell/screens.ts, plus the `/developers` path that one
- * of them routes to — a landing preference is only ever one of these. */
+/** The Angular app's screen keys (0038d3e) plus the `/developers` path. The frontend now offers
+ * only `LANDING_OPTIONS` in frontend/src/shell/prefs.ts, every one of them in this list. */
 const LANDING_SCREENS = [
   'map', 'search', 'summary', 'notify', 'links', 'rbac', 'developers', 'api', 'keys',
   'profile', 'sessions'

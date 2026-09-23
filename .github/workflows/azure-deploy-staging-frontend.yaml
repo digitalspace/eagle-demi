@@ -1,4 +1,4 @@
-# Publish the DEMI Angular bundle to the `$web` container of the staging static-website storage
+# Publish the DEMI React bundle to the `$web` container of the staging static-website storage
 # account, which is the Front Door origin. Application only. Details: wiki CI-Workflows.
 
 name: Deploy DEMI Frontend to Azure staging
@@ -48,7 +48,7 @@ jobs:
         run: corepack enable
 
       # 24 to match pr.yaml, so the build that deploys runs on the runtime the build that gated it
-      # ran on. Angular 22 floors Node at ^22.22.3 || ^24.15.0.
+      # ran on. Vite 8 needs Node ^20.19.0 || >=22.12.0.
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
