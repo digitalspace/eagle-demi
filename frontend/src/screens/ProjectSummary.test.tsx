@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { ProjectSummary } from './ProjectSummary';
 import { ANONYMOUS_SESSION, SessionContext, type Session } from '../session/session';
-import { queryWrapper, withQueryClient } from '../test-query';
+import { queryWrapper, testQueryClient, withQueryClient } from '../test-query';
+import { LINKS_QUERY } from '../api/links';
 import { json } from '../test-http';
 import { localIso } from '../test-dates';
 
@@ -26,6 +27,15 @@ const FACTS = {
   decisionDate: localIso(2014, 9, 14),
   eaCertificate: 'E14-02',
   phaseHistory: ['Pre-Application', 'Post Decision - Construction'],
+  shortCode: 'site-c',
+  shortUrl: 'https://projects.eao.gov.bc.ca/s/site-c',
+  legacyShortCodes: [],
+};
+
+const SAVED_CODE = {
+  shortCode: 'site-c-dam',
+  shortUrl: 'https://projects.eao.gov.bc.ca/s/site-c-dam',
+  legacyShortCodes: ['site-c'],
 };
 
 const LIST_ROWS = [{ id: '5d3f6c7eda7a384218296035', name: 'Post Decision - Construction' }];
@@ -91,18 +101,26 @@ const ORGANIZATIONS = [{ id: 'org1', name: 'Sample Nation', address1: '1 Main St
 
 const STAFF: Partial<Session> = { authenticated: true, isStaff: true, settled: true };
 
+/** A staffer holding a write role, which is who may change a project's short URL. */
+const EDITOR: Partial<Session> = { ...STAFF, roles: ['staff'] };
+
 interface Stubs {
   facts?: Response;
   summary?: Response;
+  /** A promise that is never settled holds the PUT open. */
+  shortCode?: Response | Promise<Response>;
 }
 
-function stub({ facts, summary }: Stubs = {}) {
+function stub({ facts, summary, shortCode }: Stubs = {}) {
   const fetchMock = vi.fn((input: unknown, _init?: RequestInit) => {
     const url = String(input);
     if (url.includes('/summary')) return Promise.resolve(summary ?? json(SUMMARY));
+    if (url.includes('/short-code')) return Promise.resolve(shortCode ?? json(SAVED_CODE));
     if (url.includes('dataset=List')) return Promise.resolve(json([{ searchResults: LIST_ROWS }]));
     if (url.includes('dataset=Organization')) return Promise.resolve(json([{ searchResults: ORGANIZATIONS }]));
-    if (url.includes(`/projects/${PROJECT_ID}`)) return Promise.resolve(facts ?? json(FACTS));
+    if (url.includes(`/projects/${PROJECT_ID}`) || url.includes(`/projects/${FACTS.eagleId}`)) {
+      return Promise.resolve(facts ?? json(FACTS));
+    }
     return Promise.resolve(json({}));
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -449,5 +467,320 @@ describe('ProjectSummary', () => {
     renderProject();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the project (HTTP 500).');
+  });
+});
+
+describe('ProjectSummary short URL', () => {
+  const editButton = () => screen.findByRole('button', { name: 'Edit short URL' });
+  const codeInput = () => screen.getByRole('textbox', { name: 'Short URL' });
+  const puts = (fetchMock: ReturnType<typeof stub>) =>
+    fetchMock.mock.calls.filter(([input]) => String(input).includes('/short-code'));
+
+  async function openEditor(ui = () => renderProject(EDITOR)) {
+    const user = userEvent.setup();
+    ui();
+    await user.click(await editButton());
+    return user;
+  }
+
+  async function typeCode(user: ReturnType<typeof userEvent.setup>, code: string) {
+    await user.clear(codeInput());
+    await user.type(codeInput(), code);
+  }
+
+  async function saveCode(user: ReturnType<typeof userEvent.setup>, code: string) {
+    await typeCode(user, code);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it('shows the short URL and copies it', async () => {
+    stub();
+    const user = userEvent.setup();
+    renderProject();
+
+    const link = await screen.findByRole('link', { name: 'projects.eao.gov.bc.ca/s/site-c' });
+    expect(link).toHaveAttribute('href', FACTS.shortUrl);
+    await user.click(screen.getByRole('button', { name: 'Copy short URL' }));
+
+    // userEvent installs its own clipboard, so this reads back what the screen actually wrote.
+    await expect(navigator.clipboard.readText()).resolves.toBe(FACTS.shortUrl);
+    expect(screen.getByRole('status')).toHaveTextContent('Copied');
+  });
+
+  it('clears the copy confirmation after two seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stub();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderProject();
+
+    await user.click(await screen.findByRole('button', { name: 'Copy short URL' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Copied');
+    act(() => vi.advanceTimersByTime(2000));
+
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
+
+  it('lists the old codes that still redirect', async () => {
+    stub({ facts: json({ ...FACTS, legacyShortCodes: ['sitec', 'site-c-old'] }) });
+
+    renderProject();
+
+    expect(
+      await screen.findByText('Also works: projects.eao.gov.bc.ca/s/sitec, projects.eao.gov.bc.ca/s/site-c-old'),
+    ).toBeInTheDocument();
+  });
+
+  it('builds nothing from a short URL that does not end in the code', async () => {
+    const shortUrl = 'https://projects.eao.gov.bc.ca/s/other';
+    stub({ facts: json({ ...FACTS, shortUrl, legacyShortCodes: ['sitec'] }) });
+
+    renderProject();
+
+    expect(await screen.findByRole('link', { name: shortUrl })).toHaveAttribute('href', shortUrl);
+    expect(screen.getByText('Also works: sitec')).toBeInTheDocument();
+  });
+
+  it('renders no short URL block for a project without a code', async () => {
+    const { shortCode: _code, shortUrl: _url, ...withoutCode } = FACTS;
+    stub({ facts: json(withoutCode) });
+
+    renderProject(EDITOR);
+
+    await screen.findByRole('heading', { level: 1, name: FACTS.name });
+    expect(screen.queryByRole('button', { name: 'Copy short URL' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit short URL' })).not.toBeInTheDocument();
+  });
+
+  it('hides Edit from a staffer without a write role', async () => {
+    stub();
+
+    renderProject({ ...STAFF, roles: ['compliance'] });
+
+    await screen.findByRole('link', { name: 'projects.eao.gov.bc.ca/s/site-c' });
+    expect(screen.queryByRole('button', { name: 'Edit short URL' })).not.toBeInTheDocument();
+  });
+
+  it('hides Edit from a write role the session does not treat as staff', async () => {
+    stub();
+
+    renderProject({ authenticated: true, settled: true, isStaff: false, roles: ['staff'] });
+
+    await screen.findByRole('link', { name: 'projects.eao.gov.bc.ca/s/site-c' });
+    expect(screen.queryByRole('button', { name: 'Edit short URL' })).not.toBeInTheDocument();
+  });
+
+  it('hides Edit from the machine write role', async () => {
+    stub();
+
+    renderProject({ ...STAFF, roles: ['demi-service-write'] });
+
+    await screen.findByRole('link', { name: 'projects.eao.gov.bc.ca/s/site-c' });
+    expect(screen.queryByRole('button', { name: 'Edit short URL' })).not.toBeInTheDocument();
+  });
+
+  it('sends the PUT to the DEMI id when the page was opened by Eagle ObjectId', async () => {
+    const fetchMock = stub();
+    const user = await openEditor(() => renderProject(EDITOR, '/projects/:id', `/projects/${FACTS.eagleId}`));
+
+    await saveCode(user, 'site-c-dam');
+
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    expect(String(puts(fetchMock)[0][0])).toMatch(new RegExp(`/projects/${PROJECT_ID}/short-code$`));
+  });
+
+  it('leaves focus where it was on the first render', async () => {
+    stub();
+
+    renderProject(EDITOR);
+
+    await editButton();
+    expect(document.body).toHaveFocus();
+  });
+
+  it('opens the editor on the current code behind the fixed host prefix', async () => {
+    stub();
+
+    await openEditor();
+
+    expect(codeInput()).toHaveValue('site-c');
+    expect(codeInput()).toHaveFocus();
+    expect(codeInput()).toHaveAccessibleDescription(/projects\.eao\.gov\.bc\.ca\/s\/.*old link will keep working/);
+  });
+
+  it('lowercases the code as it is typed', async () => {
+    stub();
+    const user = await openEditor();
+
+    await typeCode(user, 'Site-C-Dam');
+
+    expect(codeInput()).toHaveValue('site-c-dam');
+  });
+
+  it('flags a changed code the API would refuse and will not save it', async () => {
+    const fetchMock = stub();
+    const user = await openEditor();
+
+    await typeCode(user, 'a b');
+    expect(codeInput()).toHaveAttribute('aria-invalid', 'true');
+    expect(codeInput()).toHaveAccessibleDescription(/Use 3 to 64 characters/);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(puts(fetchMock)).toHaveLength(0);
+  });
+
+  it('holds the error for an emptied field until it loses focus', async () => {
+    stub();
+    const user = await openEditor();
+
+    await user.clear(codeInput());
+    expect(codeInput()).not.toHaveAttribute('aria-invalid');
+    await user.tab();
+
+    expect(codeInput()).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('sends nothing when Enter submits an invalid code', async () => {
+    const fetchMock = stub();
+    const user = await openEditor();
+
+    await typeCode(user, 'ab{Enter}');
+
+    expect(codeInput()).toHaveAttribute('aria-invalid', 'true');
+    expect(puts(fetchMock)).toHaveLength(0);
+  });
+
+  it('saves the new code, shows the new URL and returns focus to Edit', async () => {
+    const fetchMock = stub();
+    const user = await openEditor();
+
+    await saveCode(user, 'site-c-dam');
+
+    expect(await screen.findByRole('link', { name: 'projects.eao.gov.bc.ca/s/site-c-dam' })).toBeInTheDocument();
+    expect(screen.getByText('Also works: projects.eao.gov.bc.ca/s/site-c')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit short URL' })).toHaveFocus());
+    const [[, init]] = puts(fetchMock);
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({ shortCode: 'site-c-dam' });
+  });
+
+  it('marks the short links list stale after a save', async () => {
+    stub();
+    const client = testQueryClient();
+    client.setQueryData(LINKS_QUERY, []);
+    const Wrapper = queryWrapper(client);
+    const user = await openEditor(() =>
+      render(<Wrapper>{screenTree(EDITOR, '/projects/:id', `/projects/${PROJECT_ID}`)}</Wrapper>),
+    );
+
+    await saveCode(user, 'site-c-dam');
+
+    await waitFor(() => expect(client.getQueryState(LINKS_QUERY)?.isInvalidated).toBe(true));
+  });
+
+  it('shows Saving and locks both buttons while the request is open', async () => {
+    stub({ shortCode: new Promise<Response>(() => undefined) });
+    const user = await openEditor();
+
+    await saveCode(user, 'site-c-dam');
+
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    await user.click(codeInput());
+    await user.keyboard('{Escape}');
+    expect(codeInput()).toBeInTheDocument();
+  });
+
+  // fireEvent: a native double submit bypasses the disabled button, which userEvent always respects.
+  it('sends one request for a double submit', async () => {
+    const fetchMock = stub({ shortCode: new Promise<Response>(() => undefined) });
+    const user = await openEditor();
+    await typeCode(user, 'site-c-dam');
+    const form = codeInput().closest('form') as HTMLFormElement;
+
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(puts(fetchMock)).toHaveLength(1);
+  });
+
+  it('says inline when the code is already taken', async () => {
+    stub({ shortCode: json({ error: 'Code already in use' }, 409) });
+    const user = await openEditor();
+
+    await saveCode(user, 'taken-code');
+
+    await waitFor(() => expect(codeInput()).toHaveAccessibleDescription(/That short URL is taken\./));
+    expect(codeInput()).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('shows the server text inline for a refused code', async () => {
+    stub({ shortCode: json({ error: 'That code is reserved' }, 400) });
+    const user = await openEditor();
+
+    await saveCode(user, 'admin');
+
+    await waitFor(() => expect(codeInput()).toHaveAccessibleDescription(/That code is reserved/));
+  });
+
+  it('puts a 400 about the project in the callout, not on the field', async () => {
+    stub({ shortCode: json({ error: 'An Eagle id is needed before a short code can be set' }, 400) });
+    const user = await openEditor();
+
+    await saveCode(user, 'site-c-dam');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('An Eagle id is needed before a short code can be set');
+    expect(codeInput()).not.toHaveAttribute('aria-invalid');
+  });
+
+  it.each([
+    [403, { error: 'Forbidden' }, 'Forbidden'],
+    [503, { error: 'Write conflict, try again' }, 'Write conflict, try again'],
+    [404, { error: 'Project not found' }, 'Project not found'],
+    [404, { message: 'Project not found' }, 'Project not found'],
+  ])('puts a %i answer in the callout and keeps the editor open (%o)', async (status, body, text) => {
+    stub({ shortCode: json(body, status) });
+    const user = await openEditor();
+
+    await saveCode(user, 'site-c-dam');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(text);
+    expect(codeInput()).not.toHaveAttribute('aria-invalid');
+    expect(codeInput()).toHaveValue('site-c-dam');
+  });
+
+  it('clears the callout on Cancel', async () => {
+    stub({ shortCode: json({ error: 'Forbidden' }, 403) });
+    const user = await openEditor();
+    await saveCode(user, 'site-c-dam');
+    await screen.findByRole('alert');
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('cancels without saving and returns focus to Edit', async () => {
+    const fetchMock = stub();
+    const user = await openEditor();
+
+    await user.type(codeInput(), '-x');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit short URL' })).toHaveFocus());
+    expect(screen.getByRole('link', { name: 'projects.eao.gov.bc.ca/s/site-c' })).toBeInTheDocument();
+    expect(puts(fetchMock)).toHaveLength(0);
+  });
+
+  it('cancels on Escape', async () => {
+    const fetchMock = stub();
+    const user = await openEditor();
+
+    await user.type(codeInput(), '-x{Escape}');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit short URL' })).toHaveFocus());
+    expect(screen.queryByRole('textbox', { name: 'Short URL' })).not.toBeInTheDocument();
+    expect(puts(fetchMock)).toHaveLength(0);
   });
 });

@@ -43,6 +43,10 @@ module.exports = {
   phases: { defaultVis: 4, maxVis: 4 },
   // The project's own short link code. The public page it points at is public, so the code is.
   shortCode: { defaultVis: 4, maxVis: 4 },
+  // Earlier codes: printed somewhere, still resolving, so as public as the current one.
+  legacyShortCodes: { defaultVis: 4, maxVis: 4 },
+  // 'name' | 'random' | 'staff' — which writer set the code. Bookkeeping for the sync, staff only.
+  shortCodeSource: { defaultVis: 2, maxVis: 2 },
 
   // Eagle-only EA process record.
   eaStatus: { defaultVis: 4, maxVis: 4 },

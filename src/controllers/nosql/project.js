@@ -26,7 +26,10 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
-const { shortUrlFor } = require('../../helpers/short-links');
+const links = require('../../repositories/links');
+const {
+  CUSTOM_CODE, shortUrlFor, claimCode, carryShortLink
+} = require('../../helpers/short-links');
 const { writeGuarded } = require('../../helpers/etag-write');
 const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
@@ -204,8 +207,10 @@ exports.createProject = async (req, res) => {
     // nothing reaches level 2 or above by being created.
     const read = readForLevel(1);
     const now = new Date().toISOString();
+    // The upsert replaces a row already under this id; its codes are printed, so they carry over.
+    const prior = await projects.getById(systemAccess(), String(trackProjectId));
 
-    const saved = await projects.upsert({
+    const saved = await projects.upsert(carryShortLink({
       id: String(trackProjectId),
       trackProjectId: Number(trackProjectId),
       eagleId: null,
@@ -237,7 +242,7 @@ exports.createProject = async (req, res) => {
       sources: {},
       createdAt: now,
       updatedAt: now
-    });
+    }, prior));
 
     auditEvent(req, {
       action: 'project.create',
@@ -281,6 +286,9 @@ exports.updateProject = async (req, res) => {
       // be able to send them back: an old `eaglePushedAt` makes every later push read as stale, and
       // clearing `cascadePendingAt` loses a cascade the push recorded as still owed.
       eaglePushedAt: _ignoredPushedAt, cascadePendingAt: _ignoredCascadePending,
+      // The code has a link record behind it, so only `PUT /projects/:id/short-code` moves it.
+      shortCode: _ignoredShortCode, shortCodeSource: _ignoredShortCodeSource,
+      legacyShortCodes: _ignoredLegacyShortCodes,
       _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
       _ts: _ignoredTs, _etag: _ignoredEtag, sources: _ignoredSources,
       ...changes
@@ -549,7 +557,7 @@ function mergeEaglePush(doc, existing) {
   if (existing && existing.vis) merged.vis = existing.vis;
   // And the same for the code: dropping it would leave a printed link pointing at nothing once
   // the nightly sync minted a second one.
-  if (existing && existing.shortCode) merged.shortCode = existing.shortCode;
+  carryShortLink(merged, existing);
   // The merge rebuilds the record from the push, so without this a retry of a push whose cascade
   // failed would clear the marker saying that cascade is still owed.
   if (existing && existing.cascadePendingAt) merged.cascadePendingAt = existing.cascadePendingAt;
@@ -684,6 +692,86 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
     if (err.status === 400) return res.status(400).json({ error: err.message });
     return serverError(res, err, 'project controller failed');
   }
+}
+
+/**
+ * Staff set a project's short code. The previous code moves to `legacyShortCodes` and its link
+ * record stays, so a printed copy still resolves; moving back to one of those reuses its record.
+ * `shortCodeSource: 'staff'` keeps the nightly sync off it.
+ */
+exports.setShortCode = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const raw = (req.body || {}).shortCode;
+    const code = typeof raw === 'string' ? raw.toLowerCase() : '';
+    if (!CUSTOM_CODE.test(code)) {
+      return res.status(400).json({ error: 'shortCode must be 3-64 characters of a-z 0-9 _ - (case-insensitive)' });
+    }
+
+    const existing = await projects.getById(access, req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Project not found' });
+    if (existing.shortCode === code && existing.shortCodeSource === 'staff') {
+      return res.json(shortCodeBody(redactForAccess('projects', existing, access)));
+    }
+    if (!existing.eagleId) {
+      return res.status(400).json({ error: 'An Eagle id is needed before a short code can be set' });
+    }
+
+    const by = (req.user && req.user.preferred_username) || 'unknown';
+    // Claimed before the row is written: a write that fails leaves a record the retry adopts.
+    if (existing.shortCode !== code &&
+        !(await claimCode(existing, code, { links, projects }, by))) {
+      return res.status(409).json({ error: 'Code already in use' });
+    }
+
+    const written = await writeGuarded({
+      existing,
+      reread: () => projects.getById(access, req.params.id),
+      attempt: async (current) => {
+        if (!current) return { status: 'missing' };
+        const legacy = new Set(current.legacyShortCodes || []);
+        if (current.shortCode) legacy.add(current.shortCode);
+        legacy.delete(code);
+        const row = {
+          ...current,
+          shortCode: code,
+          shortCodeSource: 'staff',
+          legacyShortCodes: [...legacy],
+          updatedAt: new Date().toISOString()
+        };
+        return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }) };
+      },
+      onLost: (_current, attempt) =>
+        logger.warn('[Project Controller] short code update lost its etag race, rebuilding',
+          { id: req.params.id, attempt })
+    });
+
+    if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (written.status === 'conflict') return writeConflict(res, 'project short code', req.params.id);
+    const { saved } = written;
+
+    logger.info('[Project Controller] project short code changed',
+      { id: saved.id, by, from: existing.shortCode || null, to: code });
+    auditEvent(req, {
+      action: 'project.shortCode',
+      targetType: 'project',
+      targetId: saved.id,
+      projectId: saved.id,
+      detail: { from: existing.shortCode || null, to: code }
+    });
+
+    return res.json(shortCodeBody(redactForAccess('projects', saved, access)));
+  } catch (err) {
+    return serverError(res, err, 'project controller failed');
+  }
+};
+
+function shortCodeBody(project) {
+  return {
+    shortCode: project.shortCode,
+    shortUrl: shortUrlFor(project.shortCode),
+    legacyShortCodes: project.legacyShortCodes || []
+  };
 }
 
 exports.deleteProject = async (req, res) => {

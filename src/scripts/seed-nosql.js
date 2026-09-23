@@ -51,7 +51,7 @@ const documentsRepo = require('../repositories/documents');
 const boundariesRepo = require('../repositories/boundaries');
 const linksRepo = require('../repositories/links');
 const chunksRepo = require('../repositories/chunks');
-const { ensureProjectShortLink } = require('../helpers/short-links');
+const { ensureProjectShortLink, carryShortLink } = require('../helpers/short-links');
 
 /** Every stage `--only` accepts. */
 const ALL_STAGES = ['projects', 'documents', 'boundaries'];
@@ -436,8 +436,9 @@ async function seed(argv = [], deps = {}) {
             project.vis = existing.vis;
             summary.stages.projects.visCarried++;
           }
-          // A minted code is printable, so a re-seed must never mint a second one for the project.
-          if (existing.shortCode) project.shortCode = existing.shortCode;
+          // A minted code is printable, so a re-seed must never mint a second one for the project,
+          // nor drop the legacy codes that still resolve to it.
+          carryShortLink(project, existing);
           project.sources = { ...existing.sources, ...project.sources };
           // The public search carries no applicableRegulation or featuredDocuments, so a re-merge
           // would blank whatever eagle-api's push had already resolved onto the row. It also
@@ -447,9 +448,9 @@ async function seed(argv = [], deps = {}) {
           carryEagleOnlyFields(project, existing);
         }
         // Counted as minted, not as held: the carry above already answered for the rest.
-        if (!project.shortCode && await ensureProjectShortLink(project, repos.links)) {
-          summary.stages.projects.shortLinks++;
-        }
+        const heldCode = project.shortCode;
+        await ensureProjectShortLink(project, { links: repos.links, projects: repos.projects });
+        if (project.shortCode !== heldCode) summary.stages.projects.shortLinks++;
         await repos.projects.upsert(project);
         summary.stages.projects.written++;
       }

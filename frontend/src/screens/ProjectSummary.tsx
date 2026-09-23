@@ -20,6 +20,7 @@ import {
 } from '../api/project-summary';
 import { useDownload } from '../hooks/useDownload';
 import { useSession } from '../session/session';
+import { ProjectShortUrl } from './ProjectShortUrl';
 import { dayMonthYear, dayMonthYearTime, cad } from '../dates';
 
 /** The public EPIC project page, which is where a reader goes for the documents themselves. */
@@ -435,6 +436,7 @@ export function ProjectSummary() {
                   </span>
                 )}
               </p>
+              <ProjectShortUrl projectId={projectId} facts={facts} />
             </header>
 
             {/* Status. The border colour repeats what the label already says; never the only cue. */}

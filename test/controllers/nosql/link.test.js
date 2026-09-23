@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const links = require('../../../src/repositories/links');
+const projects = require('../../../src/repositories/projects');
 const linkController = require('../../../src/controllers/nosql/link');
 const config = require('../../../src/config');
 
@@ -240,6 +241,39 @@ test('short link controller', async (t) => {
 
     assert.strictEqual(res.statusCode, 404);
     assert.deepStrictEqual(res.body, { error: 'Short link not found' });
+  });
+
+  await t.test('a project\'s code, current or legacy, cannot be repointed or deleted', async () => {
+    const owners = { 'site-c': ['207'], kq7bt2rm: ['207'] };
+    t.mock.method(projects, 'listShortCodeOwners', async (code) => owners[code] || []);
+    t.mock.method(links, 'getById', async (code) => ({ id: code, url: DEST, note: null }));
+    const repoint = t.mock.method(links, 'repoint', async () => ({ id: 'x', url: DEST }));
+    const remove = t.mock.method(links, 'remove', async () => true);
+
+    const moved = mockRes();
+    await linkController.updateLink(
+      { params: { code: 'SITE-C' }, query: {}, user: STAFF, body: { url: DEST } }, moved);
+    const deleted = mockRes();
+    await linkController.deleteLink({ params: { code: 'kq7bt2rm' }, query: {}, user: STAFF }, deleted);
+
+    assert.strictEqual(moved.statusCode, 409);
+    assert.strictEqual(deleted.statusCode, 409);
+    assert.match(deleted.body.error, /belongs to a project/);
+    assert.strictEqual(repoint.mock.callCount() + remove.mock.callCount(), 0,
+      'a printed project link must never break');
+  });
+
+  await t.test('a custom code a project holds cannot be minted over it', async () => {
+    t.mock.method(projects, 'listShortCodeOwners', async (code) => (code === 'kq7bt2rm' ? ['207'] : []));
+    const create = t.mock.method(links, 'create', async (record) => record);
+
+    const res = mockRes();
+    await linkController.createLink(
+      { body: { url: DEST, code: 'KQ7BT2RM' }, params: {}, query: {}, user: STAFF }, res);
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.match(res.body.error, /belongs to a project/);
+    assert.strictEqual(create.mock.callCount(), 0);
   });
 
   await t.test('a delete that lands answers a message', async () => {

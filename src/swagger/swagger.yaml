@@ -893,6 +893,67 @@ paths:
         '404':
           description: Project not found.
 
+  /api/projects/{id}/short-code:
+    put:
+      summary: Set a project's short code
+      description: >-
+        Set the code in the project's `/s/<code>` link. The code is lowercased. The previous code
+        moves to `legacyShortCodes` and keeps its link record, so a printed copy still resolves.
+        Setting a code back to one of the project's own legacy codes reuses its record. Sending
+        the current code is a no-op. The nightly sync never replaces a code set here.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The same project id `GET /api/projects/{id}` takes.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [shortCode]
+              properties:
+                shortCode:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{3,64}$'
+                  example: site-c
+      responses:
+        '200':
+          description: The code the project now carries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shortCode:
+                    type: string
+                  shortUrl:
+                    type: string
+                  legacyShortCodes:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: >-
+            `shortCode` is not 3-64 characters of a-z 0-9 _ -, or the project has no Eagle id
+            and so no public page to link to. Body `{ error }`.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Staff only. The machine writer (`demi-service-write`) is refused.
+        '404':
+          description: Project not found.
+        '409':
+          description: Another link already uses the code. Body `{ error }`.
+        '503':
+          description: The project row kept changing under the write. Try again.
+
   /api/projects/{id}/visibility:
     patch:
       summary: Classify project fields
@@ -2340,6 +2401,8 @@ paths:
           description: Forbidden. The credential is read-only.
         '404':
           description: Short link not found.
+        '409':
+          description: The code is a project's current or legacy short code, so it cannot be moved.
     delete:
       summary: Delete a short link
       description: |-
@@ -2363,6 +2426,8 @@ paths:
           description: Forbidden. The credential is read-only.
         '404':
           description: Short link not found.
+        '409':
+          description: The code is a project's current or legacy short code, so it cannot be deleted.
 
   /api/me/data:
     get:
@@ -3589,8 +3654,16 @@ components:
         shortCode:
           type: string
           description: >-
-            The project's short link code, minted once by the seed or the nightly Track sync for
-            every project with an Eagle id. Absent on a project with no public page.
+            The project's short link code: the project name as a slug (`site-c-clean-energy`),
+            minted once by the seed or the nightly Track sync for every project with an Eagle id,
+            or set by staff through `PUT /api/projects/{id}/short-code`. It does not change when
+            the project is renamed. Absent on a project with no public page.
+        legacyShortCodes:
+          type: array
+          items:
+            type: string
+          description: >-
+            Codes the project carried before. Each still resolves to the project page.
         shortUrl:
           type: string
           description: >-
