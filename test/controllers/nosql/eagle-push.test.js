@@ -134,7 +134,9 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
   await t.test('upsertFromEagle preserves a minted short code', async () => {
     // Dropping it is silent: the push still returns 200 and the next nightly sync mints a second
     // code, so the printed link points at a links row nothing owns any more.
-    const existing = storedProject({ shortCode: 'kq7bt2rm' });
+    const existing = storedProject({
+      shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['kq7bt2rm']
+    });
     t.mock.method(projects, 'getByEagleId', async () => existing);
     let written;
     t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
@@ -144,7 +146,9 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
       body: { doc: eagleProject() }, user: STAFF
     }, mockRes());
 
-    assert.strictEqual(written.shortCode, 'kq7bt2rm');
+    assert.strictEqual(written.shortCode, 'site-c');
+    assert.strictEqual(written.shortCodeSource, 'staff', 'or the sync would treat it as its own');
+    assert.deepStrictEqual(written.legacyShortCodes, ['kq7bt2rm']);
   });
 
   await t.test('an unmatched project is keyed eagle-<eagleId>', async () => {

@@ -206,8 +206,9 @@ existed — 396 rows in demi-test held `proponentId: null`. `/api/public/search?
 returns `proponent` populated and `pins` as bare ObjectIds instead, so the seed fetches the
 Organization list once and `src/merge/project.js` normalises both, on the seed path and the push
 path alike. Re-running the projects stage against an existing database is the way to fill those
-fields; it keeps `vis`, `shortCode`, the Track source block, and the two fields the search does not
-carry at all (`applicableRegulation`, `featuredDocuments`).
+fields; it keeps `vis`, the short-link fields (`shortCode`, `shortCodeSource`,
+`legacyShortCodes`), the Track source block, and the two fields the search does not carry at all
+(`applicableRegulation`, `featuredDocuments`).
 
 `--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch are
 deleted through the same helpers `DELETE /documents/:id` and `DELETE /projects/:id` use, so the

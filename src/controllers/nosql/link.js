@@ -6,16 +6,18 @@
  */
 
 const links = require('../../repositories/links');
+const projects = require('../../repositories/projects');
 const { validateDestination } = require('../../helpers/link-url');
-const { generateCode, shortUrlFor, isConflict } = require('../../helpers/short-links');
+const { CUSTOM_CODE, generateCode, shortUrlFor, isConflict } = require('../../helpers/short-links');
 const { logger } = require('../../utils/logger');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const config = require('../../config');
 
-/** Vanity codes. Anything outside this alphabet cannot be a Cosmos id or a clean URL segment. */
-const CUSTOM_CODE = /^[a-z0-9_-]{3,64}$/;
 const MAX_NOTE_LENGTH = 200;
+/** Project codes are printed, current and legacy alike, so this route never moves or drops one. */
+const PROJECT_CODE_ERROR = 'This code belongs to a project. Change it on the project page instead.';
+const isProjectCode = async (code) => (await projects.listShortCodeOwners(code)).length > 0;
 
 /**
  * Fixed at module load, never composed per request: helmet runs with `contentSecurityPolicy:
@@ -78,6 +80,9 @@ exports.createLink = async (req, res) => {
     if (personal !== undefined && personal !== null && typeof personal !== 'boolean') {
       return res.status(400).json({ error: 'personal must be a boolean' });
     }
+    if (custom && await isProjectCode(customCode)) {
+      return res.status(409).json({ error: PROJECT_CODE_ERROR });
+    }
 
     const record = {
       id: custom ? customCode : generateCode(),
@@ -120,6 +125,7 @@ exports.updateLink = async (req, res) => {
     if (!CUSTOM_CODE.test(code)) {
       return res.status(404).json({ error: 'Short link not found' });
     }
+    if (await isProjectCode(code)) return res.status(409).json({ error: PROJECT_CODE_ERROR });
     const destination = validateDestination((req.body || {}).url, config.linkAllowedHosts);
     if (!destination.ok) {
       return res.status(400).json({ error: destination.reason });
@@ -154,6 +160,7 @@ exports.deleteLink = async (req, res) => {
       return res.status(404).json({ error: 'Short link not found' });
     }
 
+    if (await isProjectCode(code)) return res.status(409).json({ error: PROJECT_CODE_ERROR });
     const existing = await links.getById(code);
     const removed = existing ? await links.remove(code) : false;
     if (!removed) {

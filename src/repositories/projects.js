@@ -13,7 +13,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead } = require('../helpers/access-sql');
+const { canRead, systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
@@ -352,6 +352,32 @@ async function patchVis(id, vis) {
   return cosmos.patch(CONTAINER, String(id), String(id), operations);
 }
 
+/**
+ * Ids of every project holding `code`, current or legacy. systemAccess: a code is claimed whether or
+ * not this caller may see the project that claims it.
+ */
+async function listShortCodeOwners(code) {
+  const spec = selectWhere({
+    access: systemAccess(),
+    partitionField: PARTITION_FIELD,
+    criteria: [{
+      clause: '(c.shortCode = @code OR ARRAY_CONTAINS(c.legacyShortCodes, @code))',
+      params: [{ name: '@code', value: code }]
+    }],
+    select: 'c.id'
+  });
+  return (await fetchAll(CONTAINER, spec)).map(row => String(row.id));
+}
+
+/** Set the three short-link fields only, guarded on the revision the caller read. */
+async function patchShortLink(id, { shortCode, shortCodeSource, legacyShortCodes }, etag) {
+  return cosmos.patch(CONTAINER, String(id), String(id), [
+    { op: 'set', path: '/shortCode', value: shortCode },
+    { op: 'set', path: '/shortCodeSource', value: shortCodeSource },
+    { op: 'set', path: '/legacyShortCodes', value: legacyShortCodes || [] }
+  ], undefined, etag);
+}
+
 async function deleteById(id) {
   return cosmos.remove(CONTAINER, String(id), String(id));
 }
@@ -381,5 +407,7 @@ module.exports = {
   patchWildfireStats,
   patchBoundaries,
   patchVis,
+  listShortCodeOwners,
+  patchShortLink,
   deleteById
 };

@@ -62,31 +62,81 @@ function storedProject(overrides = {}) {
     ...mergeTrackProject(FLAT, null, { now: '2026-08-01T00:00:00.000Z' }),
     read: readForLevel(4),
     isPublished: true,
-    // Already minted: a stored row without one is the migration case, tested on its own below.
-    shortCode: 'kq7bt2rm',
+    // Already minted from the name: a row without one, or on a pre-slug random code, is the
+    // migration case, tested on its own below.
+    shortCode: 'nicomen-wind-energy',
+    shortCodeSource: 'name',
     vis: { eacExpires: 3 },
     regionalDistrict: 'Thompson-Nicola',
     ...overrides
   };
 }
 
-/** The links repository, in memory. Only `create` is reached: a project link is minted once. */
+const conflict = () => Object.assign(new Error('Conflict'), { code: 409 });
+
+/** The links repository, in memory. A code is a Cosmos id, so a second create of one is a 409. */
 function fakeLinks() {
   const created = [];
+  const byId = new Map();
   return {
     created,
-    create: async (record) => { created.push(record); return record; }
+    create: async (record) => {
+      if (byId.has(record.id)) throw conflict();
+      created.push(record);
+      byId.set(record.id, record);
+      return record;
+    },
+    getById: async (id) => byId.get(id) || null
   };
 }
 
-/** The projects repository, in memory. `deleteById` throws: this sync deletes nothing, ever. */
-function fakeProjects(rows = []) {
-  const items = rows.map(r => JSON.parse(JSON.stringify(r)));
+/**
+ * The projects repository, in memory, holding Cosmos's etag rule: a write carrying a revision
+ * that is no longer stored gets a 412. `writes` and `patches` record only the writes that landed.
+ * `midRun` runs once the sync has read its list, to land another writer's change behind it.
+ * `deleteById` throws: this sync deletes nothing, ever.
+ */
+function fakeProjects(rows = [], { midRun } = {}) {
+  let revision = 0;
+  const stamp = (row) => ({ ...structuredClone(row), _etag: `"${++revision}"` });
+  const items = structuredClone(rows);
   const writes = [];
+  const patches = [];
+  const find = (id) => items.find(p => String(p.id) === String(id)) || null;
+  const store = (row) => {
+    const saved = stamp(row);
+    const at = items.findIndex(p => String(p.id) === String(row.id));
+    if (at >= 0) items[at] = saved; else items.push(saved);
+    return structuredClone(saved);
+  };
+  const guard = (id, etag) => {
+    const current = find(id);
+    if (current && current._etag !== etag) {
+      throw Object.assign(new Error('Precondition failed'), { code: 412 });
+    }
+  };
   return {
-    items, writes,
-    listVisible: async () => ({ items }),
-    upsert: async (project) => { writes.push(project); return project; },
+    items, writes, patches, store,
+    listVisible: async () => {
+      const snapshot = structuredClone(items);
+      if (midRun) midRun(store, find);
+      return { items: snapshot };
+    },
+    getById: async (_access, id) => structuredClone(find(id)),
+    upsert: async (row, { etag, create } = {}) => {
+      if (create && find(row.id)) throw conflict();
+      guard(row.id, etag);
+      writes.push(row);
+      return store(row);
+    },
+    patchShortLink: async (id, { shortCode, shortCodeSource, legacyShortCodes }, etag) => {
+      guard(id, etag);
+      patches.push({ id, shortCode, shortCodeSource, legacyShortCodes });
+      return store({ ...find(id), shortCode, shortCodeSource, legacyShortCodes });
+    },
+    listShortCodeOwners: async (code) => items
+      .filter(p => p.shortCode === code || (p.legacyShortCodes || []).includes(code))
+      .map(p => String(p.id)),
     deleteById: async () => { throw new Error('the project sync must never delete'); }
   };
 }
@@ -182,6 +232,8 @@ test('project short links', async (t) => {
     assert.strictEqual(link.personal, false, 'a project link is everyone\'s');
     assert.strictEqual(projects.writes.length, 1, 'the code is only real once the project holds it');
     assert.strictEqual(projects.writes[0].shortCode, link.id);
+    assert.strictEqual(summary.updated, 0, 'a mint alone is not an update');
+    assert.strictEqual(projects.writes[0].updatedAt, stored.updatedAt);
   });
 
   await t.test('a project with no Eagle id has no public page, so no link', async () => {
@@ -205,8 +257,80 @@ test('project short links', async (t) => {
     await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
       { live: true, deps: { projects, links }, now: NOW });
 
-    assert.strictEqual(projects.writes[0].shortCode, 'kq7bt2rm');
+    assert.strictEqual(projects.writes[0].name, 'Renamed', 'the premise: the name moved');
+    assert.strictEqual(projects.writes[0].shortCode, 'nicomen-wind-energy',
+      'a printed slug outlives a rename');
     assert.deepStrictEqual(links.created, [], 'an upsert must not mint a second code');
+  });
+
+  /**
+   * Before slugs every project got a random code, and some are printed. The sync swaps each for
+   * the name slug once, and the old code keeps its link record so the print still resolves.
+   */
+  await t.test('a pre-slug random code is swapped for the name slug and kept as legacy', async () => {
+    const stored = storedProject({ shortCode: 'kq7bt2rm' });
+    delete stored.shortCodeSource;
+    const projects = fakeProjects([stored]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects, links }, now: NOW });
+
+    assert.deepStrictEqual(links.created.map(l => l.id), ['nicomen-wind-energy']);
+    const [written] = projects.writes;
+    assert.strictEqual(written.shortCode, 'nicomen-wind-energy');
+    assert.deepStrictEqual(written.legacyShortCodes, ['kq7bt2rm']);
+    assert.strictEqual(written.shortCodeSource, 'name');
+    assert.strictEqual(summary.shortLinks, 1);
+    assert.strictEqual(summary.failures, 0, 'the old link record is not touched');
+  });
+
+  await t.test('a migrated project is left alone on the next night', async () => {
+    const stored = storedProject({ shortCode: 'kq7bt2rm' });
+    delete stored.shortCodeSource;
+    const first = fakeProjects([stored]);
+    await syncProjects([API_PROJECT],
+      { live: true, deps: { projects: first, links: fakeLinks() }, now: NOW });
+    const second = fakeProjects([first.writes[0]]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects: second, links }, now: NOW });
+
+    assert.deepStrictEqual(second.writes, []);
+    assert.deepStrictEqual(links.created, []);
+    assert.strictEqual(summary.shortLinks, 0);
+  });
+
+  await t.test('a staff code that looks random is never migrated', async () => {
+    const projects = fakeProjects([storedProject({ shortCode: 'kemess23', shortCodeSource: 'staff' })]);
+    const links = fakeLinks();
+
+    await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
+      { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(projects.writes[0].shortCode, 'kemess23');
+    assert.deepStrictEqual(links.created, []);
+  });
+
+  await t.test('a staff code set while the run is going survives it', async () => {
+    const stored = storedProject({ shortCode: 'kq7bt2rm' });
+    delete stored.shortCodeSource;
+    const projects = fakeProjects([stored], {
+      midRun: (store, find) => store({
+        ...find('207'), shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['kq7bt2rm']
+      })
+    });
+
+    const summary = await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
+      { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    const [after] = projects.items;
+    assert.strictEqual(after.name, 'Renamed', 'the Track change still lands');
+    assert.strictEqual(after.shortCode, 'site-c', 'the run-start snapshot must not undo it');
+    assert.strictEqual(after.shortCodeSource, 'staff');
+    assert.deepStrictEqual(after.legacyShortCodes, ['kq7bt2rm']);
+    assert.strictEqual(summary.failures, 0);
   });
 
   await t.test('a dry run mints nothing', async () => {
@@ -219,7 +343,8 @@ test('project short links', async (t) => {
 
     assert.deepStrictEqual(links.created, []);
     assert.deepStrictEqual(projects.writes, []);
-    assert.strictEqual(summary.updated, 1, 'and it still reports the write a live run would make');
+    assert.strictEqual(summary.shortLinks, 1, 'and it still reports the mint a live run would make');
+    assert.strictEqual(summary.updated, 0, 'a mint alone is not an update');
   });
 });
 
@@ -298,7 +423,8 @@ test('a project DEMI has never seen is created at level 1', async () => {
   assert.strictEqual(summary.shortLinks, 1);
   assert.strictEqual(links.created.length, 1, 'a project born here is minted its link too');
   assert.strictEqual(written.shortCode, links.created[0].id);
-  assert.strictEqual(written.shortCode.length, 8);
+  assert.strictEqual(written.shortCode, 'nicomen-wind-energy', 'the code is the name slug');
+  assert.strictEqual(written.shortCodeSource, 'name');
 });
 
 test('a record the feed no longer lists is counted, not deleted', async () => {
@@ -404,7 +530,7 @@ test('a project stored as Eagle-only is re-keyed to its Track id, not duplicated
   assert.strictEqual(summary.shortLinks, 1);
   assert.strictEqual(links.created.length, 1, 'the re-keyed row is minted its link');
   assert.strictEqual(written.shortCode, links.created[0].id);
-  assert.strictEqual(written.shortCode.length, 8);
+  assert.strictEqual(written.shortCode, 'nicomen-wind-energy');
 });
 
 test('an empty Track column does not blank a populated row', () => {
@@ -442,4 +568,63 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
       phases: 0, shortLinks: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
+});
+
+/**
+ * Eagle-only rows sit in no Track row, so the Track loop never reaches their pre-slug codes. The
+ * nightly run walks them itself: prod must not need a re-seed to migrate.
+ */
+test('Eagle-only short codes', async (t) => {
+  await t.test('a pre-slug random code is migrated with a patch of the three fields', async () => {
+    const projects = fakeProjects([eagleOnlyProject({ shortCode: 'kq7bt2rm' })]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([], { live: true, deps: { projects, links }, now: NOW });
+
+    assert.deepStrictEqual(projects.patches, [{
+      id: `eagle-${API_PROJECT.epic_guid}`,
+      shortCode: 'nicomen-wind-energy',
+      shortCodeSource: 'name',
+      legacyShortCodes: ['kq7bt2rm']
+    }]);
+    assert.deepStrictEqual(projects.writes, [], 'nothing else on the row is this job\'s');
+    assert.deepStrictEqual(links.created.map(l => l.url),
+      [`${config.linkBaseUrl}/p/${API_PROJECT.epic_guid}`]);
+    assert.strictEqual(summary.shortLinks, 1);
+  });
+
+  await t.test('a pushed row with no code yet is minted one', async () => {
+    const projects = fakeProjects([eagleOnlyProject()]);
+
+    await syncProjects([], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    assert.deepStrictEqual(projects.patches, [{
+      id: `eagle-${API_PROJECT.epic_guid}`,
+      shortCode: 'nicomen-wind-energy',
+      shortCodeSource: 'name',
+      legacyShortCodes: undefined
+    }]);
+    assert.deepStrictEqual(projects.writes, []);
+  });
+
+  await t.test('the next night leaves it alone', async () => {
+    const projects = fakeProjects([eagleOnlyProject({ shortCode: 'kq7bt2rm' })]);
+    await syncProjects([], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+    const again = fakeProjects(projects.items);
+
+    await syncProjects([], { live: true, deps: { projects: again, links: fakeLinks() }, now: NOW });
+
+    assert.deepStrictEqual(again.patches, []);
+  });
+
+  await t.test('a row already re-keyed to a Track id is dead weight, not migrated', async () => {
+    const projects = fakeProjects([
+      eagleOnlyProject({ shortCode: 'kq7bt2rm' }),
+      storedProject({ eagleId: API_PROJECT.epic_guid })
+    ]);
+
+    await syncProjects([], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    assert.deepStrictEqual(projects.patches, []);
+  });
 });

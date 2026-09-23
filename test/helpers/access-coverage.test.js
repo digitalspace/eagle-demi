@@ -160,6 +160,8 @@ const gatedRoutes = [
   // credential cannot store prose that renders as EAO's account of a project.
   { method: 'get', path: '/projects/:id/summary', gate: null },
   { method: 'put', path: '/projects/:id/summary', gate: 'requireWrite' },
+  // Staff only: the machine writer holds requireWrite but not requireAdmin.
+  { method: 'put', path: '/projects/:id/short-code', gate: 'requireAdmin' },
   // The only route that returns full chunk text. authMiddleware, never passiveAuth.
   { method: 'get', path: '/documents/:id/chunks', gate: null },
   { method: 'get', path: '/me/data', gate: null },
@@ -293,7 +295,7 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 31,
+    assert.strictEqual(emissions.length, 38,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // A site emitting a stored row names it BARE (`redactForAccess('projects', saved, access)`) or
