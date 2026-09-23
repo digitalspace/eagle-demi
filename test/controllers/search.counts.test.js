@@ -258,6 +258,9 @@ test('prefix reaches the legs that count on it', async (t) => {
     assert.strictEqual(seen.Document.prefix, true);
     assert.strictEqual(seen.RecentActivity.prefix, true);
     assert.strictEqual(seen.ProjectNotification.prefix, true);
+    // The badge counts what the public page can list: no drafts, no scheduled updates.
+    assert.match(seen.RecentActivity.filter,
+      /status eq 'published' and publishDate le [^)\s]+\)\)$/);
   });
 
   await t.test('off on the exact string false, and only on that', async (tt) => {

@@ -242,6 +242,31 @@ the degrade path and logs it; the results are otherwise unchanged. No rebuild an
 whole corpus is needed to start: the re-extraction refills rows document by document and the
 indexer's high-water mark carries each one as it lands.
 
+`shortHeadline`, `summary`, `status` and `publishDate` on `activities` were added on 2026-09-23
+(PUBLIC-159), with the same columns in `demi-updates-ds`. The first two are searched; the last two
+carry the publish gate every non-staff keyword search and count sends:
+`status eq null or (status eq 'published' and publishDate le <now>)`. Roll the Updates change out
+in this order:
+
+1. Deploy the infra bicep for the `updates` container's new index paths, and wait for Cosmos to
+   finish the index rebuild (the container's index transformation progress reaches 100).
+2. PUT the index, PUT the data source, then reset and run `activities-indexer`.
+3. Deploy the DEMI app, with `updatesPublishDateFallback` at its `true` default.
+4. Run `src/scripts/backfill-update-publish-date.js --live` on the devbox, then a dry run until it
+   reports `undated=0`. Then set `updatesPublishDateFallback = false` and redeploy, so sorts on
+   `publishDate` stop running on `dateAdded`.
+5. Deploy eagle-api (its migration, then `demi-repush`), then eagle-admin.
+
+Steps 2 and 3 are in that order because the app names the new fields in
+`searchFields` and `$filter`, and the service answers an unknown field with a 400, which the
+RecentActivity keyword search turns into a 502. The reset matters because a row pushed between the
+index PUT and the data source PUT reaches the index with `status` null: it passes the gate there, so
+a scheduled or draft Update is counted, and its `summary` is not searchable. The rows themselves
+stay safe, because every keyword hit is read back from Cosmos through the same gate.
+
+`/search/counts` answers from a 45-second cache, so a scheduled Update that goes live appears in the
+counts up to 45 seconds after it appears in the list. This is accepted.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 

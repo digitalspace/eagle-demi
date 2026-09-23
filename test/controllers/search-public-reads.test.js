@@ -326,7 +326,7 @@ test('GET /search?dataset=RecentActivity', async (t) => {
       { _id: PERIOD_EAGLE_ID, isMet: true, metURL: 'https://eao.gov.bc.ca/met' });
     assert.deepStrictEqual(row.projectNotification,
       { _id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' });
-    assert.deepStrictEqual(row.project, { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy' });
+    assert.deepStrictEqual(row.project, { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy', location: null });
     assert.strictEqual(row.notifiedAt, undefined, 'the notify claim is not public');
     assert.strictEqual(row.read, undefined);
   });
@@ -395,6 +395,9 @@ test('GET /search?dataset=RecentActivity', async (t) => {
       const [read, counted] = specsFor(seen, 'updates');
       assert.match(read.query,
         /CONTAINS\(c\.headline, @keywords, true\) OR CONTAINS\(c\.content, @keywords, true\)/);
+      // The same text the index searches, so the fallback cannot miss what the index would find.
+      assert.match(read.query,
+        /CONTAINS\(c\.shortHeadline, @keywords, true\) OR CONTAINS\(c\.summary, @keywords, true\)/);
       assert.ok(boundValues(read).includes('Application'));
       // There is no relevance rank on a Cosmos read, and `-score` must not fall through to an
       // ORDER BY on a field these rows do not carry — that drops every row.
@@ -635,6 +638,20 @@ test('GET /search keyword searches over the indexed Cosmos datasets', async (t) 
     assert.strictEqual(indexed.body[0].searchResults[0]._schemaName, 'RecentActivity');
     assert.strictEqual(indexed.body[0].searchResults[0].read, undefined);
   });
+
+  await t.test('the index hides drafts and scheduled updates from the public, not from staff',
+    async () => {
+      const AT = '\\d{4}-\\d{2}-\\d{2}T[^) ]+Z';
+      const LIVE = new RegExp(`\\(status eq null or \\(status eq 'published' and publishDate le ${AT}\\)\\)`);
+      stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+      const asked = stubIndex('searchActivities', []);
+
+      await get('/api/search?dataset=RecentActivity&keywords=application');
+      assert.match(asked.filter, LIVE);
+
+      await getAsStaff(t, '/api/search?dataset=RecentActivity&keywords=application');
+      assert.doesNotMatch(asked.filter || '', /publishDate/);
+    });
 
   await t.test('notifications answer the same row on both paths too', async () => {
     stubCosmos(t, { notifications: [notificationRow()] });

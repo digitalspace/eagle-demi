@@ -396,6 +396,9 @@ const config = {
   // On: an update email links eagle-public's reader page `/updates/<id>`. Only the React line has
   // that route, so it stays off wherever linkBaseUrl still serves the Angular site.
   notifyUpdateReaderLinks: process.env.NOTIFY_UPDATE_READER_LINKS === 'true',
+  // On until src/scripts/backfill-update-publish-date.js reports no undated row: a sort on an
+  // Update's publishDate runs on dateAdded, since an ORDER BY leaves out rows without its field.
+  updatesPublishDateFallback: process.env.UPDATES_PUBLISH_DATE_FALLBACK !== 'false',
 
   // Track team feed → `project:<id>` realm roles (src/scripts/sync-track-teams.js). Two
   // client-credentials identities in the realm above: one reads Track, one holds

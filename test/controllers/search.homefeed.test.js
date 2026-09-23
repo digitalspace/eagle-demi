@@ -238,6 +238,10 @@ test('GET /search?dataset=HomeFeed', async (t) => {
       projectName: PROJECT_ROW.name,
       date: '2026-09-05T07:00:00.000Z',
       headline: 'Certificate Issued',
+      shortHeadline: null,
+      summary: null,
+      category: null,
+      publishDate: null,
       content: null,
       documentUrl: null
     });
@@ -248,9 +252,37 @@ test('GET /search?dataset=HomeFeed', async (t) => {
       projectName: PROJECT_ROW.name,
       date: day(9),
       headline: 'h-news-9',
+      shortHeadline: null,
+      summary: null,
+      category: null,
+      publishDate: null,
       content: 'The application has been accepted for review.',
       documentUrl: 'https://projects.eao.gov.bc.ca/api/document/5cf00c03a266b7e187750002/fetch'
     });
+  });
+
+  await t.test('an update is dated and ordered by publishDate, and carries the Updates fields', async () => {
+    stubFeed(t, {
+      updates: [
+        // Added first but published last: the reader's date is the publication.
+        update('late', 2, {
+          status: 'published', publishDate: day(8), shortHeadline: 'Short', summary: 'Sum.', category: 'Engagement'
+        }),
+        update('news-5', 5)
+      ]
+    });
+    stubDecisions(t);
+
+    const { body } = await get('/api/search?dataset=HomeFeed&pageSize=3');
+
+    const rows = body[0].searchResults;
+    assert.deepStrictEqual(rows.map(r => r.id), ['late', 'news-5']);
+    assert.strictEqual(rows[0].date, day(8));
+    assert.strictEqual(rows[0].publishDate, day(8));
+    assert.strictEqual(rows[0].shortHeadline, 'Short');
+    assert.strictEqual(rows[0].summary, 'Sum.');
+    assert.strictEqual(rows[0].category, 'Engagement');
+    assert.strictEqual(rows[1].date, day(5), 'no publishDate: dateAdded');
   });
 
   await t.test('the decision read is sorted newest first and stops at today', async () => {

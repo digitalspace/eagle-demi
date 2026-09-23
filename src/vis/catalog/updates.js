@@ -32,6 +32,19 @@ module.exports = {
   documentUrl: { defaultVis: 4, maxVis: 4 },
   pcp: { defaultVis: 4, maxVis: 4 },
   projectNotification: { defaultVis: 4, maxVis: 4 },
+  // The Updates fields (PUBLIC-159). A public caller only ever reads a published, due row, so
+  // `status` and `publishDate` say nothing a public page does not already show.
+  category: { defaultVis: 4, maxVis: 4 },
+  subject: { defaultVis: 4, maxVis: 4 },
+  shortHeadline: { defaultVis: 4, maxVis: 4 },
+  summary: { defaultVis: 4, maxVis: 4 },
+  featuredImage: { defaultVis: 4, maxVis: 4 },
+  attachments: { defaultVis: 4, maxVis: 4 },
+  regions: { defaultVis: 4, maxVis: 4 },
+  location: { defaultVis: 4, maxVis: 4 },
+  engagementUrl: { defaultVis: 4, maxVis: 4 },
+  status: { defaultVis: 4, maxVis: 4 },
+  publishDate: { defaultVis: 4, maxVis: 4 },
 
   // Never public. Same entries, same reasons, as catalog/projects.js.
   read: { defaultVis: 0, maxVis: 0 },
@@ -46,6 +59,12 @@ module.exports = {
   // Writer-visible only, same as `_etag`: `notifiedAt` is the eagle-notify claim this service
   // takes, not a property of the announcement.
   notifiedAt: { defaultVis: 2, maxVis: 2 },
+  notifiedBy: { defaultVis: 2, maxVis: 2 },
+  notifyClaimedAt: { defaultVis: 2, maxVis: 2 },
+  notifySentAt: { defaultVis: 2, maxVis: 2 },
+  notifyFailedAt: { defaultVis: 2, maxVis: 2 },
+  notifyCancelledAt: { defaultVis: 2, maxVis: 2 },
+  notifyAttempts: { defaultVis: 2, maxVis: 2 },
   eaglePushedAt: { defaultVis: 2, maxVis: 2 },
   _etag: { defaultVis: 2, maxVis: 2 }
 };

@@ -276,8 +276,34 @@ resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
           {
             path: '/pinned/?'
           }
+          // The publish gate every non-staff read carries (repositories/updates.js liveCriteria).
+          {
+            path: '/status/?'
+          }
+          {
+            path: '/publishDate/?'
+          }
           {
             path: '/notifiedAt/?'
+          }
+          // The scheduled announce's retry queries (repositories/updates.js listDueForNotify).
+          {
+            path: '/notifiedBy/?'
+          }
+          {
+            path: '/notifyClaimedAt/?'
+          }
+          {
+            path: '/notifySentAt/?'
+          }
+          {
+            path: '/notifyFailedAt/?'
+          }
+          {
+            path: '/notifyCancelledAt/?'
+          }
+          {
+            path: '/notifyAttempts/?'
           }
         ]
         excludedPaths: noIndex

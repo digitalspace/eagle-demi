@@ -4,30 +4,41 @@
  * eagle-notify push — "an Update was published", and its retraction.
  *
  * DEMI owns Updates, so DEMI is what tells the subscription service one went public. Nothing here
- * throws: a failure resolves `false` so the caller can release its claim and let the next push
- * retry.
+ * throws: every send resolves an OUTCOME, and the caller decides from it whether a later tick may
+ * try again.
  *
  * Dark when either setting is missing, which is every environment not yet wired to eagle-notify.
  */
 
 const config = require('../config');
 const { logger } = require('../utils/logger');
+const { decodeEntities } = require('../helpers/html-entities');
 
 const TIMEOUT_MS = 10000;
 const ATTEMPTS = 2;
 const EXCERPT_CHARS = 500;
+const SUMMARY_CHARS = 280;
+
+/**
+ * What one send came to. REJECTED is a 4xx: eagle-notify refused the body, and the same body would
+ * be refused again. FAILED is a 5xx or no answer at all, which a later attempt may get past.
+ */
+const OUTCOME = Object.freeze({ SENT: 'sent', REJECTED: 'rejected', FAILED: 'failed' });
 
 function configured() {
   return Boolean(config.notifyApiBase && config.notifyApiKey);
 }
 
+/** Markup to plain text. Tags go first, so `&lt;b&gt;` written as text survives as `<b>`. */
+function plainText(html) {
+  return decodeEntities(String(html || '').replace(/<[^>]*>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** The update's HTML content as the plain lead-in a notification quotes. */
 function excerptOf(content) {
-  return String(content || '')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, EXCERPT_CHARS);
+  return plainText(content).slice(0, EXCERPT_CHARS);
 }
 
 /**
@@ -53,7 +64,7 @@ function eventFor(item) {
 }
 
 async function post(body) {
-  if (!configured()) return true;
+  if (!configured()) return OUTCOME.SENT;
 
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     try {
@@ -63,13 +74,13 @@ async function post(body) {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(TIMEOUT_MS)
       });
-      if (res.ok) return true;
+      if (res.ok) return OUTCOME.SENT;
       // A 4xx is a bad request, not a blip: a retry sends the same rejected body again.
       if (res.status < 500) {
         logger.error('[notify] eagle-notify refused the event', {
           status: res.status, idempotencyKey: body.idempotencyKey
         });
-        return false;
+        return OUTCOME.REJECTED;
       }
       logger.warn('[notify] eagle-notify errored', {
         status: res.status, attempt, idempotencyKey: body.idempotencyKey
@@ -80,20 +91,75 @@ async function post(body) {
       });
     }
   }
-  return false;
+  return OUTCOME.FAILED;
 }
 
-async function updatePublished(item, projectName) {
+/** Tags that end a block of text: `<li>One</li><li>Two</li>` reads "One Two", not "OneTwo". */
+const BLOCK_TAG = /<\/?(?:br|p|div|li|ul|ol|h[1-6]|blockquote|tr|td|th|table|section|article)\b[^>]*>/gi;
+
+/** Tags removed until none is left, so a split tag (`<<b>script>`) cannot rejoin into one. */
+function withoutTags(html) {
+  let text = html;
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/<[^>]*>/g, '');
+  } while (text !== previous);
+  return text;
+}
+
+/**
+ * The update's fallback summary: its first non-empty paragraph as plain text, cut at 280. No `<` or
+ * `>` survives, not even one decoded from `&lt;`, so the summary can never carry a tag.
+ */
+function summaryOf(content) {
+  // Block tags break words; any other tag is inline (`<i>`), so it goes without a space.
+  const plain = (paragraph) => decodeEntities(withoutTags(paragraph.replace(BLOCK_TAG, ' ')))
+    .replace(/[<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const first = String(content || '')
+    .split(/<\/(?:p|div|h[1-6]|blockquote|ul|ol)>|\n\s*\n/i)
+    .map(plain)
+    .find(Boolean);
+  return (first || '').slice(0, SUMMARY_CHARS);
+}
+
+/**
+ * The featured image as eagle-public links a document: DEMI's download route behind the site's own
+ * `/demi-search` proxy, which redirects to a fresh presigned URL on every fetch.
+ */
+function imageUrlFor(document) {
+  return `${config.linkBaseUrl}/demi-search/documents/${encodeURIComponent(document)}/download?redirect=1`;
+}
+
+/**
+ * Announce one publication.
+ *
+ * `featuredImage` is passed apart from the row because only the caller can say whether anyone may
+ * fetch it: the download route serves public documents only, so a non-public image is `null` here.
+ */
+async function updatePublished(item, projectName, featuredImage = null) {
+  // Both or neither, and never without alt text: eagle-notify renders the image only as that pair.
+  const image = featuredImage && featuredImage.document && featuredImage.alt ? featuredImage : null;
   return post({
     ...eventFor(item),
+    id: item.id,
     url: urlFor(item),
     projectName: projectName || null,
-    excerpt: excerptOf(item.content)
+    excerpt: excerptOf(item.content),
+    // Only an editor-written one: the headline cut to 70 would stop mid-word.
+    ...(item.shortHeadline ? { shortHeadline: item.shortHeadline } : {}),
+    // Email readers cannot apply the contract fallback, so it is applied here.
+    summary: item.summary || summaryOf(item.content),
+    ...(image ? { featuredImageUrl: imageUrlFor(image.document), featuredImageAlt: image.alt } : {})
   });
 }
 
 async function updateCancelled(item) {
-  return post({ ...eventFor(item), cancelled: true });
+  return post({ ...eventFor(item), id: item.id, cancelled: true });
 }
 
-module.exports = { configured, updatePublished, updateCancelled, excerptOf, urlFor };
+module.exports = {
+  OUTCOME, configured, updatePublished, updateCancelled, excerptOf, summaryOf, urlFor
+};

@@ -129,7 +129,7 @@ const PROJECT_SEARCH_FIELDS = 'name,displayName,description,proponent,nameTokens
 const KEYWORD_INDEXES = Object.freeze({
   activities: {
     setting: 'SEARCH_INDEX_ACTIVITIES',
-    searchFields: 'headline,content,notificationName',
+    searchFields: 'headline,shortHeadline,summary,content,notificationName',
     select: 'id,eagleId,projectId'
   },
   notifications: {

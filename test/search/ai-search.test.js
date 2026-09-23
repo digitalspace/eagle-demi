@@ -1685,7 +1685,7 @@ test('keyword search over the two Cosmos-backed datasets', async (t) => {
     await aiSearch.searchNotifications({ keywords: 'peace kem', filter: ANONYMOUS_ACL, top: 10 });
 
     assert.match(calls[0].url, /\/indexes\/activities\/docs\/search/);
-    assert.strictEqual(calls[0].body.searchFields, 'headline,content,notificationName');
+    assert.strictEqual(calls[0].body.searchFields, 'headline,shortHeadline,summary,content,notificationName');
     assert.strictEqual(calls[0].body.select, 'id,eagleId,projectId');
     assert.match(calls[1].url, /\/indexes\/project-notifications\/docs\/search/);
     assert.ok(calls[1].body.searchFields.startsWith('name,description,proponent'));

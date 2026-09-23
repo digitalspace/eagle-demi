@@ -47,15 +47,15 @@ paths:
           required: false
           description: >-
             Search query string. Also accepted as `keywords`. On RecentActivity it matches the
-            headline, the content and the notification name; on ProjectNotification it matches the
-            name, the description, the proponent and the coded fields. Both rank the rows by
+            headline, the short headline, the summary, the content and the notification name; on
+            ProjectNotification it matches the name, the description, the proponent and the coded fields. Both rank the rows by
             relevance and match the last word as a prefix, the same as Project and Document. On
             CommentPeriod with no `project`, it matches the period's `informationLabel` or its
             project's name, case-insensitively as a substring, with double quotes removed and runs
             of spaces collapsed; it does not rank. The project-name match needs at least 2
             characters and reads at most 500 matching projects. The other Cosmos datasets ignore
-            it. RecentActivity still answers `top=true` from Cosmos, where `q` matches the headline
-            and the content case-insensitively and does not rank.
+            it. RecentActivity still answers `top=true` from Cosmos, where `q` matches the headline,
+            short headline, summary and content case-insensitively and does not rank.
           schema:
             type: string
         - name: prefix
@@ -120,8 +120,10 @@ paths:
             then the newest News updates and decisions (a project's EA decision, or a project
             notification's decision) merged by date, newest first. A decision dated after today is
             left out. Every row has one shape: `{kind, id, projectId, projectName, date, headline,
-            content, documentUrl}`, where `kind` is `update` or `decision` and any absent value is
-            null. HomeFeed takes no keywords and no filters.
+            shortHeadline, summary, category, publishDate, content, documentUrl}`, where `kind` is
+            `update` or `decision` and any absent value is null. An update's `date` is its
+            `publishDate`, or `dateAdded` when it has none. HomeFeed takes no keywords and no
+            filters.
           schema:
             type: integer
             minimum: 1
@@ -273,7 +275,8 @@ paths:
           required: false
           description: >-
             One key, `-` for descending. On Project, `-dateUpdated` is the most recently changed
-            record first. On RecentActivity `-score` orders by dateAdded, and on
+            record first. On RecentActivity `-score` orders by dateAdded, and `-publishDate` by
+            publishDate once every row has one (by dateAdded until then), and on
             ProjectNotification `-_id` orders by notificationReceivedDate — neither field is stored,
             and an ORDER BY on a field a row lacks drops the row. On CommentPeriod, `dateStarted`,
             `dateCompleted` or `dateAdded` in either direction, the first usable key only;
@@ -2039,8 +2042,19 @@ paths:
         follows `read[]`, not `active`: an update whose ACL keeps it off the public site is
         mirrored but never announced. DEMI owns Updates, so it is also what tells eagle-notify
         about a publication — once per update, and again as a cancellation when a published update
-        is withdrawn. A notification that fails is logged and retried by the next push; it never
-        fails the mirror.
+        is withdrawn. A notification that fails is logged and retried by the `announceUpdates`
+        timer; it never fails the mirror. An update with a `status` is announced only once it is
+        `published` and its `publishDate` has passed; a scheduled one is announced by the timer
+        when it comes due. A `notifiedAt` on the pushed record marks it as already announced.
+
+        Also stores `category`, `subject`, `shortHeadline`, `summary`, `featuredImage`
+        (`{document, alt}`), `attachments` (document ids), `regions`, `location`,
+        `engagementUrl` (http/https only, else null), `status` and `publishDate` (ISO; the
+        record's `dateAdded` when it has none). Every
+        read by a non-staff caller shows a row with a `status` only when it is `published` and
+        its `publishDate` has passed; a row with no `status`
+        follows `read[]` alone. An update is emailed at most once: withdrawing one DEMI announced
+        sends one cancellation, and re-publishing or rescheduling it sends nothing more.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

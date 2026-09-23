@@ -22,6 +22,8 @@ const {
 } = require('../../src/scripts/seed-public-reads');
 const comments = require('../../src/repositories/comments');
 const lists = require('../../src/repositories/lists');
+const updatesRepo = require('../../src/repositories/updates');
+const { updatesStore } = require('../helpers/updates-store');
 const { logger } = require('../../src/utils/logger');
 const {
   PERIOD_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, eagleComment, storedPeriod
@@ -540,4 +542,34 @@ test('comments', async (t) => {
       assert.strictEqual(fs.existsSync(state), false, 'the stage is not checkpointed complete');
       t2.mock.restoreAll();
     });
+});
+
+test('the updates stage spends the claim on live rows only, marked backfill', async (t) => {
+  t.after(() => t.mock.restoreAll());
+  const { row, store } = updatesStore(t, []);
+  const past = '2020-01-01T00:00:00.000Z';
+  const rows = {
+    live: { isPublished: true, status: 'published', publishDate: past },
+    legacy: { isPublished: true, status: null, publishDate: null, dateAdded: past },
+    scheduled: { isPublished: true, status: 'published', publishDate: '2999-01-01T00:00:00.000Z' },
+    draft: { isPublished: false, status: 'draft', publishDate: past }
+  };
+  const updateMirror = {
+    mirrorFromEagle: async (eagleId) => {
+      const saved = { id: eagleId, notifiedAt: null, ...rows[eagleId] };
+      store.set(eagleId, saved);
+      return { saved, existing: null };
+    }
+  };
+
+  await backfill(['--live', '--only', 'updates', '--state', statePath()], {
+    sources: stubSources({ datasets: { RecentActivity: Object.keys(rows).map(_id => ({ _id })) } }),
+    updateMirror,
+    updatesRepo
+  });
+
+  assert.strictEqual(row('live').notifiedBy, 'backfill');
+  assert.strictEqual(row('legacy').notifiedBy, 'backfill');
+  assert.strictEqual(row('scheduled').notifiedAt, null, 'still news: the timer announces it when due');
+  assert.strictEqual(row('draft').notifiedAt, null);
 });

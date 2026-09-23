@@ -13,7 +13,10 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead, credentialField, systemAccess, TIER } = require('../helpers/access-sql');
+const { levelOf, ROLE_LEVELS } = require('../vis/level');
 const projects = require('./projects');
+const config = require('../config');
+const { logger } = require('../utils/logger');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
   pageSlice
@@ -29,13 +32,22 @@ const PARTITION_FIELD = 'id';
  */
 const SCOPE_FIELD = 'projectId';
 
-const SORTABLE = ['dateAdded', 'dateUpdated'];
+const SORTABLE = ['dateAdded', 'dateUpdated', 'publishDate'];
 const DEFAULT_ORDER = 'c.dateAdded DESC';
 /**
  * eagle-public's news search asks for `-score`, the relevance rank its Mongo text search produced.
  * A Cosmos read has no rank, and newest-first is the order the same page shows without a query.
  */
 const SORT_ALIASES = { score: 'dateAdded' };
+
+/**
+ * The field a sort on `publishDate` runs on. An ORDER BY leaves out every row that lacks its field,
+ * so until src/scripts/backfill-update-publish-date.js has filled the rows written before mirrorItem
+ * filled it, `config.updatesPublishDateFallback` keeps such sorts on `dateAdded`.
+ */
+function publishOrderField() {
+  return config.updatesPublishDateFallback ? 'dateAdded' : 'publishDate';
+}
 
 /**
  * The three states `pinned` can be stored in — the mirror writes `doc.pinned` straight through, so
@@ -51,8 +63,97 @@ const UNPINNED = {
 /** eagle-api answers `?top=true` with at most this many rows in total — listTop's default. */
 const TOP_ROWS = 4;
 
+/** The one `status` a public caller may see, once its `publishDate` has passed. */
+const PUBLISHED = 'published';
+
+/**
+ * Does the publish gate apply to this caller? Staff level and narrower see drafts and scheduled
+ * rows; idir and public see `status === 'published' && publishDate <= now`. A row with no `status`
+ * predates the field and is governed by `read[]` alone, as before.
+ */
+function isLiveGated(access) {
+  return levelOf(access) > ROLE_LEVELS.staff;
+}
+
+/**
+ * When a row went public, for display. mirrorItem stores `dateAdded` as `publishDate` when Eagle
+ * sends none; `dateAdded` covers a row written before it did, until the backfill has run.
+ */
+function publishedAt(item) {
+  return typeof item.publishDate === 'string' && item.publishDate ? item.publishDate : (item.dateAdded || null);
+}
+
+/**
+ * The gate's predicate, with the status and the time as whatever references the caller binds.
+ * On `publishDate` alone, so the range filter can use its index: a gated row without one stays
+ * hidden, and mirrorItem never writes a row without one.
+ */
+function liveClause(statusRef, nowRef) {
+  return '(NOT IS_DEFINED(c.status) OR IS_NULL(c.status) OR ' +
+    `(c.status = ${statusRef} AND c.publishDate <= ${nowRef}))`;
+}
+
+/** The gate as a SQL criterion. */
+function liveCriteria(access, now = new Date().toISOString()) {
+  if (!isLiveGated(access)) return [];
+  return [{
+    clause: liveClause('@liveStatus', '@liveNow'),
+    params: [{ name: '@liveStatus', value: PUBLISHED }, { name: '@liveNow', value: now }]
+  }];
+}
+
+/** The same gate on a fetched row: a point read bypasses the query predicate. */
+function isLive(item, access, now = new Date().toISOString()) {
+  if (!isLiveGated(access) || item.status === undefined || item.status === null) return true;
+  return item.status === PUBLISHED && typeof item.publishDate === 'string' && item.publishDate <= now;
+}
+
 /** Nobody has claimed the notification yet. An absent field and an explicit null both count. */
-const UNCLAIMED = 'FROM c WHERE NOT IS_DEFINED(c.notifiedAt) OR IS_NULL(c.notifiedAt)';
+const UNCLAIMED_CLAUSE = '(NOT IS_DEFINED(c.notifiedAt) OR IS_NULL(c.notifiedAt))';
+
+/** Who took the claim. Only a 'demi' claim can have sent an email DEMI may later cancel. */
+const NOTIFIED_BY = Object.freeze({ DEMI: 'demi', EAGLE: 'eagle', BACKFILL: 'backfill' });
+
+/**
+ * A claim unsent this long is taken to be a run that died mid-send, and a later tick may take it
+ * over. Longer than any one run: a send waits at most two 10-second attempts.
+ */
+const NOTIFY_LEASE_MS = 30 * 60 * 1000;
+/** Tries at a send that got no answer (5xx, timeout), in total. A refusal (4xx) is never retried. */
+const NOTIFY_MAX_ATTEMPTS = 3;
+/** How far back the scheduled announce reaches. An update published longer ago is not news. */
+const NOTIFY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The DEMI send bookkeeping a whole-item write must carry across, like `notifiedAt`. */
+const NOTIFY_STATE_FIELDS = [
+  'notifyClaimedAt', 'notifySentAt', 'notifyFailedAt', 'notifyCancelledAt', 'notifyAttempts'
+];
+
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+/** A patch condition takes no parameters, so an instant is interpolated — and checked first. */
+function instantLiteral(value) {
+  if (!ISO_INSTANT.test(String(value))) throw new TypeError(`[updates] not an ISO instant: ${value}`);
+  return `"${value}"`;
+}
+
+/** A DEMI claim that ran out without a send, a refusal, or its last attempt. */
+function staleLeaseClause(now) {
+  const before = instantLiteral(new Date(Date.parse(now) - NOTIFY_LEASE_MS).toISOString());
+  return `(IS_STRING(c.notifyClaimedAt) AND c.notifyClaimedAt < ${before} ` +
+    'AND NOT IS_STRING(c.notifySentAt) AND NOT IS_STRING(c.notifyFailedAt) ' +
+    `AND c.notifyAttempts < ${NOTIFY_MAX_ATTEMPTS})`;
+}
+
+/**
+ * The row may be announced at `now`: published, through the public gate, and either unclaimed or
+ * holding a dead lease. Checked IN the claim, so a row archived or rescheduled after the timer
+ * listed it fails the claim instead of being announced from a stale read.
+ */
+function announceableClause(now) {
+  return `c.isPublished = true AND ${liveClause(`"${PUBLISHED}"`, instantLiteral(now))} ` +
+    `AND (${UNCLAIMED_CLAUSE} OR ${staleLeaseClause(now)})`;
+}
 
 /** Every DEMI project id the caller's access binds into `SCOPE_FIELD` — scope, teams, credentials. */
 function demiProjectIds(access) {
@@ -104,19 +205,20 @@ async function getById(access, id) {
   const item = await cosmos.readItem(CONTAINER, String(id), String(id));
   if (!item) return null;
   // The Cosmos partition is /id; the project axis a SCOPED caller is confined to is projectId.
-  return canRead(item, await inEagleIdSpace(access), 'projectId') ? item : null;
+  return canRead(item, await inEagleIdSpace(access), 'projectId') && isLive(item, access) ? item : null;
 }
 
 /**
- * The keyword criterion: eagle-api ran a Mongo text search over the same two fields, so a news
- * search that matched a headline there has to match it here. `true` is CONTAINS' case-insensitive
+ * The keyword criterion: the text fields the `activities` index searches, less `notificationName`,
+ * so a news search that matched there matches here. `true` is CONTAINS' case-insensitive
  * flag — without it a search for "site c" misses "Site C".
  */
 function keywordCriteria(keywords) {
   const text = String(keywords || '').trim();
   if (!text) return [];
   return [{
-    clause: '(CONTAINS(c.headline, @keywords, true) OR CONTAINS(c.content, @keywords, true))',
+    clause: '(CONTAINS(c.headline, @keywords, true) OR CONTAINS(c.content, @keywords, true) OR ' +
+      'CONTAINS(c.shortHeadline, @keywords, true) OR CONTAINS(c.summary, @keywords, true))',
     params: [{ name: '@keywords', value: text }]
   }];
 }
@@ -181,8 +283,9 @@ function dateCriteria(dateAddedFrom, dateAddedBefore) {
   ];
 }
 
-function criteriaFor({ projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }) {
+function criteriaFor(access, { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }) {
   return [
+    ...liveCriteria(access),
     ...(projectId ? [eq(SCOPE_FIELD, String(projectId), '@projectId')] : []),
     ...typeCriteria(types),
     ...documentCriteria(hasDocument),
@@ -207,9 +310,9 @@ async function list(access, {
   const spec = selectWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor({ projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }),
+    criteria: criteriaFor(access, { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }),
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
-    orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, SORT_ALIASES)
+    orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, { ...SORT_ALIASES, publishDate: publishOrderField() })
   });
 
   const { skip, fetch } = pageSlice({ pageNum, pageSize });
@@ -232,7 +335,7 @@ async function listByIds(access, ids) {
   const spec = selectWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: [inList(PARTITION_FIELD, unique, '@uid')],
+    criteria: [inList(PARTITION_FIELD, unique, '@uid'), ...liveCriteria(access)],
     select: selectFor(CONTAINER, access, PARTITION_FIELD)
   });
 
@@ -247,7 +350,7 @@ async function count(access, {
   const spec = countWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor({ projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore })
+    criteria: criteriaFor(access, { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore })
   });
   const { items } = await cosmos.query(CONTAINER, spec, {});
   return items[0] || 0;
@@ -263,20 +366,94 @@ async function count(access, {
 async function listTop(access, { limit = TOP_ROWS, types } = {}) {
   // Translated once for both halves of the strip, not per query.
   const scoped = await inEagleIdSpace(access);
-  const [pinned, unpinned] = await Promise.all([[PINNED], [UNPINNED, ...typeCriteria(types)]]
+  const live = liveCriteria(access);
+  const [pinned, unpinned] = await Promise.all([[PINNED, ...live], [UNPINNED, ...typeCriteria(types), ...live]]
     .map(async (criteria) => {
       const spec = selectWhere({
         access: scoped,
         partitionField: SCOPE_FIELD,
         criteria,
         select: selectFor(CONTAINER, access, PARTITION_FIELD),
-        orderBy: DEFAULT_ORDER
+        orderBy: `c.${publishOrderField()} DESC`
       });
       const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ pageSize: limit }));
       return items.slice(0, limit);
     }));
 
   return [...pinned, ...unpinned.slice(0, Math.max(0, limit - pinned.length))];
+}
+
+/** Pages one due-list query may read. A tick that stops here leaves the rest for the next one. */
+const DUE_PAGE_CAP = 10;
+
+/** Up to `limit` rows of `spec`, following continuations: one page may hold fewer than asked. */
+async function readUpTo(spec, limit) {
+  const rows = [];
+  let continuationToken;
+  for (let page = 0; page < DUE_PAGE_CAP && rows.length < limit; page++) {
+    const result = await cosmos.query(CONTAINER, spec, pageOptions({ pageSize: limit - rows.length, continuationToken }));
+    rows.push(...result.items);
+    continuationToken = result.continuationToken;
+    if (!continuationToken) break;
+  }
+  if (continuationToken && rows.length < limit) {
+    logger.warn('[updates] due list stopped at the page cap', { pages: DUE_PAGE_CAP, rows: rows.length });
+  }
+  return rows.slice(0, limit);
+}
+
+/** One due-list query: each criterion a plain comparison, so Cosmos can serve it from the index. */
+function dueSpec(criteria, orderBy) {
+  const access = systemAccess();
+  return selectWhere({
+    access,
+    partitionField: SCOPE_FIELD,
+    criteria: criteria.map(([clause, name, value]) => ({
+      clause, params: name ? [{ name, value }] : []
+    })),
+    select: selectFor(CONTAINER, access, PARTITION_FIELD),
+    orderBy
+  });
+}
+
+/**
+ * The scheduled announce's work list, at most `limit` rows, retries first:
+ *   1. withdrawn rows DEMI announced whose cancellation has not gone out;
+ *   2. DEMI claims whose lease ran out without a send, a refusal, or its last attempt;
+ *   3. unclaimed published rows whose `publishDate` has passed, oldest first.
+ * A claimed row's window runs from `notifyClaimedAt`, an unclaimed one's from `publishDate`. A row
+ * without `status` is listed only to retry a DEMI send: the push announces those, and one pushed
+ * while eagle-notify was dark stays unannounced. System access: it runs from a timer.
+ */
+async function listDueForNotify(now, limit) {
+  const since = new Date(Date.parse(now) - NOTIFY_WINDOW_MS).toISOString();
+  const staleBefore = new Date(Date.parse(now) - NOTIFY_LEASE_MS).toISOString();
+  const byDemi = ['c.notifiedBy = @demi', '@demi', NOTIFIED_BY.DEMI];
+  const claimedSince = ['c.notifyClaimedAt >= @since', '@since', since];
+
+  const queries = [
+    dueSpec([
+      byDemi, ['c.isPublished = false'], claimedSince, ['NOT IS_STRING(c.notifyCancelledAt)']
+    ], 'c.notifyClaimedAt ASC'),
+    dueSpec([
+      byDemi, ['c.isPublished = true'], claimedSince,
+      ['c.notifyClaimedAt < @staleBefore', '@staleBefore', staleBefore],
+      ['NOT IS_STRING(c.notifySentAt)'], ['NOT IS_STRING(c.notifyFailedAt)'],
+      ['c.notifyAttempts < @maxAttempts', '@maxAttempts', NOTIFY_MAX_ATTEMPTS]
+    ], 'c.notifyClaimedAt ASC'),
+    dueSpec([
+      ['c.isPublished = true'], ['c.status = @status', '@status', PUBLISHED],
+      ['c.publishDate >= @since', '@since', since], ['c.publishDate <= @now', '@now', now],
+      [UNCLAIMED_CLAUSE]
+    ], 'c.publishDate ASC')
+  ];
+
+  const due = [];
+  for (const spec of queries) {
+    if (due.length >= limit) break;
+    due.push(...await readUpTo(spec, limit - due.length));
+  }
+  return due;
 }
 
 /**
@@ -291,25 +468,67 @@ async function upsert(item, existing) {
   return cosmos.replace(CONTAINER, item.id, item.id, item, existing._etag);
 }
 
-/**
- * Take the notification claim, or find it already taken.
- * @returns {Promise<object|null>} the patched row, or null when somebody else holds the claim.
- */
-async function claimForNotify(id, now) {
+/** A conditional patch: the patched row, or null when the condition was false (412). */
+async function patchIf(id, operations, condition) {
   try {
-    return await cosmos.patch(CONTAINER, String(id), String(id),
-      [{ op: 'set', path: '/notifiedAt', value: now }], UNCLAIMED);
+    return await cosmos.patch(CONTAINER, String(id), String(id), operations, condition);
   } catch (err) {
-    // 412 = the condition was false, i.e. another push got there first. Not an error.
     if (err.code === 412 || err.statusCode === 412) return null;
     throw err;
   }
 }
 
-/** Give the claim back, so a later publish notifies again. */
-async function releaseNotify(id) {
-  return cosmos.patch(CONTAINER, String(id), String(id),
-    [{ op: 'set', path: '/notifiedAt', value: null }]);
+/**
+ * Take the notification claim as a lease, or find it taken or the row no longer announceable.
+ * The caller sends the row this returns, never the one it listed: that one may be stale.
+ * @returns {Promise<object|null>} the patched row, or null.
+ */
+async function claimForNotify(id, now) {
+  return patchIf(id, [
+    { op: 'set', path: '/notifiedAt', value: now },
+    { op: 'set', path: '/notifiedBy', value: NOTIFIED_BY.DEMI },
+    { op: 'set', path: '/notifyClaimedAt', value: now },
+    { op: 'incr', path: '/notifyAttempts', value: 1 }
+  ], `FROM c WHERE ${announceableClause(now)}`);
+}
+
+/**
+ * Spend the claim on a row a backfill carries, so an old publication is never announced. Live
+ * rows only: a scheduled one stays unclaimed for the timer to announce once it is due.
+ * @returns {Promise<object|null>} the patched row, or null.
+ */
+async function claimForBackfill(id, now) {
+  return patchIf(id, [
+    { op: 'set', path: '/notifiedAt', value: now },
+    { op: 'set', path: '/notifiedBy', value: NOTIFIED_BY.BACKFILL }
+  ], `FROM c WHERE c.isPublished = true AND ${liveClause(`"${PUBLISHED}"`, instantLiteral(now))} ` +
+    `AND ${UNCLAIMED_CLAUSE}`);
+}
+
+const NOTIFY_MARKS = ['notifySentAt', 'notifyFailedAt', 'notifyCancelledAt'];
+
+/** Record how a send ended. Nothing here gives the claim back: an update emails at most once. */
+async function markNotify(id, mark, at) {
+  if (!NOTIFY_MARKS.includes(mark)) throw new TypeError(`[updates] unknown notify mark: ${mark}`);
+  return cosmos.patch(CONTAINER, String(id), String(id), [{ op: 'set', path: `/${mark}`, value: at }]);
+}
+
+const UNDATED_CLAUSE = 'NOT IS_STRING(c.publishDate)';
+
+/** One page of rows without a `publishDate`, for src/scripts/backfill-update-publish-date.js. */
+async function listUndated({ pageSize, continuationToken } = {}) {
+  const spec = selectWhere({
+    access: systemAccess(),
+    partitionField: SCOPE_FIELD,
+    criteria: [{ clause: UNDATED_CLAUSE, params: [] }],
+    select: 'c.id, c.dateAdded'
+  });
+  return cosmos.query(CONTAINER, spec, pageOptions({ pageSize, continuationToken }));
+}
+
+/** Set `publishDate` on a row that still has none: a push that filled it first wins. */
+async function fillPublishDate(id, value) {
+  return patchIf(id, [{ op: 'set', path: '/publishDate', value }], `FROM c WHERE ${UNDATED_CLAUSE}`);
 }
 
 module.exports = {
@@ -318,6 +537,13 @@ module.exports = {
   SCOPE_FIELD,
   SORTABLE,
   TOP_ROWS,
+  PUBLISHED,
+  NOTIFIED_BY,
+  NOTIFY_MAX_ATTEMPTS,
+  NOTIFY_STATE_FIELDS,
+  isLiveGated,
+  isLive,
+  publishedAt,
   // Exported for the keyword-search path in controllers/search.js: the index holds EAGLE project
   // ids while a caller's scope is in DEMI ones, so the OData ACL has to be built from the same
   // translated access this container's own reads use.
@@ -327,7 +553,11 @@ module.exports = {
   listByIds,
   count,
   listTop,
+  listDueForNotify,
   upsert,
   claimForNotify,
-  releaseNotify
+  claimForBackfill,
+  markNotify,
+  listUndated,
+  fillPublishDate
 };
