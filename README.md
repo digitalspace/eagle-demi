@@ -349,7 +349,7 @@ implementation:
 | API | `demi-api-fc-test` — Functions **Flex Consumption** (FC1) on plan `demi-plan-fc-test`, scale 0-20 instances, 2048 MB each. Manage with `az functionapp` |
 | Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-test` |
 | Search | **Azure AI Search** `demi-search-test` — Basic, keyless, private endpoint only. Live indexes `chunks`, `projects`, `documents` since the cutover on 2026-08-22. The retired `demi-*` indexes are still present and still indexing — they are the rollback target (`azure/search/README.md`) |
-| Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
+| Object store | `nrs.objectstore.gov.bc.ca`, bucket `zdspnb`, no key prefix (S3-compatible, `minio` client). Same bucket eagle-api TEST writes to |
 | Frontend | React (Vite), built to `frontend/dist`, published to the `$web` container of the `demiweb…` storage account (`azure/modules/static-site.bicep`) and served through the Front Door profile in `eagle-search` |
 | Edge | Azure Front Door Standard, profile `eagle-edge-<env>` — **owned by `eagle-search`**, not by this repo. It supplies TLS, the security headers and the SPA fallback rewrite that `$web` cannot |
 | IaC | Bicep — `azure/main.bicep`, `azure/modules/` |
@@ -556,7 +556,8 @@ MinIO settings: `MINIO_HOST`, `MINIO_BUCKET_NAME`, `MINIO_ACCESS_KEY`, `MINIO_SE
 **`MINIO_PORT=443`**, **`MINIO_USE_SSL=true`** and a pinned region — without an explicit region the
 SDK does a bucket-region lookup on every presign that hangs ~135 s before failing. Dev also needs
 **`MINIO_KEY_PREFIX=ozwdez`**: the bucket holds a nested copy of prod, so recorded keys sit one
-segment deeper. The prefix is applied inside the backend; callers pass the recorded `s3Key`.
+segment deeper. The prefix is applied inside the backend; callers pass the recorded `s3Key`. Test
+(`zdspnb`) and prod (`ozwdez`) keep keys at the bucket root and set no prefix.
 
 **Downloads:** `GET /api/documents/:id/download` returns a 5-minute presigned URL, gated by the same
 ACL as the metadata read — a caller who cannot see a document cannot fetch its bytes.

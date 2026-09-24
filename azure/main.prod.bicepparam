@@ -14,8 +14,8 @@ param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'fals
 
 // ── Object store ──────────────────────────────────────────────────────────────────────────────
 // The NRS store, shared with eagle-api and outliving any Azure environment. Prod's objects sit at
-// the root of bucket `ozwdez` with no prefix — which is the same path test reaches as
-// asnpnn/ozwdez/, because the test bucket holds a nested copy of prod one segment deeper.
+// the root of bucket `ozwdez` with no prefix. Test reads bucket `zdspnb` with no prefix, the
+// bucket eagle-api test writes to. The dev bucket's asnpnn/ozwdez/ copy of prod is not read by test.
 // The credential behind it is the platform team's `nr-object-store-credential` in 6cdc9e-prod
 // (user_account / password). Nothing reads that secret at deploy time any more: both fields are
 // copied once into `demi-kv-prod` as minio-access-key and minio-secret-key, and the app resolves
