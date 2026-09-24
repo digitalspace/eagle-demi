@@ -138,6 +138,14 @@ const EMPTY_SET = new Set();
 const UNMAPPED_KEYS = {};
 
 /**
+ * Images uploaded through the Update form are Documents with `documentSource: 'UPDATE'`. They are
+ * shown on their Update only, so every Document read leaves them out unless it filters the field.
+ * `ne` rather than `eq 'PROJECT'`: legacy rows hold '' or nothing, and in Azure AI Search
+ * `null ne 'UPDATE'` is true, so those rows stay.
+ */
+const NOT_UPDATE_IMAGE = "documentSource ne 'UPDATE'";
+
+/**
  * Wire keys that ask WHETHER A FIELD IS FILLED rather than what it holds.
  *
  * `and[documentUrl]=true` is eagle-public's "Documents attached" filter on the activities list. The
@@ -515,6 +523,8 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
   const unexpressible = new Set(opts.unexpressible || []);
   const groups = [];
   const dropped = [];
+  // Fields a caller's own term landed on, so a default below can step aside for them.
+  const filtered = new Set();
 
   for (const [key, rawValue] of andParams(query)) {
     // `project` is translated by the caller before it gets here — an Eagle ObjectId compared
@@ -597,7 +607,10 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     // Reported whenever ANY value was lost, not only when all of them were: `and[pageNumber]=1,0.5`
     // would otherwise narrow silently to `1` and look like the filter the caller asked for.
     if (terms.length !== values.length) dropped.push(key);
-    if (terms.length) groups.push(terms.length === 1 ? terms[0] : `(${terms.join(' or ')})`);
+    if (terms.length) {
+      groups.push(terms.length === 1 ? terms[0] : `(${terms.join(' or ')})`);
+      filtered.add(field);
+    }
   }
 
   // Flat `project`, carrying DEMI ids by this point. Named as `dropped` on an index with no project
@@ -621,6 +634,9 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
       dropped.push('categorized');
     }
   }
+
+  // A caller who filters on `documentSource` has said which sources they want; a dropped key has not.
+  if (dataset === 'Document' && !filtered.has('documentSource')) groups.push(NOT_UPDATE_IMAGE);
 
   if (acl.filter) groups.push(acl.filter);
   return { filter: groups.length ? groups.join(' and ') : undefined, dropped };

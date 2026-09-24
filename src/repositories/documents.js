@@ -54,8 +54,22 @@ function projectIdList(projectId) {
   return (Array.isArray(projectId) ? projectId : [projectId]).map(String);
 }
 
+/**
+ * Leaves out images uploaded through the Update form (`documentSource: 'UPDATE'`): they show on
+ * their Update only, never in a document list. A missing or null `documentSource` compares as
+ * undefined in Cosmos SQL and would drop the row, so only a string is tested against the value.
+ */
+const UPDATE_SOURCE = 'UPDATE';
+
+function notUpdateImage() {
+  return {
+    clause: '(NOT IS_STRING(c.documentSource) OR c.documentSource != @updateSource)',
+    params: [{ name: '@updateSource', value: UPDATE_SOURCE }]
+  };
+}
+
 function buildCriteria({ projectId, extracted, sourceSystem, extractionError, hasProjectId,
-  parentFieldsPending }) {
+  parentFieldsPending, withoutUpdateImages }) {
   const criteria = [];
   const projectIds = projectIdList(projectId);
   if (projectIds.length === 1) criteria.push(eq('projectId', projectIds[0], '@projectId'));
@@ -84,6 +98,9 @@ function buildCriteria({ projectId, extracted, sourceSystem, extractionError, ha
 
   // NOT IS_NULL carries this: a successful extraction writes the field back as an explicit null.
   if (extractionError === true) criteria.push(isDefinedAndNotNull('contentExtractionError'));
+
+  // Opt-in, not default: the backfills and purges walk every row, Update images included.
+  if (withoutUpdateImages === true) criteria.push(notUpdateImage());
 
   return criteria;
 }
@@ -157,7 +174,7 @@ async function projectUploadMaxima(access) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [isDefinedAndNotNull('dateUploaded')],
+    criteria: [isDefinedAndNotNull('dateUploaded'), notUpdateImage()],
     select: 'c.projectId, MAX(c.dateUploaded) AS dateUploaded',
     groupBy: 'c.projectId'
   });
@@ -183,7 +200,8 @@ async function newestUploads(access, projectId) {
     partitionField: PARTITION_FIELD,
     criteria: [
       eq('projectId', String(projectId), '@projectId'),
-      isDefinedAndNotNull('dateUploaded')
+      isDefinedAndNotNull('dateUploaded'),
+      notUpdateImage()
     ],
     select: `TOP ${RECENT_UPLOAD_DOCUMENTS} ${selectFor('documents', access, PARTITION_FIELD)}`,
     orderBy: 'c.dateUploaded DESC'
@@ -295,7 +313,9 @@ async function listByIds(access, ids, projectIds) {
     partitionField: PARTITION_FIELD,
     criteria: [
       inList('id', unique, '@did'),
-      inList(PARTITION_FIELD, projects, '@dpid')
+      inList(PARTITION_FIELD, projects, '@dpid'),
+      // This read is the chunk gate: an Update image's chunk, if one was ever made, stays out.
+      notUpdateImage()
     ],
     select: 'c.id, c.displayName, c.documentFileName, c.type, c.milestone, c.milestoneId, c.datePosted'
   });
@@ -883,6 +903,7 @@ async function listByIdsUnscoped(access, ids, select) {
 
 module.exports = {
   CONTAINER,
+  UPDATE_SOURCE,
   PARTITION_FIELD,
   EXTRACTION_FIELDS,
   PARENT_PENDING_FIELDS,

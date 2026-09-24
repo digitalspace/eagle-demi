@@ -39,6 +39,7 @@ module.exports = {
   shortHeadline: { defaultVis: 4, maxVis: 4 },
   summary: { defaultVis: 4, maxVis: 4 },
   featuredImage: { defaultVis: 4, maxVis: 4 },
+  images: { defaultVis: 4, maxVis: 4 },
   attachments: { defaultVis: 4, maxVis: 4 },
   regions: { defaultVis: 4, maxVis: 4 },
   location: { defaultVis: 4, maxVis: 4 },

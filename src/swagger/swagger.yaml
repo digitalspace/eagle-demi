@@ -23,7 +23,9 @@ paths:
         `{searchResults, count, meta}`, where `meta[0].searchResultsTotal` is the measured total to
         page against. `closedCount` joins that envelope on the one read that measures a second
         number — see `and[status]`; it is absent everywhere else rather than zero. An unknown
-        dataset, or any query parameter not listed here, is a 400.
+        dataset, or any query parameter not listed here, is a 400. Document reads and counts leave
+        out images uploaded through the Update form (`documentSource` `UPDATE`) unless the request
+        filters on `and[documentSource]`.
       parameters:
         - name: dataset
           in: query
@@ -346,6 +348,8 @@ paths:
         named under `meta[0].degraded` was counted by a substring match in the database rather than
         by the search index, so its number answers a slightly different question than the tab will.
         No `Cache-Control` is sent: the counts are ACL-scoped and must not be held by a shared cache.
+        The Document count leaves out images uploaded through the Update form (`documentSource`
+        `UPDATE`), as the Document list does.
 
 
         TAKES NO FILTERS. The four parameters below are the whole list: filters belong to one
@@ -1040,7 +1044,7 @@ paths:
   /api/documents:
     get:
       summary: Retrieve documents
-      description: Get all documents, optionally filtered by spatial administrative region of their parent project. Restricts to published documents for unauthenticated public requests.
+      description: Get all documents, optionally filtered by spatial administrative region of their parent project. Restricts to published documents for unauthenticated public requests. Images uploaded through the Update form (`documentSource` `UPDATE`) are left out.
       parameters:
         - name: region
           in: query
@@ -1090,7 +1094,8 @@ paths:
       description: >-
         The distinct projects that most recently received a document the caller may read, newest
         first, each listing up to five of its newest documents. Documents the caller cannot read,
-        documents with no upload date and projects the caller cannot read are all left out.
+        documents with no upload date, images uploaded through the Update form (`documentSource`
+        `UPDATE`) and projects the caller cannot read are all left out.
 
         The ranking comes from the newest upload date in each project, so a bulk import of many
         documents into one project takes one place in the list. FEWER than `limit` projects is a
@@ -2048,9 +2053,12 @@ paths:
         when it comes due. A `notifiedAt` on the pushed record marks it as already announced.
 
         Also stores `category`, `subject`, `shortHeadline`, `summary`, `featuredImage`
-        (`{document, alt}`), `attachments` (document ids), `regions`, `location`,
+        (`{document, alt, caption, credit}`), `images` (same shape, in display order, at most 5),
+        `attachments` (document ids), `regions`, `location`,
         `engagementUrl` (http/https only, else null), `status` and `publishDate` (ISO; the
-        record's `dateAdded` when it has none). Every
+        record's `dateAdded` when it has none). Image `alt`, `caption` and `credit` are stored as
+        plain text with `<` and `>` stripped; `caption` is cut at 300 characters and `credit` at
+        150, and an empty one is stored as null. An image entry with no `document` is dropped. Every
         read by a non-staff caller shows a row with a `status` only when it is `published` and
         its `publishDate` has passed; a row with no `status`
         follows `read[]` alone. An update is emailed at most once: withdrawing one DEMI announced

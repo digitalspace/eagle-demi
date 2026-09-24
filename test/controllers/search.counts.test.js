@@ -113,6 +113,18 @@ test('GET /search/counts answers one badge per record type', async (t) => {
     assert.strictEqual(out.body[0].counts.Document, 1507);
   });
 
+  // A sysadmin has no ACL clause, so a count on the bare ACL would include the Update images the
+  // Document list leaves out.
+  await t.test('the document badge leaves out Update-form images, as the list does', async (tt) => {
+    withIndexes(tt, {});
+    const seen = stubAllLegs(tt);
+
+    const { res } = capture();
+    await searchController.counts(privileged({ keywords: 'caribou' }), res);
+
+    assert.ok(seen.Document.filter.includes("documentSource ne 'UPDATE'"), seen.Document.filter);
+  });
+
   await t.test('datasets narrows the answer without narrowing the contract', async (tt) => {
     withIndexes(tt, {});
     stubAllLegs(tt);

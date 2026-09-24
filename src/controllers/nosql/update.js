@@ -19,6 +19,7 @@ const { auditEvent } = require('../../utils/audit');
 const notify = require('../../services/notify');
 const documents = require('../../repositories/documents');
 const { toIsoOrNull } = require('../../seed/transform');
+const { plainTextOf } = require('../../helpers/html-entities');
 const {
   eaglePush, refId, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
@@ -117,6 +118,27 @@ function notifyState(existing) {
   return state;
 }
 
+// The limits the Update form enforces, held here too so a direct push cannot exceed them.
+const MAX_IMAGES = 5;
+const CAPTION_CHARS = 300;
+const CREDIT_CHARS = 150;
+
+/** An image reference. Its text is rendered on a public page, so markup is stripped here, the one writer. */
+function imageOf(image) {
+  return {
+    document: refId(image.document),
+    alt: plainTextOf(image.alt),
+    caption: plainTextOf(image.caption).slice(0, CAPTION_CHARS) || null,
+    credit: plainTextOf(image.credit).slice(0, CREDIT_CHARS) || null
+  };
+}
+
+/** The gallery, in display order; an entry with no document has nothing to show and is dropped. */
+function imagesOf(images) {
+  if (!Array.isArray(images)) return [];
+  return images.filter(image => image && image.document).slice(0, MAX_IMAGES).map(imageOf);
+}
+
 /** The mirror row: the raw Eagle record, plus what DEMI already holds about it. */
 function mirrorItem(eagleId, doc, existing) {
   const read = Array.isArray(doc.read) ? doc.read : null;
@@ -138,15 +160,15 @@ function mirrorItem(eagleId, doc, existing) {
     documentUrl: doc.documentUrl || null,
     pcp: refId(doc.pcp),
     projectNotification: refId(doc.projectNotification),
-    // The Updates fields (PUBLIC-159). Stored as sent; the `shortHeadline`/`summary` fallbacks are
-    // the reader's, so an edit to `headline` or `content` never leaves a stale copy here.
+    // The Updates fields (PUBLIC-159). Stored as sent, except image text, stored as plain text; the
+    // `shortHeadline`/`summary` fallbacks are the reader's, so an edit to `headline` or `content`
+    // never leaves a stale copy here.
     category: doc.category || null,
     subject: doc.subject || null,
     shortHeadline: doc.shortHeadline || null,
     summary: doc.summary || null,
-    featuredImage: doc.featuredImage && doc.featuredImage.document
-      ? { document: refId(doc.featuredImage.document), alt: doc.featuredImage.alt || '' }
-      : null,
+    featuredImage: doc.featuredImage && doc.featuredImage.document ? imageOf(doc.featuredImage) : null,
+    images: imagesOf(doc.images),
     attachments: Array.isArray(doc.attachments) ? doc.attachments.map(refId).filter(Boolean) : [],
     regions: Array.isArray(doc.regions) ? doc.regions.map(String) : [],
     location: doc.location || null,

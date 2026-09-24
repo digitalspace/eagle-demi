@@ -12,7 +12,7 @@
 
 const config = require('../config');
 const { logger } = require('../utils/logger');
-const { decodeEntities } = require('../helpers/html-entities');
+const { decodeEntities, plainTextOf } = require('../helpers/html-entities');
 
 const TIMEOUT_MS = 10000;
 const ATTEMPTS = 2;
@@ -94,33 +94,14 @@ async function post(body) {
   return OUTCOME.FAILED;
 }
 
-/** Tags that end a block of text: `<li>One</li><li>Two</li>` reads "One Two", not "OneTwo". */
-const BLOCK_TAG = /<\/?(?:br|p|div|li|ul|ol|h[1-6]|blockquote|tr|td|th|table|section|article)\b[^>]*>/gi;
-
-/** Tags removed until none is left, so a split tag (`<<b>script>`) cannot rejoin into one. */
-function withoutTags(html) {
-  let text = html;
-  let previous;
-  do {
-    previous = text;
-    text = text.replace(/<[^>]*>/g, '');
-  } while (text !== previous);
-  return text;
-}
-
 /**
  * The update's fallback summary: its first non-empty paragraph as plain text, cut at 280. No `<` or
  * `>` survives, not even one decoded from `&lt;`, so the summary can never carry a tag.
  */
 function summaryOf(content) {
-  // Block tags break words; any other tag is inline (`<i>`), so it goes without a space.
-  const plain = (paragraph) => decodeEntities(withoutTags(paragraph.replace(BLOCK_TAG, ' ')))
-    .replace(/[<>]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
   const first = String(content || '')
     .split(/<\/(?:p|div|h[1-6]|blockquote|ul|ol)>|\n\s*\n/i)
-    .map(plain)
+    .map(plainTextOf)
     .find(Boolean);
   return (first || '').slice(0, SUMMARY_CHARS);
 }

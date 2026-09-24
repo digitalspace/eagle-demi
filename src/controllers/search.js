@@ -515,6 +515,25 @@ function redactIndexProject(hit, access) {
   return redactForAccess('index-projects', { ...hit, vis: dialsForIndex(dials) }, access);
 }
 
+// `listByIdsUnscoped` is cross-partition, so its caller keeps each read to this many ids.
+const UPDATE_DOCUMENT_BATCH = 200;
+
+/** The documents Update rows reference. No project ids to narrow by: an update may attach any. */
+async function updateDocuments(access, ids) {
+  const rows = [];
+  for (let i = 0; i < ids.length; i += UPDATE_DOCUMENT_BATCH) {
+    rows.push(...await documentsRepo.listByIdsUnscoped(
+      access, ids.slice(i, i + UPDATE_DOCUMENT_BATCH), 'c.id, c.projectId, c.displayName, c.documentFileName, c.vis'
+    ));
+  }
+  return rows;
+}
+
+/** An Update image as the News model reads it, its `document` already resolved for this caller. */
+function imageOut(entry, document) {
+  return { document, alt: entry.alt || '', caption: entry.caption || null, credit: entry.credit || null };
+}
+
 /**
  * Label update rows with the project each announces, under the CALLER's access — same rule as
  * `labelWithProjectNames`, one id space over: `updates.projectId` holds the EAGLE id, so the lookup
@@ -526,8 +545,8 @@ function redactIndexProject(hit, access) {
  * an orphaned reference (`api/controllers/recentActivity.js:86-90`) and what eagle-public's News
  * model expects.
  *
- * Attachments and the featured image are resolved the same way: a document this caller cannot
- * read drops out, so a public page never links a download that answers 404.
+ * Attachments, the featured image and the gallery are resolved the same way: a document this
+ * caller cannot read drops out, so a public page never links a download that answers 404.
  */
 async function updateProjects(access, rows) {
   const idsOf = (field) => Array.from(new Set(rows.map(r => r[field]).filter(Boolean).map(String)));
@@ -537,7 +556,8 @@ async function updateProjects(access, rows) {
   // Document ids are Eagle `_id`s on both sides: the document mirror keys its rows by them.
   const documentIds = Array.from(new Set(rows.flatMap(r => [
     ...(Array.isArray(r.attachments) ? r.attachments : []),
-    ...(r.featuredImage && r.featuredImage.document ? [r.featuredImage.document] : [])
+    ...(r.featuredImage && r.featuredImage.document ? [r.featuredImage.document] : []),
+    ...(Array.isArray(r.images) ? r.images.map(image => image && image.document) : [])
   ]).filter(Boolean).map(String)));
 
   // Redacted before anything reads a field off them, like every other repository row on this route.
@@ -545,10 +565,7 @@ async function updateProjects(access, rows) {
     eagleIds.length ? projectsRepo.listByEagleIds(access, eagleIds) : [],
     periodIds.length ? commentPeriodsRepo.listByIds(access, periodIds) : [],
     notificationIds.length ? notificationsRepo.listByIds(access, notificationIds) : [],
-    // No project ids to narrow by: an update may attach a document from any project.
-    documentIds.length
-      ? documentsRepo.listByIdsUnscoped(access, documentIds, 'c.id, c.projectId, c.displayName, c.documentFileName, c.vis')
-      : []
+    updateDocuments(access, documentIds)
   ]).then(([p, cp, n, d]) => [
     redactAllForAccess('projects', p, access),
     redactAllForAccess('commentPeriods', cp, access),
@@ -594,8 +611,15 @@ async function updateProjects(access, rows) {
       ...(Array.isArray(row.attachments)
         ? { attachments: row.attachments.map(documentRef).filter(Boolean) }
         : {}),
-      ...(row.featuredImage !== undefined
-        ? { featuredImage: image ? { document: image, alt: row.featuredImage.alt || '' } : null }
+      ...(row.featuredImage !== undefined ? { featuredImage: image ? imageOut(row.featuredImage, image) : null } : {}),
+      // Order kept: it is the display order. A row from before the gallery answers no key.
+      ...(Array.isArray(row.images)
+        ? {
+          images: row.images.flatMap((entry) => {
+            const document = entry && entry.document ? documentRef(entry.document) : null;
+            return document ? [imageOut(entry, document)] : [];
+          })
+        }
         : {}),
       pcp: period
         ? { _id: String(period.id), isMet: period.isMet === true, metURL: period.metURL || '' }
@@ -2011,7 +2035,8 @@ const COUNT_LEGS = {
     // PROJECT's name matched, and a count without it under-reports the tab's own total.
     const { count } = await aiSearch.searchDocuments({
       countOnly: true,
-      filter: acl.filter,
+      // Through buildFilter so the tab counts the rows the Document list returns.
+      filter: eagleQuery.buildFilter({}, 'Document', acl, access).filter,
       projectFilter: projectScope.empty ? undefined : projectScope.filter,
       keywords,
       matchAll: !keywords,
