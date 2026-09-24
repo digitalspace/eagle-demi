@@ -13,15 +13,17 @@ param location = 'canadacentral'
 // needs `./scripts/deploy-infra.sh test --foundation`, which is what sets DEPLOY_FOUNDATION.
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
-// Direct-to-NRS object store. asnpnn/ozwdez, NOT the "test bucket" zdspnb: the corpus (92,472
-// objects, 257 GB) exists ONLY under asnpnn/ozwdez/, zdspnb holds zero objects under any DEMI
-// prefix, and eagle-api on OpenShift TEST reads asnpnn too (its eagle-api-minio-keys secret).
-// Measured 2026-08-11 before the dev teardown; the store is NRS-owned and outlives any Azure
-// environment. Only the coordinates are here — the credentials are `minio-access-key` and
-// `minio-secret-key` in `demi-kv-test`, and no parameter carries either value.
+// Direct-to-NRS object store: the test bucket zdspnb, keys at the root, no prefix. eagle-api on
+// OpenShift TEST has written here through its nr-object-store-credential secret since the Helm
+// move on 2026-02-11, so both apps see the same objects. asnpnn/ozwdez/ is a prod copy in the dev
+// bucket, made by the 2026-09-02 backfill, and nothing on test reads it now. A dry run on
+// 2026-09-24 found 413 of 61,683 test documents missing from zdspnb: rows copied from prod whose
+// objects exist only in that copy. Only the coordinates are here — the credentials are
+// `minio-access-key` and `minio-secret-key` in `demi-kv-test` (the test account, nr-epic-tst),
+// and no parameter carries either value.
 param minioHost = 'nrs.objectstore.gov.bc.ca'
-param minioBucketName = 'asnpnn'
-param minioKeyPrefix = 'ozwdez'
+param minioBucketName = 'zdspnb'
+param minioKeyPrefix = ''
 
 // The vault holds admin-api-key, track-client-secret, role-sync-client-secret, docling-api-key,
 // minio-access-key, minio-secret-key, analytics-shared-header and analytics-audit-header, plus the

@@ -29,8 +29,8 @@ not by streaming, at that document count.
 
 **Eleven of the twenty invocations packed zero documents** — every requested
 id came back `[bulk] object unreadable]` and the job finished in 1.6--3.5 s.
-This is the known test-bucket gap (`asnpnn` mirrors prod from before
-~2020-05; wiki `Bulk-Download-Operations.md` "Backfill missing objects on
+This is the known test-bucket gap (test then read `asnpnn/ozwdez/`, which
+mirrored prod from before ~2020-05; test now reads `zdspnb`; wiki `Bulk-Download-Operations.md` "Backfill missing objects on
 test"), not a performance signal — but it means roughly half of test's real
 job traffic is misleadingly fast, and averaging all 20 jobs would understate
 per-document cost.
