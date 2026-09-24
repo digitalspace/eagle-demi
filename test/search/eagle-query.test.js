@@ -26,6 +26,8 @@ const anonAcl = (field) => filterFor(anonymous(), field);
 /** What an anonymous caller's ACL clause is on its own: the public roles, minus the sealed rows. */
 const ANON_FILTER =
   "read/any(r: search.in(r, 'public', ',')) and not read/any(r: r eq 'compliance')";
+// Every Document read carries the Update-image exclusion ahead of the ACL clause.
+const DOC_ANON_FILTER = `documentSource ne 'UPDATE' and ${ANON_FILTER}`;
 
 test('eagle-query filters', async (t) => {
   // THE assertion that matters. The caller's filters are COMPOSED with the ACL clause; a filter
@@ -86,7 +88,7 @@ test('eagle-query filters', async (t) => {
 
     assert.deepStrictEqual(dropped, ['documentAuthor']);
     assert.ok(!filter.includes('documentAuthor'), 'a name the index lacks must never reach OData');
-    assert.strictEqual(filter, ANON_FILTER);
+    assert.strictEqual(filter, DOC_ANON_FILTER);
   });
 
   // The four document facets eagle-public sends, all as List ObjectIds, all onto the id columns.
@@ -147,7 +149,7 @@ test('eagle-query filters', async (t) => {
       anonAcl(), anonymous());
 
     assert.deepStrictEqual(dropped, ['read']);
-    assert.strictEqual(filter, ANON_FILTER);
+    assert.strictEqual(filter, DOC_ANON_FILTER);
   });
 
   // `_id` is the Eagle ObjectId on the wire. On a project that lives in `legacyEagleId`; filtering
@@ -796,14 +798,14 @@ test('a boolean value OData cannot express is dropped, not coerced to false', ()
   // to express and reports nothing — a different case from a value that cannot be expressed.
   for (const v of ['1', 'True', 'TRUE', 'yes', 'banana']) {
     const out = eagleQuery.buildFilter({ 'and[isPublished]': v }, 'Document', { filter: null, empty: false });
-    assert.strictEqual(out.filter, undefined, `${v} must not build a filter`);
+    assert.strictEqual(out.filter, "documentSource ne 'UPDATE'", `${v} builds only the Update-image default`);
     assert.deepStrictEqual(out.dropped, ['isPublished'], `${v} must be reported dropped`);
   }
   // The control: the two literals OData does define must still filter, or the assertion above is
   // satisfied by dropping everything.
   for (const [v, expected] of [['true', true], ['false', false]]) {
     const out = eagleQuery.buildFilter({ 'and[isPublished]': v }, 'Document', { filter: null, empty: false });
-    assert.strictEqual(out.filter, `isPublished eq ${expected}`);
+    assert.strictEqual(out.filter, `isPublished eq ${expected} and documentSource ne 'UPDATE'`);
     assert.deepStrictEqual(out.dropped, []);
   }
 });
@@ -1053,4 +1055,39 @@ test('Project accepts sortBy=-dateUpdated', () => {
 
   assert.deepStrictEqual(dropped, []);
   assert.ok(orderby.startsWith('dateUpdated desc'), orderby);
+});
+
+test('Update-form images stay out of Document reads', async (t) => {
+  // No ACL clause at all, the privileged shape: without the default this read is unfiltered.
+  const noAcl = { filter: null, empty: false };
+
+  await t.test('an unfiltered read still leaves them out', () => {
+    const { filter } = eagleQuery.buildFilter({}, 'Document', noAcl, anonymous());
+
+    assert.strictEqual(filter, "documentSource ne 'UPDATE'");
+  });
+
+  await t.test('a caller filtering on documentSource gets their own clause instead', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[documentSource]': 'UPDATE' }, 'Document', noAcl, anonymous());
+
+    assert.deepStrictEqual(dropped, []);
+    assert.strictEqual(filter, "documentSource eq 'UPDATE'");
+  });
+
+  // A key that never became a clause has not chosen a source, so the default stays.
+  await t.test('a documentSource filter that expresses nothing keeps the default', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[documentSource]': 'UPDATE' }, 'Document', noAcl, anonymous(),
+      { unexpressible: ['documentSource'] });
+
+    assert.deepStrictEqual(dropped, ['documentSource']);
+    assert.strictEqual(filter, "documentSource ne 'UPDATE'");
+  });
+
+  await t.test('other datasets carry no documentSource clause', () => {
+    const { filter } = eagleQuery.buildFilter({}, 'Project', anonAcl('id'), anonymous());
+
+    assert.strictEqual(filter, ANON_FILTER);
+  });
 });

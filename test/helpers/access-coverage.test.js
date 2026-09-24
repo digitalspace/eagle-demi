@@ -358,8 +358,9 @@ test('access gate coverage', async (t) => {
     // for the 404 (row deleted under edit), 409 (staff PUT write-race exhausted) and 503 (eagle
     // push write-race exhausted) sites. +3 for GET /documents/recent-uploads: its 400, its memo
     // hit and its ranked payload. +2 for the chunk ingest 409 guard and 413 cap. +1 for its
-    // uncounted 503 when the search index kept dropped chunks (error string only).
-    assert.strictEqual(emissions.length, 43,
+    // uncounted 503 when the search index kept dropped chunks (error string only). +1 for the
+    // chunk ingest 409 refusing an Update image (error string only).
+    assert.strictEqual(emissions.length, 44,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits

@@ -104,6 +104,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       shortHeadline: null,
       summary: null,
       featuredImage: null,
+      images: [],
       attachments: [],
       regions: [],
       location: null,
@@ -159,7 +160,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     assert.strictEqual(written.subject, 'Policy');
     assert.strictEqual(written.shortHeadline, 'Comment period opens');
     assert.strictEqual(written.summary, 'Have your say on the project.');
-    assert.deepStrictEqual(written.featuredImage, { document: 'D-img', alt: 'Site map' });
+    assert.deepStrictEqual(written.featuredImage, { document: 'D-img', alt: 'Site map', caption: null, credit: null });
     assert.deepStrictEqual(written.attachments, ['D-1', 'D-2']);
     assert.deepStrictEqual(written.regions, ['Lower Mainland']);
     assert.strictEqual(written.location, 'Merritt');
@@ -167,6 +168,109 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     assert.strictEqual(written.status, 'published');
     // UTC ISO text: the publish gate compares it as a string.
     assert.strictEqual(written.publishDate, '2026-08-01T16:00:00.000Z');
+  });
+
+  await t.test('the gallery is stored in display order, references flattened', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ images: [
+      { document: { _id: 'D-2' }, alt: 'Access road', caption: 'Looking north', credit: 'EAO' },
+      { document: 'D-1', alt: 'Site map' }
+    ] }) });
+
+    assert.deepStrictEqual(written.images, [
+      { document: 'D-2', alt: 'Access road', caption: 'Looking north', credit: 'EAO' },
+      { document: 'D-1', alt: 'Site map', caption: null, credit: null }
+    ]);
+  });
+
+  await t.test('gallery text is stored as plain text, with no tag left to render', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ images: [{
+      document: 'D-1',
+      alt: '<b>Site</b> map',
+      caption: '<<b>script>alert(1)<</b>/script> Looking north',
+      credit: '&lt;img src=x&gt; Jane &amp; Co'
+    }] }) });
+
+    const [image] = written.images;
+    assert.strictEqual(image.alt, 'Site map');
+    assert.strictEqual(image.caption, 'scriptalert(1)/script Looking north');
+    assert.strictEqual(image.credit, 'img src=x Jane & Co');
+  });
+
+  await t.test('the featured image caption and credit are stored as plain text', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ featuredImage: {
+      document: 'D-img',
+      alt: 'Site map',
+      caption: '  <b>Looking</b> north  ',
+      credit: '&lt;img src=x&gt; Jane &amp; Co'
+    } }) });
+
+    assert.strictEqual(written.featuredImage.caption, 'Looking north');
+    assert.strictEqual(written.featuredImage.credit, 'img src=x Jane & Co');
+  });
+
+  await t.test('the featured image alt is stored as plain text', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ featuredImage: { document: 'D-img', alt: '<i>Site</i> <b>map</b>' } }) });
+
+    assert.strictEqual(written.featuredImage.alt, 'Site map');
+  });
+
+  // The Update form allows 5 images, a 300-character caption and a 150-character credit; a direct
+  // push is held to the same.
+  await t.test('a gallery past five images keeps the first five, in order', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ images: ['D-1', 'D-2', 'D-3', 'D-4', 'D-5', 'D-6'].map(document => ({ document, alt: document })) }) });
+
+    assert.deepStrictEqual(written.images.map(image => image.document), ['D-1', 'D-2', 'D-3', 'D-4', 'D-5']);
+  });
+
+  await t.test('a gallery caption is cut to 300 characters and a credit to 150', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ images: [{ document: 'D-1', alt: 'x', caption: 'c'.repeat(301), credit: 'r'.repeat(151) }] }) });
+
+    assert.strictEqual(written.images[0].caption.length, 300);
+    assert.strictEqual(written.images[0].credit.length, 150);
+  });
+
+  await t.test('images sent as something other than a list are stored as an empty gallery', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ images: { document: 'D-1', alt: 'Site map' } }) });
+
+    assert.deepStrictEqual(written.images, []);
+  });
+
+  await t.test('a gallery entry with no document is dropped', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ images: [{ alt: 'no file' }, null, { document: 'D-1', alt: 'Site map' }] }) });
+
+    assert.deepStrictEqual(written.images.map(image => image.document), ['D-1']);
   });
 
   await t.test('an engagementUrl that is not http(s) is dropped', async () => {
@@ -350,7 +454,8 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
 
     let seen = wiredNotify(t, { publicDocs: [image.document] });
     await push({ doc: eagleUpdate({ featuredImage: image }) });
-    assert.deepStrictEqual(seen.published[0].image, image);
+    const { document, alt } = seen.published[0].image;
+    assert.deepStrictEqual({ document, alt }, image);
 
     t.mock.restoreAll();
     t.mock.method(updates, 'getById', async () => null);

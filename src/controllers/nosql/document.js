@@ -290,6 +290,9 @@ exports.getDocuments = async (req, res) => {
     const { items, continuationToken } = await documents.listVisible(access, {
       projectId: req.query.project,
       extracted,
+      // Leaves out images uploaded through the Update form. That also keeps them off the extraction
+      // host's work list (`extracted=false`), so they get no chunks.
+      withoutUpdateImages: true,
       pageSize,
       continuationToken: req.query.continuationToken
     });
@@ -1694,6 +1697,11 @@ exports.ingestChunks = async (req, res) => {
     doc = await documents.getById(access, req.params.id, req.query.project);
     if (!doc) {
       return res.status(404).json({ error: 'Document not found' });
+    }
+    // An Update image shows on its Update only; chunks would put it in search.
+    if (doc.documentSource === documents.UPDATE_SOURCE) {
+      logger.warn('[Document Controller] refused ingest for an Update image', { documentId: doc.id });
+      return res.status(409).json({ error: 'Images uploaded through the Update form are not extracted' });
     }
 
     // `express.json` only parses `application/json`, so an NDJSON body arrives here with the

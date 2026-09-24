@@ -107,12 +107,27 @@ test('GET /search?dataset=RecentActivity&and[_id]', async (t) => {
       'a document the caller cannot read drops out');
     assert.deepStrictEqual(row.featuredImage, {
       document: { _id: 'D-img', id: 'D-img', displayName: 'Site map', documentFileName: 'D-img.pdf' },
-      alt: 'Site map'
+      alt: 'Site map', caption: null, credit: null
     });
     const [lookup] = specsFor(seen, 'documents');
     assert.match(lookup.query, /c\.read/, 'the lookup carries the caller\'s ACL, never system access');
     assert.ok(boundValues(lookup).includes('public'));
     assert.deepStrictEqual(boundValues(lookup).filter(v => /^D-/.test(v)).sort(), ['D-1', 'D-hidden', 'D-img']);
+  });
+
+  await t.test('the featured image carries its caption and credit', async () => {
+    stubCosmos(t, {
+      ...rowsFor([updateRow({
+        id: UPDATE_ID, eagleId: UPDATE_ID,
+        featuredImage: { document: 'D-img', alt: 'Site map', caption: 'Looking north', credit: 'EAO' }
+      })]),
+      documents: [{ id: 'D-img', projectId: '207', displayName: 'Site map', documentFileName: 'D-img.jpg', read: ['public'] }]
+    });
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    const { caption, credit } = body[0].searchResults[0].featuredImage;
+    assert.deepStrictEqual({ caption, credit }, { caption: 'Looking north', credit: 'EAO' });
   });
 
   await t.test('a featured image the caller cannot read answers null', async () => {
@@ -124,6 +139,71 @@ test('GET /search?dataset=RecentActivity&and[_id]', async (t) => {
     const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
 
     assert.strictEqual(body[0].searchResults[0].featuredImage, null);
+  });
+
+  await t.test('the gallery resolves to names in display order, not lookup order', async () => {
+    const doc = (id) => ({ id, projectId: '207', displayName: `Photo ${id}`, documentFileName: `${id}.jpg`, read: ['public'] });
+    stubCosmos(t, {
+      ...rowsFor([updateRow({ id: UPDATE_ID, eagleId: UPDATE_ID, images: [
+        { document: 'D-b', alt: 'Second upload, shown first', caption: 'Looking north', credit: 'EAO' },
+        { document: 'D-a', alt: 'First upload', caption: null, credit: null }
+      ] })]),
+      documents: [doc('D-a'), doc('D-b')]
+    });
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    assert.deepStrictEqual(body[0].searchResults[0].images, [
+      {
+        document: { _id: 'D-b', id: 'D-b', displayName: 'Photo D-b', documentFileName: 'D-b.jpg' },
+        alt: 'Second upload, shown first', caption: 'Looking north', credit: 'EAO'
+      },
+      {
+        document: { _id: 'D-a', id: 'D-a', displayName: 'Photo D-a', documentFileName: 'D-a.jpg' },
+        alt: 'First upload', caption: null, credit: null
+      }
+    ]);
+  });
+
+  await t.test('a gallery image the caller cannot read drops out, and the rest keep their order', async () => {
+    const doc = (id) => ({ id, projectId: '207', displayName: id, documentFileName: `${id}.jpg`, read: ['public'] });
+    const seen = stubCosmos(t, {
+      ...rowsFor([updateRow({ id: UPDATE_ID, eagleId: UPDATE_ID, images: [
+        { document: 'D-3', alt: 'three' }, { document: 'D-hidden', alt: 'hidden' }, { document: 'D-1', alt: 'one' }
+      ] })]),
+      // What Cosmos answers the caller: `D-hidden` is not public, so the ACL predicate leaves it out.
+      documents: [doc('D-1'), doc('D-3')]
+    });
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    assert.deepStrictEqual(body[0].searchResults[0].images.map(image => image.alt), ['three', 'one']);
+    const [lookup] = specsFor(seen, 'documents');
+    assert.ok(boundValues(lookup).includes('public'), 'the lookup carries the caller\'s ACL');
+    assert.ok(boundValues(lookup).includes('D-hidden'), 'the hidden image was asked for and refused');
+  });
+
+  await t.test('a row stored before the gallery answers no images key', async () => {
+    stubCosmos(t, rowsFor([updateRow({ id: UPDATE_ID, eagleId: UPDATE_ID })]));
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    assert.ok(!('images' in body[0].searchResults[0]), 'no key, not an empty list');
+  });
+
+  // The document lookup is cross-partition, so it is sent in reads of at most 200 ids.
+  await t.test('201 referenced documents are looked up in two reads, and all resolve', async () => {
+    const ids = Array.from({ length: 201 }, (_, i) => `D-${i}`);
+    const seen = stubCosmos(t, {
+      ...rowsFor([updateRow({ id: UPDATE_ID, eagleId: UPDATE_ID, attachments: ids })]),
+      documents: ids.map(id => ({ id, projectId: '207', displayName: id, documentFileName: `${id}.pdf`, read: ['public'] }))
+    });
+
+    const { body } = await get(`/api/search?dataset=RecentActivity&and%5B_id%5D=${UPDATE_ID}`);
+
+    const idsPerRead = specsFor(seen, 'documents').map(spec => boundValues(spec).filter(v => /^D-/.test(v)).length);
+    assert.deepStrictEqual(idsPerRead, [200, 1]);
+    assert.strictEqual(body[0].searchResults[0].attachments.length, 201);
   });
 
   await t.test('a scheduled update reads as missing to the public', async () => {

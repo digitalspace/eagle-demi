@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * HTML entities to the characters they stand for. Shared by the federal registry reader and the
- * eagle-notify sender: both turn stored markup into plain text a person reads.
+ * HTML entities to the characters they stand for, and markup to plain text. Shared by the federal
+ * registry reader, the eagle-notify sender and the Updates mirror: each turns markup into plain
+ * text a person reads.
  */
 
 /** The punctuation entities that show up in registry markup and in editor-written Update content. */
@@ -49,4 +50,30 @@ function decodeEntities(text) {
   });
 }
 
-module.exports = { decodeEntities };
+/** Tags that end a block of text: `<li>One</li><li>Two</li>` reads "One Two", not "OneTwo". */
+const BLOCK_TAG = /<\/?(?:br|p|div|li|ul|ol|h[1-6]|blockquote|tr|td|th|table|section|article)\b[^>]*>/gi;
+
+/** Tags removed until none is left, so a split tag (`<<b>script>`) cannot rejoin into one. */
+function withoutTags(html) {
+  let text = html;
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/<[^>]*>/g, '');
+  } while (text !== previous);
+  return text;
+}
+
+/**
+ * Markup to one line of plain text. No `<` or `>` survives, not even one decoded from `&lt;`, so
+ * the result can never carry a tag.
+ */
+function plainTextOf(html) {
+  // Block tags break words; any other tag is inline (`<i>`), so it goes without a space.
+  return decodeEntities(withoutTags(String(html || '').replace(BLOCK_TAG, ' ')))
+    .replace(/[<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+module.exports = { decodeEntities, plainTextOf };
