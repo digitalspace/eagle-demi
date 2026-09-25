@@ -275,6 +275,18 @@ test('prefix reaches the legs that count on it', async (t) => {
       /status eq 'published' and publishDate le [^)\s]+\)\)$/);
   });
 
+  await t.test('the Updates badge leaves out updates under a parent the caller cannot read', async (tt) => {
+    withIndexes(tt, {});
+    const seen = stubAllLegs(tt);
+    tt.mock.method(updatesRepo, 'hiddenParentIds', async () => ['588511d0aaecd9001b8256ff']);
+
+    const { res } = capture();
+    await searchController.counts(anonymous({ keywords: 'caribou' }), res);
+
+    assert.ok(seen.RecentActivity.filter.includes("not search.in(projectId, '588511d0aaecd9001b8256ff', ',')"),
+      seen.RecentActivity.filter);
+  });
+
   await t.test('off on the exact string false, and only on that', async (tt) => {
     withIndexes(tt, {});
     const seen = stubAllLegs(tt);

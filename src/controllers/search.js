@@ -631,6 +631,11 @@ async function updateProjects(access, rows) {
   };
 }
 
+/** Update rows as the RecentActivity dataset answers them. The parent gate is the repository's. */
+async function updateResults(access, rows) {
+  return cosmosRows('updates', rows, access, 'RecentActivity', await updateProjects(access, rows));
+}
+
 /** How far back "closed recently" reaches, for the count that rides along with the open rail. */
 const CLOSED_WINDOW_DAYS = 30;
 
@@ -926,26 +931,16 @@ const COSMOS_DATASETS = {
     const id = filterValue(query, '_id');
     if (id) {
       const row = await updatesRepo.getById(access, id);
-      const rows = row ? [row] : [];
-      return {
-        searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
-          await updateProjects(access, rows)),
-        count: rows.length,
-        applied: ['_id']
-      };
+      const searchResults = await updateResults(access, row ? [row] : []);
+      return { searchResults, count: searchResults.length, applied: ['_id'] };
     }
 
     if (String(query.top) === 'true') {
       const { limit, error } = stripLimit(query);
       if (error) return { error };
-      const rows = await updatesRepo.listTop(access, { limit });
+      const searchResults = await updateResults(access, await updatesRepo.listTop(access, { limit }));
       // The count IS the answer here, not a page of a larger set: `listTop` returns the whole strip.
-      return {
-        searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
-          await updateProjects(access, rows)),
-        count: rows.length,
-        applied: ['top']
-      };
+      return { searchResults, count: searchResults.length, applied: ['top'] };
     }
 
     // `query`, NOT `filterQuery`: `updates.projectId` holds the EAGLE project id (the id eagle-api
@@ -974,8 +969,7 @@ const COSMOS_DATASETS = {
       updatesRepo.count(access, criteria)
     ]);
     return {
-      searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
-        await updateProjects(access, rows)),
+      searchResults: await updateResults(access, rows),
       count,
       // `!== null`, not truthy: `filterValues` answers `[]` (still not `null`) for `and[type]=` sent
       // empty, and that key was still SEEN — reporting it dropped here, unlike the index path, would
@@ -1032,11 +1026,18 @@ const COSMOS_DATASETS = {
  */
 async function updatesIndexAcl(access) {
   const acl = filterFor(await updatesRepo.inEagleIdSpace(access), 'projectId');
-  if (acl.empty || !updatesRepo.isLiveGated(access)) return acl;
-  const now = new Date().toISOString();
-  // On `publishDate` alone, as updatesRepo.liveCriteria: a gated row without one stays hidden.
-  const live = `(status eq null or (status eq '${updatesRepo.PUBLISHED}' and publishDate le ${now}))`;
-  return { ...acl, filter: acl.filter ? `(${acl.filter}) and ${live}` : live };
+  if (acl.empty) return acl;
+  const clauses = acl.filter ? [`(${acl.filter})`] : [];
+  // The repository's parent gate, so the index's count cannot describe rows the page will not hold.
+  const hidden = await updatesRepo.hiddenParentIds(access);
+  // `inClause` quotes each id: a stored id is data, and a quote in one must not rewrite the filter.
+  if (hidden.length) clauses.push(`not ${inClause('projectId', hidden)}`);
+  if (updatesRepo.isLiveGated(access)) {
+    const now = new Date().toISOString();
+    // On `publishDate` alone, as updatesRepo.liveCriteria: a gated row without one stays hidden.
+    clauses.push(`(status eq null or (status eq '${updatesRepo.PUBLISHED}' and publishDate le ${now}))`);
+  }
+  return { ...acl, filter: clauses.length ? clauses.join(' and ') : acl.filter };
 }
 
 /**
@@ -1061,9 +1062,7 @@ const KEYWORD_INDEX_DATASETS = {
     indexQuery: (query) => eagleQuery.withProjectIds(query, eagleQuery.projectIdsFrom(query)),
     acl: updatesIndexAcl,
     rows: async (access, ids) => {
-      const rows = inIdOrder(await updatesRepo.listByIds(access, ids), ids);
-      return cosmosRows('updates', rows, access, 'RecentActivity',
-        await updateProjects(access, rows));
+      return updateResults(access, inIdOrder(await updatesRepo.listByIds(access, ids), ids));
     }
   },
   ProjectNotification: {

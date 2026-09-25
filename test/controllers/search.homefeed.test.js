@@ -18,10 +18,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
+const updatesRepo = require('../../src/repositories/updates');
 const aiSearch = require('../../src/search/ai-search');
 const { logger } = require('../../src/utils/logger');
 const {
-  PROJECT_ROW, PROJECT_EAGLE_ID, NOTIFICATION_EAGLE_ID, specsFor, boundValues, get, getAsStaff, updateRow, notificationRow
+  PROJECT_ROW, PROJECT_EAGLE_ID, NOTIFICATION_EAGLE_ID, PRIVATE_ACL, specsFor, boundValues, get, getAsStaff,
+  updateRow, notificationRow
 } = require('../helpers/search-reads');
 
 const day = (n) => `2026-09-${String(n).padStart(2, '0')}T00:00:00.000Z`;
@@ -34,19 +36,22 @@ const update = (id, dateDay, over = {}) => updateRow({
  * Cosmos by container, recording every spec. `updates` answers the pinned and the unpinned read
  * apart, applies a bound `type` IN, and orders newest first, as the real predicates would.
  */
-function stubFeed(t, { updates = [], notifications = [] } = {}) {
+function stubFeed(t, { updates = [], notifications = [], projects = [PROJECT_ROW] } = {}) {
   const seen = [];
+  updatesRepo.forgetParents();
   t.mock.method(cosmos, 'query', async (container, spec, options) => {
     seen.push({ container, spec, options });
-    if (container === 'projects') return { items: [PROJECT_ROW] };
+    if (container === 'projects') return { items: projects.slice() };
     if (container === 'notifications') return { items: notifications.slice() };
     if (container !== 'updates') return { items: [] };
+    const hidden = (spec.parameters.find(p => p.name === '@hiddenParents') || {}).value || [];
 
     const wantsPinned = !/NOT IS_DEFINED\(c\.pinned\)/.test(spec.query);
     const types = /c\.type IN/.test(spec.query)
       ? spec.parameters.filter(p => /^@type/.test(p.name)).map(p => p.value)
       : null;
     const items = updates
+      .filter(u => !(u.projectId && hidden.includes(String(u.projectId))))
       .filter(u => (u.pinned === true) === wantsPinned)
       .filter(u => !types || types.includes(u.type))
       .sort((a, b) => b.dateAdded.localeCompare(a.dateAdded));
@@ -156,6 +161,25 @@ test('GET /search?dataset=HomeFeed', async (t) => {
       ]);
       assert.strictEqual(rows[2].headline, 'No further EAO review required');
       assert.strictEqual(body[0].count, 4);
+    });
+
+  await t.test('a pinned update of an unpublished project neither shows nor holds a pinned slot',
+    async () => {
+      const hiddenEagleId = '588511d0aaecd9001b8256ff';
+      stubFeed(t, {
+        projects: [PROJECT_ROW, { id: '208', eagleId: hiddenEagleId, name: 'Unpublished', read: PRIVATE_ACL }],
+        updates: [
+          update('pin-hidden', 5, { pinned: true, projectId: hiddenEagleId }),
+          update('news-3', 3), update('news-2', 2)
+        ]
+      });
+      stubDecisions(t);
+
+      const { body } = await get('/api/search?dataset=HomeFeed&pageSize=2');
+
+      // Excluded in the query, so the strip still fills to pageSize.
+      assert.deepStrictEqual(body[0].searchResults.map(r => `${r.kind}:${r.id}`),
+        ['update:news-3', 'update:news-2']);
     });
 
   await t.test('a decision newer than every unpinned update sorts above it, below the pinned rows',

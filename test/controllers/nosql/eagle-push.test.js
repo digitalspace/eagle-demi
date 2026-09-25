@@ -20,6 +20,7 @@ const projects = require('../../../src/repositories/projects');
 const documents = require('../../../src/repositories/documents');
 const notifications = require('../../../src/repositories/notifications');
 const aiSearch = require('../../../src/search/ai-search');
+const updateAcl = require('../../../src/helpers/update-acl');
 const projectController = require('../../../src/controllers/nosql/project');
 const documentController = require('../../../src/controllers/nosql/document');
 const authMiddleware = require('../../../src/middleware/auth');
@@ -166,6 +167,44 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
     assert.strictEqual(res.body.id, `eagle-${PROJECT_EAGLE_ID}`);
     assert.strictEqual(written.sourceSystem, 'eagle');
     assert.strictEqual(written.isPublished, true, 'derived from the pushed read[]');
+  });
+
+  await t.test('a first push caps the Updates that arrived before their project', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    t.mock.method(projects, 'upsert', async (item) => item);
+    const cascaded = [];
+    t.mock.method(updateAcl, 'setAclForProject', async (eagleId, read) => {
+      cascaded.push({ eagleId, read });
+      return { succeeded: 1, failed: 0 };
+    });
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject({ read: ['sysadmin', 'staff'] }) }, user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(cascaded, [{ eagleId: PROJECT_EAGLE_ID, read: ['sysadmin', 'staff'] }]);
+  });
+
+  await t.test('a first push whose Update cascade partly fails 500s and records the owed cascade', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    t.mock.method(projects, 'upsert', async (item) => item);
+    t.mock.method(updateAcl, 'setAclForProject', async () => ({ succeeded: 1, failed: 1 }));
+    const marked = [];
+    t.mock.method(projects, 'patchCascadePending', async (id, at) => { marked.push({ id, at }); });
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject() }, user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.match(res.body.error, /updates were not fully updated/);
+    assert.strictEqual(marked.length, 1);
+    assert.ok(marked[0].at, 'marked, not cleared');
   });
 
   await t.test('a visibility flip cascades onto the documents; a rename does not', async () => {
