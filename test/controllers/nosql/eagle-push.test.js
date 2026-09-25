@@ -31,6 +31,7 @@ const {
   eagleProject, storedEagleProject: storedProject
 } = require('../../helpers/eagle-mirror-fixtures');
 const { canRead } = require('../../../src/helpers/access-sql');
+const { logger } = require('../../../src/utils/logger');
 
 function mockRes() {
   return {
@@ -508,29 +509,85 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.documentAuthorType, null);
   });
 
-  await t.test('a document with no parent in DEMI is a 404 and no write', async () => {
+  // Operators tell the cases apart from the log alone: the body Eagle gets back never changes.
+  const NO_PARENT_BODY = '{"error":"Parent project or notification not found"}';
+
+  /**
+   * Push a document whose parent admission refuses. `stored` is the unfiltered project row,
+   * `notification` the raw notification row.
+   */
+  async function refusedDocument(t, stored, { notification = null, doc = eagleDocument() } = {}) {
     t.mock.method(projects, 'getByEagleId', async () => null);
-    t.mock.method(notifications, 'getById', async () => null);
+    t.mock.method(notifications, 'readForWrite', async () => notification);
+    t.mock.method(projects, 'readForWriteByEagleId', async () => stored);
+    const warned = [];
+    t.mock.method(logger, 'warn', (message, meta) => { warned.push(meta); });
     let upserts = 0;
     t.mock.method(documents, 'upsert', async () => { upserts++; });
 
     const res = mockRes();
     await documentController.upsertFromEagle({
-      params: { eagleId: DOC_EAGLE_ID }, query: {},
-      body: { doc: eagleDocument() }, user: STAFF
+      params: { eagleId: DOC_EAGLE_ID }, query: {}, body: { doc }, user: STAFF
     }, res);
+    return { res, warned, upserts };
+  }
+
+  await t.test('a document with no parent in DEMI is a 404, no write, logged missing', async () => {
+    const { res, warned, upserts } = await refusedDocument(t, null);
 
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(upserts, 0, 'never seed an orphan document');
     // The body names both containers, as swagger's 404 does: a notification is a parent here too.
-    assert.deepStrictEqual(res.body, { error: 'Parent project or notification not found' });
+    assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+    assert.deepStrictEqual(warned, [{
+      eagleId: PROJECT_EAGLE_ID, childId: DOC_EAGLE_ID, project: 'missing', notification: 'missing'
+    }]);
+  });
+
+  await t.test('a document under a hidden notification gets the same 404, logged hidden',
+    async () => {
+      const { res, warned } = await refusedDocument(t, null,
+        { notification: { id: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'] } });
+
+      assert.strictEqual(res.statusCode, 404);
+      assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+      assert.strictEqual(warned[0].notification, 'hidden');
+    });
+
+  await t.test('a document with a malformed parent ref gets the same 404, logged', async () => {
+    const { res, warned } = await refusedDocument(t, null,
+      { doc: eagleDocument({ project: 'not-an-object-id' }) });
+
+    assert.strictEqual(res.statusCode, 404);
+    assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+    assert.deepStrictEqual(warned, [
+      { childId: DOC_EAGLE_ID, project: 'malformed-ref', notification: 'malformed-ref' }
+    ]);
+  });
+
+  await t.test('a document under a read-less project gets the same 404, logged hidden',
+    async () => {
+      const { res, warned } = await refusedDocument(t, { id: '207', eagleId: PROJECT_EAGLE_ID });
+
+      assert.strictEqual(res.statusCode, 404);
+      assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+      assert.strictEqual(warned[0].project, 'hidden');
+    });
+
+  await t.test('a document under a sealed project gets the same 404, logged hidden', async () => {
+    const { res, warned } = await refusedDocument(t,
+      { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'] });
+
+    assert.strictEqual(res.statusCode, 404);
+    assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+    assert.strictEqual(warned[0].project, 'hidden');
   });
 
   // Eagle's `project` reference holds either id, and prod publishes documents under 17
   // notifications. Resolving through `projects` alone dropped every one of them.
   await t.test('a document under a ProjectNotification is stored under it, ACL verbatim', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
-    t.mock.method(notifications, 'getById', async () => ({
+    t.mock.method(notifications, 'readForWrite', async () => ({
       id: NOTIFICATION_EAGLE_ID, read: ['sysadmin', 'staff']
     }));
     t.mock.method(documents, 'getById', async () => null);
@@ -560,7 +617,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
   await t.test('a project row carrying the notification id does not claim the document', async () => {
     t.mock.method(projects, 'getByEagleId', async () =>
       storedProject({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
-    t.mock.method(notifications, 'getById', async () =>
+    t.mock.method(notifications, 'readForWrite', async () =>
       ({ id: NOTIFICATION_EAGLE_ID, read: ['public', 'staff', 'sysadmin'] }));
     // The row the project-first rule wrote: same document, wrong partition, narrowed ACL.
     t.mock.method(documents, 'getById', async () => ({

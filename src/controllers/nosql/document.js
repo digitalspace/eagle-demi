@@ -1026,7 +1026,7 @@ exports.upsertFromEagle = async (req, res) => {
     // A ProjectNotification is a parent here too — prod publishes documents under 17 of them —
     // and it carries no ACL to narrow against, so those keep their own read[]. Same admission the
     // seed makes (`seed-nosql.js:documentAdmission`) and the period mirror makes.
-    const parent = await admitParent(doc.project);
+    const parent = await admitParent(doc.project, { childId: eagleId });
     if (!parent) {
       return res.status(404).json({ error: 'Parent project or notification not found' });
     }

@@ -22,6 +22,7 @@ const notifications = require('../../../src/repositories/notifications');
 const lists = require('../../../src/repositories/lists');
 const projects = require('../../../src/repositories/projects');
 const { canRead } = require('../../../src/helpers/access-sql');
+const { logger } = require('../../../src/utils/logger');
 
 const commentPeriodController = require('../../../src/controllers/nosql/comment-period');
 const commentController = require('../../../src/controllers/nosql/comment');
@@ -31,7 +32,7 @@ const { withServer } = require('../../helpers/with-server');
 const { gatewayCaller, stubRegistry } = require('../../helpers/registry-callers');
 const { evaluate } = require('../../helpers/updates-store');
 const {
-  PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID,
+  PROJECT_EAGLE_ID, PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID,
   PUBLIC_ACL, PRIVATE_ACL, storedProject, storedPeriod,
   eaglePeriod, eagleComment, eagleOrganization, eagleNotification,
   mockRes, STAFF, anonymous, staff
@@ -173,9 +174,15 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
-  await t.test('a period whose parent is in neither container is a 404 and no write', async () => {
+  const NO_PARENT_BODY = '{"error":"Parent project or notification not found"}';
+
+  /** Push a period whose parent admission refuses, with `stored` as the unfiltered project row. */
+  async function refusedPeriod(t, stored) {
     t.mock.method(projects, 'getByEagleId', async () => null);
-    t.mock.method(notifications, 'getById', async () => null);
+    t.mock.method(notifications, 'readForWrite', async () => null);
+    t.mock.method(projects, 'readForWriteByEagleId', async () => stored);
+    const warned = [];
+    t.mock.method(logger, 'warn', (message, meta) => { warned.push({ message, meta }); });
     let upserts = 0;
     t.mock.method(commentPeriods, 'upsert', async () => { upserts++; });
 
@@ -183,18 +190,40 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     await commentPeriodController.upsertFromEagle({
       params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc: eaglePeriod() }, user: STAFF
     }, res);
+    return { res, warned, upserts };
+  }
+
+  await t.test('a period whose parent is in neither container is a 404, no write, logged',
+    async () => {
+      const { res, warned, upserts } = await refusedPeriod(t, null);
+
+      assert.strictEqual(res.statusCode, 404);
+      assert.strictEqual(upserts, 0);
+      // The body names both containers, as swagger's 404 does: a notification is a parent too.
+      assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+      assert.deepStrictEqual(warned, [{
+        message: '[parent-admit] parent not admitted',
+        meta: {
+          eagleId: PROJECT_EAGLE_ID, childId: PERIOD_EAGLE_ID,
+          project: 'missing', notification: 'missing'
+        }
+      }]);
+    });
+
+  await t.test('a period under a hidden project gets the same 404, logged hidden', async () => {
+    const { res, warned } = await refusedPeriod(t,
+      { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'] });
 
     assert.strictEqual(res.statusCode, 404);
-    assert.strictEqual(upserts, 0);
-    // The body names both containers, as swagger's 404 does: a notification is a parent here too.
-    assert.deepStrictEqual(res.body, { error: 'Parent project or notification not found' });
+    assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+    assert.strictEqual(warned[0].meta.project, 'hidden');
   });
 
   // Eagle's `project` reference holds either id. Resolving it through `projects` alone dropped 10
   // periods and the 232 comments under them on test, measured 2026-09-07.
   await t.test('a period under a ProjectNotification is stored under it, ACL verbatim', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
-    t.mock.method(notifications, 'getById', async () => ({
+    t.mock.method(notifications, 'readForWrite', async () => ({
       id: NOTIFICATION_EAGLE_ID, read: PRIVATE_ACL
     }));
 
@@ -219,7 +248,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
   await t.test('a project row carrying the notification id does not claim the period', async () => {
     t.mock.method(projects, 'getByEagleId', async () =>
       ({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
-    t.mock.method(notifications, 'getById', async () =>
+    t.mock.method(notifications, 'readForWrite', async () =>
       ({ id: NOTIFICATION_EAGLE_ID, read: PUBLIC_ACL }));
 
     const { res, written } = await pushTo(
@@ -238,7 +267,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     async () => {
       t.mock.method(projects, 'getByEagleId', async () =>
         ({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
-      t.mock.method(notifications, 'getById', async () =>
+      t.mock.method(notifications, 'readForWrite', async () =>
         ({ id: NOTIFICATION_EAGLE_ID, read: PUBLIC_ACL }));
       // What the project-first rule wrote: the period in the Track project's partition, narrowed
       // to its level-2 ACL. Re-mirroring is the repair, so it has to clear that row.
@@ -555,19 +584,84 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
       assert.deepStrictEqual([...store.keys()], [`${PERIOD_EAGLE_ID}::${COMMENT_EAGLE_ID}`]);
     });
 
-  await t.test('a comment whose period is not mirrored is a 404 and no write', async () => {
-    t.mock.method(commentPeriods, 'getById', async () => null);
+  const NO_PERIOD_BODY = '{"error":"Parent comment period not found"}';
+
+  /** Push a comment whose period lookup refuses, with `stored` as the unfiltered period row. */
+  async function refusedComment(t, stored, doc = eagleComment()) {
+    let periodReads = 0;
+    t.mock.method(commentPeriods, 'getById', async () => { periodReads++; return null; });
+    t.mock.method(commentPeriods, 'readForWrite', async () => stored);
+    const warned = [];
+    t.mock.method(logger, 'warn', (message, meta) => { warned.push({ message, meta }); });
     let upserts = 0;
     t.mock.method(comments, 'upsert', async () => { upserts++; });
 
     const res = mockRes();
     await commentController.upsertFromEagle({
-      params: { eagleId: COMMENT_EAGLE_ID }, query: {}, body: { doc: eagleComment() }, user: STAFF
+      params: { eagleId: COMMENT_EAGLE_ID }, query: {}, body: { doc }, user: STAFF
     }, res);
+    return { res, warned, upserts, periodReads };
+  }
 
-    assert.strictEqual(res.statusCode, 404);
-    assert.strictEqual(upserts, 0);
+  await t.test('a comment whose period is not mirrored is a 404, no write, logged missing',
+    async () => {
+      const { res, warned, upserts } = await refusedComment(t, null);
+
+      assert.strictEqual(res.statusCode, 404);
+      assert.strictEqual(upserts, 0);
+      assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+      assert.deepStrictEqual(warned, [{
+        message: '[parent-admit] parent not admitted',
+        meta: { eagleId: PERIOD_EAGLE_ID, childId: COMMENT_EAGLE_ID, period: 'missing' }
+      }]);
+    });
+
+  await t.test('a comment with a malformed period ref reads nothing and is logged', async () => {
+    const { res, warned, periodReads } = await refusedComment(t, null,
+      eagleComment({ period: 'not-an-object-id' }));
+
+    assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+    assert.deepStrictEqual({ periodReads, warned }, {
+      periodReads: 0,
+      warned: [{
+        message: '[parent-admit] parent not admitted',
+        meta: { childId: COMMENT_EAGLE_ID, period: 'malformed-ref' }
+      }]
+    });
   });
+
+  await t.test('a comment under a read-less period gets the same 404, logged hidden', async () => {
+    const { res, warned } = await refusedComment(t, { id: PERIOD_EAGLE_ID, projectId: '207' });
+
+    assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+    assert.strictEqual(warned[0].meta.period, 'hidden');
+  });
+
+  await t.test('a comment under a sealed period gets the same 404, logged hidden', async () => {
+    const { res, warned } = await refusedComment(t,
+      { id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance', 'sysadmin'] });
+
+    assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+    assert.strictEqual(warned[0].meta.period, 'hidden');
+  });
+
+  await t.test('a comment under a visible period reads nothing extra and logs nothing',
+    async () => {
+      t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
+      let classifyReads = 0;
+      t.mock.method(commentPeriods, 'readForWrite', async () => { classifyReads++; return null; });
+      const warned = [];
+      t.mock.method(logger, 'warn', (message, meta) => { warned.push(meta); });
+      partitionedCosmos(t, 'periodId', []);
+
+      const res = mockRes();
+      await commentController.upsertFromEagle({
+        params: { eagleId: COMMENT_EAGLE_ID }, query: {}, body: { doc: eagleComment() }, user: STAFF
+      }, res);
+
+      assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+      assert.deepStrictEqual({ classifyReads, warned }, { classifyReads: 0, warned: [] });
+    });
 });
 
 test('PUT /eagle/organizations/:eagleId', async (t) => {

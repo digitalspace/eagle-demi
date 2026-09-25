@@ -16,11 +16,16 @@
  * `kind` is what the caller narrows on. A project parent is a CEILING — a child may never out-rank
  * it — while a notification is not: it has no project ACL to narrow against, so its children keep
  * their own `read[]` verbatim (`seed/transform.js`, the notification-parented branch).
+ *
+ * A REFUSAL IS LOGGED, the 404 body is not changed: one `[parent-admit] parent not admitted` warn
+ * per refused child, with a reason per container. Telling `missing` from `hidden` costs one extra
+ * read, made only on a refusal and before the 404 is sent, bounded by `CLASSIFY_TIMEOUT_MS`.
  */
 
 const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
-const { systemAccess } = require('./access-sql');
+const { canRead, systemAccess } = require('./access-sql');
+const { logger } = require('../utils/logger');
 // Dependency-free reference parser shared with every mirror, so a populated `{_id}` and a bare
 // ObjectId resolve here exactly as they do there.
 const { refId } = require('../controllers/nosql/eagle-mirror');
@@ -54,15 +59,91 @@ function pickParent(project, notification) {
   return null;
 }
 
+/** Reason logged for a ref that is not an Eagle ObjectId; the raw value is never logged. */
+const MALFORMED_REF = 'malformed-ref';
+
 /**
+ * How long a refusal waits to learn why before it logs `unknown`. eagle-api aborts a push at 10 s,
+ * and the project classify is a cross-partition lookup that may drain many pages.
+ */
+const CLASSIFY_TIMEOUT_MS = 2000;
+
+const TIMED_OUT = Symbol('timed out');
+
+/** The ref's Eagle id if it is a 24-hex ObjectId, else null: nothing else reaches a read or log. */
+function eagleRef(ref) {
+  const id = refId(ref);
+  return id && projects.EAGLE_OBJECT_ID.test(id) ? id : null;
+}
+
+/**
+ * Why a stored parent row did not admit. `hidden` is read-less or sealed alike; `visible` means the
+ * row landed after the admission read.
+ *
+ * @returns {'missing'|'hidden'|'visible'}
+ */
+function missReason(row, partitionField) {
+  if (!row) return 'missing';
+  return canRead(row, systemAccess(), partitionField) ? 'visible' : 'hidden';
+}
+
+/**
+ * The refusal line. The 404 body is unchanged, so only this tells "missing" from "hidden".
+ * `childId` is the refused child's Eagle id, so the lines can feed a targeted repush.
+ *
+ * @param {{eagleId?: string, childId: string|null}} ids  eagleId is absent for a malformed ref
+ * @param {Object<string, string>} reasons  one reason per container, keyed by container role
+ */
+function warnNotAdmitted(ids, reasons) {
+  logger.warn('[parent-admit] parent not admitted', { ...ids, ...reasons });
+}
+
+/**
+ * Read a refused parent's stored row and name the reason. Awaited before the 404 goes out, since
+ * Azure Functions does not promise to finish work after the response, so it is raced against
+ * `CLASSIFY_TIMEOUT_MS`. A failed or timed-out read is logged and answers `unknown`, never a 500.
+ *
+ * @param {() => Promise<object|null>} readRow  the unfiltered read of the parent row
+ * @param {{eagleId: string, container: string, partitionField: string}} target
+ * @returns {Promise<'missing'|'hidden'|'visible'|'unknown'>}
+ */
+async function classify(readRow, { eagleId, container, partitionField }) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(resolve, CLASSIFY_TIMEOUT_MS, TIMED_OUT);
+  });
+  try {
+    const row = await Promise.race([readRow(), timeout]);
+    if (row !== TIMED_OUT) return missReason(row, partitionField);
+    logger.warn('[parent-admit] could not classify parent',
+      { eagleId, container, error: `timed out after ${CLASSIFY_TIMEOUT_MS} ms` });
+  } catch (err) {
+    logger.warn('[parent-admit] could not classify parent',
+      { eagleId, container, error: err.message, stack: err.stack });
+  } finally {
+    clearTimeout(timer);
+  }
+  return 'unknown';
+}
+
+/**
+ * On a refusal, logs one `parent not admitted` warn (reasons `missing`, `hidden`, `visible`,
+ * `unknown` or `malformed-ref`) after one extra project read. A notification hidden behind a
+ * same-id project is admitted to the project and logged too.
+ *
  * @param {string|object|null} ref  Eagle's `doc.project`, populated or bare
+ * @param {{childId?: string}} [child]  the pushed child's Eagle id, for the log
  * @returns {Promise<{id: string, read: string[], kind: 'project'|'notification'}|null>} the DEMI
  *   parent id to partition the child under, the ACL to read against `kind`, or null when DEMI
  *   holds no such parent
  */
-async function admitParent(ref) {
-  const eagleId = refId(ref);
-  if (!eagleId) return null;
+async function admitParent(ref, { childId } = {}) {
+  const child = { childId: eagleRef(childId) };
+  const eagleId = eagleRef(ref);
+  if (!eagleId) {
+    warnNotAdmitted(child, { project: MALFORMED_REF, notification: MALFORMED_REF });
+    return null;
+  }
 
   // BOTH reads, always, and concurrently. The notification decides, so a project hit may not end
   // the lookup early; issuing them together keeps a push at one round trip and costs one extra
@@ -72,12 +153,34 @@ async function admitParent(ref) {
   //
   // systemAccess on both: a mirror must find a private parent, or it would drop the row and
   // report it as drift the moment Eagle unpublished the project.
-  const [project, notification] = await Promise.all([
+  //
+  // Notification read raw and filtered here, as `notifications.getById` does, so a refusal can
+  // say why without a second read.
+  const [project, notificationRow] = await Promise.all([
     projects.getByEagleId(systemAccess(), eagleId),
-    notifications.getById(systemAccess(), eagleId)
+    notifications.readForWrite(eagleId)
   ]);
+  const notification = canRead(notificationRow, systemAccess(), notifications.SCOPE_FIELD)
+    ? notificationRow
+    : null;
 
-  return pickParent(project, notification);
+  const parent = pickParent(project, notification);
+  if (!parent) {
+    // Accepted cost: the seed-public-reads backfill pays this read once per orphan period too.
+    const projectReason = await classify(() => projects.readForWriteByEagleId(eagleId), {
+      eagleId, container: projects.CONTAINER, partitionField: projects.PARTITION_FIELD
+    });
+    warnNotAdmitted({ eagleId, ...child }, {
+      project: projectReason,
+      notification: missReason(notificationRow, notifications.SCOPE_FIELD)
+    });
+  } else if (notificationRow && !notification) {
+    logger.warn('[parent-admit] hidden notification passed its children to a same-id project',
+      { eagleId, ...child, projectId: parent.id });
+  }
+  return parent;
 }
 
-module.exports = { admitParent, pickParent };
+module.exports = {
+  admitParent, pickParent, eagleRef, classify, warnNotAdmitted, MALFORMED_REF, CLASSIFY_TIMEOUT_MS
+};

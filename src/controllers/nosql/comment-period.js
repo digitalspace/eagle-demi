@@ -99,7 +99,7 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
  *   |{ignored: string, existing: object}|null>}
  */
 async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}) {
-  const parent = parentRow || await admitParent(doc.project);
+  const parent = parentRow || await admitParent(doc.project, { childId: eagleId });
   if (!parent) return null;
 
   // A notification carries no ACL a period could out-rank, so there is nothing to narrow against
