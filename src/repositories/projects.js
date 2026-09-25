@@ -116,6 +116,18 @@ async function getByEagleId(access, eagleId) {
 }
 
 /**
+ * The stored row for an Eagle id, unfiltered: a mirror asks whether it exists, not who may read
+ * it. Write side only, like every `readForWrite`.
+ *
+ * Returns the first row when several share the eagleId; refusing duplicates is not done yet.
+ */
+async function readForWriteByEagleId(eagleId) {
+  const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
+  return await cosmos.queryFirst(CONTAINER,
+    { query: `SELECT * FROM c WHERE ${clause}`, parameters: params }, {});
+}
+
+/**
  * Names and Eagle ids for a bounded set of project ids, in one query.
  *
  * Chunk and document search hits carry a projectId and no name, so the results have to be labelled.
@@ -392,6 +404,7 @@ module.exports = {
   getById,
   EAGLE_OBJECT_ID,
   getByEagleId,
+  readForWriteByEagleId,
   listByIds,
   listIdsByName,
   NAME_MATCH_MAX_IDS,

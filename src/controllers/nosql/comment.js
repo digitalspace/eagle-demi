@@ -20,7 +20,10 @@ const { systemAccess } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const {
-  eaglePush, upsertWithRetry, refId, ignoreStalePush, pushConflict
+  eagleRef, classify, warnNotAdmitted, MALFORMED_REF
+} = require('../../helpers/parent-admit');
+const {
+  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
 function mirrorItem(eagleId, doc, period, read, existing) {
@@ -55,6 +58,29 @@ function mirrorItem(eagleId, doc, period, read, existing) {
 }
 
 /**
+ * The DEMI period a comment hangs off, or null after one `parent not admitted` warn. A miss costs
+ * one extra unfiltered read, made before the 404, to log `missing` or `hidden`.
+ */
+async function admitPeriod(ref, childId) {
+  const child = { childId: eagleRef(childId) };
+  const periodEagleId = eagleRef(ref);
+  if (!periodEagleId) {
+    warnNotAdmitted(child, { period: MALFORMED_REF });
+    return null;
+  }
+  const period = await commentPeriods.getById(systemAccess(), periodEagleId);
+  if (!period) {
+    const reason = await classify(() => commentPeriods.readForWrite(periodEagleId), {
+      eagleId: periodEagleId,
+      container: commentPeriods.CONTAINER,
+      partitionField: commentPeriods.PARTITION_FIELD
+    });
+    warnNotAdmitted({ eagleId: periodEagleId, ...child }, { period: reason });
+  }
+  return period;
+}
+
+/**
  * Mirror one raw Eagle `Comment`, whoever asked — the push handler below or the backfill
  * (src/scripts/seed-public-reads.js). NULL when the parent period is not in DEMI.
  *
@@ -64,10 +90,7 @@ function mirrorItem(eagleId, doc, period, read, existing) {
  *   |null>}
  */
 async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}) {
-  const periodEagleId = refId(doc.period);
-  const period = periodRow || (periodEagleId
-    ? await commentPeriods.getById(systemAccess(), periodEagleId)
-    : null);
+  const period = periodRow || await admitPeriod(doc.period, eagleId);
   if (!period) return null;
 
   // The period's own ACL is already constrained to its project, so one constrain here carries
