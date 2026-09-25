@@ -1978,8 +1978,11 @@ paths:
           description: Unauthorized.
         '403':
           description: |-
-            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
-            higher.
+            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+            through API Management), hold `demi-service-write`, and carry no project scope.
+            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+            get 403. An empty setting refuses everyone.
         '503':
           description: >-
             The project changed repeatedly while the push was retried. The caller retries.
@@ -2030,8 +2033,11 @@ paths:
           description: Unauthorized.
         '403':
           description: |-
-            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
-            higher.
+            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+            through API Management), hold `demi-service-write`, and carry no project scope.
+            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+            get 403. An empty setting refuses everyone.
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
         '503':
@@ -2094,8 +2100,11 @@ paths:
           description: Unauthorized.
         '403':
           description: |-
-            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
-            higher.
+            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+            through API Management), hold `demi-service-write`, and carry no project scope.
+            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+            get 403. An empty setting refuses everyone.
         '503':
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.
@@ -2148,8 +2157,11 @@ paths:
           description: Unauthorized.
         '403':
           description: |-
-            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
-            higher.
+            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+            through API Management), hold `demi-service-write`, and carry no project scope.
+            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+            get 403. An empty setting refuses everyone.
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
         '500':
@@ -2199,8 +2211,11 @@ paths:
           description: Unauthorized.
         '403':
           description: |-
-            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
-            higher.
+            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+            through API Management), hold `demi-service-write`, and carry no project scope.
+            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+            get 403. An empty setting refuses everyone.
         '404':
           description: The comment period named by `doc.period` is not mirrored yet.
         '503':
@@ -2245,8 +2260,11 @@ paths:
           description: Unauthorized.
         '403':
           description: |-
-            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
-            higher.
+            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+            through API Management), hold `demi-service-write`, and carry no project scope.
+            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+            get 403. An empty setting refuses everyone.
         '503':
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.
@@ -2289,8 +2307,11 @@ paths:
           description: Unauthorized.
         '403':
           description: |-
-            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
-            higher.
+            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+            through API Management), hold `demi-service-write`, and carry no project scope.
+            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+            get 403. An empty setting refuses everyone.
         '503':
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.
@@ -2345,8 +2366,11 @@ paths:
           description: Unauthorized.
         '403':
           description: |-
-            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
-            higher.
+            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+            through API Management), hold `demi-service-write`, and carry no project scope.
+            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+            get 403. An empty setting refuses everyone.
 
   /api/links:
     get:
@@ -3345,9 +3369,12 @@ components:
                                    400 `compliance is not grantable by this caller`.
           * `demi-service-read`  — reads every row the ACL allows. Writes nothing.
           * `demi-service-write` — the same reads, plus every data write: projects, documents,
-                                   chunks, boundaries and the Eagle mirror. Refused on
-                                   `/api/admin/*`, so it cannot mint or revoke a key. This is what
-                                   a machine writer (the eagle-api push, the extractor) holds.
+                                   chunks and boundaries. Refused on `/api/admin/*`, so it cannot
+                                   mint or revoke a key. This is what a machine writer (the
+                                   eagle-api push, the extractor) holds. The Eagle mirror,
+                                   `PUT /api/eagle/*`, also needs the caller to be a principal in
+                                   `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`) with
+                                   no project scope, so of these only eagle-api writes it.
           * `staff`, `sysadmin`, `demi-admin` — data writes AND `/api/admin/*`.
 
         A key carrying any write role must be minted with `allowWrite: true`.

@@ -384,6 +384,13 @@ const config = {
   // Keycloak clients (azp) permitted to call this API at all. Empty admits every client, which is
   // why the guard below refuses to boot test or prod on an empty list. See helpers/auth.isAllowedClient.
   allowedClients:        (process.env.DEMI_ALLOWED_CLIENTS || '').split(',').map(s => s.trim()).filter(Boolean),
+  // Registry row ids (`req.user.keyId`) allowed to write the Eagle mirror, PUT /eagle/*. Unset means
+  // eagle-api through APIM; set but empty means nobody, so blanking the setting closes the mirror
+  // instead of opening it. A getter, like adminApiKey, so the suites can change it per test.
+  get eagleMirrorPrincipals() {
+    const raw = process.env.DEMI_EAGLE_MIRROR_PRINCIPALS;
+    return (raw === undefined ? 'apim:eagle-api' : raw).split(',').map(s => s.trim()).filter(Boolean);
+  },
   // Short links: destinations are allowlisted by hostname suffix at write time (helpers/link-url).
   // linkBaseUrl is a Bicep app setting per environment so test hands back the test host, not prod's.
   linkAllowedHosts:      (process.env.LINK_ALLOWED_HOSTS || 'gov.bc.ca').split(',').map(s => s.trim()).filter(Boolean),

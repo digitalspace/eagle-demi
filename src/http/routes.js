@@ -10,7 +10,7 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // credential (demi-service-read) can be issued without also granting the ability to delete.
 // `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
 // mirror data without being able to mint itself a wider credential.
-const { requireWrite, requireAdmin, requireRole } = require('../middleware/require-roles');
+const { requireWrite, requireAdmin, requireRole, requireEagleMirror } = require('../middleware/require-roles');
 // Loads the caller's Selected Credentials. Mounted after the auth layer on the read routes where a
 // grant can widen what one caller sees — see middleware/credentials.js.
 const { credentialsMiddleware } = require('../middleware/credentials');
@@ -208,17 +208,18 @@ const routes = [
 
   // Eagle mirror. eagle-api pushes fire-and-forget on every write it makes, keyed by its own `_id`;
   // DEMI holds the merge rules, so the body is the RAW Eagle record rather than a DEMI-shaped one.
-  // Write-gated like every other mutation — the push authenticates as a registry key.
-  { method: 'put', path: '/eagle/projects/:eagleId', guards: [authMiddleware, requireWrite], load: () => projectController().upsertFromEagle },
-  { method: 'put', path: '/eagle/documents/:eagleId', guards: [authMiddleware, requireWrite], load: () => documentController().upsertFromEagle },
-  { method: 'put', path: '/eagle/updates/:eagleId', guards: [authMiddleware, requireWrite], load: () => updateController().upsertFromEagle },
-  { method: 'put', path: '/eagle/commentperiods/:eagleId', guards: [authMiddleware, requireWrite], load: () => commentPeriodController().upsertFromEagle },
-  { method: 'put', path: '/eagle/comments/:eagleId', guards: [authMiddleware, requireWrite], load: () => commentController().upsertFromEagle },
-  { method: 'put', path: '/eagle/organizations/:eagleId', guards: [authMiddleware, requireWrite], load: () => organizationController().upsertFromEagle },
-  { method: 'put', path: '/eagle/notifications/:eagleId', guards: [authMiddleware, requireWrite], load: () => notificationController().upsertFromEagle },
+  // Write-gated, then pinned to the principals in DEMI_EAGLE_MIRROR_PRINCIPALS (eagle-api through
+  // APIM): the handlers write any project through systemAccess(), so no other writer may reach them.
+  { method: 'put', path: '/eagle/projects/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => projectController().upsertFromEagle },
+  { method: 'put', path: '/eagle/documents/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => documentController().upsertFromEagle },
+  { method: 'put', path: '/eagle/updates/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => updateController().upsertFromEagle },
+  { method: 'put', path: '/eagle/commentperiods/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => commentPeriodController().upsertFromEagle },
+  { method: 'put', path: '/eagle/comments/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => commentController().upsertFromEagle },
+  { method: 'put', path: '/eagle/organizations/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => organizationController().upsertFromEagle },
+  { method: 'put', path: '/eagle/notifications/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => notificationController().upsertFromEagle },
   // The config mirror. No `:eagleId` — there is one public config document and Eagle has no id for
   // it — so the body is the payload itself rather than `{ doc }`, and only PUBLIC_KEYS are stored.
-  { method: 'put', path: '/eagle/config/public', guards: [authMiddleware, requireWrite], load: () => configController().upsertPublicFromEagle },
+  { method: 'put', path: '/eagle/config/public', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => configController().upsertPublicFromEagle },
   // No `PUT /eagle/lists/:eagleId`: Eagle `List` has no write controller (migrations only), so the
   // `lists` container takes its `kind: 'List'` rows from the backfill and nothing else.
 

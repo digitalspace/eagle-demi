@@ -484,7 +484,16 @@ Ask for the least privilege that works.
 Two gates do this, both on top of `authMiddleware`: `requireWrite` (`WRITE_ROLES`) guards data
 mutations, `requireAdmin` (`ADMIN_ROLES`) guards `/api/admin/*`. `demi-service-write` is what a
 machine writer holds — eagle-api's push, the extractor — so mirroring data never carries the
-ability to mint a wider key. See
+ability to mint a wider key.
+
+The Eagle mirror, `PUT /api/eagle/*`, is narrower still: only eagle-api may call it. Its handlers
+write any project, so `requireEagleMirror` also demands that the caller's registry row id
+(`req.user.keyId`) is listed in `DEMI_EAGLE_MIRROR_PRINCIPALS`, that it holds
+`demi-service-write`, and that it has no project scope. The setting is a comma list and
+defaults to `apim:eagle-api`, which is eagle-api arriving through API Management. Set but empty,
+it refuses everyone. Staff users, the break-glass `ADMIN_API_KEY`, the extractor key and any
+other minted `demi-service-write` key get 403, and each refusal logs a warning with the
+principal and route. See
 [ADR-007](https://github.com/digitalspace/eagle-demi/wiki/ADR-007-Service-to-Service-Credentials)
 and [Connecting an Application to DEMI](https://github.com/digitalspace/eagle-demi/wiki/Connecting-an-Application-to-DEMI).
 
