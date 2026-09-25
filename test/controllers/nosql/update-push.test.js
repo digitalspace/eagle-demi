@@ -998,6 +998,23 @@ test('a push announces only an update published inside the notify window', async
     assert.strictEqual(await updates.claimForNotify(UPDATE_EAGLE_ID, NOW), null);
     assert.strictEqual(row(UPDATE_EAGLE_ID).notifyAttempts, 1, 'no attempt is spent on it');
   });
+
+  await t.test('a push takes over a dead lease inside the window, however old the publishDate', async () => {
+    // The window runs from notifyClaimedAt once DEMI holds a claim, as listDueForNotify measures it.
+    const CLAIMED = '2026-08-09T00:00:00.000Z';
+    const OLD = '2026-07-01T00:00:00.000Z';
+    const { row, sent } = wired([{
+      id: UPDATE_EAGLE_ID, eagleId: UPDATE_EAGLE_ID, isPublished: true, status: 'published', publishDate: OLD,
+      notifiedAt: CLAIMED, notifiedBy: 'demi', notifyClaimedAt: CLAIMED, notifyAttempts: 1, _etag: '"v1"'
+    }]);
+
+    await push({ doc: eagleUpdate({ status: 'published', publishDate: OLD }) });
+
+    assert.deepStrictEqual(sent, [UPDATE_EAGLE_ID], 'the unsent claim is emailed');
+    assert.strictEqual(row(UPDATE_EAGLE_ID).notifyClaimedAt, NOW, 'under a new lease');
+    assert.strictEqual(row(UPDATE_EAGLE_ID).notifyAttempts, 2);
+    assert.strictEqual(row(UPDATE_EAGLE_ID).notifySentAt, NOW);
+  });
 });
 
 test('the updates mirror route is behind authMiddleware + requireWrite', () => {
