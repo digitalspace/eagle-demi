@@ -27,6 +27,7 @@ const projects = require('../../../src/repositories/projects');
 const documents = require('../../../src/repositories/documents');
 const commentPeriods = require('../../../src/repositories/comment-periods');
 const aiSearch = require('../../../src/search/ai-search');
+const updateAcl = require('../../../src/helpers/update-acl');
 const projectController = require('../../../src/controllers/nosql/project');
 const { logger } = require('../../../src/utils/logger');
 const { SEALED_TOKEN, levelOfRead } = require('../../../src/helpers/access-sql');
@@ -654,6 +655,25 @@ test('the project push finds the row whatever its ACL', async (t) => {
     const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
     assert.ok(!('cascadePendingAt' in byId[TWIN]),
       `the owed marker should be gone once the cascade lands, got ${byId[TWIN].cascadePendingAt}`);
+  });
+
+  await t.test('a twin owed a cascade leaves the Updates at the Track row\'s read', async () => {
+    mirrorStore(t, [
+      twin({ name: 'Twin', read: [...PRIVATE_ACL], isPublished: false, cascadePendingAt: '2026-09-20T00:00:00.000Z' }),
+      track('351', { read: [...PRIVATE_ACL], isPublished: false })
+    ]);
+    const { cascaded } = quiet();
+    const updateCascades = [];
+    t.mock.method(updateAcl, 'setAclForProject', async (eagleId, read) => {
+      updateCascades.push({ eagleId, read });
+      return { succeeded: 0, failed: 0 };
+    });
+
+    const res = await push(eagleProject());
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(cascaded.map(c => c.projectId), ['351', TWIN]);
+    assert.deepStrictEqual(updateCascades, [{ eagleId: PROJECT_EAGLE_ID, read: [...PUBLIC_ACL] }]);
   });
 
   await t.test('a sealed Track row seals its public twin and the twin\'s documents', async () => {
