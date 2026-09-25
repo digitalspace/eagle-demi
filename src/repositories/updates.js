@@ -121,8 +121,22 @@ const NOTIFIED_BY = Object.freeze({ DEMI: 'demi', EAGLE: 'eagle', BACKFILL: 'bac
 const NOTIFY_LEASE_MS = 30 * 60 * 1000;
 /** Tries at a send that got no answer (5xx, timeout), in total. A refusal (4xx) is never retried. */
 const NOTIFY_MAX_ATTEMPTS = 3;
-/** How far back the scheduled announce reaches. An update published longer ago is not news. */
+/** How far back an announce reaches, scheduled or pushed. An update published longer ago is not news. */
 const NOTIFY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The oldest instant still inside the notify window at `now`. */
+function notifyWindowStart(now) {
+  return new Date(Date.parse(now) - NOTIFY_WINDOW_MS).toISOString();
+}
+
+/**
+ * Is the row recent enough to announce at `now`? Measured as listDueForNotify measures it: a
+ * DEMI-claimed row from `notifyClaimedAt`, an unclaimed one from `publishDate`.
+ */
+function isInNotifyWindow(item, now) {
+  const from = typeof item.notifyClaimedAt === 'string' ? item.notifyClaimedAt : item.publishDate;
+  return typeof from === 'string' && from >= notifyWindowStart(now);
+}
 
 /** The DEMI send bookkeeping a whole-item write must carry across, like `notifiedAt`. */
 const NOTIFY_STATE_FIELDS = [
@@ -146,13 +160,16 @@ function staleLeaseClause(now) {
 }
 
 /**
- * The row may be announced at `now`: published, through the public gate, and either unclaimed or
- * holding a dead lease. Checked IN the claim, so a row archived or rescheduled after the timer
- * listed it fails the claim instead of being announced from a stale read.
+ * The row may be announced at `now`: published, through the public gate, inside the notify window,
+ * and either unclaimed or holding a dead lease. Checked IN the claim, so a row archived or
+ * rescheduled after the timer listed it fails the claim instead of being announced from a stale read.
  */
 function announceableClause(now) {
-  return `c.isPublished = true AND ${liveClause(`"${PUBLISHED}"`, instantLiteral(now))} ` +
-    `AND (${UNCLAIMED_CLAUSE} OR ${staleLeaseClause(now)})`;
+  const at = instantLiteral(now);
+  const since = instantLiteral(notifyWindowStart(now));
+  return `c.isPublished = true AND ${liveClause(`"${PUBLISHED}"`, at)} ` +
+    `AND ((${UNCLAIMED_CLAUSE} AND c.publishDate >= ${since}) ` +
+    `OR (${staleLeaseClause(now)} AND c.notifyClaimedAt >= ${since}))`;
 }
 
 /** Every DEMI project id the caller's access binds into `SCOPE_FIELD` — scope, teams, credentials. */
@@ -431,7 +448,7 @@ function dueSpec(criteria, orderBy) {
  * while eagle-notify was dark stays unannounced. System access: it runs from a timer.
  */
 async function listDueForNotify(now, limit) {
-  const since = new Date(Date.parse(now) - NOTIFY_WINDOW_MS).toISOString();
+  const since = notifyWindowStart(now);
   const staleBefore = new Date(Date.parse(now) - NOTIFY_LEASE_MS).toISOString();
   const byDemi = ['c.notifiedBy = @demi', '@demi', NOTIFIED_BY.DEMI];
   const claimedSince = ['c.notifyClaimedAt >= @since', '@since', since];
@@ -548,6 +565,7 @@ module.exports = {
   NOTIFY_STATE_FIELDS,
   isLiveGated,
   isLive,
+  isInNotifyWindow,
   publishedAt,
   // Exported for the keyword-search path in controllers/search.js: the index holds EAGLE project
   // ids while a caller's scope is in DEMI ones, so the OData ACL has to be built from the same
