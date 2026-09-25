@@ -1029,9 +1029,9 @@ async function updatesIndexAcl(access) {
   if (acl.empty) return acl;
   const clauses = acl.filter ? [`(${acl.filter})`] : [];
   // The repository's parent gate, so the index's count cannot describe rows the page will not hold.
-  // Eagle ids are hex, so ',' cannot occur inside one.
   const hidden = await updatesRepo.hiddenParentIds(access);
-  if (hidden.length) clauses.push(`not search.in(projectId, '${hidden.join(',')}', ',')`);
+  // `inClause` quotes each id: a stored id is data, and a quote in one must not rewrite the filter.
+  if (hidden.length) clauses.push(`not ${inClause('projectId', hidden)}`);
   if (updatesRepo.isLiveGated(access)) {
     const now = new Date().toISOString();
     // On `publishDate` alone, as updatesRepo.liveCriteria: a gated row without one stays hidden.

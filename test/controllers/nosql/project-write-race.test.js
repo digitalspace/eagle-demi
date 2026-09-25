@@ -409,6 +409,28 @@ test('a failed cascade is recorded on the row and repaired by the next push', as
     'a marker left set makes every later push cascade for nothing');
 });
 
+test('a push that owes a cascade and fails it again keeps the marker', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  t.mock.method(logger, 'error', () => {});
+
+  const OWED = '2026-09-15T00:00:00.000Z';
+  const store = fakeStore(t, storedEagleProject({ _etag: ETAG_READ, eaglePushedAt: OLDER, cascadePendingAt: OWED }));
+  const pending = [];
+  t.mock.method(projects, 'patchCascadePending', async (id, at) => {
+    pending.push(at);
+    store.stored().cascadePendingAt = at;
+    return { id };
+  });
+  // Moves nothing, so only the marker makes it cascade; the cascade fails again.
+  t.mock.method(aiSearch, 'writeAcls', async () => { throw new Error('search is still down'); });
+
+  const res = await push(eagleProject(), NEWER);
+
+  assert.strictEqual(res.statusCode, 500);
+  assert.ok(!pending.includes(null), 'a failed cascade must not clear what it still owes');
+  assert.ok(store.stored().cascadePendingAt, 'the next push has to cascade again');
+});
+
 test('the marker survives the merge, so a retry does not clear what it still owes', async (t) => {
   // The push rebuilds the whole row from the Eagle record, and a Cosmos write replaces the item.
   t.afterEach(() => t.mock.restoreAll());

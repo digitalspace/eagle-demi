@@ -476,4 +476,16 @@ test('GET /search?dataset=RecentActivity — the parent gates its updates', asyn
 
     assert.ok(sent.filter.includes(`not search.in(projectId, '${HIDDEN_EAGLE_ID}', ',')`), sent.filter);
   });
+
+  await t.test('a quote in a hidden parent id is escaped, not able to close the filter literal', async () => {
+    const quoted = { ...UNPUBLISHED, id: '209', eagleId: "x') or true or ('" };
+    stubParents(t, { updates: [NEWS], projects: [PROJECT_ROW, quoted] });
+    let sent = null;
+    t.mock.method(aiSearch, 'config', () => ({ configured: true, activitiesIndex: 'activities' }));
+    t.mock.method(aiSearch, 'searchActivities', async (opts) => { sent = opts; return { items: [{ id: UPDATE_ID }], count: 1 }; });
+
+    await get('/api/search?dataset=RecentActivity&keywords=application');
+
+    assert.ok(sent.filter.includes("not search.in(projectId, 'x'') or true or (''', ',')"), sent.filter);
+  });
 });
