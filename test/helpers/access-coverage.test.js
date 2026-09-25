@@ -89,7 +89,7 @@ const UNGATED = {
     'documents.listByIdsUnscoped, gated there with every other document read and asserted above.',
   'updates.js':
     'Write-and-point-read only: the Eagle mirror is the sole caller, it is route-gated behind ' +
-    'authMiddleware + requireWrite on /eagle/ (asserted below) and it reads through ' +
+    'authMiddleware + requireWrite + requireEagleMirror on /eagle/ (asserted below) and it reads through ' +
     'systemAccess(). There is no query read and no read route, so there is nothing for ' +
     'visibilityFor to compose — the point read is still canRead-gated in getById.',
   'projectSummaries.js':
@@ -117,7 +117,8 @@ const UNGATED = {
  * `/eagle/` demands `requireWrite` because those handlers read and write through `systemAccess()`,
  * so the write gate is the only thing standing between a read-only credential and the mirror. It
  * is deliberately NOT `requireAdmin` — the Eagle push is exactly the consumer that should hold
- * `demi-service-write` and nothing more.
+ * `demi-service-write` and nothing more. `requireEagleMirror` then narrows it to eagle-api itself,
+ * since the extractor and any minted writer hold the same role.
  *
  * Every guard of the chain is listed, auth included, because `/sealed` is the one prefix that does
  * not mount `authMiddleware` — see its entry.
@@ -130,7 +131,7 @@ const gatedPrefixes = {
   '/admin/audit': ['authMiddleware', 'requireAdmin'],
   '/admin/analytics': ['authMiddleware', 'requireAdmin'],
   '/admin/cost': ['authMiddleware', 'requireAdmin'],
-  '/eagle/': ['authMiddleware', 'requireWrite'],
+  '/eagle/': ['authMiddleware', 'requireWrite', 'requireEagleMirror'],
   // The executable half of the `credentials.js` reason above. `requireRole` is the narrow gate a
   // grant needs: requireWrite alone would let the machine writer mint one for itself.
   '/credentials': ['authMiddleware', 'requireRole'],

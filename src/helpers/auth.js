@@ -59,14 +59,24 @@ async function resolveRegistryKey(parsed) {
   return identityFor(record);
 }
 
+// Marks an identity built from a registry row. A Symbol key, so a token's claims, which become
+// req.user wholesale on the Keycloak path, can never carry it: JSON has no Symbol keys.
+const REGISTRY_IDENTITY = Symbol('registry-identity');
+
 /** The identity a registry row grants. Shared by the presented-key and APIM paths. */
 function identityFor(record) {
   return {
     preferred_username: `key:${record.name}`,
     keyId: record.id,
     realm_access: { roles: Array.isArray(record.roles) ? record.roles : [] },
-    projectScope: Array.isArray(record.projectScope) ? record.projectScope : undefined
+    projectScope: Array.isArray(record.projectScope) ? record.projectScope : undefined,
+    [REGISTRY_IDENTITY]: true
   };
+}
+
+/** True only for an identity `identityFor` built, so its `keyId` is a registry row id. */
+function isRegistryIdentity(user) {
+  return Boolean(user && user[REGISTRY_IDENTITY] === true);
 }
 
 /**
@@ -320,6 +330,7 @@ module.exports = {
   fromGateway,
   matchesConfiguredKey,
   isAllowedClient,
+  isRegistryIdentity,
   forgetCachedKey,
   KEY_CACHE_TTL_MS
 };

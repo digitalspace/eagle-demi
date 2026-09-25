@@ -21,16 +21,14 @@ const comments = require('../../../src/repositories/comments');
 const notifications = require('../../../src/repositories/notifications');
 const lists = require('../../../src/repositories/lists');
 const projects = require('../../../src/repositories/projects');
-const apiKeys = require('../../../src/repositories/api-keys');
-const { generateKey } = require('../../../src/helpers/api-key');
 const { canRead } = require('../../../src/helpers/access-sql');
-const { forgetCachedKey } = require('../../../src/helpers/auth');
 
 const commentPeriodController = require('../../../src/controllers/nosql/comment-period');
 const commentController = require('../../../src/controllers/nosql/comment');
 const organizationController = require('../../../src/controllers/nosql/organization');
 const notificationController = require('../../../src/controllers/nosql/notification');
 const { withServer } = require('../../helpers/with-server');
+const { gatewayCaller, stubRegistry } = require('../../helpers/registry-callers');
 const { evaluate } = require('../../helpers/updates-store');
 const {
   PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID,
@@ -744,7 +742,7 @@ test('every mirror refuses a body whose doc._id disagrees with the path', async 
  * The route chain, run end to end through the dispatcher. The handlers read and write through
  * systemAccess(), so nothing inside them refuses an anonymous caller — only the chain does.
  */
-test('the four mirror routes reject anonymous and admit a write key', async (t) => {
+test('the four mirror routes reject anonymous and admit eagle-api', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   const paths = [
@@ -774,14 +772,9 @@ test('the four mirror routes reject anonymous and admit a write key', async (t) 
     assert.strictEqual(upserts, 0);
   });
 
-  await t.test('a demi-service-write key reaches the handler', async () => {
-    const { keyId, plaintext, hash } = generateKey('test');
-    forgetCachedKey(keyId);
-    t.mock.method(apiKeys, 'getById', async () => ({
-      id: keyId, name: 'eagle-push', hash, roles: ['demi-service-write'],
-      projectScope: null, expiresAt: null, revokedAt: null
-    }));
-    t.mock.method(apiKeys, 'touchLastUsed', async () => {});
+  await t.test('eagle-api through APIM reaches the handler', async (t) => {
+    const eagleApi = gatewayCaller(t, 'eagle-api', ['demi-service-write']);
+    stubRegistry(t, [eagleApi.row]);
 
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     const written = [];
@@ -799,7 +792,7 @@ test('the four mirror routes reject anonymous and admit a write key', async (t) 
       for (const [i, [path, id]] of paths.entries()) {
         const res = await call(`${path}/${id}`, {
           method: 'PUT',
-          headers: { 'content-type': 'application/json', 'x-api-key': plaintext },
+          headers: { 'content-type': 'application/json', ...eagleApi.headers },
           body: JSON.stringify({ doc: bodies[i] })
         });
         assert.strictEqual(res.status, 200, `${path}: ${await res.text()}`);
@@ -808,6 +801,5 @@ test('the four mirror routes reject anonymous and admit a write key', async (t) 
 
     assert.deepStrictEqual(written,
       [PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID]);
-    forgetCachedKey(keyId);
   });
 });

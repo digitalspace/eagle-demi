@@ -114,6 +114,11 @@ param keycloakClientId string = 'eagle-admin-console'
 @description('Comma-separated Keycloak client ids (token azp) permitted to call this API.')
 param allowedClients string = ''
 
+// Who may write the Eagle mirror (PUT /eagle/*). Empty refuses everyone rather than admitting
+// every writer, so blanking it closes the mirror.
+@description('Comma-separated registry row ids permitted on PUT /eagle/*.')
+param eagleMirrorPrincipals string = 'apim:eagle-api'
+
 @description('Expected JWT aud claim. Empty disables audience verification.')
 param ssoAudience string = ''
 
@@ -833,6 +838,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'DEMI_ALLOWED_CLIENTS'
           value: allowedClients
+        }
+        {
+          name: 'DEMI_EAGLE_MIRROR_PRINCIPALS'
+          value: eagleMirrorPrincipals
         }
         {
           name: 'SSO_ISSUER'

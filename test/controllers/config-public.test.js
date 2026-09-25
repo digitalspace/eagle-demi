@@ -30,6 +30,7 @@ const { generateKey } = require('../../src/helpers/api-key');
 const { forgetCachedKey } = require('../../src/helpers/auth');
 const { routeChains } = require('../helpers/router-source');
 const { withServer } = require('../helpers/with-server');
+const { gatewayCaller, stubRegistry } = require('../helpers/registry-callers');
 
 function mockRes() {
   return {
@@ -390,7 +391,7 @@ test('public config push', async (t) => {
  * it is given — so the chain is the whole thing standing between an anonymous caller and the
  * payload eagle-public boots on.
  */
-test('the config push route is behind authMiddleware + requireWrite', async (t) => {
+test('the config push route is behind authMiddleware + requireWrite + requireEagleMirror', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('it is declared with the mirror chain', () => {
@@ -400,6 +401,7 @@ test('the config push route is behind authMiddleware + requireWrite', async (t) 
     assert.deepStrictEqual(extra, []);
     assert.match(route.chain, /\bauthMiddleware\b/);
     assert.match(route.chain, /\brequireWrite\b/);
+    assert.match(route.chain, /\brequireEagleMirror\b/);
   });
 
   await t.test('no credential is 401, and nothing is written', async () => {
@@ -434,14 +436,15 @@ test('the config push route is behind authMiddleware + requireWrite', async (t) 
     key.forget();
   });
 
-  await t.test('a demi-service-write key stores it, and the GET serves it back', async () => {
+  await t.test('eagle-api through APIM stores it, and the GET serves it back', async (t) => {
     const read = stubDocument(t);
-    const key = stubKey(t, ['demi-service-write']);
+    const eagleApi = gatewayCaller(t, 'eagle-api', ['demi-service-write']);
+    stubRegistry(t, [eagleApi.row]);
 
     await withServer(async (call) => {
       const push = await call('/api/eagle/config/public', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json', 'x-api-key': key.plaintext },
+        headers: { 'content-type': 'application/json', ...eagleApi.headers },
         body: JSON.stringify(PUSHED)
       });
       // Read once: `Response` bodies are single-use, so the failure message and the assertion
@@ -458,7 +461,6 @@ test('the config push route is behind authMiddleware + requireWrite', async (t) 
     });
 
     assert.equal(read().SEARCH_API_PATH, '/demi-search');
-    key.forget();
   });
 });
 
