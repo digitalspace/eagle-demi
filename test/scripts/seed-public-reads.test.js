@@ -18,8 +18,9 @@ const os = require('os');
 const path = require('path');
 
 const {
-  ALL_STAGES, COMMENT_FIELDS, parseArgs, mirrorListItem, withinSince, stageLine, backfill
+  ALL_STAGES, COMMENT_FIELDS, parseArgs, mirrorListItem, mirrorList, withinSince, stageLine, backfill
 } = require('../../src/scripts/seed-public-reads');
+const cosmos = require('../../src/db/cosmos-nosql');
 const comments = require('../../src/repositories/comments');
 const lists = require('../../src/repositories/lists');
 const updatesRepo = require('../../src/repositories/updates');
@@ -144,6 +145,28 @@ test('the List row this script owns', async (t) => {
     assert.strictEqual(published.listOrder, 3);
     assert.deepStrictEqual(published.sources.eagle, doc);
     assert.strictEqual(mirrorListItem('L1', doc, ['staff'], null).isPublished, false);
+  });
+
+  // A row the ACL hides from systemAccess still exists: read as absent, its create 409'd forever.
+  await t.test('replaces a stored row that has no read[], under its etag', async () => {
+    t.after(() => t.mock.restoreAll());
+    const stored = { id: 'L1', kind: lists.KINDS.LIST, name: 'Old', _etag: '"v1"' };
+    const writes = [];
+    t.mock.method(cosmos, 'readItem', async (_c, id, pk) =>
+      (id === 'L1' && pk === lists.KINDS.LIST ? { ...stored } : null));
+    t.mock.method(cosmos, 'create', async (_c, item) => {
+      writes.push(['create', item.id]);
+      throw Object.assign(new Error('conflict'), { code: 409 });
+    });
+    t.mock.method(cosmos, 'replace', async (_c, id, _pk, item, etag) => {
+      writes.push(['replace', id, etag]);
+      return item;
+    });
+
+    const written = await mirrorList('L1', { _id: 'L1', name: 'Amendment', read: PUBLIC_ACL });
+
+    assert.strictEqual(written.saved.name, 'Amendment');
+    assert.deepStrictEqual(writes, [['replace', 'L1', '"v1"']]);
   });
 });
 
@@ -301,7 +324,7 @@ test('comments', async (t) => {
   /** The real comment mirror, writing through a mocked repository. */
   const captureComments = async (t2, { items, total, periodRow }) => {
     const written = [];
-    t2.mock.method(comments, 'getById', async () => null);
+    t2.mock.method(comments, 'readForWrite', async () => null);
     t2.mock.method(comments, 'upsert', async (item) => { written.push(item); return item; });
     t2.mock.method(logger, 'error', () => {});
 
@@ -336,7 +359,7 @@ test('comments', async (t) => {
     async (t2) => {
       const items = Array.from({ length: 4 }, (_, i) => eagleComment({ _id: `C${i}` }));
       const state = statePath();
-      t2.mock.method(comments, 'getById', async () => null);
+      t2.mock.method(comments, 'readForWrite', async () => null);
       t2.mock.method(comments, 'upsert', async (item) => item);
       t2.mock.method(logger, 'error', () => {});
 
@@ -379,7 +402,7 @@ test('comments', async (t) => {
 
   await t.test('the per-period checkpoint survives the stage checkpoint', async (t2) => {
     const state = statePath();
-    t2.mock.method(comments, 'getById', async () => null);
+    t2.mock.method(comments, 'readForWrite', async () => null);
     t2.mock.method(comments, 'upsert', async (item) => item);
 
     await backfill(['--live', '--only', 'comments', '--state', state], {

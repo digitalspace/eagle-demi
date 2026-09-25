@@ -268,9 +268,7 @@ async function captureMirror(t, entity, doc, {
 
   t.mock.method(projects, 'getByEagleId', async () => (project === undefined ? storedProject() : project));
   t.mock.method(commentPeriods, 'getById', async () => (period === undefined ? storedPeriod() : period));
-  // AFTER the parent stubs: on the commentPeriods mirror `repo` IS commentPeriods, and what that
-  // mirror reads by id is its own existing row, never a parent.
-  t.mock.method(repo, 'getById', async () => existing);
+  t.mock.method(repo, 'readForWrite', async () => existing);
 
   let row;
   // `losses` 412s the first N writes, so a case can drive the mirror's retry bound.

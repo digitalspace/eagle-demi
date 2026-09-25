@@ -173,8 +173,29 @@ function updatesStore(t, rows, { onQuery = null, pageSize = Infinity } = {}) {
     const row = store.get(String(id));
     return row ? { ...row } : null;
   });
+  // Whole-item writes as Cosmos answers them: a create over a stored id is a 409, a replace off an
+  // old etag a 412. `writes` records each attempt, landed or not.
+  const writes = [];
+  let etags = 0;
+  const stamp = (item) => ({ ...item, _etag: `"w${++etags}"` });
+  t.mock.method(cosmos, 'create', async (container, item) => {
+    writes.push({ op: 'create', id: String(item.id) });
+    if (store.has(String(item.id))) throw Object.assign(new Error('conflict'), { code: 409 });
+    const row = stamp(item);
+    store.set(String(item.id), row);
+    return { ...row };
+  });
+  t.mock.method(cosmos, 'replace', async (container, id, pk, item, etag) => {
+    writes.push({ op: 'replace', id: String(id), etag });
+    const row = store.get(String(id));
+    if (!row) throw Object.assign(new Error('not found'), { code: 404 });
+    if (row._etag !== etag) throw precondition();
+    const next = stamp(item);
+    store.set(String(id), next);
+    return { ...next };
+  });
 
-  return { store, patches, queries, row: (id) => store.get(String(id)) };
+  return { store, patches, queries, writes, row: (id) => store.get(String(id)) };
 }
 
 module.exports = { updatesStore, evaluate };

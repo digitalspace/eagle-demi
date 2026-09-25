@@ -11,7 +11,6 @@
 
 const lists = require('../../repositories/lists');
 const { seedAcl } = require('../../seed/transform');
-const { systemAccess } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const {
@@ -53,7 +52,7 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   return upsertWithRetry(
     lists,
     (current) => mirrorItem(eagleId, doc, read, current),
-    () => lists.getById(systemAccess(), eagleId, lists.KINDS.ORGANIZATION),
+    () => lists.readForWrite(eagleId, lists.KINDS.ORGANIZATION),
     { pushedAt }
   );
 }

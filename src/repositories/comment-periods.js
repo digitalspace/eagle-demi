@@ -12,7 +12,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
-  assertFilterable
+  assertFilterable, readForWriteIn
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 
@@ -42,6 +42,11 @@ async function getById(access, id, projectId) {
   // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
   // the row exists, and the caller reads that as "no such comment period".
   return await cosmos.queryFirst(CONTAINER, spec, {});
+}
+
+/** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
+async function readForWrite(id, projectId) {
+  return readForWriteIn(CONTAINER, id, projectId);
 }
 
 function criteriaFor(projectId) {
@@ -287,6 +292,8 @@ async function deleteById(id, projectId) {
  * copy still says `public`, and `deriveAcls` needs the flag to refuse to act on it.
  */
 async function aclRowsForProject(access, projectId) {
+  // Callers pass systemAccess on purpose: a sealed child is skipped, and a `read`-less one heals on
+  // its own next push, which reads it unfiltered (`readForWrite`).
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
@@ -316,6 +323,7 @@ module.exports = {
   STATUSES: Object.keys(STATUS_CLAUSES),
   startOfPacificDay,
   getById,
+  readForWrite,
   listByProject,
   listByIds,
   listOpen,

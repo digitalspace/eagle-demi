@@ -77,7 +77,7 @@ async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}
   const written = await upsertWithRetry(
     comments,
     (current) => mirrorItem(eagleId, doc, period, read, current),
-    () => comments.getById(systemAccess(), eagleId),
+    () => comments.readForWrite(eagleId, period.id),
     { pushedAt }
   );
   // Nothing was written, so the partition cleanup below has nothing to clean up after.

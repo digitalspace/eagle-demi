@@ -8,6 +8,7 @@
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { writeGuarded } = require('../../helpers/etag-write');
+const { levelOfRead } = require('../../helpers/access-sql');
 
 /**
  * The pusher's clock, carried on the mirrored row.
@@ -99,6 +100,12 @@ function pushConflict(res, { label, eagleId, projectId }) {
   });
 }
 
+/** A sealed (level 0) row keeps its ACL: Eagle knows nothing of the seal, so a push never reopens it. */
+function keepSeal(item, current) {
+  if (!current || levelOfRead(current.read) !== 0) return item;
+  return { ...item, read: current.read, isPublished: current.isPublished };
+}
+
 /**
  * Write the row, rebuilding against whatever is stored after each lost race. `build(current)` runs
  * per try, so anything carried across from the stored row is carried from the value that is
@@ -118,7 +125,7 @@ async function upsertWithRetry(repo, build, readExisting, { pushedAt = null } = 
     reread: readExisting,
     attempt: async (current) => {
       if (isStalePush(pushedAt, current)) return { ignored: 'stale', existing: current };
-      const item = stampPush(build(current), pushedAt, current);
+      const item = keepSeal(stampPush(build(current), pushedAt, current), current);
       return { saved: await repo.upsert(item, current), existing: current };
     }
   });

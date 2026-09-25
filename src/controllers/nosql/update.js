@@ -212,8 +212,8 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   return upsertWithRetry(
     updates,
     (current) => mirrorItem(eagleId, doc, current),
-    // systemAccess: the mirror must find a row it is about to republish while that row is private.
-    () => updates.getById(systemAccess(), eagleId),
+    // Unfiltered: a row with no `read` or a compartment token is still there to be replaced.
+    () => updates.readForWrite(eagleId),
     { pushedAt }
   );
 }

@@ -10,7 +10,9 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const {
+  eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem, readForWriteIn
+} = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 
 const CONTAINER = 'comments';
@@ -37,6 +39,11 @@ async function getById(access, id, periodId) {
   // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
   // the row exists, and the caller reads that as "no such comment".
   return await cosmos.queryFirst(CONTAINER, spec, {});
+}
+
+/** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
+async function readForWrite(id, periodId) {
+  return readForWriteIn(CONTAINER, id, periodId);
 }
 
 function criteriaFor(periodId) {
@@ -80,6 +87,8 @@ async function deleteById(id, periodId) {
 
 /** The ACL inputs of every comment in one period — see `commentPeriods.aclRowsForProject`. */
 async function aclRowsForPeriod(access, periodId) {
+  // Callers pass systemAccess on purpose: a sealed child is skipped, and a `read`-less one heals on
+  // its own next push, which reads it unfiltered (`readForWrite`).
   const spec = selectWhere({
     access,
     partitionField: SCOPE_FIELD,
@@ -106,6 +115,7 @@ module.exports = {
   SCOPE_FIELD,
   SORTABLE,
   getById,
+  readForWrite,
   listByPeriod,
   countByPeriod,
   aclRowsForPeriod,

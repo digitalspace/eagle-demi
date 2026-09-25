@@ -10,6 +10,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
+const { logger } = require('../utils/logger');
 const { sortEntries } = require('../search/eagle-query');
 const { visibilityFor, andClauses, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { catalogFor } = require('../vis/catalog');
@@ -218,6 +219,26 @@ async function upsertItem(container, partitionField, item, existing) {
 }
 
 /**
+ * The stored row with no visibility predicate, for a write's existence check only. A point read in
+ * `partitionKey` when the caller knows it; a miss there (the row moved parent) searches every one.
+ */
+async function readForWriteIn(container, id, partitionKey) {
+  if (partitionKey !== undefined && partitionKey !== null) {
+    const row = await cosmos.readItem(container, String(id), String(partitionKey));
+    if (row) return row;
+  }
+  const { clause, params } = eq('id', String(id), '@id');
+  // Bounded by how many partitions hold this id, not by the corpus.
+  const { items } = await cosmos.query(container,
+    { query: `SELECT * FROM c WHERE ${clause}`, parameters: params });
+  if (items.length > 1) {
+    logger.warn('[sql] one id is stored in more than one partition',
+      { container, id: String(id), count: items.length });
+  }
+  return items[0] || null;
+}
+
+/**
  * The SDK reports a failed access condition on `code` or on `statusCode` depending on the path
  * that raised it; a caller retrying a lost write should not have to know which.
  */
@@ -281,6 +302,7 @@ module.exports = {
   orderByFrom,
   pageSlice,
   upsertItem,
+  readForWriteIn,
   upsertWithEtag,
   createItem,
   isDefinedAndNotNull,
