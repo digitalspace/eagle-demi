@@ -34,8 +34,10 @@ const { validateDestination } = require('../../helpers/link-url');
 const config = require('../../config');
 const { writeGuarded } = require('../../helpers/etag-write');
 const {
-  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
+  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
+const { mirrorError } = require('../../helpers/duplicate-id');
+const { narrowTwin } = require('../../helpers/project-twin');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -642,9 +644,9 @@ async function clearCascadePending(saved, eagleId) {
 
 async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
   try {
-    // systemAccess: the push is a mirror, so it must find a project it is about to republish even
+    // Unfiltered: the push is a mirror, so it must find a project it is about to republish even
     // while that project is currently private.
-    const read = () => projects.getByEagleId(systemAccess(), eagleId);
+    const read = () => projects.readForWriteByEagleId(eagleId);
     const existing = await read();
 
     // Rebuilt per try off the row that actually stored: an unguarded upsert replaced the item from
@@ -657,7 +659,7 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
       attempt: async (current) => {
         // Inside the attempt, so a retry after a 412 judges this push against the one that won.
         if (isStalePush(pushedAt, current)) return { status: 'stale', existing: current };
-        const row = stampPush(mergeEaglePush(doc, current), pushedAt, current);
+        const row = keepSeal(stampPush(mergeEaglePush(doc, current), pushedAt, current), current);
         // Guarded on the revision this attempt read, or CREATED when it read none — an unguarded
         // upsert would replace a project another push created in between.
         const saved = await projects.upsert(row,
@@ -708,10 +710,13 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
       if (owed) await clearCascadePending(saved, eagleId);
     }
 
+    const twinFailure = await narrowTwin(saved, eagleId, runCascade);
+    if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
+
     return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ error: err.message });
-    return serverError(res, err, 'project controller failed');
+    return mirrorError(res, err, 'project controller failed');
   }
 }
 

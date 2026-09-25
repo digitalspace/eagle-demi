@@ -15,6 +15,7 @@ const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
+const documents = require('../../src/repositories/documents');
 const projects = require('../../src/repositories/projects');
 const { logger } = require('../../src/utils/logger');
 
@@ -61,21 +62,63 @@ test('readForWrite on the parent-partitioned mirrors', async (t) => {
     assert.doesNotMatch(queries[0].spec.query, /read/);
   });
 
-  await t.test('an id held in two partitions warns with the id and count only', async () => {
-    stored(t, [{ id: 'c1', pk: 'a', comment: 'secret text' }, { id: 'c1', pk: 'b' }]);
-    const warned = [];
-    t.mock.method(logger, 'warn', (message, meta) => { warned.push(meta); });
+  await t.test('an id held in two partitions, neither expected, is refused and logged without content', async () => {
+    stored(t, [
+      { id: 'c1', pk: 'a', periodId: 'a', comment: 'secret text' },
+      { id: 'c1', pk: 'b', periodId: 'b' }
+    ]);
+    const logged = [];
+    t.mock.method(logger, 'error', (message, meta) => { logged.push(meta); });
 
-    await comments.readForWrite('c1', 'z');
+    await assert.rejects(comments.readForWrite('c1', 'z'), { code: 'DUPLICATE_ID' });
 
-    assert.deepStrictEqual(warned, [{ container: 'comments', id: 'c1', count: 2 }]);
+    assert.deepStrictEqual(logged, [{ container: 'comments', id: 'c1', partitionKeys: ['a', 'b'] }]);
+  });
+
+  await t.test('a document in the expected partition wins over a copy elsewhere, with no query', async () => {
+    const queries = stored(t, [
+      { id: 'd1', pk: '207', projectId: '207' },
+      { id: 'd1', pk: '208', projectId: '208' }
+    ]);
+
+    const row = await documents.readForWrite('d1', '207');
+
+    assert.deepStrictEqual({ row, queries }, { row: { id: 'd1', pk: '207', projectId: '207' }, queries: [] });
+  });
+
+  await t.test('a document held in two other partitions is refused', async () => {
+    stored(t, [{ id: 'd1', pk: '207', projectId: '207' }, { id: 'd1', pk: '208', projectId: '208' }]);
+    t.mock.method(logger, 'error', () => {});
+
+    await assert.rejects(documents.readForWrite('d1', '209'), { code: 'DUPLICATE_ID' });
+  });
+
+  await t.test('the two copies of a half-finished move are one document, and the marked copy wins', async () => {
+    stored(t, [
+      { id: 'd1', pk: '207', projectId: '207' },
+      { id: 'd1', pk: '208', projectId: '208', movedFromProjectId: '207' }
+    ]);
+
+    const row = await documents.readForWrite('d1', '209');
+
+    assert.deepStrictEqual(row, { id: 'd1', pk: '208', projectId: '208', movedFromProjectId: '207' });
+  });
+
+  await t.test('a marker naming a third partition does not excuse a duplicate', async () => {
+    stored(t, [
+      { id: 'd1', pk: '207', projectId: '207' },
+      { id: 'd1', pk: '208', projectId: '208', movedFromProjectId: '100' }
+    ]);
+    t.mock.method(logger, 'error', () => {});
+
+    await assert.rejects(documents.readForWrite('d1', '209'), { code: 'DUPLICATE_ID' });
   });
 
   await t.test('a project by Eagle id is found with no ACL predicate', async () => {
     const specs = [];
-    t.mock.method(cosmos, 'queryFirst', async (_container, spec) => {
+    t.mock.method(cosmos, 'query', async (_container, spec) => {
       specs.push(spec);
-      return { id: '207', eagleId: '588511d0aaecd9001b825604' };
+      return { items: [{ id: '207', eagleId: '588511d0aaecd9001b825604' }] };
     });
 
     const row = await projects.readForWriteByEagleId('588511d0aaecd9001b825604');
@@ -85,6 +128,36 @@ test('readForWrite on the parent-partitioned mirrors', async (t) => {
     assert.match(specs[0].query, /\bc\.eagleId = @eagleId\b/);
     assert.deepStrictEqual(specs[0].parameters,
       [{ name: '@eagleId', value: '588511d0aaecd9001b825604' }]);
+  });
+
+  const EAGLE_ID = '588511d0aaecd9001b825604';
+  const projectRows = (t, items) =>
+    t.mock.method(cosmos, 'query', async () => ({ items: items.map(row => ({ ...row })) }));
+
+  await t.test('a Track row beside its eagle-<id> twin is not refused, and the Track row wins', async () => {
+    projectRows(t, [
+      { id: `eagle-${EAGLE_ID}`, eagleId: EAGLE_ID, sourceSystem: 'eagle' },
+      { id: '351', eagleId: EAGLE_ID, sourceSystem: 'track' }
+    ]);
+
+    const row = await projects.readForWriteByEagleId(EAGLE_ID);
+
+    assert.strictEqual(row.id, '351');
+  });
+
+  await t.test('two Track rows sharing an Eagle id are refused', async () => {
+    projectRows(t, [
+      { id: '351', eagleId: EAGLE_ID }, { id: '352', eagleId: EAGLE_ID },
+      { id: `eagle-${EAGLE_ID}`, eagleId: EAGLE_ID }
+    ]);
+    const logged = [];
+    t.mock.method(logger, 'error', (message, meta) => { logged.push(meta); });
+
+    await assert.rejects(projects.readForWriteByEagleId(EAGLE_ID), { code: 'DUPLICATE_ID' });
+
+    assert.deepStrictEqual(logged, [{
+      container: 'projects', id: EAGLE_ID, partitionKeys: ['351', '352', `eagle-${EAGLE_ID}`]
+    }]);
   });
 });
 
@@ -102,13 +175,17 @@ test('readForWrite is reached only from the mirror write paths', () => {
   const ALLOWED = new Set([
     'controllers/nosql/comment-period.js',
     'controllers/nosql/comment.js',
+    'controllers/nosql/document.js',
     'controllers/nosql/notification.js',
     'controllers/nosql/organization.js',
+    'controllers/nosql/project.js',
     'controllers/nosql/update.js',
     'helpers/parent-admit.js',
+    'helpers/project-twin.js',
     'repositories/_sql.js',
     'repositories/comment-periods.js',
     'repositories/comments.js',
+    'repositories/documents.js',
     'repositories/lists.js',
     'repositories/notifications.js',
     'repositories/projects.js',

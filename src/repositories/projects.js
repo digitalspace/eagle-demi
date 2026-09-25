@@ -15,6 +15,8 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead, systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
+const { duplicateIdError } = require('../helpers/duplicate-id');
+const { eagleOnlyProjectId } = require('../merge/project');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
   upsertWithEtag, createItem, assertFilterable
@@ -119,12 +121,24 @@ async function getByEagleId(access, eagleId) {
  * The stored row for an Eagle id, unfiltered: a mirror asks whether it exists, not who may read
  * it. Write side only, like every `readForWrite`.
  *
- * Returns the first row when several share the eagleId; refusing duplicates is not done yet.
+ * A Track row beside its `eagle-<id>` twin is expected (the Track relink keeps the twin), so the
+ * Track row wins; any other pair is refused.
+ *
+ * @throws an error with `code === DUPLICATE_ID` when two rows of the same kind share the eagleId
  */
 async function readForWriteByEagleId(eagleId) {
   const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
-  return await cosmos.queryFirst(CONTAINER,
-    { query: `SELECT * FROM c WHERE ${clause}`, parameters: params }, {});
+  const { items } = await cosmos.query(CONTAINER,
+    { query: `SELECT * FROM c WHERE ${clause}`, parameters: params });
+  if (items.length <= 1) return items[0] || null;
+  const tracked = items.filter(row => row.id !== eagleOnlyProjectId(String(eagleId)));
+  if (tracked.length === 1) return tracked[0];
+  throw duplicateIdError(CONTAINER, eagleId, items.map(row => row[PARTITION_FIELD]));
+}
+
+/** The stored row by DEMI id, unfiltered. Write side only, like every `readForWrite`. */
+async function readForWrite(id) {
+  return cosmos.readItem(CONTAINER, String(id), String(id));
 }
 
 /**
@@ -405,6 +419,7 @@ module.exports = {
   EAGLE_OBJECT_ID,
   getByEagleId,
   readForWriteByEagleId,
+  readForWrite,
   listByIds,
   listIdsByName,
   NAME_MATCH_MAX_IDS,

@@ -28,7 +28,8 @@ const { routeChains } = require('../../helpers/router-source');
 // One id space for the whole push suite: the notification the public-read mirrors already use.
 const {
   NOTIFICATION_EAGLE_ID, anonymous, staff,
-  eagleProject, storedEagleProject: storedProject
+  eagleProject, storedEagleProject: storedProject,
+  projectReadForWriteFromGet, documentReadForWriteFromGet
 } = require('../../helpers/eagle-mirror-fixtures');
 const { canRead } = require('../../../src/helpers/access-sql');
 const { logger } = require('../../../src/utils/logger');
@@ -87,6 +88,7 @@ function eagleDocument(overrides = {}) {
 }
 
 test('PUT /eagle/projects/:eagleId', async (t) => {
+  t.beforeEach(() => projectReadForWriteFromGet(t));
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('every other source block survives the push', async () => {
@@ -376,6 +378,7 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
 });
 
 test('PUT /eagle/documents/:eagleId', async (t) => {
+  t.beforeEach(() => documentReadForWriteFromGet(t));
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('extraction state is carried off the stored row, never off the push', async () => {
@@ -699,6 +702,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
  * cascade has to gate on (repositories/document-acl-cascade.test.js asserts that half).
  */
 test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
+  t.beforeEach(() => documentReadForWriteFromGet(t));
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('the row is kept, flagged, and narrowed out of the public\'s reach', async () => {
@@ -842,6 +846,7 @@ test('the mirror routes are behind authMiddleware + requireWrite', async (t) => 
 });
 
 test('a demi-service-write credential is what the push should hold', async (t) => {
+  t.beforeEach(() => projectReadForWriteFromGet(t));
   t.afterEach(() => t.mock.restoreAll());
 
   const SERVICE_WRITER = {
@@ -889,3 +894,79 @@ test('a demi-service-write credential is what the push should hold', async (t) =
     }
   });
 });
+
+test('keepSeal on an Eagle push', async (t) => {
+  const { keepSeal } = require('../../../src/controllers/nosql/eagle-mirror');
+  const { SEALED_TOKEN } = require('../../../src/helpers/access-sql');
+  const pushed = { id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true };
+
+  await t.test('a read-less stored row takes the pushed read', () => {
+    assert.deepStrictEqual(keepSeal(pushed, { id: '207' }), pushed);
+  });
+
+  await t.test('a sealed stored row keeps its seal', () => {
+    const current = { id: '207', read: [SEALED_TOKEN], isPublished: false };
+    assert.deepStrictEqual(keepSeal(pushed, current), { ...pushed, read: [SEALED_TOKEN], isPublished: false });
+  });
+});
+
+test('a duplicated id is a 409 on the parent-partitioned mirrors', async (t) => {
+  const { captureMirror } = require('../../helpers/eagle-mirror-fixtures');
+  t.afterEach(() => t.mock.restoreAll());
+
+  for (const entity of ['commentPeriods', 'comments']) {
+    await t.test(entity, async () => {
+      const duplicated = Object.assign(new Error('stored twice'), { code: 'DUPLICATE_ID' });
+      const { res, row } = await captureMirror(t, entity, null, { existing: duplicated });
+
+      assert.strictEqual(res.statusCode, 409, 'eagle-api retries a 5xx, and a retry finds the same rows');
+      assert.strictEqual(row, undefined);
+    });
+  }
+});
+
+test('the mirrors through their real existence reads', async (t) => {
+  const { mirrorStore } = require('../../helpers/mirror-store');
+  const { logger: log } = require('../../../src/utils/logger');
+  t.beforeEach(() => {
+    for (const level of ['info', 'warn', 'error']) t.mock.method(log, level, () => {});
+    t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
+  });
+  t.afterEach(() => t.mock.restoreAll());
+
+  // Read-less rows: the gated read misses them, so these fail on anything but the unfiltered read.
+  await t.test('a project push updates the stored row it finds by Eagle id', async () => {
+    const store = mirrorStore(t, [{ container: 'projects', ...storedProject(), read: undefined }]);
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF,
+      body: { doc: eagleProject({ name: 'Renamed in Eagle' }) }
+    }, res);
+
+    assert.deepStrictEqual(res.body, { id: '207', action: 'upsert' });
+    assert.deepStrictEqual(store.rows('projects').map(r => [r.id, r.sources.eagle.name]),
+      [['207', 'Renamed in Eagle']]);
+  });
+
+  await t.test('a document push carries extraction state off the stored row it point-reads', async () => {
+    const store = mirrorStore(t, [
+      { container: 'projects', ...storedProject() },
+      {
+        container: 'documents', id: DOC_EAGLE_ID, projectId: '207',
+        contentExtracted: true, contentPageCount: 42
+      }
+    ]);
+
+    const res = mockRes();
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {}, user: STAFF,
+      body: { doc: eagleDocument({ contentExtracted: false }) }
+    }, res);
+
+    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, projectId: '207', action: 'upsert' });
+    const [row] = store.rows('documents');
+    assert.deepStrictEqual([row.contentExtracted, row.contentPageCount], [true, 42]);
+  });
+});
+

@@ -309,7 +309,8 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 40,
+    // 41: +1 for the Eagle push 500 when the Eagle-only twin could not be narrowed (error string).
+    assert.strictEqual(emissions.length, 41,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
     for (const site of [
@@ -360,8 +361,9 @@ test('access gate coverage', async (t) => {
     // push write-race exhausted) sites. +3 for GET /documents/recent-uploads: its 400, its memo
     // hit and its ranked payload. +2 for the chunk ingest 409 guard and 413 cap. +1 for its
     // uncounted 503 when the search index kept dropped chunks (error string only). +1 for the
-    // chunk ingest 409 refusing an Update image (error string only).
-    assert.strictEqual(emissions.length, 44,
+    // chunk ingest 409 refusing an Update image (error string only). +1 for the Eagle push ack of
+    // a sealed row, `{ ok: true }`.
+    assert.strictEqual(emissions.length, 45,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits

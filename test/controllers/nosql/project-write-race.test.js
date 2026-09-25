@@ -29,6 +29,7 @@ const commentPeriods = require('../../../src/repositories/comment-periods');
 const aiSearch = require('../../../src/search/ai-search');
 const projectController = require('../../../src/controllers/nosql/project');
 const { logger } = require('../../../src/utils/logger');
+const { SEALED_TOKEN, levelOfRead } = require('../../../src/helpers/access-sql');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL,
   eagleProject, storedEagleProject
@@ -88,7 +89,7 @@ function captureCascade(t) {
  */
 function raceWith(t, rows, losses) {
   let read = 0;
-  t.mock.method(projects, 'getByEagleId', async () => rows[Math.min(read++, rows.length - 1)]);
+  t.mock.method(projects, 'readForWriteByEagleId', async () => rows[Math.min(read++, rows.length - 1)]);
   const upserted = [];
   t.mock.method(projects, 'upsert', async (item, options) => {
     upserted.push({ item, options });
@@ -110,7 +111,7 @@ function fakeStore(t, initial, delays = []) {
   let revision = 2;
   let calls = 0;
   const upserted = [];
-  t.mock.method(projects, 'getByEagleId', async () => (stored ? { ...stored } : null));
+  t.mock.method(projects, 'readForWriteByEagleId', async () => (stored ? { ...stored } : null));
   t.mock.method(projects, 'upsert', async (item, options) => {
     const wait = delays[calls++] || 0;
     upserted.push({ item, options });
@@ -158,7 +159,7 @@ test('a create that loses to a concurrent create is re-read and rebuilt', async 
 
   let read = 0;
   const rows = [null, privateProject({ _etag: ETAG_LANDED, shortCode: 'kq7bt2rm' })];
-  t.mock.method(projects, 'getByEagleId', async () => rows[Math.min(read++, rows.length - 1)]);
+  t.mock.method(projects, 'readForWriteByEagleId', async () => rows[Math.min(read++, rows.length - 1)]);
   const upserted = [];
   t.mock.method(projects, 'upsert', async (item, options) => {
     upserted.push({ item, options });
@@ -522,4 +523,132 @@ test('a level change that keeps losing asks to be sent again', async (t) => {
 
   assert.strictEqual(res.statusCode, 503);
   assert.strictEqual(upserted.length, 3);
+});
+
+/**
+ * The existence read against rows an ACL-gated read cannot see. The gated read missed a hidden
+ * project, so the push built an Eagle-only row: a 503 loop when that row was the one hiding, and a
+ * new `eagle-<id>` twin beside a hidden Track row.
+ */
+test('the project push finds the row whatever its ACL', async (t) => {
+  const { mirrorStore } = require('../../helpers/mirror-store');
+  t.afterEach(() => t.mock.restoreAll());
+  const TWIN = `eagle-${PROJECT_EAGLE_ID}`;
+  const track = (id, overrides = {}) => {
+    const base = storedEagleProject();
+    const sources = { ...base.sources, track: { ...base.sources.track, track_project_id: Number(id) } };
+    return { container: 'projects', ...base, id, trackProjectId: Number(id), sources, ...overrides };
+  };
+  const twin = (overrides = {}) =>
+    ({ container: 'projects', id: TWIN, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', ...overrides });
+  const quiet = () => {
+    for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});
+    return captureCascade(t);
+  };
+  // The Eagle name, which the Track merge keeps under `sources.eagle` (Track owns the top-level one).
+  const eagleNames = (store) => Object.fromEntries(store.rows('projects')
+    .map(r => [r.id, r.sources && r.sources.eagle ? r.sources.eagle.name : r.name]));
+
+  await t.test('a read-less project is written, gets the pushed read, and cascades it', async () => {
+    const store = mirrorStore(t, [twin({ name: 'Old name' })]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject());
+
+    assert.strictEqual(res.statusCode, 200);
+    const [row] = store.rows('projects');
+    assert.deepStrictEqual({ id: row.id, read: row.read }, { id: TWIN, read: [...PUBLIC_ACL] });
+    assert.deepStrictEqual(cascaded.map(c => c.projectId), [TWIN]);
+  });
+
+  await t.test('a sealed Track-matched project updates the Track row, keeps its seal, adds no twin', async () => {
+    const store = mirrorStore(t,
+      [track('351', { read: [SEALED_TOKEN], isPublished: false, name: 'Old name' })]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ name: 'Renamed in Eagle' }));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(eagleNames(store), { 351: 'Renamed in Eagle' });
+    assert.deepStrictEqual(store.rows('projects')[0].read, [SEALED_TOKEN]);
+    assert.deepStrictEqual(cascaded, []);
+  });
+
+  await t.test('a Track row beside its eagle-<id> twin takes the push, and the twin narrows with it', async () => {
+    const store = mirrorStore(t, [
+      twin({ name: 'Twin', read: [...PUBLIC_ACL], isPublished: true }),
+      track('351', { name: 'Old name' })
+    ]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ name: 'Unpublished in Eagle', read: [...PRIVATE_ACL] }));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(eagleNames(store), { [TWIN]: 'Twin', 351: 'Unpublished in Eagle' });
+    const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
+    assert.strictEqual(levelOfRead(byId['351'].read), 2);
+    assert.deepStrictEqual({ read: byId[TWIN].read, isPublished: byId[TWIN].isPublished },
+      { read: byId['351'].read, isPublished: false });
+    assert.deepStrictEqual(cascaded.map(c => [c.projectId, levelOfRead(c.read)]), [['351', 2], [TWIN, 2]]);
+  });
+
+  await t.test('a twin already at or below the Track row is not written', async () => {
+    const store = mirrorStore(t,
+      [twin({ name: 'Twin', read: [...PRIVATE_ACL], isPublished: false }), track('351')]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ name: 'Renamed in Eagle' }));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(store.writes.map(w => [w.op, w.item && w.item.id]), [['upsert', '351']]);
+    assert.deepStrictEqual(cascaded, []);
+  });
+
+  await t.test('a twin owed a cascade gets it, and its marker is removed', async () => {
+    const store = mirrorStore(t, [
+      twin({ name: 'Twin', read: [...PRIVATE_ACL], isPublished: false, cascadePendingAt: '2026-09-20T00:00:00.000Z' }),
+      track('351')
+    ]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ name: 'Renamed in Eagle' }));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(cascaded.map(c => c.projectId), [TWIN]);
+    const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
+    assert.ok(!('cascadePendingAt' in byId[TWIN]),
+      `the owed marker should be gone once the cascade lands, got ${byId[TWIN].cascadePendingAt}`);
+  });
+
+  await t.test('a sealed Track row seals its public twin and the twin\'s documents', async () => {
+    const store = mirrorStore(t, [
+      twin({ name: 'Twin', read: [...PUBLIC_ACL], isPublished: true }),
+      track('351', { read: [SEALED_TOKEN], isPublished: false }),
+      { container: 'documents', id: 'doc-under-twin', projectId: TWIN, read: [...PUBLIC_ACL], isPublished: true }
+    ]);
+    for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});
+    // The real document cascade runs against the store; only the index and periods are stubbed.
+    t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
+    t.mock.method(commentPeriods, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
+
+    const res = await push(eagleProject({ name: 'Renamed in Eagle' }));
+
+    assert.strictEqual(res.statusCode, 200);
+    const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
+    assert.deepStrictEqual(byId[TWIN].read, [SEALED_TOKEN]);
+    assert.strictEqual(byId[TWIN].isPublished, false);
+    const [document] = store.rows('documents');
+    assert.deepStrictEqual({ read: document.read, isPublished: document.isPublished },
+      { read: [SEALED_TOKEN], isPublished: false });
+  });
+
+  await t.test('two Track rows holding one Eagle id are refused with 409 and no write', async () => {
+    const store = mirrorStore(t, [track('351'), track('352')]);
+    quiet();
+
+    const res = await push(eagleProject({ name: 'Renamed in Eagle' }));
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.deepStrictEqual(store.writes, []);
+  });
 });

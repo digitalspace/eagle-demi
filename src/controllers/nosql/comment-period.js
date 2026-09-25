@@ -41,7 +41,7 @@ const { constrainToProject, DELETED_CEILING } = require('../../repositories/docu
 const { admitParent } = require('../../helpers/parent-admit');
 const { seedAcl } = require('../../seed/transform');
 const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
-const { serverError } = require('../../helpers/response');
+const { mirrorError } = require('../../helpers/duplicate-id');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
@@ -212,6 +212,6 @@ exports.upsertFromEagle = async (req, res) => {
 
     return res.json({ id: saved.id, action: saved.isDeleted ? 'delete' : 'upsert' });
   } catch (err) {
-    return serverError(res, err, 'comment period controller failed');
+    return mirrorError(res, err, 'comment period controller failed');
   }
 };

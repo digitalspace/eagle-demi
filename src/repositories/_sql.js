@@ -10,11 +10,11 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { logger } = require('../utils/logger');
 const { sortEntries } = require('../search/eagle-query');
 const { visibilityFor, andClauses, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
+const { duplicateIdError } = require('../helpers/duplicate-id');
 const { ANONYMOUS_LEVEL, LEVELS, levelOf } = require('../vis/level');
 
 /**
@@ -219,10 +219,15 @@ async function upsertItem(container, partitionField, item, existing) {
 }
 
 /**
- * The stored row with no visibility predicate, for a write's existence check only. A point read in
- * `partitionKey` when the caller knows it; a miss there (the row moved parent) searches every one.
+ * The stored row with no visibility predicate, for a write's existence check only: never return it
+ * in a response. A point read in `partitionKey` when the caller knows it, and a hit there wins; a
+ * miss (the row moved parent) searches every partition.
+ *
+ * @param {string} [partitionField] names the partition keys in the log when the id is duplicated
+ * @throws an error with `code === DUPLICATE_ID` when the search finds the id in more than one row,
+ *   except the two rows of a half-finished move, where the marked row is returned
  */
-async function readForWriteIn(container, id, partitionKey) {
+async function readForWriteIn(container, id, partitionKey, partitionField) {
   if (partitionKey !== undefined && partitionKey !== null) {
     const row = await cosmos.readItem(container, String(id), String(partitionKey));
     if (row) return row;
@@ -231,9 +236,16 @@ async function readForWriteIn(container, id, partitionKey) {
   // Bounded by how many partitions hold this id, not by the corpus.
   const { items } = await cosmos.query(container,
     { query: `SELECT * FROM c WHERE ${clause}`, parameters: params });
+  // A move whose old-partition delete failed leaves two rows, the new one naming the old one's
+  // partition. That is one document owed a delete, not a duplicate: the marked row is current.
+  if (items.length === 2 && partitionField) {
+    const marked = items.find((row, i) => row.movedFromProjectId != null &&
+      String(row.movedFromProjectId) === String(items[1 - i][partitionField]));
+    if (marked) return marked;
+  }
   if (items.length > 1) {
-    logger.warn('[sql] one id is stored in more than one partition',
-      { container, id: String(id), count: items.length });
+    throw duplicateIdError(container, id,
+      partitionField ? items.map(row => row[partitionField]) : undefined);
   }
   return items[0] || null;
 }

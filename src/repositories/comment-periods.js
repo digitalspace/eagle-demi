@@ -46,7 +46,7 @@ async function getById(access, id, projectId) {
 
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
 async function readForWrite(id, projectId) {
-  return readForWriteIn(CONTAINER, id, projectId);
+  return readForWriteIn(CONTAINER, id, projectId, PARTITION_FIELD);
 }
 
 function criteriaFor(projectId) {
