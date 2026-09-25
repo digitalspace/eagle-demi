@@ -344,7 +344,9 @@ test('updates', async (t) => {
 
     await updates.list(ANON);
 
-    assert.deepStrictEqual(seen.map(s => s.container), ['updates']);
+    // The parent gate reads every parent once per request; that is not a translation.
+    const parentScan = /^SELECT c\.id, (c\.eagleId, )?c\.read FROM c/;
+    assert.deepStrictEqual(seen.filter(s => !parentScan.test(s.spec.query)).map(s => s.container), ['updates']);
   });
 });
 
@@ -356,10 +358,11 @@ test('updates publish gate', async (t) => {
   // An IDIR sign-in reads like the public: level 3, below staff.
   const IDIR = { tier: TIER.PUBLIC, roles: ['public', 'idir'], projectScope: null, teams: [], level: 3 };
 
+  /** The `updates` specs only: the parent gate's reads of the parent containers are not gated. */
   function serve() {
     const seen = [];
     t.mock.method(cosmos, 'query', async (container, spec) => {
-      seen.push(spec);
+      if (container === 'updates') seen.push(spec);
       return { items: /COUNT/.test(spec.query) ? [0] : [] };
     });
     return seen;

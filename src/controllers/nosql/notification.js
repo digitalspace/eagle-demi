@@ -9,6 +9,7 @@
  */
 
 const notifications = require('../../repositories/notifications');
+const updates = require('../../repositories/updates');
 const { seedAcl } = require('../../seed/transform');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
@@ -58,15 +59,18 @@ function mirrorItem(eagleId, doc, read, existing) {
  *
  * @returns {Promise<{saved: object, existing: object|null}>}
  */
-function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
+async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   const read = seedAcl(doc.read);
 
-  return upsertWithRetry(
+  const written = await upsertWithRetry(
     notifications,
     (current) => mirrorItem(eagleId, doc, read, current),
     () => notifications.readForWrite(eagleId),
     { pushedAt }
   );
+  // The Update parent gate caches every notification's read.
+  updates.forgetParents();
+  return written;
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;

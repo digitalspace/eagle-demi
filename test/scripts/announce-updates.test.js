@@ -17,6 +17,7 @@ const updates = require('../../src/repositories/updates');
 const notify = require('../../src/services/notify');
 const { logger } = require('../../src/utils/logger');
 const { updatesStore } = require('../helpers/updates-store');
+const { parentProject, parentNotification } = require('../helpers/update-parents');
 // Required per call, not at load: a load-time throw lands in the logger's uncaughtException handler
 // and node --test then reports the file as passing.
 const script = () => require('../../src/scripts/announce-updates');
@@ -74,6 +75,44 @@ test('scheduled announce', async (t) => {
       assert.strictEqual(row(id).notifySentAt, NOW);
       assert.strictEqual(row(id).notifyAttempts, 1);
     }
+  });
+
+  await t.test('a row under a parent that is not public is neither claimed nor sent', async () => {
+    // Rows stored before the parent cap still say `public` under an unpublished project.
+    const sent = wire();
+    const parents = { 'p-private': ['sysadmin', 'staff'], 'p-public': ['public', 'sysadmin', 'staff'] };
+    parentProject(t, (id) =>
+      (parents[id] ? { id: `demi-${id}`, name: id, read: parents[id] } : null));
+    parentNotification(t, async () => null);
+    const { row } = updatesStore(t, [
+      due('u-private', { projectId: 'p-private' }),
+      due('u-public', { projectId: 'p-public' }),
+      due('u-orphan', { projectId: 'p-unknown' })
+    ]);
+
+    await run({ now: NOW });
+
+    assert.deepStrictEqual(sent.map(s => s.id), ['u-public']);
+    assert.strictEqual(row('u-private').notifiedAt, null, 'left unclaimed for when the parent publishes');
+    assert.strictEqual(row('u-orphan').notifiedAt, null, 'a parent DEMI does not hold is not public');
+    assert.deepStrictEqual(
+      ['u-private', 'u-orphan'].map(id => [row(id).notifySkippedAt, row(id).notifySkipReason]),
+      [[NOW, 'parent-not-public'], [NOW, 'parent-missing']]);
+  });
+
+  await t.test('a full batch of rows the parent gate skipped does not hold back a newer due row', async () => {
+    const sent = wire();
+    parentProject(t, (id) => (id === 'p-public' ? { id: 'demi-p', name: 'Open', read: ['public'] } : null));
+    parentNotification(t, null);
+    const blocked = Array.from({ length: 21 }, (_, i) =>
+      due(`b${String(i).padStart(2, '0')}`, { projectId: 'p-private', publishDate: at(-600 + i) }));
+    updatesStore(t, [...blocked, due('fresh', { projectId: 'p-public', publishDate: at(-10) })]);
+
+    await run({ now: NOW });
+    assert.deepStrictEqual(sent, [], 'the first tick lists the 20 oldest, all skipped');
+
+    await run({ now: at(1) });
+    assert.deepStrictEqual(sent.map(s => s.id), ['fresh']);
   });
 
   await t.test('a row somebody else claimed first is not sent again', async () => {
@@ -238,6 +277,18 @@ test('the due list', async (t) => {
     ]);
 
     assert.deepStrictEqual(ids(await updates.listDueForNotify(NOW, 20)), ['older', 'newer']);
+  });
+
+  await t.test('a row the parent gate skipped is not listed until the mark is cleared', async () => {
+    const { store } = updatesStore(t, [
+      due('skipped', { publishDate: at(-90), notifySkippedAt: at(-30), notifySkipReason: 'parent-not-public' }),
+      due('cleared', { publishDate: at(-80), notifySkippedAt: null }),
+      due('fresh', { publishDate: at(-70) })
+    ]);
+    assert.deepStrictEqual(ids(await updates.listDueForNotify(NOW, 20)), ['cleared', 'fresh']);
+
+    store.set('skipped', { ...store.get('skipped'), notifySkippedAt: null });
+    assert.deepStrictEqual(ids(await updates.listDueForNotify(NOW, 20)), ['skipped', 'cleared', 'fresh']);
   });
 
   await t.test('a DEMI lease is windowed from its claim, not from publishDate', async () => {

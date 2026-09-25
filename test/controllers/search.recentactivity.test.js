@@ -19,7 +19,7 @@ const assert = require('node:assert');
 
 const aiSearch = require('../../src/search/ai-search');
 const {
-  PROJECT_ROW, stubCosmos, specsFor, boundValues, get, updateRow, notificationRow
+  PROJECT_ROW, PRIVATE_ACL, stubCosmos, specsFor, boundValues, get, getAsStaff, updateRow, notificationRow
 } = require('../helpers/search-reads');
 
 const UPDATE_ID = '5f0e4a0c3f4b1a0021a1b2c1';
@@ -369,4 +369,123 @@ test('GET /search?dataset=RecentActivity&and[type]', async (t) => {
       assert.match(sent.filter, /type/);
       assert.strictEqual(body[0].meta[0].dropped, undefined);
     });
+});
+
+test('GET /search?dataset=RecentActivity — the parent gates its updates', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const HIDDEN_EAGLE_ID = '588511d0aaecd9001b8256ff';
+  const UNPUBLISHED = { id: '208', eagleId: HIDDEN_EAGLE_ID, name: 'Unpublished Mine', read: PRIVATE_ACL };
+  // Stored before the push capped by parent: Eagle's own public ACL, under a private project.
+  const UNDER_UNPUBLISHED = updateRow({ id: 'u-hidden', eagleId: 'u-hidden', projectId: HIDDEN_EAGLE_ID });
+  const CORPORATE = updateRow({ id: 'u-corp', eagleId: 'u-corp', projectId: null, pinned: false });
+
+  const stubParents = (t, { updates, projects = [PROJECT_ROW, UNPUBLISHED], notifications = [notificationRow()] }) =>
+    stubCosmos(t, { projects, notifications, updates });
+  const ids = (body) => body[0].searchResults.map(r => r._id);
+
+  await t.test('an anonymous caller sees no update of an unpublished project, and the count agrees', async () => {
+    const seen = stubParents(t, { updates: [NEWS, UNDER_UNPUBLISHED, CORPORATE] });
+
+    const { status, body } = await get('/api/search?dataset=RecentActivity');
+
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(ids(body), [UPDATE_ID, 'u-corp']);
+    assert.strictEqual(body[0].count, 2, 'the total cannot be used to probe a hidden update');
+    const [read, counted] = specsFor(seen, 'updates');
+    for (const spec of [read, counted]) {
+      assert.match(spec.query, /NOT ARRAY_CONTAINS\(@hiddenParents, c\.projectId\)/);
+    }
+  });
+
+  await t.test('staff, who can read the project, see it', async () => {
+    stubParents(t, { updates: [NEWS, UNDER_UNPUBLISHED, CORPORATE] });
+
+    const { body } = await getAsStaff(t, '/api/search?dataset=RecentActivity');
+
+    assert.deepStrictEqual(ids(body), [UPDATE_ID, 'u-hidden', 'u-corp']);
+    assert.strictEqual(body[0].searchResults[1].project.name, 'Unpublished Mine');
+  });
+
+  await t.test('the point read answers nothing for it', async () => {
+    stubParents(t, { updates: [UNDER_UNPUBLISHED] });
+
+    const { body } = await get('/api/search?dataset=RecentActivity&and%5B_id%5D=u-hidden');
+
+    assert.strictEqual(body[0].count, 0);
+    assert.deepStrictEqual(body[0].searchResults, []);
+  });
+
+  await t.test('nor does the home-page strip, which fills from the rows it may show', async () => {
+    const seen = stubParents(t, { updates: [UNDER_UNPUBLISHED, CORPORATE] });
+
+    const { body } = await get('/api/search?dataset=RecentActivity&top=true');
+
+    assert.ok(!ids(body).includes('u-hidden'));
+    for (const spec of specsFor(seen, 'updates')) {
+      assert.match(spec.query, /@hiddenParents/, 'excluded in the query, before the limit');
+    }
+  });
+
+  await t.test('an update under a notification the caller cannot read is hidden too', async () => {
+    const privateNotification = notificationRow({ id: HIDDEN_EAGLE_ID, eagleId: HIDDEN_EAGLE_ID, read: PRIVATE_ACL });
+    stubParents(t, { updates: [UNDER_UNPUBLISHED, CORPORATE], projects: [PROJECT_ROW], notifications: [privateNotification] });
+
+    const { body } = await get('/api/search?dataset=RecentActivity');
+
+    assert.deepStrictEqual(ids(body), ['u-corp']);
+  });
+
+  await t.test('a public notification wins its id over a private Track project carrying it', async () => {
+    const track = { id: '353', eagleId: HIDDEN_EAGLE_ID, name: 'Shadow Track Project', read: PRIVATE_ACL };
+    stubParents(t, {
+      updates: [UNDER_UNPUBLISHED],
+      projects: [PROJECT_ROW, track],
+      notifications: [notificationRow({ id: HIDDEN_EAGLE_ID, eagleId: HIDDEN_EAGLE_ID })]
+    });
+
+    const { body } = await get('/api/search?dataset=RecentActivity');
+
+    assert.deepStrictEqual(ids(body), ['u-hidden']);
+  });
+
+  await t.test('a parent DEMI does not hold hides nothing, as in eagle-api', async () => {
+    stubParents(t, { updates: [UNDER_UNPUBLISHED], projects: [PROJECT_ROW] });
+
+    const { body } = await get('/api/search?dataset=RecentActivity');
+
+    assert.deepStrictEqual(ids(body), ['u-hidden']);
+  });
+
+  await t.test('the parents are read once per request, not once per query', async () => {
+    const seen = stubParents(t, { updates: [NEWS, UNDER_UNPUBLISHED] });
+
+    await get('/api/search?dataset=RecentActivity');
+
+    const scans = specsFor(seen, 'projects').filter(spec => /c\.read FROM c WHERE IS_DEFINED/.test(spec.query));
+    assert.strictEqual(scans.length, 1, 'the page and its count share one lookup');
+  });
+
+  await t.test('with keywords, the index filter and its count exclude the hidden parent', async () => {
+    stubParents(t, { updates: [NEWS] });
+    let sent = null;
+    t.mock.method(aiSearch, 'config', () => ({ configured: true, activitiesIndex: 'activities' }));
+    t.mock.method(aiSearch, 'searchActivities', async (opts) => { sent = opts; return { items: [{ id: UPDATE_ID }], count: 1 }; });
+
+    await get('/api/search?dataset=RecentActivity&keywords=application');
+
+    assert.ok(sent.filter.includes(`not search.in(projectId, '${HIDDEN_EAGLE_ID}', ',')`), sent.filter);
+  });
+
+  await t.test('a quote in a hidden parent id is escaped, not able to close the filter literal', async () => {
+    const quoted = { ...UNPUBLISHED, id: '209', eagleId: "x') or true or ('" };
+    stubParents(t, { updates: [NEWS], projects: [PROJECT_ROW, quoted] });
+    let sent = null;
+    t.mock.method(aiSearch, 'config', () => ({ configured: true, activitiesIndex: 'activities' }));
+    t.mock.method(aiSearch, 'searchActivities', async (opts) => { sent = opts; return { items: [{ id: UPDATE_ID }], count: 1 }; });
+
+    await get('/api/search?dataset=RecentActivity&keywords=application');
+
+    assert.ok(sent.filter.includes("not search.in(projectId, 'x'') or true or (''', ',')"), sent.filter);
+  });
 });

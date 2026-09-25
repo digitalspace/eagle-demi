@@ -107,8 +107,8 @@ function keepSeal(item, current) {
 }
 
 /**
- * Write the row, rebuilding against whatever is stored after each lost race. `build(current)` runs
- * per try, so anything carried across from the stored row is carried from the value that is
+ * Write the row, rebuilding against whatever is stored after each lost race. `build(current)`, sync
+ * or async, runs per try, so anything carried across from the stored row is carried from the value that is
  * actually stored rather than the one this request read first.
  *
  * `pushedAt` is judged inside each attempt, against the row THAT attempt read: a retry after a
@@ -125,7 +125,7 @@ async function upsertWithRetry(repo, build, readExisting, { pushedAt = null } = 
     reread: readExisting,
     attempt: async (current) => {
       if (isStalePush(pushedAt, current)) return { ignored: 'stale', existing: current };
-      const item = keepSeal(stampPush(build(current), pushedAt, current), current);
+      const item = keepSeal(stampPush(await build(current), pushedAt, current), current);
       return { saved: await repo.upsert(item, current), existing: current };
     }
   });

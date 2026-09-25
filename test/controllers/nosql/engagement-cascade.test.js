@@ -22,6 +22,7 @@ const projects = require('../../../src/repositories/projects');
 const documents = require('../../../src/repositories/documents');
 const aiSearch = require('../../../src/search/ai-search');
 const cosmos = require('../../../src/db/cosmos-nosql');
+const notifications = require('../../../src/repositories/notifications');
 const projectController = require('../../../src/controllers/nosql/project');
 
 const SYSADMIN = {
@@ -71,7 +72,7 @@ function projected(rows, query) {
  *
  * @returns {{writes: Array, unexpected: Array}} the bulk patches, in the order they were sent
  */
-function stubCosmos(t, { periods, commentsByPeriod = {} }) {
+function stubCosmos(t, { periods, commentsByPeriod = {}, updates = null }) {
   const writes = [];
   const unexpected = [];
 
@@ -88,11 +89,19 @@ function stubCosmos(t, { periods, commentsByPeriod = {} }) {
     if (container === 'comments') {
       return { items: projected(commentsByPeriod[String(options.partitionKey)] || [], query) };
     }
+    if (container === 'updates' && updates) return { items: updates.map(u => ({ ...u })) };
     unexpected.push(container);
     return { items: [] };
   });
   t.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
     writes.push({ container, operations });
+    // Updates are stored as patched, so a second move reads what the first one wrote.
+    if (container === 'updates') {
+      for (const op of operations) {
+        const row = updates.find(u => u.id === op.id);
+        row.read = op.resourceBody.operations.find(o => o.path === '/read').value;
+      }
+    }
     return { succeeded: operations.length, failed: 0, statusCounts: {}, requestCharge: 1 };
   });
 
@@ -100,8 +109,8 @@ function stubCosmos(t, { periods, commentsByPeriod = {} }) {
 }
 
 /** Move the project to `level` through the real handler. */
-async function moveTo(t, level, from) {
-  t.mock.method(projects, 'getById', async () => PROJECT_AT(from));
+async function moveTo(t, level, from, over = {}) {
+  t.mock.method(projects, 'getById', async () => ({ ...PROJECT_AT(from), ...over }));
   t.mock.method(projects, 'upsert', async (item) => item);
 
   const res = mockRes();
@@ -237,4 +246,59 @@ test('a takedown takes the engagement down with it', async (t) => {
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(writes, []);
   });
+});
+
+test('a project visibility change carries to its Updates', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('private then public: the Update follows both ways', async (tt) => {
+    const eagleId = '588511d0aaecd9001b825604';
+    // `eagleRead` is Eagle's own ACL (`sources.eagle.read`), stored as is under a public project.
+    const eagleRead = ['public', 'sysadmin', 'staff'];
+    const updates = [{ id: 'u1', read: eagleRead, eagleRead }];
+    const { writes, unexpected } = stubCosmos(tt, { periods: [], updates });
+    tt.mock.method(notifications, 'readForWrite', async () => null);
+
+    const down = await moveTo(tt, 2, 4, { eagleId });
+    assert.strictEqual(down.statusCode, 200, JSON.stringify(down.body));
+    assert.deepStrictEqual(updates[0].read, STAFF_READ);
+
+    const up = await moveTo(tt, 4, 2, { eagleId });
+    assert.strictEqual(up.statusCode, 200, JSON.stringify(up.body));
+    assert.deepStrictEqual(updates[0].read, eagleRead, 'back to Eagle\'s own read, verbatim');
+
+    const [first] = patchesTo(writes, 'updates');
+    assert.strictEqual(first.operations[0].partitionKey, 'u1', 'updates partition on their own id');
+    assert.deepStrictEqual(unexpected, []);
+  });
+
+  await t.test('a partly failed Update cascade 500s and marks the project for the next push',
+    async (tt) => {
+      const { writes } = stubCosmos(tt, { periods: [], updates: [{ id: 'u1', read: PUBLIC_READ, eagleRead: ['public'] }] });
+      tt.mock.method(notifications, 'readForWrite', async () => null);
+      tt.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
+        writes.push({ container, operations });
+        return { succeeded: 0, failed: operations.length, statusCounts: {}, requestCharge: 1 };
+      });
+      const marked = [];
+      tt.mock.method(projects, 'patchCascadePending', async (id, at) => { marked.push({ id, at }); });
+
+      const res = await moveTo(tt, 2, 4, { eagleId: '588511d0aaecd9001b825604' });
+
+      assert.strictEqual(res.statusCode, 500);
+      assert.match(res.body.error, /updates were not fully updated/);
+      assert.strictEqual(marked.length, 1);
+      assert.strictEqual(marked[0].id, '207');
+    });
+
+  await t.test('a failed Update cascade is logged and answers 500, as a document one does',
+    async (tt) => {
+      stubCosmos(tt, { periods: [], updates: [] });
+      tt.mock.method(notifications, 'readForWrite', async () => { throw new Error('cosmos down'); });
+
+      const res = await moveTo(tt, 2, 4, { eagleId: '588511d0aaecd9001b825604' });
+
+      assert.strictEqual(res.statusCode, 500);
+      assert.match(res.body.error, /updates were not updated/);
+    });
 });

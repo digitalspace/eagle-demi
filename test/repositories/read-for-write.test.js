@@ -182,6 +182,9 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'controllers/nosql/update.js',
     'helpers/parent-admit.js',
     'helpers/project-twin.js',
+    // An Update's parent, read to narrow the Update's own read: a filtered read would miss a sealed one.
+    'helpers/update-acl.js',
+    'helpers/update-parent.js',
     'repositories/_sql.js',
     'repositories/comment-periods.js',
     'repositories/comments.js',

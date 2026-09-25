@@ -15,6 +15,8 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead, credentialField, systemAccess, TIER } = require('../helpers/access-sql');
 const { levelOf, ROLE_LEVELS } = require('../vis/level');
 const projects = require('./projects');
+const notifications = require('./notifications');
+const { readParent } = require('../helpers/update-parent');
 const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
@@ -218,11 +220,99 @@ async function inEagleIdSpace(access) {
   return translated;
 }
 
+/**
+ * Eagle ids of the parents, projects and notifications, this caller cannot read. An Update under
+ * one is hidden whatever its own `read[]` says, as eagle-api's `parentReadMatch` hides it: rows
+ * stored before the push capped by parent still carry Eagle's ACL. A notification wins an id a
+ * Track project also carries (`parent-admit:pickParent`); a parent DEMI does not hold hides nothing.
+ *
+ * Once per access object, so a page, its count and its labels share one lookup.
+ */
+const hiddenParentsByAccess = new WeakMap();
+
+function hiddenParentIds(access) {
+  if (!access) return Promise.resolve([]);
+  if (!hiddenParentsByAccess.has(access)) hiddenParentsByAccess.set(access, loadHiddenParents(access));
+  return hiddenParentsByAccess.get(access);
+}
+
+/**
+ * The parent rows behind the gate, cached per process. The rows, not each caller's hidden set:
+ * one entry serves every caller, and no access field can be left out of a cache key. A write in
+ * this process that moves a parent's `read[]` calls `forgetParents`; one in another instance shows
+ * here within the TTL.
+ */
+const PARENT_ROWS_TTL_MS = 60 * 1000;
+let parentRows = null;
+
+function forgetParents() {
+  parentRows = null;
+}
+
+function cachedParentRows(now = Date.now()) {
+  if (parentRows && now - parentRows.at < PARENT_ROWS_TTL_MS) return parentRows.rows;
+  const entry = { at: now, rows: fetchParentRows() };
+  // A failed read is not cached: the next request tries again.
+  entry.rows.catch(() => { if (parentRows === entry) parentRows = null; });
+  parentRows = entry;
+  return entry.rows;
+}
+
+async function fetchParentRows() {
+  // Unfiltered: every parent must be seen to know which a caller may not read.
+  const [projectResult, notificationResult] = await Promise.all([
+    cosmos.query(projects.CONTAINER, {
+      query: 'SELECT c.id, c.eagleId, c.read FROM c WHERE IS_DEFINED(c.eagleId) AND NOT IS_NULL(c.eagleId)',
+      parameters: []
+    }, {}),
+    cosmos.query(notifications.CONTAINER, { query: 'SELECT c.id, c.read FROM c', parameters: [] }, {})
+  ]);
+  logger.debug('[updates] parent rows read', {
+    projects: projectResult.items.length,
+    notifications: notificationResult.items.length,
+    requestCharge: (projectResult.requestCharge || 0) + (notificationResult.requestCharge || 0)
+  });
+  return { projectRows: projectResult.items, notificationRows: notificationResult.items };
+}
+
+async function loadHiddenParents(access) {
+  const { projectRows, notificationRows } = await cachedParentRows();
+
+  // `canRead` is the JS twin of the SQL predicate, applied under the caller's own, untranslated, access.
+  const notificationIds = new Set(notificationRows.map(n => String(n.id)));
+  const hidden = new Set(notificationRows
+    .filter(n => !canRead(n, access, notifications.SCOPE_FIELD)).map(n => String(n.id)));
+  // Hidden only when no row carrying the id is readable: the label lookup answers the same way.
+  const readable = new Set(projectRows.filter(p => canRead(p, access, projects.PARTITION_FIELD))
+    .map(p => String(p.eagleId)));
+  for (const p of projectRows) {
+    const id = String(p.eagleId);
+    if (!readable.has(id) && !notificationIds.has(id)) hidden.add(id);
+  }
+  if (hidden.size) logger.debug('[updates] parent gate', { hiddenParents: hidden.size });
+  return [...hidden];
+}
+
+/** The SQL half of the parent gate. One parameter, whatever the count: no IN-list limit applies. */
+async function parentCriteria(access) {
+  const hidden = await hiddenParentIds(access);
+  if (hidden.length === 0) return [];
+  return [{
+    clause: '(NOT IS_DEFINED(c.projectId) OR IS_NULL(c.projectId) OR NOT ARRAY_CONTAINS(@hiddenParents, c.projectId))',
+    params: [{ name: '@hiddenParents', value: hidden }]
+  }];
+}
+
 async function getById(access, id) {
   const item = await cosmos.readItem(CONTAINER, String(id), String(id));
   if (!item) return null;
   // The Cosmos partition is /id; the project axis a SCOPED caller is confined to is projectId.
-  return canRead(item, await inEagleIdSpace(access), 'projectId') && isLive(item, access) ? item : null;
+  if (!canRead(item, await inEagleIdSpace(access), 'projectId') || !isLive(item, access)) return null;
+  // One Update, so its own parent, not the list gate's scan. A parent DEMI does not hold hides nothing.
+  const parent = item.projectId ? await readParent(item.projectId) : null;
+  if (!parent) return item;
+  const field = parent.kind === 'notification' ? notifications.SCOPE_FIELD : projects.PARTITION_FIELD;
+  return canRead(parent.doc, access, field) ? item : null;
 }
 
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
@@ -332,7 +422,10 @@ async function list(access, {
   const spec = selectWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor(access, { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }),
+    criteria: [
+      ...criteriaFor(access, { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }),
+      ...await parentCriteria(access)
+    ],
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
     orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, { ...SORT_ALIASES, publishDate: publishOrderField() })
   });
@@ -357,7 +450,7 @@ async function listByIds(access, ids) {
   const spec = selectWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: [inList(PARTITION_FIELD, unique, '@uid'), ...liveCriteria(access)],
+    criteria: [inList(PARTITION_FIELD, unique, '@uid'), ...liveCriteria(access), ...await parentCriteria(access)],
     select: selectFor(CONTAINER, access, PARTITION_FIELD)
   });
 
@@ -372,7 +465,10 @@ async function count(access, {
   const spec = countWhere({
     access: await inEagleIdSpace(access),
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor(access, { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore })
+    criteria: [
+      ...criteriaFor(access, { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }),
+      ...await parentCriteria(access)
+    ]
   });
   const { items } = await cosmos.query(CONTAINER, spec, {});
   return items[0] || 0;
@@ -388,7 +484,8 @@ async function count(access, {
 async function listTop(access, { limit = TOP_ROWS, types } = {}) {
   // Translated once for both halves of the strip, not per query.
   const scoped = await inEagleIdSpace(access);
-  const live = liveCriteria(access);
+  // In the query, before the limit, so a hidden pinned row never leaves the strip short.
+  const live = [...liveCriteria(access), ...await parentCriteria(access)];
   const [pinned, unpinned] = await Promise.all([[PINNED, ...live], [UNPINNED, ...typeCriteria(types), ...live]]
     .map(async (criteria) => {
       const spec = selectWhere({
@@ -442,7 +539,8 @@ function dueSpec(criteria, orderBy) {
  * The scheduled announce's work list, at most `limit` rows, retries first:
  *   1. withdrawn rows DEMI announced whose cancellation has not gone out;
  *   2. DEMI claims whose lease ran out without a send, a refusal, or its last attempt;
- *   3. unclaimed published rows whose `publishDate` has passed, oldest first.
+ *   3. unclaimed published rows whose `publishDate` has passed, oldest first, less those the
+ *      parent gate skipped (`markNotifySkipped`).
  * A claimed row's window runs from `notifyClaimedAt`, an unclaimed one's from `publishDate`. A row
  * without `status` is listed only to retry a DEMI send: the push announces those, and one pushed
  * while eagle-notify was dark stays unannounced. System access: it runs from a timer.
@@ -466,7 +564,7 @@ async function listDueForNotify(now, limit) {
     dueSpec([
       ['c.isPublished = true'], ['c.status = @status', '@status', PUBLISHED],
       ['c.publishDate >= @since', '@since', since], ['c.publishDate <= @now', '@now', now],
-      [UNCLAIMED_CLAUSE]
+      [UNCLAIMED_CLAUSE], ['NOT IS_STRING(c.notifySkippedAt)']
     ], 'c.publishDate ASC')
   ];
 
@@ -527,6 +625,18 @@ async function claimForBackfill(id, now) {
     `AND ${UNCLAIMED_CLAUSE}`);
 }
 
+/**
+ * The announce skipped an unclaimed row (its parent is not public), so the due list stops listing
+ * it: oldest first, 20 such rows would hold back every newer one. A push rewrites the row without
+ * the mark, and a project cascade clears it (`update-acl`). Unclaimed rows only: a claim decides.
+ */
+async function markNotifySkipped(id, at, reason) {
+  return patchIf(id, [
+    { op: 'set', path: '/notifySkippedAt', value: at },
+    { op: 'set', path: '/notifySkipReason', value: reason }
+  ], `FROM c WHERE ${UNCLAIMED_CLAUSE}`);
+}
+
 const NOTIFY_MARKS = ['notifySentAt', 'notifyFailedAt', 'notifyCancelledAt'];
 
 /** Record how a send ended. Nothing here gives the claim back: an update emails at most once. */
@@ -571,6 +681,9 @@ module.exports = {
   // ids while a caller's scope is in DEMI ones, so the OData ACL has to be built from the same
   // translated access this container's own reads use.
   inEagleIdSpace,
+  hiddenParentIds,
+  forgetParents,
+  markNotifySkipped,
   getById,
   readForWrite,
   list,
