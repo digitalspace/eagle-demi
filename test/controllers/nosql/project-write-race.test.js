@@ -604,6 +604,20 @@ test('the project push finds the row whatever its ACL', async (t) => {
     assert.deepStrictEqual(cascaded, []);
   });
 
+  await t.test('a twin at the same level as the Track row is not written or cascaded', async () => {
+    const store = mirrorStore(t,
+      [twin({ name: 'Twin', read: [...PUBLIC_ACL], isPublished: true }), track('351')]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ name: 'Renamed in Eagle' }));
+
+    assert.strictEqual(res.statusCode, 200);
+    const byId = Object.fromEntries(store.rows('projects').map(r => [r.id, r]));
+    assert.deepStrictEqual(byId['351'].read, [...PUBLIC_ACL]);
+    assert.deepStrictEqual(store.writes.map(w => [w.op, w.item && w.item.id]), [['upsert', '351']]);
+    assert.deepStrictEqual(cascaded, []);
+  });
+
   await t.test('a twin owed a cascade gets it, and its marker is removed', async () => {
     const store = mirrorStore(t, [
       twin({ name: 'Twin', read: [...PRIVATE_ACL], isPublished: false, cascadePendingAt: '2026-09-20T00:00:00.000Z' }),
