@@ -342,6 +342,8 @@ test('authenticated CUD audit coverage', async (t) => {
   });
 
   await t.test('an Eagle document push writes one document.push', async () => {
+    // A 24-hex ObjectId, as Eagle sends: the mirror admits no other shape of parent ref.
+    const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
     t.mock.method(projects, 'getByEagleId', async () => ({
       id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true
     }));
@@ -350,7 +352,11 @@ test('authenticated CUD audit coverage', async (t) => {
 
     const written = await rowsFrom(() => documentController.upsertFromEagle({
       params: { eagleId: 'eagdoc-1' }, query: {},
-      body: { doc: { _id: 'eagdoc-1', project: '207', displayName: 'Application', read: ['public'] } },
+      body: {
+        doc: {
+          _id: 'eagdoc-1', project: PROJECT_EAGLE_ID, displayName: 'Application', read: ['public']
+        }
+      },
       user: STAFF
     }, mockRes()));
 

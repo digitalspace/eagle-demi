@@ -15,6 +15,7 @@ const path = require('path');
 const cosmos = require('../../src/db/cosmos-nosql');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
+const projects = require('../../src/repositories/projects');
 const { logger } = require('../../src/utils/logger');
 
 const SRC = path.join(__dirname, '..', '..', 'src');
@@ -69,6 +70,21 @@ test('readForWrite on the parent-partitioned mirrors', async (t) => {
 
     assert.deepStrictEqual(warned, [{ container: 'comments', id: 'c1', count: 2 }]);
   });
+
+  await t.test('a project by Eagle id is found with no ACL predicate', async () => {
+    const specs = [];
+    t.mock.method(cosmos, 'queryFirst', async (_container, spec) => {
+      specs.push(spec);
+      return { id: '207', eagleId: '588511d0aaecd9001b825604' };
+    });
+
+    const row = await projects.readForWriteByEagleId('588511d0aaecd9001b825604');
+
+    assert.strictEqual(row.id, '207');
+    assert.doesNotMatch(specs[0].query, /read/);
+    assert.deepStrictEqual(specs[0].parameters,
+      [{ name: '@eagleId', value: '588511d0aaecd9001b825604' }]);
+  });
 });
 
 /** Every .js file under `dir`, as a path relative to src/. */
@@ -81,9 +97,24 @@ function sourceFiles(dir) {
 }
 
 test('readForWrite is reached only from the mirror write paths', () => {
-  const allowed = (file) => file.startsWith(`controllers${path.sep}nosql${path.sep}`) ||
-    file.startsWith(`repositories${path.sep}`) ||
-    file === path.join('scripts', 'seed-public-reads.js');
+  // Named files, not directories: a new caller of an unfiltered read is a decision, not a default.
+  const ALLOWED = new Set([
+    'controllers/nosql/comment-period.js',
+    'controllers/nosql/comment.js',
+    'controllers/nosql/notification.js',
+    'controllers/nosql/organization.js',
+    'controllers/nosql/update.js',
+    'helpers/parent-admit.js',
+    'repositories/_sql.js',
+    'repositories/comment-periods.js',
+    'repositories/comments.js',
+    'repositories/lists.js',
+    'repositories/notifications.js',
+    'repositories/projects.js',
+    'repositories/updates.js',
+    'scripts/seed-public-reads.js'
+  ].map(file => path.join(...file.split('/'))));
+  const allowed = (file) => ALLOWED.has(file);
 
   const outside = sourceFiles(SRC)
     .filter(file => /readForWrite/.test(fs.readFileSync(path.join(SRC, file), 'utf8')))
