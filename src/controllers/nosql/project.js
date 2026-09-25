@@ -22,6 +22,7 @@ const { PATCH_MAX_OPERATIONS } = require('../../db/cosmos-nosql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeProject } = require('../../helpers/purge');
+const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
@@ -54,7 +55,7 @@ function writeConflict(res, what, id) {
  *
  * @returns {Promise<string|null>} an error message the caller must 500 with, or null on success.
  */
-async function cascadeProjectVisibility(projectId, acl) {
+async function cascadeProjectVisibility(projectId, acl, eagleId) {
   // The project's own index row FIRST, and outside the try: no project list or search is a live
   // read any more (#148), so an unpublished project stayed findable BY NAME until the indexer's
   // next PT5M pass. It goes before the cascade because the project's Cosmos write has already
@@ -67,7 +68,8 @@ async function cascadeProjectVisibility(projectId, acl) {
   // at the first failure would leave the other carrying the old ACL with nothing recorded.
   const failures = [
     await cascadeDocumentVisibility(projectId, acl),
-    await cascadeEngagementVisibility(projectId, acl.read)
+    await cascadeEngagementVisibility(projectId, acl.read),
+    await cascadeUpdateVisibility(projectId, eagleId, acl.read)
   ].filter(Boolean);
   return failures.length ? failures.join(' ') : null;
 }
@@ -109,6 +111,29 @@ async function cascadeEngagementVisibility(projectId, read) {
       projectId, error: cascadeErr.message
     });
     return 'Project visibility changed, but its comment periods were not updated.';
+  }
+}
+
+/**
+ * The project's Updates, which the push capped by it. Keyed by the EAGLE id: `updates.projectId`.
+ *
+ * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ */
+async function cascadeUpdateVisibility(projectId, eagleId, read) {
+  try {
+    const cascade = await updateAcl.setAclForProject(eagleId, read);
+    if (cascade.failed > 0) {
+      logger.error('[Project Controller] update ACL cascade partially failed', {
+        projectId, eagleId, succeeded: cascade.succeeded, failed: cascade.failed
+      });
+      return 'Project visibility changed, but its updates were not fully updated.';
+    }
+    return null;
+  } catch (cascadeErr) {
+    logger.error('[Project Controller] update ACL cascade failed', {
+      projectId, eagleId, error: cascadeErr.message
+    });
+    return 'Project visibility changed, but its updates were not updated.';
   }
 }
 
@@ -463,8 +488,12 @@ exports.setLevel = async (req, res) => {
     });
 
     if (level !== from) {
-      const failure = await cascadeProjectVisibility(existing.id, acl);
-      if (failure) return res.status(500).json({ success: false, error: failure });
+      const failure = await cascadeProjectVisibility(existing.id, acl, existing.eagleId);
+      if (failure) {
+        // The next push for this project runs the cascade again, as it does after a push's failure.
+        await markCascadePending(saved, existing.eagleId);
+        return res.status(500).json({ success: false, error: failure });
+      }
     }
 
     return res.json(redactForAccess('projects', saved, access));
@@ -607,12 +636,12 @@ async function runCascade(saved, eagleId) {
   let failure;
   try {
     failure = await cascadeProjectVisibility(saved.id,
-      { read: saved.read, isPublished: saved.isPublished });
+      { read: saved.read, isPublished: saved.isPublished }, saved.eagleId);
   } catch (cascadeErr) {
     logger.error('[Project Controller] project visibility cascade threw', {
       projectId: saved.id, eagleId, error: cascadeErr.message
     });
-    failure = 'Project visibility changed, but its documents and engagement were not updated.';
+    failure = 'Project visibility changed, but its documents, engagement and updates were not updated.';
   }
   if (failure) await markCascadePending(saved, eagleId);
   return failure;
@@ -702,11 +731,16 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
     // THIS push moved anything — the move it owes the cascade for happened on an earlier push, and
     // nothing else would ever come back for it.
     const owed = Boolean(from && from.cascadePendingAt);
+    let failure = null;
     if (from && (visibilityMoved(from, saved) || owed)) {
-      const failure = await runCascade(saved, eagleId);
-      if (failure) return res.status(500).json({ success: false, error: failure });
-      if (owed) await clearCascadePending(saved, eagleId);
+      failure = await runCascade(saved, eagleId);
+      if (!failure && owed) await clearCascadePending(saved, eagleId);
+    } else if (!from) {
+      // Updates, unlike documents, can arrive before their project; they were stored uncapped.
+      failure = await cascadeUpdateVisibility(saved.id, saved.eagleId, saved.read);
+      if (failure) await markCascadePending(saved, eagleId);
     }
+    if (failure) return res.status(500).json({ success: false, error: failure });
 
     return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {

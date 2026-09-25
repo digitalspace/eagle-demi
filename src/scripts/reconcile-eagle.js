@@ -42,6 +42,7 @@ const updates = require('../repositories/updates');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
 const { seedAcl } = require('../seed/transform');
+const { readUnder } = require('../helpers/update-parent');
 const { eachCommentPage } = require('./seed-public-reads');
 const { systemAccess, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
@@ -235,18 +236,26 @@ function sameSet(a, b) {
  *
  * @param {Map}      eagleRead     Eagle id -> that record's `read[]`; an id without one is skipped
  * @param {function} parentReadOf  row -> the DEMI parent ACL the mirror narrows against, or null
+ * @param {function} derive        (upstream, parentRead) -> the `read[]` the mirror writes
  */
-function aclMismatch(rows, keyOf, eagleRead, parentReadOf = () => null) {
+function aclMismatch(rows, keyOf, eagleRead, parentReadOf = () => null, derive = mirroredRead) {
   return rows.filter(row => {
     const upstream = eagleRead.get(keyOf(row));
     if (!upstream) return false;
     const read = Array.isArray(row.read) ? row.read : [];
-    const parent = parentReadOf(row);
-    const expected = parent
-      ? documents.constrainToProject(seedAcl(upstream), parent)
-      : seedAcl(upstream);
+    const expected = derive(upstream, parentReadOf(row));
     return !sameSet(read, expected) || row.isPublished !== read.includes('public');
   }).map(keyOf);
+}
+
+/** What the document, period, list and notification mirrors write. */
+function mirroredRead(upstream, parent) {
+  return parent ? documents.constrainToProject(seedAcl(upstream), parent) : seedAcl(upstream);
+}
+
+/** What the Update mirror writes: its own rule, `update-parent:readUnder`. */
+function updateRead(upstream, parent) {
+  return readUnder(upstream, parent && { read: parent });
 }
 
 /** Every id set a diff produced, as one drift number. */
@@ -473,10 +482,14 @@ async function reconcile(argv = [], deps = {}) {
     ...diff(notificationRows, row => String(row.id), eagleNotificationIds),
     aclMismatch: aclMismatch(notificationRows, row => String(row.id), eagleRead)
   };
+  // An Update's parent is keyed by EAGLE id, and a notification wins an id a Track project carries.
+  const updateParentRead = new Map(projectRows.map(row => [String(row.eagleId), row.read]));
+  for (const row of notificationRows) updateParentRead.set(String(row.id), row.read);
   summary.updates = {
     inDemi: updateRows.length, inEagle: eagleUpdateIds.size,
     ...diff(updateRows, row => String(row.id), eagleUpdateIds),
-    aclMismatch: aclMismatch(updateRows, row => String(row.id), eagleRead)
+    aclMismatch: aclMismatch(updateRows, row => String(row.id), eagleRead,
+      row => updateParentRead.get(String(row.projectId)) || null, updateRead)
   };
 
   summary.failures.push(...(await truncatedReads(access, [

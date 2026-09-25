@@ -19,6 +19,7 @@
  */
 
 const cosmos = require('../../src/db/cosmos-nosql');
+const updatesRepo = require('../../src/repositories/updates');
 const apiKeys = require('../../src/repositories/api-keys');
 const { generateKey } = require('../../src/helpers/api-key');
 const { forgetCachedKey } = require('../../src/helpers/auth');
@@ -57,14 +58,22 @@ const bound = (spec) => Object.fromEntries((spec.parameters || []).map(p => [p.n
  */
 function stubCosmos(t, rows, counts = {}) {
   const seen = [];
+  // The Update parent gate caches parent rows per process; each stub is a new store.
+  updatesRepo.forgetParents();
   const run = (container, spec, options) => {
     seen.push({ container, spec, options });
     // A partition key is HONOURED, so a read aimed at a partition that does not exist answers
     // nothing — the case an unresolved project id produces, and the one a stub that always serves
     // its fixture would hide.
+    // The updates parent gate is APPLIED too, so a page and its count both lose a hidden row.
+    const hidden = bound(spec)['@hiddenParents'] || [];
+    // A by-Eagle-id lookup is honoured, so an Update's parent read finds its own project.
+    const eagleId = bound(spec)['@eagleId'];
     const served = (rows[container] || []).filter(row =>
-      options.partitionKey === undefined ||
-      String(row[PARTITION_FIELD[container]]) === String(options.partitionKey));
+      (options.partitionKey === undefined ||
+        String(row[PARTITION_FIELD[container]]) === String(options.partitionKey)) &&
+      !(row.projectId && hidden.includes(String(row.projectId))) &&
+      (eagleId === undefined || String(row.eagleId) === String(eagleId)));
 
     if (/COUNT\(1\)/.test(spec.query)) return { items: [counts[container] ?? served.length] };
     if (/^SELECT VALUE c\.id /.test(spec.query)) {

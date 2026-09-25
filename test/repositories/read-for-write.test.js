@@ -83,7 +83,9 @@ function sourceFiles(dir) {
 test('readForWrite is reached only from the mirror write paths', () => {
   const allowed = (file) => file.startsWith(`controllers${path.sep}nosql${path.sep}`) ||
     file.startsWith(`repositories${path.sep}`) ||
-    file === path.join('scripts', 'seed-public-reads.js');
+    file === path.join('scripts', 'seed-public-reads.js') ||
+    // An Update's parent, read to narrow the Update's own read: a filtered read would miss a sealed one.
+    file === path.join('helpers', 'update-parent.js') || file === path.join('helpers', 'update-acl.js');
 
   const outside = sourceFiles(SRC)
     .filter(file => /readForWrite/.test(fs.readFileSync(path.join(SRC, file), 'utf8')))

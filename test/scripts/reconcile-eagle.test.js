@@ -516,6 +516,42 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 7, 'both directions count toward the alert total');
   });
 
+  await t.test('an Update the push capped by its project or notification is not ACL drift', async () => {
+    const eaglePublic = ['public', 'sysadmin', 'staff'];
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, { ...EAGLE_BY_DATASET, RecentActivity: [
+        { _id: 'U-proj', project: 'P2', read: eaglePublic },
+        { _id: 'U-note', project: 'N1', read: eaglePublic },
+        { _id: 'U-open', project: 'P1', read: eaglePublic },
+        { _id: 'U-admin', project: 'P1', read: ['sysadmin'] }
+      ] }),
+      projects: {
+        ...makeDeps().projects,
+        listWithEagleId: async () => PROJECT_ROWS.map(row => ({
+          ...row, read: row.eagleId === 'P1' ? ['staff', 'idir', 'public'] : ['staff']
+        }))
+      },
+      notifications: {
+        ...makeDeps().notifications,
+        list: async () => [{ id: 'N1', read: ['staff'] }]
+      },
+      updates: {
+        list: async () => [
+          // Capped to staff under private eagle-P2 and private N1: in step.
+          { id: 'U-proj', projectId: 'P2', read: ['staff'], isPublished: false },
+          { id: 'U-note', projectId: 'N1', read: ['staff'], isPublished: false },
+          // Under public P1, so Eagle's own read verbatim; staff here is drift.
+          { id: 'U-open', projectId: 'P1', read: ['staff'], isPublished: false },
+          // Never rewritten to a ladder token: ['sysadmin'] is in step.
+          { id: 'U-admin', projectId: 'P1', read: ['sysadmin'], isPublished: false }
+        ],
+        count: async () => 4
+      }
+    }));
+
+    assert.deepStrictEqual(summary.updates.aclMismatch, ['U-open']);
+  });
+
   await t.test('a truncated updates enumeration is reported', async () => {
     const summary = await reconcile([], makeDeps({}, { updates: UPDATE_ROWS.length + 42 }));
     assert.ok(summary.failures.some(f =>

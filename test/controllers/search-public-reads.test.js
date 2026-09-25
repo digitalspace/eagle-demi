@@ -365,7 +365,8 @@ test('GET /search?dataset=RecentActivity', async (t) => {
     assert.deepStrictEqual(body[0].searchResults.map(r => r.project.name),
       ['Project 0', 'Project 1', 'Project 2']);
 
-    const projectSpecs = specsFor(seen, 'projects');
+    // The parent gate's one whole-container read aside, which is per request, not per row.
+    const projectSpecs = specsFor(seen, 'projects').filter(spec => !/c\.read FROM c WHERE IS_DEFINED/.test(spec.query));
     assert.strictEqual(projectSpecs.length, 1, 'one batched read, not one per row');
     assert.match(projectSpecs[0].query, /c\.eagleId IN \(@eid0, @eid1, @eid2\)/);
     assert.match(projectSpecs[0].query, /SELECT c\.id, c\.name, c\.eagleId/,

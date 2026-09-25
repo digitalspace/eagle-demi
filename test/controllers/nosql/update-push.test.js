@@ -16,17 +16,16 @@ const assert = require('node:assert');
 
 const cosmos = require('../../../src/db/cosmos-nosql');
 const updates = require('../../../src/repositories/updates');
-const projects = require('../../../src/repositories/projects');
-const notifications = require('../../../src/repositories/notifications');
 const notify = require('../../../src/services/notify');
 const documents = require('../../../src/repositories/documents');
 const { logger } = require('../../../src/utils/logger');
 const controller = require('../../../src/controllers/nosql/update');
 const { routeChains } = require('../../helpers/router-source');
+const { parentProject, parentNotification } = require('../../helpers/update-parents');
 
 const {
   UPDATE_EAGLE_ID, PROJECT_EAGLE_ID, PERIOD_EAGLE_ID, NOTIFICATION_EAGLE_ID,
-  PRIVATE_ACL: PRIVATE, eagleUpdate, mockRes, STAFF
+  PUBLIC_ACL: PUBLIC, PRIVATE_ACL: PRIVATE, eagleUpdate, mockRes, STAFF
 } = require('../../helpers/eagle-mirror-fixtures');
 
 function push(body, res = mockRes()) {
@@ -43,7 +42,7 @@ function push(body, res = mockRes()) {
 function wiredNotify(t, {
   claim = null, outcome = notify.OUTCOME.SENT, cancelOutcome = notify.OUTCOME.SENT, publicDocs = []
 } = {}) {
-  const seen = { claims: [], marks: [], published: [], cancelled: [] };
+  const seen = { claims: [], marks: [], published: [], cancelled: [], skips: [] };
   t.mock.method(notify, 'configured', () => true);
   t.mock.method(updates, 'claimForNotify', async (id, now) => {
     seen.claims.push({ id, now });
@@ -52,6 +51,7 @@ function wiredNotify(t, {
     return { ...written, notifiedAt: now, notifyAttempts: 1 };
   });
   t.mock.method(updates, 'markNotify', async (id, mark, at) => { seen.marks.push({ id, mark, at }); });
+  t.mock.method(updates, 'markNotifySkipped', async (id, at, reason) => { seen.skips.push({ id, reason }); });
   t.mock.method(documents, 'getById', async (access, id) => {
     assert.strictEqual(access.authenticated, false, 'the image is checked as an anonymous reader');
     return publicDocs.includes(id) ? { id } : null;
@@ -145,6 +145,133 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     assert.strictEqual(written.projectId, null);
     assert.strictEqual(written.isPublished, false, 'no public in read[] is unpublished');
   });
+
+  await t.test('an update never out-ranks its unpublished project, and keeps Eagle\'s own ACL', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PRIVATE }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: PUBLIC }) });
+
+    // The project's level, 2, in ladder tokens: the level is what the cap keeps, not Eagle's names.
+    assert.deepStrictEqual(written.read, ['staff']);
+    assert.strictEqual(written.isPublished, false);
+    assert.deepStrictEqual(written.sources.eagle.read, PUBLIC, 'what a later project publish re-derives from');
+  });
+
+  await t.test('an update under a published project keeps its own level', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: PUBLIC }) });
+
+    assert.deepStrictEqual(written.read, PUBLIC, 'Eagle\'s own read, verbatim, never rewritten');
+    assert.strictEqual(written.isPublished, true);
+  });
+
+  for (const [label, read, expected] of [
+    ['[\'sysadmin\'] stays [\'sysadmin\'], never [\'team\']', ['sysadmin'], ['sysadmin']],
+    ['[] stays [], never [\'staff\']', [], []],
+    ['a read that is not a list is stored as []', 'public', []]
+  ]) {
+    await t.test(`an update's read is never widened: ${label}`, async () => {
+      t.mock.method(updates, 'readForWrite', async () => null);
+      parentProject(t, async () => ({ id: '207', read: PUBLIC }));
+      let written;
+      t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+      await push({ doc: eagleUpdate({ read }) });
+
+      assert.deepStrictEqual(written.read, expected);
+      assert.strictEqual(written.isPublished, false);
+    });
+  }
+
+  await t.test('the parent is read again on the retry after a lost race', async () => {
+    let reads = 0;
+    t.mock.method(updates, 'readForWrite', async () => null);
+    // Private on the first attempt, public by the retry: the row must be built against the second.
+    parentProject(t, async () => ({ id: '207', read: reads++ ? PUBLIC : PRIVATE }));
+    let attempts = 0;
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => {
+      if (attempts++ === 0) throw Object.assign(new Error('etag'), { code: 412 });
+      written = item;
+      return item;
+    });
+
+    await push({ doc: eagleUpdate({ read: PUBLIC }) });
+
+    assert.strictEqual(reads, 2);
+    assert.deepStrictEqual(written.read, PUBLIC);
+  });
+
+  await t.test('a corporate update with no project keeps its read[] as sent', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => { throw new Error('must not be looked up'); });
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ project: null, read: PUBLIC }) });
+
+    assert.deepStrictEqual(written.read, PUBLIC);
+    assert.strictEqual(written.isPublished, true);
+  });
+
+  await t.test('a notification parent caps its update too, and wins over a Track project with its id', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '353', read: PUBLIC }));
+    parentNotification(t, async () => ({ id: PROJECT_EAGLE_ID, read: PRIVATE }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: PUBLIC }) });
+
+    assert.deepStrictEqual(written.read, ['staff']);
+  });
+
+  await t.test('a sealed notification caps its update to level 0, over a public Track project with its id', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '353', read: PUBLIC }));
+    parentNotification(t, async () => ({ id: PROJECT_EAGLE_ID, read: ['compliance'] }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: PUBLIC }) });
+
+    assert.deepStrictEqual(written.read, ['compliance']);
+    assert.strictEqual(written.isPublished, false);
+  });
+
+  for (const [label, stub, reason] of [
+    ['an unpublished project', (t) => parentProject(t, async () => ({ id: '207', read: PRIVATE })),
+      'parent-not-public'],
+    ['an unpublished notification', (t) => parentNotification(t,
+      async () => ({ id: PROJECT_EAGLE_ID, name: 'Quarry', read: PRIVATE })), 'parent-not-public'],
+    ['a sealed notification, over a public Track project with its id', (t) => {
+      parentProject(t, async () => ({ id: '353', read: PUBLIC }));
+      parentNotification(t, async () => ({ id: PROJECT_EAGLE_ID, read: ['compliance'] }));
+    }, 'parent-not-public'],
+    ['a parent DEMI does not hold', (t) => parentProject(t, async () => null), 'parent-missing']
+  ]) {
+    await t.test(`nothing is claimed or emailed under ${label}`, async () => {
+      t.mock.method(updates, 'readForWrite', async () => null);
+      t.mock.method(updates, 'upsert', async (item) => item);
+      stub(t);
+      const seen = wiredNotify(t);
+
+      // Pushed as if stored before the cap: `public` in its own read.
+      await controller.announce({ ...eagleUpdate(), id: UPDATE_EAGLE_ID, projectId: PROJECT_EAGLE_ID,
+        isPublished: true, read: PUBLIC, publishDate: '2026-08-01T00:00:00.000Z' }, null);
+
+      assert.deepStrictEqual(seen.claims, []);
+      assert.deepStrictEqual(seen.published, []);
+      assert.deepStrictEqual(seen.skips, [{ id: UPDATE_EAGLE_ID, reason }], 'marked, so the timer stops listing it');
+    });
+  }
 
   await t.test('the Updates fields are stored, references flattened and dates normalised', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
@@ -330,7 +457,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('a published update whose publishDate has passed is announced', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => ({ id: '207', name: 'Nicomen Wind Energy' }));
+    parentProject(t, async () => ({ id: '207', name: 'Nicomen Wind Energy', read: PUBLIC }));
     const seen = wiredNotify(t);
 
     await push({ doc: eagleUpdate({ status: 'published', publishDate: '2026-08-01T00:00:00.000Z' }) });
@@ -355,7 +482,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('a publication is announced once, with the project name', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => ({ id: '207', name: 'Nicomen Wind Energy' }));
+    parentProject(t, async () => ({ id: '207', name: 'Nicomen Wind Energy', read: PUBLIC }));
     const seen = wiredNotify(t);
 
     const res = await push({ doc: eagleUpdate() });
@@ -377,9 +504,9 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('an update under a notification is announced with the notification name', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => ({ id: '353', name: 'Shadow Track Project' }));
-    t.mock.method(notifications, 'getById', async () =>
-      ({ id: NOTIFICATION_EAGLE_ID, name: 'Sunny Ridge Quarry' }));
+    parentProject(t, async () => ({ id: '353', name: 'Shadow Track Project' }));
+    parentNotification(t, async () =>
+      ({ id: NOTIFICATION_EAGLE_ID, name: 'Sunny Ridge Quarry', read: PUBLIC }));
     const seen = wiredNotify(t);
 
     await push({ doc: eagleUpdate({ project: NOTIFICATION_EAGLE_ID }) });
@@ -390,7 +517,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('a project-less update is announced with no project name', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => { throw new Error('must not be looked up'); });
+    parentProject(t, async () => { throw new Error('must not be looked up'); });
     const seen = wiredNotify(t);
 
     await push({ doc: eagleUpdate({ project: null }) });
@@ -405,6 +532,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       id: UPDATE_EAGLE_ID, isPublished: true, notifiedAt: '2026-08-01T12:00:00.000Z'
     }));
     t.mock.method(updates, 'upsert', async (item) => item);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
     const seen = wiredNotify(t, { claim: () => null });
 
     const res = await push({ doc: eagleUpdate({ headline: 'Edited headline' }) });
@@ -417,7 +545,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('a refused send (4xx) keeps the claim and records the refusal', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => ({ id: '207', name: 'Nicomen Wind Energy' }));
+    parentProject(t, async () => ({ id: '207', name: 'Nicomen Wind Energy', read: PUBLIC }));
     const seen = wiredNotify(t, { outcome: notify.OUTCOME.REJECTED });
 
     const res = await push({ doc: eagleUpdate() });
@@ -430,7 +558,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('a send with no answer keeps the claim unmarked, for the timer to retry', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
     const seen = wiredNotify(t, { outcome: notify.OUTCOME.FAILED });
 
     await push({ doc: eagleUpdate() });
@@ -442,7 +570,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('the third send with no answer is logged as given up', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
     const errors = [];
     t.mock.method(logger, 'error', (msg) => { errors.push(msg); });
     wiredNotify(t, {
@@ -458,7 +586,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('the featured image goes out only when an anonymous reader can fetch it', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
     const image = { document: '5cf00c03a266b7e187750001', alt: 'The site' };
 
     let seen = wiredNotify(t, { publicDocs: [image.document] });
@@ -469,7 +597,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     t.mock.restoreAll();
     t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
-    t.mock.method(projects, 'getByEagleId', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
     seen = wiredNotify(t, { publicDocs: [] });
     await push({ doc: eagleUpdate({ featuredImage: image }) });
     assert.strictEqual(seen.published[0].image, null, 'a non-public image would link a 404');
@@ -778,7 +906,7 @@ test('an update emails once however often it is withdrawn and re-published', asy
   const { store } = updatesStore(t, []);
   t.mock.method(updates, 'upsert', async (item) => { store.set(String(item.id), { ...item }); return item; });
   t.mock.method(notify, 'configured', () => true);
-  t.mock.method(projects, 'getByEagleId', async () => null);
+  parentProject(t, async () => ({ id: '207', read: PUBLIC }));
   const sent = { published: 0, cancelled: 0 };
   t.mock.method(notify, 'updatePublished', async () => { sent.published++; return notify.OUTCOME.SENT; });
   t.mock.method(notify, 'updateCancelled', async () => { sent.cancelled++; return notify.OUTCOME.SENT; });
@@ -901,7 +1029,7 @@ test('two pushes that read the same row announce one publication', async (t) => 
   t.mock.method(notify, 'configured', () => true);
   const published = [];
   t.mock.method(notify, 'updatePublished', async (item) => { published.push(item.id); return notify.OUTCOME.SENT; });
-  t.mock.method(projects, 'getByEagleId', async () => ({ id: '207', name: 'Nicomen Wind Energy' }));
+  parentProject(t, async () => ({ id: '207', name: 'Nicomen Wind Energy', read: PUBLIC }));
 
   const first = push({ doc: eagleUpdate() });
   const second = push({ doc: eagleUpdate({ headline: 'Edited headline' }) });
@@ -931,7 +1059,7 @@ test('a push announces only an update published inside the notify window', async
   function wired(rows = []) {
     const db = updatesStore(t, rows);
     t.mock.method(notify, 'configured', () => true);
-    t.mock.method(projects, 'getByEagleId', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
     const sent = [];
     t.mock.method(notify, 'updatePublished', async (item) => { sent.push(item.id); return notify.OUTCOME.SENT; });
     const debug = [];

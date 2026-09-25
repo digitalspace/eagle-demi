@@ -9,10 +9,8 @@
  */
 
 const updates = require('../../repositories/updates');
-const projects = require('../../repositories/projects');
-const notifications = require('../../repositories/notifications');
-const { pickParent } = require('../../helpers/parent-admit');
-const { resolveAccess, systemAccess } = require('../../helpers/access-sql');
+const { readParent, readUnder, isPublicParent } = require('../../helpers/update-parent');
+const { resolveAccess, levelOfRead } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
@@ -23,21 +21,6 @@ const { plainTextOf } = require('../../helpers/html-entities');
 const {
   eaglePush, refId, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
-
-/** The project or notification an update announces, by name, for the email's label. */
-async function parentName(item) {
-  if (!item.projectId) return null;
-  // Same precedence as every other parent lookup: an update whose `projectId` is really a
-  // `ProjectNotification` id must be labelled with the notification, not with the Track project
-  // that happens to carry that id in `eagleId`.
-  const [project, notification] = await Promise.all([
-    projects.getByEagleId(systemAccess(), item.projectId),
-    notifications.getById(systemAccess(), item.projectId)
-  ]);
-  const parent = pickParent(project, notification);
-  const named = parent && parent.kind === 'notification' ? notification : project;
-  return named ? named.name : null;
-}
 
 /**
  * The featured image, only when anyone may fetch it: the email links DEMI's download route, which
@@ -63,8 +46,8 @@ function announcedByDemi(row) {
  * Send a claimed row and record the outcome. A refusal (4xx) keeps the claim and is never retried;
  * a send with no answer keeps it too, and the timer takes the lease over once it runs out.
  */
-async function sendClaimed(claimed, now) {
-  const outcome = await notify.updatePublished(claimed, await parentName(claimed), await publicImage(claimed));
+async function sendClaimed(claimed, now, parent) {
+  const outcome = await notify.updatePublished(claimed, parent ? parent.name : null, await publicImage(claimed));
   if (outcome === notify.OUTCOME.SENT) {
     await updates.markNotify(claimed.id, 'notifySentAt', now);
   } else if (outcome === notify.OUTCOME.REJECTED) {
@@ -97,8 +80,18 @@ async function announce(item, existing, now = new Date().toISOString()) {
         });
         return;
       }
+      // Read fresh, before the claim: a row stored before the parent cap, or a parent unpublished
+      // since the push, must not be emailed. Left unclaimed and marked, so the timer stops listing
+      // it; a push or a project cascade clears the mark once the parent may have moved.
+      const parent = item.projectId ? await readParent(item.projectId) : null;
+      if (item.projectId && !isPublicParent(parent)) {
+        const reason = parent ? 'parent-not-public' : 'parent-missing';
+        logger.debug('[Update Controller] notify skipped', { id: item.id, projectId: item.projectId, reason });
+        await updates.markNotifySkipped(item.id, now, reason);
+        return;
+      }
       const claimed = await updates.claimForNotify(item.id, now);
-      if (claimed) await sendClaimed(claimed, now);
+      if (claimed) await sendClaimed(claimed, now, parent);
       return;
     }
 
@@ -147,8 +140,7 @@ function imagesOf(images) {
 }
 
 /** The mirror row: the raw Eagle record, plus what DEMI already holds about it. */
-function mirrorItem(eagleId, doc, existing) {
-  const read = Array.isArray(doc.read) ? doc.read : null;
+function mirrorItem(eagleId, doc, read, existing) {
   return {
     id: eagleId,
     eagleId,
@@ -188,10 +180,11 @@ function mirrorItem(eagleId, doc, existing) {
     // Stored beside `isPublished` rather than folded into it: `read[]` is what governs visibility
     // and `active` is Eagle's own flag, which the News model renders.
     active: doc.active === true,
-    // read[] is authoritative and isPublished mirrors it (ADR-004), as the project and document
-    // mirrors do. `active` is the fallback for a record pushed without an ACL.
-    isPublished: read ? read.includes('public') : doc.active === true,
-    read: doc.read,
+    // read[] is authoritative and isPublished mirrors it (ADR-004). `read` is Eagle's own under the
+    // parent's ceiling (`helpers/update-parent:readUnder`); `sources.eagle.read` keeps it uncapped
+    // for the project cascade to re-derive from.
+    isPublished: read.includes('public'),
+    read,
     // A Cosmos write REPLACES the item, so the claim has to be carried across or every push of
     // a published update notifies again. Eagle's own `notifiedAt` (set by its backfill on old rows)
     // seeds an empty claim, so an update Eagle already announced is never announced again.
@@ -218,7 +211,18 @@ function mirrorItem(eagleId, doc, existing) {
 function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   return upsertWithRetry(
     updates,
-    (current) => mirrorItem(eagleId, doc, current),
+    // The parent is read per attempt, so a retry after a lost race caps against its ACL as it is
+    // then. A parent DEMI does not hold yet caps nothing; the search read gates on it again.
+    async (current) => {
+      const parent = await readParent(refId(doc.project));
+      const read = readUnder(doc.read, parent);
+      if (Array.isArray(doc.read) && levelOfRead(read) < levelOfRead(doc.read)) {
+        logger.debug('[Update Controller] read capped by parent', {
+          id: eagleId, parentId: parent.id, kind: parent.kind, from: doc.read, to: read
+        });
+      }
+      return mirrorItem(eagleId, doc, read, current);
+    },
     // Unfiltered: a row with no `read` or a compartment token is still there to be replaced.
     () => updates.readForWrite(eagleId),
     { pushedAt }
