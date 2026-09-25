@@ -74,7 +74,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('the raw Eagle record is stored as an update row', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -127,7 +127,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('an update with no project is site-wide, not orphaned', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -138,7 +138,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('the Updates fields are stored, references flattened and dates normalised', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -171,7 +171,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('the gallery is stored in display order, references flattened', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -187,7 +187,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('gallery text is stored as plain text, with no tag left to render', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -205,7 +205,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('the featured image caption and credit are stored as plain text', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -221,7 +221,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('the featured image alt is stored as plain text', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -233,7 +233,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   // The Update form allows 5 images, a 300-character caption and a 150-character credit; a direct
   // push is held to the same.
   await t.test('a gallery past five images keeps the first five, in order', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -243,7 +243,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a gallery caption is cut to 300 characters and a credit to 150', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -254,7 +254,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('images sent as something other than a list are stored as an empty gallery', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -264,7 +264,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a gallery entry with no document is dropped', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -274,7 +274,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('an engagementUrl that is not http(s) is dropped', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -284,7 +284,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('Eagle\'s notifiedAt marks a first push as already announced', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -295,7 +295,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('DEMI\'s own claim wins over Eagle\'s notifiedAt', async () => {
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: true, notifiedAt: '2026-09-01T12:00:00.000Z',
       sources: { eagle: {} }
     }));
@@ -308,7 +308,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a scheduled update is not announced before its publishDate', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     const seen = wiredNotify(t);
 
@@ -319,7 +319,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a published update whose publishDate has passed is announced', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => ({ id: '207', name: 'Nicomen Wind Energy' }));
     const seen = wiredNotify(t);
@@ -331,7 +331,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
 
   await t.test('the notification claim survives an upsert', async () => {
     // Cosmos REPLACES the item, so without this every push of a published update re-notifies.
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: true, notifiedAt: '2026-08-01T12:00:00.000Z',
       sources: { eagle: {} }
     }));
@@ -344,7 +344,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a publication is announced once, with the project name', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => ({ id: '207', name: 'Nicomen Wind Energy' }));
     const seen = wiredNotify(t);
@@ -366,7 +366,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   // ProjectNotification _id must not be labelled with the Track project that carries that id in
   // `eagleId` — subscribers would be told about a project the update is not under.
   await t.test('an update under a notification is announced with the notification name', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => ({ id: '353', name: 'Shadow Track Project' }));
     t.mock.method(notifications, 'getById', async () =>
@@ -379,7 +379,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a project-less update is announced with no project name', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => { throw new Error('must not be looked up'); });
     const seen = wiredNotify(t);
@@ -392,7 +392,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
 
   await t.test('a second push of the same active update announces nothing', async () => {
     // The claim is already held, so claimForNotify answers null (Cosmos 412) rather than patching.
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: true, notifiedAt: '2026-08-01T12:00:00.000Z'
     }));
     t.mock.method(updates, 'upsert', async (item) => item);
@@ -406,7 +406,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a refused send (4xx) keeps the claim and records the refusal', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => ({ id: '207', name: 'Nicomen Wind Energy' }));
     const seen = wiredNotify(t, { outcome: notify.OUTCOME.REJECTED });
@@ -419,7 +419,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a send with no answer keeps the claim unmarked, for the timer to retry', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => null);
     const seen = wiredNotify(t, { outcome: notify.OUTCOME.FAILED });
@@ -431,7 +431,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('the third send with no answer is logged as given up', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => null);
     const errors = [];
@@ -447,7 +447,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('the featured image goes out only when an anonymous reader can fetch it', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => null);
     const image = { document: '5cf00c03a266b7e187750001', alt: 'The site' };
@@ -458,7 +458,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     assert.deepStrictEqual({ document, alt }, image);
 
     t.mock.restoreAll();
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(projects, 'getByEagleId', async () => null);
     seen = wiredNotify(t, { publicDocs: [] });
@@ -467,7 +467,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('withdrawing an update DEMI emailed sends one cancellation and keeps the claim', async () => {
-    t.mock.method(updates, 'getById', async () => ({ id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED }));
+    t.mock.method(updates, 'readForWrite', async () => ({ id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED }));
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
     const seen = wiredNotify(t);
@@ -482,7 +482,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a withdrawal already cancelled sends nothing more', async () => {
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: false, ...EMAILED, notifyCancelledAt: '2026-08-02T00:00:00.000Z'
     }));
     t.mock.method(updates, 'upsert', async (item) => item);
@@ -494,7 +494,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a DEMI claim whose send got no answer is still cancelled: it may have gone out', async () => {
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED, notifySentAt: null
     }));
     t.mock.method(updates, 'upsert', async (item) => item);
@@ -506,7 +506,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a claim with no marker predates the bookkeeping and is not cancelled', async () => {
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: true, notifiedAt: '2026-08-01T12:00:00.000Z'
     }));
     t.mock.method(updates, 'upsert', async (item) => item);
@@ -518,7 +518,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a refused cancellation is recorded, so the timer does not ask again', async () => {
-    t.mock.method(updates, 'getById', async () => ({ id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED }));
+    t.mock.method(updates, 'readForWrite', async () => ({ id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED }));
     t.mock.method(updates, 'upsert', async (item) => item);
     const seen = wiredNotify(t, { cancelOutcome: notify.OUTCOME.REJECTED });
 
@@ -528,7 +528,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('archiving a row the backfill claimed sends no cancellation', async () => {
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: true, notifiedAt: '2026-08-01T12:00:00.000Z', notifiedBy: 'backfill'
     }));
     t.mock.method(updates, 'upsert', async (item) => item);
@@ -540,7 +540,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('moving publishDate into the future after the email sends nothing', async () => {
-    t.mock.method(updates, 'getById', async () => ({ id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED }));
+    t.mock.method(updates, 'readForWrite', async () => ({ id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED }));
     t.mock.method(updates, 'upsert', async (item) => item);
     const seen = wiredNotify(t);
 
@@ -551,7 +551,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('the send bookkeeping and its marker survive an upsert', async () => {
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED, sources: { eagle: {} }
     }));
     let written;
@@ -565,7 +565,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('archiving a backfilled update sends no cancellation', async () => {
     // First push of an Eagle-backfilled row: Eagle's notifiedAt seeds the claim.
     let stored = null;
-    t.mock.method(updates, 'getById', async () => stored);
+    t.mock.method(updates, 'readForWrite', async () => stored);
     t.mock.method(updates, 'upsert', async (item) => { stored = item; return item; });
     const seen = wiredNotify(t);
     await push({ doc: eagleUpdate({ notifiedAt: '2026-08-01T00:00:00.000Z', status: 'published' }) });
@@ -583,7 +583,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('read[] decides publication, not the upstream active flag', async () => {
     // read[] is authoritative and isPublished mirrors it (ADR-004). An `active` record the ACL
     // still keeps private is not published, so nobody is told about it.
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
     const seen = wiredNotify(t);
@@ -597,7 +597,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
 
   await t.test('a cancellation that fails keeps the claim, so the next push retries', async () => {
     const stored = { id: UPDATE_EAGLE_ID, isPublished: true, ...EMAILED };
-    t.mock.method(updates, 'getById', async () => ({ ...stored }));
+    t.mock.method(updates, 'readForWrite', async () => ({ ...stored }));
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
     const seen = wiredNotify(t, { cancelOutcome: notify.OUTCOME.FAILED });
@@ -613,7 +613,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('unpublishing an update nobody announced sends nothing', async () => {
-    t.mock.method(updates, 'getById', async () => ({
+    t.mock.method(updates, 'readForWrite', async () => ({
       id: UPDATE_EAGLE_ID, isPublished: false, notifiedAt: null
     }));
     t.mock.method(updates, 'upsert', async (item) => item);
@@ -625,7 +625,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a notify failure is logged, not returned', async () => {
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(notify, 'configured', () => true);
     t.mock.method(updates, 'claimForNotify', async () => { throw new Error('Cosmos is down'); });
@@ -639,7 +639,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('dark: no claim is taken and nothing is sent', async () => {
     // A claim taken while dark would suppress the FIRST real notification once the environment is
     // wired up, which is the one that matters.
-    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'readForWrite', async () => null);
     t.mock.method(updates, 'upsert', async (item) => item);
     t.mock.method(notify, 'configured', () => false);
     let claims = 0;
@@ -660,7 +660,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   await t.test('a body whose doc._id disagrees with the path is a 400 and no write', async () => {
-    t.mock.method(updates, 'getById', async () => { throw new Error('must not be read'); });
+    t.mock.method(updates, 'readForWrite', async () => { throw new Error('must not be read'); });
     let upserts = 0;
     t.mock.method(updates, 'upsert', async () => { upserts++; });
 
@@ -766,10 +766,6 @@ test('an update emails once however often it is withdrawn and re-published', asy
   // handler and node --test then reports the whole file as passing.
   const { updatesStore } = require('../../helpers/updates-store');
   const { store } = updatesStore(t, []);
-  t.mock.method(updates, 'getById', async (access, id) => {
-    const row = store.get(String(id));
-    return row ? { ...row } : null;
-  });
   t.mock.method(updates, 'upsert', async (item) => { store.set(String(item.id), { ...item }); return item; });
   t.mock.method(notify, 'configured', () => true);
   t.mock.method(projects, 'getByEagleId', async () => null);
@@ -809,6 +805,40 @@ test('the mirror write creates a new row and etag-replaces an existing one', asy
     ['create', 'updates', UPDATE_EAGLE_ID],
     ['replace', 'updates', UPDATE_EAGLE_ID, UPDATE_EAGLE_ID, 'e7']
   ], 'the etag is what turns a concurrent write into a 412 instead of a lost claim');
+});
+
+// The existence check is "is there a row", not "may this caller see it": a row the ACL hides from
+// systemAccess read as absent, the create 409'd on every try, and the push answered 503 forever.
+test('a push over a row the ACL hides replaces it under its etag', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const { updatesStore } = require('../../helpers/updates-store');
+  const stored = (extra) => ({
+    id: UPDATE_EAGLE_ID, eagleId: UPDATE_EAGLE_ID, projectId: PROJECT_EAGLE_ID,
+    headline: 'Old headline', _etag: '"v1"', ...extra
+  });
+
+  await t.test('a stored row with no read[] at all', async () => {
+    const { writes, row } = updatesStore(t, [stored()]);
+
+    const res = await push({ doc: eagleUpdate() });
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(writes, [{ op: 'replace', id: UPDATE_EAGLE_ID, etag: '"v1"' }]);
+    assert.strictEqual(row(UPDATE_EAGLE_ID).headline, 'Public comment period opens');
+  });
+
+  await t.test('a stored row sealed to compliance takes the push and stays sealed', async () => {
+    const { writes, row } = updatesStore(t, [stored({ read: ['compliance'], isPublished: false })]);
+
+    const res = await push({ doc: eagleUpdate() });
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(writes, [{ op: 'replace', id: UPDATE_EAGLE_ID, etag: '"v1"' }]);
+    const saved = row(UPDATE_EAGLE_ID);
+    assert.strictEqual(saved.headline, 'Public comment period opens');
+    assert.deepStrictEqual({ read: saved.read, isPublished: saved.isPublished },
+      { read: ['compliance'], isPublished: false });
+  });
 });
 
 test('two pushes that read the same row announce one publication', async (t) => {

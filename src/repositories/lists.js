@@ -57,6 +57,11 @@ async function getById(access, id, kind) {
   return await cosmos.queryFirst(CONTAINER, spec, {});
 }
 
+/** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
+async function readForWrite(id, kind) {
+  return cosmos.readItem(CONTAINER, String(id), String(kind));
+}
+
 /**
  * Name and id for a bounded set of rows of one kind, in one query — the label a foreign row refers
  * to, like `notifications.proponent`, which stores an Organization id and renders as its name.
@@ -131,6 +136,7 @@ module.exports = {
   FILTERS,
   SORTABLE,
   getById,
+  readForWrite,
   listByIds,
   listByKind,
   countByKind,

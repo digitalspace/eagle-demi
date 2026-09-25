@@ -47,6 +47,11 @@ async function getById(access, id) {
   return canRead(item, access, SCOPE_FIELD) ? item : null;
 }
 
+/** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
+async function readForWrite(id) {
+  return cosmos.readItem(CONTAINER, String(id), String(id));
+}
+
 async function list(access, { pageNum, pageSize, sortBy, ...filters } = {}) {
   const spec = selectWhere({
     access,
@@ -121,6 +126,7 @@ module.exports = {
   SORTABLE,
   FILTERS,
   getById,
+  readForWrite,
   list,
   listByIds,
   listDecisions,

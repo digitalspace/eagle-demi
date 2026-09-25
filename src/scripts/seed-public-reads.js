@@ -163,7 +163,7 @@ function mirrorList(eagleId, doc, repo = listsRepo) {
   return upsertWithRetry(
     repo,
     (current) => mirrorListItem(eagleId, doc, read, current),
-    () => repo.getById(systemAccess(), eagleId, repo.KINDS.LIST)
+    () => repo.readForWrite(eagleId, repo.KINDS.LIST)
   );
 }
 

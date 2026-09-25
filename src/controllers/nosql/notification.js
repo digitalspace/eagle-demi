@@ -10,7 +10,6 @@
 
 const notifications = require('../../repositories/notifications');
 const { seedAcl } = require('../../seed/transform');
-const { systemAccess } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const {
@@ -65,7 +64,7 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   return upsertWithRetry(
     notifications,
     (current) => mirrorItem(eagleId, doc, read, current),
-    () => notifications.getById(systemAccess(), eagleId),
+    () => notifications.readForWrite(eagleId),
     { pushedAt }
   );
 }

@@ -208,6 +208,11 @@ async function getById(access, id) {
   return canRead(item, await inEagleIdSpace(access), 'projectId') && isLive(item, access) ? item : null;
 }
 
+/** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
+async function readForWrite(id) {
+  return cosmos.readItem(CONTAINER, String(id), String(id));
+}
+
 /**
  * The keyword criterion: the text fields the `activities` index searches, less `notificationName`,
  * so a news search that matched there matches here. `true` is CONTAINS' case-insensitive
@@ -549,6 +554,7 @@ module.exports = {
   // translated access this container's own reads use.
   inEagleIdSpace,
   getById,
+  readForWrite,
   list,
   listByIds,
   count,

@@ -31,6 +31,7 @@ const commentController = require('../../../src/controllers/nosql/comment');
 const organizationController = require('../../../src/controllers/nosql/organization');
 const notificationController = require('../../../src/controllers/nosql/notification');
 const { withServer } = require('../../helpers/with-server');
+const { evaluate } = require('../../helpers/updates-store');
 const {
   PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID,
   PUBLIC_ACL, PRIVATE_ACL, storedProject, storedPeriod,
@@ -43,21 +44,44 @@ const {
  *
  * `replace` is addressed at (id, partitionKey) and throws 404 when that key holds nothing, exactly
  * as the real container does. That is what makes a row moved to another partition observable here:
- * a write aimed at the wrong partition either throws or shows up under the wrong key.
+ * a write aimed at the wrong partition either throws or shows up under the wrong key. `create` over a
+ * held key is a 409, and a cross-partition lookup evaluates the SQL it is sent.
  *
- * @returns {{ store: Map, replaced: Array }} the stored rows, and the etags `replace` was guarded by
+ * @returns {{ store: Map, replaced: Array, created: Array }} the stored rows, the etags `replace`
+ *   was guarded by, and the ids `create` was asked for
  */
 function partitionedCosmos(t, partitionField, seed = []) {
   const key = (pk, id) => `${pk}::${id}`;
   const store = new Map(seed.map(row => [key(row[partitionField], row.id), row]));
   const replaced = [];
+  const created = [];
 
   const put = async (_container, item) => {
     store.set(key(item[partitionField], item.id), item);
     return item;
   };
-  t.mock.method(cosmos, 'create', put);
+  t.mock.method(cosmos, 'create', async (container, item) => {
+    created.push(item.id);
+    if (store.has(key(item[partitionField], item.id))) {
+      throw Object.assign(new Error('Entity with the specified id already exists.'), { code: 409 });
+    }
+    return put(container, item);
+  });
   t.mock.method(cosmos, 'upsert', put);
+  t.mock.method(cosmos, 'readItem', async (_container, id, partitionKey) => {
+    const row = store.get(key(String(partitionKey), String(id)));
+    return row ? { ...row } : null;
+  });
+  // Whole-row lookups only; any other query (a cascade's projection) goes to whatever answered it
+  // before, so call this AFTER `stubCommentCascade`.
+  const priorQuery = cosmos.query;
+  t.mock.method(cosmos, 'query', async (container, spec, options) => {
+    const where = /^SELECT \* FROM c WHERE (.+)$/s.exec(spec.query);
+    if (!where) return priorQuery(container, spec, options);
+    const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
+    const items = [...store.values()].filter(r => evaluate(where[1], r, params)).map(r => ({ ...r }));
+    return { items, continuationToken: undefined, requestCharge: 0 };
+  });
   t.mock.method(cosmos, 'replace', async (_container, id, partitionKey, item, etag) => {
     if (!store.has(key(partitionKey, id))) {
       const err = new Error('Entity with the specified id does not exist in the system.');
@@ -71,13 +95,13 @@ function partitionedCosmos(t, partitionField, seed = []) {
   t.mock.method(cosmos, 'remove', async (_container, id, partitionKey) =>
     store.delete(key(String(partitionKey), String(id))));
 
-  return { store, replaced };
+  return { store, replaced, created };
 }
 
 /** Drive one controller the way the dispatcher does, and hand back what it wrote. */
 function pushTo(controller, repo, eagleId, doc, t, { existing = null } = {}) {
   let written;
-  t.mock.method(repo, 'getById', async () => existing);
+  t.mock.method(repo, 'readForWrite', async () => existing);
   t.mock.method(repo, 'upsert', async (item) => { written = item; return item; });
   const res = mockRes();
   return controller.upsertFromEagle(
@@ -223,11 +247,10 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       const misfiled = {
         id: PERIOD_EAGLE_ID, projectId: '353', read: ['staff'], _etag: '"misfiled"'
       };
-      const { store } = partitionedCosmos(t, 'projectId', [misfiled]);
-      t.mock.method(commentPeriods, 'getById', async () => misfiled);
       // The level moves staff -> public, so the comment cascade runs; it is asserted in its own
       // subtests, and here it only has to not reach Cosmos for real.
       stubCommentCascade(t, []);
+      const { store } = partitionedCosmos(t, 'projectId', [misfiled]);
 
       const res = mockRes();
       await commentPeriodController.upsertFromEagle({
@@ -249,7 +272,6 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       t.mock.method(projects, 'getByEagleId', async () => storedProject());
       const stale = { id: PERIOD_EAGLE_ID, projectId: '208', read: PUBLIC_ACL, _etag: '"stale"' };
       const { store } = partitionedCosmos(t, 'projectId', [stale]);
-      t.mock.method(commentPeriods, 'getById', async () => stale);
 
       const res = mockRes();
       await commentPeriodController.upsertFromEagle({
@@ -268,7 +290,6 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     const current = { id: PERIOD_EAGLE_ID, projectId: '207', read: PUBLIC_ACL, _etag: '"v1"' };
     const { store, replaced } = partitionedCosmos(t, 'projectId', [current]);
-    t.mock.method(commentPeriods, 'getById', async () => current);
 
     const res = mockRes();
     await commentPeriodController.upsertFromEagle({
@@ -526,7 +547,6 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
         read: PUBLIC_ACL, _etag: '"stale"'
       };
       const { store } = partitionedCosmos(t, 'periodId', [stale]);
-      t.mock.method(comments, 'getById', async () => stale);
 
       const res = mockRes();
       await commentController.upsertFromEagle({
@@ -619,6 +639,81 @@ test('PUT /eagle/notifications/:eagleId', async (t) => {
   });
 });
 
+// The existence check is "is there a row", not "may this caller see it": a row the ACL hides from
+// systemAccess read as absent, the create 409'd on every try, and the push answered 503 forever.
+test('a push over a row the ACL hides replaces it under its etag', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const push = async (controller, eagleId, doc) => {
+    const res = mockRes();
+    await controller.upsertFromEagle({ params: { eagleId }, query: {}, body: { doc }, user: STAFF }, res);
+    return res;
+  };
+
+  await t.test('a comment period sealed to compliance takes the push and stays sealed', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    stubCommentCascade(t, []);
+    const { store, replaced, created } = partitionedCosmos(t, 'projectId', [
+      {
+        id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance'], isPublished: false,
+        instructions: '', _etag: '"v1"'
+      }
+    ]);
+
+    const res = await push(commentPeriodController, PERIOD_EAGLE_ID, eaglePeriod());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual({ created, replaced }, { created: [], replaced: ['"v1"'] });
+    const row = store.get(`207::${PERIOD_EAGLE_ID}`);
+    assert.strictEqual(row.instructions, 'Tell us what you think.');
+    assert.deepStrictEqual({ read: row.read, isPublished: row.isPublished },
+      { read: ['compliance'], isPublished: false });
+  });
+
+  await t.test('a comment sealed to compliance takes the push and stays sealed', async () => {
+    t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
+    const { store, replaced, created } = partitionedCosmos(t, 'periodId', [{
+      id: COMMENT_EAGLE_ID, periodId: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance'],
+      isPublished: false, comment: null, _etag: '"v1"'
+    }]);
+
+    const res = await push(commentController, COMMENT_EAGLE_ID, eagleComment());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual({ created, replaced }, { created: [], replaced: ['"v1"'] });
+    const row = store.get(`${PERIOD_EAGLE_ID}::${COMMENT_EAGLE_ID}`);
+    assert.strictEqual(row.comment, 'The turbine setback is too small.');
+    assert.deepStrictEqual({ read: row.read, isPublished: row.isPublished },
+      { read: ['compliance'], isPublished: false });
+  });
+
+  await t.test('an organization with no read[] at all', async () => {
+    const { store, replaced, created } = partitionedCosmos(t, 'kind', [
+      { id: ORG_EAGLE_ID, kind: lists.KINDS.ORGANIZATION, name: 'Old name', _etag: '"v1"' }
+    ]);
+
+    const res = await push(organizationController, ORG_EAGLE_ID, eagleOrganization());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual({ created, replaced }, { created: [], replaced: ['"v1"'] });
+    assert.strictEqual(store.get(`${lists.KINDS.ORGANIZATION}::${ORG_EAGLE_ID}`).name,
+      'Nicomen Energy Ltd');
+  });
+
+  await t.test('a project notification with no read[] at all', async () => {
+    const { store, replaced, created } = partitionedCosmos(t, 'id', [
+      { id: NOTIFICATION_EAGLE_ID, name: 'Old name', _etag: '"v1"' }
+    ]);
+
+    const res = await push(notificationController, NOTIFICATION_EAGLE_ID, eagleNotification());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual({ created, replaced }, { created: [], replaced: ['"v1"'] });
+    assert.strictEqual(store.get(`${NOTIFICATION_EAGLE_ID}::${NOTIFICATION_EAGLE_ID}`).name,
+      'Sunny Ridge Quarry');
+  });
+});
+
 test('every mirror refuses a body whose doc._id disagrees with the path', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -689,17 +784,12 @@ test('the four mirror routes reject anonymous and admit a write key', async (t) 
     t.mock.method(apiKeys, 'touchLastUsed', async () => {});
 
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(commentPeriods, 'getById', async () => null);
-    t.mock.method(comments, 'getById', async () => null);
-    t.mock.method(lists, 'getById', async () => null);
-    t.mock.method(notifications, 'getById', async () => null);
-
     const written = [];
     for (const repo of [commentPeriods, comments, lists, notifications]) {
+      t.mock.method(repo, 'readForWrite', async () => null);
       t.mock.method(repo, 'upsert', async (item) => { written.push(item.id); return item; });
     }
-    // The comment mirror looks its period up through the repository the line above already stubbed
-    // to null, so it needs its own answer.
+    // The comment mirror's parent period.
     t.mock.method(commentPeriods, 'getById', async (access, id) =>
       (id === PERIOD_EAGLE_ID ? storedPeriod() : null));
 
