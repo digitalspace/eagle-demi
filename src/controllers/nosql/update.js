@@ -90,6 +90,13 @@ async function announce(item, existing, now = new Date().toISOString()) {
     if (item.isPublished) {
       // Not due yet: src/scripts/announce-updates.js announces it once its publishDate passes.
       if (!updates.isLive(item, null, now)) return;
+      // Old news, as a bulk repush carries it: mirrored, never claimed, never emailed.
+      if (!updates.isInNotifyWindow(item, now)) {
+        logger.debug('[Update Controller] notify skipped, older than the notify window', {
+          id: item.id, publishDate: item.publishDate
+        });
+        return;
+      }
       const claimed = await updates.claimForNotify(item.id, now);
       if (claimed) await sendClaimed(claimed, now);
       return;

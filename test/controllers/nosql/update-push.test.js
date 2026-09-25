@@ -64,6 +64,14 @@ function wiredNotify(t, {
   return seen;
 }
 
+/**
+ * Pin the clock a day after the fixtures' dates. A push announces only an update published inside
+ * the notify window, and that window counts back from now.
+ */
+function atPushTime(t) {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-02T12:00:00.000Z') });
+}
+
 /** A row DEMI claimed and emailed. */
 const EMAILED = {
   notifiedAt: '2026-08-01T12:00:00.000Z', notifiedBy: 'demi', notifyClaimedAt: '2026-08-01T12:00:00.000Z',
@@ -72,6 +80,7 @@ const EMAILED = {
 
 test('PUT /eagle/updates/:eagleId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
+  atPushTime(t);
 
   await t.test('the raw Eagle record is stored as an update row', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
@@ -761,6 +770,7 @@ test('the notification claim is a conditional patch', async (t) => {
 
 test('an update emails once however often it is withdrawn and re-published', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
+  atPushTime(t);
   // The real claim and marks run against the in-memory container; the mirror write lands there too.
   // Required here, not at load: a load-time throw is swallowed by the logger's uncaughtException
   // handler and node --test then reports the whole file as passing.
@@ -843,6 +853,7 @@ test('a push over a row the ACL hides replaces it under its etag', async (t) => 
 
 test('two pushes that read the same row announce one publication', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
+  atPushTime(t);
 
   // The update is already mirrored, unpublished and unannounced; both pushes publish it.
   const store = new Map([[UPDATE_EAGLE_ID, {
@@ -904,6 +915,89 @@ test('two pushes that read the same row announce one publication', async (t) => 
   const stored = store.get(UPDATE_EAGLE_ID);
   assert.strictEqual(stored.headline, 'Edited headline', 'and the later record is the one stored');
   assert.match(stored.notifiedAt, /^\d{4}-\d{2}-\d{2}T/, 'with the claim still held');
+});
+
+// A bulk repush carries every old update again. Only one published inside the notify window is news;
+// the rest are mirrored and never claimed, so neither this push nor a later one emails them.
+test('a push announces only an update published inside the notify window', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const NOW = '2026-08-10T12:00:00.000Z';
+  const WINDOW_START = '2026-08-03T12:00:00.000Z';
+  const JUST_BEFORE = '2026-08-03T11:59:59.999Z';
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(NOW) });
+  const { updatesStore } = require('../../helpers/updates-store');
+
+  /** The real mirror, claim and marks over an in-memory container; only the email is stubbed. */
+  function wired(rows = []) {
+    const db = updatesStore(t, rows);
+    t.mock.method(notify, 'configured', () => true);
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    const sent = [];
+    t.mock.method(notify, 'updatePublished', async (item) => { sent.push(item.id); return notify.OUTCOME.SENT; });
+    const debug = [];
+    t.mock.method(logger, 'debug', (message, meta) => { debug.push({ message, meta }); });
+    return { ...db, sent, debug };
+  }
+
+  await t.test('an update published before the window is mirrored but not claimed or emailed', async () => {
+    const { row, sent, debug } = wired();
+
+    const res = await push({ doc: eagleUpdate({ status: 'published', publishDate: JUST_BEFORE }) });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(row(UPDATE_EAGLE_ID).headline, 'Public comment period opens', 'the record is mirrored');
+    assert.strictEqual(row(UPDATE_EAGLE_ID).notifiedAt, null, 'and left unclaimed');
+    assert.deepStrictEqual(sent, []);
+    assert.deepStrictEqual(debug.map(d => d.meta && d.meta.id), [UPDATE_EAGLE_ID], 'the skip is logged');
+  });
+
+  await t.test('an old update with no status is not emailed either', async () => {
+    // A row from before `status` existed passes the live gate on read[] alone; its age still counts.
+    const { row, sent } = wired();
+
+    await push({ doc: eagleUpdate({ dateAdded: '2019-05-01T00:00:00.000Z' }) });
+
+    assert.strictEqual(row(UPDATE_EAGLE_ID).notifiedAt, null);
+    assert.deepStrictEqual(sent, []);
+  });
+
+  await t.test('an update published inside the window is claimed and emailed', async () => {
+    const { row, sent } = wired();
+
+    await push({ doc: eagleUpdate({ status: 'published', publishDate: '2026-08-09T00:00:00.000Z' }) });
+
+    assert.strictEqual(row(UPDATE_EAGLE_ID).notifiedAt, NOW);
+    assert.deepStrictEqual(sent, [UPDATE_EAGLE_ID]);
+  });
+
+  await t.test('an update published exactly at the window edge is still emailed', async () => {
+    const { sent } = wired();
+
+    await push({ doc: eagleUpdate({ status: 'published', publishDate: WINDOW_START }) });
+
+    assert.deepStrictEqual(sent, [UPDATE_EAGLE_ID]);
+  });
+
+  await t.test('the claim itself refuses an unclaimed update older than the window', async () => {
+    // Checked inside Cosmos too, so no caller can claim an old row by skipping the controller.
+    const { row } = wired([{
+      id: UPDATE_EAGLE_ID, isPublished: true, status: 'published', publishDate: JUST_BEFORE, notifiedAt: null
+    }]);
+
+    assert.strictEqual(await updates.claimForNotify(UPDATE_EAGLE_ID, NOW), null);
+    assert.strictEqual(row(UPDATE_EAGLE_ID).notifiedAt, null);
+  });
+
+  await t.test('the claim refuses a dead lease taken before the window', async () => {
+    // listDueForNotify measures a claimed row from notifyClaimedAt; the claim does the same.
+    const { row } = wired([{
+      id: UPDATE_EAGLE_ID, isPublished: true, status: 'published', publishDate: '2026-07-01T00:00:00.000Z',
+      notifiedAt: JUST_BEFORE, notifiedBy: 'demi', notifyClaimedAt: JUST_BEFORE, notifyAttempts: 1
+    }]);
+
+    assert.strictEqual(await updates.claimForNotify(UPDATE_EAGLE_ID, NOW), null);
+    assert.strictEqual(row(UPDATE_EAGLE_ID).notifyAttempts, 1, 'no attempt is spent on it');
+  });
 });
 
 test('the updates mirror route is behind authMiddleware + requireWrite', () => {
