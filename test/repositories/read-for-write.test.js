@@ -82,6 +82,7 @@ test('readForWrite on the parent-partitioned mirrors', async (t) => {
 
     assert.strictEqual(row.id, '207');
     assert.doesNotMatch(specs[0].query, /read/);
+    assert.match(specs[0].query, /\bc\.eagleId = @eagleId\b/);
     assert.deepStrictEqual(specs[0].parameters,
       [{ name: '@eagleId', value: '588511d0aaecd9001b825604' }]);
   });
