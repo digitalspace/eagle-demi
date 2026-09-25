@@ -28,6 +28,7 @@ const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
 const { admitParent } = require('../../helpers/parent-admit');
+const { mirrorError } = require('../../helpers/duplicate-id');
 const { writeGuarded } = require('../../helpers/etag-write');
 const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
@@ -108,10 +109,11 @@ async function upsertGuarded(existing, reread, build, { pushedAt = null } = {}) 
     existing,
     reread,
     attempt: async (current) => {
-      // Inside the attempt, so a retry after a 412 judges this push against the one that won.
-      if (isStalePush(pushedAt, current)) return { status: 'stale', existing: current };
+      // Build first: a row `build` refuses (a sealed one) is refused whatever the stamp says.
       const row = build(current);
       if (!row) return { status: 'missing' };
+      // Inside the attempt, so a retry after a 412 judges this push against the one that won.
+      if (isStalePush(pushedAt, current)) return { status: 'stale', existing: current };
       written = row;
       // Recomputed per try, never carried over: the token has to be minted off the value the
       // STORED row carries, or this raise repeats one that is already on the row and the other
@@ -1031,11 +1033,24 @@ exports.upsertFromEagle = async (req, res) => {
       return res.status(404).json({ error: 'Parent project or notification not found' });
     }
 
-    const existing = await documents.getById(systemAccess(), eagleId);
+    // Unfiltered: a gated read misses a sealed or read-less row, and a create over it never lands.
+    const readExisting = () => documents.readForWrite(eagleId, parent.id);
+    let existing = await readExisting();
+    // A move whose old-partition delete failed is finished before this push can start another.
+    if (existing && existing.movedFromProjectId && String(existing.projectId) !== String(parent.id)) {
+      await settleMove(existing);
+      existing = await readExisting();
+    }
+    let sealed = null;
     // Built from whatever is STORED at the moment of the write: extraction state and the pending
     // flag are carried off the row, so building once and replacing the item resurrected a clear
     // that landed meanwhile and reverted a parent field another writer had just moved.
     const buildRow = (current) => {
+      // Eagle knows nothing of a seal, so no push may write over one.
+      if (current && levelOfRead(current.read) === 0) {
+        sealed = current;
+        return null;
+      }
       const row = transformDocument(
         doc, parent.id, listLookupFrom(doc, req.body.labels),
         { existing: current, projectRead: parent.kind === 'notification' ? undefined : parent.read }
@@ -1050,16 +1065,22 @@ exports.upsertFromEagle = async (req, res) => {
         row.read = documents.constrainToProject(row.read, documents.DELETED_CEILING);
         row.isPublished = row.read.includes('public');
       }
+      // The old partition's copy is owed a delete until one lands. Carried on the row, because a
+      // retry after a failed delete point-reads the new partition and no longer sees the move.
+      // The etag goes with it: the delete lands only on the copy this move read.
+      const moved = current && String(current.projectId) !== String(row.projectId);
+      const movedFrom = moved ? String(current.projectId) : current && current.movedFromProjectId;
+      if (movedFrom && movedFrom !== String(row.projectId)) {
+        row.movedFromProjectId = movedFrom;
+        row.movedFromEtag = moved ? current._etag : current.movedFromEtag;
+      }
       return row;
     };
 
     // `transformDocument` re-resolves all four List refs from the push, so this is the path that
     // moves them in practice: a re-typed document in eagle-api arrives here and nowhere else.
-    const written = await upsertGuarded(
-      existing,
-      () => documents.getById(systemAccess(), eagleId),
-      buildRow,
-      { pushedAt });
+    const written = await upsertGuarded(existing, readExisting, buildRow, { pushedAt });
+    if (written.status === 'missing') return ignoreSealedPush(req, res, sealed, pushedAt);
     if (written.status === 'stale') {
       return ignoreStalePush(req, res, {
         label: 'Document Controller', action: 'document.push', targetType: 'document',
@@ -1077,8 +1098,15 @@ exports.upsertFromEagle = async (req, res) => {
     // still listable under the old project's ACL. The index key is the same id, so the next
     // indexer pass replaces that entry — only the stale Cosmos row needs removing. Chunks are
     // partitioned by documentId and do not move.
-    if (from && String(from.projectId) !== saved.projectId) {
-      await documents.deleteById(from.id, from.projectId);
+    if (saved.movedFromProjectId) {
+      const kept = await settleMove(saved);
+      if (kept && levelOfRead(kept.read) === 0) return ignoreSealedPush(req, res, kept, pushedAt);
+      if (kept) {
+        return ignoreStalePush(req, res, {
+          label: 'Document Controller', action: 'document.push', targetType: 'document',
+          current: kept, projectId: kept.projectId, pushedAt
+        });
+      }
     }
 
     auditEvent(req, {
@@ -1117,9 +1145,50 @@ exports.upsertFromEagle = async (req, res) => {
       action: saved.isDeleted ? 'delete' : 'upsert'
     });
   } catch (err) {
-    return serverError(res, err, 'document controller failed');
+    return mirrorError(res, err, 'document controller failed');
   }
 };
+
+/**
+ * Delete the copy a move left in the old partition, but only at the revision the move read.
+ * A 412 means something wrote that copy since. The copy with the newer `eaglePushedAt` is the
+ * live one, and a sealed copy always wins: when the old copy wins, this push's copy is deleted
+ * instead and the old row is returned; otherwise the old copy is deleted at its new revision.
+ */
+async function settleMove(saved) {
+  const { id, projectId, movedFromProjectId: from, movedFromEtag: etag } = saved;
+  try {
+    await documents.deleteById(id, from, { etag });
+  } catch (err) {
+    if ((err.code || err.statusCode) !== 412) throw err;
+    const old = await documents.readStored(id, from);
+    const oldWins = Boolean(old) && (levelOfRead(old.read) === 0 || isStalePush(saved.eaglePushedAt, old));
+    logger.warn('[Document Controller] the old copy of a moved document changed before its delete',
+      { id, fromProjectId: from, toProjectId: projectId, kept: oldWins ? from : projectId });
+    if (oldWins) {
+      await documents.deleteById(id, projectId, { etag: saved._etag });
+      return old;
+    }
+    if (old) await documents.deleteById(id, from, { etag: old._etag });
+  }
+  await documents.clearMovedFrom(id, projectId);
+  return null;
+}
+
+/** 200 so eagle-api does not resend; the seal is named in the audit row only, never the body. */
+function ignoreSealedPush(req, res, current, pushedAt) {
+  logger.warn('[Document Controller] eagle push ignored, the stored document is sealed',
+    { id: current.id });
+  auditEvent(req, {
+    action: 'document.push',
+    outcome: 'ignored',
+    targetType: 'document',
+    targetId: current.id,
+    projectId: current.projectId,
+    detail: { ignored: 'sealed', pushedAt }
+  });
+  return res.json({ ok: true });
+}
 
 exports.deleteDocument = async (req, res) => {
   try {

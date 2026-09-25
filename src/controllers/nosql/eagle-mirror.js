@@ -143,6 +143,7 @@ module.exports = {
   stampPush,
   ignoreStalePush,
   pushConflict,
+  keepSeal,
   upsertWithRetry,
   refId
 };

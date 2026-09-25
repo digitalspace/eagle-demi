@@ -320,7 +320,7 @@ test('authenticated CUD audit coverage', async (t) => {
   await t.test('an Eagle project push writes one project.push', async () => {
     // The mirror routes are unattended — nothing renders their result — so the audit row is the
     // only record that a project changed shape because eagle-api said so.
-    t.mock.method(projects, 'getByEagleId', async () => ({
+    t.mock.method(projects, 'readForWriteByEagleId', async () => ({
       id: '207', eagleId: 'eag-1', isPublished: true, read: ['public', 'staff', 'sysadmin'],
       sources: { track: { track_project_id: 207 }, eagle: {} }
     }));
@@ -347,7 +347,7 @@ test('authenticated CUD audit coverage', async (t) => {
     t.mock.method(projects, 'getByEagleId', async () => ({
       id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true
     }));
-    t.mock.method(documents, 'getById', async () => null);
+    t.mock.method(documents, 'readForWrite', async () => null);
     t.mock.method(documents, 'upsert', async (item) => item);
 
     const written = await rowsFrom(() => documentController.upsertFromEagle({
@@ -365,6 +365,35 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].TargetId, 'eagdoc-1');
     assert.strictEqual(written[0].ProjectId, '207');
     assert.strictEqual(written[0].Detail.isPublishedFrom, null, 'the row is new');
+  });
+
+  await t.test('an Eagle push onto a sealed document writes one ignored document.push', async () => {
+    const { logger } = require('../../src/utils/logger');
+    const { SEALED_TOKEN } = require('../../src/helpers/access-sql');
+    t.mock.method(projects, 'getByEagleId', async () => ({
+      id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true
+    }));
+    t.mock.method(documents, 'readForWrite', async () => ({
+      id: 'eagdoc-1', projectId: '207', read: [SEALED_TOKEN], isPublished: false, _etag: '"e1"'
+    }));
+    t.mock.method(documents, 'upsert', async () => { throw new Error('a sealed row must not be written'); });
+    const warned = [];
+    t.mock.method(logger, 'warn', (message, meta) => { if (/sealed/.test(message)) warned.push(meta); });
+
+    const res = mockRes();
+    const written = await rowsFrom(() => documentController.upsertFromEagle({
+      params: { eagleId: 'eagdoc-1' }, query: {},
+      body: {
+        doc: { _id: 'eagdoc-1', project: '588511d0aaecd9001b825604', read: ['public'] },
+        pushedAt: 1757980000000
+      },
+      user: STAFF
+    }, res));
+
+    assert.deepStrictEqual(res.body, { ok: true }, 'the seal is named in the audit row only');
+    assert.deepStrictEqual(written.map(r => [r.Action, r.Outcome, r.TargetId, r.Detail]),
+      [['document.push', 'ignored', 'eagdoc-1', { ignored: 'sealed', pushedAt: 1757980000000 }]]);
+    assert.deepStrictEqual(warned, [{ id: 'eagdoc-1' }]);
   });
 
   await t.test('api key create and revoke write one row each, carrying no secret', async () => {

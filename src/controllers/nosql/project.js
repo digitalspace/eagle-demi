@@ -35,8 +35,10 @@ const { validateDestination } = require('../../helpers/link-url');
 const config = require('../../config');
 const { writeGuarded } = require('../../helpers/etag-write');
 const {
-  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
+  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
+const { mirrorError } = require('../../helpers/duplicate-id');
+const { narrowTwin } = require('../../helpers/project-twin');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -55,7 +57,7 @@ function writeConflict(res, what, id) {
  *
  * @returns {Promise<string|null>} an error message the caller must 500 with, or null on success.
  */
-async function cascadeProjectVisibility(projectId, acl, eagleId) {
+async function cascadeProjectVisibility(projectId, acl, eagleId, { updates = true } = {}) {
   // The project's own index row FIRST, and outside the try: no project list or search is a live
   // read any more (#148), so an unpublished project stayed findable BY NAME until the indexer's
   // next PT5M pass. It goes before the cascade because the project's Cosmos write has already
@@ -69,7 +71,7 @@ async function cascadeProjectVisibility(projectId, acl, eagleId) {
   const failures = [
     await cascadeDocumentVisibility(projectId, acl),
     await cascadeEngagementVisibility(projectId, acl.read),
-    await cascadeUpdateVisibility(projectId, eagleId, acl.read)
+    updates ? await cascadeUpdateVisibility(projectId, eagleId, acl.read) : null
   ].filter(Boolean);
   return failures.length ? failures.join(' ') : null;
 }
@@ -632,11 +634,11 @@ function visibilityMoved(before, after) {
  *
  * @returns {Promise<string|null>} an error message the caller must 500 with, or null
  */
-async function runCascade(saved, eagleId) {
+async function runCascade(saved, eagleId, options) {
   let failure;
   try {
     failure = await cascadeProjectVisibility(saved.id,
-      { read: saved.read, isPublished: saved.isPublished }, saved.eagleId);
+      { read: saved.read, isPublished: saved.isPublished }, saved.eagleId, options);
   } catch (cascadeErr) {
     logger.error('[Project Controller] project visibility cascade threw', {
       projectId: saved.id, eagleId, error: cascadeErr.message
@@ -671,9 +673,9 @@ async function clearCascadePending(saved, eagleId) {
 
 async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
   try {
-    // systemAccess: the push is a mirror, so it must find a project it is about to republish even
+    // Unfiltered: the push is a mirror, so it must find a project it is about to republish even
     // while that project is currently private.
-    const read = () => projects.getByEagleId(systemAccess(), eagleId);
+    const read = () => projects.readForWriteByEagleId(eagleId);
     const existing = await read();
 
     // Rebuilt per try off the row that actually stored: an unguarded upsert replaced the item from
@@ -686,7 +688,7 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
       attempt: async (current) => {
         // Inside the attempt, so a retry after a 412 judges this push against the one that won.
         if (isStalePush(pushedAt, current)) return { status: 'stale', existing: current };
-        const row = stampPush(mergeEaglePush(doc, current), pushedAt, current);
+        const row = keepSeal(stampPush(mergeEaglePush(doc, current), pushedAt, current), current);
         // Guarded on the revision this attempt read, or CREATED when it read none — an unguarded
         // upsert would replace a project another push created in between.
         const saved = await projects.upsert(row,
@@ -742,10 +744,15 @@ async function applyEaglePush(req, res, { eagleId, doc, pushedAt }) {
     }
     if (failure) return res.status(500).json({ success: false, error: failure });
 
+    // Not the Updates: they key on the Eagle id both rows share, and the Track row caps them.
+    const twinFailure = await narrowTwin(saved, eagleId,
+      (twin, id) => runCascade(twin, id, { updates: false }));
+    if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
+
     return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ error: err.message });
-    return serverError(res, err, 'project controller failed');
+    return mirrorError(res, err, 'project controller failed');
   }
 }
 

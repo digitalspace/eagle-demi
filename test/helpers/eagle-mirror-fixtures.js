@@ -17,6 +17,7 @@ const comments = require('../../src/repositories/comments');
 const notifications = require('../../src/repositories/notifications');
 const lists = require('../../src/repositories/lists');
 const projects = require('../../src/repositories/projects');
+const documents = require('../../src/repositories/documents');
 
 const commentPeriodController = require('../../src/controllers/nosql/comment-period');
 const commentController = require('../../src/controllers/nosql/comment');
@@ -25,7 +26,7 @@ const notificationController = require('../../src/controllers/nosql/notification
 const updateController = require('../../src/controllers/nosql/update');
 const updates = require('../../src/repositories/updates');
 
-const { resolveAccess } = require('../../src/helpers/access-sql');
+const { resolveAccess, systemAccess } = require('../../src/helpers/access-sql');
 
 /** The two callers every mirror assertion is about: the visitor it must hide a row from, and the
  * staff caller it must keep it visible to. */
@@ -256,6 +257,20 @@ function mockRes() {
 const STAFF = { sub: 'kc-sub-1', preferred_username: 'push', realm_access: { roles: ['sysadmin'] } };
 
 /**
+ * Serve the push's unfiltered existence read from whatever a case mocked on the gated read, so the
+ * stored row is staged in one place. What sets the two reads apart is tested in the write-race files.
+ */
+function projectReadForWriteFromGet(t) {
+  t.mock.method(projects, 'readForWriteByEagleId',
+    (eagleId) => projects.getByEagleId(systemAccess(), eagleId));
+}
+
+function documentReadForWriteFromGet(t) {
+  t.mock.method(documents, 'readForWrite',
+    (id, projectId) => documents.getById(systemAccess(), id, projectId));
+}
+
+/**
  * Drive one mirror and return `{ res, row }` — the row is what the controller handed the
  * repository, so every assertion is about the real emitter rather than a copy of it.
  *
@@ -268,7 +283,11 @@ async function captureMirror(t, entity, doc, {
 
   t.mock.method(projects, 'getByEagleId', async () => (project === undefined ? storedProject() : project));
   t.mock.method(commentPeriods, 'getById', async () => (period === undefined ? storedPeriod() : period));
-  t.mock.method(repo, 'readForWrite', async () => existing);
+  // An Error as `existing` is what the read throws, e.g. a duplicated id.
+  t.mock.method(repo, 'readForWrite', async () => {
+    if (existing instanceof Error) throw existing;
+    return existing;
+  });
 
   let row;
   // `losses` 412s the first N writes, so a case can drive the mirror's retry bound.
@@ -305,6 +324,8 @@ function storedStamped(entity, eaglePushedAt) {
 }
 
 module.exports = {
+  projectReadForWriteFromGet,
+  documentReadForWriteFromGet,
   PROJECT_EAGLE_ID,
   PERIOD_EAGLE_ID,
   COMMENT_EAGLE_ID,

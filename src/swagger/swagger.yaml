@@ -1983,6 +1983,10 @@ paths:
             through API Management), hold `demi-service-write`, and carry no project scope.
             Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
             get 403. An empty setting refuses everyone.
+        '409':
+          description: >-
+            The id is stored in more than one DEMI row, so nothing was written. Not retried: a
+            retry finds the same rows.
         '503':
           description: >-
             The project changed repeatedly while the push was retried. The caller retries.
@@ -2021,8 +2025,8 @@ paths:
       responses:
         '200':
           description: >-
-            Document mirrored, or ignored because a newer push already landed — see
-            `EaglePushResult`.
+            Document mirrored, or ignored with nothing written: a newer push already landed, or
+            the stored row does not take mirror writes. See `EaglePushResult`.
           content:
             application/json:
               schema:
@@ -2040,6 +2044,10 @@ paths:
             get 403. An empty setting refuses everyone.
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
+        '409':
+          description: >-
+            The id is stored in more than one DEMI row, so nothing was written. Not retried: a
+            retry finds the same rows.
         '503':
           description: >-
             The document changed repeatedly while the push was retried. The caller retries.
@@ -2164,6 +2172,10 @@ paths:
             get 403. An empty setting refuses everyone.
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
+        '409':
+          description: >-
+            The id is stored in more than one DEMI row, so nothing was written. Not retried: a
+            retry finds the same rows.
         '500':
           description: |-
             The period was mirrored, but the comments under it were not all re-derived. The push
@@ -2218,6 +2230,10 @@ paths:
             get 403. An empty setting refuses everyone.
         '404':
           description: The comment period named by `doc.period` is not mirrored yet.
+        '409':
+          description: >-
+            The id is stored in more than one DEMI row, so nothing was written. Not retried: a
+            retry finds the same rows.
         '503':
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.

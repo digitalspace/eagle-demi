@@ -219,7 +219,7 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
 
   await t.test('a re-typed document pushed from eagle patches its chunks', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => storedDocument());
+    t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
     const patched = watchChunks();
 
@@ -241,7 +241,7 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
     // answering the OLD project's roles, and no other write ever touches them — chunks are
     // partitioned by documentId, so they do not move with the row.
     t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProject(), id: '208' }));
-    t.mock.method(documents, 'getById', async () => storedDocument());
+    t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
     t.mock.method(documents, 'deleteById', async () => ({}));
     const patched = watchChunks();
@@ -263,7 +263,7 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
     // "these chunks never got their new values" flag would be cleared by the next unrelated push —
     // and the repair would never find the document again.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () =>
+    t.mock.method(documents, 'readForWrite', async () =>
       storedDocument({ parentFieldsPending: true, parentFieldsPendingAt: '2026-09-01T00:00:00Z' }));
     const upserted = [];
     t.mock.method(documents, 'upsert', async (item) => { upserted.push(item); return item; });
@@ -283,7 +283,7 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
     // The push fires on EVERY eagle-api write, so patching unconditionally would walk every chunk
     // of the document on every unrelated edit — ~19 rows each, against 1.1M in the container.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => storedDocument());
+    t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
     const patched = watchChunks();
 
@@ -298,7 +298,7 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
   await t.test('a document DEMI has never seen patches nothing', async () => {
     // It has no chunks yet, and the ingest that creates them stamps the fields itself.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => null);
+    t.mock.method(documents, 'readForWrite', async () => null);
     t.mock.method(documents, 'upsert', async (item) => item);
     const patched = watchChunks();
 
@@ -315,7 +315,7 @@ test('a document write re-stamps its chunks only when a parent field moved', asy
     // filter MISS chunks; it never shows text to a caller who may not see it, so this is not the
     // ACL patch and must not 500 a write that succeeded.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => storedDocument());
+    t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
     t.mock.method(chunks, 'setParentFieldsForDocument', async () => {
       throw new Error('cosmos unavailable');
@@ -452,7 +452,7 @@ test('with a queue configured the write enqueues instead of walking the chunks',
     // The whole point: ~6k chunks is ~60 serial Cosmos bulk calls plus 429 backoff, and
     // eagle-api's pushClient.js aborts the push at 10 s and pushes again — the same walk twice.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => storedDocument());
+    t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
     const { messages, patched } = watchQueue();
 
@@ -489,7 +489,7 @@ test('with a queue configured the write enqueues instead of walking the chunks',
     // The push fires on EVERY eagle-api write. Queueing unconditionally would trade a slow
     // request for a queue that re-walks every document in the corpus on every unrelated edit.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => storedDocument());
+    t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
     const { messages } = watchQueue();
 
@@ -506,7 +506,7 @@ test('with a queue configured the write enqueues instead of walking the chunks',
     // and a stale chunk copy makes a filter MISS rows rather than showing text to anyone.
     // `scripts/backfill-chunk-parent-fields.js --project` is the repair.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(documents, 'getById', async () => storedDocument());
+    t.mock.method(documents, 'readForWrite', async () => storedDocument());
     t.mock.method(documents, 'upsert', async (item) => item);
     watchQueue(() => { throw new Error('queue not found'); });
     const errors = [];

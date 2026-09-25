@@ -17,7 +17,7 @@ const commentPeriods = require('../../repositories/comment-periods');
 const { constrainToProject } = require('../../repositories/documents');
 const { seedAcl } = require('../../seed/transform');
 const { systemAccess } = require('../../helpers/access-sql');
-const { serverError } = require('../../helpers/response');
+const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const {
   eagleRef, classify, warnNotAdmitted, MALFORMED_REF
@@ -154,6 +154,6 @@ exports.upsertFromEagle = async (req, res) => {
 
     return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {
-    return serverError(res, err, 'comment controller failed');
+    return mirrorError(res, err, 'comment controller failed');
   }
 };

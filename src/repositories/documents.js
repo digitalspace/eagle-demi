@@ -12,7 +12,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead, readForLevel, levelOfRead, systemAccess, SEALED_TOKEN } = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem
+  upsertWithEtag, createItem, readForWriteIn
 } = require('./_sql');
 // The fields the chunks carry a copy of, read from the one list that owns them.
 const { CHUNK_PARENT_FIELDS } = require('./chunks');
@@ -276,6 +276,27 @@ async function getById(access, id, projectId) {
   // whenever the partitions it reached first do not hold the id, and reading only that page
   // reports a document that exists as deleted.
   return await cosmos.queryFirst(CONTAINER, spec, {});
+}
+
+/**
+ * The stored row, unfiltered, for the Eagle mirror's existence check: a sealed or read-less row
+ * must be found, or the push creates over it and loses every etag race. Never a response.
+ */
+async function readForWrite(id, projectId) {
+  return readForWriteIn(CONTAINER, id, projectId, PARTITION_FIELD);
+}
+
+/** Drop a moved row's owed-delete marker once the old partition's copy is gone. */
+async function clearMovedFrom(id, projectId) {
+  return cosmos.patch(CONTAINER, String(id), String(projectId), [
+    { op: 'set', path: '/movedFromProjectId', value: null },
+    { op: 'set', path: '/movedFromEtag', value: null }
+  ]);
+}
+
+/** The row as stored in one partition, with no ACL check. For write paths only. */
+async function readStored(id, projectId) {
+  return cosmos.readItem(CONTAINER, String(id), String(projectId));
 }
 
 /**
@@ -854,8 +875,8 @@ async function setPublished(id, projectId, level) {
  * controllers/nosql/document.js. That is done explicitly rather than via the change feed,
  * which emits no deletes in latest-version mode.
  */
-async function deleteById(id, projectId) {
-  return cosmos.remove(CONTAINER, String(id), String(projectId));
+async function deleteById(id, projectId, { etag } = {}) {
+  return cosmos.remove(CONTAINER, String(id), String(projectId), { etag });
 }
 
 /**
@@ -916,6 +937,9 @@ module.exports = {
   listSealed,
   countVisible,
   getById,
+  readForWrite,
+  clearMovedFrom,
+  readStored,
   listByIds,
   listByIdsUnscoped,
   aclRowsForProject,

@@ -26,6 +26,8 @@ const chunks = require('../../../src/repositories/chunks');
 const aiSearch = require('../../../src/search/ai-search');
 const documentController = require('../../../src/controllers/nosql/document');
 const { logger } = require('../../../src/utils/logger');
+const { SEALED_TOKEN } = require('../../../src/helpers/access-sql');
+const cosmos = require('../../../src/db/cosmos-nosql');
 const {
   mockRes, STAFF, storedDocument, storedProject: storedProjectRow,
   DOCUMENT_EAGLE_ID, PROJECT_EAGLE_ID, TYPE_ID, MILESTONE_ID
@@ -60,7 +62,10 @@ const eagleDocument = (overrides = {}) => ({
  */
 function raceWith(t, rows, losses) {
   let read = 0;
-  t.mock.method(documents, 'getById', async () => rows[Math.min(read++, rows.length - 1)]);
+  // The staff edit reads through getById, the push through readForWrite; both see one history.
+  const next = async () => rows[Math.min(read++, rows.length - 1)];
+  t.mock.method(documents, 'getById', next);
+  t.mock.method(documents, 'readForWrite', next);
   const upserted = [];
   t.mock.method(documents, 'upsert', async (item, options) => {
     upserted.push({ item, options });
@@ -311,4 +316,226 @@ test('a newer document push writes, and stores the stamp it was ordered by', asy
   assert.strictEqual(upserted[0].item.typeId, NEW_TYPE_ID);
   assert.strictEqual(upserted[0].item.eaglePushedAt, NEWER,
     'without the stamp on the row the next push has nothing to be ordered against');
+});
+
+/**
+ * The existence read against rows an ACL-gated read cannot see. The gated read missed a read-less
+ * or sealed row, so the push created over it, lost every create and answered 503 forever.
+ */
+test('the document push finds the row whatever its ACL', async (t) => {
+  const { mirrorStore } = require('../../helpers/mirror-store');
+  t.afterEach(() => t.mock.restoreAll());
+  const parent = { container: 'projects', ...storedProjectRow(), isPublished: true };
+  const stored = (projectId, overrides = {}) =>
+    ({ container: 'documents', ...storedDocument({ projectId }), ...overrides });
+  const quiet = () => {
+    t.mock.method(aiSearch, 'writeAcls', async () => 0);
+    t.mock.method(chunks, 'setParentFieldsForDocument', async () =>
+      ({ succeeded: 1, failed: 0, skippedNewer: 0, statusCounts: {}, requestCharge: 1 }));
+    t.mock.method(documents, 'setParentFieldsPending', async () =>
+      ({ status: 'raised', pendingAt: TOKEN }));
+    for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});
+  };
+
+  await t.test('a read-less document is written and gets a read', async () => {
+    const store = mirrorStore(t, [parent, stored('207', { read: undefined, isPublished: undefined })]);
+    quiet();
+
+    const res = await push(eagleDocument());
+
+    assert.strictEqual(res.statusCode, 200);
+    const [row] = store.rows('documents');
+    assert.ok(Array.isArray(row.read) && row.read.includes('public'),
+      `the pushed read should land on the row, got ${JSON.stringify(row.read)}`);
+    assert.deepStrictEqual(store.writes.map(w => w.op), ['upsert']);
+  });
+
+  await t.test('a sealed document is left as it is and the push is answered 200', async () => {
+    const store = mirrorStore(t, [parent, stored('207', { read: [SEALED_TOKEN], isPublished: false })]);
+    quiet();
+
+    const res = await push(eagleDocument({ displayName: 'Renamed in Eagle' }));
+
+    assert.deepStrictEqual({ status: res.statusCode, body: res.body }, { status: 200, body: { ok: true } });
+    assert.deepStrictEqual(store.writes, []);
+    assert.deepStrictEqual(store.rows('documents')[0].read, [SEALED_TOKEN]);
+  });
+
+  await t.test('an id stored under two other projects is refused with 409 and no write', async () => {
+    const store = mirrorStore(t, [parent, stored('208'), stored('209')]);
+    quiet();
+
+    const res = await push(eagleDocument());
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('a copy under the parent project wins over a copy elsewhere', async () => {
+    const store = mirrorStore(t, [parent, stored('208', { displayName: 'Old copy' }), stored('207')]);
+    quiet();
+
+    const res = await push(eagleDocument({ displayName: 'Pushed' }));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(store.writes.map(w => [w.op, w.item.projectId]), [['upsert', '207']]);
+    const byProject = Object.fromEntries(store.rows('documents').map(r => [r.projectId, r.displayName]));
+    assert.deepStrictEqual(byProject, { 207: 'Pushed', 208: 'Old copy' });
+  });
+
+  await t.test('a stale push onto a sealed row is answered as sealed, not stale', async () => {
+    const store = mirrorStore(t, [parent,
+      stored('207', { read: [SEALED_TOKEN], isPublished: false, eaglePushedAt: NEWER })]);
+    quiet();
+
+    const res = await push(eagleDocument(), OLDER);
+
+    assert.deepStrictEqual({ status: res.statusCode, body: res.body }, { status: 200, body: { ok: true } });
+    assert.deepStrictEqual(store.writes, []);
+  });
+
+  await t.test('a move whose old-partition delete failed is finished by the retry', async () => {
+    const store = mirrorStore(t, [parent, stored('100', { displayName: 'Before the move' })]);
+    quiet();
+    const storeRemove = cosmos.remove;
+    let failures = 1;
+    t.mock.method(cosmos, 'remove', async (...args) => {
+      if (failures-- > 0) throw new Error('delete failed');
+      return storeRemove(...args);
+    });
+
+    const first = await push(eagleDocument());
+    const retry = await push(eagleDocument());
+
+    assert.deepStrictEqual([first.statusCode, retry.statusCode], [500, 200]);
+    const rows = store.rows('documents');
+    assert.deepStrictEqual(rows.map(r => [r.projectId, r.movedFromProjectId]), [['207', null]],
+      'the retry point-reads 207 and must still remove the copy left under 100');
+  });
+
+});
+
+test('a push that loses to a seal is answered as sealed, and nothing lands', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProjectRow(), isPublished: true }));
+  const upserted = raceWith(t, [
+    storedDocument({ _etag: ETAG_READ }),
+    storedDocument({ _etag: ETAG_LANDED, read: [SEALED_TOKEN], isPublished: false })
+  ], 1);
+
+  const res = await push(eagleDocument());
+
+  assert.deepStrictEqual({ status: res.statusCode, body: res.body }, { status: 200, body: { ok: true } });
+  assert.strictEqual(upserted.length, 1, 'only the attempt that lost its race was sent');
+});
+
+/**
+ * A move leaves the old partition's copy owed a delete. The delete is guarded by the etag the move
+ * read, so it cannot remove a copy a newer push rewrote after the move's first delete failed.
+ */
+test('a move deletes the copy it left behind only at the revision it read', async (t) => {
+  const { mirrorStore } = require('../../helpers/mirror-store');
+  t.afterEach(() => t.mock.restoreAll());
+  const OTHER_EAGLE_ID = '588511d0aaecd9001b825699';
+  const THIRD_EAGLE_ID = '588511d0aaecd9001b825698';
+  const projectRow = (id, eagleId) =>
+    ({ container: 'projects', ...storedProjectRow(), id, eagleId, isPublished: true });
+  const parents = [projectRow('207', PROJECT_EAGLE_ID), projectRow('100', OTHER_EAGLE_ID),
+    projectRow('300', THIRD_EAGLE_ID)];
+  const stored = (projectId, overrides = {}) =>
+    ({ container: 'documents', ...storedDocument({ projectId }), ...overrides });
+  let warned;
+  const quiet = () => {
+    t.mock.method(aiSearch, 'writeAcls', async () => 0);
+    t.mock.method(chunks, 'setParentFieldsForDocument', async () =>
+      ({ succeeded: 1, failed: 0, skippedNewer: 0, statusCounts: {}, requestCharge: 1 }));
+    t.mock.method(documents, 'setParentFieldsPending', async () =>
+      ({ status: 'raised', pendingAt: TOKEN }));
+    warned = [];
+    t.mock.method(logger, 'warn', (message, meta) => warned.push({ message, meta }));
+    for (const level of ['info', 'error']) t.mock.method(logger, level, () => {});
+  };
+  const failFirstRemove = () => {
+    const storeRemove = cosmos.remove;
+    let failures = 1;
+    t.mock.method(cosmos, 'remove', async (...args) => {
+      if (failures-- > 0) throw new Error('delete failed');
+      return storeRemove(...args);
+    });
+  };
+  const layout = (store) => store.rows('documents')
+    .map(r => [r.projectId, r.displayName, r.movedFromProjectId || null]);
+
+  await t.test('the delete carries the etag of the copy the move read, and lands', async () => {
+    const store = mirrorStore(t, [...parents, stored('100', { displayName: 'Before the move' })]);
+    quiet();
+    const [before] = store.rows('documents');
+    failFirstRemove();
+
+    const first = await push(eagleDocument({ displayName: 'Moved' }), OLDER);
+    const retry = await push(eagleDocument({ displayName: 'Moved' }), OLDER);
+
+    assert.deepStrictEqual([first.statusCode, retry.statusCode], [500, 200]);
+    assert.deepStrictEqual(layout(store), [['207', 'Moved', null]]);
+    const removes = store.writes.filter(w => w.op === 'remove');
+    assert.deepStrictEqual(removes.map(w => [w.pk, w.etag]), [['100', before._etag]]);
+  });
+
+  await t.test('a newer push to the old copy keeps it, and the moved copy is removed', async () => {
+    const store = mirrorStore(t, [...parents, stored('100', { displayName: 'Before the move' })]);
+    quiet();
+    failFirstRemove();
+
+    const moved = await push(eagleDocument({ displayName: 'Moved' }), OLDER);
+    const newer = await push(eagleDocument({ project: OTHER_EAGLE_ID, displayName: 'Moved back' }), NEWER);
+    const retry = await push(eagleDocument({ displayName: 'Moved' }), OLDER);
+
+    assert.deepStrictEqual([moved.statusCode, newer.statusCode, retry.statusCode], [500, 200, 200]);
+    assert.strictEqual(retry.body.ignored, 'stale');
+    assert.deepStrictEqual(layout(store), [['100', 'Moved back', null]],
+      'the copy the newer push wrote must survive the older move\'s retry');
+    assert.deepStrictEqual(warned.filter(w => /changed before its delete/.test(w.message)).map(w => w.meta),
+      [{ id: DOC_ID, fromProjectId: '100', toProjectId: '207', kept: '100' }]);
+  });
+
+  await t.test('an older write to the old copy does not keep it', async () => {
+    const store = mirrorStore(t,
+      [...parents, stored('100', { displayName: 'Before the move', eaglePushedAt: OLDER })]);
+    quiet();
+    failFirstRemove();
+
+    await push(eagleDocument({ displayName: 'Moved' }), NEWER);
+    // Not a push: an extraction or cascade write moves the etag and leaves the stamp alone.
+    await cosmos.patch('documents', DOC_ID, '100', [{ op: 'set', path: '/extractionStatus', value: 'done' }]);
+    const retry = await push(eagleDocument({ displayName: 'Moved' }), NEWER);
+
+    assert.strictEqual(retry.statusCode, 200);
+    assert.deepStrictEqual(layout(store), [['207', 'Moved', null]]);
+  });
+
+  await t.test('a half-finished move is finished by a push to a third project', async () => {
+    const store = mirrorStore(t, [...parents,
+      stored('100', { displayName: 'Before the move' }), stored('207', { displayName: 'Moved' })]);
+    quiet();
+    const [old] = store.rows('documents');
+    await cosmos.patch('documents', DOC_ID, '207', [
+      { op: 'set', path: '/movedFromProjectId', value: '100' },
+      { op: 'set', path: '/movedFromEtag', value: old._etag }
+    ]);
+
+    const res = await push(eagleDocument({ project: THIRD_EAGLE_ID, displayName: 'Moved again' }));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(layout(store), [['300', 'Moved again', null]]);
+  });
+
+  await t.test('two copies with no move marker are still refused with 409', async () => {
+    const store = mirrorStore(t, [...parents, stored('100'), stored('207')]);
+    quiet();
+
+    const res = await push(eagleDocument({ project: THIRD_EAGLE_ID }));
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.deepStrictEqual(store.writes, []);
+  });
 });
