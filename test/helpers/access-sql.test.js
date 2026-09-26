@@ -13,6 +13,7 @@ const {
   isPrivileged,
   readForLevel,
   levelOfRead,
+  capRead,
   resolveAccess,
   readClause,
   scopeClause,
@@ -256,6 +257,23 @@ test('the ladder vocabulary', async (t) => {
     assert.strictEqual(levelOfRead([]), 1);
     assert.strictEqual(levelOfRead(undefined), 1);
     assert.strictEqual(levelOfRead(['sysadmin']), 1, 'an admin role name is not a ladder token');
+  });
+
+  await t.test('a cap narrows a read and never widens a privileged-only one to team', () => {
+    const TEAM = ['team'];
+    assert.deepStrictEqual(capRead(['sysadmin'], TEAM), ['sysadmin'], 'team members must not gain it');
+    assert.deepStrictEqual(capRead(['team'], TEAM), ['team']);
+    assert.deepStrictEqual(capRead(['staff'], TEAM), ['team']);
+    assert.deepStrictEqual(capRead([], TEAM), []);
+    assert.deepStrictEqual(capRead(['project-team'], TEAM), ['team'],
+      'a legacy role is not privileged, and any realm role of that name could read it');
+
+    assert.deepStrictEqual(capRead(['staff', 'idir', 'public'], ['sysadmin']), ['sysadmin'],
+      'a privileged-only cap keeps the row privileged-only');
+    assert.deepStrictEqual(capRead(['staff'], undefined), ['team'], 'an unknown cap still lands at team');
+    assert.deepStrictEqual(capRead(['sysadmin'], ['compliance']), ['compliance']);
+    assert.deepStrictEqual(capRead(['compliance'], ['public']), ['compliance']);
+    assert.deepStrictEqual(capRead(['sysadmin', 'staff', 'demi-admin'], ['public']), ['staff']);
   });
 });
 

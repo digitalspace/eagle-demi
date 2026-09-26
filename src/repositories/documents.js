@@ -9,7 +9,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead, readForLevel, levelOfRead, systemAccess, SEALED_TOKEN } = require('../helpers/access-sql');
+const { canRead, readForLevel, capRead, systemAccess, SEALED_TOKEN } = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
   upsertWithEtag, createItem, readForWriteIn
@@ -369,12 +369,13 @@ async function aclRowsForProject(access, projectId) {
 /**
  * The document's ACL narrowed by its project's — never widened by it.
  *
- * The LOWER of the two ladder levels, which cannot widen either side by construction. A missing or
- * empty ACL reads as level 1 (`levelOfRead([])`), so an unknown on either side fails closed to
- * `team` rather than to a fixed level 2 a level-1 project never allowed.
+ * The LOWER of the two ladder levels (`access-sql:capRead`), which cannot widen either side by
+ * construction. A missing or empty project ACL reads as level 1 (`levelOfRead([])`), so an unknown
+ * fails closed to `team` rather than to a fixed level 2 a level-1 project never allowed; a level-1
+ * read with no ladder token (`['sysadmin']`) stays privileged-only.
  */
 function constrainToProject(ownRead, projectRead) {
-  return readForLevel(Math.min(levelOfRead(ownRead), levelOfRead(projectRead)));
+  return capRead(ownRead, projectRead);
 }
 
 /**

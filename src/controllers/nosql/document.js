@@ -22,7 +22,7 @@ const { chunkMarkdown, createChunkAccumulator, hasPageMarkers, pageCountOf } =
   require('../../chunker');
 const restampChunks = require('../../jobs/restamp-chunks');
 const {
-  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, TIER
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, capRead, TIER
 } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
@@ -57,7 +57,7 @@ let warnedNoRestampTarget = false;
  * its project. EVERY document write path must go through this.
  */
 function resolveDocumentAcl(parentProject) {
-  const read = readForLevel(Math.min(1, levelOfRead(parentProject.read)));
+  const read = capRead(readForLevel(1), parentProject.read);
 
   // `published` is READ OFF the capped read[] — read[] is authoritative, isPublished mirrors it.
   return { published: read.includes('public'), read };

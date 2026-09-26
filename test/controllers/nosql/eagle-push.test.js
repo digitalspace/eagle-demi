@@ -510,7 +510,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.isPublished, false);
   });
 
-  await t.test('a document Eagle marks compliance-only lands at level 1, not sealed', async () => {
+  await t.test('a document Eagle marks compliance-only lands privileged-only, not sealed', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'getById', async () => null);
     let written;
@@ -521,8 +521,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       body: { doc: eagleDocument({ read: ['compliance'] }) }, user: STAFF
     }, mockRes());
 
-    assert.deepStrictEqual(written.read, ['team']);
-    assert.deepStrictEqual(written.ownRead, ['team'], 'the cascade restores from the stripped read');
+    assert.deepStrictEqual(written.read, ['sysadmin']);
+    assert.deepStrictEqual(written.ownRead, ['sysadmin'], 'the cascade restores from the stripped read');
   });
 
   await t.test('a document that moved project leaves no row in the old partition', async () => {
@@ -756,9 +756,9 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     }, mockRes());
 
     assert.strictEqual(indexWrites.length, 1);
-    // `sysadmin` is no ladder token at all, so the pushed ACL reads as level 1.
+    // `sysadmin` is no ladder token, so level 1, and privileged-only rather than `team`.
     assert.deepStrictEqual(indexWrites[0],
-      [{ id: DOC_EAGLE_ID, read: ['team'], isPublished: false }]);
+      [{ id: DOC_EAGLE_ID, read: ['sysadmin'], isPublished: false }]);
 
     indexWrites.length = 0;
     await documentController.upsertFromEagle({

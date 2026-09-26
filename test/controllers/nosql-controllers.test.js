@@ -512,6 +512,11 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     assert.deepStrictEqual(acl.read, ['team']);
   });
 
+  await t.test('a privileged-only parent widens the document past the plain level-1 default', () => {
+    const acl = resolveDocumentAcl({ read: ['sysadmin'] });
+    assert.deepStrictEqual(acl.read, ['sysadmin']);
+  });
+
   await t.test('a sealed (level 0) parent caps the document below level 1', () => {
     const acl = resolveDocumentAcl({ read: ['compliance'] });
     assert.deepStrictEqual(acl.read, ['compliance']);

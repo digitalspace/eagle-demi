@@ -28,16 +28,16 @@ const { naturalSortKey } = require('../helpers/natural-sort');
  * kept, `compliance` would seal the copy and hide it from every ladder caller.
  *
  * With no upstream ACL the item lands at level 2 (All EAO). With only compliance left after the
- * blanks it lands at level 1 (`team`), not 2: `['compliance','sysadmin']` already lands at
- * `['sysadmin']` (level 1), so a bare `['compliance']` must not land wider. A list of blanks alone
- * stays `[]`, as it always has. Every item gets an explicit `read[]`, which is the condition for
+ * blanks it lands at `['sysadmin']`, exactly what `['compliance','sysadmin']` lands at: no ladder
+ * token, so privileged callers only. Not `team`, which the team arm opens to the project's team
+ * members. A list of blanks alone stays `[]`, as it always has. Every item gets an explicit `read[]`, which is the condition for
  * deleting the legacy no-ACL tier from the visibility predicate.
  */
 function seedAcl(upstreamRead) {
   if (!Array.isArray(upstreamRead) || upstreamRead.length === 0) return readForLevel(2);
   const kept = upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
   const open = kept.filter(r => r !== SEALED_TOKEN);
-  return open.length === 0 && kept.length > 0 ? readForLevel(1) : open;
+  return open.length === 0 && kept.length > 0 ? ['sysadmin'] : open;
 }
 
 /** `internalSize` arrives as a number OR a numeric string (261 of 2,961 sampled were strings). */

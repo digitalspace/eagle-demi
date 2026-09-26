@@ -574,9 +574,9 @@ test('reconcile', async (t) => {
       },
       updates: {
         list: async () => [
-          // What the push stores: the token dropped, and level 1 when nothing else is left.
+          // What the push stores: the token dropped, and sysadmin only when nothing else is left.
           { id: 'U-comp', projectId: 'P1', read: ['public'], isPublished: true },
-          { id: 'U-only', projectId: 'P1', read: ['team'], isPublished: false }
+          { id: 'U-only', projectId: 'P1', read: ['sysadmin'], isPublished: false }
         ],
         count: async () => 2
       }

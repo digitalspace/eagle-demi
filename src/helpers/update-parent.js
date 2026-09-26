@@ -9,7 +9,7 @@ const cosmos = require('../db/cosmos-nosql');
 const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
 const { pickParent } = require('./parent-admit');
-const { levelOfRead, readForLevel, isDemiSeal } = require('./access-sql');
+const { levelOfRead, capRead, isDemiSeal } = require('./access-sql');
 const { seedAcl } = require('../seed/transform');
 
 /**
@@ -64,15 +64,16 @@ function ceilingRead(parent) {
 
 /**
  * An Update's `read[]` under its parent: Eagle's own minus compliance (`ownRead`), unless the
- * parent sits at a lower level (`ceilingRead`), in which case the parent's level. Never rewritten
+ * parent sits at a lower level (`ceilingRead`), in which case the parent's level through
+ * `access-sql:capRead`, so a privileged-only parent keeps the Update privileged-only. Never rewritten
  * to ladder tokens, so `['sysadmin']` stays `['sysadmin']` and `[]` stays `[]`. No parent, no
  * ceiling.
  */
 function readUnder(eagleRead, parent) {
   const own = ownRead(eagleRead);
   if (!parent) return own;
-  const ceiling = levelOfRead(ceilingRead(parent));
-  return ceiling < levelOfRead(own) ? readForLevel(ceiling) : own;
+  const ceiling = ceilingRead(parent);
+  return levelOfRead(ceiling) < levelOfRead(own) ? capRead(own, ceiling) : own;
 }
 
 /** The bar for emailing an Update: its parent, if it has one, is readable by anyone. */
