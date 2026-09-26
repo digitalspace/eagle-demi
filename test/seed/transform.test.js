@@ -63,6 +63,15 @@ test('seedAcl — every seeded item gets an explicit read[]', async (t) => {
     assert.deepStrictEqual(seedAcl(['public', '', '   ', null, 'staff']), ['public', 'staff']);
   });
 
+  await t.test('drops the compliance token, which Eagle has no compartment for', () => {
+    assert.deepStrictEqual(seedAcl(['public', 'compliance']), ['public']);
+    assert.deepStrictEqual(seedAcl(['compliance']), ['sysadmin'], 'privileged only, never sealed');
+    assert.deepStrictEqual(seedAcl(['compliance', '']), ['sysadmin'], 'the blank does not hide the removed token');
+    // No team token: the team arm would open a bare compliance row to the project's team members.
+    assert.deepStrictEqual(seedAcl(['compliance']), seedAcl(['compliance', 'sysadmin']),
+      'a bare compliance read lands no wider than one that also names sysadmin');
+  });
+
   await t.test('an all-junk ACL falls back to closed rather than to empty', () => {
     // An empty read[] would hit the isPublished mirror branch of the visibility predicate.
     assert.deepStrictEqual(seedAcl(['', '  ']), []);
@@ -125,9 +134,9 @@ test('transformDocument', async (t) => {
     // The seed used to keep the Eagle ACL verbatim, so a public document under a project Track
     // marks private was seeded public and stayed listable under a project nobody could see.
     // The Eagle roles and `['sysadmin']` share nothing, so this is the fail-closed branch. It
-    // caps at the parent's own level — `['sysadmin']` carries no ladder token, so that level is 1.
+    // caps at the parent's own read: privileged-only, so not `team`, which team members can open.
     const priv = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, projectRead: ['sysadmin'] });
-    assert.deepStrictEqual(priv.read, ['team']);
+    assert.deepStrictEqual(priv.read, ['sysadmin']);
     assert.strictEqual(priv.isPublished, false);
 
     const pub = transformDocument(EAGLE_DOC, '207', LIST,

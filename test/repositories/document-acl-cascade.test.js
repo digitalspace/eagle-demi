@@ -41,7 +41,7 @@ test('constrainToProject — the lower of the two levels', async (t) => {
   await t.test('a narrower document stays narrow under a public project', () => {
     // The whole point. Assignment would have widened this to the project's array.
     assert.deepStrictEqual(
-      documents.constrainToProject(['sysadmin'], PUBLIC_PROJECT), ['team']);
+      documents.constrainToProject(['sysadmin'], PUBLIC_PROJECT), ['sysadmin']);
   });
 
   await t.test('a legacy role name carries no level of its own', () => {
@@ -57,10 +57,10 @@ test('constrainToProject — the lower of the two levels', async (t) => {
     assert.deepStrictEqual(documents.constrainToProject(['public'], undefined), ['team']);
   });
 
-  await t.test('fail-closed under a public project yields team', () => {
+  await t.test('fail-closed under a public project never takes the project reach', () => {
     // A document with no ACL knows nothing about itself, and a project cannot supply that —
     // inheriting the parent's reach is exactly the widening this rule exists to stop.
-    assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), ['team']);
+    assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), []);
     assert.deepStrictEqual(documents.constrainToProject(undefined, PUBLIC_PROJECT), ['team']);
   });
 
@@ -141,7 +141,7 @@ test('setAclForProject', async (t) => {
 
     await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
 
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['team']);
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
     assert.strictEqual(opValue(cap.ops[0], '/isPublished'), false);
   });
 
@@ -206,7 +206,7 @@ test('setAclForProject', async (t) => {
       assert.ok(cap.ops.every(o => o.partitionKey === '207'), 'one partition, one bulk request');
       assert.ok(cap.ops.every(o => o.operationType === 'Patch'));
       assert.deepStrictEqual(result.ids, ['d1', 'd2', 'd3']);
-      assert.deepStrictEqual(opValue(cap.ops[2], '/read'), ['team'],
+      assert.deepStrictEqual(opValue(cap.ops[2], '/read'), [],
         'a row with no ACL at all still fails closed rather than being skipped');
     });
 
@@ -226,7 +226,7 @@ test('setAclForProject', async (t) => {
     for (const op of wire) {
       assert.ok('value' in op, `${op.path} reaches Cosmos with no value key, which is a 400`);
     }
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['team'], 'and it still fails closed');
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), [], 'and it still fails closed');
   });
 
   await t.test('an empty project writes nothing', async (tt) => {

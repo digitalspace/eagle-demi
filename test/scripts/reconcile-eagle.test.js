@@ -12,7 +12,6 @@ const { logger } = require('../../src/utils/logger');
 const { documentAdmission } = require('../../src/scripts/seed-nosql');
 const { buildRegistry, buildProjectIndex } = require('../../src/merge/project');
 const { MAX_PAGE_SIZE, readForLevel } = require('../../src/helpers/access-sql');
-
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
 /**
@@ -311,6 +310,17 @@ test('reconcile', async (t) => {
     assert.match(report(summary, { json: true }), /"aclMismatch": \[\s*"P2"\s*\]/);
   });
 
+  await t.test('an eagleOnly set says level-0 rows are counted there, and which a re-push repairs', async () => {
+    const rendered = report(await reconcile([], makeDeps()));
+    // Per container: projects has no eagleOnly in these fixtures, documents does.
+    const section = (label) => rendered.split(/\n(?=\w+: \d+ mirrored in DEMI)/)
+      .find(part => part.startsWith(`${label}:`));
+    const NOTE = /eagleOnly \(the push missed these\): [^\n]+\n {4}rows stored at level 0 are not read here and count as missing; a re-push repairs those an Eagle push sealed, a DEMI seal \(sealedAt\) stays\n/;
+
+    assert.match(section('documents'), NOTE);
+    assert.doesNotMatch(section('projects'), /rows stored at level 0/);
+  });
+
   await t.test('reports drift both ways', async () => {
     const summary = await reconcile([], makeDeps());
 
@@ -550,6 +560,29 @@ test('reconcile', async (t) => {
     }));
 
     assert.deepStrictEqual(summary.updates.aclMismatch, ['U-open']);
+  });
+
+  await t.test('an Update whose Eagle read carries compliance is compared stripped', async () => {
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, { ...EAGLE_BY_DATASET, RecentActivity: [
+        { _id: 'U-comp', project: 'P1', read: ['compliance', 'public'] },
+        { _id: 'U-only', project: 'P1', read: ['compliance'] }
+      ] }),
+      projects: {
+        ...makeDeps().projects,
+        listWithEagleId: async () => PROJECT_ROWS.map(row => ({ ...row, read: ['staff', 'idir', 'public'] }))
+      },
+      updates: {
+        list: async () => [
+          // What the push stores: the token dropped, and sysadmin only when nothing else is left.
+          { id: 'U-comp', projectId: 'P1', read: ['public'], isPublished: true },
+          { id: 'U-only', projectId: 'P1', read: ['sysadmin'], isPublished: false }
+        ],
+        count: async () => 2
+      }
+    }));
+
+    assert.deepStrictEqual(summary.updates.aclMismatch, []);
   });
 
   await t.test('a truncated updates enumeration is reported', async () => {

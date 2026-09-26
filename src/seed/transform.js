@@ -13,27 +13,31 @@
  * record with no resolvable project is dropped instead of given a fabricated parent.
  */
 
-const { readForLevel } = require('../helpers/access-sql');
+const { readForLevel, SEALED_TOKEN } = require('../helpers/access-sql');
 const { naturalSortKey } = require('../helpers/natural-sort');
 
 /**
- * ACL for a seeded item.
+ * ACL for a seeded or pushed Eagle item, the one rule every Eagle mirror derives `read[]` through.
  *
- * Upstream `read[]` is preserved VERBATIM when present — Eagle carries role types
- * already (`project-team`, `admin:nrced`, `public`), and rewriting them would either widen an
- * upstream restriction or silently drop a role. Privileged DEMI callers do not need to appear in
- * the list: `readClause` short-circuits them to `true`.
+ * Upstream `read[]` is preserved when present — Eagle carries role types already (`project-team`,
+ * `admin:nrced`, `public`), and rewriting them would either widen an upstream restriction or
+ * silently drop a role. Privileged DEMI callers do not need to appear in the list: `readClause`
+ * short-circuits them to `true`.
  *
- * With no upstream ACL the item fails closed. Every seeded item gets an explicit `read[]`, which
- * is the condition for deleting the legacy no-ACL tier from the visibility predicate.
+ * Two things are dropped: blank entries, and the sealed token. Eagle has no sealed compartment, so
+ * kept, `compliance` would seal the copy and hide it from every ladder caller.
+ *
+ * With no upstream ACL the item lands at level 2 (All EAO). With only compliance left after the
+ * blanks it lands at `['sysadmin']`, exactly what `['compliance','sysadmin']` lands at: no ladder
+ * token, so privileged callers only. Not `team`, which the team arm opens to the project's team
+ * members. A list of blanks alone stays `[]`, as it always has. Every item gets an explicit `read[]`, which is the condition for
+ * deleting the legacy no-ACL tier from the visibility predicate.
  */
 function seedAcl(upstreamRead) {
-  if (Array.isArray(upstreamRead) && upstreamRead.length > 0) {
-    return upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
-  }
-  // Level 2, the level the legacy admin-role list already meant, written in ladder tokens so a
-  // re-seed does not rewrite what a controller wrote.
-  return readForLevel(2);
+  if (!Array.isArray(upstreamRead) || upstreamRead.length === 0) return readForLevel(2);
+  const kept = upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
+  const open = kept.filter(r => r !== SEALED_TOKEN);
+  return open.length === 0 && kept.length > 0 ? ['sysadmin'] : open;
 }
 
 /** `internalSize` arrives as a number OR a numeric string (261 of 2,961 sampled were strings). */
@@ -225,7 +229,7 @@ function transformBoundary(item, opts = {}) {
   }
 
   // Reference geography is public by default — that is what every seeded row is. `seedAcl`
-  // preserves an upstream `read[]` verbatim when the source supplies one, so a restricted
+  // preserves an upstream `read[]`, minus compliance, when the source supplies one, so a restricted
   // shapefile keeps its restriction through a re-seed instead of being republished.
   const read = Array.isArray(item.read) && item.read.length > 0
     ? seedAcl(item.read)

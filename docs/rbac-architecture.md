@@ -90,8 +90,11 @@ there. The sealed routes (§1 Level 0) mount their own chain, `authenticate` the
 **Back-compat.** Legacy `read[]` values (`['sysadmin','staff','demi-admin']`, with `'public'` when
 published) already contain `staff`, so they read as level 2 — today's meaning. Admin role names in
 `read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
-stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` verbatim
-(`resolveProjectAcl`), so pushed records stay level 2 or 4.
+stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` minus the
+`compliance` token (`seedAcl`), so a pushed record lands at level 1, 2 or 4 and is never sealed by a
+push. A compliance-only record lands at `['sysadmin']`, the same as `['compliance','sysadmin']`: privileged callers only, not the project team. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
+stays sealed until released; a row sealed by an earlier push has no `sealedAt` and heals on its next
+push.
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.

@@ -2,7 +2,7 @@
 
 /**
  * Re-derive a project's Updates' ACLs when its visibility changes, by the push's own rule
- * (`update-parent:readUnder`) off `sources.eagle.read`. Not `acl-cascade.cascadeAcl`: that derives
+ * (`update-parent:readUnder`, which drops compliance) off `sources.eagle.read`. Not `acl-cascade.cascadeAcl`: that derives
  * through `seedAcl` and ladder tokens, which would widen an Update, and patches one partition while
  * `updates` partitions on `/id`.
  */
@@ -11,7 +11,7 @@ const cosmos = require('../db/cosmos-nosql');
 const updates = require('../repositories/updates');
 const notifications = require('../repositories/notifications');
 const { readUnder } = require('./update-parent');
-const { levelOfRead } = require('./access-sql');
+const { heldSealed } = require('../controllers/nosql/eagle-mirror');
 const { logger } = require('../utils/logger');
 
 const NOTHING = Object.freeze({ succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0, ids: [], rows: [] });
@@ -35,11 +35,12 @@ async function setAclForProject(projectEagleId, projectRead) {
   if (await notifications.readForWrite(String(projectEagleId))) return NOTHING;
 
   const { items } = await cosmos.query(updates.CONTAINER, {
-    query: 'SELECT c.id, c.read, c.sources.eagle.read AS eagleRead FROM c WHERE c.projectId = @projectId',
+    query: 'SELECT c.id, c.read, c.sealedAt, c.sources.eagle.read AS eagleRead FROM c WHERE c.projectId = @projectId',
     parameters: [{ name: '@projectId', value: String(projectEagleId) }]
   }, {});
-  // A sealed row keeps its seal, as a push does (`eagle-mirror:keepSeal`).
-  const derived = items.filter(row => levelOfRead(row.read) !== 0).map(row => {
+  // A row DEMI sealed keeps its seal, as a push does (`eagle-mirror:keepSeal`); one an Eagle push
+  // sealed is re-derived like any other.
+  const derived = items.filter(row => !heldSealed(row)).map(row => {
     const read = readUnder(row.eagleRead, { read: projectRead });
     return { id: String(row.id), read, isPublished: read.includes('public') };
   });

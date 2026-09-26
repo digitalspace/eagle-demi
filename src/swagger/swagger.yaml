@@ -3870,7 +3870,9 @@ components:
           description: |-
             The raw Eagle record, exactly as eagle-api stores it. `doc._id` must equal the
             `eagleId` path parameter. For a document, `doc.project` is the parent project's
-            Eagle `_id` (or an object carrying it as `_id`).
+            Eagle `_id` (or an object carrying it as `_id`). Every mirror drops `compliance`
+            from `doc.read`, and a read left with nothing else is stored as `['sysadmin']`,
+            readable by privileged callers only.
         pushedAt:
           type: integer
           format: int64
@@ -3901,9 +3903,6 @@ components:
         id:
           type: string
           description: The DEMI id of the mirrored record.
-        projectId:
-          type: string
-          description: Documents only — the parent project's DEMI id.
         action:
           type: string
           enum: [upsert, delete]

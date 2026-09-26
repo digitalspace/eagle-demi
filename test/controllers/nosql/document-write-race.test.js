@@ -30,7 +30,7 @@ const { SEALED_TOKEN } = require('../../../src/helpers/access-sql');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const {
   mockRes, STAFF, storedDocument, storedProject: storedProjectRow,
-  DOCUMENT_EAGLE_ID, PROJECT_EAGLE_ID, TYPE_ID, MILESTONE_ID
+  DOCUMENT_EAGLE_ID, PROJECT_EAGLE_ID, TYPE_ID, MILESTONE_ID, SEALED_AT
 } = require('../../helpers/eagle-mirror-fixtures');
 
 const DOC_ID = DOCUMENT_EAGLE_ID;
@@ -351,7 +351,7 @@ test('the document push finds the row whatever its ACL', async (t) => {
   });
 
   await t.test('a sealed document is left as it is and the push is answered 200', async () => {
-    const store = mirrorStore(t, [parent, stored('207', { read: [SEALED_TOKEN], isPublished: false })]);
+    const store = mirrorStore(t, [parent, stored('207', { read: [SEALED_TOKEN], isPublished: false, sealedAt: SEALED_AT })]);
     quiet();
 
     const res = await push(eagleDocument({ displayName: 'Renamed in Eagle' }));
@@ -385,7 +385,7 @@ test('the document push finds the row whatever its ACL', async (t) => {
 
   await t.test('a stale push onto a sealed row is answered as sealed, not stale', async () => {
     const store = mirrorStore(t, [parent,
-      stored('207', { read: [SEALED_TOKEN], isPublished: false, eaglePushedAt: NEWER })]);
+      stored('207', { read: [SEALED_TOKEN], isPublished: false, sealedAt: SEALED_AT, eaglePushedAt: NEWER })]);
     quiet();
 
     const res = await push(eagleDocument(), OLDER);
@@ -420,7 +420,7 @@ test('a push that loses to a seal is answered as sealed, and nothing lands', asy
   t.mock.method(projects, 'getByEagleId', async () => ({ ...storedProjectRow(), isPublished: true }));
   const upserted = raceWith(t, [
     storedDocument({ _etag: ETAG_READ }),
-    storedDocument({ _etag: ETAG_LANDED, read: [SEALED_TOKEN], isPublished: false })
+    storedDocument({ _etag: ETAG_LANDED, read: [SEALED_TOKEN], isPublished: false, sealedAt: SEALED_AT })
   ], 1);
 
   const res = await push(eagleDocument());
@@ -508,6 +508,32 @@ test('a move deletes the copy it left behind only at the revision it read', asyn
     // Not a push: an extraction or cascade write moves the etag and leaves the stamp alone.
     await cosmos.patch('documents', DOC_ID, '100', [{ op: 'set', path: '/extractionStatus', value: 'done' }]);
     const retry = await push(eagleDocument({ displayName: 'Moved' }), NEWER);
+
+    assert.strictEqual(retry.statusCode, 200);
+    assert.deepStrictEqual(layout(store), [['207', 'Moved', null]]);
+  });
+
+  /** Move to 207 with the old-copy delete failing, then seal the old copy before the retry. */
+  const sealOldCopyMidMove = async (seal) => {
+    const store = mirrorStore(t, [...parents, stored('100', { displayName: 'Before the move' })]);
+    quiet();
+    failFirstRemove();
+    await push(eagleDocument({ displayName: 'Moved' }), OLDER);
+    await cosmos.patch('documents', DOC_ID, '100',
+      Object.entries(seal).map(([key, value]) => ({ op: 'set', path: `/${key}`, value })));
+    return { store, retry: await push(eagleDocument({ displayName: 'Moved' }), OLDER) };
+  };
+
+  await t.test('a DEMI-sealed old copy is kept, and the moved copy is removed', async () => {
+    const { store, retry } = await sealOldCopyMidMove({ read: [SEALED_TOKEN], sealedAt: SEALED_AT });
+
+    assert.strictEqual(retry.statusCode, 200);
+    assert.deepStrictEqual(retry.body, { ok: true }, 'answered as sealed');
+    assert.deepStrictEqual(layout(store), [['100', 'Before the move', null]]);
+  });
+
+  await t.test('an old copy an Eagle push sealed is not kept', async () => {
+    const { store, retry } = await sealOldCopyMidMove({ read: [SEALED_TOKEN] });
 
     assert.strictEqual(retry.statusCode, 200);
     assert.deepStrictEqual(layout(store), [['207', 'Moved', null]]);

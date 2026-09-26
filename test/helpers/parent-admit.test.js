@@ -32,6 +32,8 @@ const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
 // agree with whatever that helper returns.
 const PUBLIC_ACL = ['public', 'staff', 'sysadmin'];
 const TRACK_ONLY_ACL = ['staff'];
+// Stamped by `POST /sealed` only; a level-0 row without it was sealed by an Eagle push.
+const SEALED_AT = '2026-09-01T00:00:00.000Z';
 
 /** The Track project row the merge wrote for a guid that names a notification. */
 const shadowProject = () =>
@@ -159,7 +161,7 @@ test('admitParent — a refusal logs why, an admission reads nothing extra', asy
 
   await t.test('a sealed project row logs hidden', async () => {
     const { warned } = stubParents(t, {
-      stored: { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'] }
+      stored: { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT }
     });
 
     assert.strictEqual(await admitParent(PROJECT_EAGLE_ID, CHILD), null);
@@ -168,11 +170,47 @@ test('admitParent — a refusal logs why, an admission reads nothing extra', asy
 
   await t.test('a sealed notification refuses its child and logs hidden', async () => {
     const { warned } = stubParents(t, {
-      notification: { id: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'] }
+      notification: { id: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT }
     });
 
     assert.strictEqual(await admitParent(PROJECT_EAGLE_ID, CHILD), null);
     assert.deepStrictEqual(warned, [refused('missing', 'hidden')]);
+  });
+
+  // Stored ['compliance'] by a push from before the strip: the next push heals it, so it is a
+  // parent at its Eagle read minus compliance, not a hidden one.
+  await t.test('a project an Eagle push sealed is admitted at its Eagle read', async () => {
+    const { warned } = stubParents(t, {
+      stored: {
+        id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance'],
+        sources: { eagle: { read: ['compliance', 'public'] } }
+      }
+    });
+
+    assert.deepStrictEqual(await admitParent(PROJECT_EAGLE_ID, CHILD),
+      { id: '207', read: ['public'], kind: 'project' });
+    assert.deepStrictEqual(warned.map(w => w.message),
+      ['[parent-admit] project stored sealed by an Eagle push, admitted at its Eagle read']);
+  });
+
+  await t.test('a project an Eagle push sealed with no Eagle read left is admitted at staff', async () => {
+    stubParents(t, { stored: { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance'] } });
+
+    assert.deepStrictEqual(await admitParent(PROJECT_EAGLE_ID, CHILD),
+      { id: '207', read: ['staff'], kind: 'project' });
+  });
+
+  await t.test('a notification an Eagle push sealed is admitted at its Eagle read', async () => {
+    const { warned } = stubParents(t, {
+      notification: {
+        id: PROJECT_EAGLE_ID, read: ['compliance'],
+        sources: { eagle: { read: ['compliance', 'public'] } }
+      }
+    });
+
+    assert.deepStrictEqual(await admitParent(PROJECT_EAGLE_ID, CHILD),
+      { id: PROJECT_EAGLE_ID, read: ['public'], kind: 'notification' });
+    assert.deepStrictEqual(warned, []);
   });
 
   await t.test('a read-less notification refuses its child and logs hidden', async () => {

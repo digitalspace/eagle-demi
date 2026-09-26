@@ -71,6 +71,31 @@ function levelOfRead(read) {
 }
 
 /**
+ * `own` narrowed to `cap`'s level, never widened by it: the lower of the two ladder levels.
+ *
+ * At level 1 a read made only of privileged role names (`['sysadmin']`, or `[]`) is kept rather
+ * than rewritten to `readForLevel(1)`: `team` is what the team arm opens to the project's team
+ * members, and such a read opens to privileged callers only. The row's own read wins, then the
+ * cap's. A legacy role like `project-team` still lands at `team`, as does an empty or missing cap.
+ */
+function capRead(own, cap) {
+  const level = Math.min(levelOfRead(own), levelOfRead(cap));
+  if (level !== 1) return readForLevel(level);
+  const privilegedOnly = read => Array.isArray(read) && read.every(r => SECURE_ROLES.includes(r));
+  if (privilegedOnly(own)) return own;
+  if (privilegedOnly(cap) && cap.length > 0) return cap;
+  return readForLevel(1);
+}
+
+/**
+ * A level-0 row DEMI sealed itself (`POST /sealed` stamps `sealedAt`). A level-0 row without it
+ * was sealed by an Eagle push carrying `compliance`, which is not a seal: the next push heals it.
+ */
+function isDemiSeal(row) {
+  return Boolean(row && row.sealedAt);
+}
+
+/**
  * The tokens a credential's `levels` admit, and the tokens that prove a row sits ABOVE them
  * (docs/rbac-architecture.md §1, "Selected Credentials").
  *
@@ -647,6 +672,8 @@ module.exports = {
   pageSizeFor,
   readForLevel,
   levelOfRead,
+  capRead,
+  isDemiSeal,
   levelTokens,
   matchesLevels,
   credentialField,
