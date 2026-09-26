@@ -9,7 +9,8 @@ const cosmos = require('../db/cosmos-nosql');
 const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
 const { pickParent } = require('./parent-admit');
-const { levelOfRead, readForLevel } = require('./access-sql');
+const { levelOfRead, readForLevel, isDemiSeal } = require('./access-sql');
+const { seedAcl } = require('../seed/transform');
 
 /**
  * The project row carrying an Eagle id, unfiltered. Not `projects.getByEagleId(systemAccess())`:
@@ -42,14 +43,35 @@ async function readParent(eagleId) {
 }
 
 /**
- * An Update's `read[]` under its parent: Eagle's own, verbatim, unless the parent sits at a lower
- * level, in which case the parent's level. Never widened: not `seedAcl`, not rewritten to ladder
- * tokens, so `['sysadmin']` stays `['sysadmin']` and `[]` stays `[]`. No parent, no ceiling.
+ * An Update's own `read[]` from Eagle's: minus compliance (`seedAcl`), so a compliance-only read
+ * lands at level 2. An empty read stays `[]` and a non-list is `[]`: neither is widened.
+ */
+function ownRead(eagleRead) {
+  if (!Array.isArray(eagleRead) || eagleRead.length === 0) return [];
+  return seedAcl(eagleRead);
+}
+
+/**
+ * The read a parent caps at. A parent an Eagle push sealed (level 0, its stored `doc` without
+ * `sealedAt`) caps at its Eagle read minus compliance, the read its next push lands; a DEMI seal,
+ * or a parent passed without its row, caps as stored.
+ */
+function ceilingRead(parent) {
+  const { doc } = parent;
+  if (!doc || levelOfRead(parent.read) !== 0 || isDemiSeal(doc)) return parent.read;
+  return seedAcl(doc.sources && doc.sources.eagle && doc.sources.eagle.read);
+}
+
+/**
+ * An Update's `read[]` under its parent: Eagle's own minus compliance (`ownRead`), unless the
+ * parent sits at a lower level (`ceilingRead`), in which case the parent's level. Never rewritten
+ * to ladder tokens, so `['sysadmin']` stays `['sysadmin']` and `[]` stays `[]`. No parent, no
+ * ceiling.
  */
 function readUnder(eagleRead, parent) {
-  const own = Array.isArray(eagleRead) ? eagleRead : [];
+  const own = ownRead(eagleRead);
   if (!parent) return own;
-  const ceiling = levelOfRead(parent.read);
+  const ceiling = levelOfRead(ceilingRead(parent));
   return ceiling < levelOfRead(own) ? readForLevel(ceiling) : own;
 }
 
@@ -58,4 +80,4 @@ function isPublicParent(parent) {
   return Boolean(parent) && Array.isArray(parent.read) && parent.read.includes('public');
 }
 
-module.exports = { readParent, readUnder, isPublicParent };
+module.exports = { readParent, ownRead, readUnder, isPublicParent };

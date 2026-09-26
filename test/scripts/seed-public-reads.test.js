@@ -24,10 +24,13 @@ const cosmos = require('../../src/db/cosmos-nosql');
 const comments = require('../../src/repositories/comments');
 const lists = require('../../src/repositories/lists');
 const updatesRepo = require('../../src/repositories/updates');
+const updateController = require('../../src/controllers/nosql/update');
 const { updatesStore } = require('../helpers/updates-store');
+const { parentProject, parentNotification } = require('../helpers/update-parents');
 const { logger } = require('../../src/utils/logger');
 const {
-  PERIOD_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, eagleComment, storedPeriod
+  PERIOD_EAGLE_ID, PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, SEALED_AT, eagleComment, eagleUpdate,
+  storedPeriod
 } = require('../helpers/eagle-mirror-fixtures');
 
 const BASE = 'https://eagle-test.example/api/public';
@@ -595,4 +598,33 @@ test('the updates stage spends the claim on live rows only, marked backfill', as
   assert.strictEqual(row('legacy').notifiedBy, 'backfill');
   assert.strictEqual(row('scheduled').notifiedAt, null, 'still news: the timer announces it when due');
   assert.strictEqual(row('draft').notifiedAt, null);
+});
+
+test('the updates stage heals an Update an Eagle push sealed, under a project still stored so', async (t) => {
+  t.after(() => t.mock.restoreAll());
+  const EAGLE_READ = ['compliance', 'public'];
+  const sealedRow = (id, extra = {}) => ({
+    id, projectId: PROJECT_EAGLE_ID, read: ['compliance'], isPublished: false,
+    sources: { eagle: { _id: id, read: EAGLE_READ } }, _etag: `"${id}"`, ...extra
+  });
+  const { row } = updatesStore(t, [sealedRow('U-eagle'), sealedRow('U-demi', { sealedAt: SEALED_AT })]);
+  // Sealed by an earlier compliance push and not yet pushed again: it caps at its Eagle read.
+  parentProject(t, {
+    id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance'], isPublished: false,
+    sources: { eagle: { _id: PROJECT_EAGLE_ID, read: EAGLE_READ } }
+  });
+  parentNotification(t, null);
+
+  await backfill(['--live', '--only', 'updates', '--state', statePath()], {
+    sources: stubSources({ datasets: {
+      RecentActivity: ['U-eagle', 'U-demi'].map(_id => eagleUpdate({ _id, read: EAGLE_READ }))
+    } }),
+    updateMirror: updateController,
+    updatesRepo
+  });
+
+  assert.deepStrictEqual(row('U-eagle').read, ['public']);
+  assert.strictEqual(row('U-eagle').isPublished, true);
+  assert.deepStrictEqual(row('U-demi').read, ['compliance'], 'a DEMI seal is only lifted by a release');
+  assert.strictEqual(row('U-demi').isPublished, false);
 });

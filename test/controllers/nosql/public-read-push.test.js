@@ -35,7 +35,7 @@ const {
   PROJECT_EAGLE_ID, PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID,
   PUBLIC_ACL, PRIVATE_ACL, storedProject, storedPeriod,
   eaglePeriod, eagleComment, eagleOrganization, eagleNotification,
-  mockRes, STAFF, anonymous, staff
+  mockRes, STAFF, anonymous, staff, SEALED_AT
 } = require('../../helpers/eagle-mirror-fixtures');
 
 /**
@@ -174,6 +174,16 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
+  await t.test('a period Eagle marks compliance-only lands at level 2, not sealed', async () => {
+    // Eagle has no sealed compartment; keeping the token would hide the row from every staff reader.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+
+    const { written } = await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
+      eaglePeriod({ read: ['compliance'] }), t);
+
+    assert.deepStrictEqual(written().read, ['staff']);
+  });
+
   const NO_PARENT_BODY = '{"error":"Parent project or notification not found"}';
 
   /** Push a period whose parent admission refuses, with `stored` as the unfiltered project row. */
@@ -212,7 +222,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
 
   await t.test('a period under a hidden project gets the same 404, logged hidden', async () => {
     const { res, warned } = await refusedPeriod(t,
-      { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'] });
+      { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT });
 
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
@@ -544,6 +554,15 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
+  await t.test('a comment Eagle marks compliance-only lands at level 2, not sealed', async () => {
+    t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
+
+    const { written } = await pushTo(
+      commentController, comments, COMMENT_EAGLE_ID, eagleComment({ read: ['compliance'] }), t);
+
+    assert.deepStrictEqual(written().read, ['staff']);
+  });
+
   await t.test('an absent isAnonymous is stored as anonymous, matching the Eagle default', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
     const doc = eagleComment();
@@ -639,11 +658,21 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
 
   await t.test('a comment under a sealed period gets the same 404, logged hidden', async () => {
     const { res, warned } = await refusedComment(t,
-      { id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance', 'sysadmin'] });
+      { id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT });
 
     assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
     assert.strictEqual(warned[0].meta.period, 'hidden');
   });
+
+  await t.test('a comment under a period an Eagle push sealed is logged eagle-sealed, not hidden',
+    async () => {
+      // A re-push of the period heals it; the log says so rather than calling it a seal.
+      const { res, warned } = await refusedComment(t,
+        { id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance'] });
+
+      assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+      assert.strictEqual(warned[0].meta.period, 'eagle-sealed');
+    });
 
   await t.test('a comment under a visible period reads nothing extra and logs nothing',
     async () => {
@@ -698,6 +727,20 @@ test('PUT /eagle/organizations/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
     assert.deepStrictEqual(written().read, PRIVATE_ACL, 'kept verbatim, like every seeded ACL');
   });
+
+  await t.test('the compliance token is dropped from an organization read', async () => {
+    const { written } = await pushTo(organizationController, lists, ORG_EAGLE_ID,
+      eagleOrganization({ read: ['compliance', 'public'] }), t);
+
+    assert.deepStrictEqual(written().read, ['public']);
+  });
+
+  await t.test('a compliance-only organization lands at level 2, not sealed', async () => {
+    const { written } = await pushTo(organizationController, lists, ORG_EAGLE_ID,
+      eagleOrganization({ read: ['compliance'] }), t);
+
+    assert.deepStrictEqual(written().read, ['staff']);
+  });
 });
 
 test('PUT /eagle/notifications/:eagleId', async (t) => {
@@ -729,6 +772,20 @@ test('PUT /eagle/notifications/:eagleId', async (t) => {
 
     assert.strictEqual(written().notificationThresholdValue, 0);
   });
+
+  await t.test('the compliance token is dropped from a notification read', async () => {
+    const { written } = await pushTo(notificationController, notifications, NOTIFICATION_EAGLE_ID,
+      eagleNotification({ read: ['compliance', 'public'] }), t);
+
+    assert.deepStrictEqual(written().read, ['public']);
+  });
+
+  await t.test('a compliance-only notification lands at level 2, not sealed', async () => {
+    const { written } = await pushTo(notificationController, notifications, NOTIFICATION_EAGLE_ID,
+      eagleNotification({ read: ['compliance'] }), t);
+
+    assert.deepStrictEqual(written().read, ['staff']);
+  });
 });
 
 // The existence check is "is there a row", not "may this caller see it": a row the ACL hides from
@@ -748,7 +805,7 @@ test('a push over a row the ACL hides replaces it under its etag', async (t) => 
     const { store, replaced, created } = partitionedCosmos(t, 'projectId', [
       {
         id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance'], isPublished: false,
-        instructions: '', _etag: '"v1"'
+        sealedAt: SEALED_AT, instructions: '', _etag: '"v1"'
       }
     ]);
 
@@ -760,13 +817,20 @@ test('a push over a row the ACL hides replaces it under its etag', async (t) => 
     assert.strictEqual(row.instructions, 'Tell us what you think.');
     assert.deepStrictEqual({ read: row.read, isPublished: row.isPublished },
       { read: ['compliance'], isPublished: false });
+
+    // The first push must carry the stamp, or the second reads an Eagle seal and reopens it.
+    const again = await push(commentPeriodController, PERIOD_EAGLE_ID, eaglePeriod());
+    assert.strictEqual(again.statusCode, 200, JSON.stringify(again.body));
+    const twice = store.get(`207::${PERIOD_EAGLE_ID}`);
+    assert.deepStrictEqual({ read: twice.read, isPublished: twice.isPublished, sealedAt: twice.sealedAt },
+      { read: ['compliance'], isPublished: false, sealedAt: SEALED_AT });
   });
 
   await t.test('a comment sealed to compliance takes the push and stays sealed', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
     const { store, replaced, created } = partitionedCosmos(t, 'periodId', [{
       id: COMMENT_EAGLE_ID, periodId: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance'],
-      isPublished: false, comment: null, _etag: '"v1"'
+      isPublished: false, sealedAt: SEALED_AT, comment: null, _etag: '"v1"'
     }]);
 
     const res = await push(commentController, COMMENT_EAGLE_ID, eagleComment());
@@ -777,6 +841,39 @@ test('a push over a row the ACL hides replaces it under its etag', async (t) => 
     assert.strictEqual(row.comment, 'The turbine setback is too small.');
     assert.deepStrictEqual({ read: row.read, isPublished: row.isPublished },
       { read: ['compliance'], isPublished: false });
+  });
+
+  // Stored ['compliance'] by a push from before the strip, no `sealedAt`: not a DEMI seal.
+  await t.test('a comment period an Eagle push sealed takes the pushed read', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    stubCommentCascade(t, []);
+    const { store } = partitionedCosmos(t, 'projectId', [{
+      id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance'], isPublished: false, _etag: '"v1"'
+    }]);
+
+    const res = await push(commentPeriodController, PERIOD_EAGLE_ID,
+      eaglePeriod({ read: ['compliance', ...PUBLIC_ACL] }));
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    const row = store.get(`207::${PERIOD_EAGLE_ID}`);
+    assert.deepStrictEqual({ read: row.read, isPublished: row.isPublished },
+      { read: ['staff', 'idir', 'public'], isPublished: true });
+  });
+
+  await t.test('a comment an Eagle push sealed takes the pushed read', async () => {
+    t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
+    const { store } = partitionedCosmos(t, 'periodId', [{
+      id: COMMENT_EAGLE_ID, periodId: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance'],
+      isPublished: false, _etag: '"v1"'
+    }]);
+
+    const res = await push(commentController, COMMENT_EAGLE_ID,
+      eagleComment({ read: ['compliance', ...PUBLIC_ACL] }));
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    const row = store.get(`${PERIOD_EAGLE_ID}::${COMMENT_EAGLE_ID}`);
+    assert.deepStrictEqual({ read: row.read, isPublished: row.isPublished },
+      { read: ['staff', 'idir', 'public'], isPublished: true });
   });
 
   await t.test('an organization with no read[] at all', async () => {

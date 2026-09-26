@@ -40,6 +40,12 @@ const ORG_EAGLE_ID = '58850f69aaecd9001b8085cc';
 const NOTIFICATION_EAGLE_ID = '5f0e4a0c3f4b1a0021a1b2c3';
 const UPDATE_EAGLE_ID = '5f0e4a0c3f4b1a0021a1b2c4';
 
+/**
+ * Stamped by `POST /sealed` only. A level-0 row without it was sealed by an Eagle push carrying
+ * `compliance`, and the next push heals it; a DEMI seal fixture needs it to stay sealed.
+ */
+const SEALED_AT = '2026-09-01T00:00:00.000Z';
+
 /** Published, and taken down: what Eagle leaves on a record staff can still read. */
 const PUBLIC_ACL = ['public', 'sysadmin', 'staff'];
 const PRIVATE_ACL = ['sysadmin', 'staff'];
@@ -336,6 +342,7 @@ module.exports = {
   TYPE_ID,
   MILESTONE_ID,
   PUBLIC_ACL,
+  SEALED_AT,
   PRIVATE_ACL,
   MIRRORS,
   storedProject,

@@ -15,16 +15,18 @@
  *
  * `kind` is what the caller narrows on. A project parent is a CEILING — a child may never out-rank
  * it — while a notification is not: it has no project ACL to narrow against, so its children keep
- * their own `read[]` verbatim (`seed/transform.js`, the notification-parented branch).
+ * their own `read[]` minus compliance (`seed/transform.js`, the notification-parented branch).
  *
  * A REFUSAL IS LOGGED, the 404 body is not changed: one `[parent-admit] parent not admitted` warn
  * per refused child, with a reason per container. Telling `missing` from `hidden` costs one extra
- * read, made only on a refusal and before the 404 is sent, bounded by `CLASSIFY_TIMEOUT_MS`.
+ * read, made only on a refusal and before the 404 is sent, bounded by `CLASSIFY_TIMEOUT_MS`. That
+ * same read admits a project an Eagle push sealed (level 0, no `sealedAt`) at its Eagle read.
  */
 
 const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
-const { canRead, systemAccess } = require('./access-sql');
+const { canRead, systemAccess, levelOfRead, isDemiSeal } = require('./access-sql');
+const { seedAcl } = require('../seed/transform');
 const { logger } = require('../utils/logger');
 // Dependency-free reference parser shared with every mirror, so a populated `{_id}` and a bare
 // ObjectId resolve here exactly as they do there.
@@ -68,7 +70,7 @@ const MALFORMED_REF = 'malformed-ref';
  */
 const CLASSIFY_TIMEOUT_MS = 2000;
 
-const TIMED_OUT = Symbol('timed out');
+const TIMED_OUT = Symbol('timed out or failed');
 
 /** The ref's Eagle id if it is a 24-hex ObjectId, else null: nothing else reaches a read or log. */
 function eagleRef(ref) {
@@ -77,14 +79,32 @@ function eagleRef(ref) {
 }
 
 /**
- * Why a stored parent row did not admit. `hidden` is read-less or sealed alike; `visible` means the
- * row landed after the admission read.
+ * A level-0 row an Eagle push sealed (no `sealedAt`) is judged at its Eagle read minus compliance,
+ * the read its next push lands. Any other row is judged as stored.
+ */
+function asPushed(row) {
+  if (!row || levelOfRead(row.read) !== 0 || isDemiSeal(row)) return row;
+  const eagle = row.sources && row.sources.eagle;
+  return { ...row, read: seedAcl(eagle && eagle.read) };
+}
+
+/** The row, at `asPushed`'s read, when the system caller reads it; else null. */
+function admissible(row, partitionField) {
+  const judged = asPushed(row);
+  return judged && canRead(judged, systemAccess(), partitionField) ? judged : null;
+}
+
+/**
+ * Why a stored parent row did not admit. `hidden` is read-less or DEMI-sealed alike;
+ * `eagle-sealed` heals when the parent is pushed again; `visible` means the row landed after the
+ * admission read.
  *
- * @returns {'missing'|'hidden'|'visible'}
+ * @returns {'missing'|'hidden'|'eagle-sealed'|'visible'}
  */
 function missReason(row, partitionField) {
   if (!row) return 'missing';
-  return canRead(row, systemAccess(), partitionField) ? 'visible' : 'hidden';
+  if (canRead(row, systemAccess(), partitionField)) return 'visible';
+  return asPushed(row) === row ? 'hidden' : 'eagle-sealed';
 }
 
 /**
@@ -105,16 +125,25 @@ function warnNotAdmitted(ids, reasons) {
  *
  * @param {() => Promise<object|null>} readRow  the unfiltered read of the parent row
  * @param {{eagleId: string, container: string, partitionField: string}} target
- * @returns {Promise<'missing'|'hidden'|'visible'|'unknown'>}
+ * @returns {Promise<'missing'|'hidden'|'eagle-sealed'|'visible'|'unknown'>}
  */
-async function classify(readRow, { eagleId, container, partitionField }) {
+async function classify(readRow, target) {
+  const row = await readBounded(readRow, target);
+  return row === TIMED_OUT ? 'unknown' : missReason(row, target.partitionField);
+}
+
+/**
+ * `readRow` raced against `CLASSIFY_TIMEOUT_MS`; `TIMED_OUT` for a failed or timed-out read,
+ * which is logged here.
+ */
+async function readBounded(readRow, { eagleId, container }) {
   let timer;
   const timeout = new Promise((resolve) => {
     timer = setTimeout(resolve, CLASSIFY_TIMEOUT_MS, TIMED_OUT);
   });
   try {
     const row = await Promise.race([readRow(), timeout]);
-    if (row !== TIMED_OUT) return missReason(row, partitionField);
+    if (row !== TIMED_OUT) return row;
     logger.warn('[parent-admit] could not classify parent',
       { eagleId, container, error: `timed out after ${CLASSIFY_TIMEOUT_MS} ms` });
   } catch (err) {
@@ -123,13 +152,14 @@ async function classify(readRow, { eagleId, container, partitionField }) {
   } finally {
     clearTimeout(timer);
   }
-  return 'unknown';
+  return TIMED_OUT;
 }
 
 /**
- * On a refusal, logs one `parent not admitted` warn (reasons `missing`, `hidden`, `visible`,
- * `unknown` or `malformed-ref`) after one extra project read. A notification hidden behind a
- * same-id project is admitted to the project and logged too.
+ * On a refusal, logs one `parent not admitted` warn (reasons `missing`, `hidden`, `eagle-sealed`,
+ * `visible`, `unknown` or `malformed-ref`) after one extra project read. A notification hidden
+ * behind a same-id project is admitted to the project and logged too. A parent an Eagle push sealed
+ * is admitted at its Eagle read minus compliance, and logged.
  *
  * @param {string|object|null} ref  Eagle's `doc.project`, populated or bare
  * @param {{childId?: string}} [child]  the pushed child's Eagle id, for the log
@@ -160,20 +190,27 @@ async function admitParent(ref, { childId } = {}) {
     projects.getByEagleId(systemAccess(), eagleId),
     notifications.readForWrite(eagleId)
   ]);
-  const notification = canRead(notificationRow, systemAccess(), notifications.SCOPE_FIELD)
-    ? notificationRow
-    : null;
+  const notification = admissible(notificationRow, notifications.SCOPE_FIELD);
 
-  const parent = pickParent(project, notification);
+  let parent = pickParent(project, notification);
   if (!parent) {
     // Accepted cost: the seed-public-reads backfill pays this read once per orphan period too.
-    const projectReason = await classify(() => projects.readForWriteByEagleId(eagleId), {
-      eagleId, container: projects.CONTAINER, partitionField: projects.PARTITION_FIELD
-    });
-    warnNotAdmitted({ eagleId, ...child }, {
-      project: projectReason,
-      notification: missReason(notificationRow, notifications.SCOPE_FIELD)
-    });
+    const target = { eagleId, container: projects.CONTAINER, partitionField: projects.PARTITION_FIELD };
+    const stored = await readBounded(() => projects.readForWriteByEagleId(eagleId), target);
+    // The system read above filters every level-0 row, so an Eagle-sealed project is only seen here.
+    const unsealed = stored !== TIMED_OUT && stored !== asPushed(stored)
+      ? admissible(stored, target.partitionField)
+      : null;
+    if (unsealed) {
+      parent = pickParent(unsealed, null);
+      logger.warn('[parent-admit] project stored sealed by an Eagle push, admitted at its Eagle read',
+        { eagleId, ...child, projectId: parent.id });
+    } else {
+      warnNotAdmitted({ eagleId, ...child }, {
+        project: stored === TIMED_OUT ? 'unknown' : missReason(stored, target.partitionField),
+        notification: missReason(notificationRow, notifications.SCOPE_FIELD)
+      });
+    }
   } else if (notificationRow && !notification) {
     logger.warn('[parent-admit] hidden notification passed its children to a same-id project',
       { eagleId, ...child, projectId: parent.id });

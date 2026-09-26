@@ -25,7 +25,7 @@ const { parentProject, parentNotification } = require('../../helpers/update-pare
 
 const {
   UPDATE_EAGLE_ID, PROJECT_EAGLE_ID, PERIOD_EAGLE_ID, NOTIFICATION_EAGLE_ID,
-  PUBLIC_ACL: PUBLIC, PRIVATE_ACL: PRIVATE, eagleUpdate, mockRes, STAFF
+  PUBLIC_ACL: PUBLIC, PRIVATE_ACL: PRIVATE, eagleUpdate, mockRes, STAFF, SEALED_AT
 } = require('../../helpers/eagle-mirror-fixtures');
 
 function push(body, res = mockRes()) {
@@ -190,6 +190,67 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     });
   }
 
+  await t.test('a compliance-only update lands at level 2, not sealed', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: ['compliance'] }) });
+
+    assert.deepStrictEqual(written.read, ['staff']);
+    assert.deepStrictEqual(written.sources.eagle.read, ['staff'], 'what a later project publish re-derives from');
+  });
+
+  await t.test('the compliance token is dropped before the parent cap, not after', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: ['compliance', 'public'] }) });
+
+    assert.deepStrictEqual(written.read, ['public']);
+    assert.strictEqual(written.isPublished, true);
+    assert.deepStrictEqual(written.sources.eagle.read, ['public']);
+  });
+
+  // A parent an Eagle push sealed (level 0, no sealedAt) heals on its own next push, so it caps at
+  // the read that push lands, not at sealed.
+  for (const [eagleRead, expected] of [
+    [['compliance', 'public'], PUBLIC],
+    [['compliance'], ['staff']]
+  ]) {
+    await t.test(`an update under a parent an Eagle push sealed caps at its Eagle read ${JSON.stringify(eagleRead)} minus compliance`, async () => {
+      t.mock.method(updates, 'readForWrite', async () => null);
+      parentProject(t, async () => ({
+        id: '207', read: ['compliance'], isPublished: false, sources: { eagle: { read: eagleRead } }
+      }));
+      let written;
+      t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+      await push({ doc: eagleUpdate({ read: PUBLIC }) });
+
+      assert.deepStrictEqual(written.read, expected);
+      assert.strictEqual(written.isPublished, expected.includes('public'));
+    });
+  }
+
+  await t.test('an update under a parent DEMI sealed is capped to sealed', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({
+      id: '207', read: ['compliance'], isPublished: false, sealedAt: SEALED_AT,
+      sources: { eagle: { read: ['compliance', 'public'] } }
+    }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: PUBLIC }) });
+
+    assert.deepStrictEqual(written.read, ['compliance']);
+    assert.strictEqual(written.isPublished, false);
+  });
+
   await t.test('the parent is read again on the retry after a lost race', async () => {
     let reads = 0;
     t.mock.method(updates, 'readForWrite', async () => null);
@@ -236,7 +297,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   await t.test('a sealed notification caps its update to level 0, over a public Track project with its id', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     parentProject(t, async () => ({ id: '353', read: PUBLIC }));
-    parentNotification(t, async () => ({ id: PROJECT_EAGLE_ID, read: ['compliance'] }));
+    parentNotification(t, async () => ({ id: PROJECT_EAGLE_ID, read: ['compliance'], sealedAt: SEALED_AT }));
     let written;
     t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
@@ -253,7 +314,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       async () => ({ id: PROJECT_EAGLE_ID, name: 'Quarry', read: PRIVATE })), 'parent-not-public'],
     ['a sealed notification, over a public Track project with its id', (t) => {
       parentProject(t, async () => ({ id: '353', read: PUBLIC }));
-      parentNotification(t, async () => ({ id: PROJECT_EAGLE_ID, read: ['compliance'] }));
+      parentNotification(t, async () => ({ id: PROJECT_EAGLE_ID, read: ['compliance'], sealedAt: SEALED_AT }));
     }, 'parent-not-public'],
     ['a parent DEMI does not hold', (t) => parentProject(t, async () => null), 'parent-missing']
   ]) {
@@ -966,7 +1027,8 @@ test('a push over a row the ACL hides replaces it under its etag', async (t) => 
   });
 
   await t.test('a stored row sealed to compliance takes the push and stays sealed', async () => {
-    const { writes, row } = updatesStore(t, [stored({ read: ['compliance'], isPublished: false })]);
+    const { writes, row } = updatesStore(t,
+      [stored({ read: ['compliance'], isPublished: false, sealedAt: SEALED_AT })]);
 
     const res = await push({ doc: eagleUpdate() });
 
@@ -976,6 +1038,13 @@ test('a push over a row the ACL hides replaces it under its etag', async (t) => 
     assert.strictEqual(saved.headline, 'Public comment period opens');
     assert.deepStrictEqual({ read: saved.read, isPublished: saved.isPublished },
       { read: ['compliance'], isPublished: false });
+
+    // The first push must carry the stamp, or the second reads an Eagle seal and reopens it.
+    const again = await push({ doc: eagleUpdate() });
+    assert.strictEqual(again.statusCode, 200, JSON.stringify(again.body));
+    const twice = row(UPDATE_EAGLE_ID);
+    assert.deepStrictEqual({ read: twice.read, isPublished: twice.isPublished, sealedAt: twice.sealedAt },
+      { read: ['compliance'], isPublished: false, sealedAt: SEALED_AT });
   });
 });
 

@@ -11,7 +11,7 @@
  *
  * A PERIOD MAY ALSO HANG OFF A `ProjectNotification`. Eagle's `project` reference holds either id,
  * and a notification is not a project: it carries no ACL a child could out-rank, so such a period
- * keeps its own `read[]` verbatim and is partitioned under the notification's own id — the same
+ * keeps its own `read[]` minus compliance and is partitioned under the notification's own id — the same
  * two rules `seed/transform.js` and the document mirror apply to a notification-parented document.
  * `helpers/parent-admit` is the one place that tells the two parents apart.
  *

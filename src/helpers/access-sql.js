@@ -71,6 +71,14 @@ function levelOfRead(read) {
 }
 
 /**
+ * A level-0 row DEMI sealed itself (`POST /sealed` stamps `sealedAt`). A level-0 row without it
+ * was sealed by an Eagle push carrying `compliance`, which is not a seal: the next push heals it.
+ */
+function isDemiSeal(row) {
+  return Boolean(row && row.sealedAt);
+}
+
+/**
  * The tokens a credential's `levels` admit, and the tokens that prove a row sits ABOVE them
  * (docs/rbac-architecture.md §1, "Selected Credentials").
  *
@@ -647,6 +655,7 @@ module.exports = {
   pageSizeFor,
   readForLevel,
   levelOfRead,
+  isDemiSeal,
   levelTokens,
   matchesLevels,
   credentialField,

@@ -586,6 +586,11 @@ function report(summary, { json } = {}) {
     line('unpublishedOrDeleted (gone from Eagle\'s public search, NOT purged)',
       s.unpublishedOrDeleted.map(r => r.id));
     line('eagleOnly (the push missed these)', s.eagleOnly);
+    // The system read excludes every level-0 row, so a sealed row can only surface here.
+    if (s.eagleOnly.length) {
+      lines.push('    rows stored at level 0 are not read here and count as missing; a re-push repairs ' +
+        'those an Eagle push sealed, a DEMI seal (sealedAt) stays');
+    }
     if (s.unresolvedParent.length) {
       line('unresolvedParent (Eagle-only, but its own project is unpublished/gone — seed-nosql ' +
         'drops these too, not counted as drift)', s.unresolvedParent);

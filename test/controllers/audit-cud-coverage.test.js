@@ -374,7 +374,8 @@ test('authenticated CUD audit coverage', async (t) => {
       id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true
     }));
     t.mock.method(documents, 'readForWrite', async () => ({
-      id: 'eagdoc-1', projectId: '207', read: [SEALED_TOKEN], isPublished: false, _etag: '"e1"'
+      id: 'eagdoc-1', projectId: '207', read: [SEALED_TOKEN], isPublished: false,
+      sealedAt: '2026-09-01T00:00:00.000Z', _etag: '"e1"'
     }));
     t.mock.method(documents, 'upsert', async () => { throw new Error('a sealed row must not be written'); });
     const warned = [];
@@ -390,11 +391,42 @@ test('authenticated CUD audit coverage', async (t) => {
       user: STAFF
     }, res));
 
+    assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(res.body, { ok: true }, 'the seal is named in the audit row only');
     assert.deepStrictEqual(written.map(r => [r.Action, r.Outcome, r.TargetId, r.Detail]),
       [['document.push', 'ignored', 'eagdoc-1', { ignored: 'sealed', pushedAt: 1757980000000 }]]);
     assert.deepStrictEqual(warned, [{ id: 'eagdoc-1' }]);
   });
+
+  await t.test('an Eagle push onto a document an Eagle push sealed heals it and is not ignored',
+    async () => {
+      // Stored ['compliance'] by a push from before the strip, no `sealedAt`: not a DEMI seal.
+      const { SEALED_TOKEN } = require('../../src/helpers/access-sql');
+      t.mock.method(projects, 'getByEagleId', async () => ({
+        id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true
+      }));
+      t.mock.method(documents, 'readForWrite', async () => ({
+        id: 'eagdoc-1', projectId: '207', read: [SEALED_TOKEN], isPublished: false, _etag: '"e1"'
+      }));
+      const upserts = [];
+      t.mock.method(documents, 'upsert', async (item) => { upserts.push(item); return item; });
+
+      const res = mockRes();
+      const written = await rowsFrom(() => documentController.upsertFromEagle({
+        params: { eagleId: 'eagdoc-1' }, query: {},
+        body: {
+          doc: { _id: 'eagdoc-1', project: '588511d0aaecd9001b825604', read: ['compliance', 'public'] }
+        },
+        user: STAFF
+      }, res));
+
+      assert.deepStrictEqual(res.body, { id: 'eagdoc-1', action: 'upsert' });
+      assert.strictEqual(upserts.length, 1);
+      assert.deepStrictEqual(upserts[0].read, ['staff', 'idir', 'public'], 'level 4, the seal gone');
+      assert.strictEqual(upserts[0].isPublished, true);
+      assert.deepStrictEqual(written.map(r => [r.Action, r.Outcome, r.Detail.isPublishedTo]),
+        [['document.push', 'success', true]]);
+    });
 
   await t.test('api key create and revoke write one row each, carrying no secret', async () => {
     t.mock.method(apiKeys, 'upsert', async (record) => record);

@@ -33,7 +33,7 @@ const { logger } = require('../../../src/utils/logger');
 const { SEALED_TOKEN, levelOfRead } = require('../../../src/helpers/access-sql');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL,
-  eagleProject, storedEagleProject
+  eagleProject, storedEagleProject, SEALED_AT
 } = require('../../helpers/eagle-mirror-fixtures');
 
 /** The revision the first read saw, and the one the row moved to. */
@@ -586,7 +586,7 @@ test('the project push finds the row whatever its ACL', async (t) => {
 
   await t.test('a sealed Track-matched project updates the Track row, keeps its seal, adds no twin', async () => {
     const store = mirrorStore(t,
-      [track('351', { read: [SEALED_TOKEN], isPublished: false, name: 'Old name' })]);
+      [track('351', { read: [SEALED_TOKEN], isPublished: false, sealedAt: SEALED_AT, name: 'Old name' })]);
     const { cascaded } = quiet();
 
     const res = await push(eagleProject({ name: 'Renamed in Eagle' }));
@@ -595,6 +595,20 @@ test('the project push finds the row whatever its ACL', async (t) => {
     assert.deepStrictEqual(eagleNames(store), { 351: 'Renamed in Eagle' });
     assert.deepStrictEqual(store.rows('projects')[0].read, [SEALED_TOKEN]);
     assert.deepStrictEqual(cascaded, []);
+  });
+
+  await t.test('a Track project an Eagle push sealed takes the stripped read and cascades it', async () => {
+    // Stored ['compliance'] by a push from before the strip, no `sealedAt`: not a DEMI seal.
+    const store = mirrorStore(t, [track('351', { read: [SEALED_TOKEN], isPublished: false })]);
+    const { cascaded } = quiet();
+
+    const res = await push(eagleProject({ read: ['compliance', ...PUBLIC_ACL] }));
+
+    assert.strictEqual(res.statusCode, 200);
+    const [row] = store.rows('projects');
+    assert.deepStrictEqual({ read: row.read, isPublished: row.isPublished },
+      { read: [...PUBLIC_ACL], isPublished: true });
+    assert.deepStrictEqual(cascaded.map(c => [c.projectId, levelOfRead(c.read)]), [['351', 4]]);
   });
 
   await t.test('a Track row beside its eagle-<id> twin takes the push, and the twin narrows with it', async () => {
@@ -679,7 +693,7 @@ test('the project push finds the row whatever its ACL', async (t) => {
   await t.test('a sealed Track row seals its public twin and the twin\'s documents', async () => {
     const store = mirrorStore(t, [
       twin({ name: 'Twin', read: [...PUBLIC_ACL], isPublished: true }),
-      track('351', { read: [SEALED_TOKEN], isPublished: false }),
+      track('351', { read: [SEALED_TOKEN], isPublished: false, sealedAt: SEALED_AT }),
       { container: 'documents', id: 'doc-under-twin', projectId: TWIN, read: [...PUBLIC_ACL], isPublished: true }
     ]);
     for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});

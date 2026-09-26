@@ -31,7 +31,7 @@ const { admitParent } = require('../../helpers/parent-admit');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { writeGuarded } = require('../../helpers/etag-write');
 const {
-  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
+  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, heldSealed
 } = require('./eagle-mirror');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
@@ -1046,8 +1046,8 @@ exports.upsertFromEagle = async (req, res) => {
     // flag are carried off the row, so building once and replacing the item resurrected a clear
     // that landed meanwhile and reverted a parent field another writer had just moved.
     const buildRow = (current) => {
-      // Eagle knows nothing of a seal, so no push may write over one.
-      if (current && levelOfRead(current.read) === 0) {
+      // Eagle knows nothing of a seal, so no push may write over one DEMI made.
+      if (heldSealed(current)) {
         sealed = current;
         return null;
       }
@@ -1100,7 +1100,7 @@ exports.upsertFromEagle = async (req, res) => {
     // partitioned by documentId and do not move.
     if (saved.movedFromProjectId) {
       const kept = await settleMove(saved);
-      if (kept && levelOfRead(kept.read) === 0) return ignoreSealedPush(req, res, kept, pushedAt);
+      if (heldSealed(kept)) return ignoreSealedPush(req, res, kept, pushedAt);
       if (kept) {
         return ignoreStalePush(req, res, {
           label: 'Document Controller', action: 'document.push', targetType: 'document',
@@ -1140,10 +1140,7 @@ exports.upsertFromEagle = async (req, res) => {
 
     if (owed) await propagateParentFields(saved);
 
-    return res.json({
-      id: saved.id, projectId: saved.projectId,
-      action: saved.isDeleted ? 'delete' : 'upsert'
-    });
+    return res.json({ id: saved.id, action: saved.isDeleted ? 'delete' : 'upsert' });
   } catch (err) {
     return mirrorError(res, err, 'document controller failed');
   }
@@ -1152,7 +1149,7 @@ exports.upsertFromEagle = async (req, res) => {
 /**
  * Delete the copy a move left in the old partition, but only at the revision the move read.
  * A 412 means something wrote that copy since. The copy with the newer `eaglePushedAt` is the
- * live one, and a sealed copy always wins: when the old copy wins, this push's copy is deleted
+ * live one, and a copy DEMI sealed always wins: when the old copy wins, this push's copy is deleted
  * instead and the old row is returned; otherwise the old copy is deleted at its new revision.
  */
 async function settleMove(saved) {
@@ -1162,7 +1159,7 @@ async function settleMove(saved) {
   } catch (err) {
     if ((err.code || err.statusCode) !== 412) throw err;
     const old = await documents.readStored(id, from);
-    const oldWins = Boolean(old) && (levelOfRead(old.read) === 0 || isStalePush(saved.eaglePushedAt, old));
+    const oldWins = Boolean(old) && (heldSealed(old) || isStalePush(saved.eaglePushedAt, old));
     logger.warn('[Document Controller] the old copy of a moved document changed before its delete',
       { id, fromProjectId: from, toProjectId: projectId, kept: oldWins ? from : projectId });
     if (oldWins) {

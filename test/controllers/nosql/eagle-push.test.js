@@ -30,7 +30,7 @@ const { routeChains } = require('../../helpers/router-source');
 const {
   NOTIFICATION_EAGLE_ID, anonymous, staff,
   eagleProject, storedEagleProject: storedProject,
-  projectReadForWriteFromGet, documentReadForWriteFromGet
+  projectReadForWriteFromGet, documentReadForWriteFromGet, SEALED_AT
 } = require('../../helpers/eagle-mirror-fixtures');
 const { canRead } = require('../../../src/helpers/access-sql');
 const { logger } = require('../../../src/utils/logger');
@@ -169,6 +169,19 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
     assert.strictEqual(res.body.id, `eagle-${PROJECT_EAGLE_ID}`);
     assert.strictEqual(written.sourceSystem, 'eagle');
     assert.strictEqual(written.isPublished, true, 'derived from the pushed read[]');
+  });
+
+  await t.test('the compliance token is dropped from a pushed project read', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject({ read: ['compliance', 'public'] }) }, user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(written.read, ['public']);
   });
 
   await t.test('a first push caps the Updates that arrived before their project', async () => {
@@ -439,7 +452,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       body: { doc: eagleDocument({ contentExtracted: false }) }, user: STAFF
     }, res);
 
-    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, projectId: '207', action: 'upsert' });
+    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, action: 'upsert' });
     assert.strictEqual(written.contentExtracted, true);
     assert.strictEqual(written.contentExtractedAt, '2026-08-01T00:00:00.000Z');
     assert.strictEqual(written.contentPageCount, 42);
@@ -495,6 +508,21 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
     assert.deepStrictEqual(written.read, ['staff']);
     assert.strictEqual(written.isPublished, false);
+  });
+
+  await t.test('a document Eagle marks compliance-only lands at level 2, not sealed', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => null);
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ read: ['compliance'] }) }, user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(written.read, ['staff']);
+    assert.deepStrictEqual(written.ownRead, ['staff'], 'the cascade restores from the stripped read');
   });
 
   await t.test('a document that moved project leaves no row in the old partition', async () => {
@@ -589,7 +617,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
   await t.test('a document under a hidden notification gets the same 404, logged hidden',
     async () => {
       const { res, warned } = await refusedDocument(t, null,
-        { notification: { id: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'] } });
+        { notification: { id: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT } });
 
       assert.strictEqual(res.statusCode, 404);
       assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
@@ -618,12 +646,36 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
   await t.test('a document under a sealed project gets the same 404, logged hidden', async () => {
     const { res, warned } = await refusedDocument(t,
-      { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'] });
+      { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT });
 
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
     assert.strictEqual(warned[0].project, 'hidden');
   });
+
+  await t.test('a document under a project an Eagle push sealed is admitted at its Eagle read',
+    async () => {
+      // Stored ['compliance'] by a push from before the strip, no `sealedAt`, not yet re-pushed.
+      t.mock.method(projects, 'getByEagleId', async () => null);
+      t.mock.method(notifications, 'readForWrite', async () => null);
+      t.mock.method(projects, 'readForWriteByEagleId', async () => ({
+        id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance'],
+        sources: { eagle: { _id: PROJECT_EAGLE_ID, read: ['compliance', 'public'] } }
+      }));
+      t.mock.method(documents, 'getById', async () => null);
+      let written;
+      t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+      const res = mockRes();
+      await documentController.upsertFromEagle({
+        params: { eagleId: DOC_EAGLE_ID }, query: {}, body: { doc: eagleDocument() }, user: STAFF
+      }, res);
+
+      assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, action: 'upsert' });
+      assert.strictEqual(written.projectId, '207');
+      assert.ok(written.read.includes('public'), 'capped at the project\'s Eagle read, not at level 0');
+      assert.ok(!written.read.includes('compliance'));
+    });
 
   // Eagle's `project` reference holds either id, and prod publishes documents under 17
   // notifications. Resolving through `projects` alone dropped every one of them.
@@ -764,7 +816,7 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
 
     assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
     assert.deepStrictEqual(res.body,
-      { id: DOC_EAGLE_ID, projectId: '207', action: 'delete' }, 'what the pusher gets to log');
+      { id: DOC_EAGLE_ID, action: 'delete' }, 'what the pusher gets to log');
     assert.strictEqual(written.isDeleted, true);
     assert.strictEqual(written.isPublished, false);
     assert.deepStrictEqual(written.read, ['staff'], 'narrowed to the takedown level, not deleted');
@@ -944,8 +996,14 @@ test('keepSeal on an Eagle push', async (t) => {
   });
 
   await t.test('a sealed stored row keeps its seal', () => {
+    const current = { id: '207', read: [SEALED_TOKEN], isPublished: false, sealedAt: SEALED_AT };
+    assert.deepStrictEqual(keepSeal(pushed, current),
+      { ...pushed, read: [SEALED_TOKEN], isPublished: false, sealedAt: SEALED_AT });
+  });
+
+  await t.test('a row an Eagle push sealed takes the pushed read', () => {
     const current = { id: '207', read: [SEALED_TOKEN], isPublished: false };
-    assert.deepStrictEqual(keepSeal(pushed, current), { ...pushed, read: [SEALED_TOKEN], isPublished: false });
+    assert.deepStrictEqual(keepSeal(pushed, current), pushed);
   });
 });
 
@@ -1003,7 +1061,7 @@ test('the mirrors through their real existence reads', async (t) => {
       body: { doc: eagleDocument({ contentExtracted: false }) }
     }, res);
 
-    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, projectId: '207', action: 'upsert' });
+    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, action: 'upsert' });
     const [row] = store.rows('documents');
     assert.deepStrictEqual([row.contentExtracted, row.contentPageCount], [true, 42]);
   });

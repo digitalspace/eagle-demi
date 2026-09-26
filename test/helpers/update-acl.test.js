@@ -13,7 +13,7 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const notifications = require('../../src/repositories/notifications');
 const { setAclForProject } = require('../../src/helpers/update-acl');
-const { PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL } = require('./eagle-mirror-fixtures');
+const { PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, SEALED_AT } = require('./eagle-mirror-fixtures');
 
 // Spelled out, not built from readForLevel, so the assertion cannot agree with any helper output.
 const PUBLIC_PARENT = ['staff', 'idir', 'public'];
@@ -73,6 +73,19 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.strictEqual(patched(seen.ops[0])['/isPublished'], false);
   });
 
+  await t.test('a raw Eagle read still carrying compliance is re-derived without it', async () => {
+    // Rows pushed before the strip keep the raw read in sources.eagle.read.
+    const seen = stub(t, [
+      { id: 'u1', read: STAFF_PARENT, eagleRead: ['compliance', 'public'] },
+      { id: 'u2', read: STAFF_PARENT, eagleRead: ['compliance'] }
+    ]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.deepStrictEqual(patched(seen.ops[0])['/read'], ['public']);
+    assert.deepStrictEqual(patched(seen.ops[1])['/read'], ['staff']);
+  });
+
   await t.test('a sealed notification holding the id still cascades nothing', async () => {
     const seen = stub(t, [{ id: 'u1', read: PUBLIC_ACL, eagleRead: PUBLIC_ACL }],
       { notification: { id: PROJECT_EAGLE_ID, read: ['compliance'] } });
@@ -108,12 +121,23 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.deepStrictEqual(patched(seen.ops[0])['/read'], ['sysadmin']);
   });
 
-  await t.test('a sealed Update keeps its seal', async () => {
-    const seen = stub(t, [{ id: 'u1', read: ['compliance'], eagleRead: PUBLIC_ACL }]);
+  await t.test('an Update DEMI sealed keeps its seal', async () => {
+    const seen = stub(t, [{ id: 'u1', read: ['compliance'], sealedAt: SEALED_AT, eagleRead: PUBLIC_ACL }]);
 
     await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
 
     assert.strictEqual(seen.ops.length, 0);
+    // Without the stamp in the projection every DEMI seal would read as Eagle's and be reopened.
+    assert.match(seen.queries[0].spec.query, /\bc\.sealedAt\b/);
+  });
+
+  await t.test('an Update an Eagle push sealed is re-derived like any other', async () => {
+    const seen = stub(t, [{ id: 'u1', read: ['compliance'], eagleRead: ['compliance', 'public'] }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.strictEqual(seen.ops.length, 1);
+    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': ['public'], '/isPublished': true, ...CLEARED });
   });
 
   await t.test('an empty project ACL is refused rather than read as level 1', async () => {

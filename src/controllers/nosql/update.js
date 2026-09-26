@@ -9,7 +9,7 @@
  */
 
 const updates = require('../../repositories/updates');
-const { readParent, readUnder, isPublicParent } = require('../../helpers/update-parent');
+const { readParent, ownRead, readUnder, isPublicParent } = require('../../helpers/update-parent');
 const { resolveAccess, levelOfRead } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
@@ -180,9 +180,9 @@ function mirrorItem(eagleId, doc, read, existing) {
     // Stored beside `isPublished` rather than folded into it: `read[]` is what governs visibility
     // and `active` is Eagle's own flag, which the News model renders.
     active: doc.active === true,
-    // read[] is authoritative and isPublished mirrors it (ADR-004). `read` is Eagle's own under the
-    // parent's ceiling (`helpers/update-parent:readUnder`); `sources.eagle.read` keeps it uncapped
-    // for the project cascade to re-derive from.
+    // read[] is authoritative and isPublished mirrors it (ADR-004). `read` is Eagle's own minus
+    // compliance under the parent's ceiling (`helpers/update-parent:readUnder`); `sources.eagle.read`
+    // keeps it uncapped, still minus compliance, for the project cascade to re-derive from.
     isPublished: read.includes('public'),
     read,
     // A Cosmos write REPLACES the item, so the claim has to be carried across or every push of
@@ -215,13 +215,15 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
     // then. A parent DEMI does not hold yet caps nothing; the search read gates on it again.
     async (current) => {
       const parent = await readParent(refId(doc.project));
-      const read = readUnder(doc.read, parent);
-      if (Array.isArray(doc.read) && levelOfRead(read) < levelOfRead(doc.read)) {
+      // Stored stripped in `sources.eagle` too, so the project cascade re-derives from it.
+      const own = ownRead(doc.read);
+      const read = readUnder(own, parent);
+      if (levelOfRead(read) < levelOfRead(own)) {
         logger.debug('[Update Controller] read capped by parent', {
-          id: eagleId, parentId: parent.id, kind: parent.kind, from: doc.read, to: read
+          id: eagleId, parentId: parent.id, kind: parent.kind, from: own, to: read
         });
       }
-      return mirrorItem(eagleId, doc, read, current);
+      return mirrorItem(eagleId, { ...doc, read: own }, read, current);
     },
     // Unfiltered: a row with no `read` or a compartment token is still there to be replaced.
     () => updates.readForWrite(eagleId),
