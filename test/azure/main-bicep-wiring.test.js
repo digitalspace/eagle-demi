@@ -539,16 +539,22 @@ test('prod names neither the eagle-notify host nor its vault secret', () => {
     'naming the secret prod never set makes the deploy check demand a credential prod does not use');
 });
 
-// Reader links point update emails at /updates/:id, which only eagle-public's React line serves.
-// Prod and test still serve the Angular site there, so turning it on sends every email to a 404.
-test('update reader links reach the app setting and stay off in test and prod', () => {
+// Reader links only where the link base serves /updates/:id (eagle-public's React line): test's
+// base is the React beta host; prod stays on the Angular site, off, until the cutover.
+const REACT_BETA_TEST_HOST = /^https:\/\/eagle-public-next-test-[a-z0-9]+\.[a-z0-9]+\.azurefd\.net$/;
+
+test('update reader links reach the app setting and are on only where the link base serves /updates', () => {
   assert.match(MAIN, /^\s+notifyUpdateReaderLinks: notifyUpdateReaderLinks$/m,
     'main.bicep must pass the flag to the API module, or a bicepparam value never lands');
   assert.match(API_MODULE,
     /name: 'NOTIFY_UPDATE_READER_LINKS'\s+value: notifyUpdateReaderLinks \? 'true' : 'false'/,
     'src/config.js reads exactly the string true');
-  assert.doesNotMatch(TEST_PARAMS, /^param notifyUpdateReaderLinks = true/m,
-    'test.projects.eao.gov.bc.ca serves the Angular site, which has no /updates route');
+  const testReaderLinks = /^param notifyUpdateReaderLinks = true/m.test(TEST_PARAMS);
+  const testLinkBase = /^param linkBaseUrl = '([^']*)'$/m.exec(TEST_PARAMS);
+  assert.ok(testLinkBase, 'test must state linkBaseUrl');
+  assert.ok(!testReaderLinks || REACT_BETA_TEST_HOST.test(testLinkBase[1]),
+    `test turns reader links on with linkBaseUrl ${testLinkBase[1]}, which is not the React beta ` +
+    'host and has no /updates route');
   assert.doesNotMatch(PROD_PARAMS, /^param notifyUpdateReaderLinks = true/m,
     'projects.eao.gov.bc.ca serves the Angular site, which has no /updates route');
 });
