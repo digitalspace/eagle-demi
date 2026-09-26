@@ -348,8 +348,8 @@ test('ACL — the merge never widens visibility', async (t) => {
     assert.ok(!acl.includes('public'), 'the merge must never widen an upstream restriction');
   });
 
-  await t.test('a compliance-only Eagle read[] lands at level 2, not sealed', () => {
-    assert.deepStrictEqual(resolveProjectAcl({ read: ['compliance'] }), ['staff']);
+  await t.test('a compliance-only Eagle read[] lands at level 1, not sealed', () => {
+    assert.deepStrictEqual(resolveProjectAcl({ read: ['compliance'] }), ['team']);
   });
 
   await t.test('a Track project with no Eagle match is NOT public', () => {

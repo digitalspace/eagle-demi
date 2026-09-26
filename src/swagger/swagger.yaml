@@ -3871,7 +3871,7 @@ components:
             The raw Eagle record, exactly as eagle-api stores it. `doc._id` must equal the
             `eagleId` path parameter. For a document, `doc.project` is the parent project's
             Eagle `_id` (or an object carrying it as `_id`). Every mirror drops `compliance`
-            from `doc.read`, and a read left with nothing else is stored at level 2 (`['staff']`).
+            from `doc.read`, and a read left with nothing else is stored at level 1 (`['team']`).
         pushedAt:
           type: integer
           format: int64

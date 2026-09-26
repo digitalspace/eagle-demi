@@ -27,16 +27,17 @@ const { naturalSortKey } = require('../helpers/natural-sort');
  * Two things are dropped: blank entries, and the sealed token. Eagle has no sealed compartment, so
  * kept, `compliance` would seal the copy and hide it from every ladder caller.
  *
- * With no upstream ACL, or only compliance left after the blanks, the item lands at level 2 (All
- * EAO), so a compliance-only Eagle row is stored readable by `staff`. A list of blanks alone stays
- * `[]`, as it always has. Every item gets an explicit `read[]`, which is the condition for deleting
- * the legacy no-ACL tier from the visibility predicate.
+ * With no upstream ACL the item lands at level 2 (All EAO). With only compliance left after the
+ * blanks it lands at level 1 (`team`), not 2: `['compliance','sysadmin']` already lands at
+ * `['sysadmin']` (level 1), so a bare `['compliance']` must not land wider. A list of blanks alone
+ * stays `[]`, as it always has. Every item gets an explicit `read[]`, which is the condition for
+ * deleting the legacy no-ACL tier from the visibility predicate.
  */
 function seedAcl(upstreamRead) {
   if (!Array.isArray(upstreamRead) || upstreamRead.length === 0) return readForLevel(2);
   const kept = upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
   const open = kept.filter(r => r !== SEALED_TOKEN);
-  return open.length === 0 && kept.length > 0 ? readForLevel(2) : open;
+  return open.length === 0 && kept.length > 0 ? readForLevel(1) : open;
 }
 
 /** `internalSize` arrives as a number OR a numeric string (261 of 2,961 sampled were strings). */

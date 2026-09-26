@@ -44,7 +44,7 @@ async function readParent(eagleId) {
 
 /**
  * An Update's own `read[]` from Eagle's: minus compliance (`seedAcl`), so a compliance-only read
- * lands at level 2. An empty read stays `[]` and a non-list is `[]`: neither is widened.
+ * lands at level 1. An empty read stays `[]` and a non-list is `[]`: neither is widened.
  */
 function ownRead(eagleRead) {
   if (!Array.isArray(eagleRead) || eagleRead.length === 0) return [];

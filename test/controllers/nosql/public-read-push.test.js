@@ -174,14 +174,14 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
-  await t.test('a period Eagle marks compliance-only lands at level 2, not sealed', async () => {
+  await t.test('a period Eagle marks compliance-only lands at level 1, not sealed', async () => {
     // Eagle has no sealed compartment; keeping the token would hide the row from every staff reader.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
 
     const { written } = await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
       eaglePeriod({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['staff']);
+    assert.deepStrictEqual(written().read, ['team']);
   });
 
   const NO_PARENT_BODY = '{"error":"Parent project or notification not found"}';
@@ -554,13 +554,13 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
-  await t.test('a comment Eagle marks compliance-only lands at level 2, not sealed', async () => {
+  await t.test('a comment Eagle marks compliance-only lands at level 1, not sealed', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
 
     const { written } = await pushTo(
       commentController, comments, COMMENT_EAGLE_ID, eagleComment({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['staff']);
+    assert.deepStrictEqual(written().read, ['team']);
   });
 
   await t.test('an absent isAnonymous is stored as anonymous, matching the Eagle default', async () => {
@@ -735,11 +735,11 @@ test('PUT /eagle/organizations/:eagleId', async (t) => {
     assert.deepStrictEqual(written().read, ['public']);
   });
 
-  await t.test('a compliance-only organization lands at level 2, not sealed', async () => {
+  await t.test('a compliance-only organization lands at level 1, not sealed', async () => {
     const { written } = await pushTo(organizationController, lists, ORG_EAGLE_ID,
       eagleOrganization({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['staff']);
+    assert.deepStrictEqual(written().read, ['team']);
   });
 });
 
@@ -780,11 +780,11 @@ test('PUT /eagle/notifications/:eagleId', async (t) => {
     assert.deepStrictEqual(written().read, ['public']);
   });
 
-  await t.test('a compliance-only notification lands at level 2, not sealed', async () => {
+  await t.test('a compliance-only notification lands at level 1, not sealed', async () => {
     const { written } = await pushTo(notificationController, notifications, NOTIFICATION_EAGLE_ID,
       eagleNotification({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['staff']);
+    assert.deepStrictEqual(written().read, ['team']);
   });
 });
 

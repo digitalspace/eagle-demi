@@ -510,7 +510,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.isPublished, false);
   });
 
-  await t.test('a document Eagle marks compliance-only lands at level 2, not sealed', async () => {
+  await t.test('a document Eagle marks compliance-only lands at level 1, not sealed', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'getById', async () => null);
     let written;
@@ -521,8 +521,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       body: { doc: eagleDocument({ read: ['compliance'] }) }, user: STAFF
     }, mockRes());
 
-    assert.deepStrictEqual(written.read, ['staff']);
-    assert.deepStrictEqual(written.ownRead, ['staff'], 'the cascade restores from the stripped read');
+    assert.deepStrictEqual(written.read, ['team']);
+    assert.deepStrictEqual(written.ownRead, ['team'], 'the cascade restores from the stripped read');
   });
 
   await t.test('a document that moved project leaves no row in the old partition', async () => {

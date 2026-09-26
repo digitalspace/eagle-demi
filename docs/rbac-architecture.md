@@ -92,7 +92,7 @@ published) already contain `staff`, so they read as level 2 — today's meaning.
 `read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
 stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` minus the
 `compliance` token (`seedAcl`), so a pushed record lands at level 1, 2 or 4 and is never sealed by a
-push. A compliance-only record lands at level 2. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
+push. A compliance-only record lands at level 1 (`team`), no wider than `['compliance','sysadmin']`. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
 stays sealed until released; a row sealed by an earlier push has no `sealedAt` and heals on its next
 push.
 

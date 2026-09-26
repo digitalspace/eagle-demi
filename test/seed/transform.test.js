@@ -65,8 +65,8 @@ test('seedAcl — every seeded item gets an explicit read[]', async (t) => {
 
   await t.test('drops the compliance token, which Eagle has no compartment for', () => {
     assert.deepStrictEqual(seedAcl(['public', 'compliance']), ['public']);
-    assert.deepStrictEqual(seedAcl(['compliance']), ['staff'], 'level 2, never sealed');
-    assert.deepStrictEqual(seedAcl(['compliance', '']), ['staff'], 'the blank does not hide the removed token');
+    assert.deepStrictEqual(seedAcl(['compliance']), ['team'], 'level 1, never sealed');
+    assert.deepStrictEqual(seedAcl(['compliance', '']), ['team'], 'the blank does not hide the removed token');
   });
 
   await t.test('an all-junk ACL falls back to closed rather than to empty', () => {
