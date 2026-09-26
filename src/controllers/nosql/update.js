@@ -22,15 +22,27 @@ const {
   eaglePush, refId, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
+const EMAIL_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif']);
+const EMAIL_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif']);
+
 /**
  * The featured image, only when anyone may fetch it: the email links DEMI's download route, which
  * serves public documents alone. The document id is the Eagle `_id`, as in `featuredImage.document`.
+ * Only types every mail client renders go out: classic Outlook shows WebP as a broken image.
+ * The extension stands in only when the row has no MIME type.
  */
 async function publicImage(item) {
   const image = item.featuredImage;
   if (!image || !image.document) return null;
   // An anonymous caller's read, the same predicate the download route applies to the email reader.
-  return (await documents.getById(resolveAccess({}), image.document)) ? image : null;
+  const doc = await documents.getById(resolveAccess({}), image.document);
+  if (!doc) return null;
+  const mime = String(doc.mimeType || '').toLowerCase();
+  if (mime ? EMAIL_IMAGE_MIMES.has(mime) : EMAIL_IMAGE_EXTS.has(doc.fileExt)) return image;
+  logger.info('[Update Controller] featured image not email-safe, email goes without it', {
+    id: item.id, type: mime || doc.fileExt || null
+  });
+  return null;
 }
 
 /**

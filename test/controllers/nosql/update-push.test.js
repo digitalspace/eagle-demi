@@ -18,6 +18,7 @@ const cosmos = require('../../../src/db/cosmos-nosql');
 const updates = require('../../../src/repositories/updates');
 const notify = require('../../../src/services/notify');
 const documents = require('../../../src/repositories/documents');
+const config = require('../../../src/config');
 const { logger } = require('../../../src/utils/logger');
 const controller = require('../../../src/controllers/nosql/update');
 const { routeChains } = require('../../helpers/router-source');
@@ -54,7 +55,7 @@ function wiredNotify(t, {
   t.mock.method(updates, 'markNotifySkipped', async (id, at, reason) => { seen.skips.push({ id, reason }); });
   t.mock.method(documents, 'getById', async (access, id) => {
     assert.strictEqual(access.authenticated, false, 'the image is checked as an anonymous reader');
-    return publicDocs.includes(id) ? { id } : null;
+    return publicDocs.find((row) => row.id === id) || null;
   });
   t.mock.method(notify, 'updatePublished', async (item, projectName, image) => {
     seen.published.push({ item, projectName, image });
@@ -62,6 +63,34 @@ function wiredNotify(t, {
   });
   t.mock.method(notify, 'updateCancelled', async (item) => { seen.cancelled.push(item); return cancelOutcome; });
   return seen;
+}
+
+const IMAGE = { document: '5cf00c03a266b7e187750001', alt: 'The site' };
+
+/**
+ * The event body eagle-notify receives for a new update whose featured image document reads as
+ * `row` (null: not public). The real payload builder runs, so the keys asserted are the ones the
+ * email template renders from.
+ */
+async function eventForImage(t, row) {
+  t.mock.method(updates, 'readForWrite', async () => null);
+  t.mock.method(updates, 'upsert', async (item) => item);
+  parentProject(t, async () => ({ id: '207', read: PUBLIC }));
+  wiredNotify(t, { publicDocs: row ? [{ id: IMAGE.document, ...row }] : [] });
+  notify.updatePublished.mock.restore();
+  let body;
+  t.mock.method(global, 'fetch', async (url, opts) => { body = JSON.parse(opts.body); return { ok: true, status: 202 }; });
+  const saved = { base: config.notifyApiBase, key: config.notifyApiKey };
+  config.notifyApiBase = 'https://notify.example';
+  config.notifyApiKey = 'test-function-key';
+  try {
+    await push({ doc: eagleUpdate({ featuredImage: IMAGE }) });
+  } finally {
+    config.notifyApiBase = saved.base;
+    config.notifyApiKey = saved.key;
+  }
+  assert.ok(body, 'eagle-notify was called');
+  return body;
 }
 
 /**
@@ -650,7 +679,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     parentProject(t, async () => ({ id: '207', read: PUBLIC }));
     const image = { document: '5cf00c03a266b7e187750001', alt: 'The site' };
 
-    let seen = wiredNotify(t, { publicDocs: [image.document] });
+    let seen = wiredNotify(t, { publicDocs: [{ id: image.document, mimeType: 'image/jpeg' }] });
     await push({ doc: eagleUpdate({ featuredImage: image }) });
     const { document, alt } = seen.published[0].image;
     assert.deepStrictEqual({ document, alt }, image);
@@ -662,6 +691,32 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     seen = wiredNotify(t, { publicDocs: [] });
     await push({ doc: eagleUpdate({ featuredImage: image }) });
     assert.strictEqual(seen.published[0].image, null, 'a non-public image would link a 404');
+  });
+
+  await t.test('a public JPEG goes out as the featured image', async () => {
+    const body = await eventForImage(t, { mimeType: 'image/jpeg', fileExt: 'jpg' });
+    assert.match(body.featuredImageUrl, new RegExp(`/documents/${IMAGE.document}/download`));
+    assert.strictEqual(body.featuredImageAlt, IMAGE.alt);
+  });
+
+  await t.test('a public WebP is left out: classic Outlook shows it broken', async () => {
+    const infos = [];
+    t.mock.method(logger, 'info', (msg, meta) => infos.push({ msg, meta }));
+    const body = await eventForImage(t, { mimeType: 'image/webp', fileExt: 'webp' });
+    assert.strictEqual('featuredImageUrl' in body, false);
+    assert.strictEqual('featuredImageAlt' in body, false);
+    assert.deepStrictEqual(infos.find((i) => /not email-safe/.test(i.msg)).meta,
+      { id: UPDATE_EAGLE_ID, type: 'image/webp' });
+  });
+
+  await t.test('with no MIME type the file extension decides', async () => {
+    const body = await eventForImage(t, { mimeType: '', fileExt: 'png' });
+    assert.match(body.featuredImageUrl, new RegExp(`/documents/${IMAGE.document}/download`));
+  });
+
+  await t.test('a JPEG an anonymous reader cannot fetch is still left out', async () => {
+    const body = await eventForImage(t, null);
+    assert.strictEqual('featuredImageUrl' in body, false);
   });
 
   await t.test('withdrawing an update DEMI emailed sends one cancellation and keeps the claim', async () => {
