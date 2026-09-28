@@ -16,7 +16,8 @@
 
 const path = require('path');
 const { PassThrough } = require('stream');
-const ZipStream = require('zip-stream');
+// zip-stream 7 is ESM-only; require() of it returns the module namespace, not the class.
+const ZipStream = require('zip-stream').default;
 
 const config = require('../config');
 const storage = require('../storage');
