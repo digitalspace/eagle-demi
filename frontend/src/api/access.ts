@@ -43,11 +43,15 @@ export async function simulateAccess(body: SimulateRequest): Promise<SimulateRes
     });
   } catch (err) {
     if (err instanceof ApiError) {
-      throw new Error(serverError(err.body) ?? `The access engine answered ${err.status}.`);
+      throw new Error(serverError(err.body) ?? `The access engine answered ${err.status}.`, {
+        cause: err,
+      });
     }
     // A 2xx whose body will not parse is an answer with nothing in it, which Angular reports the
     // same way as a refusal; only silence reads as no answer at all.
-    if (err instanceof SyntaxError) throw new Error('The access engine answered 200.');
-    throw new Error('The access engine did not answer.');
+    if (err instanceof SyntaxError) {
+      throw new Error('The access engine answered 200.', { cause: err });
+    }
+    throw new Error('The access engine did not answer.', { cause: err });
   }
 }
