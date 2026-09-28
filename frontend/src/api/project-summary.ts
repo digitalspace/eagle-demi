@@ -352,9 +352,11 @@ export async function fetchProjectFacts(projectId: string, init?: ApiInit): Prom
       // Same answer for "not readable" and "not there", for the reason fetchDocument gives:
       // telling them apart would disclose that a hidden row exists.
       if (err.status === 403 || err.status === 404) {
-        throw new Error('That project is not in the registry, or you do not have access to it.');
+        throw new Error('That project is not in the registry, or you do not have access to it.', {
+          cause: err,
+        });
       }
-      throw new Error(`Could not load the project (HTTP ${err.status}).`);
+      throw new Error(`Could not load the project (HTTP ${err.status}).`, { cause: err });
     }
     throw err;
   }

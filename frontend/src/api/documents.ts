@@ -96,7 +96,7 @@ export async function fetchDocument(
   } catch (err) {
     if (err instanceof ApiError) {
       if (err.status === 403 || err.status === 404) return null;
-      throw new Error(`Could not load the document (HTTP ${err.status}).`);
+      throw new Error(`Could not load the document (HTTP ${err.status}).`, { cause: err });
     }
     throw err;
   }
@@ -129,7 +129,7 @@ export async function getDownloadUrl(documentId: string, projectId?: string): Pr
     // A 403 is an answer, not an outage: this reader may not have the document, and the public
     // copy is not the way around that.
     if (err instanceof ApiError && err.status === 403) {
-      throw new Error('You do not have permission to download this document.');
+      throw new Error('You do not have permission to download this document.', { cause: err });
     }
     failure =
       err instanceof ApiError ? new Error(`Could not prepare download (HTTP ${err.status}).`) : err;

@@ -157,7 +157,7 @@ async function start(): Promise<boolean> {
   // so it is left for the callback, where the code in hand is what settles the session.
   const onLoad = remembered() && !isOAuthCallback ? 'login-required' : 'check-sso';
 
-  let authenticated = false;
+  let authenticated: boolean;
   try {
     authenticated = await Promise.race([
       client.init({
