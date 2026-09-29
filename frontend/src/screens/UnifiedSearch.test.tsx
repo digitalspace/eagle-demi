@@ -145,7 +145,7 @@ describe('UnifiedSearch', () => {
   });
 
   it('keeps the keyword and drops the filters and sort when the record type changes', async () => {
-    stubApi();
+    const fetchMock = stubApi();
     const user = userEvent.setup();
     const { search } = renderAt('/search?keywords=dam&type=abc&sortBy=%2BdisplayName');
     await screen.findByRole('button', { name: 'Site C Application' });
@@ -155,7 +155,9 @@ describe('UnifiedSearch', () => {
     expect(search().get('record')).toBe('projects');
     expect(search().get('keywords')).toBe('dam');
     expect(search().get('type')).toBeNull();
-    expect(search().get('sortBy')).toBe('-dateUpdated');
+    expect(search().get('sortBy')).toBeNull();
+    // The keyword carried across, so the new record ranks by relevance, not its date.
+    await waitFor(() => expect(searchesFor(fetchMock, 'Project').at(-1)).toContain('&sortBy=-score'));
   });
 
   it('sends the typed keyword only once typing has stopped for 300 ms', async () => {
@@ -337,6 +339,53 @@ describe('UnifiedSearch', () => {
 
     expect(raw().at(-1)).toContain('&sortBy=-datePosted');
     expect(raw().some((url) => url.includes('bogus'))).toBe(false);
+  });
+
+  it('ranks a keyword search by relevance when no sort was chosen', async () => {
+    const fetchMock = stubApi();
+    renderAt('/search?keywords=trans');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    expect(searchesFor(fetchMock, 'Document').at(-1)).toContain('&sortBy=-score');
+  });
+
+  it('keeps a chosen sort over a keyword', async () => {
+    const fetchMock = stubApi();
+    renderAt('/search?keywords=trans&sortBy=-datePosted');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    expect(searchesFor(fetchMock, 'Document').at(-1)).toContain('&sortBy=-datePosted');
+  });
+
+  it('returns to the record sort once the keyword is cleared', async () => {
+    const fetchMock = stubApi();
+    const user = userEvent.setup();
+    renderAt('/search?keywords=trans');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    await user.click(screen.getByRole('button', { name: 'Remove Search trans' }));
+
+    await waitFor(() => expect(searchesFor(fetchMock, 'Document').at(-1)).toContain('&sortBy=-datePosted'));
+  });
+
+  it('shows relevance as the sort in force on a keyword search', async () => {
+    stubNarrow(true);
+    stubApi();
+    renderAt('/search?keywords=trans');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    const select = screen.getByRole('combobox', { name: /^Sort/ });
+    expect(within(select).getByRole('option', { name: 'Relevance', selected: true })).toBeInTheDocument();
+  });
+
+  it('offers no relevance sort without a keyword', async () => {
+    stubNarrow(true);
+    stubApi();
+    renderAt('/search');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    const select = screen.getByRole('combobox', { name: /^Sort/ });
+    expect(within(select).queryByRole('option', { name: 'Relevance' })).toBeNull();
   });
 
   it('sends a plus sort encoded, so it does not arrive as a space', async () => {

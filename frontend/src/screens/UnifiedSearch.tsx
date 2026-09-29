@@ -16,7 +16,10 @@ import {
   DEFAULT_PAGE_SIZE,
   INSIDE_SORT,
   RECORD_TYPES,
+  RELEVANCE_SORT,
+  implicitSort,
   parseGridParams,
+  searchKeyword,
   type RecordType,
   type SearchScope,
 } from '../search/grid-url';
@@ -46,7 +49,6 @@ import {
   SEARCH_DEBOUNCE_MS,
   passageRowFrom,
   runSearch,
-  searchKeyword,
   useFilterSources,
   useTypeCounts,
   type SearchResult,
@@ -68,9 +70,6 @@ const INSIDE_DATASET = 'DocumentChunk';
 
 /** Every chunk field is unsortable, so relevance is the only order; the URL spells it `-matches`. */
 const INSIDE_SORT_OPTIONS: SortOption[] = [{ value: INSIDE_SORT, label: 'Most matches' }];
-
-/** demi-search reads `-score` as "issue no $orderby", which leaves the relevance ranking in place. */
-const INSIDE_WIRE_SORT = '-score';
 
 /** demi-search answers 400 for `and[nameContains]` on the chunk dataset: it filters names only. */
 const NAMES_ONLY_FILTERS = ['nameContains'];
@@ -231,10 +230,13 @@ export function UnifiedSearch() {
   const advancedFields: AdvancedField[] = config.advancedFields
     .map((field) => (field.kind === 'select' ? { ...field, options: options[field.id] ?? field.options } : field));
 
-  // A sort the URL names that this record cannot sort by falls back to the record's own.
+  // A sort the URL names that this record cannot sort by falls back to the one it takes unchosen.
   const sortKey = state.sortBy.replace(/^[+-]/, '');
-  const sortable = state.sortBy === config.defaultSort || config.columns.some((column) => column.key === sortKey);
-  const sortBy = sortable ? state.sortBy : config.defaultSort;
+  const sortable =
+    state.sortBy === config.defaultSort ||
+    (state.sortBy === RELEVANCE_SORT && term !== '') ||
+    config.columns.some((column) => column.key === sortKey);
+  const sortBy = sortable ? state.sortBy : implicitSort(term, inside ? 'inside' : 'names', config.defaultSort);
   const searchKey: SearchKey = {
     record: state.record,
     inside,
@@ -254,7 +256,7 @@ export function UnifiedSearch() {
           keywords: term,
           pageNum: state.currentPage,
           pageSize: state.pageSize,
-          sortBy: inside ? INSIDE_WIRE_SORT : sortBy,
+          sortBy: inside ? RELEVANCE_SORT : sortBy,
           filters,
           yearIds,
           textIds,
@@ -527,6 +529,7 @@ export function UnifiedSearch() {
         headerless={config.headerless}
         listRow={listRow}
         sortOptions={inside ? INSIDE_SORT_OPTIONS : undefined}
+        relevance={term !== ''}
         body={insideBody}
         footer={!insidePrompt}
         page={state.currentPage}

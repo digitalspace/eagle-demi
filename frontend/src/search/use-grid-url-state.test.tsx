@@ -82,14 +82,38 @@ describe('useGridUrlState', () => {
     expect(state.keywords).toBe('dam');
     expect(state.filters).toEqual({});
     expect(state.hiddenColumns).toEqual([]);
-    expect(state.sortBy).toBe('-dateAdded');
+    expect(state.sortBy).toBe('');
+    expect(result.current.search).not.toContain('sortBy');
   });
 
-  it('sorts by relevance inside the documents and restores the record sort on the way out', () => {
-    const { result } = renderAt('/search');
+  it('drops a chosen sort when the scope changes, leaving the order to the scope', () => {
+    const { result } = renderAt('/search?keywords=dam&sortBy=%2Bname');
     act(() => result.current.grid.setScope('inside'));
-    expect(result.current.grid.state.sortBy).toBe('-matches');
+    expect(result.current.search).not.toContain('sortBy');
+    act(() => result.current.grid.setSort('name'));
     act(() => result.current.grid.setScope('names'));
+    expect(result.current.search).not.toContain('sortBy');
+  });
+
+  it('leaves the sort unchosen when a keyword is typed, so the search ranks by relevance', () => {
+    const { result } = renderAt('/search');
+    act(() => result.current.grid.setKeyword('trans'));
+    expect(result.current.search).toContain('keywords=trans');
+    expect(result.current.search).not.toContain('sortBy');
+  });
+
+  it('keeps a chosen sort across typing and clearing the keyword', () => {
+    const { result } = renderAt('/search?sortBy=-datePosted');
+    act(() => result.current.grid.setKeyword('trans'));
     expect(result.current.grid.state.sortBy).toBe('-datePosted');
+    act(() => result.current.grid.clearAll());
+    expect(result.current.grid.state.sortBy).toBe('-datePosted');
+  });
+
+  it('flips the implicit record sort when its own column is sorted', () => {
+    // The record sort is `-datePosted`, so a press asking for descending first must flip it to ascending.
+    const { result } = renderAt('/search');
+    act(() => result.current.grid.setSort('datePosted', '-'));
+    expect(result.current.grid.state.sortBy).toBe('+datePosted');
   });
 });

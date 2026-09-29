@@ -4,12 +4,9 @@ import { ApiError, api } from '../api/client';
 import { isAbortError, listRowsQuery, type WireEnvelope } from '../api/search';
 import { trackException } from '../telemetry';
 import type { FilterValues, PassageHit, PassageRow } from './grid-types';
-import { RECORD_TYPES, type RecordType } from './grid-url';
+import { RECORD_TYPES, searchKeyword, type RecordType } from './grid-url';
 import { RECORD_DATASETS, type OptionSource, type SearchMeta } from './record-types';
 import { toWireFilters } from './search-filters';
-
-/** Shortest keyword worth a round trip. One character matches most of the corpus. */
-export const MIN_KEYWORD_LENGTH = 2;
 
 /** How long typing has to stop before a request goes out. */
 export const SEARCH_DEBOUNCE_MS = 300;
@@ -53,14 +50,6 @@ export type TypeCounts = Record<RecordType, number | null>;
 
 interface CountsEnvelope {
   counts?: Record<string, number | null>;
-}
-
-/**
- * What a typed box searches for. Anything shorter than the minimum searches as an empty keyword:
- * backspacing to one character restores the unfiltered list instead of leaving the last results up.
- */
-export function searchKeyword(keywords: string): string {
-  return keywords.trim().length >= MIN_KEYWORD_LENGTH ? keywords.trim() : '';
 }
 
 /**

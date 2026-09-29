@@ -2,8 +2,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import type { FilterValue } from './grid-types';
 import {
-  DEFAULT_SORT,
-  INSIDE_SORT,
+  implicitSort,
   parseGridParams,
   serializeGridParams,
   toggleSortDirection,
@@ -62,7 +61,7 @@ export function useGridUrlState(defaults: GridDefaults) {
             record,
             filters: {},
             hiddenColumns: [],
-            sortBy: recordDefaults.defaultSort ?? '',
+            sortBy: '',
             currentPage: 1,
           },
           { ...stable, ...recordDefaults },
@@ -70,16 +69,15 @@ export function useGridUrlState(defaults: GridDefaults) {
       [current, stable, write],
     ),
     /** Relevance is the only order inside the documents; the names scope gets its own sort back. */
-    setScope: useCallback(
-      (scope: SearchScope) =>
-        patch({ scope, sortBy: scope === 'inside' ? INSIDE_SORT : (defaultSort ?? DEFAULT_SORT) }, true),
-      [patch, defaultSort],
-    ),
-    /** A header click names the column and leaves the direction to the URL it is flipping. */
+    setScope: useCallback((scope: SearchScope) => patch({ scope, sortBy: '' }, true), [patch]),
+    /** A header click names the column and flips the sort in force, chosen or implicit. */
     setSort: useCallback(
       (key: string, fallback: '+' | '-' = '+') =>
-        patch((now) => ({ sortBy: toggleSortDirection(now.sortBy, key, fallback) }), true),
-      [patch],
+        patch((now) => {
+          const inForce = now.sortBy || implicitSort(now.keywords, now.scope, defaultSort);
+          return { sortBy: toggleSortDirection(inForce, key, fallback) };
+        }, true),
+      [patch, defaultSort],
     ),
     /** `null` drops the filter. Narrowing the set moves the reader off whatever page they were on. */
     setFilter: useCallback(
