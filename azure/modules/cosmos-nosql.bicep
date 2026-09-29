@@ -229,6 +229,10 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
             // index on that exact path; without this the query is rejected outright.
             path: '/dateUploaded/?'
           }
+          {
+            // documents.js listParentFieldsPending and countParentFieldsPending filter on it.
+            path: '/parentFieldsPending/?'
+          }
         ]
         excludedPaths: noIndex
       }

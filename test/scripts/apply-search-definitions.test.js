@@ -254,6 +254,57 @@ test('apply-search-definitions', async (t) => {
     assert.strictEqual(calls.filter(c => c.method === 'PUT' && /\/indexes\/projects\?/.test(c.url)).length, 1);
   });
 
+  const KEYWORD_SWITCHES = ['SEARCH_INDEX_ACTIVITIES', 'SEARCH_INDEX_PROJECT_NOTIFICATIONS'];
+  const configWith = (env) => {
+    const aiSearch = require('../../src/search/ai-search');
+    const saved = Object.fromEntries(KEYWORD_SWITCHES.map(key => [key, process.env[key]]));
+    try {
+      for (const key of KEYWORD_SWITCHES) {
+        if (env[key] === undefined) delete process.env[key];
+        else process.env[key] = env[key];
+      }
+      return aiSearch.config();
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  };
+  const SWITCHED_ON = {
+    SEARCH_INDEX_ACTIVITIES: 'activities', SEARCH_INDEX_PROJECT_NOTIFICATIONS: 'project-notifications'
+  };
+  /** Serve a live `name` index holding one field the committed copy lacks, so a PUT would drop it. */
+  const servingDroppable = (tt, name) => {
+    const committed = script.load(script.INDEX_DIR).find(d => d.body.name === name).body;
+    const live = { ...committed, fields: [...committed.fields, { name: 'legacyOnly', type: 'Edm.String' }] };
+    const target = new RegExp(`/indexes/${name}\\?`);
+    return stub(tt, (url, init) =>
+      (init.method === 'GET' && target.test(url))
+        ? { status: 200, text: async () => JSON.stringify(live) }
+        : ok(url, init));
+  };
+  for (const name of ['activities', 'project-notifications']) {
+    await t.test(`run() refuses a non-additive PUT of ${name} with its switch set`, async (tt) => {
+      const calls = servingDroppable(tt, name);
+      const liveNames = script.servingNames(configWith(SWITCHED_ON));
+      await assert.rejects(
+        () => script.run({ endpoint: ENDPOINT, live: true, only: name, liveNames, log: () => {} }),
+        new RegExp(`refusing to PUT index "${name}".*NOT additive.*field "legacyOnly"`, 's')
+      );
+      assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0, 'and it must refuse BEFORE writing anything');
+    });
+
+    // An empty switch means Cosmos answers, so the index is not serving: this is its rebuild window.
+    await t.test(`run() writes a non-additive ${name} with its switch unset`, async (tt) => {
+      const calls = servingDroppable(tt, name);
+      const liveNames = script.servingNames(configWith({}));
+      await script.run({ endpoint: ENDPOINT, live: true, only: name, liveNames, log: () => {} });
+      assert.strictEqual(
+        calls.filter(c => c.method === 'PUT' && new RegExp(`/indexes/${name}\\?`).test(c.url)).length, 1);
+    });
+  }
+
   await t.test('a DRY RUN is never refused, even when the names are the live ones', async (tt) => {
     // The guard used to run before the dry-run split, so once the rename made the committed names
     // the live ones, the first command an operator reaches for during an incident exited 1 without
@@ -396,21 +447,11 @@ test('apply-search-definitions', async (t) => {
     // 'run() refuses to write an index the app is serving from' above and mutation-proven there.
     // That guard now REFUSES a plain re-run of this script, which is correct: with the names
     // coincident, applying the definitions again would rewrite indexes serving traffic.
-    const { config } = require('../../src/search/ai-search');
     // The two keyword indexes have NO code default — absent means Cosmos — so the app "serves"
     // them only where a param file names one. Asked with the switch on, which is the state this
     // script is ever run against; with it off those indexes serve nothing and the guard has
     // nothing to protect.
-    const switched = { SEARCH_INDEX_ACTIVITIES: 'activities',
-      SEARCH_INDEX_PROJECT_NOTIFICATIONS: 'project-notifications' };
-    const saved = Object.fromEntries(
-      Object.keys(switched).map(key => [key, process.env[key]]));
-    Object.assign(process.env, switched);
-    const cfg = config();
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    const cfg = configWith(SWITCHED_ON);
     const live = new Set([cfg.index, cfg.projectsIndex, cfg.documentsIndex,
       cfg.activitiesIndex, cfg.notificationsIndex].filter(Boolean));
     const names = script.load(script.INDEX_DIR).map(d => d.body.name);
