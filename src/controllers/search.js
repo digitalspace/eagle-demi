@@ -1128,6 +1128,8 @@ function warnKeywordFallback(dataset, reason = 'off') {
 
 /** Test seam, like resetStaleChunkScopeCache: the warn-once latch outlives one test otherwise. */
 exports.resetKeywordFallbackWarnings = () => keywordFallbackWarned.clear();
+/** Test seam: drive the latch directly rather than through a whole request. */
+exports.warnKeywordFallback = warnKeywordFallback;
 
 /** `List` and `Organization`: one container, one handler, told apart by `kind`. */
 async function listRows({ access, query, pageNum, pageSize, sortBy }, kind) {
