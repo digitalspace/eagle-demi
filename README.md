@@ -695,8 +695,9 @@ with the live one on `demi-cosmos-<env>`. It never changes throughput. Cosmos re
 the background after the update, so queries on a new path can scan until that finishes.
 
 A dry run needs no `CONFIRM_PROD`, on prod too. `--live` refuses while `cosmos-nosql.bicep` has
-uncommitted changes. Prod `--live` also needs `CONFIRM_PROD=yes` and a HEAD already merged into
-`origin/main`. It prints a warning before an update that removes index paths.
+uncommitted changes. Prod `--live` also needs `CONFIRM_PROD=yes`, a working `git fetch` of
+`origin/main`, and a `cosmos-nosql.bicep` identical to the one on `origin/main`. It prints a
+warning before an update that removes index paths.
 
 Exit codes: 0 no drift, or applied and confirmed; 1 failure, including a live policy that still
 differs after the update; 2 bad usage or refused; 3 dry run found drift.

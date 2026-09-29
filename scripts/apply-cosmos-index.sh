@@ -15,8 +15,8 @@ diff. Dry run by default: applies nothing. --live applies the declared policy,
 then re-reads the live one and checks it matches.
 
 --live refuses while cosmos-nosql.bicep has uncommitted changes. Prod --live also
-needs CONFIRM_PROD=yes and HEAD merged into origin/main. A prod dry run needs
-neither.
+needs CONFIRM_PROD=yes, a successful fetch of origin/main, and cosmos-nosql.bicep
+identical to origin/main. A prod dry run needs none of these.
 
 extract prints the declared policy, normalised, and needs no Azure login.
 
@@ -143,15 +143,31 @@ if [ "$LIVE" = 'true' ]; then
     echo "✗ refusing to apply to prod. Export CONFIRM_PROD=yes if that is what you mean." >&2
     exit 2
   fi
-  if [ -n "$(git -C "$REPO_ROOT" status --porcelain -- "$BICEP_REL")" ]; then
+  # A git error must refuse, not read as a clean tree.
+  rc=0
+  porcelain=$(git -C "$REPO_ROOT" status --porcelain -- "$BICEP_REL") || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "✗ refusing --live: git status failed (exit ${rc}) for ${BICEP_REL}" >&2
+    exit 2
+  fi
+  if [ -n "$porcelain" ]; then
     echo "✗ refusing --live: ${BICEP_REL} has uncommitted changes. Commit them first." >&2
     exit 2
   fi
   if [ "$ENVIRONMENT" = 'prod' ]; then
-    git -C "$REPO_ROOT" fetch -q origin main \
-      || echo "WARNING: git fetch origin main failed; checking against the local origin/main" >&2
-    if ! git -C "$REPO_ROOT" merge-base --is-ancestor HEAD origin/main; then
-      echo "✗ refusing prod --live: HEAD is not merged into origin/main. Apply from merged code." >&2
+    if ! git -C "$REPO_ROOT" fetch -q origin main; then
+      echo "✗ refusing prod --live: git fetch origin main failed; cannot compare with origin/main" >&2
+      exit 2
+    fi
+    # Compare content, not ancestry: an old checkout of main is an ancestor too, and would drop
+    # indexes prod already has.
+    rc=0
+    git -C "$REPO_ROOT" diff --quiet origin/main -- "$BICEP_REL" || rc=$?
+    if [ "$rc" -eq 1 ]; then
+      echo "✗ refusing prod --live: cosmos-nosql.bicep differs from origin/main; merge or check out main first" >&2
+      exit 2
+    elif [ "$rc" -ne 0 ]; then
+      echo "✗ refusing prod --live: git diff against origin/main failed (exit ${rc})" >&2
       exit 2
     fi
   fi

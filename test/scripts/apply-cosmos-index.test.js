@@ -47,14 +47,19 @@ case "$1 $2 $4" in
 esac
 `;
 
-// Clean tree and HEAD merged by default; FAKE_GIT_DIRTY=1, FAKE_GIT_ANCESTOR=0, FAKE_GIT_FETCH_FAIL=1 flip them.
+// Clean tree, fetch works, bicep same as origin/main by default. FAKE_GIT_DIRTY, FAKE_GIT_STATUS_FAIL,
+// FAKE_GIT_FETCH_FAIL, FAKE_GIT_BICEP_DIFFERS, FAKE_GIT_DIFF_FAIL (each =1) flip one.
 const FAKE_GIT = `#!/usr/bin/env bash
 echo "$*" >> "$STUB_GIT_LOG"
 [ "$1" = -C ] && shift 2
 case "$1" in
-  status) [ "\${FAKE_GIT_DIRTY:-0}" = 1 ] && echo ' M azure/modules/cosmos-nosql.bicep'; exit 0 ;;
+  status)
+    [ "\${FAKE_GIT_STATUS_FAIL:-0}" = 1 ] && exit 128
+    [ "\${FAKE_GIT_DIRTY:-0}" = 1 ] && echo ' M azure/modules/cosmos-nosql.bicep'; exit 0 ;;
   fetch) [ "\${FAKE_GIT_FETCH_FAIL:-0}" != 1 ] ;;
-  merge-base) [ "\${FAKE_GIT_ANCESTOR:-1}" = 1 ] ;;
+  diff)
+    [ "\${FAKE_GIT_DIFF_FAIL:-0}" = 1 ] && exit 128
+    [ "\${FAKE_GIT_BICEP_DIFFERS:-0}" != 1 ] ;;
   *) exit 99 ;;
 esac
 `;
@@ -198,7 +203,7 @@ test('--live applies the declared policy to the named account and confirms it', 
   assert.match(run.stdout, /^applied/m);
   assert.doesNotMatch(run.stderr, /WARNING/);
   assert.match(run.gitCalls, /status --porcelain -- azure\/modules\/cosmos-nosql\.bicep/);
-  assert.doesNotMatch(run.gitCalls, /fetch|merge-base/);
+  assert.doesNotMatch(run.gitCalls, /fetch|diff/);
 });
 
 test('--live warns before removing an index path, then applies', () => {
@@ -216,6 +221,13 @@ test('--live refuses while cosmos-nosql.bicep has uncommitted changes', () => {
   assert.strictEqual(run.azCalls, '');
 });
 
+test('--live refuses when git status fails instead of reading a clean tree', () => {
+  const run = stubRun(['test', 'documents', '--live'], { env: { FAKE_GIT_STATUS_FAIL: '1' } });
+  assert.strictEqual(run.status, 2);
+  assert.match(run.stderr, /git status failed \(exit 128\)/);
+  assert.strictEqual(run.azCalls, '');
+});
+
 test('--live exits 1 when the live policy still differs after the update', () => {
   const run = stubRun(['test', 'documents', '--live'], { env: { FAKE_AZ_UPDATE_NOOP: '1' } });
   assert.strictEqual(run.status, 1);
@@ -223,7 +235,7 @@ test('--live exits 1 when the live policy still differs after the update', () =>
   assert.match(run.azCalls, /container update/);
 });
 
-test('prod --live with CONFIRM_PROD=yes on merged HEAD applies to the prod account', () => {
+test('prod --live with CONFIRM_PROD=yes and bicep equal to origin/main applies to the prod account', () => {
   const run = stubRun(['prod', 'documents', '--live'], { env: { CONFIRM_PROD: 'yes' } });
   assert.strictEqual(run.status, 0, run.stderr);
   const calls = run.azCalls.split('\n');
@@ -232,22 +244,35 @@ test('prod --live with CONFIRM_PROD=yes on merged HEAD applies to the prod accou
   assert.strictEqual(show.length, 2);
   assert.strictEqual(update.length, 1);
   for (const call of [...show, ...update]) assert.match(call, PROD_TARGET);
-  assert.match(run.gitCalls, /fetch -q origin main/);
-  assert.match(run.gitCalls, /merge-base --is-ancestor HEAD origin\/main/);
+  const gitArgv = run.gitCalls.trim().split('\n').map((c) => c.replace(/^-C \S+ /, ''));
+  assert.deepStrictEqual(gitArgv, [
+    'status --porcelain -- azure/modules/cosmos-nosql.bicep',
+    'fetch -q origin main',
+    'diff --quiet origin/main -- azure/modules/cosmos-nosql.bicep',
+  ]);
 });
 
-test('prod --live refuses when HEAD is not merged into origin/main', () => {
-  const run = stubRun(['prod', 'documents', '--live'], { env: { CONFIRM_PROD: 'yes', FAKE_GIT_ANCESTOR: '0' } });
+// A stale checkout of main passes an ancestry check but can still drop an index prod already has.
+test('prod --live refuses a merged HEAD whose bicep differs from origin/main', () => {
+  const run = stubRun(['prod', 'documents', '--live'], { env: { CONFIRM_PROD: 'yes', FAKE_GIT_BICEP_DIFFERS: '1' } });
   assert.strictEqual(run.status, 2);
-  assert.match(run.stderr, /HEAD is not merged into origin\/main/);
+  assert.match(run.stderr, /cosmos-nosql\.bicep differs from origin\/main; merge or check out main first/);
   assert.strictEqual(run.azCalls, '');
 });
 
-test('prod --live warns on a failed fetch and still checks ancestry', () => {
+test('prod --live refuses when git diff against origin/main errors', () => {
+  const run = stubRun(['prod', 'documents', '--live'], { env: { CONFIRM_PROD: 'yes', FAKE_GIT_DIFF_FAIL: '1' } });
+  assert.strictEqual(run.status, 2);
+  assert.match(run.stderr, /git diff against origin\/main failed \(exit 128\)/);
+  assert.strictEqual(run.azCalls, '');
+});
+
+test('prod --live refuses when git fetch origin main fails', () => {
   const run = stubRun(['prod', 'documents', '--live'], { env: { CONFIRM_PROD: 'yes', FAKE_GIT_FETCH_FAIL: '1' } });
-  assert.strictEqual(run.status, 0, run.stderr);
-  assert.match(run.stderr, /WARNING: git fetch origin main failed/);
-  assert.match(run.gitCalls, /merge-base --is-ancestor/);
+  assert.strictEqual(run.status, 2);
+  assert.match(run.stderr, /git fetch origin main failed/);
+  assert.doesNotMatch(run.gitCalls, /diff/);
+  assert.strictEqual(run.azCalls, '');
 });
 
 for (const confirm of ['', 'YES', 'true']) {
