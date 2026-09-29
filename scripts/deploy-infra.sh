@@ -100,6 +100,7 @@ done
 # a .bicepparam file, so an environment variable is the only way to pass the switch through.
 export DEPLOY_FOUNDATION
 
+# SUBSCRIPTION and RESOURCE_GROUP are repeated in scripts/apply-cosmos-index.sh; change both together.
 case "$ENVIRONMENT" in
   test)
     SUBSCRIPTION='7897ceb1-9a86-4639-87d7-7f9ff67142b3'

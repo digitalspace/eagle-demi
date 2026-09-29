@@ -9,13 +9,20 @@ usage() {
 Usage: scripts/apply-cosmos-index.sh <test|prod> <container> [--live]
        scripts/apply-cosmos-index.sh extract <container>
 
-Compares the indexing policy declared for <container> in
-azure/modules/cosmos-nosql.bicep with the live one on demi-cosmos-<env>/demi and
-prints a unified diff. Dry run by default: prints the update command, runs
-nothing. --live runs it, then re-reads the live policy and checks it matches.
-Prod --live also needs CONFIRM_PROD=yes.
+Compiles azure/modules/cosmos-nosql.bicep, compares the indexing policy declared
+for <container> with the live one on demi-cosmos-<env>/demi and prints a unified
+diff. Dry run by default: applies nothing. --live applies the declared policy,
+then re-reads the live one and checks it matches.
+
+--live refuses while cosmos-nosql.bicep has uncommitted changes. Prod --live also
+needs CONFIRM_PROD=yes and HEAD merged into origin/main. A prod dry run needs
+neither.
 
 extract prints the declared policy, normalised, and needs no Azure login.
+
+Exit codes: 0 no drift, or applied and confirmed; 1 failure, including a live
+policy that still differs after --live; 2 bad usage or refused; 3 dry run found
+drift.
 
 Throughput is never touched. Cosmos rebuilds the index in the background after
 the update; queries on a newly added path can scan until it finishes.
@@ -23,17 +30,20 @@ EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BICEP="${REPO_ROOT}/azure/modules/cosmos-nosql.bicep"
+BICEP_REL='azure/modules/cosmos-nosql.bicep'
+BICEP="${REPO_ROOT}/${BICEP_REL}"
 DATABASE='demi'
 CONTAINER_TYPE='Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers'
 
-# Same shape for both sides, so a diff shows only real differences: the service returns nulls and
-# empty arrays the template never declares, and path order carries no meaning. compositeIndexes
-# keeps its order, because the path order inside a composite index does.
+# Drop the nulls and empty arrays the service adds, and sort what carries no order. Paths inside
+# one composite index keep their order; jq `sort` compares objects by sorted keys, so key order is moot.
 NORMALISE=$(cat <<'JQ'
 walk(if type == "object" then with_entries(select(.value != null and .value != [])) else . end)
 | reduce ("includedPaths", "excludedPaths", "spatialIndexes", "fullTextIndexes", "vectorIndexes") as $k
     (.; if (.[$k] | type) == "array" then .[$k] |= sort_by(.path) else . end)
+| if (.spatialIndexes | type) == "array"
+  then .spatialIndexes |= map(if (.types | type) == "array" then .types |= sort else . end) else . end
+| if (.compositeIndexes | type) == "array" then .compositeIndexes |= sort else . end
 JQ
 )
 
@@ -70,9 +80,26 @@ declared_policy() {
 }
 
 live_policy() {
-  az cosmosdb sql container show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" \
+  local raw
+  if ! raw=$(az cosmosdb sql container show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" \
     -a "$ACCOUNT" -d "$DATABASE" -n "$CONTAINER" --query resource.indexingPolicy -o json \
-    --only-show-errors | jq -S "$NORMALISE"
+    --only-show-errors); then
+    echo "✗ container ${CONTAINER} not found on ${ACCOUNT} (it may be conditional in bicep)" >&2
+    exit 1
+  fi
+  jq -S "$NORMALISE" <<<"$raw"
+}
+
+# Diff a live policy against the declared one into $WORK/diff.txt: 0 same, 1 differs, else exit 2.
+diff_policy() {
+  local live_label="$1" live_file="$2" rc=0
+  diff -u --label "$live_label" --label "declared cosmos-nosql.bicep" \
+    "$live_file" "${WORK}/declared.json" >"${WORK}/diff.txt" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "✗ diff failed (exit ${rc}) comparing the live and declared policies" >&2
+    exit 2
+  fi
+  return "$rc"
 }
 
 for arg in "$@"; do
@@ -94,7 +121,7 @@ if [ "$#" -eq 3 ]; then
   LIVE='true'
 fi
 
-# Same values as scripts/deploy-infra.sh.
+# Same values as the environment case in scripts/deploy-infra.sh; change both together.
 case "$ENVIRONMENT" in
   test)
     SUBSCRIPTION='7897ceb1-9a86-4639-87d7-7f9ff67142b3'
@@ -111,9 +138,23 @@ case "$ENVIRONMENT" in
 esac
 ACCOUNT="demi-cosmos-${ENVIRONMENT}"
 
-if [ "$ENVIRONMENT" = 'prod' ] && [ "$LIVE" = 'true' ] && [ "${CONFIRM_PROD:-}" != 'yes' ]; then
-  echo "✗ refusing to apply to prod. Export CONFIRM_PROD=yes if that is what you mean." >&2
-  exit 2
+if [ "$LIVE" = 'true' ]; then
+  if [ "$ENVIRONMENT" = 'prod' ] && [ "${CONFIRM_PROD:-}" != 'yes' ]; then
+    echo "✗ refusing to apply to prod. Export CONFIRM_PROD=yes if that is what you mean." >&2
+    exit 2
+  fi
+  if [ -n "$(git -C "$REPO_ROOT" status --porcelain -- "$BICEP_REL")" ]; then
+    echo "✗ refusing --live: ${BICEP_REL} has uncommitted changes. Commit them first." >&2
+    exit 2
+  fi
+  if [ "$ENVIRONMENT" = 'prod' ]; then
+    git -C "$REPO_ROOT" fetch -q origin main \
+      || echo "WARNING: git fetch origin main failed; checking against the local origin/main" >&2
+    if ! git -C "$REPO_ROOT" merge-base --is-ancestor HEAD origin/main; then
+      echo "✗ refusing prod --live: HEAD is not merged into origin/main. Apply from merged code." >&2
+      exit 2
+    fi
+  fi
 fi
 
 WORK=$(mktemp -d)
@@ -123,29 +164,30 @@ declared_policy "$CONTAINER" >"${WORK}/declared.json"
 live_policy >"${WORK}/live.json"
 
 TARGET="${ACCOUNT}/${DATABASE}/${CONTAINER}"
-if diff -u --label "live ${TARGET}" --label "declared cosmos-nosql.bicep" \
-  "${WORK}/live.json" "${WORK}/declared.json"; then
+if diff_policy "live ${TARGET}" "${WORK}/live.json"; then
   echo "no change: ${TARGET} already matches cosmos-nosql.bicep"
   exit 0
 fi
-
-UPDATE=(az cosmosdb sql container update --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP"
-  -a "$ACCOUNT" -d "$DATABASE" -n "$CONTAINER" --idx "@${WORK}/declared.json" -o none --only-show-errors)
+cat "${WORK}/diff.txt"
 
 if [ "$LIVE" != 'true' ]; then
   echo
-  echo "dry run, nothing applied. --live would run, with the declared side of the diff as the file:"
-  echo "  ${UPDATE[*]}"
-  exit 0
+  echo "dry run: would apply the declared policy to ${TARGET}; rerun with --live"
+  exit 3
+fi
+
+if grep -Eq '^-[[:space:]]+"path"' "${WORK}/diff.txt"; then
+  echo "WARNING: removes index paths" >&2
 fi
 
 echo
 echo "applying to ${TARGET}"
-"${UPDATE[@]}"
+az cosmosdb sql container update --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" \
+  -a "$ACCOUNT" -d "$DATABASE" -n "$CONTAINER" --idx "@${WORK}/declared.json" -o none --only-show-errors
 
 live_policy >"${WORK}/after.json"
-if ! diff -u --label "live ${TARGET} after update" --label "declared cosmos-nosql.bicep" \
-  "${WORK}/after.json" "${WORK}/declared.json"; then
+if ! diff_policy "live ${TARGET} after update" "${WORK}/after.json"; then
+  cat "${WORK}/diff.txt"
   echo "✗ live policy still differs from cosmos-nosql.bicep after the update" >&2
   exit 1
 fi

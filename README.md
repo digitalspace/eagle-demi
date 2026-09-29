@@ -678,17 +678,28 @@ A change to one container's `indexingPolicy` in `azure/modules/cosmos-nosql.bice
 policy in about a minute.
 
 ```bash
-# dry run: diff live against declared, print the update command
+# dry run: diff live against declared, apply nothing
 ./scripts/apply-cosmos-index.sh test documents
+./scripts/apply-cosmos-index.sh prod documents
 
 # apply, then re-read and check the live policy matches
 ./scripts/apply-cosmos-index.sh test documents --live
 CONFIRM_PROD=yes ./scripts/apply-cosmos-index.sh prod documents --live
+
+# print the declared policy only, no Azure login needed
+./scripts/apply-cosmos-index.sh extract documents
 ```
 
-It compiles the bicep, takes the named container's policy, and compares it with the live one on
-`demi-cosmos-<env>`. It never changes throughput. Cosmos rebuilds the index in the background after
-the update, so queries on a new path can scan until that finishes.
+It compiles `azure/modules/cosmos-nosql.bicep`, takes the named container's policy, and compares it
+with the live one on `demi-cosmos-<env>`. It never changes throughput. Cosmos rebuilds the index in
+the background after the update, so queries on a new path can scan until that finishes.
+
+A dry run needs no `CONFIRM_PROD`, on prod too. `--live` refuses while `cosmos-nosql.bicep` has
+uncommitted changes. Prod `--live` also needs `CONFIRM_PROD=yes` and a HEAD already merged into
+`origin/main`. It prints a warning before an update that removes index paths.
+
+Exit codes: 0 no drift, or applied and confirmed; 1 failure, including a live policy that still
+differs after the update; 2 bad usage or refused; 3 dry run found drift.
 
 It does not record a foundation deployment. The next `deploy-infra.sh <env> --live` still sees
 `cosmos-nosql.bicep` changed since the last `--foundation` run and refuses until one runs.
