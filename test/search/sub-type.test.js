@@ -36,4 +36,14 @@ test('normalizeSubType', async (t) => {
     assert.strictEqual(normalizeSubType(name), 'Solid Waste Management', 'no year reads as 2018');
     assert.strictEqual(normalizeSubType(name, 'unknown'), 'Solid Waste Management');
   });
+
+  await t.test('marine port takes the 2002 name only under the 2002 Act or earlier', () => {
+    const name = 'Marine Port Projects';
+    assert.strictEqual(normalizeSubType(name, 2002), 'Marine Port Facilities');
+    assert.strictEqual(normalizeSubType(name, '2002 Environmental Assessment Act'),
+      'Marine Port Facilities');
+    assert.strictEqual(normalizeSubType(name, 1996), 'Marine Port Facilities');
+    assert.strictEqual(normalizeSubType(name, 2018), name);
+    assert.strictEqual(normalizeSubType(name), name, 'no year reads as 2018');
+  });
 });

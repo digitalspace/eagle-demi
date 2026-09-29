@@ -110,6 +110,22 @@ test('field precedence — Track wins, Eagle fills gaps', async (t) => {
  * resolves the ObjectId-bearing ones before pushing — the merge has no Mongo to resolve them
  * against — so these cases pin the SHAPE that arrives as much as the fact that it lands.
  */
+// The index filters `sector` and `projectSubType` by exact match; "Groundwater Extraction " (9 rows)
+// matched no filter value.
+test('sector and sub-type are stored trimmed', async (t) => {
+  await t.test('on a Track-matched project', () => {
+    const merged = mergeTrackProject({ ...TRACK_207, sub_type_name: ' Power Plants  ' },
+      eagleFor(TRACK_207, { sector: 'Groundwater Extraction ' }), OPTS);
+    assert.strictEqual(merged.sector, 'Groundwater Extraction');
+    assert.strictEqual(merged.projectSubType, 'Power Plants');
+  });
+
+  await t.test('on an Eagle-only project', () => {
+    const merged = mergeEagleOnlyProject(eagleFor(TRACK_207, { sector: '  Dams ' }), OPTS);
+    assert.strictEqual(merged.sector, 'Dams');
+  });
+});
+
 test('the pushed-enriched Eagle project record', async (t) => {
   const ENRICHED = {
     CEAALink: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80000',

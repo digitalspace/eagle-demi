@@ -516,6 +516,18 @@ function redactIndexProject(hit, access) {
   return redactForAccess('index-projects', { ...hit, vis: dialsForIndex(dials) }, access);
 }
 
+/**
+ * The wire `sector`: Track's sub-type, named for the legislation year, when the STORED row has no
+ * sector. Asked of the stored row, not the redacted one, or a sector a dial withholds would come
+ * back as the sub-type. Trimmed, as the merge stores it; rows written before that may still carry
+ * a trailing space. Display only: `and[sector]` and `sortBy=sector` read the index column.
+ */
+function wireSector(stored, shown, legislationYear) {
+  const text = v => (typeof v === 'string' ? v.trim() : '');
+  if (text(stored.sector)) return text(shown.sector) || 'Other';
+  return normalizeSubType(shown.projectSubType, legislationYear) || 'Other';
+}
+
 // `listByIdsUnscoped` is cross-partition, so its caller keeps each read to this many ids.
 const UPDATE_DOCUMENT_BATCH = 200;
 
@@ -1445,9 +1457,7 @@ exports.search = async (req, res) => {
                 trackProjectId: String(doc.id).startsWith('eagle-') ? null : String(doc.id),
                 legacyEagleId: doc.legacyEagleId || '',
                 name: doc.name || doc.displayName || 'Unnamed Project',
-                // Track's sub-type when Eagle has no sector. The index holds no legislation year,
-                // so a renamed sub-type takes its 2018 name here.
-                sector: doc.sector || normalizeSubType(doc.projectSubType) || 'Other',
+                sector: wireSector(hit, doc, doc.legislationYear),
                 status: doc.status || 'Active',
                 centroid: geoPoint(doc.centroid),
                 region: doc.region || 'British Columbia',
@@ -1540,9 +1550,9 @@ exports.search = async (req, res) => {
             // registry is Active. See wiki Search-Index-Reference#cosmos-and-index-field-names-differ.
             legacyEagleId: row.eagleId || '',
             name: row.name || 'Unnamed Project',
-            // Track's sub-type when Eagle has no sector, named for the project's legislation year.
-            sector: row.sector ||
-              normalizeSubType(row.projectSubType, row.legislationYear ?? row.legislation) || 'Other',
+            // `legislation` too: the index has only `legislationYear`, so a row with the label
+            // alone reads as 2018 on the keyword path.
+            sector: wireSector(p, row, row.legislationYear ?? row.legislation),
             // ONE stored name: the writers now rename at the edge (`controllers/nosql/project.js`),
             // so `status` is a wire name only and no row can carry it.
             status: row.projectState || 'Active',
