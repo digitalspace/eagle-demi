@@ -8,7 +8,6 @@ import {
   passageRowFrom,
   readCounts,
   resetCountsProbe,
-  searchKeyword,
   useFilterSources,
 } from './search-api';
 
@@ -33,13 +32,6 @@ beforeEach(() => resetCountsProbe());
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.mocked(trackException).mockClear();
-});
-
-describe('searchKeyword', () => {
-  it('searches as an empty keyword below two characters', () => {
-    expect(searchKeyword(' a ')).toBe('');
-    expect(searchKeyword(' ab ')).toBe('ab');
-  });
 });
 
 describe('buildSearchQuery', () => {

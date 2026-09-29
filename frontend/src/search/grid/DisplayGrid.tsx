@@ -16,6 +16,7 @@ import {
   type SortOption,
   type SortState,
 } from '../grid-types';
+import { RELEVANCE_SORT } from '../grid-url';
 import { toTerms } from '../highlight';
 import { savedQueryRecordLabel, savedQueryUrl } from '../saved-query';
 import { countText } from './grid-format';
@@ -61,10 +62,10 @@ export const NARROW_QUERY = '(max-width: 719.98px)';
 const SKELETON_ROWS = Array.from({ length: 5 }, (_, index) => index);
 
 /** The sort select offered where no column heading can be clicked: lists and narrow cards. */
-function sortOptionsFor(columns: GridColumn<Row>[], sort: SortState | null): SortOption[] {
+function sortOptionsFor(columns: GridColumn<Row>[], sort: SortState | null, relevance: boolean): SortOption[] {
   const date = columns.find((column) => column.primaryDate) ?? columns.find((column) => column.date);
   const name = columns.find((column) => column.link) ?? columns.find((column) => column.sortable);
-  const options: SortOption[] = [];
+  const options: SortOption[] = relevance ? [{ value: RELEVANCE_SORT, label: 'Relevance' }] : [];
   if (date?.sortable) {
     options.push({ value: `-${date.key}`, label: 'Newest first' }, { value: `+${date.key}`, label: 'Oldest first' });
   }
@@ -121,6 +122,8 @@ export interface DisplayGridProps {
   headerless: boolean;
   listRow: (row: Row) => ListRowData;
   sortOptions?: SortOption[];
+  /** A keyword search: the sort select offers relevance first. */
+  relevance: boolean;
   /** The page draws the records itself (passages); the grid keeps its frame. */
   body?: ReactNode;
   footer: boolean;
@@ -151,8 +154,10 @@ export function DisplayGrid(props: DisplayGridProps) {
   const cardMode = narrow && !listMode && !showEmpty;
   const showHead = !listMode && !props.headerless && !cardMode && (!showEmpty || anyFilterSet(filters));
   const showFilterRow = showHead && columns.some((column) => !!column.filter);
-  const sortChoices = props.sortOptions ?? sortOptionsFor(columns, sort);
-  const showSortBar = !showEmpty && (listMode || cardMode) && sortChoices.length > 0;
+  const sortChoices = props.sortOptions ?? sortOptionsFor(columns, sort, props.relevance);
+  // A derived select with one choice has nothing to pick; a list the page supplies shows as given.
+  const showSortBar =
+    !showEmpty && (listMode || cardMode) && sortChoices.length > (props.sortOptions ? 0 : 1);
   const sortValue = sort ? sortValueOf(sort) : '';
   // A list, a headerless type, a narrow card or an empty result draws no filter row.
   const panelFields = showFilterRow

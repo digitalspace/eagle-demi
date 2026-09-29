@@ -17,6 +17,11 @@ export const DEFAULT_PAGE_SIZE = 25;
 /** Names & details sorts by posted date; inside-document search sorts by match count. */
 export const DEFAULT_SORT = '-datePosted';
 export const INSIDE_SORT = '-matches';
+/** demi-search reads `-score` as "issue no $orderby", which leaves the relevance ranking in place. */
+export const RELEVANCE_SORT = '-score';
+
+/** Shortest keyword worth a round trip. One character matches most of the corpus. */
+export const MIN_KEYWORD_LENGTH = 2;
 
 /** URL keys the grid owns. Anything else on the query string is a filter id. */
 export const RESERVED_PARAMS = [
@@ -33,6 +38,7 @@ export interface GridUrlState {
   keywords: string;
   record: RecordType;
   scope: SearchScope;
+  /** The sort the reader chose. Empty leaves the order to `implicitSort`. */
   sortBy: string;
   /** 1-based, as the API counts pages. */
   currentPage: number;
@@ -44,7 +50,7 @@ export interface GridUrlState {
 }
 
 export interface GridDefaults {
-  /** Sort applied when the URL names none, and restored when the scope returns to names. */
+  /** The record's own order, used when the URL names no sort and there is no keyword. */
   defaultSort?: string;
   defaultPageSize?: number;
 }
@@ -94,6 +100,23 @@ export function readFilterValue(raw: string): FilterValue {
   return raw.includes(',') ? raw.split(',').filter((part) => part !== '') : raw;
 }
 
+/**
+ * What a typed box searches for. Anything shorter than the minimum searches as an empty keyword:
+ * backspacing to one character restores the unfiltered list instead of leaving the last results up.
+ */
+export function searchKeyword(keywords: string): string {
+  return keywords.trim().length >= MIN_KEYWORD_LENGTH ? keywords.trim() : '';
+}
+
+/**
+ * The order a search takes when the reader has not chosen one: match count inside documents,
+ * relevance for a keyword, otherwise the record's own sort.
+ */
+export function implicitSort(keywords: string, scope: SearchScope, defaultSort = DEFAULT_SORT): string {
+  if (scope === 'inside') return INSIDE_SORT;
+  return searchKeyword(keywords) ? RELEVANCE_SORT : defaultSort;
+}
+
 /** Reads the grid's URL schema off a query string. */
 export function parseGridParams(search: URLSearchParams, defaults: GridDefaults = {}): GridUrlState {
   const params = paramsToObject(search);
@@ -115,11 +138,7 @@ export function parseGridParams(search: URLSearchParams, defaults: GridDefaults 
     keywords: String(params['keywords'] ?? ''),
     record,
     scope,
-    sortBy: params['sortBy']
-      ? normalizeSortBy(String(params['sortBy']))
-      : scope === 'inside'
-        ? INSIDE_SORT
-        : (defaults.defaultSort ?? DEFAULT_SORT),
+    sortBy: params['sortBy'] ? normalizeSortBy(String(params['sortBy'])) : '',
     currentPage: Number.isFinite(page) && page > 0 ? page : 1,
     pageSize: PAGE_SIZES.includes(size) ? size : (defaults.defaultPageSize ?? DEFAULT_PAGE_SIZE),
     hiddenColumns: params['cols'] ? String(params['cols']).split(',').filter(Boolean) : [],

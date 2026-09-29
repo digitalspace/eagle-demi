@@ -3,7 +3,10 @@ import {
   DEFAULT_RECORD,
   DEFAULT_SORT,
   INSIDE_SORT,
+  RELEVANCE_SORT,
+  implicitSort,
   parseGridParams,
+  searchKeyword,
   serializeGridParams,
   toggleSortDirection,
 } from './grid-url';
@@ -56,19 +59,13 @@ describe('grid-url', () => {
       expect(state.filters).toEqual({});
     });
 
-    it('falls back to the default sort when the URL carries none', () => {
-      expect(parseGridParams(new URLSearchParams('')).sortBy).toBe(DEFAULT_SORT);
-      expect(parseGridParams(new URLSearchParams('sortBy=')).sortBy).toBe(DEFAULT_SORT);
-      expect(
-        parseGridParams(new URLSearchParams('sortBy='), { defaultSort: '-dateAdded' }).sortBy,
-      ).toBe('-dateAdded');
+    it('reads no chosen sort when the URL carries none, so the implicit order can follow the keyword', () => {
+      expect(parseGridParams(new URLSearchParams('keywords=trans')).sortBy).toBe('');
+      expect(parseGridParams(new URLSearchParams('sortBy='), { defaultSort: '-dateAdded' }).sortBy).toBe('');
     });
 
-    it('sorts by match count inside documents, whatever the type default is', () => {
-      expect(
-        parseGridParams(new URLSearchParams('scope=inside'), { defaultSort: '-dateUpdated' })
-          .sortBy,
-      ).toBe(INSIDE_SORT);
+    it('keeps the sort the URL names alongside a keyword', () => {
+      expect(parseGridParams(new URLSearchParams('keywords=trans&sortBy=-datePosted')).sortBy).toBe('-datePosted');
     });
 
     it('leaves defaults and empty values off the query string', () => {
@@ -76,14 +73,40 @@ describe('grid-url', () => {
         keywords: '',
         record: DEFAULT_RECORD,
         scope: 'names',
-        sortBy: DEFAULT_SORT,
+        sortBy: '',
         currentPage: 1,
         pageSize: DEFAULT_PAGE_SIZE,
         hiddenColumns: [],
         filters: { proponent: [], region: '' },
       });
 
-      expect(params.toString()).toBe(`sortBy=${encodeURIComponent(DEFAULT_SORT)}`);
+      expect(params.toString()).toBe('');
+    });
+  });
+
+  describe('searchKeyword', () => {
+    it('searches as an empty keyword below two characters', () => {
+      expect(searchKeyword(' a ')).toBe('');
+      expect(searchKeyword(' ab ')).toBe('ab');
+    });
+  });
+
+  describe('implicitSort', () => {
+    it('ranks a keyword search by relevance', () => {
+      expect(implicitSort('trans', 'names', '-dateUpdated')).toBe(RELEVANCE_SORT);
+    });
+
+    it('takes the record sort when there is no keyword', () => {
+      expect(implicitSort('', 'names', '-dateUpdated')).toBe('-dateUpdated');
+      expect(implicitSort('', 'names')).toBe(DEFAULT_SORT);
+    });
+
+    it('takes the record sort for a keyword too short to search', () => {
+      expect(implicitSort(' t ', 'names', '-dateUpdated')).toBe('-dateUpdated');
+    });
+
+    it('sorts by match count inside documents, whatever the type default is', () => {
+      expect(implicitSort('habitat', 'inside', '-dateUpdated')).toBe(INSIDE_SORT);
     });
   });
 
