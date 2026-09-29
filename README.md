@@ -671,6 +671,40 @@ from. If any of them changed, or has an uncommitted edit, it refuses under `--li
 what-if. A change to `azure/main.bicep` or a `.bicepparam` file only warns, because those files
 change for application work too.
 
+### Cosmos indexing policy only
+
+A change to one container's `indexingPolicy` in `azure/modules/cosmos-nosql.bicep` does not need a
+`--foundation` run (about 32 minutes on prod). `scripts/apply-cosmos-index.sh` applies just that
+policy in about a minute.
+
+```bash
+# dry run: diff live against declared, apply nothing
+./scripts/apply-cosmos-index.sh test documents
+./scripts/apply-cosmos-index.sh prod documents
+
+# apply, then re-read and check the live policy matches
+./scripts/apply-cosmos-index.sh test documents --live
+CONFIRM_PROD=yes ./scripts/apply-cosmos-index.sh prod documents --live
+
+# print the declared policy only, no Azure login needed
+./scripts/apply-cosmos-index.sh extract documents
+```
+
+It compiles `azure/modules/cosmos-nosql.bicep`, takes the named container's policy, and compares it
+with the live one on `demi-cosmos-<env>`. It never changes throughput. Cosmos rebuilds the index in
+the background after the update, so queries on a new path can scan until that finishes.
+
+A dry run needs no `CONFIRM_PROD`, on prod too. `--live` refuses while `cosmos-nosql.bicep` has
+uncommitted changes. Prod `--live` also needs `CONFIRM_PROD=yes`, a working `git fetch` of
+`origin/main`, and a `cosmos-nosql.bicep` identical to the one on `origin/main`. It prints a
+warning before an update that removes index paths.
+
+Exit codes: 0 no drift, or applied and confirmed; 1 failure, including a live policy that still
+differs after the update; 2 bad usage or refused; 3 dry run found drift.
+
+It does not record a foundation deployment. The next `deploy-infra.sh <env> --live` still sees
+`cosmos-nosql.bicep` changed since the last `--foundation` run and refuses until one runs.
+
 ### Secrets live in Key Vault
 
 `demi-kv-<env>` holds the credentials the API resolves at runtime as
