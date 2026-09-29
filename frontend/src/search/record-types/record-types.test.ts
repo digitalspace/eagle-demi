@@ -9,6 +9,7 @@ import {
   subjectName,
 } from './activities';
 import { proponentName } from './projects';
+import { toOptions } from './record-type';
 import { RECORD_TYPE_CONFIGS, projectPath, recordConfig, type RecordTypeConfig } from './index';
 
 /** Every filter id a record type can put on the wire: its column filters and its panel fields. */
@@ -174,6 +175,46 @@ describe('projects helpers', () => {
     it('names a proponent that arrived as a bare string', () => {
       expect(proponentName({ proponent: 'Acme' })).toBe('Acme');
     });
+  });
+});
+
+describe('toOptions', () => {
+  it('keeps each List term under its own id and Act, and adds no Act to a term without one', () => {
+    expect(
+      toOptions([
+        { _id: 'a02', name: 'Proponent', type: 'author', legislation: 2002 },
+        { _id: 'a18', name: 'Proponent', type: 'author', legislation: 2018 },
+        { code: 'Mines', name: 'Mines' },
+      ]),
+    ).toStrictEqual([
+      { value: 'a02', label: 'Proponent', legislation: '2002' },
+      { value: 'a18', label: 'Proponent', legislation: '2018' },
+      { value: 'Mines', label: 'Mines' },
+    ]);
+  });
+
+  it('reads a zero Act, number or text, as no Act', () => {
+    expect(
+      toOptions([
+        { _id: 'n0', name: 'Proponent', legislation: 0 },
+        { _id: 's0', name: 'Proponent', legislation: '0' },
+      ]),
+    ).toStrictEqual([
+      { value: 'n0', label: 'Proponent' },
+      { value: 's0', label: 'Proponent' },
+    ]);
+  });
+});
+
+describe('projects options', () => {
+  it('offers a phase held under both Acts once per Act, each with its own id', () => {
+    const phase = (id: string, legislation: number) => ({ _id: id, name: 'Construction', type: 'projectPhase', legislation });
+    const options = recordConfig('projects').optionsFrom([phase('ph02', 2002), phase('ph18', 2018)], []);
+
+    expect(options['currentPhaseName']).toStrictEqual([
+      { value: 'ph02', label: 'Construction', legislation: '2002' },
+      { value: 'ph18', label: 'Construction', legislation: '2018' },
+    ]);
   });
 });
 

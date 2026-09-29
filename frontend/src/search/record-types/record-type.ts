@@ -61,10 +61,26 @@ export interface RecordTypeConfig<Row = Record<string, unknown>> {
   rowTemplate?: RowTemplate;
 }
 
-/** An option's wire value is its `_id`, or its `code` for the lists that carry no id. */
+/** A `List` row's Act year as text, or undefined when it names no Act (absent, 0 or `'0'`). */
+export function actYear(item: OptionSource): string | undefined {
+  const year = Number(item.legislation);
+  return year > 0 ? String(year) : undefined;
+}
+
+/**
+ * An option's wire value is its `_id`, or its `code` for the lists that carry no id. A `List` term
+ * keeps its Act year: the same label under two Acts is two ids, and each narrows different records.
+ */
 export function toOptions(items: OptionSource[]): ValueOption[] {
   return items
-    .map((item) => ({ value: item._id ?? item.code ?? item.name ?? '', label: item.name ?? '' }))
+    .map((item): ValueOption => {
+      const legislation = actYear(item);
+      return {
+        value: item._id ?? item.code ?? item.name ?? '',
+        label: item.name ?? '',
+        ...(legislation ? { legislation } : {}),
+      };
+    })
     .filter((option) => option.value !== '' && option.label !== '');
 }
 

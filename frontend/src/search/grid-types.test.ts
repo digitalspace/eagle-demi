@@ -1,4 +1,4 @@
-import { columnFiltersForPanel, passageLabel, sortStateOf, type GridColumn } from './grid-types';
+import { columnFiltersForPanel, groupByLegislation, passageLabel, sortStateOf, type GridColumn } from './grid-types';
 
 describe('sortStateOf', () => {
   it('reads a leading minus as a descending sort on the field', () => {
@@ -55,5 +55,24 @@ describe('passageLabel', () => {
   it('labels a real page number as a page and anything else as a passage', () => {
     expect(passageLabel({ locator: 12, text: 'hit', pageNumbered: true })).toBe('Page 12');
     expect(passageLabel({ locator: 2, text: 'hit' })).toBe('Passage 2');
+  });
+});
+
+describe('groupByLegislation', () => {
+  it('puts the terms with no Act first, then each Act newest first, keeping order within a group', () => {
+    const groups = groupByLegislation([
+      { value: 'a02', label: 'Amendment', legislation: '2002' },
+      { value: 'none1', label: 'Other' },
+      { value: 'a18', label: 'Amendment', legislation: '2018' },
+      { value: 'p02', label: 'Proponent', legislation: '2002' },
+      { value: 'none2', label: 'Misc' },
+    ]);
+
+    expect(groups.map((group) => group.legislation)).toEqual(['', '2018', '2002']);
+    expect(groups.map((group) => group.options.map((option) => option.value))).toEqual([
+      ['none1', 'none2'],
+      ['a18'],
+      ['a02', 'p02'],
+    ]);
   });
 });

@@ -448,6 +448,23 @@ describe('UnifiedSearch', () => {
     expect(search().get('type')).toBe('l1');
   });
 
+  it('names the Act on a chip, so the same term picked under both Acts reads apart', async () => {
+    const amendment = (id: string, legislation: number) => ({ _id: id, name: 'Amendment', type: 'doctype', legislation });
+    stubApi({ List: [amendment('l02', 2002), amendment('l18', 2018)] });
+    renderAt('/search?type=l02,l18');
+
+    expect(await screen.findByRole('button', { name: 'Remove Document type Amendment (2002)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove Document type Amendment (2018)' })).toBeInTheDocument();
+  });
+
+  it('names the Act on a project phase chip', async () => {
+    const phase = (id: string, legislation: number) => ({ _id: id, name: 'Construction', type: 'projectPhase', legislation });
+    stubApi({ List: [phase('ph02', 2002), phase('ph18', 2018)] });
+    renderAt('/search?record=projects&currentPhaseName=ph18');
+
+    expect(await screen.findByRole('button', { name: 'Remove Phase Construction (2018)' })).toBeInTheDocument();
+  });
+
   it('empties a date field when its chip is removed', async () => {
     stubApi();
     const user = userEvent.setup();

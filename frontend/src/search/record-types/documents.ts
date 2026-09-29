@@ -1,5 +1,6 @@
-import type { GridCell, GridColumn, ValueOption } from '../grid-types';
+import { newestActFirst, type GridCell, type GridColumn, type ValueOption } from '../grid-types';
 import {
+  actYear,
   RECORD_DATASETS,
   toOptions,
   type OptionSource,
@@ -74,12 +75,10 @@ const COLUMNS: GridColumn<Record<string, unknown>>[] = [
 function legislationOptions(lists: OptionSource[]): ValueOption[] {
   const years = new Set<string>();
   for (const item of lists) {
-    if (item.legislation) years.add(String(item.legislation));
+    const year = actYear(item);
+    if (year) years.add(year);
   }
-  return [...years]
-    .sort()
-    .reverse()
-    .map((year) => ({ value: year, label: `${year} Act` }));
+  return [...years].sort(newestActFirst).map((year) => ({ value: year, label: `${year} Act` }));
 }
 
 /** All documents. */

@@ -10,6 +10,8 @@ export type ColumnFilter = 'text' | 'year' | 'values' | null;
 export interface ValueOption {
   value: string;
   label: string;
+  /** The Act year of a `List` term. Each Act holds its own copy of a label, under its own id. */
+  legislation?: string;
 }
 
 /** One cell's content, as a tagged union, so the column configs stay free of markup. */
@@ -94,6 +96,37 @@ export function sortStateOf(sortBy: string): SortState | null {
 
 /** Natural order, so "Volume 2 of 9" precedes "Volume 10 of 9". Client-side comparisons only. */
 export const gridCollator = new Intl.Collator(undefined, { numeric: true });
+
+/** A picked option as a chip or button names it: with its Act year, so same-label terms read apart. */
+export function optionLabel(option: ValueOption): string {
+  return option.legislation ? `${option.label} (${option.legislation})` : option.label;
+}
+
+export interface OptionGroup {
+  /** Empty for the options that belong to no Act. */
+  legislation: string;
+  options: ValueOption[];
+}
+
+/** Act years newest first, compared as numbers. The one Act order every picker and select shows. */
+export const newestActFirst = (a: string, b: string) => gridCollator.compare(b, a);
+
+/** Options split by Act, newest Act first. Options with no Act come first, in one group. */
+export function groupByLegislation(options: ValueOption[]): OptionGroup[] {
+  const groups = new Map<string, ValueOption[]>();
+  for (const option of options) {
+    const key = option.legislation ?? '';
+    const group = groups.get(key);
+    if (group) group.push(option);
+    else groups.set(key, [option]);
+  }
+  return [...groups]
+    .sort(([a], [b]) => (a === '' ? -1 : b === '' ? 1 : newestActFirst(a, b)))
+    .map(([legislation, grouped]) => ({ legislation, options: grouped }));
+}
+
+/** The heading over one Act's terms in a filter list. */
+export const actHeading = (legislation: string) => `${legislation} Act Terms`;
 
 /**
  * The column filters as advanced-panel fields. In list and headerless modes no column is on

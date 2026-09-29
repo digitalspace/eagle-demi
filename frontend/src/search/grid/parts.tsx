@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link } from 'react-router';
 import {
+  actHeading,
   gridCollator,
+  groupByLegislation,
+  optionLabel,
   passageLabel,
   type AdvancedField,
   type FilterValue,
@@ -281,6 +284,7 @@ function ValuePicker({
   const [typed, setTyped] = useState('');
   const anchor = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  const groupId = useId();
   // The narrowing belongs to one opening; the next one starts with every option.
   const close = useCallback(() => {
     setOpen(false);
@@ -289,10 +293,24 @@ function ValuePicker({
   useDismissable(open, anchor, button, close);
   const picked = options.filter((option) => selected.includes(option.value));
   const term = typed.trim().toLowerCase();
-  const shown = term ? options.filter((option) => option.label.toLowerCase().includes(term)) : options;
-  const buttonText = picked.length === 0 ? 'All' : picked.length === 1 ? picked[0].label : `${picked.length} selected`;
+  // Matched against the label with its Act year, so typing "2018" narrows to that Act's terms.
+  const shown = term ? options.filter((option) => optionLabel(option).toLowerCase().includes(term)) : options;
+  const buttonText = picked.length === 0 ? 'All' : picked.length === 1 ? optionLabel(picked[0]) : `${picked.length} selected`;
   const toggle = (value: string) =>
     onChange(selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]);
+  const checkbox = (option: ValueOption) => (
+    <label key={option.value} className="display-grid__option">
+      <input type="checkbox" checked={selected.includes(option.value)} onChange={() => toggle(option.value)} />
+      {option.label}
+      {/* The group heading shows the Act; the name needs it too, or both Acts' boxes read the same. */}
+      {option.legislation && (
+        <>
+          {' '}
+          <span className="display-grid__visually-hidden">({option.legislation})</span>
+        </>
+      )}
+    </label>
+  );
   // The span stands where Angular's inline host element stood, so the picker CSS lays out the same.
   return (
     <span ref={anchor}>
@@ -302,7 +320,7 @@ function ValuePicker({
         className={`display-grid__control display-grid__pick${picked.length > 0 ? ' display-grid__control--on' : ''}`}
         aria-label={`Filter by ${label}`}
         aria-expanded={open}
-        title={picked.length ? picked.map((option) => option.label).join(', ') : undefined}
+        title={picked.length ? picked.map(optionLabel).join(', ') : undefined}
         onClick={() => (open ? close() : setOpen(true))}
       >
         <span className="display-grid__pick-label">{buttonText}</span>
@@ -331,12 +349,18 @@ function ValuePicker({
               onChange={(event) => setTyped(event.target.value)}
             />
           )}
-          {shown.map((option) => (
-            <label key={option.value} className="display-grid__option">
-              <input type="checkbox" checked={selected.includes(option.value)} onChange={() => toggle(option.value)} />
-              {option.label}
-            </label>
-          ))}
+          {groupByLegislation(shown).map((group) => {
+            if (!group.legislation) return <Fragment key="">{group.options.map(checkbox)}</Fragment>;
+            const headingId = `${groupId}-${group.legislation.replace(/\W+/g, '-')}`;
+            return (
+              <div key={group.legislation} className="display-grid__picker-act" role="group" aria-labelledby={headingId}>
+                <p id={headingId} className="display-grid__picker-group">
+                  {actHeading(group.legislation)}
+                </p>
+                {group.options.map(checkbox)}
+              </div>
+            );
+          })}
         </div>
       )}
     </span>
@@ -518,6 +542,12 @@ function PanelText({ field, value, onChange }: { field: AdvancedField; value: st
   );
 }
 
+const selectOption = (option: ValueOption) => (
+  <option key={option.value} value={option.value}>
+    {optionLabel(option)}
+  </option>
+);
+
 export function AdvancedFilters({
   fields,
   values,
@@ -553,11 +583,15 @@ export function AdvancedFilters({
                 <span className="display-grid__panel-label">{field.label}</span>
                 <select className="display-grid__panel-control" value={value} onChange={(event) => set(event.target.value || null)}>
                   <option value="">All</option>
-                  {(field.options ?? []).map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
+                  {groupByLegislation(field.options ?? []).map((group) =>
+                    group.legislation ? (
+                      <optgroup key={group.legislation} label={actHeading(group.legislation)}>
+                        {group.options.map(selectOption)}
+                      </optgroup>
+                    ) : (
+                      <Fragment key="">{group.options.map(selectOption)}</Fragment>
+                    ),
+                  )}
                 </select>
               </label>
             );

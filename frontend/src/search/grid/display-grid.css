@@ -459,6 +459,18 @@
   margin-top: 2px;
 }
 
+.display-grid__picker-group {
+  margin: var(--layout-padding-small) 0 var(--layout-margin-hair);
+  color: var(--typography-color-primary);
+  font: var(--typography-bold-small-body);
+}
+
+/* A rule only between groups: the first group in the list sits right under the picker head. */
+:is(.display-grid__option, .display-grid__picker-act) + .display-grid__picker-act > .display-grid__picker-group {
+  padding-top: var(--layout-padding-xsmall);
+  border-top: var(--layout-border-width-small) solid var(--theme-gray-50);
+}
+
 .display-grid__picker-clear {
   padding: 0;
   border: none;
