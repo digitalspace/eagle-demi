@@ -12,6 +12,7 @@ const { filterFor, inClause } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const eagleQuery = require('../search/eagle-query');
 const groupChunks = require('../search/group-chunks');
+const { normalizeSubType } = require('../search/sub-type');
 const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
 const { EAGLE_OBJECT_ID } = projectsRepo;
@@ -1444,7 +1445,9 @@ exports.search = async (req, res) => {
                 trackProjectId: String(doc.id).startsWith('eagle-') ? null : String(doc.id),
                 legacyEagleId: doc.legacyEagleId || '',
                 name: doc.name || doc.displayName || 'Unnamed Project',
-                sector: doc.sector || 'Other',
+                // Track's sub-type when Eagle has no sector. The index holds no legislation year,
+                // so a renamed sub-type takes its 2018 name here.
+                sector: doc.sector || normalizeSubType(doc.projectSubType) || 'Other',
                 status: doc.status || 'Active',
                 centroid: geoPoint(doc.centroid),
                 region: doc.region || 'British Columbia',
@@ -1537,7 +1540,9 @@ exports.search = async (req, res) => {
             // registry is Active. See wiki Search-Index-Reference#cosmos-and-index-field-names-differ.
             legacyEagleId: row.eagleId || '',
             name: row.name || 'Unnamed Project',
-            sector: row.sector || 'Other',
+            // Track's sub-type when Eagle has no sector, named for the project's legislation year.
+            sector: row.sector ||
+              normalizeSubType(row.projectSubType, row.legislationYear ?? row.legislation) || 'Other',
             // ONE stored name: the writers now rename at the edge (`controllers/nosql/project.js`),
             // so `status` is a wire name only and no row can carry it.
             status: row.projectState || 'Active',
