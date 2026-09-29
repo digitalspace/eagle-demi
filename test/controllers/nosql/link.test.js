@@ -314,6 +314,27 @@ test('short link controller', async (t) => {
     assert.strictEqual(create.mock.callCount() + repoint.mock.callCount() + remove.mock.callCount(), 0);
   });
 
+  await t.test('a sealed project\'s code is a 409 even for an admin, without the project id', async () => {
+    const SEALED_310 = { id: '310', shortCode: 'sealed-site', read: ['compliance'] };
+    t.mock.method(projects, 'listShortCodeOwners', async () => ['310']);
+    t.mock.method(projects, 'getById', gatedGetById(SEALED_310));
+    t.mock.method(links, 'getById', async (code) => ({ id: code, url: DEST, note: null }));
+    const repoint = t.mock.method(links, 'repoint', async () => ({ id: 'x', url: DEST }));
+    const remove = t.mock.method(links, 'remove', async () => true);
+
+    const moved = mockRes();
+    await linkController.updateLink(
+      { params: { code: 'sealed-site' }, query: {}, user: ADMIN, body: { url: DEST } }, moved);
+    const deleted = mockRes();
+    await linkController.deleteLink({ params: { code: 'sealed-site' }, query: {}, user: ADMIN }, deleted);
+
+    for (const res of [moved, deleted]) {
+      assert.strictEqual(res.statusCode, 409, 'a sealed holder still owns the code');
+      assert.deepStrictEqual(Object.keys(res.body), ['error'], 'the sealed project is not named');
+    }
+    assert.strictEqual(repoint.mock.callCount() + remove.mock.callCount(), 0);
+  });
+
   await t.test('the project named is the Track row over its Eagle-only twin, current over legacy', async () => {
     const rows = {
       // The twin a relink leaves behind still holds the code as current.

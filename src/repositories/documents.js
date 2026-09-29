@@ -934,7 +934,6 @@ module.exports = {
   listVisible,
   projectUploadMaxima,
   newestUploads,
-  RECENT_UPLOAD_DOCUMENTS,
   listSealed,
   countVisible,
   getById,

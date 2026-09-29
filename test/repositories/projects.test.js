@@ -35,6 +35,39 @@ test('project short-code reads and writes', async (t) => {
     assert.deepStrictEqual(await projectsRepo.listShortCodeOwners('site-c'), ['207']);
     assert.match(spec.query, /c\.shortCode = @code OR ARRAY_CONTAINS\(c\.legacyShortCodes, @code\)/);
     assert.deepStrictEqual(spec.parameters, [{ name: '@code', value: 'site-c' }]);
+    assert.doesNotMatch(spec.query, /c\.read/, 'an ownership check applies no visibility clause');
+  });
+
+  const stored = [
+    { id: '310', read: ['compliance'], shortCode: 'sealed-site', legacyShortCodes: [] },
+    { id: '312', shortCode: 'readless-site', legacyShortCodes: [] },
+    { id: '311', read: ['public'], shortCode: 'other', legacyShortCodes: [] }
+  ];
+  /**
+   * Cosmos as the ACL predicate would see it: a seal exclusion in the query hides a sealed row, and
+   * on a row with no `read[]` the term is undefined, so that row drops out too.
+   */
+  const storedQuery = async (_container, spec) => {
+    const code = spec.parameters.find(p => p.name === '@code').value;
+    const sealed = /NOT ARRAY_CONTAINS\(c\.read, '([^']+)'\)/.exec(spec.query);
+    const items = stored
+      .filter(row => row.shortCode === code || row.legacyShortCodes.includes(code))
+      .filter(row => !sealed || (row.read && !row.read.includes(sealed[1])))
+      .map(row => ({ id: row.id }));
+    return { items };
+  };
+
+  await t.test('a sealed project still owns its code', async () => {
+    t.mock.method(cosmos, 'query', storedQuery);
+
+    assert.deepStrictEqual(await projectsRepo.listShortCodeOwners('sealed-site'), ['310'],
+      'a hidden owner would let PUT or DELETE /links repoint a sealed project\'s code');
+  });
+
+  await t.test('a project with no read[] still owns its code', async () => {
+    t.mock.method(cosmos, 'query', storedQuery);
+
+    assert.deepStrictEqual(await projectsRepo.listShortCodeOwners('readless-site'), ['312']);
   });
 
   await t.test('the patch sets only the three short-link fields, guarded on the etag', async () => {

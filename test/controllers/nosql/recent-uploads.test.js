@@ -398,6 +398,53 @@ test('GET /documents/recent-uploads', async (t) => {
     assert.strictEqual(aggregates.length, 0, 'a refused limit must not reach Cosmos');
   });
 
+  await t.test('a refused limit is marked uncacheable and varies by credential', async (t2) => {
+    setup(t2);
+    stubCosmos(t2, [], {});
+
+    await withServer(async (call) => {
+      const res = await call('/documents/recent-uploads?limit=abc');
+      assert.strictEqual(res.status, 400);
+      assert.strictEqual(res.headers.get('vary'), 'Authorization, X-Api-Key');
+      assert.strictEqual(res.headers.get('cache-control'), 'private, no-store',
+        'a shared cache must not store the refusal and replay it for a valid request');
+    });
+  });
+
+  await t.test('a failed ranking for an anonymous caller is not marked cacheable', async (t2) => {
+    setup(t2);
+    t2.mock.method(cosmos, 'query', async () => { throw new Error('cosmos unavailable'); });
+    t2.mock.method(logger, 'error', () => {});
+
+    await withServer(async (call) => {
+      const res = await call('/documents/recent-uploads?limit=3');
+      assert.strictEqual(res.status, 500);
+      assert.strictEqual(res.headers.get('cache-control'), 'private, no-store',
+        'a shared cache holding the 500 for five minutes would blank the panel for every visitor');
+      assert.strictEqual(res.headers.get('vary'), 'Authorization, X-Api-Key');
+    });
+  });
+
+  await t.test('the memo entry lives TTL-1 ms and is gone at exactly TTL ms', async (t2) => {
+    const TTL_MS = 60_000;
+    const { advance } = setup(t2);
+    const { aggregates } = stubCosmos(t2, [doc('d1', '101', '2026-09-10T10:00:00.000Z')],
+      { 101: project('101') });
+
+    await withServer(async (call) => {
+      await call('/documents/recent-uploads?limit=3');
+      assert.strictEqual(aggregates.length, 1);
+
+      advance(TTL_MS - 1);
+      await call('/documents/recent-uploads?limit=3');
+      assert.strictEqual(aggregates.length, 1, 'one millisecond short of the TTL is still a hit');
+
+      advance(1);
+      await call('/documents/recent-uploads?limit=3');
+      assert.strictEqual(aggregates.length, 2, 'exactly TTL ms elapsed is a miss');
+    });
+  });
+
   await t.test('caches the anonymous answer for a minute and recomputes after it', async (t2) => {
     const { advance } = setup(t2);
     const { aggregates } = stubCosmos(t2, [doc('d1', '101', '2026-09-10T10:00:00.000Z')],
@@ -406,6 +453,8 @@ test('GET /documents/recent-uploads', async (t) => {
     await withServer(async (call) => {
       const first = await call('/documents/recent-uploads?limit=3');
       const second = await call('/documents/recent-uploads?limit=3');
+      assert.strictEqual(second.headers.get('cache-control'), 'public, max-age=300',
+        'a memo hit is the same public answer as the computed one');
       assert.deepStrictEqual(await second.json(), await first.json());
       assert.strictEqual(aggregates.length, 1, 'the second hit inside the TTL must not touch Cosmos');
 
