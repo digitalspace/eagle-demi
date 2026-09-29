@@ -5,6 +5,7 @@ import { EAGLE_OBJECT_ID } from '../api/documents';
 import { config as appConfig } from '../config';
 import { useDownload } from '../hooks/useDownload';
 import {
+  optionLabel,
   sortStateOf,
   type AdvancedField,
   type FilterValue,
@@ -96,6 +97,7 @@ function gridDate(value: unknown): string {
 function pickText(options: ValueOption[], pick: unknown): string {
   const held = pick && typeof pick === 'object' ? (pick as Record<string, unknown>) : null;
   const raw = held ? String(held['name'] ?? held['_id'] ?? '') : String(pick ?? '');
+  // Bare label, no Act year: a cell names one record's own term, so there is no twin to tell apart.
   const label = options.find((option) => option.value === raw)?.label;
   if (label !== undefined) return label;
   // A bare ObjectId in an Author cell tells the reader less than a blank.
@@ -127,8 +129,10 @@ const DECLARED_FILTERS = Object.fromEntries(
   }),
 ) as Record<RecordType, string[]>;
 
-const labelOfValue = (options: ValueOption[], value: string) =>
-  options.find((option) => option.value === value)?.label ?? value;
+const labelOfValue = (options: ValueOption[], value: string) => {
+  const option = options.find((item) => item.value === value);
+  return option ? optionLabel(option) : value;
+};
 
 /**
  * The one search page: a keyword, a record type, and the shared grid configured by that type.
