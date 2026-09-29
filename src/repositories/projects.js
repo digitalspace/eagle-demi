@@ -13,7 +13,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead, systemAccess } = require('../helpers/access-sql');
+const { canRead } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const { duplicateIdError } = require('../helpers/duplicate-id');
 const { eagleOnlyProjectId } = require('../merge/project');
@@ -379,19 +379,16 @@ async function patchVis(id, vis) {
 }
 
 /**
- * Ids of every project holding `code`, current or legacy. systemAccess: a code is claimed whether or
- * not this caller may see the project that claims it.
+ * Ids of every project holding `code`, current or legacy. Unfiltered, not systemAccess: that still
+ * hides sealed (`compliance`) rows and rows with no `read[]`, and both hold their codes all the same.
+ * Ids only; the link controller answers 409 without an id for a holder the caller cannot read;
+ * other callers use the ids internally.
  */
 async function listShortCodeOwners(code) {
-  const spec = selectWhere({
-    access: systemAccess(),
-    partitionField: PARTITION_FIELD,
-    criteria: [{
-      clause: '(c.shortCode = @code OR ARRAY_CONTAINS(c.legacyShortCodes, @code))',
-      params: [{ name: '@code', value: code }]
-    }],
-    select: 'c.id'
-  });
+  const spec = {
+    query: 'SELECT c.id FROM c WHERE (c.shortCode = @code OR ARRAY_CONTAINS(c.legacyShortCodes, @code))',
+    parameters: [{ name: '@code', value: code }]
+  };
   return (await fetchAll(CONTAINER, spec)).map(row => String(row.id));
 }
 

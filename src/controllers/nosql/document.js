@@ -472,22 +472,27 @@ exports.getRecentUploads = async (req, res) => {
   try {
     const access = resolveAccess(req);
 
+    // The rows vary by caller, and a credential can arrive in either header — a shared cache keyed
+    // on the URL alone would hand one caller's ranking to the next visitor. Private until a success
+    // body is sent, so neither a 400 nor a 500 is ever stored.
+    res.setHeader('Vary', 'Authorization, X-Api-Key');
+    res.setHeader('Cache-Control', 'private, no-store');
+
     const { limit, error } = recentUploadsLimit(req.query.limit);
     if (error) return res.status(400).json({ error });
 
     const anonymous = isAnonymous(access);
-
-    // The rows vary by caller, and a credential can arrive in either header — a shared cache keyed
-    // on the URL alone would hand one caller's ranking to the next visitor.
-    res.setHeader('Vary', 'Authorization, X-Api-Key');
-    res.setHeader('Cache-Control', anonymous
-      ? `public, max-age=${RECENT_UPLOADS_MAX_AGE}`
-      : 'private, no-store');
+    const markCacheable = () => {
+      if (anonymous) res.setHeader('Cache-Control', `public, max-age=${RECENT_UPLOADS_MAX_AGE}`);
+    };
 
     const now = Date.now();
     const memoKey = `${access.tier}:${limit}`;
     const memoed = anonymous ? memoRead(memoKey, now) : null;
-    if (memoed) return res.json({ items: memoed });
+    if (memoed) {
+      markCacheable();
+      return res.json({ items: memoed });
+    }
 
     const ranked = await rankRecentUploads(access, limit);
     if (anonymous) recentUploadsMemo.set(memoKey, { items: ranked, at: now });
@@ -496,6 +501,7 @@ exports.getRecentUploads = async (req, res) => {
       logger.info(`recent uploads: ${ranked.length} of ${limit} projects had a readable upload`);
     }
 
+    markCacheable();
     return res.json({ items: ranked });
   } catch (err) {
     return serverError(res, err, 'document controller failed');

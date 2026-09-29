@@ -1103,8 +1103,9 @@ paths:
         lists what it has. Projects tie-break by id and documents tie-break by id, so the same data
         renders the same way. `dateUploaded` on the project is that of the first document listed.
 
-        Anonymous answers carry `Cache-Control: public, max-age=300`; a request that presented a
-        credential carries `private, no-store`, because the rows differ per caller. Both carry
+        A 200 to an anonymous request carries `Cache-Control: public, max-age=300`. A 200 to a
+        request that presented a credential carries `private, no-store`, because the rows differ
+        per caller, and so does every error (400 or 500) for every caller. All of them carry
         `Vary: Authorization, X-Api-Key`.
       parameters:
         - name: limit
@@ -1165,7 +1166,15 @@ paths:
                               dateUploaded:
                                 type: string
         '400':
-          description: limit was not a plain whole number between 1 and 10.
+          description: >-
+            limit was not a plain whole number between 1 and 10. Carries
+            `Cache-Control: private, no-store` and `Vary: Authorization, X-Api-Key` for every
+            caller, anonymous included, so no shared cache stores it.
+        '500':
+          description: >-
+            `{ "success": false, "error": "Internal server error." }` — the ranking read failed.
+            Carries `Cache-Control: private, no-store` and `Vary: Authorization, X-Api-Key` for
+            every caller.
 
   /api/documents/extract:
     post:
