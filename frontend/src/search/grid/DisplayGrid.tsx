@@ -155,7 +155,9 @@ export function DisplayGrid(props: DisplayGridProps) {
   const showHead = !listMode && !props.headerless && !cardMode && (!showEmpty || anyFilterSet(filters));
   const showFilterRow = showHead && columns.some((column) => !!column.filter);
   const sortChoices = props.sortOptions ?? sortOptionsFor(columns, sort, props.relevance);
-  const showSortBar = !showEmpty && (listMode || cardMode) && sortChoices.length > 0;
+  // A derived select with one choice has nothing to pick; a list the page supplies shows as given.
+  const showSortBar =
+    !showEmpty && (listMode || cardMode) && sortChoices.length > (props.sortOptions ? 0 : 1);
   const sortValue = sort ? sortValueOf(sort) : '';
   // A list, a headerless type, a narrow card or an empty result draws no filter row.
   const panelFields = showFilterRow

@@ -388,6 +388,41 @@ describe('UnifiedSearch', () => {
     expect(within(select).queryByRole('option', { name: 'Relevance' })).toBeNull();
   });
 
+  it('ranks by relevance once picked over a chosen sort, and returns to that sort when the keyword is cleared', async () => {
+    stubNarrow(true);
+    const fetchMock = stubApi();
+    const user = userEvent.setup();
+    renderAt('/search?keywords=trans&sortBy=-datePosted');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    await user.selectOptions(screen.getByRole('combobox', { name: /^Sort/ }), 'Relevance');
+    await waitFor(() => expect(searchesFor(fetchMock, 'Document').at(-1)).toContain('&sortBy=-score'));
+
+    await user.click(screen.getByRole('button', { name: 'Remove Search trans' }));
+    await waitFor(() => expect(searchesFor(fetchMock, 'Document').at(-1)).toContain('&sortBy=-datePosted'));
+  });
+
+  it('sends a relevance sort the address names on a keyword search', async () => {
+    const fetchMock = stubApi();
+    renderAt('/search?keywords=trans&sortBy=-score');
+    await screen.findByRole('button', { name: 'Site C Application' });
+
+    expect(searchesFor(fetchMock, 'Document').at(-1)).toContain('&sortBy=-score');
+  });
+
+  it('shows most matches as the sort inside the documents when the address names relevance', async () => {
+    flags['CONTENT_SEARCH'] = true;
+    const fetchMock = stubApi({
+      DocumentChunk: [{ documentId: 'doc-9', documentName: 'Caribou Plan', matchCount: 1, passages: [{ text: 'trans' }] }],
+    });
+    renderAt('/search?scope=inside&keywords=trans&sortBy=-score');
+    await screen.findByText('Passage 1');
+
+    expect(searchesFor(fetchMock, 'DocumentChunk').at(-1)).toContain('&sortBy=-score&');
+    const select = screen.getByRole('combobox', { name: /^Sort/ });
+    expect(within(select).getByRole('option', { name: 'Most matches', selected: true })).toBeInTheDocument();
+  });
+
   it('sends a plus sort encoded, so it does not arrive as a space', async () => {
     const fetchMock = stubApi();
     renderAt('/search?sortBy=%2BdisplayName');

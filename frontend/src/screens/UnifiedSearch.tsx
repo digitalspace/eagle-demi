@@ -234,7 +234,7 @@ export function UnifiedSearch() {
   const sortKey = state.sortBy.replace(/^[+-]/, '');
   const sortable =
     state.sortBy === config.defaultSort ||
-    (state.sortBy === RELEVANCE_SORT && term !== '') ||
+    (!inside && state.sortBy === RELEVANCE_SORT && term !== '') ||
     config.columns.some((column) => column.key === sortKey);
   const sortBy = sortable ? state.sortBy : implicitSort(term, inside ? 'inside' : 'names', config.defaultSort);
   const searchKey: SearchKey = {
