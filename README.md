@@ -671,6 +671,28 @@ from. If any of them changed, or has an uncommitted edit, it refuses under `--li
 what-if. A change to `azure/main.bicep` or a `.bicepparam` file only warns, because those files
 change for application work too.
 
+### Cosmos indexing policy only
+
+A change to one container's `indexingPolicy` in `azure/modules/cosmos-nosql.bicep` does not need a
+`--foundation` run (about 32 minutes on prod). `scripts/apply-cosmos-index.sh` applies just that
+policy in about a minute.
+
+```bash
+# dry run: diff live against declared, print the update command
+./scripts/apply-cosmos-index.sh test documents
+
+# apply, then re-read and check the live policy matches
+./scripts/apply-cosmos-index.sh test documents --live
+CONFIRM_PROD=yes ./scripts/apply-cosmos-index.sh prod documents --live
+```
+
+It compiles the bicep, takes the named container's policy, and compares it with the live one on
+`demi-cosmos-<env>`. It never changes throughput. Cosmos rebuilds the index in the background after
+the update, so queries on a new path can scan until that finishes.
+
+It does not record a foundation deployment. The next `deploy-infra.sh <env> --live` still sees
+`cosmos-nosql.bicep` changed since the last `--foundation` run and refuses until one runs.
+
 ### Secrets live in Key Vault
 
 `demi-kv-<env>` holds the credentials the API resolves at runtime as
