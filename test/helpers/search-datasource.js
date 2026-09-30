@@ -19,7 +19,7 @@
 function projectedColumns(query) {
   const select = query.slice(query.indexOf('SELECT') + 'SELECT'.length, query.indexOf(' FROM '));
   return new Map(select.split(',').map((col) => {
-    const alias = /^\s*(\S+)\s+AS\s+(\S+)\s*$/i.exec(col);
+    const alias = /^\s*(.+?)\s+AS\s+(\w+)\s*$/i.exec(col);
     if (alias) return [alias[2], alias[1].replace(/^c\./, '')];
     const name = col.trim().replace(/^c\./, '');
     return [name, name];

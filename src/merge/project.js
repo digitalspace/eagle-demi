@@ -218,6 +218,19 @@ function flattenEagleProject(doc, orgs) {
   return normalizeEagleSlot(flat, orgs);
 }
 
+/**
+ * Labels stored trimmed. The index filters on them by exact match, and some Eagle rows carry a
+ * trailing space ("Groundwater Extraction ") that no filter value matches.
+ */
+const TRIMMED_FIELDS = ['sector', 'projectSubType'];
+
+function trimLabels(merged) {
+  for (const field of TRIMMED_FIELDS) {
+    if (typeof merged[field] === 'string') merged[field] = merged[field].trim();
+  }
+  return merged;
+}
+
 function hasValue(v) {
   if (v === undefined || v === null) return false;
   if (typeof v === 'string') return v.trim() !== '';
@@ -372,6 +385,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   // EA-process record and stay exactly as they are. This is the dated assessment rail, and it is
   // omitted rather than emptied when Track has none — an absent feed must not blank a stored one.
   if (Array.isArray(opts.phases) && opts.phases.length) merged.phases = opts.phases;
+  trimLabels(merged);
 
   const centroid = normalizeCentroid(track, eagle);
   if (centroid) merged.centroid = centroid;
@@ -428,6 +442,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   for (const field of EAGLE_ONLY_FIELDS) {
     if (hasValue(eagle[field])) merged[field] = eagle[field];
   }
+  trimLabels(merged);
 
   const centroid = normalizeCentroid(null, eagle);
   if (centroid) merged.centroid = centroid;
@@ -555,6 +570,7 @@ module.exports = {
   flattenEagleProject,
   carryEagleOnlyFields,
   hasValue,
+  TRIMMED_FIELDS,
   BC_BBOX,
   validCoordinates,
   normalizeCentroid,

@@ -169,6 +169,16 @@ test('the projects vis column is serialized to text', () => {
   assert.strictEqual(idx.fields.find(f => f.name === 'vis').type, 'Edm.String');
 });
 
+// `legislationYear` is Edm.Int32 and projects-indexer runs with `maxFailedItems: 0`, so one stored
+// row with a string year fails the document and stops the whole indexer run. Non-numbers go in null.
+test('the projects legislationYear column only hands the indexer a number', () => {
+  const [idx, ds] = PAIRS[1];
+
+  assert.strictEqual(projectedColumns(ds.container.query).get('legislationYear'),
+    '(IS_NUMBER(c.legislationYear) ? c.legislationYear : null)');
+  assert.strictEqual(idx.fields.find(f => f.name === 'legislationYear').type, 'Edm.Int32');
+});
+
 // A rename in the data source and the dial translation in `src/vis/catalog/index-projects-renames.js`
 // are two files that never see each other. search-drift.test.js walks the entries that EXIST; it
 // cannot see an alias added here with no entry, and that alias is exactly the case where a stored
@@ -181,7 +191,9 @@ test('every column the projects data source renames is translated by PROJECT_TO_
     // `ToString(c.vis) AS vis` is a serialization, and `c.eacDecision._id` dials off its ROOT
     // property — that is the name `PATCH /projects/:id/visibility` stores.
     const call = /^\w+\(\s*c?\.?([\w.]+)\s*\)$/.exec(expr);
-    const stored = (call ? call[1] : expr).split('.')[0];
+    // `(IS_NUMBER(c.x) ? c.x : null) AS x` is a type guard on x, and only when both sides name x.
+    const guard = /^\(\s*IS_\w+\(\s*c\.([\w.]+)\s*\)\s*\?\s*c\.\1\s*:\s*null\s*\)$/.exec(expr);
+    const stored = (guard ? guard[1] : call ? call[1] : expr).split('.')[0];
     if (stored === alias) continue;
 
     assert.ok((PROJECT_TO_INDEX[stored] || []).includes(alias),

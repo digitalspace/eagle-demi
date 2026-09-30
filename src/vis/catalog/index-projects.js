@@ -20,6 +20,10 @@ module.exports = {
   // panel sends the id — this is the column that filter resolves to.
   proponentId: { defaultVis: 4, maxVis: 4 },
   sector: { defaultVis: 4, maxVis: 4 },
+  // Track's sub-type; the response falls back to it when `sector` is empty.
+  projectSubType: { defaultVis: 4, maxVis: 4 },
+  // Names a renamed sub-type for its Act when `sector` falls back.
+  legislationYear: { defaultVis: 4, maxVis: 4 },
   status: { defaultVis: 4, maxVis: 4 },
   region: { defaultVis: 4, maxVis: 4 },
   legacyEagleId: { defaultVis: 4, maxVis: 4 },
