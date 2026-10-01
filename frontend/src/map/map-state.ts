@@ -431,6 +431,10 @@ export function projectSearchText(project: Project): string {
     project.description,
     typeof trackDescription === 'string' ? trackDescription : '',
     project.proponent,
+    // Label fields the server matches, so narrowing never drops a row it returned.
+    project.type,
+    project.currentPhaseName,
+    project.eacDecision,
   ]
     .map((value) => value || '')
     .join(' ');

@@ -109,6 +109,20 @@ describe('mapping a project row', () => {
     expect(mapProject({ _id: 'a' }).eaCertificate).toBeUndefined();
   });
 
+  it('flattens phase and decision refs to their labels, never to a bare id', () => {
+    const row = mapProject({
+      _id: 'a',
+      type: 'Industrial',
+      currentPhaseName: { _id: 'p1', name: 'Early Engagement' },
+      eacDecision: '5cf00c03a266b7e1877504b0',
+    });
+    const plain = mapProject({ _id: 'b', eacDecision: 'Certificate Issued' });
+
+    expect(row).toMatchObject({ type: 'Industrial', currentPhaseName: 'Early Engagement' });
+    expect(row.eacDecision).toBeUndefined();
+    expect(plain.eacDecision).toBe('Certificate Issued');
+  });
+
   it('reads a proponent from either shape', () => {
     expect(mapProject({ _id: 'a', proponent: { name: 'Sample Energy' } }).proponent).toBe('Sample Energy');
     expect(mapProject({ _id: 'a', proponent: 'Example Aggregates' }).proponent).toBe('Example Aggregates');
