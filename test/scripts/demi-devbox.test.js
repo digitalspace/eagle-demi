@@ -934,7 +934,7 @@ test('demi-devbox.sh', async (t) => {
     // On prod a create waits 15-31 minutes before its script starts.
     const r = run(['drift'], {
       // About 6 s queued against a 1 s run timeout plus 3 s of grace.
-      env: { ...MANAGED, AZ_PENDING_POLLS: '6', DEVBOX_RUN_POLL_SLEEP: '1', DEVBOX_RUN_TIMEOUT: '1', DEVBOX_READY_TIMEOUT: '0' }
+      env: { ...MANAGED, AZ_PENDING_POLLS: '6', AZ_RUNNING_POLLS: '1', DEVBOX_RUN_POLL_SLEEP: '1', DEVBOX_RUN_TIMEOUT: '1', DEVBOX_READY_TIMEOUT: '0' }
     });
     assert.strictEqual(r.status, 0, r.stderr);
     assert.match(r.stdout, /ok documents/);
