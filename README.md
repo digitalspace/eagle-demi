@@ -54,7 +54,7 @@ no extension or handler is transitioning (up to 20 minutes, `DEVBOX_READY_TIMEOU
 names what is busy). Failed and `NotReady` extensions are listed and not waited on. It then runs
 the command in `/opt/eagle-demi` as `sudo -u demi /usr/local/bin/demi-run '<command>'`, prints
 its output and exits with the command's exit code. One argument after `--` is a shell command
-line; several are passed as separate arguments. The script needs `az` and `jq` on your machine.
+line; several are passed as separate arguments. The script needs `az` on your machine, and `jq` unless `DEVBOX_RUNNER` is set.
 
 `demi-run` is the whole interface. It logs the CLI in as the managed identity, exports
 `AZURE_CLIENT_ID`, `COSMOS_ENDPOINT`, `COSMOS_NOSQL_DATABASE`, `SEARCH_ENDPOINT` and

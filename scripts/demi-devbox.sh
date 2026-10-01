@@ -92,6 +92,8 @@ OUT_CONTAINER='devbox-run-output'
 RUN_NAME=''
 RUN_SAS_EXPIRY=''
 RUN_FILES=()
+# Set only when a failure is known to come before the command started; `run` reads it.
+RUN_NOT_STARTED=''
 
 # Not POLL_SLEEP: with-search-admin.sh reads that name for its own RBAC-replication poll, and this
 # script runs inside it.
@@ -241,7 +243,7 @@ def code: (. // "") | ascii_downcase;
 # `$1`: what a give-up message says has already happened.
 devbox_ready() {
   [[ -z "$DEVBOX_RUNNER" ]] || return 0
-  local done_note="${1:-Nothing was run.}" t0=$SECONDS posted='' iv parsed power agent busy failed msg shown='' nap i=0
+  local done_note="${1:-Nothing was run.}" t0=$SECONDS posted='' start_said iv parsed power agent busy failed msg shown='' nap i=0
   local -a naps
   read -r -a naps <<<"$DEVBOX_READY_SLEEPS"
   while :; do
@@ -263,12 +265,14 @@ devbox_ready() {
       if [[ -z "$posted" ]]; then
         posted=$SECONDS
         if "$AZ" vm start --subscription "$SUBSCRIPTION" -g "$VM_RG" -n "$VM" --no-wait >/dev/null; then
+          start_said='after the start was posted: the start did not take'
           echo "demi-devbox: ${VM} was ${power}; start posted" >&2
         else
+          start_said='after its start was refused, and no other start brought it up'
           echo "demi-devbox: the start of ${VM} was refused (az error above); waiting up to ${DEVBOX_START_GRACE}s in case another run's start is in flight" >&2
         fi
       elif (( SECONDS - posted >= DEVBOX_START_GRACE )); then
-        die "${VM} is still ${power} ${DEVBOX_START_GRACE}s after the start was posted: the start did not take. ${done_note}"
+        die "${VM} is still ${power} ${DEVBOX_START_GRACE}s ${start_said}. ${done_note}"
       fi
     fi
     local status="power=${power} agent=${agent} (${msg}) extensions busy: ${busy:-none}"
@@ -320,8 +324,9 @@ error_code() {
 # (deadline, interrupt, error), so its SAS can re-create blobs after this. `keep`: blobs stay.
 managed_cleanup() {
   local mode="${1:-live}" err
-  # Ignored, not reset: a second Ctrl-C would otherwise kill the deletes below. az inherits it too.
-  trap - EXIT; trap '' INT TERM
+  # Ctrl-C ignored, not reset, so a second one cannot kill the deletes below (az inherits it).
+  # TERM stays default: it is how a hung delete is still stopped.
+  trap - EXIT TERM; trap '' INT
   if [[ -n "${RUN_NAME:-}" ]]; then
     # At most 25 managed run commands per VM, so every one is removed. NotFound: it was never made.
     if ! err="$("$AZ" vm run-command delete --subscription "$SUBSCRIPTION" -g "$VM_RG" --vm-name "$VM" \
@@ -340,7 +345,7 @@ managed_cleanup() {
   RUN_NAME=''; RUN_SAS_EXPIRY=''
   rm -f "${RUN_FILES[@]+"${RUN_FILES[@]}"}"
   RUN_FILES=()
-  trap - INT TERM
+  trap - INT
 }
 
 # A managed run command: output to blob, no 4 KB cap, and the client polls on its own bounds
@@ -364,6 +369,7 @@ managed_run() {
   if ! { out_sas="$(sas_file "${RUN_NAME}/stdout" "$RUN_SAS_EXPIRY")" && RUN_FILES+=("$out_sas") \
       && err_sas="$(sas_file "${RUN_NAME}/stderr" "$RUN_SAS_EXPIRY")" && RUN_FILES+=("$err_sas"); }; then
     echo "demi-devbox: could not mint the output SAS on ${DEVBOX_OUTPUT_ACCOUNT}" >&2
+    RUN_NOT_STARTED='the output SAS could not be minted'
     managed_cleanup finished
     return 1
   fi
@@ -373,6 +379,7 @@ managed_run() {
       --timeout-in-seconds "$DEVBOX_RUN_TIMEOUT" \
       --output-blob-uri "@${out_sas}" --error-blob-uri "@${err_sas}" --no-wait -o none 2>&1)"; then
     echo "demi-devbox: run-command create failed ($(error_code <<<"$err"))" >&2
+    RUN_NOT_STARTED='run-command create was refused'
     managed_cleanup live
     return 1
   fi
@@ -389,6 +396,7 @@ managed_run() {
     esac
     if [[ -z "$started" ]] && (( SECONDS - t0 >= DEVBOX_QUEUE_TIMEOUT )); then
       echo "demi-devbox: run-command ${RUN_NAME} never started: still '${state}' after ${DEVBOX_QUEUE_TIMEOUT}s in the VM agent's queue; deleting it." >&2
+      RUN_NOT_STARTED="it never left the VM agent's queue"
       managed_cleanup live
       return 1
     fi
@@ -444,9 +452,18 @@ devbox_run() {
     managed_run "$wrapped"
     return
   fi
+  local errf
+  errf="$(mktemp)"
   out="$("$AZ" vm run-command invoke --subscription "$SUBSCRIPTION" -g "$VM_RG" -n "$VM" \
     --command-id RunShellScript --scripts "$wrapped" \
-    --query "value[].message" -o tsv)" || return 1
+    --query "value[].message" -o tsv 2>"$errf")" || rc=$?
+  cat "$errf" >&2
+  # 409: another run command holds the extension, so this one was never handed to the VM.
+  if [[ "$rc" -ne 0 ]] && grep -q '(Conflict)' "$errf"; then
+    RUN_NOT_STARTED='run-command invoke was refused with 409 Conflict'
+  fi
+  rm -f "$errf"
+  [[ "$rc" -eq 0 ]] || return 1
   printf '%s\n' "$out"
 }
 
@@ -660,15 +677,16 @@ do_run() {
   resolve_env
   devbox_ready
   prepare_output
-  local out code rc=0
+  local out code
   out="$(mktemp)"
-  devbox_run "$RUN_CMD" >"$out" || rc=$?
+  devbox_run "$RUN_CMD" >"$out" || true
   cat "$out"
   code="$(remote_exit <"$out")"
   rm -f "$out"
   if [[ -z "$code" ]]; then
-    # A refused call (409 while another run command is going) never ran; the error above says which.
-    [[ "$rc" -eq 0 ]] || die "the call to ${VM} failed and no DEMI_EXIT line came back; see the error above"
+    # Any other failure (timeout, transport error, lost output) may come after the command ran, so
+    # only a known refusal may tell the operator a retry is safe.
+    [[ -z "$RUN_NOT_STARTED" ]] || die "the command did not run on ${VM}: ${RUN_NOT_STARTED}; see the error above"
     die "no DEMI_EXIT line came back from ${VM}: the command may have run, but its output was lost"
   fi
   exit "$code"

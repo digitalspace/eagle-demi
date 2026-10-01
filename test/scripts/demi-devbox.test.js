@@ -49,6 +49,8 @@ echo "$*" | tr "\\n" " " >> "\${AZ_LOG}"
 echo "" >> "\${AZ_LOG}"
 
 state="$(dirname "\${AZ_LOG}")"
+# \`called-vm-run-command-delete\` and the like: the events SIGNAL_DRIVER waits on.
+touch "\${state}/called-$1-$2-\${3:-}"
 
 # \`--scripts\` is invoke's flag, \`--script\` the managed run command's.
 if [[ -n "\${AZ_PAYLOAD_DIR:-}" && "$*" == *--script* ]]; then
@@ -85,10 +87,11 @@ instance_view() {
 run_command() {
   case "$1" in
     invoke)
-      if [[ -n "\${AZ_INVOKE_FAIL:-}" ]]; then
-        echo "ERROR: (Conflict) Run command extension execution is in progress. Please wait for completion before invoking a run command." >&2
-        exit 1
-      fi
+      # conflict: refused before the VM saw it. Anything else: a transport error after it ran.
+      case "\${AZ_INVOKE_FAIL:-}" in
+        conflict) echo "ERROR: (Conflict) Run command extension execution is in progress. Please wait for completion before invoking a run command." >&2; exit 1 ;;
+        ?*) echo "ERROR: HTTPSConnectionPool(host='management.azure.com', port=443): Read timed out." >&2; exit 1 ;;
+      esac
       remote_reply "$scripts" ;;
     create)
       if [[ -n "\${AZ_CREATE_FAIL:-}" ]]; then
@@ -96,7 +99,7 @@ run_command() {
         exit 1
       fi
       [[ "$outuri" != @* ]] || echo "\${outuri#@}" > "\${state}/sas-path"
-      [[ -z "\${AZ_CREATE_SLEEP:-}" ]] || sleep "\${AZ_CREATE_SLEEP}"
+      [[ -z "\${AZ_CREATE_SLEEP:-}" ]] || { touch "\${state}/create-sleeping"; sleep "\${AZ_CREATE_SLEEP}"; }
       # The real CLI prints the resource, blob URIs and their SAS included, unless told -o none.
       [[ "$*" == *"-o none"* ]] || echo "{\\"outputBlobUri\\": \\"https://fake/\${name}/stdout?sig=FAKESIG\\"}"
       # \`@file\`: what the SAS file held and how it was protected, for the tests to read back.
@@ -247,13 +250,23 @@ exit 0
 `;
 
 /**
- * Starts the script in its own process group and sends each `<delay s>:<signal>` in $1 to the whole
- * group, the way a terminal's Ctrl-C reaches every process in the job, then exits with its status.
+ * Starts the script in its own process group and, for each `<marker>:<signal>` in $1, waits for the
+ * fake az to touch that marker, then signals. INT goes to the whole group, the way a terminal's
+ * Ctrl-C reaches every process in the job; anything else to the script alone, like `kill <pid>`.
+ * Exits with the script's status. Its own exit, a spawnSync timeout included, takes the group down
+ * with it, so no poll loop outlives the test's tmp dir.
  */
 const SIGNAL_DRIVER = `set -m
 signals="$1"; shift
+state="$(dirname "$AZ_LOG")"
 "$@" & pid=$!
-for s in $signals; do sleep "\${s%%:*}"; kill -"\${s#*:}" -- "-$pid" 2>/dev/null; done
+trap 'kill -TERM -- "-$pid" 2>/dev/null' EXIT
+trap 'exit 143' TERM
+for s in $signals; do
+  until [[ -e "$state/\${s%%:*}" ]]; do kill -0 "$pid" 2>/dev/null || break 2; sleep 0.05; done
+  sig="\${s#*:}"; target="$pid"; [[ "$sig" != INT ]] || target="-$pid"
+  kill -"$sig" -- "$target" 2>/dev/null
+done
 wait "$pid"`;
 
 /**
@@ -275,7 +288,6 @@ function run(args, opts = {}) {
   const res = spawnSync('bash', argv, {
     encoding: 'utf8',
     timeout: opts.timeout || 60000,
-    killSignal: opts.killSignal || 'SIGTERM',
     input: opts.input === undefined ? '' : opts.input,
     env: {
       ...process.env,
@@ -763,6 +775,8 @@ test('demi-devbox.sh', async (t) => {
   const starts = (r) => r.calls.filter(c => c.startsWith('vm start'));
   const NOT_READY = iv({ agent: 'Not Ready', msg: 'VM status blob is found but not yet populated.' });
   const MANAGED = { DEVBOX_RUN_MODE: 'managed' };
+  // Pending forever, but bounded: a run the driver failed to stop gives up within the queue timeout.
+  const SIGNALLED = { ...MANAGED, AZ_PENDING_POLLS: '1000000', DEVBOX_QUEUE_TIMEOUT: '30' };
 
   await t.test('waits for the VM agent before the first command', () => {
     // A run-command posted while the agent is still busy with extensions queues behind them.
@@ -913,13 +927,24 @@ test('demi-devbox.sh', async (t) => {
     assert.deepStrictEqual(r.remote, []);
   });
 
-  await t.test('a refused start says so at once, not as a posted start', () => {
+  await t.test('a refused start says so at once, then keeps waiting for another start', () => {
+    const r = run(['drift'], {
+      env: { AZ_IV: iv({ power: 'deallocated', agent: 'none' }), AZ_READY_AFTER: '2', AZ_START_FAIL: '1' }
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 3);
+    assert.strictEqual(starts(r).length, 1);
+    assert.match(r.stderr, /OperationNotAllowed[\s\S]*the start of demi-devbox-test was refused \(az error above\)/);
+    assert.ok(!r.stderr.includes('start posted'), r.stderr);
+  });
+
+  await t.test('giving up after a refused start does not call it posted', () => {
     const r = run(['drift'], {
       env: { AZ_IV: iv({ power: 'deallocated', agent: 'none' }), AZ_READY_AFTER: '99', AZ_START_FAIL: '1', DEVBOX_START_GRACE: '0' }
     });
     assert.strictEqual(r.status, 1);
-    assert.match(r.stderr, /OperationNotAllowed[\s\S]*the start of demi-devbox-test was refused \(az error above\)/);
-    assert.ok(!r.stderr.includes('start posted'), r.stderr);
+    assert.match(r.stderr, /still deallocated 0s after its start was refused, and no other start brought it up/);
+    assert.ok(!r.stderr.includes('after the start was posted'), r.stderr);
   });
 
   await t.test('runs through invoke unless managed mode is asked for', () => {
@@ -1016,7 +1041,7 @@ test('demi-devbox.sh', async (t) => {
 
   await t.test('an interrupt during create removes the SAS file, the run command and the blobs', () => {
     const r = run(['run', '--', 'true'], {
-      env: { ...MANAGED, AZ_CREATE_SLEEP: '4' }, timeout: 1500, killSignal: 'SIGTERM'
+      env: { ...MANAGED, AZ_CREATE_SLEEP: '4' }, signals: 'create-sleeping:TERM'
     });
     assert.strictEqual(r.status, 143, `${r.signal} ${r.stderr}`);
     const [name] = named(r.calls, 'create');
@@ -1052,7 +1077,7 @@ test('demi-devbox.sh', async (t) => {
 
   await t.test('an interrupted run deletes its run-command resource', () => {
     const r = run(['run', '--', 'true'], {
-      env: { ...MANAGED, AZ_PENDING_POLLS: '1000000' }, timeout: 3000, killSignal: 'SIGTERM'
+      env: SIGNALLED, signals: 'called-vm-run-command-show:TERM'
     });
     assert.strictEqual(r.status, 143, `${r.signal} ${r.stderr}`);
     assert.strictEqual(named(r.calls, 'create').length, 1);
@@ -1061,9 +1086,11 @@ test('demi-devbox.sh', async (t) => {
 
   await t.test('a second Ctrl-C during cleanup does not cut it short', () => {
     const r = run(['run', '--', 'true'], {
-      env: { ...MANAGED, AZ_PENDING_POLLS: '1000000', AZ_DELETE_SLEEP: '2' }, signals: '1.5:INT 1:INT'
+      env: { ...SIGNALLED, AZ_DELETE_SLEEP: '2' },
+      signals: 'called-vm-run-command-show:INT called-vm-run-command-delete:INT'
     });
-    assert.strictEqual(r.status, 130, r.stderr);
+    // Printed by the cleanup after both deletes, so only a cleanup that finished gets here.
+    assert.match(r.stderr, /may reappear until/, r.stderr);
     const [name] = named(r.calls, 'create');
     assert.deepStrictEqual(named(r.calls, 'delete'), [name]);
     assert.ok(r.calls.some(c => c.startsWith('storage blob delete-batch') && c.includes(`--pattern ${name}/*`)),
@@ -1071,7 +1098,7 @@ test('demi-devbox.sh', async (t) => {
   });
 
   await t.test('Ctrl-C under a role grant deletes the run command, then revokes the grant', () => {
-    const r = run(['drift'], { env: { ...MANAGED, AZ_PENDING_POLLS: '1000000' }, signals: '2.5:INT' });
+    const r = run(['drift'], { env: SIGNALLED, signals: 'called-vm-run-command-show:INT' });
     assert.notStrictEqual(r.status, 0);
     assert.strictEqual(named(r.calls, 'create').length, 1, r.stderr);
     assert.deepStrictEqual(named(r.calls, 'delete'), named(r.calls, 'create'));
@@ -1192,12 +1219,27 @@ test('demi-devbox.sh', async (t) => {
     assert.match(r.stderr, /no DEMI_EXIT line came back from demi-devbox-test: the command may have run, but its output was lost/);
   });
 
-  await t.test('a refused invoke does not say the command may have run', () => {
-    const r = run(['run', '--', 'true'], { env: { AZ_INVOKE_FAIL: '1' } });
-    assert.strictEqual(r.status, 1);
-    assert.match(r.stderr, /\(Conflict\)/);
-    assert.match(r.stderr, /the call to demi-devbox-test failed and no DEMI_EXIT line came back/);
-    assert.ok(!r.stderr.includes('may have run'), r.stderr);
+  await t.test('run says "did not run" only for a failure known to come before the command', () => {
+    // A wrong "did not run" invites a retry of something that is not idempotent.
+    const DID_NOT_RUN = /the command did not run on demi-devbox-test: /;
+    const MAY_HAVE_RUN = /the command may have run, but its output was lost/;
+    const cases = [
+      ['invoke refused with 409', { AZ_INVOKE_FAIL: 'conflict' }, DID_NOT_RUN],
+      ['managed create refused', { ...MANAGED, AZ_CREATE_FAIL: '1' }, DID_NOT_RUN],
+      ['managed run never left the queue', { ...MANAGED, AZ_PENDING_POLLS: '99', DEVBOX_QUEUE_TIMEOUT: '0' }, DID_NOT_RUN],
+      ['invoke transport error', { AZ_INVOKE_FAIL: 'timeout' }, MAY_HAVE_RUN],
+      ['managed run timed out without an exit line', { ...MANAGED, AZ_EXEC_STATE: 'TimedOut', AZ_NO_EXIT_LINE: '1' }, MAY_HAVE_RUN],
+      ['managed run past the client deadline', { ...MANAGED, AZ_RUNNING_POLLS: '99', DEVBOX_RUN_TIMEOUT: '0' }, MAY_HAVE_RUN],
+      ['managed output download failed', { ...MANAGED, AZ_DOWNLOAD_FAIL: '1' }, MAY_HAVE_RUN]
+    ];
+    for (const [label, env, want] of cases) {
+      const r = run(['run', '--', 'true'], { env });
+      assert.strictEqual(r.status, 1, `${label}: ${r.stderr}`);
+      assert.match(r.stderr, want, label);
+      assert.doesNotMatch(r.stderr, want === DID_NOT_RUN ? MAY_HAVE_RUN : DID_NOT_RUN, label);
+    }
+    const runner = withRunner('echo partial; exit 5', ['run', '--', 'true']);
+    assert.match(runner.stderr, MAY_HAVE_RUN, 'a runner that exits non-zero may have run it');
   });
 
   await t.test('run passes a non-zero exit code through in invoke mode', () => {
