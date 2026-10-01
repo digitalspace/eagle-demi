@@ -32,7 +32,8 @@ const OVERRIDABLE_KEYS = [
 //
 // This is eagle-api's own PUBLIC_KEYS (api/controllers/config.js) minus KEYCLOAK_* — the public
 // site does not log in — and minus ANALYTICS_API_URL, a constant shim eagle-api keeps for an
-// Angular version this endpoint has no reason to carry.
+// Angular version this endpoint has no reason to carry. EXTENDED_PROJECT_PAGES only arrives once
+// eagle-api's list and Config model carry it too: both the push and the seeder read its payload.
 //
 // Adding a key here publishes it to anonymous callers the moment the document carries it, so the
 // same rule as above applies: nothing that is not already public information.
@@ -49,8 +50,26 @@ const PUBLIC_KEYS = [
   'APPINSIGHTS_CONNECTION_STRING',
   'SURVEY_URL',
   'SHOW_SURVEY_BANNER',
-  'ACCESS_GATE'
+  'ACCESS_GATE',
+  'EXTENDED_PROJECT_PAGES'
 ];
+
+// Lower case only, unlike the shared projects pattern: the public site matches ids by exact string,
+// so an upper-case id would be served and never match. Same rule as eagle-api's validator.
+const EXTENDED_PAGE_PROJECT_ID = /^[0-9a-f]{24}$/;
+const CONTENT_KEY = /^[a-z0-9-]{1,40}$/;
+// Same cap as eagle-api; keeps the config item far under the Cosmos item size limit.
+const MAX_EXTENDED_PROJECT_PAGES = 50;
+
+/** EXTENDED_PROJECT_PAGES shape: a plain object of up to 50 Eagle project ids to extended page content keys. */
+function isExtendedProjectPages(value) {
+  if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
+    return false;
+  }
+  const entries = Object.entries(value);
+  return entries.length <= MAX_EXTENDED_PROJECT_PAGES && entries.every(([id, contentKey]) =>
+    EXTENDED_PAGE_PROJECT_ID.test(id) && typeof contentKey === 'string' && CONTENT_KEY.test(contentKey));
+}
 
 // Which build is actually answering, read ONCE at load from a file stamped into the deploy package
 // by scripts/package-api.py.
@@ -156,6 +175,11 @@ function pickPublicKeys(source) {
   for (const key of PUBLIC_KEYS) {
     const value = source[key];
     if (value === undefined || value === null) continue;
+    // The one structured key: a malformed map is dropped whole rather than served to anonymous callers.
+    if (key === 'EXTENDED_PROJECT_PAGES' && !isExtendedProjectPages(value)) {
+      logger.warn('[config] EXTENDED_PROJECT_PAGES is not a map of up to 50 lower-case Eagle project ids to content keys; dropped');
+      continue;
+    }
     picked[key] = value;
   }
   return picked;
