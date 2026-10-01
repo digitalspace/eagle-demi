@@ -193,11 +193,24 @@ test('every column the projects data source renames is translated by PROJECT_TO_
     const call = /^\w+\(\s*c?\.?([\w.]+)\s*\)$/.exec(expr);
     // `(IS_NUMBER(c.x) ? c.x : null) AS x` is a type guard on x, and only when both sides name x.
     const guard = /^\(\s*IS_\w+\(\s*c\.([\w.]+)\s*\)\s*\?\s*c\.\1\s*:\s*null\s*\)$/.exec(expr);
-    const stored = (guard ? guard[1] : call ? call[1] : expr).split('.')[0];
-    if (stored === alias) continue;
+    // Anything else (`searchLabels`) is built from several columns, and a dial on each must reach it.
+    const sources = guard || call || !/\bc\./.test(expr)
+      ? [guard ? guard[1] : call ? call[1] : expr]
+      : [...new Set([...expr.matchAll(/\bc\.([\w.]+)/g)].map(m => m[1]))];
+    for (const stored of sources.map(s => s.split('.')[0])) {
+      if (stored === alias) continue;
+      assert.ok((PROJECT_TO_INDEX[stored] || []).includes(alias),
+        `${stored} is aliased to ${alias}, so a dial on ${stored} needs that alias in PROJECT_TO_INDEX`);
+    }
+  }
+});
 
-    assert.ok((PROJECT_TO_INDEX[stored] || []).includes(alias),
-      `${stored} is aliased to ${alias}, so a dial on ${stored} needs that alias in PROJECT_TO_INDEX`);
+test('searchLabels joins the six label columns, each guarded so a missing one cannot null the rest', () => {
+  const [, ds] = PAIRS[1];
+  const expr = projectedColumns(ds.container.query).get('searchLabels');
+  for (const path of ['sector', 'projectSubType', 'projectState', 'region', 'projectType',
+    'currentPhaseName.name', 'eacDecision.name']) {
+    assert.ok(expr.includes(`IS_STRING(c.${path})`), `${path} is not in searchLabels, or is unguarded`);
   }
 });
 

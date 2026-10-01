@@ -42,6 +42,8 @@ module.exports = {
   sourceSystem: { defaultVis: 4, maxVis: 4 },
   // Searchable copy of `name`, never retrievable — classified because a dial on `name` maps here.
   nameTokens: { defaultVis: 4, maxVis: 4 },
+  // Searchable join of the label columns above, never retrievable; it cannot outrank its sources.
+  searchLabels: { defaultVis: 4, maxVis: 4 },
 
   // Not an index field: the marked-up copy of `name`/`displayName`/`description` that
   // `searchProjects` attaches. It cannot outrank its sources, which are all 4.
