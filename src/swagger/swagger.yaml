@@ -400,8 +400,9 @@ paths:
       summary: Can the live search indexes answer what this app asks them?
       description: >-
         Unauthenticated, like the other health routes. Each live index is asked for an empty page
-        (`top: 0`) with the `select` and the `$orderby` clauses the app emits; Azure AI Search
-        answers a 400 naming the first field the index does not carry. Nothing applies index
+        (`top: 0`) with the `select` and the `$orderby` clauses the app emits, and `projects` also
+        with the keyword search's `searchFields`; Azure AI Search answers a 400 naming the first
+        field the index does not carry, or carries without `searchable`. Nothing applies index
         definitions on deploy, so the committed `azure/search/indexes/*.json` can be wider than the
         live index — this is the only check that compares the two.
 
@@ -414,7 +415,8 @@ paths:
         '503':
           description: >-
             `{ "ok": false, "indexes": { "documents": { "ok": false, "missing": ["fileSize"] } } }`
-            — the named index is narrower than the app, so every query against it is a 400. Also
+            — the named index is narrower than the app: it lacks the field, or cannot search a
+            field the keyword search names, so every query that uses the field is a 400. Also
             answered when `SEARCH_ENDPOINT` is unset, and when a probe failed for a reason that is
             not a missing field (`"error": "probe failed"`, details in the log).
     post:
@@ -424,15 +426,17 @@ paths:
         release pipeline can hold the INCOMING tag's schema against the live index before it swaps
         the code.
 
-        Per index, either `{"select": [...], "orderby": [...]}` or a committed index definition
-        as-is (`{"fields": [{"name": ...}]}`, whose retrievable fields become the select). An index
-        named in the body but not queried by this app is a 400; an index left out keeps the
-        deployed select.
+        Per index, either `{"select": [...], "orderby": [...], "searchFields": [...]}` or a
+        committed index definition as-is (`{"fields": [{"name": ...}]}`, whose retrievable fields
+        become the select and whose searchable fields become `searchFields`). `searchFields` may be
+        a list or a comma-separated string; an empty one keeps the deployed list. An index named in
+        the body but not queried by this app is a 400; an index left out keeps the deployed select
+        and field list.
 
         Bounded, because the route is anonymous and every entry becomes a live query: at most the
-        three known indexes, 64 entries per `select` and per `orderby`, each a field name of at
-        most 64 characters optionally followed by `asc` or `desc`, and 12 probes per request. The
-        committed definitions fit inside all of them.
+        five known indexes, 64 entries per `select`, `orderby` and `searchFields`, each a field
+        name of at most 64 characters (an `orderby` entry optionally followed by `asc` or `desc`),
+        and 20 probes per request. The committed definitions fit inside all of them.
       requestBody:
         required: false
         content:
@@ -452,7 +456,9 @@ paths:
             The body named an index this app does not query, or an override was outside the bounds
             above (`{"error": "schema override out of bounds"}`). No probe is issued.
         '503':
-          description: A supplied field is missing from the live index, or the probe could not run.
+          description: >-
+            A supplied field is missing from the live index, a supplied `searchFields` entry is not
+            searchable there, or the probe could not run.
 
   /api/health/search-data:
     get:

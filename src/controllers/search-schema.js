@@ -43,6 +43,9 @@ const INDEXES = [
     dataset: 'Project',
     definition: require('../../azure/search/indexes/projects.json'),
     select: () => aiSearch.PROJECT_SELECT,
+    // A field the live index holds but cannot search passes the select probe and still makes every
+    // project keyword query a 400.
+    searchFields: () => aiSearch.PROJECT_SEARCH_FIELDS,
     liveName: cfg => cfg.projectsIndex
   },
   {
@@ -90,7 +93,7 @@ const MAX_OVERRIDE_ENTRIES = 64;
 const MAX_ENTRY_CHARS = 64;
 /** `field` or `field asc|desc` — an index field name, which is all a probe can ask about. */
 const ENTRY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*( (asc|desc))?$/;
-/** Five indexes × (one select probe + at most three `orderby` batches). */
+/** Five indexes × (one select probe + one searchFields probe + at most two `orderby` batches). */
 const MAX_PROBES_PER_REQUEST = 20;
 
 /**
@@ -168,9 +171,10 @@ function orderbyClause(entry) {
  * The selects and orders a request body overrides, so CI can probe the INCOMING tag's schema
  * through the CURRENTLY deployed app — the only order in which the gate can block a bad release.
  *
- * Two accepted shapes per index. `{select, orderby}` states the query directly. A committed index
- * definition (`{fields: [{name}]}`) is accepted as-is so the workflow can post the file it already
- * has: every field it declares must exist live, which is the committed-vs-live question. Its
+ * Two accepted shapes per index. `{select, orderby, searchFields}` states the query directly. A
+ * committed index definition (`{fields: [{name}]}`) is accepted as-is so the workflow can post the
+ * file it already has: every field it declares must exist live, and every `searchable` one must be
+ * searchable live, which is the committed-vs-live question. Its
  * `sortable` flags are deliberately not turned into an order — that would restate the type gate
  * `orderbyFieldsFor` borrows from `buildOrderBy`, and get `centroid` wrong the same way.
  *
@@ -200,6 +204,8 @@ function overridesFrom(body) {
         ),
         orderby: []
       };
+      const searchable = value.fields.filter(f => f && f.name && f.searchable === true);
+      if (searchable.length > 0) out[name].searchFields = boundedList(searchable.map(f => f.name));
       continue;
     }
 
@@ -210,23 +216,31 @@ function overridesFrom(body) {
     // Bounded BEFORE the direction is added, so `orderbyClause`'s output is not what the pattern
     // has to describe: what a caller may send is a field name, optionally with its direction.
     if (Array.isArray(value.orderby)) override.orderby = boundedList(value.orderby).map(orderbyClause);
+    // Empty, as a list or a string, means no override: `searchFields: ''` would check nothing.
+    const { searchFields } = value;
+    if ((Array.isArray(searchFields) || typeof searchFields === 'string') && searchFields.length > 0) {
+      override.searchFields = boundedList(searchFields);
+      // ENTRY_PATTERN admits a direction for `orderby`; on a field list it is not a field name.
+      if (override.searchFields.some(entry => /\s/.test(entry))) throw outOfBounds();
+    }
     out[name] = override;
   }
   return out;
 }
 
 /**
- * One index: the select first, then the orders.
+ * One index: the select first, then the search field list, then the orders.
  *
  * Separate probes rather than one combined request, because the answer names a field and not which
  * clause carried it: a select fault reported against an order sends an operator to `SORT_KEYS`
- * instead of to the select. The select is also the one that took prod down.
+ * instead of to the select, and a field-list fault is a `searchable` flag, not a missing field.
+ * The select is also the one that took prod down.
  */
-async function probeIndex({ liveName, select, orderby }) {
+async function probeIndex({ liveName, select, searchFields, orderby }) {
   const fail = result => {
     logger.warn(
-      `[search-schema] ${liveName} is missing ${result.missing.join(', ')} — the live index cannot ` +
-      'answer what this app asks it for, so every query against it is a 400'
+      `[search-schema] ${liveName} is missing or cannot search ${result.missing.join(', ')} — the ` +
+      'live index cannot answer what this app asks it for, so every query against it is a 400'
     );
     return { ok: false, missing: result.missing };
   };
@@ -234,6 +248,11 @@ async function probeIndex({ liveName, select, orderby }) {
   try {
     const selectProbe = await aiSearch.probeIndexSchema({ indexName: liveName, select });
     if (!selectProbe.ok) return fail(selectProbe);
+
+    if (searchFields) {
+      const searchProbe = await aiSearch.probeIndexSchema({ indexName: liveName, searchFields });
+      if (!searchProbe.ok) return fail(searchProbe);
+    }
 
     for (let i = 0; i < orderby.length; i += ORDERBY_CLAUSES_PER_PROBE) {
       const batch = orderby.slice(i, i + ORDERBY_CLAUSES_PER_PROBE);
@@ -281,11 +300,14 @@ exports.searchSchema = async (req, res) => {
           schema: entry.schema,
           liveName: entry.liveName(cfg),
           select: (override && override.select) || entry.select(),
+          searchFields: (override && override.searchFields) ||
+            (entry.searchFields && entry.searchFields()),
           orderby: (override && override.orderby) || orderbyFieldsFor(entry).map(orderbyClause)
         };
       });
     const probes = plan.reduce(
-      (total, index) => total + 1 + Math.ceil(index.orderby.length / ORDERBY_CLAUSES_PER_PROBE), 0
+      (total, index) => total + 1 + (index.searchFields ? 1 : 0) +
+        Math.ceil(index.orderby.length / ORDERBY_CLAUSES_PER_PROBE), 0
     );
     if (probes > MAX_PROBES_PER_REQUEST) throw outOfBounds();
   } catch (err) {

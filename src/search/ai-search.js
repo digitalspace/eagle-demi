@@ -111,8 +111,12 @@ const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,pageNumbered,read'
  * and the result total answer the same question; `nameTokens` is `name` under the `filename`
  * analyzer — `keywords=mine` matches "Mine Project", which `en.microsoft` strips as a stopword
  * from every other field here.
+ *
+ * `searchLabels` is the sector, status, region, type, phase and decision labels joined into one
+ * field by the data source, so `keywords=mines` finds projects by sector. One field rather than six,
+ * because flipping `searchable` on the label columns would mean rebuilding the index.
  */
-const PROJECT_SEARCH_FIELDS = 'name,displayName,description,proponent,nameTokens';
+const PROJECT_SEARCH_FIELDS = 'name,displayName,description,proponent,nameTokens,searchLabels';
 
 /**
  * The two datasets whose index answers WHICH ROWS MATCH and nothing else.
@@ -964,20 +968,26 @@ function mergeDegraded(results) {
  * @param {string} opts.indexName   the LIVE index name, not the schema name
  * @param {string|string[]} [opts.select]
  * @param {string|string[]} [opts.orderby]
+ * @param {string|string[]} [opts.searchFields]  a field the live index holds but cannot search is
+ *   reported in `missing` too: to a keyword query it is the same 400
  * @returns {Promise<{ok: boolean, index: string, missing?: string[]}>}
  */
-async function probeIndexSchema({ indexName, select, orderby } = {}) {
+async function probeIndexSchema({ indexName, select, orderby, searchFields } = {}) {
   const list = value => (Array.isArray(value) ? value.join(',') : value);
-  const body = { search: '*', top: 0, count: false };
+  // A term, not `*`: the service skips checking `searchFields` on a match-all (200 on test, 2026-09-29).
+  const body = { search: searchFields ? 'probe' : '*', top: 0, count: false };
   if (select) body.select = list(select);
   // Joined with ', ' — `$orderby` clauses are comma-separated and each carries its own direction.
   if (orderby) body.orderby = Array.isArray(orderby) ? orderby.join(', ') : orderby;
+  if (searchFields) body.searchFields = list(searchFields);
 
   try {
     await request(`/indexes/${indexName}/docs/search?api-version=${API_VERSION}`, body);
     return { ok: true, index: indexName };
   } catch (err) {
-    const missing = err.status === 400 ? missingPropertyFrom(err) : null;
+    const missing = err.status === 400
+      ? missingPropertyFrom(err) || unsearchableFieldFrom(err)
+      : null;
     if (!missing) throw err;
     return { ok: false, index: indexName, missing: [missing] };
   }
@@ -999,6 +1009,17 @@ async function filterAnswerable(indexName, property, filter) {
     if (err.status === 400 && blamedPropertyFrom(err) === property) return false;
     throw err;
   }
+}
+
+/**
+ * The field a 400 names from a `searchFields` list. Both spellings as demi-search-test returned them
+ * on 2026-09-29: `The field 'sector' in the search field list is not searchable.` and
+ * `Unknown field 'nosuchfield' in search field list.`, each followed by `Parameter name: searchFields`.
+ */
+function unsearchableFieldFrom(err) {
+  const match = /(?:The field|Unknown field) '([^']+)' in (?:the )?search field list/
+    .exec((err && err.message) || '');
+  return match ? match[1] : null;
 }
 
 /**
@@ -1422,7 +1443,7 @@ async function searchChunks(opts = {}) {
 }
 
 /**
- * Project search. Mirrors the Typesense `query_by=name,displayName,description,proponent`.
+ * Project search over PROJECT_SEARCH_FIELDS.
  */
 async function searchProjects(opts = {}) {
   const { configured, projectsIndex } = config();
@@ -2187,6 +2208,8 @@ async function drainIndexedChunks(documentId, opts) {
 module.exports = {
   DOCUMENT_SELECT,
   PROJECT_SELECT,
+  // Exported for the guard test that holds it against the searchable fields of `projects.json`.
+  PROJECT_SEARCH_FIELDS,
   CHUNK_SELECT,
   // The live-schema gate and the error classification behind `SEARCH_SCHEMA_DRIFT`.
   probeIndexSchema,
