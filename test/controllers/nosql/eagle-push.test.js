@@ -28,7 +28,7 @@ const { requireWrite, requireAdmin } = require('../../../src/middleware/require-
 const { routeChains } = require('../../helpers/router-source');
 // One id space for the whole push suite: the notification the public-read mirrors already use.
 const {
-  NOTIFICATION_EAGLE_ID, anonymous, staff,
+  NOTIFICATION_EAGLE_ID, PRIVATE_ACL, anonymous, staff,
   eagleProject, storedEagleProject: storedProject,
   projectReadForWriteFromGet, documentReadForWriteFromGet, SEALED_AT
 } = require('../../helpers/eagle-mirror-fixtures');
@@ -51,9 +51,21 @@ const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
 const DOC_EAGLE_ID = '58869abba4acd4014b81f55c';
 
 /**
+ * An Act's block as eagle-api pushes it when the project never used that Act: the push body is a
+ * hydrated Mongoose document's `toObject()`, and the schema defaults fill every block, so it is
+ * non-empty but carries no `name`. A sample of the real defaults (api/helpers/models/project.js).
+ */
+const UNUSED_BLOCK = Object.freeze({
+  CEAAInvolvement: null, CELead: '', centroid: [], description: '', eacDecision: null,
+  location: '', proponent: null, region: '', type: '', legislation: '', sector: '', status: '',
+  isTermsAgreed: false, dateUpdated: null, applicableRegulation: null, groups: []
+});
+
+/**
  * The same project as eagle-api's Mongo actually stores it: content nested under the legislation
- * block, with STALE top-level copies of `name` and `region` beside it. This is what the push
- * sends — the flattening the search endpoint does is not in the push path.
+ * block, with STALE top-level copies of `name` and `region` beside it, and every other Act's block
+ * default-filled. This is what the push sends — the flattening the search endpoint does is not in
+ * the push path.
  */
 function rawMongoProject(blockOverrides = {}, topOverrides = {}) {
   const { _id, read, ...content } = eagleProject();
@@ -67,7 +79,10 @@ function rawMongoProject(blockOverrides = {}, topOverrides = {}) {
     region: '',
     projectCAC: true,
     cacEmail: 'cac@example.gov.bc.ca',
+    legislation_1996: { ...UNUSED_BLOCK },
+    legislation_2002: { ...UNUSED_BLOCK },
     legislation_2018: { ...content, region: 'Thompson-Nicola', sector: 'Energy-Electricity', ...blockOverrides },
+    legislation_2025: { ...UNUSED_BLOCK },
     ...topOverrides
   };
 }
@@ -355,9 +370,9 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
     let written;
     t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
 
-    // Missing outright, then naming a block the document does not carry. Either way there is
-    // exactly one candidate, so the answer is not ambiguous.
-    for (const top of [{ currentLegislationYear: undefined }, { currentLegislationYear: 'legislation_1996' }]) {
+    // Missing outright, then naming a block the document does not carry. Either way exactly one
+    // block has a name; the default-filled siblings do not count.
+    for (const top of [{ currentLegislationYear: undefined }, { currentLegislationYear: 'legislation_2010' }]) {
       const res = mockRes();
       await projectController.upsertFromEagle({
         params: { eagleId: PROJECT_EAGLE_ID }, query: {},
@@ -382,9 +397,8 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
       name: '', currentLegislationYear: undefined, legislation_2002: { name: 'Older' }
     });
     const empty = rawMongoProject({}, { name: '', legislation_2018: null });
-    // The key RESOLVES here — `currentLegislationYear` names a block that is present and is an
-    // object. It just holds nothing, so flattening it produces the same nameless row as the two
-    // above, which is why the check is on content rather than on the key.
+    // `currentLegislationYear` names a present but EMPTY block: that is not usable, so the named
+    // fallback runs and finds no named block.
     const contentless = rawMongoProject({}, { name: '', legislation_2018: {} });
 
     for (const doc of [ambiguous, empty, contentless]) {
@@ -397,6 +411,42 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
       assert.match(res.body.error, /no resolvable legislation block/);
     }
     assert.strictEqual(upserts, 0);
+  });
+
+  await t.test('a named Building Canada Act block beside 2018 with nothing picking one is a 400', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let upserts = 0;
+    t.mock.method(projects, 'upsert', async () => { upserts++; });
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF,
+      body: { doc: rawMongoProject({}, {
+        name: '', currentLegislationYear: undefined, legislation_2025: { ...UNUSED_BLOCK, name: 'Federal Corridor' }
+      }) }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /no resolvable legislation block/);
+    assert.strictEqual(upserts, 0);
+  });
+
+  await t.test('an unpublish push whose current block has no name is stored unpublished', async () => {
+    // eagle-api drops a rejected push with no retry, so a 400 here would leave the row public.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF,
+      body: { doc: rawMongoProject({ name: '' }, { name: '', read: [...PRIVATE_ACL] }) }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written.isPublished, false);
+    assert.ok(!written.read.includes('public'));
+    assert.strictEqual(written.description, 'A wind farm near Nicomen');
   });
 
   await t.test('an already-flat search-shaped doc is untouched', async () => {

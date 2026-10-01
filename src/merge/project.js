@@ -87,7 +87,8 @@ const EAGLE_TOP_LEVEL_FIELDS = [
   '_updatedBy', '_addedBy', '_deletedBy', '__v'
 ];
 
-const LEGISLATION_KEYS = ['legislation_1996', 'legislation_2002', 'legislation_2018'];
+// Open pattern, not a list: a new Act needs no change here.
+const LEGISLATION_KEY = /^legislation_\d{4}$/;
 
 /**
  * Put the Eagle slot in the shape `EAGLE_ONLY_FIELDS` names, whatever fed it.
@@ -188,22 +189,27 @@ function carryEagleOnlyFields(merged, existing) {
 function flattenEagleProject(doc, orgs) {
   if (!doc) return doc;
 
-  // An EMPTY object is not a block: flattening it yields nothing, so a doc whose named year holds
-  // `{}` lands as nameless as one that names no year at all.
-  const isBlock = k => k && doc[k] && typeof doc[k] === 'object' && !Array.isArray(doc[k]) &&
+  const isBlock = k => doc[k] && typeof doc[k] === 'object' && !Array.isArray(doc[k]) &&
     Object.keys(doc[k]).length > 0;
-  const present = LEGISLATION_KEYS.filter(isBlock);
+  const legislationKeys = Object.keys(doc).filter(k => LEGISLATION_KEY.test(k));
+  const current = doc.currentLegislationYear;
 
   let key = null;
-  if (isBlock(doc.currentLegislationYear)) key = doc.currentLegislationYear;
-  else if (present.length === 1) key = present[0];
+  // The current block wins named or not: eagle-api does not require `name`, and a sibling must
+  // never stand in for it.
+  if (typeof current === 'string' && LEGISLATION_KEY.test(current) && isBlock(current)) {
+    key = current;
+  } else {
+    // eagle-api default-fills every Act's block, so only a named one is a real fallback candidate.
+    const named = legislationKeys.filter(k => isBlock(k) && hasValue(doc[k].name));
+    if (named.length === 1) key = named[0];
+  }
 
   if (!key) {
-    // A doc that carries legislation keys but resolves none of them to content is a raw Mongo doc
-    // we failed to read. With no top-level name to fall back on it would land nameless and
-    // published, so reject rather than guess which block is current.
+    // No current block and no single named block: without a top-level name the row would land
+    // nameless and published, so reject rather than guess.
     // Copied, not returned as-is: normalising in place would rewrite the caller's own record.
-    if (hasValue(doc.name) || !LEGISLATION_KEYS.some(k => k in doc)) {
+    if (hasValue(doc.name) || legislationKeys.length === 0) {
       return normalizeEagleSlot({ ...doc }, orgs);
     }
     const err = new Error('Eagle project has no resolvable legislation block');
@@ -564,7 +570,6 @@ function buildProjectIndex(projects) {
 
 module.exports = {
   TRACK_PRECEDENCE,
-  LEGISLATION_KEYS,
   EAGLE_ONLY_FIELDS,
   EAGLE_TOP_LEVEL_FIELDS,
   flattenEagleProject,
