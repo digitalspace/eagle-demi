@@ -85,6 +85,13 @@ Four things to know:
    be running and can write the blobs again until its SAS expires; the script prints that expiry.
    If the output download itself fails, the blobs are kept and the script prints their path.
 
+   The container comes from `azure/modules/api-function-flex.bicep`. The role does not: each
+   person who runs managed mode is granted it by hand, scoped to the container, with
+   `az role assignment create --assignee <object-id> --role "Storage Blob Data Contributor" --scope
+   <account-id>/blobServices/default/containers/devbox-run-output`. It stays out of Bicep because
+   the grants that exist today were made by hand, and a template grant for the same person would
+   fail with `RoleAssignmentExists`.
+
 2. **`/opt/eagle-demi` is a shallow clone made at first boot**, not a deploy. `git pull && yarn
    install` in the same run-command before anything that depends on a recent change.
 3. **The VM is a `Standard_B2s` — 4 GiB of RAM.** A big export needs `node
