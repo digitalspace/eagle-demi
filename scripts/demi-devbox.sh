@@ -36,8 +36,8 @@
 # Each phase is ONE run command, and each one costs 20-45 s of ARM and agent round trips. That is
 # why the per-index steps are a loop inside one payload and why the indexer wait runs on the VM
 # (`src/scripts/reset-and-run-indexers.js`) instead of a poll per tick from here: an apply is 3-4
-# calls, a drift is 1. `--no-wait` stops
-# after the run is posted, which is the workable mode for chunks-indexer: it takes hours.
+# calls, a drift is 1. `--no-wait` stops after the run is posted, which is the workable mode for
+# chunks-indexer: it takes hours.
 #
 # A data source named by `--datasources` is PUT BEFORE step 1: step 2 only covers data sources that
 # already exist and differ, and a new indexer's dry run refuses while its data source is missing.
@@ -60,12 +60,12 @@
 # `5 15 60`), `DEVBOX_START_GRACE` (seconds a posted start may leave the VM stopped, default 180),
 # `DEVBOX_RUN_TIMEOUT` (managed script timeout on the VM: default 5400 under a search role grant,
 # so the grant stays as short as an invoke run; 14400 for `run`), `DEVBOX_QUEUE_TIMEOUT` (seconds
-# a managed run may wait in the agent's queue before it starts, default 3600), `DEVBOX_RUN_POLL_SLEEP`
-# (default 10), `DEVBOX_OUTPUT_ACCOUNT` (managed output account, default the `demifc*` account in
-# the VM's group), `DEVBOX_CHECKOUT`
-# (default `/opt/eagle-demi`), `DS_RG` (Cosmos account's resource group, only needed when the
-# subscription holds more than one account), `INDEXER_POLL_SLEEP`, `INDEXER_TIMEOUT`,
-# `INDEXER_TIMEOUT_LONG`, `AZ` (the `az` seam the tests drive).
+# a managed run may wait in the agent's queue before it starts, default 3600),
+# `DEVBOX_RUN_POLL_SLEEP` (default 10), `DEVBOX_OUTPUT_ACCOUNT` (managed output account, default
+# the `demifc*` account in the VM's group), `DEVBOX_CHECKOUT` (default `/opt/eagle-demi`), `DS_RG`
+# (Cosmos account's resource group, only needed when the subscription holds more than one
+# account), `INDEXER_POLL_SLEEP`, `INDEXER_TIMEOUT`, `INDEXER_TIMEOUT_LONG`, `AZ` (the `az` seam
+# the tests drive).
 set -euo pipefail
 
 AZ="${AZ:-az}"
@@ -92,6 +92,8 @@ OUT_CONTAINER='devbox-run-output'
 RUN_NAME=''
 RUN_SAS_EXPIRY=''
 RUN_FILES=()
+# Set only when a failure is known to come before the command started; `run` reads it.
+RUN_NOT_STARTED=''
 
 # Not POLL_SLEEP: with-search-admin.sh reads that name for its own RBAC-replication poll, and this
 # script runs inside it.
@@ -238,9 +240,10 @@ def code: (. // "") | ascii_downcase;
 
 # Run-command is one more agent goal state, so it queues behind any extension the agent is still
 # working through. Called before the first remote call of each stretch with no prompt in it.
+# `$1`: what a give-up message says has already happened.
 devbox_ready() {
   [[ -z "$DEVBOX_RUNNER" ]] || return 0
-  local t0=$SECONDS posted='' iv parsed power agent busy failed msg shown='' nap i=0
+  local done_note="${1:-Nothing was run.}" t0=$SECONDS posted='' start_said iv parsed power agent busy failed msg shown='' nap i=0
   local -a naps
   read -r -a naps <<<"$DEVBOX_READY_SLEEPS"
   while :; do
@@ -260,16 +263,21 @@ devbox_ready() {
     # both post; the second may be refused, so the power state read after it is the verdict.
     if [[ "$power" == 'deallocated' || "$power" == 'stopped' ]]; then
       if [[ -z "$posted" ]]; then
-        "$AZ" vm start --subscription "$SUBSCRIPTION" -g "$VM_RG" -n "$VM" --no-wait >/dev/null || true
         posted=$SECONDS
-        echo "demi-devbox: ${VM} was ${power}; start posted" >&2
+        if "$AZ" vm start --subscription "$SUBSCRIPTION" -g "$VM_RG" -n "$VM" --no-wait >/dev/null; then
+          start_said='after the start was posted: the start did not take'
+          echo "demi-devbox: ${VM} was ${power}; start posted" >&2
+        else
+          start_said='after its start was refused, and no other start brought it up'
+          echo "demi-devbox: the start of ${VM} was refused (az error above); waiting up to ${DEVBOX_START_GRACE}s in case another run's start is in flight" >&2
+        fi
       elif (( SECONDS - posted >= DEVBOX_START_GRACE )); then
-        die "${VM} is still ${power} ${DEVBOX_START_GRACE}s after the start was posted: the start did not take. Nothing was run."
+        die "${VM} is still ${power} ${DEVBOX_START_GRACE}s ${start_said}. ${done_note}"
       fi
     fi
     local status="power=${power} agent=${agent} (${msg}) extensions busy: ${busy:-none}"
     if (( SECONDS - t0 >= DEVBOX_READY_TIMEOUT )); then
-      die "${VM} not ready after ${DEVBOX_READY_TIMEOUT}s: ${status}. Nothing was run."
+      die "${VM} not ready after ${DEVBOX_READY_TIMEOUT}s: ${status}. ${done_note}"
     fi
     echo "demi-devbox: waiting for ${VM}: ${status}" >&2
     nap="${naps[i]:-${naps[-1]}}"
@@ -316,7 +324,9 @@ error_code() {
 # (deadline, interrupt, error), so its SAS can re-create blobs after this. `keep`: blobs stay.
 managed_cleanup() {
   local mode="${1:-live}" err
-  trap - EXIT INT TERM
+  # Ctrl-C ignored, not reset, so a second one cannot kill the deletes below (az inherits it).
+  # TERM stays default: it is how a hung delete is still stopped.
+  trap - EXIT TERM; trap '' INT
   if [[ -n "${RUN_NAME:-}" ]]; then
     # At most 25 managed run commands per VM, so every one is removed. NotFound: it was never made.
     if ! err="$("$AZ" vm run-command delete --subscription "$SUBSCRIPTION" -g "$VM_RG" --vm-name "$VM" \
@@ -335,6 +345,7 @@ managed_cleanup() {
   RUN_NAME=''; RUN_SAS_EXPIRY=''
   rm -f "${RUN_FILES[@]+"${RUN_FILES[@]}"}"
   RUN_FILES=()
+  trap - INT
 }
 
 # A managed run command: output to blob, no 4 KB cap, and the client polls on its own bounds
@@ -358,6 +369,7 @@ managed_run() {
   if ! { out_sas="$(sas_file "${RUN_NAME}/stdout" "$RUN_SAS_EXPIRY")" && RUN_FILES+=("$out_sas") \
       && err_sas="$(sas_file "${RUN_NAME}/stderr" "$RUN_SAS_EXPIRY")" && RUN_FILES+=("$err_sas"); }; then
     echo "demi-devbox: could not mint the output SAS on ${DEVBOX_OUTPUT_ACCOUNT}" >&2
+    RUN_NOT_STARTED='the output SAS could not be minted'
     managed_cleanup finished
     return 1
   fi
@@ -367,6 +379,7 @@ managed_run() {
       --timeout-in-seconds "$DEVBOX_RUN_TIMEOUT" \
       --output-blob-uri "@${out_sas}" --error-blob-uri "@${err_sas}" --no-wait -o none 2>&1)"; then
     echo "demi-devbox: run-command create failed ($(error_code <<<"$err"))" >&2
+    RUN_NOT_STARTED='run-command create was refused'
     managed_cleanup live
     return 1
   fi
@@ -383,6 +396,7 @@ managed_run() {
     esac
     if [[ -z "$started" ]] && (( SECONDS - t0 >= DEVBOX_QUEUE_TIMEOUT )); then
       echo "demi-devbox: run-command ${RUN_NAME} never started: still '${state}' after ${DEVBOX_QUEUE_TIMEOUT}s in the VM agent's queue; deleting it." >&2
+      RUN_NOT_STARTED="it never left the VM agent's queue"
       managed_cleanup live
       return 1
     fi
@@ -438,9 +452,18 @@ devbox_run() {
     managed_run "$wrapped"
     return
   fi
+  local errf
+  errf="$(mktemp)"
   out="$("$AZ" vm run-command invoke --subscription "$SUBSCRIPTION" -g "$VM_RG" -n "$VM" \
     --command-id RunShellScript --scripts "$wrapped" \
-    --query "value[].message" -o tsv)" || return 1
+    --query "value[].message" -o tsv 2>"$errf")" || rc=$?
+  cat "$errf" >&2
+  # 409: another run command holds the extension, so this one was never handed to the VM.
+  if [[ "$rc" -ne 0 ]] && grep -q '(Conflict)' "$errf"; then
+    RUN_NOT_STARTED='run-command invoke was refused with 409 Conflict'
+  fi
+  rm -f "$errf"
+  [[ "$rc" -eq 0 ]] || return 1
   printf '%s\n' "$out"
 }
 
@@ -549,28 +572,27 @@ internal_drift_run() {
 do_apply() {
   resolve_env
   preflight_rbac
-  prepare_output
 
   # A new indexer names a data source that does not exist yet, and the dry run refuses on that name
   # before anything can be written — so no run could ever create it. `--datasources` is the operator
   # naming the ones to PUT first. Its own grant, ahead of the dry run's: a data source no committed
   # indexer reads yet cannot change what the service is serving.
+  #
+  # Its own prompt, because this write lands before the one below: a `[y/N]` answered after the
+  # data sources are already on the service cannot still mean "nothing was written".
+  if [[ -n "$DATASOURCES" && "$ASSUME_YES" -ne 1 ]]; then
+    local pre_answer=''
+    # The notice is its own echo: `read -p` prints nothing when stdin is not a terminal, and this
+    # line is the record of what the answer was about.
+    echo "demi-devbox: will PUT data source(s) ${DATASOURCES} before the dry run." >&2
+    read -r -p "Proceed? [y/N] " pre_answer || pre_answer=''
+    [[ "$pre_answer" == "y" || "$pre_answer" == "Y" ]] || die "aborted — nothing was written"
+  fi
+  devbox_ready
+  prepare_output
   if [[ -n "$DATASOURCES" ]]; then
-    # Its own prompt, because this write lands before the one below: a `[y/N]` answered after the
-    # data sources are already on the service cannot still mean "nothing was written".
-    if [[ "$ASSUME_YES" -ne 1 ]]; then
-      local pre_answer=''
-      # The notice is its own echo: `read -p` prints nothing when stdin is not a terminal, and this
-      # line is the record of what the answer was about.
-      echo "demi-devbox: will PUT data source(s) ${DATASOURCES} before the dry run." >&2
-      read -r -p "Proceed? [y/N] " pre_answer || pre_answer=''
-      [[ "$pre_answer" == "y" || "$pre_answer" == "Y" ]] || die "aborted — nothing was written"
-    fi
-    devbox_ready
     with_grant "$0" __put-datasources --env "$ENV_NAME" --datasources "$DATASOURCES"
     echo "demi-devbox: pre-created data source(s): ${DATASOURCES}"
-  else
-    devbox_ready
   fi
 
   local dry_log
@@ -629,7 +651,9 @@ do_apply() {
     local answer=''
     read -r -p "Proceed? [y/N] " answer || answer=''
     [[ "$answer" == "y" || "$answer" == "Y" ]] || die "aborted — nothing was written"
-    devbox_ready
+    local written='Nothing was written.'
+    [[ -z "$DATASOURCES" ]] || written="Only data source(s) ${DATASOURCES} were written, before the dry run."
+    devbox_ready "$written"
   fi
 
   local -a wait_flag=()
@@ -659,7 +683,12 @@ do_run() {
   cat "$out"
   code="$(remote_exit <"$out")"
   rm -f "$out"
-  [[ -n "$code" ]] || die "no DEMI_EXIT line came back from ${VM}: the command may have run, but its output was lost"
+  if [[ -z "$code" ]]; then
+    # Any other failure (timeout, transport error, lost output) may come after the command ran, so
+    # only a known refusal may tell the operator a retry is safe.
+    [[ -z "$RUN_NOT_STARTED" ]] || die "the command did not run on ${VM}: ${RUN_NOT_STARTED}; see the error above"
+    die "no DEMI_EXIT line came back from ${VM}: the command may have run, but its output was lost"
+  fi
   exit "$code"
 }
 
@@ -798,8 +827,8 @@ while [[ $# -gt 0 ]]; do
     --no-wait) NO_WAIT=1; shift ;;
     # One argument is a shell command line; several are argv, quoted one by one.
     --) shift; HAS_CMD=1
-      if [[ $# -eq 1 ]]; then RUN_CMD="$1"; elif [[ $# -gt 1 ]]; then RUN_CMD="$(printf '%q ' "$@")"; fi
-      RUN_CMD="${RUN_CMD% }"; break ;;
+      if [[ $# -eq 1 ]]; then RUN_CMD="$1"; elif [[ $# -gt 1 ]]; then RUN_CMD="$(printf '%q ' "$@")"; RUN_CMD="${RUN_CMD% }"; fi
+      break ;;
     -h|--help) usage; exit 0 ;;
     *) usage_error "unknown argument '$1'" ;;
   esac
@@ -824,6 +853,11 @@ done
 if [[ -n "$DEVBOX_RUNNER" && "$(readlink -f -- "$DEVBOX_RUNNER" || true)" == "$(readlink -f -- "$0")" ]]; then
   usage_error "DEVBOX_RUNNER points at this script, which would call itself without end"
 fi
+case "$ACTION" in
+  drift|apply|watch|run)
+    [[ -n "$DEVBOX_RUNNER" ]] || command -v jq >/dev/null \
+      || die "needs jq to read the VM agent's state; install it, or set DEVBOX_RUNNER. Nothing was run." ;;
+esac
 
 # The `__` actions are this script re-entering itself under with-search-admin.sh, never something
 # to type: on their own they run without a grant and answer 403.
