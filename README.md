@@ -78,12 +78,28 @@ Four things to know:
    no output cap, and the script timeout is `DEVBOX_RUN_TIMEOUT` (default 4 hours for `run`, 90
    minutes under a search role grant). The blobs are written through a user-delegation SAS minted
    from your `az` login, which carries only your own blob roles, so **managed mode needs Storage
-   Blob Data Contributor on that account**; with Reader the run fails with
-   `403 AuthorizationPermissionMismatch`. After every managed run, including one that timed out,
+   Blob Data Contributor on that container**, plus the delegator role below; with Reader the run
+   fails with `403 AuthorizationPermissionMismatch`. After every managed run, including one that timed out,
    was interrupted or failed at create, the script asks Azure to delete the run-command resource (a
    VM holds at most 25) and deletes the blobs it finds. A timed-out or interrupted script may still
    be running and can write the blobs again until its SAS expires; the script prints that expiry.
    If the output download itself fails, the blobs are kept and the script prints their path.
+
+   In deployed environments the container comes from `azure/modules/api-function-flex.bicep`; the
+   script still creates it if it is missing. The roles are granted by hand to each person who runs
+   managed mode:
+
+   - Storage Blob Data Contributor, scoped to the container, to write and read the run's blobs.
+   - Storage Blob Delegator, scoped to the storage account, to get the user delegation key that
+     signs the SAS. Azure checks that key at account scope or above, so the container role does not
+     cover it. Not needed for someone who already has Owner or Contributor over the account.
+
+   Grant each with `az role assignment create --assignee <object-id> --role "<role>" --scope <scope>`.
+   The account scope is its full resource ID, from `az storage account show -n <account> --query id
+   -o tsv`; the container scope is that ID plus `/blobServices/default/containers/devbox-run-output`.
+   Neither grant is in Bicep: no param file holds a person's object id, and the Data Contributor
+   grants that exist today were made by hand, so a template grant for the same person would fail
+   with `RoleAssignmentExists`.
 
 2. **`/opt/eagle-demi` is a shallow clone made at first boot**, not a deploy. `git pull && yarn
    install` in the same run-command before anything that depends on a recent change.

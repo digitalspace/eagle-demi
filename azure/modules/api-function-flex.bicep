@@ -326,6 +326,13 @@ resource deployContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
   name: 'deployment'
 }
 
+// Managed-mode devbox runs write stdout/stderr here; the name must match OUT_CONTAINER in
+// scripts/demi-devbox.sh. Operator roles are granted by hand; see the README devbox section.
+resource devboxRunOutputContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'devbox-run-output'
+}
+
 // Shared by every queue below, so its condition is the OR of theirs — an environment that runs
 // only one of the two features still needs the service.
 resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue) || !empty(searchDefinitionsQueue)) {

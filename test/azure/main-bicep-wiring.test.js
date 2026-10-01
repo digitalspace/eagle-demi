@@ -279,6 +279,19 @@ test('the Entra SSH params stay outside the frozen cloud-init span', () => {
   }
 });
 
+test('the API storage account declares the container managed devbox runs write to', () => {
+  const script = fs.readFileSync(path.join(ROOT, 'scripts', 'demi-devbox.sh'), 'utf8');
+  const name = /^OUT_CONTAINER='([^']+)'$/m.exec(script);
+  assert.ok(name, 'scripts/demi-devbox.sh must set OUT_CONTAINER');
+  const escaped = name[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const blocks = [...API_MODULE.matchAll(
+    /^resource \w+ 'Microsoft\.Storage\/storageAccounts\/blobServices\/containers@[^']+' = (if \(.*\) )?\{\n([\s\S]*?)\n\}/gm)];
+  const block = blocks.find((m) => new RegExp(`^\\s*name: '${escaped}'$`, 'm').test(m[2]));
+  assert.ok(block, `api-function-flex.bicep must declare container '${name[1]}'`);
+  assert.strictEqual(block[1], undefined, 'the container must not be conditional');
+  assert.match(block[2], /^\s*parent: blobService$/m, 'the container must sit on the API storage account');
+});
+
 // Read off demi-apim-test and demi-apim-prod, both Disabled (2026-09-06). Omitted, the API version's
 // default is Enabled, so every apply proposes switching the deprecated portal back on.
 test('the gateway pins the legacy developer portal off', () => {
