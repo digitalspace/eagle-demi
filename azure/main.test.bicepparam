@@ -224,6 +224,10 @@ param devboxEntraSshPrincipalId = ''
 // Pinned to the live budget period — an existing budget rejects startDate updates.
 param budgetStartDate = '2026-08-01'
 
+// Raised from 400 on 2026-10-01. The run rate is about 520 CAD a month (about 16.7 a day) since
+// Defender for Cloud and a full month of the search service were added.
+param budgetAmount = 550
+
 // Same probe as prod, test-shaped: monitors the real user path and its executions keep one
 // Flex instance warm — cheaper than alwaysReady and doubles as monitoring.
 param availabilityUrl = 'https://test.projects.eao.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1'
