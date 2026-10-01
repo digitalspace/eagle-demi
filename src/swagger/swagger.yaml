@@ -2370,6 +2370,8 @@ paths:
           eagle-api's config payload. Anything outside the allowlist is dropped rather than
           rejected; `ENVIRONMENT` and `ACCESS_GATE` are required because a payload missing either
           is not an eagle-api config, and a missing gate leaves the access curtain undecided.
+          A malformed `EXTENDED_PROJECT_PAGES` (see `PublicConfig`) is dropped, which turns the
+          extended project page off; the rest of the body is stored and the push still returns 200.
         content:
           application/json:
             schema:
@@ -3583,6 +3585,18 @@ components:
             Whether the public site closes its access curtain. A stored `false` is served as
             boolean `false`; absent is NOT `false`, which is why an unseeded document answers 503
             rather than a payload.
+        EXTENDED_PROJECT_PAGES:
+          type: object
+          description: >-
+            Eagle project id (24 lower-case hex characters) to the content key of the public site's
+            extended project page, at most 50 entries. Absent or empty turns the extended project
+            page off. A value that is not this shape is dropped whole and served as absent: an id
+            in any other form, upper case included, or more than 50 entries.
+          additionalProperties:
+            type: string
+            pattern: '^[a-z0-9-]{1,40}$'
+          example:
+            '5c8a1b1c1d1e1f2021222324': pacific-link
 
     MeBase:
       type: object

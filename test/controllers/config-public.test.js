@@ -31,6 +31,7 @@ const { forgetCachedKey } = require('../../src/helpers/auth');
 const { routeChains } = require('../helpers/router-source');
 const { withServer } = require('../helpers/with-server');
 const { gatewayCaller, stubRegistry } = require('../helpers/registry-callers');
+const { logger } = require('../../src/utils/logger');
 
 function mockRes() {
   return {
@@ -383,6 +384,114 @@ test('public config push', async (t) => {
 
     assert.equal(res.statusCode, 500);
     assert.ok(!/demi-cosmos/.test(JSON.stringify(res.body)), 'the driver message reached the caller');
+  });
+});
+
+const PROJECT_ID = '5c8a1b1c1d1e1f2021222324';
+// n distinct lower-case 24-hex ids
+const idMap = (n) => Object.fromEntries(
+  Array.from({ length: n }, (_, i) => [i.toString(16).padStart(24, '0'), 'pacific-link']));
+
+/** GET /config/public over a document carrying `pages` as EXTENDED_PROJECT_PAGES. */
+async function servedWithPages(t, pages) {
+  t.mock.method(configRepository, 'getPublic', async () => ({ ...STORED, EXTENDED_PROJECT_PAGES: pages }));
+  const res = mockRes();
+  await configController.getPublicConfig(REQ, res);
+  return res;
+}
+
+test('EXTENDED_PROJECT_PAGES', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('a map of Eagle project id to content key is served as stored', async () => {
+    const res = await servedWithPages(t, { [PROJECT_ID]: 'pacific-link' });
+
+    assert.deepEqual(res.body.EXTENDED_PROJECT_PAGES, { [PROJECT_ID]: 'pacific-link' });
+  });
+
+  await t.test('an empty map is served, so the site can read it as off', async () => {
+    const res = await servedWithPages(t, {});
+
+    assert.deepEqual(res.body.EXTENDED_PROJECT_PAGES, {});
+  });
+
+  await t.test('a map of exactly 50 entries is served', async () => {
+    const res = await servedWithPages(t, idMap(50));
+
+    assert.deepEqual(res.body.EXTENDED_PROJECT_PAGES, idMap(50));
+  });
+
+  await t.test('absent from the document is absent from the payload', async () => {
+    t.mock.method(configRepository, 'getPublic', async () => STORED);
+    const res = mockRes();
+
+    await configController.getPublicConfig(REQ, res);
+
+    assert.ok(!('EXTENDED_PROJECT_PAGES' in res.body));
+  });
+
+  const DROPPED = [
+    ['an array', [PROJECT_ID]],
+    ['an empty array', []],
+    ['a string', `{"${PROJECT_ID}":"pacific-link"}`],
+    ['a boolean', true],
+    ['a key that is not an Eagle id', { 'pacific-link': 'pacific-link' }],
+    ['a 23-character key', { [PROJECT_ID.slice(1)]: 'pacific-link' }],
+    ['a number value', { [PROJECT_ID]: 7 }],
+    ['a nested object value', { [PROJECT_ID]: { page: 'pacific-link' } }],
+    ['an uppercase value', { [PROJECT_ID]: 'Pacific-Link' }],
+    ['a value with a slash', { [PROJECT_ID]: '../admin' }],
+    ['an empty value', { [PROJECT_ID]: '' }],
+    ['a 41-character value', { [PROJECT_ID]: 'a'.repeat(41) }],
+    ['one bad entry beside a good one', { [PROJECT_ID]: 'pacific-link', ['f'.repeat(24)]: 'Bad Key' }],
+    ['an upper-case key', { [PROJECT_ID.toUpperCase()]: 'pacific-link' }],
+    ['51 entries', idMap(51)],
+    ['a __proto__ key', JSON.parse('{"__proto__":"pacific-link"}')],
+    ['a constructor key', { constructor: 'pacific-link' }],
+    ['a map with no prototype', Object.assign(Object.create(null), { [PROJECT_ID]: 'pacific-link' })]
+  ];
+
+  for (const [name, pages] of DROPPED) {
+    await t.test(`${name} is dropped and the other keys still served`, async () => {
+      const warn = t.mock.method(logger, 'warn', () => {});
+      const res = await servedWithPages(t, pages);
+
+      assert.equal(res.statusCode, 200);
+      assert.ok(!('EXTENDED_PROJECT_PAGES' in res.body), 'a malformed map reached an anonymous caller');
+      assert.equal(res.body.ACCESS_GATE, true);
+      assert.equal(res.body.SEARCH_API_PATH, '/demi-search');
+      assert.match(String(warn.mock.calls[0]?.arguments[0]), /EXTENDED_PROJECT_PAGES/);
+    });
+  }
+
+  await t.test('a push stores a valid map and refuses to store a malformed one', async () => {
+    t.mock.method(logger, 'warn', () => {});
+    const read = stubDocument(t);
+
+    const stored = mockRes();
+    await configController.upsertPublicFromEagle(
+      { ...REQ, body: { ...PUSHED, EXTENDED_PROJECT_PAGES: { [PROJECT_ID]: 'pacific-link' } } }, stored);
+    assert.equal(stored.statusCode, 200);
+    assert.deepEqual(read().EXTENDED_PROJECT_PAGES, { [PROJECT_ID]: 'pacific-link' });
+
+    const dropped = mockRes();
+    await configController.upsertPublicFromEagle(
+      { ...REQ, body: { ...PUSHED, EXTENDED_PROJECT_PAGES: { [PROJECT_ID]: 'Bad Key' } } }, dropped);
+    assert.equal(dropped.statusCode, 200);
+    assert.ok(!('EXTENDED_PROJECT_PAGES' in read()));
+  });
+
+  await t.test('the retired FEDERAL_REVIEW_PROJECTS key is neither served nor stored', async () => {
+    const retired = { FEDERAL_REVIEW_PROJECTS: { [PROJECT_ID]: 'pacific-link' } };
+    t.mock.method(configRepository, 'getPublic', async () => ({ ...STORED, ...retired }));
+    const res = mockRes();
+    await configController.getPublicConfig(REQ, res);
+    assert.ok(!('FEDERAL_REVIEW_PROJECTS' in res.body), 'the retired key reached an anonymous caller');
+    t.mock.restoreAll();
+
+    const read = stubDocument(t);
+    await configController.upsertPublicFromEagle({ ...REQ, body: { ...PUSHED, ...retired } }, mockRes());
+    assert.ok(!('FEDERAL_REVIEW_PROJECTS' in read()), 'the retired key was stored');
   });
 });
 
