@@ -17,12 +17,16 @@ const PROJECT_TO_INDEX = {
   name: ['name', 'nameTokens'],
   abbreviation: ['displayName'],
   proponentName: ['proponent'],
-  projectState: ['status'],
+  // The label columns reach the index a second time, joined into `searchLabels`.
+  sector: ['sector', 'searchLabels'],
+  projectSubType: ['projectSubType', 'searchLabels'],
+  projectState: ['status', 'searchLabels'],
+  region: ['region', 'searchLabels'],
   eagleId: ['legacyEagleId'],
-  projectType: ['type'],
+  projectType: ['type', 'searchLabels'],
   CEAAInvolvement: ['ceaaInvolvementId'],
-  currentPhaseName: ['currentPhaseName', 'currentPhaseNameId'],
-  eacDecision: ['eacDecision', 'eacDecisionId']
+  currentPhaseName: ['currentPhaseName', 'currentPhaseNameId', 'searchLabels'],
+  eacDecision: ['eacDecision', 'eacDecisionId', 'searchLabels']
 };
 
 /**
