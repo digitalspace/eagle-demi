@@ -103,18 +103,30 @@ test('the open rail and its closed count exclude deleted periods', async (t) => 
   }
 });
 
+// Dates every tz revision agrees on: tz 2026c keeps America/Vancouver on UTC-7 after 2026-11-01.
 test('startOfPacificDay is the Pacific midnight of the Pacific date, across DST', () => {
   const cases = [
     ['2026-09-22T18:00:00Z', '2026-09-22T07:00:00.000Z'], // PDT
     ['2026-09-22T06:59:59Z', '2026-09-21T07:00:00.000Z'], // still the 21st in Vancouver
     ['2026-01-15T23:00:00Z', '2026-01-15T08:00:00.000Z'], // PST
     ['2026-03-08T12:00:00Z', '2026-03-08T08:00:00.000Z'], // DST starts at 02:00: midnight was PST
-    ['2026-11-01T12:00:00Z', '2026-11-01T07:00:00.000Z'], // DST ends at 02:00: midnight was PDT
-    ['2026-11-02T12:00:00Z', '2026-11-02T08:00:00.000Z']
+    ['2025-11-02T12:00:00Z', '2025-11-02T07:00:00.000Z'], // DST ends at 02:00: midnight was PDT
+    ['2025-11-03T12:00:00Z', '2025-11-03T08:00:00.000Z'] // PST
   ];
   for (const [now, midnight] of cases) {
     assert.strictEqual(commentPeriods.startOfPacificDay(new Date(now)).toISOString(), midnight, now);
   }
+});
+
+test('startOfPacificDay after 2026-11-01 uses the offset the tz database gives', () => {
+  const now = new Date('2026-12-15T12:00:00Z');
+  const name = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Vancouver', timeZoneName: 'longOffset' })
+    .formatToParts(now).find(part => part.type === 'timeZoneName').value;
+  const [, sign, hours, minutes] = name.match(/^GMT([+-])(\d{2}):(\d{2})$/);
+  const offsetMs = Number(`${sign}1`) * (Number(hours) * 3600000 + Number(minutes) * 60000);
+
+  assert.strictEqual(commentPeriods.startOfPacificDay(now).toISOString(),
+    new Date(Date.UTC(2026, 11, 15) - offsetMs).toISOString(), name);
 });
 
 test('projects.listIdsByName', async (t) => {

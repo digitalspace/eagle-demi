@@ -670,10 +670,13 @@ test('the closing day follows the Pacific calendar, as eagle-public does', async
     assert.deepStrictEqual(applyStatusPredicate(count, ROWS).map(r => r.id), ['this-morning', 'yesterday']);
   });
 
-  // 2026-11-01 falls back at 09:00Z: midnight that day is 00:00 PDT (07:00Z); 08:00Z is 01:00 PDT.
+  // 2025-11-02 fell back at 09:00Z: midnight that day was 00:00 PDT (07:00Z); 08:00Z was 01:00 PDT.
+  // 2025, not 2026: tz 2026c keeps Vancouver on PDT past 2026-11-01, so that day has no switch.
   await t.test('on the day DST ends, only the PDT midnight counts as the closing day', async (tt) => {
-    at(tt, '2026-11-01T20:00:00.000Z');
-    const rows = [closing('pdt-midnight', '2026-11-01T07:00:00.000Z'), closing('one-am', '2026-11-01T08:00:00.000Z')];
+    at(tt, '2025-11-02T20:00:00.000Z');
+    const fallBack = (id, dateCompleted) =>
+      periodRow({ id, eagleId: id, dateStarted: '2025-10-01T07:00:00.000Z', dateCompleted });
+    const rows = [fallBack('pdt-midnight', '2025-11-02T07:00:00.000Z'), fallBack('one-am', '2025-11-02T08:00:00.000Z')];
     const seen = stubPeriods(tt, rows);
 
     await get(OPEN);
