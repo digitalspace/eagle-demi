@@ -40,19 +40,21 @@ there is no key to fall back on. Opening the firewall is denied by Azure Policy.
 `demi-devbox-test` is where they run: a small VM inside the landing-zone VNet, running as
 `demi-identity-test` — the same identity the API runs as, so a script there has exactly the app's
 Cosmos, Key Vault and Search access and nothing more. It is deallocated between sessions, and a
-schedule shuts it down at 19:00 Pacific, so start it first and deallocate it after:
-
-```bash
-az vm start      -g c4b0a8-test-rg -n demi-devbox-test   # ~60-90 s
-az vm deallocate -g c4b0a8-test-rg -n demi-devbox-test   # compute bills for every hour it runs
-```
+schedule shuts it down at 19:00 Pacific.
 
 **Scripts go over the ARM control plane** — no network path from here, no SSH:
 
 ```bash
-az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
-  --scripts "sudo -u demi /usr/local/bin/demi-run 'cd /opt/eagle-demi && node src/scripts/reconcile-eagle.js'"
+scripts/demi-devbox.sh run --env test -- 'node src/scripts/reconcile-eagle.js'
+az vm deallocate -g c4b0a8-test-rg -n demi-devbox-test   # after; compute bills for every hour it runs
 ```
+
+`run` starts the VM if it is stopped or deallocated, then waits until the VM agent is `Ready` and
+no extension or handler is transitioning (up to 20 minutes, `DEVBOX_READY_TIMEOUT`; on timeout it
+names what is busy). Failed and `NotReady` extensions are listed and not waited on. It then runs
+the command in `/opt/eagle-demi` as `sudo -u demi /usr/local/bin/demi-run '<command>'`, prints
+its output and exits with the command's exit code. One argument after `--` is a shell command
+line; several are passed as separate arguments.
 
 `demi-run` is the whole interface. It logs the CLI in as the managed identity, exports
 `AZURE_CLIENT_ID`, `COSMOS_ENDPOINT`, `COSMOS_NOSQL_DATABASE`, `SEARCH_ENDPOINT` and
@@ -69,23 +71,25 @@ a failed login fails the run-command visibly.
 
 Four things to know:
 
-1. **run-command truncates stdout at 4 KB**, so anything longer is written to a file and comes back
-   out through blob storage. The identity already holds Storage Blob Data Owner on the API's storage
-   account, which is the one to use:
-
-   ```bash
-   ACCT=$(az storage account list -g c4b0a8-test-rg --query "[?starts_with(name,'demifc')].name" -o tsv)
-   az storage container create --auth-mode login --account-name "$ACCT" -n transfer   # once
-   # inside the run-command script, after the run has written /tmp/out.ndjson:
-   #   az storage blob upload --auth-mode login --account-name <acct> -c transfer -n out.ndjson -f /tmp/out.ndjson
-   az storage blob download --auth-mode login --account-name "$ACCT" -c transfer -n out.ndjson -f ./out.ndjson
-   ```
+1. **By default output is cut at 4 KB and a run stops at 90 minutes.** That is
+   `az vm run-command invoke`, which the script uses unless `DEVBOX_RUN_MODE=managed`. Managed mode
+   runs a managed run command instead: the VM writes stdout and stderr to append blobs in container
+   `devbox-run-output` on the `demifc*` account (`DEVBOX_OUTPUT_ACCOUNT` to override), so there is
+   no output cap, and the script timeout is `DEVBOX_RUN_TIMEOUT` (default 4 hours for `run`, 90
+   minutes under a search role grant). The blobs are written through a user-delegation SAS minted
+   from your `az` login, which carries only your own blob roles, so **managed mode needs Storage
+   Blob Data Contributor on that account**; with Reader the run fails with
+   `403 AuthorizationPermissionMismatch`. After every managed run, including one that timed out,
+   was interrupted or failed at create, the script asks Azure to delete the run-command resource (a
+   VM holds at most 25) and deletes the blobs it finds. A timed-out or interrupted script may still
+   be running and can write the blobs again until its SAS expires; the script prints that expiry.
+   If the output download itself fails, the blobs are kept and the script prints their path.
 
 2. **`/opt/eagle-demi` is a shallow clone made at first boot**, not a deploy. `git pull && yarn
    install` in the same run-command before anything that depends on a recent change.
-3. **The VM is a `Standard_B1s` — 1 GiB of RAM.** A big export needs `node
-   --max-old-space-size=...` and probably `az vm resize --size Standard_B2s` first; Node's default
-   heap gets the process OOM-killed with no error, it simply vanishes.
+3. **The VM is a `Standard_B2s` — 4 GiB of RAM.** A big export needs `node
+   --max-old-space-size=...`; Node's default heap gets the process OOM-killed with no error, it
+   simply vanishes.
 4. **A run still going at 19:00 Pacific dies with the auto-shutdown.** Disable the schedule for the
    day, or start the run earlier.
 
@@ -116,12 +120,12 @@ index, data source, indexer reset and run. It reads the resource group, the tena
 identity off the resources themselves, so a prod run cannot inherit the test defaults. Outage
 symptoms and the rest of the response: `docs/runbook-search-outage.md`.
 
-Each phase is one `az vm run-command invoke`, and every invoke is a 20-45 s round trip through ARM.
+Each phase is one run command, and every one is a 20-45 s round trip through ARM.
 That is why a drift check is a single call and an apply is three or four, whatever `--only` names:
 the per-index steps loop inside one payload, and the wait for the indexer runs on the devbox
 (`src/scripts/reset-and-run-indexers.js`) rather than as a call per poll.
 
-`chunks-indexer` takes hours and run-command gives up after 90 minutes, so reset it with
+`chunks-indexer` takes hours, the wait gives up after 80 minutes and a run stops at 90, so reset it with
 `--no-wait`: the script posts the reset and the run, releases the role grant, and prints the
 `watch` command to pick the wait back up later.
 

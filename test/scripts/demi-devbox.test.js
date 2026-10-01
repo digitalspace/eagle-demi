@@ -48,18 +48,70 @@ const FAKE_AZ = `#!/usr/bin/env bash
 echo "$*" | tr "\\n" " " >> "\${AZ_LOG}"
 echo "" >> "\${AZ_LOG}"
 
-if [[ -n "\${AZ_PAYLOAD_DIR:-}" && "$*" == *--scripts* ]]; then
+state="$(dirname "\${AZ_LOG}")"
+
+# \`--scripts\` is invoke's flag, \`--script\` the managed run command's.
+if [[ -n "\${AZ_PAYLOAD_DIR:-}" && "$*" == *--script* ]]; then
   payload="$(mktemp "\${AZ_PAYLOAD_DIR}/payload-XXXXXX")"
 fi
 
-sub=""; scripts=""; prev=""
+sub=""; scripts=""; name=""; file=""; query=""; outuri=""; prev=""
 for a in "$@"; do
   case "$prev" in
     --subscription) sub="$a" ;;
-    --scripts) scripts="$a" ;;
+    --scripts|--script) scripts="$a" ;;
+    --name|-n) name="$a" ;;
+    -f) file="$a" ;;
+    --query) query="$a" ;;
+    --output-blob-uri) outuri="$a" ;;
   esac
   prev="$a"
 done
+
+# Each call to a counter returns how many times it has been called before, so a test can say
+# "not ready for the first N checks".
+count() { local f="\${state}/count-$1" n=0; [[ -f "$f" ]] && n="$(cat "$f")"; echo $((n + 1)) > "$f"; echo "$n"; }
+
+# The raw instanceView JSON: AZ_IV for the first AZ_READY_AFTER checks, a settled VM after that.
+# The script classifies it itself, so the fake never decides what counts as ready.
+READY_IV='{"statuses":[{"code":"ProvisioningState/succeeded"},{"code":"PowerState/running"}],"vmAgent":{"statuses":[{"code":"ProvisioningState/succeeded","displayStatus":"Ready","message":"Guest Agent is running"}],"extensionHandlers":[]},"extensions":[]}'
+instance_view() {
+  if [[ -n "\${AZ_IV_FAIL:-}" ]]; then echo "ERROR: (AuthorizationFailed) no read on the VM" >&2; exit 1; fi
+  if [[ "$(count iv)" -ge "\${AZ_READY_AFTER:-0}" ]]; then echo "\${AZ_IV_READY:-$READY_IV}"; else echo "\${AZ_IV}"; fi
+}
+
+run_command() {
+  case "$1" in
+    invoke) remote_reply "$scripts" ;;
+    create)
+      if [[ -n "\${AZ_CREATE_FAIL:-}" ]]; then
+        echo "ERROR: (AuthorizationFailed) cannot write https://acct.blob.core.windows.net/devbox-run-output/x/stdout?sv=1&sig=FAKESIG" >&2
+        exit 1
+      fi
+      [[ "$outuri" != @* ]] || echo "\${outuri#@}" > "\${state}/sas-path"
+      [[ -z "\${AZ_CREATE_SLEEP:-}" ]] || sleep "\${AZ_CREATE_SLEEP}"
+      # The real CLI prints the resource, blob URIs and their SAS included, unless told -o none.
+      [[ "$*" == *"-o none"* ]] || echo "{\\"outputBlobUri\\": \\"https://fake/\${name}/stdout?sig=FAKESIG\\"}"
+      # \`@file\`: what the SAS file held and how it was protected, for the tests to read back.
+      if [[ "$outuri" == @* ]]; then
+        cat "\${outuri#@}" > "\${state}/sas-seen"
+        stat -c %a "\${outuri#@}" > "\${state}/sas-mode"
+      fi
+      [[ -n "\${AZ_NO_BLOB:-}" ]] || remote_reply "$scripts" > "\${state}/blob-\${name}-stdout"
+      [[ -z "\${AZ_STDERR_TEXT:-}" ]] || echo "\${AZ_STDERR_TEXT}" > "\${state}/blob-\${name}-stderr" ;;
+    delete)
+      if [[ -n "\${AZ_DELETE_NOTFOUND:-}" ]]; then echo "ERROR: (ResourceNotFound) The Resource was not found." >&2; exit 1; fi ;;
+    show)
+      if [[ "$query" == *executionMessage* ]]; then
+        echo "\${AZ_EXEC_MESSAGE:-Execution failed: Error creating AppendBlob: StatusCode=403, ErrorCode=AuthorizationPermissionMismatch, QueryParameterName=sig, QueryParameterValue=FAKESIG}"
+        return
+      fi
+      n="$(count show)"
+      if [[ "$n" -lt "\${AZ_PENDING_POLLS:-0}" ]]; then echo "Creating Pending"; return; fi
+      if [[ "$n" -lt $(( \${AZ_PENDING_POLLS:-0} + \${AZ_RUNNING_POLLS:-0} )) ]]; then echo "Succeeded Running"; return; fi
+      echo "\${AZ_PROV_STATE:-Succeeded} \${AZ_EXEC_STATE:-Succeeded}" ;;
+  esac
+}
 
 if [[ -n "\${payload:-}" ]]; then printf "%s" "$scripts" > "$payload"; fi
 
@@ -69,11 +121,12 @@ group() { if [[ "$sub" == "${PROD_SUB}" ]]; then echo "rg-demi-prod"; else echo 
 # \`all\` is the label a run that named no index carries.
 names_of() { sed -n "s/.*for n in \\([A-Za-z0-9 _-]*\\); do.*/\\1/p" <<<"$1" | head -1; }
 
-# The indexers handed to reset-and-run-indexers.js: the words between the script name and the \`;\`
-# that ends the remote command. Grepping for *-indexer would also match the script's own filename.
+# The indexers handed to reset-and-run-indexers.js: the words between the script name and the
+# newline that ends the remote command. Grepping for *-indexer would also match the script's own
+# filename.
 indexers_of() {
   local rest="\${1##*reset-and-run-indexers.js }"
-  echo "\${rest%%;*}"
+  echo "\${rest%%$'\\n'*}"
 }
 
 # AZ_DRIFT / AZ_DRY_FAIL: "1" for every index, or a comma list to fail just those. One payload now
@@ -144,8 +197,10 @@ remote_reply() {
     echo "DEMI_STEP datasources 0"
   fi
   if [[ "$s" == *"reset-and-run-indexers.js"* ]]; then indexer_transcript "$s"; fi
+  # A one-off \`run\`: as many lines as asked for, and the exit code asked for.
+  if [[ -n "\${AZ_RUN_LINES:-}" ]]; then seq 1 "\${AZ_RUN_LINES}"; bad="\${AZ_RUN_EXIT:-0}"; fi
 
-  echo "DEMI_EXIT=\${bad}"
+  [[ -n "\${AZ_NO_EXIT_LINE:-}" ]] || echo "DEMI_EXIT=\${bad}"
 }
 
 case "$1 $2" in
@@ -166,7 +221,19 @@ case "$1 $2" in
     esac ;;
   "identity show") echo "fake-principal-id" ;;
   "vm start") ;;
-  "vm run-command") remote_reply "$scripts" ;;
+  "vm get-instance-view") instance_view ;;
+  "vm run-command") run_command "$3" "$@" ;;
+  "storage account") echo "demifctestfake" ;;
+  "storage blob")
+    case "$3" in
+      generate-sas) echo "https://demifctestfake.blob.core.windows.net/devbox-run-output/\${name}?sig=FAKESIG" ;;
+      download)
+        src="\${state}/blob-\${name//\\//-}"
+        if [[ -n "\${AZ_DOWNLOAD_FAIL:-}" ]]; then echo "ERROR: (AuthorizationFailure) This request is not authorized." >&2; exit 1; fi
+        [[ -f "$src" ]] || { printf 'ERROR: The specified blob does not exist.\nErrorCode:BlobNotFound\n' >&2; exit 1; }
+        cp "$src" "$file" ;;
+    esac ;;
+  "storage container") [[ -z "\${AZ_CONTAINER_FAIL:-}" ]] || { echo "ERROR: AuthorizationPermissionMismatch" >&2; exit 1; } ;;
 esac
 exit 0
 `;
@@ -183,7 +250,8 @@ function run(args, opts = {}) {
 
   const res = spawnSync('bash', [SCRIPT, ...args], {
     encoding: 'utf8',
-    timeout: 60000,
+    timeout: opts.timeout || 60000,
+    killSignal: opts.killSignal || 'SIGTERM',
     input: opts.input === undefined ? '' : opts.input,
     env: {
       ...process.env,
@@ -197,6 +265,8 @@ function run(args, opts = {}) {
       // Carried into the payload rather than slept on here; a test that let the default through
       // would wait 30 s per tick on the VM's behalf.
       INDEXER_POLL_SLEEP: '0',
+      DEVBOX_READY_SLEEPS: '0',
+      DEVBOX_RUN_POLL_SLEEP: '0',
       ...(opts.env || {})
     }
   });
@@ -205,10 +275,72 @@ function run(args, opts = {}) {
   // The verbatim `--scripts` value of every run-command call, before the log flattens its newlines.
   const payloads = fs.readdirSync(payloadDir).sort()
     .map(f => fs.readFileSync(path.join(payloadDir, f), 'utf8'));
+  // What the fake found in the `@file` a managed create was handed, and that file's mode.
+  const readState = (f) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), 'utf8').trim() : '');
+  const sasSeen = readState('sas-seen');
+  const sasMode = readState('sas-mode');
+  const sasPath = readState('sas-path');
   fs.rmSync(dir, { recursive: true, force: true });
-  // What was actually sent to the VM, one entry per run-command call.
-  const remote = calls.filter(c => c.startsWith('vm run-command'));
-  return { ...res, calls, remote, payloads };
+  // What was actually sent to the VM, one entry per run-command that carried a script.
+  const remote = calls.filter(c => /^vm run-command (invoke|create) /.test(c));
+  return { ...res, calls, remote, payloads, sasSeen, sasMode, sasPath };
+}
+
+/** A raw instanceView, shaped like `az vm get-instance-view --query instanceView` returns it. */
+function iv({ power = 'running', agent = 'Ready', msg = 'Guest Agent is running', ext = [], handlers = [] } = {}) {
+  return JSON.stringify({
+    statuses: [{ code: 'ProvisioningState/succeeded' }, { code: `PowerState/${power}` }],
+    vmAgent: {
+      statuses: [{ code: 'ProvisioningState/succeeded', displayStatus: agent, message: msg }],
+      extensionHandlers: handlers.map(([type, code]) => ({ type, status: { code } }))
+    },
+    extensions: ext.map(([name, code]) => (code ? { name, statuses: [{ code }] } : { name }))
+  });
+}
+
+const PROD_IV = iv({
+  ext: ['AzureMonitorLinuxAgent', 'AzurePolicyforLinux', 'ChangeTracking-Linux', 'MDE.Linux']
+    .map(n => [n, 'ProvisioningState/succeeded']),
+  handlers: [
+    ['Microsoft.Azure.Monitor.AzureMonitorLinuxAgent', 'ProvisioningState/succeeded'],
+    ['Microsoft.GuestConfiguration.ConfigurationforLinux', 'ProvisioningState/succeeded'],
+    ['Microsoft.Azure.ChangeTrackingAndInventory.ChangeTracking-Linux', 'ProvisioningState/NotReady/1011'],
+    ['Microsoft.CPlat.Core.LinuxPatchExtension', 'ProvisioningState/succeeded'],
+    ['Microsoft.Azure.AzureDefenderForServers.MDE.Linux', 'ProvisioningState/succeeded'],
+    ['Microsoft.CPlat.Core.RunCommandLinux', 'ProvisioningState/succeeded']
+  ]
+});
+
+/** The command demi-run would receive on the VM: the `--scripts` payload with one quoting level removed. */
+function innerOf(payload) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-payload-'));
+  const stub = path.join(dir, 'demi-run');
+  const captured = path.join(dir, 'inner.sh');
+  fs.writeFileSync(stub, `#!/usr/bin/env bash\nprintf '%s' "$1" > ${captured}\n`, { mode: 0o755 });
+  const unwrap = spawnSync('bash', ['-c', payload.replace('sudo -u demi /usr/local/bin/demi-run', stub)],
+    { encoding: 'utf8' });
+  const inner = fs.existsSync(captured) ? fs.readFileSync(captured, 'utf8') : '';
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.strictEqual(unwrap.status, 0, unwrap.stderr);
+  return inner;
+}
+
+/** Runs an unwrapped command here, in a temp dir standing in for the devbox checkout. */
+function runInner(inner) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-checkout-'));
+  const res = spawnSync('bash', ['-c', inner.replace(/^cd \/opt\/eagle-demi /, `cd ${dir} `)], { encoding: 'utf8' });
+  fs.rmSync(dir, { recursive: true, force: true });
+  return res;
+}
+
+/** Runs the script with DEVBOX_RUNNER set to a throwaway wrapper whose body is `body`. */
+function withRunner(body, args) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-runner-'));
+  const runner = path.join(dir, 'runner');
+  fs.writeFileSync(runner, `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+  const r = run(args, { env: { DEVBOX_RUNNER: runner } });
+  fs.rmSync(dir, { recursive: true, force: true });
+  return r;
 }
 
 const creates = (calls) => calls.filter(c => c.startsWith('role assignment create'));
@@ -459,7 +591,7 @@ test('demi-devbox.sh', async (t) => {
     assert.strictEqual(both.status, 0, both.stderr);
     assert.match(both.stdout, /PUT data source\(s\): demi-documents-ds\n/);
     assert.match(both.stdout, /reset and run indexer\(s\): documents-indexer\n/);
-    assert.match(indexerPayload(both), /reset-and-run-indexers\.js documents-indexer ;/);
+    assert.match(indexerPayload(both), /reset-and-run-indexers\.js documents-indexer\n/);
   });
 
   await t.test('--datasources asks before its own PUT, and a no writes nothing', () => {
@@ -507,7 +639,7 @@ test('demi-devbox.sh', async (t) => {
       '--yes']);
     assert.strictEqual(r.status, 0, r.stderr);
     assert.match(indexerPayload(r), /DEMI_TIMEOUT=\S*4800\S/);
-    assert.match(r.stdout, /up after 90 minutes/,
+    assert.match(r.stdout, /gives\s+up after 80 minutes/,
       'the plan warns that a wait this long cannot finish inside one call');
   });
 
@@ -578,31 +710,418 @@ test('demi-devbox.sh', async (t) => {
     assert.strictEqual(r.payloads.length, 3,
       `dry, write, indexers — one call each, got ${r.payloads.length}`);
 
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-payload-'));
-    // Stands in for demi-run: writes the single argument it was handed, which is the command as the
-    // devbox would receive it after one round of quote removal.
-    const stub = path.join(dir, 'demi-run');
-    const captured = path.join(dir, 'inner.sh');
-    fs.writeFileSync(stub, `#!/usr/bin/env bash\nprintf '%s' "$1" > ${captured}\n`, { mode: 0o755 });
-
     for (const payload of r.payloads) {
-      const outer = path.join(dir, 'outer.sh');
-      fs.writeFileSync(outer, payload);
-      const outerCheck = spawnSync('bash', ['-n', outer], { encoding: 'utf8' });
+      const outerCheck = spawnSync('bash', ['-n', '-c', payload], { encoding: 'utf8' });
       assert.strictEqual(outerCheck.status, 0, `--scripts is not valid bash: ${outerCheck.stderr}\n${payload}`);
 
       // Unwrap it the way the VM does, then check the command that actually runs.
-      fs.rmSync(captured, { force: true });
-      const unwrap = spawnSync('bash', ['-c', payload.replace('sudo -u demi /usr/local/bin/demi-run', stub)],
-        { encoding: 'utf8' });
-      assert.strictEqual(unwrap.status, 0, unwrap.stderr);
-      const inner = fs.readFileSync(captured, 'utf8');
-      const innerCheck = spawnSync('bash', ['-n', captured], { encoding: 'utf8' });
+      const inner = innerOf(payload);
+      const innerCheck = spawnSync('bash', ['-n', '-c', inner], { encoding: 'utf8' });
       assert.strictEqual(innerCheck.status, 0, `the command demi-run receives is not valid bash: ${innerCheck.stderr}\n${inner}`);
       assert.match(inner, /^cd \/opt\/eagle-demi &&/, 'every command runs in the checkout');
       assert.match(inner, /echo DEMI_EXIT=\$\?$/, 'every command must carry its exit code back');
     }
-    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const firstIndex = (calls, prefix) => calls.findIndex(c => c.startsWith(prefix));
+  const lastIndex = (calls, prefix) => calls.map(c => c.startsWith(prefix)).lastIndexOf(true);
+  const named = (calls, verb) => calls.filter(c => c.startsWith(`vm run-command ${verb} `))
+    .map(c => / --name (\S+)/.exec(c)[1]);
+  const checks = (r) => r.calls.filter(c => c.startsWith('vm get-instance-view')).length;
+  const starts = (r) => r.calls.filter(c => c.startsWith('vm start'));
+  const NOT_READY = iv({ agent: 'Not Ready', msg: 'VM status blob is found but not yet populated.' });
+  const MANAGED = { DEVBOX_RUN_MODE: 'managed' };
+
+  await t.test('waits for the VM agent before the first command', () => {
+    // A run-command posted while the agent is still busy with extensions queues behind them.
+    const r = run(['drift'], { env: { AZ_IV: NOT_READY, AZ_READY_AFTER: '2' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 3);
+    assert.ok(lastIndex(r.calls, 'vm get-instance-view') < firstIndex(r.calls, 'vm run-command invoke'),
+      'no command may be posted before the agent is Ready');
+    assert.match(r.stderr, /waiting for demi-devbox-test: power=running agent=Not Ready/);
+  });
+
+  await t.test('keeps waiting while an extension is transitioning, even with the agent Ready', () => {
+    const r = run(['drift'], {
+      env: { AZ_IV: iv({ ext: [['ChangeTracking-Linux', 'ProvisioningState/transitioning']] }), AZ_READY_AFTER: '1' }
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 2);
+    assert.match(r.stderr, /agent=Ready .*extensions busy: ChangeTracking-Linux/);
+  });
+
+  await t.test('a failed extension does not block, whatever its case, and is named', () => {
+    // A failed handler never settles; waiting on it would hold every run for the full cap.
+    const r = run(['drift'], {
+      env: { AZ_IV: iv({ ext: [['ChangeTracking-Linux', 'ProvisioningState/Failed/1011']] }), AZ_READY_AFTER: '99' }
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 1);
+    assert.match(r.stderr, /ignoring failed or NotReady on demi-devbox-test: ChangeTracking-Linux/);
+  });
+
+  await t.test('an extension with no status yet does not block', () => {
+    const r = run(['drift'], { env: { AZ_IV: iv({ ext: [['MDE.Linux']] }), AZ_READY_AFTER: '99' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 1);
+  });
+
+  await t.test('the prod devbox shape passes once its agent is Ready', () => {
+    // Read from demi-devbox-prod on 2026-10-01: every extension succeeded, the ChangeTracking
+    // handler stuck at NotReady/1011.
+    const r = run(['drift', '--env', 'prod'], { env: { AZ_IV: PROD_IV, AZ_READY_AFTER: '99' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 1);
+    assert.match(r.stderr,
+      /ignoring failed or NotReady on demi-devbox-prod: Microsoft\.Azure\.ChangeTrackingAndInventory\.ChangeTracking-Linux/);
+  });
+
+  await t.test('checks the agent before the grant, and not again inside it', () => {
+    // A check under the grant would hold the role open while waiting.
+    const r = run(['drift']);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 1);
+    assert.ok(firstIndex(r.calls, 'vm get-instance-view') < firstIndex(r.calls, 'role assignment create'));
+  });
+
+  await t.test('apply checks the agent again after its prompt', () => {
+    // The prompt can sit unanswered long enough for the agent to pick up new extension work.
+    const r = run(['apply', '--only', 'documents'], { env: { AZ_DS_DIFFERS: '1' }, input: 'y\n' });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 2);
+    assert.ok(lastIndex(r.calls, 'vm get-instance-view') > firstIndex(r.calls, 'vm run-command invoke'),
+      'the second check comes after the dry run, before the write');
+  });
+
+  await t.test('gives up on an agent that never settles and names what blocked it', () => {
+    const r = run(['drift', '--env', 'prod'], {
+      env: {
+        AZ_IV: iv({ agent: 'Not Ready', msg: 'VM status blob is found but not yet populated.',
+          ext: [['ChangeTracking-Linux', 'ProvisioningState/transitioning']] }),
+        AZ_READY_AFTER: '99',
+        DEVBOX_READY_TIMEOUT: '0'
+      }
+    });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /demi-devbox-prod not ready after 0s/);
+    assert.match(r.stderr, /agent=Not Ready \(VM status blob is found but not yet populated\.\)/);
+    assert.match(r.stderr, /extensions busy: ChangeTracking-Linux/);
+    assert.deepStrictEqual(r.remote, [], 'nothing may be posted to a box that is not ready');
+    assert.deepStrictEqual(creates(r.calls), [], 'no grant is taken for a run that stops here');
+  });
+
+  await t.test('stops at once when the instance view cannot be read', () => {
+    const r = run(['drift'], { env: { AZ_IV_FAIL: '1' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /AuthorizationFailed/);
+    assert.match(r.stderr, /could not read the instance view of demi-devbox-test/);
+    assert.strictEqual(checks(r), 1, 'an az error is not retried for 20 minutes');
+    assert.deepStrictEqual(r.remote, []);
+  });
+
+  await t.test('leaves a running VM alone while its agent settles', () => {
+    const r = run(['drift'], { env: { AZ_IV: NOT_READY, AZ_READY_AFTER: '1' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(starts(r), []);
+  });
+
+  await t.test('starts a stopped VM once, without blocking on the start', () => {
+    const r = run(['drift'], { env: { AZ_IV: iv({ power: 'stopped', agent: 'none' }), AZ_READY_AFTER: '3' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(starts(r).length, 1, starts(r).join('\n'));
+    assert.match(starts(r)[0], /--no-wait/, 'the ready loop is the bound, not the start call');
+  });
+
+  await t.test('does not post a start while one is already in flight', () => {
+    const r = run(['drift'], { env: { AZ_IV: iv({ power: 'starting', agent: 'none' }), AZ_READY_AFTER: '2' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(starts(r), []);
+  });
+
+  await t.test('does not post a start while the VM is deallocating', () => {
+    const r = run(['drift'], { env: { AZ_IV: iv({ power: 'deallocating', agent: 'none' }), AZ_READY_AFTER: '2' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(starts(r), []);
+  });
+
+  await t.test('says so when a posted start does not take', () => {
+    const r = run(['drift'], {
+      env: { AZ_IV: iv({ power: 'deallocated', agent: 'none' }), AZ_READY_AFTER: '99', DEVBOX_START_GRACE: '0' }
+    });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /demi-devbox-test is still deallocated 0s after the start was posted: the start did not take/);
+    assert.strictEqual(starts(r).length, 1);
+    assert.deepStrictEqual(r.remote, []);
+  });
+
+  await t.test('runs through invoke unless managed mode is asked for', () => {
+    const r = run(['drift']);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.remote.length, 1);
+    assert.match(r.remote[0], /^vm run-command invoke .*--command-id RunShellScript/);
+    assert.ok(r.calls.every(c => !c.startsWith('storage ')), 'invoke needs no output storage');
+  });
+
+  await t.test('managed run prints the whole output and exits with the remote exit code', () => {
+    // Action run-command cuts output at 4 KB; a managed one writes all of it to a blob.
+    const r = run(['run', '--', 'seq 1 3000'],
+      { env: { ...MANAGED, AZ_RUN_LINES: '3000', AZ_RUN_EXIT: '3' } });
+    assert.strictEqual(r.status, 3, r.stderr);
+    assert.ok(r.stdout.length > 4096, `got ${r.stdout.length} bytes`);
+    assert.match(r.stdout, /^1$/m);
+    assert.match(r.stdout, /^3000$/m);
+    assert.match(r.payloads[0], /seq 1 3000/);
+    assert.match(r.remote[0], /--async-execution true/);
+  });
+
+  await t.test('a managed run under a role grant stops at 90 minutes, a plain run at 4 hours', () => {
+    // The grant stays open for as long as the client waits, so it must not inherit run's 4 hours.
+    const granted = run(['drift'], { env: MANAGED });
+    assert.strictEqual(granted.status, 0, granted.stderr);
+    assert.match(granted.remote[0], /--timeout-in-seconds 5400 /);
+    const plain = run(['run', '--', 'true'], { env: { ...MANAGED, AZ_RUN_LINES: '1' } });
+    assert.match(plain.remote[0], /--timeout-in-seconds 14400 /);
+  });
+
+  await t.test('managed run prints the remote stderr', () => {
+    const r = run(['run', '--', 'true'], { env: { ...MANAGED, AZ_STDERR_TEXT: 'warning from node' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr, /warning from node/);
+  });
+
+  await t.test('waits for the run to finish before reading its output', () => {
+    const r = run(['drift'], { env: { ...MANAGED, AZ_PENDING_POLLS: '2' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.calls.filter(c => c.startsWith('vm run-command show')).length, 3);
+    assert.ok(lastIndex(r.calls, 'vm run-command show') < firstIndex(r.calls, 'storage blob download'));
+  });
+
+  await t.test('a run command whose provisioning was canceled ends the wait', () => {
+    const r = run(['drift'], { env: { ...MANAGED, AZ_PROV_STATE: 'Canceled', AZ_EXEC_STATE: 'Pending' } });
+    assert.strictEqual(r.status, 1);
+    assert.strictEqual(r.calls.filter(c => c.startsWith('vm run-command show')).length, 1);
+  });
+
+  await t.test('deletes the run-command resource and its blobs after a run that succeeded', () => {
+    // A VM holds at most 25 managed run commands.
+    const r = run(['drift'], { env: MANAGED });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const [name] = named(r.calls, 'create');
+    assert.deepStrictEqual(named(r.calls, 'delete'), [name]);
+    assert.match(r.calls.find(c => c.startsWith('vm run-command delete')), /--no-wait/);
+    assert.ok(r.calls.some(c => c.startsWith('storage blob delete-batch') && c.includes(`--pattern ${name}/*`)));
+    assert.ok(!r.stderr.includes('may reappear'), r.stderr);
+  });
+
+  await t.test('deletes the run-command resource after a run that failed', () => {
+    const r = run(['drift'], { env: { ...MANAGED, AZ_EXEC_STATE: 'Failed' } });
+    assert.strictEqual(r.status, 1);
+    assert.strictEqual(named(r.calls, 'create').length, 1);
+    assert.deepStrictEqual(named(r.calls, 'delete'), named(r.calls, 'create'));
+  });
+
+  await t.test('a run still going at the deadline is deleted, and its blobs may come back', () => {
+    const r = run(['drift'], { env: { ...MANAGED, AZ_RUNNING_POLLS: '99', DEVBOX_RUN_TIMEOUT: '0' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /still running 0s after it started; deleting it/);
+    assert.deepStrictEqual(named(r.calls, 'delete'), named(r.calls, 'create'));
+    // The script on the VM can still append through its SAS after the blobs are deleted.
+    assert.match(r.stderr, /may reappear until \d{4}-\d\d-\d\dT\d\d:\d\dZ/);
+  });
+
+  await t.test('time in the agent queue does not count against the run deadline', () => {
+    // On prod a create waits 15-31 minutes before its script starts.
+    const r = run(['drift'], {
+      // About 6 s queued against a 1 s run timeout plus 3 s of grace.
+      env: { ...MANAGED, AZ_PENDING_POLLS: '6', DEVBOX_RUN_POLL_SLEEP: '1', DEVBOX_RUN_TIMEOUT: '1', DEVBOX_READY_TIMEOUT: '0' }
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stdout, /ok documents/);
+  });
+
+  await t.test('a run that never leaves the queue is deleted and says it never started', () => {
+    const r = run(['drift'], { env: { ...MANAGED, AZ_PENDING_POLLS: '99', DEVBOX_QUEUE_TIMEOUT: '0' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /never started: still 'creating pending' after 0s in the VM agent's queue/);
+    assert.deepStrictEqual(named(r.calls, 'delete'), named(r.calls, 'create'));
+  });
+
+  await t.test('an interrupt during create removes the SAS file, the run command and the blobs', () => {
+    const r = run(['run', '--', 'true'], {
+      env: { ...MANAGED, AZ_CREATE_SLEEP: '4' }, timeout: 1500, killSignal: 'SIGTERM'
+    });
+    assert.strictEqual(r.status, 143, `${r.signal} ${r.stderr}`);
+    const [name] = named(r.calls, 'create');
+    assert.deepStrictEqual(named(r.calls, 'delete'), [name]);
+    assert.ok(r.calls.some(c => c.startsWith('storage blob delete-batch') && c.includes(`--pattern ${name}/*`)));
+    assert.ok(r.sasPath && !fs.existsSync(r.sasPath), `SAS file left at ${r.sasPath}`);
+  });
+
+  await t.test('a failed create shows its error code, never the SAS it echoes', () => {
+    const r = run(['run', '--', 'true'], { env: { ...MANAGED, AZ_CREATE_FAIL: '1' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /run-command create failed \(\(AuthorizationFailed\)\)/);
+    assert.ok(!r.stderr.includes('FAKESIG') && !r.stdout.includes('FAKESIG'), r.stderr);
+  });
+
+  await t.test('cleanup after a failed create says nothing about the run command that was never made', () => {
+    const r = run(['run', '--', 'true'], { env: { ...MANAGED, AZ_CREATE_FAIL: '1', AZ_DELETE_NOTFOUND: '1' } });
+    assert.strictEqual(r.status, 1);
+    assert.strictEqual(named(r.calls, 'delete').length, 1);
+    assert.ok(!r.stderr.includes('could not delete run-command'), r.stderr);
+  });
+
+  await t.test('a failed output download keeps the blobs and says where they are', () => {
+    const r = run(['drift'], { env: { ...MANAGED, AZ_DOWNLOAD_FAIL: '1' } });
+    assert.strictEqual(r.status, 1);
+    const [name] = named(r.calls, 'create');
+    assert.match(r.stderr, new RegExp(`could not download demifctestfake/devbox-run-output/${name}/stdout; the blobs are kept`));
+    assert.match(r.stderr, /AuthorizationFailure/);
+    assert.ok(!r.stderr.includes('no output blob'), r.stderr);
+    assert.ok(r.calls.every(c => !c.startsWith('storage blob delete-batch')), 'the output may still be there');
+    assert.deepStrictEqual(named(r.calls, 'delete'), [name]);
+  });
+
+  await t.test('an interrupted run deletes its run-command resource', () => {
+    const r = run(['run', '--', 'true'], {
+      env: { ...MANAGED, AZ_PENDING_POLLS: '1000000' }, timeout: 3000, killSignal: 'SIGTERM'
+    });
+    assert.strictEqual(r.status, 143, `${r.signal} ${r.stderr}`);
+    assert.strictEqual(named(r.calls, 'create').length, 1);
+    assert.deepStrictEqual(named(r.calls, 'delete'), named(r.calls, 'create'));
+  });
+
+  await t.test('a missing output blob fails the run and names the role, without the SAS', () => {
+    // The VM writes through a SAS that carries only the operator's own blob roles.
+    const r = run(['drift'], { env: { ...MANAGED, AZ_NO_BLOB: '1', AZ_EXEC_STATE: 'Failed' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr,
+      /no output blob for demi-run-\S+ \(StatusCode=403, ErrorCode=AuthorizationPermissionMismatch\)/);
+    assert.match(r.stderr, /Storage Blob Data Contributor on demifctestfake/);
+    assert.ok(!r.stderr.includes('FAKESIG'), 'the storage error echoes query parameters');
+    assert.deepStrictEqual(named(r.calls, 'delete'), named(r.calls, 'create'));
+    assert.ok(r.calls.some(c => c.startsWith('storage blob delete-batch')), 'a missing blob leaves nothing to keep');
+  });
+
+  await t.test('a missing output blob for another reason names no role', () => {
+    const r = run(['drift'], {
+      env: { ...MANAGED, AZ_NO_BLOB: '1', AZ_EXEC_STATE: 'Failed',
+        AZ_EXEC_MESSAGE: 'Execution failed: StatusCode=404, ErrorCode=ContainerNotFound' }
+    });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /\(StatusCode=404, ErrorCode=ContainerNotFound\)/);
+    assert.ok(!r.stderr.includes('Storage Blob Data Contributor'), r.stderr);
+  });
+
+  await t.test('the SAS reaches az through a 0600 file, never argv or the terminal', () => {
+    const r = run(['run', '--', 'true'], { env: { ...MANAGED, AZ_RUN_LINES: '1' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.remote[0], /--output-blob-uri @\S+ --error-blob-uri @\S+/);
+    assert.match(r.sasSeen, /sig=FAKESIG/, 'the file az read held the SAS');
+    assert.strictEqual(r.sasMode, '600');
+    assert.ok(r.calls.every(c => !c.includes('FAKESIG')), 'no az argv may carry it');
+    assert.ok(!r.stdout.includes('FAKESIG') && !r.stderr.includes('FAKESIG'));
+  });
+
+  await t.test('the SAS is write-only and outlives the run by a margin', () => {
+    const t0 = Date.now();
+    const r = run(['run', '--', 'true'],
+      { env: { ...MANAGED, AZ_RUN_LINES: '1', DEVBOX_RUN_TIMEOUT: '7200', DEVBOX_QUEUE_TIMEOUT: '1200' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const sas = r.calls.find(c => c.startsWith('storage blob generate-sas'));
+    assert.match(sas, /--permissions acw /);
+    const expiry = Date.parse(/--expiry (\S+)/.exec(sas)[1]);
+    const want = t0 + (7200 + 1200 + 600) * 1000;
+    assert.ok(Math.abs(expiry - want) < 120000, `expiry ${new Date(expiry).toISOString()}`);
+  });
+
+  await t.test('the SAS lifetime stops at the 7 day user-delegation limit', () => {
+    const t0 = Date.now();
+    const r = run(['run', '--', 'true'], { env: { ...MANAGED, AZ_RUN_LINES: '1', DEVBOX_RUN_TIMEOUT: '9999999' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const expiry = Date.parse(/--expiry (\S+)/.exec(r.calls.find(c => c.startsWith('storage blob generate-sas')))[1]);
+    assert.ok(expiry <= t0 + 7 * 86400 * 1000 + 60000, new Date(expiry).toISOString());
+  });
+
+  await t.test('a container that cannot be created stops the run before anything is posted', () => {
+    const r = run(['drift'], { env: { ...MANAGED, AZ_CONTAINER_FAIL: '1' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /could not create container devbox-run-output on demifctestfake: .*Storage Blob Data Contributor/);
+    assert.deepStrictEqual(r.remote, []);
+    assert.deepStrictEqual(creates(r.calls), [], 'no grant either');
+  });
+
+  await t.test('refuses an unknown DEVBOX_RUN_MODE and names the valid ones', () => {
+    const r = run(['drift'], { env: { DEVBOX_RUN_MODE: 'ssh' } });
+    assert.strictEqual(r.status, 2);
+    assert.match(r.stderr, /unknown DEVBOX_RUN_MODE 'ssh', want invoke\|managed/);
+    assert.deepStrictEqual(r.calls, []);
+  });
+
+  await t.test('refuses timing settings that are not whole seconds', () => {
+    const sleeps = run(['drift'], { env: { DEVBOX_READY_SLEEPS: '5 soon' } });
+    assert.strictEqual(sleeps.status, 2);
+    assert.match(sleeps.stderr, /DEVBOX_READY_SLEEPS must be seconds/);
+    const timeout = run(['drift'], { env: { DEVBOX_RUN_TIMEOUT: '1h' } });
+    assert.strictEqual(timeout.status, 2);
+    assert.match(timeout.stderr, /DEVBOX_RUN_TIMEOUT must be a whole number of seconds, got '1h'/);
+  });
+
+  await t.test('run needs a command', () => {
+    const r = run(['run']);
+    assert.strictEqual(r.status, 2);
+    assert.match(r.stderr, /run needs a command after --/);
+    assert.deepStrictEqual(r.calls, []);
+  });
+
+  await t.test('run takes no search flags, and the search actions take no command', () => {
+    const flagged = run(['run', '--only', 'documents', '--', 'true']);
+    assert.strictEqual(flagged.status, 2);
+    assert.match(flagged.stderr, /run takes only --env and -- <command>/);
+    const commanded = run(['drift', '--', 'true']);
+    assert.strictEqual(commanded.status, 2);
+    assert.match(commanded.stderr, /-- <command> belongs to run, not drift/);
+  });
+
+  await t.test('run says the output was lost when no exit code comes back', () => {
+    const r = run(['run', '--', 'true'], { env: { AZ_NO_EXIT_LINE: '1' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /no DEMI_EXIT line came back from demi-devbox-test: the command may have run, but its output was lost/);
+  });
+
+  await t.test('run keeps each argument intact on the VM', () => {
+    const r = run(['run', '--', 'printf', '%s|', 'a', 'c d']);
+    assert.strictEqual(r.status, 0, r.stderr);
+    const ran = runInner(innerOf(r.payloads[0]));
+    assert.match(ran.stdout, /^a\|c d\|/);
+  });
+
+  await t.test('a trailing & or a # comment does not break the wrapper', () => {
+    const comment = runInner(innerOf(run(['run', '--', 'echo hi # note']).payloads[0]));
+    assert.match(comment.stdout, /^hi\nDEMI_EXIT=0$/m);
+    const background = runInner(innerOf(run(['run', '--', 'true &']).payloads[0]));
+    assert.match(background.stdout, /DEMI_EXIT=0/, background.stderr);
+  });
+
+  await t.test('DEVBOX_RUNNER replaces every az call to the VM', () => {
+    const r = withRunner('echo "from runner"; echo DEMI_EXIT=0', ['run', '--', 'true']);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stdout, /from runner/);
+    assert.ok(r.calls.every(c => !c.startsWith('vm ') && !c.startsWith('storage ')), r.calls.join('\n'));
+  });
+
+  await t.test('a failing DEVBOX_RUNNER still shows what it printed', () => {
+    const r = withRunner('echo "partial output"; exit 5', ['drift']);
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stdout, /partial output/);
+    assert.match(r.stderr, /DEVBOX_RUNNER exited 5/);
+  });
+
+  await t.test('refuses a DEVBOX_RUNNER that is this script', () => {
+    const r = run(['run', '--', 'true'], { env: { DEVBOX_RUNNER: SCRIPT } });
+    assert.strictEqual(r.status, 2);
+    assert.match(r.stderr, /DEVBOX_RUNNER points at this script/);
   });
 
   await t.test('the re-entrant phases refuse to run outside a grant', () => {

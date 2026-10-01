@@ -137,7 +137,8 @@ it to fix a metadata index.
 
 An indexer that is still running when the wait's deadline passes is a warning, not a failure: the
 run was posted and it is working. Re-read it with `watch`. For `chunks-indexer` skip the wait
-altogether — run-command itself gives up after 90 minutes:
+altogether — a run stops at 90 minutes, both through `az vm run-command invoke` (the default) and
+as a managed run command under the role grant (`DEVBOX_RUN_MODE=managed`):
 
 ```bash
 scripts/demi-devbox.sh apply --env prod --only chunks --datasources demi-chunks-ds --no-wait
