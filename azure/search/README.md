@@ -493,11 +493,12 @@ same three steps in one run. Pass `--datasources`: it PUTs the named data source
 run, which a new indexer otherwise fails — the dry run refuses while the data source its
 definition names is missing.
 
-That run is three or four `az vm run-command invoke` calls: the pre-create, the dry run, the index
-and data source writes together, and the indexer reset and wait. The wait itself runs on the devbox
+That run is three or four run-command calls (`az vm run-command invoke` by default, a managed run
+command with `DEVBOX_RUN_MODE=managed`): the pre-create, the dry run, the index and data source
+writes together, and the indexer reset and wait. The wait itself runs on the devbox
 (`src/scripts/reset-and-run-indexers.js`), because each call costs a 20-45 s ARM round trip. Add
 `--no-wait` for `chunks-indexer` and follow with `scripts/demi-devbox.sh watch --env <env>
---datasources <name>`; run-command stops at 90 minutes and that run does not.
+--datasources <name>`; a run stops at 90 minutes in either mode and that indexer run does not.
 
 A brand-new indexer needs no reset — it has no high-water mark to clear — but it does need the
 `Content-Length: 0` header, and the run is read the same way as any other: `executionHistory[0]`,
