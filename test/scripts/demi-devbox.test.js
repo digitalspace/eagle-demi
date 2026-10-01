@@ -77,12 +77,19 @@ count() { local f="\${state}/count-$1" n=0; [[ -f "$f" ]] && n="$(cat "$f")"; ec
 READY_IV='{"statuses":[{"code":"ProvisioningState/succeeded"},{"code":"PowerState/running"}],"vmAgent":{"statuses":[{"code":"ProvisioningState/succeeded","displayStatus":"Ready","message":"Guest Agent is running"}],"extensionHandlers":[]},"extensions":[]}'
 instance_view() {
   if [[ -n "\${AZ_IV_FAIL:-}" ]]; then echo "ERROR: (AuthorizationFailed) no read on the VM" >&2; exit 1; fi
-  if [[ "$(count iv)" -ge "\${AZ_READY_AFTER:-0}" ]]; then echo "\${AZ_IV_READY:-$READY_IV}"; else echo "\${AZ_IV}"; fi
+  local n; n="$(count iv)"
+  # AZ_UNREADY_FROM: AZ_IV again from that check on, for a VM that gets busy partway through a run.
+  if [[ "$n" -ge "\${AZ_READY_AFTER:-0}" && "$n" -lt "\${AZ_UNREADY_FROM:-999999}" ]]; then echo "\${AZ_IV_READY:-$READY_IV}"; else echo "\${AZ_IV}"; fi
 }
 
 run_command() {
   case "$1" in
-    invoke) remote_reply "$scripts" ;;
+    invoke)
+      if [[ -n "\${AZ_INVOKE_FAIL:-}" ]]; then
+        echo "ERROR: (Conflict) Run command extension execution is in progress. Please wait for completion before invoking a run command." >&2
+        exit 1
+      fi
+      remote_reply "$scripts" ;;
     create)
       if [[ -n "\${AZ_CREATE_FAIL:-}" ]]; then
         echo "ERROR: (AuthorizationFailed) cannot write https://acct.blob.core.windows.net/devbox-run-output/x/stdout?sv=1&sig=FAKESIG" >&2
@@ -100,6 +107,7 @@ run_command() {
       [[ -n "\${AZ_NO_BLOB:-}" ]] || remote_reply "$scripts" > "\${state}/blob-\${name}-stdout"
       [[ -z "\${AZ_STDERR_TEXT:-}" ]] || echo "\${AZ_STDERR_TEXT}" > "\${state}/blob-\${name}-stderr" ;;
     delete)
+      [[ -z "\${AZ_DELETE_SLEEP:-}" ]] || sleep "\${AZ_DELETE_SLEEP}"
       if [[ -n "\${AZ_DELETE_NOTFOUND:-}" ]]; then echo "ERROR: (ResourceNotFound) The Resource was not found." >&2; exit 1; fi ;;
     show)
       if [[ "$query" == *executionMessage* ]]; then
@@ -220,7 +228,7 @@ case "$1 $2" in
       delete) ;;
     esac ;;
   "identity show") echo "fake-principal-id" ;;
-  "vm start") ;;
+  "vm start") [[ -z "\${AZ_START_FAIL:-}" ]] || { echo "ERROR: (OperationNotAllowed) Operation 'start' is not allowed." >&2; exit 1; } ;;
   "vm get-instance-view") instance_view ;;
   "vm run-command") run_command "$3" "$@" ;;
   "storage account") echo "demifctestfake" ;;
@@ -238,7 +246,20 @@ esac
 exit 0
 `;
 
-/** Run the script with the fake az, returning {status, stdout, stderr, calls, remote}. */
+/**
+ * Starts the script in its own process group and sends each `<delay s>:<signal>` in $1 to the whole
+ * group, the way a terminal's Ctrl-C reaches every process in the job, then exits with its status.
+ */
+const SIGNAL_DRIVER = `set -m
+signals="$1"; shift
+"$@" & pid=$!
+for s in $signals; do sleep "\${s%%:*}"; kill -"\${s#*:}" -- "-$pid" 2>/dev/null; done
+wait "$pid"`;
+
+/**
+ * Run the script with the fake az, returning {status, stdout, stderr, calls, remote}.
+ * `opts.signals`: see SIGNAL_DRIVER.
+ */
 function run(args, opts = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-devbox-'));
   const az = path.join(dir, 'az');
@@ -248,7 +269,10 @@ function run(args, opts = {}) {
   fs.writeFileSync(az, FAKE_AZ, { mode: 0o755 });
   fs.writeFileSync(log, '');
 
-  const res = spawnSync('bash', [SCRIPT, ...args], {
+  const argv = opts.signals
+    ? ['-c', SIGNAL_DRIVER, 'driver', opts.signals, 'bash', SCRIPT, ...args]
+    : [SCRIPT, ...args];
+  const res = spawnSync('bash', argv, {
     encoding: 'utf8',
     timeout: opts.timeout || 60000,
     killSignal: opts.killSignal || 'SIGTERM',
@@ -606,6 +630,14 @@ test('demi-devbox.sh', async (t) => {
     assert.strictEqual(creates(r.calls).length, 0, 'no grant is taken for a run that stops here');
   });
 
+  await t.test('in managed mode a no to --datasources creates no output container', () => {
+    const r = run(['apply', '--only', 'activities', '--datasources', 'demi-updates-ds'],
+      { input: '\n', env: { DEVBOX_RUN_MODE: 'managed' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /aborted — nothing was written/);
+    assert.ok(r.calls.every(c => !c.startsWith('storage ')), r.calls.join('\n'));
+  });
+
   await t.test('refuses to reset an indexer whose last execution is still running', () => {
     // A PT5M tick already in flight writes its old high-water mark back when it finishes, undoing
     // the clear. The run that follows then reports 0 rows and reads like a broken reset.
@@ -751,6 +783,15 @@ test('demi-devbox.sh', async (t) => {
     assert.match(r.stderr, /agent=Ready .*extensions busy: ChangeTracking-Linux/);
   });
 
+  await t.test('a handler transitioning with no extension entry still blocks', () => {
+    const r = run(['drift'], {
+      env: { AZ_IV: iv({ handlers: [['Microsoft.CPlat.Core.RunCommandLinux', 'ProvisioningState/transitioning']] }), AZ_READY_AFTER: '1' }
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 2);
+    assert.match(r.stderr, /extensions busy: Microsoft\.CPlat\.Core\.RunCommandLinux/);
+  });
+
   await t.test('a failed extension does not block, whatever its case, and is named', () => {
     // A failed handler never settles; waiting on it would hold every run for the full cap.
     const r = run(['drift'], {
@@ -792,6 +833,23 @@ test('demi-devbox.sh', async (t) => {
     assert.strictEqual(checks(r), 2);
     assert.ok(lastIndex(r.calls, 'vm get-instance-view') > firstIndex(r.calls, 'vm run-command invoke'),
       'the second check comes after the dry run, before the write');
+  });
+
+  await t.test('apply --yes checks the agent once', () => {
+    const r = run(['apply', '--only', 'documents', '--yes'], { env: { AZ_DS_DIFFERS: '1' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(checks(r), 1);
+  });
+
+  await t.test('an agent busy after the prompt names the data sources already written', () => {
+    const r = run(['apply', '--only', 'documents', '--datasources', 'demi-documents-ds'], {
+      input: 'y\ny\n',
+      env: { AZ_IV: NOT_READY, AZ_UNREADY_FROM: '1', DEVBOX_READY_TIMEOUT: '0' }
+    });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /not ready after 0s: .*Only data source\(s\) demi-documents-ds were written, before the dry run\./);
+    assert.ok(!r.stderr.includes('Nothing was run'), r.stderr);
+    assert.ok(r.payloads.every(p => !p.includes('--live')), 'the indexes are not written');
   });
 
   await t.test('gives up on an agent that never settles and names what blocked it', () => {
@@ -853,6 +911,15 @@ test('demi-devbox.sh', async (t) => {
     assert.match(r.stderr, /demi-devbox-test is still deallocated 0s after the start was posted: the start did not take/);
     assert.strictEqual(starts(r).length, 1);
     assert.deepStrictEqual(r.remote, []);
+  });
+
+  await t.test('a refused start says so at once, not as a posted start', () => {
+    const r = run(['drift'], {
+      env: { AZ_IV: iv({ power: 'deallocated', agent: 'none' }), AZ_READY_AFTER: '99', AZ_START_FAIL: '1', DEVBOX_START_GRACE: '0' }
+    });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /OperationNotAllowed[\s\S]*the start of demi-devbox-test was refused \(az error above\)/);
+    assert.ok(!r.stderr.includes('start posted'), r.stderr);
   });
 
   await t.test('runs through invoke unless managed mode is asked for', () => {
@@ -992,6 +1059,27 @@ test('demi-devbox.sh', async (t) => {
     assert.deepStrictEqual(named(r.calls, 'delete'), named(r.calls, 'create'));
   });
 
+  await t.test('a second Ctrl-C during cleanup does not cut it short', () => {
+    const r = run(['run', '--', 'true'], {
+      env: { ...MANAGED, AZ_PENDING_POLLS: '1000000', AZ_DELETE_SLEEP: '2' }, signals: '1.5:INT 1:INT'
+    });
+    assert.strictEqual(r.status, 130, r.stderr);
+    const [name] = named(r.calls, 'create');
+    assert.deepStrictEqual(named(r.calls, 'delete'), [name]);
+    assert.ok(r.calls.some(c => c.startsWith('storage blob delete-batch') && c.includes(`--pattern ${name}/*`)),
+      r.calls.join('\n'));
+  });
+
+  await t.test('Ctrl-C under a role grant deletes the run command, then revokes the grant', () => {
+    const r = run(['drift'], { env: { ...MANAGED, AZ_PENDING_POLLS: '1000000' }, signals: '2.5:INT' });
+    assert.notStrictEqual(r.status, 0);
+    assert.strictEqual(named(r.calls, 'create').length, 1, r.stderr);
+    assert.deepStrictEqual(named(r.calls, 'delete'), named(r.calls, 'create'));
+    assert.strictEqual(creates(r.calls).length, 1);
+    assert.strictEqual(deletes(r.calls).length, 1);
+    assert.ok(lastIndex(r.calls, 'vm run-command delete') < lastIndex(r.calls, 'role assignment delete'));
+  });
+
   await t.test('a missing output blob fails the run and names the role, without the SAS', () => {
     // The VM writes through a SAS that carries only the operator's own blob roles.
     const r = run(['drift'], { env: { ...MANAGED, AZ_NO_BLOB: '1', AZ_EXEC_STATE: 'Failed' } });
@@ -1068,6 +1156,20 @@ test('demi-devbox.sh', async (t) => {
     assert.match(timeout.stderr, /DEVBOX_RUN_TIMEOUT must be a whole number of seconds, got '1h'/);
   });
 
+  await t.test('stops before any az call when jq is missing', () => {
+    // Only what the script needs before its first az call.
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-nojq-'));
+    for (const tool of ['bash', 'dirname']) {
+      const real = spawnSync('bash', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
+      fs.symlinkSync(real, path.join(bin, tool));
+    }
+    const r = run(['drift'], { env: { PATH: bin } });
+    fs.rmSync(bin, { recursive: true, force: true });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /needs jq to read the VM agent's state/);
+    assert.deepStrictEqual(r.calls, []);
+  });
+
   await t.test('run needs a command', () => {
     const r = run(['run']);
     assert.strictEqual(r.status, 2);
@@ -1090,11 +1192,38 @@ test('demi-devbox.sh', async (t) => {
     assert.match(r.stderr, /no DEMI_EXIT line came back from demi-devbox-test: the command may have run, but its output was lost/);
   });
 
+  await t.test('a refused invoke does not say the command may have run', () => {
+    const r = run(['run', '--', 'true'], { env: { AZ_INVOKE_FAIL: '1' } });
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /\(Conflict\)/);
+    assert.match(r.stderr, /the call to demi-devbox-test failed and no DEMI_EXIT line came back/);
+    assert.ok(!r.stderr.includes('may have run'), r.stderr);
+  });
+
+  await t.test('run passes a non-zero exit code through in invoke mode', () => {
+    const r = run(['run', '--', 'false'], { env: { AZ_RUN_LINES: '1', AZ_RUN_EXIT: '4' } });
+    assert.strictEqual(r.status, 4, r.stderr);
+    assert.match(r.remote[0], /^vm run-command invoke /);
+  });
+
   await t.test('run keeps each argument intact on the VM', () => {
     const r = run(['run', '--', 'printf', '%s|', 'a', 'c d']);
     assert.strictEqual(r.status, 0, r.stderr);
     const ran = runInner(innerOf(r.payloads[0]));
     assert.match(ran.stdout, /^a\|c d\|/);
+  });
+
+  await t.test('run keeps a quote, a newline and a $ intact on the VM', () => {
+    const r = run(['run', '--', 'printf', '%s|', "it's", 'a\nb', '$HOME']);
+    assert.strictEqual(r.status, 0, r.stderr);
+    const ran = runInner(innerOf(r.payloads[0]));
+    assert.ok(ran.stdout.startsWith("it's|a\nb|$HOME|"), ran.stdout + ran.stderr);
+  });
+
+  await t.test('a one-argument command keeps its trailing space', () => {
+    // Stripped to `a\`, it would join the wrapper's closing brace onto the command line.
+    const ran = runInner(innerOf(run(['run', '--', 'printf "%s|" a\\ ']).payloads[0]));
+    assert.match(ran.stdout, /^a \|DEMI_EXIT=0/, ran.stderr);
   });
 
   await t.test('a trailing & or a # comment does not break the wrapper', () => {
