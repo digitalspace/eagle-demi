@@ -327,7 +327,7 @@ resource deployContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
 }
 
 // Managed-mode devbox runs write stdout/stderr here; the name must match OUT_CONTAINER in
-// scripts/demi-devbox.sh. Operator write access is a manual container-scope grant (README).
+// scripts/demi-devbox.sh. Operator roles are granted by hand; see the README devbox section.
 resource devboxRunOutputContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
   name: 'devbox-run-output'
