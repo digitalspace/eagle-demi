@@ -214,6 +214,17 @@ test('searchLabels joins the six label columns, each guarded so a missing one ca
   }
 });
 
+// Same rule as `wireSector` in src/controllers/search.js: a blank or whitespace-only sector is no
+// sector, so the Track sub-type stands in. Without the TRIM guard, `''` or `' '` wins and the row
+// carries neither word.
+test('searchLabels falls back to the sub-type when the sector is blank', () => {
+  const [, ds] = PAIRS[1];
+  const expr = projectedColumns(ds.container.query).get('searchLabels');
+  assert.match(expr, new RegExp(
+    String.raw`\(IS_STRING\(c\.sector\) AND LENGTH\(TRIM\(c\.sector\)\) > 0 \? c\.sector : ` +
+    String.raw`\(IS_STRING\(c\.projectSubType\) \? c\.projectSubType : ''\)\)`));
+});
+
 // The three fields TODO 3.3 adds, pinned by name and by what they are: the generic check above
 // passes on a `documentSource` typed Edm.Boolean or a `fileNameTokens` aliased off the wrong
 // column, and both are silent — a type flip is a rebuild, and the wrong alias analyzes the wrong
