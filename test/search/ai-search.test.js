@@ -1597,6 +1597,36 @@ test('project searches search the stopword-free copy of the name', async (t) => 
   });
 });
 
+// A searchFields name the index holds but does not mark searchable is a 400 on every keyword query.
+// This holds the code against the committed index; `/health/search-schema` holds it against the live one.
+test('every field the project keyword search names is searchable in the committed index', () => {
+  const definition = require('../../azure/search/indexes/projects.json');
+  const searchable = new Set(definition.fields.filter(f => f.searchable).map(f => f.name));
+  const notSearchable = aiSearch.PROJECT_SEARCH_FIELDS.split(',').filter(name => !searchable.has(name));
+  assert.deepStrictEqual(notSearchable, [], `not searchable in ${definition.name}: ${notSearchable.join(', ')}`);
+});
+
+// A keyword query for a sector, status, region, type, phase or decision label matched no project
+// while the list rendered that label on every row. `searchLabels` carries all six.
+test('searchProjects matches keywords against the joined project labels', async (t) => {
+  const calls = captureFetch(t, () => ({ json: { value: [] } }));
+
+  await aiSearch.searchProjects({ filter: null, keywords: 'mines' });
+
+  assert.ok(calls[0].body.searchFields.split(',').includes('searchLabels'),
+    `got: ${calls[0].body.searchFields}`);
+});
+
+// The Projects badge and the result total must count the same query.
+test('countProjects searches the same fields as searchProjects', async (t) => {
+  const calls = captureFetch(t, () => ({ json: { value: [], '@odata.count': 0 } }));
+
+  await aiSearch.searchProjects({ filter: null, keywords: 'mines' });
+  await aiSearch.countProjects({ filter: null, keywords: 'mines' });
+
+  assert.strictEqual(calls[1].body.searchFields, calls[0].body.searchFields);
+});
+
 // The frontend fires a request per debounced keystroke, so Project and Document must prefix-match
 // the half-typed last word WITHOUT being asked. Chunk search is left as it was.
 test('type-ahead is on by default for the two keyword datasets', async (t) => {
@@ -2496,6 +2526,35 @@ test('the schema probe', async (t) => {
       await aiSearch.probeIndexSchema({ indexName: 'documents', select: aiSearch.DOCUMENT_SELECT }),
       { ok: false, index: 'documents', missing: ['fileSize'] });
   });
+
+  await t.test('checks a field list with a search term, since that is how keyword queries send it',
+    async (tt) => {
+      const calls = captureFetch(tt, () => ({ json: {} }));
+
+      const result = await aiSearch.probeIndexSchema({
+        indexName: 'projects', searchFields: aiSearch.PROJECT_SEARCH_FIELDS
+      });
+
+      assert.deepStrictEqual(result, { ok: true, index: 'projects' });
+      assert.strictEqual(calls[0].body.searchFields, aiSearch.PROJECT_SEARCH_FIELDS);
+      assert.notStrictEqual(calls[0].body.search, '*');
+      assert.strictEqual(calls[0].body.top, 0);
+    });
+
+  // The 400s demi-search-test answered on 2026-09-29, verbatim.
+  for (const [label, message] of [
+    ['not searchable',
+      "The field 'sector' in the search field list is not searchable.\r\nParameter name: searchFields"],
+    ['not in the index', "Unknown field 'sector' in search field list.\r\nParameter name: searchFields"]
+  ]) {
+    await t.test(`names a field-list field that is ${label}`, async (tt) => {
+      captureFetch(tt, () => ({ ok: false, status: 400, json: { error: { message } } }));
+
+      assert.deepStrictEqual(
+        await aiSearch.probeIndexSchema({ indexName: 'projects', searchFields: 'name,sector' }),
+        { ok: false, index: 'projects', missing: ['sector'] });
+    });
+  }
 
   // A probe that answered `{ok: false}` for a role or a network fault would report drift against an
   // index that is correct, and send an operator to widen one that needs nothing.

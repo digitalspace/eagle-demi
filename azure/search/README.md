@@ -202,10 +202,12 @@ Two service rules met on 2026-08-25 while adding it: `stored: false` is rejected
 is refused without `allowIndexDowntime=true` on the PUT — a few seconds offline, so do it, but only
 on the index PUT and never as a default in `apply-search-definitions.js`.
 
-The project label columns (sector, or the Track sub-type when there is no sector, status, region,
-type, phase and EA decision) are not searchable themselves. `demi-projects-ds` joins them into
-`searchLabels`, a searchable field that is new and so a plain widening rather than a rebuild. The
-index must carry it before the app lists it in `PROJECT_SEARCH_FIELDS` (`src/search/ai-search.js`).
+Project keyword search (`PROJECT_SEARCH_FIELDS` in `src/search/ai-search.js`) matches six
+searchable fields: `name`, `displayName`, `description`, `proponent`, `nameTokens` and
+`searchLabels`. The label columns (sector, or the Track sub-type when there is no sector, status,
+region, type, phase and EA decision) are not searchable themselves; `demi-projects-ds` joins them
+into `searchLabels`, which is a new field and so a plain widening rather than a rebuild.
+`/health/search-schema` checks the field list against the live index before a release ships.
 
 `proponentId` on `projects` was added on 2026-09-07, and it is a plain widening — no analyzer, no
 rebuild. The facet panel filters by Organization ObjectId while the `proponent` column holds the

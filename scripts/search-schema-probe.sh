@@ -9,8 +9,9 @@ usage() {
 Usage: scripts/search-schema-probe.sh <base-url> [indexes-dir]
 
 Builds a probe body from azure/search/indexes/*.json — per index, every retrievable
-field as `select` — and POSTs it to <base-url>/health/search-schema. The endpoint
-runs that select, plus the orders it derives from the app's own query builder,
+field as `select` and every searchable field as `searchFields` — and POSTs it to
+<base-url>/health/search-schema. The endpoint runs that select and that field list,
+plus the orders it derives from the app's own query builder,
 against the live index with `top: 0`, so the answer is about the LIVE schema, not
 the committed JSON.
 
@@ -71,6 +72,9 @@ for (const file of fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort()
   // No orderby key: the endpoint then derives the orders from buildOrderBy, the one authority on
   // what this app can sort by. The `sortable` flags do not answer that question.
   indexes[def.name] = { select: fields.filter((f) => f.retrievable !== false).map((f) => f.name) };
+  // A field this release searches that the live index cannot is a 400 on every keyword query.
+  const searchable = fields.filter((f) => f.searchable === true).map((f) => f.name);
+  if (searchable.length) indexes[def.name].searchFields = searchable;
 }
 if (!Object.keys(indexes).length) throw new Error(`no index definitions under ${dir}`);
 process.stdout.write(JSON.stringify({ indexes }));

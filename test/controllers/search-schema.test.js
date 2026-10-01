@@ -155,6 +155,112 @@ test('search schema health', async (t) => {
       `the log names the index and the field; got: ${warnings.join(' | ')}`);
   });
 
+  // A field the index holds but cannot search passes every select and order probe, and still makes
+  // each project keyword query a 400. Only `projects` names a field list by default.
+  await t.test('it probes the project index with the fields the keyword search names', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { out, res } = capture();
+    await searchSchema.searchSchema(request(), res);
+
+    assert.strictEqual(out.status, 200);
+    const searched = probes.filter(p => p.searchFields);
+    assert.deepStrictEqual(searched.map(p => [p.indexName, p.searchFields]),
+      [['projects-live', aiSearch.PROJECT_SEARCH_FIELDS]]);
+  });
+
+  await t.test('a live index that cannot search a field the app searches is a 503 that names it',
+    async (tt) => {
+      const warnings = [];
+      tt.mock.method(logger, 'warn', message => warnings.push(message));
+      stubProbe(tt, opts =>
+        (opts.indexName === 'projects-live' && opts.searchFields ? 'searchLabels' : null));
+
+      const { out, res } = capture();
+      await searchSchema.searchSchema(request(), res);
+
+      assert.strictEqual(out.status, 503);
+      assert.deepStrictEqual(out.body.indexes.projects, { ok: false, missing: ['searchLabels'] });
+      assert.deepStrictEqual(out.body.indexes.documents, { ok: true });
+      assert.ok(warnings.some(w => w.includes('projects-live') && w.includes('searchLabels')),
+        `the log names the index and the field; got: ${warnings.join(' | ')}`);
+    });
+
+  // CI posts the INCOMING definition through the app already deployed, so the searchable flags of
+  // the file are what the live index must match, not the deployed app's own field list.
+  await t.test('a posted definition probes its searchable fields as the field list', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { res } = capture();
+    await searchSchema.searchSchema(request({
+      indexes: {
+        projects: {
+          name: 'projects',
+          fields: [
+            { name: 'id', type: 'Edm.String' },
+            { name: 'name', type: 'Edm.String', searchable: true },
+            { name: 'sector', type: 'Edm.String', searchable: true },
+            { name: 'region', type: 'Edm.String', searchable: false }
+          ]
+        }
+      }
+    }), res);
+
+    const searched = probes.filter(p => p.indexName === 'projects-live' && p.searchFields);
+    assert.deepStrictEqual(searched.map(p => p.searchFields), [['name', 'sector']]);
+  });
+
+  await t.test('a posted field list is probed instead of the deployed one', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { res } = capture();
+    await searchSchema.searchSchema(request({
+      indexes: { projects: { searchFields: ['name', 'eacDecision'] } }
+    }), res);
+
+    const searched = probes.filter(p => p.indexName === 'projects-live' && p.searchFields);
+    assert.deepStrictEqual(searched.map(p => p.searchFields), [['name', 'eacDecision']]);
+  });
+
+  // An empty list would send `searchFields: ''`, which asks the service nothing about this index.
+  for (const [label, empty] of [['list', []], ['string', '']]) {
+    await t.test(`a posted empty field ${label} leaves the deployed one in place`, async (tt) => {
+      const probes = stubProbe(tt);
+
+      const { res } = capture();
+      await searchSchema.searchSchema(request({ indexes: { projects: { searchFields: empty } } }), res);
+
+      const searched = probes.filter(p => p.indexName === 'projects-live' && p.searchFields);
+      assert.deepStrictEqual(searched.map(p => p.searchFields), [aiSearch.PROJECT_SEARCH_FIELDS]);
+    });
+  }
+
+  await t.test('a posted field list may be a comma-separated string', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { res } = capture();
+    await searchSchema.searchSchema(request({
+      indexes: { projects: { searchFields: 'name,sector' } }
+    }), res);
+
+    const searched = probes.filter(p => p.indexName === 'projects-live' && p.searchFields);
+    assert.deepStrictEqual(searched.map(p => p.searchFields), [['name', 'sector']]);
+  });
+
+  // A direction is legal on an order entry and meaningless on a field list.
+  await t.test('a field-list entry carrying a direction is refused', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { out, res } = capture();
+    await searchSchema.searchSchema(request({
+      indexes: { projects: { searchFields: ['name asc'] } }
+    }), res);
+
+    assert.strictEqual(out.status, 400);
+    assert.strictEqual(out.body.error, 'schema override out of bounds');
+    assert.strictEqual(probes.length, 0);
+  });
+
   // Not drift: a role, a wrong index name, a timeout. Reported as a failure, never as a missing
   // field, and the service's own message stays in the log — this route is anonymous and that text
   // carries the endpoint and the index name.
@@ -324,29 +430,33 @@ test('search schema health', async (t) => {
     }), res);
 
     assert.strictEqual(out.status, 200);
-    assert.strictEqual(probes.length, 5, 'one select probe per index, and no order to batch');
+    assert.strictEqual(probes.length, 10,
+      'one select and one searchable-field probe per index, and no order to batch');
   });
 
   // The widest index emits 14 orders, so the app's own probe costs one call per index plus its
   // batches. The cap is what stops a body from turning the same route into an arbitrary number of
-  // them: the longest override a caller may send is 64 entries, two batches, for each index.
+  // them: the longest override a caller may send is 64 order entries, two batches, and one field
+  // list, for each index.
   await t.test('the longest body a caller may send stays inside the probe cap', async (tt) => {
     const probes = stubProbe(tt);
-    const orderby = Array.from({ length: 64 }, (_, i) => `field${i}`);
+    const fields = Array.from({ length: 64 }, (_, i) => `field${i}`);
+    const longest = { orderby: fields, searchFields: fields };
 
     const { out, res } = capture();
     await searchSchema.searchSchema(request({
       indexes: {
-        chunks: { orderby },
-        projects: { orderby },
-        documents: { orderby },
-        activities: { orderby },
-        'project-notifications': { orderby }
+        chunks: longest,
+        projects: longest,
+        documents: longest,
+        activities: longest,
+        'project-notifications': longest
       }
     }), res);
 
-    assert.strictEqual(out.status, 200, '5 x (1 select + 2 order batches) = 15 is inside the cap');
-    assert.strictEqual(probes.length, 15);
+    assert.strictEqual(out.status, 200,
+      '5 x (1 select + 1 field list + 2 order batches) = 20 is inside the cap');
+    assert.strictEqual(probes.length, 20);
   });
 
   await t.test('no search endpoint is a 503, not a clean bill of health', async (tt) => {

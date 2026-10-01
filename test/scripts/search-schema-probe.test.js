@@ -66,6 +66,13 @@ test('search-schema-probe.sh', async (t) => {
     // Sortable but not retrievable: still out of the select.
     assert.ok(!indexes.documents.select.includes('displayNameSort'));
     assert.ok(indexes.projects.select.includes('centroid'));
+    // The searchable flags of the release's own definition, so a field it newly searches is
+    // checked against the live index before the app that searches it ships.
+    // Searchable but not retrievable: in the field list though they are out of the select.
+    assert.ok(indexes.projects.searchFields.includes('searchLabels'));
+    assert.ok(indexes.projects.searchFields.includes('nameTokens'));
+    assert.ok(!indexes.projects.select.includes('searchLabels'));
+    assert.ok(!indexes.projects.searchFields.includes('sector'));
     // No orderby: the endpoint derives the orders from buildOrderBy, which knows the app orders
     // `documents` by displayNameSort and never by displayName. Sending a list built from the
     // `sortable` flags would block a release over fields no query sorts on.
