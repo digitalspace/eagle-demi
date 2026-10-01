@@ -1986,9 +1986,14 @@ paths:
                 $ref: '#/components/schemas/EaglePushResult'
         '400':
           description: |-
-            Body is not `{ doc }`, `doc._id` disagrees with the path, or the record names no
-            legislation block that holds content — a nameless project would otherwise be mirrored
-            as published.
+            Body is not `{ doc }`, `doc._id` disagrees with the path, or the legislation block
+            cannot be resolved. Block keys are `legislation_YYYY` (four digits). When
+            `currentLegislationYear` is a string naming such a key whose block is a non-empty
+            object, that block is used, with or without a `name`. Otherwise the one block with a
+            non-blank `name` (trimmed) is used. This 400 applies only when neither resolves (no
+            usable `currentLegislationYear`, and no or several named blocks), the record carries at
+            least one block key (a key with a null value counts), and it has no top-level `name`.
+            A nameless project would otherwise be mirrored as published.
         '401':
           description: Unauthorized.
         '403':

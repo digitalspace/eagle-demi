@@ -443,6 +443,148 @@ test('Eagle-only projects', async (t) => {
   });
 });
 
+test('a raw push under the Building Canada Act block', async (t) => {
+  const BLOCK = {
+    name: 'Federal Corridor',
+    legislation: 'Building Canada Act',
+    legislationYear: 2025,
+    centroid: [-123.1, 49.3]
+  };
+  const raw = (top = {}) => ({ _id: 'bca1', read: ['public'], legislation_2025: BLOCK, ...top });
+  // A project moved onto the new Act keeps its old block, so only currentLegislationYear decides.
+  const moved = () => raw({
+    currentLegislationYear: 'legislation_2025',
+    legislation_2018: { name: 'Old Name', legislation: 'Environmental Assessment Act', legislationYear: 2018 }
+  });
+
+  await t.test('flattens to its label and year', () => {
+    const merged = mergeEagleOnlyProject(moved(), OPTS);
+
+    assert.strictEqual(merged.name, 'Federal Corridor');
+    assert.strictEqual(merged.legislation, 'Building Canada Act');
+    assert.strictEqual(merged.legislationYear, 2025);
+    assert.deepStrictEqual(merged.centroid.coordinates, BLOCK.centroid);
+  });
+
+  await t.test('is found as the lone block when currentLegislationYear is missing', () => {
+    const merged = mergeEagleOnlyProject(raw(), OPTS);
+
+    assert.strictEqual(merged.legislation, 'Building Canada Act');
+    assert.strictEqual(merged.legislationYear, 2025);
+  });
+
+  await t.test('an empty block with no top-level name is rejected, not stored nameless', () => {
+    assert.throws(() => mergeEagleOnlyProject(raw({ legislation_2025: {} }), OPTS),
+      err => err.status === 400);
+  });
+});
+
+test('legislation blocks are found by key pattern, not a list of Acts', async (t) => {
+  const FUTURE = { name: 'Future Act Project', legislation: 'Future Act', legislationYear: 2031 };
+  const OLD = { name: 'Old Name', legislation: 'Environmental Assessment Act', legislationYear: 2018 };
+  const raw = (top = {}) => ({ _id: 'act2031', read: ['public'], legislation_2031: FUTURE, ...top });
+
+  await t.test('a lone block for an Act DEMI has never seen flattens to its label and year', () => {
+    const merged = mergeEagleOnlyProject(raw(), OPTS);
+
+    assert.strictEqual(merged.name, 'Future Act Project');
+    assert.strictEqual(merged.legislation, 'Future Act');
+    assert.strictEqual(merged.legislationYear, 2031);
+  });
+
+  await t.test('two blocks with no currentLegislationYear and no top-level name are rejected', () => {
+    assert.throws(() => mergeEagleOnlyProject(raw({ legislation_2018: OLD }), OPTS),
+      err => err.status === 400);
+  });
+
+  await t.test('a currentLegislationYear naming a non-legislation key is ignored', () => {
+    const merged = mergeEagleOnlyProject(
+      raw({ currentLegislationYear: 'decoy', decoy: { name: 'Decoy', legislationYear: 1 } }), OPTS);
+
+    assert.strictEqual(merged.name, 'Future Act Project');
+    assert.strictEqual(merged.legislationYear, 2031);
+  });
+
+  // An array would otherwise coerce to its one element in both the key test and the lookup.
+  await t.test('a non-string currentLegislationYear names no block, even one that exists', () => {
+    assert.throws(() => mergeEagleOnlyProject(
+      raw({ currentLegislationYear: ['legislation_2018'], legislation_2018: OLD }), OPTS),
+    err => err.status === 400);
+  });
+
+  await t.test('a currentLegislationYear naming an empty block falls back to the one named block', () => {
+    const merged = mergeEagleOnlyProject(
+      raw({ currentLegislationYear: 'legislation_2018', legislation_2018: {} }), OPTS);
+
+    assert.strictEqual(merged.name, 'Future Act Project');
+    assert.strictEqual(merged.legislationYear, 2031);
+  });
+
+  for (const bad of ['legislation_25', 'legislation_2025x']) {
+    await t.test(`${bad} is not a legislation block`, () => {
+      const merged = mergeEagleOnlyProject(raw({ [bad]: OLD }), OPTS);
+
+      assert.strictEqual(merged.name, 'Future Act Project');
+      assert.strictEqual(merged.legislationYear, 2031);
+    });
+  }
+});
+
+test('a push of a hydrated eagle-api project, every block default-filled', async (t) => {
+  // Mirrors UNUSED_BLOCK in test/controllers/nosql/eagle-push.test.js: what `toObject()` gives
+  // for an Act the project never used. eagle-api does not require `name`.
+  const UNUSED_BLOCK = Object.freeze({
+    CEAAInvolvement: null, CELead: '', centroid: [], description: '', eacDecision: null,
+    location: '', proponent: null, region: '', type: '', legislation: '', sector: '', status: '',
+    isTermsAgreed: false, dateUpdated: null, applicableRegulation: null, groups: []
+  });
+  const CURRENT = {
+    ...UNUSED_BLOCK, description: 'Current text', status: 'In Progress',
+    legislation: 'Building Canada Act', legislationYear: 2025
+  };
+  const OLD = {
+    ...UNUSED_BLOCK, name: 'Old Name', description: 'Old text', status: 'Complete',
+    legislation: 'Environmental Assessment Act', legislationYear: 2018
+  };
+  const raw = (top = {}) => ({
+    _id: 'hydrated1', read: ['public'], currentLegislationYear: 'legislation_2025',
+    legislation_1996: { ...UNUSED_BLOCK }, legislation_2002: { ...UNUSED_BLOCK },
+    legislation_2018: OLD, legislation_2025: CURRENT, ...top
+  });
+  const assertCurrent = (merged) => {
+    assert.strictEqual(merged.description, 'Current text');
+    assert.strictEqual(merged.projectState, 'In Progress');
+    assert.strictEqual(merged.legislation, 'Building Canada Act');
+    assert.strictEqual(merged.legislationYear, 2025);
+  };
+
+  await t.test('a nameless current block is flattened, not the named older one', () => {
+    const merged = mergeEagleOnlyProject(raw(), OPTS);
+
+    assertCurrent(merged);
+    assert.strictEqual(merged.name, undefined);
+  });
+
+  await t.test('a stale top-level name does not turn it into a raw pass-through', () => {
+    assertCurrent(mergeEagleOnlyProject(raw({ name: 'Stale Top Name' }), OPTS));
+  });
+
+  await t.test('a blank-only name on the current block is still the current block', () => {
+    const merged = mergeEagleOnlyProject(raw({ legislation_2025: { ...CURRENT, name: '   ' } }), OPTS);
+
+    assertCurrent(merged);
+    assert.notStrictEqual(merged.name, 'Old Name');
+  });
+
+  await t.test('with no current key the one named block wins over default-filled siblings', () => {
+    const merged = mergeEagleOnlyProject(
+      raw({ currentLegislationYear: undefined, legislation_2025: { ...UNUSED_BLOCK } }), OPTS);
+
+    assert.strictEqual(merged.name, 'Old Name');
+    assert.strictEqual(merged.legislationYear, 2018);
+  });
+});
+
 test('buildRegistry against the real Track dataset', async (t) => {
   // The Eagle side is derived from the real 354 epic_guids so the join arithmetic is tested on
   // the actual distribution: 6 guids are withheld to dangle, 10 orphans are added.
