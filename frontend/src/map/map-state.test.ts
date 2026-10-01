@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
+import { mapProject } from '../api/projects';
 import type { Project } from '../api/types';
 import {
   boundarySection,
@@ -72,6 +73,28 @@ describe('searchProjects', () => {
       WIND,
     ];
     expect(searchProjects(rows, 'hydro').map((p) => p.id)).toEqual([3, 4]);
+  });
+
+  it('searches the type, phase and decision label fields the server matches', () => {
+    const rows = [
+      project({ id: 5, type: 'Industrial' }),
+      project({ id: 6, currentPhaseName: 'Early Engagement' }),
+      project({ id: 7, eacDecision: 'Certificate Issued' }),
+      WIND,
+    ];
+    expect(searchProjects(rows, 'industrial').map((p) => p.id)).toEqual([5]);
+    expect(searchProjects(rows, 'engagement').map((p) => p.id)).toEqual([6]);
+    expect(searchProjects(rows, 'certificate').map((p) => p.id)).toEqual([7]);
+  });
+
+  it('matches a phase as the search row sends it, a name inside a ref', () => {
+    const row = mapProject({
+      _id: 'e3',
+      id: '12',
+      name: 'Green Bay',
+      currentPhaseName: { _id: 'phase-1', name: 'Post-Certificate' },
+    });
+    expect(searchProjects([row, WIND], 'post-certificate')).toEqual([row]);
   });
 });
 

@@ -1,4 +1,6 @@
 /** Track and Eagle attribute bags, carried through untouched for the screens that read them. */
+import type { ListRef } from './list-ref';
+
 export interface RawMetadata {
   trackAttributes?: Record<string, unknown>;
   eagleAttributes?: Record<string, unknown>;
@@ -22,6 +24,10 @@ export interface Project {
   electoralDistrict?: string;
   description?: string;
   proponent?: string;
+  /** Labels flattened from the `/search` row: label fields the server matches, read by client search. */
+  type?: string;
+  currentPhaseName?: string;
+  eacDecision?: string;
   /**
    * Track's `ea_certificate`, verbatim. Certificate STATE, not just a number: a real one
    * ("E98-05", "WD09-01") or a word ("Withdrawn", "In progress", "N/A"). Most projects have none.
@@ -80,6 +86,9 @@ export interface RawProject {
   leadAgency?: string;
   eaDecisionDate?: string | null;
   proponent?: string | { name?: string };
+  type?: string;
+  currentPhaseName?: ListRef;
+  eacDecision?: ListRef;
   highlighted?: { name?: string; description?: string };
   metadata?: RawMetadata;
   sources?: Project['sources'];

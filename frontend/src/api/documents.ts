@@ -4,21 +4,18 @@ import { config } from '../config';
 import { isoDay } from '../dates';
 import { ApiError, api } from './client';
 import { searchDataset, searchRetry } from './search';
+import { EAGLE_OBJECT_ID } from './list-ref';
 import { useProjects } from './projects';
 import { trackException } from '../telemetry';
 import type { Document, Project, RawDocument } from './types';
+
+export { EAGLE_OBJECT_ID };
 
 /** Where the same document sits on the public EPIC site, outside DEMI's presigned storage. */
 const EPIC_PUBLIC_DOCUMENT_BASE = 'https://projects.eao.gov.bc.ca/api/public/document';
 
 export const epicPublicDownloadUrl = (documentId: string): string =>
   `${EPIC_PUBLIC_DOCUMENT_BASE}/${encodeURIComponent(documentId)}/download`;
-
-/**
- * An Eagle ObjectId. Seeded rows reuse it as their DEMI id, so it is also what says a document
- * exists on the public EPIC site; a DEMI-native upload carries a uuid and exists nowhere else.
- */
-export const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 export const documentsKey = (query: string) => ['search', 'Document', query] as const;
 

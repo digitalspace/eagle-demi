@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { searchDataset, searchRetry } from './search';
+import { resolveListLabel, type ListRef } from './list-ref';
 import type { Project, RawMetadata, RawProject } from './types';
 
 /** Where a project with no usable centroid is placed: the middle of BC. */
@@ -44,6 +45,9 @@ export function parseCentroid(raw: unknown): [number, number] {
 const PLACEHOLDER_DESCRIPTION = /^No project description provided\.?$/;
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+// No List lookup here, so an unresolved ObjectId comes back empty and is dropped, never searched.
+const refName = (ref: ListRef | undefined): string | undefined => resolveListLabel(ref, null).text || undefined;
 
 /**
  * The description as the record carries it, never invented.
@@ -104,6 +108,9 @@ export function mapProject(p: RawProject): Project {
     region: p.region || 'British Columbia',
     description,
     proponent: proponentOf(p, rawMetadata),
+    type: p.type || undefined,
+    currentPhaseName: refName(p.currentPhaseName),
+    eacDecision: refName(p.eacDecision),
     // No fallback: an invented certificate number is a claim about a legal document.
     eaCertificate: p.eaCertificate === undefined ? undefined : p.eaCertificate || null,
     rawMetadata,
