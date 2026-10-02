@@ -12,6 +12,7 @@ import {
   useLists,
 } from './project-summary';
 import { json, respond, urlOf } from '../test-http';
+import { ApiError } from './client';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -164,6 +165,15 @@ describe('fetchProjectFacts', () => {
     respond(json({ error: 'boom' }, 500));
 
     await expect(fetchProjectFacts('272')).rejects.toThrow('Could not load the project (HTTP 500).');
+  });
+
+  it.each([404, 500])('keeps the API error behind a %i as the cause', async (status) => {
+    respond(json({ error: 'boom' }, status));
+
+    const err = await fetchProjectFacts('272').catch((e: unknown) => e);
+
+    expect((err as Error).cause).toBeInstanceOf(ApiError);
+    expect(((err as Error).cause as ApiError).status).toBe(status);
   });
 });
 
