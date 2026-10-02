@@ -149,4 +149,12 @@ test('minting a privileged key', async (t) => {
     assert.strictEqual(res.statusCode, 201);
     assert.deepStrictEqual(stored[0].roles, ['demi-admin']);
   });
+
+  await t.test('a demi-admin caller can mint a demi-admin key, a role it already holds', async (t) => {
+    const { res, stored } = await mint(
+      ['demi-admin'], { name: 'ops', roles: ['demi-admin'], allowWrite: true }, t);
+
+    assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
+    assert.deepStrictEqual(stored[0].roles, ['demi-admin']);
+  });
 });

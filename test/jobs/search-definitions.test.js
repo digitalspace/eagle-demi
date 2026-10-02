@@ -157,6 +157,23 @@ test('search definition job', async (t) => {
     assert.strictEqual(h.final().status, 'succeeded');
   });
 
+  await t.test('a resumed watch restamps startedAt, so the 409 guard does not call it dead', async () => {
+    const startedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const h = harness(t, {
+      job: row({ status: 'running', startedAt, resetIssuedAt: startedAt }),
+      resetLog: ['DEMI_RESULT name=projects-indexer status=success items=361 failed=0 tracking=null']
+    });
+
+    await searchDefinitions.run(ID, { attempt: 2, maxAttempts: 3 });
+
+    const restamped = h.patches.find(p => p.startedAt);
+    assert.ok(restamped, 'the resume writes a fresh startedAt');
+    assert.strictEqual(searchDefinitions.isStale({ status: 'running', startedAt: restamped.startedAt }),
+      false);
+    assert.strictEqual(searchDefinitions.isStale({ status: 'running', startedAt }), true,
+      'the original stamp alone would read as dead');
+  });
+
   await t.test('a finished job is left alone — nothing is applied and nothing is reset', async () => {
     const h = harness(t, { job: row({ status: 'succeeded' }) });
 

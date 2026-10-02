@@ -290,6 +290,9 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
 
     if (resuming) {
       out.log(`resumed after redelivery: the reset was issued at ${job.resetIssuedAt}, watching only`);
+      // `isStale` dates a running row from `startedAt`; the original stamp would let a long resume
+      // look dead to the 409 guard while this worker still watches.
+      await jobs.patch(id, { startedAt: new Date().toISOString(), steps: out.steps });
     } else {
       // ONE `run()` PER NAME. The script's `--only` takes a single definition, and a list has to
       // fail before the first PUT rather than partway through, which is the guard it already runs

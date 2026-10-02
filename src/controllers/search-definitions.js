@@ -26,6 +26,8 @@ const ALLOWED_BODY_KEYS = ['only', 'datasources', 'live', 'check'];
 // entries it did not recognise — an unbounded list would be reflected into the response and, for
 // `only`, would be one `apply.run()` per entry.
 const MAX_NAMES = 20;
+// Twice the longest name the package carries; bounds what the unknown-name 400 can echo back.
+const MAX_NAME_LENGTH = 64;
 
 /** A list of known names, deduplicated, or the 400 that says what is wrong with it. */
 function names(value, field, known) {
@@ -33,6 +35,9 @@ function names(value, field, known) {
   if (!Array.isArray(value)) return { error: `${field} must be an array of names.` };
   if (value.length > MAX_NAMES) {
     return { error: `${field} takes at most ${MAX_NAMES} names.` };
+  }
+  if (value.some(name => typeof name === 'string' && name.length > MAX_NAME_LENGTH)) {
+    return { error: `${field} names are at most ${MAX_NAME_LENGTH} characters.` };
   }
   const unknown = value.filter(name => typeof name !== 'string' || !known.includes(name));
   if (unknown.length > 0) {
@@ -49,45 +54,51 @@ function flag(value, field) {
   return { value };
 }
 
+const APPLY_EVENT = { action: 'searchDefinitions.apply', targetType: 'searchDefinitions' };
+
+/** Every refused apply is audited too, so probing the route leaves a durable trace. */
+function refuse(req, res, status, payload, targetId) {
+  audit.auditEvent(req, {
+    ...APPLY_EVENT, outcome: 'failure', targetId, detail: { status, error: payload.error }
+  });
+  return res.status(status).json(payload);
+}
+
 exports.applySearchDefinitions = async (req, res) => {
   try {
     const body = (req && req.body) || {};
+    const badRequest = error => refuse(req, res, 400, { error });
 
     const unknown = Object.keys(body).filter(key => !ALLOWED_BODY_KEYS.includes(key));
-    if (unknown.length > 0) {
-      return res.status(400).json({ error: `Unknown body parameter(s): ${unknown.join(', ')}` });
-    }
+    if (unknown.length > 0) return badRequest(`Unknown body parameter(s): ${unknown.join(', ')}`);
 
     const only = names(body.only, 'only', searchDefinitions.knownNames());
-    if (only.error) return res.status(400).json({ error: only.error });
+    if (only.error) return badRequest(only.error);
     const datasources = names(body.datasources, 'datasources', searchDefinitions.knownDataSourceNames());
-    if (datasources.error) return res.status(400).json({ error: datasources.error });
+    if (datasources.error) return badRequest(datasources.error);
     const live = flag(body.live, 'live');
-    if (live.error) return res.status(400).json({ error: live.error });
+    if (live.error) return badRequest(live.error);
     const check = flag(body.check, 'check');
-    if (check.error) return res.status(400).json({ error: check.error });
+    if (check.error) return badRequest(check.error);
 
     // The same pair the CLI refuses together: `check` reads the live schema and writes nothing,
     // `live` PUTs. Accepting both would make the flag that decided what happened whichever branch
     // the job looked at first.
-    if (live.value && check.value) {
-      return res.status(400).json({ error: 'live and check are mutually exclusive.' });
-    }
+    if (live.value && check.value) return badRequest('live and check are mutually exclusive.');
     if (check.value && datasources.value.length > 0) {
-      return res.status(400).json({ error: 'check writes nothing, so it cannot take datasources.' });
+      return badRequest('check writes nothing, so it cannot take datasources.');
     }
 
     // An empty `only` means "every definition", which on a live run resets every indexer — chunks
     // included, and that is hours of rebuild during which search serves a partial index. Nobody
     // asks for that by leaving a field out, so it has to be named.
     if (live.value && only.value.length === 0) {
-      return res.status(400).json({
-        error: 'live needs a non-empty only list: applying everything resets every indexer, chunks included.'
-      });
+      return badRequest(
+        'live needs a non-empty only list: applying everything resets every indexer, chunks included.');
     }
 
     if (!searchDefinitions.enabled()) {
-      return res.status(503).json({ error: 'search definition apply disabled' });
+      return refuse(req, res, 503, { error: 'search definition apply disabled' });
     }
 
     // ONE APPLY AT A TIME. Two runs PUT the same definitions and reset the same indexers, and the
@@ -100,10 +111,10 @@ exports.applySearchDefinitions = async (req, res) => {
       .filter(job => !searchDefinitions.isStale(job));
     if (active.length > 0) {
       const running = active[0];
-      return res.status(409).json({
+      return refuse(req, res, 409, {
         error: `a search definition apply is already ${running.status}.`,
         jobId: String(running.id).slice(searchDefinitions.JOB_PREFIX.length)
-      });
+      }, running.id);
     }
 
     const user = (req && req.user) || {};
@@ -129,7 +140,7 @@ exports.applySearchDefinitions = async (req, res) => {
       await jobs.patch(job.id, {
         status: 'failed', error: 'enqueue failed', finishedAt: new Date().toISOString()
       }).catch(() => {});
-      return res.status(503).json({ error: 'search definition apply could not be queued' });
+      return refuse(req, res, 503, { error: 'search definition apply could not be queued' }, job.id);
     }
 
     logger.info(`[search-definitions] job queued job=${job.id} only=${only.value.join(',') || 'all'} ` +
@@ -140,8 +151,7 @@ exports.applySearchDefinitions = async (req, res) => {
     // exists for — it decides what the search service serves — so it belongs beside apikey.create
     // in EagleAudit_CL rather than only in the app log, which is kept for weeks.
     audit.auditEvent(req, {
-      action: 'searchDefinitions.apply',
-      targetType: 'searchDefinitions',
+      ...APPLY_EVENT,
       targetId: job.id,
       detail: {
         only: only.value,
