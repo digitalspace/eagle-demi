@@ -38,4 +38,15 @@ test('access log', async (t) => {
 
     assert.strictEqual(info.mock.calls[0].arguments[1].path, '/api/documents');
   });
+
+  await t.test('a HEAD logs 0 bytes, not the size of the file it describes', () => {
+    const info = t.mock.method(logger, 'info', () => {});
+    const head = { statusCode: 200, get: (name) => (/^content-length$/i.test(name) ? '48213' : undefined) };
+
+    logRequest({ method: 'HEAD', originalUrl: '/api/documents/doc-1/download', headers: {} }, head, 2);
+
+    const [message, meta] = info.mock.calls[0].arguments;
+    assert.match(message, / 200 - 0 B - /);
+    assert.strictEqual(meta.bytes, 0);
+  });
 });

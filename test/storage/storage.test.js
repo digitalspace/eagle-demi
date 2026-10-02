@@ -42,14 +42,14 @@ test('backend selection', async (t) => {
     // backend has and the other does not turns that flip into a runtime crash on one path.
     for (const name of ['minio', 'azureBlob']) {
       const backend = require(`../../src/storage/${name}`);
-      for (const op of ['getBuffer', 'getObjectStream', 'getDownloadUrl', 'putFile',
+      for (const op of ['getBuffer', 'getObjectStream', 'getDownloadUrl', 'statObject', 'putFile',
         'putObjectStream', 'removeObject', 'describe']) {
         assert.strictEqual(typeof backend[op], 'function', `${name}.${op}`);
       }
     }
     // The facade forwards everything the app uses; the copy script talks to a backend directly
     // and needs getBuffer/describe, which is why those two stay off this list.
-    for (const op of ['getDownloadUrl', 'putFile', 'getObjectStream', 'putObjectStream',
+    for (const op of ['getDownloadUrl', 'statObject', 'putFile', 'getObjectStream', 'putObjectStream',
       'removeObject']) {
       assert.strictEqual(typeof load('minio')[op], 'function', `facade.${op}`);
     }
@@ -199,6 +199,37 @@ test('minio backend applies the key prefix to every operation', async (t) => {
 
     await assert.rejects(minio.removeObject('zips/abc.zip'), /Access Denied/,
       'swallowing this would report a permission problem as a completed sweep');
+  });
+
+  await t.test('statObject reads the prefixed key and maps size and type', async () => {
+    let seen;
+    t.mock.method(Minio.Client.prototype, 'statObject', async (b, key) => {
+      seen = key;
+      return { size: 48213, etag: 'e', metaData: { 'content-type': 'application/pdf' } };
+    });
+
+    assert.deepStrictEqual(await minio.statObject('etl/site-c/abc.pdf'),
+      { size: 48213, contentType: 'application/pdf' });
+    assert.strictEqual(seen, 'ozwdez/etl/site-c/abc.pdf');
+  });
+
+  await t.test('statObject is null for a missing key', async () => {
+    // A bodiless HEAD 404 is `NotFound`; a server that sends a body says `NoSuchKey`.
+    for (const code of ['NotFound', 'NoSuchKey']) {
+      t.mock.method(Minio.Client.prototype, 'statObject', async () => {
+        throw Object.assign(new Error('Not Found'), { code });
+      });
+      assert.strictEqual(await minio.statObject('etl/gone.pdf'), null, code);
+    }
+  });
+
+  await t.test('statObject reports any other failure', async () => {
+    t.mock.method(Minio.Client.prototype, 'statObject', async () => {
+      throw Object.assign(new Error('Access Denied'), { code: 'AccessDenied' });
+    });
+
+    await assert.rejects(minio.statObject('etl/abc.pdf'), /Access Denied/,
+      'a permission fault read as "missing" would answer 404 for a file that is there');
   });
 
   await t.test('putFile stores under the prefixed key and returns it', async () => {
@@ -401,6 +432,39 @@ test('azure blob backend', async (t) => {
     t.mock.method(BlockBlobClient.prototype, 'download', async () => ({ readableStreamBody: body }));
 
     assert.strictEqual(await azure.getObjectStream('etl/abc.pdf'), body);
+  });
+
+  await t.test('statObject maps contentLength and contentType', async () => {
+    let seen;
+    t.mock.method(BlockBlobClient.prototype, 'getProperties', async function () {
+      seen = this.name;
+      return { contentLength: 48213, contentType: 'application/pdf' };
+    });
+
+    assert.deepStrictEqual(await azure.statObject('etl/abc.pdf'),
+      { size: 48213, contentType: 'application/pdf' });
+    assert.strictEqual(seen, 'etl/abc.pdf');
+  });
+
+  /** A HEAD error as the SDK throws it: no body, so the code is in `details`, not `code`. */
+  const headError = (statusCode, errorCode) =>
+    Object.assign(new Error(errorCode), { statusCode, details: { errorCode } });
+
+  await t.test('statObject is null only for a missing blob', async () => {
+    t.mock.method(BlockBlobClient.prototype, 'getProperties', async () => {
+      throw headError(404, 'BlobNotFound');
+    });
+
+    assert.strictEqual(await azure.statObject('etl/gone.pdf'), null);
+  });
+
+  await t.test('statObject reports a missing container and every other failure', async () => {
+    // ContainerNotFound is a 404 too, but it means the config is wrong, not that one file is gone.
+    for (const err of [headError(404, 'ContainerNotFound'), headError(403, 'AuthorizationFailure'),
+      Object.assign(new Error('socket hang up'), { code: 'REQUEST_SEND_ERROR' })]) {
+      t.mock.method(BlockBlobClient.prototype, 'getProperties', async () => { throw err; });
+      await assert.rejects(azure.statObject('etl/abc.pdf'), err, err.message);
+    }
   });
 
   await t.test('the container is NEVER created on demand', async () => {

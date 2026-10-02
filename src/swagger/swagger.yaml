@@ -1359,6 +1359,62 @@ paths:
           description: No document with this id the caller may read, or it has no stored file.
         '500':
           description: '`{ "error": "Failed to generate download link." }` — the presign failed.'
+    head:
+      summary: Headers of a document's stored file, without a redirect
+      description: >-
+        Answered by DEMI itself, never with a 302: the presigned URL is signed for GET, so a HEAD
+        that followed the redirect would get a 403 from the store. Same visibility check as GET. No
+        URL is minted and no analytics or audit event is written. `redirect` and `Accept` are
+        ignored.
+
+        Size and type come from the store. If the store times out (3 seconds), cannot be reached,
+        or answers 5xx, the document record answers instead, and `Content-Length` is left out when
+        the record has no size. Any other store error is a 500.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Parent project id, the partition key. Avoids a cross-partition lookup.
+      responses:
+        '200':
+          description: The document is visible and its file is stored. No body.
+          headers:
+            Content-Type:
+              description: >-
+                The stored object's type, else the record's, else `application/octet-stream`.
+                A value that is not a valid media type is skipped.
+              schema:
+                type: string
+            Content-Length:
+              description: >-
+                The stored object's size in bytes, or the record's when the store is down.
+                Absent when neither is known.
+              schema:
+                type: integer
+            Content-Disposition:
+              description: The same `attachment` value the presigned GET carries.
+              schema:
+                type: string
+            Cache-Control:
+              description: Always `no-store`.
+              schema:
+                type: string
+        '404':
+          description: >-
+            No document with this id the caller may read, it has no stored file, or the store
+            reports the object missing.
+        '500':
+          description: >-
+            The document lookup failed, or the store refused the stat (for example, access denied).
+            Same answer as GET: `{ "error": "Failed to generate download link." }`, but HEAD sends
+            no body.
 
   /api/documents/{id}/level:
     put:

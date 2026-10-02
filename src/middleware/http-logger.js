@@ -24,7 +24,8 @@ function logRequest(req, res, durationMs) {
   // Same resolver the audit trail keys on, so the two can never disagree about who a caller is.
   const ip = callerIp(req);
   const { statusCode } = res;
-  const contentLength = res.get('Content-Length') || 0;
+  // A HEAD's Content-Length is the size of the file it describes; nothing was sent.
+  const contentLength = method === 'HEAD' ? 0 : (res.get('Content-Length') || 0);
 
   // Caller identity. Guards run before this, so req.user is populated by the time it reads.
   //

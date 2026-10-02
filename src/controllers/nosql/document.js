@@ -14,6 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const { finished } = require('stream/promises');
 const storage = require('../../storage');
+const { contentDisposition } = require('../../storage/content-disposition');
 
 const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
@@ -43,6 +44,10 @@ const config = require('../../config');
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
 const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
+
+// How long HEAD waits on the store's stat. The SDKs wait far longer than a link checker will, and
+// past this HEAD answers from the record, as for any other outage.
+const STAT_TIMEOUT_MS = 3000;
 
 // Marks a request that arrived through the deprecated `published` alias. A symbol, so no request
 // body can set it.
@@ -523,6 +528,26 @@ exports.getDocument = async (req, res) => {
 };
 
 /**
+ * The visibility gate both download verbs share. `getById` applies the caller's access, so null is
+ * "hidden from you" as well as "no such id".
+ *
+ * @returns {Promise<{status: number, body: object}|{doc: object, fileName: string, access: object}>}
+ */
+async function findStoredFile(req, id) {
+  const access = resolveAccess(req);
+  const doc = await documents.getById(access, id, req.query.project);
+  if (!doc) return { status: 404, body: { error: 'Document not found' } };
+  if (!doc.s3Key) return { status: 404, body: { error: 'Document has no stored file.' } };
+  return { doc, fileName: doc.s3Key.split('/').pop(), access };
+}
+
+/** GET's failure answer. HEAD sends the same one, so one fault logs one way whichever verb hit it. */
+function downloadFailed(err) {
+  logger.error(`[Document Controller] Presigned download failed: ${err.message}`);
+  return { status: 500, body: { error: 'Failed to generate download link.' } };
+}
+
+/**
  * Short-lived presigned download URL, gated by the same visibility rule as the metadata — a
  * caller who cannot see the document must not be able to fetch its bytes.
  *
@@ -534,17 +559,10 @@ exports.getDocument = async (req, res) => {
  */
 async function resolveDownload(req, id) {
   try {
-    const access = resolveAccess(req);
-    const doc = await documents.getById(access, id, req.query.project);
+    const found = await findStoredFile(req, id);
+    if (found.status) return found;
+    const { doc, fileName } = found;
 
-    if (!doc) {
-      return { status: 404, body: { error: 'Document not found' } };
-    }
-    if (!doc.s3Key) {
-      return { status: 404, body: { error: 'Document has no stored file.' } };
-    }
-
-    const fileName = doc.s3Key.split('/').pop();
     // The storage layer owns key resolution and expiry. It used to be done here, with the
     // client borrowed from the extraction script — which is how extract.js came to read keys
     // without the environment prefix while this path applied it.
@@ -577,8 +595,7 @@ async function resolveDownload(req, id) {
       body: { url, expiresIn: DOWNLOAD_URL_TTL_SECONDS, fileName, displayName: doc.displayName || null }
     };
   } catch (err) {
-    logger.error(`[Document Controller] Presigned download failed: ${err.message}`);
-    return { status: 500, body: { error: 'Failed to generate download link.' } };
+    return downloadFailed(err);
   }
 }
 
@@ -598,7 +615,107 @@ function wantsRedirect(req) {
   return accept.startsWith('text/html');
 }
 
+/** A recorded `fileSize` is missing or a numeric string on many rows; only a positive number counts. */
+function recordedSize(doc) {
+  const size = Number(doc.fileSize);
+  return Number.isFinite(size) && size > 0 ? size : null;
+}
+
+// RFC 9110 `type/subtype`, optional parameters. `[ \t]`, not `\s`, so no CR or LF gets through.
+const TOKEN = "[\\w!#$%&'*+.^`|~-]+";
+const MEDIA_TYPE = new RegExp(
+  `^${TOKEN}/${TOKEN}(?:[ \\t]*;[ \\t]*${TOKEN}=(?:${TOKEN}|"[^"\\\\\\x00-\\x1f\\x7f]*"))*$`);
+
+function isMediaType(value) {
+  return typeof value === 'string' && MEDIA_TYPE.test(value);
+}
+
+// Node network codes, Azure's REQUEST_SEND_ERROR, and MinIO's name for a 503.
+const STORE_UNREACHABLE = new Set(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND',
+  'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'ECONNABORTED', 'REQUEST_SEND_ERROR',
+  'SlowDown']);
+// MinIO refuses the name before sending; Azure answers 400 with one of these.
+const BAD_OBJECT_NAME = new Set(['InvalidObjectName', 'InvalidResourceName', 'InvalidUri']);
+
+/** The store's error code. On a HEAD, Azure carries it in `details.errorCode`, not `code`. */
+function storeErrorCode(err) {
+  return err.code || (err.details && err.details.errorCode) || '';
+}
+
+/** A network fault, a timeout or a store 5xx: worth answering from the record. */
+function isStoreOutage(err) {
+  if (err.statusCode >= 500 || STORE_UNREACHABLE.has(storeErrorCode(err))) return true;
+  // MinIO names 403, 404, 405, 501 and 503 on a bodiless HEAD. Any other status arrives as an
+  // S3Error with no code, and on a stat that is a 500, 502 or 504 from the store or its proxy.
+  return err.name === 'S3Error' && !err.code;
+}
+
+function isBadObjectName(err) {
+  return err.name === 'InvalidObjectNameError' || BAD_OBJECT_NAME.has(storeErrorCode(err));
+}
+
+/** `storage.statObject`, rejected with an ETIMEDOUT after `STAT_TIMEOUT_MS`. */
+async function statBounded(key) {
+  let timer;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(Object.assign(
+      new Error(`store stat timed out after ${STAT_TIMEOUT_MS} ms`), { code: 'ETIMEDOUT' })),
+    STAT_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([storage.statObject(key), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * HEAD is answered here, never redirected: the presigned URL is signed for GET, so a link checker
+ * that follows a 302 with HEAD gets a 403 from the store. No presign, so no analytics or audit
+ * event either — nobody received the bytes.
+ */
+async function headDownload(req, res) {
+  let found;
+  try {
+    found = await findStoredFile(req, req.params.id);
+  } catch (err) {
+    found = downloadFailed(err);
+  }
+  if (found.status) return res.status(found.status).json(found.body);
+  const { doc, fileName, access } = found;
+
+  let stat;
+  try {
+    stat = await statBounded(doc.s3Key);
+  } catch (err) {
+    if (isBadObjectName(err)) {
+      stat = null;
+    } else if (isStoreOutage(err)) {
+      // The record already proved the file visible and stored, so an outage answers from it
+      // rather than failing a link check.
+      logger.warn(`[Document Controller] HEAD stat failed, answering from the record: ${err.message}`);
+    } else {
+      return res.status(500).json(downloadFailed(err).body);
+    }
+  }
+  if (stat === null) return res.status(404).json({ error: 'Document has no stored file.' });
+
+  // The fallback reads what this caller may see of the record, as GET /documents/:id would show.
+  const record = redactForAccess('documents', doc, access);
+  const size = stat ? stat.size : recordedSize(record);
+  const type = [stat && stat.contentType, record.mimeType].find(isMediaType);
+  res.status(200);
+  res.set('Content-Type', type || 'application/octet-stream');
+  res.set('Content-Disposition', contentDisposition(fileName));
+  res.set('Cache-Control', 'no-store');
+  // The size a GET would return; null leaves it out. makeRes keeps it on the empty body.
+  res.set('Content-Length', Number.isFinite(size) ? String(size) : null);
+  return res.send('');
+}
+
 exports.downloadDocument = async (req, res) => {
+  if (req.method === 'HEAD') return headDownload(req, res);
+
   const { status, body } = await resolveDownload(req, req.params.id);
 
   // Only a 200 redirects. A 404 or 500 stays JSON in both modes: there is nowhere to send the
