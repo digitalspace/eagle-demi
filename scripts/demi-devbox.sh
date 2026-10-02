@@ -53,8 +53,9 @@
 # identifiers, not credentials.
 #
 # ENV VARS: `DEVBOX_RUNNER` (path to an external `run --env <env> -- <command>` wrapper; when unset
-# this starts the VM and runs the command itself), `DEVBOX_RUN_MODE` (`invoke`, the default:
-# `az vm run-command invoke`, 4 KB output, 90 minute cap; or `managed`: output to blob, needs
+# this starts the VM and runs the command itself), `DEVBOX_KEEP_RUNNING` (`1` keeps a VM this run
+# started up at the end; by default it is deallocated again), `DEVBOX_RUN_MODE` (`invoke`, the
+# default: `az vm run-command invoke`, 4 KB output, 90 minute cap; or `managed`: output to blob, needs
 # Storage Blob Data Contributor on the output account), `DEVBOX_READY_TIMEOUT` (seconds to wait
 # for the VM agent, default 1200), `DEVBOX_READY_SLEEPS` (back-off between agent checks, default
 # `5 15 60`), `DEVBOX_START_GRACE` (seconds a posted start may leave the VM stopped, default 180),
@@ -63,8 +64,8 @@
 # a managed run may wait in the agent's queue before it starts, default 3600),
 # `DEVBOX_RUN_POLL_SLEEP` (default 10), `DEVBOX_OUTPUT_ACCOUNT` (managed output account, default
 # the `demifc*` account in the VM's group), `DEVBOX_CHECKOUT` (default `/opt/eagle-demi`), `DS_RG`
-# (Cosmos account's resource group, only needed when the subscription holds more than one
-# account), `INDEXER_POLL_SLEEP`, `INDEXER_TIMEOUT`, `INDEXER_TIMEOUT_LONG`, `AZ` (the `az` seam
+# (Cosmos account's resource group, only needed when the subscription holds Cosmos accounts in
+# more than one group), `INDEXER_POLL_SLEEP`, `INDEXER_TIMEOUT`, `INDEXER_TIMEOUT_LONG`, `AZ` (the `az` seam
 # the tests drive).
 set -euo pipefail
 
@@ -94,6 +95,9 @@ RUN_SAS_EXPIRY=''
 RUN_FILES=()
 # Set only when a failure is known to come before the command started; `run` reads it.
 RUN_NOT_STARTED=''
+DEVBOX_KEEP_RUNNING="${DEVBOX_KEEP_RUNNING:-}"
+# Set when this run posted the VM's start. Not exported: only the top-level run deallocates.
+VM_STARTED=''
 
 # Not POLL_SLEEP: with-search-admin.sh reads that name for its own RBAC-replication poll, and this
 # script runs inside it.
@@ -145,6 +149,7 @@ test   7897ceb1-9a86-4639-87d7-7f9ff67142b3    demi-search-test    demi-devbox-t
 prod   be5924ac-1083-4a1b-be92-7b444882cfd9    demi-search-prod    demi-devbox-prod
 
 Resource groups, the tenant and the indexer identity are read with `az` at runtime.
+A devbox this run started is deallocated at the end; DEVBOX_KEEP_RUNNING=1 keeps it up.
 Background: azure/search/README.md, docs/runbook-search-outage.md.
 EOF
 }
@@ -267,6 +272,10 @@ devbox_ready() {
         if "$AZ" vm start --subscription "$SUBSCRIPTION" -g "$VM_RG" -n "$VM" --no-wait >/dev/null; then
           start_said='after the start was posted: the start did not take'
           echo "demi-devbox: ${VM} was ${power}; start posted" >&2
+          if [[ "$DEVBOX_KEEP_RUNNING" != '1' ]]; then
+            VM_STARTED=1
+            base_traps
+          fi
         else
           start_said='after its start was refused, and no other start brought it up'
           echo "demi-devbox: the start of ${VM} was refused (az error above); waiting up to ${DEVBOX_START_GRACE}s in case another run's start is in flight" >&2
@@ -284,6 +293,39 @@ devbox_ready() {
     (( i < ${#naps[@]} - 1 )) && i=$((i + 1))
     sleep "$nap"
   done
+}
+
+# What the traps go back to between managed runs: nothing, or the deallocate of a VM this run
+# started, so a `die` or Ctrl-C does not leave it running either.
+base_traps() {
+  if [[ -n "$VM_STARTED" ]]; then
+    trap 'set +e; stop_started_vm' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+  else
+    trap - EXIT INT TERM
+  fi
+}
+
+# Deallocates the VM this run started. Not while an extension is busy: that is another run's
+# command in flight, and a deallocate would cut it off. Best effort; the run's own status stands.
+stop_started_vm() {
+  [[ -n "$VM_STARTED" ]] || return 0
+  VM_STARTED=''
+  local iv busy='unknown' by_hand="az vm deallocate --subscription ${SUBSCRIPTION} -g ${VM_RG} -n ${VM}"
+  if iv="$("$AZ" vm get-instance-view --subscription "$SUBSCRIPTION" -g "$VM_RG" -n "$VM" \
+      --query instanceView -o json 2>/dev/null)"; then
+    busy="$(jq -r "$READY_JQ" <<<"$iv" | cut -d'|' -f3)" || busy='unknown'
+  fi
+  if [[ -n "$busy" ]]; then
+    echo "demi-devbox: left ${VM} running, which this run started: extensions busy: ${busy}. Deallocate it once they finish: ${by_hand}" >&2
+    return 0
+  fi
+  if "$AZ" vm deallocate --subscription "$SUBSCRIPTION" -g "$VM_RG" -n "$VM" --no-wait -o none; then
+    echo "demi-devbox: deallocate of ${VM} posted, since this run started it (DEVBOX_KEEP_RUNNING=1 keeps it up)" >&2
+  else
+    echo "demi-devbox: could not deallocate ${VM} (az error above); run: ${by_hand}" >&2
+  fi
 }
 
 # Managed mode only. Resolved once per invocation and exported, so re-entered phases reuse it.
@@ -345,7 +387,7 @@ managed_cleanup() {
   RUN_NAME=''; RUN_SAS_EXPIRY=''
   rm -f "${RUN_FILES[@]+"${RUN_FILES[@]}"}"
   RUN_FILES=()
-  trap - INT
+  base_traps
 }
 
 # A managed run command: output to blob, no 4 KB cap, and the client polls on its own bounds
@@ -356,7 +398,8 @@ managed_run() {
   RUN_FILES=()
   RUN_NAME="demi-run-$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
   # Best effort in the handlers: a closed terminal must not stop the cleanup at its first echo.
-  trap 'set +e; managed_cleanup live' EXIT
+  # An EXIT trap set inside an EXIT trap never runs, so the deallocate is named here too.
+  trap 'set +e; managed_cleanup live; stop_started_vm' EXIT
   trap 'trap "" PIPE; set +e; managed_cleanup live; exit 130' INT
   trap 'trap "" PIPE; set +e; managed_cleanup live; exit 143' TERM
   grace=$((3 * DEVBOX_RUN_POLL_SLEEP))
@@ -708,10 +751,12 @@ resolve_datasource_env() {
   if [[ -n "${DS_RG:-}" ]]; then
     COSMOS_RG="$DS_RG"
   else
+    # Groups, not accounts: test keeps `demi-cosmos-test` and `notify-cosmos-test` in one group, and
+    # the account itself is named on the VM by COSMOS_ENDPOINT.
     mapfile -t groups < <("$AZ" resource list --subscription "$SUBSCRIPTION" \
-      --resource-type Microsoft.DocumentDB/databaseAccounts --query "[].resourceGroup" -o tsv)
+      --resource-type Microsoft.DocumentDB/databaseAccounts --query "[].resourceGroup" -o tsv | sort -u)
     [[ "${#groups[@]}" -eq 1 ]] \
-      || die "found ${#groups[@]} Cosmos accounts in ${SUBSCRIPTION}; set DS_RG to the one COSMOS_ENDPOINT names"
+      || die "found Cosmos accounts in ${#groups[@]} resource groups in ${SUBSCRIPTION}; set DS_RG to the group of the account COSMOS_ENDPOINT names"
     COSMOS_RG="${groups[0]}"
   fi
 

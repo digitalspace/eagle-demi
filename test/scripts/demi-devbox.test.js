@@ -80,8 +80,10 @@ READY_IV='{"statuses":[{"code":"ProvisioningState/succeeded"},{"code":"PowerStat
 instance_view() {
   if [[ -n "\${AZ_IV_FAIL:-}" ]]; then echo "ERROR: (AuthorizationFailed) no read on the VM" >&2; exit 1; fi
   local n; n="$(count iv)"
-  # AZ_UNREADY_FROM: AZ_IV again from that check on, for a VM that gets busy partway through a run.
-  if [[ "$n" -ge "\${AZ_READY_AFTER:-0}" && "$n" -lt "\${AZ_UNREADY_FROM:-999999}" ]]; then echo "\${AZ_IV_READY:-$READY_IV}"; else echo "\${AZ_IV}"; fi
+  # AZ_UNREADY_FROM: AZ_IV again from that check on (AZ_IV_LATE when set), for a VM that gets busy
+  # partway through a run.
+  if [[ "$n" -ge "\${AZ_UNREADY_FROM:-999999}" ]]; then echo "\${AZ_IV_LATE:-$AZ_IV}"
+  elif [[ "$n" -ge "\${AZ_READY_AFTER:-0}" ]]; then echo "\${AZ_IV_READY:-$READY_IV}"; else echo "\${AZ_IV}"; fi
 }
 
 run_command() {
@@ -216,7 +218,9 @@ remote_reply() {
 
 case "$1 $2" in
   "account show") echo "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" ;;
-  "resource list") group ;;
+  # AZ_COSMOS_GROUPS: one group per Cosmos account, comma separated.
+  "resource list")
+    if [[ "$*" == *DocumentDB* && -n "\${AZ_COSMOS_GROUPS:-}" ]]; then tr ',' '\\n' <<<"\${AZ_COSMOS_GROUPS}"; else group; fi ;;
   "resource show")
     echo "/subscriptions/$sub/resourceGroups/$(group)/providers/Microsoft.ManagedIdentity/userAssignedIdentities/demi-identity-x" ;;
   "role assignment")
@@ -232,6 +236,7 @@ case "$1 $2" in
     esac ;;
   "identity show") echo "fake-principal-id" ;;
   "vm start") [[ -z "\${AZ_START_FAIL:-}" ]] || { echo "ERROR: (OperationNotAllowed) Operation 'start' is not allowed." >&2; exit 1; } ;;
+  "vm deallocate") [[ -z "\${AZ_DEALLOCATE_FAIL:-}" ]] || { echo "ERROR: (AuthorizationFailed) no deallocate on the VM" >&2; exit 1; } ;;
   "vm get-instance-view") instance_view ;;
   "vm run-command") run_command "$3" "$@" ;;
   "storage account") echo "demifctestfake" ;;
@@ -1105,6 +1110,106 @@ test('demi-devbox.sh', async (t) => {
     assert.strictEqual(creates(r.calls).length, 1);
     assert.strictEqual(deletes(r.calls).length, 1);
     assert.ok(lastIndex(r.calls, 'vm run-command delete') < lastIndex(r.calls, 'role assignment delete'));
+  });
+
+  const deallocs = (r) => r.calls.filter(c => c.startsWith('vm deallocate'));
+  // Stopped for the first check, so the run posts the start; ready from the second on.
+  const STARTS_IT = { AZ_IV: iv({ power: 'deallocated', agent: 'none' }), AZ_READY_AFTER: '1' };
+
+  await t.test('deallocates a VM it started, after the last command', () => {
+    const r = run(['drift'], { env: STARTS_IT });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(deallocs(r).length, 1, r.calls.join('\n'));
+    assert.match(deallocs(r)[0], new RegExp(`--subscription ${TEST_SUB} -g c4b0a8-test-rg -n demi-devbox-test --no-wait`));
+    assert.ok(lastIndex(r.calls, 'vm run-command invoke') < firstIndex(r.calls, 'vm deallocate'));
+    assert.ok(lastIndex(r.calls, 'role assignment delete') < firstIndex(r.calls, 'vm deallocate'),
+      'the grant is revoked before the VM goes');
+    assert.match(r.stderr, /deallocate of demi-devbox-test posted/);
+  });
+
+  await t.test('a failed run still deallocates the VM it started, and keeps its own status', () => {
+    const r = run(['drift'], { env: { ...STARTS_IT, AZ_DRIFT: '1' } });
+    assert.strictEqual(r.status, 1);
+    assert.strictEqual(deallocs(r).length, 1, r.calls.join('\n'));
+  });
+
+  await t.test('never deallocates a VM it did not start', () => {
+    assert.deepStrictEqual(deallocs(run(['drift'])), [], 'found running');
+    // Refused start: whichever run's start brought the VM up owns its deallocate.
+    const refused = run(['drift'], { env: { ...STARTS_IT, AZ_READY_AFTER: '2', AZ_START_FAIL: '1' } });
+    assert.strictEqual(refused.status, 0, refused.stderr);
+    assert.deepStrictEqual(deallocs(refused), []);
+  });
+
+  await t.test('DEVBOX_KEEP_RUNNING=1 keeps a VM it started up', () => {
+    const r = run(['drift'], { env: { ...STARTS_IT, DEVBOX_KEEP_RUNNING: '1' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(starts(r).length, 1);
+    assert.deepStrictEqual(deallocs(r), []);
+  });
+
+  await t.test('leaves the VM up while another run command is busy on it, and says how to stop it', () => {
+    const r = run(['drift'], {
+      env: {
+        ...STARTS_IT,
+        AZ_UNREADY_FROM: '2',
+        AZ_IV_LATE: iv({ ext: [['RunCommandLinux', 'ProvisioningState/transitioning']] })
+      }
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(deallocs(r), []);
+    assert.match(r.stderr, new RegExp(
+      `left demi-devbox-test running.*RunCommandLinux.*az vm deallocate --subscription ${TEST_SUB} -g c4b0a8-test-rg -n demi-devbox-test`));
+  });
+
+  await t.test('a refused deallocate is reported, and the run status stands', () => {
+    const r = run(['drift'], { env: { ...STARTS_IT, AZ_DEALLOCATE_FAIL: '1' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stderr, /could not deallocate demi-devbox-test \(az error above\); run: az vm deallocate/);
+  });
+
+  await t.test('a managed run deallocates the VM it started, finished or interrupted', () => {
+    const done = run(['run', '--', 'true'], { env: { ...MANAGED, ...STARTS_IT, AZ_RUN_LINES: '1' } });
+    assert.strictEqual(done.status, 0, done.stderr);
+    assert.strictEqual(deallocs(done).length, 1, done.calls.join('\n'));
+    assert.ok(lastIndex(done.calls, 'vm run-command delete') < firstIndex(done.calls, 'vm deallocate'));
+
+    const term = run(['run', '--', 'true'], {
+      env: { ...SIGNALLED, ...STARTS_IT }, signals: 'called-vm-run-command-show:TERM'
+    });
+    assert.strictEqual(term.status, 143, `${term.signal} ${term.stderr}`);
+    assert.deepStrictEqual(named(term.calls, 'delete'), named(term.calls, 'create'));
+    assert.strictEqual(deallocs(term).length, 1, term.calls.join('\n'));
+
+    const failed = run(['run', '--', 'true'], { env: { ...MANAGED, ...STARTS_IT, AZ_CREATE_FAIL: '1' } });
+    assert.strictEqual(failed.status, 1);
+    assert.strictEqual(deallocs(failed).length, 1, failed.calls.join('\n'));
+  });
+
+  await t.test('Ctrl-C under a role grant still deallocates the VM it started', () => {
+    const r = run(['drift'], { env: { ...SIGNALLED, ...STARTS_IT }, signals: 'called-vm-run-command-show:INT' });
+    assert.notStrictEqual(r.status, 0);
+    assert.strictEqual(deallocs(r).length, 1, r.calls.join('\n'));
+    assert.ok(lastIndex(r.calls, 'role assignment delete') < firstIndex(r.calls, 'vm deallocate'));
+  });
+
+  await t.test('two Cosmos accounts in one group need no DS_RG', () => {
+    const r = run(['apply', '--only', 'documents', '--yes'],
+      { env: { AZ_DS_DIFFERS: '1', AZ_COSMOS_GROUPS: 'c4b0a8-test-rg,c4b0a8-test-rg' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.remote.find(c => c.includes('put-search-datasources.js')), /DS_RG=\S*c4b0a8-test-rg/);
+  });
+
+  await t.test('Cosmos accounts in two groups still need DS_RG, and DS_RG picks the group', () => {
+    const env = { AZ_DS_DIFFERS: '1', AZ_COSMOS_GROUPS: 'c4b0a8-test-rg,other-rg' };
+    const refused = run(['apply', '--only', 'documents', '--yes'], { env });
+    assert.strictEqual(refused.status, 1);
+    assert.match(refused.stderr, /found Cosmos accounts in 2 resource groups .*set DS_RG/);
+    assert.ok(refused.remote.every(c => !c.includes('put-search-datasources.js')));
+
+    const picked = run(['apply', '--only', 'documents', '--yes'], { env: { ...env, DS_RG: 'other-rg' } });
+    assert.strictEqual(picked.status, 0, picked.stderr);
+    assert.match(picked.remote.find(c => c.includes('put-search-datasources.js')), /DS_RG=\S*other-rg/);
   });
 
   await t.test('a missing output blob fails the run and names the role, without the SAS', () => {
