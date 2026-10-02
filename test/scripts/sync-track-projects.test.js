@@ -685,6 +685,17 @@ test('the Track sync keeps the tags DEMI set', async (t) => {
     assert.strictEqual(projects.writes[0].id, '207', 'the premise: this is the re-keyed row');
     assert.deepStrictEqual(projects.writes[0].tags, ['Nicomen Wind']);
   });
+
+  await t.test('on a relink, as the Eagle-only row stands after a tags PUT during the run', async () => {
+    const projects = fakeProjects([eagleOnlyProject({ tags: ['Nicomen Wind'] })], {
+      midRun: (store, find) => store({ ...find(eagleOnlyProject().id), tags: ['Wind', 'Thompson'] })
+    });
+
+    await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    assert.strictEqual(projects.writes[0].id, '207', 'the premise: this is the re-keyed row');
+    assert.deepStrictEqual(projects.writes[0].tags, ['Wind', 'Thompson']);
+  });
 });
 
 test('a relink that loses to a staff-pinned row releases the slug it minted', async () => {
