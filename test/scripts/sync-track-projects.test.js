@@ -664,6 +664,29 @@ test('a relink carries a staff code, its legacy codes and a custom target to the
   assert.deepStrictEqual(links.created, []);
 });
 
+// `tags` is DEMI's own and Track never sends it, so neither the nightly update nor a re-key may
+// rebuild the row without it.
+test('the Track sync keeps the tags DEMI set', async (t) => {
+  await t.test('on an update to the Track fields', async () => {
+    const projects = fakeProjects([storedProject({ tags: ['Nicomen Wind'] })]);
+
+    await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
+      { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    assert.strictEqual(projects.writes[0].name, 'Renamed', 'the premise: the row was rewritten');
+    assert.deepStrictEqual(projects.writes[0].tags, ['Nicomen Wind']);
+  });
+
+  await t.test('on a relink of an Eagle-only row to its Track id', async () => {
+    const projects = fakeProjects([eagleOnlyProject({ tags: ['Nicomen Wind'] })]);
+
+    await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+    assert.strictEqual(projects.writes[0].id, '207', 'the premise: this is the re-keyed row');
+    assert.deepStrictEqual(projects.writes[0].tags, ['Nicomen Wind']);
+  });
+});
+
 test('a relink that loses to a staff-pinned row releases the slug it minted', async () => {
   const projects = fakeProjects([eagleOnlyProject()], {
     midRun: (store) => store(storedProject({ shortCode: 'site-c', shortCodeSource: 'staff' }))

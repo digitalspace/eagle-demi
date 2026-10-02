@@ -25,7 +25,7 @@ const { purgeProject } = require('../../helpers/purge');
 const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
-const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
+const { mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields } = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
 const {
@@ -38,7 +38,7 @@ const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
 const { mirrorError } = require('../../helpers/duplicate-id');
-const { narrowTwin } = require('../../helpers/project-twin');
+const { narrowTwin, mirrorTags, sameTags } = require('../../helpers/project-twin');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -46,6 +46,37 @@ function writeConflict(res, what, id) {
   return res.status(503).json({
     error: 'The record is being written by another request. Try again.'
   });
+}
+
+const MAX_TAGS = 20;
+const MAX_TAG_LENGTH = 100;
+
+const ZERO_WIDTH = /[\u200B-\u200D\u2060\uFEFF]/g;
+
+/** NFC, zero-width characters out, whitespace runs to one space, trimmed. */
+const cleanTag = (tag) => tag.normalize('NFC').replace(ZERO_WIDTH, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Clean each tag, drop empties and case-insensitive repeats. The limits apply to what is left.
+ * @returns {{ tags: string[] } | { error: string }}
+ */
+function normalizeTags(value) {
+  if (!Array.isArray(value) || value.some(tag => typeof tag !== 'string')) {
+    return { error: 'tags must be an array of strings' };
+  }
+  const seen = new Set();
+  const tags = [];
+  for (const tag of value.map(cleanTag)) {
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+  if (tags.length > MAX_TAGS) return { error: `At most ${MAX_TAGS} tags, got ${tags.length}` };
+  if (tags.some(tag => tag.length > MAX_TAG_LENGTH)) {
+    return { error: `Each tag must be at most ${MAX_TAG_LENGTH} characters` };
+  }
+  return { tags };
 }
 
 /**
@@ -276,14 +307,14 @@ exports.createProject = async (req, res) => {
       createdAt: now,
       updatedAt: now
     };
-    // The upsert replaces a row already under this id; its codes are printed, so they carry over,
-    // guarded so a short-code PUT landing in between is not written back over.
+    // The upsert replaces a row already under this id; its codes are printed and its tags are set
+    // only by PUT, so both carry over, guarded so a PUT landing in between is not written back over.
     const written = await writeGuarded({
       existing: await reread(),
       reread,
       attempt: async (current) => ({
         status: 'saved',
-        saved: await projects.upsert(carryShortLink({ ...row }, current),
+        saved: await projects.upsert(carryDemiOnlyFields(carryShortLink({ ...row }, current), current),
           current ? { etag: current._etag } : { create: true })
       }),
       onLost: (_current, attempt) =>
@@ -362,6 +393,12 @@ exports.updateProject = async (req, res) => {
       });
     }
 
+    if (changes.tags !== undefined) {
+      const normalized = normalizeTags(changes.tags);
+      if (normalized.error) return res.status(400).json({ error: normalized.error });
+      changes.tags = normalized.tags;
+    }
+
     // Guarded and rebuilt per try, the same as the push path: a whole-item write from this
     // request's snapshot would silently replace a push that landed while the body was in flight.
     const written = await writeGuarded({
@@ -390,6 +427,12 @@ exports.updateProject = async (req, res) => {
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
     const { saved } = written;
 
+    // Every PUT that sends tags mirrors them, unchanged or not, so a pair that drifted apart heals.
+    // Never across a re-pointed `eagleId`: the new id's row belongs to another project.
+    const mirrorFailure = changes.tags !== undefined && saved.eagleId === existing.eagleId
+      ? await mirrorTags(existing)
+      : null;
+
     // Field NAMES, not values: an audit row records who changed what and when, and a full
     // before/after of arbitrary request bodies would put project content into a table kept for
     // seven years. The visibility pair is recorded too, unchanged though PUT now leaves it — a
@@ -400,7 +443,8 @@ exports.updateProject = async (req, res) => {
       targetId: existing.id,
       projectId: existing.id,
       detail: {
-        fields: Object.keys(changes),
+        fields: Object.keys(changes)
+          .filter(key => key !== 'tags' || !sameTags(existing.tags, changes.tags)),
         isPublishedFrom: existing.isPublished,
         isPublishedTo: saved.isPublished
       }
@@ -408,6 +452,7 @@ exports.updateProject = async (req, res) => {
 
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
+    if (mirrorFailure) return res.status(500).json({ success: false, error: mirrorFailure });
     return res.json(redactForAccess('projects', saved, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
@@ -613,6 +658,7 @@ function mergeEaglePush(doc, existing) {
   // The merge rebuilds the record from the push, so without this a retry of a push whose cascade
   // failed would clear the marker saying that cascade is still owed.
   if (existing && existing.cascadePendingAt) merged.cascadePendingAt = existing.cascadePendingAt;
+  carryDemiOnlyFields(merged, existing);
   return merged;
 }
 

@@ -52,7 +52,9 @@ paths:
             headline, the short headline, the summary, the content and the notification name; on
             ProjectNotification it matches the name, the description, the proponent and the coded fields. Both rank the rows by
             relevance and match the last word as a prefix, the same as Project and Document. On
-            CommentPeriod with no `project`, it matches the period's `informationLabel` or its
+            Project it also matches `tags`, the former and alternate names, and Document also
+            returns the documents of a project whose name, display name, proponent or tags match.
+            On CommentPeriod with no `project`, it matches the period's `informationLabel` or its
             project's name, case-insensitively as a substring, with double quotes removed and runs
             of spaces collapsed; it does not rank. The project-name match needs at least 2
             characters and reads at most 500 matching projects. The other Cosmos datasets ignore
@@ -745,11 +747,17 @@ paths:
         '200':
           description: Project successfully updated.
         '400':
-          description: Body contains a field the caller cannot see, or a vis key.
+          description: >-
+            Body contains a field the caller cannot see, or a vis key, or `tags` outside the limits
+            on `ProjectInput.tags`.
         '401':
           description: Unauthorized.
         '404':
           description: Project not found.
+        '500':
+          description: >-
+            The project was saved, but its `eagle-<eagleId>` copy could not take the new `tags`.
+            Sending the same body again finishes it.
     delete:
       summary: Delete project
       description: Permanently remove a project from the master directory.
@@ -3823,6 +3831,15 @@ components:
           description: >-
             True when `shortLinkUrl` is a staff-set target, false when it is the public page.
             Present only beside `shortLinkUrl`. Response only.
+        tags:
+          type: array
+          items:
+            type: string
+          description: >-
+            Former and alternate names. Set in DEMI only, through `PUT /api/projects/{id}`; the
+            Eagle push, the Track sync and a `POST` onto an existing id keep it. A `PUT` that sends
+            it to a project or its `eagle-<eagleId>` copy then copies the stored list onto the other
+            row, unless the same `PUT` changes `eagleId`. Project keyword search matches it.
     
     ProjectInput:
       type: object
@@ -3839,6 +3856,18 @@ components:
           type: string
         centroid:
           $ref: '#/components/schemas/GeoPoint'
+        tags:
+          type: array
+          items:
+            type: string
+          description: >-
+            Set by `PUT` only. `POST` does not take it from the body, and keeps the stored tags
+            when it replaces an existing id. Each tag is NFC-normalized, zero-width characters are
+            removed, runs of whitespace become one space, and it is trimmed; blank tags and
+            case-insensitive repeats are then dropped. The limits apply to what is left: more than
+            20 tags or a tag over 100 characters is a 400, as is anything but an array of strings.
+            `[]` clears them.
+          example: ["West Coast Oil Pipeline"]
 
     DocumentInput:
       type: object

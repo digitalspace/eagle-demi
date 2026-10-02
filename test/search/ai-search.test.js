@@ -1597,6 +1597,127 @@ test('project searches search the stopword-free copy of the name', async (t) => 
   });
 });
 
+// `tags` holds former and alternate names, so a search for an old name has to reach it from all three
+// places that search the projects index by keyword.
+test('project keyword searches match the stored tags', async (t) => {
+  await t.test('searchProjects', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchProjects({ filter: null, keywords: 'peace river' });
+
+    assert.ok(calls[0].body.searchFields.split(',').includes('tags'), `got: ${calls[0].body.searchFields}`);
+  });
+
+  await t.test('countProjects', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [], '@odata.count': 0 } }));
+
+    await aiSearch.countProjects({ filter: null, keywords: 'peace river' });
+
+    assert.ok(calls[0].body.searchFields.split(',').includes('tags'), `got: ${calls[0].body.searchFields}`);
+  });
+
+  await t.test('the project-name leg of searchDocuments', async (tt) => {
+    const calls = captureFetch(tt, (i) => (i === 1
+      ? { json: { value: [{ id: '207' }], '@odata.count': 1 } }
+      : { json: { value: [{ id: 'd1' }], '@odata.count': 1 } }));
+
+    await aiSearch.searchDocuments({ filter: null, projectFilter: null, keywords: 'peace river', top: 10 });
+
+    assert.ok(calls[1].url.includes('/indexes/projects/'), `the premise: call 1 is the projects leg, got ${calls[1].url}`);
+    assert.ok(calls[1].body.searchFields.split(',').includes('tags'), `got: ${calls[1].body.searchFields}`);
+  });
+
+  await t.test('searchProjects searches the filename copy of the tags', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchProjects({ filter: null, keywords: 'peace river' });
+
+    assert.ok(calls[0].body.searchFields.split(',').includes('tagsTokens'), `got: ${calls[0].body.searchFields}`);
+  });
+
+  await t.test('the project-name leg of searchDocuments searches the filename copy too', async (tt) => {
+    const calls = captureFetch(tt, (i) => (i === 1
+      ? { json: { value: [{ id: '207' }], '@odata.count': 1 } }
+      : { json: { value: [{ id: 'd1' }], '@odata.count': 1 } }));
+
+    await aiSearch.searchDocuments({ filter: null, projectFilter: null, keywords: 'peace river', top: 10 });
+
+    assert.ok(calls[1].url.includes('/indexes/projects/'), `the premise: call 1 is the projects leg, got ${calls[1].url}`);
+    assert.ok(calls[1].body.searchFields.split(',').includes('tagsTokens'), `got: ${calls[1].body.searchFields}`);
+  });
+});
+
+// A release that searches `tags` reaches a live index nobody widened: the projects tab must stay up
+// without the two columns, not 400 on every keyword. The messages are the service's own (test, 2026-09-29).
+test('a projects index that cannot search tags', async (t) => {
+  const refused = (message) => ({ ok: false, status: 400, json: { error: { message } } });
+  const unknown = (field) => refused(`Unknown field '${field}' in search field list.\r\nParameter name: searchFields`);
+  const unsearchable = (field) =>
+    refused(`The field '${field}' in the search field list is not searchable.\r\nParameter name: searchFields`);
+  const answered = { json: { value: [{ id: '207' }], '@odata.count': 1 } };
+  const quiet = (tt) => tt.mock.method(require('../../src/utils/logger').logger, 'error', () => {});
+
+  await t.test('drops tags and tagsTokens when the field is unknown, retries once, and says so', async (tt) => {
+    quiet(tt);
+    const calls = captureFetch(tt, (i) => (i === 0 ? unknown('tags') : answered));
+
+    const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
+
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,searchLabels');
+    assert.deepStrictEqual(res.meta.degraded, { missing: ['tags', 'tagsTokens'] });
+    assert.strictEqual(res.count, 1, 'the page is served');
+  });
+
+  await t.test('drops both when the field is there but not searchable', async (tt) => {
+    quiet(tt);
+    const calls = captureFetch(tt, (i) => (i === 0 ? unsearchable('tags') : answered));
+
+    const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
+
+    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,searchLabels');
+    assert.deepStrictEqual(res.meta.degraded, { missing: ['tags', 'tagsTokens'] });
+  });
+
+  await t.test('a second 400 after the drop is thrown, not stripped again', async (tt) => {
+    quiet(tt);
+    const calls = captureFetch(tt, (i) => (i === 0 ? unknown('tags') : unknown('searchLabels')));
+
+    await assert.rejects(
+      () => aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 }),
+      /HTTP 400/
+    );
+    assert.strictEqual(calls.length, 2);
+  });
+
+  // Deliberate: the pair degrades as one unit, so an index that has tags loses it too until widened.
+  await t.test('an index with tags but no tagsTokens loses both', async (tt) => {
+    quiet(tt);
+    const calls = captureFetch(tt, (i) => (i === 0 ? unknown('tagsTokens') : answered));
+
+    const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
+
+    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,searchLabels');
+    assert.deepStrictEqual(res.meta.degraded, { missing: ['tagsTokens', 'tags'] });
+  });
+
+  await t.test('an index missing both, whose 400 names tagsTokens first, still serves the page',
+    async (tt) => {
+      quiet(tt);
+      // The index: refuses whichever of the two the request still names, tagsTokens first.
+      const calls = captureFetch(tt, (i) => {
+        const fields = calls[i].body.searchFields.split(',');
+        const absent = ['tagsTokens', 'tags'].find(name => fields.includes(name));
+        return absent ? unknown(absent) : answered;
+      });
+
+      const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
+
+      assert.strictEqual(res.count, 1, 'the page is served');
+      assert.deepStrictEqual([...res.meta.degraded.missing].sort(), ['tags', 'tagsTokens']);
+    });
+});
+
 // A searchFields name the index holds but does not mark searchable is a 400 on every keyword query.
 // This holds the code against the committed index; `/health/search-schema` holds it against the live one.
 test('every field the project keyword search names is searchable in the committed index', () => {

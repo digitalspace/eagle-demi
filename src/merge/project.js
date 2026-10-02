@@ -152,6 +152,19 @@ const PUSH_ONLY_FIELDS = [
   'eaglePushedAt', 'cascadePendingAt'
 ];
 
+/** Fields only DEMI writes (`PUT /projects/:id`). No feed sends them, so no re-merge can rebuild them. */
+const DEMI_ONLY_FIELDS = ['tags'];
+
+/** Carry the DEMI-only fields off the stored row onto a rebuilt one. */
+function carryDemiOnlyFields(merged, existing) {
+  if (!merged || !existing) return merged;
+  for (const field of DEMI_ONLY_FIELDS) {
+    const value = existing[field];
+    if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
+  }
+  return merged;
+}
+
 /**
  * Carry forward the Eagle fields a re-merge could not rebuild.
  *
@@ -574,6 +587,7 @@ module.exports = {
   EAGLE_TOP_LEVEL_FIELDS,
   flattenEagleProject,
   carryEagleOnlyFields,
+  carryDemiOnlyFields,
   hasValue,
   TRIMMED_FIELDS,
   BC_BBOX,

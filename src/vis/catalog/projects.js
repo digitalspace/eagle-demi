@@ -82,6 +82,8 @@ module.exports = {
   overallProgress: { defaultVis: 4, maxVis: 4 },
   code: { defaultVis: 4, maxVis: 4 },
   nameSearchTerms: { defaultVis: 4, maxVis: 4 },
+  // Former and alternate names, set in DEMI only; the keyword search matches them.
+  tags: { defaultVis: 4, maxVis: 4 },
 
   // Contacts. eagle-public shows these to anonymous visitors today, so they stay at 4.
   projectLead: { defaultVis: 4, maxVis: 4 },

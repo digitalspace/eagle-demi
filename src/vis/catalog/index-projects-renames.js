@@ -15,6 +15,7 @@ const indexProjects = require('./index-projects');
 const PROJECT_TO_INDEX = {
   // `name` reaches the index twice: itself, and again as `nameTokens` under the `filename` analyzer.
   name: ['name', 'nameTokens'],
+  tags: ['tags', 'tagsTokens'],
   abbreviation: ['displayName'],
   proponentName: ['proponent'],
   // The label columns reach the index a second time, joined into `searchLabels`.

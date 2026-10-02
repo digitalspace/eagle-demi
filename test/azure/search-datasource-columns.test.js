@@ -179,6 +179,43 @@ test('the projects legislationYear column only hands the indexer a number', () =
   assert.strictEqual(idx.fields.find(f => f.name === 'legislationYear').type, 'Edm.Int32');
 });
 
+// `tags` is a Collection(Edm.String), and the same `maxFailedItems: 0` rule holds: one row whose tags
+// are a bare string, an object, or a list holding anything but strings fails the document and stops
+// the whole indexer run.
+test('the projects tags columns only hand the indexer a list of strings', () => {
+  const [, ds] = PAIRS[1];
+  const columns = projectedColumns(ds.container.query);
+
+  for (const alias of ['tags', 'tagsTokens']) {
+    assert.strictEqual(columns.get(alias),
+      '(IS_ARRAY(c.tags) ? ARRAY(SELECT VALUE t FROM t IN c.tags WHERE IS_STRING(t)) : null)');
+  }
+});
+
+// Searchable so an old name finds the project; never retrievable, like `nameTokens` and
+// `searchLabels` (see src/vis/catalog/index-projects.js).
+test('the projects tags field is a searchable, non-retrievable string list', () => {
+  const [idx] = PAIRS[1];
+  const field = idx.fields.find(f => f.name === 'tags');
+
+  assert.ok(field, 'the projects index must declare tags');
+  assert.strictEqual(field.type, 'Collection(Edm.String)');
+  assert.strictEqual(field.searchable, true);
+  assert.strictEqual(field.retrievable, false);
+});
+
+// `tags` under the `filename` analyzer, for the same reason as `nameTokens`.
+test('the projects tagsTokens field is a searchable, non-retrievable string list under filename', () => {
+  const [idx] = PAIRS[1];
+  const field = idx.fields.find(f => f.name === 'tagsTokens');
+
+  assert.ok(field, 'the projects index must declare tagsTokens');
+  assert.strictEqual(field.type, 'Collection(Edm.String)');
+  assert.strictEqual(field.analyzer, 'filename');
+  assert.strictEqual(field.searchable, true);
+  assert.strictEqual(field.retrievable, false);
+});
+
 // A rename in the data source and the dial translation in `src/vis/catalog/index-projects-renames.js`
 // are two files that never see each other. search-drift.test.js walks the entries that EXIST; it
 // cannot see an alias added here with no entry, and that alias is exactly the case where a stored

@@ -202,15 +202,45 @@ Two service rules met on 2026-08-25 while adding it: `stored: false` is rejected
 is refused without `allowIndexDowntime=true` on the PUT — a few seconds offline, so do it, but only
 on the index PUT and never as a default in `apply-search-definitions.js`.
 
-Project keyword search (`PROJECT_SEARCH_FIELDS` in `src/search/ai-search.js`) matches six
-searchable fields: `name`, `displayName`, `description`, `proponent`, `nameTokens` and
-`searchLabels`. The label columns (sector, or the Track sub-type when there is no sector, status,
+Project keyword search (`PROJECT_SEARCH_FIELDS` in `src/search/ai-search.js`) matches eight
+searchable fields: `name`, `displayName`, `description`, `proponent`, `nameTokens`,
+`searchLabels`, `tags` and `tagsTokens`. The label columns (sector, or the Track sub-type when there is no sector, status,
 region, type, phase and EA decision) are not searchable themselves; `demi-projects-ds` joins them
 into `searchLabels`, which is a new field and so a plain widening rather than a rebuild.
 `/health/search-schema` checks the field list against the live index, but the deploy gate asks the
 app that is already running, so it protects only the releases after the one that adds the check.
 The release that first searches `searchLabels` relies on the index being widened by hand before
 it deploys; against an index without the field, every project keyword search is a 400.
+
+`tags` on `projects` holds former and alternate names, set in DEMI through `PUT /api/projects/{id}`,
+so "West Coast Oil Pipeline" finds the project now named "Pacific Link". It is a
+`Collection(Edm.String)`, searchable and not retrievable, under `en.microsoft` like
+`searchLabels`. A collection rather than one joined string because Cosmos SQL has no way to join
+an array, and the indexer maps a JSON array of strings straight onto a collection.
+`tagsTokens` is the same list under the `filename` analyzer, as `nameTokens` is for `name`, so a
+stopword in a tag ("The Mine") still matches. `demi-projects-ds` selects both as
+`(IS_ARRAY(c.tags) ? ARRAY(SELECT VALUE t FROM t IN c.tags WHERE IS_STRING(t)) : null)`: a row
+with no tags indexes as null, and an element that is not a string is left out, since one row the
+collection cannot hold would fail the whole indexer run. The document search's project leg
+searches both too, so documents follow the tag. A `PUT` that sends `tags` to a Track project or
+its `eagle-<eagleId>` copy then copies the stored list onto the other row, unless the same `PUT`
+changes `eagleId`.
+
+Both are new fields, so a plain widening. Same order as `searchLabels`, because the app that ships
+them searches them on every project keyword query and the document search's project leg:
+
+1. PUT the `projects` index and `demi-projects-ds`, then reset and run `projects-indexer`, in one
+   step: `scripts/demi-devbox.sh apply --env test --only projects --datasources demi-projects-ds
+   --yes`, or the `with-search-admin.sh apply` form below. Wait for the run entry to report as
+   many items processed as the `projects` container holds, with none failed.
+2. Check the live index searches the fields: `scripts/search-schema-probe.sh <api base url>`
+   posts the committed definitions to `/health/search-schema` and must answer ok for `projects`.
+3. Deploy the app.
+
+An app deployed ahead of step 1 does not 400: whichever of `tags` and `tagsTokens` the service
+names, the search drops both, retries once, marks the result `meta.degraded` and logs an error;
+the Projects count is not retried and reads as unknown. An index that has `tags` but not
+`tagsTokens` loses both until it is widened. That is a fallback, not the deploy path.
 
 `proponentId` on `projects` was added on 2026-09-07, and it is a plain widening — no analyzer, no
 rebuild. The facet panel filters by Organization ObjectId while the `proponent` column holds the

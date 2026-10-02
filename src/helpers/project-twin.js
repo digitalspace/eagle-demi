@@ -60,4 +60,51 @@ async function narrowTwin(saved, eagleId, cascade) {
   return failure;
 }
 
-module.exports = { narrowTwin };
+/** Whether two stored `tags` values are the same list; absent reads as empty. */
+const sameTags = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
+
+/** The other row of a Track/`eagle-<id>` pair, or null when the row has none. */
+async function readPartner(row) {
+  if (!row.eagleId) return null;
+  const twinId = eagleOnlyProjectId(String(row.eagleId));
+  const partner = String(row.id) === twinId
+    ? await projects.readForWriteByEagleId(row.eagleId)
+    : await projects.readForWrite(twinId);
+  return partner && String(partner.id) !== String(row.id) ? partner : null;
+}
+
+/**
+ * Copy the row's stored `tags` onto the other row of its pair, so both rows (and the documents
+ * each one holds) match the same names, and a removal on one is a removal on both.
+ *
+ * @param {object} row  the row as it was before this write, so the pair is the one it belonged to
+ * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ */
+async function mirrorTags(row) {
+  const read = () => readPartner(row);
+  const logFailure = (cause) => logger.error('[project-twin] could not mirror tags onto the other row of the pair',
+    { projectId: row.id, eagleId: row.eagleId, ...cause });
+  try {
+    const written = await writeGuarded({
+      existing: await read(),
+      reread: read,
+      attempt: async (partner) => {
+        if (!partner) return { status: 'none' };
+        // Stored, not this request's snapshot: a PUT on the partner may have landed since ours.
+        const primary = await projects.readForWrite(row.id);
+        if (!primary || sameTags(partner.tags, primary.tags)) return { status: 'none' };
+        const copy = { ...partner, tags: [...(primary.tags || [])], updatedAt: new Date().toISOString() };
+        await projects.upsert(copy, { etag: partner._etag });
+        return { status: 'saved' };
+      }
+    });
+    if (written.status !== 'conflict') return null;
+    logFailure();
+  } catch (err) {
+    // Caught here so the caller still audits the primary write it already made.
+    logFailure({ error: err.message, stack: err.stack });
+  }
+  return 'The project tags changed, but the other copy of this project could not take them.';
+}
+
+module.exports = { narrowTwin, mirrorTags, sameTags };

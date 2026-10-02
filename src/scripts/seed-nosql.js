@@ -34,8 +34,10 @@ const fs = require('fs');
 
 const sources = require('../seed/sources');
 const transform = require('../seed/transform');
-const { buildRegistry, buildProjectIndex, carryEagleOnlyFields, notificationShadowedProjects } =
-  require('../merge/project');
+const {
+  buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
+  eagleOnlyProjectId, isEagleOnlyProjectId
+} = require('../merge/project');
 
 const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
@@ -446,6 +448,12 @@ async function seed(argv = [], deps = {}) {
           // that blanked those would let an already-applied push land again, or lose a cascade the
           // row is still owed.
           carryEagleOnlyFields(project, existing);
+          carryDemiOnlyFields(project, existing);
+        } else if (project.eagleId && !isEagleOnlyProjectId(project.id)) {
+          // A Track row built for the first time beside its `eagle-<id>` twin takes the twin's
+          // tags, the same as the Track relink.
+          const twinId = eagleOnlyProjectId(String(project.eagleId));
+          carryDemiOnlyFields(project, await repos.projects.getById(access, twinId));
         }
         // Counted as minted, not as held: the carry above already answered for the rest.
         const heldCode = project.shortCode;

@@ -10,6 +10,7 @@ const {
   mergeTrackProject,
   mergeEagleOnlyProject,
   carryEagleOnlyFields,
+  carryDemiOnlyFields,
   buildRegistry,
   buildProjectIndex,
   normalizeCentroid,
@@ -841,5 +842,42 @@ test('carryEagleOnlyFields carries only what the feed cannot rebuild', async (t)
       { pins: [PIN, OTHER_PIN] });
 
     assert.deepStrictEqual(merged.pins, [PIN]);
+  });
+});
+
+// `tags` is written only by `PUT /projects/:id`; no feed sends it, so a re-merge has nothing to
+// rebuild it from and the stored row is the only copy.
+test('carryDemiOnlyFields', async (t) => {
+  await t.test('the stored tags land on the rebuilt row', () => {
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS),
+      { id: '207', tags: ['Old Name', 'Another Name'] });
+
+    assert.deepStrictEqual(merged.tags, ['Old Name', 'Another Name']);
+    assert.strictEqual(merged.id, '207');
+  });
+
+  await t.test('a stored row with no tags gives the rebuilt row none', () => {
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS),
+      { id: '207' });
+
+    assert.strictEqual(merged.tags, undefined, 'absent, not fabricated as []');
+  });
+
+  await t.test('the rebuilt row gets its own copy, so editing it leaves the stored row alone', () => {
+    const stored = { id: '207', tags: ['Old Name'] };
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
+
+    merged.tags.push('New Name');
+
+    assert.deepStrictEqual(stored.tags, ['Old Name']);
+  });
+
+  await t.test('no stored row hands the rebuilt row back as it was', () => {
+    const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207), OPTS);
+
+    const merged = carryDemiOnlyFields(rebuilt, null);
+
+    assert.strictEqual(merged, rebuilt);
+    assert.strictEqual(merged.tags, undefined);
   });
 });
