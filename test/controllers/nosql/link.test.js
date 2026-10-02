@@ -36,7 +36,7 @@ const STAFF = { preferred_username: 'staff.person' };
 /** A caller who reads every level, beside STAFF, who holds no role and reads public rows only. */
 const ADMIN = { preferred_username: 'admin.person', realm_access: { roles: ['sysadmin'] } };
 /** Project 207 at level 1: staff tooling sees it, a caller with no role does not. */
-const HIDDEN_207 = { id: '207', read: readForLevel(1) };
+const HIDDEN_207 = { id: '207', shortCode: 'site-c', legacyShortCodes: ['kq7bt2rm'], read: readForLevel(1) };
 /** `projects.getById` as the repository answers it: null for a row the caller may not read. */
 const gatedGetById = (row) => async (access, id) => (id === row.id && canRead(row, access, projects.PARTITION_FIELD) ? row : null);
 const DEST = 'https://projects.eao.gov.bc.ca/p/207';
@@ -368,6 +368,25 @@ test('short link controller', async (t) => {
     await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: ADMIN }, admin);
 
     assert.deepStrictEqual(staff.body, { error: 'This code belongs to a project. Edit it on the project instead.', projectId: '208' });
+    assert.strictEqual(admin.body.projectId, '207');
+  });
+
+  await t.test('a holder whose code field is dialed above the caller is not named', async () => {
+    const rows = {
+      207: { id: '207', shortCode: 'site-c', read: readForLevel(4), vis: { shortCode: 1 } },
+      208: { id: '208', shortCode: 'kemess', legacyShortCodes: ['site-c'], read: readForLevel(4), vis: { legacyShortCodes: 1 } }
+    };
+    t.mock.method(projects, 'listShortCodeOwners', async () => ['207', '208']);
+    t.mock.method(projects, 'getById', async (access, id) =>
+      (rows[id] && canRead(rows[id], access, projects.PARTITION_FIELD) ? rows[id] : null));
+
+    const staff = mockRes();
+    await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: STAFF }, staff);
+    const admin = mockRes();
+    await linkController.deleteLink({ params: { code: 'site-c' }, query: {}, user: ADMIN }, admin);
+
+    assert.strictEqual(staff.statusCode, 409, 'ownership is judged on every project');
+    assert.deepStrictEqual(Object.keys(staff.body), ['error'], 'a project holding the code in a hidden field is not named');
     assert.strictEqual(admin.body.projectId, '207');
   });
 

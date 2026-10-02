@@ -2482,8 +2482,8 @@ paths:
         Every short link, newest first. Read-only, so any authenticated caller may list — the rows
         carry no ACL and nothing secret. Each row carries `shortUrl` already composed, so a client
         never builds it from a second copy of the base URL. A row whose code a project holds also
-        carries `projectId` and `projectRole` when the caller may read that project; edit it
-        through `PUT /api/projects/{id}/short-code`. If the project lookup fails, rows come back
+        carries `projectId` and `projectRole` when the caller may read that project and its code
+        field; edit it through `PUT /api/projects/{id}/short-code`. If the project lookup fails, rows come back
         without them.
       security:
         - ApiKeyAuth: []
@@ -2542,7 +2542,7 @@ paths:
         '409':
           description: >-
             The supplied `code` is already in use. Body `{ error }`, plus `projectId` when a
-            project holds it and the caller may read that project.
+            project holds it and the caller may read that project and its code field.
 
   /api/links/{code}:
     put:
@@ -2588,8 +2588,9 @@ paths:
         '409':
           description: >-
             The code is a project's current or legacy short code, so it cannot be moved here.
-            Body `{ error }`, plus `projectId` naming a holder the caller may read, a Track project
-            before its Eagle-only copy and a current holder before a legacy one: change it there.
+            Body `{ error }`, plus `projectId` naming a holder whose code field the caller may
+            read, a Track project before its Eagle-only copy and a current holder before a legacy
+            one: change it there.
             Also sent when the record changed after it was read (a project may have taken the
             code); nothing was written.
     delete:
@@ -2618,8 +2619,9 @@ paths:
         '409':
           description: >-
             The code is a project's current or legacy short code, so it cannot be deleted.
-            Body `{ error }`, plus `projectId` naming a holder the caller may read, chosen as for
-            PUT. Also sent when the record changed after it was read; nothing was deleted.
+            Body `{ error }`, plus `projectId` naming a holder whose code field the caller may
+            read, chosen as for PUT. Also sent when the record changed after it was read; nothing
+            was deleted.
 
   /api/me/data:
     get:
@@ -4086,8 +4088,8 @@ components:
         projectId:
           type: string
           description: >-
-            Only on a code a project holds, and only when the caller may read that project. That
-            project's id, for `PUT /api/projects/{id}/short-code`.
+            Only on a code a project holds, and only when the caller may read that project and its
+            code field. That project's id, for `PUT /api/projects/{id}/short-code`.
         projectRole:
           type: string
           enum: [current, legacy]
