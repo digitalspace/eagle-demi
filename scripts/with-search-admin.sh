@@ -160,6 +160,8 @@ if [[ -n "$STALE" ]]; then
   echo "with-search-admin: probably left behind by a run that was killed. This run does not remove it," >&2
   echo "with-search-admin: so that grant outlives this window until somebody does:" >&2
   echo "  az role assignment delete --ids <id above>" >&2
+  echo "with-search-admin: a killed apply run also leaves its mode 600 curl config, which holds the" >&2
+  echo "with-search-admin: admin key, in ${TMPDIR:-/tmp} (tmp.*); delete it." >&2
 fi
 
 ASSIGNMENT_ID=''
@@ -325,6 +327,12 @@ if [[ -z "$JOB_ID" ]]; then
   # Same reasoning as the empty assignment id above: an accepted request with no id cannot be
   # followed, so the only honest thing is to stop rather than revoke under a job that is running.
   echo "with-search-admin: the apply was accepted but named no job — it may still be running:" >&2
+  echo "  ${RESPONSE}" >&2
+  exit 1
+fi
+# The id goes into the poll URL; the route only answers to a UUID (src/repositories/bulk-downloads.js JOB_ID).
+if [[ ! "$JOB_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+  echo "with-search-admin: the apply named a job id that is not a UUID — not polling it; it may still be running:" >&2
   echo "  ${RESPONSE}" >&2
   exit 1
 fi

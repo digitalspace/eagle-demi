@@ -88,6 +88,8 @@ const WIRED = [
     'the API module call — without it LINK_BASE_URL is empty and short links resolve nowhere'],
   ['allowedClients', /^\s+allowedClients: allowedClients$/m,
     'the API module call — without it DEMI_ALLOWED_CLIENTS is empty and the app refuses to boot'],
+  ['eagleMirrorPrincipals', /^\s+eagleMirrorPrincipals: eagleMirrorPrincipals$/m,
+    'the API module call — without it DEMI_EAGLE_MIRROR_PRINCIPALS is always the module default'],
   ['ssoAudience', /^\s+ssoAudience: ssoAudience$/m,
     'the API module call — without it SSO_AUDIENCE cannot be set once the aud claim is measured'],
   ['syncTeamsSchedule', /^\s+syncTeamsSchedule: syncTeamsSchedule$/m,
@@ -1321,6 +1323,18 @@ const APP_MODULES = [
 ];
 
 const moduleBlock = (modulePath) => MAIN.split(/^module /m).find(b => b.includes(`'${modulePath}'`));
+
+// main.bicep composes the app's BUDGET_NAME instead of reading the module output, which is empty in
+// an application-only run; the two literals must stay equal.
+test('main.bicep builds the same budget name cost-budget.bicep creates', () => {
+  const COST_BUDGET = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cost-budget.bicep'), 'utf8');
+  const literal = (src) => (/^var budgetName = ('[^']+')$/m.exec(src) || [])[1];
+  assert.ok(literal(COST_BUDGET), 'cost-budget.bicep must name its budget with a budgetName var');
+  assert.strictEqual(literal(MAIN), literal(COST_BUDGET),
+    'the app reads the budget by the name main.bicep passes it as BUDGET_NAME');
+  assert.match(moduleBlock('./modules/cost-budget.bicep'), /^\s+environmentName: environmentName$/m,
+    'both literals interpolate environmentName, so the module must get the same value');
+});
 
 test('every foundation module is gated on deployFoundation', () => {
   assert.match(MAIN, /^param deployFoundation bool = false$/m,

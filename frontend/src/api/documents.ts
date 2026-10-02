@@ -129,7 +129,9 @@ export async function getDownloadUrl(documentId: string, projectId?: string): Pr
       throw new Error('You do not have permission to download this document.', { cause: err });
     }
     failure =
-      err instanceof ApiError ? new Error(`Could not prepare download (HTTP ${err.status}).`) : err;
+      err instanceof ApiError
+        ? new Error(`Could not prepare download (HTTP ${err.status}).`, { cause: err })
+        : err;
   }
 
   if (presigned) return presigned;

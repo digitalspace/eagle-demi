@@ -145,7 +145,10 @@ describe('fetchDocument', () => {
   it('raises anything else', async () => {
     respond(json({}, 500));
 
-    await expect(fetchDocument('d1')).rejects.toThrow('Could not load the document (HTTP 500).');
+    const err = await fetchDocument('d1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('Could not load the document (HTTP 500).');
+    expect((err as Error).cause).toMatchObject({ name: 'ApiError', status: 500 });
   });
 });
 
@@ -169,9 +172,9 @@ describe('getDownloadUrl', () => {
   it('treats a refusal as an answer, never falling back to the public copy', async () => {
     respond(json({ error: 'forbidden' }, 403), json({ error: 'forbidden' }, 403));
 
-    await expect(getDownloadUrl(SEEDED_ID)).rejects.toThrow(
-      'You do not have permission to download this document.',
-    );
+    const err = await getDownloadUrl(SEEDED_ID).catch((e: unknown) => e);
+    expect((err as Error).message).toBe('You do not have permission to download this document.');
+    expect((err as Error).cause).toMatchObject({ name: 'ApiError', status: 403 });
   });
 
   it('falls back to the public EPIC copy when a seeded document fails', async () => {
@@ -183,7 +186,10 @@ describe('getDownloadUrl', () => {
   it('raises for a DEMI-native document rather than sending the reader to a dead URL', async () => {
     respond(json({}, 500));
 
-    await expect(getDownloadUrl(NATIVE_ID)).rejects.toThrow('Could not prepare download (HTTP 500).');
+    const err = await getDownloadUrl(NATIVE_ID).catch((e: unknown) => e);
+    expect((err as Error).message).toBe('Could not prepare download (HTTP 500).');
+    // The HTTP body and stack ride on the cause, which is what telemetry records.
+    expect((err as Error).cause).toMatchObject({ name: 'ApiError', status: 500 });
   });
 
   it('raises when the API answered without a link', async () => {

@@ -100,25 +100,22 @@ done
 # a .bicepparam file, so an environment variable is the only way to pass the switch through.
 export DEPLOY_FOUNDATION
 
-# SUBSCRIPTION and RESOURCE_GROUP are repeated in scripts/apply-cosmos-index.sh; change both together.
+# shellcheck source-path=SCRIPTDIR source=lib/azure-env.sh
+source "${REPO_ROOT}/scripts/lib/azure-env.sh"
+if ! demi_azure_env "$ENVIRONMENT"; then
+  echo -e "${RED}✗ unknown environment '${ENVIRONMENT}'. Use: test | prod${NC}" >&2
+  exit 2
+fi
 case "$ENVIRONMENT" in
   test)
-    SUBSCRIPTION='7897ceb1-9a86-4639-87d7-7f9ff67142b3'
-    RESOURCE_GROUP='c4b0a8-test-rg'
     # Direct azurewebsites.net access is platform-403'd since the APIM cutover; probe the gateway.
     APIM_HOST="demi-apim-${ENVIRONMENT}.azure-api.net"
     ;;
   prod)
-    SUBSCRIPTION='be5924ac-1083-4a1b-be92-7b444882cfd9'
-    RESOURCE_GROUP='rg-demi-prod'
     # This box has NO prod write context. The name below is the read-only ServiceAccount context
     # for this workspace, used here only to read the devbox public key out of 6cdc9e-prod. Export
     # it by hand to override.
     OC_CONTEXT='6cdc9e-prod/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd'
-    ;;
-  *)
-    echo -e "${RED}✗ unknown environment '${ENVIRONMENT}'. Use: test | prod${NC}" >&2
-    exit 2
     ;;
 esac
 

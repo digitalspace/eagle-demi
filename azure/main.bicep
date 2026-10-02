@@ -117,6 +117,10 @@ param keycloakClientId string = 'eagle-admin-console'
 @description('Comma-separated Keycloak client ids (token azp) permitted to call this API.')
 param allowedClients string
 
+// Empty refuses every writer, so blanking it closes the Eagle mirror.
+@description('Comma-separated registry row ids permitted on PUT /eagle/*.')
+param eagleMirrorPrincipals string = 'apim:eagle-api'
+
 // Empty, not 'account': the audience Keycloak actually mints is unmeasured, and a wrong value
 // rejects every token. Empty means the check is not enforced.
 @description('Expected JWT aud claim. Empty disables audience verification.')
@@ -725,6 +729,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     bulkMaxJobAgeMs: bulkMaxJobAgeMs
     keycloakClientId: keycloakClientId
     allowedClients: allowedClients
+    eagleMirrorPrincipals: eagleMirrorPrincipals
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
     edgeSecretUri: edgeSecretUri

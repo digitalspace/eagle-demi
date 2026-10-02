@@ -30,11 +30,17 @@ function parseArgs(argv) {
   return args;
 }
 
-/** The patch ops one row needs; empty when every label is already trimmed. */
+/**
+ * The patch ops one row needs; empty when every label is already trimmed. A whitespace-only label
+ * is removed, as the merge leaves a blank label out rather than storing ''.
+ */
 function trimOps(row) {
   return TRIMMED_FIELDS
     .filter(field => typeof row[field] === 'string' && row[field].trim() !== row[field])
-    .map(field => ({ op: 'set', path: `/${field}`, value: row[field].trim() }));
+    .map((field) => {
+      const value = row[field].trim();
+      return value ? { op: 'set', path: `/${field}`, value } : { op: 'remove', path: `/${field}` };
+    });
 }
 
 function summaryLine(s) {

@@ -12,14 +12,17 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const SCRIPT = path.resolve(__dirname, '..', '..', 'scripts', 'apply-cosmos-index.sh');
+
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const SCRIPT = path.join(REPO_ROOT, 'scripts', 'apply-cosmos-index.sh');
 
 const which = (cmd) => spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8' });
-const azOnPath = which('az').status === 0;
+// `az bicep version` fails without a local Bicep CLI, where `az bicep build` would try to download one.
+const bicepReady = spawnSync('az', ['bicep', 'version', '--only-show-errors'], { encoding: 'utf8' }).status === 0;
 const REAL_DIFF = which('diff').stdout.trim();
 
 test('extract reads the documents policy from the real cosmos-nosql.bicep', {
-  skip: azOnPath ? false : 'az not on PATH, cannot compile bicep',
+  skip: bicepReady ? false : 'no local Bicep CLI (az bicep version failed), cannot compile bicep',
 }, () => {
   const run = spawnSync('bash', [SCRIPT, 'extract', 'documents'], { encoding: 'utf8' });
   assert.strictEqual(run.status, 0, run.stderr);
@@ -32,15 +35,16 @@ test('extract reads the documents policy from the real cosmos-nosql.bicep', {
   assert.ok(excluded.includes('/*'));
 });
 
-// `bicep build` prints $STUB_ARM; `container show` prints $STUB_LIVE; `container update` copies its
+// `bicep build` prints $STUB_ARM; `container show` prints a resource with $STUB_LIVE as its policy,
+// plus the $FAKE_AZ_SHOW_EXTRA fields, or fails with $FAKE_AZ_SHOW_ERR. `container update` copies its
 // @file over $STUB_LIVE unless FAKE_AZ_UPDATE_NOOP=1. Every call is logged with its full argv.
 const FAKE_AZ = `#!/usr/bin/env bash
 echo "$*" >> "$STUB_LOG"
 case "$1 $2 $4" in
   'bicep build '*) cat "$STUB_ARM" ;;
   'cosmosdb sql show')
-    [ "\${FAKE_AZ_SHOW_FAIL:-0}" = 1 ] && { echo 'ERROR: Resource Not Found' >&2; exit 3; }
-    cat "$STUB_LIVE" ;;
+    [ -n "\${FAKE_AZ_SHOW_ERR:-}" ] && { echo "$FAKE_AZ_SHOW_ERR" >&2; exit 3; }
+    jq --argjson extra "\${FAKE_AZ_SHOW_EXTRA:-null}" '{indexingPolicy: .} + $extra' "$STUB_LIVE" ;;
   'cosmosdb sql update')
     [ "\${FAKE_AZ_UPDATE_NOOP:-0}" = 1 ] && exit 0
     for a in "$@"; do case "$a" in @*) cp "\${a#@}" "$STUB_LIVE" ;; esac; done ;;
@@ -48,10 +52,12 @@ esac
 `;
 
 // Clean tree, fetch works, bicep same as origin/main by default. FAKE_GIT_DIRTY, FAKE_GIT_STATUS_FAIL,
-// FAKE_GIT_FETCH_FAIL, FAKE_GIT_BICEP_DIFFERS, FAKE_GIT_DIFF_FAIL (each =1) flip one.
+// FAKE_GIT_FETCH_FAIL, FAKE_GIT_BICEP_DIFFERS, FAKE_GIT_DIFF_FAIL (each =1) flip one. A call without
+// -C $STUB_REPO exits 97, so the script cannot read the caller's working directory by mistake.
 const FAKE_GIT = `#!/usr/bin/env bash
 echo "$*" >> "$STUB_GIT_LOG"
-[ "$1" = -C ] && shift 2
+{ [ "$1" = -C ] && [ "$2" = "$STUB_REPO" ]; } || exit 97
+shift 2
 case "$1" in
   status)
     [ "\${FAKE_GIT_STATUS_FAIL:-0}" = 1 ] && exit 128
@@ -129,6 +135,7 @@ function stubRun(args, { arm = armWith({ documents: DECLARED }), live = LIVE_MIS
         STUB_LIVE: path.join(dir, 'live.json'),
         STUB_LOG: path.join(dir, 'az.log'),
         STUB_GIT_LOG: path.join(dir, 'git.log'),
+        STUB_REPO: REPO_ROOT,
       },
     });
     return {
@@ -206,13 +213,48 @@ test('--live applies the declared policy to the named account and confirms it', 
   assert.doesNotMatch(run.gitCalls, /fetch|diff/);
 });
 
+const LIVE_WITH_OLD = { ...LIVE_SAME, includedPaths: [...LIVE_SAME.includedPaths, { path: '/old/?' }] };
+
 test('--live warns before removing an index path, then applies', () => {
-  const live = { ...LIVE_SAME, includedPaths: [...LIVE_SAME.includedPaths, { path: '/old/?' }] };
-  const run = stubRun(['test', 'documents', '--live'], { live });
+  const run = stubRun(['test', 'documents', '--live'], { live: LIVE_WITH_OLD });
   assert.strictEqual(run.status, 0, run.stderr);
-  assert.match(run.stderr, /^WARNING: removes index paths$/m);
+  assert.match(run.stderr, /^WARNING: drops indexing: removes included path \/old\/\?$/m);
   assert.match(run.azCalls, /container update/);
 });
+
+test('a dry run warns about a removed index path before it exits 3', () => {
+  const run = stubRun(['test', 'documents'], { live: LIVE_WITH_OLD });
+  assert.strictEqual(run.status, 3, run.stderr);
+  assert.match(run.stderr, /^WARNING: drops indexing: removes included path \/old\/\?$/m);
+});
+
+test('a dry run warns about a new excluded path and indexingMode none', () => {
+  const declared = { ...DECLARED, indexingMode: 'none', excludedPaths: [{ path: '/*' }, { path: '/_etag/?' }, { path: '/big/*' }] };
+  const run = stubRun(['test', 'documents'], { arm: armWith({ documents: declared }), live: LIVE_SAME });
+  assert.strictEqual(run.status, 3, run.stderr);
+  assert.match(run.stderr, /^WARNING: drops indexing: adds excluded path \/big\/\*$/m);
+  assert.match(run.stderr, /^WARNING: drops indexing: sets indexingMode none$/m);
+  assert.doesNotMatch(run.stderr, /removes/);
+});
+
+test('a dry run warns about a removed composite index', () => {
+  const declared = { ...GEO_DECLARED, compositeIndexes: [GEO_DECLARED.compositeIndexes[1]] };
+  const run = stubRun(['test', 'geo'], { arm: armWith({ geo: declared }), live: GEO_DECLARED });
+  assert.strictEqual(run.status, 3, run.stderr);
+  assert.match(run.stderr, /^WARNING: drops indexing: removes composite index \/a, \/b$/m);
+});
+
+for (const [field, extra] of [
+  ['analyticalStorageTtl', { analyticalStorageTtl: -1 }],
+  ['computedProperties', { computedProperties: [{ name: 'lower', query: 'SELECT VALUE LOWER(c.name) FROM c' }] }],
+]) {
+  test(`--live refuses a container that sets ${field}, which the update drops`, () => {
+    const run = stubRun(['test', 'documents', '--live'], { env: { FAKE_AZ_SHOW_EXTRA: JSON.stringify(extra) } });
+    assert.strictEqual(run.status, 2, run.stderr);
+    assert.match(run.stderr, new RegExp(`refusing --live: demi-cosmos-test/demi/documents sets ${field}`));
+    assert.doesNotMatch(run.azCalls, /container update/);
+  });
+}
 
 test('--live refuses while cosmos-nosql.bicep has uncommitted changes', () => {
   const run = stubRun(['test', 'documents', '--live'], { env: { FAKE_GIT_DIRTY: '1' } });
@@ -293,14 +335,23 @@ test('prod dry run needs no CONFIRM_PROD and reads the prod account', () => {
 });
 
 test('a container missing on the account fails and says it may be conditional', () => {
-  const run = stubRun(['test', 'documents'], { env: { FAKE_AZ_SHOW_FAIL: '1' } });
+  const run = stubRun(['test', 'documents'], { env: { FAKE_AZ_SHOW_ERR: 'ERROR: Resource Not Found' } });
   assert.strictEqual(run.status, 1);
   assert.match(run.stderr, /container documents not found on demi-cosmos-test \(it may be conditional in bicep\)/);
 });
 
-test('a diff error exits 2 instead of reading as drift', () => {
+test('any other show failure prints the az error and does not claim the container is missing', () => {
+  const err = 'ERROR: AADSTS700082: The refresh token has expired due to inactivity.';
+  const run = stubRun(['test', 'documents'], { env: { FAKE_AZ_SHOW_ERR: err } });
+  assert.strictEqual(run.status, 1);
+  assert.ok(run.stderr.includes(err), run.stderr);
+  assert.match(run.stderr, /could not read container documents on demi-cosmos-test; see the az error above/);
+  assert.doesNotMatch(run.stderr, /not found/);
+});
+
+test('a diff error exits 1 instead of reading as drift', () => {
   const run = stubRun(['test', 'documents', '--live'], { env: { FAKE_DIFF_FAIL: '1' } });
-  assert.strictEqual(run.status, 2);
+  assert.strictEqual(run.status, 1);
   assert.match(run.stderr, /diff failed \(exit 2\)/);
   assert.doesNotMatch(run.azCalls, /container update/);
 });
