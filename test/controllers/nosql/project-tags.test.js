@@ -50,9 +50,12 @@ const STORED = { id: '207', trackProjectId: 207, name: 'Site C Clean Energy', _e
 // Built from code points so the characters under test are visible in this file.
 const ZWSP = String.fromCharCode(0x200B);
 const ZWJ = String.fromCharCode(0x200D);
+const ZWNJ = String.fromCharCode(0x200C);
 const WORD_JOINER = String.fromCharCode(0x2060);
 const COMBINING_ACUTE = String.fromCharCode(0x0301);
 const E_ACUTE = String.fromCharCode(0x00E9);
+const WOMAN = String.fromCodePoint(0x1F469);
+const EAR_OF_RICE = String.fromCodePoint(0x1F33E);
 
 test('PUT /projects/:id tags', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -176,6 +179,28 @@ test('PUT /projects/:id tags', async (t) => {
 
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(store.saved().tags, ['Site C', 'Peace River']);
+  });
+
+  await t.test('a ZWJ or ZWNJ inside a word or emoji is kept; one beside a space or an end goes', async () => {
+    const store = stage(t, STORED);
+    const farmer = `${WOMAN}${ZWJ}${EAR_OF_RICE}`;
+    // Persian "mi-khaham": the ZWNJ keeps the prefix from joining the verb.
+    const persian = `\u0645\u06CC${ZWNJ}\u062E\u0648\u0627\u0647\u0645`;
+
+    const res = await put({ tags: [`${farmer} Farm`, persian, `${ZWNJ}Site C${ZWJ}`] });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(store.saved().tags, [`${farmer} Farm`, persian, 'Site C']);
+  });
+
+  await t.test('the 100-character limit counts characters, not UTF-16 units', async () => {
+    const store = stage(t, STORED);
+
+    const res = await put({ tags: [EAR_OF_RICE.repeat(100)] });
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(store.saved().tags, [EAR_OF_RICE.repeat(100)]);
+    assert.strictEqual((await put({ tags: [EAR_OF_RICE.repeat(101)] })).statusCode, 400);
   });
 
   await t.test('a run of inner whitespace becomes one space', async () => {
@@ -307,6 +332,26 @@ test('the audit row of a PUT names tags only when they changed', async (t) => {
 
     assert.deepStrictEqual(fields, ['tags']);
   });
+
+  await t.test('tags are compared with the row the write replaced, not the first read', async () => {
+    const rows = [];
+    audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
+    // First read: tags as sent. Then another PUT lands, so the guarded write rebuilds off a row
+    // whose tags differ, and the tags this PUT writes are a change after all.
+    const reads = [{ ...STORED, tags: ['Site C'] }, { ...STORED, tags: ['Peace River'], _etag: '"0x2"' }];
+    t.mock.method(projects, 'getById', async () => structuredClone(reads.length > 1 ? reads.shift() : reads[0]));
+    t.mock.method(projects, 'upsert', async (doc) => {
+      if (doc._etag === '"0x1"') throw Object.assign(new Error('HTTP 412'), { code: 412 });
+      return doc;
+    });
+    t.mock.method(logger, 'warn', () => {});
+
+    const res = await put({ tags: ['Site C'] });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(rows.length, 1, 'the premise: one audit row per PUT');
+    assert.deepStrictEqual(rows[0].Detail.fields, ['tags']);
+  });
 });
 
 // A Track project and the `eagle-<id>` row the Track relink keeps beside it are one project to a
@@ -393,6 +438,17 @@ test('PUT /projects/:id tags reach the other row of a Track/Eagle pair', async (
       assert.strictEqual(mirrored.ActorId, 'kc-staff-1');
       assert.deepStrictEqual(mirrored.Detail, { fields: ['tags'], copiedFrom: '207' });
     });
+
+  await t.test('the PUT is audited before the copy onto the other row', async () => {
+    const rows = [];
+    audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
+    pairStore([TRACK_ROW, TWIN_ROW]);
+
+    const res = await put({ tags: ['Site C'] });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(rows.map(row => row.Action), ['project.update', 'project.mirrorTags']);
+  });
 
   await t.test('a Track row the caller cannot read takes the tags sent on its twin, audited', async () => {
     const strictTrack = { ...TRACK_ROW, read: ['team'], description: 'Track-only text' };
@@ -574,4 +630,21 @@ test('POST /projects onto an existing id keeps the stored tags', async (t) => {
   assert.strictEqual(res.statusCode, 201);
   assert.strictEqual(saved.name, 'Site C', 'the premise: the row was rebuilt from the body');
   assert.deepStrictEqual(saved.tags, ['Peace River Site C']);
+});
+
+// A relinked Track row keeps its `eagle-<id>` twin by `eagleId`; a POST that nulled it split the
+// pair, and later tag PUTs stopped reaching the twin.
+test('POST /projects onto a relinked Track row keeps its eagleId', async (t) => {
+  t.mock.method(projects, 'getById', async () => ({ ...STORED, eagleId: PROJECT_EAGLE_ID }));
+  let saved;
+  t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+  const res = mockRes();
+  await projectController.createProject({
+    params: {}, query: {}, user: STAFF,
+    body: { trackProjectId: 207, name: 'Site C', centroid: { type: 'Point', coordinates: [-121.2, 56.2] } }
+  }, res);
+
+  assert.strictEqual(res.statusCode, 201);
+  assert.strictEqual(saved.eagleId, PROJECT_EAGLE_ID);
 });

@@ -178,16 +178,19 @@ async function syncProjects(apiProjects, opts = {}) {
     }
   };
 
-  /** Inserts a row this run read as absent. One created behind the run is the next run's. */
-  const insert = async (id, row) => {
+  /**
+   * Inserts a row this run read as absent. One created behind the run is the next run's.
+   * `build` runs per live try, so a row built off another stored row sees that row as it stands.
+   */
+  const insert = async (id, build) => {
     if (!live) {
-      if (await mint(row)) summary.shortLinks++;
+      if (await mint(await build())) summary.shortLinks++;
       return;
     }
     const written = await writeMinting(id, null, async (current, mintRow) => {
       if (current) return { status: 'exists' };
       // A copy per try: a lost try's code is released before this one, so it must not ride along.
-      const fresh = { ...row };
+      const fresh = { ...(await build()) };
       const minted = await mintRow(fresh);
       await repo.upsert(fresh, { create: true });
       return { status: 'saved', minted };
@@ -227,7 +230,7 @@ async function syncProjects(apiProjects, opts = {}) {
 
     try {
       if (relink) {
-        // A RE-KEY, NOT A NEW RECORD. `...relink` keeps the boundary stamps and `sources.wildfire`,
+        // A RE-KEY, NOT A NEW RECORD. `...twin` keeps the boundary stamps and `sources.wildfire`,
         // the merge re-owns the identity and the Track fields, and `read`/`isPublished`/`vis` come
         // back off the stored row: a re-key must not move a level either.
         //
@@ -235,11 +238,15 @@ async function syncProjects(apiProjects, opts = {}) {
         // with it: `buildRegistry` simply stops producing it, and `--reconcile` keys Eagle-only
         // rows on `eagleId` against the Eagle fetch, so a row whose Eagle project still exists is
         // not surplus. Removing one is `purgeProject`'s job, and that cascades to its documents.
-        const merged = mergeTrackProject(track, eagleOf(relink), mergeOpts);
         summary.relinked++;
         rekeyed.add(String(relink.eagleId));
         await heal(relink);
-        await insert(id, { ...relink, ...merged, read: relink.read, isPublished: relink.isPublished });
+        // The twin as stored now, not at run start: a tags PUT or a narrowing since must carry.
+        await insert(id, async () => {
+          const twin = (live && await repo.getById(systemAccess(), relink.id)) || relink;
+          const merged = mergeTrackProject(track, eagleOf(twin), mergeOpts);
+          return { ...twin, ...merged, read: twin.read, isPublished: twin.isPublished };
+        });
         continue;
       }
 
@@ -250,7 +257,7 @@ async function syncProjects(apiProjects, opts = {}) {
         merged.read = readForLevel(1);
         merged.isPublished = false;
         summary.created++;
-        await insert(id, merged);
+        await insert(id, async () => merged);
         continue;
       }
 

@@ -25,7 +25,9 @@ const { purgeProject } = require('../../helpers/purge');
 const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
-const { mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields } = require('../../merge/project');
+const {
+  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, TRIMMED_FIELDS
+} = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
 const {
@@ -51,10 +53,13 @@ function writeConflict(res, what, id) {
 const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 100;
 
-const ZERO_WIDTH = /[\u200B-\u200D\u2060\uFEFF]/g;
+const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/g;
+// ZWNJ and ZWJ shape some scripts and emoji, so only those joining nothing (an end or a space) go.
+const LOOSE_JOINER = /(?<=^|\s)[\u200C\u200D]+|[\u200C\u200D]+(?=\s|$)/g;
 
 /** NFC, zero-width characters out, whitespace runs to one space, trimmed. */
-const cleanTag = (tag) => tag.normalize('NFC').replace(ZERO_WIDTH, '').replace(/\s+/g, ' ').trim();
+const cleanTag = (tag) => tag.normalize('NFC').replace(ZERO_WIDTH, '').replace(LOOSE_JOINER, '')
+  .replace(/\s+/g, ' ').trim();
 
 /**
  * Clean each tag, drop empties and case-insensitive repeats. The limits apply to what is left.
@@ -73,10 +78,51 @@ function normalizeTags(value) {
     tags.push(tag);
   }
   if (tags.length > MAX_TAGS) return { error: `At most ${MAX_TAGS} tags, got ${tags.length}` };
-  if (tags.some(tag => tag.length > MAX_TAG_LENGTH)) {
+  // Code points, not UTF-16 units: an emoji or a CJK extension character is one character.
+  if (tags.some(tag => [...tag].length > MAX_TAG_LENGTH)) {
     return { error: `Each tag must be at most ${MAX_TAG_LENGTH} characters` };
   }
   return { tags };
+}
+
+/** Labels stored the way the merge stores them: the index filters on them by exact match. */
+function trimLabels(row) {
+  for (const field of TRIMMED_FIELDS) {
+    if (typeof row[field] === 'string') row[field] = row[field].trim();
+  }
+  return row;
+}
+
+/**
+ * A number or a four-digit string to a number, blank to null. The index field is an Int32, so
+ * anything else is refused rather than stored.
+ * @returns {{ value: number|null } | { error: string }}
+ */
+function normalizeLegislationYear(value) {
+  if (value === null || value === '') return { value: null };
+  const year = typeof value === 'string' && /^\d{4}$/.test(value.trim()) ? Number(value) : value;
+  return Number.isInteger(year) && year >= 1000 && year <= 9999
+    ? { value: year }
+    : { error: 'legislationYear must be a year, such as 2002 or 2018' };
+}
+
+/**
+ * A PUT body's tags, labels and year, cleaned in place.
+ * @returns {string|null} the message to 400 with, or null
+ */
+function cleanChanges(changes) {
+  if (changes.tags !== undefined) {
+    const normalized = normalizeTags(changes.tags);
+    if (normalized.error) return normalized.error;
+    changes.tags = normalized.tags;
+  }
+  if (changes.legislationYear !== undefined) {
+    const year = normalizeLegislationYear(changes.legislationYear);
+    if (year.error) return year.error;
+    changes.legislationYear = year.value;
+  }
+  trimLabels(changes);
+  return null;
 }
 
 /**
@@ -274,7 +320,7 @@ exports.createProject = async (req, res) => {
     const now = new Date().toISOString();
     const id = String(trackProjectId);
     const reread = () => projects.getById(systemAccess(), id);
-    const row = {
+    const row = trimLabels({
       id,
       trackProjectId: Number(trackProjectId),
       eagleId: null,
@@ -306,15 +352,17 @@ exports.createProject = async (req, res) => {
       sources: {},
       createdAt: now,
       updatedAt: now
-    };
+    });
     // The upsert replaces a row already under this id; its codes are printed and its tags are set
     // only by PUT, so both carry over, guarded so a PUT landing in between is not written back over.
+    // Its `eagleId` too: on a relinked Track row, null would split it from its `eagle-<id>` twin.
     const written = await writeGuarded({
       existing: await reread(),
       reread,
       attempt: async (current) => ({
         status: 'saved',
-        saved: await projects.upsert(carryDemiOnlyFields(carryShortLink({ ...row }, current), current),
+        saved: await projects.upsert(
+          carryDemiOnlyFields(carryShortLink({ ...row, eagleId: current?.eagleId ?? null }, current), current),
           current ? { etag: current._etag } : { create: true })
       }),
       onLost: (_current, attempt) =>
@@ -401,11 +449,8 @@ exports.updateProject = async (req, res) => {
       });
     }
 
-    if (changes.tags !== undefined) {
-      const normalized = normalizeTags(changes.tags);
-      if (normalized.error) return res.status(400).json({ error: normalized.error });
-      changes.tags = normalized.tags;
-    }
+    const invalid = cleanChanges(changes);
+    if (invalid) return res.status(400).json({ error: invalid });
 
     // Guarded and rebuilt per try, the same as the push path: a whole-item write from this
     // request's snapshot would silently replace a push that landed while the body was in flight.
@@ -423,6 +468,7 @@ exports.updateProject = async (req, res) => {
         };
         return {
           status: 'saved',
+          replaced: current,
           saved: await projects.upsert(row, { etag: current._etag })
         };
       },
@@ -433,18 +479,13 @@ exports.updateProject = async (req, res) => {
 
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
-    const { saved } = written;
-
-    // Every PUT that sends tags mirrors them, unchanged or not, so a pair that drifted apart heals.
-    // Never across a re-pointed `eagleId`: the new id's row belongs to another project.
-    const mirrorFailure = changes.tags !== undefined && saved.eagleId === existing.eagleId
-      ? await mirrorTags(existing, req)
-      : null;
+    const { saved, replaced } = written;
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full
     // before/after of arbitrary request bodies would put project content into a table kept for
     // seven years. The visibility pair is recorded too, unchanged though PUT now leaves it — a
     // reader of this table should not have to know which route could move it.
+    // Against the row the write replaced, not the first read, and before the tag copy's own row.
     auditEvent(req, {
       action: 'project.update',
       targetType: 'project',
@@ -452,11 +493,17 @@ exports.updateProject = async (req, res) => {
       projectId: existing.id,
       detail: {
         fields: Object.keys(changes)
-          .filter(key => key !== 'tags' || !sameTags(existing.tags, changes.tags)),
-        isPublishedFrom: existing.isPublished,
+          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags)),
+        isPublishedFrom: replaced.isPublished,
         isPublishedTo: saved.isPublished
       }
     });
+
+    // Every PUT that sends tags mirrors them, unchanged or not, so a pair that drifted apart heals.
+    // Never across a re-pointed `eagleId`: the new id's row belongs to another project.
+    const mirrorFailure = changes.tags !== undefined && saved.eagleId === existing.eagleId
+      ? await mirrorTags(existing, req)
+      : null;
 
     if (mirrorFailure) return res.status(500).json({ success: false, error: mirrorFailure });
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
