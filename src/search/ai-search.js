@@ -804,9 +804,8 @@ async function runSearch(index, opts = {}) {
     } catch (err) {
       const field = err.status === 400 ? missingPropertyFrom(err) || unsearchableFieldFrom(err) : null;
       if (!field || degraded || VISIBILITY_FIELDS.has(field) || !dropField(body, field)) throw err;
-      // `<field>` and `<field>Tokens` are one source column under two analyzers: either named drops both.
-      const twin = field.endsWith('Tokens') ? field.slice(0, -'Tokens'.length) : `${field}Tokens`;
-      degraded = { missing: dropField(body, twin) ? [field, twin] : [field] };
+      const twin = DROPPED_TOGETHER.get(field);
+      degraded = { missing: twin && dropField(body, twin) ? [field, twin] : [field] };
       // ERROR, not warn: nothing else says the index is behind the code, and the page being served
       // is missing a column the app asked for. `{index, field}` are log fields so the alert and
       // the operator can filter on the field rather than parse the sentence.
@@ -910,6 +909,12 @@ function missingPropertyFrom(err) {
  * the caller may see.
  */
 const VISIBILITY_FIELDS = new Set(['read', 'isPublished', 'vis']);
+
+/**
+ * One source column under two analyzers, added in one release, so a stale index lacks both and the
+ * one-retry budget must drop them together. Other `<field>Tokens` pairs predate this and drop alone.
+ */
+const DROPPED_TOGETHER = new Map([['tags', 'tagsTokens'], ['tagsTokens', 'tags']]);
 
 /**
  * Take one field name out of every list in a search body that can name it.

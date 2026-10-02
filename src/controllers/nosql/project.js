@@ -38,7 +38,7 @@ const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
 const { mirrorError } = require('../../helpers/duplicate-id');
-const { narrowTwin, mirrorTags, sameTags } = require('../../helpers/project-twin');
+const { narrowTwin, mirrorTags, partnerRefusesTags, sameTags } = require('../../helpers/project-twin');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -387,6 +387,14 @@ exports.updateProject = async (req, res) => {
     // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level: the dial map is
     // policy rather than content, and no route sets it yet.
     const refused = refusedWriteKeys('projects', changes, access, existing);
+    // The tag copy below writes the other row of the pair, so its dial on `tags` must allow this
+    // caller too. Same message as a refusal here: nothing about that row is told to a caller who may
+    // not read it.
+    const mirrorsTags = changes.tags !== undefined &&
+      (changes.eagleId === undefined || changes.eagleId === existing.eagleId);
+    if (mirrorsTags && !refused.includes('tags') && await partnerRefusesTags(existing, access)) {
+      refused.push('tags');
+    }
     if (refused.length) {
       return res.status(400).json({
         error: `Fields not writable by this caller: ${refused.join(', ')}`

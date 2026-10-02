@@ -2,6 +2,8 @@
 
 /**
  * Every authenticated create, update and delete writes exactly one audit row.
+ * Exception: a tags PUT that changes the other row of a Track/Eagle pair writes two,
+ * `project.update` and `project.mirrorTags`.
  *
  * That rule is the reason this file exists rather than a handful of assertions scattered through
  * the controller tests: the gap it closed was not a broken audit call, it was seven handlers that

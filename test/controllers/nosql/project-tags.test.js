@@ -407,6 +407,34 @@ test('PUT /projects/:id tags reach the other row of a Track/Eagle pair', async (
     assert.strictEqual(mirrored && mirrored.TargetId, '207', `got actions: ${rows.map(row => row.Action)}`);
   });
 
+  // The review's case: a dial on the partner that refuses the caller a direct PUT there.
+  for (const [label, edited, partner] of [['the Track row', TRACK_ROW, TWIN_ROW], ['the twin', TWIN_ROW, TRACK_ROW]]) {
+    await t.test(`tags sent on ${label} are refused when the other row's dial on tags refuses the caller`,
+      async () => {
+        const rows = [];
+        audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
+        const store = pairStore([{ ...edited, tags: ['Mine'] }, { ...partner, tags: ['Keep'], vis: { tags: 1 } }]);
+
+        const res = await put({ tags: ['X'] }, WRITER, edited.id);
+
+        assert.strictEqual(res.statusCode, 400);
+        assert.deepStrictEqual(res.body, { error: 'Fields not writable by this caller: tags' });
+        assert.deepStrictEqual(store.written, []);
+        assert.deepStrictEqual(store.tagsOf(edited.id), ['Mine']);
+        assert.deepStrictEqual(store.tagsOf(partner.id), ['Keep']);
+        assert.ok(!rows.some(row => row.Action === 'project.mirrorTags'), `got actions: ${rows.map(row => row.Action)}`);
+      });
+  }
+
+  await t.test('a caller the other row\'s dial allows still gets the copy', async () => {
+    const store = pairStore([TRACK_ROW, { ...TWIN_ROW, tags: ['Keep'], vis: { tags: 1 } }]);
+
+    const res = await put({ tags: ['X'] }, STAFF);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(store.tagsOf(TWIN_ID), ['X']);
+  });
+
   await t.test('tags sent on the Track row are written to its twin', async () => {
     const store = pairStore([TRACK_ROW, TWIN_ROW]);
 

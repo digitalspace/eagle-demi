@@ -1716,6 +1716,18 @@ test('a projects index that cannot search tags', async (t) => {
       assert.strictEqual(res.count, 1, 'the page is served');
       assert.deepStrictEqual([...res.meta.degraded.missing].sort(), ['tags', 'tagsTokens']);
     });
+
+  // Only the tags pair drops as one: names still answer when only their filename copy is missing.
+  await t.test('an unknown nameTokens drops nameTokens alone', async (tt) => {
+    quiet(tt);
+    const calls = captureFetch(tt, (i) => (i === 0 ? unknown('nameTokens') : answered));
+
+    const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
+
+    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,searchLabels,tags,tagsTokens');
+    assert.ok(calls[1].body.select.split(',').includes('name'), `got select: ${calls[1].body.select}`);
+    assert.deepStrictEqual(res.meta.degraded, { missing: ['nameTokens'] });
+  });
 });
 
 // A searchFields name the index holds but does not mark searchable is a 400 on every keyword query.

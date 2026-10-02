@@ -12,6 +12,7 @@ const { writeGuarded } = require('./etag-write');
 const { logger } = require('../utils/logger');
 const { auditEvent } = require('../utils/audit');
 const { eagleOnlyProjectId } = require('../merge/project');
+const { refusedWriteKeys } = require('../vis/redact');
 
 /**
  * Bring the twin down to the Track row's read when that is lower, then cascade it onto the twin's
@@ -75,12 +76,22 @@ async function readPartner(row) {
 }
 
 /**
+ * Whether the partner's field dial on `tags` refuses this caller, as a direct PUT there would.
+ * Its `read[]` is left unchecked, the same as `mirrorTags`.
+ */
+async function partnerRefusesTags(row, access) {
+  const partner = await readPartner(row);
+  return Boolean(partner) && refusedWriteKeys('projects', { tags: [] }, access, partner).length > 0;
+}
+
+/**
  * Copy the row's stored `tags` onto the other row of its pair, so both rows (and the documents
  * each one holds) match the same names, and a removal on one is a removal on both.
  *
  * The partner is read and written without the caller's access: the two rows can carry different
  * `read[]`, and a checked read would skip the partner and leave the pair apart. Only `tags` (and
- * `updatedAt`) change on it, and the write is audited under the caller.
+ * `updatedAt`) change on it, and the write is audited under the caller. The partner's field dial
+ * is not skipped: the PUT checks `partnerRefusesTags` before its own write.
  *
  * @param {object} row  the row as it was before this write, so the pair is the one it belonged to
  * @param {object} req  the request whose caller the partner write is audited under
@@ -122,4 +133,4 @@ async function mirrorTags(row, req) {
   return 'The project tags changed, but the other copy of this project could not take them.';
 }
 
-module.exports = { narrowTwin, mirrorTags, sameTags };
+module.exports = { narrowTwin, mirrorTags, partnerRefusesTags, sameTags };

@@ -749,7 +749,8 @@ paths:
         '400':
           description: >-
             Body contains a field the caller cannot see, or a vis key, or `tags` outside the limits
-            on `ProjectInput.tags`.
+            on `ProjectInput.tags`, or `tags` when the other row of a Track/`eagle-<eagleId>` pair
+            does not let the caller see its tags. Nothing is written to either row.
         '401':
           description: Unauthorized.
         '404':
@@ -3868,8 +3869,9 @@ components:
             20 tags or a tag over 100 characters is a 400, as is anything but an array of strings.
             `[]` clears them. On a Track project or its `eagle-<eagleId>` copy, the stored list is
             then copied onto the other row. That copy does not check the caller's access to the
-            other row, because the two rows can have different read lists. It writes only the tag
-            list, and it is audited.
+            other row's read list, because the two rows can have different read lists. But a `tags`
+            write is refused (400) when the field visibility setting for `tags` on either row
+            refuses the caller. The copy writes only the tag list, and it is audited.
           example: ["West Coast Oil Pipeline"]
 
     DocumentInput:
