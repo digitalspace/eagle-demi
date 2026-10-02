@@ -431,9 +431,14 @@ function buildFacts(documents, sourcePool = documents) {
 // Prompting
 // ---------------------------------------------------------------------------------------------
 
-/** One numbered source. `i` is its position in THIS call's sources, which is what a citation means. */
-const sourceLine = (c, i) =>
-  `[${i + 1}] (page ${c.pageNumber ?? 0}) ${String(c.content || '').trim()}`;
+/**
+ * One numbered source. `i` is its position in THIS call's sources, which is what a citation means.
+ * The page goes in only when `pageNumbered`: otherwise the number is a passage sequence, not a page.
+ */
+const sourceLine = (c, i) => {
+  const page = c.pageNumbered === true ? `(page ${c.pageNumber ?? 0}) ` : '';
+  return `[${i + 1}] ${page}${String(c.content || '').trim()}`;
+};
 
 const SOURCE_SEPARATOR = '\n\n';
 
@@ -1585,6 +1590,7 @@ function federalChunksFrom(decision) {
       chunkId: iaacId(decision.docId, page.page),
       documentId,
       pageNumber: page.page,
+      pageNumbered: true,
       content: page.text,
       source: 'iaac',
       // The file, or the registry page that prints the decision instead of linking a file.
