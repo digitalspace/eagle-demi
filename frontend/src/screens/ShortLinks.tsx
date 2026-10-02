@@ -11,7 +11,7 @@ import {
   type ShortLink,
 } from '../api/links';
 import { getSessionClaims } from '../api/keycloak';
-import { ApiError, errorMessage } from '../api/client';
+import { ApiError, bodyString, errorMessage } from '../api/client';
 import { linkButton, primaryButton, stack, textInput } from './controls';
 import { dayMonth } from '../dates';
 
@@ -29,16 +29,22 @@ const editInput: CSSProperties = {
   font: 'var(--typography-regular-small-body)',
 };
 
-/** The `projectId` a 409 names when a project holds the code, else null. */
-function holderOf(err: unknown): string | null {
-  if (!(err instanceof ApiError) || err.status !== 409) return null;
-  try {
-    const { projectId } = JSON.parse(err.body) as { projectId?: unknown };
-    return typeof projectId === 'string' && projectId ? projectId : null;
-  } catch {
-    return null;
-  }
+/**
+ * The API's wording for a code a project holds. It sends `projectId` only when the caller may read
+ * that project, so this text is the one sign of a project the caller cannot see.
+ */
+const PROJECT_HELD = /belongs to a project/i;
+
+/** A write that failed, and the project a 409 named as the code's holder. */
+interface Failure {
+  text: string;
+  projectId: string | null;
 }
+
+const projectPath = (projectId: string) => `/projects/${encodeURIComponent(projectId)}`;
+
+/** A row a 409 locked carries no role until the list is read again. */
+const PILL = { current: 'Project', legacy: 'Old project code', unknown: 'Project code' } as const;
 
 /** Mine first, then everyone's. Empty groups are dropped rather than shown as a bare heading. */
 function linkGroups(links: ShortLink[], me: string): { title: string; rows: ShortLink[] }[] {
@@ -58,7 +64,7 @@ export function ShortLinks() {
   const loading = query.isFetching;
   const groups = linkGroups(links, getSessionClaims()?.preferredUsername ?? '');
 
-  const [error, setError] = useState('');
+  const [error, setError] = useState<Failure | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [newUrl, setNewUrl] = useState('');
   const [newCode, setNewCode] = useState('');
@@ -69,15 +75,19 @@ export function ShortLinks() {
   const [editingCode, setEditingCode] = useState('');
   const [editUrl, setEditUrl] = useState('');
 
-  /** Holders named by a 409, for rows the list read before a project claimed them. Code to project id. */
+  /**
+   * Rows a 409 showed to be project-held after the list was read. Code to project id, '' for a
+   * project the caller cannot read.
+   */
   const [claimed, setClaimed] = useState<Record<string, string>>({});
-  /** The staff project page for a project-held row, '' for a row staff edit here. */
+  const isHeld = (link: ShortLink) => Boolean(link.projectId) || link.id in claimed;
+  /** The staff project page for a project-held row, '' when there is none to link to. */
   const projectPage = (link: ShortLink) => {
-    const projectId = link.projectId ?? claimed[link.id];
-    return projectId ? `/projects/${encodeURIComponent(projectId)}` : '';
+    const projectId = link.projectId || claimed[link.id];
+    return projectId ? projectPath(projectId) : '';
   };
   /** A row that turns out to be project-held drops its open repoint. */
-  const isRepointing = (link: ShortLink) => editingCode === link.id && !projectPage(link);
+  const isRepointing = (link: ShortLink) => editingCode === link.id && !isHeld(link);
 
   /** The row the clipboard last answered for, and what it said. */
   const [copy, setCopy] = useState<{ code: string; ok: boolean } | null>(null);
@@ -86,23 +96,28 @@ export function ShortLinks() {
   const [dismissedRead, setDismissedRead] = useState<unknown>(null);
 
   const readError = query.error && query.error !== dismissedRead ? errorMessage(query.error) : '';
-  const shown = error || readError;
+  const shown = error?.text || readError;
 
   const reload = () => queryClient.invalidateQueries({ queryKey: LINKS_QUERY });
 
   /** `link` names the row written, so a project-held refusal can lock it. */
   async function write(send: () => Promise<unknown>, link?: ShortLink): Promise<boolean> {
-    setError('');
+    setError(null);
     try {
       await send();
       await reload();
       return true;
     } catch (err) {
-      setError(errorMessage(err));
-      const projectId = link && holderOf(err);
-      if (link && projectId) {
-        setClaimed((held) => ({ ...held, [link.id]: projectId }));
-        setEditingCode('');
+      const conflict = err instanceof ApiError && err.status === 409;
+      const projectId = conflict ? bodyString(err.body, 'projectId') : null;
+      setError({ text: errorMessage(err), projectId });
+      if (conflict) {
+        if (link && (projectId || PROJECT_HELD.test(err.message))) {
+          setClaimed((held) => ({ ...held, [link.id]: projectId ?? '' }));
+          setEditingCode('');
+        }
+        // A 409 means the list is stale: a project or another request took the code since the read.
+        void reload();
       }
       return false;
     }
@@ -111,7 +126,7 @@ export function ShortLinks() {
   /** Opening or closing the form clears the callout, whichever read or write put it there. */
   function toggleForm() {
     setFormOpen(!formOpen);
-    setError('');
+    setError(null);
     setDismissedRead(query.error ?? null);
   }
 
@@ -130,7 +145,7 @@ export function ShortLinks() {
   function startRepoint(link: ShortLink) {
     setEditingCode(link.id);
     setEditUrl(link.url);
-    setError('');
+    setError(null);
   }
 
   async function saveRepoint(link: ShortLink) {
@@ -166,7 +181,17 @@ export function ShortLinks() {
         </button>
       </div>
 
-      {shown && <div className="callout callout--warning">{shown}</div>}
+      {shown && (
+        <div className="callout callout--warning">
+          {shown}
+          {error?.projectId && (
+            <>
+              {' '}
+              <Link to={projectPath(error.projectId)}>Open the project page</Link>
+            </>
+          )}
+        </div>
+      )}
 
       {formOpen && (
         <section className="panel panel--padded">
@@ -274,9 +299,9 @@ export function ShortLinks() {
                           Personal
                         </span>
                       )}
-                      {projectPage(link) && (
+                      {isHeld(link) && (
                         <span className="pill pill--info" style={{ marginLeft: '0.35rem' }}>
-                          {link.projectRole === 'legacy' ? 'Old project code' : 'Project'}
+                          {PILL[link.projectRole ?? 'unknown']}
                         </span>
                       )}
                     </td>
@@ -312,10 +337,14 @@ export function ShortLinks() {
                             <button type="button" onClick={() => void copyLink(link)} style={linkButton}>
                               {copy?.code === link.id ? (copy.ok ? 'Copied' : 'Copy failed') : 'Copy'}
                             </button>
-                            {projectPage(link) ? (
-                              <Link to={projectPage(link)} style={linkButton}>
-                                Edit on the project page <span className="visually-hidden">for {link.id}</span>
-                              </Link>
+                            {isHeld(link) ? (
+                              projectPage(link) && (
+                                <Link to={projectPage(link)} style={linkButton}>
+                                  {/* Only the current code is edited there; an old code is kept as it is. */}
+                                  {link.projectRole === 'current' ? 'Edit on the project page' : 'Open the project page'}{' '}
+                                  <span className="visually-hidden">for {link.id}</span>
+                                </Link>
+                              )
                             ) : (
                               <>
                                 <button type="button" onClick={() => startRepoint(link)} style={linkButton}>
