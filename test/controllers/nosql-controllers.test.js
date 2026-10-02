@@ -366,6 +366,60 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(saved.projectState, 'Completed', 'the stored name is the specific one');
   });
 
+  // The index filters on these labels by exact match and holds the year as an Int32, the same
+  // shape the Track and Eagle merges store.
+  await t.test('create stores sector trimmed', async () => {
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 8, name: 'S', sector: ' Energy ', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+
+    assert.strictEqual(saved.sector, 'Energy');
+  });
+
+  await t.test('update stores sector and projectSubType trimmed and legislationYear as a number', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '207', trackProjectId: 207, name: 'P' }));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: WRITER_USER,
+      body: { sector: 'Mines ', projectSubType: ' Groundwater Extraction ', legislationYear: '2018' }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.sector, 'Mines');
+    assert.strictEqual(saved.projectSubType, 'Groundwater Extraction');
+    assert.strictEqual(saved.legislationYear, 2018);
+  });
+
+  await t.test('update clears legislationYear on a blank and refuses one that is not a year', async () => {
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', trackProjectId: 207, name: 'P', legislationYear: 2002
+    }));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const cleared = mockRes();
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: WRITER_USER, body: { legislationYear: '' } }, cleared);
+    assert.strictEqual(cleared.statusCode, 200);
+    assert.strictEqual(saved.legislationYear, null);
+
+    saved = undefined;
+    for (const legislationYear of ['2018 Act', 2018.5, true]) {
+      const refused = mockRes();
+      await projectController.updateProject(
+        { params: { id: '207' }, query: {}, user: WRITER_USER, body: { legislationYear } }, refused);
+      assert.strictEqual(refused.statusCode, 400, `sent ${JSON.stringify(legislationYear)}`);
+      assert.match(refused.body.error, /legislationYear/);
+    }
+    assert.strictEqual(saved, undefined, 'nothing is written on a refused year');
+  });
+
   /**
    * Redaction-safe update: the response is narrowed by level, so a body key the caller was never
    * shown would overwrite a value they cannot see (docs/rbac-architecture.md §2 item 1).
