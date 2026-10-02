@@ -1658,7 +1658,7 @@ test('a projects index that cannot search tags', async (t) => {
   const quiet = (tt) => tt.mock.method(require('../../src/utils/logger').logger, 'error', () => {});
 
   await t.test('drops tags and tagsTokens when the field is unknown, retries once, and says so', async (tt) => {
-    quiet(tt);
+    const logged = quiet(tt);
     const calls = captureFetch(tt, (i) => (i === 0 ? unknown('tags') : answered));
 
     const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
@@ -1667,16 +1667,32 @@ test('a projects index that cannot search tags', async (t) => {
     assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,searchLabels');
     assert.deepStrictEqual(res.meta.degraded, { missing: ['tags', 'tagsTokens'] });
     assert.strictEqual(res.count, 1, 'the page is served');
+    assert.deepStrictEqual(logged.mock.calls[0].arguments[1].fields, ['tags', 'tagsTokens'],
+      'the log fields name every dropped field, not just the one the service named');
   });
 
-  await t.test('drops both when the field is there but not searchable', async (tt) => {
+  // The index holds tags, so tagsTokens is still searchable and only the refused name goes.
+  await t.test('drops only tags when the field is there but not searchable', async (tt) => {
     quiet(tt);
     const calls = captureFetch(tt, (i) => (i === 0 ? unsearchable('tags') : answered));
 
     const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
 
-    assert.strictEqual(calls[1].body.searchFields, 'name,displayName,description,proponent,nameTokens,searchLabels');
-    assert.deepStrictEqual(res.meta.degraded, { missing: ['tags', 'tagsTokens'] });
+    assert.strictEqual(calls[1].body.searchFields,
+      'name,displayName,description,proponent,nameTokens,searchLabels,tagsTokens');
+    assert.deepStrictEqual(res.meta.degraded, { missing: ['tags'] });
+  });
+
+  await t.test('an unsearchable field stays in the select', async (tt) => {
+    quiet(tt);
+    const calls = captureFetch(tt, (i) => (i === 0 ? unsearchable('name') : answered));
+
+    const res = await aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'peace river', top: 10 });
+
+    assert.ok(calls[0].body.select.split(',').includes('name'), `the premise, got: ${calls[0].body.select}`);
+    assert.strictEqual(calls[1].body.select, calls[0].body.select);
+    assert.ok(!calls[1].body.searchFields.split(',').includes('name'), `got: ${calls[1].body.searchFields}`);
+    assert.deepStrictEqual(res.meta.degraded, { missing: ['name'] });
   });
 
   await t.test('a second 400 after the drop is thrown, not stripped again', async (tt) => {
@@ -1730,13 +1746,29 @@ test('a projects index that cannot search tags', async (t) => {
   });
 });
 
-// A searchFields name the index holds but does not mark searchable is a 400 on every keyword query.
-// This holds the code against the committed index; `/health/search-schema` holds it against the live one.
-test('every field the project keyword search names is searchable in the committed index', () => {
-  const definition = require('../../azure/search/indexes/projects.json');
-  const searchable = new Set(definition.fields.filter(f => f.searchable).map(f => f.name));
-  const notSearchable = aiSearch.PROJECT_SEARCH_FIELDS.split(',').filter(name => !searchable.has(name));
-  assert.deepStrictEqual(notSearchable, [], `not searchable in ${definition.name}: ${notSearchable.join(', ')}`);
+// A searchFields name the committed index does not mark searchable would degrade every keyword query
+// to a narrower 200, so a typo has to fail here. Read off the requests, so inline lists count too;
+// `/health/search-schema` holds the lists against the live index.
+test('every searchFields list a keyword search sends is searchable in the committed index', async (t) => {
+  const files = { 'demi-chunks': 'chunks', projects: 'projects', documents: 'documents' };
+  const calls = captureFetch(t, () => ({ json: { value: [{ id: '207' }], '@odata.count': 1 } }));
+
+  await aiSearch.searchProjects({ filter: null, keywords: 'peace river' });
+  await aiSearch.countProjects({ filter: null, keywords: 'peace river' });
+  await aiSearch.searchDocuments({ filter: null, projectFilter: null, keywords: 'peace river', top: 10 });
+  await aiSearch.searchChunks({ filter: null, keywords: 'peace river' });
+
+  const sent = calls.filter(call => call.body && call.body.searchFields);
+  assert.ok(sent.some(call => call.url.includes('/indexes/documents/')), 'the premise: the documents leg ran');
+  assert.ok(sent.filter(call => call.url.includes('/indexes/projects/')).length >= 3,
+    'the premise: both project lists ran');
+  for (const { url, body } of sent) {
+    const index = /\/indexes\/([^/]+)\//.exec(url)[1];
+    const definition = require(`../../azure/search/indexes/${files[index]}.json`);
+    const searchable = new Set(definition.fields.filter(f => f.searchable).map(f => f.name));
+    const notSearchable = body.searchFields.split(',').filter(name => !searchable.has(name));
+    assert.deepStrictEqual(notSearchable, [], `not searchable in ${definition.name}: ${notSearchable.join(', ')}`);
+  }
 });
 
 // A keyword query for a sector, status, region, type, phase or decision label matched no project
@@ -2515,7 +2547,7 @@ test('a field the live index cannot answer', async (t) => {
 
       const logged = errors.find(e => e.msg.includes("'fileSize'"));
       assert.ok(logged, `the degrade must be logged at error level, got: ${JSON.stringify(errors)}`);
-      assert.strictEqual(logged.meta.field, 'fileSize');
+      assert.deepStrictEqual(logged.meta.fields, ['fileSize']);
       assert.ok(logged.meta.index, 'and the index, so an operator knows which one to widen');
     });
 

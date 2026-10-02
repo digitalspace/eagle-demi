@@ -802,17 +802,22 @@ async function runSearch(index, opts = {}) {
     try {
       return await request(path, body);
     } catch (err) {
-      const field = err.status === 400 ? missingPropertyFrom(err) || unsearchableFieldFrom(err) : null;
-      if (!field || degraded || VISIBILITY_FIELDS.has(field) || !dropField(body, field)) throw err;
-      const twin = DROPPED_TOGETHER.get(field);
+      const absent = err.status === 400 ? missingPropertyFrom(err) : null;
+      const refusal = err.status === 400 && !absent ? searchFieldRefusalFrom(err) : null;
+      const field = absent || (refusal && refusal.field);
+      // A field the index holds but cannot search is still valid in select, orderby and highlight,
+      // and its twin is still searchable, so only its searchFields entry goes.
+      const lists = absent || (refusal && refusal.absent) ? DROPPABLE_LISTS : ['searchFields'];
+      if (!field || degraded || VISIBILITY_FIELDS.has(field) || !dropField(body, field, lists)) throw err;
+      const twin = lists === DROPPABLE_LISTS && DROPPED_TOGETHER.get(field);
       degraded = { missing: twin && dropField(body, twin) ? [field, twin] : [field] };
       // ERROR, not warn: nothing else says the index is behind the code, and the page being served
-      // is missing a column the app asked for. `{index, field}` are log fields so the alert and
-      // the operator can filter on the field rather than parse the sentence.
+      // is missing a column the app asked for. `{index, fields}` are log fields so the alert and
+      // the operator can filter on a field rather than parse the sentence.
       logger.error(
         `[ai-search] the ${index} index cannot answer '${degraded.missing.join("', '")}' — retried ` +
         'without it, so this page is narrower than the app asked for. Widen the index and reindex.',
-        { index, field }
+        { index, fields: degraded.missing }
       );
       return request(path, body);
     }
@@ -916,6 +921,8 @@ const VISIBILITY_FIELDS = new Set(['read', 'isPublished', 'vis']);
  */
 const DROPPED_TOGETHER = new Map([['tags', 'tagsTokens'], ['tagsTokens', 'tags']]);
 
+const DROPPABLE_LISTS = ['select', 'searchFields', 'highlight', 'orderby'];
+
 /**
  * Take one field name out of every list in a search body that can name it.
  *
@@ -928,11 +935,12 @@ const DROPPED_TOGETHER = new Map([['tags', 'tagsTokens'], ['tagsTokens', 'tags']
  * text — the one thing CHUNK_SELECT exists to withhold. `orderby` and `highlight` may go: the
  * service's own relevance order and no highlights are both narrower answers, not wider ones.
  *
+ * @param {string[]} [lists] the body keys to drop it from; all four unless narrowed
  * @returns {boolean} whether the body changed, so the caller knows a retry can differ
  */
-function dropField(body, field) {
+function dropField(body, field, lists = DROPPABLE_LISTS) {
   const changes = [];
-  for (const key of ['select', 'searchFields', 'highlight', 'orderby']) {
+  for (const key of lists) {
     if (typeof body[key] !== 'string') continue;
     const parts = body[key].split(',');
     // `select`, `searchFields` and `highlight` are field names; an `orderby` clause is
@@ -1028,9 +1036,15 @@ async function filterAnswerable(indexName, property, filter) {
  * `Unknown field 'nosuchfield' in search field list.`, each followed by `Parameter name: searchFields`.
  */
 function unsearchableFieldFrom(err) {
-  const match = /(?:The field|Unknown field) '([^']+)' in (?:the )?search field list/
+  const refusal = searchFieldRefusalFrom(err);
+  return refusal ? refusal.field : null;
+}
+
+/** As above, plus whether the index lacks the field (`Unknown field`) rather than holding it unsearchable. */
+function searchFieldRefusalFrom(err) {
+  const match = /(The field|Unknown field) '([^']+)' in (?:the )?search field list/
     .exec((err && err.message) || '');
-  return match ? match[1] : null;
+  return match ? { field: match[2], absent: match[1] === 'Unknown field' } : null;
 }
 
 /**
@@ -2219,7 +2233,7 @@ async function drainIndexedChunks(documentId, opts) {
 module.exports = {
   DOCUMENT_SELECT,
   PROJECT_SELECT,
-  // Exported for the guard test that holds it against the searchable fields of `projects.json`.
+  // Exported for `/health/search-schema`, which probes the live index with what the app sends.
   PROJECT_SEARCH_FIELDS,
   CHUNK_SELECT,
   // The live-schema gate and the error classification behind `SEARCH_SCHEMA_DRIFT`.
