@@ -145,6 +145,20 @@ async function putObjectStream(key, stream, contentType) {
   return key;
 }
 
+/** Size and type of a stored blob, or null when it is not there. */
+async function statObject(key) {
+  try {
+    const props = await getBlobClient(key).getProperties();
+    return { size: props.contentLength, contentType: props.contentType || null };
+  } catch (err) {
+    // A HEAD error has no body, so the SDK carries x-ms-error-code in `details`, as its own
+    // deleteIfExists reads it. ContainerNotFound is a config fault and must surface.
+    const code = err && (err.code || (err.details && err.details.errorCode));
+    if (code === 'BlobNotFound') return null;
+    throw err;
+  }
+}
+
 /** Delete an object. `deleteIfExists` swallows the 404, which is what a re-running sweep needs. */
 async function removeObject(key) {
   await getBlobClient(key).deleteIfExists();
@@ -169,6 +183,7 @@ module.exports = {
   getBuffer,
   getObjectStream,
   getDownloadUrl,
+  statObject,
   putFile,
   putObjectStream,
   removeObject,

@@ -91,14 +91,28 @@ async function putObjectStream(key, stream, contentType) {
   return objectPath;
 }
 
+function isMissing(err) {
+  return Boolean(err) && (err.code === 'NoSuchKey' || err.code === 'NotFound' || err.statusCode === 404);
+}
+
+/** Size and type of a stored object, or null when it is not there. */
+async function statObject(key) {
+  try {
+    const stat = await getClient().statObject(config.minioBucket, resolveObjectKey(key));
+    const meta = stat.metaData || {};
+    return { size: stat.size, contentType: meta['content-type'] || null };
+  } catch (err) {
+    if (isMissing(err)) return null;
+    throw err;
+  }
+}
+
 /** Delete an object. Already gone is success: cleanup re-runs over keys a retry may have removed. */
 async function removeObject(key) {
   try {
     return await getClient().removeObject(config.minioBucket, resolveObjectKey(key));
   } catch (err) {
-    if (err && (err.code === 'NoSuchKey' || err.code === 'NotFound' || err.statusCode === 404)) {
-      return undefined;
-    }
+    if (isMissing(err)) return undefined;
     throw err;
   }
 }
@@ -113,5 +127,6 @@ function describe() {
 }
 
 module.exports = {
-  getBuffer, getObjectStream, getDownloadUrl, putFile, putObjectStream, removeObject, describe
+  getBuffer, getObjectStream, getDownloadUrl, statObject, putFile, putObjectStream, removeObject,
+  describe
 };

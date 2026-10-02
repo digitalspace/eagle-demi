@@ -14,15 +14,28 @@
  */
 
 process.env.NODE_ENV = 'test';
+// Before src/config is first required: the audit writer is inert without these, so a HEAD that
+// wrote an event would pass the "no event" check below. Batch of 1 sends each row at once.
+process.env.AUDIT_DCR_ENDPOINT = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
+process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
+process.env.AUDIT_MAX_BATCH = '1';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { HttpRequest } = require('@azure/functions');
 
 const storage = require('../../src/storage');
 const documents = require('../../src/repositories/documents');
 const controller = require('../../src/controllers/nosql/document');
-const { makeRes } = require('../../src/http/router');
+const audit = require('../../src/utils/audit');
+const { logger } = require('../../src/utils/logger');
+const { makeRes, dispatch } = require('../../src/http/router');
 const { withServer } = require('../helpers/with-server');
+const { TIER } = require('../../src/helpers/access-sql');
+
+// Both streams (analytics and audit) land here instead of the ingestion API.
+const sent = [];
+audit._setTransport(async (stream, batch) => { sent.push(...batch.map(row => ({ stream, ...row }))); });
 
 const URL_WITH_DISPOSITION =
   'https://demistoretest.blob.core.windows.net/demi-test/etl/site-c/report.pdf' +
@@ -196,5 +209,221 @@ test('the redirect survives the dispatcher', async (t) => {
       assert.equal(res.status, 200);
       assert.equal((await res.json()).url, URL_WITH_DISPOSITION);
     });
+  });
+});
+
+test('HEAD is answered here, never redirected', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  // The presigned URL is signed for GET, so a HEAD that followed a 302 got a 403 from the store.
+  // Every case runs through the dispatcher: the router is what turns HEAD into this GET route.
+  const head = (call, path) => call(path, { method: 'HEAD' });
+  const STAT = { size: 48213, contentType: 'application/pdf' };
+  const PATH = `/api/documents/${DOC.id}/download`;
+
+  /** dispatch() as the Functions host gets it, before any Response object fills a header in. */
+  const rawHead = (path) => dispatch(
+    new HttpRequest({ method: 'HEAD', url: `http://127.0.0.1${path}`, headers: {} }),
+    { error: () => {} });
+
+  /** What a store outage looks like: a socket error, not an HTTP answer. */
+  const unreachable = () => Object.assign(new Error('connect ECONNREFUSED 10.0.0.5:9000'),
+    { code: 'ECONNREFUSED' });
+
+  await t.test('a visible document answers 200 with the file headers and mints no url', async (t) => {
+    const presign = allow(t);
+    t.mock.method(storage, 'statObject', async () => STAT);
+    await withServer(async (call) => {
+      const res = await head(call, `/api/documents/${DOC.id}/download`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('content-type'), 'application/pdf');
+      assert.equal(res.headers.get('content-length'), '48213');
+      assert.equal(res.headers.get('content-disposition'),
+        'attachment; filename="report.pdf"; filename*=UTF-8\'\'report.pdf');
+      assert.equal(res.headers.get('cache-control'), 'no-store');
+      assert.equal(res.headers.get('location'), null);
+      assert.equal(await res.text(), '');
+    });
+    assert.equal(presign.mock.callCount(), 0, 'a HEAD must not mint a presigned url');
+  });
+
+  await t.test('?redirect=1 still answers 200, not a 302', async (t) => {
+    allow(t);
+    t.mock.method(storage, 'statObject', async () => STAT);
+    await withServer(async (call) => {
+      const res = await head(call, `/api/documents/${DOC.id}/download?redirect=1`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('location'), null);
+    });
+  });
+
+  await t.test('an unpublished document the caller can see writes no analytics or audit event', async (t) => {
+    // GET of this row writes both. HEAD hands out no bytes, so it must write neither.
+    allow(t, { doc: { ...DOC, isPublished: false } });
+    t.mock.method(storage, 'statObject', async () => STAT);
+    sent.length = 0;
+    await withServer(async (call) => {
+      const res = await head(call, PATH);
+      assert.equal(res.status, 200);
+    });
+    await audit.flush();
+    assert.deepEqual(sent, []);
+  });
+
+  await t.test('an unknown id is the same 404 as GET, JSON headers included', async (t) => {
+    t.mock.method(documents, 'getById', async () => null);
+    await withServer(async (call) => {
+      const res = await head(call, '/api/documents/no-such-id/download');
+      assert.equal(res.status, 404);
+      assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
+      assert.equal(res.headers.get('content-length'),
+        String(Buffer.byteLength(JSON.stringify({ error: 'Document not found' }))));
+    });
+  });
+
+  await t.test('a failed lookup logs and answers as GET does', async (t) => {
+    t.mock.method(documents, 'getById', async () => { throw new Error('cosmos 503'); });
+    const error = t.mock.method(logger, 'error', () => {});
+    const response = res();
+
+    await controller.downloadDocument(req({ method: 'HEAD' }), response);
+
+    assert.equal(response.statusCode, 500);
+    assert.deepEqual(JSON.parse(response.body), { error: 'Failed to generate download link.' });
+    assert.deepEqual(error.mock.calls.map(c => c.arguments[0]),
+      ['[Document Controller] Presigned download failed: cosmos 503']);
+  });
+
+  await t.test('a document hidden from the caller is a 404', async (t) => {
+    // A fake that hides the document from the public tier only: the dispatcher's request carries
+    // no credential, so this proves HEAD hands getById the caller's own access.
+    t.mock.method(documents, 'getById',
+      async (access) => (access.tier === TIER.PUBLIC ? null : { ...DOC, isPublished: false }));
+    t.mock.method(storage, 'statObject', async () => STAT);
+    await withServer(async (call) => {
+      const res = await head(call, `/api/documents/${DOC.id}/download`);
+      assert.equal(res.status, 404);
+      assert.equal(res.headers.get('content-disposition'), null);
+    });
+  });
+
+  await t.test('a record whose object is gone from the store is a 404', async (t) => {
+    allow(t);
+    t.mock.method(storage, 'statObject', async () => null);
+    await withServer(async (call) => {
+      const res = await head(call, `/api/documents/${DOC.id}/download`);
+      assert.equal(res.status, 404);
+    });
+  });
+
+  await t.test('a store outage answers from the record instead of a 500', async (t) => {
+    allow(t, { doc: { ...DOC, mimeType: 'application/pdf', fileSize: '1200' } });
+    t.mock.method(storage, 'statObject', async () => { throw unreachable(); });
+    const warn = t.mock.method(logger, 'warn', () => {});
+    await withServer(async (call) => {
+      const res = await head(call, PATH);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get('content-type'), 'application/pdf');
+      assert.equal(res.headers.get('content-length'), '1200');
+    });
+    assert.equal(warn.mock.callCount(), 1);
+  });
+
+  await t.test('a store 5xx answers from the record too', async (t) => {
+    allow(t, { doc: { ...DOC, fileSize: 1200 } });
+    t.mock.method(storage, 'statObject', async () => {
+      throw Object.assign(new Error('Service Unavailable'), { statusCode: 503 });
+    });
+    t.mock.method(logger, 'warn', () => {});
+    const out = await rawHead(PATH);
+    assert.equal(out.status, 200);
+    assert.equal(out.headers['content-length'], '1200');
+  });
+
+  await t.test('a stat still running after 3 s answers from the record', async (t) => {
+    allow(t, { doc: { ...DOC, mimeType: 'application/pdf', fileSize: 1200 } });
+    let statCalled;
+    const called = new Promise((resolve) => { statCalled = resolve; });
+    t.mock.method(storage, 'statObject', () => { statCalled(); return new Promise(() => {}); });
+    const warn = t.mock.method(logger, 'warn', () => {});
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const pending = rawHead(PATH);
+      await called;
+      t.mock.timers.tick(3000);
+      // setImmediate is not mocked, so this resolves only if 3 s of fake time did not end the wait.
+      const out = await Promise.race([pending, new Promise(r => setImmediate(r, 'still waiting'))]);
+      assert.notEqual(out, 'still waiting', 'HEAD is still waiting on the store 3 s in');
+      assert.equal(out.status, 200);
+      assert.equal(out.headers['content-length'], '1200');
+      assert.equal(warn.mock.callCount(), 1);
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+
+  await t.test('a refused store is a 500, logged and answered as GET does', async (t) => {
+    // A permission fault does not clear on retry; answering from the record would hide it.
+    const shapes = {
+      minio: Object.assign(new Error('Valid and authorized credentials required'),
+        { name: 'S3Error', code: 'AccessDenied' }),
+      azure: Object.assign(new Error('This request is not authorized to perform this operation.'),
+        { statusCode: 403, details: { errorCode: 'AuthorizationPermissionMismatch' } })
+    };
+    for (const [backend, err] of Object.entries(shapes)) {
+      t.mock.restoreAll();
+      allow(t, { doc: { ...DOC, fileSize: 1200 } });
+      t.mock.method(storage, 'statObject', async () => { throw err; });
+      const error = t.mock.method(logger, 'error', () => {});
+      // The handler's own response: dispatch() drops a HEAD body, and the body is what is checked.
+      const out = res();
+      await controller.downloadDocument(req({ method: 'HEAD' }), out);
+      assert.equal(out.statusCode, 500, backend);
+      assert.deepEqual(JSON.parse(out.body), { error: 'Failed to generate download link.' }, backend);
+      assert.ok(error.mock.calls.some(c =>
+        c.arguments[0] === `[Document Controller] Presigned download failed: ${err.message}`), backend);
+    }
+  });
+
+  await t.test('a key the store refuses as a name is a 404', async (t) => {
+    allow(t);
+    t.mock.method(storage, 'statObject', async () => {
+      throw Object.assign(new Error('Invalid object name: x'), { name: 'InvalidObjectNameError' });
+    });
+    const out = res();
+    await controller.downloadDocument(req({ method: 'HEAD' }), out);
+    assert.equal(out.statusCode, 404);
+    assert.deepEqual(JSON.parse(out.body), { error: 'Document has no stored file.' });
+  });
+
+  await t.test('a Content-Type that is not a media type is never passed through', async (t) => {
+    const cases = [
+      // The stored type is bad, the record's is good: the record's.
+      { stat: 'application/pdf\r\nSet-Cookie: a=1', mimeType: 'application/pdf', want: 'application/pdf' },
+      // Both bad: the safe default.
+      { stat: 'pdf', mimeType: 'text/html\nX-Injected: 1', want: 'application/octet-stream' },
+      // A parameter is part of a valid type and stays.
+      { stat: 'text/plain; charset=utf-8', mimeType: 'pdf', want: 'text/plain; charset=utf-8' }
+    ];
+    for (const { stat, mimeType, want } of cases) {
+      t.mock.restoreAll();
+      allow(t, { doc: { ...DOC, mimeType } });
+      t.mock.method(storage, 'statObject', async () => ({ size: 10, contentType: stat }));
+      const out = await rawHead(PATH);
+      assert.equal(out.status, 200);
+      assert.equal(out.headers['content-type'], want, JSON.stringify(stat));
+    }
+  });
+
+  await t.test('with no stat and no recorded size, no Content-Length is claimed', async (t) => {
+    // The raw dispatch() result: a Response built from it could fill the header in on its own.
+    allow(t);
+    t.mock.method(storage, 'statObject', async () => { throw unreachable(); });
+    t.mock.method(logger, 'warn', () => {});
+    const out = await rawHead(PATH);
+    assert.equal(out.status, 200);
+    assert.ok(!('content-length' in out.headers), `content-length: ${out.headers['content-length']}`);
+    assert.equal(out.headers['content-type'], 'application/octet-stream');
+    assert.equal(out.body, undefined);
   });
 });

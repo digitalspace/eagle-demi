@@ -140,7 +140,13 @@ function makeRes(requestId) {
     res.finished = true;
     if (defaultType && !headers['content-type']) headers['content-type'] = defaultType;
     res.body = body;
-    headers['content-length'] = String(Buffer.byteLength(body || ''));
+    // An empty body keeps a preset length: HEAD states the size of the file it stands for, and
+    // null means unknown, so the header is left out.
+    if (body || headers['content-length'] === undefined) {
+      headers['content-length'] = String(Buffer.byteLength(body || ''));
+    } else if (headers['content-length'] === null) {
+      delete headers['content-length'];
+    }
     if (res._done) res._done();
     return res;
   };

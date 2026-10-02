@@ -48,6 +48,16 @@ function getDownloadUrl(key, opts) {
 }
 
 /**
+ * Size and type of a stored object, without reading it.
+ *
+ * @param {string} key
+ * @returns {Promise<{size: number, contentType: string|null}|null>} null when the object is absent
+ */
+function statObject(key) {
+  return backend.statObject(key);
+}
+
+/**
  * Store a local file under `key`.
  *
  * @returns {Promise<string>} the key as actually stored, which may differ from the input — the
@@ -83,5 +93,5 @@ function removeObject(key) {
 }
 
 module.exports = {
-  getDownloadUrl, putFile, getObjectStream, putObjectStream, removeObject
+  getDownloadUrl, statObject, putFile, getObjectStream, putObjectStream, removeObject
 };

@@ -364,8 +364,12 @@ test('access gate coverage', async (t) => {
     // hit and its ranked payload. +2 for the chunk ingest 409 guard and 413 cap. +1 for its
     // uncounted 503 when the search index kept dropped chunks (error string only). +1 for the
     // chunk ingest 409 refusing an Update image (error string only). +1 for the Eagle push ack of
-    // a sealed row, `{ ok: true }`.
-    assert.strictEqual(emissions.length, 45,
+    // a sealed row, `{ ok: true }`. +1 for the HEAD download 404 when the store reports the object
+    // missing (error string only). +1 for its 500 on a store fault other than an outage (error
+    // string only).
+    // `res.status(found.status).json(found.body)` in headDownload is outside the scan (the status is
+    // not a literal), so the bodies it can send are pinned below with the download payload.
+    assert.strictEqual(emissions.length, 47,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits
@@ -403,6 +407,20 @@ test('access gate coverage', async (t) => {
     assert.ok(download, 'resolveDownload no longer returns a literal body — re-check what it emits');
     assert.ok(!/\bdoc\b(?!\s*\.)/.test(download[1]),
       'the download body names the stored document row bare, so it ships read[] and s3Key');
+
+    // findStoredFile's refusals reach the caller through that unscanned site, so its bodies are
+    // pinned as exact text: anything else it returned would ship unseen.
+    const finder = /async function findStoredFile\([^)]*\) \{([\s\S]*?)\n\}/.exec(code(controller));
+    assert.ok(finder, 'findStoredFile is gone — re-check what the download routes answer with');
+    assert.deepStrictEqual(finder[1].match(/body: \{[^}]*\}/g), [
+      "body: { error: 'Document not found' }",
+      "body: { error: 'Document has no stored file.' }"
+    ], 'findStoredFile answers with a body other than its two error strings');
+    // The same site sends downloadFailed's body when the lookup throws.
+    const failed = /function downloadFailed\([^)]*\) \{([\s\S]*?)\n\}/.exec(code(controller));
+    assert.ok(failed, 'downloadFailed is gone — re-check what a failed download answers with');
+    assert.deepStrictEqual(failed[1].match(/body: \{[^}]*\}/g),
+      ["body: { error: 'Failed to generate download link.' }"]);
   });
 
   await t.test('every /me route in the router is on the list above', () => {
