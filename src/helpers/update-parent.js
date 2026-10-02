@@ -76,9 +76,38 @@ function readUnder(eagleRead, parent) {
   return levelOfRead(ceiling) < levelOfRead(own) ? capRead(own, ceiling) : own;
 }
 
+/** Eagle sent no `read` at all: absent or null. `[]` is a read, and so is any non-list. */
+function hasNoRead(doc) {
+  return doc.read === undefined || doc.read === null;
+}
+
+/**
+ * Eagle's legacy `RecentActivity` rows with no `read` field, a null `status` and `active: true` are
+ * shown to anonymous callers: eagle-api's public search `$redact` DESCENDS into a row whose `read`
+ * is missing or null, but PRUNES `read: []` (an empty array is true in `$cond` and false in
+ * `$anyElementTrue`). So only a missing read is as visible as its parent; `[]` stays `[]`.
+ */
+function inheritsParentRead(doc) {
+  if (!doc) return false;
+  const noStatus = doc.status === undefined || doc.status === null;
+  return hasNoRead(doc) && noStatus && doc.active === true;
+}
+
+/**
+ * The `read[]` DEMI stores for an Eagle Update under `parent`: a legacy open row
+ * (`inheritsParentRead`) takes the parent's ceiling as is; every other row is `readUnder`. No
+ * parent, nothing to inherit.
+ *
+ * @param {{read?: *, status?: *, active?: *}} doc  the Eagle record, or its `sources.eagle` copy
+ */
+function updateRead(doc, parent) {
+  if (parent && inheritsParentRead(doc)) return ceilingRead(parent);
+  return readUnder(doc && doc.read, parent);
+}
+
 /** The bar for emailing an Update: its parent, if it has one, is readable by anyone. */
 function isPublicParent(parent) {
   return Boolean(parent) && Array.isArray(parent.read) && parent.read.includes('public');
 }
 
-module.exports = { readParent, ownRead, readUnder, isPublicParent };
+module.exports = { readParent, ownRead, readUnder, hasNoRead, inheritsParentRead, updateRead, isPublicParent };

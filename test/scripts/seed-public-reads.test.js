@@ -29,7 +29,7 @@ const { updatesStore } = require('../helpers/updates-store');
 const { parentProject, parentNotification } = require('../helpers/update-parents');
 const { logger } = require('../../src/utils/logger');
 const {
-  PERIOD_EAGLE_ID, PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, SEALED_AT, eagleComment, eagleUpdate,
+  PERIOD_EAGLE_ID, PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, SEALED_AT, eagleComment, eagleUpdate, eagleUpdateWithoutRead,
   storedPeriod
 } = require('../helpers/eagle-mirror-fixtures');
 
@@ -627,4 +627,37 @@ test('the updates stage heals an Update an Eagle push sealed, under a project st
   assert.strictEqual(row('U-eagle').isPublished, true);
   assert.deepStrictEqual(row('U-demi').read, ['compliance'], 'a DEMI seal is only lifted by a release');
   assert.strictEqual(row('U-demi').isPublished, false);
+});
+
+test('a rerun of the updates stage rewrites a legacy open Update stored before the inherit rule', async (t) => {
+  t.after(() => t.mock.restoreAll());
+  // As the mirror stored both shapes before: `[]` for a missing read and an empty one alike.
+  const stored = (id) => ({
+    id, projectId: PROJECT_EAGLE_ID, read: [], isPublished: false, status: null,
+    sources: { eagle: { _id: id, read: [], status: null, active: true } }, _etag: `"${id}"`
+  });
+  const { row } = updatesStore(t, [stored('U-legacy'), stored('U-empty')]);
+  parentProject(t, { id: '207', eagleId: PROJECT_EAGLE_ID, read: PUBLIC_ACL, isPublished: true });
+  parentNotification(t, null);
+  const lines = [];
+  t.mock.method(logger, 'info', (msg) => lines.push(msg));
+
+  await backfill(['--live', '--only', 'updates', '--state', statePath()], {
+    sources: stubSources({ datasets: {
+      RecentActivity: [
+        eagleUpdateWithoutRead({ _id: 'U-legacy', status: null, active: true }),
+        eagleUpdate({ _id: 'U-empty', read: [], status: null, active: true })
+      ]
+    } }),
+    updateMirror: updateController,
+    updatesRepo
+  });
+
+  assert.deepStrictEqual(row('U-legacy').read, PUBLIC_ACL);
+  assert.strictEqual(row('U-legacy').isPublished, true);
+  assert.strictEqual(row('U-legacy').sources.eagle.read, null, 'a missing read is stored apart from []');
+  // eagle-api prunes `read: []` for an anonymous caller, so DEMI keeps it unpublished.
+  assert.deepStrictEqual(row('U-empty').read, []);
+  assert.strictEqual(row('U-empty').isPublished, false);
+  assert.ok(lines.some(l => /updates \(this run\): fetched=2 written=2 skipped=0/.test(l)), lines.join('\n'));
 });

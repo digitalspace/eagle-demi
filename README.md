@@ -282,8 +282,10 @@ For an id both sides hold, `aclMismatch` lists rows whose DEMI `read[]` is not w
 would write from Eagle's `read[]`, or whose `isPublished` no longer matches its own `read[]`. The
 two ACLs are compared as sets, so order does not matter. A document, comment period or comment is
 first narrowed to its DEMI parent's ACL, the same way the mirrors do, so a row under a private
-project is not reported. These count toward `drift=`. The fix is a re-push from Eagle; this script
-does not rewrite them, and nothing writes back to Eagle.
+project is not reported. These count toward `drift=`. A row whose Eagle `read` is empty or missing
+is not compared, including a legacy Update with a missing `read` that takes its parent's read
+(`docs/public-read-backfill.md`). The fix is a re-push from Eagle; this script does not rewrite
+them, and nothing writes back to Eagle.
 
 One line is what a log alert matches:
 

@@ -140,6 +140,43 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.deepStrictEqual(patched(seen.ops[0]), { '/read': ['public'], '/isPublished': true, ...CLEARED });
   });
 
+  await t.test('a legacy open update (no read, no status, active) follows the project both ways', async () => {
+    // The mirror stores a missing Eagle read as null.
+    const legacy = { id: 'u1', read: [], eagleRead: null, eagleActive: true };
+    const seen = stub(t, [legacy, { ...legacy, id: 'u2', eagleStatus: 'draft' }, { ...legacy, id: 'u3', eagleActive: false }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    // Without status and active in the projection the rule could never see a legacy row.
+    assert.match(seen.queries[0].spec.query, /c\.sources\.eagle\.status AS eagleStatus/);
+    assert.match(seen.queries[0].spec.query, /c\.sources\.eagle\.active AS eagleActive/);
+    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': PUBLIC_PARENT, '/isPublished': true, ...CLEARED });
+    assert.deepStrictEqual(patched(seen.ops[1])['/read'], [], 'a status is not legacy');
+    assert.deepStrictEqual(patched(seen.ops[2])['/read'], [], 'an inactive row is not legacy');
+
+    t.mock.restoreAll();
+    const again = stub(t, [legacy]);
+    await setAclForProject(PROJECT_EAGLE_ID, PRIVATE_ACL);
+    assert.deepStrictEqual(patched(again.ops[0]), { '/read': PRIVATE_ACL, '/isPublished': false, ...CLEARED });
+  });
+
+  await t.test('an update with no sources.eagle.read at all follows the project too', async () => {
+    const seen = stub(t, [{ id: 'u1', read: [], eagleActive: true }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': PUBLIC_PARENT, '/isPublished': true, ...CLEARED });
+  });
+
+  await t.test('an update Eagle sent with read: [] stays [] under a public project', async () => {
+    // eagle-api prunes an empty read for an anonymous caller, so it is not legacy open.
+    const seen = stub(t, [{ id: 'u1', read: [], eagleRead: [], eagleStatus: null, eagleActive: true }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': [], '/isPublished': false, ...CLEARED });
+  });
+
   await t.test('an empty project ACL is refused rather than read as level 1', async () => {
     stub(t, []);
     await assert.rejects(setAclForProject(PROJECT_EAGLE_ID, []), TypeError);
