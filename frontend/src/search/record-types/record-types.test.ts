@@ -235,7 +235,15 @@ describe('documents helpers', () => {
 
   it('offers the legislation years newest first, one per Act', () => {
     const options = recordConfig('documents').optionsFrom(
-      [{ legislation: 1996 }, { legislation: 2018 }, { legislation: 2002 }, { legislation: 2018 }],
+      [
+        { legislation: 1996 },
+        { legislation: 2018 },
+        { legislation: 2002 },
+        { legislation: '2018' },
+        // No Act: dropped, as a number and as the string the index can hold.
+        { legislation: 0 },
+        { legislation: '0' },
+      ],
       [],
     );
 

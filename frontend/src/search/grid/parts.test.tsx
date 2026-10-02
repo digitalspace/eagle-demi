@@ -128,6 +128,16 @@ describe('ValuePicker', () => {
     expect(screen.queryByRole('group', { name: '2002 Act Terms' })).not.toBeInTheDocument();
   });
 
+  it('does not match a partial year against the Act, only against the label', async () => {
+    const user = userEvent.setup();
+    renderRow(MANY_ACTS);
+
+    await user.click(screen.getByRole('button', { name: 'Filter by Author' }));
+    await user.type(screen.getByRole('textbox', { name: 'Search author' }), '201');
+
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+  });
+
   it('drops an Act heading once typing leaves that Act no terms', async () => {
     const user = userEvent.setup();
     renderRow(MANY_ACTS);

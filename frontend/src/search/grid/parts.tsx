@@ -293,8 +293,11 @@ function ValuePicker({
   useDismissable(open, anchor, button, close);
   const picked = options.filter((option) => selected.includes(option.value));
   const term = typed.trim().toLowerCase();
-  // Matched against the label with its Act year, so typing "2018" narrows to that Act's terms.
-  const shown = term ? options.filter((option) => optionLabel(option).toLowerCase().includes(term)) : options;
+  // A whole year narrows to that Act's terms; a partial one must not keep every Act-tagged term.
+  const year = /^\d{4}$/.test(term) ? term : '';
+  const shown = term
+    ? options.filter((option) => option.label.toLowerCase().includes(term) || (year !== '' && option.legislation === year))
+    : options;
   const buttonText = picked.length === 0 ? 'All' : picked.length === 1 ? optionLabel(picked[0]) : `${picked.length} selected`;
   const toggle = (value: string) =>
     onChange(selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]);
