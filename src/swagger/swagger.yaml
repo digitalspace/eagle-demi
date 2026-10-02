@@ -948,11 +948,19 @@ paths:
           application/json:
             schema:
               type: object
-              minProperties: 1
+              # A null shortCode counts as not sent, so it alone does not satisfy the second branch.
+              anyOf:
+                - required: [url]
+                - required: [shortCode]
+                  properties:
+                    shortCode:
+                      type: string
               properties:
                 shortCode:
                   type: string
+                  nullable: true
                   pattern: '^[A-Za-z0-9_-]{3,64}$'
+                  description: The new code. `null` is the same as leaving it out.
                   example: site-c
                 url:
                   type: string
@@ -981,7 +989,9 @@ paths:
                       type: string
                   url:
                     type: string
-                    description: The effective target, the project page when none is set.
+                    description: >-
+                      The effective target, the project page when none is set. The same value
+                      `GET /api/projects/{id}` returns as `shortLinkUrl`.
                   shortLinkCustom:
                     type: boolean
                     description: True when a staff-set target is stored, false on the public page.
