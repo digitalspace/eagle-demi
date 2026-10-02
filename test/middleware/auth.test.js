@@ -1,10 +1,10 @@
 'use strict';
 
 process.env.NODE_ENV = 'test';
-process.env.DOCLING_API_KEY = 'eagle-demi-api-key';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { SUITE_KEY } = require('../helpers/suite-key');
 const jwt = require('jsonwebtoken');
 const authMiddleware = require('../../src/middleware/auth');
 const config = require('../../src/config');
@@ -20,7 +20,7 @@ test('Auth Middleware Tests', async (t) => {
   await t.test('calls next() and populates req.user when valid X-Api-Key is provided', () => {
     const req = {
       header: (name) => {
-        if (name === 'X-Api-Key') return 'eagle-demi-api-key';
+        if (name === 'X-Api-Key') return SUITE_KEY;
         return null;
       }
     };
@@ -67,6 +67,20 @@ test('Auth Middleware Tests', async (t) => {
     assert.ok(req.user);
     assert.strictEqual(req.user.preferred_username, 'test-user');
     assert.ok(req.user.realm_access.roles.includes('demi-admin'));
+  });
+
+  await t.test('the old built-in test key is refused even under NODE_ENV=test', () => {
+    const req = { header: (name) => (name === 'X-Api-Key' ? 'eagle-demi-api-key' : null) };
+    let statusVal = 0;
+    const res = { status: (val) => { statusVal = val; return { json: () => {} }; } };
+    let nextCalled = false;
+
+    authMiddleware(req, res, () => { nextCalled = true; });
+
+    assert.strictEqual(process.env.NODE_ENV, 'test');
+    assert.strictEqual(nextCalled, false);
+    assert.strictEqual(req.user, undefined);
+    assert.strictEqual(statusVal, 401);
   });
 
   await t.test('returns 401 when Bearer token is completely missing or invalid', () => {
