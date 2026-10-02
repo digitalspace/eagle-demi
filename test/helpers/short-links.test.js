@@ -241,6 +241,17 @@ test('ensureProjectShortLink', async (t) => {
       'the staff member who wrote it may take it onto the project');
   });
 
+  await t.test('an unheld record by an unnamed caller is not adopted by another unnamed caller', async () => {
+    const project = PROJECT();
+    const url = `${config.linkBaseUrl}/p/${project.eagleId}`;
+    const repos = fakeRepos(null, {
+      ids: { 'nicomen-wind-energy': { id: 'nicomen-wind-energy', url, createdBy: 'unknown' } }
+    });
+
+    assert.strictEqual(await claimCode(project, 'nicomen-wind-energy', repos, { createdBy: 'unknown' }), false,
+      'every caller with no username is "unknown", so the name does not prove the same caller');
+  });
+
   await t.test('an unheld record at `alsoUrl` is adopted and moved to the target', async () => {
     const project = { ...PROJECT(), shortLinkUrl: 'https://www.projects.eao.gov.bc.ca/nicomen' };
     const page = `${config.linkBaseUrl}/p/${project.eagleId}`;
