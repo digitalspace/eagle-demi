@@ -29,6 +29,8 @@ const ASSIGNMENT_ID = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Se
 
 const API_KEY = 'super-secret-key-value';
 
+const JOB_ID = '3f2b8c1e-7d4a-4e9b-a6c5-0d1e2f3a4b5c';
+
 const FAKE_AZ = `#!/usr/bin/env bash
 echo "az $*" >> "\${CALL_LOG}"
 case "$1 $2" in
@@ -54,7 +56,8 @@ const FAKE_CURL = `#!/usr/bin/env bash
 echo "curl $*" >> "\${CALL_LOG}"
 url="\${@: -1}"
 if [[ "$url" == *"/apply" ]]; then
-  echo '{"jobId":"job-1","statusUrl":"/admin/search-definitions/jobs/job-1"}'
+  job="\${CURL_JOB_ID:-${JOB_ID}}"
+  echo "{\\"jobId\\":\\"$job\\"}"
   echo "\${CURL_POST_CODE:-202}"
   exit 0
 fi
@@ -63,7 +66,7 @@ n=0
 read -r -a statuses <<< "\${CURL_STATUSES:-succeeded}"
 status="\${statuses[$n]:-\${statuses[-1]}}"
 echo "$((n + 1))" > "\${CALL_LOG}.n"
-echo "{\\"id\\":\\"job-1\\",\\"status\\":\\"\${status}\\",\\"error\\":\\"\${CURL_JOB_ERROR:-}\\",\\"results\\":\${CURL_JOB_RESULTS:-[]}}"
+echo "{\\"id\\":\\"${JOB_ID}\\",\\"status\\":\\"\${status}\\",\\"error\\":\\"\${CURL_JOB_ERROR:-}\\",\\"results\\":\${CURL_JOB_RESULTS:-[]}}"
 echo "\${CURL_GET_CODE:-200}"
 exit 0
 `;
@@ -169,6 +172,15 @@ test('with-search-admin.sh apply', async (t) => {
     assert.strictEqual(r.calls.filter(isDelete).length, 1);
   });
 
+  await t.test('refuses to poll a job id that is not a UUID, and revokes', async () => {
+    const r = run(['apply', '--env', 'test', '--only', 'projects'],
+      { env: { CURL_JOB_ID: '../../apikeys' } });
+    assert.strictEqual(r.status, 1, r.stderr);
+    assert.match(r.stderr, /job id that is not a UUID/);
+    assert.strictEqual(r.calls.filter(isPoll).length, 0, 'the id must never reach the poll URL');
+    assert.strictEqual(r.calls.filter(isDelete).length, 1);
+  });
+
   await t.test('revokes when the POST itself is rejected', async () => {
     // Nothing is running, so this is the cheapest grant to leak and the easiest to miss.
     const r = run(['apply', '--env', 'test', '--only', 'projects'],
@@ -185,7 +197,7 @@ test('with-search-admin.sh apply', async (t) => {
       { env: { CURL_STATUSES: 'running', APPLY_TIMEOUT: '0' } });
     assert.notStrictEqual(r.status, 0);
     assert.strictEqual(r.calls.filter(isDelete).length, 1, 'a timeout must still revoke');
-    assert.match(r.stderr, /job-1/, 'the job id has to survive the give-up, or it cannot be followed');
+    assert.ok(r.stderr.includes(JOB_ID), 'the job id has to survive the give-up, or it cannot be followed');
   });
 
   await t.test('never prints the API key', async () => {
@@ -253,6 +265,7 @@ test('with-search-admin.sh apply', async (t) => {
 
     assert.strictEqual(r.status, 0, r.stderr);
     assert.match(r.stderr, /ALREADY holds Search Service Contributor/);
+    assert.match(r.stderr, /killed apply run also leaves its mode 600 curl config/);
     assert.strictEqual(r.calls.filter(isCreate).length, 1,
       'a stale grant is a warning, not a reason to refuse the run');
   });

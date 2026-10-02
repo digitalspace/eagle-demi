@@ -617,15 +617,19 @@ what produced 3,382 synthetic project rows in the old database.
 the `demiwebtest…` static-website storage account, deployed from `azure/main.test.bicepparam`.
 
 `FRONTEND_STORAGE_ACCOUNT` has **no default and cannot be guessed** — the account name carries a
-`uniqueString` suffix. Take it from the `frontendStorageAccountName` output of `main.bicep`; the
-script aborts rather than inventing one, and `all` therefore needs it too.
+`uniqueString` suffix. Take it from the `frontendStorageAccountName` output of the newest
+`deploy-infra.sh <env> --foundation` run (deployment `infra-fnd-<sha>-<hhmmss>`). An
+application-only run emits that output, `frontendStaticSiteHostName` and `apimGatewayUrl` as empty
+strings. The script aborts rather than inventing one, and `all` therefore needs it too.
 
 ```bash
 # API by hand (Flex publishes through config-zip; deploy-azure.sh is frontend-only):
 BUILD_ID="$(git describe --tags --always)-$(date -u +%H%M%S)" python3 scripts/package-api.py . /tmp/api.zip
 az functionapp deployment source config-zip -g c4b0a8-test-rg -n demi-api-fc-test --src /tmp/api.zip
 
-FRONTEND_STORAGE_ACCOUNT=$(az deployment group show -g c4b0a8-test-rg -n main \
+FND=$(az deployment group list -g c4b0a8-test-rg \
+  --query "[?starts_with(name, 'infra-fnd-') && properties.provisioningState=='Succeeded'] | sort_by(@, &properties.timestamp) | [-1].name" -o tsv)
+FRONTEND_STORAGE_ACCOUNT=$(az deployment group show -g c4b0a8-test-rg -n "$FND" \
   --query properties.outputs.frontendStorageAccountName.value -o tsv) \
   ./scripts/deploy-azure.sh frontend c4b0a8-test-rg
 ```
@@ -716,11 +720,15 @@ the background after the update, so queries on a new path can scan until that fi
 
 A dry run needs no `CONFIRM_PROD`, on prod too. `--live` refuses while `cosmos-nosql.bicep` has
 uncommitted changes. Prod `--live` also needs `CONFIRM_PROD=yes`, a working `git fetch` of
-`origin/main`, and a `cosmos-nosql.bicep` identical to the one on `origin/main`. It prints a
-warning before an update that removes index paths.
+`origin/main`, and a `cosmos-nosql.bicep` identical to the one on `origin/main`.
 
-Exit codes: 0 no drift, or applied and confirmed; 1 failure, including a live policy that still
-differs after the update; 2 bad usage or refused; 3 dry run found drift.
+Dry run or not, it prints a warning when the declared policy drops indexing the live one has: a
+removed included path, composite index or spatial index, a new excluded path, or `indexingMode:
+none`. `--live` refuses a container that sets `analyticalStorageTtl` or `computedProperties`,
+because `az cosmosdb sql container update` does not carry them over.
+
+Exit codes: 0 no drift, or applied and confirmed; 1 failure, including a diff error and a live
+policy that still differs after the update; 2 bad usage or refused; 3 dry run found drift.
 
 It does not record a foundation deployment. The next `deploy-infra.sh <env> --live` still sees
 `cosmos-nosql.bicep` changed since the last `--foundation` run and refuses until one runs.
@@ -874,7 +882,8 @@ without revisiting that grant. A missing grant fails the first step of
 `scripts/deploy-azure.sh frontend` with a 403, before the build.
 
 1. **Give eagle-search the origin hostname.** `main.bicep` outputs `frontendStaticSiteHostName`
-   (`demiweb….z13.web.core.windows.net`); it goes into eagle-search's `demiFrontendWebHostName`
+   (`demiweb….z13.web.core.windows.net`) from a `--foundation` run only; an application-only run
+   emits it empty. It goes into eagle-search's `demiFrontendWebHostName`
    parameter, which is what adds DEMI's route to the shared Front Door profile.
 
 2. **Add the AFD hostname to `frontendHostNames` BEFORE publishing the frontend to it.** An AFD

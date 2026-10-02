@@ -20,9 +20,14 @@ identical to origin/main. A prod dry run needs none of these.
 
 extract prints the declared policy, normalised, and needs no Azure login.
 
-Exit codes: 0 no drift, or applied and confirmed; 1 failure, including a live
-policy that still differs after --live; 2 bad usage or refused; 3 dry run found
-drift.
+Prints a WARNING, dry run or not, when the declared policy drops indexing:
+removes an included path, a composite or spatial index, adds an excluded path,
+or sets indexingMode none. --live refuses a container that sets
+analyticalStorageTtl or computedProperties, which the update would drop.
+
+Exit codes: 0 no drift, or applied and confirmed; 1 failure, including a diff
+error and a live policy that still differs after --live; 2 bad usage or refused;
+3 dry run found drift.
 
 Throughput is never touched. Cosmos rebuilds the index in the background after
 the update; queries on a newly added path can scan until it finishes.
@@ -79,25 +84,45 @@ declared_policy() {
   jq --arg c "$container" --arg type "$CONTAINER_TYPE" "$EXTRACT" <<<"$compiled" | jq -S "$NORMALISE"
 }
 
+# Write the live container resource to $1 and print its policy, normalised.
 live_policy() {
-  local raw
-  if ! raw=$(az cosmosdb sql container show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" \
-    -a "$ACCOUNT" -d "$DATABASE" -n "$CONTAINER" --query resource.indexingPolicy -o json \
-    --only-show-errors); then
-    echo "✗ container ${CONTAINER} not found on ${ACCOUNT} (it may be conditional in bicep)" >&2
+  local out="$1" err="${WORK}/show.err"
+  if ! az cosmosdb sql container show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" \
+    -a "$ACCOUNT" -d "$DATABASE" -n "$CONTAINER" --query resource -o json \
+    --only-show-errors >"$out" 2>"$err"; then
+    cat "$err" >&2
+    if grep -Eqi 'not ?found' "$err"; then
+      echo "✗ container ${CONTAINER} not found on ${ACCOUNT} (it may be conditional in bicep)" >&2
+    else
+      echo "✗ could not read container ${CONTAINER} on ${ACCOUNT}; see the az error above" >&2
+    fi
     exit 1
   fi
-  jq -S "$NORMALISE" <<<"$raw"
+  jq -S ".indexingPolicy | ${NORMALISE}" "$out"
 }
 
-# Diff a live policy against the declared one into $WORK/diff.txt: 0 same, 1 differs, else exit 2.
+# One line per change that drops indexing the live policy has. Normalised policies come in as
+# $live and $decl (--slurpfile).
+INDEX_LOSS=$(cat <<'JQ'
+def paths($k): [(.[$k] // [])[] | .path];
+$live[0] as $l | $decl[0] as $d
+| ((($l | paths("includedPaths")) - ($d | paths("includedPaths")))[] | "removes included path \(.)"),
+  ((($d | paths("excludedPaths")) - ($l | paths("excludedPaths")))[] | "adds excluded path \(.)"),
+  ((($l | paths("spatialIndexes")) - ($d | paths("spatialIndexes")))[] | "removes spatial index \(.)"),
+  ((($l.compositeIndexes // []) - ($d.compositeIndexes // []))[]
+    | "removes composite index \(map(.path) | join(", "))"),
+  (if $d.indexingMode == "none" and $l.indexingMode != "none" then "sets indexingMode none" else empty end)
+JQ
+)
+
+# Diff a live policy against the declared one into $WORK/diff.txt: 0 same, 1 differs, else exit 1.
 diff_policy() {
   local live_label="$1" live_file="$2" rc=0
   diff -u --label "$live_label" --label "declared cosmos-nosql.bicep" \
     "$live_file" "${WORK}/declared.json" >"${WORK}/diff.txt" || rc=$?
   if [ "$rc" -gt 1 ]; then
     echo "✗ diff failed (exit ${rc}) comparing the live and declared policies" >&2
-    exit 2
+    exit 1
   fi
   return "$rc"
 }
@@ -121,21 +146,12 @@ if [ "$#" -eq 3 ]; then
   LIVE='true'
 fi
 
-# Same values as the environment case in scripts/deploy-infra.sh; change both together.
-case "$ENVIRONMENT" in
-  test)
-    SUBSCRIPTION='7897ceb1-9a86-4639-87d7-7f9ff67142b3'
-    RESOURCE_GROUP='c4b0a8-test-rg'
-    ;;
-  prod)
-    SUBSCRIPTION='be5924ac-1083-4a1b-be92-7b444882cfd9'
-    RESOURCE_GROUP='rg-demi-prod'
-    ;;
-  *)
-    echo "✗ unknown environment '${ENVIRONMENT}'. Use: test | prod" >&2
-    exit 2
-    ;;
-esac
+# shellcheck source-path=SCRIPTDIR source=lib/azure-env.sh
+source "${REPO_ROOT}/scripts/lib/azure-env.sh"
+if ! demi_azure_env "$ENVIRONMENT"; then
+  echo "✗ unknown environment '${ENVIRONMENT}'. Use: test | prod" >&2
+  exit 2
+fi
 ACCOUNT="demi-cosmos-${ENVIRONMENT}"
 
 if [ "$LIVE" = 'true' ]; then
@@ -177,7 +193,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 declared_policy "$CONTAINER" >"${WORK}/declared.json"
-live_policy >"${WORK}/live.json"
+live_policy "${WORK}/live-resource.json" >"${WORK}/live.json"
 
 TARGET="${ACCOUNT}/${DATABASE}/${CONTAINER}"
 if diff_policy "live ${TARGET}" "${WORK}/live.json"; then
@@ -186,14 +202,22 @@ if diff_policy "live ${TARGET}" "${WORK}/live.json"; then
 fi
 cat "${WORK}/diff.txt"
 
+jq -n -r --slurpfile live "${WORK}/live.json" --slurpfile decl "${WORK}/declared.json" "$INDEX_LOSS" \
+  | while IFS= read -r loss; do echo "WARNING: drops indexing: ${loss}" >&2; done
+
 if [ "$LIVE" != 'true' ]; then
   echo
   echo "dry run: would apply the declared policy to ${TARGET}; rerun with --live"
   exit 3
 fi
 
-if grep -Eq '^-[[:space:]]+"path"' "${WORK}/diff.txt"; then
-  echo "WARNING: removes index paths" >&2
+# The update rebuilds the container from a GET and does not carry these two over.
+dropped=$(jq -r '[if .analyticalStorageTtl != null then "analyticalStorageTtl" else empty end,
+  if (.computedProperties // []) != [] then "computedProperties" else empty end] | join(", ")' \
+  "${WORK}/live-resource.json")
+if [ -n "$dropped" ]; then
+  echo "✗ refusing --live: ${TARGET} sets ${dropped}, which az cosmosdb sql container update drops" >&2
+  exit 2
 fi
 
 echo
@@ -201,7 +225,7 @@ echo "applying to ${TARGET}"
 az cosmosdb sql container update --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" \
   -a "$ACCOUNT" -d "$DATABASE" -n "$CONTAINER" --idx "@${WORK}/declared.json" -o none --only-show-errors
 
-live_policy >"${WORK}/after.json"
+live_policy "${WORK}/after-resource.json" >"${WORK}/after.json"
 if ! diff_policy "live ${TARGET} after update" "${WORK}/after.json"; then
   cat "${WORK}/diff.txt"
   echo "✗ live policy still differs from cosmos-nosql.bicep after the update" >&2

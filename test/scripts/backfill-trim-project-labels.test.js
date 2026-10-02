@@ -66,6 +66,19 @@ test('backfillTrimProjectLabels', async (t) => {
     ]);
   });
 
+  await t.test('--live removes a whitespace-only label instead of writing an empty string', async () => {
+    const patch = fakePatch();
+    await backfillTrimProjectLabels(['--live'],
+      { projects: fakeProjects([{ id: '211', sector: '   ', projectSubType: 'Dams ' }]), patch: patch.fn });
+
+    assert.deepStrictEqual(patch.calls, [
+      { id: '211', ops: [
+        { op: 'remove', path: '/sector' },
+        { op: 'set', path: '/projectSubType', value: 'Dams' }
+      ] }
+    ]);
+  });
+
   await t.test('a failed patch is counted and exits 1; the rest still run', async () => {
     const patch = fakePatch(['207']);
     const summary = await backfillTrimProjectLabels(['--live'],
