@@ -288,23 +288,24 @@ test('access gate coverage', async (t) => {
     );
   });
 
+  await t.test('the links list tags rows only through the caller\'s own project access', () => {
+    const repo = code(fs.readFileSync(path.join(REPO_DIR, 'links.js'), 'utf8'));
+    const fn = repo.slice(repo.indexOf('async function listProjectCodes'));
+    assert.match(fn, /^async function listProjectCodes\(access\) \{\s*if \(!access\) throw/,
+      'access has no default, so omitting it cannot read past the ACL');
+    assert.match(fn, /selectWhere\(\{\s*access,/, 'listProjectCodes must compose the access it is handed');
+    const controller = code(fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'link.js'), 'utf8'));
+    const calls = controller.match(/listProjectCodes\([^)]*\)/g) || [];
+    assert.deepStrictEqual(calls, ['listProjectCodes(resolveAccess(req)'],
+      'GET /links must tag through the caller\'s access');
+  });
+
   /**
    * The ROW gate says which records; the field catalog says which attributes of one. This is the
    * second half, checked per CALL SITE rather than per file (docs/rbac-architecture.md §2 item 1):
    * a response that emits a stored project without `redactForAccess` ships `read[]`, `vis`, the
    * raw `sources` payloads and the Cosmos system fields to whoever asked.
    */
-  await t.test('the links list tags rows only through the caller\'s own project access', () => {
-    const repo = code(fs.readFileSync(path.join(REPO_DIR, 'links.js'), 'utf8'));
-    const fn = repo.slice(repo.indexOf('async function listProjectCodes'));
-    assert.match(fn, /^async function listProjectCodes\(access = systemAccess\(\)\)/);
-    assert.match(fn, /selectWhere\(\{\s*access,/, 'listProjectCodes must compose the access it is handed');
-    const controller = code(fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'link.js'), 'utf8'));
-    const calls = controller.match(/listProjectCodes\([^)]*\)/g) || [];
-    assert.deepStrictEqual(calls, ['listProjectCodes(resolveAccess(req)'],
-      'GET /links must tag through the caller\'s access, never the systemAccess default');
-  });
-
   await t.test('every project response site redacts', () => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);

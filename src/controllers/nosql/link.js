@@ -25,7 +25,7 @@ const RACED_ERROR = 'This short link changed while saving. Reload and try again.
 /**
  * A 409 when any project holds `code`, else null. Ownership is judged on every project; the
  * `projectId` that lets the admin UI send the edit to the project route names the best holder
- * (`links.ownerRank`) the caller may read, so never a hidden one.
+ * (`links.ownerRank`) whose row and code field the caller may read, so never a hidden one.
  */
 async function projectCodeConflict(req, res, code) {
   const owners = await projects.listShortCodeOwners(code);
@@ -33,6 +33,8 @@ async function projectCodeConflict(req, res, code) {
   const access = resolveAccess(req);
   const [owner] = (await Promise.all(owners.map(id => projects.getById(access, id))))
     .filter(Boolean)
+    .map(row => links.shownCodes(row, access))
+    .filter(row => row.shortCode === code || row.legacyShortCodes.includes(code))
     .sort((a, b) => links.ownerRank(a, code) - links.ownerRank(b, code));
   return res.status(409).json(owner ? { error: PROJECT_CODE_ERROR, projectId: String(owner.id) } : { error: PROJECT_CODE_ERROR });
 }

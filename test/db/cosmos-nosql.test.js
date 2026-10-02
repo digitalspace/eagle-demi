@@ -433,16 +433,6 @@ test('upsert carries optimistic concurrency to the SDK', async (t) => {
   });
 });
 
-/**
- * A guarded PATCH inside a BULK request.
- *
- * The chunk re-stamp orders concurrent walks with a SQL `condition` on every patch, and it sends
- * one request per hundred chunks rather than one per chunk — a corpus walk is 400k+ of them. Two
- * things have to hold for that: the condition must reach the SDK on each operation, and a rejected
- * condition must be reported as the ANSWER it is. A 412 retried four times pays four requests for
- * a decision Cosmos already made and then hands the caller a skipped chunk counted as a lost one,
- * which is what sends the repair after rows that are already current.
- */
 test('remove carries optimistic concurrency to the SDK', async (t) => {
   const { module: db, deletes } = loadWithSdkStub(t);
 
@@ -460,6 +450,16 @@ test('remove carries optimistic concurrency to the SDK', async (t) => {
   });
 });
 
+/**
+ * A guarded PATCH inside a BULK request.
+ *
+ * The chunk re-stamp orders concurrent walks with a SQL `condition` on every patch, and it sends
+ * one request per hundred chunks rather than one per chunk — a corpus walk is 400k+ of them. Two
+ * things have to hold for that: the condition must reach the SDK on each operation, and a rejected
+ * condition must be reported as the ANSWER it is. A 412 retried four times pays four requests for
+ * a decision Cosmos already made and then hands the caller a skipped chunk counted as a lost one,
+ * which is what sends the repair after rows that are already current.
+ */
 test('bulk carries a per-operation Patch condition to the SDK', async () => {
   const sent = [];
   const container = {

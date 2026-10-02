@@ -8,8 +8,8 @@
 const cosmos = require('../db/cosmos-nosql');
 const projects = require('./projects');
 const { selectWhere, fetchAll } = require('./_sql');
-const { systemAccess } = require('../helpers/access-sql');
 const { isEagleOnlyProjectId } = require('../merge/project');
+const { redactForAccess } = require('../vis/redact');
 
 const CONTAINER = 'links';
 
@@ -75,15 +75,22 @@ function ownerRank(row, code) {
   return (isEagleOnlyProjectId(row.id) ? 2 : 0) + (row.shortCode === code ? 0 : 1);
 }
 
+/** The codes `row` holds as this caller may see them: the field dials apply, as on any project read. */
+function shownCodes(row, access) {
+  const shown = redactForAccess('projects', row, access);
+  return { id: row.id, shortCode: shown.shortCode || null, legacyShortCodes: shown.legacyShortCodes || [] };
+}
+
 /**
  * Which project holds each code, current or legacy, in one query over the projects container: the
  * list route tags every row with it, and a lookup per row would be one query per link. Bounded by
- * the project count. Several holders resolve by `ownerRank`. `access` narrows it to the projects
- * the caller may read.
+ * the project count. Several holders resolve by `ownerRank`. Only projects and codes the caller
+ * may read count.
  *
  * @returns {Promise<Map<string, {projectId: string, projectRole: 'current'|'legacy'}>>}
  */
-async function listProjectCodes(access = systemAccess()) {
+async function listProjectCodes(access) {
+  if (!access) throw new Error('[links] listProjectCodes needs the caller\'s access');
   const spec = selectWhere({
     access,
     partitionField: projects.PARTITION_FIELD,
@@ -91,13 +98,13 @@ async function listProjectCodes(access = systemAccess()) {
       clause: '((IS_DEFINED(c.shortCode) AND NOT IS_NULL(c.shortCode)) OR ARRAY_LENGTH(c.legacyShortCodes) > 0)',
       params: []
     }],
-    select: 'c.id, c.shortCode, c.legacyShortCodes'
+    select: 'c.id, c.shortCode, c.legacyShortCodes, c.vis'
   });
-  const rows = await fetchAll(projects.CONTAINER, spec);
+  const rows = (await fetchAll(projects.CONTAINER, spec)).map(row => shownCodes(row, access));
   const held = new Map();
   const ranks = new Map();
   for (const row of rows) {
-    for (const code of [row.shortCode, ...(row.legacyShortCodes || [])]) {
+    for (const code of [row.shortCode, ...row.legacyShortCodes]) {
       if (!code) continue;
       const rank = ownerRank(row, code);
       if (ranks.has(code) && ranks.get(code) <= rank) continue;
@@ -116,5 +123,6 @@ module.exports = {
   remove,
   list,
   listProjectCodes,
-  ownerRank
+  ownerRank,
+  shownCodes
 };

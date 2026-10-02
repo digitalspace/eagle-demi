@@ -126,7 +126,8 @@ function projectLinkRecord(project, id, createdBy = 'system') {
 /**
  * Creates the link record for `code`, or adopts a shared one already there. Adopted when only this
  * project (or its Eagle-only twin) holds the code, whatever the url; when nobody holds it, only a
- * record the system or this same caller (`createdBy`) wrote, at this project's target or `alsoUrl`.
+ * record the system or this same named caller (`createdBy`) wrote, at this project's target or
+ * `alsoUrl`. Every caller with no username is `'unknown'`, so that name proves nothing.
  * A project write that failed after its link landed leaves exactly that, and must not block the
  * retry. A personal record is never adopted: it is one staff member's own link, and the /links
  * routes refuse to edit a project's code.
@@ -174,7 +175,8 @@ async function adoptable(project, record, repos, createdBy, alsoUrl) {
     const self = selfIds(project);
     return owners.every(id => self.has(String(id)));
   }
-  if (record.createdBy !== 'system' && record.createdBy !== createdBy) return false;
+  const sameCaller = createdBy !== 'unknown' && record.createdBy === createdBy;
+  if (record.createdBy !== 'system' && !sameCaller) return false;
   return record.url === projectTarget(project) || (Boolean(alsoUrl) && record.url === alsoUrl);
 }
 

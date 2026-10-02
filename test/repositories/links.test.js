@@ -7,7 +7,7 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const links = require('../../src/repositories/links');
-const { resolveAccess } = require('../../src/helpers/access-sql');
+const { resolveAccess, systemAccess } = require('../../src/helpers/access-sql');
 
 test('links repository', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -91,7 +91,7 @@ test('links repository', async (t) => {
       };
     });
 
-    const held = await links.listProjectCodes();
+    const held = await links.listProjectCodes(systemAccess());
 
     assert.deepStrictEqual([...held.entries()].sort(), [
       ['kemess', { projectId: '208', projectRole: 'current' }],
@@ -99,9 +99,9 @@ test('links repository', async (t) => {
       ['site-c', { projectId: '207', projectRole: 'current' }]
     ]);
     assert.deepStrictEqual(seen.map(q => q.container), ['projects']);
-    assert.match(seen[0].spec.query, /^SELECT c\.id, c\.shortCode, c\.legacyShortCodes FROM c WHERE /);
+    assert.match(seen[0].spec.query, /^SELECT c\.id, c\.shortCode, c\.legacyShortCodes, c\.vis FROM c WHERE /);
     assert.match(seen[0].spec.query, /IS_DEFINED\(c\.shortCode\) AND NOT IS_NULL\(c\.shortCode\)\) OR ARRAY_LENGTH\(c\.legacyShortCodes\) > 0/);
-    assert.ok(!/@role/.test(seen[0].spec.query), 'with no access given, every project counts');
+    assert.ok(!/@role/.test(seen[0].spec.query), 'under system access, every project counts');
   });
 
   await t.test('listProjectCodes names the Track row over the Eagle-only twin a relink left behind', async () => {
@@ -113,7 +113,7 @@ test('links repository', async (t) => {
       ]
     }));
 
-    const held = await links.listProjectCodes();
+    const held = await links.listProjectCodes(systemAccess());
 
     assert.deepStrictEqual(held.get('site-c'), { projectId: '207', projectRole: 'legacy' });
     assert.deepStrictEqual(held.get('kq7bt2rm'), { projectId: '207', projectRole: 'legacy' });
@@ -128,5 +128,25 @@ test('links repository', async (t) => {
 
     assert.match(seenSpec.query, /r IN c\.read WHERE r IN \(@role0\)/);
     assert.deepStrictEqual(seenSpec.parameters, [{ name: '@role0', value: 'public' }]);
+  });
+
+  await t.test('listProjectCodes with no access throws, never reads unscoped', async () => {
+    const query = t.mock.method(cosmos, 'query', async () => ({ items: [] }));
+    await assert.rejects(() => links.listProjectCodes(), /needs the caller's access/);
+    assert.strictEqual(query.mock.callCount(), 0);
+  });
+
+  await t.test('listProjectCodes skips a code in a field dialed above the caller', async () => {
+    t.mock.method(cosmos, 'query', async () => ({
+      items: [
+        { id: '207', shortCode: 'site-c', legacyShortCodes: ['kq7bt2rm'], vis: { shortCode: 1 } },
+        { id: '208', shortCode: 'kemess', legacyShortCodes: ['old-kemess'], vis: { legacyShortCodes: 1 } }
+      ]
+    }));
+
+    const held = await links.listProjectCodes(resolveAccess({ user: { preferred_username: 'staff.person' } }));
+
+    assert.deepStrictEqual([...held.keys()].sort(), ['kemess', 'kq7bt2rm']);
+    assert.deepStrictEqual(held.get('kq7bt2rm'), { projectId: '207', projectRole: 'legacy' });
   });
 });
