@@ -3866,7 +3866,10 @@ components:
             removed, runs of whitespace become one space, and it is trimmed; blank tags and
             case-insensitive repeats are then dropped. The limits apply to what is left: more than
             20 tags or a tag over 100 characters is a 400, as is anything but an array of strings.
-            `[]` clears them.
+            `[]` clears them. On a Track project or its `eagle-<eagleId>` copy, the stored list is
+            then copied onto the other row. That copy does not check the caller's access to the
+            other row, because the two rows can have different read lists. It writes only the tag
+            list, and it is audited.
           example: ["West Coast Oil Pipeline"]
 
     DocumentInput:

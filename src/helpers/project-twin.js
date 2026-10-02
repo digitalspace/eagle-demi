@@ -10,6 +10,7 @@ const projects = require('../repositories/projects');
 const { levelOfRead } = require('./access-sql');
 const { writeGuarded } = require('./etag-write');
 const { logger } = require('../utils/logger');
+const { auditEvent } = require('../utils/audit');
 const { eagleOnlyProjectId } = require('../merge/project');
 
 /**
@@ -77,10 +78,15 @@ async function readPartner(row) {
  * Copy the row's stored `tags` onto the other row of its pair, so both rows (and the documents
  * each one holds) match the same names, and a removal on one is a removal on both.
  *
+ * The partner is read and written without the caller's access: the two rows can carry different
+ * `read[]`, and a checked read would skip the partner and leave the pair apart. Only `tags` (and
+ * `updatedAt`) change on it, and the write is audited under the caller.
+ *
  * @param {object} row  the row as it was before this write, so the pair is the one it belonged to
+ * @param {object} req  the request whose caller the partner write is audited under
  * @returns {Promise<string|null>} an error message the caller must 500 with, or null
  */
-async function mirrorTags(row) {
+async function mirrorTags(row, req) {
   const read = () => readPartner(row);
   const logFailure = (cause) => logger.error('[project-twin] could not mirror tags onto the other row of the pair',
     { projectId: row.id, eagleId: row.eagleId, ...cause });
@@ -95,9 +101,18 @@ async function mirrorTags(row) {
         if (!primary || sameTags(partner.tags, primary.tags)) return { status: 'none' };
         const copy = { ...partner, tags: [...(primary.tags || [])], updatedAt: new Date().toISOString() };
         await projects.upsert(copy, { etag: partner._etag });
-        return { status: 'saved' };
+        return { status: 'saved', partnerId: partner.id };
       }
     });
+    if (written.status === 'saved') {
+      auditEvent(req, {
+        action: 'project.mirrorTags',
+        targetType: 'project',
+        targetId: written.partnerId,
+        projectId: written.partnerId,
+        detail: { fields: ['tags'], copiedFrom: row.id }
+      });
+    }
     if (written.status !== 'conflict') return null;
     logFailure();
   } catch (err) {

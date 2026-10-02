@@ -430,7 +430,7 @@ exports.updateProject = async (req, res) => {
     // Every PUT that sends tags mirrors them, unchanged or not, so a pair that drifted apart heals.
     // Never across a re-pointed `eagleId`: the new id's row belongs to another project.
     const mirrorFailure = changes.tags !== undefined && saved.eagleId === existing.eagleId
-      ? await mirrorTags(existing)
+      ? await mirrorTags(existing, req)
       : null;
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full
@@ -450,9 +450,9 @@ exports.updateProject = async (req, res) => {
       }
     });
 
+    if (mirrorFailure) return res.status(500).json({ success: false, error: mirrorFailure });
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
-    if (mirrorFailure) return res.status(500).json({ success: false, error: mirrorFailure });
     return res.json(redactForAccess('projects', saved, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');

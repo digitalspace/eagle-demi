@@ -224,7 +224,8 @@ with no tags indexes as null, and an element that is not a string is left out, s
 collection cannot hold would fail the whole indexer run. The document search's project leg
 searches both too, so documents follow the tag. A `PUT` that sends `tags` to a Track project or
 its `eagle-<eagleId>` copy then copies the stored list onto the other row, unless the same `PUT`
-changes `eagleId`.
+changes `eagleId`. That copy does not check the caller's access to the other row, because the two
+rows can have different read lists. It writes only the tag list, and it is audited.
 
 Both are new fields, so a plain widening. Same order as `searchLabels`, because the app that ships
 them searches them on every project keyword query and the document search's project leg:

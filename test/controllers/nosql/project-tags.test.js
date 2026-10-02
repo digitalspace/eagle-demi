@@ -20,6 +20,7 @@ const audit = require('../../../src/utils/audit');
 const { logger } = require('../../../src/utils/logger');
 const projects = require('../../../src/repositories/projects');
 const projectController = require('../../../src/controllers/nosql/project');
+const { canRead, resolveAccess } = require('../../../src/helpers/access-sql');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, eagleProject, storedEagleProject, projectReadForWriteFromGet
 } = require('../../helpers/eagle-mirror-fixtures');
@@ -311,11 +312,18 @@ test('the audit row of a PUT names tags only when they changed', async (t) => {
 // A Track project and the `eagle-<id>` row the Track relink keeps beside it are one project to a
 // reader, so a name set on either has to find both.
 test('PUT /projects/:id tags reach the other row of a Track/Eagle pair', async (t) => {
-  t.afterEach(() => t.mock.restoreAll());
+  t.afterEach(() => {
+    t.mock.restoreAll();
+    audit._setTransport(async () => {});
+  });
 
   const TWIN_ID = `eagle-${PROJECT_EAGLE_ID}`;
-  const TRACK_ROW = { id: '207', trackProjectId: 207, eagleId: PROJECT_EAGLE_ID, name: 'Nicomen Wind', _etag: '"t1"' };
-  const TWIN_ROW = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', name: 'Nicomen Wind', _etag: '"e1"' };
+  const TRACK_ROW = {
+    id: '207', trackProjectId: 207, eagleId: PROJECT_EAGLE_ID, name: 'Nicomen Wind', read: ['staff'], _etag: '"t1"'
+  };
+  const TWIN_ROW = {
+    id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', name: 'Nicomen Wind', read: ['staff'], _etag: '"e1"'
+  };
 
   /**
    * A projects container in memory. `refuse` names a row whose every write fails with `refuseCode`
@@ -326,7 +334,11 @@ test('PUT /projects/:id tags reach the other row of a Track/Eagle pair', async (
     const byId = new Map(rows.map(row => [row.id, structuredClone(row)]));
     const written = [];
     const read = (id) => structuredClone(byId.get(String(id)) ?? null);
-    t.mock.method(projects, 'getById', async (_access, id) => read(id));
+    // Same gate as the repository's point read; the write-path reads below are unchecked.
+    t.mock.method(projects, 'getById', async (access, id) => {
+      const row = read(id);
+      return canRead(row, access, 'id') ? row : null;
+    });
     t.mock.method(projects, 'readForWrite', async (id) => read(id));
     // The repository's rule: of a Track row and its twin, the Track row answers for the Eagle id.
     t.mock.method(projects, 'readForWriteByEagleId', async (eagleId) => {
@@ -340,8 +352,60 @@ test('PUT /projects/:id tags reach the other row of a Track/Eagle pair', async (
       await afterWrite(doc);
       return doc;
     });
-    return { tagsOf: (id) => byId.get(id).tags, written };
+    return { tagsOf: (id) => byId.get(id).tags, rowOf: (id) => structuredClone(byId.get(id)), written };
   }
+
+  // A `staff` caller: a writer, but not privileged, so `read[]` decides what it can read.
+  const STAFF_WRITER = { sub: 'kc-staff-1', preferred_username: 'staff.writer', realm_access: { roles: ['staff'] } };
+
+  /**
+   * A PUT of tags on `edited` by STAFF_WRITER, whose partner `strict` it cannot read. Returns the
+   * response, the store and the audit rows the PUT recorded.
+   */
+  async function putBesideStrictPartner(edited, strict) {
+    const rows = [];
+    audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
+    const store = pairStore([edited, strict]);
+    assert.strictEqual(await projects.getById(resolveAccess({ user: STAFF_WRITER }), strict.id), null,
+      'the premise: the caller cannot read the partner');
+
+    const res = await put({ tags: ['Site C'] }, STAFF_WRITER, edited.id);
+    return { res, store, rows };
+  }
+
+  /** Everything the PUT must leave alone on the partner: all but `tags` and `updatedAt`. */
+  const untouched = ({ tags: _tags, updatedAt: _updatedAt, ...rest }) => rest;
+
+  await t.test('a twin the caller cannot read takes the tags and nothing else, and none of it is returned',
+    async () => {
+      const strictTwin = { ...TWIN_ROW, read: ['team'], description: 'Twin-only text', tags: ['Old Name'] };
+
+      const { res, store, rows } = await putBesideStrictPartner(TRACK_ROW, strictTwin);
+
+      assert.strictEqual(res.statusCode, 200);
+      assert.deepStrictEqual(store.tagsOf(TWIN_ID), ['Site C']);
+      assert.deepStrictEqual(untouched(store.rowOf(TWIN_ID)), untouched(strictTwin));
+      assert.strictEqual(res.body.id, '207');
+      assert.ok(!JSON.stringify(res.body).includes('Twin-only text'), JSON.stringify(res.body));
+      const mirrored = rows.find(row => row.Action === 'project.mirrorTags');
+      assert.ok(mirrored, `got actions: ${rows.map(row => row.Action)}`);
+      assert.strictEqual(mirrored.TargetId, TWIN_ID);
+      assert.strictEqual(mirrored.ActorId, 'kc-staff-1');
+      assert.deepStrictEqual(mirrored.Detail, { fields: ['tags'], copiedFrom: '207' });
+    });
+
+  await t.test('a Track row the caller cannot read takes the tags sent on its twin, audited', async () => {
+    const strictTrack = { ...TRACK_ROW, read: ['team'], description: 'Track-only text' };
+
+    const { res, store, rows } = await putBesideStrictPartner(TWIN_ROW, strictTrack);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(store.tagsOf('207'), ['Site C']);
+    assert.deepStrictEqual(untouched(store.rowOf('207')), untouched(strictTrack));
+    assert.ok(!JSON.stringify(res.body).includes('Track-only text'), JSON.stringify(res.body));
+    const mirrored = rows.find(row => row.Action === 'project.mirrorTags');
+    assert.strictEqual(mirrored && mirrored.TargetId, '207', `got actions: ${rows.map(row => row.Action)}`);
+  });
 
   await t.test('tags sent on the Track row are written to its twin', async () => {
     const store = pairStore([TRACK_ROW, TWIN_ROW]);
