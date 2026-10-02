@@ -33,4 +33,22 @@ function normalizeSubType(value, legislationYear) {
   return act2002 ? 'Local Government Solid Waste Management Facilities' : 'Solid Waste Management';
 }
 
-module.exports = { normalizeSubType };
+/**
+ * The stored sub-types that show as `shown`, and under which Act each does: normalizeSubType run
+ * backwards, for a filter on the shown name. 2002 is a legislation year of 2002 or earlier; 2018
+ * is any other year, or none.
+ * @returns {{name: string, under2002: boolean, under2018: boolean}[]}
+ */
+function subTypeSources(shown) {
+  const name = typeof shown === 'string' ? shown.trim() : '';
+  if (!name) return [];
+  return [...new Set([name, TRANSMISSION_LINES, SOLID_WASTE, MARINE_PORT])]
+    .map(source => ({
+      name: source,
+      under2002: normalizeSubType(source, 2002) === name,
+      under2018: normalizeSubType(source, 2018) === name
+    }))
+    .filter(s => s.under2002 || s.under2018);
+}
+
+module.exports = { normalizeSubType, subTypeSources };
