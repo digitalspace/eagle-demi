@@ -1,10 +1,10 @@
 'use strict';
 
 process.env.NODE_ENV = 'test';
-process.env.DOCLING_API_KEY = 'eagle-demi-api-key';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { SUITE_KEY } = require('../helpers/suite-key');
 const jwt = require('jsonwebtoken');
 const passiveAuthMiddleware = require('../../src/middleware/passiveAuth');
 const { resolveAccess, TIER } = require('../../src/helpers/access-sql');
@@ -21,7 +21,7 @@ test('Passive Auth Middleware Tests', async (t) => {
   await t.test('calls next() and populates req.user when valid X-Api-Key is provided', () => {
     const req = {
       header: (name) => {
-        if (name === 'X-Api-Key') return 'eagle-demi-api-key';
+        if (name === 'X-Api-Key') return SUITE_KEY;
         return null;
       }
     };

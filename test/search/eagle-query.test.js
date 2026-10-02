@@ -218,6 +218,45 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("type eq 'Mines'"));
   });
 
+  // A row with no sector shows Track's sub-type as its sector, so the filter has to reach it too.
+  await t.test('and[sector] also matches a row with no sector whose sub-type shows as the value', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[sector]': 'Oil Refineries' }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, []);
+    assert.strictEqual(filter,
+      "(sector eq 'Oil Refineries' or ((sector eq null or sector eq '') and projectSubType eq 'Oil Refineries'))" +
+      ` and ${ANON_FILTER}`);
+  });
+
+  await t.test('and[sector] maps a renamed sub-type back to the name Track stores', () => {
+    const { filter } = eagleQuery.buildFilter(
+      { 'and[sector]': 'Electric Transmission Lines' }, 'Project', anonAcl('id'));
+    assert.ok(filter.includes(
+      "((sector eq null or sector eq '') and (projectSubType eq 'Electric Transmission Lines' or " +
+      "projectSubType eq 'Transmission Lines'))"), filter);
+  });
+
+  // Marine ports were renamed between the Acts, so the stored name shows one way per Act.
+  await t.test('and[sector] reads a renamed sub-type under the Act it shows for', () => {
+    const old = eagleQuery.buildFilter({ 'and[sector]': 'Marine Port Facilities' }, 'Project', anonAcl('id'));
+    assert.ok(old.filter.includes(
+      "(projectSubType eq 'Marine Port Projects' and legislationYear le 2002)"), old.filter);
+
+    const current = eagleQuery.buildFilter({ 'and[sector]': 'Marine Port Projects' }, 'Project', anonAcl('id'));
+    assert.ok(current.filter.includes(
+      "((sector eq null or sector eq '') and (projectSubType eq 'Marine Port Projects' and " +
+      '(legislationYear eq null or legislationYear gt 2002)))'), current.filter);
+  });
+
+  await t.test('a multi-select and[sector] carries the fallback per value, and quotes it', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[sector]': "Mines,O'Brien" }, 'Project', anonAcl('id'));
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("projectSubType eq 'Mines'"), filter);
+    assert.ok(filter.includes("projectSubType eq 'O''Brien'"), filter);
+  });
+
   // `and[type]=` with nothing after the `=` splits to zero values, same as the key being absent —
   // it must add no clause AND must not be reported dropped, the same "no filter" reading the Cosmos
   // path's `typeCriteria` gives `updates.js` `and[type]`. See `src/repositories/updates.js`.

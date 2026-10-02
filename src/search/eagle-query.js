@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { logger } = require('../utils/logger');
 const { buildContainsQuery } = require('./ai-search');
+const { subTypeSources } = require('./sub-type');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
 const { levelOf } = require('../vis/level');
@@ -179,6 +180,33 @@ const VALUE_ALIASES = {
       'Tourist Destination Resorts': 'Tourist Destination Resort'
     }
   }
+};
+
+/**
+ * `and[sector]=X` also matches a row with no sector whose Track sub-type SHOWS as X: the response
+ * falls back to it (wireSector in controllers/search.js). Null when no stored sub-type shows as X,
+ * or this caller may not query the fields the fallback reads.
+ */
+function sectorFallbackTerm(value, access) {
+  const fields = fieldsFor('Project');
+  const readable = ['projectSubType', 'legislationYear']
+    .every(f => fields.get(f)?.filterable && fieldVisible('Project', f, access));
+  if (!readable) return null;
+  const sources = subTypeSources(value).map(({ name, under2002, under2018 }) => {
+    const eq = `projectSubType eq ${quote(name)}`;
+    if (under2002 && under2018) return eq;
+    return under2002
+      ? `(${eq} and legislationYear le 2002)`
+      : `(${eq} and (legislationYear eq null or legislationYear gt 2002))`;
+  });
+  if (sources.length === 0) return null;
+  const any = sources.length === 1 ? sources[0] : `(${sources.join(' or ')})`;
+  return `((sector eq null or sector eq '') and ${any})`;
+}
+
+/** Wire key -> a term for the rows whose shown value comes from a fallback field, per dataset. */
+const FALLBACK_TERMS = {
+  Project: { sector: sectorFallbackTerm }
 };
 
 /**
@@ -594,6 +622,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     }
 
     const valueMap = (VALUE_ALIASES[dataset] || {})[base] || {};
+    const fallback = !edge && (FALLBACK_TERMS[dataset] || {})[base];
     // ONE ENTRY PER WIRE VALUE, whatever it expands to, so the report below counts values that
     // produced no term rather than the spellings each was tried under.
     const terms = values.flatMap((v) => {
@@ -602,6 +631,8 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
         .map(spelling => (edge ? rangeTerm(field, meta, spelling, edge) : term(field, meta, spelling)))
         .filter(Boolean);
       if (built.length === 0) return [];
+      const extra = fallback && fallback(v, access);
+      if (extra) built.push(extra);
       return [built.length === 1 ? built[0] : `(${built.join(' or ')})`];
     });
     // Reported whenever ANY value was lost, not only when all of them were: `and[pageNumber]=1,0.5`

@@ -18,6 +18,7 @@ process.env.AUDIT_MAX_BATCH = '1';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { SUITE_KEY } = require('../../helpers/suite-key');
 const fs = require('node:fs');
 const path = require('node:path');
 const jwt = require('jsonwebtoken');
@@ -103,7 +104,7 @@ function runGuards(guards, req, res) {
 
 /** A request carrying the test suite's sysadmin API key. */
 const sysadminReq = () => ({
-  header: (name) => (name === 'X-Api-Key' ? 'eagle-demi-api-key' : null),
+  header: (name) => (name === 'X-Api-Key' ? SUITE_KEY : null),
   params: { id: 's1' }, query: {}, body: {}
 });
 

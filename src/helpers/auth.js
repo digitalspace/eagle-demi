@@ -246,14 +246,6 @@ function authenticate(req, onSuccess, onFailure) {
     return;
   }
 
-  // Testing fallback only — guarded, and never reachable outside the test runner.
-  if (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key') {
-    return onSuccess({
-      preferred_username: 'internal-service',
-      realm_access: { roles: ['sysadmin', 'staff', 'demi-admin'] }
-    });
-  }
-
   // 2. User Keycloak Bearer Token Check
   const authHeader = req.header('Authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {

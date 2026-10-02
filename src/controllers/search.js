@@ -520,7 +520,8 @@ function redactIndexProject(hit, access) {
  * The wire `sector`: Track's sub-type, named for the legislation year, when the STORED row has no
  * sector. Asked of the stored row, not the redacted one, or a sector a dial withholds would come
  * back as the sub-type. Trimmed, as the merge stores it; rows written before that may still carry
- * a trailing space. Display only: `and[sector]` and `sortBy=sector` read the index column.
+ * a trailing space. `and[sector]` matches the fallback too (search/eagle-query.js); `sortBy=sector`
+ * still orders on the index column.
  */
 function wireSector(stored, shown, legislationYear) {
   const text = v => (typeof v === 'string' ? v.trim() : '');

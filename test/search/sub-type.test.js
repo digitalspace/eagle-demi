@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { normalizeSubType } = require('../../src/search/sub-type');
+const { normalizeSubType, subTypeSources } = require('../../src/search/sub-type');
 
 test('normalizeSubType', async (t) => {
   await t.test('a name eagle-admin already uses passes through, trimmed', () => {
@@ -45,5 +45,31 @@ test('normalizeSubType', async (t) => {
     assert.strictEqual(normalizeSubType(name, 1996), 'Marine Port Facilities');
     assert.strictEqual(normalizeSubType(name, 2018), name);
     assert.strictEqual(normalizeSubType(name), name, 'no year reads as 2018');
+  });
+});
+
+test('subTypeSources', async (t) => {
+  await t.test('a name no rename produces comes from itself, under both Acts', () => {
+    assert.deepStrictEqual(subTypeSources(' Coal Mines '),
+      [{ name: 'Coal Mines', under2002: true, under2018: true }]);
+  });
+
+  await t.test('a renamed name comes from the name Track stores, under the Act that renames it', () => {
+    assert.deepStrictEqual(subTypeSources('Local Government Solid Waste Management Facilities'), [
+      { name: 'Local Government Solid Waste Management Facilities', under2002: true, under2018: true },
+      { name: 'Solid Waste Management Facilities', under2002: true, under2018: false }
+    ]);
+    assert.deepStrictEqual(subTypeSources('Marine Port Projects'),
+      [{ name: 'Marine Port Projects', under2002: false, under2018: true }]);
+  });
+
+  await t.test('a name that always shows renamed is no source of itself', () => {
+    assert.deepStrictEqual(subTypeSources('Transmission Lines'), []);
+  });
+
+  await t.test('empty or missing has no source', () => {
+    for (const value of [undefined, null, '', '  ', 42]) {
+      assert.deepStrictEqual(subTypeSources(value), [], `for ${JSON.stringify(value)}`);
+    }
   });
 });

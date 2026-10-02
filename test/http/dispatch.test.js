@@ -13,6 +13,7 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { SUITE_KEY } = require('../helpers/suite-key');
 const { HttpRequest } = require('@azure/functions');
 
 const { dispatch } = require('../../src/http/router');
@@ -20,8 +21,7 @@ const configController = require('../../src/controllers/config');
 const documentController = require('../../src/controllers/nosql/document');
 const links = require('../../src/repositories/links');
 
-/** The suite credential src/helpers/auth.js honours only under NODE_ENV=test. */
-const AUTHED = { 'x-api-key': 'eagle-demi-api-key' };
+const AUTHED = { 'x-api-key': SUITE_KEY };
 
 function call(path, init = {}) {
   return dispatch(new HttpRequest({

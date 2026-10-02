@@ -11,14 +11,14 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { SUITE_KEY } = require('../helpers/suite-key');
 
 const { simulate } = require('../../src/controllers/access-simulate');
 const { CATALOGS } = require('../../src/vis/catalog');
 const config = require('../../src/config');
 const { withServer } = require('../helpers/with-server');
 
-/** The suite credential src/helpers/auth.js honours only under NODE_ENV=test. */
-const AUTHED = { 'content-type': 'application/json', 'x-api-key': 'eagle-demi-api-key' };
+const AUTHED = { 'content-type': 'application/json', 'x-api-key': SUITE_KEY };
 
 function run(body) {
   const res = {
