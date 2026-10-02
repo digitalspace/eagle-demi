@@ -609,7 +609,8 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
   async function refusedComment(t, stored, doc = eagleComment()) {
     let periodReads = 0;
     t.mock.method(commentPeriods, 'getById', async () => { periodReads++; return null; });
-    t.mock.method(commentPeriods, 'readForWrite', async () => stored);
+    let classifyReads = 0;
+    t.mock.method(commentPeriods, 'readForWrite', async () => { classifyReads++; return stored; });
     const warned = [];
     t.mock.method(logger, 'warn', (message, meta) => { warned.push({ message, meta }); });
     let upserts = 0;
@@ -619,15 +620,15 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     await commentController.upsertFromEagle({
       params: { eagleId: COMMENT_EAGLE_ID }, query: {}, body: { doc }, user: STAFF
     }, res);
-    return { res, warned, upserts, periodReads };
+    return { res, warned, upserts, periodReads, classifyReads };
   }
 
   await t.test('a comment whose period is not mirrored is a 404, no write, logged missing',
     async () => {
-      const { res, warned, upserts } = await refusedComment(t, null);
+      const { res, warned, upserts, classifyReads } = await refusedComment(t, null);
 
       assert.strictEqual(res.statusCode, 404);
-      assert.strictEqual(upserts, 0);
+      assert.deepStrictEqual({ upserts, classifyReads }, { upserts: 0, classifyReads: 1 });
       assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
       assert.deepStrictEqual(warned, [{
         message: '[parent-admit] parent not admitted',
@@ -645,6 +646,18 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
       warned: [{
         message: '[parent-admit] parent not admitted',
         meta: { childId: COMMENT_EAGLE_ID, period: 'malformed-ref' }
+      }]
+    });
+  });
+
+  await t.test('a comment with no period ref reads nothing and is logged no-ref', async () => {
+    const { warned, periodReads } = await refusedComment(t, null, eagleComment({ period: null }));
+
+    assert.deepStrictEqual({ periodReads, warned }, {
+      periodReads: 0,
+      warned: [{
+        message: '[parent-admit] parent not admitted',
+        meta: { childId: COMMENT_EAGLE_ID, period: 'no-ref' }
       }]
     });
   });

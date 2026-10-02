@@ -20,7 +20,7 @@ const { systemAccess } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const {
-  eagleRef, classify, warnNotAdmitted, MALFORMED_REF
+  eagleRef, badRefReason, classify, warnNotAdmitted
 } = require('../../helpers/parent-admit');
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
@@ -65,7 +65,7 @@ async function admitPeriod(ref, childId) {
   const child = { childId: eagleRef(childId) };
   const periodEagleId = eagleRef(ref);
   if (!periodEagleId) {
-    warnNotAdmitted(child, { period: MALFORMED_REF });
+    warnNotAdmitted(child, { period: badRefReason(ref) });
     return null;
   }
   const period = await commentPeriods.getById(systemAccess(), periodEagleId);
