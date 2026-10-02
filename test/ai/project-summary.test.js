@@ -71,7 +71,8 @@ const APPENDIX = {
 };
 
 const chunk = (n, content, documentId = 'docB') => ({
-  chunkId: `${documentId}::p${n}::c0`, documentId, projectId: '272', pageNumber: n, content
+  chunkId: `${documentId}::p${n}::c0`, documentId, projectId: '272', pageNumber: n, pageNumbered: true,
+  content
 });
 
 /**
@@ -1078,6 +1079,22 @@ test('generateProjectSummary', async (t) => {
     await generateProjectSummary('272', { sources, section: 'nations' });
 
     assert.strictEqual(pagesIn(calls[0]).length, 2);
+  });
+
+  await t.test('a passage from an extraction without page markers carries no page label', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({ nations: [] }));
+    const passage = { ...chunk(7, 'Saulteau First Nations were consulted.', 'docX'), pageNumbered: false };
+
+    await generateProjectSummary('272', {
+      sources: fakeSources({ documents: [APPENDIX], chunks: { docX: [passage] }, chunkHits: [{ documentId: 'docX' }] }),
+      section: 'nations'
+    });
+
+    const prompt = calls[0].body.messages[1].content;
+    assert.match(prompt, /\[1\] Saulteau First Nations were consulted\./);
+    assert.doesNotMatch(prompt, /\(page 7\)/, 'a passage sequence number is not a PDF page');
   });
 
   await t.test('never takes a nations passage from a document outside the public list', async () => {

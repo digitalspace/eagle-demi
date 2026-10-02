@@ -11,7 +11,7 @@ const cosmos = require('../db/cosmos-nosql');
 const updates = require('../repositories/updates');
 const notifications = require('../repositories/notifications');
 const { readUnder } = require('./update-parent');
-const { heldSealed } = require('../controllers/nosql/eagle-mirror');
+const { heldSealed } = require('./access-sql');
 const { logger } = require('../utils/logger');
 
 const NOTHING = Object.freeze({ succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0, ids: [], rows: [] });

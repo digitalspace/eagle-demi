@@ -287,7 +287,8 @@ test('listActiveSearchDefinitionJobs', async (t) => {
       spec.parameters.map(p => p.value),
       [bulkDownloads.SEARCH_DEF_PREFIX, 'queued', 'running']
     );
-    // The caller only needs to know whether there is one, so there is no reason to drain the set.
-    assert.strictEqual(options.maxItemCount, 10);
+    // Drained: with a page size `query` takes one fetchNext(), which can be empty while a live row
+    // waits on the next page behind stale ones.
+    assert.strictEqual(options && options.maxItemCount, undefined);
   });
 });

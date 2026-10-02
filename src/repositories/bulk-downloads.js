@@ -111,14 +111,14 @@ async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 
  * The search-definition jobs that are still going.
  *
  * A prefix match on the id, which is also the partition key, so this reads the container's own
- * index rather than scanning rows. `limit` is a page: the caller only needs to know whether there
- * is one, so there is no reason to drain the set.
+ * index rather than scanning rows. Drained, not paged: a cross-partition page can come back short
+ * or empty while rows remain, and the caller drops stale rows, so a live one may sit past page one.
  *
  * `startedAt` comes back with the row because `running` alone does not say a run is in flight: a
  * worker the host killed leaves that status behind for the rest of the row's TTL. The caller dates
  * the row against the worker's own wait ceiling (src/jobs/search-definitions.js).
  */
-async function listActiveSearchDefinitionJobs({ limit = 10 } = {}) {
+async function listActiveSearchDefinitionJobs() {
   const names = ACTIVE_STATUSES.map((_, i) => `@status${i}`);
   const { items } = await cosmos.query(CONTAINER, {
     query: `SELECT c.id, c.status, c.createdAt, c.startedAt FROM c ` +
@@ -127,7 +127,7 @@ async function listActiveSearchDefinitionJobs({ limit = 10 } = {}) {
       { name: '@prefix', value: SEARCH_DEF_PREFIX },
       ...names.map((name, i) => ({ name, value: ACTIVE_STATUSES[i] }))
     ]
-  }, { maxItemCount: limit });
+  });
   return items;
 }
 

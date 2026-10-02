@@ -250,9 +250,10 @@ test('POST /admin/search-definitions/apply', async (t) => {
     });
   });
 
-  await t.test('a run that was never queued is not audited as one', async () => {
+  await t.test('a run that was never queued is audited as a failure, not as a run', async () => {
     const audited = [];
-    t.mock.method(jobs, 'create', async (job) => job);
+    let created = null;
+    t.mock.method(jobs, 'create', async (job) => { created = job; return job; });
     t.mock.method(jobs, 'listActiveSearchDefinitionJobs', async () => []);
     t.mock.method(jobs, 'patch', async () => {});
     t.mock.method(audit, 'auditEvent', (req, event) => { audited.push(event); });
@@ -262,7 +263,39 @@ test('POST /admin/search-definitions/apply', async (t) => {
     await controller.applySearchDefinitions(post({ only: ['projects'] }), response);
 
     assert.strictEqual(response.statusCode, 503);
-    assert.deepStrictEqual(audited, [], 'an apply that never reached the queue did not happen');
+    assert.deepStrictEqual(audited.map(({ outcome, targetId, detail }) => ({ outcome, targetId, detail })), [{
+      outcome: 'failure',
+      targetId: created.id,
+      detail: { status: 503, error: 'search definition apply could not be queued' }
+    }], 'it names the failed row');
+  });
+
+  await t.test('a refused apply is audited as a failure, without queuing anything', async () => {
+    const taken = accept(t);
+    const response = res();
+
+    await controller.applySearchDefinitions(post({ only: ['chunkz'] }), response);
+
+    assert.strictEqual(response.statusCode, 400);
+    assert.deepStrictEqual(taken.audited, [{
+      action: 'searchDefinitions.apply', targetType: 'searchDefinitions', outcome: 'failure',
+      targetId: undefined, detail: { status: 400, error: body(response).error }
+    }]);
+    assert.deepStrictEqual(taken.sent, []);
+  });
+
+  await t.test('a name longer than the cap is a 400 that does not echo it', async () => {
+    const taken = accept(t);
+    const response = res();
+    const long = `x${'y'.repeat(64)}`;
+
+    await controller.applySearchDefinitions(post({ datasources: [long], live: true, only: ['projects'] }),
+      response);
+
+    assert.strictEqual(response.statusCode, 400);
+    assert.match(body(response).error, /at most 64 characters/);
+    assert.ok(!body(response).error.includes(long), 'the name must not be echoed back');
+    assert.deepStrictEqual(taken.sent, []);
   });
 
   await t.test('a second apply is refused while one is still going', async () => {
@@ -279,6 +312,8 @@ test('POST /admin/search-definitions/apply', async (t) => {
       'the caller needs the job that is in the way, to poll it');
     assert.deepStrictEqual(taken.sent, [], 'nothing was queued');
     assert.strictEqual(taken.job(), null, 'and no row was written');
+    assert.deepStrictEqual(taken.audited.map(e => [e.outcome, e.targetId, e.detail.status]),
+      [['failure', running, 409]], 'the refusal is audited against the run in the way');
   });
 
   await t.test('a queued job that has not started yet blocks just the same', async () => {

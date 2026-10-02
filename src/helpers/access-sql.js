@@ -95,6 +95,11 @@ function isDemiSeal(row) {
   return Boolean(row && row.sealedAt);
 }
 
+/** A row DEMI holds sealed: level 0 AND `isDemiSeal`. No Eagle push reopens it. */
+function heldSealed(row) {
+  return Boolean(row) && levelOfRead(row.read) === 0 && isDemiSeal(row);
+}
+
 /**
  * The tokens a credential's `levels` admit, and the tokens that prove a row sits ABOVE them
  * (docs/rbac-architecture.md §1, "Selected Credentials").
@@ -674,6 +679,7 @@ module.exports = {
   levelOfRead,
   capRead,
   isDemiSeal,
+  heldSealed,
   levelTokens,
   matchesLevels,
   credentialField,

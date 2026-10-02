@@ -213,7 +213,8 @@ async function newestUploads(access, projectId) {
 }
 
 /**
- * Sealed documents only — level 0, the compliance compartment.
+ * Sealed documents only — level 0 AND stamped `sealedAt` (`isDemiSeal`): a level-0 row an Eagle push
+ * sealed is not a DEMI seal, heals on its next push, and has nothing to release.
  *
  * The criterion NARROWS; the visibility predicate is still composed first, so this returns nothing
  * at all to a caller without `compliance`. The token is our own literal, never a caller value, and
@@ -226,7 +227,7 @@ async function listSealed(access, opts = {}) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [{ clause: `ARRAY_CONTAINS(c.read, '${SEALED_TOKEN}')`, params: [] }],
+    criteria: [{ clause: `ARRAY_CONTAINS(c.read, '${SEALED_TOKEN}') AND IS_STRING(c.sealedAt)`, params: [] }],
     select: 'c.id, c.projectId, c.sealedAt, c.displayName',
     orderBy: 'c.id ASC'
   });
@@ -289,8 +290,8 @@ async function readForWrite(id, projectId) {
 /** Drop a moved row's owed-delete marker once the old partition's copy is gone. */
 async function clearMovedFrom(id, projectId) {
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
-    { op: 'set', path: '/movedFromProjectId', value: null },
-    { op: 'set', path: '/movedFromEtag', value: null }
+    { op: 'remove', path: '/movedFromProjectId' },
+    { op: 'remove', path: '/movedFromEtag' }
   ]);
 }
 

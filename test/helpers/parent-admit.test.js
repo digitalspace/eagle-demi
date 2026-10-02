@@ -22,7 +22,7 @@ const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
 const { logger } = require('../../src/utils/logger');
 const {
-  admitParent, pickParent, MALFORMED_REF, CLASSIFY_TIMEOUT_MS
+  admitParent, pickParent, MALFORMED_REF, NO_REF, CLASSIFY_TIMEOUT_MS
 } = require('../../src/helpers/parent-admit');
 
 // Track 353's epic_guid on test, 2026-09-08: a ProjectNotification _id in a project's guid field.
@@ -107,21 +107,24 @@ test('admitParent — both containers are read for every ref', async (t) => {
     assert.deepStrictEqual(asked, [SHADOWED_NOTIFICATION_ID]);
   });
 
-  await t.test('an empty ref is answered without reading either container', async () => {
+  await t.test('an empty ref reads neither container and logs no-ref once per call', async () => {
     let reads = 0;
     t.mock.method(projects, 'getByEagleId', async () => { reads++; return null; });
     t.mock.method(notifications, 'readForWrite', async () => { reads++; return null; });
-    t.mock.method(logger, 'warn', () => {});
+    const warned = [];
+    t.mock.method(logger, 'warn', (message, meta) => { warned.push(meta); });
 
     assert.strictEqual(await admitParent(null), null);
     assert.strictEqual(await admitParent(''), null);
-    assert.strictEqual(reads, 0);
+    const noRef = { childId: null, project: NO_REF, notification: NO_REF };
+    assert.deepStrictEqual({ reads, warned }, { reads: 0, warned: [noRef, noRef] });
   });
 });
 
 /** Stub both admission reads and the refusal read; return what was warned and what was read. */
 function stubParents(t, { project = null, notification = null, stored = null } = {}) {
   const warned = [];
+  const errored = [];
   const refusalReads = [];
   t.mock.method(projects, 'getByEagleId', async () => project);
   t.mock.method(notifications, 'readForWrite', async () => notification);
@@ -130,7 +133,8 @@ function stubParents(t, { project = null, notification = null, stored = null } =
     return stored;
   });
   t.mock.method(logger, 'warn', (message, meta) => { warned.push({ message, meta }); });
-  return { warned, refusalReads };
+  t.mock.method(logger, 'error', (message, meta) => { errored.push({ message, meta }); });
+  return { warned, errored, refusalReads };
 }
 
 // The refused child, a document, whose id the warn carries for a targeted repush.
@@ -210,7 +214,10 @@ test('admitParent — a refusal logs why, an admission reads nothing extra', asy
 
     assert.deepStrictEqual(await admitParent(PROJECT_EAGLE_ID, CHILD),
       { id: PROJECT_EAGLE_ID, read: ['public'], kind: 'notification' });
-    assert.deepStrictEqual(warned, []);
+    assert.deepStrictEqual(warned, [{
+      message: '[parent-admit] notification stored sealed by an Eagle push, admitted at its Eagle read',
+      meta: { eagleId: PROJECT_EAGLE_ID, childId: CHILD_ID, notificationId: PROJECT_EAGLE_ID }
+    }]);
   });
 
   await t.test('a read-less notification refuses its child and logs hidden', async () => {
@@ -228,38 +235,39 @@ test('admitParent — a refusal logs why, an admission reads nothing extra', asy
     assert.deepStrictEqual(warned, [refused('visible', 'missing')]);
   });
 
-  await t.test('a failed classify read still refuses, and logs unknown', async () => {
-    const { warned } = stubParents(t);
-    t.mock.method(projects, 'readForWriteByEagleId', async () => { throw new Error('503'); });
+  await t.test('a failed classify read still refuses, logs the failure at error and unknown',
+    async () => {
+      const { warned, errored } = stubParents(t);
+      t.mock.method(projects, 'readForWriteByEagleId', async () => { throw new Error('503'); });
 
-    assert.strictEqual(await admitParent(PROJECT_EAGLE_ID, CHILD), null);
-    const [failure, refusal] = warned.map(w => w.meta);
-    assert.deepStrictEqual({ ...failure, stack: undefined },
-      { eagleId: PROJECT_EAGLE_ID, container: 'projects', error: '503', stack: undefined });
-    assert.deepStrictEqual(refusal, refused('unknown', 'missing').meta);
-  });
-
-  await t.test('a classify read that outlasts the bound refuses and logs unknown', async (st) => {
-    st.mock.timers.enable({ apis: ['setTimeout'] });
-    const { warned } = stubParents(t);
-    let reached;
-    const readStarted = new Promise((resolve) => { reached = resolve; });
-    t.mock.method(projects, 'readForWriteByEagleId', () => {
-      reached();
-      return new Promise(() => {});
+      assert.strictEqual(await admitParent(PROJECT_EAGLE_ID, CHILD), null);
+      assert.deepStrictEqual(errored.map(e => ({ ...e.meta, stack: undefined })),
+        [{ eagleId: PROJECT_EAGLE_ID, container: 'projects', error: '503', stack: undefined }]);
+      assert.deepStrictEqual(warned, [refused('unknown', 'missing')]);
     });
 
-    const admitted = admitParent(PROJECT_EAGLE_ID, CHILD);
-    await readStarted;
-    st.mock.timers.tick(CLASSIFY_TIMEOUT_MS);
+  await t.test('a classify read that outlasts the bound refuses and logs unknown',
+    { timeout: 5000 }, async (st) => {
+      st.mock.timers.enable({ apis: ['setTimeout'] });
+      const { warned } = stubParents(t);
+      let reached;
+      const readStarted = new Promise((resolve) => { reached = resolve; });
+      t.mock.method(projects, 'readForWriteByEagleId', () => {
+        reached();
+        return new Promise(() => {});
+      });
 
-    assert.strictEqual(await admitted, null);
-    assert.deepStrictEqual(warned.map(w => w.meta), [
-      { eagleId: PROJECT_EAGLE_ID, container: 'projects',
-        error: `timed out after ${CLASSIFY_TIMEOUT_MS} ms` },
-      refused('unknown', 'missing').meta
-    ]);
-  });
+      const admitted = admitParent(PROJECT_EAGLE_ID, CHILD);
+      await readStarted;
+      st.mock.timers.tick(CLASSIFY_TIMEOUT_MS);
+
+      assert.strictEqual(await admitted, null);
+      assert.deepStrictEqual(warned.map(w => w.meta), [
+        { eagleId: PROJECT_EAGLE_ID, container: 'projects',
+          error: `timed out after ${CLASSIFY_TIMEOUT_MS} ms` },
+        refused('unknown', 'missing').meta
+      ]);
+    });
 
   await t.test('an admitted project makes no refusal read and logs nothing', async () => {
     const { warned, refusalReads } = stubParents(t, {
@@ -281,12 +289,13 @@ test('admitParent — a refusal logs why, an admission reads nothing extra', asy
 
   await t.test('a hidden notification that falls through to a same-id project is logged',
     async () => {
-      const { warned } = stubParents(t, {
+      const { warned, refusalReads } = stubParents(t, {
         project: shadowProject(),
         notification: { id: SHADOWED_NOTIFICATION_ID }
       });
 
       assert.strictEqual((await admitParent(SHADOWED_NOTIFICATION_ID, CHILD)).id, '353');
+      assert.deepStrictEqual(refusalReads, []);
       assert.deepStrictEqual(warned, [{
         message: '[parent-admit] hidden notification passed its children to a same-id project',
         meta: { eagleId: SHADOWED_NOTIFICATION_ID, childId: CHILD_ID, projectId: '353' }
