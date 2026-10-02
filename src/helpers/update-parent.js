@@ -76,18 +76,21 @@ function readUnder(eagleRead, parent) {
   return levelOfRead(ceiling) < levelOfRead(own) ? capRead(own, ceiling) : own;
 }
 
+/** Eagle sent no `read` at all: absent or null. `[]` is a read, and so is any non-list. */
+function hasNoRead(doc) {
+  return doc.read === undefined || doc.read === null;
+}
+
 /**
- * Eagle's legacy `RecentActivity` rows carry an empty or missing `read[]`, a null `status` and
- * `active: true`, and eagle-api serves them to anonymous callers: its search `$redact` keeps a row
- * with no read, and `/public/recentActivity` never checks the row's own read. Such a row is as
- * visible as its parent in Eagle, so it is here too. A non-list `read` is not missing.
+ * Eagle's legacy `RecentActivity` rows with no `read` field, a null `status` and `active: true` are
+ * shown to anonymous callers: eagle-api's public search `$redact` DESCENDS into a row whose `read`
+ * is missing or null, but PRUNES `read: []` (an empty array is true in `$cond` and false in
+ * `$anyElementTrue`). So only a missing read is as visible as its parent; `[]` stays `[]`.
  */
 function inheritsParentRead(doc) {
   if (!doc) return false;
-  const emptyRead = doc.read === undefined || doc.read === null ||
-    (Array.isArray(doc.read) && doc.read.length === 0);
   const noStatus = doc.status === undefined || doc.status === null;
-  return emptyRead && noStatus && doc.active === true;
+  return hasNoRead(doc) && noStatus && doc.active === true;
 }
 
 /**
@@ -107,4 +110,4 @@ function isPublicParent(parent) {
   return Boolean(parent) && Array.isArray(parent.read) && parent.read.includes('public');
 }
 
-module.exports = { readParent, ownRead, readUnder, inheritsParentRead, updateRead, isPublicParent };
+module.exports = { readParent, ownRead, readUnder, hasNoRead, inheritsParentRead, updateRead, isPublicParent };

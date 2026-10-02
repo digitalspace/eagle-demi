@@ -2,8 +2,8 @@
 
 /**
  * `helpers/update-parent:updateRead`, the one rule for an Update's stored `read[]`: Eagle's own under
- * the parent's ceiling, except a legacy open row (empty read, no status, active), which takes the
- * parent's read.
+ * the parent's ceiling, except a legacy open row (no read, no status, active), which takes the
+ * parent's read. eagle-api shows a missing read to anonymous callers and prunes `read: []`.
  */
 
 process.env.NODE_ENV = 'test';
@@ -18,16 +18,16 @@ const { PUBLIC_ACL, PRIVATE_ACL } = require('./eagle-mirror-fixtures');
 const PUBLIC_PARENT = { id: '207', read: ['staff', 'idir', 'public'] };
 const PRIVATE_PARENT = { id: '207', read: PRIVATE_ACL };
 
-/** An Eagle `RecentActivity` as the pre-2025 migration left it. */
-const legacy = (extra = {}) => ({ read: [], status: null, active: true, ...extra });
+/** An Eagle `RecentActivity` as the pre-2025 migration left it: no `read` field at all. */
+const legacy = (extra = {}) => ({ status: null, active: true, ...extra });
 
 test('updateRead — a legacy open update takes its parent\'s read', async (t) => {
-  await t.test('empty read, null status, active: the parent\'s read', () => {
+  await t.test('missing read, null status, active: the parent\'s read', () => {
     assert.deepStrictEqual(updateRead(legacy(), PUBLIC_PARENT), ['staff', 'idir', 'public']);
     assert.deepStrictEqual(updateRead(legacy(), PRIVATE_PARENT), PRIVATE_ACL);
   });
 
-  await t.test('a missing read and a missing status count as empty', () => {
+  await t.test('a null read and a missing status count as missing', () => {
     assert.deepStrictEqual(updateRead({ active: true }, PUBLIC_PARENT), ['staff', 'idir', 'public']);
     assert.deepStrictEqual(updateRead(legacy({ read: null, status: undefined }), PUBLIC_PARENT),
       ['staff', 'idir', 'public']);
@@ -46,12 +46,17 @@ test('updateRead — a legacy open update takes its parent\'s read', async (t) =
 });
 
 test('updateRead — every other update keeps today\'s rule', async (t) => {
-  await t.test('empty read with a status stays []', () => {
+  await t.test('an empty read is a read, not a missing one: eagle-api prunes it, so it stays []', () => {
+    assert.strictEqual(inheritsParentRead(legacy({ read: [] })), false);
+    assert.deepStrictEqual(updateRead(legacy({ read: [] }), PUBLIC_PARENT), []);
+  });
+
+  await t.test('missing read with a status stays []', () => {
     assert.deepStrictEqual(updateRead(legacy({ status: 'published' }), PUBLIC_PARENT), []);
     assert.deepStrictEqual(updateRead(legacy({ status: 'draft' }), PUBLIC_PARENT), []);
   });
 
-  await t.test('empty read on an inactive row stays []', () => {
+  await t.test('missing read on an inactive row stays []', () => {
     assert.deepStrictEqual(updateRead(legacy({ active: false }), PUBLIC_PARENT), []);
     assert.deepStrictEqual(updateRead(legacy({ active: undefined }), PUBLIC_PARENT), []);
   });

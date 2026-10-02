@@ -180,6 +180,12 @@ function eagleUpdate(overrides = {}) {
   };
 }
 
+/** An Eagle `RecentActivity` with no `read` field at all, as eagle-api sends a legacy row. */
+function eagleUpdateWithoutRead(overrides = {}) {
+  const { read: _read, ...doc } = eagleUpdate(overrides);
+  return doc;
+}
+
 function eagleOrganization(overrides = {}) {
   return {
     _id: ORG_EAGLE_ID,
@@ -355,6 +361,7 @@ module.exports = {
   eagleOrganization,
   eagleNotification,
   eagleUpdate,
+  eagleUpdateWithoutRead,
   mockRes,
   STAFF,
   anonymous,

@@ -10,7 +10,7 @@
 
 const updates = require('../../repositories/updates');
 const {
-  readParent, ownRead, updateRead, inheritsParentRead, isPublicParent
+  readParent, ownRead, hasNoRead, updateRead, inheritsParentRead, isPublicParent
 } = require('../../helpers/update-parent');
 const { resolveAccess, levelOfRead } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
@@ -197,7 +197,7 @@ function mirrorItem(eagleId, doc, read, existing) {
     // read[] is authoritative and isPublished mirrors it (ADR-004). `read` is Eagle's own minus
     // compliance under the parent's ceiling, or the parent's for a legacy open row
     // (`helpers/update-parent:updateRead`); `sources.eagle.read` keeps Eagle's own, uncapped and
-    // still minus compliance, for the project cascade to re-derive from.
+    // still minus compliance (null when Eagle sent none), for the project cascade to re-derive from.
     isPublished: read.includes('public'),
     read,
     // A Cosmos write REPLACES the item, so the claim has to be carried across or every push of
@@ -242,7 +242,8 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
           id: eagleId, parentId: parent.id, kind: parent.kind, from: own, to: read
         });
       }
-      return mirrorItem(eagleId, { ...doc, read: own }, read, current);
+      // A missing read is stored as null, not `[]`: the cascade needs the two apart (`inheritsParentRead`).
+      return mirrorItem(eagleId, { ...doc, read: hasNoRead(doc) ? null : own }, read, current);
     },
     // Unfiltered: a row with no `read` or a compartment token is still there to be replaced.
     () => updates.readForWrite(eagleId),

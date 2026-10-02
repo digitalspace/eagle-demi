@@ -140,8 +140,9 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.deepStrictEqual(patched(seen.ops[0]), { '/read': ['public'], '/isPublished': true, ...CLEARED });
   });
 
-  await t.test('a legacy open update (empty read, no status, active) follows the project both ways', async () => {
-    const legacy = { id: 'u1', read: [], eagleRead: [], eagleActive: true };
+  await t.test('a legacy open update (no read, no status, active) follows the project both ways', async () => {
+    // The mirror stores a missing Eagle read as null.
+    const legacy = { id: 'u1', read: [], eagleRead: null, eagleActive: true };
     const seen = stub(t, [legacy, { ...legacy, id: 'u2', eagleStatus: 'draft' }, { ...legacy, id: 'u3', eagleActive: false }]);
 
     await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
@@ -157,6 +158,23 @@ test('setAclForProject — updates follow their project', async (t) => {
     const again = stub(t, [legacy]);
     await setAclForProject(PROJECT_EAGLE_ID, PRIVATE_ACL);
     assert.deepStrictEqual(patched(again.ops[0]), { '/read': PRIVATE_ACL, '/isPublished': false, ...CLEARED });
+  });
+
+  await t.test('an update with no sources.eagle.read at all follows the project too', async () => {
+    const seen = stub(t, [{ id: 'u1', read: [], eagleActive: true }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': PUBLIC_PARENT, '/isPublished': true, ...CLEARED });
+  });
+
+  await t.test('an update Eagle sent with read: [] stays [] under a public project', async () => {
+    // eagle-api prunes an empty read for an anonymous caller, so it is not legacy open.
+    const seen = stub(t, [{ id: 'u1', read: [], eagleRead: [], eagleStatus: null, eagleActive: true }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': [], '/isPublished': false, ...CLEARED });
   });
 
   await t.test('an empty project ACL is refused rather than read as level 1', async () => {

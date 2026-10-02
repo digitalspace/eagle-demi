@@ -104,21 +104,26 @@ npm run db:seed-public-reads -- --live --only lists
 The state file will already hold a completed `lists` entry from the first backfill. `--only lists`
 runs it anyway.
 
-## Legacy Updates with an empty read
+## Legacy Updates with no read
 
-Many old Eagle `RecentActivity` rows have `read: []`, no `status`, and `active: true`. eagle-api
-shows them to anonymous callers anyway: its search `$redact` keeps a row with no read, and
-`/public/recentActivity` never checks the row's own read. On prod (2026-10-02) that was 1389 of 2543
-rows.
+Many old Eagle `RecentActivity` rows have no `read` field, no `status`, and `active: true`.
+eagle-api's public search shows them to anonymous callers: its `$redact` keeps a row whose `read`
+is missing or null. On prod (2026-10-02), the rows for project `58851197aaecd9001b8227cc` came back
+to an anonymous caller with no `read` field.
 
-The Update mirror gives such a row its parent's `read[]`, so it is public when its project (or
-`ProjectNotification`) is public and private when it is not. The rule is
+A row with `read: []` is different. The same `$redact` prunes it: an empty array counts as true in
+`$cond` but fails `$anyElementTrue`. `/public/recentActivity` prunes both shapes.
+
+The Update mirror gives a row with a missing `read` its parent's `read[]`, so it is public when its
+project (or `ProjectNotification`) is public and private when it is not. The rule is
 `helpers/update-parent.js:updateRead`. The push, this backfill and the project cascade all use it.
-A row with a non-empty `read[]`, a `status`, or `active` not `true` is mirrored as before: its own
-read minus compliance, capped by the parent. `sources.eagle.read` still stores Eagle's own empty
-read, so the cascade follows the project when its visibility changes.
+A row with any `read` (`[]` included), a `status`, or `active` not `true` is mirrored as before: its
+own read minus compliance, capped by the parent, so `read: []` stays `[]` and unpublished.
+`sources.eagle.read` stores `null` when Eagle sent no read and `[]` when it sent an empty one, so the
+cascade applies the same rule when the project's visibility changes.
 
-Rows written before this rule are stored as unpublished. A plain rerun of the stage rewrites them.
+Rows written before this rule are stored as unpublished, with `sources.eagle.read: []` for both
+shapes. A plain rerun of the stage rewrites them.
 Deploy the API first: an older push or project cascade would write `[]` back. The script runs the
 mirror code of the checkout it runs from, so pull the devbox checkout in the same run:
 
