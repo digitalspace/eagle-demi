@@ -256,6 +256,7 @@ html, body {
 /* The prefix wraps before the input drops under a usable width. */
 .ps-short__input {
   flex: 1 0 9rem;
+  /* An input's automatic minimum (about 11rem) is wider than the basis; this holds it to 9rem. */
   min-width: 0;
   border: none;
   padding: 0.5rem 0.7rem;

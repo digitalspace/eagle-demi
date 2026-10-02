@@ -529,10 +529,11 @@ describe('ProjectSummary short URL', () => {
     renderProject();
 
     await user.click(await screen.findByRole('button', { name: 'Copy short URL' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Copied');
+    const status = await screen.findByRole('status');
+    await waitFor(() => expect(status).toHaveTextContent('Copied'));
     act(() => vi.advanceTimersByTime(2000));
 
-    expect(screen.getByRole('status')).toHaveTextContent('');
+    expect(status).toBeEmptyDOMElement();
   });
 
   it('lists the old codes that still redirect', async () => {
@@ -797,20 +798,36 @@ describe('ProjectSummary short URL', () => {
     expect(puts(fetchMock)).toHaveLength(0);
   });
 
-  it('wraps a long short URL instead of widening the page', async () => {
-    stub();
+  // jsdom does no layout, so this reads the computed wrap on the nodes that hold the text: a rule
+  // closer to them that turned wrapping off would fail here too.
+  it('lets a long code wrap anywhere, on the line and in the editor', async () => {
+    const code = 'a'.repeat(64);
+    stub({ facts: json({ ...FACTS, shortCode: code, shortUrl: `https://projects.eao.gov.bc.ca/s/${code}` }) });
     const sheet = document.createElement('style');
     sheet.textContent = styles;
     document.head.append(sheet);
     try {
-      renderProject();
+      const user = await openEditor(() => renderProject(EDITOR));
+      expect(getComputedStyle(codeInput().closest('.ps-short__field')!.firstElementChild!).overflowWrap).toBe('anywhere');
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
-      const link = await screen.findByRole('link', { name: 'projects.eao.gov.bc.ca/s/site-c' });
-      const block = link.closest('.ps-short') as HTMLElement;
-      expect(getComputedStyle(block).overflowWrap).toBe('anywhere');
+      const link = await screen.findByRole('link', { name: `projects.eao.gov.bc.ca/s/${code}` });
+      expect(getComputedStyle(link.querySelector('code')!).overflowWrap).toBe('anywhere');
     } finally {
       sheet.remove();
     }
+  });
+
+  // `overflow-wrap: anywhere` only breaks a run that has no other break, so these keep the host whole.
+  it('offers line breaks only before a dot or after a slash in the host prefix', async () => {
+    stub();
+
+    await openEditor();
+
+    const prefix = codeInput().closest('.ps-short__field')!.firstElementChild!;
+    const pieces = [...prefix.childNodes].filter((node) => node.nodeName !== 'WBR').map((node) => node.textContent);
+    expect(pieces).toEqual(['projects', '.eao', '.gov', '.bc', '.ca/', 's/']);
+    expect(prefix.querySelectorAll('wbr')).toHaveLength(pieces.length - 1);
   });
 });
 
@@ -834,13 +851,26 @@ describe('ProjectSummary short URL target', () => {
   }
 
   const save = (user: ReturnType<typeof userEvent.setup>) => user.click(screen.getByRole('button', { name: 'Save' }));
+  // jsdom's name computation drops the space that opens the hidden span; browsers keep it.
+  const pointsTo = (url: string) =>
+    screen.findByRole('link', { name: (name) => name.replace(' (', '(') === `${url}(opens in a new tab)` });
+  const editButton = () => screen.findByRole('button', { name: 'Edit short URL' });
 
-  it('shows where the short URL points', async () => {
+  it('shows where the short URL points, and says the link opens a new tab', async () => {
     stub();
 
     renderProject();
 
-    expect(await screen.findByRole('link', { name: FACTS.shortLinkUrl })).toHaveAttribute('href', FACTS.shortLinkUrl);
+    expect(await pointsTo(FACTS.shortLinkUrl)).toHaveAttribute('href', FACTS.shortLinkUrl);
+    expect(await pointsTo(FACTS.shortLinkUrl)).toHaveAttribute('target', '_blank');
+  });
+
+  it('shows no placeholder that could pass for a value in the empty Points to field', async () => {
+    stub();
+
+    await openEditor();
+
+    expect(targetInput()).not.toHaveAttribute('placeholder');
   });
 
   it('opens the Points to field empty while the link uses the project page', async () => {
@@ -860,10 +890,20 @@ describe('ProjectSummary short URL target', () => {
     expect(targetInput()).toHaveValue(NEW_TARGET);
   });
 
-  it('changes nothing when the project page is chosen for a link already on it', async () => {
+  it('turns Use the project page off while the field is already empty', async () => {
+    stub();
+    const user = await openEditor();
+
+    expect(screen.getByRole('button', { name: 'Use the project page' })).toBeDisabled();
+    await typeTarget(user, NEW_TARGET);
+    expect(screen.getByRole('button', { name: 'Use the project page' })).toBeEnabled();
+  });
+
+  it('changes nothing when a typed target is cleared back to the project page', async () => {
     const fetchMock = stub();
     const user = await openEditor();
 
+    await typeTarget(user, NEW_TARGET);
     await user.click(screen.getByRole('button', { name: 'Use the project page' }));
     await user.type(targetInput(), '{Enter}');
 
@@ -902,13 +942,43 @@ describe('ProjectSummary short URL target', () => {
     await typeTarget(user, NEW_TARGET);
     await save(user);
 
-    expect(await screen.findByRole('link', { name: NEW_TARGET })).toHaveAttribute('href', NEW_TARGET);
+    expect(await pointsTo(NEW_TARGET)).toHaveAttribute('href', NEW_TARGET);
     expect(sentBody(fetchMock)).toEqual({ url: NEW_TARGET });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Edit short URL' })).toHaveFocus());
   });
 
+  it('reopens the editor on the custom target the save stored', async () => {
+    stub({
+      shortCode: json({ ...SAVED_CODE, shortCode: 'site-c', shortUrl: FACTS.shortUrl, url: NEW_TARGET, shortLinkCustom: true }),
+    });
+    const user = await openEditor();
+    await typeTarget(user, NEW_TARGET);
+    await save(user);
+
+    await user.click(await editButton());
+
+    expect(targetInput()).toHaveValue(NEW_TARGET);
+  });
+
+  // The API stores the project page URL as no custom target, and answers so.
+  it('reopens the editor empty after the project page URL was typed as the target', async () => {
+    const fetchMock = stub({
+      facts: json({ ...FACTS, shortLinkUrl: NEW_TARGET, shortLinkCustom: true }),
+      shortCode: json({ ...SAVED_CODE, shortCode: 'site-c', shortUrl: FACTS.shortUrl, url: FACTS.shortLinkUrl }),
+    });
+    const user = await openEditor();
+    await typeTarget(user, FACTS.shortLinkUrl);
+    await save(user);
+
+    expect(await pointsTo(FACTS.shortLinkUrl)).toBeInTheDocument();
+    expect(sentBody(fetchMock)).toEqual({ url: FACTS.shortLinkUrl });
+    await user.click(await editButton());
+
+    expect(targetInput()).toHaveValue('');
+  });
+
   it('sends the code and the target together when both changed', async () => {
-    const fetchMock = stub({ shortCode: json({ ...SAVED_CODE, url: NEW_TARGET }) });
+    const fetchMock = stub({ shortCode: json({ ...SAVED_CODE, url: NEW_TARGET, shortLinkCustom: true }) });
     const user = await openEditor();
 
     await user.clear(codeInput());
@@ -932,7 +1002,7 @@ describe('ProjectSummary short URL target', () => {
     expect(targetInput()).toHaveFocus();
     await save(user);
 
-    expect(await screen.findByRole('link', { name: FACTS.shortLinkUrl })).toBeInTheDocument();
+    expect(await pointsTo(FACTS.shortLinkUrl)).toBeInTheDocument();
     expect(sentBody(fetchMock)).toEqual({ url: null });
   });
 
@@ -1035,7 +1105,7 @@ describe('ProjectSummary short URL target', () => {
     );
     await save(user);
 
-    expect(await screen.findByRole('link', { name: NEW_TARGET })).toHaveAttribute('href', NEW_TARGET);
+    expect(await pointsTo(NEW_TARGET)).toHaveAttribute('href', NEW_TARGET);
     expect(puts(fetchMock)).toHaveLength(2);
     expect(JSON.parse(String(puts(fetchMock)[1][1]?.body))).toEqual({ url: NEW_TARGET });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

@@ -89,8 +89,8 @@ export interface ProjectFacts {
   decisionDate?: string | null;
   eaCertificate?: string | null;
   phaseHistory?: PhaseHistoryEntry[];
-  shortCode?: string;
-  shortUrl?: string;
+  shortCode?: string | null;
+  shortUrl?: string | null;
   /** Codes the project used before; each still redirects here. */
   legacyShortCodes?: string[];
   /** Where the short URL and its old codes lead. */
@@ -325,12 +325,17 @@ export async function fetchProjectFacts(projectId: string, init?: ApiInit): Prom
 /** What the API accepts once lowercased; mirrors the server's own check. */
 export const SHORT_CODE_PATTERN = /^[a-z0-9_-]{3,64}$/;
 
-/** `url` is the effective target: the project page unless staff pointed the link elsewhere. */
-export type ShortCodeFields = Required<
-  Pick<ProjectFacts, 'shortCode' | 'shortUrl' | 'legacyShortCodes' | 'shortLinkCustom'>
-> & {
+/**
+ * `url` is the effective target: the project page unless staff pointed the link elsewhere. A
+ * target-only change on a project with no code answers `shortCode` and `shortUrl` null.
+ */
+export interface ShortCodeFields {
+  shortCode: string | null;
+  shortUrl: string | null;
+  legacyShortCodes: string[];
+  shortLinkCustom: boolean;
   url: string;
-};
+}
 
 /** Only the fields that changed; `url: null` points the link back at the project page. */
 export interface ShortCodeChange {
