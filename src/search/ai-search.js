@@ -115,8 +115,12 @@ const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,pageNumbered,read'
  * `searchLabels` is the sector, status, region, type, phase and decision labels joined into one
  * field by the data source, so `keywords=mines` finds projects by sector. One field rather than six,
  * because flipping `searchable` on the label columns would mean rebuilding the index.
+ *
+ * `tags` holds former and alternate names set in DEMI, so an old name still finds the project;
+ * `tagsTokens` is `tags` under `filename`, for the same reason as `nameTokens`.
  */
-const PROJECT_SEARCH_FIELDS = 'name,displayName,description,proponent,nameTokens,searchLabels';
+const PROJECT_SEARCH_FIELDS =
+  'name,displayName,description,proponent,nameTokens,searchLabels,tags,tagsTokens';
 
 /**
  * The two datasets whose index answers WHICH ROWS MATCH and nothing else.
@@ -798,15 +802,16 @@ async function runSearch(index, opts = {}) {
     try {
       return await request(path, body);
     } catch (err) {
-      const field = err.status === 400 ? missingPropertyFrom(err) : null;
+      const field = err.status === 400 ? missingPropertyFrom(err) || unsearchableFieldFrom(err) : null;
       if (!field || degraded || VISIBILITY_FIELDS.has(field) || !dropField(body, field)) throw err;
-      degraded = { missing: [field] };
+      const twin = DROPPED_TOGETHER.get(field);
+      degraded = { missing: twin && dropField(body, twin) ? [field, twin] : [field] };
       // ERROR, not warn: nothing else says the index is behind the code, and the page being served
       // is missing a column the app asked for. `{index, field}` are log fields so the alert and
       // the operator can filter on the field rather than parse the sentence.
       logger.error(
-        `[ai-search] the ${index} index cannot answer '${field}' — retried without it, so this ` +
-        'page is narrower than the app asked for. Widen the index and reindex.',
+        `[ai-search] the ${index} index cannot answer '${degraded.missing.join("', '")}' — retried ` +
+        'without it, so this page is narrower than the app asked for. Widen the index and reindex.',
         { index, field }
       );
       return request(path, body);
@@ -904,6 +909,12 @@ function missingPropertyFrom(err) {
  * the caller may see.
  */
 const VISIBILITY_FIELDS = new Set(['read', 'isPublished', 'vis']);
+
+/**
+ * One source column under two analyzers, added in one release, so a stale index lacks both and the
+ * one-retry budget must drop them together. Other `<field>Tokens` pairs predate this and drop alone.
+ */
+const DROPPED_TOGETHER = new Map([['tags', 'tagsTokens'], ['tagsTokens', 'tags']]);
 
 /**
  * Take one field name out of every list in a search body that can name it.
@@ -1582,7 +1593,7 @@ async function searchDocuments(opts = {}) {
       fuzzy: opts.fuzzy,
       prefix,
       filter: opts.projectFilter,
-      searchFields: 'name,displayName,proponent,nameTokens',
+      searchFields: 'name,displayName,proponent,nameTokens,tags,tagsTokens',
       select: 'id',
       top: MAX_PROJECT_FANOUT
     });

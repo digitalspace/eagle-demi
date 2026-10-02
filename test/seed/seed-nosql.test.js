@@ -503,6 +503,32 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(summary.stages.projects.shortLinks, 0);
   });
 
+  await t.test('a re-seed keeps the tags DEMI set on the row', async () => {
+    // Neither Track nor Eagle sends tags, so the rebuilt row has nothing to fill them from.
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) => (id === '207'
+      ? { id: '207', tags: ['Nicomen Wind'] }
+      : null);
+
+    await seed(['--live', '--only', 'projects'], { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.deepStrictEqual(matched.tags, ['Nicomen Wind']);
+  });
+
+  await t.test('a Track row seeded for the first time takes the tags of its eagle-<id> twin', async () => {
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) => (id === `eagle-${matchedGuid}`
+      ? { id: `eagle-${matchedGuid}`, eagleId: matchedGuid, tags: ['Nicomen Wind'] }
+      : null);
+
+    await seed(['--live', '--only', 'projects'], { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.strictEqual(matched.eagleId, matchedGuid, 'the premise: 207 is the Track row of that pair');
+    assert.deepStrictEqual(matched.tags, ['Nicomen Wind']);
+  });
+
   await t.test('documents are grouped by project — the partition key', async () => {
     const { written, repos } = makeRepos();
     await seed(['--live', '--only', 'documents'], { sources: stubSources, repos, now: NOW });
