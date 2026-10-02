@@ -300,8 +300,8 @@ test('documents repository', async (t) => {
     await documents.listSealed({ ...COMPLIANCE, compartment: true }, {});
 
     const { spec } = calls[0];
-    assert.match(spec.query, /ARRAY_CONTAINS\(c\.read, 'compliance'\)/,
-      'the criterion is what makes this the sealed list rather than a document list');
+    assert.match(spec.query, /ARRAY_CONTAINS\(c\.read, 'compliance'\) AND IS_STRING\(c\.sealedAt\)/,
+      'level 0 AND stamped: a row an Eagle push sealed is not a DEMI seal and has nothing to release');
     assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/,
       'the ACL predicate composes first — the criterion narrows, it never replaces');
     assert.ok(spec.parameters.some(p => p.value === 'compliance'),

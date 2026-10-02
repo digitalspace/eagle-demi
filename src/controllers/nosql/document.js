@@ -22,7 +22,7 @@ const { chunkMarkdown, createChunkAccumulator, hasPageMarkers, pageCountOf } =
   require('../../chunker');
 const restampChunks = require('../../jobs/restamp-chunks');
 const {
-  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, capRead, TIER
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, capRead, heldSealed, TIER
 } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
@@ -31,7 +31,7 @@ const { admitParent } = require('../../helpers/parent-admit');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { writeGuarded } = require('../../helpers/etag-write');
 const {
-  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, heldSealed
+  eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
@@ -1170,12 +1170,35 @@ async function settleMove(saved) {
       { id, fromProjectId: from, toProjectId: projectId, kept: oldWins ? from : projectId });
     if (oldWins) {
       await documents.deleteById(id, projectId, { etag: saved._etag });
+      await reindexKept(old, { rewrite: true });
       return old;
     }
     if (old) await documents.deleteById(id, from, { etag: old._etag });
   }
+  // The patch advances the kept copy's `_ts`, so the indexer re-reads its other fields.
   await documents.clearMovedFrom(id, projectId);
+  await reindexKept(saved);
   return null;
+}
+
+/**
+ * Both copies share one index entry, and the indexer never sees the delete, so the entry can hold
+ * the removed copy. Best-effort: the settle has landed, and a failure only leaves the entry stale.
+ */
+async function reindexKept(kept, { rewrite = false } = {}) {
+  try {
+    await aiSearch.writeAcls(aiSearch.indexes().documents, [
+      { id: kept.id, read: kept.read, isPublished: kept.isPublished }
+    ]);
+    // An unchanged guarded rewrite advances `_ts`, so the indexer's next pass re-reads every field.
+    if (rewrite) await documents.upsert(kept, { etag: kept._etag });
+  } catch (err) {
+    // A 412 means a newer write already advanced `_ts`.
+    if ((err.code || err.statusCode) === 412) return;
+    logger.error('[Document Controller] the kept copy of a moved document was not re-indexed', {
+      id: kept.id, projectId: kept.projectId, error: err.message, stack: err.stack
+    });
+  }
 }
 
 /** 200 so eagle-api does not resend; the seal is named in the audit row only, never the body. */

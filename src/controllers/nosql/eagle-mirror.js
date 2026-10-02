@@ -8,7 +8,7 @@
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { writeGuarded } = require('../../helpers/etag-write');
-const { levelOfRead, isDemiSeal } = require('../../helpers/access-sql');
+const { heldSealed } = require('../../helpers/access-sql');
 
 /**
  * The pusher's clock, carried on the mirrored row.
@@ -101,17 +101,8 @@ function pushConflict(res, { label, eagleId, projectId }) {
 }
 
 /**
- * A row DEMI holds sealed: level 0 AND stamped `sealedAt`. Eagle knows nothing of such a seal, so
- * no push reopens it. A level-0 row without the stamp came from an Eagle push carrying
- * `compliance` and takes the next push's read like any other row.
- */
-function heldSealed(row) {
-  return Boolean(row) && levelOfRead(row.read) === 0 && isDemiSeal(row);
-}
-
-/**
  * A row DEMI sealed keeps its ACL through a push, and its `sealedAt`: a row written without the
- * stamp would read as Eagle's seal and the next push would reopen it. See `heldSealed`.
+ * stamp would read as Eagle's seal and the next push would reopen it. See `access-sql:heldSealed`.
  */
 function keepSeal(item, current) {
   if (!heldSealed(current)) return item;
@@ -155,7 +146,6 @@ module.exports = {
   stampPush,
   ignoreStalePush,
   pushConflict,
-  heldSealed,
   keepSeal,
   upsertWithRetry,
   refId

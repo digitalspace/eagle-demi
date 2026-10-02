@@ -409,8 +409,10 @@ test('the document push finds the row whatever its ACL', async (t) => {
 
     assert.deepStrictEqual([first.statusCode, retry.statusCode], [500, 200]);
     const rows = store.rows('documents');
-    assert.deepStrictEqual(rows.map(r => [r.projectId, r.movedFromProjectId]), [['207', null]],
+    assert.deepStrictEqual(rows.map(r => r.projectId), ['207'],
       'the retry point-reads 207 and must still remove the copy left under 100');
+    assert.deepStrictEqual(['movedFromProjectId', 'movedFromEtag'].filter(f => f in rows[0]), [],
+      'the marker is removed, not left behind as null');
   });
 
 });
@@ -445,16 +447,22 @@ test('a move deletes the copy it left behind only at the revision it read', asyn
   const stored = (projectId, overrides = {}) =>
     ({ container: 'documents', ...storedDocument({ projectId }), ...overrides });
   let warned;
+  let errors;
+  let indexed;
   const quiet = () => {
-    t.mock.method(aiSearch, 'writeAcls', async () => 0);
+    indexed = [];
+    t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => { indexed.push(...rows); return rows.length; });
     t.mock.method(chunks, 'setParentFieldsForDocument', async () =>
       ({ succeeded: 1, failed: 0, skippedNewer: 0, statusCounts: {}, requestCharge: 1 }));
     t.mock.method(documents, 'setParentFieldsPending', async () =>
       ({ status: 'raised', pendingAt: TOKEN }));
     warned = [];
+    errors = [];
     t.mock.method(logger, 'warn', (message, meta) => warned.push({ message, meta }));
-    for (const level of ['info', 'error']) t.mock.method(logger, level, () => {});
+    t.mock.method(logger, 'error', (message, meta) => errors.push({ message, meta }));
+    t.mock.method(logger, 'info', () => {});
   };
+  const aclOf = (row) => ({ id: row.id, read: row.read, isPublished: row.isPublished });
   const failFirstRemove = () => {
     const storeRemove = cosmos.remove;
     let failures = 1;
@@ -496,6 +504,69 @@ test('a move deletes the copy it left behind only at the revision it read', asyn
       'the copy the newer push wrote must survive the older move\'s retry');
     assert.deepStrictEqual(warned.filter(w => /changed before its delete/.test(w.message)).map(w => w.meta),
       [{ id: DOC_ID, fromProjectId: '100', toProjectId: '207', kept: '100' }]);
+  });
+
+  /** Move to 207 with the old-copy delete failing, push a narrower copy back to 100, retry the move. */
+  const oldCopyWinsMidMove = async () => {
+    const store = mirrorStore(t, [...parents, stored('100', { displayName: 'Before the move' })]);
+    quiet();
+    failFirstRemove();
+    await push(eagleDocument({ displayName: 'Moved' }), OLDER);
+    await push(eagleDocument({ project: OTHER_EAGLE_ID, displayName: 'Moved back', read: ['sysadmin'] }), NEWER);
+    const [beforeRetry] = store.rows('documents').filter(r => r.projectId === '100');
+    store.writes.length = 0;
+    indexed.length = 0;
+    errors.length = 0;
+    return { store, beforeRetry, retry: await push(eagleDocument({ displayName: 'Moved' }), OLDER) };
+  };
+
+  await t.test('when the old copy wins, the index entry is given the kept copy', async () => {
+    const { store, beforeRetry, retry } = await oldCopyWinsMidMove();
+
+    assert.strictEqual(retry.body.ignored, 'stale');
+    const [kept] = store.rows('documents');
+    assert.ok(!kept.read.includes('public'), `the kept copy is the narrow one, got ${kept.read}`);
+    assert.deepStrictEqual(indexed, [aclOf(kept)], 'the removed public copy\'s ACL must not stay indexed');
+    const rewrites = store.writes.filter(w => w.op === 'upsert' && w.item.projectId === '100')
+      .map(w => [w.item.projectId, w.etag]);
+    assert.deepStrictEqual(rewrites, [['100', beforeRetry._etag]],
+      'the kept copy is rewritten at the revision read, so the indexer re-reads its other fields');
+    assert.deepStrictEqual(errors, []);
+  });
+
+  await t.test('a failed re-index still settles the move, and is logged', async () => {
+    const store = mirrorStore(t, [...parents, stored('100', { displayName: 'Before the move' })]);
+    quiet();
+    failFirstRemove();
+    await push(eagleDocument({ displayName: 'Moved' }), OLDER);
+    await push(eagleDocument({ project: OTHER_EAGLE_ID, displayName: 'Moved back' }), NEWER);
+    t.mock.method(aiSearch, 'writeAcls', async () => { throw new Error('search down'); });
+    errors.length = 0;
+
+    const retry = await push(eagleDocument({ displayName: 'Moved' }), OLDER);
+
+    assert.deepStrictEqual([retry.statusCode, retry.body.ignored], [200, 'stale']);
+    assert.deepStrictEqual(layout(store), [['100', 'Moved back', null]]);
+    assert.deepStrictEqual(errors.map(e => [e.message, e.meta.id, e.meta.projectId, e.meta.error]), [[
+      '[Document Controller] the kept copy of a moved document was not re-indexed', DOC_ID, '100', 'search down'
+    ]]);
+  });
+
+  await t.test('when the moved copy wins, the index entry is given the moved copy', async () => {
+    const store = mirrorStore(t,
+      [...parents, stored('100', { displayName: 'Before the move', eaglePushedAt: OLDER, read: ['sysadmin'] })]);
+    quiet();
+    failFirstRemove();
+    await push(eagleDocument({ displayName: 'Moved' }), NEWER);
+    await cosmos.patch('documents', DOC_ID, '100', [{ op: 'set', path: '/extractionStatus', value: 'done' }]);
+    indexed.length = 0;
+
+    await push(eagleDocument({ displayName: 'Moved' }), NEWER);
+
+    const [kept] = store.rows('documents');
+    assert.strictEqual(kept.projectId, '207');
+    assert.ok(kept.read.includes('public'), `the moved copy is the public one, got ${kept.read}`);
+    assert.deepStrictEqual(indexed.at(-1), aclOf(kept));
   });
 
   await t.test('an older write to the old copy does not keep it', async () => {
