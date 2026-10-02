@@ -204,9 +204,10 @@ on the index PUT and never as a default in `apply-search-definitions.js`.
 
 Project keyword search (`PROJECT_SEARCH_FIELDS` in `src/search/ai-search.js`) matches eight
 searchable fields: `name`, `displayName`, `description`, `proponent`, `nameTokens`,
-`searchLabels`, `tags` and `tagsTokens`. The label columns (sector, or the Track sub-type when there is no sector, status,
-region, type, phase and EA decision) are not searchable themselves; `demi-projects-ds` joins them
-into `searchLabels`, which is a new field and so a plain widening rather than a rebuild.
+`searchLabels`, `tags` and `tagsTokens`. The label columns (sector, or the Track sub-type when
+there is no sector, status, region, type, phase and EA decision) are not searchable themselves;
+`demi-projects-ds` joins them into `searchLabels`, which is a new field and so a plain widening
+rather than a rebuild.
 `/health/search-schema` checks the field list against the live index, but the deploy gate asks the
 app that is already running, so it protects only the releases after the one that adds the check.
 The release that first searches `searchLabels` relies on the index being widened by hand before
