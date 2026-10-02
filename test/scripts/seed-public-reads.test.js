@@ -628,3 +628,29 @@ test('the updates stage heals an Update an Eagle push sealed, under a project st
   assert.deepStrictEqual(row('U-demi').read, ['compliance'], 'a DEMI seal is only lifted by a release');
   assert.strictEqual(row('U-demi').isPublished, false);
 });
+
+test('a rerun of the updates stage rewrites a legacy open Update stored before the inherit rule', async (t) => {
+  t.after(() => t.mock.restoreAll());
+  // As the mirror stored it before: Eagle's empty read, kept unpublished under a public project.
+  const stored = {
+    id: 'U-legacy', projectId: PROJECT_EAGLE_ID, read: [], isPublished: false, status: null,
+    sources: { eagle: { _id: 'U-legacy', read: [], status: null, active: true } }, _etag: '"U-legacy"'
+  };
+  const { row } = updatesStore(t, [stored]);
+  parentProject(t, { id: '207', eagleId: PROJECT_EAGLE_ID, read: PUBLIC_ACL, isPublished: true });
+  parentNotification(t, null);
+  const lines = [];
+  t.mock.method(logger, 'info', (msg) => lines.push(msg));
+
+  await backfill(['--live', '--only', 'updates', '--state', statePath()], {
+    sources: stubSources({ datasets: {
+      RecentActivity: [eagleUpdate({ _id: 'U-legacy', read: [], status: null, active: true })]
+    } }),
+    updateMirror: updateController,
+    updatesRepo
+  });
+
+  assert.deepStrictEqual(row('U-legacy').read, PUBLIC_ACL);
+  assert.strictEqual(row('U-legacy').isPublished, true);
+  assert.ok(lines.some(l => /updates \(this run\): fetched=1 written=1 skipped=0/.test(l)), lines.join('\n'));
+});

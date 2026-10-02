@@ -201,10 +201,11 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     assert.strictEqual(written.isPublished, true);
   });
 
-  for (const [label, read, expected] of [
-    ['[\'sysadmin\'] stays [\'sysadmin\'], never [\'team\']', ['sysadmin'], ['sysadmin']],
-    ['[] stays [], never [\'staff\']', [], []],
-    ['a read that is not a list is stored as []', 'public', []]
+  for (const [label, fields, expected] of [
+    ['[\'sysadmin\'] stays [\'sysadmin\'], never [\'team\']', { read: ['sysadmin'] }, ['sysadmin']],
+    ['[] with a status stays [], never [\'staff\']', { read: [], status: 'draft' }, []],
+    ['[] on an inactive row stays []', { read: [], active: false }, []],
+    ['a read that is not a list is stored as []', { read: 'public' }, []]
   ]) {
     await t.test(`an update's read is never widened: ${label}`, async () => {
       t.mock.method(updates, 'readForWrite', async () => null);
@@ -212,10 +213,26 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       let written;
       t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
 
-      await push({ doc: eagleUpdate({ read }) });
+      await push({ doc: eagleUpdate(fields) });
 
       assert.deepStrictEqual(written.read, expected);
       assert.strictEqual(written.isPublished, false);
+    });
+  }
+
+  // Eagle serves its legacy rows (empty read, no status, active) to anyone who can read the parent.
+  for (const [label, parentRead, published] of [['public', PUBLIC, true], ['unpublished', PRIVATE, false]]) {
+    await t.test(`a legacy open update takes the read of its ${label} project`, async () => {
+      t.mock.method(updates, 'readForWrite', async () => null);
+      parentProject(t, async () => ({ id: '207', read: parentRead }));
+      let written;
+      t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+      await push({ doc: eagleUpdate({ read: [], status: null, active: true }) });
+
+      assert.deepStrictEqual(written.read, parentRead);
+      assert.strictEqual(written.isPublished, published);
+      assert.deepStrictEqual(written.sources.eagle.read, [], 'Eagle\'s own, for the cascade to re-derive from');
     });
   }
 

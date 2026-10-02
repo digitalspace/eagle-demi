@@ -104,6 +104,36 @@ npm run db:seed-public-reads -- --live --only lists
 The state file will already hold a completed `lists` entry from the first backfill. `--only lists`
 runs it anyway.
 
+## Legacy Updates with an empty read
+
+Many old Eagle `RecentActivity` rows have `read: []`, no `status`, and `active: true`. eagle-api
+shows them to anonymous callers anyway: its search `$redact` keeps a row with no read, and
+`/public/recentActivity` never checks the row's own read. On prod (2026-10-02) that was 1389 of 2543
+rows.
+
+The Update mirror gives such a row its parent's `read[]`, so it is public when its project (or
+`ProjectNotification`) is public and private when it is not. The rule is
+`helpers/update-parent.js:updateRead`. The push, this backfill and the project cascade all use it.
+A row with a non-empty `read[]`, a `status`, or `active` not `true` is mirrored as before: its own
+read minus compliance, capped by the parent. `sources.eagle.read` still stores Eagle's own empty
+read, so the cascade follows the project when its visibility changes.
+
+Rows written before this rule are stored as unpublished. A plain rerun of the stage rewrites them.
+Deploy the API first: an older push or project cascade would write `[]` back. The script runs the
+mirror code of the checkout it runs from, so pull the devbox checkout in the same run:
+
+```bash
+scripts/demi-devbox.sh run --env prod -- 'git pull && yarn install && node src/scripts/seed-public-reads.js --live --only updates --state ./updates-legacy.state.json'
+```
+
+No extra flag is needed. The backfill sends no `pushedAt`, so the stale-push guard never skips a
+row. Every row is rebuilt from Eagle and replaced under its etag. Nothing compares a hash or
+`updatedAt` first. The stage line should read `written=` equal to `fetched=`. A row that keeps losing
+its etag race to a live push shows up under `dropped`. That push already wrote it with the same rule.
+
+The backfill takes the notification claim on every live, published row it writes (see the
+`mirrorUpdate` comment in the script), so these old updates send no email.
+
 ## What the backfill cannot recover
 
 `/api/public/comment` removes the author from a comment submitted anonymously before it answers, so
