@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { simulateAccess } from './access';
+import { ApiError } from './client';
 
 vi.mock('../config', () => ({ config: () => ({ API_PATH: '/api' }) }));
 
@@ -14,6 +15,18 @@ describe('simulateAccess', () => {
     stub(new Response(JSON.stringify({ error: 'roles must be an array' }), { status: 400 }));
 
     await expect(simulateAccess(REQUEST)).rejects.toThrow('roles must be an array');
+  });
+
+  it.each([
+    ['a refusal', () => stub(new Response('', { status: 503 })), ApiError],
+    ['a 200 that will not parse', () => stub(new Response('<html>gateway</html>', { status: 200 })), SyntaxError],
+    ['silence', () => vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network down'); })), TypeError],
+  ])('keeps the original error as the cause of %s', async (_case, answer, original) => {
+    answer();
+
+    const err = await simulateAccess(REQUEST).catch((e: unknown) => e);
+
+    expect((err as Error).cause).toBeInstanceOf(original);
   });
 
   it('names the status when a refusal carries no message', async () => {

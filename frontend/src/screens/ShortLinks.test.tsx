@@ -277,57 +277,105 @@ describe('ShortLinks', () => {
 });
 
 describe('ShortLinks project codes', () => {
-  // The server's wording; the screen keys on the 409 status and projectId, never on this text.
+  // The server's wording. With no projectId, it is the only sign that a hidden project holds the code.
   const HELD = 'This code belongs to a project. Edit it on the project instead.';
+  const RACED = 'This short link changed while saving. Reload and try again.';
   const editOnProject = (code: string) => ({ name: `Edit on the project page for ${code}` });
+  const openProject = (code: string) => ({ name: `Open the project page for ${code}` });
   const rowOf = (code: string) => screen.getAllByRole('row').find((row) => row.textContent?.includes(code))!;
+  const listReads = (fetchMock: ReturnType<typeof stub>) => requests(fetchMock).filter((r) => r.startsWith('GET'));
 
   it.each([
-    ['current', 'Project'],
-    ['legacy', 'Old project code'],
-  ] as const)('shows a %s project code read-only, linked to the project editor', async (projectRole, pill) => {
+    ['current', 'Project', editOnProject],
+    ['legacy', 'Old project code', openProject],
+  ] as const)('shows a %s project code read-only, linked to the project page', async (projectRole, pill, name) => {
     stub([{ ...link('site-c', 'system'), projectId: '272', projectRole }]);
 
     renderScreen(<ShortLinks />, signedIn);
     await screen.findByText('Shared links');
 
     const row = rowOf('site-c');
-    expect(within(row).getByRole('link', editOnProject('site-c'))).toHaveAttribute('href', '/projects/272');
+    expect(within(row).getByRole('link', name('site-c'))).toHaveAttribute('href', '/projects/272');
     expect(within(row).getByText(pill)).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Repoint' })).not.toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
   });
 
-  async function refusedList() {
-    stub([link('site-c', 'system')], () => json({ error: HELD, projectId: '272' }, 409));
+  it('never offers to edit an old project code', async () => {
+    stub([{ ...link('site-c-old', 'system'), projectId: '272', projectRole: 'legacy' }]);
+
+    renderScreen(<ShortLinks />, signedIn);
+    await screen.findByText('Shared links');
+
+    expect(within(rowOf('site-c-old')).queryByRole('link', { name: /Edit/ })).not.toBeInTheDocument();
+  });
+
+  async function refusedList(body: object = { error: HELD, projectId: '272' }) {
+    const fetchMock = stub([link('site-c', 'system')], () => json(body, 409));
     const user = userEvent.setup();
     renderScreen(<ShortLinks />, signedIn);
     await screen.findByText('Shared links');
-    return user;
+    return { user, fetchMock };
   }
 
   it('locks a row whose repoint is refused because a project holds the code', async () => {
-    const user = await refusedList();
+    const { user } = await refusedList();
 
     await user.click(screen.getByRole('button', { name: 'Repoint' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByText(HELD)).toBeInTheDocument();
-    expect(within(rowOf('site-c')).getByRole('link', editOnProject('site-c'))).toHaveAttribute(
-      'href',
-      '/projects/272',
-    );
+    expect(within(rowOf('site-c')).getByRole('link', openProject('site-c'))).toHaveAttribute('href', '/projects/272');
     expect(screen.queryByLabelText('New destination')).not.toBeInTheDocument();
   });
 
+  // The 409 does not say whether the code is current or old, so the pill does not guess.
   it('locks a row whose delete is refused because a project holds the code', async () => {
-    const user = await refusedList();
+    const { user } = await refusedList();
 
     await user.click(screen.getByRole('button', { name: 'Delete' }));
 
     expect(await screen.findByText(HELD)).toBeInTheDocument();
     expect(within(rowOf('site-c')).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
-    expect(within(rowOf('site-c')).getByText('Project')).toBeInTheDocument();
+    expect(within(rowOf('site-c')).getByText('Project code')).toBeInTheDocument();
+  });
+
+  it('locks a row held by a project the caller cannot read, with nothing to link to', async () => {
+    const { user } = await refusedList({ error: HELD });
+
+    await user.click(screen.getByRole('button', { name: 'Repoint' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText(HELD)).toBeInTheDocument();
+    const row = rowOf('site-c');
+    expect(within(row).getByText('Project code')).toBeInTheDocument();
+    expect(within(row).queryByRole('link', { name: /project page/ })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Repoint' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+  });
+
+  it('reads the list again after a 409', async () => {
+    const { user, fetchMock } = await refusedList();
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await screen.findByText(HELD);
+    await waitFor(() => expect(listReads(fetchMock)).toHaveLength(2));
+  });
+
+  it('links the project from the callout when a create is refused for a project code', async () => {
+    const fetchMock = stub([], () => json({ error: HELD, projectId: '272' }, 409));
+    const user = userEvent.setup();
+    renderScreen(<ShortLinks />, signedIn);
+    await screen.findByText('No short links yet.');
+
+    await user.click(screen.getByRole('button', { name: 'New short link' }));
+    await user.type(screen.getByPlaceholderText('https://projects.eao.gov.bc.ca/…'), 'https://demi.gov.bc.ca/x');
+    await user.type(screen.getByPlaceholderText('site-c-eac'), 'site-c');
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+
+    expect(await screen.findByRole('link', { name: 'Open the project page' })).toHaveAttribute('href', '/projects/272');
+    await waitFor(() => expect(listReads(fetchMock)).toHaveLength(2));
   });
 
   it('drops an open repoint when the row turns out to be held by a project', async () => {
@@ -352,15 +400,14 @@ describe('ShortLinks project codes', () => {
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
   });
 
-  it('keeps a row editable after a 409 that names no project', async () => {
-    stub([link('mine-a', 'j.okafor')], () => json({ error: 'Code already in use' }, 409));
-    const user = userEvent.setup();
+  it('keeps a row editable after a 409 for a write that raced another', async () => {
+    const { user } = await refusedList({ error: RACED });
 
-    renderScreen(<ShortLinks />, signedIn);
-    await screen.findByText('My links');
-    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Repoint' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByText('Code already in use')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Repoint' })).toBeInTheDocument();
+    expect(await screen.findByText(RACED)).toBeInTheDocument();
+    expect(screen.getByLabelText('New destination')).toBeInTheDocument();
+    expect(within(rowOf('site-c')).queryByText(/^Project/)).not.toBeInTheDocument();
   });
 });

@@ -23,14 +23,19 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** The `error` string a DEMI error body carries, or null when it has none. */
-export function serverError(body: string): string | null {
+/** A non-empty string `field` from a JSON body, or null when the body has none. */
+export function bodyString(body: string, field: string): string | null {
   try {
-    const { error } = JSON.parse(body) as { error?: unknown };
-    return typeof error === 'string' && error ? error : null;
+    const value = (JSON.parse(body) as Record<string, unknown>)[field];
+    return typeof value === 'string' && value ? value : null;
   } catch {
     return null;
   }
+}
+
+/** The `error` string a DEMI error body carries, or null when it has none. */
+export function serverError(body: string): string | null {
+  return bodyString(body, 'error');
 }
 
 /** The DEMI API base, prefix included. Empty API_LOCATION = same origin, through the dev proxy. */

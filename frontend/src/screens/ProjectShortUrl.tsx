@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ApiError, errorMessage, serverError } from '../api/client';
+import { ApiError, bodyString, errorMessage, serverError } from '../api/client';
 import { STAFF_ROLES } from '../api/keycloak';
 import { LINKS_QUERY } from '../api/links';
 import {
@@ -24,15 +24,11 @@ const URL_REFUSAL = /^url\b/i;
 const COPY_FEEDBACK_MS = 2000;
 
 /** The body's `error`, else its `message`, else null. */
-function serverText(err: ApiError): string | null {
-  const error = serverError(err.body);
-  if (error) return error;
-  try {
-    const { message } = JSON.parse(err.body) as { message?: unknown };
-    return typeof message === 'string' && message ? message : null;
-  } catch {
-    return null;
-  }
+const serverText = (err: ApiError): string | null => serverError(err.body) ?? bodyString(err.body, 'message');
+
+/** Line breaks before each dot and after each slash, so a narrow screen never splits the host mid-word. */
+function breakable(text: string): ReactNode[] {
+  return text.split(/(?=\.)|(?<=\/)/).flatMap((part, index) => (index ? [<wbr key={index} />, part] : [part]));
 }
 
 /** Empty is valid: it means the project page. The API takes https only. */
@@ -230,7 +226,7 @@ export function ProjectShortUrl({ projectId, facts }: { projectId: string; facts
           </label>
           <div className="ps-short__field">
             <span id={prefixId} className="ps-short__prefix">
-              {prefix ?? '/s/'}
+              {breakable(prefix ?? '/s/')}
             </span>
             <input
               ref={input}
@@ -269,7 +265,6 @@ export function ProjectShortUrl({ projectId, facts }: { projectId: string; facts
               className="ps-short__input"
               autoComplete="off"
               spellCheck={false}
-              placeholder="The project page"
               value={urlDraft}
               aria-invalid={urlError ? true : undefined}
               aria-describedby={`${urlErrorId} ${urlHelpId}`}
@@ -289,7 +284,7 @@ export function ProjectShortUrl({ projectId, facts }: { projectId: string; facts
           <button
             type="button"
             className="ps-card__link ps-card__link--button ps-short__reset"
-            disabled={saving}
+            disabled={saving || !urlDraft}
             onClick={() => {
               setUrlDraft('');
               setUrlRejected('');
@@ -312,7 +307,7 @@ export function ProjectShortUrl({ projectId, facts }: { projectId: string; facts
         <p className="ps-short__line">
           Short URL:{' '}
           <a href={shortUrl} target="_blank" rel="noopener noreferrer">
-            <code className="cell__mono">{prefix === null ? shortUrl : bare}</code>
+            <code className="cell__mono">{breakable(prefix === null ? shortUrl : bare)}</code>
           </a>
           <button type="button" className="ps-card__link ps-card__link--button" onClick={() => void copy()}>
             Copy <span className="visually-hidden">short URL</span>
@@ -336,6 +331,7 @@ export function ProjectShortUrl({ projectId, facts }: { projectId: string; facts
           Points to:{' '}
           <a href={target} target="_blank" rel="noopener noreferrer">
             {target}
+            <span className="visually-hidden"> (opens in a new tab)</span>
           </a>
         </p>
       )}
