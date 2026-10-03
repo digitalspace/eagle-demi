@@ -32,7 +32,7 @@
     "@azure/monitor-opentelemetry": "^1.20.0",
     "@azure/storage-blob": "^12.33.0",
     "@azure/storage-queue": "^12.31.0",
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.4",
     "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^4.1.0",
     "minio": "^8.0.7",
