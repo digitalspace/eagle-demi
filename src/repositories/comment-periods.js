@@ -85,7 +85,8 @@ async function listEveryByProject(projectId, access) {
 }
 
 /**
- * The three fields a period is REFERRED to by, for a bounded set of period ids, in one query.
+ * The fields a period is REFERRED to by, its dates among them so a reader can tell open from
+ * closed, for a bounded set of period ids, in one query.
  *
  * Cross-partition — the ids arrive off `updates.pcp` and `notifications.pcp`, which carry no
  * project — but the set is one page of rows and only the reference is projected.
@@ -98,7 +99,7 @@ async function listByIds(access, ids) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: [inList('id', unique, '@cpid')],
-    select: 'c.id, c.isMet, c.metURL'
+    select: 'c.id, c.isMet, c.metURL, c.dateStarted, c.dateCompleted'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});

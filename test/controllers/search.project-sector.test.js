@@ -41,7 +41,7 @@ test('Project sector falls back to the Track sub-type', async (t) => {
       // Stored before the merge trimmed; the filter panel's value has no trailing space.
       { id: 'h', sector: 'Groundwater Extraction ', projectSubType: 'Dams', ...PUBLIC }
     ];
-    t.mock.method(projectsRepo, 'listVisible', async () => ({ items: rows }));
+    t.mock.method(projectsRepo, 'listPage', async () => rows);
     t.mock.method(projectsRepo, 'countVisible', async () => rows.length);
 
     assert.deepStrictEqual(await sectors({ pageSize: '10' }), [
@@ -84,9 +84,7 @@ test('Project sector falls back to the Track sub-type', async (t) => {
 
   // A dial that hides `sector` from the public must not leak the sub-type in its place.
   await t.test('a sector withheld by a dial stays withheld on both paths', async () => {
-    t.mock.method(projectsRepo, 'listVisible', async () => ({
-      items: [{ id: 'a', sector: 'Mining', projectSubType: 'Coal Mines', vis: { sector: 2 }, ...PUBLIC }]
-    }));
+    t.mock.method(projectsRepo, 'listPage', async () => [{ id: 'a', sector: 'Mining', projectSubType: 'Coal Mines', vis: { sector: 2 }, ...PUBLIC }]);
     t.mock.method(projectsRepo, 'countVisible', async () => 1);
     t.mock.method(aiSearch, 'searchProjects', async () => ({
       count: 1,

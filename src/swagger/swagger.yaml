@@ -335,8 +335,8 @@ paths:
           description: >-
             Unknown dataset, unsupported query parameter, dataset=Comment with no period, or a
             page past the deepest one a Cosmos list serves: for dataset=RecentActivity, Comment,
-            ProjectNotification, List, Organization, and CommentPeriod with a `project`,
-            `pageNum * pageSize + pageSize` (pageSize clamped to 1000) must stay within 20000 rows.
+            ProjectNotification, List, Organization, CommentPeriod with a `project`, and Project
+            with no keywords, filter or sort, `pageNum * pageSize + pageSize` (pageSize clamped to 1000) must stay within 20000 rows.
         '502':
           description: >-
             The backing search index or database could not be read. The body carries `code`

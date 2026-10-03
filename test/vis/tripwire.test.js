@@ -68,6 +68,7 @@ test('no anonymous response carries a restricted field', async (t) => {
     t.mock.method(projects, 'listVisible', async () => ({
       items: [structuredClone(STORED)], continuationToken: undefined
     }));
+    t.mock.method(projects, 'listPage', async () => [structuredClone(STORED)]);
     t.mock.method(projects, 'getById', async () => structuredClone(STORED));
     t.mock.method(projects, 'countVisible', async () => 1);
 

@@ -19,7 +19,7 @@ const { duplicateIdError } = require('../helpers/duplicate-id');
 const { eagleOnlyProjectId } = require('../merge/project');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem, assertFilterable
+  upsertWithEtag, createItem, assertFilterable, readPage
 } = require('./_sql');
 
 const CONTAINER = 'projects';
@@ -49,12 +49,12 @@ function buildCriteria(opts, access) {
 }
 
 /**
- * List projects visible to this caller.
+ * Projects visible to this caller, by name.
  * ORDER BY c.name requires /name to be indexed — it is, in the container's indexing policy.
  * Without the index Cosmos rejects the sort outright rather than degrading.
  */
-async function listVisible(access, opts = {}) {
-  const spec = selectWhere({
+function visibleSpec(access, opts) {
+  return selectWhere({
     access,
     partitionField: PARTITION_FIELD,
     criteria: buildCriteria(opts, access),
@@ -63,8 +63,16 @@ async function listVisible(access, opts = {}) {
     select: selectFor('projects', access, PARTITION_FIELD),
     orderBy: 'c.name ASC'
   });
+}
 
-  return cosmos.query(CONTAINER, spec, pageOptions(opts));
+/** One continuation page: `{items, continuationToken}`. With no `pageSize`, every row. */
+async function listVisible(access, opts = {}) {
+  return cosmos.query(CONTAINER, visibleSpec(access, opts), pageOptions(opts));
+}
+
+/** One offset page (`pageNum`, `pageSize`) of `listVisible`'s rows, past the first 1,000. */
+async function listPage(access, { pageNum, pageSize } = {}) {
+  return readPage(CONTAINER, visibleSpec(access, {}), { pageNum, pageSize });
 }
 
 async function countVisible(access, opts = {}) {
@@ -411,6 +419,7 @@ module.exports = {
   buildCriteria,
   CRITERIA_FIELDS,
   listVisible,
+  listPage,
   countVisible,
   getById,
   EAGLE_OBJECT_ID,

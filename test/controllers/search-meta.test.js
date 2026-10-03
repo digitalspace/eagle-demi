@@ -92,7 +92,7 @@ test('the response says which keys it could not express', async (t) => {
     // possible reading of the narrowest possible request: measured, `dataset=Project&project=<id>`
     // returned `count: 348`, every project this caller can see, to someone who asked for one.
     let searched = false;
-    t.mock.method(projectsRepo, 'listVisible', async () => { searched = true; return { items: [] }; });
+    t.mock.method(projectsRepo, 'listPage', async () => { searched = true; return []; });
     t.mock.method(projectsRepo, 'countVisible', async () => { searched = true; return 348; });
     t.mock.method(aiSearch, 'searchProjects', async () => { searched = true; return { count: 348, items: [] }; });
 
@@ -144,9 +144,9 @@ test('an unparseable pageSize takes the documented default', async (t) => {
   // corpus — where `pageSize=10` answers 10.
   await t.test('pageSize=abc asks for the same page an absent pageSize does', async () => {
     const asked = [];
-    t.mock.method(projectsRepo, 'listVisible', async (access, opts) => {
+    t.mock.method(projectsRepo, 'listPage', async (access, opts) => {
       asked.push(opts.pageSize);
-      return { items: [] };
+      return [];
     });
     t.mock.method(projectsRepo, 'countVisible', async () => 348);
 
@@ -164,9 +164,9 @@ test('an unparseable pageSize takes the documented default', async (t) => {
   // Azure AI Search as `{top: -5, skip: -15}`.
   await t.test('a zero or negative pageSize takes the default too', async () => {
     const asked = [];
-    t.mock.method(projectsRepo, 'listVisible', async (access, opts) => {
+    t.mock.method(projectsRepo, 'listPage', async (access, opts) => {
       asked.push(opts.pageSize);
-      return { items: [] };
+      return [];
     });
     t.mock.method(projectsRepo, 'countVisible', async () => 348);
 
@@ -1189,14 +1189,12 @@ test('a Cosmos project row carries its location', async (t) => {
   // `address` on the way in, and neither row mapper read it back. `/projects` map popups render
   // "Location: -" and the marker tooltip renders the literal string "null".
   await t.test('location comes from the stored address', async () => {
-    t.mock.method(projectsRepo, 'listVisible', async () => ({
-      items: [{
+    t.mock.method(projectsRepo, 'listPage', async () => [{
         id: '207',
         name: 'Site C Clean Energy Project',
         address: '10 km south-west of Fort St. John',
         read: ['public']
-      }]
-    }));
+      }]);
     t.mock.method(projectsRepo, 'countVisible', async () => 1);
 
     const { out, res } = capture();

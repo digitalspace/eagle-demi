@@ -23,6 +23,13 @@ const {
   listRow, orgRow, periodRow, commentRow, updateRow, notificationRow
 } = require('../helpers/search-reads');
 
+/** `row` cut to the columns `spec` selects, as Cosmos answers a projected query. */
+const projected = (spec, row) => Object.fromEntries(
+  /^SELECT (.+?) FROM c\b/.exec(spec.query)[1].split(', ')
+    .map(column => column.replace(/^c\./, ''))
+    .filter(field => field in row)
+    .map(field => [field, row[field]]));
+
 test('GET /search?dataset=List', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -292,7 +299,7 @@ test('GET /search?dataset=RecentActivity', async (t) => {
       if (container === 'projects') return { items: [PROJECT_ROW] };
       // The two references an update carries, as the repositories project them.
       if (container === 'commentPeriods') {
-        return { items: [{ id: PERIOD_EAGLE_ID, isMet: true, metURL: 'https://eao.gov.bc.ca/met' }] };
+        return { items: [projected(spec, periodRow({ isMet: true, metURL: 'https://eao.gov.bc.ca/met' }))] };
       }
       if (container === 'notifications') {
         return { items: [{ id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' }] };
@@ -321,9 +328,12 @@ test('GET /search?dataset=RecentActivity', async (t) => {
     assert.strictEqual(row.documentUrl,
       'https://projects.eao.gov.bc.ca/api/document/5cf00c03a266b7e187750002/fetch');
     // OBJECTS, not the bare ids the mirror stores: the News template reads `pcp.isMet` and
-    // `projectNotification.name`, and a string answers both with undefined.
-    assert.deepStrictEqual(row.pcp,
-      { _id: PERIOD_EAGLE_ID, isMet: true, metURL: 'https://eao.gov.bc.ca/met' });
+    // `projectNotification.name`, and a string answers both with undefined. The dates, as stored,
+    // are what tell an open period from a closed one.
+    assert.deepStrictEqual(row.pcp, {
+      _id: PERIOD_EAGLE_ID, isMet: true, metURL: 'https://eao.gov.bc.ca/met',
+      dateStarted: '2026-08-01T00:00:00.000Z', dateCompleted: '2026-08-30T00:00:00.000Z'
+    });
     assert.deepStrictEqual(row.projectNotification,
       { _id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' });
     assert.deepStrictEqual(row.project, { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy', location: null });
@@ -384,6 +394,21 @@ test('GET /search?dataset=RecentActivity', async (t) => {
     assert.strictEqual(row.pcp, undefined);
     assert.strictEqual(row.projectNotification, undefined);
   });
+
+  await t.test('a period with no dates answers null for both, not a missing or made-up date',
+    async () => {
+      stubCosmos(t, {
+        projects: [PROJECT_ROW],
+        updates: [updateRow()],
+        commentPeriods: [periodRow({ dateStarted: null, dateCompleted: null })]
+      });
+
+      const { body } = await get('/api/search?dataset=RecentActivity');
+
+      const { pcp } = body[0].searchResults[0];
+      assert.strictEqual(pcp.dateStarted, null);
+      assert.strictEqual(pcp.dateCompleted, null);
+    });
 
   await t.test('keywords search the headline and the content, and -score means newest first',
     async () => {
