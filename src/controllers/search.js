@@ -635,8 +635,12 @@ async function updateProjects(access, rows) {
           })
         }
         : {}),
+      // Dates as stored, ISO string or null, so a reader can tell an open period from a closed one.
       pcp: period
-        ? { _id: String(period.id), isMet: period.isMet === true, metURL: period.metURL || '' }
+        ? {
+          _id: String(period.id), isMet: period.isMet === true, metURL: period.metURL || '',
+          dateStarted: period.dateStarted ?? null, dateCompleted: period.dateCompleted ?? null
+        }
         : undefined,
       projectNotification: notification
         ? { _id: String(notification.id), name: notification.name }
