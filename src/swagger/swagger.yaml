@@ -1318,7 +1318,8 @@ paths:
         body. Only a 200 redirects: a 404 or 500 answers JSON in both modes.
 
         The presigned URL carries the file name as `response-content-disposition`, so the browser
-        saves `Report.pdf` rather than the storage key.
+        saves `Report.pdf` rather than the storage key. It says `attachment` unless `inline=1` is
+        sent and the file is a PDF or a PNG, JPEG, GIF or WebP image.
       parameters:
         - name: id
           in: path
@@ -1340,6 +1341,18 @@ paths:
           description: >-
             `1` answers 302 to the presigned URL instead of returning it as JSON. An
             `Accept: text/html…` request redirects without it.
+        - name: inline
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['1']
+          description: >-
+            `1` signs the URL with `Content-Disposition: inline` and the file's `Content-Type`, so
+            the browser shows it instead of saving it. Only for `application/pdf`, `image/png`,
+            `image/jpeg`, `image/gif` and `image/webp`, taken from the recorded MIME type, or from
+            the file extension when that is missing or `application/octet-stream`. Any other type
+            stays `attachment`. Works in both modes. HEAD ignores it.
       responses:
         '200':
           description: A presigned download URL. JSON mode.
@@ -1352,6 +1365,11 @@ paths:
                   expiresIn: { type: integer, description: Seconds until the URL expires. }
                   fileName: { type: string }
                   displayName: { type: string, nullable: true }
+                  inline:
+                    type: boolean
+                    description: >-
+                      Whether the URL is signed `inline`. False when `inline=1` was not sent or the
+                      file type is not one that may open in the browser.
         '302':
           description: Redirect mode. The presigned URL is the `Location`.
           headers:
@@ -1743,6 +1761,7 @@ paths:
                   expiresIn: { type: integer, description: Seconds until the URL expires. }
                   fileName: { type: string }
                   displayName: { type: string, nullable: true }
+                  inline: { type: boolean, enum: [false], description: Always an attachment here. }
                   single: { type: boolean, enum: [true] }
         '202':
           description: The job was recorded and queued.

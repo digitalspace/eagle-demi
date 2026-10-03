@@ -14,7 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const { finished } = require('stream/promises');
 const storage = require('../../storage');
-const { contentDisposition } = require('../../storage/content-disposition');
+const { contentDisposition, inlineType } = require('../../storage/content-disposition');
 
 const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
@@ -555,9 +555,12 @@ function downloadFailed(err) {
  * request from here too: the ACL check, the analytics event, the audit row and the presign are one
  * implementation, so the two routes cannot drift apart on any of them.
  *
+ * `inline` asks for a URL the browser shows rather than saves; only safe types get one, and the
+ * body's `inline` says whether this file did.
+ *
  * @returns {Promise<{status: number, body: object}>}
  */
-async function resolveDownload(req, id) {
+async function resolveDownload(req, id, { inline = false } = {}) {
   try {
     const found = await findStoredFile(req, id);
     if (found.status) return found;
@@ -566,15 +569,20 @@ async function resolveDownload(req, id) {
     // The storage layer owns key resolution and expiry. It used to be done here, with the
     // client borrowed from the extraction script — which is how extract.js came to read keys
     // without the environment prefix while this path applied it.
+    const signedType = inline ? inlineType(doc.mimeType, fileName) : null;
     const url = await storage.getDownloadUrl(doc.s3Key, {
       expirySeconds: DOWNLOAD_URL_TTL_SECONDS,
-      fileName
+      fileName,
+      inlineType: signedType
     });
+    // A view and a save share one event name; this tells them apart.
+    const viewDetail = signedType ? { inline: true } : {};
 
     analyticsEvent(req, {
       eventName: 'document.download',
       projectId: doc.projectId,
-      documentId: doc.id
+      documentId: doc.id,
+      detail: viewDetail
     });
 
     // A download of a document the public cannot see is an access to restricted material, which
@@ -586,13 +594,16 @@ async function resolveDownload(req, id) {
         targetType: 'document',
         targetId: doc.id,
         projectId: doc.projectId,
-        detail: { displayName: doc.displayName || null }
+        detail: { displayName: doc.displayName || null, ...viewDetail }
       });
     }
 
     return {
       status: 200,
-      body: { url, expiresIn: DOWNLOAD_URL_TTL_SECONDS, fileName, displayName: doc.displayName || null }
+      body: {
+        url, expiresIn: DOWNLOAD_URL_TTL_SECONDS, fileName, displayName: doc.displayName || null,
+        inline: Boolean(signedType)
+      }
     };
   } catch (err) {
     return downloadFailed(err);
@@ -606,13 +617,17 @@ exports.resolveDownload = resolveDownload;
  * `Accept: text/html` and cannot read JSON, so a navigation would otherwise render the URL as text.
  */
 function wantsRedirect(req) {
-  const raw = req.query && req.query.redirect;
-  // Repeated query keys arrive as ARRAYS from querystring.parse (src/http/router.js).
-  const value = Array.isArray(raw) ? raw[raw.length - 1] : raw;
-  if (value === '1') return true;
+  if (queryFlag(req, 'redirect')) return true;
 
   const accept = String((req.headers && req.headers.accept) || '');
   return accept.startsWith('text/html');
+}
+
+/** `?<name>=1`. Repeated query keys arrive as ARRAYS from querystring.parse; the last one wins. */
+function queryFlag(req, name) {
+  const raw = req.query && req.query[name];
+  const value = Array.isArray(raw) ? raw[raw.length - 1] : raw;
+  return value === '1';
 }
 
 /** A recorded `fileSize` is missing or a numeric string on many rows; only a positive number counts. */
@@ -716,7 +731,8 @@ async function headDownload(req, res) {
 exports.downloadDocument = async (req, res) => {
   if (req.method === 'HEAD') return headDownload(req, res);
 
-  const { status, body } = await resolveDownload(req, req.params.id);
+  const { status, body } = await resolveDownload(req, req.params.id,
+    { inline: queryFlag(req, 'inline') });
 
   // Only a 200 redirects. A 404 or 500 stays JSON in both modes: there is nowhere to send the
   // caller, and a browser gets the same body it would have got before.

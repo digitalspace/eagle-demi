@@ -41,6 +41,7 @@ const backend = BACKENDS[backendName]();
  * @param {object} [opts]
  * @param {number} [opts.expirySeconds=300]
  * @param {string} [opts.fileName]  suggested filename for the browser
+ * @param {string} [opts.inlineType]  signs `inline` and this Content-Type; absent = attachment
  * @returns {Promise<string>}
  */
 function getDownloadUrl(key, opts) {
