@@ -11,7 +11,13 @@ const {
 const { logger } = require('../../src/utils/logger');
 const { documentAdmission } = require('../../src/scripts/seed-nosql');
 const { buildRegistry, buildProjectIndex } = require('../../src/merge/project');
-const { MAX_PAGE_SIZE, readForLevel } = require('../../src/helpers/access-sql');
+const { readForLevel, systemAccess } = require('../../src/helpers/access-sql');
+const { ids, pagedCosmos } = require('../helpers/paged-cosmos');
+const updatesRepo = require('../../src/repositories/updates');
+const notificationsRepo = require('../../src/repositories/notifications');
+const listsRepo = require('../../src/repositories/lists');
+const periodsRepo = require('../../src/repositories/comment-periods');
+const commentsRepo = require('../../src/repositories/comments');
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
 /**
@@ -117,11 +123,15 @@ function stubSources(over = {}, datasets = EAGLE_BY_DATASET) {
 const assertSystem = (access) => assert.strictEqual(access && access.tier, 'privileged',
   'the reconcile must read as systemAccess(), or it diffs against a partial view');
 
-/** `n` rows in one partition, enough of them to reach a page ceiling. */
-const idRows = (prefix, n) => Array.from({ length: n }, (_, i) => ({ id: `${prefix}-${i}` }));
+/**
+ * A per-partition COUNT for a fake that overrides only the read: what that read returns, unless
+ * `counted[partition]` says the partition holds more.
+ */
+const countOfRead = (read, counted = {}) => async (partition, access) =>
+  counted[partition] ?? (await read(partition, access)).length;
 
 function makeDeps(over = {}, counts = {}) {
-  return {
+  const deps = {
     sources: stubSources(),
     projects: {
       listWithEagleId: async (access) => { assertSystem(access); return PROJECT_ROWS; },
@@ -136,29 +146,38 @@ function makeDeps(over = {}, counts = {}) {
       }
     },
     commentPeriods: {
-      listByProject: async (projectId, access) => {
+      listEveryByProject: async (projectId, access) => {
         assertSystem(access);
         return PERIOD_ROWS[projectId] || [];
       }
     },
     lists: {
       KINDS: { LIST: 'List', ORGANIZATION: 'Organization' },
-      listByKind: async (kind, access) => { assertSystem(access); return LIST_ROWS[kind]; },
+      listEveryOfKind: async (kind, access) => { assertSystem(access); return LIST_ROWS[kind]; },
       countByKind: async (kind) => counts[kind] ?? LIST_ROWS[kind].length
     },
     notifications: {
-      list: async (access) => { assertSystem(access); return NOTIFICATION_ROWS; },
+      listEvery: async (access) => { assertSystem(access); return NOTIFICATION_ROWS; },
       count: async () => counts.notifications ?? NOTIFICATION_ROWS.length
     },
     updates: {
-      list: async (access) => { assertSystem(access); return UPDATE_ROWS; },
+      listEvery: async (access) => { assertSystem(access); return UPDATE_ROWS; },
       count: async () => counts.updates ?? UPDATE_ROWS.length
     },
     comments: {
-      listByPeriod: async (periodId, access) => { assertSystem(access); return [{ id: 'C1' }]; }
+      listEveryByPeriod: async (periodId, access) => { assertSystem(access); return [{ id: 'C1' }]; }
     },
     ...over
   };
+  deps.commentPeriods = {
+    countByProject: countOfRead(deps.commentPeriods.listEveryByProject, counts.commentPeriods),
+    ...deps.commentPeriods
+  };
+  deps.comments = {
+    countByPeriod: countOfRead(deps.comments.listEveryByPeriod, counts.comments),
+    ...deps.comments
+  };
+  return deps;
 }
 
 /**
@@ -170,7 +189,7 @@ function updatesDrift() {
   return {
     sources: stubSources({}, { ...EAGLE_BY_DATASET, RecentActivity: [{ _id: 'U1' }, { _id: 'U2' }] }),
     updates: {
-      list: async (access) => { assertSystem(access); return [{ id: 'U1' }, { id: 'U-gone' }]; },
+      listEvery: async (access) => { assertSystem(access); return [{ id: 'U1' }, { id: 'U-gone' }]; },
       count: async () => 2
     }
   };
@@ -294,7 +313,7 @@ test('reconcile', async (t) => {
       lists: {
         ...makeDeps().lists,
         // Private in Eagle, public in DEMI.
-        listByKind: async (kind) => kind === 'List'
+        listEveryOfKind: async (kind) => kind === 'List'
           ? [{ id: 'L1', kind: 'List', read: PUBLIC, isPublished: true }]
           : LIST_ROWS[kind]
       }
@@ -430,7 +449,7 @@ test('reconcile', async (t) => {
         CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-pn', project: 'N1' }]
       }),
       commentPeriods: {
-        listByProject: async (projectId, access) => {
+        listEveryByProject: async (projectId, access) => {
           assertSystem(access);
           return ({ ...PERIOD_ROWS, N1: [{ id: 'CP-pn', projectId: 'N1' }] })[projectId] || [];
         }
@@ -465,7 +484,7 @@ test('reconcile', async (t) => {
           countWithEagleId: async () => PROJECT_ROWS.length + 1
         },
         commentPeriods: {
-          listByProject: async (projectId, access) => {
+          listEveryByProject: async (projectId, access) => {
             assertSystem(access);
             return ({ ...PERIOD_ROWS, 353: [{ id: 'CP-pn', projectId: '353' }] })[projectId] || [];
           }
@@ -489,7 +508,7 @@ test('reconcile', async (t) => {
         CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-pn', project: 'N1' }]
       }),
       commentPeriods: {
-        listByProject: async (projectId, access) => {
+        listEveryByProject: async (projectId, access) => {
           assertSystem(access);
           return ({ ...PERIOD_ROWS, N1: [{ id: 'CP-pn', projectId: 'N1' }] })[projectId] || [];
         }
@@ -543,10 +562,10 @@ test('reconcile', async (t) => {
       },
       notifications: {
         ...makeDeps().notifications,
-        list: async () => [{ id: 'N1', read: ['staff'] }]
+        listEvery: async () => [{ id: 'N1', read: ['staff'] }]
       },
       updates: {
-        list: async () => [
+        listEvery: async () => [
           // Capped to staff under private eagle-P2 and private N1: in step.
           { id: 'U-proj', projectId: 'P2', read: ['staff'], isPublished: false },
           { id: 'U-note', projectId: 'N1', read: ['staff'], isPublished: false },
@@ -573,7 +592,7 @@ test('reconcile', async (t) => {
         listWithEagleId: async () => PROJECT_ROWS.map(row => ({ ...row, read: ['staff', 'idir', 'public'] }))
       },
       updates: {
-        list: async () => [
+        listEvery: async () => [
           // What the push stores: the token dropped, and sysadmin only when nothing else is left.
           { id: 'U-comp', projectId: 'P1', read: ['public'], isPublished: true },
           { id: 'U-only', projectId: 'P1', read: ['sysadmin'], isPublished: false }
@@ -609,58 +628,63 @@ test('reconcile', async (t) => {
       /documents enumerated 3 rows but the container holds 503 — .*truncated read/);
   });
 
-  // Both public-read ceilings guard ONE partition read: comment periods partition on project,
-  // comments on period. Comparing the accumulated total against the per-partition cap fired on
-  // every real run — DEMI holds ~1200 comment periods across ~500 projects.
-  await t.test('the comment-period ceiling is per project, not the running total', async () => {
-    const perProject = (byProject) => ({
-      commentPeriods: {
-        listByProject: async (projectId, access) => {
-          assertSystem(access);
-          return byProject[projectId] || [];
-        }
-      }
+  // Prod, 2026-10-03: a one-page read of 2,543 updates printed `updates eagleOnly=1543`.
+  await t.test('updates past one page are read whole, so matching sides report eagleOnly=0',
+    async (tt) => {
+      const rows = ids('U', 2500);
+      pagedCosmos(tt, container => (container === updatesRepo.CONTAINER ? rows : []));
+      const summary = await reconcile([], makeDeps({
+        sources: stubSources({}, {
+          ...EAGLE_BY_DATASET, RecentActivity: rows.map(row => ({ _id: row.id }))
+        }),
+        updates: updatesRepo
+      }));
+
+      assert.strictEqual(summary.updates.inDemi, rows.length);
+      assert.deepStrictEqual(summary.updates.eagleOnly, []);
+      assert.deepStrictEqual(summary.updates.unpublishedOrDeleted, []);
+      assert.deepStrictEqual(summary.failures.filter(f => /^updates/.test(f)), []);
     });
-    const half = Math.ceil(MAX_PAGE_SIZE / 2) + 1;
 
-    const spread = await reconcile([], makeDeps(perProject({
-      207: idRows('a', half), 'eagle-P2': idRows('b', half)
-    })));
-    assert.ok(spread.commentPeriods.inDemi > MAX_PAGE_SIZE,
-      'more periods in all than one page holds, but no project filled a page');
-    assert.deepStrictEqual(spread.failures.filter(f => /comment-period page/.test(f)), [],
-      'a total spread across projects is not a truncated read');
-
-    const filled = await reconcile([], makeDeps(perProject({ 207: idRows('a', MAX_PAGE_SIZE) })));
-    assert.ok(filled.failures.some(f => /a project filled a comment-period page/.test(f)),
-      'one project that filled its page IS a truncated read');
+  await t.test('every DEMI enumeration reads past one page', async (tt) => {
+    const rows = ids('r', 2500);
+    const seen = pagedCosmos(tt, () => rows);
+    const access = systemAccess();
+    // `crossPartition`: unsorted, because a cross-partition ORDER BY loses its continuation.
+    const reads = [
+      ['notifications.listEvery', notificationsRepo.CONTAINER, true,
+        () => notificationsRepo.listEvery(access)],
+      ['updates.listEvery', updatesRepo.CONTAINER, true, () => updatesRepo.listEvery(access)],
+      ['lists.listEveryOfKind', listsRepo.CONTAINER, false,
+        () => listsRepo.listEveryOfKind(listsRepo.KINDS.ORGANIZATION, access)],
+      ['commentPeriods.listEveryByProject', periodsRepo.CONTAINER, false,
+        () => periodsRepo.listEveryByProject('207', access)],
+      ['comments.listEveryByPeriod', commentsRepo.CONTAINER, false,
+        () => commentsRepo.listEveryByPeriod('CP1', access)]
+    ];
+    for (const [name, container, crossPartition, read] of reads) {
+      const before = seen.length;
+      assert.strictEqual((await read()).length, rows.length, `${name} stopped at one page`);
+      if (crossPartition) {
+        const own = seen.slice(before).filter(s => s.container === container);
+        assert.ok(own.length > 0 && own.every(s => !/ORDER BY/.test(s.spec.query)),
+          `${name} must not sort`);
+      }
+    }
   });
 
-  await t.test('the comment ceiling is per period, not the running total', async () => {
-    const twoPeriods = {
-      commentPeriods: {
-        listByProject: async (projectId, access) => {
-          assertSystem(access);
-          return projectId === '207' ? [{ id: 'CP1' }, { id: 'CP2' }] : [];
-        }
-      }
-    };
-    const byPeriod = (rowsFor) => ({
-      ...twoPeriods,
-      comments: {
-        listByPeriod: async (periodId, access) => { assertSystem(access); return rowsFor(periodId); }
-      }
-    });
-    const half = Math.ceil(MAX_PAGE_SIZE / 2) + 1;
+  await t.test('a comment-period partition read short of its COUNT is reported', async () => {
+    const summary = await reconcile([], makeDeps({}, { commentPeriods: { 207: 1001 } }));
+    assert.ok(summary.failures.some(f =>
+      /commentPeriods enumerated 1 rows but the container holds 1001 — .*truncated read/.test(f)),
+    JSON.stringify(summary.failures));
+  });
 
-    const spread = await reconcile(['--comments'],
-      makeDeps(byPeriod(periodId => idRows(periodId, half))));
-    assert.ok(spread.comments.inDemi > MAX_PAGE_SIZE, 'more comments in all than one page holds');
-    assert.deepStrictEqual(spread.failures.filter(f => /a period filled a comment page/.test(f)), []);
-
-    const filled = await reconcile(['--comments'], makeDeps(byPeriod(periodId =>
-      (periodId === 'CP1' ? idRows('CP1', MAX_PAGE_SIZE) : []))));
-    assert.ok(filled.failures.some(f => /a period filled a comment page/.test(f)));
+  await t.test('a comment partition read short of its COUNT is reported', async () => {
+    const summary = await reconcile(['--comments'], makeDeps({}, { comments: { CP1: 1001 } }));
+    assert.ok(summary.failures.some(f =>
+      /comments enumerated 1 rows but the container holds 1001 — .*truncated read/.test(f)),
+    JSON.stringify(summary.failures));
   });
 
   await t.test('nothing it reports is a delete list', async () => {
@@ -834,7 +858,7 @@ function engageDeps({ rows = MET_PERIODS, respond, deleted = [] } = {}) {
     engageApiBase: ENGAGE_BASE,
     fetch: async (url) => respond(url),
     commentPeriods: {
-      listByProject: async (projectId, access) => {
+      listEveryByProject: async (projectId, access) => {
         assertSystem(access);
         return projectId === '207' ? rows : [];
       },

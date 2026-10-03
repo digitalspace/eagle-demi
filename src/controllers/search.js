@@ -1961,6 +1961,8 @@ exports.search = async (req, res) => {
           ...(result.closedCount === undefined ? {} : { closedCount: result.closedCount })
         }]);
       } catch (err) {
+        // A page past MAX_PAGE_DEPTH, refused by `readPage` before it reads anything.
+        if (err.status === 400) return res.status(400).json({ error: err.message });
         logger.error(`[search] ${dataset} read failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, `${dataset} search is unavailable`));
       }

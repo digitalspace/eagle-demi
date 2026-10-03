@@ -162,8 +162,8 @@ node src/scripts/reconcile-eagle.js              # comment periods, lists, notif
 node src/scripts/reconcile-eagle.js --comments   # and comments
 ```
 
-Comments are behind a flag because the sweep costs one eagle-api request per comment period and one
-Cosmos query per period — too much for the nightly timer, which is why the alert line says
+Comments are behind a flag because the sweep costs one eagle-api request per comment period and two
+Cosmos queries (the read and its COUNT) per period — too much for the nightly timer, which is why the alert line says
 `comments: skipped` when it was not asked for. A container the run did not sweep never reports zero
 drift.
 

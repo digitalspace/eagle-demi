@@ -44,7 +44,7 @@ const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql')
 const { seedAcl } = require('../seed/transform');
 const { readUnder } = require('../helpers/update-parent');
 const { eachCommentPage } = require('./seed-public-reads');
-const { systemAccess, MAX_PAGE_SIZE } = require('../helpers/access-sql');
+const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 
 /** The containers reported, in the order `report` prints them and `summaryLine` names them. */
@@ -379,10 +379,12 @@ async function reconcile(argv = [], deps = {}) {
   const projectRows = await projectsRepo.listWithEagleId(access);
   const documentRows = await documentsRepo.listSeededIds(access);
 
-  summary.failures = (await truncatedReads(access, [
+  const truncated = async (pairs) => (await truncatedReads(access, pairs))
+    .map(short => `${short} — the diff below is computed off a truncated read`);
+  summary.failures = await truncated([
     ['projects', projectRows, projectsRepo.countWithEagleId],
     ['documents', documentRows, documentsRepo.countSeededIds]
-  ])).map(short => `${short} — the diff below is computed off a truncated read`);
+  ]);
 
   const projectDiff = diff(projectRows, row => String(row.eagleId), eagleProjectIds,
     row => row.sourceSystem === 'eagle');
@@ -399,33 +401,33 @@ async function reconcile(argv = [], deps = {}) {
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff,
     aclMismatch: aclMismatch(documentRows, row => String(row.id), eagleRead, projectReadOf) };
 
-  // The public-read containers, enumerated through the SAME repository reads a request uses. Their
-  // rows carry `id === eagleId`, and every one of them is the backfill's or the push's, so there is
-  // no `pushOwned` split to make.
+  // The public-read containers, enumerated with the SAME predicates a request reads under, but
+  // whole: a request's read stops at MAX_PAGE_SIZE rows, and every row past it would report as
+  // Eagle-only drift. Their rows carry `id === eagleId`, and every one of them is the backfill's
+  // or the push's, so there is no `pushOwned` split to make.
   //
   // Comment periods DO need a parent gate. eagle-api's `dataset=CommentPeriod` gates on the
   // period's own `read[]` and joins no parent (`api/aggregators/searchAggregator.js`), so a period
   // Eagle publishes under a project it does not publish is still in the id set — while the mirror
   // drops it, because its parent project row is not in DEMI. Measured on test 2026-09-07: 29 such
   // periods under 20 unpublished projects, every one of them reported as push drift.
-  const notificationRows = await notificationsRepo.list(access, {});
+  const notificationRows = await notificationsRepo.listEvery(access);
   const periodRows = [];
-  // MAX_PAGE_SIZE caps ONE partition's read, so the ceiling is per parent. Comparing the running
-  // total against it would fire on every real run once DEMI holds that many periods in all.
-  let periodPageFilled = false;
   // Every partition a period can live in: `commentPeriods` partitions on the parent, and the
   // mirror admits a project or a `ProjectNotification` — nothing else.
   const periodParents = [...projectRows, ...notificationRows];
+  // The truncation guard's COUNT, one per partition read: a container-wide COUNT would also count
+  // periods under parents this walk never visits.
+  let periodCount = 0;
   for (const parent of periodParents) {
-    const rows = await periodsRepo.listByProject(parent.id, access, {});
-    periodPageFilled = periodPageFilled || rows.length >= MAX_PAGE_SIZE;
-    periodRows.push(...rows);
+    for (const row of await periodsRepo.listEveryByProject(parent.id, access)) periodRows.push(row);
+    periodCount += await periodsRepo.countByProject(parent.id, access);
   }
   const listRows = [
-    ...await listsRepo.listByKind(listsRepo.KINDS.LIST, access, {}),
-    ...await listsRepo.listByKind(listsRepo.KINDS.ORGANIZATION, access, {})
+    ...await listsRepo.listEveryOfKind(listsRepo.KINDS.LIST, access),
+    ...await listsRepo.listEveryOfKind(listsRepo.KINDS.ORGANIZATION, access)
   ];
-  const updateRows = await updatesRepo.list(access, {});
+  const updateRows = await updatesRepo.listEvery(access);
 
   // One `lists` container holds both kinds, so both id sets are one comparison.
   const eagleListIds = await eagleIds(src, 'Organization',
@@ -492,23 +494,17 @@ async function reconcile(argv = [], deps = {}) {
       row => updateParentRead.get(String(row.projectId)) || null, updateRead)
   };
 
-  summary.failures.push(...(await truncatedReads(access, [
+  summary.failures.push(...await truncated([
     ['lists', listRows, async (a) =>
       (await listsRepo.countByKind(listsRepo.KINDS.LIST, a)) +
       (await listsRepo.countByKind(listsRepo.KINDS.ORGANIZATION, a))],
     ['notifications', notificationRows, notificationsRepo.count],
-    ['updates', updateRows, updatesRepo.count]
-  ])).map(short => `${short} — the diff below is computed off a truncated read`));
+    ['updates', updateRows, updatesRepo.count],
+    ['commentPeriods', periodRows, async () => periodCount]
+  ]));
 
-  // The per-partition enumerations have no cheap COUNT to pair with — one per project, one per
-  // period — so the ceiling itself is the check: a partition that filled a page may hold more.
-  if (periodPageFilled) {
-    summary.failures.push('a project filled a comment-period page — the commentPeriods diff below ' +
-      'is computed off a truncated read');
-  }
-
-  // Comments are OPT-IN: the sweep costs one eagle-api round trip per comment period and one
-  // single-partition Cosmos query per period, which is too much to put on the nightly timer.
+  // Comments are OPT-IN: the sweep costs one eagle-api round trip per comment period and two
+  // single-partition Cosmos queries (read, COUNT) per period — too much for the nightly timer.
   if (args.comments) {
     const commentRows = [];
     const eagleCommentIds = new Set();
@@ -516,7 +512,6 @@ async function reconcile(argv = [], deps = {}) {
     // fetched them, so they were neither drift nor reported — a silent hole the size of the
     // unresolved-period set. They cost one round trip each, on a flag that is already opt-in.
     const unresolvedComments = new Set();
-    let ceiling = false;
     for (const periodId of summary.commentPeriods.unresolvedParent) {
       await eachCommentPage(periodId, { sources: src }, (items) => {
         for (const row of items) {
@@ -528,21 +523,19 @@ async function reconcile(argv = [], deps = {}) {
     }
     // A comment is narrowed to its period's ACL, as the comment mirror does.
     const periodReadOf = new Map();
+    let commentCount = 0;
     for (const period of periodRows) {
-      const rows = await commentsRepo.listByPeriod(period.id, access, {});
-      ceiling = ceiling || rows.length >= MAX_PAGE_SIZE;
-      commentRows.push(...rows);
-      for (const row of rows) periodReadOf.set(String(row.id), period.read);
+      for (const row of await commentsRepo.listEveryByPeriod(period.id, access)) {
+        commentRows.push(row);
+        periodReadOf.set(String(row.id), period.read);
+      }
+      commentCount += await commentsRepo.countByPeriod(period.id, access);
       await eachCommentPage(period.id, { sources: src }, (items) => {
         for (const row of items) {
           eagleCommentIds.add(String(row._id));
           noteRead(row);
         }
       });
-    }
-    if (ceiling) {
-      summary.failures.push('a period filled a comment page — the comments diff below is computed ' +
-        'off a truncated read');
     }
     summary.comments = {
       inDemi: commentRows.length, inEagle: eagleCommentIds.size,
@@ -551,6 +544,7 @@ async function reconcile(argv = [], deps = {}) {
       aclMismatch: aclMismatch(commentRows, row => String(row.id), eagleRead,
         row => periodReadOf.get(String(row.id)) || null)
     };
+    summary.failures.push(...await truncated([['comments', commentRows, async () => commentCount]]));
   }
 
   summary.drift = driftOf(summary);

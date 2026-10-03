@@ -21,7 +21,7 @@ const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
-  pageSlice
+  readPage, fetchAll
 } = require('./_sql');
 
 const CONTAINER = 'updates';
@@ -415,24 +415,31 @@ function criteriaFor(access, { projectId, keywords, types, hasDocument, dateAdde
  * @param {string}   [opts.dateAddedFrom]    inclusive ISO lower bound — see dateCriteria
  * @param {string}   [opts.dateAddedBefore]  EXCLUSIVE ISO upper bound — see dateCriteria
  */
-async function list(access, {
-  projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore,
-  pageNum, pageSize, sortBy
-} = {}) {
-  const spec = selectWhere({
-    access: await inEagleIdSpace(access),
-    partitionField: SCOPE_FIELD,
-    criteria: [
-      ...criteriaFor(access, { projectId, keywords, types, hasDocument, dateAddedFrom, dateAddedBefore }),
-      ...await parentCriteria(access)
-    ],
-    select: selectFor(CONTAINER, access, PARTITION_FIELD),
-    orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, { ...SORT_ALIASES, publishDate: publishOrderField() })
-  });
+async function list(access, { pageNum, pageSize, sortBy, ...filters } = {}) {
+  const spec = listSpec(access, await inEagleIdSpace(access), filters, await parentCriteria(access),
+    orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, { ...SORT_ALIASES, publishDate: publishOrderField() }));
 
-  const { skip, fetch } = pageSlice({ pageNum, pageSize });
-  const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ pageSize: fetch }));
-  return skip > 0 ? items.slice(skip) : items;
+  return readPage(CONTAINER, spec, { pageNum, pageSize });
+}
+
+// Synchronous over already-awaited parts: an extra async hop reorders `list` against `count`.
+function listSpec(access, scoped, filters, parents, orderBy) {
+  return selectWhere({
+    access: scoped,
+    partitionField: SCOPE_FIELD,
+    criteria: [...criteriaFor(access, filters), ...parents],
+    select: selectFor(CONTAINER, access, PARTITION_FIELD),
+    orderBy
+  });
+}
+
+/**
+ * Every row `list` pages over, past its MAX_PAGE_SIZE cap — for the reconcile, never a request.
+ * Unsorted: see `projects.listEagleOnlyIds` for why a cross-partition ORDER BY stops at one page.
+ */
+async function listEvery(access) {
+  return fetchAll(CONTAINER,
+    listSpec(access, await inEagleIdSpace(access), {}, await parentCriteria(access)));
 }
 
 /**
@@ -505,7 +512,10 @@ async function listTop(access, { limit = TOP_ROWS, types } = {}) {
 /** Pages one due-list query may read. A tick that stops here leaves the rest for the next one. */
 const DUE_PAGE_CAP = 10;
 
-/** Up to `limit` rows of `spec`, following continuations: one page may hold fewer than asked. */
+/**
+ * Up to `limit` rows of `spec`, following continuations: one page may hold fewer than asked.
+ * Not `readPage`: a due list stops at DUE_PAGE_CAP and leaves the rest for the next tick.
+ */
 async function readUpTo(spec, limit) {
   const rows = [];
   let continuationToken;
@@ -687,6 +697,7 @@ module.exports = {
   getById,
   readForWrite,
   list,
+  listEvery,
   listByIds,
   count,
   listTop,
