@@ -44,7 +44,7 @@ const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql')
 const { seedAcl } = require('../seed/transform');
 const { readUnder } = require('../helpers/update-parent');
 const { eachCommentPage } = require('./seed-public-reads');
-const { systemAccess } = require('../helpers/access-sql');
+const { systemAccess, levelOfRead, SECURE_ROLES } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 
 /** The containers reported, in the order `report` prints them and `summaryLine` names them. */
@@ -231,8 +231,23 @@ function sameSet(a, b) {
 }
 
 /**
- * Ids in both Eagle and DEMI whose DEMI `read[]` is not what the mirror would write from Eagle's,
- * or whose `isPublished` has come apart from its own `read[]`. Every id-set diff passes these.
+ * Do two `read[]`s let in the same callers under `readClause`? Every caller holds `public`, so two
+ * level-4 reads always do; at 2 and 3 privileged names are ignored, as those callers pass anyway.
+ * Levels 0 and 1 compare exactly: `['team']`, `['sysadmin']` and `[]` are all level 1.
+ */
+function sameAccess(a, b) {
+  const level = levelOfRead(a);
+  if (level !== levelOfRead(b)) return false;
+  if (level === 4) return true;
+  if (level < 2) return sameSet(a, b);
+  const unprivileged = read => read.filter(r => !SECURE_ROLES.includes(r));
+  return sameSet(unprivileged(a), unprivileged(b));
+}
+
+/**
+ * Ids in both Eagle and DEMI whose DEMI `read[]` grants different access than the one the mirror
+ * would write from Eagle's, or whose `isPublished` has come apart from its own `read[]`. Every
+ * id-set diff passes these.
  *
  * @param {Map}      eagleRead     Eagle id -> that record's `read[]`; an id without one is skipped
  * @param {function} parentReadOf  row -> the DEMI parent ACL the mirror narrows against, or null
@@ -244,7 +259,7 @@ function aclMismatch(rows, keyOf, eagleRead, parentReadOf = () => null, derive =
     if (!upstream) return false;
     const read = Array.isArray(row.read) ? row.read : [];
     const expected = derive(upstream, parentReadOf(row));
-    return !sameSet(read, expected) || row.isPublished !== read.includes('public');
+    return !sameAccess(read, expected) || row.isPublished !== read.includes('public');
   }).map(keyOf);
 }
 
@@ -594,8 +609,9 @@ function report(summary, { json } = {}) {
         'choose — re-mirror to move them)', s.misfiledParent);
     }
     if (s.aclMismatch && s.aclMismatch.length) {
-      line('aclMismatch (in both, but DEMI read[]/isPublished is not what the mirror writes from ' +
-        'Eagle\'s read[] — re-push from Eagle to repair)', s.aclMismatch);
+      line('aclMismatch (in both, but DEMI read[] lets in different callers than the read[] the ' +
+        'mirror would write from Eagle\'s, or isPublished disagrees with read[]; check each row, ' +
+        'a full re-push would overwrite DEMI-side changes)', s.aclMismatch);
     }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +

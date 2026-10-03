@@ -278,14 +278,21 @@ separates them — a tombstone, or a credential that reads unpublished rows. A d
 project is unpublished/gone is not counted as `eagleOnly` drift either — seed-nosql drops it the
 same way — it reports separately as `unresolvedParent`.
 
-For an id both sides hold, `aclMismatch` lists rows whose DEMI `read[]` is not what the mirror
-would write from Eagle's `read[]`, or whose `isPublished` no longer matches its own `read[]`. The
-two ACLs are compared as sets, so order does not matter. A document, comment period or comment is
-first narrowed to its DEMI parent's ACL, the same way the mirrors do, so a row under a private
-project is not reported. These count toward `drift=`. A row whose Eagle `read` is empty or missing
-is not compared, including a legacy Update with a missing `read` that takes its parent's read
-(`docs/public-read-backfill.md`). The fix is a re-push from Eagle; this script does not rewrite
-them, and nothing writes back to Eagle.
+For an id both sides hold, `aclMismatch` lists rows whose DEMI `read[]` lets in different callers
+than the `read[]` the mirror would write from Eagle's, or whose `isPublished` no longer matches
+its own `read[]`. A document, comment period or comment is first narrowed to its DEMI parent's
+ACL, the same way the mirrors do, so a row under a private project is not reported. The two ACLs
+are compared by access level, not by exact spelling: the early seed stored Eagle role names such
+as `['public','sysadmin','staff']`, and the mirror now writes ladder tokens such as
+`['staff','idir','public']` for the same level. Two reads at level 4 always match. At levels 2
+and 3 they match when they hold the same names once privileged ones (`sysadmin`, `demi-admin`,
+the `demi-service-*` roles) are set aside, since those callers read every row anyway. At level 1
+the sets must be equal, because `['team']`, `['sysadmin']` and `[]` are all level 1 but let in
+different callers. These count toward `drift=`. A row whose Eagle `read` is empty or missing is
+not compared, including a legacy Update with a missing `read` that takes its parent's read
+(`docs/public-read-backfill.md`). This script does not rewrite them, and nothing writes back to
+Eagle. Do not repair them with a full document re-push: it replaces whole rows and undoes
+DEMI-side changes.
 
 One line is what a log alert matches:
 
