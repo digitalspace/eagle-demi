@@ -13,6 +13,7 @@ const documentsRepo = require('../../src/repositories/documents');
 const projectsRepo = require('../../src/repositories/projects');
 const notificationsRepo = require('../../src/repositories/notifications');
 const { NOTIFICATION_EAGLE_ID } = require('../helpers/eagle-mirror-fixtures');
+const { ids, pagedCosmos } = require('../helpers/paged-cosmos');
 const chunksRepo = require('../../src/repositories/chunks');
 const summarizer = require('../../src/ai/summarize');
 const { logger } = require('../../src/utils/logger');
@@ -56,12 +57,12 @@ test('Search Controller Tests', async (t) => {
       }
     ];
 
-    t.mock.method(projectsRepo, 'listVisible', async (access, opts) => {
+    t.mock.method(projectsRepo, 'listPage', async (access, opts) => {
       // The repository owns the SQL; what this path must not lose is the caller's access context.
       assert.ok(access, 'expected an access context');
       assert.ok(!('trackOnly' in opts), 'provenance must not scope a public project read');
       assert.strictEqual(opts.pageSize, 10);
-      return { items: mockProjects };
+      return mockProjects;
     });
 
     const req = {
@@ -99,8 +100,7 @@ test('Search Controller Tests', async (t) => {
   // reading index names off a Cosmos row, the same defect the `projectState` fixture note above
   // describes, one field group over.
   await t.test('the Cosmos project branch emits the type, phase and decision columns', async () => {
-    t.mock.method(projectsRepo, 'listVisible', async () => ({
-      items: [{
+    t.mock.method(projectsRepo, 'listPage', async () => [{
         id: '46',
         name: 'Caribou Gas Processing Plant',
         projectState: 'Care and Maintenance',
@@ -111,8 +111,7 @@ test('Search Controller Tests', async (t) => {
         eacDecision: { _id: '5e27937a749c83437054f214', name: 'Certificate Issued' },
         decisionDate: '1996-11-13T08:00:00.000Z',
         read: ['public']
-      }]
-    }));
+      }]);
 
     let jsonResponse;
     const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
@@ -133,9 +132,7 @@ test('Search Controller Tests', async (t) => {
   // `eagleQuery.ref` answers `undefined` for that case, which is the same dash and one helper
   // instead of two.
   await t.test('a project with no phase or decision yields no ref, not an empty object', async () => {
-    t.mock.method(projectsRepo, 'listVisible', async () => ({
-      items: [{ id: '1', name: 'Marshall Road', read: ['public'] }]
-    }));
+    t.mock.method(projectsRepo, 'listPage', async () => [{ id: '1', name: 'Marshall Road', read: ['public'] }]);
 
     let jsonResponse;
     const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
@@ -152,15 +149,13 @@ test('Search Controller Tests', async (t) => {
   // The `projects` INDEX has no such column, so only this branch can carry it — the same asymmetry
   // `location` has.
   await t.test('the Cosmos project branch emits eaCertificate, and null when there is none', async () => {
-    t.mock.method(projectsRepo, 'listVisible', async () => ({
-      items: [
+    t.mock.method(projectsRepo, 'listPage', async () => [
         { id: '46', name: 'Caribou Gas Processing Plant', eaCertificate: 'E05-01', read: ['public'] },
         { id: '354', name: 'Surrey Langley SkyTrain', read: ['public'] },
         // Track uses the column for certificate STATE as well as numbers, and it reaches the wire
         // unchanged: nothing on this path parses or filters the value.
         { id: '38', name: 'Ajax Mine', eaCertificate: 'Withdrawn', read: ['public'] }
-      ]
-    }));
+      ]);
 
     let jsonResponse;
     const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
@@ -212,9 +207,7 @@ test('Search Controller Tests', async (t) => {
   // Both branches are asserted here because they are separate literal row shapes.
   await t.test('both project branches carry dateUpdated', async () => {
     const EDITED = '2026-09-10T17:04:00.000Z';
-    t.mock.method(projectsRepo, 'listVisible', async () => ({
-      items: [{ id: '46', name: 'Caribou', dateUpdated: EDITED, read: ['public'] }]
-    }));
+    t.mock.method(projectsRepo, 'listPage', async () => [{ id: '46', name: 'Caribou', dateUpdated: EDITED, read: ['public'] }]);
     t.mock.method(aiSearch, 'searchProjects', async () => ({
       count: 1,
       items: [{ id: '46', name: 'Caribou', dateUpdated: EDITED, read: ['public'] }]
@@ -262,14 +255,12 @@ test('Search Controller Tests', async (t) => {
     // Same rule, other branch. Cosmos STORES the field, so this side reads it rather than
     // sniffing the id prefix — and the two must agree, or the answer depends on which corpus
     // served it, which is the whole defect this change exists to close.
-    t.mock.method(projectsRepo, 'listVisible', async () => ({
-      items: [
+    t.mock.method(projectsRepo, 'listPage', async () => [
         { id: 'eagle-6a59234357be6fca20a489dc', name: 'testtesttest', trackProjectId: null,
           eagleId: '6a59234357be6fca20a489dc', read: ['public'] },
         { id: '207', name: 'Nicomen Wind Energy', trackProjectId: 207,
           eagleId: '58851172aaecd9001b820335', read: ['public'] }
-      ]
-    }));
+      ]);
     t.mock.method(projectsRepo, 'countVisible', async () => 2);
 
     let body = null;
@@ -718,9 +709,9 @@ test('Search Controller Tests', async (t) => {
     async () => {
       let listed = false;
       t.mock.method(aiSearch, 'searchProjects', async () => ({ count: 0, items: [] }));
-      t.mock.method(projectsRepo, 'listVisible', async () => {
+      t.mock.method(projectsRepo, 'listPage', async () => {
         listed = true;
-        return { items: [] };
+        return [];
       });
 
       const req = { query: { dataset: 'Project', keywords: 'zarquonflux' }, header: () => null };
@@ -1359,9 +1350,9 @@ test('every dataset is fail-closed for a caller scoped to nothing', async (t) =>
     t.mock.method(aiSearch, 'searchProjects', async () => { searched = true; return { items: [] }; });
     // The Cosmos fallback must be ACL-gated too — scoped-to-nothing is SQL `false` there.
     let seenAccess;
-    t.mock.method(projectsRepo, 'listVisible', async (access) => {
+    t.mock.method(projectsRepo, 'listPage', async (access) => {
       seenAccess = access;
-      return { items: [], continuationToken: undefined };
+      return [];
     });
 
     let body;
@@ -1855,7 +1846,7 @@ test('the eagle-public response contract', async (t) => {
       read: stored.read
     };
 
-    t.mock.method(projectsRepo, 'listVisible', async () => ({ items: [stored] }));
+    t.mock.method(projectsRepo, 'listPage', async () => [stored]);
     t.mock.method(projectsRepo, 'countVisible', async () => 1);
     t.mock.method(aiSearch, 'searchProjects', async () => ({ count: 1, items: [indexed] }));
 
@@ -1909,7 +1900,7 @@ test('the eagle-public response contract', async (t) => {
     assert.ok(!('status' in saved), 'the wire name must not reach the container');
 
     // Cosmos branch: reads the stored row.
-    t.mock.method(projectsRepo, 'listVisible', async () => ({ items: [saved] }));
+    t.mock.method(projectsRepo, 'listPage', async () => [saved]);
     t.mock.method(projectsRepo, 'countVisible', async () => 1);
     const c = capture();
     await searchController.search(
@@ -1955,14 +1946,14 @@ test('the answer matches the request that was made', async (t) => {
   // A search that carries a sort now goes to the INDEX, which can express one. Asserted on the
   // `$orderby` that went out AND on the list read never being issued — a route that quietly served
   // the fixed-order list beside a correct-looking log line is the whole defect.
-  for (const [dataset, repo, service, sortBy, expected] of [
-    ['Project', projectsRepo, 'searchProjects', '-name', 'name desc'],
-    ['Document', documentsRepo, 'searchDocuments', '-datePosted', 'datePosted desc']
+  for (const [dataset, repo, list, service, sortBy, expected] of [
+    ['Project', projectsRepo, 'listPage', 'searchProjects', '-name', 'name desc'],
+    ['Document', documentsRepo, 'listVisible', 'searchDocuments', '-datePosted', 'datePosted desc']
   ]) {
     await t.test(`a sort on the keywordless ${dataset} list reaches the index, not the fixed order`,
       async () => {
         let listed = false;
-        t.mock.method(repo, 'listVisible', async () => { listed = true; return { items: [] }; });
+        t.mock.method(repo, list, async () => { listed = true; return { items: [] }; });
         t.mock.method(repo, 'countVisible', async () => 0);
         let sent;
         t.mock.method(aiSearch, service, async (opts) => {
@@ -2082,9 +2073,9 @@ test('the answer matches the request that was made', async (t) => {
   // where MAX_PAGE_ROWS would either refuse it or truncate it to 500 without saying so.
   await t.test('eagle-public\'s empty double sortBy is not a sort', async () => {
     let listOpts;
-    t.mock.method(projectsRepo, 'listVisible', async (access, opts) => {
+    t.mock.method(projectsRepo, 'listPage', async (access, opts) => {
       listOpts = opts;
-      return { items: [] };
+      return [];
     });
     t.mock.method(projectsRepo, 'countVisible', async () => 382);
     let searched = false;
@@ -2196,24 +2187,16 @@ test('the answer matches the request that was made', async (t) => {
     assert.strictEqual(sent.top, 500, 'and asks for the page the caller asked for');
   });
 
-  // The KEYWORDLESS branches page differently and had no coverage at all. Cosmos has no offset —
-  // it pages with continuation tokens (`_sql.js:89-92`) — so both list paths overfetch
-  // `skip + pageSize` rows and drop the first `skip` by hand. Deleting that slice left the whole
-  // suite green while every page served page one: the request that goes out is IDENTICAL on both
-  // pages by construction (same predicate, only a larger pageSize), so a test that inspects the
-  // outgoing options or the status code cannot see the defect. These assert the rows that come
-  // back, and assert page 2 against page 1 — the shape a client actually experiences.
-  //
-  // The stub returns the first N rows for a pageSize of N, which is what the overfetch depends on.
-  const listStub = prefix => async (_access, opts) =>
-    ({ items: Array.from({ length: opts.pageSize }, (_, i) => ({
-      id: `${prefix}${i}`, projectId: '207', read: ['public']
-    })) });
-  const expectedIds = (prefix, from) => Array.from({ length: 10 }, (_, i) => `${prefix}${from + i}`);
+  // The KEYWORDLESS branch pages differently. Cosmos has no offset, so `readPage` reads
+  // `skip + pageSize` rows and drops the first `skip`. Dropping that skip serves page one on every
+  // page while the outgoing query looks the same, so these assert the rows that come back, page 2
+  // against page 1. Stubbed at `cosmos.query`, under the real repository.
+  const expectedIds = (prefix, from) => Array.from({ length: 10 }, (_, i) => `${prefix}-${from + i}`);
 
-  await t.test('the keywordless project list serves page 2 from row 10, not row 0', async () => {
-    t.mock.method(projectsRepo, 'listVisible', listStub('proj'));
-    t.mock.method(projectsRepo, 'countVisible', async () => 40);
+  await t.test('the keywordless project list serves page 2 from row 10, not row 0', async (tt) => {
+    const rows = ids('proj', 40).map(row => ({ ...row, read: ['public'] }));
+    pagedCosmos(tt, c => (c === projectsRepo.CONTAINER ? rows : []));
+    tt.mock.method(projectsRepo, 'countVisible', async () => rows.length);
 
     const idsOnPage = async (pageNum) => {
       const { out, res } = capture();
@@ -2228,7 +2211,6 @@ test('the answer matches the request that was made', async (t) => {
     const second = await idsOnPage(1);
     assert.deepStrictEqual(first, expectedIds('proj', 0));
     assert.deepStrictEqual(second, expectedIds('proj', 10), 'page 2 starts at row 10');
-    assert.strictEqual(second.length, 10, 'and is a page, not the overfetched 20 rows');
   });
 
   // The other half of that decision, written down: a page bigger than the search layer will
@@ -2256,9 +2238,7 @@ test('the answer matches the request that was made', async (t) => {
   // `registry-state.service.ts` asks for pageSize=500 and no pageNum — so a registry of any size
   // reported 500.
   await t.test('a page-sized list does not report its own length as the corpus', async () => {
-    t.mock.method(projectsRepo, 'listVisible', async () => ({
-      items: [{ id: '207', name: 'Site C', read: ['public'] }]
-    }));
+    t.mock.method(projectsRepo, 'listPage', async () => [{ id: '207', name: 'Site C', read: ['public'] }]);
     t.mock.method(projectsRepo, 'countVisible', async () => 4210);
 
     const { out, res } = capture();
@@ -2292,7 +2272,7 @@ test('the answer matches the request that was made', async (t) => {
   // [C5] A search that FAILED is not a search that found nothing. 200 with an empty array told
   // every visitor of /projects that the registry holds no projects.
   await t.test('a failed list is reported, not published as an empty registry', async () => {
-    t.mock.method(projectsRepo, 'listVisible', async () => {
+    t.mock.method(projectsRepo, 'listPage', async () => {
       throw new Error('Cosmos DB request rate is large');
     });
 
@@ -2313,9 +2293,9 @@ test('the answer matches the request that was made', async (t) => {
     t.mock.method(aiSearch, 'searchProjects', async () => {
       throw Object.assign(new Error('HTTP 400 invalid expression'), { status: 400 });
     });
-    t.mock.method(projectsRepo, 'listVisible', async () => {
+    t.mock.method(projectsRepo, 'listPage', async () => {
       listed = true;
-      return { items: [{ id: '999', name: 'Some Other Project', read: ['public'] }] };
+      return [{ id: '999', name: 'Some Other Project', read: ['public'] }];
     });
 
     const { out, res } = capture();
@@ -2441,9 +2421,9 @@ test('the answer matches the request that was made', async (t) => {
     // caught by the controller and returned as the very 502 this asserts — a green test for a
     // probe served entirely by Cosmos. They have to succeed for the assertion to mean anything.
     let servedByCosmos = false;
-    t.mock.method(projectsRepo, 'listVisible', async () => {
+    t.mock.method(projectsRepo, 'listPage', async () => {
       servedByCosmos = true;
-      return { items: [] };
+      return [];
     });
     t.mock.method(projectsRepo, 'countVisible', async () => 0);
     t.mock.method(logger, 'error', () => {});

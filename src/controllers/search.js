@@ -1515,19 +1515,15 @@ exports.search = async (req, res) => {
 
       // Bare list: a read, in the repository's own order.
       try {
-        // PAGED BY OVERFETCH-AND-SLICE, a real ceiling: Cosmos pages with continuation tokens, not
-        // offsets, so a page is reachable only while `skip + pageSize` stays inside the repository's
-        // 1000-row clamp. Every project fits one page. Upgrade path: return the token in `meta`.
+        // An offset page read through `readPage`, which follows continuation tokens past the
+        // 1,000 rows one fetch carries. `pageSize` is clamped to 1,000, and a page past
+        // MAX_PAGE_DEPTH rows is refused with 400 below.
         //
         // Only `project` can still be dropped here — anything else is criteria and went to the
         // index — and it is genuinely inexpressible: `projects` has no project axis.
         noteDropped('filter', eagleQuery.filterKeysIn(req.query));
 
-        const cosmosSkip = pageNum * pageSize;
-        const { items: page } = await projectsRepo.listVisible(access, {
-          pageSize: cosmosSkip + pageSize
-        });
-        const projects = cosmosSkip > 0 ? page.slice(cosmosSkip) : page;
+        const projects = await projectsRepo.listPage(access, { pageNum, pageSize });
 
         // Counted on EVERY request. Running it only when `pageNum` was present let the response
         // wrapper fill the gap with the page length, so `pageSize=500` with no `pageNum` — DEMI's
@@ -1593,6 +1589,8 @@ exports.search = async (req, res) => {
 
         return res.json([{ searchResults: mapped, count }]);
       } catch (cosmosErr) {
+        // A page past MAX_PAGE_DEPTH, refused by `readPage` before it reads anything.
+        if (cosmosErr.status === 400) return res.status(400).json({ error: cosmosErr.message });
         // See the keyword branch above: a search that FAILED is not a search that found nothing.
         // 200 with `[]` told every visitor of /projects that the EA registry contains no projects.
         logger.error(`[search] project list failed: ${cosmosErr.message}`);

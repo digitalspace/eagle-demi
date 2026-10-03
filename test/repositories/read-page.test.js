@@ -13,6 +13,7 @@ const comments = require('../../src/repositories/comments');
 const notifications = require('../../src/repositories/notifications');
 const lists = require('../../src/repositories/lists');
 const commentPeriods = require('../../src/repositories/comment-periods');
+const projects = require('../../src/repositories/projects');
 const { resolveAccess, MAX_PAGE_DEPTH } = require('../../src/helpers/access-sql');
 const { ids, pagedCosmos } = require('../helpers/paged-cosmos');
 const { stubCosmos, get } = require('../helpers/search-reads');
@@ -33,7 +34,10 @@ const READS = [
     read: (opts) => lists.listByKind(lists.KINDS.ORGANIZATION, anonymous(), opts) },
   { name: 'commentPeriods.listByProject', container: commentPeriods.CONTAINER,
     order: 'c.dateStarted DESC', partitionKey: '207',
-    read: (opts) => commentPeriods.listByProject('207', anonymous(), opts) }
+    read: (opts) => commentPeriods.listByProject('207', anonymous(), opts) },
+  // Partitioned by id, so every fetch is cross-partition: no partition key on any of them.
+  { name: 'projects.listPage', container: projects.CONTAINER, order: 'c.name ASC',
+    read: (opts) => projects.listPage(anonymous(), opts) }
 ];
 
 for (const { name, container, order, partitionKey, read } of READS) {
@@ -103,6 +107,26 @@ test('GET /search refuses a page past MAX_PAGE_DEPTH with 400, not an empty page
   stubCosmos(t, { updates: [] });
   const { status, body } = await get(
     `/api/search?dataset=RecentActivity&sortBy=-dateAdded&pageSize=10&pageNum=${MAX_PAGE_DEPTH / 10}`);
+  assert.strictEqual(status, 400);
+  assert.match(body.error, /past the deepest page this list serves/);
+});
+
+test('GET /search serves the bare project list past row 1,000', async (t) => {
+  const rows = ids('p', 1500).map(row => ({ ...row, name: row.id, read: ['public'] }));
+  pagedCosmos(t, c => (c === projects.CONTAINER ? rows : []));
+  t.mock.method(projects, 'countVisible', async () => rows.length);
+
+  const { status, body } = await get('/api/search?dataset=Project&pageSize=10&pageNum=100');
+
+  assert.strictEqual(status, 200);
+  assert.deepStrictEqual(body[0].searchResults.map(r => r.id), idsOf(rows.slice(1000, 1010)));
+  assert.strictEqual(body[0].count, 1500);
+});
+
+test('GET /search refuses a project page past MAX_PAGE_DEPTH with 400', async (t) => {
+  stubCosmos(t, { projects: [] });
+  const { status, body } = await get(
+    `/api/search?dataset=Project&pageSize=10&pageNum=${MAX_PAGE_DEPTH / 10}`);
   assert.strictEqual(status, 400);
   assert.match(body.error, /past the deepest page this list serves/);
 });
