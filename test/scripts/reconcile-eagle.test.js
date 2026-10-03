@@ -277,6 +277,63 @@ test('aclMismatch', async (t) => {
     const rows = [{ id: 'a', read: STAFF, isPublished: false }];
     assert.deepStrictEqual(aclMismatch(rows, byId, new Map()), []);
   });
+
+  // The early seed stored Eagle's role names; the mirror now writes ladder tokens under a parent.
+  const RAW_PUBLIC = ['public', 'sysadmin', 'staff'];
+  const RAW_STAFF = ['sysadmin', 'staff'];
+  const underPublic = () => PUBLIC;
+
+  await t.test('a raw seed read at level 4 under a project is in step with the ladder', () => {
+    const rows = [{ id: 'a', read: RAW_PUBLIC, isPublished: true }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(RAW_PUBLIC), underPublic), []);
+  });
+
+  await t.test('a raw staff-only read is in step with ladder level 2', () => {
+    const rows = [{ id: 'a', read: RAW_STAFF, isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(RAW_STAFF), underPublic), []);
+  });
+
+  await t.test('a raw public row Eagle has since made private is a mismatch', () => {
+    const rows = [{ id: 'a', read: RAW_PUBLIC, isPublished: true }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(RAW_STAFF), underPublic), ['a']);
+  });
+
+  await t.test('a raw private row Eagle has since published is a mismatch', () => {
+    const rows = [{ id: 'a', read: RAW_STAFF, isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(RAW_PUBLIC), underPublic), ['a']);
+  });
+
+  await t.test('isPublished out of step on a raw-shape row is still a mismatch', () => {
+    const rows = [{ id: 'a', read: RAW_PUBLIC, isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(RAW_PUBLIC), underPublic), ['a']);
+  });
+
+  await t.test('two different level 1 reads are a mismatch', () => {
+    const rows = [{ id: 'a', read: ['team'], isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(['sysadmin'])), ['a']);
+  });
+
+  await t.test('the same level 1 read is not a mismatch', () => {
+    const rows = [{ id: 'a', read: ['team'], isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(['team'])), []);
+  });
+
+  // Same level, but a caller the ladder row turns away still gets in (or the reverse).
+  await t.test('a level 2 row carrying an unprivileged role name is a mismatch', () => {
+    const rows = [{ id: 'a', read: ['staff', 'project-team'], isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(RAW_PUBLIC), () => STAFF), ['a']);
+  });
+
+  await t.test('a level 2 row carrying team opens it to the team arm, a mismatch', () => {
+    const rows = [{ id: 'a', read: ['staff', 'team'], isPublished: false }];
+    assert.deepStrictEqual(aclMismatch(rows, byId, eagle(RAW_PUBLIC), () => STAFF), ['a']);
+  });
+
+  await t.test('a level 3 row without staff shuts out a staff caller, a mismatch', () => {
+    const rows = [{ id: 'a', read: ['idir', 'sysadmin'], isPublished: false }];
+    assert.deepStrictEqual(
+      aclMismatch(rows, byId, eagle(RAW_PUBLIC), () => readForLevel(3)), ['a']);
+  });
 });
 
 test('reconcile', async (t) => {
@@ -306,8 +363,9 @@ test('reconcile', async (t) => {
         listSeededIds: async () => withRead(DOCUMENT_ROWS, {
           // Under public 207, so it should be public too.
           D1: { read: STAFF, isPublished: false },
-          // Under private eagle-P2: the mirror narrows it to staff, so this is in step.
-          D2: { read: STAFF, isPublished: false }
+          // Under private eagle-P2: the mirror narrows it to staff. The early seed's raw spelling
+          // of that level grants the same callers, so this is in step.
+          D2: { read: ['sysadmin', 'staff'], isPublished: false }
         })
       },
       lists: {
