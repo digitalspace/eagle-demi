@@ -396,6 +396,13 @@ const MAX_PAGE_SIZE = 1000;
 const ANON_MAX_PAGE_SIZE = 100;
 
 /**
+ * Deepest row an offset page may reach (`pageNum * pageSize + pageSize`). Cosmos has no offset, so
+ * a page costs every row before it; past this a request is refused. Data on 2026-10-03: 2,510
+ * updates, 802 comments in the largest period.
+ */
+const MAX_PAGE_DEPTH = 20000;
+
+/**
  * Page size for a list read: `{ pageSize }`, or `{ error }` when a caller that presented no
  * credential asked for more than its cap.
  *
@@ -674,6 +681,7 @@ module.exports = {
   PROJECT_ROLE_PREFIX,
   MAX_PAGE_SIZE,
   ANON_MAX_PAGE_SIZE,
+  MAX_PAGE_DEPTH,
   pageSizeFor,
   readForLevel,
   levelOfRead,

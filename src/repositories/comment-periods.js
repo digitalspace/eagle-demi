@@ -12,7 +12,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
-  assertFilterable, readForWriteIn
+  assertFilterable, readForWriteIn, fetchAll, readPage
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 
@@ -58,23 +58,30 @@ function criteriaFor(projectId) {
  *
  * @param {string} projectId  the DEMI id of the parent the periods hang off. Usually a project,
  *   but `helpers/parent-admit.js` also admits a `ProjectNotification`, and the mirror partitions a
- *   period under whichever parent it picked — so `reconcile-eagle.js` walks both id spaces here.
+ *   period under whichever parent it picked — so `reconcile-eagle.js` walks both id spaces through
+ *   `listEveryByProject`.
  *   Always the parent's `id`, never its `eagleId`, so a caller scoped to a project passes the same
  *   value the projects container answers on.
  */
 async function listByProject(projectId, access, { pageNum, pageSize, sortBy } = {}) {
-  const spec = selectWhere({
+  const spec = byProjectSpec(projectId, access, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER));
+
+  return readPage(CONTAINER, spec, { pageNum, pageSize, partitionKey: String(projectId) });
+}
+
+function byProjectSpec(projectId, access, orderBy) {
+  return selectWhere({
     access,
     partitionField: PARTITION_FIELD,
     criteria: criteriaFor(projectId),
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
-    orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER)
+    orderBy
   });
+}
 
-  const { skip, fetch } = pageSlice({ pageNum, pageSize });
-  const { items } = await cosmos.query(CONTAINER, spec,
-    pageOptions({ pageSize: fetch, partitionKey: String(projectId) }));
-  return skip > 0 ? items.slice(skip) : items;
+/** Every period of one parent, past `listByProject`'s MAX_PAGE_SIZE cap — for the reconcile only. */
+async function listEveryByProject(projectId, access) {
+  return fetchAll(CONTAINER, byProjectSpec(projectId, access), { partitionKey: String(projectId) });
 }
 
 /**
@@ -325,6 +332,7 @@ module.exports = {
   getById,
   readForWrite,
   listByProject,
+  listEveryByProject,
   listByIds,
   listOpen,
   countClosedSince,

@@ -13,7 +13,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll } = require('./_sql');
 
 const CONTAINER = 'notifications';
 const PARTITION_FIELD = 'id';
@@ -53,17 +53,24 @@ async function readForWrite(id) {
 }
 
 async function list(access, { pageNum, pageSize, sortBy, ...filters } = {}) {
-  const spec = selectWhere({
+  const spec = listSpec(access, filters, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, SORT_ALIASES));
+
+  return readPage(CONTAINER, spec, { pageNum, pageSize });
+}
+
+function listSpec(access, filters, orderBy) {
+  return selectWhere({
     access,
     partitionField: SCOPE_FIELD,
     criteria: criteriaFor(filters),
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
-    orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, SORT_ALIASES)
+    orderBy
   });
+}
 
-  const { skip, fetch } = pageSlice({ pageNum, pageSize });
-  const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ pageSize: fetch }));
-  return skip > 0 ? items.slice(skip) : items;
+/** Every row `list` pages over, unsorted — for the reconcile only; see `updates.listEvery`. */
+async function listEvery(access) {
+  return fetchAll(CONTAINER, listSpec(access, {}));
 }
 
 /**
@@ -128,6 +135,7 @@ module.exports = {
   getById,
   readForWrite,
   list,
+  listEvery,
   listByIds,
   listDecisions,
   count,

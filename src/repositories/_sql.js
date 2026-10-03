@@ -11,7 +11,8 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { sortEntries } = require('../search/eagle-query');
-const { visibilityFor, andClauses, MAX_PAGE_SIZE } = require('../helpers/access-sql');
+const { visibilityFor, andClauses, MAX_PAGE_SIZE, MAX_PAGE_DEPTH } = require('../helpers/access-sql');
+const { logger } = require('../utils/logger');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
 const { duplicateIdError } = require('../helpers/duplicate-id');
@@ -298,13 +299,52 @@ async function createItem(container, item, label) {
 
 /**
  * Offset paging onto Cosmos, which has continuation tokens and no offsets: overfetch `skip + size`
- * rows and slice. A real ceiling — a page is reachable only while that total stays inside
- * MAX_PAGE_SIZE, the same bound `controllers/search.js` documents on the project list.
+ * rows and slice. `size` is clamped to MAX_PAGE_SIZE; `readPage` refuses `skip + size` past
+ * MAX_PAGE_DEPTH.
  */
 function pageSlice({ pageNum, pageSize } = {}) {
   const size = Math.min(Math.max(Number(pageSize) || MAX_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   const skip = Math.max(Number(pageNum) || 0, 0) * size;
   return { size, skip, fetch: skip + size };
+}
+
+/** Fault stop for one `readPage`: the fetches its deepest page needs, plus slack for short ones. */
+const READ_PAGE_MAX_FETCHES = Math.ceil(MAX_PAGE_DEPTH / MAX_PAGE_SIZE) + 30;
+
+/**
+ * One `pageSlice` page of `spec`, in the query's own order, following the continuation until
+ * `skip + size` rows are in — past the MAX_PAGE_SIZE one fetch carries, and past a short or empty
+ * fetch that still carries a token. A deep page costs every row before it: at least
+ * `(skip + size) / MAX_PAGE_SIZE` round trips (cross-partition fetches can come back short, and
+ * each call adds a query-plan trip), never more rows than the predicate matches.
+ *
+ * @throws {Error} `status: 400` when `skip + size` is past MAX_PAGE_DEPTH, before any read
+ */
+async function readPage(container, spec, { pageNum, pageSize, partitionKey } = {}) {
+  const { skip, fetch } = pageSlice({ pageNum, pageSize });
+  if (fetch > MAX_PAGE_DEPTH) {
+    throw Object.assign(new Error('page is past the deepest page this list serves: ' +
+      `pageNum * pageSize + pageSize must stay within ${MAX_PAGE_DEPTH} rows`), { status: 400 });
+  }
+  const rows = [];
+  let read = 0;
+  let continuationToken;
+  for (let fetches = 0; ; fetches++) {
+    if (fetches === READ_PAGE_MAX_FETCHES) {
+      logger.warn('[sql] page read hit its fetch bound; answering a short page', {
+        container, fetches, read, skip, fetch
+      });
+      break;
+    }
+    const page = await cosmos.query(container, spec,
+      pageOptions({ pageSize: fetch - read, continuationToken, partitionKey }));
+    for (const item of page.items) {
+      if (read++ >= skip) rows.push(item);
+    }
+    continuationToken = page.continuationToken;
+    if (!continuationToken || read >= fetch) break;
+  }
+  return rows;
 }
 
 module.exports = {
@@ -313,6 +353,7 @@ module.exports = {
   assertFilterable,
   orderByFrom,
   pageSlice,
+  readPage,
   upsertItem,
   readForWriteIn,
   upsertWithEtag,

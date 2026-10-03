@@ -11,7 +11,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
-  eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem, readForWriteIn
+  eq, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, readForWriteIn, fetchAll
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 
@@ -51,18 +51,24 @@ function criteriaFor(periodId) {
 }
 
 async function listByPeriod(periodId, access, { pageNum, pageSize, sortBy } = {}) {
-  const spec = selectWhere({
+  const spec = byPeriodSpec(periodId, access, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER));
+
+  return readPage(CONTAINER, spec, { pageNum, pageSize, partitionKey: String(periodId) });
+}
+
+function byPeriodSpec(periodId, access, orderBy) {
+  return selectWhere({
     access,
     partitionField: SCOPE_FIELD,
     criteria: criteriaFor(periodId),
     select: selectFor(CONTAINER, access, SCOPE_FIELD),
-    orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER)
+    orderBy
   });
+}
 
-  const { skip, fetch } = pageSlice({ pageNum, pageSize });
-  const { items } = await cosmos.query(CONTAINER, spec,
-    pageOptions({ pageSize: fetch, partitionKey: String(periodId) }));
-  return skip > 0 ? items.slice(skip) : items;
+/** Every comment of one period, past `listByPeriod`'s MAX_PAGE_SIZE cap — for the reconcile only. */
+async function listEveryByPeriod(periodId, access) {
+  return fetchAll(CONTAINER, byPeriodSpec(periodId, access), { partitionKey: String(periodId) });
 }
 
 /**
@@ -117,6 +123,7 @@ module.exports = {
   getById,
   readForWrite,
   listByPeriod,
+  listEveryByPeriod,
   countByPeriod,
   aclRowsForPeriod,
   setAclForPeriod,

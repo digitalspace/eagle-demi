@@ -14,7 +14,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const { eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll } = require('./_sql');
 
 const CONTAINER = 'lists';
 const PARTITION_FIELD = 'kind';
@@ -100,18 +100,25 @@ function criteriaFor(kind, opts) {
  * @param {object} [opts]  filter keys from FILTERS, plus `pageNum` / `pageSize` / `sortBy`
  */
 async function listByKind(kind, access, opts = {}) {
-  const spec = selectWhere({
+  const spec = byKindSpec(kind, access, opts, orderByFrom(opts.sortBy, SORTABLE[kind] || [], DEFAULT_ORDER));
+
+  return readPage(CONTAINER, spec,
+    { pageNum: opts.pageNum, pageSize: opts.pageSize, partitionKey: String(kind) });
+}
+
+function byKindSpec(kind, access, opts, orderBy) {
+  return selectWhere({
     access,
     partitionField: SCOPE_FIELD,
     criteria: criteriaFor(kind, opts),
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
-    orderBy: orderByFrom(opts.sortBy, SORTABLE[kind] || [], DEFAULT_ORDER)
+    orderBy
   });
+}
 
-  const { skip, fetch } = pageSlice(opts);
-  const { items } = await cosmos.query(CONTAINER, spec,
-    pageOptions({ pageSize: fetch, partitionKey: String(kind) }));
-  return skip > 0 ? items.slice(skip) : items;
+/** Every row of one kind, past `listByKind`'s MAX_PAGE_SIZE cap — for the reconcile only. */
+async function listEveryOfKind(kind, access) {
+  return fetchAll(CONTAINER, byKindSpec(kind, access, {}), { partitionKey: String(kind) });
 }
 
 async function countByKind(kind, access, opts = {}) {
@@ -139,6 +146,7 @@ module.exports = {
   readForWrite,
   listByIds,
   listByKind,
+  listEveryOfKind,
   countByKind,
   upsert
 };
