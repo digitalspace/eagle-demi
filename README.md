@@ -591,8 +591,10 @@ segment deeper. The prefix is applied inside the backend; callers pass the recor
 (`zdspnb`) and prod (`ozwdez`) keep keys at the bucket root and set no prefix.
 
 **Downloads:** `GET /api/documents/:id/download` returns a 5-minute presigned URL, gated by the same
-ACL as the metadata read — a caller who cannot see a document cannot fetch its bytes. A `HEAD` on
-the same path is answered by DEMI itself and never redirects, because the presigned URL is signed
+ACL as the metadata read — a caller who cannot see a document cannot fetch its bytes. The URL says
+`attachment`; `?inline=1` makes a PDF or a PNG, JPEG, GIF or WebP image open in the browser instead,
+and every other type stays a download. The JSON body's `inline` field says which one this file got.
+A `HEAD` on the same path is answered by DEMI itself and never redirects, because the presigned URL is signed
 for GET only: 200 with the file's `Content-Type`, `Content-Length` and `Content-Disposition`, or the
 same 404 as GET. HEAD also checks the store. If the store says the object is missing, HEAD returns
 404, while GET still returns a link. If the store times out (3 seconds) or is down, HEAD answers from

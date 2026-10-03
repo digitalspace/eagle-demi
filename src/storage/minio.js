@@ -57,9 +57,12 @@ async function getObjectStream(key) {
 async function getDownloadUrl(key, opts = {}) {
   const expirySeconds = opts.expirySeconds || 300;
   // The response headers are part of what is signed.
-  const respHeaders = opts.fileName
-    ? { 'response-content-disposition': contentDisposition(opts.fileName) }
-    : undefined;
+  const respHeaders = {};
+  if (opts.fileName) {
+    respHeaders['response-content-disposition'] =
+      contentDisposition(opts.fileName, { inline: Boolean(opts.inlineType) });
+  }
+  if (opts.inlineType) respHeaders['response-content-type'] = opts.inlineType;
   return getClient().presignedGetObject(
     config.minioBucket, resolveObjectKey(key), expirySeconds, respHeaders
   );

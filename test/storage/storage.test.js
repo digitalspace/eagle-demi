@@ -126,6 +126,21 @@ test('minio backend applies the key prefix to every operation', async (t) => {
       seenHeaders['response-content-disposition'],
       "attachment; filename=\"epic-documents-1.zip\"; filename*=UTF-8''epic-documents-1.zip"
     );
+    assert.strictEqual(seenHeaders['response-content-type'], undefined);
+  });
+
+  await t.test('an inline type signs inline and that Content-Type', async () => {
+    // The store may hold a PDF as octet-stream, which a browser saves instead of showing.
+    let seenHeaders;
+    t.mock.method(Minio.Client.prototype, 'presignedGetObject', async (b, k, e, headers) => {
+      seenHeaders = headers;
+      return 'https://example.invalid/signed';
+    });
+
+    await minio.getDownloadUrl('etl/abc.pdf', { fileName: 'Site C.pdf', inlineType: 'application/pdf' });
+    assert.strictEqual(seenHeaders['response-content-disposition'],
+      "inline; filename=\"Site C.pdf\"; filename*=UTF-8''Site%20C.pdf");
+    assert.strictEqual(seenHeaders['response-content-type'], 'application/pdf');
   });
 
   await t.test('an unsized upload is multiparted in 64 MiB pieces, not 528 MiB ones', async () => {
@@ -362,6 +377,19 @@ test('azure blob backend', async (t) => {
     assert.strictEqual(new URL(url).searchParams.get('rscd'),
       "attachment; filename=\"Site C Report.pdf\"; filename*=UTF-8''Site%20C%20Report.pdf",
       'both backends sign the same header — one that differs is a bug only one environment shows');
+    assert.strictEqual(new URL(url).searchParams.get('rsct'), null);
+  });
+
+  await t.test('an inline type signs inline and that Content-Type', async () => {
+    t.mock.method(BlobServiceClient.prototype, 'getUserDelegationKey', async () => fakeKey);
+
+    const url = new URL(await azure.getDownloadUrl('etl/abc.pdf', {
+      fileName: 'Site C Report.pdf', inlineType: 'application/pdf',
+      now: Date.parse('2026-07-30T12:00:00Z')
+    }));
+    assert.strictEqual(url.searchParams.get('rscd'),
+      "inline; filename=\"Site C Report.pdf\"; filename*=UTF-8''Site%20C%20Report.pdf");
+    assert.strictEqual(url.searchParams.get('rsct'), 'application/pdf');
   });
 
   await t.test('the delegation key is cached, then refetched after it expires', async () => {

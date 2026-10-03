@@ -119,8 +119,10 @@ async function getDownloadUrl(key, opts = {}) {
   };
 
   if (opts.fileName) {
-    sasOptions.contentDisposition = contentDisposition(opts.fileName);
+    sasOptions.contentDisposition =
+      contentDisposition(opts.fileName, { inline: Boolean(opts.inlineType) });
   }
+  if (opts.inlineType) sasOptions.contentType = opts.inlineType;
 
   const sas = generateBlobSASQueryParameters(
     sasOptions, delegationKey, config.azureStorageAccount

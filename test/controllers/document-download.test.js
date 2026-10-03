@@ -186,6 +186,96 @@ test('download in redirect mode', async (t) => {
   });
 });
 
+test('download in inline mode', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  /** The inlineType the presign was asked for. */
+  async function signedType(t, query, doc = DOC) {
+    const presign = allow(t, { doc });
+    const response = res();
+    await controller.downloadDocument(req({ query }), response);
+    assert.equal(presign.mock.callCount(), 1);
+    return { response, type: presign.mock.calls[0].arguments[1].inlineType };
+  }
+
+  await t.test('?inline=1&redirect=1 on a PDF signs it inline as application/pdf', async (t) => {
+    const { response, type } = await signedType(t, { redirect: '1', inline: '1' },
+      { ...DOC, mimeType: 'application/pdf' });
+    assert.equal(type, 'application/pdf');
+    assert.equal(response.statusCode, 302);
+  });
+
+  await t.test('the JSON mode takes the flag too', async (t) => {
+    const { response, type } = await signedType(t, { inline: '1' });
+    assert.equal(type, 'application/pdf', 'no recorded type: the .pdf name decides');
+    assert.equal(response.statusCode, 200);
+  });
+
+  await t.test('the JSON body says whether inline was honoured for this file', async (t) => {
+    const cases = [
+      [{ inline: '1' }, { ...DOC, mimeType: 'application/pdf' }, true],
+      [{}, { ...DOC, mimeType: 'application/pdf' }, false],
+      [{ inline: '1' }, { ...DOC, mimeType: 'text/html', s3Key: 'etl/page.html' }, false]
+    ];
+    for (const [query, doc, expected] of cases) {
+      const { response } = await signedType(t, query, doc);
+      assert.strictEqual(JSON.parse(response.body).inline, expected, JSON.stringify({ query, doc }));
+      t.mock.restoreAll();
+    }
+  });
+
+  await t.test('an inline view is marked in the analytics and audit detail; a save is not', async (t) => {
+    const restricted = { ...DOC, mimeType: 'application/pdf', isPublished: false };
+    const detailOf = async (query) => {
+      sent.length = 0;
+      await signedType(t, query, restricted);
+      await audit.flush();
+      t.mock.restoreAll();
+      const row = (stream) => sent.find(r => r.stream === stream).Detail;
+      return { analytics: row(audit.EVENTS_STREAM), audited: row(audit.AUDIT_STREAM) };
+    };
+
+    const view = await detailOf({ inline: '1' });
+    assert.deepStrictEqual(view.analytics, { inline: true });
+    assert.deepStrictEqual(view.audited, { displayName: 'Site C Report', inline: true });
+
+    const save = await detailOf({});
+    assert.deepStrictEqual(save.analytics, {});
+    assert.deepStrictEqual(save.audited, { displayName: 'Site C Report' });
+  });
+
+  await t.test('HTML, SVG or an unknown type stays an attachment', async (t) => {
+    for (const doc of [
+      { ...DOC, mimeType: 'text/html', s3Key: 'etl/page.html' },
+      { ...DOC, mimeType: 'image/svg+xml', s3Key: 'etl/logo.svg' },
+      { ...DOC, mimeType: 'text/html' },
+      { ...DOC, s3Key: 'etl/noext' }
+    ]) {
+      const { type } = await signedType(t, { redirect: '1', inline: '1' }, doc);
+      assert.strictEqual(type, null, JSON.stringify(doc));
+      t.mock.restoreAll();
+    }
+  });
+
+  await t.test('without inline=1 a PDF is still an attachment', async (t) => {
+    for (const query of [{ redirect: '1' }, { redirect: '1', inline: 'true' }, { inline: ['1', '0'] }]) {
+      const { type } = await signedType(t, query, { ...DOC, mimeType: 'application/pdf' });
+      assert.strictEqual(type, null, JSON.stringify(query));
+      t.mock.restoreAll();
+    }
+  });
+
+  await t.test('HEAD ignores it: still attachment', async (t) => {
+    allow(t);
+    t.mock.method(storage, 'statObject', async () => ({ size: 1, contentType: 'application/pdf' }));
+    await withServer(async (call) => {
+      const res = await call(`/api/documents/${DOC.id}/download?inline=1`, { method: 'HEAD' });
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get('content-disposition'), /^attachment;/);
+    });
+  });
+});
+
 test('the redirect survives the dispatcher', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
