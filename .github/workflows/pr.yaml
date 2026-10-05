@@ -63,11 +63,11 @@ jobs:
         run: python3 extractor/test_extract.py
 
       # cryptography only lets the tests build AES-encrypted fixtures.
-      - name: Install PDF titler test dependencies
+      - name: Install PDF title test dependencies
         run: pip install -r pdf-title/requirements.txt pytest==9.1.1 cryptography==48.0.0
 
-      - name: Run PDF titler tests
-        run: python3 -m pytest pdf-title/test_titler.py
+      - name: Run PDF title tests
+        run: python3 -m pytest pdf-title
 
   test-frontend:
     name: Test & Build Frontend
