@@ -46,6 +46,8 @@ module.exports = {
   region: { defaultVis: 4, maxVis: 4 },
   eaoStatus: { defaultVis: 4, maxVis: 4 },
   legislation: { defaultVis: 4, maxVis: 4 },
+  // SHA-256 of the file as uploaded to eagle-api. Not rendered anywhere, but not sensitive either.
+  uploadSha256: { defaultVis: 4, maxVis: 4 },
 
   // Records-management identifiers; public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2).
   orcsClassification: { defaultVis: 4, maxVis: 4 },

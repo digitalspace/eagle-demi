@@ -165,6 +165,7 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     fileExt: (doc.internalExt || '').replace(/^\./, '').toLowerCase(),
     fileSize: toNumber(doc.internalSize),
     mimeType: doc.internalMime || '',
+    uploadSha256: typeof doc.internalOriginalSha256 === 'string' ? doc.internalOriginalSha256 : null,
 
     type: resolveListLabel(doc.type, listLookup),
     typeId: listRefId(doc.type),
