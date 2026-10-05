@@ -73,7 +73,12 @@ const EAGLE_ONLY_FIELDS = [
   'sector', 'commodity', 'region', 'fedElecDist', 'provElecDist',
   'projectCAC', 'projectCACPublished', 'cacEmail',
   'proponentId', 'pins', 'pinsRead', 'featuredDocuments',
-  'overallProgress', 'code', 'nameSearchTerms'
+  'overallProgress', 'code', 'nameSearchTerms',
+  // Returned by eagle-api's project GET (its `tagList`) and staff-only here: catalog level 2.
+  'CELead', 'CELeadEmail', 'CELeadPhone', 'projectLeadId', 'responsibleEPDId', 'projLead',
+  'addedBy', 'intake', 'dateCommentsOpen', 'dateCommentsClosed', 'duration', 'isTermsAgreed',
+  'primaryContact', 'proMember', 'eaStatusDate', 'projectStatusDate', 'activeDate',
+  'substantially', 'substantiallyDate', 'hasMetCommentPeriods'
 ];
 
 /**

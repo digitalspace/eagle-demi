@@ -17,6 +17,7 @@ const {
   resolveProjectAcl,
   BC_BBOX
 } = require('../../src/merge/project');
+const { redactForAccess } = require('../../src/vis/redact');
 
 const inBC = (lng, lat) =>
   lng >= BC_BBOX.minLng && lng <= BC_BBOX.maxLng &&
@@ -250,6 +251,58 @@ test('Eagle\'s dateUpdated', async (t) => {
     const never = mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS);
     assert.ok(!('dateUpdated' in never),
       'a project Eagle never edited must read as never edited, not as edited when DEMI last synced');
+  });
+});
+
+/**
+ * Fields eagle-api's project GET returns that DEMI used to leave inside `sources.eagle`, which no
+ * caller can read. Carried for staff only; the anonymous response must not move.
+ */
+test('Eagle fields carried for staff', async (t) => {
+  const STAFF_FIELDS = {
+    CELead: 'Casey Federal', CELeadEmail: 'ce.lead@example.invalid', CELeadPhone: '250 555 0199',
+    dateCommentsOpen: '2019-01-01', hasMetCommentPeriods: true
+  };
+  const STAFF = { level: 2 };
+  const ANONYMOUS = { level: 4 };
+
+  await t.test('they survive the legislation flatten of a raw Mongo push', () => {
+    const merged = mergeTrackProject(TRACK_207, {
+      _id: TRACK_207.epic_guid,
+      read: ['public'],
+      currentLegislationYear: 'legislation_2002',
+      legislation_2002: { name: 'Nested Name', ...STAFF_FIELDS }
+    }, OPTS);
+
+    assert.strictEqual(merged.CELeadEmail, 'ce.lead@example.invalid');
+    assert.strictEqual(merged.hasMetCommentPeriods, true);
+  });
+
+  await t.test('they land on an Eagle-only project too', () => {
+    const merged = mergeEagleOnlyProject(eagleFor(TRACK_207, STAFF_FIELDS), OPTS);
+    assert.strictEqual(merged.CELead, 'Casey Federal');
+  });
+
+  await t.test('staff reads them', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, STAFF_FIELDS), OPTS);
+    const out = redactForAccess('projects', merged, STAFF);
+    assert.strictEqual(out.CELeadEmail, 'ce.lead@example.invalid');
+    assert.strictEqual(out.dateCommentsOpen, '2019-01-01');
+  });
+
+  await t.test('an anonymous caller does not', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, STAFF_FIELDS), OPTS);
+    const out = redactForAccess('projects', merged, ANONYMOUS);
+    assert.ok(!('CELeadEmail' in out));
+    assert.ok(!('hasMetCommentPeriods' in out));
+  });
+
+  await t.test('the anonymous response is the same as before they were carried', () => {
+    const without = mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS);
+    const withThem = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, STAFF_FIELDS), OPTS);
+    assert.deepStrictEqual(
+      redactForAccess('projects', withThem, ANONYMOUS),
+      redactForAccess('projects', without, ANONYMOUS));
   });
 });
 
