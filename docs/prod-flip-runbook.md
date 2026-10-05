@@ -78,9 +78,12 @@ script under `src/scripts/` names the role.
 These scripts read with `systemAccess()`, the level-0 context that passes every ACL, so anything
 they print or write out is unredacted and is handled as level-0 material:
 
-`src/scripts/audit-chunk-quality.js`, `backfill-display-name-sort.js`, `backfill-document-list-ids.js`,
-`backfill-eac-number.js`, `backfill-eagle-staff-fields.js`, `close-unpublished-track-projects.js`, `probe-phrase-presence.js`,
-`purge-extraction.js`, `reconcile-eagle.js`, `score-retrieval.js`, `seed-nosql.js`, `sync-wildfires.js`.
+`src/scripts/audit-chunk-quality.js`, `backfill-chunk-parent-fields.js`, `backfill-display-name-sort.js`,
+`backfill-document-list-ids.js`, `backfill-eac-number.js`, `backfill-eagle-staff-fields.js`,
+`backfill-objects.js`, `backfill-trim-project-labels.js`, `backup-originals.js`,
+`close-unpublished-track-projects.js`, `probe-phrase-presence.js`, `purge-extraction.js`,
+`reconcile-eagle.js`, `restore-originals.js`, `score-retrieval.js`, `seed-nosql.js`,
+`seed-public-reads.js`, `sync-track-projects.js`, `sync-wildfires.js`.
 
 `grep -n systemAccess src/scripts/*.js` is that list; a script added to one is added to the other.
 
