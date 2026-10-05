@@ -6,14 +6,15 @@ or written unless those bytes hash to `originalSha256`.
     python3 pdf-title/restore.py --file titled.pdf --length N --sha256 HEX --out original.pdf
     python3 pdf-title/restore.py --id DOC_ID [--project PROJECT_ID] [--live]
 
-`--id` restores the stored object through the DEMI lease API, the same flow as `run.py`, with
-DEMI_API_URL and DEMI_API_KEY set. Without `--live` it only says what it would do.
+`--id` restores the stored object through the DEMI lease API (`mode=restore`), the same flow as
+`run.py`, with DEMI_API_URL and DEMI_API_KEY set. Without `--live` it only says what it would do.
 """
 
 import argparse
 import hashlib
 import re
 import sys
+import time
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
@@ -96,7 +97,9 @@ def _restore_by_id(args) -> int:
     if not args.live:
         run.log_row(args.id, "restore", "dry-run", "would restore; add --live to write")
         return 0
-    return 0 if run.process(client, row, want="restore") == "restored" else 1
+    # Room for the PUT window (about 155 s after commit) and one late answer; past it the sweep settles.
+    deadline = time.time() + 10 * 60
+    return 0 if run.process(client, row, want="restore", deadline=deadline) == "restored" else 1
 
 
 if __name__ == "__main__":
