@@ -172,20 +172,27 @@ function unwrapSearchResponse(body, url) {
  *
  * @param {function} [opts.onPage]           (items, fetchedSoFar, total) — progress or a handler
  * @param {boolean}  [opts.accumulate=true]  false returns {count, total} instead of the items
+ * @param {function} [opts.pageUrl]   (pageNum, pageSize) -> url; default the dataset's `/search` page
+ * @param {function} [opts.fetchPage] url -> {items, total}; default an unauthenticated search fetch
+ * @param {number}   [opts.maxPages]  stop after this many pages; the total is then not verified
  */
 async function fetchAllPages(base, dataset, opts = {}) {
   // Historically this took a bare callback as the third argument.
   const options = typeof opts === 'function' ? { onPage: opts } : opts;
-  const { onPage, accumulate = true } = options;
+  const {
+    onPage, accumulate = true, maxPages = Infinity,
+    pageUrl = (pageNum, pageSize) => `${base}/search?dataset=${encodeURIComponent(dataset)}` +
+      `&pageSize=${pageSize}&pageNum=${pageNum}`,
+    fetchPage = async (url) => unwrapSearchResponse(await fetchJson(url), url)
+  } = options;
 
   const items = [];
   let count = 0;
   let total = null;
+  let capped = false;
 
   for (let pageNum = 0; ; pageNum++) {
-    const url = `${base}/search?dataset=${encodeURIComponent(dataset)}` +
-      `&pageSize=${PAGE_SIZE}&pageNum=${pageNum}`;
-    const page = unwrapSearchResponse(await fetchJson(url), url);
+    const page = await fetchPage(pageUrl(pageNum, PAGE_SIZE));
     if (total === null) total = page.total;
 
     count += page.items.length;
@@ -195,9 +202,10 @@ async function fetchAllPages(base, dataset, opts = {}) {
     if (page.items.length < PAGE_SIZE) break;
     // A total of exactly N*PAGE_SIZE would otherwise cost one extra empty request.
     if (total !== null && count >= total) break;
+    if (pageNum + 1 >= maxPages) { capped = true; break; }
   }
 
-  if (total !== null && count !== total) {
+  if (!capped && total !== null && count !== total) {
     throw new Error(
       `[seed] ${dataset}: fetched ${count} but upstream reports ${total} — refusing to ` +
       'seed a truncated corpus'
