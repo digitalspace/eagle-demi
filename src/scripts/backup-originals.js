@@ -39,6 +39,8 @@ const MAX_REPORTED = 20;
 // Blob metadata is capped at 8 KB in total; the full id list goes in the manifest.
 const MAX_DOC_IDS_IN_METADATA = 20;
 const SELECT = 'c.id, c.s3Key, c.fileSize, c.read';
+// The account name is built into a host name, so only a valid storage account name passes.
+const ACCOUNT_NAME = /^[a-z0-9]{3,24}$/;
 
 const SUBCOMMANDS = ['list-bucket', 'export-rows', 'copy', 'verify', 'drill'];
 const REQUIRED = {
@@ -78,8 +80,7 @@ function parseArgs(argv) {
   for (const name of REQUIRED[command]) {
     if (!args[name]) throw new Error(`${TAG} ${command} needs --${name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)}`);
   }
-  // The account name is built into a host name, so only a valid storage account name passes.
-  if (args.account && !/^[a-z0-9]{3,24}$/.test(args.account)) {
+  if (args.account && !ACCOUNT_NAME.test(args.account)) {
     throw new Error(`${TAG} --account is not a storage account name`);
   }
   for (const n of ['concurrency', 'sample']) {
@@ -544,7 +545,10 @@ async function run(argv, deps = {}) {
   return args.check ? drillCheck(args, d) : drillStart(args, d);
 }
 
-module.exports = { parseArgs, redact, buildPlan, reconcile, run };
+module.exports = {
+  parseArgs, redact, buildPlan, reconcile, run,
+  ACCOUNT_NAME, stripQuotes, isMd5Etag, readLines, defaultContainers
+};
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
