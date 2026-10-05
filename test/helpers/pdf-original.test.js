@@ -10,7 +10,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlib = require('zlib');
 const { readOriginal, READ_BUDGET } = require('../../src/helpers/pdf-original');
-const { originalScanner } = require('../../src/helpers/pdf-tail');
 const { fixture, classicTail, classicPdf } = require('./pdf-build');
 
 /** Facts read from `bytes` as an original of `length` bytes, plus every range asked for. */
@@ -117,10 +116,6 @@ test('a linearized file is read from the first-page section, over 1 MiB from the
   assert.ok(original.length - facts.prev > 1024 * 1024);
   assert.ok(!facts.error);
   assert.ok(reads.reduce((sum, [, n]) => sum + n, 0) < 64 * 1024, 'reads only the sections and objects it needs');
-  // The older text scan reads the end trailer, which has no /Root.
-  const scan = originalScanner();
-  scan.push(original);
-  assert.equal(scan.result().error, 'original-trailer-unreadable');
 });
 
 test('an xref stream with Predictor 12 and a Catalog inside an object stream', async () => {

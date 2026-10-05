@@ -21,7 +21,8 @@ const cosmos = require('../../db/cosmos-nosql');
 const storage = require('../../storage');
 const backupCheck = require('../../helpers/backup-check');
 const { isPdf, isEligible, isCurrent, needsRestore } = require('../../helpers/pdf-title');
-const { originalScanner, checkTail } = require('../../helpers/pdf-tail');
+const { checkTail, refuse: refuseRead } = require('../../helpers/pdf-tail');
+const { readOriginal } = require('../../helpers/pdf-original');
 const { pdfTitleFor } = require('../../helpers/file-name');
 const { levelOfRead, isDemiSeal } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
@@ -168,13 +169,11 @@ async function sharedKeys(keys) {
 
 /**
  * One read of an object: whole sha256, the sha256 of its first `prefixLength` bytes, its first
- * bytes, the bytes after the prefix (up to `tailMax`), and with `scan` the facts of the original,
- * which is the prefix when one is given.
+ * bytes, and the bytes after the prefix (up to `tailMax`).
  */
-async function hashObject(key, { prefixLength, tailMax = 0, scan = false } = {}) {
+async function hashObject(key, { prefixLength, tailMax = 0 } = {}) {
   const whole = crypto.createHash('sha256');
   const prefix = crypto.createHash('sha256');
-  const scanner = scan ? originalScanner() : null;
   const tail = [];
   let tailLength = 0;
   let head = Buffer.alloc(0);
@@ -183,11 +182,9 @@ async function hashObject(key, { prefixLength, tailMax = 0, scan = false } = {})
   for await (const chunk of stream) {
     whole.update(chunk);
     if (head.length < 8) head = Buffer.concat([head, chunk.subarray(0, 8 - head.length)]);
-    if (scanner && !Number.isInteger(prefixLength)) scanner.push(chunk);
     if (Number.isInteger(prefixLength)) {
       const inPrefix = Math.max(0, Math.min(chunk.length, prefixLength - length));
       if (inPrefix) prefix.update(chunk.subarray(0, inPrefix));
-      if (inPrefix && scanner) scanner.push(chunk.subarray(0, inPrefix));
       if (inPrefix < chunk.length && tailLength <= tailMax) {
         tail.push(chunk.subarray(inPrefix));
         tailLength += chunk.length - inPrefix;
@@ -200,8 +197,29 @@ async function hashObject(key, { prefixLength, tailMax = 0, scan = false } = {})
     sha256: whole.digest('hex'),
     prefixSha256: Number.isInteger(prefixLength) && length >= prefixLength ? prefix.digest('hex') : null,
     head,
-    tail: tailLength <= tailMax ? Buffer.concat(tail) : null,
-    facts: scanner ? scanner.result() : null
+    tail: tailLength <= tailMax ? Buffer.concat(tail) : null
+  };
+}
+
+/**
+ * The first `length` bytes of one backup version, read in ranges, for `readOriginal`. No read
+ * reaches past `length` or leaves the version, whatever the reader asks for.
+ */
+function backupRange(backupKey, versionId, length) {
+  return async (offset, want) => {
+    if (!Number.isInteger(offset) || !Number.isInteger(want) || offset < 0 || want < 1 || offset + want > length) {
+      refuseRead('original-offset');
+    }
+    const parts = [];
+    for (let at = offset; at < offset + want;) {
+      const ask = Math.min(storage.MAX_RANGE_BYTES, offset + want - at);
+      const part = await storage.readRange(backupKey, at, ask, { versionId });
+      parts.push(part);
+      // A short part means the version ended early; the reader refuses the short result.
+      if (part.length < ask) break;
+      at += ask;
+    }
+    return Buffer.concat(parts);
   };
 }
 
@@ -318,8 +336,7 @@ async function inspect(row) {
       return { kind: 'bad', reason: 'hash-mismatch' };
     }
     if (lease.mode === 'title') {
-      const facts = inFlight.facts && { ...inFlight.facts, metadataObjects: new Set(inFlight.facts.metadataObjects) };
-      const refused = check.tail ? checkTail(check.tail, original.length, facts) : 'tail-too-large';
+      const refused = check.tail ? checkTail(check.tail, original.length, inFlight.facts) : 'tail-too-large';
       if (refused) return { kind: 'bad', reason: refused, shape: true };
     }
     return { kind: 'good' };
@@ -716,25 +733,34 @@ async function commit(req, res) {
     }
 
     // The API's own read of the backup decides; the worker's numbers are only compared with it.
-    const hashed = await hashObject(held.backupKey, {
-      scan: held.mode === 'title', prefixLength: original ? original.length : undefined
-    });
+    const hashed = await hashObject(held.backupKey);
     const neverWritten = (why) => (original ? {} : { title: held.title, status: 'skipped', reason: why });
     if (hashed.head.toString('latin1', 0, 5) !== '%PDF-') return giveUp('not-pdf-bytes', neverWritten('not-pdf-bytes'));
     if (hashed.length !== stat.size) return giveUp('source-changed');
-    if (held.mode === 'title' && hashed.facts.error) return giveUp(hashed.facts.error, neverWritten(hashed.facts.error));
 
     if (!original) {
       if (body.originalLength !== stat.size || hashed.sha256 !== body.originalSha256) {
         return giveUp('original-mismatch', neverWritten('original-mismatch'));
       }
+    } else if (hashed.sha256 !== expectedNow(row).sha256) {
+      return giveUp('record-mismatch', { status: 'needs-review', reason: 'record-mismatch' });
+    }
+
+    // The increment check needs the original's structure, read from the backup version the lease copied.
+    let facts = null;
+    if (held.mode === 'title') {
+      if (!held.backupVersionId) return giveUp('backup-unversioned');
+      const length = original ? original.length : stat.size;
+      facts = await readOriginal(backupRange(held.backupKey, held.backupVersionId, length), length);
+      if (facts.error) return giveUp(facts.error, neverWritten(facts.error));
+    }
+
+    if (!original) {
       row = await save(row, {
         ...record, originalLength: stat.size, originalSha256: hashed.sha256, originalEtag: bareEtag(stat.etag)
       });
       original = originalFor(row);
       logger.info('pdf-title.original', { id: row.id, s3Key: row.s3Key, length: original.length, sha256: original.sha256 });
-    } else if (hashed.sha256 !== expectedNow(row).sha256) {
-      return giveUp('record-mismatch', { status: 'needs-review', reason: 'record-mismatch' });
     }
 
     // Signed first, so putExpiresAt (taken after signing) is never earlier than the link's own
@@ -742,7 +768,6 @@ async function commit(req, res) {
     // store's clock running behind this one; that skew was not measured on ECS.
     const uploadUrl = await storage.getUploadUrl(row.s3Key, { expirySeconds: PUT_SECONDS, contentMd5: body.newMd5 });
     const putExpiresAt = new Date(Date.now() + PUT_SECONDS * 1000).toISOString();
-    const facts = hashed.facts && { ...hashed.facts, metadataObjects: [...hashed.facts.metadataObjects] };
     const inFlight = {
       newLength: body.newLength, newSha256: body.newSha256, newMd5: body.newMd5,
       backupKey: held.backupKey, backupVersionId: held.backupVersionId || null, putExpiresAt, facts

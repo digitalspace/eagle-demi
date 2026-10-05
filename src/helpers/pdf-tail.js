@@ -7,7 +7,7 @@
  * Anything else in the increment could change what the public sees, so it is refused.
  *
  * The original's facts come from `readOriginal` in `pdf-original.js`, which follows its xref
- * structure. `originalScanner` is the older text scan, kept until the controller moves over.
+ * structure.
  */
 
 // Names that can run code, open links, or change pages or annotations, plus compression.
@@ -18,8 +18,6 @@ const FORBIDDEN = new Set([
 const XREF_KEYS = new Set(['Type', 'W', 'Index', 'Size', 'Root', 'Info', 'Prev', 'ID', 'Length']);
 const TRAILER_KEYS = new Set(['Size', 'Root', 'Info', 'Prev', 'ID']);
 const XMP_KEYS = new Set(['Type', 'Subtype', 'Length']);
-/** The original's last trailer must sit in this many final bytes; an xref stream's data comes after it. */
-const TRAILER_WINDOW = 1024 * 1024;
 
 const WS = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20]);
 const DELIM = new Set([...'()<>[]{}/%'].map(c => c.charCodeAt(0)));
@@ -145,115 +143,6 @@ class Reader {
 const refOf = (v) => (v && v.ref ? v.ref : null);
 const sameRef = (a, b) => Boolean(a && b) && a[0] === b[0] && a[1] === b[1];
 
-/** How far past an object header the scan waits for `stream` or `endobj` before it gives up. */
-const HEADER_LOOKAHEAD = 64 * 1024;
-const HEADER = /(\d+)\s+(\d+)\s+obj\b/g;
-const BODY_END = /\bendobj\b|(?<!end)stream(?:\r\n|\n|\r)/g;
-
-/**
- * Collects the original's facts from its chunks, in order, without holding the whole file.
- *
- * Object headers are looked for only outside stream data: a stream with a direct /Length is
- * skipped by that length, one with an indirect /Length up to its `endstream`. Bytes inside a
- * stream therefore cannot pose as a metadata object, except in a stream whose indirect length
- * hides a literal `endstream` in its data.
- */
-function originalScanner() {
-  const metadataObjects = new Set();
-  let window = Buffer.alloc(0);
-  let length = 0;
-  let text = '';
-  let skip = 0;
-  let inStream = false;
-
-  function noteHeader(num, gen, dict) {
-    if (/\/Type\s*\/Metadata\b/.test(dict) && /\/Subtype\s*\/XML\b/.test(dict)) metadataObjects.add(`${num} ${gen}`);
-    // Writers often leave /Type off the stream itself, so the catalog's reference counts too.
-    const fromCatalog = /\/Type\s*\/Catalog\b/.test(dict) && /\/Metadata\s+(\d+)\s+(\d+)\s+R/.exec(dict);
-    if (fromCatalog) metadataObjects.add(`${fromCatalog[1]} ${fromCatalog[2]}`);
-  }
-
-  /** Consume `text` as far as it can be read without more bytes; `final` means no more come. */
-  function advance(final) {
-    for (;;) {
-      if (skip) {
-        const n = Math.min(skip, text.length);
-        text = text.slice(n);
-        skip -= n;
-        if (skip) return;
-      }
-      if (inStream) {
-        const end = text.indexOf('endstream');
-        if (end < 0) { text = final ? '' : text.slice(-8); return; }
-        text = text.slice(end + 'endstream'.length);
-        inStream = false;
-      }
-      HEADER.lastIndex = 0;
-      const head = HEADER.exec(text);
-      if (!head) { text = final ? '' : text.slice(-40); return; }
-      BODY_END.lastIndex = head.index + head[0].length;
-      const body = BODY_END.exec(text);
-      if (!body) {
-        if (!final && text.length - head.index < HEADER_LOOKAHEAD) { text = text.slice(head.index); return; }
-        // A header with no end in reach: skip past it rather than read its bytes as a dictionary.
-        text = text.slice(head.index + head[0].length);
-        continue;
-      }
-      const dict = text.slice(head.index + head[0].length, body.index);
-      noteHeader(head[1], head[2], dict);
-      text = text.slice(body.index + body[0].length);
-      if (body[0].startsWith('stream')) {
-        const direct = /\/Length\s+(\d+)(?!\s+\d+\s+R)/.exec(dict);
-        if (direct) skip = Number(direct[1]);
-        else inStream = true;
-      }
-    }
-  }
-
-  return {
-    push(chunk) {
-      length += chunk.length;
-      window = Buffer.concat([window, chunk]);
-      if (window.length > TRAILER_WINDOW) window = window.subarray(window.length - TRAILER_WINDOW);
-      text += chunk.toString('latin1');
-      advance(false);
-    },
-
-    /** `{prev, root, info, size, metadataObjects}`, or `{error}` when the last trailer cannot be read. */
-    result() {
-      advance(true);
-      const text = window.toString('latin1');
-      const found = [...text.matchAll(/startxref\s+(\d+)/g)];
-      if (!found.length) return { error: 'original-no-startxref' };
-      const prev = Number(found.at(-1)[1]);
-      const windowStart = length - window.length;
-      try {
-        let trailer;
-        if (prev >= windowStart && text.startsWith('xref', prev - windowStart)) {
-          const at = text.lastIndexOf('trailer', found.at(-1).index);
-          if (at < 0) return { error: 'original-trailer-unreadable' };
-          const reader = new Reader(window, at + 'trailer'.length);
-          reader.ws();
-          trailer = reader.dict();
-        } else if (prev >= windowStart) {
-          const reader = new Reader(window, prev - windowStart);
-          reader.int(); reader.int(); reader.expect('obj'); reader.ws();
-          trailer = reader.dict();
-        } else {
-          return { error: 'original-trailer-unreadable' };
-        }
-        const size = trailer.get('Size');
-        const root = refOf(trailer.get('Root'));
-        if (!size || !Number.isInteger(size.number) || !root) return { error: 'original-trailer-unreadable' };
-        return { prev, root, info: refOf(trailer.get('Info')), size: size.number, metadataObjects };
-      } catch (err) {
-        if (err instanceof Refused) return { error: 'original-trailer-unreadable' };
-        throw err;
-      }
-    }
-  };
-}
-
 /** Values an Info dictionary may hold: text and plain scalars, never a reference or structure. */
 function isPlainValue(v) {
   return 'string' in v || 'name' in v || 'number' in v || 'keyword' in v;
@@ -293,18 +182,14 @@ function xrefStreamEntries(dict, data) {
   return entries;
 }
 
-/** True when `[num, gen]` is the original's XMP stream: `facts.metadata`, else the older scanner's set. */
-function isMetadata(facts, num, gen) {
-  if ('metadata' in facts) return sameRef(facts.metadata, [num, gen]);
-  return Boolean(facts.metadataObjects && facts.metadataObjects.has(`${num} ${gen}`));
-}
-
 /**
  * Null when `tail` (the bytes after the original) is exactly a titler increment for `facts`
- * (from `readOriginal`, or the older `originalScanner().result()`), else the reason it is refused.
+ * (from `readOriginal`), else the reason it is refused.
  */
 function checkTail(tail, originalLength, facts) {
-  if (!facts || facts.error) return (facts && facts.error) || 'original-unscanned';
+  if (facts && facts.error) return facts.error;
+  // Facts of any other shape, such as the retired text scan's `metadataObjects`, are not trusted.
+  if (!facts || !('metadata' in facts)) return 'original-unscanned';
   try {
     const r = new Reader(tail);
     const objects = new Map();
@@ -345,7 +230,7 @@ function checkTail(tail, originalLength, facts) {
       } else if (data && type && type.name === 'Metadata') {
         const subtype = dict.get('Subtype');
         if (xmp || !subtype || subtype.name !== 'XML' || ![...dict.keys()].every(k => XMP_KEYS.has(k))) refuse('tail-xmp');
-        if (!isMetadata(facts, num, gen)) refuse('tail-xmp-number');
+        if (!sameRef(facts.metadata, [num, gen])) refuse('tail-xmp-number');
         xmp = [num, gen];
       } else if (!data) {
         if (info || !dict.has('Title') || ![...dict.values()].every(isPlainValue)) refuse('tail-info');
@@ -411,4 +296,4 @@ function checkTail(tail, originalLength, facts) {
   }
 }
 
-module.exports = { originalScanner, checkTail, Reader, Refused, refuse };
+module.exports = { checkTail, Reader, Refused, refuse };

@@ -7,7 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { originalScanner, checkTail } = require('../../src/helpers/pdf-tail');
+const { checkTail } = require('../../src/helpers/pdf-tail');
 const { readOriginal } = require('../../src/helpers/pdf-original');
 const { fixture, classicTail, classicPdf } = require('./pdf-build');
 
@@ -19,30 +19,7 @@ function load(name, titled = 'titled', ext = '.pdf') {
 
 const readFacts = (original) => readOriginal(async (offset, length) => original.subarray(offset, offset + length), original.length);
 
-function factsOf(original, chunk = 97) {
-  const scan = originalScanner();
-  for (let i = 0; i < original.length; i += chunk) scan.push(original.subarray(i, i + chunk));
-  return scan.result();
-}
-
 test('real titler output passes', async (t) => {
-  for (const name of CASES) {
-    await t.test(name, () => {
-      const { original, titled } = load(name);
-      assert.ok(titled.subarray(0, original.length).equals(original));
-      assert.equal(checkTail(titled.subarray(original.length), original.length, factsOf(original)), null);
-    });
-  }
-
-  await t.test('the scan does not depend on where chunks split', () => {
-    const { original, titled } = load('xrefstream-xmp');
-    for (const chunk of [1, 7, 64, 4096]) {
-      assert.equal(checkTail(titled.subarray(original.length), original.length, factsOf(original, chunk)), null, chunk);
-    }
-  });
-});
-
-test('real titler output passes with the structural reader\'s facts', async (t) => {
   const shapes = [
     ...CASES.map(name => [name]),
     ['classic-info', 'retitled'],
@@ -60,13 +37,17 @@ test('real titler output passes with the structural reader\'s facts', async (t) 
   }
 });
 
-test('the metadata ref wins over the older scanner\'s set when both are given', async () => {
+test('facts not in the structural reader\'s shape are refused', async () => {
   const { original, titled } = load('classic-xmp');
   const facts = await readFacts(original);
   const tail = titled.subarray(original.length);
   const [num, gen] = facts.metadata;
-  assert.equal(checkTail(tail, original.length, { ...facts, metadataObjects: new Set() }), null);
-  assert.equal(checkTail(tail, original.length, { ...facts, metadata: null, metadataObjects: new Set([`${num} ${gen}`]) }), 'tail-xmp-number');
+  // The retired text scan's shape, naming the right object, still fails closed.
+  const old = { ...facts, metadataObjects: [`${num} ${gen}`] };
+  delete old.metadata;
+  assert.equal(checkTail(tail, original.length, old), 'original-unscanned');
+  assert.equal(checkTail(tail, original.length, null), 'original-unscanned');
+  assert.equal(checkTail(tail, original.length, facts), null);
 });
 
 test('a fake metadata header after a literal endstream cannot make a page XMP (N9)', async () => {
@@ -86,13 +67,11 @@ test('a fake metadata header after a literal endstream cannot make a page XMP (N
   const xmp = '<< /Type /Metadata /Subtype /XML /Length 5 >>\nstream\n<x/>\n\nendstream';
   const tail = classicTail(original, [[1, '<< /Title (New) >>'], [4, xmp]], `/Size 7 /Root 2 0 R /Info 1 0 R /Prev ${facts.prev}`);
   assert.equal(checkTail(tail, original.length, facts), 'tail-xmp-number');
-  // The older text scan is fooled by the same bytes, which is why its facts are on the way out.
-  assert.equal(checkTail(tail, original.length, factsOf(original)), null);
 });
 
 test('hostile increments are refused', async (t) => {
   const { original } = load('classic-info');
-  const facts = factsOf(original);
+  const facts = await readFacts(original);
   const trailer = `/Size ${facts.size} /Root ${facts.root.join(' ')} R /Info 1 0 R /Prev ${facts.prev}`;
   const info = '<< /Title (Site C Report) /Producer (x) >>';
   const check = (tail) => checkTail(tail, original.length, facts);
@@ -165,31 +144,18 @@ test('hostile increments are refused', async (t) => {
     assert.equal(check(Buffer.concat([classicTail(original, [[1, info]], trailer), Buffer.from('% note\n')])), 'tail-trailing-bytes');
   });
 
-  await t.test('an original whose last trailer cannot be read refuses everything', () => {
+  await t.test('an original the reader refused refuses everything', () => {
     const tail = classicTail(original, [[1, info]], trailer);
-    assert.equal(checkTail(tail, original.length, { error: 'original-trailer-unreadable' }), 'original-trailer-unreadable');
-    assert.equal(factsOf(Buffer.from('%PDF-1.4\nno trailer here\n')).error, 'original-no-startxref');
+    assert.equal(checkTail(tail, original.length, { error: 'original-no-startxref' }), 'original-no-startxref');
   });
 });
 
-test('an xref stream may not take a number the original uses', () => {
+test('an xref stream may not take a number the original uses', async () => {
   const { original, titled } = load('xrefstream-noinfo');
-  const facts = factsOf(original);
+  const facts = await readFacts(original);
   const tail = titled.subarray(original.length).toString('latin1');
   const xrefNum = Number(/(\d+) 0 obj\n<< \/Type \/XRef/.exec(tail)[1]);
   assert.ok(xrefNum >= facts.size, 'the titler takes a fresh number');
   // Same bytes, but the original is told its numbers reach past the xref stream's.
   assert.equal(checkTail(titled.subarray(original.length), original.length, { ...facts, size: xrefNum + 1 }), 'tail-object-number');
-});
-
-test('bytes inside a stream cannot pose as a metadata object', () => {
-  const { original } = load('classic-info');
-  const fake = '9 0 obj\n<< /Type /Metadata /Subtype /XML /Length 0 >>\nstream\n\nendstream\nendobj\n';
-  // An image-like stream with a direct /Length whose data holds a fake header.
-  const decoy = `20 0 obj\n<< /Length ${fake.length} >>\nstream\n${fake}\nendstream\nendobj\n`;
-  // Appended after the original's own end, so its trailer and offsets still read.
-  const withDecoy = Buffer.concat([original, Buffer.from(decoy, 'latin1')]);
-  assert.ok(!factsOf(withDecoy).metadataObjects.has('9 0'));
-  // The same header outside any stream does count.
-  assert.ok(factsOf(Buffer.concat([original, Buffer.from(fake, 'latin1')])).metadataObjects.has('9 0'));
 });

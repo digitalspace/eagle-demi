@@ -1559,10 +1559,11 @@ paths:
         '409':
           description: >-
             `no-lease`, `lease-expired`, `already-committed`, `lease-too-short`, `key-changed`,
-            `source-changed`, `not-pdf-bytes`, `original-mismatch`, `record-mismatch`, or a reason
-            the original cannot be read for the increment check (`original-no-startxref`,
-            `original-trailer-unreadable`). All but `lease-too-short` release the lease. The store
-            is untouched.
+            `source-changed`, `not-pdf-bytes`, `original-mismatch`, `record-mismatch`,
+            `backup-unversioned`, or an `original-*` reason the original's structure cannot be read
+            for the increment check (for example `original-encrypted`, `original-filter`,
+            `original-xref`). An `original-*` reason on a file never titled is recorded as a skip.
+            All but `lease-too-short` release the lease. The store is untouched.
         '412':
           description: The row changed while the commit was recorded (`lease-race`).
         '503':
