@@ -149,7 +149,7 @@ async function copyObject(src, dest, { ifSourceEtag, now } = {}) {
   if (done.copyStatus !== 'success') {
     throw new Error(`[storage] copy of ${src} ended ${done.copyStatus}`);
   }
-  return { etag: done.etag || null };
+  return { etag: done.etag || null, versionId: done.versionId || null };
 }
 
 async function putFile(key, filePath, contentType) {
@@ -172,7 +172,10 @@ async function putObjectStream(key, stream, contentType) {
 async function statObject(key) {
   try {
     const props = await getBlobClient(key).getProperties();
-    return { size: props.contentLength, contentType: props.contentType || null, etag: props.etag || null };
+    return {
+      size: props.contentLength, contentType: props.contentType || null, etag: props.etag || null,
+      versionId: props.versionId || null
+    };
   } catch (err) {
     // A HEAD error has no body, so the SDK carries x-ms-error-code in `details`, as its own
     // deleteIfExists reads it. ContainerNotFound is a config fault and must surface.
@@ -182,9 +185,10 @@ async function statObject(key) {
   }
 }
 
-/** Delete an object. `deleteIfExists` swallows the 404, which is what a re-running sweep needs. */
-async function removeObject(key) {
-  await getBlobClient(key).deleteIfExists();
+/** Delete an object or one version. `deleteIfExists` swallows the 404, as a re-running sweep needs. */
+async function removeObject(key, { versionId } = {}) {
+  const client = getBlobClient(key);
+  await (versionId ? client.withVersion(versionId) : client).deleteIfExists();
 }
 
 function describe() {

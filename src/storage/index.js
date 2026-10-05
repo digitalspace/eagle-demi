@@ -111,7 +111,8 @@ async function getUploadUrl(key, { expirySeconds = MAX_UPLOAD_EXPIRY_SECONDS, co
  * @param {string} src
  * @param {string} dest
  * @param {{ifSourceEtag: string}} opts  etag from statObject(src)
- * @returns {Promise<{etag: string|null}>} etag of the written object
+ * @returns {Promise<{etag: string|null, versionId: string|null}>} the written object's etag and
+ *   version; versionId is null when the store keeps no versions
  */
 async function copyObject(src, dest, { ifSourceEtag } = {}) {
   const fields = { src: String(src), dest: String(dest) };
@@ -132,8 +133,9 @@ async function copyObject(src, dest, { ifSourceEtag } = {}) {
  * Size, type and etag of a stored object, without reading it.
  *
  * @param {string} key
- * @returns {Promise<{size: number, contentType: string|null, etag: string|null}|null>} null when
- *   the object is absent. The etag is opaque: pass it back to copyObject on the same backend.
+ * @returns {Promise<{size: number, contentType: string|null, etag: string|null,
+ *   versionId: string|null}|null>} null when the object is absent. The etag is opaque: pass it
+ *   back to copyObject on the same backend.
  */
 function statObject(key) {
   return backend.statObject(key);
@@ -169,8 +171,23 @@ function putObjectStream(key, stream, contentType) {
   return backend.putObjectStream(key, stream, contentType);
 }
 
-/** Delete an object. Absent is not an error, in both backends. */
-function removeObject(key) {
+/**
+ * Delete an object. Absent is not an error, in both backends.
+ *
+ * `versionId` deletes that one version, and only of a backup: in a versioned bucket a plain delete
+ * keeps the bytes behind a delete marker, but a version of an original is its history.
+ *
+ * @param {string} key
+ * @param {{versionId?: string|null}} [opts]
+ */
+function removeObject(key, { versionId } = {}) {
+  if (versionId) {
+    const fields = { key: String(key) };
+    if (!isExactKey(key) || !String(key).startsWith(BACKUP_PREFIX)) {
+      throw refuse('version delete', 'key is not a backup', fields);
+    }
+    return backend.removeObject(key, { versionId });
+  }
   return backend.removeObject(key);
 }
 

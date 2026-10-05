@@ -93,7 +93,7 @@ async function copyObject(src, dest, { ifSourceEtag }) {
     }),
     new Minio.CopyDestinationOptions({ Bucket: config.minioBucket, Object: resolveObjectKey(dest) })
   );
-  return { etag: res.Etag || null };
+  return { etag: res.Etag || null, versionId: res.VersionId || null };
 }
 
 async function putFile(key, filePath, contentType) {
@@ -131,17 +131,24 @@ async function statObject(key) {
   try {
     const stat = await getClient().statObject(config.minioBucket, resolveObjectKey(key));
     const meta = stat.metaData || {};
-    return { size: stat.size, contentType: meta['content-type'] || null, etag: stat.etag || null };
+    return {
+      size: stat.size, contentType: meta['content-type'] || null, etag: stat.etag || null,
+      versionId: stat.versionId || null
+    };
   } catch (err) {
     if (isMissing(err)) return null;
     throw err;
   }
 }
 
-/** Delete an object. Already gone is success: cleanup re-runs over keys a retry may have removed. */
-async function removeObject(key) {
+/**
+ * Delete an object, or one version of it. Already gone is success: cleanup re-runs over keys a
+ * retry may have removed. In a versioned bucket only a versionId delete frees the bytes.
+ */
+async function removeObject(key, { versionId } = {}) {
   try {
-    return await getClient().removeObject(config.minioBucket, resolveObjectKey(key));
+    return await getClient().removeObject(config.minioBucket, resolveObjectKey(key),
+      versionId ? { versionId } : undefined);
   } catch (err) {
     if (isMissing(err)) return undefined;
     throw err;

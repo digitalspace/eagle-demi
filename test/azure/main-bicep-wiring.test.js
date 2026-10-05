@@ -90,6 +90,8 @@ const WIRED = [
     'the API module call — without it DEMI_ALLOWED_CLIENTS is empty and the app refuses to boot'],
   ['eagleMirrorPrincipals', /^\s+eagleMirrorPrincipals: eagleMirrorPrincipals$/m,
     'the API module call — without it DEMI_EAGLE_MIRROR_PRINCIPALS is always the module default'],
+  ['pdfTitleWorkerPrincipals', /^\s+pdfTitleWorkerPrincipals: pdfTitleWorkerPrincipals$/m,
+    'the API module call — without it DEMI_PDF_TITLE_WORKER_PRINCIPALS is always empty'],
   ['ssoAudience', /^\s+ssoAudience: ssoAudience$/m,
     'the API module call — without it SSO_AUDIENCE cannot be set once the aud claim is measured'],
   ['syncTeamsSchedule', /^\s+syncTeamsSchedule: syncTeamsSchedule$/m,

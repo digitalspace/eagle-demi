@@ -1306,6 +1306,335 @@ paths:
         '401':
           description: Unauthorized.
 
+  /api/documents/pdf-title/pending:
+    get:
+      summary: PDF title work list
+      description: >-
+        One page of documents whose stored PDF needs its title written (`mode: title`) or taken
+        out again because the public name is now withheld (`mode: restore`). Reads only. Rows that
+        are sealed (DEMI or Eagle), not public, not a PDF, not pushed by Eagle (`eaglePushedAt`
+        unset), over 256 MiB by `fileSize`, sharing their `s3Key` with another row, leased, or
+        under review are left out. A cross-partition page can be short or empty while more rows
+        exist: follow `continuation` until it is null. Callers: the PDF title worker principal
+        only (`DEMI_PDF_TITLE_WORKER_PRINCIPALS`; no default). Configuration rule: no principal may
+        be on both that list and `DEMI_EAGLE_MIRROR_PRINCIPALS`, or one key can both mirror Eagle
+        data and rewrite stored PDFs.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Rows scanned per page, 1 to 500. Default 100.
+          schema:
+            type: integer
+        - name: continuation
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of work.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        projectId: { type: string }
+                        mode: { type: string, enum: [title, restore] }
+                        title: { type: string, nullable: true }
+                  continuation: { type: string, nullable: true }
+        '400':
+          description: The continuation token is not one this API issued (`bad-continuation`).
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Not the PDF title worker principal.
+        '503':
+          description: The object store has no ETag and version semantics (`backend-unsupported`).
+
+  /api/documents/pdf-title/sweep:
+    post:
+      summary: Settle one page of expired PDF title leases
+      description: >-
+        For each expired lease: no write in flight releases it and deletes the backup by version;
+        a store holding the new object is verified and recorded; while the PUT link may still be
+        used the row is left (`waiting`) and its backup kept; a store holding the source releases
+        it; anything else is copied back from the backup and recorded `needs-review`. Rows that
+        fail are named in `failed`. Follow `continuation` until it is null to reach every expired
+        lease, and send back the `before` the first page returned with every later page, so one
+        sweep reads one query.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Rows per page, 1 to 20. Default 5.
+          schema:
+            type: integer
+        - name: continuation
+          in: query
+          required: false
+          description: Requires `before`.
+          schema:
+            type: string
+        - name: before
+          in: query
+          required: false
+          description: The cutoff a first page returned, sent back unchanged. Absent means now.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Outcomes for this page.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scanned: { type: integer }
+                  outcomes:
+                    type: object
+                    additionalProperties: { type: integer }
+                  failed:
+                    type: array
+                    items: { type: string }
+                  before: { type: string, format: date-time }
+                  continuation: { type: string, nullable: true }
+        '400':
+          description: Bad continuation token, a continuation without `before`, or a malformed `before`.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Not the PDF title worker principal.
+        '503':
+          description: Unsupported object store.
+
+  /api/documents/{id}/pdf-title/lease:
+    post:
+      summary: Lease one document for a PDF title write
+      description: >-
+        Checks the document, stats its object, checks the stored size against the record, and
+        refuses unless the archive backup holds the original (`assertBackedUp`). Then records a
+        10-minute lease on the current key, copies the object to its short-lived backup
+        `pdf-title-backup/<s3Key>` on the condition that its ETag has not moved, and returns a
+        300-second GET link to that backup. Nothing is written to the original here. `mode=restore`
+        asks for a restore of any titled, unsealed document with a recorded original, whatever its
+        name; sealed rows (DEMI or Eagle) are refused the same as on the automatic path.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          description: Parent project id, the partition key. Avoids a cross-partition lookup.
+          schema:
+            type: string
+        - name: mode
+          in: query
+          required: false
+          description: Operator restore. Only `restore` is accepted.
+          schema:
+            type: string
+            enum: [restore]
+      responses:
+        '201':
+          description: Lease issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  leaseId: { type: string }
+                  mode: { type: string, enum: [title, restore] }
+                  expiresAt: { type: string, format: date-time }
+                  title: { type: string, nullable: true }
+                  backupUrl: { type: string }
+                  backupUrlExpiresIn: { type: integer }
+                  sourceSize: { type: integer }
+                  contentType: { type: string }
+                  originalLength: { type: integer, nullable: true }
+                  originalSha256: { type: string, nullable: true }
+                  maxGrowth: { type: integer, description: Most bytes the increment may add. }
+        '400':
+          description: '`mode` other than `restore`.'
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Not the PDF title worker principal.
+        '404':
+          description: No such document.
+        '409':
+          description: >-
+            Refused, with `reason`: `lease-held`, `sweep-pending`, `needs-review`,
+            `not-from-eagle`, `sealed`, `not-pdf`, `no-file`, `not-public`, `no-public-name`,
+            `current`, `no-original`, `not-titled`, `no-project`, `no-object`, `record-mismatch`,
+            `empty`, `over-cap`, `shared-key`, `orphan-backup-differs`, `source-changed`, or a
+            backup gate reason (`no-backup`, `size-mismatch`, `md5-mismatch`, `not-archive`,
+            `backup-unconfigured`).
+        '412':
+          description: Another worker leased the document first (`lease-race`).
+        '503':
+          description: The backup copy failed and the lease was released, or an unsupported store.
+
+  /api/documents/{id}/pdf-title/commit:
+    post:
+      summary: Sign the PUT for a checked PDF title write
+      description: >-
+        The lease must be live, held by the caller, on the row's current key, with at least the
+        PUT lifetime plus 60 s left. The API reads the backup itself: it must start with `%PDF-`
+        and, for a file already titled or restored, hash to the recorded value. On first titling
+        it records `originalLength` and `originalSha256` once. Returns a 120-second PUT link for
+        exactly the leased key with Content-MD5 signed in, and the headers the PUT must carry.
+        If-Match on the source ETag is not signed: the store honours it unsigned, and the report
+        checks the stored result whatever the worker sent.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaseId, newLength, newSha256, newMd5]
+              properties:
+                leaseId: { type: string }
+                newLength: { type: integer, description: 'Original length plus 1 to `maxGrowth` bytes; a restore sends the original length.' }
+                newSha256: { type: string, description: 64 lowercase hex characters }
+                newMd5: { type: string, description: base64 MD5 of the whole new body }
+                originalLength: { type: integer, description: Required on first titling. }
+                originalSha256: { type: string, description: Required on first titling. }
+      responses:
+        '200':
+          description: PUT link and required headers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl: { type: string }
+                  expiresIn: { type: integer }
+                  putExpiresAt: { type: string, format: date-time }
+                  headers:
+                    type: object
+                    description: Content-Type, Content-MD5 and If-Match; send all three.
+                    additionalProperties: { type: string }
+        '400':
+          description: Body fails validation.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Not the PDF title worker principal.
+        '404':
+          description: No such document.
+        '409':
+          description: >-
+            `no-lease`, `lease-expired`, `already-committed`, `lease-too-short`, `key-changed`,
+            `source-changed`, `not-pdf-bytes`, `original-mismatch`, `record-mismatch`, or a reason
+            the original cannot be read for the increment check (`original-no-startxref`,
+            `original-trailer-unreadable`). All but `lease-too-short` release the lease. The store
+            is untouched.
+        '412':
+          description: The row changed while the commit was recorded (`lease-race`).
+        '503':
+          description: Unsupported object store.
+
+  /api/documents/{id}/pdf-title:
+    put:
+      summary: Report the end of a PDF title lease
+      description: >-
+        `{leaseId}` releases the lease, after a PUT or after a failure that wrote nothing.
+        `{leaseId, skipped: true, reason}` records a skip. The store decides the outcome either
+        way, and only once the PUT link is dead: until `putExpiresAt` plus 30 s every report answers
+        409 `put-window-open`, nothing is released or recorded, and the backup is kept. A write
+        that fails a check inside that window is copied back from the backup at once. A new
+        object is verified by size, ETag, Content-Type, whole sha256, original-prefix
+        sha256, and an increment that holds only what the titler writes (Info dictionary, XMP
+        metadata stream, one xref section). It is recorded `titled` or `restored`. An increment of
+        any other shape is copied back from the backup and recorded as a skip. An unchanged source
+        releases the lease. Anything else is copied back from the backup and recorded
+        `needs-review`, and the backup is kept. While the PUT link may still be used the answer is
+        409 `put-window-open`: report again after `putExpiresAt`.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaseId]
+              properties:
+                leaseId: { type: string }
+                skipped: { type: boolean }
+                reason: { type: string, description: Printable ASCII, cut to 200 characters. }
+      responses:
+        '200':
+          description: Outcome.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outcome: { type: string, enum: [titled, restored, skipped, released, needs-review] }
+                  status: { type: string, nullable: true }
+                  reason: { type: string, nullable: true }
+        '400':
+          description: A skip with no reason.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Not the PDF title worker principal.
+        '404':
+          description: No such document.
+        '409':
+          description: '`no-lease`, or `put-window-open` with `putExpiresAt`.'
+        '412':
+          description: The row changed while the outcome was recorded (`lease-race`).
+        '503':
+          description: Unsupported object store.
+
   /api/documents/{id}/download:
     get:
       summary: Presigned download for a document's bytes
