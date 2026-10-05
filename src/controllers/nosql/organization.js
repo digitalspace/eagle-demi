@@ -17,7 +17,22 @@ const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
-/** The published business card, and nothing from the staff side of the model. */
+/** Eagle's staff-side organization fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+function staffFields(doc) {
+  return {
+    description: doc.description || '',
+    address2: doc.address2 || '',
+    company: doc.company || '',
+    companyLegal: doc.companyLegal || '',
+    parentCompany: doc.parentCompany ? String(doc.parentCompany) : null,
+    addedBy: doc.addedBy || '',
+    updatedBy: doc.updatedBy || '',
+    dateAdded: doc.dateAdded || null,
+    dateUpdated: doc.dateUpdated || null
+  };
+}
+
+/** The published business card, plus the staff side of the model at level 2. */
 function mirrorItem(eagleId, doc, read, existing) {
   return {
     id: eagleId,
@@ -33,6 +48,7 @@ function mirrorItem(eagleId, doc, read, existing) {
     city: doc.city || '',
     postal: doc.postal || '',
     website: doc.website || '',
+    ...staffFields(doc),
 
     isPublished: read.includes('public'),
     read,
@@ -58,6 +74,7 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
+exports.staffFields = staffFields;
 
 exports.upsertFromEagle = async (req, res) => {
   try {

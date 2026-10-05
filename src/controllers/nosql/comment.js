@@ -26,6 +26,20 @@ const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
+/** Eagle's staff-side review fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+function staffFields(doc) {
+  return {
+    datePosted: doc.datePosted || null,
+    eaoNotes: doc.eaoNotes || null,
+    proponentNotes: doc.proponentNotes || null,
+    proponentStatus: doc.proponentStatus || null,
+    publishedNotes: doc.publishedNotes || null,
+    rejectedNotes: doc.rejectedNotes || null,
+    rejectedReason: doc.rejectedReason || null,
+    valuedComponents: Array.isArray(doc.valuedComponents) ? doc.valuedComponents.map(String) : []
+  };
+}
+
 function mirrorItem(eagleId, doc, period, read, existing) {
   return {
     id: eagleId,
@@ -50,6 +64,7 @@ function mirrorItem(eagleId, doc, period, read, existing) {
     documents: Array.isArray(doc.documents) ? doc.documents.map(String) : [],
     commentId: doc.commentId ?? null,
     eaoStatus: doc.eaoStatus || null,
+    ...staffFields(doc),
 
     isPublished: read.includes('public'),
     read,
@@ -117,6 +132,7 @@ async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
+exports.staffFields = staffFields;
 
 exports.upsertFromEagle = async (req, res) => {
   try {

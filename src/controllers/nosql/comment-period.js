@@ -48,6 +48,39 @@ const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
+/** Eagle's staff-side period fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+function staffFields(doc) {
+  const list = (v) => (Array.isArray(v) ? v : []);
+  return {
+    ceaaAdditionalText: doc.ceaaAdditionalText || '',
+    ceaaInformationLabel: doc.ceaaInformationLabel || '',
+    ceaaRelatedDocuments: doc.ceaaRelatedDocuments || '',
+    classificationRoles: list(doc.classificationRoles),
+    classifiedPercent: doc.classifiedPercent ?? null,
+    commenterRoles: list(doc.commenterRoles),
+    commentIdCount: doc.commentIdCount ?? null,
+    dateCompletedEst: doc.dateCompletedEst || null,
+    dateStartedEst: doc.dateStartedEst || null,
+    dateUpdated: doc.dateUpdated || null,
+    downloadRoles: list(doc.downloadRoles),
+    isClassified: doc.isClassified ?? null,
+    isResolved: doc.isResolved ?? null,
+    isVetted: doc.isVetted || '',
+    metURLAdmin: doc.metURLAdmin || '',
+    milestone: doc.milestone ? String(doc.milestone) : null,
+    periodType: doc.periodType || '',
+    phase: doc.phase || '',
+    phaseName: doc.phaseName || '',
+    publishedPercent: doc.publishedPercent ?? null,
+    rangeOption: doc.rangeOption || '',
+    rangeType: doc.rangeType || '',
+    resolvedPercent: doc.resolvedPercent ?? null,
+    userCan: doc.userCan || '',
+    vettedPercent: doc.vettedPercent ?? null,
+    vettingRoles: list(doc.vettingRoles)
+  };
+}
+
 /** The mirror row: the fields eagle-public renders, plus the raw Eagle record behind them. */
 function mirrorItem(eagleId, doc, projectId, read, existing) {
   return {
@@ -75,6 +108,7 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
     openHouses: Array.isArray(doc.openHouses) ? doc.openHouses : [],
     relatedDocuments: Array.isArray(doc.relatedDocuments) ? doc.relatedDocuments : [],
     commentTip: doc.commentTip || '',
+    ...staffFields(doc),
 
     // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` above is
     // what hides it, this is what says why, and it is what stops a cascade widening it again.
@@ -169,6 +203,7 @@ async function cascadeToComments(period) {
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
+exports.staffFields = staffFields;
 
 exports.upsertFromEagle = async (req, res) => {
   try {
