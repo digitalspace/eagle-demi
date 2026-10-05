@@ -31,6 +31,10 @@ def test_size_is_checked_against_the_larger_of_trailer_size_and_highest_object()
     assert pass_rate.compare_facts(FACTS, {**PIKE, "size": 5, "max_object": 7}, VIEW) == ["size-vs-pikepdf"]
 
 
+def test_a_file_pikepdf_finds_encrypted_is_encrypted_whatever_reason_the_titler_skipped_it():
+    assert pass_rate.classify(["skip:signed", "skip:signed"], {**PIKE, "encrypted": True}) == "encrypted"
+
+
 def _row(file, cls, reader="facts", tails=(), diff=()):
     return {"file": file, "class": cls, "reader": reader, "tails": list(tails), "facts_diff": list(diff)}
 
