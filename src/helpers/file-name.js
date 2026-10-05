@@ -19,11 +19,14 @@ const BIDI = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 const EXTENSION = /^\.[A-Za-z0-9]{1,8}$/;
 const isExtension = ext => EXTENSION.test(ext) && /[A-Za-z]/.test(ext);
 
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/g;
+
 /** Strip what a file or zip entry path must not carry: separators, control and bidi characters, dots. */
 function clean(value) {
   return String(value == null ? '' : value)
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f/\\]/g, '')
+    .replace(CONTROL, '')
+    .replace(/[/\\]/g, '')
     .replace(BIDI, '')
     .replace(/^\.+/, '')
     .trim();
@@ -54,4 +57,18 @@ function fileNameFor(doc, access, fallback = '') {
   return base.slice(0, Math.max(1, MAX_NAME_LENGTH - ext.length)) + ext;
 }
 
-module.exports = { clean, fileNameFor };
+/**
+ * The title written into a PDF: the display name an anonymous visitor sees, on one line, or null
+ * when they see none (a `vis` dial can withhold it). A title is no path, so slashes stay.
+ */
+function pdfTitleFor(doc) {
+  if (!doc || typeof doc !== 'object') return null;
+  const name = redactForAccess('documents', doc, {}).displayName;
+  return String(name == null ? '' : name)
+    .replace(CONTROL, ' ')
+    .replace(BIDI, '')
+    .replace(/\s+/g, ' ')
+    .trim() || null;
+}
+
+module.exports = { clean, fileNameFor, pdfTitleFor };
