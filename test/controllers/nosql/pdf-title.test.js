@@ -165,6 +165,7 @@ async function titleOnce(w, bytes, { id = 'd1', first = true, query = {} } = {})
 
 async function titled(w) {
   const { leaseId } = await titleOnce(w, TITLED);
+  w.closePutWindow();
   assert.equal((await report({ leaseId })).body.outcome, 'titled');
 }
 
@@ -198,6 +199,8 @@ test('pdf title lease API', async (t) => {
       c.arguments[1].sha256 === sha256(ORIGINAL) && c.arguments[1].length === ORIGINAL.length));
 
     const backupVersion = w.row().pdfTitle.lease.backupVersionId;
+    assert.equal((await report({ leaseId })).body.reason, 'put-window-open');
+    w.closePutWindow();
     assert.deepEqual((await report({ leaseId })).body, { outcome: 'titled', status: 'titled', reason: null });
 
     const record = w.row().pdfTitle;
@@ -386,7 +389,7 @@ test('pdf title lease API', async (t) => {
     });
   });
 
-  await t.test('a report while the PUT link is live waits and keeps the backup', async (t) => {
+  await t.test('inside the PUT window nothing is final, even for a good object', async (t) => {
     const w = world(t);
     const leased = await lease();
     const committed = await commit(commitBody(leased.body.leaseId, TITLED));
@@ -394,12 +397,18 @@ test('pdf title lease API', async (t) => {
     const early = await report({ leaseId: leased.body.leaseId, skipped: true, reason: 'x' });
     assert.equal(early.status, 409);
     assert.equal(early.body.reason, 'put-window-open');
-    assert.ok(w.store.has(BACKUP));
-    assert.ok(w.row().pdfTitle.inFlight);
+    assert.ok(early.body.putExpiresAt);
 
-    // The late PUT still lands, and is verified rather than lost.
+    // The late PUT lands; it is good, but stays unrecorded while the link lives.
     assert.equal(w.workerPut(KEY, TITLED, committed.body.headers), 200);
+    assert.equal((await report({ leaseId: leased.body.leaseId })).body.reason, 'put-window-open');
+    assert.equal(w.row().pdfTitle.status, undefined);
+    assert.ok(w.row().pdfTitle.lease);
+    assert.ok(w.store.has(BACKUP));
+
+    w.closePutWindow();
     assert.equal((await report({ leaseId: leased.body.leaseId })).body.outcome, 'titled');
+    assert.ok(!w.store.has(BACKUP));
   });
 
   await t.test('a PUT refused on If-Match, reported once the link is dead, leaves the store as it was', async (t) => {
@@ -425,17 +434,39 @@ test('pdf title lease API', async (t) => {
     assert.equal((await pending()).length, 1, 'offered again');
   });
 
-  await t.test('verify failures copy the backup back', async (t) => {
+  /**
+   * PUT refused bytes, report inside the window (undone at once, nothing final), PUT the same bytes
+   * again through the same link, then report after the window. Returns the final report body.
+   */
+  async function refusedTwice(w, leaseId, bytes, headers) {
+    assert.equal(w.workerPut(KEY, bytes, headers), 200);
+    const inWindow = await report({ leaseId });
+    assert.equal(inWindow.status, 409);
+    assert.equal(inWindow.body.reason, 'put-window-open');
+    assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL), 'undone at once');
+    assert.ok(w.store.has(BACKUP), 'backup kept inside the window');
+    assert.ok(w.row().pdfTitle.lease, 'lease kept inside the window');
+    assert.equal(w.row().pdfTitle.status, undefined, 'no final status inside the window');
+
+    // If-Match is unsigned and the object is the source again, so the same link lands again.
+    assert.equal(w.workerPut(KEY, bytes, headers), 200);
+    assert.ok(w.store.has(BACKUP));
+    w.closePutWindow();
+    const final = await report({ leaseId });
+    assert.equal(final.status, 200);
+    assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL), 'the original is in the store at the end');
+    return final.body;
+  }
+
+  await t.test('verify failures copy the backup back, and a second PUT cannot undo that', async (t) => {
     await t.test('a whole-file hash mismatch: needs review, backup kept', async (t) => {
       const w = world(t);
       const leased = await lease();
       const wrong = Buffer.from(TITLED);
       wrong[wrong.length - 20] ^= 1;
       const committed = await commit({ ...commitBody(leased.body.leaseId, wrong), newSha256: sha256(TITLED) });
-      assert.equal(w.workerPut(KEY, wrong, committed.body.headers), 200);
-      const res = await report({ leaseId: leased.body.leaseId });
-      assert.equal(res.body.reason, 'hash-mismatch');
-      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+      const final = await refusedTwice(w, leased.body.leaseId, wrong, committed.body.headers);
+      assert.deepEqual(final, { outcome: 'needs-review', status: 'needs-review', reason: 'hash-mismatch' });
       assert.ok(w.store.has(BACKUP));
       assert.equal(w.row().pdfTitle.overwritten.etag, md5Hex(wrong), 'the overwritten version is on record');
       assert.equal((await lease()).body.reason, 'needs-review');
@@ -447,11 +478,9 @@ test('pdf title lease API', async (t) => {
       const bent = Buffer.from(TITLED);
       bent[20] ^= 1;
       const committed = await commit(commitBody(leased.body.leaseId, bent));
-      assert.equal(w.workerPut(KEY, bent, committed.body.headers), 200);
-      const res = await report({ leaseId: leased.body.leaseId });
-      assert.equal(res.body.outcome, 'needs-review');
-      assert.equal(res.body.reason, 'hash-mismatch');
-      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+      const final = await refusedTwice(w, leased.body.leaseId, bent, committed.body.headers);
+      assert.equal(final.outcome, 'needs-review');
+      assert.equal(final.reason, 'hash-mismatch');
     });
 
     await t.test('an increment that is not the titler\'s shape is undone and skipped', async (t) => {
@@ -462,21 +491,32 @@ test('pdf title lease API', async (t) => {
       assert.ok(at > ORIGINAL.length, 'the edit lands in the increment');
       const hostile = Buffer.from(`${text.slice(0, at)}/AA      ${text.slice(at + 9)}`, 'latin1');
       const committed = await commit(commitBody(leased.body.leaseId, hostile));
-      assert.equal(w.workerPut(KEY, hostile, committed.body.headers), 200);
-      const res = await report({ leaseId: leased.body.leaseId });
-      assert.equal(res.body.outcome, 'skipped');
-      assert.equal(res.body.reason, 'tail-forbidden:AA');
-      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
-      assert.ok(!w.store.has(BACKUP));
+      const final = await refusedTwice(w, leased.body.leaseId, hostile, committed.body.headers);
+      assert.deepEqual(final, { outcome: 'skipped', status: 'skipped', reason: 'tail-forbidden:AA' });
+      assert.ok(!w.store.has(BACKUP), 'deleted only after the window');
     });
 
     await t.test('a changed Content-Type', async (t) => {
       const w = world(t);
       const leased = await lease();
       const committed = await commit(commitBody(leased.body.leaseId, TITLED));
-      assert.equal(w.workerPut(KEY, TITLED, { ...committed.body.headers, 'Content-Type': 'text/html' }), 200);
-      assert.equal((await report({ leaseId: leased.body.leaseId })).body.reason, 'content-type-changed');
-      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+      const final = await refusedTwice(w, leased.body.leaseId, TITLED, { ...committed.body.headers, 'Content-Type': 'text/html' });
+      assert.equal(final.reason, 'content-type-changed');
+      assert.ok(w.store.has(BACKUP));
+    });
+
+    await t.test('refused once, then the store holds the source after the window', async (t) => {
+      const w = world(t);
+      const leased = await lease();
+      const wrong = Buffer.from(TITLED);
+      wrong[wrong.length - 20] ^= 1;
+      const committed = await commit({ ...commitBody(leased.body.leaseId, wrong), newSha256: sha256(TITLED) });
+      assert.equal(w.workerPut(KEY, wrong, committed.body.headers), 200);
+      assert.equal((await report({ leaseId: leased.body.leaseId })).status, 409);
+      w.closePutWindow();
+      const final = await report({ leaseId: leased.body.leaseId });
+      assert.equal(final.body.reason, 'hash-mismatch', 'the earlier refusal is still the outcome');
+      assert.ok(w.store.has(BACKUP));
     });
   });
 
@@ -494,6 +534,7 @@ test('pdf title lease API', async (t) => {
     // The gate asks after the archived original, not the titled object now stored.
     assert.deepEqual(w.calls.gate.at(-1), { key: KEY, size: ORIGINAL.length, etag: md5Hex(ORIGINAL) });
 
+    w.closePutWindow();
     assert.equal((await report({ leaseId })).body.outcome, 'titled');
     const record = w.row().pdfTitle;
     assert.equal(record.title, 'Site C Report, Final');
@@ -541,6 +582,7 @@ test('pdf title lease API', async (t) => {
 
     const committed = await commit(commitBody(leased.body.leaseId, ORIGINAL, { first: false }));
     assert.equal(w.workerPut(KEY, ORIGINAL, committed.body.headers), 200);
+    w.closePutWindow();
     assert.equal((await report({ leaseId: leased.body.leaseId })).body.outcome, 'restored');
     const record = w.row().pdfTitle;
     assert.equal(record.status, 'restored');
@@ -555,6 +597,25 @@ test('pdf title lease API', async (t) => {
     Object.assign(w.row(), { vis: { displayName: 3 }, read: ['compliance'] });
     assert.deepEqual(await pending(), []);
     assert.equal((await lease()).body.reason, 'sealed');
+  });
+
+  await t.test('an operator restore refuses sealed rows like the automatic path', async (t) => {
+    for (const seal of [{ read: ['compliance'] }, { read: ['compliance'], sealedAt: '2026-10-01T00:00:00Z' }]) {
+      const w = world(t);
+      await titled(w);
+      Object.assign(w.row(), seal);
+      assert.equal((await lease({ query: { mode: 'restore' } })).body.reason, 'sealed');
+      assert.equal(w.calls.copies.length, 1, 'no backup, so no link to sealed bytes');
+      t.mock.restoreAll();
+      for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});
+    }
+  });
+
+  await t.test('a lease with no recorded principal belongs to nobody', async (t) => {
+    const w = world(t);
+    const leased = await lease();
+    delete w.row().pdfTitle.lease.principal;
+    assert.equal((await commit(commitBody(leased.body.leaseId, TITLED))).body.reason, 'no-lease');
   });
 
   await t.test('an operator restore of a titled file whose name is still public', async (t) => {
@@ -606,6 +667,7 @@ test('pdf title lease API', async (t) => {
       const w = world(t);
       await titleOnce(w, TITLED);
       w.expireLease();
+      w.closePutWindow();
       await call(controller.sweep);
       assert.equal(w.row().pdfTitle.status, 'titled');
       assert.ok(!w.store.has(BACKUP));
@@ -647,12 +709,34 @@ test('pdf title lease API', async (t) => {
       await titleOnce(w, TITLED);
       w.row().s3Key = 'etl/p1/new.pdf';
       w.expireLease();
+      w.closePutWindow();
       await call(controller.sweep);
       assert.ok(w.store.get('etl/p1/new.pdf').bytes.equals(fresh), 'the new key is never written');
       assert.ok(w.store.get(KEY).bytes.equals(TITLED));
       const record = w.row().pdfTitle;
       assert.equal(record.status, 'titled');
       assert.equal(record.sourceKey, KEY, 'the record names the key it was made for');
+    });
+
+    await t.test('every page of one sweep uses the cutoff its first page returned', async (t) => {
+      world(t);
+      const seen = [];
+      t.mock.method(cosmos, 'query', async (container, spec, opts) => {
+        seen.push({ now: spec.parameters[0].value, continuation: opts.continuationToken });
+        return { items: [], continuationToken: seen.length === 1 ? 'page-2' : undefined };
+      });
+      const first = await call(controller.sweep);
+      assert.equal(first.body.continuation, 'page-2');
+      assert.equal(first.body.before, seen[0].now);
+      // A cutoff from a sweep that started earlier is read back exactly, not replaced by now.
+      const earlier = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const second = await call(controller.sweep, { query: { continuation: 'page-2', before: earlier } });
+      assert.equal(second.status, 200);
+      assert.equal(second.body.before, earlier);
+      assert.equal(seen[1].now, earlier);
+      assert.equal(seen[1].continuation, 'page-2');
+      assert.equal((await call(controller.sweep, { query: { continuation: 'page-2' } })).status, 400, 'a continuation needs its cutoff');
+      assert.equal((await call(controller.sweep, { query: { before: 'yesterday' } })).status, 400);
     });
 
     await t.test('a row that fails is named and the rest still settle', async (t) => {

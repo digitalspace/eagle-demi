@@ -1316,7 +1316,9 @@ paths:
         unset), over 256 MiB by `fileSize`, sharing their `s3Key` with another row, leased, or
         under review are left out. A cross-partition page can be short or empty while more rows
         exist: follow `continuation` until it is null. Callers: the PDF title worker principal
-        only (`DEMI_PDF_TITLE_WORKER_PRINCIPALS`).
+        only (`DEMI_PDF_TITLE_WORKER_PRINCIPALS`; no default). Configuration rule: no principal may
+        be on both that list and `DEMI_EAGLE_MIRROR_PRINCIPALS`, or one key can both mirror Eagle
+        data and rewrite stored PDFs.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1368,7 +1370,8 @@ paths:
         used the row is left (`waiting`) and its backup kept; a store holding the source releases
         it; anything else is copied back from the backup and recorded `needs-review`. Rows that
         fail are named in `failed`. Follow `continuation` until it is null to reach every expired
-        lease.
+        lease, and send back the `before` the first page returned with every later page, so one
+        sweep reads one query.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1382,8 +1385,16 @@ paths:
         - name: continuation
           in: query
           required: false
+          description: Requires `before`.
           schema:
             type: string
+        - name: before
+          in: query
+          required: false
+          description: The cutoff a first page returned, sent back unchanged. Absent means now.
+          schema:
+            type: string
+            format: date-time
       responses:
         '200':
           description: Outcomes for this page.
@@ -1399,9 +1410,10 @@ paths:
                   failed:
                     type: array
                     items: { type: string }
+                  before: { type: string, format: date-time }
                   continuation: { type: string, nullable: true }
         '400':
-          description: Bad continuation token.
+          description: Bad continuation token, a continuation without `before`, or a malformed `before`.
         '401':
           description: Unauthorized.
         '403':
@@ -1418,7 +1430,8 @@ paths:
         10-minute lease on the current key, copies the object to its short-lived backup
         `pdf-title-backup/<s3Key>` on the condition that its ETag has not moved, and returns a
         300-second GET link to that backup. Nothing is written to the original here. `mode=restore`
-        asks for a restore of any titled document with a recorded original, whatever its name.
+        asks for a restore of any titled, unsealed document with a recorded original, whatever its
+        name; sealed rows (DEMI or Eagle) are refused the same as on the automatic path.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1561,7 +1574,10 @@ paths:
       description: >-
         `{leaseId}` releases the lease, after a PUT or after a failure that wrote nothing.
         `{leaseId, skipped: true, reason}` records a skip. The store decides the outcome either
-        way. A new object is verified by size, ETag, Content-Type, whole sha256, original-prefix
+        way, and only once the PUT link is dead: until `putExpiresAt` plus 30 s every report answers
+        409 `put-window-open`, nothing is released or recorded, and the backup is kept. A write
+        that fails a check inside that window is copied back from the backup at once. A new
+        object is verified by size, ETag, Content-Type, whole sha256, original-prefix
         sha256, and an increment that holds only what the titler writes (Info dictionary, XMP
         metadata stream, one xref section). It is recorded `titled` or `restored`. An increment of
         any other shape is copied back from the backup and recorded as a skip. An unchanged source

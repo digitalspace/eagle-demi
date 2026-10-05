@@ -264,15 +264,9 @@ function onLeasedKey(row) {
 // Settle: the one place that decides what a lease ends as, for a worker report and for the sweep.
 // ---------------------------------------------------------------------------------------------
 
-/**
- * Copy the backup back over the leased key and check it equals the backup. A verified restore of a
- * write the API refused is a skip; anything else parks the row for review with the backup, the
- * in-flight record and the version that was overwritten kept, so nothing a person needs is lost.
- */
-async function restoreFromBackup(row, reason, fields, { verifiedIsSkip = false } = {}) {
-  const record = recordOf(row);
-  const { lease, inFlight } = record;
-  let restored = false;
+/** Copy the backup back over the leased key: did the key end up holding the backup's bytes, and what was overwritten? */
+async function copyBack(row, fields) {
+  const { lease, inFlight } = recordOf(row);
   let overwritten = null;
   try {
     const current = await storage.statObject(row.s3Key);
@@ -281,16 +275,17 @@ async function restoreFromBackup(row, reason, fields, { verifiedIsSkip = false }
     if (!backup) throw new Error('backup is missing');
     await storage.copyObject(inFlight.backupKey, row.s3Key, { ifSourceEtag: backup.etag });
     const [put, ref] = await Promise.all([hashObject(row.s3Key), hashObject(inFlight.backupKey)]);
-    restored = put.length === lease.sourceSize && put.sha256 === ref.sha256;
+    return { restored: put.length === lease.sourceSize && put.sha256 === ref.sha256, overwritten };
   } catch (err) {
     logger.error('[pdf-title] restore from backup failed', { ...fields, error: err.message });
+    return { restored: false, overwritten };
   }
-  if (restored && verifiedIsSkip) {
-    await dropBackup(inFlight.backupKey, inFlight.backupVersionId, fields);
-    logger.warn('[pdf-title] write refused and undone', { ...fields, reason });
-    return { row: await release(row, skipFields(row, lease, { reason })), outcome: 'skipped' };
-  }
-  logger.error('[pdf-title] verify failed; needs review', { ...fields, reason, restored });
+}
+
+/** Park the row for a person, keeping the backup, the in-flight record and what was overwritten. */
+async function park(row, reason, restored, overwritten, fields) {
+  const { inFlight } = recordOf(row);
+  logger.error('[pdf-title] write refused; needs review', { ...fields, reason, restored });
   const stored = await save(row, {
     ...baseRecord(row),
     inFlight,
@@ -302,23 +297,42 @@ async function restoreFromBackup(row, reason, fields, { verifiedIsSkip = false }
   return { row: stored, outcome: 'needs-review' };
 }
 
-/** Full check of a new object that matches the in-flight size and MD5. */
-async function verifyNew(row, stat, fields) {
+/**
+ * What the store holds for the in-flight write: `good` (the new object, fully checked), `source`
+ * (the pre-lease bytes), or `bad` with a reason. `shape` marks an increment that is not the
+ * titler's, which a verified undo turns into a skip rather than a review.
+ */
+async function inspect(row) {
   const { lease, inFlight } = recordOf(row);
-  const original = originalFor(row);
-  if ((stat.contentType || null) !== (lease.contentType || null)) {
-    return restoreFromBackup(row, 'content-type-changed', fields);
+  const stat = await storage.statObject(row.s3Key);
+  if (stat && stat.size === inFlight.newLength && bareEtag(stat.etag) === md5Hex(inFlight.newMd5)) {
+    if ((stat.contentType || null) !== (lease.contentType || null)) return { kind: 'bad', reason: 'content-type-changed' };
+    const original = originalFor(row);
+    const check = await hashObject(row.s3Key, { prefixLength: original.length, tailMax: MAX_GROWTH });
+    if (check.sha256 !== inFlight.newSha256 || check.prefixSha256 !== original.sha256) {
+      return { kind: 'bad', reason: 'hash-mismatch' };
+    }
+    if (lease.mode === 'title') {
+      const facts = inFlight.facts && { ...inFlight.facts, metadataObjects: new Set(inFlight.facts.metadataObjects) };
+      const refused = check.tail ? checkTail(check.tail, original.length, facts) : 'tail-too-large';
+      if (refused) return { kind: 'bad', reason: refused, shape: true };
+    }
+    return { kind: 'good' };
   }
-  const check = await hashObject(row.s3Key, { prefixLength: original.length, tailMax: MAX_GROWTH });
-  if (check.sha256 !== inFlight.newSha256 || check.prefixSha256 !== original.sha256) {
-    return restoreFromBackup(row, 'hash-mismatch', fields);
+  if (stat) {
+    const same = (other) => Boolean(other) && stat.size === other.size && bareEtag(stat.etag) === bareEtag(other.etag);
+    // The backup's own ETag counts too: a copy back may not reproduce a multipart source ETag.
+    if (same({ size: lease.sourceSize, etag: lease.sourceEtag }) || same(await storage.statObject(inFlight.backupKey))) {
+      return { kind: 'source' };
+    }
   }
+  return { kind: 'bad', reason: stat ? 'unexpected-object' : 'object-missing' };
+}
+
+/** Record a verified write, end the lease and delete the backup. */
+async function finish(row, fields) {
+  const { lease, inFlight } = recordOf(row);
   const isRestore = lease.mode === 'restore';
-  if (!isRestore) {
-    const facts = inFlight.facts && { ...inFlight.facts, metadataObjects: new Set(inFlight.facts.metadataObjects) };
-    const refused = check.tail ? checkTail(check.tail, original.length, facts) : 'tail-too-large';
-    if (refused) return restoreFromBackup(row, refused, fields, { verifiedIsSkip: true });
-  }
   const done = await release(row, {
     status: isRestore ? 'restored' : 'titled',
     reason: null,
@@ -332,13 +346,13 @@ async function verifyNew(row, stat, fields) {
 }
 
 /**
- * End a lease from the store's state. `report` is the worker's skip, if it sent one.
+ * End a lease from the store's state; the one path for a worker report and for the sweep.
+ * `report` is the worker's skip, if it sent one.
  *
  * - No in-flight write: nothing was ever signed, so drop the backup and clear.
- * - The store holds the new object: verify it fully and record `titled` or `restored`.
- * - The PUT link may still be used: wait (`outcome: 'waiting'`), and keep the backup.
- * - The store still holds the source: the PUT never landed; drop the backup and clear.
- * - Anything else: copy the backup back and set `needs-review`.
+ * - PUT link maybe still live: undo a bad object at once, then wait (`outcome: 'waiting'`).
+ * - After the link is dead: a good object is recorded `titled` or `restored`; the source (or the
+ *   undone bad write) releases the lease; anything else is undone and parked for review.
  */
 async function settle(stored, report = null) {
   const row = onLeasedKey(stored);
@@ -352,20 +366,36 @@ async function settle(stored, report = null) {
     return { row: await release(row, skipFields(row, lease, report)), outcome: report ? 'skipped' : 'released' };
   }
 
-  const { newLength, newMd5, backupKey, backupVersionId, putExpiresAt } = record.inFlight;
-  const stat = await storage.statObject(row.s3Key);
-  if (stat && stat.size === newLength && bareEtag(stat.etag) === md5Hex(newMd5)) return verifyNew(row, stat, fields);
+  const verdict = await inspect(row);
 
-  // A live PUT link can still land after any decision made now: never release or delete under it.
-  if (Date.now() < Date.parse(putExpiresAt) + PUT_SKEW_MS) return { row: stored, outcome: 'waiting' };
-
-  if (stat && stat.size === lease.sourceSize && bareEtag(stat.etag) === bareEtag(lease.sourceEtag)) {
-    await dropBackup(backupKey, backupVersionId, fields);
-    logger.info('[pdf-title] write never landed; source unchanged', { ...fields, reason: report ? report.reason : 'released' });
-    return { row: await release(row, skipFields(row, lease, report)), outcome: report ? 'skipped' : 'released' };
+  // INVARIANT: while the PUT link can still land (now < putExpiresAt + skew), never release the
+  // lease, never delete the backup and never record a final status, whatever the store holds now:
+  // the same link can PUT again and undo any of them. A failed check is undone at once and noted
+  // on inFlight; the decision is made from a fresh look once the link is dead.
+  if (Date.now() < Date.parse(record.inFlight.putExpiresAt) + PUT_SKEW_MS) {
+    if (verdict.kind !== 'bad') return { row: stored, outcome: 'waiting' };
+    const { restored, overwritten } = await copyBack(row, fields);
+    const refusal = { reason: verdict.reason, shape: Boolean(verdict.shape), restored, overwritten, at: nowIso() };
+    logger.warn('[pdf-title] write refused inside the PUT window; undone, decision waits', { ...fields, reason: verdict.reason });
+    return { row: await save(row, { ...record, inFlight: { ...record.inFlight, refusal } }), outcome: 'waiting' };
   }
 
-  return restoreFromBackup(row, stat ? 'unexpected-object' : 'object-missing', fields);
+  const refusal = record.inFlight.refusal;
+  if (verdict.kind === 'good') return finish(row, fields);
+  if (verdict.kind === 'source') {
+    if (refusal && !refusal.shape) return park(row, refusal.reason, true, refusal.overwritten, fields);
+    await dropBackup(record.inFlight.backupKey, record.inFlight.backupVersionId, fields);
+    const why = refusal ? { reason: refusal.reason } : report;
+    logger.info('[pdf-title] lease ended; store holds the source', { ...fields, reason: why ? why.reason : 'released' });
+    return { row: await release(row, skipFields(row, lease, why)), outcome: why ? 'skipped' : 'released' };
+  }
+  const { restored, overwritten } = await copyBack(row, fields);
+  if (restored && verdict.shape) {
+    await dropBackup(record.inFlight.backupKey, record.inFlight.backupVersionId, fields);
+    logger.warn('[pdf-title] write refused and undone', { ...fields, reason: verdict.reason });
+    return { row: await release(row, skipFields(row, lease, { reason: verdict.reason })), outcome: 'skipped' };
+  }
+  return park(row, verdict.reason, restored, overwritten, fields);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -431,16 +461,23 @@ async function listPending(req, res) {
 
 /**
  * POST /documents/pdf-title/sweep — settle one page of expired leases. A row still under a live
- * PUT link is left (`waiting`); a row that fails is named in `failed`. Follow `continuation` to
- * reach the rest, so rows that keep failing never hold the others back.
+ * PUT link is left (`waiting`); a row that fails is named in `failed`. Follow `continuation`, with
+ * the `before` cutoff the first page returned, so every page reads the same query and rows that
+ * keep failing never hold the others back.
  */
 async function sweep(req, res) {
   if (unsupportedBackend(res)) return undefined;
   try {
     const limit = pageLimit(req.query && req.query.limit, SWEEP_DEFAULT, SWEEP_MAX);
+    const given = req.query && req.query.before;
+    if (given !== undefined && (Number.isNaN(Date.parse(given)) || new Date(given).toISOString() !== given)) {
+      return refuse(res, 400, 'before must be the ISO time a sweep page returned');
+    }
+    if (given === undefined && req.query && req.query.continuation) return refuse(res, 400, 'a continuation needs its before');
+    const before = given === undefined ? nowIso() : given;
     const page = await queryPage(req, res, {
       query: 'SELECT * FROM c WHERE IS_DEFINED(c.pdfTitle.lease.expiresAt) AND c.pdfTitle.lease.expiresAt < @now',
-      parameters: [{ name: '@now', value: nowIso() }]
+      parameters: [{ name: '@now', value: before }]
     }, limit);
     if (!page) return undefined;
     const counts = { released: 0, skipped: 0, titled: 0, restored: 0, 'needs-review': 0, waiting: 0 };
@@ -455,7 +492,7 @@ async function sweep(req, res) {
       }
     }
     logger.info('[pdf-title] sweep', { scanned: page.items.length, ...counts, failed: failed.length });
-    return res.json({ scanned: page.items.length, outcomes: counts, failed, continuation: page.continuationToken || null });
+    return res.json({ scanned: page.items.length, outcomes: counts, failed, before, continuation: page.continuationToken || null });
   } catch (err) {
     return serverError(res, err, '[pdf-title] sweep failed');
   }
@@ -465,6 +502,7 @@ async function sweep(req, res) {
 function leaseMode(row, requested) {
   const original = originalFor(row);
   if (requested === 'restore') {
+    if (isSealed(row)) return { reason: 'sealed' };
     if (!original) return { reason: 'no-original' };
     if (recordOf(row).status !== 'titled') return { reason: 'not-titled' };
     return { mode: 'restore' };
@@ -615,7 +653,7 @@ async function backupAndAnswer(res, row, leaseRecord, original, title) {
 function heldLease(req, row, leaseId) {
   const record = recordOf(row);
   if (!record || !record.lease || record.lease.leaseId !== leaseId) return { reason: 'no-lease' };
-  if (record.lease.principal && record.lease.principal !== principalOf(req)) return { reason: 'no-lease' };
+  if (!record.lease.principal || record.lease.principal !== principalOf(req)) return { reason: 'no-lease' };
   if (!isLive(record.lease)) return { reason: 'lease-expired', record, lease: record.lease };
   return { record, lease: record.lease };
 }
@@ -694,6 +732,10 @@ async function commit(req, res) {
       return giveUp('record-mismatch', { status: 'needs-review', reason: 'record-mismatch' });
     }
 
+    // Signed first, so putExpiresAt (taken after signing) is never earlier than the link's own
+    // expiry. A link whose inFlight save then fails is never handed out. PUT_SKEW_MS covers the
+    // store's clock running behind this one; that skew was not measured on ECS.
+    const uploadUrl = await storage.getUploadUrl(row.s3Key, { expirySeconds: PUT_SECONDS, contentMd5: body.newMd5 });
     const putExpiresAt = new Date(Date.now() + PUT_SECONDS * 1000).toISOString();
     const facts = hashed.facts && { ...hashed.facts, metadataObjects: [...hashed.facts.metadataObjects] };
     const inFlight = {
@@ -701,9 +743,6 @@ async function commit(req, res) {
       backupKey: held.backupKey, backupVersionId: held.backupVersionId || null, putExpiresAt, facts
     };
     row = await save(row, { ...recordOf(row), inFlight });
-
-    // If the PUT link cannot be made, nothing was signed: the sweep finds the source unchanged.
-    const uploadUrl = await storage.getUploadUrl(row.s3Key, { expirySeconds: PUT_SECONDS, contentMd5: body.newMd5 });
     logger.info('[pdf-title] write signed', { ...fields, newLength: body.newLength });
     return res.json({
       uploadUrl,
