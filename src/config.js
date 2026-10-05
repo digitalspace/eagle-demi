@@ -119,6 +119,12 @@ const config = {
   azureStorageAccount:   process.env.AZURE_STORAGE_ACCOUNT || '',
   azureStorageContainer: process.env.AZURE_STORAGE_CONTAINER || '',
 
+  // Archive-tier backup of stored originals, read by src/helpers/backup-check.js before any
+  // in-place rewrite. Keyless like the blob backend above. Empty means no backup is configured,
+  // and the check then refuses every object rather than waving it through.
+  backupAccount:   process.env.BACKUP_ACCOUNT || '',
+  backupContainer: process.env.BACKUP_CONTAINER || '',
+
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   secretFromEnv('DOCLING_API_KEY'),
 
