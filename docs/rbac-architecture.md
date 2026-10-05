@@ -98,16 +98,18 @@ push.
 
 **Eagle-mirror exception (2026-10-05).** Eagle's `staff` role skips every read check, so a pushed
 record whose `read[]` has no ladder token (for example `['sysadmin']` or `['sysadmin','inspector']`)
-gains `staff` and lands at level 2 (`seed/transform.js:withEagleStaff`). Under a parent the read is
-derived by `seed/transform.js:eagleReadUnder`: the parent cap applies, and where the capped result
-would be `team` (a level-1 parent that is not privileged-only, such as `['team']`, `[]` or
+gains `staff` and lands at level 2 (`helpers/eagle-acl.js:withEagleStaff`). Under a parent the read
+is derived by `helpers/eagle-acl.js:eagleReadUnder`: the parent cap applies, and where the capped
+result would be `team` (a level-1 parent that is not privileged-only, such as `['team']`, `[]` or
 `['project-team']`), the row stores what it stored before the rule, `['sysadmin']`. So the result is
 never wider than the parent, never `team` and never `public`. The document, period, comment and
-Update mirrors, the period and comment cascade (`helpers/acl-cascade.js`) and the reconcile drift
-check all derive through it. Existing rows are rewritten by `src/scripts/backfill-eagle-ladder.js`,
-which caps each row by the same rule against its parent's stored read, a DEMI narrow or takedown
-included. `staff` stays out of `SECURE_ROLES`. To drop the rule, remove `withEagleStaff` and that
-script.
+Update mirrors, the period and comment cascade (`helpers/acl-cascade.js`), the document project
+cascade (`setAclForProject`, Eagle rows with a non-empty own read only) and the reconcile drift
+check all derive through it. A document's `ownRead` holds Eagle's read without `staff`; the
+cascade adds it. DEMI-native documents keep the plain cap. Existing rows are rewritten by
+`src/scripts/backfill-eagle-ladder.js`, which caps each row's `read` by the same rule against its
+parent's stored read, a DEMI narrow or takedown included, and leaves `ownRead` alone. `staff` stays
+out of `SECURE_ROLES`. To drop the rule, remove `withEagleStaff` and that script.
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.

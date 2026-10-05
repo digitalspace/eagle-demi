@@ -2,7 +2,7 @@
 
 /**
  * Give `staff` to the Eagle-mirrored rows already in Cosmos whose `read[]` carries no ladder token,
- * by the rule the mirrors now apply on every push (`seed/transform.js:withEagleStaff`).
+ * by the rule the mirrors now apply on every push (`helpers/eagle-acl.js:withEagleStaff`).
  *
  * In DEMI, no ladder token means privileged callers only. In Eagle, `staff` skips every read
  * check, so those rows (for example `['sysadmin']` or `['sysadmin','inspector']`) are visible to
@@ -17,7 +17,7 @@
  * What it never widens:
  * - sealed rows (`compliance`) and any row with a ladder token. A DEMI takedown or narrow writes
  *   `readForLevel(level)`, which always carries one, so those rows are never candidates;
- * - a row whose parent caps it below level 2. The cap is the push's own, `seed/transform:
+ * - a row whose parent caps it below level 2. The cap is the push's own, `helpers/eagle-acl:
  *   eagleReadUnder` (through `update-parent:readUnder` for Updates), against the parent's stored
  *   read, a DEMI narrow or takedown included: the rule a push applies, so the two agree. Only a
  *   level-2 result is written, so nothing lands at `team` or `public`;
@@ -70,7 +70,7 @@ function parseArgs(argv) {
 function rowsSpec(container, skip) {
   const candidatesOnly = PARENT_CONTAINERS.has(container) ? '' : ` AND ${NO_LADDER_SQL('c.read')}`;
   return {
-    query: 'SELECT c.id, c.read, c.ownRead, c.eagleId, c.projectId, c.periodId, c.kind, ' +
+    query: 'SELECT c.id, c.read, c.eagleId, c.projectId, c.periodId, c.kind, ' +
       'IS_DEFINED(c.sources.eagle) AS hasEagleSource FROM c ' +
       `WHERE (IS_DEFINED(c.eagleId) OR IS_DEFINED(c.sources.eagle))${candidatesOnly} ` +
       'ORDER BY c.id OFFSET @skip LIMIT @size',
@@ -111,8 +111,8 @@ function parentReadOf(step, row, parents) {
 }
 
 /**
- * What one row is patched to, or null. Only a level-2 `read` is written. `ownRead` (documents), the
- * unconstrained Eagle ACL the project cascade re-derives from, takes the rule uncapped beside it.
+ * What one row is patched to, or null. Only a level-2 `read` is written. A document's `ownRead`
+ * stays Eagle's read without `staff`: the project cascade adds it through `eagleReadUnder`.
  */
 function planRow(step, row, parentRead) {
   if (!hasNoLadder(row.read) || parentRead === null) return null;
@@ -120,7 +120,7 @@ function planRow(step, row, parentRead) {
     ? readUnder(row.read, parentRead === undefined ? null : { read: parentRead })
     : (parentRead === undefined ? seedAcl(row.read) : eagleReadUnder(row.read, parentRead));
   if (levelOfRead(next) !== 2) return null;
-  return hasNoLadder(row.ownRead) ? { read: next, ownRead: seedAcl(row.ownRead) } : { read: next };
+  return { read: next };
 }
 
 function patchOp(step, row, plan, now) {
@@ -129,7 +129,6 @@ function patchOp(step, row, plan, now) {
     { op: 'set', path: '/read', value: plan.read },
     { op: 'set', path: '/isPublished', value: plan.read.includes('public') }
   ];
-  if (plan.ownRead) operations.push({ op: 'set', path: '/ownRead', value: plan.ownRead });
   return {
     operationType: 'Patch',
     partitionKey: row[step.pk],

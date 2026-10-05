@@ -245,14 +245,15 @@ test('backfill-eagle-ladder', async (t) => {
     assert.deepStrictEqual(readOf(writes, 'u-1'), ['sysadmin', 'staff']);
   });
 
-  await t.test("a document's ownRead takes the rule uncapped", async (t) => {
+  await t.test("a document's ownRead is left without staff: the cascade adds it", async (t) => {
     const writes = fakeCosmos(t, {
       projects: [{ id: 'p-up', eagleId: 'e-up', read: ['staff'], eagleRead: [] }],
       documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-up', read: ['sysadmin'], ownRead: ['sysadmin', 'inspector'] }]
     });
     await backfillEagleLadder(['--live']);
     const ops = writes.find(w => w.id === 'd-1').resourceBody.operations;
-    assert.deepStrictEqual(ops.find(o => o.path === '/ownRead').value, ['sysadmin', 'inspector', 'staff']);
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
+    assert.strictEqual(ops.find(o => o.path === '/ownRead'), undefined);
   });
 
   await t.test("a document DEMI narrowed keeps its ownRead", async (t) => {

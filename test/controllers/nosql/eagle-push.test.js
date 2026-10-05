@@ -629,7 +629,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     }, mockRes());
 
     assert.deepStrictEqual(written.read, ['staff']);
-    assert.deepStrictEqual(written.ownRead, ['sysadmin', 'staff'], 'the cascade restores from the stripped read');
+    assert.deepStrictEqual(written.ownRead, ['sysadmin'], 'the stripped read, without staff: the cascade adds it');
   });
 
   /** The read a document push stores under a project whose stored read is `projectRead`. */
@@ -658,9 +658,15 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.deepStrictEqual(await pushedUnder(['staff'], ['sysadmin']), await pushedUnder(['staff'], ['sysadmin', 'staff']));
   });
 
-  await t.test('a no-ladder document under a project narrowed to level 1 stays privileged-only, not team', async () => {
-    assert.deepStrictEqual(await pushedUnder(['team'], ['sysadmin']), ['sysadmin']);
-  });
+  // Level-1 parents store what the push stored before the staff rule; staff-level parents, staff.
+  for (const [parentRead, expected] of [
+    [['team'], ['sysadmin']], [['sysadmin'], ['sysadmin']], [[], ['sysadmin']],
+    [['project-team'], ['sysadmin']], [['staff'], ['staff']], [['staff', 'idir', 'public'], ['staff']]
+  ]) {
+    await t.test(`an Eagle ['sysadmin'] document pushed under ${JSON.stringify(parentRead)} stores ${JSON.stringify(expected)}`, async () => {
+      assert.deepStrictEqual(await pushedUnder(parentRead, ['sysadmin']), expected);
+    });
+  }
 
   await t.test('a public document under a project taken down to staff lands at staff, as before', async () => {
     assert.deepStrictEqual(await pushedUnder(['staff'], ['sysadmin', 'staff', 'public']), ['staff']);

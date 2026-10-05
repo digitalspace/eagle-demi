@@ -243,6 +243,41 @@ test('setAclForProject', async (t) => {
   });
 });
 
+test('setAclForProject — the Eagle staff rule, never team', async (t) => {
+  // What the push stores for an Eagle `['sysadmin']` document: `ownRead` without staff.
+  const EAGLE_ADMIN_DOC = { id: 'd1', read: ['sysadmin'], ownRead: ['sysadmin'], sourceSystem: 'eagle' };
+  const cascade = async (tt, row, projectRead) => {
+    const cap = harness(tt, [row]);
+    await documents.setAclForProject(systemAccess(), '207', projectRead);
+    return opValue(cap.ops[0], '/read');
+  };
+
+  // `[]`, the sixth parent the push loop covers, is refused here (above).
+  for (const [projectRead, expected] of [
+    [['team'], ['sysadmin']], [['sysadmin'], ['sysadmin']], [['project-team'], ['sysadmin']],
+    [['staff'], ['staff']], [['staff', 'idir', 'public'], ['staff']]
+  ]) {
+    await t.test(`an Eagle ['sysadmin'] document under ${JSON.stringify(projectRead)} stores ${JSON.stringify(expected)}`, async (tt) => {
+      assert.deepStrictEqual(await cascade(tt, EAGLE_ADMIN_DOC, projectRead), expected);
+    });
+  }
+
+  await t.test('a project narrowed to team and widened back restores staff', async (tt) => {
+    const narrowed = { ...EAGLE_ADMIN_DOC, read: await cascade(tt, EAGLE_ADMIN_DOC, ['team']) };
+    tt.mock.restoreAll();
+    assert.deepStrictEqual(narrowed.read, ['sysadmin']);
+    assert.deepStrictEqual(await cascade(tt, narrowed, ['staff', 'idir', 'public']), ['staff']);
+  });
+
+  await t.test('a DEMI-native privileged-only document under a project moved to level 2 stays privileged-only', async (tt) => {
+    assert.deepStrictEqual(await cascade(tt, { id: 'd1', read: ['sysadmin'] }, ['staff']), ['sysadmin']);
+  });
+
+  await t.test('an Eagle row with nothing to derive from keeps the plain cap', async (tt) => {
+    assert.deepStrictEqual(await cascade(tt, { id: 'd1', sourceSystem: 'eagle' }, ['staff']), []);
+  });
+});
+
 /** Capture the patch operations one setPublished call would send. */
 function capturePatch(tt) {
   const captured = { ops: null };

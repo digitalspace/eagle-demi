@@ -67,7 +67,7 @@ const capIfLower = (own, ceiling) => (levelOfRead(ceiling) < levelOfRead(own) ? 
 
 /**
  * An Update's `read[]` under its parent: `ownRead`, capped by `ceilingRead` through
- * `seed/transform:eagleReadUnder` where the ceiling sits lower. So `['sysadmin']` is
+ * `helpers/eagle-acl:eagleReadUnder` where the ceiling sits lower. So `['sysadmin']` is
  * `['sysadmin','staff']` under a parent at level 2 or wider, and stays `['sysadmin']` under any
  * level-1 parent. `[]` stays `[]`. No parent, no ceiling.
  */

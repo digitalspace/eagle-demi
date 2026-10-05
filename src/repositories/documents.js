@@ -16,6 +16,7 @@ const {
 } = require('./_sql');
 // The fields the chunks carry a copy of, read from the one list that owns them.
 const { CHUNK_PARENT_FIELDS } = require('./chunks');
+const { eagleReadUnder } = require('../helpers/eagle-acl');
 
 const CONTAINER = 'documents';
 const PARTITION_FIELD = 'projectId';
@@ -361,14 +362,15 @@ async function listByIds(access, ids, projectIds) {
  * any field — no index-only path for this filter — so the extra columns cost response bytes only.
  *
  * `c.isDeleted` rides along because `ownRead` outlives the record: a document Eagle deleted was
- * published right up to the delete, so its snapshot still says `public`.
+ * published right up to the delete, so its snapshot still says `public`. `c.sourceSystem` picks
+ * the Eagle rule (`helpers/eagle-acl:eagleReadUnder`) for Eagle mirrors only.
  */
 async function aclRowsForProject(access, projectId) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
     criteria: [eq('projectId', String(projectId), '@projectId')],
-    select: 'c.id, c.read, c.ownRead, c.isDeleted'
+    select: 'c.id, c.read, c.ownRead, c.isDeleted, c.sourceSystem'
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
   return items;
@@ -453,11 +455,14 @@ async function setAclForProject(access, projectId, read) {
     // nobody can rule out from outside the private endpoint.
     const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
       : (Array.isArray(row.read) ? row.read : []);
+    // An Eagle mirror's `ownRead` is Eagle's read without `staff`; the push's rule adds it. A
+    // DEMI-native row, or an empty `own`, keeps the plain cap so neither is widened.
+    const capped = row.sourceSystem === 'eagle' && own.length > 0
+      ? eagleReadUnder(own, read)
+      : constrainToProject(own, read);
     // Both ceilings, lower wins: the project's, and level 2 once Eagle has deleted the record —
     // without the second, the next project publish would republish a document Eagle no longer has.
-    const next = row.isDeleted === true
-      ? constrainToProject(constrainToProject(own, read), DELETED_CEILING)
-      : constrainToProject(own, read);
+    const next = row.isDeleted === true ? constrainToProject(capped, DELETED_CEILING) : capped;
     derived.push({ id: String(row.id), read: next, isPublished: next.includes('public') });
     return {
       operationType: 'Patch',

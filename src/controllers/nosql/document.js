@@ -36,7 +36,7 @@ const {
 } = require('./eagle-mirror');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
-const { transformDocument, seedAcl } = require('../../seed/transform');
+const { transformDocument, eagleBaseAcl } = require('../../seed/transform');
 const { naturalSortKey } = require('../../helpers/natural-sort');
 const { fileNameFor } = require('../../helpers/file-name');
 const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
@@ -1202,8 +1202,9 @@ exports.upsertFromEagle = async (req, res) => {
         { existing: current, projectRead: parent.kind === 'notification' ? undefined : parent.read }
       );
       // The cascade restores a narrowed ACL from `ownRead` (documents.setAclForProject), so the
-      // push must carry the unconstrained Eagle ACL. A re-seed drops it deliberately; this does not.
-      row.ownRead = seedAcl(doc.read);
+      // push must carry the unconstrained Eagle ACL, without `staff`: the cascade adds it through
+      // `eagleReadUnder`. A re-seed drops it deliberately; this does not.
+      row.ownRead = eagleBaseAcl(doc.read);
       // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` below is
       // what hides it, this is what says why, and it is what stops a cascade widening it again.
       row.isDeleted = doc.isDeleted === true;
