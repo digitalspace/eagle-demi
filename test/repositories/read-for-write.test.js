@@ -178,6 +178,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'controllers/nosql/document.js',
     'controllers/nosql/notification.js',
     'controllers/nosql/organization.js',
+    // The PDF title writer: it must see a row's full state to refuse or restore it; answers carry no row.
+    'controllers/nosql/pdf-title.js',
     'controllers/nosql/project.js',
     'controllers/nosql/update.js',
     'helpers/parent-admit.js',

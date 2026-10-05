@@ -194,6 +194,15 @@ test('minio backend applies the key prefix to every operation', async (t) => {
     assert.strictEqual(seen, 'ozwdez/zips/abc.zip');
   });
 
+  await t.test('removeObject with a versionId deletes that version of the prefixed key', async () => {
+    let seen;
+    t.mock.method(Minio.Client.prototype, 'removeObject', async (b, key, opts) => { seen = { key, opts }; });
+
+    await minio.removeObject('pdf-title-backup/etl/abc.pdf', { versionId: 'v9' });
+
+    assert.deepStrictEqual(seen, { key: 'ozwdez/pdf-title-backup/etl/abc.pdf', opts: { versionId: 'v9' } });
+  });
+
   await t.test('removeObject treats an already-deleted key as done', async () => {
     // The sweeper re-runs over rows a retry may have half-cleared; a 404 there is not a failure.
     t.mock.method(Minio.Client.prototype, 'removeObject', async () => {
@@ -216,15 +225,18 @@ test('minio backend applies the key prefix to every operation', async (t) => {
       'swallowing this would report a permission problem as a completed sweep');
   });
 
-  await t.test('statObject reads the prefixed key and maps size, type and etag', async () => {
+  await t.test('statObject reads the prefixed key and maps size, type, etag and version', async () => {
     let seen;
     t.mock.method(Minio.Client.prototype, 'statObject', async (b, key) => {
       seen = key;
-      return { size: 48213, etag: '9b2cf535f27731c974343645a3985328', metaData: { 'content-type': 'application/pdf' } };
+      return {
+        size: 48213, etag: '9b2cf535f27731c974343645a3985328', versionId: 'v7',
+        metaData: { 'content-type': 'application/pdf' }
+      };
     });
 
     assert.deepStrictEqual(await minio.statObject('etl/site-c/abc.pdf'),
-      { size: 48213, contentType: 'application/pdf', etag: '9b2cf535f27731c974343645a3985328' });
+      { size: 48213, contentType: 'application/pdf', etag: '9b2cf535f27731c974343645a3985328', versionId: 'v7' });
     assert.strictEqual(seen, 'ozwdez/etl/site-c/abc.pdf');
   });
 
@@ -411,6 +423,29 @@ test('upload URLs and backup copies', async (t) => {
     assert.strictEqual(headers['x-amz-copy-source'], `zdspnb/ozwdez/${KEY}`);
     assert.strictEqual(headers['x-amz-copy-source-if-match'], 'e7f3');
     assert.strictEqual(res.etag, 'aa11');
+    assert.strictEqual(res.versionId, null);
+  });
+
+  await t.test('a backup copy reports the version it wrote', async () => {
+    t.mock.method(Minio.Client.prototype, 'statObject', async () => {
+      throw Object.assign(new Error('Not Found'), { code: 'NotFound' });
+    });
+    t.mock.method(Minio.Client.prototype, 'copyObject', async () => ({ Etag: 'aa11', VersionId: 'v3' }));
+
+    const res = await storage.copyObject(KEY, storage.backupKeyFor(KEY), { ifSourceEtag: 'e7f3' });
+
+    assert.deepStrictEqual(res, { etag: 'aa11', versionId: 'v3' });
+  });
+
+  await t.test('a version delete is refused for anything but a backup', async () => {
+    // A version of an original is its history; only short-lived backups are deleted by version.
+    const remove = t.mock.method(Minio.Client.prototype, 'removeObject', async () => {});
+    assert.throws(() => storage.removeObject(KEY, { versionId: 'v1' }), /not a backup/);
+    assert.throws(() => storage.removeObject('pdf-title-backup/../x', { versionId: 'v1' }), /not a backup/);
+    assert.strictEqual(remove.mock.callCount(), 0);
+
+    await storage.removeObject(storage.backupKeyFor(KEY), { versionId: 'v1' });
+    assert.deepStrictEqual(remove.mock.calls[0].arguments.slice(1), [`ozwdez/pdf-title-backup/${KEY}`, { versionId: 'v1' }]);
   });
 
   await t.test('a backup is never taken over an existing one', async () => {
@@ -703,7 +738,7 @@ test('azure blob backend', async (t) => {
     });
 
     assert.deepStrictEqual(await azure.statObject('etl/abc.pdf'),
-      { size: 48213, contentType: 'application/pdf', etag: '"0x8DCB1A2B3C4D5E6"' });
+      { size: 48213, contentType: 'application/pdf', etag: '"0x8DCB1A2B3C4D5E6"', versionId: null });
     assert.strictEqual(seen, 'etl/abc.pdf');
   });
 

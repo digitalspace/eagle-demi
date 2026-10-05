@@ -49,6 +49,7 @@ const linkController = () => require('../controllers/nosql/link');
 const credentialController = () => require('../controllers/nosql/credentials');
 const userDataController = () => require('../controllers/nosql/userdata');
 const sealedController = () => require('../controllers/nosql/sealed');
+const pdfTitleController = () => require('../controllers/nosql/pdf-title');
 
 /**
  * Liveness only — the process is up. Deliberately does NOT claim anything about the database; it
@@ -166,6 +167,8 @@ const routes = [
   // literal route placed after it would be answered as a document lookup for the id
   // "recent-uploads".
   { method: 'get', path: '/documents/recent-uploads', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getRecentUploads },
+  // The PDF title worker's work list; before `/documents/:id` for the same reason as the line above.
+  { method: 'get', path: '/documents/pdf-title/pending', guards: [authMiddleware, requireWrite], load: () => pdfTitleController().listPending },
   { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getDocument },
   // Presigned download link — ACL-gated inside the controller, same as the metadata read.
   { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().downloadDocument },
@@ -186,6 +189,11 @@ const routes = [
   // outside the VNet, and the parent-document ACL is re-applied inside the controller.
   { method: 'get', path: '/documents/:id/chunks', guards: [authMiddleware, credentialsMiddleware], load: () => projectSummaryController().getDocumentChunks },
   { method: 'delete', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().deleteDocument },
+  // PDF title lease, commit, report: the only routes that sign a write to a stored original. Same
+  // guards as the chunk ingest, the other machine writer of a document.
+  { method: 'post', path: '/documents/:id/pdf-title/lease', guards: [authMiddleware, requireWrite], load: () => pdfTitleController().lease },
+  { method: 'post', path: '/documents/:id/pdf-title/commit', guards: [authMiddleware, requireWrite], load: () => pdfTitleController().commit },
+  { method: 'put', path: '/documents/:id/pdf-title', guards: [authMiddleware, requireWrite], load: () => pdfTitleController().report },
 
   // Bulk download. Same chain as /documents/:id/download and for the same reason: the ACL runs
   // inside the controller, so an anonymous caller gets the public tier rather than a 401. The

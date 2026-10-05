@@ -1306,6 +1306,229 @@ paths:
         '401':
           description: Unauthorized.
 
+  /api/documents/pdf-title/pending:
+    get:
+      summary: PDF title work list
+      description: >-
+        Settles up to 20 expired leases first, then returns one page of documents whose stored PDF
+        needs its title written (`mode: title`) or taken out again because the public name is now
+        withheld (`mode: restore`). Rows that are sealed, not public, not a PDF, over 256 MiB by
+        `fileSize`, sharing their `s3Key` with another row, leased, or under review are left out.
+        A cross-partition page can be short or empty while more rows exist: follow `continuation`
+        until it is null.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Rows scanned per page, 1 to 500. Default 100.
+          schema:
+            type: integer
+        - name: continuation
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of work.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        projectId: { type: string }
+                        mode: { type: string, enum: [title, restore] }
+                        title: { type: string, nullable: true }
+                  continuation: { type: string, nullable: true }
+                  swept: { type: integer }
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Caller has no write role.
+
+  /api/documents/{id}/pdf-title/lease:
+    post:
+      summary: Lease one document for a PDF title write
+      description: >-
+        Checks the document, stats its object, and refuses unless the archive backup holds the
+        original (`assertBackedUp`). Then records a 10-minute lease, copies the object to its
+        short-lived backup `pdf-title-backup/<s3Key>` on the condition that its ETag has not moved,
+        and returns a 300-second GET link to that backup. Nothing is written to the original here.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          description: Parent project id, the partition key. Avoids a cross-partition lookup.
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Lease issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  leaseId: { type: string }
+                  mode: { type: string, enum: [title, restore] }
+                  expiresAt: { type: string, format: date-time }
+                  title: { type: string, nullable: true }
+                  backupUrl: { type: string }
+                  backupUrlExpiresIn: { type: integer }
+                  sourceSize: { type: integer }
+                  contentType: { type: string }
+                  originalLength: { type: integer, nullable: true }
+                  originalSha256: { type: string, nullable: true }
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Caller has no write role.
+        '404':
+          description: No such document.
+        '409':
+          description: >-
+            Refused, with `reason`: `lease-held`, `sweep-pending`, `needs-review`, `sealed`,
+            `not-pdf`, `no-file`, `not-public`, `no-public-name`, `current`, `no-project`,
+            `no-original`, `no-object`, `empty`, `over-cap`, `shared-key`, `source-changed`, or a
+            backup gate reason (`no-backup`, `size-mismatch`, `md5-mismatch`, `not-archive`,
+            `backup-unconfigured`).
+        '412':
+          description: Another worker leased the document first.
+        '503':
+          description: The backup copy failed; the lease was released.
+
+  /api/documents/{id}/pdf-title/commit:
+    post:
+      summary: Sign the PUT for a checked PDF title write
+      description: >-
+        The lease must be live and the object unchanged since the lease. On first titling the API
+        hashes the backup itself and records `originalLength` and `originalSha256` once. Returns a
+        120-second PUT link for exactly `s3Key` with Content-MD5 signed in, and the headers the PUT
+        must carry: `Content-Type`, `Content-MD5`, and `If-Match` on the source ETag so the store
+        refuses the write if the object changed after this call.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaseId, newLength, newSha256, newMd5]
+              properties:
+                leaseId: { type: string }
+                newLength: { type: integer }
+                newSha256: { type: string, description: 64 lowercase hex characters }
+                newMd5: { type: string, description: base64 MD5 of the whole new body }
+                originalLength: { type: integer, description: Required on first titling. }
+                originalSha256: { type: string, description: Required on first titling. }
+      responses:
+        '200':
+          description: PUT link and required headers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl: { type: string }
+                  expiresIn: { type: integer }
+                  headers:
+                    type: object
+                    additionalProperties: { type: string }
+        '400':
+          description: Body fails validation.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Caller has no write role.
+        '409':
+          description: >-
+            `no-lease`, `lease-expired`, `already-committed`, `source-changed` or
+            `original-mismatch`. The store is untouched.
+
+  /api/documents/{id}/pdf-title:
+    put:
+      summary: Report the end of a PDF title lease
+      description: >-
+        Sent after the PUT, or with `skipped: true` and a `reason` when the worker wrote nothing.
+        The store decides the outcome: the new object is verified by size, ETag, whole sha256 and
+        original-prefix sha256 and recorded `titled` or `restored`; an unchanged source releases
+        the lease; anything else is copied back from the backup and recorded `needs-review`, and
+        the backup is kept.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [leaseId]
+              properties:
+                leaseId: { type: string }
+                skipped: { type: boolean }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Outcome.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outcome: { type: string, enum: [titled, restored, skipped, released, needs-review] }
+                  status: { type: string, nullable: true }
+                  reason: { type: string, nullable: true }
+        '400':
+          description: A skip with no reason.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Caller has no write role.
+        '409':
+          description: No lease with this id.
+
   /api/documents/{id}/download:
     get:
       summary: Presigned download for a document's bytes
