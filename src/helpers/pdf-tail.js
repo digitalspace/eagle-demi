@@ -145,32 +145,83 @@ class Reader {
 const refOf = (v) => (v && v.ref ? v.ref : null);
 const sameRef = (a, b) => Boolean(a && b) && a[0] === b[0] && a[1] === b[1];
 
-/** Collects the original's facts from its chunks, in order, without holding the whole file. */
+/** How far past an object header the scan waits for `stream` or `endobj` before it gives up. */
+const HEADER_LOOKAHEAD = 64 * 1024;
+const HEADER = /(\d+)\s+(\d+)\s+obj\b/g;
+const BODY_END = /\bendobj\b|(?<!end)stream(?:\r\n|\n|\r)/g;
+
+/**
+ * Collects the original's facts from its chunks, in order, without holding the whole file.
+ *
+ * Object headers are looked for only outside stream data: a stream with a direct /Length is
+ * skipped by that length, one with an indirect /Length up to its `endstream`. Bytes inside a
+ * stream therefore cannot pose as a metadata object, except in a stream whose indirect length
+ * hides a literal `endstream` in its data.
+ */
 function originalScanner() {
   const metadataObjects = new Set();
   let window = Buffer.alloc(0);
   let length = 0;
-  let carry = '';
-  const HEADER = /(\d+)\s+(\d+)\s+obj\b([\s\S]{0,512})/g;
+  let text = '';
+  let skip = 0;
+  let inStream = false;
+
+  function noteHeader(num, gen, dict) {
+    if (/\/Type\s*\/Metadata\b/.test(dict) && /\/Subtype\s*\/XML\b/.test(dict)) metadataObjects.add(`${num} ${gen}`);
+    // Writers often leave /Type off the stream itself, so the catalog's reference counts too.
+    const fromCatalog = /\/Type\s*\/Catalog\b/.test(dict) && /\/Metadata\s+(\d+)\s+(\d+)\s+R/.exec(dict);
+    if (fromCatalog) metadataObjects.add(`${fromCatalog[1]} ${fromCatalog[2]}`);
+  }
+
+  /** Consume `text` as far as it can be read without more bytes; `final` means no more come. */
+  function advance(final) {
+    for (;;) {
+      if (skip) {
+        const n = Math.min(skip, text.length);
+        text = text.slice(n);
+        skip -= n;
+        if (skip) return;
+      }
+      if (inStream) {
+        const end = text.indexOf('endstream');
+        if (end < 0) { text = final ? '' : text.slice(-8); return; }
+        text = text.slice(end + 'endstream'.length);
+        inStream = false;
+      }
+      HEADER.lastIndex = 0;
+      const head = HEADER.exec(text);
+      if (!head) { text = final ? '' : text.slice(-40); return; }
+      BODY_END.lastIndex = head.index + head[0].length;
+      const body = BODY_END.exec(text);
+      if (!body) {
+        if (!final && text.length - head.index < HEADER_LOOKAHEAD) { text = text.slice(head.index); return; }
+        // A header with no end in reach: skip past it rather than read its bytes as a dictionary.
+        text = text.slice(head.index + head[0].length);
+        continue;
+      }
+      const dict = text.slice(head.index + head[0].length, body.index);
+      noteHeader(head[1], head[2], dict);
+      text = text.slice(body.index + body[0].length);
+      if (body[0].startsWith('stream')) {
+        const direct = /\/Length\s+(\d+)(?!\s+\d+\s+R)/.exec(dict);
+        if (direct) skip = Number(direct[1]);
+        else inStream = true;
+      }
+    }
+  }
 
   return {
     push(chunk) {
       length += chunk.length;
       window = Buffer.concat([window, chunk]);
       if (window.length > TRAILER_WINDOW) window = window.subarray(window.length - TRAILER_WINDOW);
-      const text = carry + chunk.toString('latin1');
-      for (const m of text.matchAll(HEADER)) {
-        const head = m[3].split(/\bstream\b|\bendobj\b/)[0];
-        if (/\/Type\s*\/Metadata\b/.test(head) && /\/Subtype\s*\/XML\b/.test(head)) metadataObjects.add(Number(m[1]));
-        // Writers often leave /Type off the stream itself, so the catalog's reference counts too.
-        const fromCatalog = /\/Type\s*\/Catalog\b/.test(head) && /\/Metadata\s+(\d+)\s+\d+\s+R/.exec(head);
-        if (fromCatalog) metadataObjects.add(Number(fromCatalog[1]));
-      }
-      carry = text.slice(-600);
+      text += chunk.toString('latin1');
+      advance(false);
     },
 
     /** `{prev, root, info, size, metadataObjects}`, or `{error}` when the last trailer cannot be read. */
     result() {
+      advance(true);
       const text = window.toString('latin1');
       const found = [...text.matchAll(/startxref\s+(\d+)/g)];
       if (!found.length) return { error: 'original-no-startxref' };
@@ -208,17 +259,18 @@ function isPlainValue(v) {
   return 'string' in v || 'name' in v || 'number' in v || 'keyword' in v;
 }
 
-function checkTrailer(dict, facts, info, allowed) {
+function checkTrailer(dict, facts, info, allowed, highest) {
   for (const key of dict.keys()) if (!allowed.has(key)) refuse('tail-trailer');
   if (!sameRef(refOf(dict.get('Root')), facts.root)) refuse('tail-root');
   if (!sameRef(refOf(dict.get('Info')), info)) refuse('tail-info-ref');
   const prev = dict.get('Prev');
   if (!prev || prev.number !== facts.prev) refuse('tail-prev');
   const size = dict.get('Size');
-  if (!size || !Number.isInteger(size.number) || size.number < facts.size) refuse('tail-size');
+  // /Size covers the original's numbers and every number the increment adds.
+  if (!size || !Number.isInteger(size.number) || size.number < Math.max(facts.size, highest + 1)) refuse('tail-size');
 }
 
-/** Decode an xref stream's rows into `number -> offset`, refusing any entry that is not type 1. */
+/** Decode an xref stream's rows into `number -> {offset, gen}`, refusing any entry that is not type 1. */
 function xrefStreamEntries(dict, data) {
   const w = dict.get('W');
   const widths = w && w.array && w.array.map(x => x.number);
@@ -233,7 +285,7 @@ function xrefStreamEntries(dict, data) {
   for (let i = 0; i < pairs.length; i += 2) {
     for (let n = pairs[i]; n < pairs[i] + pairs[i + 1]; n++) {
       if (at + row > data.length || data[at] !== 1) refuse('tail-xref');
-      entries.set(n, data.readUIntBE(at + 1, widths[1]));
+      entries.set(n, { offset: data.readUIntBE(at + 1, widths[1]), gen: data.readUInt16BE(at + 1 + widths[1]) });
       at += row;
     }
   }
@@ -278,7 +330,7 @@ function checkTail(tail, originalLength, facts) {
       }
       r.expect('endobj');
       if (objects.has(num)) refuse('tail-object');
-      objects.set(num, originalLength + at);
+      objects.set(num, { offset: originalLength + at, gen });
 
       const type = dict.get('Type');
       if (data && type && type.name === 'XRef') {
@@ -287,7 +339,7 @@ function checkTail(tail, originalLength, facts) {
       } else if (data && type && type.name === 'Metadata') {
         const subtype = dict.get('Subtype');
         if (xmp || !subtype || subtype.name !== 'XML' || ![...dict.keys()].every(k => XMP_KEYS.has(k))) refuse('tail-xmp');
-        if (!facts.metadataObjects.has(num)) refuse('tail-xmp-number');
+        if (!facts.metadataObjects.has(`${num} ${gen}`)) refuse('tail-xmp-number');
         xmp = [num, gen];
       } else if (!data) {
         if (info || !dict.has('Title') || ![...dict.values()].every(isPlainValue)) refuse('tail-info');
@@ -297,15 +349,18 @@ function checkTail(tail, originalLength, facts) {
       }
       if (xrefStream && num !== xrefStream.num) refuse('tail-object');
     }
+    // Only the Info and XMP objects revise an object the original has; anything else is new.
+    if (xrefStream && (xrefStream.num < facts.size || xrefStream.gen !== 0)) refuse('tail-object-number');
     if (!info) refuse('tail-info');
     // A revised Info keeps its number; a new one takes a number the original never used.
-    if (facts.info ? !sameRef(info, facts.info) : info[0] < facts.size) refuse('tail-info-number');
+    if (facts.info ? !sameRef(info, facts.info) : (info[0] < facts.size || info[1] !== 0)) refuse('tail-info-number');
+    const highest = Math.max(...objects.keys());
 
     let entries;
     let xrefAt;
     if (xrefStream) {
       if (!r.peekWord('startxref')) refuse('tail-xref');
-      checkTrailer(xrefStream.dict, facts, info, XREF_KEYS);
+      checkTrailer(xrefStream.dict, facts, info, XREF_KEYS, highest);
       entries = xrefStreamEntries(xrefStream.dict, xrefStream.data);
       xrefAt = xrefStream.offset;
     } else {
@@ -319,25 +374,29 @@ function checkTail(tail, originalLength, facts) {
         const count = r.int();
         for (let n = first; n < first + count; n++) {
           const offset = r.int();
-          r.int();
+          const gen = r.int();
           if (r.word() !== 'n') refuse('tail-xref');
-          entries.set(n, offset);
+          entries.set(n, { offset, gen });
         }
       }
       r.expect('trailer');
       r.ws();
-      checkTrailer(r.dict(), facts, info, TRAILER_KEYS);
+      checkTrailer(r.dict(), facts, info, TRAILER_KEYS, highest);
     }
     // Every entry points at its own object in the increment, and every object has one.
     if (entries.size !== objects.size) refuse('tail-xref');
-    for (const [n, offset] of entries) if (objects.get(n) !== offset) refuse('tail-xref');
+    for (const [n, entry] of entries) {
+      const object = objects.get(n);
+      if (!object || object.offset !== entry.offset || object.gen !== entry.gen) refuse('tail-xref');
+    }
 
     r.expect('startxref');
     if (r.int() !== xrefAt) refuse('tail-startxref');
     r.ws();
     if (!r.peekWord('%%EOF')) refuse('tail-syntax');
     r.pos += 5;
-    r.ws();
+    // The titler ends on a newline: whitespace only after %%EOF, not even a comment.
+    while (r.pos < tail.length && WS.has(tail[r.pos])) r.pos++;
     if (r.pos !== tail.length) refuse('tail-trailing-bytes');
     return null;
   } catch (err) {

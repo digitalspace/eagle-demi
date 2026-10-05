@@ -118,9 +118,49 @@ test('hostile increments are refused', async (t) => {
     assert.equal(check(Buffer.concat([classicTail(original, [[1, info]], trailer), Buffer.from('3 0 obj\n<< >>\nendobj\n')])), 'tail-trailing-bytes');
   });
 
+  await t.test('a trailer /Size that does not cover the new numbers', () => {
+    const bodies = [[1, info], [facts.size + 3, '<< /Title (x) >>']];
+    assert.match(String(check(classicTail(original, bodies, trailer))), /tail-info|tail-size/);
+    const fresh = { ...facts, info: null };
+    const newInfo = classicTail(original, [[facts.size + 3, info]], trailer.replace('/Info 1 0 R', `/Info ${facts.size + 3} 0 R`));
+    assert.equal(checkTail(newInfo, original.length, fresh), 'tail-size');
+  });
+
+  await t.test('an xref generation that differs from the object\'s', () => {
+    const tail = classicTail(original, [[1, info]], trailer);
+    const bent = Buffer.from(tail.toString('latin1').replace(' 00000 n', ' 00001 n'), 'latin1');
+    assert.equal(check(bent), 'tail-xref');
+  });
+
+  await t.test('a comment after %%EOF', () => {
+    assert.equal(check(Buffer.concat([classicTail(original, [[1, info]], trailer), Buffer.from('% note\n')])), 'tail-trailing-bytes');
+  });
+
   await t.test('an original whose last trailer cannot be read refuses everything', () => {
     const tail = classicTail(original, [[1, info]], trailer);
     assert.equal(checkTail(tail, original.length, { error: 'original-trailer-unreadable' }), 'original-trailer-unreadable');
     assert.equal(factsOf(Buffer.from('%PDF-1.4\nno trailer here\n')).error, 'original-no-startxref');
   });
+});
+
+test('an xref stream may not take a number the original uses', () => {
+  const { original, titled } = load('xrefstream-noinfo');
+  const facts = factsOf(original);
+  const tail = titled.subarray(original.length).toString('latin1');
+  const xrefNum = Number(/(\d+) 0 obj\n<< \/Type \/XRef/.exec(tail)[1]);
+  assert.ok(xrefNum >= facts.size, 'the titler takes a fresh number');
+  // Same bytes, but the original is told its numbers reach past the xref stream's.
+  assert.equal(checkTail(titled.subarray(original.length), original.length, { ...facts, size: xrefNum + 1 }), 'tail-object-number');
+});
+
+test('bytes inside a stream cannot pose as a metadata object', () => {
+  const { original } = load('classic-info');
+  const fake = '9 0 obj\n<< /Type /Metadata /Subtype /XML /Length 0 >>\nstream\n\nendstream\nendobj\n';
+  // An image-like stream with a direct /Length whose data holds a fake header.
+  const decoy = `20 0 obj\n<< /Length ${fake.length} >>\nstream\n${fake}\nendstream\nendobj\n`;
+  // Appended after the original's own end, so its trailer and offsets still read.
+  const withDecoy = Buffer.concat([original, Buffer.from(decoy, 'latin1')]);
+  assert.ok(!factsOf(withDecoy).metadataObjects.has('9 0'));
+  // The same header outside any stream does count.
+  assert.ok(factsOf(Buffer.concat([original, Buffer.from(fake, 'latin1')])).metadataObjects.has('9 0'));
 });
