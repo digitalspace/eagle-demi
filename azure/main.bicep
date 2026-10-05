@@ -121,6 +121,11 @@ param allowedClients string
 @description('Comma-separated registry row ids permitted on PUT /eagle/*.')
 param eagleMirrorPrincipals string = 'apim:eagle-api'
 
+// Empty refuses everyone, so the PDF title routes stay shut until a worker key is named. Never
+// list a principal here that is also in eagleMirrorPrincipals: one key would hold both powers.
+@description('Comma-separated registry row ids permitted on the PDF title worker routes.')
+param pdfTitleWorkerPrincipals string = ''
+
 // Empty, not 'account': the audience Keycloak actually mints is unmeasured, and a wrong value
 // rejects every token. Empty means the check is not enforced.
 @description('Expected JWT aud claim. Empty disables audience verification.')
@@ -730,6 +735,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     keycloakClientId: keycloakClientId
     allowedClients: allowedClients
     eagleMirrorPrincipals: eagleMirrorPrincipals
+    pdfTitleWorkerPrincipals: pdfTitleWorkerPrincipals
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
     edgeSecretUri: edgeSecretUri

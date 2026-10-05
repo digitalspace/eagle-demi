@@ -119,6 +119,11 @@ param allowedClients string = ''
 @description('Comma-separated registry row ids permitted on PUT /eagle/*.')
 param eagleMirrorPrincipals string = 'apim:eagle-api'
 
+// Who may call the PDF title worker routes. Empty refuses everyone. Keep it disjoint from
+// eagleMirrorPrincipals.
+@description('Comma-separated registry row ids permitted on the PDF title worker routes.')
+param pdfTitleWorkerPrincipals string = ''
+
 @description('Expected JWT aud claim. Empty disables audience verification.')
 param ssoAudience string = ''
 
@@ -849,6 +854,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'DEMI_EAGLE_MIRROR_PRINCIPALS'
           value: eagleMirrorPrincipals
+        }
+        {
+          name: 'DEMI_PDF_TITLE_WORKER_PRINCIPALS'
+          value: pdfTitleWorkerPrincipals
         }
         {
           name: 'SSO_ISSUER'

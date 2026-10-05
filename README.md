@@ -526,6 +526,11 @@ principal and route. See
 [ADR-007](https://github.com/digitalspace/eagle-demi/wiki/ADR-007-Service-to-Service-Credentials)
 and [Connecting an Application to DEMI](https://github.com/digitalspace/eagle-demi/wiki/Connecting-an-Application-to-DEMI).
 
+The PDF title worker routes, `/api/documents/pdf-title/*` and `/api/documents/:id/pdf-title*`,
+use the same check with their own list, `DEMI_PDF_TITLE_WORKER_PRINCIPALS` (bicep
+`pdfTitleWorkerPrincipals`). It has no default: unset or empty, the routes refuse everyone. Never
+put one principal on both lists, or one key can both mirror Eagle data and rewrite stored PDFs.
+
 **Never hardcode a key literal** — this repository is public, so a literal there is a world-readable
 credential. (`DOCLING_API_KEY` was exactly that until it was split out; it is now outbound-only and
 401s inbound.)

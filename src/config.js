@@ -398,7 +398,8 @@ const config = {
     return (raw === undefined ? 'apim:eagle-api' : raw).split(',').map(s => s.trim()).filter(Boolean);
   },
   // Registry row ids allowed to call the PDF title worker routes. Unset or empty means nobody: the
-  // routes sign writes to stored originals, so there is no default principal.
+  // routes sign writes to stored originals, so there is no default principal. Never list a
+  // principal that is also in eagleMirrorPrincipals: one key would hold both powers.
   get pdfTitleWorkerPrincipals() {
     return (process.env.DEMI_PDF_TITLE_WORKER_PRINCIPALS || '').split(',').map(s => s.trim()).filter(Boolean);
   },
