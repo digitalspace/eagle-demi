@@ -1,12 +1,15 @@
 'use strict';
 
 /**
- * Copy the staff-side Eagle fields onto the comment, comment-period and organization rows already
- * in Cosmos, from the raw Eagle record each row keeps in `sources.eagle`.
+ * Copy the staff-side Eagle fields onto the project, comment, comment-period and organization rows
+ * already in Cosmos, from the Eagle record each row keeps in `sources.eagle`.
  *
- * WHY. The three mirrors now promote these fields (`staffFields` in each controller), but rows
- * written before that hold them only in `sources.eagle`, which no caller can read. A re-push from
- * Eagle would fix it, and is what this avoids: the values are already inside DEMI.
+ * WHY. The project merge and the three mirrors now promote these fields (`EAGLE_STAFF_FIELDS` in
+ * merge/project.js, `staffFields` in each controller), but rows written before that hold them only
+ * in `sources.eagle`, which no caller can read. A re-push from Eagle would fix it, and is what this
+ * avoids: the values are already inside DEMI. A project row takes them through the merge's own
+ * pick, so Track-owned fields and precedence are untouched; a Track-only project has no Eagle
+ * source and is skipped.
  *
  *   node src/scripts/backfill-eagle-staff-fields.js [--live]
  *
@@ -25,6 +28,8 @@ const { selectWhere, countWhere, eq, fetchAll } = require('../repositories/_sql'
 const comments = require('../repositories/comments');
 const commentPeriods = require('../repositories/comment-periods');
 const lists = require('../repositories/lists');
+const projects = require('../repositories/projects');
+const { EAGLE_STAFF_FIELDS, pickEagleFields, flattenEagleProject } = require('../merge/project');
 const { systemAccess } = require('../helpers/access-sql');
 const commentMirror = require('../controllers/nosql/comment');
 const commentPeriodMirror = require('../controllers/nosql/comment-period');
@@ -33,14 +38,19 @@ const { logger } = require('../utils/logger');
 
 const TAG = '[staff-fields-backfill]';
 
+const fromEagle = eq('sourceSystem', 'eagle', '@source');
+
 const TARGETS = [
+  // Any sourceSystem: a Track-matched project keeps its Eagle record too.
+  { container: projects.CONTAINER, partitionField: projects.PARTITION_FIELD, criteria: [],
+    staffFields: (eagle) => pickEagleFields(flattenEagleProject(eagle), EAGLE_STAFF_FIELDS) },
   { container: comments.CONTAINER, partitionField: comments.PARTITION_FIELD,
-    staffFields: commentMirror.staffFields, criteria: [] },
+    staffFields: commentMirror.staffFields, criteria: [fromEagle] },
   { container: commentPeriods.CONTAINER, partitionField: commentPeriods.PARTITION_FIELD,
-    staffFields: commentPeriodMirror.staffFields, criteria: [] },
+    staffFields: commentPeriodMirror.staffFields, criteria: [fromEagle] },
   { container: lists.CONTAINER, partitionField: lists.PARTITION_FIELD,
     staffFields: organizationMirror.staffFields,
-    criteria: [eq(lists.PARTITION_FIELD, lists.KINDS.ORGANIZATION, '@kind')] }
+    criteria: [fromEagle, eq(lists.PARTITION_FIELD, lists.KINDS.ORGANIZATION, '@kind')] }
 ];
 
 function parseArgs(argv) {
@@ -69,8 +79,7 @@ function summaryLine(s) {
 
 async function backfillContainer(target, args, io) {
   const { container, partitionField, staffFields } = target;
-  const spec = { access: systemAccess(), partitionField: null,
-    criteria: [eq('sourceSystem', 'eagle', '@source'), ...target.criteria] };
+  const spec = { access: systemAccess(), partitionField: null, criteria: target.criteria };
 
   const summary = {
     container, mode: args.live ? 'live' : 'dry-run',

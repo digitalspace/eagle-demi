@@ -72,6 +72,28 @@ test('a staff row with no ladder token is counted under L1 and exits 0', async (
   assert.match(h.out[0], /missingInDemi=1 .*unexplained=0 known=L1-no-ladder-token:1/);
 });
 
+const staffProjectRun = async (demiExtra) => {
+  const h = harness(searchSides({
+    eagle: [project(A, { CELead: 'Casey Federal', directoryStructure: [{ id: 1 }] })],
+    demi: [project(A, { CELead: 'Casey Federal', directoryStructure: [{ id: 1 }], ...demiExtra })]
+  }), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-env', 'PARITY_TOKEN',
+    '--only', 'search-Project'], h.deps);
+  return { code, line: h.out[0] };
+};
+
+test('a promoted staff field missing from DEMI is unexplained, not excused as L3', async () => {
+  const { code, line } = await staffProjectRun({ CELead: null });
+  assert.strictEqual(code, 1);
+  assert.match(line, /fieldDiff=1 unexplained=1/);
+});
+
+test('a staff field DEMI does not promote yet is counted under L3 and exits 0', async () => {
+  const { code, line } = await staffProjectRun({ directoryStructure: null });
+  assert.strictEqual(code, 0);
+  assert.match(line, /fieldDiff=1 unexplained=0 known=L3-staff-field-not-promoted:1/);
+});
+
 test('an id listed under a class in --known-ids is counted under that class and exits 0', async () => {
   const h = harness(searchSides({ eagle: [project(A), project(B)], demi: [project(A)] }),
     { files: { 'known.json': JSON.stringify({ 'L2-never-mirrored': [B] }) } });

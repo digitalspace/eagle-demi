@@ -8,17 +8,42 @@ const assert = require('node:assert');
 const {
   parseArgs, backfillEagleStaffFields, exitCodeFor
 } = require('../../src/scripts/backfill-eagle-staff-fields');
+const { mergeTrackProject, EAGLE_STAFF_FIELDS } = require('../../src/merge/project');
 const { evaluate } = require('../helpers/updates-store');
 const {
-  eagleComment, eaglePeriod, eagleOrganization, PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID,
-  PUBLIC_ACL, STAFF_COMMENT_FIELDS, STAFF_PERIOD_FIELDS, STAFF_ORGANIZATION_FIELDS
+  eagleComment, eaglePeriod, eagleOrganization, eagleProject, PERIOD_EAGLE_ID, COMMENT_EAGLE_ID,
+  ORG_EAGLE_ID, PROJECT_EAGLE_ID, PUBLIC_ACL,
+  STAFF_COMMENT_FIELDS, STAFF_PERIOD_FIELDS, STAFF_ORGANIZATION_FIELDS
 } = require('../helpers/eagle-mirror-fixtures');
 
 const OTHER_PERIOD = '5b8bcf0d0f5e9c0019a7a1d1';
 
+// Track and Eagle disagree on the name, so a backfill that re-applied Eagle over Track shows.
+const MATCHED_PROJECT = mergeTrackProject(
+  { track_project_id: 207, name: 'Nicomen Wind Energy', epic_guid: PROJECT_EAGLE_ID },
+  eagleProject({
+    name: 'Nicomen Wind (Eagle name)', CELead: 'Casey Federal',
+    CELeadEmail: 'ce.lead@example.invalid', hasMetCommentPeriods: true, intake: ''
+  }),
+  { now: '2026-09-01T00:00:00.000Z' });
+const TRACK_ONLY_PROJECT = mergeTrackProject(
+  { track_project_id: 311, name: 'Track Only Quarry' }, null,
+  { now: '2026-09-01T00:00:00.000Z' });
+
+/** A merged project as stored before the merge carried the staff fields. */
+function storedBefore(merged, etag) {
+  const row = { ...merged, _etag: etag };
+  for (const field of EAGLE_STAFF_FIELDS) delete row[field];
+  return row;
+}
+
 /** Rows as the mirrors stored them before the staff fields were promoted. */
 function seedRows() {
   return {
+    projects: [
+      storedBefore(MATCHED_PROJECT, 'j1'),
+      { ...structuredClone(TRACK_ONLY_PROJECT), _etag: 'j2' }
+    ],
     comments: [
       { id: COMMENT_EAGLE_ID, periodId: PERIOD_EAGLE_ID, projectId: '207', sourceSystem: 'eagle',
         comment: 'The turbine setback is too small.', read: PUBLIC_ACL, _etag: 'e1',
@@ -49,7 +74,7 @@ function seedRows() {
   };
 }
 
-const PARTITION = { comments: 'periodId', commentPeriods: 'projectId', lists: 'kind' };
+const PARTITION = { projects: 'id', comments: 'periodId', commentPeriods: 'projectId', lists: 'kind' };
 
 /**
  * A Cosmos double that evaluates the WHERE clause the script sends and applies Replace operations
@@ -113,6 +138,7 @@ test('a dry run counts per container and writes nothing', async () => {
     [2, 1, 3, 3]);
   assert.deepStrictEqual([s.commentPeriods.planned, s.commentPeriods.current], [1, 1]);
   assert.deepStrictEqual([s.lists.scanned, s.lists.planned], [1, 1], 'the List row is not read');
+  assert.deepStrictEqual([s.projects.planned, s.projects.noSource], [1, 1]);
   assert.strictEqual(db.calls.length, 0);
   assert.deepStrictEqual(db.rows, before);
 });
@@ -124,7 +150,8 @@ test('a live run copies the staff fields from sources.eagle', async (t) => {
 
   await t.test('every planned row is written and the run exits 0', () => {
     assert.deepStrictEqual(
-      [s.comments.written, s.commentPeriods.written, s.lists.written], [2, 1, 1]);
+      [s.projects.written, s.comments.written, s.commentPeriods.written, s.lists.written],
+      [1, 2, 1, 1]);
     assert.strictEqual(exitCodeFor(summaries), 0);
   });
 
@@ -140,6 +167,17 @@ test('a live run copies the staff fields from sources.eagle', async (t) => {
       { ...STAFF_PERIOD_FIELDS });
     assert.deepStrictEqual(pick(db.rows.lists[0], STAFF_ORGANIZATION_FIELDS),
       { ...STAFF_ORGANIZATION_FIELDS });
+  });
+
+  await t.test('a matched project becomes exactly what the merge writes, Track name kept', () => {
+    const { _etag, ...row } = db.rows.projects[0];
+    assert.deepStrictEqual(row, MATCHED_PROJECT);
+    assert.strictEqual(row.name, 'Nicomen Wind Energy');
+    assert.strictEqual(row.CELeadEmail, 'ce.lead@example.invalid');
+  });
+
+  await t.test('a Track-only project is untouched', () => {
+    assert.deepStrictEqual(db.rows.projects[1], seedRows().projects[1]);
   });
 
   await t.test('the List row, the sealed row and the source-less row are untouched', () => {
@@ -160,7 +198,8 @@ test('a live run copies the staff fields from sources.eagle', async (t) => {
   await t.test('a second run plans nothing', async () => {
     const again = byContainer(await backfillEagleStaffFields([], db));
     assert.deepStrictEqual(
-      [again.comments.planned, again.commentPeriods.planned, again.lists.planned], [0, 0, 0]);
+      [again.projects.planned, again.comments.planned, again.commentPeriods.planned,
+        again.lists.planned], [0, 0, 0, 0]);
   });
 });
 

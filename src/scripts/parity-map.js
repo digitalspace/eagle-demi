@@ -9,6 +9,11 @@
  * from `--id <name>=<eagleId>`. Field entries are names both sides share or `[eagleName, demiName]`.
  */
 
+const { EAGLE_STAFF_FIELDS } = require('../merge/project');
+const commentMirror = require('../controllers/nosql/comment');
+const commentPeriodMirror = require('../controllers/nosql/comment-period');
+const organizationMirror = require('../controllers/nosql/organization');
+
 const STAFF = ['staff', 'sysadmin'];
 const ANON = ['anonymous'];
 
@@ -25,10 +30,19 @@ const FIELDS = {
   Pin: ['name', 'province', 'website']
 };
 
-/** Staff-only fields: compared for staff and sysadmin only. */
+/** Staff fields DEMI does not promote yet: a staff row lacking one in DEMI is class L3. */
+const UNPROMOTED_STAFF_FIELDS = {
+  Project: ['directoryStructure']
+};
+
+const promoted = staffFields => Object.keys(staffFields({}));
+
+/** Staff-only fields: compared for staff and sysadmin only. The promoted ones are never excused. */
 const STAFF_FIELDS = {
-  Project: ['directoryStructure'],
-  Comment: ['eaoNotes', 'proponentNotes', 'publishedNotes', 'rejectedNotes', 'rejectedReason', 'eaoStatus']
+  Project: [...EAGLE_STAFF_FIELDS, ...UNPROMOTED_STAFF_FIELDS.Project],
+  Comment: ['eaoStatus', ...promoted(commentMirror.staffFields)],
+  CommentPeriod: promoted(commentPeriodMirror.staffFields),
+  Organization: promoted(organizationMirror.staffFields)
 };
 
 /** Fields Eagle strips for non-staff callers and DEMI shows: compared for anonymous only. */
@@ -58,8 +72,8 @@ const KNOWN_DIFFERENCES = [
   { name: 'L2-never-mirrored', kind: 'missingInDemi', ids: true,
     why: 'Eagle row never reached DEMI; closed by backfill' },
   { name: 'L3-staff-field-not-promoted', kind: 'fieldDiff', identities: STAFF,
-    why: 'staff field sits only in sources.eagle (S2a, S2b)',
-    match: ({ dataset, field, demiValue }) => (STAFF_FIELDS[dataset] || []).includes(field) && demiValue == null },
+    why: 'staff field DEMI does not promote yet',
+    match: ({ dataset, field, demiValue }) => (UNPROMOTED_STAFF_FIELDS[dataset] || []).includes(field) && demiValue == null },
   { name: 'L4-soft-deleted', kind: 'missingInDemi',
     why: 'Eagle isDeleted row; not ported',
     match: ({ eagle }) => eagle.isDeleted === true },
