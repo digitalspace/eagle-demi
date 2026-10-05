@@ -116,15 +116,21 @@ function fakeAzure() {
           },
           async beginCopyFromURL(url, opts) {
             writes.push(['copy', cname, name]);
-            c.blobs.set(name, { body: null, copyStatus: 'pending', from: url, tier: opts.tier, priority: opts.rehydratePriority });
+            // Like Azure out of Archive: copy success at once, the wait only in archiveStatus.
+            c.blobs.set(name, {
+              body: null, copyStatus: 'success', accessTier: 'Archive', archiveStatus: 'rehydrate-pending-to-cool',
+              from: url, tier: opts.tier, priority: opts.rehydratePriority
+            });
           },
           async getProperties() {
             const b = c.blobs.get(name);
             if (!b) throw Object.assign(new Error('BlobNotFound'), { statusCode: 404 });
-            return { copyStatus: b.copyStatus };
+            return { copyStatus: b.copyStatus, accessTier: b.accessTier, archiveStatus: b.archiveStatus };
           },
           async download() {
-            return { readableStreamBody: Readable.from([c.blobs.get(name).body]) };
+            const b = c.blobs.get(name);
+            if (b.accessTier === 'Archive') throw Object.assign(new Error('This operation is not permitted on an archived blob.'), { statusCode: 409 });
+            return { readableStreamBody: Readable.from([b.body]) };
           },
           async delete() {
             writes.push(['delete', cname, name]);
@@ -500,10 +506,13 @@ async function drillStarted(t) {
   return { azure, restored, original, check };
 }
 
+/** The restored copy once rehydration has finished: archiveStatus cleared, tier online. */
+const rehydrated = body => ({ archiveStatus: undefined, accessTier: 'Cool', body });
+
 test('drill restores a sample at Cool and passes once each sha256 matches', async (t) => {
   const { azure, restored, original, check } = await drillStarted(t);
   const pending = await check();
-  Object.assign(restored, { copyStatus: 'success', body: original });
+  Object.assign(restored, rehydrated(original));
   const done = await check();
 
   assert.strictEqual(restored.tier, 'Cool');
@@ -516,7 +525,7 @@ test('drill restores a sample at Cool and passes once each sha256 matches', asyn
 
 test('drill check fails a restored copy whose sha256 differs from the metadata', async (t) => {
   const { restored, original, check } = await drillStarted(t);
-  Object.assign(restored, { copyStatus: 'success', body: Buffer.concat([original, Buffer.from('x')]) });
+  Object.assign(restored, rehydrated(Buffer.concat([original, Buffer.from('x')])));
   const result = await check();
 
   assert.strictEqual(result.summary.mismatch, 1);
@@ -525,11 +534,29 @@ test('drill check fails a restored copy whose sha256 differs from the metadata',
 
 test('drill check fails a copy that did not succeed, even when its bytes would match', async (t) => {
   const { restored, original, check } = await drillStarted(t);
-  Object.assign(restored, { copyStatus: 'aborted', body: original });
+  Object.assign(restored, { ...rehydrated(original), copyStatus: 'aborted' });
   const result = await check();
 
   assert.strictEqual(result.summary.matched, 0);
   assert.strictEqual(result.exitCode, 1);
+});
+
+test('drill check counts a copy as pending while it is still rehydrating, though the copy reports success', async (t) => {
+  const { restored, check } = await drillStarted(t);
+  const result = await check();
+
+  assert.strictEqual(restored.copyStatus, 'success');
+  assert.deepStrictEqual([result.summary.pending, result.summary.failed, result.exitCode], [1, 0, 2]);
+});
+
+test('drill check fails a copy left in the Archive tier with no rehydration under way', async (t) => {
+  const { restored, original, check } = await drillStarted(t);
+  Object.assign(restored, { archiveStatus: undefined, body: original });
+  const result = await check();
+
+  assert.deepStrictEqual([result.summary.matched, result.exitCode], [0, 1]);
+  // Refused from its properties, never by attempting a download Azure would refuse.
+  assert.match(result.summary.failures[0], /tier Archive, archiveStatus none/);
 });
 
 test('list-bucket writes key, size and unquoted ETag, and counts multipart ETags', async (t) => {
@@ -562,7 +589,62 @@ test('export-rows writes every row of every partition with its key, size and rea
   ]);
 });
 
+const RESTIC = 'DO_NOT_DELETE_restic_backup/';
+
+/** A bucket with one document object and one object under the restic prefix, copied with that prefix excluded. */
+async function filteredBackup(t, rows = [{ id: 'doc1', s3Key: 'p1/a.pdf' }]) {
+  const objects = { 'p1/a.pdf': { body: PDF }, [`${RESTIC}data/x`]: { body: OTHER } };
+  const s = setup(t, objects, rows);
+  const azure = fakeAzure();
+  const d = deps(fakeSource(objects), azure);
+  await run(s.copyArgs('--live', '--exclude-prefix', RESTIC), d);
+  return { s, azure, d };
+}
+
+test('list-bucket leaves out keys under each excluded prefix and reports their totals', async (t) => {
+  const s = setup(t, {});
+  const out = path.join(s.dir, 'listing.jsonl');
+  const objects = { 'p1/a.pdf': { body: PDF }, [`${RESTIC}data/x`]: { body: OTHER }, 'z/y': { body: PDF } };
+  const result = await run(['list-bucket', '--bucket', BUCKET, '--out', out,
+    '--exclude-prefix', RESTIC, '--exclude-prefix', 'z/'], { source: fakeSource(objects) });
+
+  const keys = fs.readFileSync(out, 'utf8').trim().split('\n').map(l => JSON.parse(l).key);
+  assert.deepStrictEqual(keys, ['p1/a.pdf']);
+  assert.deepStrictEqual(result.summary.excluded, { objects: 2, bytes: OTHER.length + PDF.length });
+  assert.match(s.logs.join('\n'), /excluded=.*DO_NOT_DELETE_restic_backup/);
+});
+
+test('copy and verify with the same exclusion skip the prefix and verify clean, recording what was left out', async (t) => {
+  const { s, azure, d } = await filteredBackup(t);
+  const result = await run(s.verifyArgs('--live', '--exclude-prefix', RESTIC), d);
+  const summary = JSON.parse(azure.manifests.blobs.get('test/2026-10-05T12-00-00-000Z/summary.json').body);
+
+  assert.deepStrictEqual([...azure.originals.blobs.keys()], ['p1/a.pdf']);
+  assert.strictEqual(result.exitCode, 0);
+  assert.deepStrictEqual(summary.bucket, { objects: 1, bytes: PDF.length });
+  assert.deepStrictEqual(summary.excluded, {
+    prefixes: [RESTIC], bucket: { objects: 1, bytes: OTHER.length }, blobs: { objects: 0, bytes: 0 }
+  });
+});
+
+test('verify without the exclusion still counts the excluded objects as missing', async (t) => {
+  const { s, d } = await filteredBackup(t);
+  const result = await run(s.verifyArgs(), d);
+
+  assert.strictEqual(result.exitCode, 1);
+  assert.ok(result.summary.gapKeys.includes(`${RESTIC}data/x: missing`));
+});
+
+test('verify with an exclusion still fails on a document key under the excluded prefix', async (t) => {
+  const { s, d } = await filteredBackup(t, [{ id: 'doc1', s3Key: 'p1/a.pdf' }, { id: 'doc9', s3Key: `${RESTIC}data/x` }]);
+  const result = await run(s.verifyArgs('--exclude-prefix', RESTIC), d);
+
+  assert.strictEqual(result.exitCode, 1);
+  assert.ok(result.summary.gapKeys.includes(`${RESTIC}data/x: cosmos-unbacked`));
+});
+
 test('parseArgs refuses an unknown subcommand and an account name that is not one', () => {
   assert.throws(() => parseArgs(['backup']), /first argument/);
   assert.throws(() => parseArgs(['drill', '--account', 'evil.example.com/x', '--drill-list', 'd']), /storage account/);
+  assert.throws(() => parseArgs(['list-bucket', '--bucket', 'b', '--out', 'o', '--exclude-prefix']), /needs a prefix/);
 });

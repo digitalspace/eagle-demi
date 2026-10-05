@@ -193,6 +193,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'repositories/notifications.js',
     'repositories/projects.js',
     'repositories/updates.js',
+    // The archive restore: it must see a sealed row's pdfTitle record to refuse or update it.
+    'scripts/restore-originals.js',
     'scripts/seed-public-reads.js'
   ].map(file => path.join(...file.split('/'))));
   const allowed = (file) => ALLOWED.has(file);
