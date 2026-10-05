@@ -8,8 +8,10 @@ process.env.MINIO_KEY_PREFIX = 'ozwdez';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { parseArgs, sourceStat, backfillObjects, exitCodeFor } =
+const { parseArgs, sourceStat, backfillObjects, exitCodeFor, readPartition } =
   require('../../src/scripts/backfill-objects');
+const cosmos = require('../../src/db/cosmos-nosql');
+const { systemAccess } = require('../../src/helpers/access-sql');
 
 const TARGET_BUCKET = 'asnpnn';
 
@@ -320,4 +322,14 @@ test('a failed upload destroys the source stream', async () => {
   assert.equal(summary.failed, 3);
   assert.equal(streams.length, 3);
   assert.ok(streams.every(s => s.destroyed), 'every abandoned source stream is destroyed');
+});
+
+test('readPartition projects the backfill fields unless the caller names its own', async (t) => {
+  const queries = [];
+  t.mock.method(cosmos, 'query', async (container, spec) => { queries.push(spec.query); return { items: [] }; });
+  await readPartition(systemAccess(), '1');
+  await readPartition(systemAccess(), '1', 'c.id, c.read');
+
+  assert.match(queries[0], /^SELECT c\.id, c\.s3Key, c\.datePosted, c\.fileSize FROM/);
+  assert.match(queries[1], /^SELECT c\.id, c\.read FROM/);
 });

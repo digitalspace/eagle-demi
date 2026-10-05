@@ -21,15 +21,13 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const zlib = require('zlib');
-const Minio = require('minio');
 const config = require('../config');
 const documents = require('../repositories/documents');
-const { selectWhere, fetchAll } = require('../repositories/_sql');
 const { systemAccess } = require('../helpers/access-sql');
 const { createCredential } = require('../utils/azure-credential');
 const { logger } = require('../utils/logger');
 const { mapLimit } = require('../utils/worker-pool');
-const { isNotFound, eachRow } = require('./backfill-objects');
+const { isNotFound, eachRow, clientFor, readPartition } = require('./backfill-objects');
 
 const TAG = '[backup]';
 const BLOCK_SIZE = 16 * 1024 * 1024;
@@ -135,11 +133,6 @@ function writeJsonl(file, rows) {
   fs.writeFileSync(file, rows.map(r => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''));
 }
 
-// Copied from backfill-objects.js, which does not export it.
-function clientFor(host, port, useSSL, accessKey, secretKey) {
-  return new Minio.Client({ endPoint: host, port, useSSL, accessKey, secretKey, region: config.minioRegion });
-}
-
 function defaultSource() {
   // The source credential when one is set, otherwise this environment's own bucket credential.
   const client = config.sourceMinioAccess
@@ -157,12 +150,6 @@ function defaultContainers(account) {
   const { BlobServiceClient } = require('@azure/storage-blob');
   const service = new BlobServiceClient(`https://${account}.blob.core.windows.net`, createCredential());
   return name => service.getContainerClient(name);
-}
-
-/** Like backfill-objects.js readPartition, with the fields the backup and manifest need. */
-async function readPartition(access, projectId) {
-  const spec = selectWhere({ access, partitionField: documents.PARTITION_FIELD, select: SELECT });
-  return fetchAll(documents.CONTAINER, spec, { partitionKey: String(projectId ?? '') });
 }
 
 async function listBucket(args, deps) {
@@ -544,7 +531,7 @@ async function run(argv, deps = {}) {
     now: () => new Date(),
     random: Math.random,
     documents,
-    readRows: readPartition,
+    readRows: (access, projectId) => readPartition(access, projectId, SELECT),
     ...deps
   };
   if (!d.source && (args.command === 'list-bucket' || args.command === 'copy')) d.source = defaultSource();
