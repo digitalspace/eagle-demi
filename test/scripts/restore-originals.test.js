@@ -59,7 +59,7 @@ function fakeStore(objects, { onUploadUrl, readBack = {} } = {}) {
   };
 }
 
-/** Archive double: `originals` holds the backups; a copy into `restore` stays pending until finished. */
+/** Archive double: `originals` holds the backups; a copy into `restore` stays archived until finished. */
 function fakeAzure(originals) {
   const restore = new Map();
   const copies = [];
@@ -70,20 +70,25 @@ function fakeAzure(originals) {
         async getProperties() {
           const b = restore.get(name);
           if (!b) throw Object.assign(new Error('BlobNotFound'), { statusCode: 404 });
-          return { copyStatus: b.copyStatus, contentType: 'application/pdf' };
+          return { copyStatus: b.copyStatus, accessTier: b.accessTier, archiveStatus: b.archiveStatus, contentType: 'application/pdf' };
         },
         async beginCopyFromURL(url, opts) {
           copies.push({ name, url, ...opts });
           const source = decodeURIComponent(url.split('/originals/')[1]);
-          restore.set(name, { copyStatus: 'pending', body: originals[source] });
+          // Like Azure out of Archive: copy success at once, the wait only in archiveStatus.
+          restore.set(name, {
+            copyStatus: 'success', accessTier: 'Archive', archiveStatus: 'rehydrate-pending-to-cool', body: originals[source]
+          });
         },
         async download() {
-          return { readableStreamBody: Readable.from([restore.get(name).body]) };
+          const b = restore.get(name);
+          if (b.accessTier === 'Archive') throw Object.assign(new Error('This operation is not permitted on an archived blob.'), { statusCode: 409 });
+          return { readableStreamBody: Readable.from([b.body]) };
         }
       };
     }
   });
-  const finish = () => { for (const b of restore.values()) b.copyStatus = 'success'; };
+  const finish = () => { for (const b of restore.values()) Object.assign(b, { archiveStatus: undefined, accessTier: 'Cool' }); };
   return { containerFor, restore, copies, finish };
 }
 
@@ -223,6 +228,14 @@ test('status counts rows not started, pending and ready', async (t) => {
   const result = await s.go('status', '--all-changed');
   assert.deepStrictEqual([result.summary.pending, result.summary.absent], [1, 1]);
   assert.strictEqual(result.exitCode, 2);
+});
+
+test('apply waits on a copy that reports success but is still rehydrating', async (t) => {
+  const s = setup(t);
+  await s.go('rehydrate', '--id', 'a', '--live');
+  const result = await s.go('apply', '--id', 'a', '--live', '--confirm', '0');
+  assert.deepStrictEqual([result.summary.pending, result.exitCode], [1, 2]);
+  assert.strictEqual(s.store.puts.length, 0);
 });
 
 test('apply writes the backup back under If-Match and Content-MD5, then marks the record restored', async (t) => {

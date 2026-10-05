@@ -35,7 +35,7 @@ const { logger } = require('../utils/logger');
 const { mapLimit } = require('../utils/worker-pool');
 const { eachRow, readPartition } = require('./backfill-objects');
 const {
-  ACCOUNT_NAME, redact, stripQuotes, isMd5Etag, readLines, defaultContainers
+  ACCOUNT_NAME, redact, stripQuotes, isMd5Etag, readLines, defaultContainers, rehydrationState
 } = require('./backup-originals');
 
 const TAG = '[restore]';
@@ -234,8 +234,7 @@ async function copyState(row, ctx) {
   try {
     const props = await ctx.restore.getBlockBlobClient(REHYDRATED_PREFIX + row.key).getProperties();
     row.contentType = props.contentType;
-    if (props.copyStatus === 'pending') return 'pending';
-    return props.copyStatus === 'success' ? 'ready' : 'failed';
+    return rehydrationState(props);
   } catch (err) {
     if (err.statusCode === 404) return 'absent';
     throw err;

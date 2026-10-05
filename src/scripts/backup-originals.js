@@ -12,6 +12,9 @@
  *   node src/scripts/backup-originals.js drill --account <acct> --drill-list drill.jsonl [--sample 20] [--live]
  *   node src/scripts/backup-originals.js drill --account <acct> --drill-list drill.jsonl --check [--live]
  *
+ * `--exclude-prefix <prefix>` (repeatable) leaves keys under that prefix out of list-bucket, copy
+ * and verify alike; verify records the prefixes and the excluded totals in its summary.
+ *
  * **DRY RUN BY DEFAULT**: without `--live` nothing is written to Azure. Each blob name is the
  * s3Key unchanged. A blob is committed straight to Archive, create-only, and only after the bytes
  * read are proven equal to the source; resume is a rerun, because existing names are skipped.
@@ -64,7 +67,8 @@ function parseArgs(argv) {
   }
   const args = {
     command, live: false, check: false, concurrency: 8, limit: 0, sample: 20,
-    container: 'originals', manifestContainer: 'manifests', restoreContainer: 'restore'
+    container: 'originals', manifestContainer: 'manifests', restoreContainer: 'restore',
+    excludePrefixes: []
   };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -74,6 +78,11 @@ function parseArgs(argv) {
     else if (a === '--concurrency') args.concurrency = Number(rest[++i]);
     else if (a === '--limit') args.limit = Number(rest[++i]);
     else if (a === '--sample') args.sample = Number(rest[++i]);
+    else if (a === '--exclude-prefix') {
+      const prefix = rest[++i];
+      if (!prefix) throw new Error(`${TAG} --exclude-prefix needs a prefix`);
+      args.excludePrefixes.push(prefix);
+    }
     else if (FLAGS[a]) args[FLAGS[a]] = rest[++i];
     else throw new Error(`${TAG} unknown argument: ${a}`);
   }
@@ -122,6 +131,23 @@ const isMd5Etag = etag => /^[0-9a-f]{32}$/.test(etag);
 const blockId = i => Buffer.from(String(i).padStart(6, '0')).toString('base64');
 const md5Hex = bytes => (bytes ? Buffer.from(bytes).toString('hex') : '');
 
+/** Splits rows into kept and excluded by key prefix, totalling what was excluded. */
+function splitExcluded(rows, prefixes, keyOf, sizeOf) {
+  const kept = [];
+  const excluded = { objects: 0, bytes: 0 };
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (key && prefixes.some(p => key.startsWith(p))) {
+      excluded.objects++;
+      excluded.bytes += sizeOf(row) || 0;
+    } else kept.push(row);
+  }
+  return { kept, excluded };
+}
+
+const exclusionNote = (prefixes, totals) =>
+  prefixes.length ? ` excluded=${JSON.stringify({ prefixes, ...totals })}` : '';
+
 function readJsonl(file) {
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
 }
@@ -154,17 +180,17 @@ function defaultContainers(account) {
 }
 
 async function listBucket(args, deps) {
-  const rows = [];
-  let bytes = 0;
+  const listed = [];
   for await (const o of deps.source.listObjects(args.bucket)) {
-    if (!o.name) continue;
-    rows.push({ key: o.name, size: o.size, etag: stripQuotes(o.etag) });
-    bytes += o.size;
+    if (o.name) listed.push({ key: o.name, size: o.size, etag: stripQuotes(o.etag) });
   }
+  const { kept: rows, excluded } = splitExcluded(listed, args.excludePrefixes, r => r.key, r => r.size);
+  const bytes = rows.reduce((n, r) => n + r.size, 0);
   writeJsonl(args.out, rows);
   const multipart = rows.filter(r => r.etag.includes('-')).length;
-  logger.info(`${TAG} list-bucket bucket=${args.bucket} objects=${rows.length} bytes=${bytes} multipart=${multipart}`);
-  return { exitCode: 0, summary: { objects: rows.length, bytes, multipart } };
+  logger.info(`${TAG} list-bucket bucket=${args.bucket} objects=${rows.length} bytes=${bytes} multipart=${multipart}` +
+    exclusionNote(args.excludePrefixes, { bucket: excluded }));
+  return { exitCode: 0, summary: { objects: rows.length, bytes, multipart, excluded } };
 }
 
 async function exportRows(args, deps) {
@@ -298,7 +324,10 @@ function copySummaryLine(s) {
 }
 
 async function copy(args, deps) {
-  let entries = [...buildPlan(readJsonl(args.bucketList), readJsonl(args.rows)).values()];
+  const prefixes = args.excludePrefixes;
+  const bucket = splitExcluded(readJsonl(args.bucketList), prefixes, o => o.key, o => o.size);
+  const docs = splitExcluded(readJsonl(args.rows), prefixes, r => r.s3Key, () => 0);
+  let entries = [...buildPlan(bucket.kept, docs.kept).values()];
   if (args.limit) entries = entries.slice(0, args.limit);
 
   const originals = deps.containerFor(args.container);
@@ -333,15 +362,22 @@ async function copy(args, deps) {
   });
 
   if (args.live && args.missingOut) fs.writeFileSync(args.missingOut, missing.map(k => `${k}\n`).join(''));
-  logger.info(copySummaryLine(summary));
+  logger.info(copySummaryLine(summary) +
+    exclusionNote(prefixes, { bucket: bucket.excluded, cosmosRows: docs.excluded.objects }));
   if (summary.failed) logger.error(`${TAG} first ${summary.failures.length} failures: ${summary.failures.join(' | ')}`);
   return { exitCode: summary.failed ? 1 : 0, summary };
 }
 
-async function listBlobs(container) {
+async function listBlobs(container, prefixes = []) {
   const blobs = new Map();
-  for await (const item of container.listBlobsFlat({ includeMetadata: true })) blobs.set(item.name, item);
-  return blobs;
+  const excluded = { objects: 0, bytes: 0 };
+  for await (const item of container.listBlobsFlat({ includeMetadata: true })) {
+    if (prefixes.some(p => item.name.startsWith(p))) {
+      excluded.objects++;
+      excluded.bytes += item.properties.contentLength;
+    } else blobs.set(item.name, item);
+  }
+  return { blobs, excluded };
 }
 
 /** Reconcile the stored blobs against the bucket listing and the Cosmos keys; every gap is named. */
@@ -427,10 +463,13 @@ function manifestLines(bucketRows, docRows, blobs, result) {
 }
 
 async function verify(args, deps) {
-  const bucketRows = readJsonl(args.bucketList);
+  const prefixes = args.excludePrefixes;
+  const bucket = splitExcluded(readJsonl(args.bucketList), prefixes, o => o.key, o => o.size);
+  const bucketRows = bucket.kept;
+  // Cosmos rows stay whole: a document key under an excluded prefix must show up as a gap.
   const docRows = readJsonl(args.rows);
   const listedMissing = new Set(args.bucketMissing ? readLines(args.bucketMissing) : []);
-  const blobs = await listBlobs(deps.containerFor(args.container));
+  const { blobs, excluded: blobsExcluded } = await listBlobs(deps.containerFor(args.container), prefixes);
   const result = reconcile(bucketRows, docRows, blobs, listedMissing);
 
   const runId = deps.now().toISOString().replace(/[:.]/g, '-');
@@ -445,6 +484,8 @@ async function verify(args, deps) {
     missingInSource: result.missingInSource,
     manifest: { name: `${prefix}/objects.jsonl.gz`, sha256: crypto.createHash('sha256').update(manifest).digest('hex') }
   };
+  const excludedTotals = { bucket: bucket.excluded, blobs: blobsExcluded };
+  if (prefixes.length) summary.excluded = { prefixes, ...excludedTotals };
 
   if (args.live) {
     const manifests = deps.containerFor(args.manifestContainer);
@@ -459,7 +500,8 @@ async function verify(args, deps) {
   logger.info(`${TAG} verify mode=${args.live ? 'live' : 'dry-run'} env=${args.env} runId=${runId} ` +
     `bucket=${c.bucket.objects}/${c.bucket.bytes} blobs=${c.blobs.objects}/${c.blobs.bytes} ` +
     `cosmosKeys=${c.cosmos.keys} cosmosBacked=${c.cosmos.backed} missingInSource=${c.cosmos.missingInSource} ` +
-    `gaps=${result.gaps.length} ${JSON.stringify(byReason)} manifestSha256=${summary.manifest.sha256}`);
+    `gaps=${result.gaps.length} ${JSON.stringify(byReason)} manifestSha256=${summary.manifest.sha256}` +
+    exclusionNote(prefixes, excludedTotals));
   if (result.gaps.length) logger.error(`${TAG} first gaps: ${summary.gapKeys.slice(0, MAX_REPORTED).join(' | ')}`);
   return { exitCode: result.gaps.length ? 1 : 0, summary };
 }
@@ -493,6 +535,19 @@ async function drillStart(args, deps) {
   return { exitCode: 0, summary: { started: args.live ? entries.length : 0, sample: entries.length } };
 }
 
+const ONLINE_TIERS = new Set(['Hot', 'Cool', 'Cold']);
+
+/**
+ * `pending`, `ready` or `failed` for a copy out of Archive. A same-account copy reports copy
+ * success at once; the wait shows only in `archiveStatus` while the tier stays Archive.
+ */
+function rehydrationState(props) {
+  if (props.copyStatus === 'pending') return 'pending';
+  if (props.copyStatus !== 'success') return 'failed';
+  if (String(props.archiveStatus || '').startsWith('rehydrate-pending')) return 'pending';
+  return !props.archiveStatus && ONLINE_TIERS.has(props.accessTier) ? 'ready' : 'failed';
+}
+
 /** Check phase: once each copy lands, compare its sha256 with the metadata, then delete it. */
 async function drillCheck(args, deps) {
   const restore = deps.containerFor(args.restoreContainer);
@@ -501,8 +556,11 @@ async function drillCheck(args, deps) {
     const blob = restore.getBlockBlobClient(e.restoreName);
     try {
       const props = await blob.getProperties();
-      if (props.copyStatus === 'pending') { summary.pending++; continue; }
-      if (props.copyStatus !== 'success') throw new Error(`copy ${props.copyStatus}`);
+      const state = rehydrationState(props);
+      if (state === 'pending') { summary.pending++; continue; }
+      if (state !== 'ready') {
+        throw new Error(`copy ${props.copyStatus}, tier ${props.accessTier}, archiveStatus ${props.archiveStatus || 'none'}`);
+      }
       const body = (await blob.download()).readableStreamBody;
       const hash = crypto.createHash('sha256');
       for await (const chunk of body) hash.update(chunk);
@@ -547,7 +605,7 @@ async function run(argv, deps = {}) {
 
 module.exports = {
   parseArgs, redact, buildPlan, reconcile, run,
-  ACCOUNT_NAME, stripQuotes, isMd5Etag, readLines, defaultContainers
+  ACCOUNT_NAME, stripQuotes, isMd5Etag, readLines, defaultContainers, rehydrationState
 };
 
 if (require.main === module) {
