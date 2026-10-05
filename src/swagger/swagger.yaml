@@ -1322,8 +1322,11 @@ paths:
         body. Only a 200 redirects: a 404 or 500 answers JSON in both modes.
 
         The presigned URL carries the file name as `response-content-disposition`, so the browser
-        saves `Report.pdf` rather than the storage key. It says `attachment` unless `inline=1` is
-        sent and the file is a PDF or a PNG, JPEG, GIF or WebP image.
+        saves `Site C Report.pdf` rather than the storage key. The name is `documentFileName`, else
+        `displayName`, as far as the caller may see them, with the recorded extension added when
+        the name has none; the storage key's last segment names the file only when neither is
+        visible. It says `attachment` unless `inline=1` is sent and the file is a PDF or a PNG,
+        JPEG, GIF or WebP image.
       parameters:
         - name: id
           in: path
@@ -1367,7 +1370,9 @@ paths:
                 properties:
                   url: { type: string }
                   expiresIn: { type: integer, description: Seconds until the URL expires. }
-                  fileName: { type: string }
+                  fileName:
+                    type: string
+                    description: The name the URL is signed with, as described above.
                   displayName: { type: string, nullable: true }
                   inline:
                     type: boolean
