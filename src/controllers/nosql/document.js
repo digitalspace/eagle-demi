@@ -38,6 +38,7 @@ const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const { transformDocument, seedAcl } = require('../../seed/transform');
 const { naturalSortKey } = require('../../helpers/natural-sort');
+const { fileNameFor } = require('../../helpers/file-name');
 const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
 const config = require('../../config');
 
@@ -531,14 +532,21 @@ exports.getDocument = async (req, res) => {
  * The visibility gate both download verbs share. `getById` applies the caller's access, so null is
  * "hidden from you" as well as "no such id".
  *
- * @returns {Promise<{status: number, body: object}|{doc: object, fileName: string, access: object}>}
+ * `record` is what this caller may see of the row; `fileName` is the document's own name, the key's
+ * last segment only when the row names nothing.
+ *
+ * @returns {Promise<{status: number, body: object}|{doc: object, record: object, fileName: string}>}
  */
 async function findStoredFile(req, id) {
   const access = resolveAccess(req);
   const doc = await documents.getById(access, id, req.query.project);
   if (!doc) return { status: 404, body: { error: 'Document not found' } };
   if (!doc.s3Key) return { status: 404, body: { error: 'Document has no stored file.' } };
-  return { doc, fileName: doc.s3Key.split('/').pop(), access };
+  return {
+    doc,
+    record: redactForAccess('documents', doc, access),
+    fileName: fileNameFor(doc, access, doc.s3Key.split('/').pop())
+  };
 }
 
 /** GET's failure answer. HEAD sends the same one, so one fault logs one way whichever verb hit it. */
@@ -564,7 +572,7 @@ async function resolveDownload(req, id, { inline = false } = {}) {
   try {
     const found = await findStoredFile(req, id);
     if (found.status) return found;
-    const { doc, fileName } = found;
+    const { doc, record, fileName } = found;
 
     // The storage layer owns key resolution and expiry. It used to be done here, with the
     // client borrowed from the extraction script — which is how extract.js came to read keys
@@ -601,7 +609,7 @@ async function resolveDownload(req, id, { inline = false } = {}) {
     return {
       status: 200,
       body: {
-        url, expiresIn: DOWNLOAD_URL_TTL_SECONDS, fileName, displayName: doc.displayName || null,
+        url, expiresIn: DOWNLOAD_URL_TTL_SECONDS, fileName, displayName: record.displayName || null,
         inline: Boolean(signedType)
       }
     };
@@ -697,7 +705,7 @@ async function headDownload(req, res) {
     found = downloadFailed(err);
   }
   if (found.status) return res.status(found.status).json(found.body);
-  const { doc, fileName, access } = found;
+  const { doc, record, fileName } = found;
 
   let stat;
   try {
@@ -716,7 +724,6 @@ async function headDownload(req, res) {
   if (stat === null) return res.status(404).json({ error: 'Document has no stored file.' });
 
   // The fallback reads what this caller may see of the record, as GET /documents/:id would show.
-  const record = redactForAccess('documents', doc, access);
   const size = stat ? stat.size : recordedSize(record);
   const type = [stat && stat.contentType, record.mimeType].find(isMediaType);
   res.status(200);

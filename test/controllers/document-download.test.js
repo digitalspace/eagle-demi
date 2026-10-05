@@ -75,7 +75,7 @@ test('download in JSON mode', async (t) => {
     assert.equal(response.statusCode, 200);
     const body = JSON.parse(response.body);
     assert.equal(body.url, URL_WITH_DISPOSITION);
-    assert.equal(body.fileName, 'report.pdf');
+    assert.equal(body.fileName, 'Site C Report.pdf');
     assert.equal(body.displayName, 'Site C Report');
     assert.ok(body.expiresIn > 0);
     assert.ok(!('location' in response.headers), 'JSON mode must not set a Location');
@@ -91,14 +91,52 @@ test('download in JSON mode', async (t) => {
     }
   });
 
-  await t.test('the presign is asked for the file name, so the browser saves report.pdf', async (t) => {
-    // Already the behaviour, asserted because the redirect mode has no JSON body to carry the name
-    // — `response-content-disposition` on the presigned URL is the only thing left saying it.
-    const presign = allow(t);
-    await controller.downloadDocument(req(), res());
+});
 
-    assert.equal(presign.mock.callCount(), 1);
-    assert.deepEqual(presign.mock.calls[0].arguments[1].fileName, 'report.pdf');
+test('the file name the URL is signed with', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  // The redirect mode has no JSON body to carry the name: `response-content-disposition` on the
+  // presigned URL is the only thing saying it, so the presign and the body must agree.
+  async function names(t, fields, query = {}) {
+    const doc = { ...DOC, s3Key: 'etl/site-c/4dd67fbf0c.pdf', ...fields };
+    const presign = allow(t, { doc });
+    const response = res();
+    await controller.downloadDocument(req({ query }), response);
+    const signed = presign.mock.calls[0].arguments[1].fileName;
+    return { signed, body: response.body ? JSON.parse(response.body) : null };
+  }
+
+  await t.test('the document file name, not the storage key', async (t) => {
+    const { signed, body } = await names(t, { documentFileName: 'Site C EAC Application.pdf' });
+    assert.strictEqual(signed, 'Site C EAC Application.pdf');
+    assert.strictEqual(body.fileName, signed);
+  });
+
+  await t.test('a file name with no extension takes the recorded one', async (t) => {
+    const { signed } = await names(t, { documentFileName: 'Site C Application', fileExt: 'pdf' });
+    assert.strictEqual(signed, 'Site C Application.pdf');
+  });
+
+  await t.test('no file name: the display name, with the extension of the stored key', async (t) => {
+    const { signed } = await names(t, {});
+    assert.strictEqual(signed, 'Site C Report.pdf');
+  });
+
+  await t.test('a name withheld from this caller is not signed; the key names the file', async (t) => {
+    const { signed, body } = await names(t, {
+      documentFileName: 'Sealed Enforcement Order.pdf',
+      displayName: 'Sealed Enforcement Order',
+      vis: { documentFileName: 0, displayName: 0 }
+    });
+    assert.strictEqual(signed, '4dd67fbf0c.pdf');
+    assert.strictEqual(body.displayName, null, 'the withheld title must not ride along in the body');
+  });
+
+  await t.test('an inline redirect signs the same name', async (t) => {
+    const { signed } = await names(t, { documentFileName: 'Site C EAC Application.pdf' },
+      { redirect: '1', inline: '1' });
+    assert.strictEqual(signed, 'Site C EAC Application.pdf');
   });
 });
 
@@ -209,6 +247,11 @@ test('download in inline mode', async (t) => {
     const { response, type } = await signedType(t, { inline: '1' });
     assert.equal(type, 'application/pdf', 'no recorded type: the .pdf name decides');
     assert.equal(response.statusCode, 200);
+  });
+
+  await t.test('the last inline value wins', async (t) => {
+    const { type } = await signedType(t, { inline: ['0', '1'] }, { ...DOC, mimeType: 'application/pdf' });
+    assert.strictEqual(type, 'application/pdf');
   });
 
   await t.test('the JSON body says whether inline was honoured for this file', async (t) => {
@@ -329,7 +372,7 @@ test('HEAD is answered here, never redirected', async (t) => {
       assert.equal(res.headers.get('content-type'), 'application/pdf');
       assert.equal(res.headers.get('content-length'), '48213');
       assert.equal(res.headers.get('content-disposition'),
-        'attachment; filename="report.pdf"; filename*=UTF-8\'\'report.pdf');
+        'attachment; filename="Site C Report.pdf"; filename*=UTF-8\'\'Site%20C%20Report.pdf');
       assert.equal(res.headers.get('cache-control'), 'no-store');
       assert.equal(res.headers.get('location'), null);
       assert.equal(await res.text(), '');

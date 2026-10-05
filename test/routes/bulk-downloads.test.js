@@ -101,7 +101,7 @@ test('POST /bulk-downloads', async (t) => {
 
     assert.strictEqual(response.statusCode, 200);
     assert.strictEqual(body(response).url, 'https://nrs.example/presigned');
-    assert.strictEqual(body(response).fileName, 'part-a.pdf');
+    assert.strictEqual(body(response).fileName, 'Part A.pdf', 'the document name, as a zip entry gets');
     assert.strictEqual(body(response).single, true);
     assert.strictEqual(created.mock.callCount(), 0, 'a single file must not create a job');
     // Both events: the shared helper records the document download, this route records the request.
