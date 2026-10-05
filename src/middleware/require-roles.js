@@ -73,26 +73,41 @@ function requireRole(name) {
  * identity `identityFor` marked, because a Keycloak token's claims become `req.user` as they are
  * and a token could carry a `keyId` claim. Break-glass has no `keyId`, so it never passes.
  */
-function requireEagleMirror(req, res, next) {
-  const user = req.user || {};
-  const roles = (user.realm_access && user.realm_access.roles) || [];
-  const principal = isRegistryIdentity(user) && typeof user.keyId === 'string' ? user.keyId : '';
+/**
+ * A guard that admits only the registry principals `principalsOf()` names, holding
+ * `demi-service-write`, with no project scope. `label` names the route family in the refusal.
+ */
+function namedWriter(principalsOf, label) {
+  return function (req, res, next) {
+    const user = req.user || {};
+    const roles = (user.realm_access && user.realm_access.roles) || [];
+    const principal = isRegistryIdentity(user) && typeof user.keyId === 'string' ? user.keyId : '';
 
-  const admitted = principal !== '' &&
-    config.eagleMirrorPrincipals.includes(principal) &&
-    roles.includes('demi-service-write') &&
-    projectScopeFor(req) === null;
+    const admitted = principal !== '' &&
+      principalsOf().includes(principal) &&
+      roles.includes('demi-service-write') &&
+      projectScopeFor(req) === null;
 
-  if (!admitted) {
-    // The route without its query string, and the principal's name only: never a header.
-    const route = String(req.originalUrl || '').split('?')[0];
-    logger.warn(
-      `[demi-api] Eagle mirror refused ${principal || user.preferred_username || 'unknown'} on ${req.method} ${route}`
-    );
-    return res.status(403).json({ error: 'Forbidden. Only the Eagle mirror writer may call this route.' });
-  }
+    if (!admitted) {
+      // The route without its query string, and the principal's name only: never a header.
+      const route = String(req.originalUrl || '').split('?')[0];
+      logger.warn(
+        `[demi-api] ${label} refused ${principal || user.preferred_username || 'unknown'} on ${req.method} ${route}`
+      );
+      return res.status(403).json({ error: `Forbidden. Only the ${label} writer may call this route.` });
+    }
 
-  return next();
+    return next();
+  };
 }
 
-module.exports = { requireWrite, requireAdmin, requireRole, requireEagleMirror };
+const requireEagleMirror = namedWriter(() => config.eagleMirrorPrincipals, 'Eagle mirror');
+
+/**
+ * The PDF title worker, /documents/pdf-title/* and /documents/:id/pdf-title*. Those routes read
+ * every row unfiltered and hand out links that read and write stored originals, so a scoped key or
+ * a staff login must not reach them. Principals come from `config.pdfTitleWorkerPrincipals`.
+ */
+const requirePdfTitleWorker = namedWriter(() => config.pdfTitleWorkerPrincipals, 'PDF title worker');
+
+module.exports = { requireWrite, requireAdmin, requireRole, requireEagleMirror, requirePdfTitleWorker };

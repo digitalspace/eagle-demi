@@ -397,6 +397,11 @@ const config = {
     const raw = process.env.DEMI_EAGLE_MIRROR_PRINCIPALS;
     return (raw === undefined ? 'apim:eagle-api' : raw).split(',').map(s => s.trim()).filter(Boolean);
   },
+  // Registry row ids allowed to call the PDF title worker routes. Unset or empty means nobody: the
+  // routes sign writes to stored originals, so there is no default principal.
+  get pdfTitleWorkerPrincipals() {
+    return (process.env.DEMI_PDF_TITLE_WORKER_PRINCIPALS || '').split(',').map(s => s.trim()).filter(Boolean);
+  },
   // Short links: destinations are allowlisted by hostname suffix at write time (helpers/link-url).
   // linkBaseUrl is a Bicep app setting per environment so test hands back the test host, not prod's.
   linkAllowedHosts:      (process.env.LINK_ALLOWED_HOSTS || 'gov.bc.ca').split(',').map(s => s.trim()).filter(Boolean),
