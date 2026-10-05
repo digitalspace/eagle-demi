@@ -56,6 +56,14 @@ async function getObjectStream(key) {
   return getClient().getObject(config.minioBucket, resolveObjectKey(key));
 }
 
+/** A byte range of an object, or of one version of it. The facade checks key, offset and length. */
+async function getRangeStream(key, offset, length, { versionId } = {}) {
+  // The SDK reads to the end of the object when length is 0.
+  if (!(length > 0)) throw new Error('[storage] a range read needs a length');
+  return getClient().getPartialObject(config.minioBucket, resolveObjectKey(key), offset, length,
+    versionId ? { versionId } : undefined);
+}
+
 async function getDownloadUrl(key, opts = {}) {
   const expirySeconds = opts.expirySeconds || 300;
   // The response headers are part of what is signed.
@@ -165,6 +173,6 @@ function describe() {
 }
 
 module.exports = {
-  getBuffer, getObjectStream, getDownloadUrl, getUploadUrl, copyObject, statObject, putFile,
-  putObjectStream, removeObject, describe
+  getBuffer, getObjectStream, getRangeStream, getDownloadUrl, getUploadUrl, copyObject, statObject,
+  putFile, putObjectStream, removeObject, describe
 };
