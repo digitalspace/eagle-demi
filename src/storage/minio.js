@@ -12,6 +12,8 @@
  */
 
 const Minio = require('minio');
+// The package's public signer: presignedPutObject cannot sign extra headers such as Content-MD5.
+const { presignSignatureV4 } = require('minio/dist/main/signing.js');
 const config = require('../config');
 const { resolveObjectKey } = require('./objectKey');
 const { contentDisposition } = require('./content-disposition');
@@ -68,6 +70,32 @@ async function getDownloadUrl(key, opts = {}) {
   );
 }
 
+/**
+ * Presigned V4 PUT for one object, with Content-MD5 signed when given. The facade checks the key.
+ * Content-Type is never signed: the SDK's signer drops it from SignedHeaders on purpose.
+ */
+async function getUploadUrl(key, { expirySeconds, contentMd5 } = {}) {
+  // The SDK's own default is 7 days; a write link must never get that by omission.
+  if (!(expirySeconds > 0)) throw new Error('[storage] an upload URL needs an expiry');
+  const request = getClient().getRequestOptions({
+    method: 'PUT', region: config.minioRegion, bucketName: config.minioBucket,
+    objectName: resolveObjectKey(key), headers: contentMd5 ? { 'content-md5': contentMd5 } : undefined
+  });
+  return presignSignatureV4(request, config.minioAccess, config.minioSecret, undefined,
+    config.minioRegion, new Date(), expirySeconds);
+}
+
+/** Server-side copy, refused by the store with 412 when the source etag has moved on. */
+async function copyObject(src, dest, { ifSourceEtag }) {
+  const res = await getClient().copyObject(
+    new Minio.CopySourceOptions({
+      Bucket: config.minioBucket, Object: resolveObjectKey(src), MatchETag: ifSourceEtag
+    }),
+    new Minio.CopyDestinationOptions({ Bucket: config.minioBucket, Object: resolveObjectKey(dest) })
+  );
+  return { etag: res.Etag || null };
+}
+
 async function putFile(key, filePath, contentType) {
   const objectPath = resolveObjectKey(key);
   const meta = contentType ? { 'Content-Type': contentType } : undefined;
@@ -103,7 +131,7 @@ async function statObject(key) {
   try {
     const stat = await getClient().statObject(config.minioBucket, resolveObjectKey(key));
     const meta = stat.metaData || {};
-    return { size: stat.size, contentType: meta['content-type'] || null };
+    return { size: stat.size, contentType: meta['content-type'] || null, etag: stat.etag || null };
   } catch (err) {
     if (isMissing(err)) return null;
     throw err;
@@ -130,6 +158,6 @@ function describe() {
 }
 
 module.exports = {
-  getBuffer, getObjectStream, getDownloadUrl, statObject, putFile, putObjectStream, removeObject,
-  describe
+  getBuffer, getObjectStream, getDownloadUrl, getUploadUrl, copyObject, statObject, putFile,
+  putObjectStream, removeObject, describe
 };
