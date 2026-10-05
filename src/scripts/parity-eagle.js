@@ -7,6 +7,7 @@
  * Usage: README "Parity with eagle-api".
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const { fetchAllPages, unwrapSearchResponse, rateLimitWaitMs, PAGE_SIZE } = require('../seed/sources');
 const { diff } = require('./reconcile-eagle');
@@ -20,13 +21,20 @@ const MIN_GAP_MS = 500;
 const IDENTITIES = ['anonymous', 'staff', 'sysadmin'];
 const ID_NAMES = ['project', 'period', 'document', 'comment', 'organization'];
 const SAMPLE_CAP = 20;
+const REDIRECTS = [301, 302, 303, 307, 308];
 
 const USAGE = `usage: node src/scripts/parity-eagle.js --eagle <eagle-api base> --demi <DEMI base>
   [--identity anonymous|staff|sysadmin] [--token-env <VAR>] [--only <read>] [--max-pages <n>]
-  [--id project|period|document|comment|organization=<eagleId>]... [--known-ids <file>] [--report <file>]`;
+  [--id project|period|document|comment|organization=<eagleId>]... [--known-ids <file>] [--report <file>]
+  [--download-sample <n>]`;
 
 function parseArgs(argv) {
-  const args = { identity: 'anonymous', ids: {}, maxPages: Infinity };
+  const args = { identity: 'anonymous', ids: {}, maxPages: Infinity, downloadSample: 0 };
+  const count = (raw, min) => {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < min) throw new Error(`a whole number of at least ${min} is needed, got ${raw}`);
+    return n;
+  };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const value = () => {
@@ -42,12 +50,8 @@ function parseArgs(argv) {
       case '--only': args.only = value(); break;
       case '--known-ids': args.knownIds = value(); break;
       case '--report': args.report = value(); break;
-      case '--max-pages': {
-        const n = Number(value());
-        if (!Number.isInteger(n) || n < 1) throw new Error('--max-pages needs a positive integer');
-        args.maxPages = n;
-        break;
-      }
+      case '--max-pages': args.maxPages = count(value(), 1); break;
+      case '--download-sample': args.downloadSample = count(value(), 0); break;
       case '--id': {
         const m = value().match(/^([a-z]+)=([A-Za-z0-9_-]+)$/);
         if (!m || !ID_NAMES.includes(m[1])) throw new Error(`--id takes <${ID_NAMES.join('|')}>=<id>`);
@@ -67,6 +71,9 @@ function parseArgs(argv) {
   if (!IDENTITIES.includes(args.identity)) throw new Error(`--identity is one of ${IDENTITIES.join(', ')}`);
   if (args.identity === 'anonymous' && args.tokenEnv) throw new Error('anonymous runs send no token');
   if (args.identity !== 'anonymous' && !args.tokenEnv) throw new Error(`--identity ${args.identity} needs --token-env`);
+  if (args.downloadSample && args.identity === 'anonymous') {
+    throw new Error('--download-sample reads the protected download route: it needs a staff or sysadmin token');
+  }
   return args;
 }
 
@@ -225,6 +232,51 @@ function compare(entry, identity, eagle, demi, knownIds) {
   return out;
 }
 
+/** sha256 and byte length of a response body, read as a stream. */
+async function digest(res, url) {
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).pathname}`);
+  const hash = crypto.createHash('sha256');
+  let length = 0;
+  for await (const chunk of res.body || []) {
+    hash.update(chunk);
+    length += chunk.length;
+  }
+  return { sha256: hash.digest('hex'), length };
+}
+
+/** The same file through Eagle's protected route and DEMI's, which may redirect to object storage. */
+async function compareDownloads(entry, ids, eagle, demi, store) {
+  const out = { sampled: ids.length, match: 0, missingInDemi: 0, extraInDemi: 0, fieldDiff: 0, unexplained: 0,
+    classes: {}, samples: [] };
+  const flag = (sample) => {
+    out.unexplained++;
+    if (out.samples.length < SAMPLE_CAP) out.samples.push(sample);
+  };
+  for (const id of ids) {
+    const eagleUrl = urlOf(eagle.base, entry.eagle, { document: id });
+    const fromEagle = await digest(await eagle.get(eagleUrl), eagleUrl);
+    let url = urlOf(demi.base, entry.demi, { document: id });
+    let res = await demi.get(url);
+    if (res.status === 404) {
+      out.missingInDemi++;
+      flag({ kind: 'missingInDemi', id });
+      continue;
+    }
+    if (REDIRECTS.includes(res.status)) {
+      url = new URL(res.headers.get('location'), url).toString();
+      res = await store.get(url);
+    }
+    const fromDemi = await digest(res, url);
+    const differing = ['sha256', 'length'].filter(k => fromEagle[k] !== fromDemi[k]);
+    if (!differing.length) out.match++;
+    for (const field of differing) {
+      out.fieldDiff++;
+      flag({ kind: 'fieldDiff', id, field });
+    }
+  }
+  return out;
+}
+
 function lineOf(read, identity, r) {
   const classes = Object.entries(r.classes).map(([k, v]) => `${k}:${v}`).join(',');
   return `[parity] ${read} identity=${identity} match=${r.match} missingInDemi=${r.missingInDemi} ` +
@@ -272,7 +324,9 @@ async function run(argv, deps = {}) {
     }
     knownIds = loadKnownIds(args.knownIds, d.readFile);
     for (const entry of d.map.filter(e => !e.skip)) {
-      if (/download/i.test(entry.eagle.path)) throw new Error(`${entry.read}: download routes are never replayed`);
+      if (/^\/public\/.*download/i.test(entry.eagle.path)) {
+        throw new Error(`${entry.read}: the public download route is never called`);
+      }
     }
     if (args.only && !d.map.some(e => e.read === args.only)) throw new Error(`--only: no read named ${args.only}`);
   } catch (err) {
@@ -282,33 +336,67 @@ async function run(argv, deps = {}) {
 
   const eagle = client(args.eagle, token, d);
   const demi = client(args.demi, token, d);
+  // The presigned URL DEMI redirects to carries its own signature; the bearer token never goes there.
+  const store = client(null, null, d);
   const { identity } = args;
   const results = [];
 
+  const pairedDocuments = new Set();
+  const downloads = [];
+  const record = (entry, outcome) => {
+    results.push({ read: entry.read, plan: entry.plan, ...outcome });
+    if (outcome.status === 'skipped') {
+      d.log(`[parity] ${entry.read} identity=${identity} skipped${outcome.pending ? ' (pending)' : ''}: ${outcome.reason}`);
+    } else if (outcome.status === 'error') {
+      d.error(`[parity] ${entry.read} identity=${identity} error: ${outcome.message}`);
+    } else {
+      d.log(lineOf(entry.read, identity, outcome));
+    }
+  };
+
   for (const entry of d.map) {
     if (args.only && entry.read !== args.only) continue;
+    if (entry.download && !entry.skip) {
+      downloads.push(entry);
+      continue;
+    }
     if (entry.skip) {
-      results.push({ read: entry.read, plan: entry.plan, status: 'skipped', pending: !!entry.pending, reason: entry.skip });
-      d.log(`[parity] ${entry.read} identity=${identity} skipped${entry.pending ? ' (pending)' : ''}: ${entry.skip}`);
+      record(entry, { status: 'skipped', pending: !!entry.pending, reason: entry.skip });
       continue;
     }
     if (!entry.identities.includes(identity)) continue;
     const missing = idsNeeded(entry).filter(name => !args.ids[name]);
     if (missing.length) {
-      const reason = `needs ${missing.map(n => `--id ${n}=<eagleId>`).join(' ')}`;
-      results.push({ read: entry.read, plan: entry.plan, status: 'skipped', reason });
-      d.log(`[parity] ${entry.read} identity=${identity} skipped: ${reason}`);
+      record(entry, { status: 'skipped', reason: `needs ${missing.map(n => `--id ${n}=<eagleId>`).join(' ')}` });
       continue;
     }
     try {
       const eagleSide = await rowsOf(eagle, entry.eagle, args.ids, args.maxPages);
       const demiSide = await rowsOf(demi, entry.demi, args.ids, args.maxPages);
-      const counts = compare(entry, identity, eagleSide, demiSide, knownIds);
-      results.push({ read: entry.read, plan: entry.plan, status: 'compared', ...counts });
-      d.log(lineOf(entry.read, identity, counts));
+      if (entry.dataset === 'Document') {
+        const eagleIds = new Set(eagleSide.rows.map(keyOf));
+        demiSide.rows.map(keyOf).filter(id => eagleIds.has(id)).forEach(id => pairedDocuments.add(id));
+      }
+      record(entry, { status: 'compared', ...compare(entry, identity, eagleSide, demiSide, knownIds) });
     } catch (err) {
-      results.push({ read: entry.read, plan: entry.plan, status: 'error', message: err.message });
-      d.error(`[parity] ${entry.read} identity=${identity} error: ${err.message}`);
+      record(entry, { status: 'error', message: err.message });
+    }
+  }
+
+  for (const entry of downloads) {
+    if (!entry.identities.includes(identity)) continue;
+    const ids = [...new Set([args.ids.document, ...pairedDocuments])]
+      .filter(id => id && EAGLE_ID.test(id)).slice(0, args.downloadSample);
+    if (!args.downloadSample) {
+      record(entry, { status: 'skipped', reason: 'off: pass --download-sample <n>' });
+    } else if (!ids.length) {
+      record(entry, { status: 'skipped', reason: 'no document paired on both sides, and no --id document' });
+    } else {
+      try {
+        record(entry, { status: 'compared', ...await compareDownloads(entry, ids, eagle, demi, store) });
+      } catch (err) {
+        record(entry, { status: 'error', message: err.message });
+      }
     }
   }
 

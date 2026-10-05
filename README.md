@@ -345,6 +345,12 @@ one read; `--max-pages <n>` caps paging, and a capped read compares fields only,
 extra rows cannot be told from a partial slice. The `--report` file lists ids and field names of
 unexplained differences, never values.
 
+`--download-sample <n>` (default 0, off; needs a staff or sysadmin token) also downloads up to `n`
+documents both sides returned, plus `--id document` if given, through Eagle's protected
+`/document/{id}/download` and DEMI's `/documents/:id/download`. It follows DEMI's redirect to
+object storage without the bearer token, and compares sha256 and byte length while streaming;
+nothing is written to disk. Any mismatch counts as unexplained.
+
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
 exception — the high-water mark cannot see them, so the application removes index entries explicitly.

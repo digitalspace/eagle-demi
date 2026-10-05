@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { run, MIN_GAP_MS } = require('../../src/scripts/parity-eagle');
+const { PARITY_MAP } = require('../../src/scripts/parity-map');
+const { unknownParams } = require('../../src/search/eagle-query');
 
 const EAGLE = 'https://eagle.test/api';
 const DEMI = 'https://demi.test/api';
@@ -113,14 +115,14 @@ test('a 5xx is retried once, then the read fails and exits 1', async () => {
   assert.match(h.out[0], /error: HTTP 503/);
 });
 
-test('a map entry on a download route is refused before any request', async () => {
+test('a map entry on the public download route is refused before any request', async () => {
   const h = harness(() => assert.fail('no request expected'));
   const map = [{ read: 'dl', identities: ['anonymous'], dataset: 'Document',
     eagle: { path: '/public/document/:document/download', shape: 'array' },
     demi: { path: '/documents/:document', shape: 'object' } }];
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--id', `document=${A}`], { ...h.deps, map });
   assert.strictEqual(code, 1);
-  assert.match(h.out[0], /download routes are never replayed/);
+  assert.match(h.out[0], /public download route is never called/);
 });
 
 test('the token is sent to both APIs and never appears in output or the report', async () => {
@@ -141,4 +143,61 @@ test('a token passed as an argument is refused without being echoed', async () =
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, TOKEN], h.deps);
   assert.strictEqual(code, 1);
   assert.ok(!h.out.join('\n').includes(TOKEN));
+});
+
+/**
+ * Downloads: Eagle streams `eagleBytes`; DEMI redirects to a presigned store URL serving
+ * `storeBytes`. Every other request gets the one row A, so the Document reads pair it.
+ */
+const downloads = ({ eagleBytes = 'pdf-bytes', storeBytes = 'pdf-bytes' } = {}) => (host, url) => {
+  if (host === 'store.test') return new Response(storeBytes);
+  if (url.pathname.endsWith('/download')) {
+    return host === 'eagle.test'
+      ? new Response(eagleBytes)
+      : new Response(null, { status: 302, headers: { location: 'https://store.test/zdspnb/a.pdf?sig=s' } });
+  }
+  const rows = [{ _id: A, documentFileName: 'a.pdf' }];
+  return json(url.pathname.endsWith('/search') ? searchBody(rows) : rows);
+};
+const staff = ['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-env', 'PARITY_TOKEN'];
+
+test('a download with the same bytes on both sides matches, and the store gets no token', async () => {
+  const h = harness(downloads(), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'document-download', '--id', `document=${A}`, '--download-sample', '1'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /document-download identity=staff match=1 .*fieldDiff=0 unexplained=0/);
+  const store = h.calls.filter(c => c.host === 'store.test');
+  assert.strictEqual(store.length, 1);
+  assert.strictEqual(store[0].headers.authorization, undefined);
+});
+
+test('a download whose bytes differ is unexplained and exits 1', async () => {
+  const h = harness(downloads({ storeBytes: 'pdf-bytez' }), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'document-download', '--id', `document=${A}`, '--download-sample', '1'], h.deps);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], /match=0 .*fieldDiff=1 unexplained=1/);
+});
+
+test('with no --download-sample nothing is downloaded', async () => {
+  const h = harness(downloads(), { env: { PARITY_TOKEN: TOKEN } });
+  await run(staff, h.deps);
+  assert.strictEqual(h.calls.filter(c => /download/i.test(c.url.pathname)).length, 0);
+  assert.ok(h.out.some(line => /document-download identity=staff skipped: off/.test(line)));
+});
+
+test('a sampled run downloads through the protected route only, never the public one', async () => {
+  const h = harness(downloads(), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--download-sample', '2'], h.deps);
+  assert.strictEqual(code, 0);
+  const paths = h.calls.filter(c => c.host === 'eagle.test').map(c => c.url.pathname);
+  assert.ok(paths.includes(`/api/document/${A}/download`), 'the protected route was sampled');
+  assert.deepStrictEqual(paths.filter(p => /\/public\/.*download/i.test(p)), []);
+});
+
+test('every DEMI search request in the map uses only parameters DEMI knows', () => {
+  const offenders = PARITY_MAP
+    .filter(e => !e.skip && e.demi.path === '/search')
+    .map(e => [e.read, unknownParams({ ...e.demi.query, pageNum: '0', pageSize: '100' })])
+    .filter(([, unknown]) => unknown.length);
+  assert.deepStrictEqual(offenders, []);
 });
