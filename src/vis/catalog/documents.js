@@ -67,6 +67,9 @@ module.exports = {
   // The padded copy of `displayName` the index sorts on (helpers/natural-sort). Derived, so no
   // response has a reason to carry it; refusedWriteKeys then refuses it as a body key too.
   displayNameSort: { defaultVis: 0, maxVis: 0 },
+  // The title-writer's record of the stored PDF (original length and hash, lease): bookkeeping,
+  // never public, and 0/0 also refuses it as a body key — only the pdf-title endpoints write it.
+  pdfTitle: { defaultVis: 0, maxVis: 0 },
 
   // Never public. `s3Key` is the object-store key — the bytes are reached through
   // GET /documents/:id/download, which reads it off the raw repository row. `ownRead` is the

@@ -30,6 +30,13 @@ const EXTRACTION_FIELDS = [
 ];
 
 /**
+ * DEMI-owned state a write that rebuilds the row from upstream must carry forward: the extraction
+ * state plus `pdfTitle`, the record of the title written into the stored PDF and of its original
+ * length and hash. Dropping `pdfTitle` loses the only way to check or restore the original.
+ */
+const DEMI_OWNED_FIELDS = [...EXTRACTION_FIELDS, 'pdfTitle'];
+
+/**
  * The "this document's chunks did not get the new parent fields" flag and when it was raised
  * (`setParentFieldsPending`). Named as a pair because both have to survive a write that rebuilds
  * the row from upstream — a re-seed or an Eagle push — or the flag is dropped and the missed
@@ -471,7 +478,7 @@ async function setAclForProject(access, projectId, read) {
 }
 
 /**
- * Extraction state of every document in one partition, for the seeder, PLUS the four parent fields
+ * DEMI-owned state of every document in one partition, for the seeder, PLUS the four parent fields
  * whose copies live on the chunks and the pending-re-stamp flag.
  *
  * A Cosmos upsert REPLACES the item, so a re-seed that does not carry the extraction state forward
@@ -485,7 +492,7 @@ async function setAclForProject(access, projectId, read) {
  */
 async function extractionRowsForProject(access, projectId) {
   return projectedRowsForProject(access, projectId,
-    [...EXTRACTION_FIELDS, ...CHUNK_PARENT_FIELDS, ...PARENT_PENDING_FIELDS]);
+    [...DEMI_OWNED_FIELDS, ...CHUNK_PARENT_FIELDS, ...PARENT_PENDING_FIELDS]);
 }
 
 /**
@@ -512,8 +519,9 @@ async function projectedRowsForProject(access, projectId, fields) {
 const seededCriteria = () => [eq('sourceSystem', 'eagle', '@sourceSystem')];
 
 /**
- * `{id, projectId, read, isPublished}` for every Eagle-seeded document — the seeder's reconcile
- * set, ~61k rows. Scoped to `sourceSystem: 'eagle'` so a row this seed never produced (an
+ * `{id, projectId, read, isPublished, pdfTitle}` for every Eagle-seeded document — the seeder's
+ * reconcile set, ~61k rows. `pdfTitle` rides along so a purge can log the original it records.
+ * Scoped to `sourceSystem: 'eagle'` so a row this seed never produced (an
  * epic.submit upload) can never be computed as surplus and deleted.
  *
  * NO ORDER BY: a cross-partition sort takes the SDK's query-plan path, whose mergeHeaders never
@@ -524,7 +532,7 @@ async function listSeededIds(access) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: seededCriteria(),
-    select: 'c.id, c.projectId, c.read, c.isPublished'
+    select: 'c.id, c.projectId, c.read, c.isPublished, c.pdfTitle'
   });
   return fetchAll(CONTAINER, spec);
 }
@@ -929,6 +937,7 @@ module.exports = {
   UPDATE_SOURCE,
   PARTITION_FIELD,
   EXTRACTION_FIELDS,
+  DEMI_OWNED_FIELDS,
   PARENT_PENDING_FIELDS,
   MANIFEST_FIELDS,
   buildCriteria,

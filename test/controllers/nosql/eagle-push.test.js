@@ -508,6 +508,63 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.contentPageCount, 42);
   });
 
+  const PDF_TITLE = Object.freeze({
+    sourceKey: 'etl/site-c/abc.pdf', originalLength: 2048, originalSha256: 'f'.repeat(64),
+    title: 'Part A', titledLength: 2311, titledSha256: 'e'.repeat(64), status: 'titled',
+    reason: null, lease: null, inFlight: null, at: '2026-10-01T00:00:00.000Z'
+  });
+
+  await t.test('the PDF title record is carried off the stored row through a push', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['public', 'sysadmin'],
+      pdfTitle: PDF_TITLE
+    }));
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument() }, user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(written.pdfTitle, PDF_TITLE,
+      'a push that drops it loses the original length and hash the stored file is checked against');
+  });
+
+  await t.test('a delete push keeps the PDF title record', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['public', 'sysadmin'],
+      pdfTitle: PDF_TITLE
+    }));
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ isDeleted: true }) }, user: STAFF
+    }, mockRes());
+
+    assert.strictEqual(written.isPublished, false);
+    assert.deepStrictEqual(written.pdfTitle, PDF_TITLE);
+  });
+
+  await t.test('a push never takes a PDF title record from the Eagle document', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => null);
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ pdfTitle: { originalLength: 1 } }) }, user: STAFF
+    }, mockRes());
+
+    assert.ok(written, 'the push was written');
+    assert.strictEqual(written.pdfTitle, undefined);
+  });
+
   await t.test('read[] is the lower of the document\'s level and its project\'s', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject({
       read: ['public', 'sysadmin', 'staff']

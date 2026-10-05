@@ -8,7 +8,8 @@
  * delete, so removing the index entry here is the ONLY thing that stops a deleted record staying
  * findable — a second implementation would eventually forget one of these calls.
  *
- * The stored blob is deliberately left in place: no caller may destroy a source file.
+ * The stored blob is deliberately left in place: no caller may destroy a source file. A titled
+ * PDF's original length and hash live only on the row, so they are logged before it goes.
  */
 
 const documents = require('../repositories/documents');
@@ -25,7 +26,7 @@ const { logger } = require('../utils/logger');
  * Index first, then Cosmos, row last: a request that dies part way leaves the row, so a retried
  * DELETE finds the chunks again. The other order leaves index rows nothing can reach.
  */
-async function purgeDocument({ id, projectId, s3Key } = {}) {
+async function purgeDocument({ id, projectId, s3Key, pdfTitle } = {}) {
   const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(id);
   const removedFromSearch = await aiSearch.deleteFromIndex(aiSearch.indexes().documents, id);
 
@@ -37,6 +38,13 @@ async function purgeDocument({ id, projectId, s3Key } = {}) {
     logger.error(`[purge] chunk removal failed for document ${id}: ${err.message}`);
   }
 
+  if (pdfTitle) {
+    // In the message, not meta: the deployed format (NODE_ENV unset) prints the message alone.
+    // sourceKey names the object the hash describes; reconcile rows carry no s3Key.
+    logger.info(`[purge] pdf-title.original id=${id} s3Key=${s3Key} ` +
+      `sourceKey=${pdfTitle.sourceKey} originalLength=${pdfTitle.originalLength} ` +
+      `originalSha256=${pdfTitle.originalSha256}`);
+  }
   await documents.deleteById(id, projectId);
 
   return {
