@@ -3,7 +3,7 @@
 /**
  * Re-derive a project's Updates' ACLs when its visibility changes, by the push's own rule
  * (`update-parent:updateRead`, which drops compliance) off `sources.eagle`. Not `acl-cascade.cascadeAcl`: that derives
- * through `seedAcl` and ladder tokens, which would widen an Update, and patches one partition while
+ * through `constrainToProject`, whose ladder-token rewrite would widen an Update, and patches one partition while
  * `updates` partitions on `/id`.
  */
 

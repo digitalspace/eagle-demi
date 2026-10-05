@@ -43,8 +43,8 @@ async function readParent(eagleId) {
 }
 
 /**
- * An Update's own `read[]` from Eagle's: minus compliance (`seedAcl`), so a compliance-only read
- * lands at level 1. An empty read stays `[]` and a non-list is `[]`: neither is widened.
+ * An Update's own `read[]` from Eagle's through `seedAcl`: minus compliance, plus `staff` when no
+ * ladder token is left. An empty read stays `[]` and a non-list is `[]`: neither is widened.
  */
 function ownRead(eagleRead) {
   if (!Array.isArray(eagleRead) || eagleRead.length === 0) return [];
@@ -65,9 +65,9 @@ function ceilingRead(parent) {
 /**
  * An Update's `read[]` under its parent: Eagle's own minus compliance (`ownRead`), unless the
  * parent sits at a lower level (`ceilingRead`), in which case the parent's level through
- * `access-sql:capRead`, so a privileged-only parent keeps the Update privileged-only. Never rewritten
- * to ladder tokens, so `['sysadmin']` stays `['sysadmin']` and `[]` stays `[]`. No parent, no
- * ceiling.
+ * `access-sql:capRead`, so a privileged-only parent keeps the Update privileged-only. Otherwise not
+ * rewritten to ladder tokens: `['sysadmin']` becomes `['sysadmin','staff']`, never `['team']`, and
+ * `[]` stays `[]`. No parent, no ceiling.
  */
 function readUnder(eagleRead, parent) {
   const own = ownRead(eagleRead);

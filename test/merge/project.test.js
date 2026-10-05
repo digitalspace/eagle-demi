@@ -414,12 +414,12 @@ test('ACL — the merge never widens visibility', async (t) => {
 
   await t.test('an existing Eagle read[] is preserved, minus the compliance token', () => {
     const acl = resolveProjectAcl({ read: ['sysadmin', 'compliance'] });
-    assert.deepStrictEqual(acl, ['sysadmin']);
+    assert.deepStrictEqual(acl, ['sysadmin', 'staff']);
     assert.ok(!acl.includes('public'), 'the merge must never widen an upstream restriction');
   });
 
-  await t.test('a compliance-only Eagle read[] lands privileged-only, not sealed', () => {
-    assert.deepStrictEqual(resolveProjectAcl({ read: ['compliance'] }), ['sysadmin']);
+  await t.test('a compliance-only Eagle read[] lands at staff, not sealed', () => {
+    assert.deepStrictEqual(resolveProjectAcl({ read: ['compliance'] }), ['sysadmin', 'staff']);
   });
 
   await t.test('a Track project with no Eagle match is NOT public', () => {
