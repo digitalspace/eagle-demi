@@ -26,9 +26,13 @@ const TITLED = Buffer.concat([ORIGINAL, Buffer.from(' plus a title increment')])
 const OTHER = Buffer.from('%PDF-1.7 another original');
 const OTHER_TITLED = Buffer.concat([OTHER, Buffer.from(' titled')]);
 
-/** Object store double. `put` honours If-Match and Content-MD5 the way the store does. */
+/**
+ * Object store double. `put` honours If-Match and Content-MD5 the way the store does. An object is
+ * its bytes, or `{ body, etag }` for an ETag that is not the MD5 (multipart).
+ */
 function fakeStore(objects, { onUploadUrl, readBack = {} } = {}) {
-  const store = new Map(Object.entries(objects).map(([k, body]) => [k, { body, etag: md5(body) }]));
+  const store = new Map(Object.entries(objects)
+    .map(([k, o]) => [k, Buffer.isBuffer(o) ? { body: o, etag: md5(o) } : o]));
   const puts = [];
   return {
     store, puts,
@@ -268,6 +272,63 @@ test('plan refuses a row whose record names a different original than the backup
   const result = await s.go('plan', '--id', 'a');
   assert.strictEqual(result.summary.refused, 1);
   assert.match(s.logs.join('\n'), /reason=record-original-differs/);
+});
+
+test('plan restores an object whose multipart ETag differs from the one recorded at backup', async (t) => {
+  const sameSize = Buffer.from(ORIGINAL.toString().toUpperCase());
+  const s = setup(t, { bucket: { 'p1/a.pdf': { body: sameSize, etag: `${md5(sameSize)}-2` } } });
+  const result = await s.go('plan', '--id', 'a');
+  assert.strictEqual(result.summary.restore, 1);
+  assert.match(s.logs.join('\n'), /reason=etag-differs/);
+});
+
+test('plan leaves an object alone whose multipart ETag equals the one recorded at backup', async (t) => {
+  const etag = `${md5(ORIGINAL)}-2`;
+  const s = setup(t, {
+    bucket: { 'p1/a.pdf': { body: ORIGINAL, etag } },
+    manifest: [manifestLine('p1/a.pdf', ORIGINAL, { etag })],
+    rows: [{ id: 'a', projectId: 'p1', s3Key: 'p1/a.pdf' }]
+  });
+  const result = await s.go('plan', '--id', 'a');
+  assert.strictEqual(result.summary.unchanged, 1);
+});
+
+test('plan refuses a row whose record names a different original length than the backup', async (t) => {
+  const record = { ...titledRecord('p1/a.pdf', ORIGINAL, TITLED), originalLength: ORIGINAL.length + 1 };
+  const s = setup(t, { rows: [{ id: 'a', projectId: 'p1', s3Key: 'p1/a.pdf', pdfTitle: record }] });
+  const result = await s.go('plan', '--id', 'a');
+  assert.strictEqual(result.summary.refused, 1);
+  assert.match(s.logs.join('\n'), /reason=record-original-differs/);
+});
+
+test('apply refuses, writing nothing, when a lease is taken after the plan', async (t) => {
+  const s = setup(t);
+  await rehydrated(s, '--id', 'a');
+  // The first read is the selection; a title job leases the row before the write re-reads it.
+  const read = s.docs.documents.readForWrite;
+  let reads = 0;
+  s.docs.documents.readForWrite = async (id) => {
+    const doc = await read(id);
+    if (++reads === 1) s.docs.stored.get('a').pdfTitle.lease = { leaseId: 'late' };
+    return doc;
+  };
+  const result = await s.go('apply', '--id', 'a', '--live', '--confirm', '1');
+  assert.strictEqual(result.summary.refused, 1);
+  assert.strictEqual(s.store.puts.length, 0);
+});
+
+test('apply updates only the records that claim a titled file, not every document on the key', async (t) => {
+  const skipped = { sourceKey: 'p1/a.pdf', status: 'skipped', reason: 'shared-key', title: 'Public name' };
+  const s = setup(t, {
+    rows: [
+      { id: 'a', projectId: 'p1', s3Key: 'p1/a.pdf', pdfTitle: titledRecord('p1/a.pdf', ORIGINAL, TITLED) },
+      { id: 'd', projectId: 'p1', s3Key: 'p1/a.pdf', pdfTitle: skipped }
+    ]
+  });
+  await rehydrated(s, '--project', 'p1');
+  await s.go('apply', '--project', 'p1', '--live', '--confirm', '1');
+  assert.strictEqual(s.docs.stored.get('a').pdfTitle.status, 'restored');
+  assert.deepStrictEqual(s.docs.stored.get('d').pdfTitle, skipped);
 });
 
 test('apply skips and reports a row whose object changed after the plan (412)', async (t) => {
