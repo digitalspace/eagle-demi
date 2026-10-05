@@ -35,7 +35,8 @@ const {
   PROJECT_EAGLE_ID, PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID,
   PUBLIC_ACL, PRIVATE_ACL, storedProject, storedPeriod,
   eaglePeriod, eagleComment, eagleOrganization, eagleNotification,
-  mockRes, STAFF, anonymous, staff, SEALED_AT
+  mockRes, STAFF, anonymous, staff, SEALED_AT,
+  STAFF_PERIOD_FIELDS, STAFF_COMMENT_FIELDS, STAFF_ORGANIZATION_FIELDS
 } = require('../../helpers/eagle-mirror-fixtures');
 
 /**
@@ -155,6 +156,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       openHouses: [{ eventDate: '2026-08-10T00:00:00.000Z', description: 'Community hall' }],
       relatedDocuments: ['5cf00c03a266b7e187750002'],
       commentTip: 'Comments are public.',
+      ...STAFF_PERIOD_FIELDS,
       isDeleted: false,
       isPublished: true,
       read: ['staff', 'idir', 'public'],
@@ -538,6 +540,7 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
       documents: ['5cf00c03a266b7e187750003'],
       commentId: 12,
       eaoStatus: 'Published',
+      ...STAFF_COMMENT_FIELDS,
       isPublished: true,
       read: ['staff', 'idir', 'public'],
       sources: { eagle: eagleComment() }
@@ -727,6 +730,7 @@ test('PUT /eagle/organizations/:eagleId', async (t) => {
       city: 'Merritt',
       postal: 'V1K 1B8',
       website: 'https://example.invalid',
+      ...STAFF_ORGANIZATION_FIELDS,
       isPublished: true,
       read: PUBLIC_ACL,
       sources: { eagle: eagleOrganization() }

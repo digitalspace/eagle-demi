@@ -6,10 +6,9 @@
  *
  * ONE catalog for both kinds, because one container has one entity name and `catalogFor` is keyed
  * on it. That is safe only while every field of both kinds carries the same policy, which it does:
- * a List row is a lookup label, and the mirrored half of an Organization is its published business
- * card. The staff-side Organization fields — `addedBy`, `updatedBy`, `parentCompany`,
- * `companyLegal` — are not mirrored, so they need no entry. Add a second container before adding a
- * field whose two kinds would disagree.
+ * a List row is a lookup label, and an Organization is its published business card plus staff-side
+ * fields at 2/2 that a List row never carries. Add a second container before adding a field whose
+ * two kinds would disagree.
  */
 module.exports = {
   // Structural / identity.
@@ -36,6 +35,17 @@ module.exports = {
   city: { defaultVis: 4, maxVis: 4 },
   postal: { defaultVis: 4, maxVis: 4 },
   website: { defaultVis: 4, maxVis: 4 },
+
+  // `Organization` staff-side fields (`staffFields` in the organization mirror).
+  description: { defaultVis: 2, maxVis: 2 },
+  address2: { defaultVis: 2, maxVis: 2 },
+  company: { defaultVis: 2, maxVis: 2 },
+  companyLegal: { defaultVis: 2, maxVis: 2 },
+  parentCompany: { defaultVis: 2, maxVis: 2 },
+  addedBy: { defaultVis: 2, maxVis: 2 },
+  updatedBy: { defaultVis: 2, maxVis: 2 },
+  dateAdded: { defaultVis: 2, maxVis: 2 },
+  dateUpdated: { defaultVis: 2, maxVis: 2 },
 
   // Never public. Same entries, same reasons, as catalog/projects.js.
   read: { defaultVis: 0, maxVis: 0 },

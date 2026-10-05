@@ -3,9 +3,9 @@
 /**
  * Field visibility policy for a mirrored comment period. See catalog/projects.js for the rules.
  *
- * Everything here is what eagle-public renders on the public engagement tab today, so it is 4/4.
- * The staff-only halves of the Eagle model — `metURLAdmin`, the vetting and classification roles
- * and percentages, `eaoNotes` — are not mirrored at all, so they need no entry.
+ * The public fields are what eagle-public renders on the engagement tab today, so they are 4/4.
+ * The staff-side fields of the Eagle model are 2/2: staff read them in eagle-api, and nothing here
+ * may publish them.
  */
 module.exports = {
   // Structural / identity.
@@ -33,6 +33,34 @@ module.exports = {
   openHouses: { defaultVis: 4, maxVis: 4 },
   relatedDocuments: { defaultVis: 4, maxVis: 4 },
   commentTip: { defaultVis: 4, maxVis: 4 },
+
+  // Staff-side fields (`staffFields` in the comment-period mirror).
+  ceaaAdditionalText: { defaultVis: 2, maxVis: 2 },
+  ceaaInformationLabel: { defaultVis: 2, maxVis: 2 },
+  ceaaRelatedDocuments: { defaultVis: 2, maxVis: 2 },
+  classificationRoles: { defaultVis: 2, maxVis: 2 },
+  classifiedPercent: { defaultVis: 2, maxVis: 2 },
+  commenterRoles: { defaultVis: 2, maxVis: 2 },
+  commentIdCount: { defaultVis: 2, maxVis: 2 },
+  dateCompletedEst: { defaultVis: 2, maxVis: 2 },
+  dateStartedEst: { defaultVis: 2, maxVis: 2 },
+  dateUpdated: { defaultVis: 2, maxVis: 2 },
+  downloadRoles: { defaultVis: 2, maxVis: 2 },
+  isClassified: { defaultVis: 2, maxVis: 2 },
+  isResolved: { defaultVis: 2, maxVis: 2 },
+  isVetted: { defaultVis: 2, maxVis: 2 },
+  metURLAdmin: { defaultVis: 2, maxVis: 2 },
+  milestone: { defaultVis: 2, maxVis: 2 },
+  periodType: { defaultVis: 2, maxVis: 2 },
+  phase: { defaultVis: 2, maxVis: 2 },
+  phaseName: { defaultVis: 2, maxVis: 2 },
+  publishedPercent: { defaultVis: 2, maxVis: 2 },
+  rangeOption: { defaultVis: 2, maxVis: 2 },
+  rangeType: { defaultVis: 2, maxVis: 2 },
+  resolvedPercent: { defaultVis: 2, maxVis: 2 },
+  userCan: { defaultVis: 2, maxVis: 2 },
+  vettedPercent: { defaultVis: 2, maxVis: 2 },
+  vettingRoles: { defaultVis: 2, maxVis: 2 },
 
   // Never public. Same entries, same reasons, as catalog/projects.js.
   read: { defaultVis: 0, maxVis: 0 },
