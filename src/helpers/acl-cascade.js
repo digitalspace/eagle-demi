@@ -12,7 +12,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { constrainToProject, DELETED_CEILING } = require('../repositories/documents');
-const { seedAcl } = require('../seed/transform');
+const { seedAcl, eagleReadUnder } = require('../seed/transform');
 
 /**
  * @param {Array}  rows        `{id, read, eagleRead, isDeleted}` from the container's own acl
@@ -25,14 +25,12 @@ function deriveAcls(rows, parentRead) {
     // The upstream ACL when the raw record still carries one, otherwise what the row holds today.
     // `seedAcl` fails closed, so a record with no upstream `read[]` lands at level 2 rather than
     // inheriting the parent's.
-    const own = Array.isArray(row.eagleRead) && row.eagleRead.length > 0
-      ? seedAcl(row.eagleRead)
-      : (Array.isArray(row.read) && row.read.length > 0 ? row.read : seedAcl(null));
+    const capped = Array.isArray(row.eagleRead) && row.eagleRead.length > 0
+      ? eagleReadUnder(row.eagleRead, parentRead)
+      : constrainToProject(Array.isArray(row.read) && row.read.length > 0 ? row.read : seedAcl(null), parentRead);
     // A deleted row's raw Eagle record still says `public` — it was published right up to the
     // delete — so without this ceiling the next project publish would republish it.
-    const next = row.isDeleted === true
-      ? constrainToProject(constrainToProject(own, parentRead), DELETED_CEILING)
-      : constrainToProject(own, parentRead);
+    const next = row.isDeleted === true ? constrainToProject(capped, DELETED_CEILING) : capped;
     return { id: String(row.id), read: next, isPublished: next.includes('public') };
   });
 }

@@ -14,8 +14,7 @@
 
 const comments = require('../../repositories/comments');
 const commentPeriods = require('../../repositories/comment-periods');
-const { constrainToProject } = require('../../repositories/documents');
-const { seedAcl } = require('../../seed/transform');
+const { eagleReadUnder } = require('../../seed/transform');
 const { systemAccess } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
@@ -110,7 +109,7 @@ async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}
 
   // The period's own ACL is already constrained to its project, so one constrain here carries
   // both ceilings.
-  const read = constrainToProject(seedAcl(doc.read), period.read);
+  const read = eagleReadUnder(doc.read, period.read);
 
   const written = await upsertWithRetry(
     comments,

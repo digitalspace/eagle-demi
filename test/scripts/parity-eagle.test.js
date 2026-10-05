@@ -223,3 +223,16 @@ test('every DEMI search request in the map uses only parameters DEMI knows', () 
     .filter(([, unknown]) => unknown.length);
   assert.deepStrictEqual(offenders, []);
 });
+
+test('--max-pages reads that many pages per side and reports the read as truncated, not as missing rows', async () => {
+  const ids = Array.from({ length: 250 }, (_, i) => i.toString(16).padStart(24, '0'));
+  // DEMI orders differently, so its first page shares no row with Eagle's.
+  const pageOf = (order, url) => {
+    const pageNum = Number(url.searchParams.get('pageNum'));
+    return json(searchBody(order.slice(pageNum * 100, pageNum * 100 + 100).map(id => project(id)), order.length));
+  };
+  const h = harness((host, url) => pageOf(host === 'eagle.test' ? ids : [...ids].reverse(), url));
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public', '--max-pages', '1'], h.deps);
+  assert.strictEqual(h.calls.length, 2);
+  assert.match(h.out[0], /missingInDemi=0 extraInDemi=0 .* truncated$/);
+});

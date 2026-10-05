@@ -10,7 +10,7 @@ const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
 const { pickParent } = require('./parent-admit');
 const { levelOfRead, capRead, isDemiSeal } = require('./access-sql');
-const { seedAcl } = require('../seed/transform');
+const { seedAcl, eagleReadUnder } = require('../seed/transform');
 
 /**
  * The project row carrying an Eagle id, unfiltered. Not `projects.getByEagleId(systemAccess())`:
@@ -62,18 +62,20 @@ function ceilingRead(parent) {
   return seedAcl(doc.sources && doc.sources.eagle && doc.sources.eagle.read);
 }
 
+/** Capped only where the ceiling sits lower; otherwise kept verbatim, not rewritten to ladder tokens. */
+const capIfLower = (own, ceiling) => (levelOfRead(ceiling) < levelOfRead(own) ? capRead(own, ceiling) : own);
+
 /**
- * An Update's `read[]` under its parent: Eagle's own minus compliance (`ownRead`), unless the
- * parent sits at a lower level (`ceilingRead`), in which case the parent's level through
- * `access-sql:capRead`, so a privileged-only parent keeps the Update privileged-only. Otherwise not
- * rewritten to ladder tokens: `['sysadmin']` becomes `['sysadmin','staff']`, never `['team']`, and
- * `[]` stays `[]`. No parent, no ceiling.
+ * An Update's `read[]` under its parent: `ownRead`, capped by `ceilingRead` through
+ * `seed/transform:eagleReadUnder` where the ceiling sits lower. So `['sysadmin']` is
+ * `['sysadmin','staff']` under a parent at level 2 or wider, and stays `['sysadmin']` under any
+ * level-1 parent. `[]` stays `[]`. No parent, no ceiling.
  */
 function readUnder(eagleRead, parent) {
   const own = ownRead(eagleRead);
   if (!parent) return own;
   const ceiling = ceilingRead(parent);
-  return levelOfRead(ceiling) < levelOfRead(own) ? capRead(own, ceiling) : own;
+  return own.length === 0 ? capIfLower(own, ceiling) : eagleReadUnder(eagleRead, ceiling, capIfLower);
 }
 
 /** Eagle sent no `read` at all: absent or null. `[]` is a read, and so is any non-list. */

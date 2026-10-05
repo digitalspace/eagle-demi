@@ -263,6 +263,19 @@ test('aclMismatch', async (t) => {
     assert.deepStrictEqual(aclMismatch(rows, byId, eagle(STAFF)), ['a']);
   });
 
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team']]) {
+    await t.test(`a no-ladder row stored privileged-only under level-1 parent ${JSON.stringify(parent)} is not drift`, () => {
+      const rows = [{ id: 'a', read: ['sysadmin'], isPublished: false }];
+      assert.deepStrictEqual(aclMismatch(rows, byId, eagle(['sysadmin']), () => parent), []);
+    });
+  }
+
+  await t.test('a no-ladder row under a staff parent is drift until it carries staff', () => {
+    const parentOf = () => STAFF;
+    assert.deepStrictEqual(aclMismatch([{ id: 'a', read: ['sysadmin'], isPublished: false }], byId, eagle(['sysadmin']), parentOf), ['a']);
+    assert.deepStrictEqual(aclMismatch([{ id: 'a', read: STAFF, isPublished: false }], byId, eagle(['sysadmin']), parentOf), []);
+  });
+
   await t.test('isPublished out of step with its own read[] is a mismatch', () => {
     const rows = [{ id: 'a', read: PUBLIC, isPublished: false }];
     assert.deepStrictEqual(aclMismatch(rows, byId, eagle(PUBLIC)), ['a']);

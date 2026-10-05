@@ -6,11 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  seedAcl, withEagleStaff, toNumber, toIsoOrNull, resolveListLabel,
+  seedAcl, withEagleStaff, eagleReadUnder, toNumber, toIsoOrNull, resolveListLabel,
   transformDocument, transformBoundary
 } = require('../../src/seed/transform');
 const { levelOfRead } = require('../../src/helpers/access-sql');
-const { constrainToProject } = require('../../src/repositories/documents');
 const { naturalSortKey } = require('../../src/helpers/natural-sort');
 
 const NOW = '2026-07-30T00:00:00.000Z';
@@ -115,12 +114,30 @@ test('seedAcl — an Eagle read with no ladder token gains staff', async (t) => 
     assert.deepStrictEqual(withEagleStaff(['compliance']), ['compliance']);
   });
 
-  await t.test('a widened child is still capped by a privileged-only parent', () => {
-    assert.deepStrictEqual(constrainToProject(seedAcl(['sysadmin']), ['sysadmin']), ['sysadmin']);
+});
+
+test('eagleReadUnder — the added staff never caps to team', async (t) => {
+  // What every capped mirror stored for an Eagle `['sysadmin']` child before the rule.
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team']]) {
+    await t.test(`under a level-1 parent ${JSON.stringify(parent)} it stays ['sysadmin']`, () => {
+      assert.deepStrictEqual(eagleReadUnder(['sysadmin'], parent), ['sysadmin']);
+    });
+  }
+
+  await t.test('under a staff parent it lands at staff', () => {
+    assert.deepStrictEqual(eagleReadUnder(['sysadmin'], ['sysadmin', 'staff']), ['staff']);
   });
 
-  await t.test('a widened child under a staff parent lands at staff', () => {
-    assert.deepStrictEqual(constrainToProject(seedAcl(['sysadmin']), ['sysadmin', 'staff']), ['staff']);
+  await t.test('under a public parent it lands at staff, no wider', () => {
+    assert.deepStrictEqual(eagleReadUnder(['sysadmin'], ['staff', 'idir', 'public']), ['staff']);
+  });
+
+  await t.test('an Eagle read that already carries a ladder token caps as before', () => {
+    assert.deepStrictEqual(eagleReadUnder(['sysadmin', 'staff'], ['team']), ['team']);
+  });
+
+  await t.test('a sealed parent still seals it', () => {
+    assert.deepStrictEqual(eagleReadUnder(['sysadmin'], ['compliance']), ['compliance']);
   });
 });
 

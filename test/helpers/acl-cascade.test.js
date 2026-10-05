@@ -112,3 +112,20 @@ test('deriveAcls — the raw Eagle ACL is the row\'s own', async (t) => {
       ['a', 'b', 'c']);
   });
 });
+
+test('deriveAcls — an Eagle row with no ladder token is never opened to team', async (t) => {
+  const row = { id: 'x', read: ['sysadmin'], eagleRead: ['sysadmin'] };
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team']]) {
+    await t.test(`under a level-1 parent ${JSON.stringify(parent)} it stays ['sysadmin']`, () => {
+      assert.deepStrictEqual(deriveAcls([row], parent)[0].read, ['sysadmin']);
+    });
+  }
+
+  await t.test('under a staff parent it lands at staff', () => {
+    assert.deepStrictEqual(deriveAcls([row], STAFF_PARENT)[0].read, ['staff']);
+  });
+
+  await t.test('a deleted row under a level-1 parent stays privileged-only', () => {
+    assert.deepStrictEqual(deriveAcls([{ ...row, isDeleted: true }], ['team'])[0].read, ['sysadmin']);
+  });
+});

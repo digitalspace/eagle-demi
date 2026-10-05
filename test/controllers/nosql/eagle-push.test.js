@@ -646,18 +646,21 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     return written.read;
   }
 
-  // DEMI's narrow writes `readForLevel(level)`; a no-ladder child is capped like any staff child.
+  // DEMI's narrow writes `readForLevel(level)`.
   for (const [label, parentRead] of [['level 1', ['team']], ['level 2', ['staff']]]) {
     await t.test(`a no-ladder document under a project narrowed to ${label} is no wider than it`, async () => {
       const read = await pushedUnder(parentRead, ['sysadmin']);
       assert.ok(levelOfRead(read) <= levelOfRead(parentRead));
     });
-
-    await t.test(`a no-ladder document under a project narrowed to ${label} lands where a staff document does`, async () => {
-      const read = await pushedUnder(parentRead, ['sysadmin']);
-      assert.deepStrictEqual(read, await pushedUnder(parentRead, ['sysadmin', 'staff']));
-    });
   }
+
+  await t.test('a no-ladder document under a project narrowed to level 2 lands where a staff document does', async () => {
+    assert.deepStrictEqual(await pushedUnder(['staff'], ['sysadmin']), await pushedUnder(['staff'], ['sysadmin', 'staff']));
+  });
+
+  await t.test('a no-ladder document under a project narrowed to level 1 stays privileged-only, not team', async () => {
+    assert.deepStrictEqual(await pushedUnder(['team'], ['sysadmin']), ['sysadmin']);
+  });
 
   await t.test('a public document under a project taken down to staff lands at staff, as before', async () => {
     assert.deepStrictEqual(await pushedUnder(['staff'], ['sysadmin', 'staff', 'public']), ['staff']);

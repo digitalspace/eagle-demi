@@ -98,12 +98,16 @@ push.
 
 **Eagle-mirror exception (2026-10-05).** Eagle's `staff` role skips every read check, so a pushed
 record whose `read[]` has no ladder token (for example `['sysadmin']` or `['sysadmin','inspector']`)
-gains `staff` and lands at level 2 (`seed/transform.js:withEagleStaff`). The parent cap still
-applies, so the result is never wider than the parent and never `public`. Existing rows
-are rewritten by `src/scripts/backfill-eagle-ladder.js`. `staff` stays out of `SECURE_ROLES`. The
-backfill leaves rows under a project DEMI narrowed or took down as they are. A later push of such a
-row caps it to the parent, like any other staff row. To drop the rule, remove `withEagleStaff` and
-that script.
+gains `staff` and lands at level 2 (`seed/transform.js:withEagleStaff`). Under a parent the read is
+derived by `seed/transform.js:eagleReadUnder`: the parent cap applies, and where the capped result
+would be `team` (a level-1 parent that is not privileged-only, such as `['team']`, `[]` or
+`['project-team']`), the row stores what it stored before the rule, `['sysadmin']`. So the result is
+never wider than the parent, never `team` and never `public`. The document, period, comment and
+Update mirrors, the period and comment cascade (`helpers/acl-cascade.js`) and the reconcile drift
+check all derive through it. Existing rows are rewritten by `src/scripts/backfill-eagle-ladder.js`,
+which caps each row by the same rule against its parent's stored read, a DEMI narrow or takedown
+included. `staff` stays out of `SECURE_ROLES`. To drop the rule, remove `withEagleStaff` and that
+script.
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.

@@ -11,7 +11,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { updateRead, inheritsParentRead } = require('../../src/helpers/update-parent');
+const { updateRead, inheritsParentRead, readUnder } = require('../../src/helpers/update-parent');
 const { PUBLIC_ACL, PRIVATE_ACL } = require('./eagle-mirror-fixtures');
 
 // Spelled out, not built from readForLevel, so the assertion cannot agree with any helper output.
@@ -70,5 +70,21 @@ test('updateRead — every other update keeps today\'s rule', async (t) => {
   await t.test('a read that is not a list is not missing: stored as [], never widened', () => {
     assert.strictEqual(inheritsParentRead(legacy({ read: 'public' })), false);
     assert.deepStrictEqual(updateRead(legacy({ read: 'public' }), PUBLIC_PARENT), []);
+  });
+});
+
+test('readUnder — an Eagle read with no ladder token is never opened to team', async (t) => {
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team']]) {
+    await t.test(`under a level-1 parent ${JSON.stringify(parent)} it stays ['sysadmin']`, () => {
+      assert.deepStrictEqual(readUnder(['sysadmin'], { read: parent }), ['sysadmin']);
+    });
+  }
+
+  await t.test('under a staff parent it keeps its own read, widened', () => {
+    assert.deepStrictEqual(readUnder(['sysadmin'], { read: ['staff'] }), ['sysadmin', 'staff']);
+  });
+
+  await t.test('an empty read under a sealed parent is sealed, as before', () => {
+    assert.deepStrictEqual(readUnder([], { read: ['compliance'], doc: { sealedAt: 'x' } }), ['compliance']);
   });
 });

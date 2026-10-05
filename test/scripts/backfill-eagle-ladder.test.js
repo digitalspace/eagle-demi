@@ -7,6 +7,7 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const { backfillEagleLadder, parseArgs, exitCodeFor } = require('../../src/scripts/backfill-eagle-ladder');
+const { eagleReadUnder } = require('../../src/seed/transform');
 
 const EAGLE_PUBLIC = ['sysadmin', 'staff', 'public'];
 const STAFF_PROJECT = { id: 'p-staff', eagleId: 'e-staff', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin', 'staff'] };
@@ -117,38 +118,69 @@ test('backfill-eagle-ladder', async (t) => {
     });
     const summaries = await backfillEagleLadder(['--live']);
     assert.strictEqual(writes.length, 0);
-    assert.strictEqual(summaryOf(summaries, 'documents').narrowedParent, 1);
+    assert.strictEqual(summaryOf(summaries, 'documents').heldByParent, 1);
   });
 
-  await t.test('a document under a project taken down to level 2 is not written', async (t) => {
+  await t.test('an Update under a project narrowed to level 1 is not written', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [TEAM_PROJECT],
+      updates: [{ id: 'u-1', projectId: 'e-team', read: ['sysadmin'], hasEagleSource: true }]
+    });
+    await backfillEagleLadder(['--live']);
+    assert.strictEqual(writes.length, 0);
+  });
+
+  // The push caps by the parent's stored read, a DEMI takedown included, so the backfill does too.
+  await t.test('a document under a project taken down to level 2 lands at staff, as its push would', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [TAKEN_DOWN_PROJECT],
       documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-down', read: ['sysadmin'] }]
     });
     await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.length, 0);
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
   });
 
-  await t.test('an Update under a narrowed project is not written', async (t) => {
+  await t.test('a document under a project at its Eagle level but a different set lands at staff', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [{ id: 'p-same', eagleId: 'e-same', read: ['staff'], eagleRead: ['sysadmin', 'staff'] }],
+      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-same', read: ['sysadmin'] }]
+    });
+    await backfillEagleLadder(['--live']);
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
+  });
+
+  await t.test('an Update under a project taken down to level 2 keeps its own read, widened', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [TAKEN_DOWN_PROJECT],
       updates: [{ id: 'u-1', projectId: 'e-down', read: ['sysadmin'], hasEagleSource: true }]
     });
     await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.length, 0);
+    assert.deepStrictEqual(readOf(writes, 'u-1'), ['sysadmin', 'staff']);
   });
 
-  await t.test('a comment under a period of a narrowed project is not written', async (t) => {
+  await t.test('a comment under a staff period of a taken-down project lands at staff', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [TAKEN_DOWN_PROJECT],
       commentPeriods: [{ id: 'cp-1', projectId: 'p-down', read: ['staff'], hasEagleSource: true }],
       comments: [{ id: 'c-1', periodId: 'cp-1', projectId: 'p-down', read: ['sysadmin'], hasEagleSource: true }]
     });
     await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.length, 0);
+    assert.deepStrictEqual(readOf(writes, 'c-1'), ['staff']);
   });
 
-  await t.test('a project DEMI widened above its Eagle read is not treated as narrowed', async (t) => {
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team'], ['staff'], ['staff', 'idir', 'public']]) {
+    await t.test(`a document under ${JSON.stringify(parent)} is written exactly when a push after the run gives it staff`, async (t) => {
+      const writes = fakeCosmos(t, {
+        projects: [{ id: 'p-x', eagleId: 'e-x', read: parent, eagleRead: EAGLE_PUBLIC }],
+        documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-x', read: ['sysadmin'] }]
+      });
+      await backfillEagleLadder(['--live']);
+      const pushed = eagleReadUnder(['sysadmin'], readOf(writes, 'p-x') || parent);
+      assert.deepStrictEqual(readOf(writes, 'd-1'), pushed.includes('staff') ? pushed : undefined);
+    });
+  }
+
+  await t.test('a document under a project DEMI widened above its Eagle read lands at staff', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [{ id: 'p-up', eagleId: 'e-up', read: ['staff', 'idir', 'public'], eagleRead: ['sysadmin', 'staff'] }],
       documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-up', read: ['sysadmin'] }]

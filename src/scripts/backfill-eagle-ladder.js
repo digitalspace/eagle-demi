@@ -17,12 +17,10 @@
  * What it never widens:
  * - sealed rows (`compliance`) and any row with a ladder token. A DEMI takedown or narrow writes
  *   `readForLevel(level)`, which always carries one, so those rows are never candidates;
- * - any row under a project DEMI narrowed or took down (`narrowed`), nor the comments under its
- *   periods: this script leaves their stored read as it is. A later Eagle push of such a row still
- *   gains `staff` and is then capped to the parent, like any other staff row;
- * - a row whose parent would cap it below level 2: the parent cap is the push's own
- *   (`constrainToProject`, or `update-parent:readUnder` for Updates), and only a level-2 result is
- *   written, so nothing lands at `team` or `public`;
+ * - a row whose parent caps it below level 2. The cap is the push's own, `seed/transform:
+ *   eagleReadUnder` (through `update-parent:readUnder` for Updates), against the parent's stored
+ *   read, a DEMI narrow or takedown included: the rule a push applies, so the two agree. Only a
+ *   level-2 result is written, so nothing lands at `team` or `public`;
  * - a row whose parent is not in DEMI.
  *
  * Parents are planned first and children are capped by the parent's planned read, so a dry run
@@ -31,10 +29,9 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { constrainToProject } = require('../repositories/documents');
 const { readUnder } = require('../helpers/update-parent');
 const { levelOfRead, LEVEL_TOKENS, SEALED_TOKEN } = require('../helpers/access-sql');
-const { seedAcl, eagleBaseAcl } = require('../seed/transform');
+const { seedAcl, eagleReadUnder } = require('../seed/transform');
 const { logger } = require('../utils/logger');
 
 const PAGE_SIZE = 500;
@@ -52,9 +49,6 @@ const STEPS = Object.freeze([
 
 /** Containers whose every row is loaded, because they cap other containers' rows. */
 const PARENT_CONTAINERS = new Set(['projects', 'notifications', 'commentPeriods']);
-
-/** Parent-map value for a project DEMI narrowed or took down, and for the periods under it. */
-const NARROWED = Symbol('narrowed');
 
 const BLOCKING = [...Object.values(LEVEL_TOKENS), SEALED_TOKEN];
 const NO_LADDER_SQL = field => `(IS_ARRAY(${field}) AND ARRAY_LENGTH(${field}) > 0 AND ` +
@@ -77,7 +71,7 @@ function rowsSpec(container, skip) {
   const candidatesOnly = PARENT_CONTAINERS.has(container) ? '' : ` AND ${NO_LADDER_SQL('c.read')}`;
   return {
     query: 'SELECT c.id, c.read, c.ownRead, c.eagleId, c.projectId, c.periodId, c.kind, ' +
-      'IS_DEFINED(c.sources.eagle) AS hasEagleSource, c.sources.eagle.read AS eagleRead FROM c ' +
+      'IS_DEFINED(c.sources.eagle) AS hasEagleSource FROM c ' +
       `WHERE (IS_DEFINED(c.eagleId) OR IS_DEFINED(c.sources.eagle))${candidatesOnly} ` +
       'ORDER BY c.id OFFSET @skip LIMIT @size',
     parameters: [
@@ -100,20 +94,6 @@ async function allRows(queryPage, container) {
 const hasNoLadder = read => Array.isArray(read) && read.length > 0 &&
   !read.some(r => BLOCKING.includes(r));
 
-const sameSet = (a, b) => a.length === b.length && a.every(r => b.includes(r));
-
-/**
- * A project row whose read is not what the merge derives from its Eagle copy and sits no higher:
- * only a DEMI level change (`record.narrow`, `record.takedown`) or seal leaves a project there.
- * Compared against the pre-rule read, so a project the rule has not reached yet is not counted.
- */
-function narrowed(project) {
-  const read = Array.isArray(project.read) ? project.read : [];
-  const derived = eagleBaseAcl(project.eagleRead);
-  if (sameSet(read, derived) || sameSet(read, seedAcl(project.eagleRead))) return false;
-  return levelOfRead(read) <= levelOfRead(derived);
-}
-
 /**
  * The parent read a row is capped by: `undefined` for no cap, `null` when the parent is missing.
  * A notification wins over a project, as `parent-admit:pickParent` says, and caps nothing except
@@ -135,10 +115,10 @@ function parentReadOf(step, row, parents) {
  * unconstrained Eagle ACL the project cascade re-derives from, takes the rule uncapped beside it.
  */
 function planRow(step, row, parentRead) {
-  if (!hasNoLadder(row.read) || parentRead === null || parentRead === NARROWED) return null;
+  if (!hasNoLadder(row.read) || parentRead === null) return null;
   const next = step.parent === 'eagle'
     ? readUnder(row.read, parentRead === undefined ? null : { read: parentRead })
-    : (parentRead === undefined ? seedAcl(row.read) : constrainToProject(seedAcl(row.read), parentRead));
+    : (parentRead === undefined ? seedAcl(row.read) : eagleReadUnder(row.read, parentRead));
   if (levelOfRead(next) !== 2) return null;
   return hasNoLadder(row.ownRead) ? { read: next, ownRead: seedAcl(row.ownRead) } : { read: next };
 }
@@ -160,7 +140,7 @@ function patchOp(step, row, plan, now) {
 
 function summaryLine(s) {
   return `[eagle-ladder] container=${s.container} mode=${s.mode} scanned=${s.scanned} ` +
-    `planned=${s.planned} narrowedParent=${s.narrowedParent} heldByParent=${s.heldByParent} ` +
+    `planned=${s.planned} heldByParent=${s.heldByParent} ` +
     `noParent=${s.noParent} ` +
     `patched=${s.patched} skipped=${s.skipped} failed=${s.failed}`;
 }
@@ -183,7 +163,7 @@ async function backfillEagleLadder(argv = [], deps = {}) {
   for (const step of STEPS) {
     const s = {
       container: step.container, mode: args.live ? 'live' : 'dry-run',
-      scanned: 0, planned: 0, narrowedParent: 0, heldByParent: 0, noParent: 0,
+      scanned: 0, planned: 0, heldByParent: 0, noParent: 0,
       patched: 0, skipped: 0, failed: 0
     };
     const ops = [];
@@ -194,19 +174,17 @@ async function backfillEagleLadder(argv = [], deps = {}) {
       const plan = planRow(step, row, parentRead);
       if (hasNoLadder(row.read) && !plan) {
         if (parentRead === null) s.noParent++;
-        else if (parentRead === NARROWED) s.narrowedParent++;
         else s.heldByParent++;
       }
       // Children are capped by what the parent becomes, so the dry run counts the live result.
       const read = plan ? plan.read : row.read;
       if (step.container === 'projects') {
-        const value = narrowed(row) ? NARROWED : read;
-        parents.projects.set(String(row.id), value);
-        if (row.eagleId) parents.projectsByEagleId.set(String(row.eagleId), value);
+        parents.projects.set(String(row.id), read);
+        if (row.eagleId) parents.projectsByEagleId.set(String(row.eagleId), read);
       } else if (step.container === 'notifications') {
         parents.notifications.set(String(row.id), read);
       } else if (step.container === 'commentPeriods') {
-        parents.periods.set(String(row.id), parentRead === NARROWED ? NARROWED : read);
+        parents.periods.set(String(row.id), read);
       }
       if (!plan) continue;
       s.planned++;
