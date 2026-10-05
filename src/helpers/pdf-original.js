@@ -18,7 +18,7 @@ const INFLATE_BUDGET = 32 * 1024 * 1024;
 const MAX_SECTIONS = 64;
 /** The last startxref must sit in this many final bytes. */
 const END_WINDOW = 4096;
-/** First read at an offset; a parse that runs off its end retries 8 times wider. */
+/** First read at an offset; a parse that runs off its end retries twice as wide. */
 const FIRST_WINDOW = 4096;
 const RETRY_MARGIN = 1024;
 
@@ -46,8 +46,11 @@ function source(readRange, length) {
     },
     /** `parse(reader)` over the bytes at `offset`, widening the read while it runs out of bytes. */
     async parseAt(offset, parse) {
-      for (let size = FIRST_WINDOW; ; size *= 8) {
-        const buf = await read(offset, size);
+      let buf = Buffer.alloc(0);
+      for (let size = FIRST_WINDOW; ; size *= 2) {
+        // Only the bytes past the last window are fetched, so a wider retry costs what it adds.
+        const more = await read(offset + buf.length, size - buf.length);
+        buf = buf.length ? Buffer.concat([buf, more]) : more;
         const r = new Reader(buf, 0, { forbid: false });
         try {
           return parse(r, buf);

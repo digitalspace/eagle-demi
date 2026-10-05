@@ -8,19 +8,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
 const zlib = require('zlib');
 const { readOriginal, READ_BUDGET } = require('../../src/helpers/pdf-original');
 const { originalScanner } = require('../../src/helpers/pdf-tail');
-const { classicTail, classicPdf } = require('./pdf-build');
-
-const DIR = path.join(__dirname, '..', 'fixtures', 'pdf-title');
-
-function fixture(file) {
-  const bytes = fs.readFileSync(path.join(DIR, file));
-  return file.endsWith('.gz') ? zlib.gunzipSync(bytes) : bytes;
-}
+const { fixture, classicTail, classicPdf } = require('./pdf-build');
 
 /** Facts read from `bytes` as an original of `length` bytes, plus every range asked for. */
 async function read(bytes, length = bytes.length) {
@@ -49,6 +40,58 @@ function xrefStreamPdf(dict, data) {
     Buffer.from(`${head}1 0 obj\n<< /Type /XRef /Size 2 /W [1 1 1] ${dict} /Length ${data.length} >>\nstream\n`, 'latin1'),
     data,
     Buffer.from(`\nendstream\nendobj\nstartxref\n${head.length}\n%%EOF\n`, 'latin1')
+  ]);
+}
+
+/** PNG row predictor `type` (Sub 1, Up 2, Average 3, Paeth 4) over left `a`, above `b`, upper-left `c`. */
+function pngGuess(type, a, b, c) {
+  if (type === 1) return a;
+  if (type === 2) return b;
+  if (type === 3) return (a + b) >> 1;
+  if (type === 4) {
+    const p = a + b - c;
+    const [pa, pb, pc] = [Math.abs(p - a), Math.abs(p - b), Math.abs(p - c)];
+    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+  }
+  return 0;
+}
+
+/**
+ * Header, `bodies` as plain objects, then an xref stream listing them with widths `w`. `zero`
+ * lists object 0 as free, so /Index starts at 0. `png` encodes rows with those predictor types
+ * in turn, under FlateDecode and /Predictor 12.
+ */
+function xrefStreamFile(bodies, trailer, { w, zero = false, png = null }) {
+  let text = '%PDF-1.7\n';
+  const offsets = new Map();
+  for (const [num, body] of bodies) {
+    offsets.set(num, text.length);
+    text += `${num} 0 obj\n${body}\nendobj\n`;
+  }
+  const self = Math.max(...offsets.keys()) + 1;
+  offsets.set(self, text.length);
+  const bytes = (v, width) => Array.from({ length: width }, (_, k) => Math.floor(v / 256 ** (width - 1 - k)) % 256);
+  const first = zero ? 0 : 1;
+  const rows = [];
+  for (let n = first; n <= self; n++) {
+    rows.push([...bytes(offsets.has(n) ? 1 : 0, w[0]), ...bytes(offsets.get(n) || 0, w[1]), ...bytes(0, w[2])]);
+  }
+  let data = Buffer.from(rows.flat());
+  let filter = '';
+  if (png) {
+    const coded = rows.flatMap((row, i) => {
+      const type = png[i % png.length];
+      const above = rows[i - 1] || row.map(() => 0);
+      return [type, ...row.map((x, j) => (x - pngGuess(type, row[j - 1] || 0, above[j], above[j - 1] || 0)) & 0xff)];
+    });
+    data = zlib.deflateSync(Buffer.from(coded));
+    filter = `/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns ${rows[0].length} >> `;
+  }
+  text += `${self} 0 obj\n<< /Type /XRef /Size ${self + 1} /W [${w.join(' ')}] /Index [${first} ${self + 1 - first}] ${trailer} ${filter}/Length ${data.length} >>\nstream\n`;
+  return Buffer.concat([
+    Buffer.from(text, 'latin1'),
+    data,
+    Buffer.from(`\nendstream\nendobj\nstartxref\n${offsets.get(self)}\n%%EOF\n`, 'latin1')
   ]);
 }
 
@@ -104,6 +147,50 @@ test('a hybrid file finds its compressed Catalog through /XRefStm', async () => 
   assert.deepEqual((await read(hybrid)).facts, { prev: lastTable(hybrid), root: [2, 0], info: [1, 0], size: 8, metadata: [6, 0] });
   const tableOnly = classicPdf(bodies, '/Size 8 /Root 2 0 R /Info 1 0 R', { free: [2] });
   assert.equal((await read(tableOnly)).facts.error, 'original-unlisted');
+});
+
+test('a newer section wins over an older one for objects and trailer keys', async () => {
+  const older = classicPdf(BODIES, TRAILER);
+  const xmp = '<< /Type /Metadata /Subtype /XML /Length 4 >>\nstream\n<x/>\nendstream';
+  const catalog = '<< /Type /Catalog /Pages 3 0 R /Metadata 6 0 R >>';
+  // Catalog 2 revised in place to name an XMP stream.
+  const revised = Buffer.concat([older, classicTail(older, [[2, catalog], [6, xmp]], `${TRAILER} /Prev ${lastTable(older)}`)]);
+  assert.deepEqual((await read(revised)).facts, { prev: lastTable(revised), root: [2, 0], info: [1, 0], size: 7, metadata: [6, 0] });
+  // /Root moved to a new Catalog 7; the older trailer still names 2.
+  const moved = Buffer.concat([older, classicTail(older, [[6, xmp], [7, catalog]], `/Size 8 /Root 7 0 R /Info 1 0 R /Prev ${lastTable(older)}`)]);
+  assert.deepEqual((await read(moved)).facts, { prev: lastTable(moved), root: [7, 0], info: [1, 0], size: 8, metadata: [6, 0] });
+});
+
+test('xref streams: every PNG row predictor, zero values and a missing type field', async (t) => {
+  const trailer = '/Root 2 0 R /Info 1 0 R';
+  const expected = (bytes) => ({ prev: bytes.lastIndexOf('5 0 obj'), root: [2, 0], info: [1, 0], size: 6, metadata: null });
+
+  await t.test('None, Sub, Up, Average and Paeth rows, with /Index from 0', async () => {
+    const file = xrefStreamFile(BODIES, trailer, { w: [1, 4, 1], zero: true, png: [0, 3, 4, 1, 2, 4] }); // Average on Info's row, Paeth on the Catalog's
+    assert.deepEqual((await read(file)).facts, expected(file));
+  });
+
+  await t.test('/W [0 4 0]: type 1 and generation 0 by default', async () => {
+    const file = xrefStreamFile(BODIES, trailer, { w: [0, 4, 0] });
+    assert.deepEqual((await read(file)).facts, expected(file));
+  });
+});
+
+test('/XRefStm must name an xref stream, not a table', async () => {
+  const older = classicPdf(BODIES, TRAILER);
+  const bad = Buffer.concat([older, classicTail(older, [[1, '<< /Title (New) >>']], `${TRAILER} /XRefStm ${lastTable(older)}`)]);
+  assert.equal((await read(bad)).facts.error, 'original-xref');
+});
+
+test('a 3 MiB older table behind a large increment fits the read budget', async () => {
+  // 100,000 free entries, one subsection each: about 2.8 MiB of table.
+  const free = Array.from({ length: 100000 }, (_, i) => i + 5);
+  const older = classicPdf(BODIES, '/Size 100005 /Root 2 0 R /Info 1 0 R', { free });
+  const pad = `<< /Pad (${'x'.repeat(14 * 1024 * 1024)}) >>`;
+  const file = Buffer.concat([older, classicTail(older, [[1, '<< /Title (New) >>'], [100005, pad]], `/Size 100006 /Root 2 0 R /Info 1 0 R /Prev ${lastTable(older)}`)]);
+  const { facts, reads } = await read(file);
+  assert.equal(facts.size, 100006, facts.error);
+  assert.ok(reads.reduce((sum, [, n]) => sum + n, 0) < 8 * 1024 * 1024);
 });
 
 test('size covers the highest number any section lists, above a low /Size', async () => {

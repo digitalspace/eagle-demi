@@ -1,9 +1,21 @@
 'use strict';
 
 /**
- * Hand-built PDF sections for the tail and original-reader tests. Bodies are latin1 strings,
- * so stream data may hold any byte.
+ * Hand-built PDF sections and fixture loading for the tail and original-reader tests. Bodies are
+ * latin1 strings, so stream data may hold any byte.
  */
+
+const fs = require('fs');
+const path = require('path');
+const zlib = require('zlib');
+
+const FIXTURES = path.join(__dirname, '..', 'fixtures', 'pdf-title');
+
+/** A file from `test/fixtures/pdf-title`, gunzipped when its name ends in `.gz`. */
+function fixture(file) {
+  const bytes = fs.readFileSync(path.join(FIXTURES, file));
+  return file.endsWith('.gz') ? zlib.gunzipSync(bytes) : bytes;
+}
 
 /**
  * Bytes to append after `prefix`: `bodies` (`[number, body]`) as objects, then one classic xref
@@ -34,4 +46,4 @@ function classicPdf(bodies, trailer, options) {
   return Buffer.concat([header, classicTail(header, bodies, trailer, options)]);
 }
 
-module.exports = { classicTail, classicPdf };
+module.exports = { fixture, classicTail, classicPdf };

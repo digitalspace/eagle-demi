@@ -7,23 +7,14 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
-const zlib = require('zlib');
 const { originalScanner, checkTail } = require('../../src/helpers/pdf-tail');
 const { readOriginal } = require('../../src/helpers/pdf-original');
-const { classicTail, classicPdf } = require('./pdf-build');
+const { fixture, classicTail, classicPdf } = require('./pdf-build');
 
-const DIR = path.join(__dirname, '..', 'fixtures', 'pdf-title');
 const CASES = ['classic-xmp', 'classic-info', 'xrefstream-xmp', 'xrefstream-noinfo'];
 
-function read(file) {
-  const bytes = fs.readFileSync(path.join(DIR, file));
-  return file.endsWith('.gz') ? zlib.gunzipSync(bytes) : bytes;
-}
-
 function load(name, titled = 'titled', ext = '.pdf') {
-  return { original: read(`${name}.original${ext}`), titled: read(`${name}.${titled}${ext}`) };
+  return { original: fixture(`${name}.original${ext}`), titled: fixture(`${name}.${titled}${ext}`) };
 }
 
 const readFacts = (original) => readOriginal(async (offset, length) => original.subarray(offset, offset + length), original.length);
