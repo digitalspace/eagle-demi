@@ -94,9 +94,11 @@ that grep: all three query a container directly (`SELECT * FROM c`, `export-chun
 `chunks`; `backfill-eagle-ladder.js` selects ACL fields from every Eagle-mirrored container), with no
 access predicate at all — wider than `systemAccess()`, not narrower.
 
-Five of them leave a file behind rather than only printing: `export-chunks-to-eagle.js --dump`,
-`audit-chunk-quality.js --out`, `probe-phrase-presence.js --out`, `score-retrieval.js --out` and
-`copy-to-env.js` (its `--checkpoint` file, written on every `--live` run, not only `--dump`).
+Ten of them leave a file behind rather than only printing: `export-chunks-to-eagle.js --dump`,
+`audit-chunk-quality.js --out`, `probe-phrase-presence.js --out`, `score-retrieval.js --out`,
+`backup-originals.js --out`, `restore-originals.js --out`, `seed-nosql.js`, `seed-public-reads.js`,
+`backfill-chunk-parent-fields.js` (its state file) and `copy-to-env.js` (its `--checkpoint` file,
+written on every `--live` run, not only `--dump`).
 
 ### Delete the dump
 
