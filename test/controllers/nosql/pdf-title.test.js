@@ -35,16 +35,19 @@ const ORIGINAL = fixture('classic-info.original.pdf');
 const TITLED = fixture('classic-info.titled.pdf');
 const RETITLED = fixture('classic-info.retitled.pdf');
 
+// Mongo ObjectIds, as the seed and the Eagle push write `id`. No `eaglePushedAt`: the seed never sets it.
+const ID = '5f1d7a3c9b2e4d6f8a0b1c2d';
+const ID2 = '5f1d7a3c9b2e4d6f8a0b1c2e';
+
 const DOC = {
-  id: 'd1',
+  id: ID,
   projectId: 'p1',
   s3Key: KEY,
   displayName: 'Site C Report',
   mimeType: 'application/pdf',
   fileExt: 'pdf',
   fileSize: ORIGINAL.length,
-  read: readForLevel(4),
-  eaglePushedAt: 1759600000000
+  read: readForLevel(4)
 };
 
 const sha256 = b => crypto.createHash('sha256').update(b).digest('hex');
@@ -130,13 +133,13 @@ function world(t, { rows = [DOC], objects = { [KEY]: ORIGINAL }, gate = { ok: tr
     return 200;
   }
 
-  const row = (id = 'd1') => db.get(id);
-  const closePutWindow = (id = 'd1') => { row(id).pdfTitle.inFlight.putExpiresAt = new Date(Date.now() - 60000).toISOString(); };
-  const expireLease = (id = 'd1') => { row(id).pdfTitle.lease.expiresAt = past(); };
+  const row = (id = ID) => db.get(id);
+  const closePutWindow = (id = ID) => { row(id).pdfTitle.inFlight.putExpiresAt = new Date(Date.now() - 60000).toISOString(); };
+  const expireLease = (id = ID) => { row(id).pdfTitle.lease.expiresAt = past(); };
   return { db, store, calls, put, workerPut, row, closePutWindow, expireLease };
 }
 
-async function call(handler, { id = 'd1', body, query = {}, keyId = 'worker' } = {}) {
+async function call(handler, { id = ID, body, query = {}, keyId = 'worker' } = {}) {
   const res = makeRes('test');
   await handler({ params: { id }, query, body, headers: {}, user: { keyId } }, res);
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : null };
@@ -154,7 +157,7 @@ function commitBody(leaseId, bytes, { first = true } = {}) {
 }
 
 /** Lease, commit and PUT `bytes` as the worker would. */
-async function titleOnce(w, bytes, { id = 'd1', first = true, query = {} } = {}) {
+async function titleOnce(w, bytes, { id = ID, first = true, query = {} } = {}) {
   const leased = await lease({ id, query });
   assert.equal(leased.status, 201, JSON.stringify(leased.body));
   const committed = await commit(commitBody(leased.body.leaseId, bytes, { first }), { id });
@@ -179,7 +182,7 @@ test('pdf title lease API', async (t) => {
     const w = world(t);
     const logged = t.mock.method(logger, 'info', () => {});
 
-    assert.deepEqual(await pending(), [{ id: 'd1', projectId: 'p1', mode: 'title', title: 'Site C Report' }]);
+    assert.deepEqual(await pending(), [{ id: ID, projectId: 'p1', mode: 'title', title: 'Site C Report' }]);
 
     const { leased, committed, putStatus, leaseId } = await titleOnce(w, TITLED);
     assert.equal(leased.body.backupUrl, `https://store.test/${BACKUP}?sig=get`);
@@ -243,8 +246,7 @@ test('pdf title lease API', async (t) => {
       'not-public': { ...DOC, read: readForLevel(2) },
       'no-public-name': { ...DOC, vis: { displayName: 3 } },
       'sealed': { ...DOC, read: ['compliance'] },
-      'not-pdf': { ...DOC, mimeType: 'application/vnd.ms-excel', fileExt: 'xlsx' },
-      'not-from-eagle': { ...DOC, eaglePushedAt: undefined }
+      'not-pdf': { ...DOC, mimeType: 'application/vnd.ms-excel', fileExt: 'xlsx' }
     };
     for (const [reason, row] of Object.entries(cases)) {
       const w = world(t, { rows: [row] });
@@ -253,6 +255,26 @@ test('pdf title lease API', async (t) => {
       assert.equal(res.body.reason, reason);
       assert.equal(w.calls.copies.length, 0, reason);
       assert.deepEqual(await pending(), [], `${reason} is not listed`);
+      t.mock.restoreAll();
+      for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});
+    }
+  });
+
+  await t.test('an ObjectId id is from Eagle without a push stamp: listed and leased', async (t) => {
+    world(t);
+    assert.equal(DOC.eaglePushedAt, undefined);
+    assert.deepEqual((await pending()).map(r => r.id), [ID]);
+    assert.equal((await lease()).status, 201);
+  });
+
+  await t.test('any other id is refused not-from-eagle and not listed, even with a push stamp', async (t) => {
+    for (const id of [crypto.randomUUID(), ID.toUpperCase(), ID.slice(1)]) {
+      const w = world(t, { rows: [{ ...DOC, id, eaglePushedAt: 1759600000000 }] });
+      const res = await lease({ id });
+      assert.equal(res.status, 409, id);
+      assert.equal(res.body.reason, 'not-from-eagle', id);
+      assert.equal(w.calls.copies.length, 0, id);
+      assert.deepEqual(await pending(), [], `${id} is not listed`);
       t.mock.restoreAll();
       for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});
     }
@@ -285,7 +307,7 @@ test('pdf title lease API', async (t) => {
   });
 
   await t.test('a key stored by two rows is skipped and never listed', async (t) => {
-    const w = world(t, { rows: [DOC, { ...DOC, id: 'd2' }] });
+    const w = world(t, { rows: [DOC, { ...DOC, id: ID2 }] });
     assert.deepEqual(await pending(), []);
     assert.equal((await lease()).body.reason, 'shared-key');
     assert.equal(w.calls.copies.length, 0);
@@ -571,7 +593,7 @@ test('pdf title lease API', async (t) => {
     await titled(w);
 
     w.row().vis = { displayName: 3 };
-    assert.deepEqual(await pending(), [{ id: 'd1', projectId: 'p1', mode: 'restore', title: null }]);
+    assert.deepEqual(await pending(), [{ id: ID, projectId: 'p1', mode: 'restore', title: null }]);
 
     const leased = await lease();
     assert.equal(leased.body.mode, 'restore');
@@ -740,20 +762,20 @@ test('pdf title lease API', async (t) => {
     });
 
     await t.test('a row that fails is named and the rest still settle', async (t) => {
-      const w = world(t, { rows: [DOC, { ...DOC, id: 'd2', s3Key: 'etl/p1/two.pdf' }], objects: { [KEY]: ORIGINAL, 'etl/p1/two.pdf': ORIGINAL } });
-      await lease({ id: 'd1' });
-      await lease({ id: 'd2' });
-      w.expireLease('d1');
-      w.expireLease('d2');
+      const w = world(t, { rows: [DOC, { ...DOC, id: ID2, s3Key: 'etl/p1/two.pdf' }], objects: { [KEY]: ORIGINAL, 'etl/p1/two.pdf': ORIGINAL } });
+      await lease({ id: ID });
+      await lease({ id: ID2 });
+      w.expireLease(ID);
+      w.expireLease(ID2);
       const patch = cosmos.patch;
       t.mock.method(cosmos, 'patch', async (...args) => {
-        if (args[1] === 'd1') throw new Error('Cosmos unavailable');
+        if (args[1] === ID) throw new Error('Cosmos unavailable');
         return patch(...args);
       });
       const res = await call(controller.sweep);
-      assert.deepEqual(res.body.failed, ['d1']);
+      assert.deepEqual(res.body.failed, [ID]);
       assert.equal(res.body.outcomes.released, 1);
-      assert.equal(w.row('d2').pdfTitle.lease, undefined);
+      assert.equal(w.row(ID2).pdfTitle.lease, undefined);
     });
   });
 
