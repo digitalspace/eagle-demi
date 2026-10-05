@@ -104,6 +104,29 @@ module.exports = {
   complianceLead: { defaultVis: 2, maxVis: 4 },
   execProjectDirector: { defaultVis: 2, maxVis: 4 },
 
+  // Fields eagle-api's project GET returns that DEMI dropped until it carried them for staff
+  // parity. Level 2 and capped there: none is on a public page, and raising one is a policy call.
+  CELead: { defaultVis: 2, maxVis: 2 },
+  CELeadEmail: { defaultVis: 2, maxVis: 2 },
+  CELeadPhone: { defaultVis: 2, maxVis: 2 },
+  projectLeadId: { defaultVis: 2, maxVis: 2 },
+  responsibleEPDId: { defaultVis: 2, maxVis: 2 },
+  projLead: { defaultVis: 2, maxVis: 2 },
+  addedBy: { defaultVis: 2, maxVis: 2 },
+  intake: { defaultVis: 2, maxVis: 2 },
+  dateCommentsOpen: { defaultVis: 2, maxVis: 2 },
+  dateCommentsClosed: { defaultVis: 2, maxVis: 2 },
+  duration: { defaultVis: 2, maxVis: 2 },
+  isTermsAgreed: { defaultVis: 2, maxVis: 2 },
+  primaryContact: { defaultVis: 2, maxVis: 2 },
+  proMember: { defaultVis: 2, maxVis: 2 },
+  eaStatusDate: { defaultVis: 2, maxVis: 2 },
+  projectStatusDate: { defaultVis: 2, maxVis: 2 },
+  activeDate: { defaultVis: 2, maxVis: 2 },
+  substantially: { defaultVis: 2, maxVis: 2 },
+  substantiallyDate: { defaultVis: 2, maxVis: 2 },
+  hasMetCommentPeriods: { defaultVis: 2, maxVis: 2 },
+
   // Pinned documents and the pinned-proponent list, both stored top level in Mongo. They were only
   // ever reachable under `sources.eagle`, which is maxVis 0 — these entries are what publishes them.
   // `pins` rows are `{_id, name, province}`; `featuredDocuments` are Eagle document ids.

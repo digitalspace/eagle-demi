@@ -64,7 +64,7 @@ test('updateRead — every other update keeps today\'s rule', async (t) => {
   await t.test('a non-empty read is its own, and still capped by the parent', () => {
     assert.deepStrictEqual(updateRead(legacy({ read: PUBLIC_ACL }), PUBLIC_PARENT), PUBLIC_ACL);
     assert.deepStrictEqual(updateRead(legacy({ read: PUBLIC_ACL }), PRIVATE_PARENT), ['staff']);
-    assert.deepStrictEqual(updateRead(legacy({ read: ['sysadmin'] }), PUBLIC_PARENT), ['sysadmin']);
+    assert.deepStrictEqual(updateRead(legacy({ read: ['sysadmin'] }), PUBLIC_PARENT), ['sysadmin', 'staff']);
   });
 
   await t.test('a read that is not a list is not missing: stored as [], never widened', () => {

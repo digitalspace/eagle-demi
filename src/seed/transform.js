@@ -13,7 +13,7 @@
  * record with no resolvable project is dropped instead of given a fabricated parent.
  */
 
-const { readForLevel, SEALED_TOKEN } = require('../helpers/access-sql');
+const { readForLevel, SEALED_TOKEN, LEVEL_TOKENS } = require('../helpers/access-sql');
 const { naturalSortKey } = require('../helpers/natural-sort');
 
 /**
@@ -28,16 +28,32 @@ const { naturalSortKey } = require('../helpers/natural-sort');
  * kept, `compliance` would seal the copy and hide it from every ladder caller.
  *
  * With no upstream ACL the item lands at level 2 (All EAO). With only compliance left after the
- * blanks it lands at `['sysadmin']`, exactly what `['compliance','sysadmin']` lands at: no ladder
- * token, so privileged callers only. Not `team`, which the team arm opens to the project's team
- * members. A list of blanks alone stays `[]`, as it always has. Every item gets an explicit `read[]`, which is the condition for
- * deleting the legacy no-ACL tier from the visibility predicate.
+ * blanks it lands at `['sysadmin']` before `withEagleStaff`, never at `team`, which the team arm
+ * opens to the project's team members. Every item gets an explicit `read[]`, which is the
+ * condition for deleting the legacy no-ACL tier from the visibility predicate.
  */
 function seedAcl(upstreamRead) {
+  return withEagleStaff(eagleBaseAcl(upstreamRead));
+}
+
+/** `seedAcl` without `withEagleStaff`: what the mirrors wrote before 2026-10-05. */
+function eagleBaseAcl(upstreamRead) {
   if (!Array.isArray(upstreamRead) || upstreamRead.length === 0) return readForLevel(2);
   const kept = upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
   const open = kept.filter(r => r !== SEALED_TOKEN);
   return open.length === 0 && kept.length > 0 ? ['sysadmin'] : open;
+}
+
+const LADDER_TOKENS = Object.freeze(Object.values(LEVEL_TOKENS));
+
+/**
+ * Eagle's `staff` role skips every read check, so an Eagle read with no ladder token (`['sysadmin']`,
+ * `['sysadmin','inspector']`) gains `staff`: level 2, never `team` or `public`. Approved 2026-10-05;
+ * remove here and in `scripts/backfill-eagle-ladder.js` to drop it (docs/rbac-architecture.md §1).
+ */
+function withEagleStaff(read) {
+  if (read.includes(SEALED_TOKEN) || read.some(r => LADDER_TOKENS.includes(r))) return read;
+  return [...read, LEVEL_TOKENS[2]];
 }
 
 /** `internalSize` arrives as a number OR a numeric string (261 of 2,961 sampled were strings). */
@@ -255,6 +271,8 @@ function transformBoundary(item, opts = {}) {
 module.exports = {
   EXTRACTION_FIELDS,
   seedAcl,
+  eagleBaseAcl,
+  withEagleStaff,
   toNumber,
   toIsoOrNull,
   resolveListLabel,

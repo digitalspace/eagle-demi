@@ -202,7 +202,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   });
 
   for (const [label, doc, expected] of [
-    ['[\'sysadmin\'] stays [\'sysadmin\'], never [\'team\']', eagleUpdate({ read: ['sysadmin'] }), ['sysadmin']],
+    ['[\'sysadmin\'] gains staff, never [\'team\']', eagleUpdate({ read: ['sysadmin'] }), ['sysadmin', 'staff']],
     ['[] with a status stays [], never [\'staff\']', eagleUpdate({ read: [], status: 'draft' }), []],
     ['[] on an inactive row stays []', eagleUpdate({ read: [], active: false }), []],
     // eagle-api prunes `read: []` for an anonymous caller; only a missing read is legacy open.
@@ -264,8 +264,8 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
 
     await push({ doc: eagleUpdate({ read: ['compliance'] }) });
 
-    assert.deepStrictEqual(written.read, ['sysadmin']);
-    assert.deepStrictEqual(written.sources.eagle.read, ['sysadmin'], 'what a later project publish re-derives from');
+    assert.deepStrictEqual(written.read, ['sysadmin', 'staff']);
+    assert.deepStrictEqual(written.sources.eagle.read, ['sysadmin', 'staff'], 'what a later project publish re-derives from');
   });
 
   await t.test('the compliance token is dropped before the parent cap, not after', async () => {
@@ -285,7 +285,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
   // the read that push lands, not at sealed.
   for (const [eagleRead, expected] of [
     [['compliance', 'public'], PUBLIC],
-    [['compliance'], ['sysadmin']]
+    [['compliance'], ['staff']]
   ]) {
     await t.test(`an update under a parent an Eagle push sealed caps at its Eagle read ${JSON.stringify(eagleRead)} minus compliance`, async () => {
       t.mock.method(updates, 'readForWrite', async () => null);

@@ -92,9 +92,18 @@ published) already contain `staff`, so they read as level 2 — today's meaning.
 `read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
 stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` minus the
 `compliance` token (`seedAcl`), so a pushed record lands at level 1, 2 or 4 and is never sealed by a
-push. A compliance-only record lands at `['sysadmin']`, the same as `['compliance','sysadmin']`: privileged callers only, not the project team. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
+push. A compliance-only record lands at `['sysadmin','staff']`, the same as `['compliance','sysadmin']`, never at the project team. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
 stays sealed until released; a row sealed by an earlier push has no `sealedAt` and heals on its next
 push.
+
+**Eagle-mirror exception (2026-10-05).** Eagle's `staff` role skips every read check, so a pushed
+record whose `read[]` has no ladder token (for example `['sysadmin']` or `['sysadmin','inspector']`)
+gains `staff` and lands at level 2 (`seed/transform.js:withEagleStaff`). The parent cap still
+applies, so the result is never wider than the parent and never `public`. Existing rows
+are rewritten by `src/scripts/backfill-eagle-ladder.js`. `staff` stays out of `SECURE_ROLES`. The
+backfill leaves rows under a project DEMI narrowed or took down as they are. A later push of such a
+row caps it to the parent, like any other staff row. To drop the rule, remove `withEagleStaff` and
+that script.
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.
@@ -103,8 +112,8 @@ push.
 `requireWrite`, audited as `record.widen` / `record.narrow` through `auditEvent`. Level 4 requires
 `confirm: true` and answers 400 without it. Level 4 and a level-0 release also require a `reason`
 body field and answer 400 without it; on every other move `reason` is optional, because the audit
-row already carries actor, time, from and to. Nothing widens automatically — no job, no push, no
-merge raises a record's level. A document still cannot out-rank its project, nor a comment period,
+row already carries actor, time, from and to. Nothing else widens automatically — no job, no push, no
+merge raises a record's level, apart from the Eagle-mirror exception above. A document still cannot out-rank its project, nor a comment period,
 nor a comment its period; a project's change cascades to all three. A document or period parented by
 a `ProjectNotification` instead of a project has no such ceiling — a notification carries no access
 list to narrow against — so it keeps the one Eagle published it with. Which of the two is the parent
