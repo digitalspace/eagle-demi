@@ -232,6 +232,15 @@ test('transformDocument', async (t) => {
     assert.strictEqual(doc.fileExt, 'pdf', 'leading dot stripped');
   });
 
+  await t.test('the upload sha256 maps from internalOriginalSha256, null when absent or not a string', () => {
+    const sha = 'a'.repeat(64);
+    const seed = extra => transformDocument({ ...EAGLE_DOC, ...extra }, '207', LIST, OPTS);
+    assert.strictEqual(seed({ internalOriginalSha256: sha }).uploadSha256, sha);
+    assert.strictEqual(doc.uploadSha256, null, 'missing');
+    assert.strictEqual(seed({ internalOriginalSha256: null }).uploadSha256, null);
+    assert.strictEqual(seed({ internalOriginalSha256: 12345 }).uploadSha256, null, 'non-string');
+  });
+
   await t.test('an orphan document throws rather than being filed anywhere', () => {
     assert.throws(() => transformDocument(EAGLE_DOC, null, LIST, OPTS), /resolved projectId/);
     assert.throws(() => transformDocument(EAGLE_DOC, '', LIST, OPTS), /resolved projectId/);
