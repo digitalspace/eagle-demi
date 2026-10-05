@@ -42,15 +42,15 @@ test('backend selection', async (t) => {
     // backend has and the other does not turns that flip into a runtime crash on one path.
     for (const name of ['minio', 'azureBlob']) {
       const backend = require(`../../src/storage/${name}`);
-      for (const op of ['getBuffer', 'getObjectStream', 'getDownloadUrl', 'statObject', 'putFile',
-        'putObjectStream', 'removeObject', 'describe']) {
+      for (const op of ['getBuffer', 'getObjectStream', 'getDownloadUrl', 'getUploadUrl', 'copyObject',
+        'statObject', 'putFile', 'putObjectStream', 'removeObject', 'describe']) {
         assert.strictEqual(typeof backend[op], 'function', `${name}.${op}`);
       }
     }
     // The facade forwards everything the app uses; the copy script talks to a backend directly
     // and needs getBuffer/describe, which is why those two stay off this list.
-    for (const op of ['getDownloadUrl', 'statObject', 'putFile', 'getObjectStream', 'putObjectStream',
-      'removeObject']) {
+    for (const op of ['getDownloadUrl', 'getUploadUrl', 'copyObject', 'statObject', 'putFile',
+      'getObjectStream', 'putObjectStream', 'removeObject']) {
       assert.strictEqual(typeof load('minio')[op], 'function', `facade.${op}`);
     }
   });
@@ -216,15 +216,15 @@ test('minio backend applies the key prefix to every operation', async (t) => {
       'swallowing this would report a permission problem as a completed sweep');
   });
 
-  await t.test('statObject reads the prefixed key and maps size and type', async () => {
+  await t.test('statObject reads the prefixed key and maps size, type and etag', async () => {
     let seen;
     t.mock.method(Minio.Client.prototype, 'statObject', async (b, key) => {
       seen = key;
-      return { size: 48213, etag: 'e', metaData: { 'content-type': 'application/pdf' } };
+      return { size: 48213, etag: '9b2cf535f27731c974343645a3985328', metaData: { 'content-type': 'application/pdf' } };
     });
 
     assert.deepStrictEqual(await minio.statObject('etl/site-c/abc.pdf'),
-      { size: 48213, contentType: 'application/pdf' });
+      { size: 48213, contentType: 'application/pdf', etag: '9b2cf535f27731c974343645a3985328' });
     assert.strictEqual(seen, 'ozwdez/etl/site-c/abc.pdf');
   });
 
@@ -277,6 +277,185 @@ test('minio backend applies the key prefix to every operation', async (t) => {
 
     await minio.getBuffer('etl/site-c/abc.pdf');
     assert.strictEqual(seen, 'etl/site-c/abc.pdf');
+  });
+});
+
+// ── Upload URLs and backup copies ────────────────────────────────────────────
+// The title worker holds no storage credential, so a presigned PUT for one exact original is the
+// only write it gets. A link for a zip or a backup, or one that outlives a few minutes, widens what
+// a leaked URL can destroy. Signed for real by the SDK, offline: an explicit region skips the
+// bucket lookup.
+
+test('upload URLs and backup copies', async (t) => {
+  const Minio = require('minio');
+  const { presignSignatureV4 } = require('minio/dist/main/signing.js');
+  const { logger } = require('../../src/utils/logger');
+  const prev = {
+    minioAccess: config.minioAccess, minioSecret: config.minioSecret, minioHost: config.minioHost,
+    minioPort: config.minioPort, minioSsl: config.minioSsl, minioBucket: config.minioBucket,
+    minioKeyPrefix: config.minioKeyPrefix
+  };
+  const fresh = ['../../src/storage', '../../src/storage/minio'].map((p) => require.resolve(p));
+  const KEY = 'etl/site-c/5f1e2d3c4b5a69788796a5b4.pdf';
+  const MD5 = '1B2M2Y8AsgTpgAmY7PhCfg==';
+  let storage;
+  let logged;
+
+  t.beforeEach(() => {
+    Object.assign(config, {
+      minioAccess: 'test-access', minioSecret: 'test-secret', minioHost: 'objects.example.invalid',
+      minioPort: 443, minioSsl: true, minioBucket: 'zdspnb', minioKeyPrefix: 'ozwdez'
+    });
+    // The MinIO client is cached per module with the credentials it was built with.
+    for (const k of fresh) delete require.cache[k];
+    storage = require('../../src/storage');
+    logged = [];
+    for (const level of ['info', 'warn', 'error']) {
+      t.mock.method(logger, level, (...args) => { logged.push(JSON.stringify(args)); });
+    }
+  });
+  t.afterEach(() => {
+    Object.assign(config, prev);
+    for (const k of fresh) delete require.cache[k];
+    t.mock.restoreAll();
+  });
+
+  /** The SDK's own PUT presign for the same key and instant, with these signed headers. */
+  const signedAsPut = (url, headers) => {
+    const at = url.searchParams.get('X-Amz-Date')
+      .replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z');
+    const signer = new Minio.Client({
+      endPoint: 'objects.example.invalid', port: 443, useSSL: true, region: config.minioRegion,
+      accessKey: 'test-access', secretKey: 'test-secret'
+    });
+    const request = signer.getRequestOptions({
+      method: 'PUT', region: config.minioRegion, bucketName: 'zdspnb', objectName: `ozwdez/${KEY}`,
+      headers
+    });
+    return presignSignatureV4(request, 'test-access', 'test-secret', undefined, config.minioRegion,
+      new Date(at), Number(url.searchParams.get('X-Amz-Expires')));
+  };
+
+  const refusedKeys = ['../x', '', 'etl/../x.pdf', 'etl/./x.pdf', '/etl/x.pdf', 'etl//x.pdf',
+    'etl/x.pdf/', 'etl\\x.pdf', 'etl/x\n.pdf', 'zips/abc.zip', 'pdf-title-backup/etl/x.pdf',
+    'ozwdez/pdf-title-backup/etl/x.pdf', 'ozwdez/zips/abc.zip'];
+  for (const key of refusedKeys) {
+    await t.test(`an upload URL for ${JSON.stringify(key)} is refused`, async () => {
+      await assert.rejects(storage.getUploadUrl(key), /upload URL refused/);
+    });
+  }
+
+  await t.test('an upload URL for a key that is not a string is refused', async () => {
+    await assert.rejects(storage.getUploadUrl(undefined), /upload URL refused/);
+  });
+
+  for (const expirySeconds of [0, -1, 1.5, 301, 900]) {
+    await t.test(`an upload URL with expiry ${expirySeconds} is refused`, async () => {
+      await assert.rejects(storage.getUploadUrl(KEY, { expirySeconds }), /expiry must be 1 to 300/);
+    });
+  }
+
+  await t.test('an upload URL with a malformed contentMd5 is refused', async () => {
+    await assert.rejects(storage.getUploadUrl(KEY, { contentMd5: 'd41d8cd98f00b204e9800998ecf8427e' }),
+      /contentMd5 is not a base64 MD5/);
+  });
+
+  await t.test('signs a PUT for the environment-prefixed original, 300 s by default', async () => {
+    const url = new URL(await storage.getUploadUrl(KEY));
+
+    assert.strictEqual(url.pathname, `/zdspnb/ozwdez/${KEY}`);
+    assert.strictEqual(url.protocol, 'https:');
+    assert.strictEqual(url.searchParams.get('X-Amz-Expires'), '300');
+    assert.strictEqual(url.searchParams.get('X-Amz-SignedHeaders'), 'host');
+    // Equal to the SDK's PUT signature at the same instant: the method is part of what is signed.
+    assert.strictEqual(url.href, signedAsPut(url));
+  });
+
+  await t.test('a contentMd5 is signed, so the store can refuse a different body', async () => {
+    const url = new URL(await storage.getUploadUrl(KEY, { contentMd5: MD5, expirySeconds: 60 }));
+
+    assert.strictEqual(url.searchParams.get('X-Amz-SignedHeaders'), 'content-md5;host');
+    assert.strictEqual(url.searchParams.get('X-Amz-Expires'), '60');
+    assert.strictEqual(url.href, signedAsPut(url, { 'content-md5': MD5 }));
+    assert.notStrictEqual(url.href, signedAsPut(url, { 'content-md5': 'rL0Y20zC+Fzt72VPzMSk2A==' }));
+  });
+
+  await t.test('no signed URL reaches the log, issued or refused', async () => {
+    const url = await storage.getUploadUrl(KEY, { contentMd5: MD5 });
+    await assert.rejects(storage.getUploadUrl('zips/abc.zip'));
+    const sig = new URL(url).searchParams.get('X-Amz-Signature');
+
+    assert.ok(logged.some((line) => line.includes('upload URL issued')), 'issuance not logged');
+    assert.ok(logged.some((line) => line.includes('upload URL refused')), 'refusal not logged');
+    assert.ok(!logged.some((line) => line.includes(sig) || line.includes('X-Amz-')),
+      'a signed URL in a log line is a write credential anyone with log access can use');
+  });
+
+  await t.test('the backend itself refuses a write link with no expiry', async () => {
+    await assert.rejects(require('../../src/storage/minio').getUploadUrl(KEY), /needs an expiry/);
+  });
+
+  await t.test('a backup copies the original to its backup key, only at the stat etag', async () => {
+    t.mock.method(Minio.Client.prototype, 'statObject', async () => {
+      throw Object.assign(new Error('Not Found'), { code: 'NotFound' });
+    });
+    let headers, dest;
+    t.mock.method(Minio.Client.prototype, 'copyObject', async (source, target) => {
+      headers = source.getHeaders(); dest = target.Object;
+      return { Etag: 'aa11' };
+    });
+
+    const res = await storage.copyObject(KEY, storage.backupKeyFor(KEY), { ifSourceEtag: 'e7f3' });
+
+    assert.strictEqual(dest, `ozwdez/pdf-title-backup/${KEY}`);
+    assert.strictEqual(headers['x-amz-copy-source'], `zdspnb/ozwdez/${KEY}`);
+    assert.strictEqual(headers['x-amz-copy-source-if-match'], 'e7f3');
+    assert.strictEqual(res.etag, 'aa11');
+  });
+
+  await t.test('a backup is never taken over an existing one', async () => {
+    // The first backup holds the untouched original; a second would hold an already-titled file.
+    t.mock.method(Minio.Client.prototype, 'statObject', async () => ({ size: 1, etag: 'x', metaData: {} }));
+    const copy = t.mock.method(Minio.Client.prototype, 'copyObject', async () => ({}));
+
+    await assert.rejects(storage.copyObject(KEY, storage.backupKeyFor(KEY), { ifSourceEtag: 'e7f3' }),
+      (err) => err.code === 'BACKUP_EXISTS');
+    assert.strictEqual(copy.mock.callCount(), 0);
+  });
+
+  await t.test('a restore copies a backup back over the original it was taken from', async () => {
+    let headers, dest;
+    t.mock.method(Minio.Client.prototype, 'copyObject', async (source, target) => {
+      headers = source.getHeaders(); dest = target.Object;
+      return { Etag: 'bb22' };
+    });
+
+    await storage.copyObject(storage.backupKeyFor(KEY), KEY, { ifSourceEtag: 'aa11' });
+
+    assert.strictEqual(dest, `ozwdez/${KEY}`);
+    assert.strictEqual(headers['x-amz-copy-source'], `zdspnb/ozwdez/pdf-title-backup/${KEY}`);
+    assert.strictEqual(headers['x-amz-copy-source-if-match'], 'aa11');
+  });
+
+  const refusedCopies = [
+    ['an arbitrary dest', KEY, 'etl/site-c/other.pdf'],
+    ['a dest under the backup prefix that is not the backup of src', KEY, 'pdf-title-backup/etl/other.pdf'],
+    ['a restore onto a key the backup was not taken from', `pdf-title-backup/${KEY}`, 'etl/other.pdf'],
+    ['a backup of a backup', `pdf-title-backup/${KEY}`, `pdf-title-backup/pdf-title-backup/${KEY}`],
+    ['a backup of a zip', 'zips/abc.zip', 'pdf-title-backup/zips/abc.zip'],
+    ['a traversal in src', 'etl/../x.pdf', 'pdf-title-backup/etl/../x.pdf'],
+    ['a copy onto itself', KEY, KEY]
+  ];
+  for (const [what, src, dest] of refusedCopies) {
+    await t.test(`a copy is refused for ${what}`, async () => {
+      const copy = t.mock.method(Minio.Client.prototype, 'copyObject', async () => ({}));
+      await assert.rejects(storage.copyObject(src, dest, { ifSourceEtag: 'e7f3' }), /copy refused/);
+      assert.strictEqual(copy.mock.callCount(), 0);
+    });
+  }
+
+  await t.test('a copy without the source etag is refused', async () => {
+    await assert.rejects(storage.copyObject(KEY, storage.backupKeyFor(KEY)), /ifSourceEtag is required/);
   });
 });
 
@@ -392,6 +571,60 @@ test('azure blob backend', async (t) => {
     assert.strictEqual(url.searchParams.get('rsct'), 'application/pdf');
   });
 
+  await t.test('an upload URL is a write-only, time-limited https SAS for that blob', async () => {
+    t.mock.method(BlobServiceClient.prototype, 'getUserDelegationKey', async () => fakeKey);
+
+    const url = new URL(await azure.getUploadUrl('etl/abc.pdf', {
+      expirySeconds: 300, now: Date.parse('2026-07-30T12:00:00Z')
+    }));
+    assert.strictEqual(url.pathname, '/documents-dev/etl/abc.pdf');
+    assert.strictEqual(url.searchParams.get('sp'), 'w', 'no read, no delete');
+    assert.strictEqual(url.searchParams.get('sr'), 'b', 'scoped to one blob, not the container');
+    assert.strictEqual(url.searchParams.get('spr'), 'https');
+    assert.strictEqual(url.searchParams.get('se'), '2026-07-30T12:05:00Z');
+  });
+
+  await t.test('an upload URL is never issued without an expiry', async () => {
+    t.mock.method(BlobServiceClient.prototype, 'getUserDelegationKey', async () => fakeKey);
+    await assert.rejects(azure.getUploadUrl('etl/abc.pdf'), /needs an expiry/);
+  });
+
+  await t.test('an upload URL refuses a digest it cannot bind', async () => {
+    // A SAS signs no request headers; accepting contentMd5 would promise a check nobody makes.
+    t.mock.method(BlobServiceClient.prototype, 'getUserDelegationKey', async () => fakeKey);
+    await assert.rejects(
+      azure.getUploadUrl('etl/abc.pdf', { expirySeconds: 300, contentMd5: '1B2M2Y8AsgTpgAmY7PhCfg==' }),
+      /cannot bind Content-MD5/);
+  });
+
+  await t.test('a copy reads the source through a read SAS, only at the given etag', async () => {
+    t.mock.method(BlobServiceClient.prototype, 'getUserDelegationKey', async () => fakeKey);
+    let dest, source, opts;
+    t.mock.method(BlockBlobClient.prototype, 'beginCopyFromURL', async function (url, o) {
+      dest = this.name; source = new URL(url); opts = o;
+      return { pollUntilDone: async () => ({ copyStatus: 'success', etag: '"0x8DCB"' }) };
+    });
+
+    const res = await azure.copyObject('etl/abc.pdf', 'pdf-title-backup/etl/abc.pdf',
+      { ifSourceEtag: '"0x8DCA"', now: Date.parse('2026-07-30T12:00:00Z') });
+
+    assert.strictEqual(dest, 'pdf-title-backup/etl/abc.pdf');
+    assert.strictEqual(source.pathname, '/documents-dev/etl/abc.pdf');
+    assert.strictEqual(source.searchParams.get('sp'), 'r');
+    assert.strictEqual(opts.sourceConditions.ifMatch, '"0x8DCA"');
+    assert.strictEqual(res.etag, '"0x8DCB"');
+  });
+
+  await t.test('a copy that does not end in success is an error', async () => {
+    t.mock.method(BlobServiceClient.prototype, 'getUserDelegationKey', async () => fakeKey);
+    t.mock.method(BlockBlobClient.prototype, 'beginCopyFromURL', async () => ({
+      pollUntilDone: async () => ({ copyStatus: 'failed' })
+    }));
+
+    await assert.rejects(azure.copyObject('etl/abc.pdf', 'pdf-title-backup/etl/abc.pdf',
+      { ifSourceEtag: '"0x8DCA"' }), /ended failed/);
+  });
+
   await t.test('the delegation key is cached, then refetched after it expires', async () => {
     // Without caching, every download adds a round trip; cached too long, it produces SAS URLs
     // that fail authentication rather than an obvious error.
@@ -462,15 +695,15 @@ test('azure blob backend', async (t) => {
     assert.strictEqual(await azure.getObjectStream('etl/abc.pdf'), body);
   });
 
-  await t.test('statObject maps contentLength and contentType', async () => {
+  await t.test('statObject maps contentLength, contentType and etag', async () => {
     let seen;
     t.mock.method(BlockBlobClient.prototype, 'getProperties', async function () {
       seen = this.name;
-      return { contentLength: 48213, contentType: 'application/pdf' };
+      return { contentLength: 48213, contentType: 'application/pdf', etag: '"0x8DCB1A2B3C4D5E6"' };
     });
 
     assert.deepStrictEqual(await azure.statObject('etl/abc.pdf'),
-      { size: 48213, contentType: 'application/pdf' });
+      { size: 48213, contentType: 'application/pdf', etag: '"0x8DCB1A2B3C4D5E6"' });
     assert.strictEqual(seen, 'etl/abc.pdf');
   });
 

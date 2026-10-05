@@ -101,34 +101,55 @@ async function getDelegationKey(now = Date.now()) {
   return key;
 }
 
-async function getDownloadUrl(key, opts = {}) {
-  const expirySeconds = opts.expirySeconds || 300;
-  const now = opts.now || Date.now();
+/** A user delegation SAS URL for one blob, https only, backdated for clock skew. */
+async function signedUrl(key, permissions, expirySeconds, now, extra = {}) {
   const blobClient = getBlobClient(key);
   const delegationKey = await getDelegationKey(now);
-
-  const sasOptions = {
+  const sas = generateBlobSASQueryParameters({
     containerName: config.azureStorageContainer,
     blobName: key,
-    // Read only. A download link must never carry write or delete rights — a leaked URL with
-    // `d` would let anyone destroy a source document.
-    permissions: BlobSASPermissions.parse('r'),
+    permissions: BlobSASPermissions.parse(permissions),
     protocol: SASProtocol.Https,
     startsOn: new Date(now - CLOCK_SKEW_MS),
-    expiresOn: new Date(now + expirySeconds * 1000)
-  };
+    expiresOn: new Date(now + expirySeconds * 1000),
+    ...extra
+  }, delegationKey, config.azureStorageAccount).toString();
+  return `${blobClient.url}?${sas}`;
+}
 
+async function getDownloadUrl(key, opts = {}) {
+  const extra = {};
   if (opts.fileName) {
-    sasOptions.contentDisposition =
+    extra.contentDisposition =
       contentDisposition(opts.fileName, { inline: Boolean(opts.inlineType) });
   }
-  if (opts.inlineType) sasOptions.contentType = opts.inlineType;
+  if (opts.inlineType) extra.contentType = opts.inlineType;
+  // Read only. A download link must never carry write or delete rights — a leaked URL with
+  // `d` would let anyone destroy a source document.
+  return signedUrl(key, 'r', opts.expirySeconds || 300, opts.now || Date.now(), extra);
+}
 
-  const sas = generateBlobSASQueryParameters(
-    sasOptions, delegationKey, config.azureStorageAccount
-  ).toString();
+/** Write-only SAS for one blob. The facade checks the key and sets the expiry. */
+async function getUploadUrl(key, { expirySeconds, contentMd5, now } = {}) {
+  if (!(expirySeconds > 0)) throw new Error('[storage] an upload URL needs an expiry');
+  // A SAS has no field that binds request headers, so a digest would be silently unenforced.
+  if (contentMd5) throw new Error('[storage] an Azure upload URL cannot bind Content-MD5');
+  // `w` alone: create or overwrite this blob, no read, no delete.
+  return signedUrl(key, 'w', expirySeconds, now || Date.now());
+}
 
-  return `${blobClient.url}?${sas}`;
+/** Server-side copy, refused by the service with 412 when the source etag has moved on. */
+async function copyObject(src, dest, { ifSourceEtag, now } = {}) {
+  // The source is read through a short read SAS, the same grant a download link carries.
+  const source = await signedUrl(src, 'r', 300, now || Date.now());
+  const poller = await getBlobClient(dest).beginCopyFromURL(source, {
+    sourceConditions: { ifMatch: ifSourceEtag }
+  });
+  const done = await poller.pollUntilDone();
+  if (done.copyStatus !== 'success') {
+    throw new Error(`[storage] copy of ${src} ended ${done.copyStatus}`);
+  }
+  return { etag: done.etag || null };
 }
 
 async function putFile(key, filePath, contentType) {
@@ -151,7 +172,7 @@ async function putObjectStream(key, stream, contentType) {
 async function statObject(key) {
   try {
     const props = await getBlobClient(key).getProperties();
-    return { size: props.contentLength, contentType: props.contentType || null };
+    return { size: props.contentLength, contentType: props.contentType || null, etag: props.etag || null };
   } catch (err) {
     // A HEAD error has no body, so the SDK carries x-ms-error-code in `details`, as its own
     // deleteIfExists reads it. ContainerNotFound is a config fault and must surface.
@@ -185,6 +206,8 @@ module.exports = {
   getBuffer,
   getObjectStream,
   getDownloadUrl,
+  getUploadUrl,
+  copyObject,
   statObject,
   putFile,
   putObjectStream,

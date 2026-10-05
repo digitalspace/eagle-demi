@@ -3,7 +3,8 @@
 /**
  * Object storage — the single entry point every caller uses.
  *
- * Hand out a short-lived download URL, write an upload, stream an object in or out, delete one.
+ * Hand out a short-lived download or upload URL, write an upload, copy an original to its backup,
+ * stream an object in or out, delete one.
  * Nothing here exposes a bucket, a container, or a client.
  *
  * The backend is chosen by an EXPLICIT `STORAGE_BACKEND` value and an unknown value throws at
@@ -14,6 +15,14 @@
  */
 
 const config = require('../config');
+const { logger } = require('../utils/logger');
+
+/** Untouched copies of originals taken before a title write; restore reads them back. */
+const BACKUP_PREFIX = 'pdf-title-backup/';
+// No upload link and no backup source may touch these, at any depth (an env prefix may sit before).
+const PROTECTED_SEGMENT = /(^|\/)(zips|pdf-title-backup)\//;
+const MAX_UPLOAD_EXPIRY_SECONDS = 300;
+const CONTENT_MD5 = /^[A-Za-z0-9+/]{22}==$/;
 
 const BACKENDS = {
   minio: () => require('./minio'),
@@ -48,11 +57,83 @@ function getDownloadUrl(key, opts) {
   return backend.getDownloadUrl(key, opts);
 }
 
+/** One exact object key: non-empty, relative, no `.`/`..`/empty segment, no backslash or control. */
+function isExactKey(key) {
+  return typeof key === 'string' && key !== '' && !key.includes('\\') &&
+    ![...key].some((c) => c.charCodeAt(0) < 0x20 || c === '\u007f') &&
+    key.split('/').every((s) => s !== '' && s !== '.' && s !== '..');
+}
+
+function refuse(op, reason, fields) {
+  logger.warn(`[storage] ${op} refused: ${reason}`, fields);
+  return new Error(`[storage] ${op} refused: ${reason}`);
+}
+
+/** The backup key for an original. Fixed per original, so a restore can be paired with it. */
+function backupKeyFor(key) {
+  return `${BACKUP_PREFIX}${key}`;
+}
+
 /**
- * Size and type of a stored object, without reading it.
+ * A short-lived URL that can write one exact object, for a worker that holds no storage credential.
+ *
+ * Never for a key under `zips/` or `pdf-title-backup/`. `contentMd5` is signed on MinIO, so the
+ * store rejects a body with another digest; Content-Type cannot be bound by either backend.
+ *
+ * @param {string} key  the recorded key, before any environment prefix
+ * @param {object} [opts]
+ * @param {number} [opts.expirySeconds=300]  1 to 300
+ * @param {string} [opts.contentMd5]  base64 MD5 of the exact body the worker will PUT
+ * @returns {Promise<string>}
+ */
+async function getUploadUrl(key, { expirySeconds = MAX_UPLOAD_EXPIRY_SECONDS, contentMd5 } = {}) {
+  const fields = { key: String(key), expirySeconds };
+  if (!isExactKey(key)) throw refuse('upload URL', 'not one exact key', fields);
+  if (PROTECTED_SEGMENT.test(key)) throw refuse('upload URL', 'key is under zips/ or pdf-title-backup/', fields);
+  if (!Number.isInteger(expirySeconds) || expirySeconds < 1 || expirySeconds > MAX_UPLOAD_EXPIRY_SECONDS) {
+    throw refuse('upload URL', `expiry must be 1 to ${MAX_UPLOAD_EXPIRY_SECONDS} seconds`, fields);
+  }
+  if (contentMd5 !== undefined && !CONTENT_MD5.test(contentMd5)) {
+    throw refuse('upload URL', 'contentMd5 is not a base64 MD5', fields);
+  }
+  const url = await backend.getUploadUrl(key, { expirySeconds, contentMd5 });
+  // Never log the URL itself: its signature is a write credential until it expires.
+  logger.info('[storage] upload URL issued', { key, expirySeconds, md5Bound: Boolean(contentMd5) });
+  return url;
+}
+
+/**
+ * Server-side copy between an original and its backup, only if the source still has `ifSourceEtag`.
+ *
+ * Two pairings only: backup (`dest === backupKeyFor(src)`, refused when that backup exists, so a
+ * later run never overwrites the first, untouched copy) and restore (`src === backupKeyFor(dest)`).
+ *
+ * @param {string} src
+ * @param {string} dest
+ * @param {{ifSourceEtag: string}} opts  etag from statObject(src)
+ * @returns {Promise<{etag: string|null}>} etag of the written object
+ */
+async function copyObject(src, dest, { ifSourceEtag } = {}) {
+  const fields = { src: String(src), dest: String(dest) };
+  if (!isExactKey(src) || !isExactKey(dest)) throw refuse('copy', 'not one exact key', fields);
+  const isBackup = dest === backupKeyFor(src) && !PROTECTED_SEGMENT.test(src);
+  const isRestore = src === backupKeyFor(dest) && !PROTECTED_SEGMENT.test(dest);
+  if (!isBackup && !isRestore) throw refuse('copy', 'dest is neither the backup of src nor its original', fields);
+  if (typeof ifSourceEtag !== 'string' || !ifSourceEtag) throw refuse('copy', 'ifSourceEtag is required', fields);
+  if (isBackup && await backend.statObject(dest)) {
+    throw Object.assign(refuse('copy', 'backup already exists', fields), { code: 'BACKUP_EXISTS' });
+  }
+  const result = await backend.copyObject(src, dest, { ifSourceEtag });
+  logger.info(`[storage] ${isBackup ? 'backup' : 'restore'} copied`, { ...fields, etag: result.etag });
+  return result;
+}
+
+/**
+ * Size, type and etag of a stored object, without reading it.
  *
  * @param {string} key
- * @returns {Promise<{size: number, contentType: string|null}|null>} null when the object is absent
+ * @returns {Promise<{size: number, contentType: string|null, etag: string|null}|null>} null when
+ *   the object is absent. The etag is opaque: pass it back to copyObject on the same backend.
  */
 function statObject(key) {
   return backend.statObject(key);
@@ -94,5 +175,6 @@ function removeObject(key) {
 }
 
 module.exports = {
-  getDownloadUrl, statObject, putFile, getObjectStream, putObjectStream, removeObject
+  getDownloadUrl, getUploadUrl, copyObject, statObject, putFile, getObjectStream, putObjectStream,
+  removeObject, backupKeyFor
 };
