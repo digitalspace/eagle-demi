@@ -13,7 +13,7 @@ const { redactForAccess } = require('../vis/redact');
 const MAX_NAME_LENGTH = 150;
 
 // Left-to-right overrides and isolates let a name render as something other than what extracts.
-const BIDI = /[‎‏‪-‮⁦-⁩]/g;
+const BIDI = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 // A real extension, not "the text after the last dot". The letter is what rules out `.2`.
 const EXTENSION = /^\.[A-Za-z0-9]{1,8}$/;

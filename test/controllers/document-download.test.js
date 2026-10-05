@@ -123,6 +123,11 @@ test('the file name the URL is signed with', async (t) => {
     assert.strictEqual(signed, 'Site C Report.pdf');
   });
 
+  await t.test('a version number is not an extension: the stored key lends one', async (t) => {
+    const { signed } = await names(t, { documentFileName: 'Report v1.2' });
+    assert.strictEqual(signed, 'Report v1.2.pdf');
+  });
+
   await t.test('a name withheld from this caller is not signed; the key names the file', async (t) => {
     const { signed, body } = await names(t, {
       documentFileName: 'Sealed Enforcement Order.pdf',
