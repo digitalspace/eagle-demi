@@ -4,6 +4,10 @@ The titler only appends, so the original is the first `originalLength` bytes. No
 or written unless those bytes hash to `originalSha256`.
 
     python3 pdf-title/restore.py --file titled.pdf --length N --sha256 HEX --out original.pdf
+    python3 pdf-title/restore.py --id DOC_ID [--project PROJECT_ID] [--live]
+
+`--id` restores the stored object through the DEMI lease API, the same flow as `run.py`, with
+DEMI_API_URL and DEMI_API_KEY set. Without `--live` it only says what it would do.
 """
 
 import argparse
@@ -44,11 +48,23 @@ def restore(data: bytes, original_length, original_sha256) -> bytes:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Restore the original PDF from a titled file.")
-    parser.add_argument("--file", required=True, help="titled PDF to read")
-    parser.add_argument("--length", required=True, type=int, help="recorded originalLength")
-    parser.add_argument("--sha256", required=True, help="recorded originalSha256")
-    parser.add_argument("--out", required=True, help="path for the original; must not exist yet")
+    parser.add_argument("--file", help="titled PDF to read")
+    parser.add_argument("--length", type=int, help="recorded originalLength (with --file)")
+    parser.add_argument("--sha256", help="recorded originalSha256 (with --file)")
+    parser.add_argument("--out", help="path for the original; must not exist yet (with --file)")
+    parser.add_argument("--id", help="document id: restore its stored object through the DEMI API")
+    parser.add_argument("--project", help="the document's project id (with --id)")
+    parser.add_argument("--live", action="store_true", help="write (with --id); without it, write nothing")
+    parser.add_argument("--timeout", type=int, default=60, help="seconds per request (with --id)")
     args = parser.parse_args(argv)
+    if bool(args.file) == bool(args.id):
+        parser.error("give exactly one of --file or --id")
+    if args.id:
+        if args.timeout < 1:
+            parser.error("--timeout must be 1 or more")
+        return _restore_by_id(args)
+    if args.length is None or not args.sha256 or not args.out:
+        parser.error("--file needs --length, --sha256 and --out")
 
     with open(args.file, "rb") as f:
         data = f.read()
@@ -66,6 +82,21 @@ def main(argv=None) -> int:
         return 1
     print(f"restored {len(original)} bytes to {args.out}, sha256 {args.sha256.lower()}")
     return 0
+
+
+def _restore_by_id(args) -> int:
+    # Imported here so --file keeps working offline without the titler's PDF libraries.
+    import run
+
+    run.configure_logging()
+    client = run.client_from_env(args.timeout)
+    if client is None:
+        return 2
+    row = {"id": args.id, "projectId": args.project, "mode": "restore"}
+    if not args.live:
+        run.log_row(args.id, "restore", "dry-run", "would restore; add --live to write")
+        return 0
+    return 0 if run.process(client, row, want="restore") == "restored" else 1
 
 
 if __name__ == "__main__":
