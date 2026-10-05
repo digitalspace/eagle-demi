@@ -7,41 +7,22 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
 const { originalScanner, checkTail } = require('../../src/helpers/pdf-tail');
+const { readOriginal } = require('../../src/helpers/pdf-original');
+const { fixture, classicTail, classicPdf } = require('./pdf-build');
 
-const DIR = path.join(__dirname, '..', 'fixtures', 'pdf-title');
 const CASES = ['classic-xmp', 'classic-info', 'xrefstream-xmp', 'xrefstream-noinfo'];
 
-function load(name) {
-  return {
-    original: fs.readFileSync(path.join(DIR, `${name}.original.pdf`)),
-    titled: fs.readFileSync(path.join(DIR, `${name}.titled.pdf`))
-  };
+function load(name, titled = 'titled', ext = '.pdf') {
+  return { original: fixture(`${name}.original${ext}`), titled: fixture(`${name}.${titled}${ext}`) };
 }
+
+const readFacts = (original) => readOriginal(async (offset, length) => original.subarray(offset, offset + length), original.length);
 
 function factsOf(original, chunk = 97) {
   const scan = originalScanner();
   for (let i = 0; i < original.length; i += chunk) scan.push(original.subarray(i, i + chunk));
   return scan.result();
-}
-
-/** A classic increment after `original` with these object bodies and trailer, offsets correct. */
-function classicTail(original, bodies, trailer) {
-  let text = '';
-  const offsets = new Map();
-  for (const [num, body] of bodies) {
-    offsets.set(num, original.length + Buffer.byteLength(text, 'latin1'));
-    text += `${num} 0 obj\n${body}\nendobj\n`;
-  }
-  const xrefAt = original.length + Buffer.byteLength(text, 'latin1');
-  text += 'xref\n';
-  for (const [num, offset] of [...offsets].sort((a, b) => a[0] - b[0])) {
-    text += `${num} 1\n${String(offset).padStart(10, '0')} 00000 n\r\n`;
-  }
-  text += `trailer\n<< ${trailer} >>\nstartxref\n${xrefAt}\n%%EOF\n`;
-  return Buffer.from(text, 'latin1');
 }
 
 test('real titler output passes', async (t) => {
@@ -59,6 +40,54 @@ test('real titler output passes', async (t) => {
       assert.equal(checkTail(titled.subarray(original.length), original.length, factsOf(original, chunk)), null, chunk);
     }
   });
+});
+
+test('real titler output passes with the structural reader\'s facts', async (t) => {
+  const shapes = [
+    ...CASES.map(name => [name]),
+    ['classic-info', 'retitled'],
+    ['objstm-xmp'],
+    ['linearized-large', 'titled', '.pdf.gz']
+  ];
+  for (const [name, titledAs = 'titled', ext] of shapes) {
+    await t.test(`${name} ${titledAs}`, async () => {
+      const { original, titled } = load(name, titledAs, ext);
+      assert.ok(titled.subarray(0, original.length).equals(original));
+      const facts = await readFacts(original);
+      assert.ok(!facts.error, facts.error);
+      assert.equal(checkTail(titled.subarray(original.length), original.length, facts), null);
+    });
+  }
+});
+
+test('the metadata ref wins over the older scanner\'s set when both are given', async () => {
+  const { original, titled } = load('classic-xmp');
+  const facts = await readFacts(original);
+  const tail = titled.subarray(original.length);
+  const [num, gen] = facts.metadata;
+  assert.equal(checkTail(tail, original.length, { ...facts, metadataObjects: new Set() }), null);
+  assert.equal(checkTail(tail, original.length, { ...facts, metadata: null, metadataObjects: new Set([`${num} ${gen}`]) }), 'tail-xmp-number');
+});
+
+test('a fake metadata header after a literal endstream cannot make a page XMP (N9)', async () => {
+  // The content stream has an indirect /Length, and its data holds `endstream` and then a
+  // metadata header for object 4, the page.
+  const decoy = 'BT ET\n% endstream\n4 0 obj\n<< /Type /Metadata /Subtype /XML /Length 0 >>\nstream\n\nendstream\nendobj\n';
+  const original = classicPdf([
+    [1, '<< /Title (Old) >>'],
+    [2, '<< /Type /Catalog /Pages 3 0 R >>'],
+    [3, '<< /Type /Pages /Kids [4 0 R] /Count 1 >>'],
+    [4, '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 200 200] /Contents 5 0 R >>'],
+    [5, `<< /Length 6 0 R >>\nstream\n${decoy}\nendstream`],
+    [6, String(decoy.length + 1)]
+  ], '/Size 7 /Root 2 0 R /Info 1 0 R');
+  const facts = await readFacts(original);
+  assert.equal(facts.metadata, null);
+  const xmp = '<< /Type /Metadata /Subtype /XML /Length 5 >>\nstream\n<x/>\n\nendstream';
+  const tail = classicTail(original, [[1, '<< /Title (New) >>'], [4, xmp]], `/Size 7 /Root 2 0 R /Info 1 0 R /Prev ${facts.prev}`);
+  assert.equal(checkTail(tail, original.length, facts), 'tail-xmp-number');
+  // The older text scan is fooled by the same bytes, which is why its facts are on the way out.
+  assert.equal(checkTail(tail, original.length, factsOf(original)), null);
 });
 
 test('hostile increments are refused', async (t) => {
