@@ -257,7 +257,8 @@ resource blobAudit 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = 
   }
 }
 
-// Every Administrative event under the account: settings (shared keys, network), role assignments,
+// Every Administrative event under the account once it has finished (Succeeded or Failed), not the
+// Started and Accepted events: settings (shared keys, network), role assignments,
 // immutability policy changes, lock removal, key listing.
 resource changeAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
   name: 'eagle-backup-changes-${environmentName}'
@@ -272,6 +273,18 @@ resource changeAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
         {
           field: 'category'
           equals: 'Administrative'
+        }
+        {
+          anyOf: [
+            {
+              field: 'status'
+              equals: 'Succeeded'
+            }
+            {
+              field: 'status'
+              equals: 'Failed'
+            }
+          ]
         }
       ]
     }
