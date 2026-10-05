@@ -153,7 +153,8 @@ test('summarize reports the deep cutoffs when --top actually reaches them', () =
 // confident `recall@1: 0` against a service it had never contacted. A zero that means "unset app
 // setting" and a zero that means "unfindable corpus" must not print the same.
 test('score refuses to run when search is unconfigured, rather than reporting 0% recall', async () => {
-  const labelsFile = path.join(os.tmpdir(), 'score-retrieval-guard.jsonl');
+  const labelsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'score-retrieval-'));
+  const labelsFile = path.join(labelsDir, 'guard.jsonl');
   fs.writeFileSync(labelsFile, '{"documentId":"doc-a","phrase":"Tumbler Ridge"}\n');
   const saved = process.env.SEARCH_ENDPOINT;
   delete process.env.SEARCH_ENDPOINT;
@@ -165,7 +166,7 @@ test('score refuses to run when search is unconfigured, rather than reporting 0%
     );
   } finally {
     if (saved !== undefined) process.env.SEARCH_ENDPOINT = saved;
-    fs.rmSync(labelsFile, { force: true });
+    fs.rmSync(labelsDir, { recursive: true, force: true });
   }
 });
 
