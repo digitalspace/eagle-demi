@@ -23,6 +23,8 @@ const BACKUP_PREFIX = 'pdf-title-backup/';
 const PROTECTED_SEGMENT = /(^|\/)(zips|pdf-title-backup)\//;
 const MAX_UPLOAD_EXPIRY_SECONDS = 300;
 const CONTENT_MD5 = /^[A-Za-z0-9+/]{22}==$/;
+/** Most one ranged read returns: a PDF xref table section of ~400,000 entries, 20 bytes each. */
+const MAX_RANGE_BYTES = 8 * 1024 * 1024;
 
 const BACKENDS = {
   minio: () => require('./minio'),
@@ -142,6 +144,47 @@ function statObject(key) {
 }
 
 /**
+ * `length` bytes of one original or its backup from `offset`, optionally pinned to one version.
+ *
+ * Shorter than `length` only when the object ends first. More bytes than asked (a store that
+ * ignored the range) is refused, since they would not start at `offset`.
+ *
+ * @param {string} key
+ * @param {number} offset  0 or more
+ * @param {number} length  1 to MAX_RANGE_BYTES
+ * @param {{versionId?: string|null}} [opts]  read this version, as statObject or copyObject gave it
+ * @returns {Promise<Buffer>}
+ */
+async function readRange(key, offset, length, { versionId } = {}) {
+  const fields = { key: String(key), offset, length, versionId };
+  if (!isExactKey(key)) throw refuse('range read', 'not one exact key', fields);
+  const original = key.startsWith(BACKUP_PREFIX) ? key.slice(BACKUP_PREFIX.length) : key;
+  if (PROTECTED_SEGMENT.test(original)) {
+    throw refuse('range read', 'key is neither an original nor its backup', fields);
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw refuse('range read', 'offset must be a non-negative integer', fields);
+  }
+  if (!Number.isInteger(length) || length < 1 || length > MAX_RANGE_BYTES) {
+    throw refuse('range read', `length must be 1 to ${MAX_RANGE_BYTES} bytes`, fields);
+  }
+  if (versionId !== undefined && versionId !== null && (typeof versionId !== 'string' || versionId === '')) {
+    throw refuse('range read', 'versionId must be a non-empty string', fields);
+  }
+  const stream = await backend.getRangeStream(key, offset, length, { versionId: versionId || undefined });
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    total += chunk.length;
+    // Leaving the loop destroys the stream, so an unranged body is never drained.
+    if (total > length) throw refuse('range read', 'store returned more bytes than asked', fields);
+    chunks.push(chunk);
+  }
+  logger.debug('[storage] range read', { ...fields, bytes: total });
+  return Buffer.concat(chunks, total);
+}
+
+/**
  * Store a local file under `key`.
  *
  * @returns {Promise<string>} the key as actually stored, which may differ from the input — the
@@ -193,5 +236,5 @@ function removeObject(key, { versionId } = {}) {
 
 module.exports = {
   getDownloadUrl, getUploadUrl, copyObject, statObject, putFile, getObjectStream, putObjectStream,
-  removeObject, backupKeyFor
+  removeObject, backupKeyFor, readRange, MAX_RANGE_BYTES
 };

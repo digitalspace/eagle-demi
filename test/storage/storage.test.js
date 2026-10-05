@@ -42,15 +42,15 @@ test('backend selection', async (t) => {
     // backend has and the other does not turns that flip into a runtime crash on one path.
     for (const name of ['minio', 'azureBlob']) {
       const backend = require(`../../src/storage/${name}`);
-      for (const op of ['getBuffer', 'getObjectStream', 'getDownloadUrl', 'getUploadUrl', 'copyObject',
-        'statObject', 'putFile', 'putObjectStream', 'removeObject', 'describe']) {
+      for (const op of ['getBuffer', 'getObjectStream', 'getRangeStream', 'getDownloadUrl', 'getUploadUrl',
+        'copyObject', 'statObject', 'putFile', 'putObjectStream', 'removeObject', 'describe']) {
         assert.strictEqual(typeof backend[op], 'function', `${name}.${op}`);
       }
     }
     // The facade forwards everything the app uses; the copy script talks to a backend directly
     // and needs getBuffer/describe, which is why those two stay off this list.
     for (const op of ['getDownloadUrl', 'getUploadUrl', 'copyObject', 'statObject', 'putFile',
-      'getObjectStream', 'putObjectStream', 'removeObject']) {
+      'getObjectStream', 'putObjectStream', 'removeObject', 'readRange']) {
       assert.strictEqual(typeof load('minio')[op], 'function', `facade.${op}`);
     }
   });
@@ -492,13 +492,107 @@ test('upload URLs and backup copies', async (t) => {
   await t.test('a copy without the source etag is refused', async () => {
     await assert.rejects(storage.copyObject(KEY, storage.backupKeyFor(KEY)), /ifSourceEtag is required/);
   });
+
+  // Ranged reads go through the real SDK down to its HTTP request, so the Range header and the
+  // versionId query are the ones the store would see.
+  const { Readable } = require('stream');
+  const storeReturns = (body) => t.mock.method(Minio.Client.prototype, 'makeRequestAsync',
+    async () => Readable.from([Buffer.from(body)]));
+
+  await t.test('a ranged read asks for offset to offset+length-1 of the pinned version', async () => {
+    const req = storeReturns('0123456789');
+    const versionId = 'a1b2/c3+d4=';
+
+    const buf = await storage.readRange(storage.backupKeyFor(KEY), 100, 10, { versionId });
+
+    const { method, objectName, headers, query } = req.mock.calls[0].arguments[0];
+    assert.strictEqual(method, 'GET');
+    assert.strictEqual(objectName, `ozwdez/pdf-title-backup/${KEY}`);
+    assert.strictEqual(headers.range, 'bytes=100-109');
+    assert.strictEqual(new URLSearchParams(query).get('versionId'), versionId);
+    assert.strictEqual(buf.toString(), '0123456789');
+  });
+
+  await t.test('a ranged read with no versionId reads the current object from offset 0', async () => {
+    const req = storeReturns('%PDF');
+    await storage.readRange(KEY, 0, 4);
+
+    const { headers, query } = req.mock.calls[0].arguments[0];
+    assert.strictEqual(headers.range, 'bytes=0-3');
+    assert.strictEqual(query, '');
+  });
+
+  await t.test('a range past the end of the object returns only the bytes that exist', async () => {
+    storeReturns('%%EOF\n');
+    const buf = await storage.readRange(KEY, 2000, 64, { versionId: 'v1' });
+    assert.strictEqual(buf.toString(), '%%EOF\n');
+  });
+
+  await t.test('a store that sends more bytes than asked is refused, not trusted', async () => {
+    // A 200 with the whole object instead of a 206: the bytes would not start at the offset.
+    storeReturns('%PDF-1.7 the whole object');
+    await assert.rejects(storage.readRange(KEY, 9, 4), /more bytes than asked/);
+  });
+
+  await t.test(`a ranged read is capped at ${storage.MAX_RANGE_BYTES} bytes`, async () => {
+    const req = storeReturns('x');
+    await storage.readRange(KEY, 0, storage.MAX_RANGE_BYTES);
+    assert.strictEqual(req.mock.calls[0].arguments[0].headers.range, `bytes=0-${storage.MAX_RANGE_BYTES - 1}`);
+
+    await assert.rejects(storage.readRange(KEY, 0, storage.MAX_RANGE_BYTES + 1), /length must be 1 to/);
+    assert.strictEqual(req.mock.callCount(), 1);
+  });
+
+  const refusedRanges = [
+    ['a negative offset', -1, 10, /offset must be/],
+    ['a fractional offset', 1.5, 10, /offset must be/],
+    ['an offset that is a string', '0', 10, /offset must be/],
+    ['an offset past safe integers', 2 ** 53, 10, /offset must be/],
+    ['a zero length', 0, 0, /length must be/],
+    ['a negative length', 0, -10, /length must be/],
+    ['a fractional length', 0, 2.5, /length must be/],
+    ['a missing length', 0, undefined, /length must be/]
+  ];
+  for (const [what, offset, length, reason] of refusedRanges) {
+    await t.test(`a ranged read with ${what} is refused`, async () => {
+      const req = storeReturns('x');
+      await assert.rejects(storage.readRange(KEY, offset, length), reason);
+      assert.strictEqual(req.mock.callCount(), 0);
+    });
+  }
+
+  for (const key of ['../x', 'etl/../x.pdf', 'zips/abc.zip', 'ozwdez/zips/abc.zip',
+    'pdf-title-backup/zips/abc.zip', `pdf-title-backup/pdf-title-backup/${KEY}`, undefined]) {
+    await t.test(`a ranged read of ${JSON.stringify(key)} is refused`, async () => {
+      const req = storeReturns('x');
+      await assert.rejects(storage.readRange(key, 0, 10), /range read refused/);
+      assert.strictEqual(req.mock.callCount(), 0);
+    });
+  }
+
+  for (const versionId of ['', 42]) {
+    await t.test(`a ranged read with versionId ${JSON.stringify(versionId)} is refused`, async () => {
+      await assert.rejects(storage.readRange(KEY, 0, 10, { versionId }), /versionId must be/);
+    });
+  }
+
+  await t.test('no URL reaches the log from a ranged read, done or refused', async () => {
+    t.mock.method(logger, 'debug', (...args) => { logged.push(JSON.stringify(args)); });
+    storeReturns('%PDF');
+    await storage.readRange(storage.backupKeyFor(KEY), 0, 4, { versionId: 'v1' });
+    await assert.rejects(storage.readRange('zips/abc.zip', 0, 4));
+
+    assert.ok(logged.some((line) => line.includes('range read') && line.includes('"bytes":4')), 'read not logged');
+    assert.ok(logged.some((line) => line.includes('range read refused')), 'refusal not logged');
+    assert.ok(!logged.some((line) => /https?:|objects\.example\.invalid|X-Amz-/.test(line)));
+  });
 });
 
 // ── Azure Blob backend ───────────────────────────────────────────────────────
 
 test('azure blob backend', async (t) => {
   const azure = require('../../src/storage/azureBlob');
-  const { BlobServiceClient, BlockBlobClient } = require('@azure/storage-blob');
+  const { BlobServiceClient, BlobClient, BlockBlobClient } = require('@azure/storage-blob');
 
   const prev = {
     account: config.azureStorageAccount,
@@ -728,6 +822,42 @@ test('azure blob backend', async (t) => {
     t.mock.method(BlockBlobClient.prototype, 'download', async () => ({ readableStreamBody: body }));
 
     assert.strictEqual(await azure.getObjectStream('etl/abc.pdf'), body);
+  });
+
+  await t.test('a ranged read downloads offset and count from the pinned version', async () => {
+    const body = require('stream').Readable.from(['%PDF']);
+    let seen;
+    // withVersion hands back a plain BlobClient, so the download to watch is that one.
+    t.mock.method(BlobClient.prototype, 'download', async function (offset, count) {
+      seen = { url: new URL(this.url), offset, count };
+      return { readableStreamBody: body };
+    });
+
+    assert.strictEqual(await azure.getRangeStream('pdf-title-backup/etl/abc.pdf', 100, 10,
+      { versionId: '2026-10-05T01:02:03.1234567Z' }), body);
+    assert.strictEqual(seen.url.pathname, '/documents-dev/pdf-title-backup/etl/abc.pdf');
+    assert.strictEqual(seen.url.searchParams.get('versionid'), '2026-10-05T01:02:03.1234567Z');
+    assert.strictEqual(seen.offset, 100);
+    assert.strictEqual(seen.count, 10);
+  });
+
+  await t.test('a ranged read with no versionId downloads the current blob', async () => {
+    let seen;
+    t.mock.method(BlockBlobClient.prototype, 'download', async function (offset, count) {
+      seen = { url: new URL(this.url), offset, count };
+      return { readableStreamBody: require('stream').Readable.from(['%PDF']) };
+    });
+
+    await azure.getRangeStream('etl/abc.pdf', 0, 4);
+    assert.strictEqual(seen.url.searchParams.has('versionid'), false);
+    assert.deepStrictEqual([seen.offset, seen.count], [0, 4]);
+  });
+
+  await t.test('the backend refuses a ranged read with no length, which would read the whole blob', async () => {
+    const download = t.mock.method(BlockBlobClient.prototype, 'download', async () => ({}));
+    await assert.rejects(azure.getRangeStream('etl/abc.pdf', 0, 0), /needs a length/);
+    await assert.rejects(require('../../src/storage/minio').getRangeStream('etl/abc.pdf', 0), /needs a length/);
+    assert.strictEqual(download.mock.callCount(), 0);
   });
 
   await t.test('statObject maps contentLength, contentType and etag', async () => {
