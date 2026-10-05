@@ -315,7 +315,9 @@ async function copy(args, deps) {
 
   const originals = deps.containerFor(args.container);
   if (args.live && !(await originals.exists())) {
-    throw new Error(`${TAG} container ${args.container} does not exist; deploy document-backup.bicep first`);
+    // Never created here: a typo would otherwise become an empty container without retention.
+    throw new Error(`${TAG} container ${args.container} not found in account ${args.account}; ` +
+      'the backup storage infrastructure must be deployed first');
   }
   const ctx = {
     originals, source: deps.source, bucket: args.bucket, live: args.live,
