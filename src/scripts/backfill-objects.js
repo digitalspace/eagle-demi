@@ -122,11 +122,11 @@ function defaultStorage() {
 }
 
 /** One partition's rows, projected. Single-partition, so the read is bounded and pages reliably. */
-async function readPartition(access, projectId) {
+async function readPartition(access, projectId, select = SELECT) {
   const spec = selectWhere({
     access,
     partitionField: documents.PARTITION_FIELD,
-    select: SELECT
+    select
   });
   return fetchAll(documents.CONTAINER, spec, { partitionKey: String(projectId ?? '') });
 }
@@ -284,7 +284,8 @@ function exitCodeFor(summary) {
 }
 
 module.exports = {
-  parseArgs, isNotFound, sourceStat, eachRow, summaryLine, backfillObjects, exitCodeFor
+  parseArgs, isNotFound, sourceStat, eachRow, summaryLine, backfillObjects, exitCodeFor,
+  clientFor, readPartition
 };
 
 if (require.main === module) {
