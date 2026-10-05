@@ -6,11 +6,8 @@
  * /Metadata stream (unfiltered), and one xref section (table plus trailer, or an xref stream).
  * Anything else in the increment could change what the public sees, so it is refused.
  *
- * `originalScanner` collects what the check needs from the original while it is streamed once:
- * its last startxref, the /Root, /Info and /Size of its last trailer, and which object numbers
- * are XMP metadata: a stream marked /Type /Metadata /Subtype /XML, or the /Metadata of a catalog
- * stored as a plain object. A catalog inside an object stream is not seen, so a file whose
- * metadata stream is unmarked and whose catalog is compressed has its XMP revision refused.
+ * The original's facts come from `readOriginal` in `pdf-original.js`, which follows its xref
+ * structure. `originalScanner` is the older text scan, kept until the controller moves over.
  */
 
 // Names that can run code, open links, or change pages or annotations, plus compression.
@@ -30,9 +27,12 @@ const DELIM = new Set([...'()<>[]{}/%'].map(c => c.charCodeAt(0)));
 class Refused extends Error {}
 const refuse = (reason) => { throw new Refused(reason); };
 
-/** A strict reader of PDF objects over one buffer. Strings and stream data are never searched. */
+/**
+ * A strict reader of PDF objects over one buffer. Strings and stream data are never searched.
+ * `forbid: false` reads names such as /Filter without refusing, for parsing an original.
+ */
 class Reader {
-  constructor(buf, pos = 0) { this.buf = buf; this.pos = pos; }
+  constructor(buf, pos = 0, { forbid = true } = {}) { this.buf = buf; this.pos = pos; this.forbid = forbid; }
 
   ws() {
     for (;;) {
@@ -93,7 +93,7 @@ class Reader {
     while (this.pos < this.buf.length && !WS.has(this.buf[this.pos]) && !DELIM.has(this.buf[this.pos])) this.pos++;
     const name = this.buf.toString('latin1', start, this.pos)
       .replace(/#([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-    if (FORBIDDEN.has(name)) refuse(`tail-forbidden:${name}`);
+    if (this.forbid && FORBIDDEN.has(name)) refuse(`tail-forbidden:${name}`);
     return name;
   }
 
@@ -293,9 +293,15 @@ function xrefStreamEntries(dict, data) {
   return entries;
 }
 
+/** True when `[num, gen]` is the original's XMP stream: `facts.metadata`, else the older scanner's set. */
+function isMetadata(facts, num, gen) {
+  if ('metadata' in facts) return sameRef(facts.metadata, [num, gen]);
+  return Boolean(facts.metadataObjects && facts.metadataObjects.has(`${num} ${gen}`));
+}
+
 /**
  * Null when `tail` (the bytes after the original) is exactly a titler increment for `facts`
- * (from `originalScanner().result()`), else the reason it is refused.
+ * (from `readOriginal`, or the older `originalScanner().result()`), else the reason it is refused.
  */
 function checkTail(tail, originalLength, facts) {
   if (!facts || facts.error) return (facts && facts.error) || 'original-unscanned';
@@ -339,7 +345,7 @@ function checkTail(tail, originalLength, facts) {
       } else if (data && type && type.name === 'Metadata') {
         const subtype = dict.get('Subtype');
         if (xmp || !subtype || subtype.name !== 'XML' || ![...dict.keys()].every(k => XMP_KEYS.has(k))) refuse('tail-xmp');
-        if (!facts.metadataObjects.has(`${num} ${gen}`)) refuse('tail-xmp-number');
+        if (!isMetadata(facts, num, gen)) refuse('tail-xmp-number');
         xmp = [num, gen];
       } else if (!data) {
         if (info || !dict.has('Title') || ![...dict.values()].every(isPlainValue)) refuse('tail-info');
@@ -405,4 +411,4 @@ function checkTail(tail, originalLength, facts) {
   }
 }
 
-module.exports = { originalScanner, checkTail };
+module.exports = { originalScanner, checkTail, Reader, Refused, refuse };
