@@ -506,15 +506,18 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.strictEqual(options.partitionKey, '207',
       'a cross-partition drain per project would scan the whole container');
     assert.match(spec.query, /c\.projectId = @projectId/);
-    // Exactly id + _etag + the four extraction fields + the four parent fields + the pending pair:
+    // Exactly id + _etag + the DEMI-owned fields + the four parent fields + the pending pair:
     // a wider projection reads 60k whole documents back. The parent fields ride along because the
     // seeder has to know whether a re-seed MOVED one, which is what decides if the document's
     // chunks need re-stamping; the pending pair rides along because a re-seed has to carry a
     // raised flag forward rather than clear a re-stamp nothing has done; `_etag` rides along so a
     // caller clearing that flag can do it conditionally.
     assert.strictEqual(spec.query.split(' FROM ')[0].replace('SELECT ', ''),
-      ['c.id', 'c._etag', ...[...documents.EXTRACTION_FIELDS, ...chunks.CHUNK_PARENT_FIELDS,
+      ['c.id', 'c._etag', ...[...documents.DEMI_OWNED_FIELDS, ...chunks.CHUNK_PARENT_FIELDS,
         ...documents.PARENT_PENDING_FIELDS].map(f => `c.${f}`)].join(', '));
+    // Named, not taken from the list above: dropped from the list, it would vanish from both sides.
+    assert.match(spec.query, /c\.pdfTitle\b/,
+      'not read, so every re-seed drops the record of the original PDF bytes');
     for (const field of documents.PARENT_PENDING_FIELDS) {
       assert.match(spec.query, new RegExp(`c\\.${field}\\b`),
         `${field} is not read, so the seed cannot carry it and every re-seed clears it`);
@@ -531,7 +534,9 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     const { spec } = calls[0];
     assert.match(spec.query, /c\.sourceSystem = @sourceSystem/);
     assert.ok(spec.parameters.some(p => p.name === '@sourceSystem' && p.value === 'eagle'));
-    assert.match(spec.query, /^SELECT c\.id, c\.projectId, c\.read, c\.isPublished FROM c/);
+    // pdfTitle rides along: a reconcile purge without it loses the original length and hash.
+    assert.match(spec.query,
+      /^SELECT c\.id, c\.projectId, c\.read, c\.isPublished, c\.pdfTitle FROM c/);
     // A cross-partition ORDER BY takes the SDK's query-plan path, which never copies
     // `x-ms-continuation` into the merged headers — fetchAll then stops at the first page.
     assert.doesNotMatch(spec.query, /ORDER BY/,

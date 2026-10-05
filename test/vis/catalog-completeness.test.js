@@ -286,6 +286,12 @@ test('the documents catalog covers every field the seed and the controller write
     }
   });
 
+  await t.test('pdfTitle can never be seen or written through a body', () => {
+    // A seeded row carries it only from the stored row, so the transform keys above miss it.
+    assert.strictEqual(documentCatalog.pdfTitle.defaultVis, 0);
+    assert.strictEqual(documentCatalog.pdfTitle.maxVis, 0);
+  });
+
   await t.test('s3Key never exceeds maxVis 0', () => {
     assert.strictEqual(documentCatalog.s3Key.maxVis, 0);
     assert.strictEqual(documentCatalog.s3Key.defaultVis, 0);

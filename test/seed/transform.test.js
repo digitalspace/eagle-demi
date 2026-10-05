@@ -382,6 +382,26 @@ test('extraction state survives a re-seed', async (t) => {
   });
 });
 
+test('the PDF title record survives a re-seed', async (t) => {
+  const pdfTitle = {
+    sourceKey: 'etl/x/abc.pdf', originalLength: 2048, originalSha256: 'f'.repeat(64),
+    title: 'Part A', status: 'titled', at: '2026-10-01T00:00:00.000Z'
+  };
+
+  await t.test('an existing row carries it verbatim', () => {
+    const out = transformDocument(EAGLE_DOC, '207', LIST, {
+      ...OPTS, existing: { id: EAGLE_DOC._id, pdfTitle }
+    });
+    assert.deepStrictEqual(out.pdfTitle, pdfTitle);
+  });
+
+  await t.test('a row without one gets no key at all, not a null', () => {
+    // Absent is what the work list reads as "never titled"; a null would need its own case there.
+    const out = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, existing: { id: EAGLE_DOC._id } });
+    assert.ok(!('pdfTitle' in out));
+  });
+});
+
 test('a raised pending re-stamp survives a re-seed', async (t) => {
   // The flag says "this document's chunks never got their new parent fields". A Cosmos upsert
   // REPLACES the row, so a transform that drops it retires the only record of a re-stamp nothing

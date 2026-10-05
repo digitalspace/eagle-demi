@@ -80,12 +80,14 @@ function listRefId(ref) {
   return ref ? String(ref) : null;
 }
 
-const { EXTRACTION_FIELDS, constrainToProject } = require('../repositories/documents');
+const {
+  EXTRACTION_FIELDS, DEMI_OWNED_FIELDS, constrainToProject
+} = require('../repositories/documents');
 
-function carriedExtraction(existing) {
+function carriedDemiState(existing) {
   if (!existing) return {};
   return Object.fromEntries(
-    EXTRACTION_FIELDS.filter(f => existing[f] !== undefined).map(f => [f, existing[f]])
+    DEMI_OWNED_FIELDS.filter(f => existing[f] !== undefined).map(f => [f, existing[f]])
   );
 }
 
@@ -121,8 +123,9 @@ function carriedPending(existing) {
  * @param {Map}      listLookup       List `_id` -> name
  * @param {object}   [opts]
  * @param {string}   [opts.now]       ISO timestamp, injected for deterministic tests
- * @param {object}   [opts.existing]  the row already in Cosmos, if any — its extraction state and
- *                                    a raised pending-re-stamp flag are carried onto the result
+ * @param {object}   [opts.existing]  the row already in Cosmos, if any — its extraction state,
+ *                                    PDF title record and a raised pending-re-stamp flag are carried
+ *                                    onto the result
  * @param {string[]} [opts.projectRead] the parent project's ACL, which this one is narrowed against
  */
 function transformDocument(doc, projectId, listLookup, opts = {}) {
@@ -196,7 +199,7 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     contentExtractedAt: null,
     contentPageCount: 0,
     contentExtractionError: null,
-    ...carriedExtraction(opts.existing),
+    ...carriedDemiState(opts.existing),
     ...carriedPending(opts.existing),
 
     updatedAt: opts.now || new Date().toISOString()
