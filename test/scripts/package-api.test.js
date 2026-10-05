@@ -106,6 +106,19 @@ test('API deploy package', async (t) => {
     );
   });
 
+  await t.test('does NOT ship pdf-title/ — a Python tool, not part of the API', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-pdf-title-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+    fs.mkdirSync(path.join(repo, 'pdf-title'));
+    fs.writeFileSync(path.join(repo, 'pdf-title', 'titler.py'), '#');
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.deepStrictEqual([...packed].filter(e => e.startsWith('pdf-title/')), []);
+  });
+
   await t.test('does NOT ship public/ — an untracked local build output', () => {
     // Nothing serves it since the static mounts left src/app.js, and zipdeploy merges into
     // wwwroot, so packaging a stale bundle once would leave it there permanently. This packager
