@@ -1,0 +1,4 @@
+# Pinned: the updated bytes depend on how pypdf serialises objects, and pikepdf (qpdf) is the
+# second reader every output must pass.
+pypdf==6.19.0
+pikepdf==10.16.0
