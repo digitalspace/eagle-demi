@@ -1312,9 +1312,9 @@ paths:
       description: >-
         One page of documents whose stored PDF needs its title written (`mode: title`) or taken
         out again because the public name is now withheld (`mode: restore`). Reads only. Rows that
-        are sealed (DEMI or Eagle), not public, not a PDF, not pushed by Eagle (`eaglePushedAt`
-        unset), over 256 MiB by `fileSize`, sharing their `s3Key` with another row, leased, or
-        under review are left out. A cross-partition page can be short or empty while more rows
+        are sealed (DEMI or Eagle), not public, not a PDF, not from Eagle (`id` is not a
+        24-character lowercase hex Mongo ObjectId), over 256 MiB by `fileSize`, sharing their
+        `s3Key` with another row, leased, or under review are left out. A cross-partition page can be short or empty while more rows
         exist: follow `continuation` until it is null. Callers: the PDF title worker principal
         only (`DEMI_PDF_TITLE_WORKER_PRINCIPALS`; no default). Configuration rule: no principal may
         be on both that list and `DEMI_EAGLE_MIRROR_PRINCIPALS`, or one key can both mirror Eagle

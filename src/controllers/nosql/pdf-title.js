@@ -28,6 +28,8 @@ const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 
 const LEASE_MS = 10 * 60 * 1000;
+// A Mongo ObjectId as `String(_id)` writes it: 24 lowercase hex characters.
+const EAGLE_ID = /^[0-9a-f]{24}$/;
 const BACKUP_GET_SECONDS = 300;
 const PUT_SECONDS = 120;
 /** Commit needs this much lease left beyond the PUT link, so the link dies before the lease does. */
@@ -110,9 +112,12 @@ function isSealed(row) {
   return isDemiSeal(row) || levelOfRead(row.read) === 0;
 }
 
-/** Only an Eagle push sets `eaglePushedAt`, and only Eagle data sets the key on those rows. */
+/**
+ * Seed and Eagle push write `id` as the Mongo ObjectId, while every caller-reachable create uses
+ * `crypto.randomUUID()` and no update can change `id`, so a 24-hex id means Eagle set the key.
+ */
 function isFromEagle(row) {
-  return Number.isFinite(row.eaglePushedAt);
+  return EAGLE_ID.test(String(row.id));
 }
 
 /** Why a row may not be titled, or null when it may. Size and shared key need the store and a query. */
