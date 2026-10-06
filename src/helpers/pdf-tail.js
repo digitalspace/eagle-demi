@@ -117,7 +117,7 @@ class Reader {
         if (/^\d+$/.test(gen) && this.word() === 'R') return { ref: [Number(w), Number(gen)] };
         this.pos = back;
       }
-      return { number: Number(w) };
+      return { number: Number(w), token: w };
     }
     if (w === 'true' || w === 'false' || w === 'null') return { keyword: w };
     this.pos = start;
@@ -216,9 +216,18 @@ function stringBytes(text) {
   return Buffer.from(out);
 }
 
+/** A number token without a plus sign, leading zeros or trailing fraction zeros; exact past 2^53. */
+function numberText(token) {
+  const [, sign, int, frac = ''] = /^([+-]?)(\d*)\.?(\d*)$/.exec(token);
+  const whole = int.replace(/^0+/, '') || '0';
+  const fraction = frac.replace(/0+$/, '');
+  const text = fraction ? `${whole}.${fraction}` : whole;
+  return sign === '-' && text !== '0' ? `-${text}` : text;
+}
+
 /**
  * One text per meaning of a value: dictionary keys sorted, names and strings as hex of their
- * decoded bytes, numbers as JavaScript prints them. Two writers' spellings of one value compare equal.
+ * decoded bytes, numbers from their token digits. Two writers' spellings of one value compare equal.
  */
 function canonical(v) {
   const name = (n) => `/${Buffer.from(n, 'latin1').toString('hex')}`;
@@ -227,7 +236,7 @@ function canonical(v) {
   if ('name' in v) return name(v.name);
   if ('string' in v) return `<${stringBytes(v.string).toString('hex')}>`;
   if ('ref' in v) return `${v.ref[0]} ${v.ref[1]} R`;
-  if ('number' in v) return String(v.number);
+  if ('number' in v) return numberText(v.token);
   return v.keyword;
 }
 

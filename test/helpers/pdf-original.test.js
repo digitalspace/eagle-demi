@@ -179,6 +179,8 @@ test('the Catalog and Info are kept in canonical form', async () => {
   assert.equal(facts.infoKept, canon('<< /ModDate <443a3230303430313032303330343035> /Producer (Acrobat Distiller 6.0.1) >>'));
   assert.equal((await read(fixture('xrefstream-noinfo.original.pdf'))).facts.infoKept, null);
   // Spelling never matters: escapes, line ends, hex case and number forms decode to one form.
+  assert.equal(canon('<< /N [+007 -0 -.50 1.] >>'), canon('<< /N [7 0 -0.5 1] >>'));
+  assert.notEqual(canon('<< /N 9007199254740993 >>'), canon('<< /N 9007199254740992 >>'), 'exact past 2^53');
   assert.equal(canon('<< /A (a\\101\\\nb\r\nc) /B 1.50 /C <4A6> /D /x#41 >>'), canon('<< /D /xA /C <4a60> /B 1.5 /A (aAb\nc) >>'));
 });
 
