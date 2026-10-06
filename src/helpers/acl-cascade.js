@@ -5,8 +5,8 @@
  *
  * The `commentPeriods` and `comments` halves of the public-read cascade differ only in which
  * partition they read, so the rule itself lives here once. Documents keep their own copy in
- * `repositories/documents`: they carry a lazily captured `ownRead` snapshot, which these two do
- * not need — the Eagle push is the only writer of either container and it stores the raw upstream
+ * `repositories/documents`: they carry an `ownRead` snapshot, which these two do not need — the
+ * Eagle push is the only writer of either container and it stores the raw upstream
  * record, so `sources.eagle.read` is always the row's own unconstrained ACL.
  */
 

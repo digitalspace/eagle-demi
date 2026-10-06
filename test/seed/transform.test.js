@@ -210,6 +210,16 @@ test('transformDocument', async (t) => {
       'with no projectRead — a notification parent — the ACL stays verbatim');
   });
 
+  await t.test("stores Eagle's read without staff as ownRead, whatever the project caps read to", () => {
+    // `read` alone is ambiguous: `['staff']` is also what a real Eagle `['sysadmin','staff']` gives.
+    const row = transformDocument({ ...EAGLE_DOC, read: ['sysadmin'] }, '207', LIST,
+      { ...OPTS, projectRead: ['staff', 'idir', 'public'] });
+    assert.deepStrictEqual(row.read, ['staff']);
+    assert.deepStrictEqual(row.ownRead, ['sysadmin']);
+    assert.deepStrictEqual(transformDocument({ ...EAGLE_DOC, read: ['sysadmin'] }, '207', LIST, OPTS).ownRead,
+      ['sysadmin'], 'with no projectRead too');
+  });
+
   await t.test('carries the natural-sort key beside the display name', () => {
     // The index cannot compute it (Cosmos SQL has no zero-pad, and a sortable field is never
     // analyzed), so a seeded row without this key sorts by codepoint — "Item 10" before "Item 2".

@@ -23,9 +23,14 @@
  *   level-2 result is written, so nothing lands at `team` or `public`;
  * - a row whose parent is not in DEMI.
  *
+ * A document with no `ownRead` also gains one, in the same patch: its `read` before this run, which
+ * on a row written before the rule is Eagle's own read. `setAclForProject` re-derives an Eagle row
+ * from `ownRead` only, and a stored `read` holding `staff` may carry the token the rule added, so
+ * such a row is counted (`staffNoOwnRead`) and not written.
+ *
  * Parents are planned first and children are capped by the parent's planned read, so a dry run
  * counts what a live run writes. Each patch is conditioned on the row still having no ladder token,
- * so a push or a level change that lands meanwhile wins.
+ * and on a document still having no `ownRead`, so a push or a level change that lands meanwhile wins.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -54,8 +59,9 @@ const BLOCKING = [...Object.values(LEVEL_TOKENS), SEALED_TOKEN];
 const NO_LADDER_SQL = field => `(IS_ARRAY(${field}) AND ARRAY_LENGTH(${field}) > 0 AND ` +
   `NOT EXISTS(SELECT VALUE r FROM r IN ${field} WHERE ARRAY_CONTAINS(@blocking, r)))`;
 // Patch conditions take no parameters; the tokens are constants, never input.
-const NO_LADDER_CONDITION = field => `FROM c WHERE NOT EXISTS(SELECT VALUE r FROM r IN ${field} ` +
+const NO_LADDER_PREDICATE = field => `NOT EXISTS(SELECT VALUE r FROM r IN ${field} ` +
   `WHERE r IN (${BLOCKING.map(t => `'${t}'`).join(', ')}))`;
+const NO_OWN_READ_SQL = 'NOT (IS_ARRAY(c.ownRead) AND ARRAY_LENGTH(c.ownRead) > 0)';
 
 function parseArgs(argv) {
   const args = { live: false };
@@ -68,9 +74,11 @@ function parseArgs(argv) {
 }
 
 function rowsSpec(container, skip) {
-  const candidatesOnly = PARENT_CONTAINERS.has(container) ? '' : ` AND ${NO_LADDER_SQL('c.read')}`;
+  const candidates = container === 'documents'
+    ? `(${NO_LADDER_SQL('c.read')} OR ${NO_OWN_READ_SQL})` : NO_LADDER_SQL('c.read');
+  const candidatesOnly = PARENT_CONTAINERS.has(container) ? '' : ` AND ${candidates}`;
   return {
-    query: 'SELECT c.id, c.read, c.eagleId, c.projectId, c.periodId, c.kind, ' +
+    query: 'SELECT c.id, c.read, c.ownRead, c.eagleId, c.projectId, c.periodId, c.kind, ' +
       'IS_DEFINED(c.sources.eagle) AS hasEagleSource FROM c ' +
       `WHERE (IS_DEFINED(c.eagleId) OR IS_DEFINED(c.sources.eagle))${candidatesOnly} ` +
       'ORDER BY c.id OFFSET @skip LIMIT @size',
@@ -93,6 +101,7 @@ async function allRows(queryPage, container) {
 
 const hasNoLadder = read => Array.isArray(read) && read.length > 0 &&
   !read.some(r => BLOCKING.includes(r));
+const isNonEmpty = read => Array.isArray(read) && read.length > 0;
 
 /**
  * The parent read a row is capped by: `undefined` for no cap, `null` when the parent is missing.
@@ -111,8 +120,8 @@ function parentReadOf(step, row, parents) {
 }
 
 /**
- * What one row is patched to, or null. Only a level-2 `read` is written. A document's `ownRead`
- * stays Eagle's read without `staff`: the project cascade adds it through `eagleReadUnder`.
+ * The `read` one row is patched to, or null. Only a level-2 `read` is written. A document's
+ * `ownRead` stays Eagle's read without `staff`: the project cascade adds it through `eagleReadUnder`.
  */
 function planRow(step, row, parentRead) {
   if (!hasNoLadder(row.read) || parentRead === null) return null;
@@ -123,24 +132,40 @@ function planRow(step, row, parentRead) {
   return { read: next };
 }
 
-function patchOp(step, row, plan, now) {
-  const operations = [
-    { op: 'set', path: '/updatedAt', value: now },
-    { op: 'set', path: '/read', value: plan.read },
-    { op: 'set', path: '/isPublished', value: plan.read.includes('public') }
-  ];
+/**
+ * A document's missing `ownRead`: its stored `read`, or null when it has one, has no `read`, or is
+ * not a document. `ambiguous` when that `read` holds `staff`, which the rule may have added.
+ */
+function ownReadPlan(step, row) {
+  if (step.container !== 'documents' || isNonEmpty(row.ownRead) || !isNonEmpty(row.read)) return null;
+  return row.read.includes(LEVEL_TOKENS[2]) ? { ambiguous: true } : { ownRead: row.read };
+}
+
+function patchOp(step, row, plan, ownRead, now) {
+  const operations = [{ op: 'set', path: '/updatedAt', value: now }];
+  const guards = [];
+  if (plan) {
+    operations.push(
+      { op: 'set', path: '/read', value: plan.read },
+      { op: 'set', path: '/isPublished', value: plan.read.includes('public') });
+    guards.push(NO_LADDER_PREDICATE('c.read'));
+  }
+  if (ownRead) {
+    operations.push({ op: 'set', path: '/ownRead', value: ownRead });
+    guards.push(NO_OWN_READ_SQL);
+  }
   return {
     operationType: 'Patch',
     partitionKey: row[step.pk],
     id: String(row.id),
-    resourceBody: { operations, condition: NO_LADDER_CONDITION('c.read') }
+    resourceBody: { operations, condition: `FROM c WHERE ${guards.join(' AND ')}` }
   };
 }
 
 function summaryLine(s) {
   return `[eagle-ladder] container=${s.container} mode=${s.mode} scanned=${s.scanned} ` +
     `planned=${s.planned} heldByParent=${s.heldByParent} ` +
-    `noParent=${s.noParent} ` +
+    `noParent=${s.noParent} ownRead=${s.ownRead} staffNoOwnRead=${s.staffNoOwnRead} ` +
     `patched=${s.patched} skipped=${s.skipped} failed=${s.failed}`;
 }
 
@@ -162,7 +187,7 @@ async function backfillEagleLadder(argv = [], deps = {}) {
   for (const step of STEPS) {
     const s = {
       container: step.container, mode: args.live ? 'live' : 'dry-run',
-      scanned: 0, planned: 0, heldByParent: 0, noParent: 0,
+      scanned: 0, planned: 0, heldByParent: 0, noParent: 0, ownRead: 0, staffNoOwnRead: 0,
       patched: 0, skipped: 0, failed: 0
     };
     const ops = [];
@@ -185,9 +210,13 @@ async function backfillEagleLadder(argv = [], deps = {}) {
       } else if (step.container === 'commentPeriods') {
         parents.periods.set(String(row.id), read);
       }
-      if (!plan) continue;
+      const own = ownReadPlan(step, row);
+      if (own && own.ambiguous) s.staffNoOwnRead++;
+      const ownRead = own && own.ownRead;
+      if (ownRead) s.ownRead++;
+      if (!plan && !ownRead) continue;
       s.planned++;
-      ops.push(patchOp(step, row, plan, now));
+      ops.push(patchOp(step, row, plan, ownRead, now));
     }
 
     if (args.live) {

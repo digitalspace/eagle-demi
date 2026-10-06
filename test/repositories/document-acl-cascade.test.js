@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const documents = require('../../src/repositories/documents');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { systemAccess } = require('../../src/helpers/access-sql');
+const { transformDocument } = require('../../src/seed/transform');
 
 // The stored legacy ACLs, spelled out. Building them from a constant would pass against any value
 // of that constant, including one that no longer contains `staff`.
@@ -102,7 +103,7 @@ test('setAclForProject', async (t) => {
     });
 
   await t.test('captures ownRead on the first cascade', async (tt) => {
-    // No backfill exists, so the first cascade over a seeded row is what preserves its Eagle ACL.
+    // A DEMI-native row has no snapshot until its first cascade, which preserves its own ACL.
     const cap = harness(tt, [{ id: 'd1', read: ['public', 'sysadmin'] }]);
 
     await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
@@ -275,6 +276,20 @@ test('setAclForProject — the Eagle staff rule, never team', async (t) => {
 
   await t.test('an Eagle row with nothing to derive from keeps the plain cap', async (tt) => {
     assert.deepStrictEqual(await cascade(tt, { id: 'd1', sourceSystem: 'eagle' }, ['staff']), []);
+  });
+
+  await t.test("an Eagle ['sysadmin'] document seeded under a public project stays privileged-only under team", async (tt) => {
+    const seeded = transformDocument({ _id: 'd1', read: ['sysadmin'] }, '207', new Map(),
+      { projectRead: ['staff', 'idir', 'public'] });
+    assert.deepStrictEqual(seeded.read, ['staff'], 'the stored read alone would cap to team');
+    assert.deepStrictEqual(await cascade(tt, seeded, ['team']), ['sysadmin']);
+  });
+
+  await t.test('an Eagle row with no ownRead takes the plain cap and gains no snapshot', async (tt) => {
+    const cap = harness(tt, [{ id: 'd1', read: ['sysadmin'], sourceSystem: 'eagle' }]);
+    await documents.setAclForProject(systemAccess(), '207', ['staff', 'idir', 'public']);
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
+    assert.strictEqual(opValue(cap.ops[0], '/ownRead'), undefined);
   });
 });
 

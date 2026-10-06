@@ -161,6 +161,9 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     legislation: doc.legislation || null,
 
     read,
+    // Eagle's read without `staff`, which `documents.setAclForProject` re-derives from. The stored
+    // `read` cannot stand in for it: `['staff']` there may be Eagle's `['sysadmin']` plus the rule.
+    ownRead: eagleBaseAcl(doc.read),
     // DERIVED from read[], not copied. Upstream `isPublished` is true on only 66% of documents
     // that are unambiguously public by their ACL, so copying it would hide a third of the
     // corpus. read[] is authoritative and isPublished is its mirror (ADR-004).

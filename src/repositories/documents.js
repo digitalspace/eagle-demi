@@ -409,16 +409,19 @@ const DELETED_CEILING = readForLevel(2);
  * verbatim), and once destroyed there was nothing to restore on re-publish. `constrainToProject`
  * takes the lower of the two levels, so no cascade in either direction can raise a document.
  *
- * `ownRead` IS CAPTURED HERE, LAZILY, and that is why no backfill is needed. The first cascade over
- * a document reads the value the seed wrote and stores it alongside; every later cascade re-derives
- * from that snapshot rather than from a value a previous cascade already narrowed. Writing it at
- * seed time instead would mean the same semantics plus a ~60,578-document backfill computing
- * exactly what this derives for free.
+ * Every cascade re-derives from `ownRead`, the snapshot of the document's own ACL, rather than from
+ * a value a previous cascade already narrowed. Eagle mirrors write it on every seed and push
+ * (`seed/transform.js:transformDocument`), and `backfill-eagle-ladder.js` writes it on Eagle rows
+ * stored before that. A DEMI-native row without one has it CAPTURED here, lazily, from its `read`.
  *
- * The one lossy set is documents a PREVIOUS cascade already flattened: their Eagle ACL is gone, so
+ * An Eagle row is never captured that way. Its stored `read` may carry the `staff` the Eagle rule
+ * added (`helpers/eagle-acl.js:withEagleStaff`), so it cannot stand in for Eagle's read: the row
+ * takes the plain cap and keeps no snapshot until a push or re-seed writes one.
+ *
+ * The one lossy set is documents a PREVIOUS cascade already flattened: their own ACL is gone, so
  * capture records the flattened value and a re-publish leaves them private. Fail-closed, bounded,
  * and enumerable from audit rows (`record.narrow` / `record.takedown` from `setLevel`, project
- * controller) — recovery is a re-seed of that project, which rewrites `read` and drops `ownRead`.
+ * controller) — recovery is a re-seed of that project, which rewrites `read` and `ownRead`.
  *
  * A bulk PATCH, not an upsert: an upsert would have to read every document back first. All of a
  * project's documents share one partition, so this is normally a single request.
@@ -443,8 +446,8 @@ async function setAclForProject(access, projectId, read) {
   // without re-deriving the rule a second way.
   const derived = [];
   const result = await cosmos.bulkVerified(CONTAINER, rows.map(row => {
-    // The snapshot if there is one, otherwise what the row carries today — which on a first
-    // cascade IS the seeded Eagle ACL, the value the snapshot exists to preserve.
+    // The snapshot if there is one, otherwise what the row carries today — which on a DEMI-native
+    // row's first cascade IS its own ACL, the value the snapshot exists to preserve.
     //
     // `: []` and not `: row.read`, because a row with NO `read` field would put `undefined` in a
     // `set` op, and Cosmos rejects a `set` with no value. Patch ops are atomic per item, so that
@@ -453,13 +456,13 @@ async function setAclForProject(access, projectId, read) {
     // `[]` fails closed to level 1 instead. No current write path produces such a row (all
     // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
     // nobody can rule out from outside the private endpoint.
-    const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
-      : (Array.isArray(row.read) ? row.read : []);
-    // An Eagle mirror's `ownRead` is Eagle's read without `staff`; the push's rule adds it. A
-    // DEMI-native row, or an empty `own`, keeps the plain cap so neither is widened.
-    const capped = row.sourceSystem === 'eagle' && own.length > 0
-      ? eagleReadUnder(own, read)
-      : constrainToProject(own, read);
+    const snapshot = Array.isArray(row.ownRead) && row.ownRead.length > 0;
+    const eagle = row.sourceSystem === 'eagle';
+    const own = snapshot ? row.ownRead : (Array.isArray(row.read) ? row.read : []);
+    // An Eagle mirror's `ownRead` is Eagle's read without `staff`; the push's rule adds it. An
+    // Eagle row with no `ownRead` never goes through `eagleReadUnder`: a stored `['staff']` may be
+    // Eagle's `['sysadmin']` plus the added token, and that rule would open it to `team`.
+    const capped = eagle && snapshot ? eagleReadUnder(own, read) : constrainToProject(own, read);
     // Both ceilings, lower wins: the project's, and level 2 once Eagle has deleted the record —
     // without the second, the next project publish would republish a document Eagle no longer has.
     const next = row.isDeleted === true ? constrainToProject(capped, DELETED_CEILING) : capped;
@@ -470,7 +473,8 @@ async function setAclForProject(access, projectId, read) {
       id: String(row.id),
       resourceBody: {
         operations: [
-          { op: 'set', path: '/ownRead', value: own },
+          // Not captured on an Eagle row (header): a later cascade would treat it as Eagle's read.
+          ...(eagle && !snapshot ? [] : [{ op: 'set', path: '/ownRead', value: own }]),
           { op: 'set', path: '/read', value: next },
           { op: 'set', path: '/isPublished', value: next.includes('public') },
           { op: 'set', path: '/updatedAt', value: updatedAt }

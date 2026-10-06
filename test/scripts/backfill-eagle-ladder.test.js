@@ -8,6 +8,8 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { backfillEagleLadder, parseArgs, exitCodeFor } = require('../../src/scripts/backfill-eagle-ladder');
 const { eagleReadUnder } = require('../../src/seed/transform');
+const documentsRepo = require('../../src/repositories/documents');
+const { systemAccess } = require('../../src/helpers/access-sql');
 
 const EAGLE_PUBLIC = ['sysadmin', 'staff', 'public'];
 const STAFF_PROJECT = { id: 'p-staff', eagleId: 'e-staff', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin', 'staff'] };
@@ -34,11 +36,12 @@ function fakeCosmos(t, rows) {
   return writes;
 }
 
-const readOf = (writes, id) => {
+const valueOf = (writes, id, path) => {
   const op = writes.find(w => w.id === id);
-  const set = op && op.resourceBody.operations.find(o => o.path === '/read');
+  const set = op && op.resourceBody.operations.find(o => o.path === path);
   return set ? set.value : undefined;
 };
+const readOf = (writes, id) => valueOf(writes, id, '/read');
 
 const summaryOf = (summaries, container) => summaries.find(s => s.container === container);
 
@@ -220,7 +223,7 @@ test('backfill-eagle-ladder', async (t) => {
 
   await t.test('a row whose parent is not in DEMI is counted and not written', async (t) => {
     const writes = fakeCosmos(t, {
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-gone', read: ['sysadmin'] }]
+      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-gone', read: ['sysadmin'], ownRead: ['sysadmin'] }]
     });
     const summaries = await backfillEagleLadder(['--live']);
     assert.strictEqual(writes.length, 0);
@@ -263,6 +266,59 @@ test('backfill-eagle-ladder', async (t) => {
     });
     await backfillEagleLadder(['--live']);
     assert.strictEqual(writes.length, 0);
+  });
+
+  await t.test('a document with no ownRead gains its pre-run read, and a later team narrow keeps it privileged-only', async (t) => {
+    const doc = { id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['sysadmin'], sourceSystem: 'eagle' };
+    const writes = fakeCosmos(t, { projects: [STAFF_PROJECT], documents: [doc] });
+    await backfillEagleLadder(['--live']);
+    assert.deepStrictEqual(valueOf(writes, 'd-1', '/ownRead'), ['sysadmin']);
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff'], 'in the same patch that promotes read');
+    assert.match(writes[0].resourceBody.condition, /ownRead/);
+
+    t.mock.restoreAll();
+    const stored = { ...doc, read: ['staff'], ownRead: valueOf(writes, 'd-1', '/ownRead') };
+    t.mock.method(cosmos, 'query', async () => ({ items: [stored], continuationToken: undefined }));
+    let cascaded;
+    t.mock.method(cosmos, 'bulkVerified', async (_container, operations) => {
+      cascaded = operations[0].resourceBody.operations.find(o => o.path === '/read').value;
+      return { succeeded: operations.length, failed: 0, statusCounts: {}, requestCharge: 1 };
+    });
+    await documentsRepo.setAclForProject(systemAccess(), 'p-staff', ['team']);
+    assert.deepStrictEqual(cascaded, ['sysadmin']);
+  });
+
+  await t.test('a document with a ladder read and no ownRead gains ownRead only', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [STAFF_PROJECT],
+      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['public', 'sysadmin'] }]
+    });
+    const summaries = await backfillEagleLadder(['--live']);
+    assert.deepStrictEqual(valueOf(writes, 'd-1', '/ownRead'), ['public', 'sysadmin']);
+    assert.strictEqual(readOf(writes, 'd-1'), undefined);
+    assert.doesNotMatch(writes[0].resourceBody.condition, /'staff'/, 'not guarded on a ladder token it has');
+    assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 1);
+  });
+
+  await t.test('a document holding staff with no ownRead is counted and not written', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [STAFF_PROJECT],
+      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['staff'] }]
+    });
+    const summaries = await backfillEagleLadder(['--live']);
+    assert.strictEqual(writes.length, 0);
+    assert.strictEqual(summaryOf(summaries, 'documents').staffNoOwnRead, 1);
+    assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 0);
+  });
+
+  await t.test('a dry run counts the ownRead writes and writes nothing', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [STAFF_PROJECT],
+      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['sysadmin'] }]
+    });
+    const summaries = await backfillEagleLadder([]);
+    assert.strictEqual(writes.length, 0);
+    assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 1);
   });
 
   await t.test('each patch is guarded on the row still having no ladder token', async (t) => {
