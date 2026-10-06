@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from pypdf import PdfReader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "pdf-title-check"))
 
@@ -100,6 +101,22 @@ def test_a_folder_of_good_samples_passes_through_the_api_reader_and_tail_check(s
     assert rows["classic.pdf"]["tails"] == "pass|pass"
     assert rows["xref-stream-xmp.pdf"]["facts_diff"] == ""
     assert (rows["encrypted.PDF"]["class"], rows["encrypted.PDF"]["reader"]) == ("encrypted", "original-encrypted")
+
+
+def test_each_titled_output_goes_to_check_js_with_the_title_it_was_written_with(samples, monkeypatch):
+    sent = []
+    real = pass_rate.run_node
+
+    def recording(entries, node):
+        # Read titles now: the output folder is removed once main returns.
+        sent.extend((PdfReader(t["file"]).metadata.title, t["title"]) for e in entries for t in e["titled"])
+        return real(entries, node)
+
+    monkeypatch.setattr(pass_rate, "run_node", recording)
+
+    pass_rate.main([str(samples)])
+
+    assert sorted(sent) == sorted((t, t) for t in pass_rate.TITLES * 2)
 
 
 def test_a_titled_output_the_api_would_refuse_fails_the_run(samples, tmp_path, monkeypatch):

@@ -5,7 +5,7 @@ Measures how many sample PDFs make it through the title pipeline. Run it on a fo
 For each PDF in the folder, it:
 
 1. Runs `set_title` from `pdf-title/titler.py` twice: once with an ASCII title, once with a non-ASCII one.
-2. Runs the API side on each titled output, the same way the API does it. `readOriginal` (`src/helpers/pdf-original.js`) reads the original bytes. Then `checkTail` (`src/helpers/pdf-tail.js`) checks the bytes the titler added, using those facts.
+2. Runs the API side on each titled output, the same way the API does it. `readOriginal` (`src/helpers/pdf-original.js`) reads the original bytes. Then `checkTail` (`src/helpers/pdf-tail.js`) checks the bytes the titler added, using those facts and the title that output was written with. Both the Info /Title and the XMP dc:title must decode to that title.
 3. Compares the facts the reader found (`root`, `info`, `metadata`, `prev`, `size`) with what pikepdf sees and with the numbers the titler wrote from.
 
 Sample PDFs are never committed. Keep them outside the repo.

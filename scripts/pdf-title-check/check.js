@@ -1,10 +1,11 @@
 'use strict';
 
 /**
- * Node side of pass_rate.py. Reads JSON lines `{name, original, titled: [path, ...]}` on stdin and
- * writes one line per input: `{name, facts, tails}` or `{name, exception}`. `facts` is what
+ * Node side of pass_rate.py. Reads JSON lines `{name, original, titled: [{file, title}, ...]}` on
+ * stdin and writes one line per input: `{name, facts, tails}` or `{name, exception}`. `facts` is what
  * `readOriginal` returns for the original; `tails` holds `checkTail`'s reason per titled file, null
- * for a pass. Same calls, same order as the API: read the original, then check the bytes after it.
+ * for a pass. Same calls, same order as the API: read the original, then check the bytes after it
+ * against the title the file was written with.
  */
 
 const fs = require('fs');
@@ -20,7 +21,8 @@ async function check({ name, original, titled }) {
   } catch (err) {
     return { name, exception: err.message };
   }
-  const tails = titled.map((file) => checkTail(fs.readFileSync(file).subarray(bytes.length), bytes.length, facts));
+  const tails = titled.map(({ file, title }) =>
+    checkTail(fs.readFileSync(file).subarray(bytes.length), bytes.length, facts, title));
   return { name, facts, tails };
 }
 

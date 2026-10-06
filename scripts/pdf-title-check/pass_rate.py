@@ -107,7 +107,7 @@ def build_rows(samples, out_dir, node):
             if res.data is not None:
                 file = Path(out_dir) / f"{len(entries)}.{k}.pdf"
                 file.write_bytes(res.data)
-                titled.append(str(file))
+                titled.append({"file": str(file), "title": title})
         pike = pike_facts(data)
         rows.append({"file": path.name, "bytes": len(data), "class": classify(results, pike),
                      "titler": results, "pike": pike, "view": titler_view(data)})
