@@ -663,8 +663,8 @@ from eagle-api's role checks. The routes are not wired yet; these are the intend
 | `GET /reports?type=bcgw` (public) | `src/controllers/report.js` `getReport` | `GET /api/reports?type=bcgw` |
 
 **Comment export.** The caller's level picks the columns. Level 2 or lower (sysadmin, staff) gets
-the staff columns. Any other level gets the proponent columns, only published comments, and a blank
-`Author`. `Author` is also blank on every anonymous comment. Rows are the comments the caller can
+the staff columns. Any other level gets the proponent columns and only published comments. In both,
+`Author` reads `Anonymous` on an anonymous comment, as in eagle-api. Rows are the comments the caller can
 read, and each row goes through the field redactor first, so a hidden field is an empty cell.
 Attachment links point at `/documents/:id/download` on the host the caller used, and list only
 documents the caller can read. Text that starts with `=`, `+`, `-` or `@` gets a leading `'` so a

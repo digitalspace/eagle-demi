@@ -125,7 +125,7 @@ test('comment export', async (t) => {
     assert.strictEqual(res.headers['content-type'], 'text/csv; charset=utf-8');
   });
 
-  await t.test('an anonymous caller gets the proponent columns with Author blank', async () => {
+  await t.test('an anonymous caller gets the proponent columns', async () => {
     fakeCosmos(t, [comment()]);
     const { columns, records } = await exportAs(undefined);
 
@@ -133,16 +133,24 @@ test('comment export', async (t) => {
       'Comment_No', 'Submitted', 'Author', 'Location', 'Comment', 'Attachments', 'Published',
       'Pillar', 'Project', 'PCP_Title', 'Export_Date', 'CACMember'
     ]);
-    assert.strictEqual(records[0].Author, '', 'attributed, but never in a proponent export');
+    assert.strictEqual(records[0].Author, 'Pat Doe', 'attributed, so public, as in eagle-api');
     assert.strictEqual(records[0].Published, '', 'datePosted is a level-2 field');
     assert.strictEqual(records[0].Comment, 'Plain text');
   });
 
-  await t.test('an anonymous comment has a blank Author in the staff export', async () => {
+  await t.test('an anonymous comment reads Anonymous in the staff export', async () => {
     fakeCosmos(t, [comment({ isAnonymous: true })]);
     const { records } = await exportAs(STAFF);
 
-    assert.strictEqual(records[0].Author, '');
+    assert.strictEqual(records[0].Author, 'Anonymous');
+  });
+
+  await t.test('an anonymous comment reads Anonymous in the proponent export', async () => {
+    fakeCosmos(t, [comment({ isAnonymous: true })]);
+    const { res, records } = await exportAs(undefined);
+
+    assert.strictEqual(records[0].Author, 'Anonymous');
+    assert.ok(!res.body.includes('Pat Doe'), 'the stored name never leaves');
   });
 
   await t.test('quotes, commas and line breaks are escaped', async () => {

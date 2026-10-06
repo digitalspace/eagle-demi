@@ -68,7 +68,7 @@ function linkBase(req) {
   return host ? `${proto}://${host}` : '';
 }
 
-function csvRow(comment, { staff, readable, base, projectName, periodTitle, today }) {
+function csvRow(comment, { readable, base, projectName, periodTitle, today }) {
   const links = (comment.documents || [])
     .filter(id => readable.has(String(id)))
     .map(id => `${base}/documents/${encodeURIComponent(id)}/download`);
@@ -76,8 +76,8 @@ function csvRow(comment, { staff, readable, base, projectName, periodTitle, toda
   const row = {
     Comment_No: comment.commentId,
     Submitted: exportDate(comment.dateAdded),
-    // Blank for a proponent export and for any anonymous comment, whatever the redactor kept.
-    Author: staff && comment.isAnonymous === false ? comment.author : null,
+    // eagle-api's exact string, in both formats. An attributed name survives redaction at level 4.
+    Author: comment.isAnonymous === false ? comment.author : 'Anonymous',
     Location: comment.location,
     Comment: comment.comment,
     // eagle-api's csv-stringify JSON-encoded the link array; kept so existing sheets still parse.
@@ -123,7 +123,6 @@ exports.exportComments = async (req, res) => {
 
     const readable = await readableDocumentIds(access, rows, stored.projectId);
     const context = {
-      staff,
       readable,
       base: linkBase(req),
       projectName: project && project.name,
