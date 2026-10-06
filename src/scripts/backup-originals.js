@@ -110,6 +110,11 @@ function redact(text) {
   return out;
 }
 
+/** Azure HEAD errors (getProperties, exists) carry an empty message: fall back to status and error code. */
+const errText = err => err.message ||
+  [err.statusCode, err.code || err.response?.headers?.get('x-ms-error-code')].filter(Boolean).join(' ') ||
+  String(err);
+
 const isThrottle = err => Boolean(err) &&
   (err.code === 'SlowDown' || err.code === 'ServerBusy' || err.statusCode === 503);
 
@@ -356,7 +361,7 @@ async function copy(args, deps) {
     } catch (err) {
       if (err instanceof Mismatch) summary.mismatch++;
       summary.failed++;
-      if (summary.failures.length < MAX_REPORTED) summary.failures.push(`${entry.key}: ${redact(err.message)}`);
+      if (summary.failures.length < MAX_REPORTED) summary.failures.push(`${entry.key}: ${redact(errText(err))}`);
     }
     if (++done % PROGRESS_EVERY === 0) logger.info(copySummaryLine(summary));
   });
@@ -569,7 +574,7 @@ async function drillCheck(args, deps) {
       if (args.live) await blob.delete();
     } catch (err) {
       summary.failed++;
-      summary.failures.push(`${e.name}: ${redact(err.message)}`);
+      summary.failures.push(`${e.name}: ${redact(errText(err))}`);
     }
   }
   logger.info(`${TAG} drill check mode=${args.live ? 'live' : 'dry-run'} matched=${summary.matched} ` +
@@ -615,7 +620,7 @@ if (require.main === module) {
   run(argv)
     .then(result => process.exit(result.exitCode))
     .catch(err => {
-      logger.error(`${TAG} Fatal`, { error: redact(err.message), stack: redact(err.stack) });
+      logger.error(`${TAG} Fatal`, { error: redact(errText(err)), stack: redact(err.stack) });
       process.exit(1);
     });
 }
