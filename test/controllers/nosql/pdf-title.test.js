@@ -604,10 +604,8 @@ test('pdf title lease API', async (t) => {
       assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
     });
 
-    await t.test('a check that throws copies the backup back and skips', async (t) => {
-      const w = world(t);
-      const { leaseId } = await titleOnce(w, TITLED);
-      w.closePutWindow();
+    /** The next object read throws once, as a dropped connection would. */
+    const throwOnce = (t) => {
       const stream = storage.getObjectStream;
       let thrown = false;
       t.mock.method(storage, 'getObjectStream', async (key) => {
@@ -615,9 +613,46 @@ test('pdf title lease API', async (t) => {
         thrown = true;
         throw new Error('connection reset');
       });
-      assert.deepEqual((await report({ leaseId })).body, { outcome: 'skipped', status: 'skipped', reason: 'check-failed' });
+    };
+
+    await t.test('a check that throws copies the backup back and releases for a retry', async (t) => {
+      const w = world(t);
+      const { leaseId } = await titleOnce(w, TITLED);
+      w.closePutWindow();
+      throwOnce(t);
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'released', status: null, reason: null });
       assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
-      assert.equal(w.row().pdfTitle.lease, undefined);
+      assert.ok(!w.store.has(BACKUP));
+      const record = w.row().pdfTitle;
+      assert.deepEqual([record.lease, record.status, record.title, record.skippedTitle], [undefined, undefined, undefined, undefined]);
+      assert.equal((await pending()).length, 1, 'offered again');
+    });
+
+    await t.test('a check that throws inside the PUT window is undone and later released for a retry', async (t) => {
+      const w = world(t);
+      const { leaseId } = await titleOnce(w, TITLED);
+      throwOnce(t);
+      assert.equal((await report({ leaseId })).body.reason, 'put-window-open');
+      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL), 'undone at once');
+      w.closePutWindow();
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'released', status: null, reason: null });
+      assert.equal((await pending()).length, 1, 'offered again');
+    });
+
+    await t.test('a refused shape on a titled file stays terminal for that title', async (t) => {
+      const w = world(t);
+      await titled(w);
+      w.row().displayName = SECOND;
+      const leased = await lease();
+      const text = RETITLED.toString('latin1');
+      const at = text.lastIndexOf('/Producer');
+      const hostile = Buffer.from(`${text.slice(0, at)}/AA      ${text.slice(at + 9)}`, 'latin1');
+      const committed = await commit(commitBody(leased.body.leaseId, hostile, { first: false }));
+      assert.equal(w.workerPut(KEY, hostile, committed.body.headers), 200);
+      w.closePutWindow();
+      assert.equal((await report({ leaseId: leased.body.leaseId })).body.outcome, 'skipped');
+      assert.deepEqual([w.row().pdfTitle.status, w.row().pdfTitle.skippedTitle], ['titled', SECOND]);
+      assert.deepEqual(await pending(), [], 'not offered again');
     });
 
     await t.test('a changed Content-Type', async (t) => {

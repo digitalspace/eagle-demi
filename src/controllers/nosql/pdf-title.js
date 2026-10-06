@@ -393,9 +393,10 @@ async function settle(stored, report = null) {
   try {
     verdict = await inspect(row);
   } catch (err) {
-    // A check that cannot finish never leaves an unchecked object live: undo it like a bad shape.
+    // A check that cannot finish never leaves an unchecked object live: undo it like a bad shape,
+    // but record no skip (`retry`), since nothing is known against the file.
     logger.error('[pdf-title] check of the stored object failed', { ...fields, error: err.message });
-    verdict = { kind: 'bad', reason: 'check-failed', shape: true };
+    verdict = { kind: 'bad', reason: 'check-failed', shape: true, retry: true };
   }
 
   // INVARIANT: while the PUT link can still land (now < putExpiresAt + skew), never release the
@@ -405,7 +406,7 @@ async function settle(stored, report = null) {
   if (Date.now() < Date.parse(record.inFlight.putExpiresAt) + PUT_SKEW_MS) {
     if (verdict.kind !== 'bad') return { row: stored, outcome: 'waiting' };
     const { restored, overwritten } = await copyBack(row, fields);
-    const refusal = { reason: verdict.reason, shape: Boolean(verdict.shape), restored, overwritten, at: nowIso() };
+    const refusal = { reason: verdict.reason, shape: Boolean(verdict.shape), retry: Boolean(verdict.retry), restored, overwritten, at: nowIso() };
     logger.warn('[pdf-title] write refused inside the PUT window; undone, decision waits', { ...fields, reason: verdict.reason });
     return { row: await save(row, { ...record, inFlight: { ...record.inFlight, refusal } }), outcome: 'waiting' };
   }
@@ -415,7 +416,7 @@ async function settle(stored, report = null) {
   if (verdict.kind === 'source') {
     if (refusal && !refusal.shape) return park(row, refusal.reason, true, refusal.overwritten, fields);
     await dropBackup(record.inFlight.backupKey, record.inFlight.backupVersionId, fields);
-    const why = refusal ? { reason: refusal.reason } : report;
+    const why = refusal && !refusal.retry ? { reason: refusal.reason } : report;
     logger.info('[pdf-title] lease ended; store holds the source', { ...fields, reason: why ? why.reason : 'released' });
     return { row: await release(row, skipFields(row, lease, why)), outcome: why ? 'skipped' : 'released' };
   }
@@ -423,6 +424,7 @@ async function settle(stored, report = null) {
   if (restored && verdict.shape) {
     await dropBackup(record.inFlight.backupKey, record.inFlight.backupVersionId, fields);
     logger.warn('[pdf-title] write refused and undone', { ...fields, reason: verdict.reason });
+    if (verdict.retry) return { row: await release(row), outcome: 'released' };
     return { row: await release(row, skipFields(row, lease, { reason: verdict.reason })), outcome: 'skipped' };
   }
   return park(row, verdict.reason, restored, overwritten, fields);
