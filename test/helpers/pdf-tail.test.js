@@ -2,16 +2,16 @@
 
 /**
  * The increment check against real `pdf-title/titler.py` output (fixtures written by it from the
- * titler's own test builders) and against hand-built hostile increments.
+ * titler's own test builders) and against hand-built increments. `classic-xmp.in-place.pdf` is
+ * from the earlier titler that revised XMP in place, which the check now refuses.
  */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { originalScanner, checkTail } = require('../../src/helpers/pdf-tail');
+const pdfTail = require('../../src/helpers/pdf-tail');
 const { readOriginal } = require('../../src/helpers/pdf-original');
 const { fixture, classicTail, classicPdf } = require('./pdf-build');
 
-const CASES = ['classic-xmp', 'classic-info', 'xrefstream-xmp', 'xrefstream-noinfo'];
 
 function load(name, titled = 'titled', ext = '.pdf') {
   return { original: fixture(`${name}.original${ext}`), titled: fixture(`${name}.${titled}${ext}`) };
@@ -19,54 +19,313 @@ function load(name, titled = 'titled', ext = '.pdf') {
 
 const readFacts = (original) => readOriginal(async (offset, length) => original.subarray(offset, offset + length), original.length);
 
-function factsOf(original, chunk = 97) {
-  const scan = originalScanner();
-  for (let i = 0; i < original.length; i += chunk) scan.push(original.subarray(i, i + chunk));
-  return scan.result();
-}
+/** The title hand-built increments write; fixtures pass their own. */
+const TITLE = 'New';
+const FINAL = 'Site C Report, Final (2026) \u00e9';
+const checkTail = (bytes, length, facts, title = TITLE) => pdfTail.checkTail(bytes, length, facts, title);
+
+/** An XMP packet the way the titler leaves one, with `inner` added inside the dc description. */
+const packet = (title = TITLE, inner = '') => '<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n' +
+  '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n' +
+  '<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">\n' +
+  `<dc:title><rdf:Alt><rdf:li xml:lang="x-default">${title}</rdf:li></rdf:Alt></dc:title>${inner}\n` +
+  '</rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end="w"?>';
+/** The older packet header some writers still copy: single quotes, an empty begin, a byte count. */
+const OLD_HEADER = "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d' bytes='1030'?>";
+/** An XMP stream object holding `body` as UTF-8, as a latin1 body string for `classicTail`. */
+const xmpObject = (body = packet()) => {
+  const bytes = Buffer.from(body, 'utf8');
+  return `<< /Type /Metadata /Subtype /XML /Length ${bytes.length} >>\nstream\n${bytes.toString('latin1')}\nendstream`;
+};
+const XMP = xmpObject();
 
 test('real titler output passes', async (t) => {
-  for (const name of CASES) {
-    await t.test(name, () => {
-      const { original, titled } = load(name);
-      assert.ok(titled.subarray(0, original.length).equals(original));
-      assert.equal(checkTail(titled.subarray(original.length), original.length, factsOf(original)), null);
-    });
-  }
-
-  await t.test('the scan does not depend on where chunks split', () => {
-    const { original, titled } = load('xrefstream-xmp');
-    for (const chunk of [1, 7, 64, 4096]) {
-      assert.equal(checkTail(titled.subarray(original.length), original.length, factsOf(original, chunk)), null, chunk);
-    }
-  });
-});
-
-test('real titler output passes with the structural reader\'s facts', async (t) => {
   const shapes = [
-    ...CASES.map(name => [name]),
-    ['classic-info', 'retitled'],
-    ['objstm-xmp'],
-    ['linearized-large', 'titled', '.pdf.gz']
+    ['classic-info', FINAL], ['classic-info', 'Site C Report', 'retitled'], ['xrefstream-noinfo', FINAL],
+    ['classic-xmp', FINAL], ['xrefstream-xmp', FINAL], ['objstm-xmp', 'Site C Report'],
+    ['linearized-large', 'Site C Report', 'titled', '.pdf.gz']
   ];
-  for (const [name, titledAs = 'titled', ext] of shapes) {
+  for (const [name, title, titledAs = 'titled', ext] of shapes) {
     await t.test(`${name} ${titledAs}`, async () => {
       const { original, titled } = load(name, titledAs, ext);
       assert.ok(titled.subarray(0, original.length).equals(original));
       const facts = await readFacts(original);
       assert.ok(!facts.error, facts.error);
-      assert.equal(checkTail(titled.subarray(original.length), original.length, facts), null);
+      assert.equal(checkTail(titled.subarray(original.length), original.length, facts, title), null);
+      // The same bytes for any other title are refused.
+      assert.equal(checkTail(titled.subarray(original.length), original.length, facts, `${title}.`), 'tail-info-title');
     });
   }
 });
 
-test('the metadata ref wins over the older scanner\'s set when both are given', async () => {
-  const { original, titled } = load('classic-xmp');
+test('the titler writes PDF/A conformance B as a character reference', async (t) => {
+  for (const [name, ext] of [['classic-xmp'], ['xrefstream-xmp'], ['objstm-xmp'], ['linearized-large', '.pdf.gz']]) {
+    await t.test(name, () => {
+      const { original, titled } = load(name, 'titled', ext);
+      // The original holds it raw; the increment never does.
+      assert.match(original.toString('latin1'), /<pdfaid:conformance>B</);
+      assert.match(titled.subarray(original.length).toString('latin1'), /<pdfaid:conformance>&#66;</);
+    });
+  }
+});
+
+test('an XMP word cannot paint a path an earlier content stream left open', async () => {
+  // Page 3 draws stream 4, which builds a path and never paints it, then object 7, which the original never defines.
+  const original = classicPdf([
+    [1, '<< /Title (Old) >>'],
+    [2, '<< /Type /Catalog /Pages 3 0 R /Metadata 5 0 R >>'],
+    [3, '<< /Type /Page /MediaBox [0 0 200 200] /Contents [4 0 R 7 0 R] >>'],
+    [4, '<< /Length 14 >>\nstream\n0 0 200 200 re\nendstream'],
+    [5, xmpObject(packet('Old'))],
+    [6, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>']
+  ], '/Size 7 /Root 2 0 R /Info 1 0 R');
+  const facts = await readFacts(original);
+  assert.equal(facts.size, 7);
+  const titled = (conformance) => classicTail(original, [
+    [1, '<< /Title (New) >>'],
+    [2, '<< /Type /Catalog /Pages 3 0 R /Metadata 7 0 R >>'],
+    [7, xmpObject(packet(TITLE, `<pdfaid:conformance>${conformance}</pdfaid:conformance>`))]
+  ], `/Size 8 /Root 2 0 R /Info 1 0 R /Prev ${facts.prev}`);
+  assert.equal(checkTail(titled('B'), original.length, facts), 'tail-xmp-body');
+  assert.equal(checkTail(titled('&#66;'), original.length, facts), null);
+});
+
+test('XMP revised in place is refused, whatever the object at that number is', async (t) => {
+  await t.test('the earlier titler\'s output', async () => {
+    const { original, titled } = load('classic-xmp', 'in-place');
+    const facts = await readFacts(original);
+    assert.equal(checkTail(titled.subarray(original.length), original.length, facts, FINAL), 'tail-xmp-in-place');
+  });
+
+  await t.test('a /Metadata that is also page 1\'s content stream', async () => {
+    const original = classicPdf([
+      [1, '<< /Title (Old) >>'],
+      [2, '<< /Type /Catalog /Pages 3 0 R /Metadata 5 0 R >>'],
+      [3, '<< /Type /Pages /Kids [4 0 R] /Count 1 >>'],
+      [4, '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 200 200] /Contents 5 0 R >>'],
+      [5, '<< /Length 5 >>\nstream\nBT ET\nendstream']
+    ], '/Size 6 /Root 2 0 R /Info 1 0 R');
+    const facts = await readFacts(original);
+    const page = '<< /Type /Metadata /Subtype /XML /Length 38 >>\nstream\nBT /F1 48 Tf 72 700 Td (anything) Tj ET\nendstream';
+    const tail = classicTail(original, [[1, '<< /Title (New) >>'], [5, page]], `/Size 6 /Root 2 0 R /Info 1 0 R /Prev ${facts.prev}`);
+    assert.equal(checkTail(tail, original.length, facts), 'tail-xmp-in-place');
+  });
+});
+
+test('XMP at a new number with the Catalog revised for it', async (t) => {
+  const { original } = load('classic-xmp');
+  const facts = await readFacts(original);
+  const n = facts.size;
+  const trailer = `/Size ${n + 1} /Root 3 0 R /Info 1 0 R /Prev ${facts.prev}`;
+  // The original Info and Catalog in other spellings: hex strings, other key order.
+  const info = '<< /ModDate <443a3230303430313032303330343035> /Title (New) /Producer (Acrobat Distiller 6.0.1) >>';
+  const catalog = (extra = '') => `<< /Metadata ${n} 0 R /Pages 2 0 R /Type /Catalog ${extra}>>`;
+  const check = (bodies, dict = trailer) => checkTail(classicTail(original, bodies, dict), original.length, facts);
+
+  await t.test('commits', () => {
+    assert.equal(check([[1, info], [3, catalog()], [n, XMP]]), null);
+  });
+
+  const cases = {
+    'a Catalog with a key added, even one Info may never hold': [[[1, info], [3, catalog('/OpenAction 9 0 R ')], [n, XMP]], 'tail-catalog-changed'],
+    'a Catalog with a key dropped': [[[1, info], [3, `<< /Metadata ${n} 0 R /Type /Catalog >>`], [n, XMP]], 'tail-catalog-changed'],
+    'a Catalog still naming the old XMP': [[[1, info], [3, '<< /Metadata 6 0 R /Pages 2 0 R /Type /Catalog >>'], [n, XMP]], 'tail-catalog-changed'],
+    'a new XMP the Catalog does not name': [[[1, info], [n, XMP]], 'tail-xmp'],
+    'a Catalog revised with no new XMP': [[[1, info], [3, catalog()]], 'tail-catalog-changed'],
+    'a new XMP under a number the original uses': [[[1, info], [3, '<< /Metadata 4 0 R /Pages 2 0 R /Type /Catalog >>'], [4, XMP]], 'tail-xmp-number'],
+    'a Catalog that is a stream': [[[1, info], [3, `${catalog().slice(0, -2)}/Length 1 >>\nstream\nx\nendstream`], [n, XMP]], 'tail-object']
+  };
+  for (const [label, [bodies, reason]] of Object.entries(cases)) {
+    await t.test(label, () => assert.equal(check(bodies), reason));
+  }
+
+  await t.test('a file with no XMP gets no Catalog revision', async () => {
+    const plain = load('classic-info').original;
+    const plainFacts = await readFacts(plain);
+    const m = plainFacts.size;
+    const tail = classicTail(plain, [[1, info], [3, `<< /Type /Catalog /Pages 2 0 R /Metadata ${m} 0 R >>`], [m, XMP]],
+      `/Size ${m + 1} /Root 3 0 R /Info 1 0 R /Prev ${plainFacts.prev}`);
+    assert.equal(checkTail(tail, plain.length, plainFacts), 'tail-catalog-changed');
+  });
+});
+
+test('the new XMP body is strict XML whose only text is the title', async (t) => {
+  const { original } = load('classic-xmp');
+  const facts = await readFacts(original);
+  const n = facts.size;
+  const trailer = `/Size ${n + 1} /Root 3 0 R /Info 1 0 R /Prev ${facts.prev}`;
+  const catalog = `<< /Metadata ${n} 0 R /Pages 2 0 R /Type /Catalog >>`;
+  const check = (body, { title = TITLE, info = '(New)' } = {}) => checkTail(
+    classicTail(original, [[1, `<< /ModDate (D:20040102030405) /Producer (Acrobat Distiller 6.0.1) /Title ${info} >>`], [3, catalog], [n, xmpObject(body)]], trailer),
+    original.length, facts, title);
+
+  const accepted = {
+    'the titler\'s packet': packet(),
+    'PDF/A identification values, B as a character reference': packet(TITLE, '<pdfaid:part>1</pdfaid:part><pdfaid:conformance>&#66;</pdfaid:conformance>'),
+    'dates and ids as text': packet(TITLE, '<xmp:CreateDate>2004-01-02T03:04:05Z</xmp:CreateDate><xmpMM:DocumentID>uuid:6c9a-11</xmpMM:DocumentID>'),
+    'an older dc:title attribute': packet(TITLE, '<x:a dc:title="New"/>'),
+    'a Producer with parentheses': packet(TITLE, '<pdf:Producer>Adobe Acrobat 11.0 (Windows)</pdf:Producer>'),
+    'an attribute with a comma and parentheses': packet(TITLE, '<x:a x:xmptk="Adobe XMP Core 5.6-c015 (84.1), 2016/09/10"/>'),
+    'non-ASCII and apostrophes as text': packet(TITLE, '<xmp:CreatorTool>Microsoft\u00ae Word\u2019s</xmp:CreatorTool>'),
+    'no xpacket wrapper': packet().replace(/<\?xpacket[^>]*>/g, ''),
+    'an Adobe filters instruction after the header': packet().replace('?>\n', '?>\n<?adobe-xap-filters esc="CRLF"?>\n'),
+    'the older header in single quotes with a byte count': packet()
+      .replace(/^<\?xpacket[^>]*>/, OLD_HEADER)
+      .replace('<?xpacket end="w"?>', '<?xpacket end=\'r\'?>'),
+    'a header with an encoding': packet().replace('kc9d"?>', 'kc9d" encoding="UTF-8"?>'),
+    'a non-ASCII element name': packet(TITLE, '<pdfx:Solutionↂ0020ID>42</pdfx:Solutionↂ0020ID>')
+  };
+  for (const [label, body] of Object.entries(accepted)) {
+    await t.test(`accepted: ${label}`, () => assert.equal(check(body), null));
+  }
+  await t.test('a title holding an operator word is accepted only as a character reference', () => {
+    const info = '(Appendix F)';
+    assert.equal(check(packet('Appendix &#70;'), { title: 'Appendix F', info }), null);
+    assert.equal(check(packet('Appendix &#x46;'), { title: 'Appendix F', info }), null);
+    assert.equal(check(packet('Appendix F'), { title: 'Appendix F', info }), 'tail-xmp-body');
+    assert.equal(check(packet('Plan B'), { title: 'Plan B', info: '(Plan B)' }), 'tail-xmp-body');
+    assert.equal(check(packet('Plan &#66;'), { title: 'Plan B', info: '(Plan B)' }), null);
+  });
+
+  await t.test('a title holding lexer delimiters is accepted only as character references', () => {
+    const title = '50% {draft} [2] a\\b (x';
+    const info = '(50% {draft} [2] a\\\\b \\(x)';
+    assert.equal(check(packet('50&#37; &#123;draft&#125; &#91;2&#93; a&#92;b &#40;x'), { title, info }), null);
+    // Each raw form decodes to its title and the Info matches, so only the raw XMP text is at fault.
+    const raws = { '50% x': '50% x', '&#123;draft}': '{draft}', '[2]': '[2]', 'a\\b': 'a\\b', '(x': '(x', 'a > b': 'a > b' };
+    for (const [raw, decoded] of Object.entries(raws)) {
+      const hex = `<${Buffer.from(decoded, 'latin1').toString('hex')}>`;
+      assert.equal(check(packet(raw), { title: decoded, info: hex }), 'tail-xmp-body', raw);
+    }
+  });
+
+  await t.test('accepted: a title with markup characters, escaped', () => {
+    assert.equal(check(packet('A &amp; &#66; &lt;1&gt;'), { title: 'A & B <1>', info: '(A & B <1>)' }), null);
+  });
+
+  const refused = {
+    'PDF/A conformance B written raw': packet(TITLE, '<pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>'),
+    'page operators as a text node': packet(TITLE, '<x:a>BT /F1 48 Tf 72 700 Td (x) Tj ET</x:a>'),
+    'path operators without delimiters': packet(TITLE, '<x:a>0 0 999 999 re f</x:a>'),
+    'an operator glued to a number': packet(TITLE, '<x:a>1re</x:a>'),
+    'a dc:title other than the wanted title': packet('Other'),
+    'a second language with another title': packet().replace('</rdf:Alt>', '<rdf:li xml:lang="fr">Autre</rdf:li></rdf:Alt>'),
+    'an empty dc:title': packet().replace(`>${TITLE}<`, '><'),
+    'no dc:title at all': packet().replace(/<dc:title>.*<\/dc:title>/, ''),
+    'a dc:title attribute with another title': packet(TITLE, '<x:a dc:title="Other"/>'),
+    'a DOCTYPE with an entity': `<!DOCTYPE x [<!ENTITY e "BT">]>${packet()}`,
+    'an undeclared entity': packet(TITLE, '<x:a>&e;</x:a>'),
+    'CDATA': packet(TITLE, '<x:a><![CDATA[BT]]></x:a>'),
+    'a comment': packet(TITLE, '<!-- > re f -->'),
+    'a > inside a processing instruction': packet(TITLE, '<?x a > re f?>'),
+    'a processing instruction before the header': `<?x y?>${packet()}`,
+    'a processing instruction after the packet': `${packet()}<?x y?>`,
+    'an xpacket instruction in another form': packet(TITLE, '<?xpacket z?>'),
+    'a processing instruction inside the title': packet(`<?x y?>${TITLE}`),
+    'a name character XML does not allow': packet(TITLE, '<x:a×b>1</x:a×b>'),
+    'a second root after a processing instruction': packet().replace('<?xpacket end', '<?x y?><x:b/><?xpacket end'),
+    'text after a packet with the older header': `${packet().replace(/^<\?xpacket[^>]*>/, OLD_HEADER)}f`,
+    'a > inside an attribute value': packet(TITLE, '<x:a b="1 > re"/>'),
+    'an unbalanced ( in text': packet(TITLE, '<pdf:Producer>Adobe (Windows</pdf:Producer>'),
+    'a ) before its ( in text': packet(TITLE, '<pdf:Producer>a) (b</pdf:Producer>'),
+    'a % in text': packet(TITLE, '<x:a>100%</x:a>'),
+    'a backslash in text': packet(TITLE, '<x:a>a\\b</x:a>'),
+    'brackets in text': packet(TITLE, '<x:a>[1]</x:a>'),
+    'a control character in text': packet(TITLE, '<x:a>a\u0007b</x:a>'),
+    'a > in text': packet(TITLE, '<x:a>a > b</x:a>'),
+    'an operator after a string': packet(TITLE, '<x:a>(x) Tj</x:a>'),
+    'an operator glued to a string': packet(TITLE, '<x:a>(x)Tj</x:a>'),
+    'a lone quote operator': packet(TITLE, '<x:a>(x) \'</x:a>'),
+    'a stray & in an attribute': packet(TITLE, '<x:a b="a & b"/>'),
+    'mismatched tags': packet(TITLE, '<x:a></x:b>'),
+    'a second root': `${packet()}<x:b/>`,
+    'text after the packet': `${packet()}f`,
+    'bytes that are not UTF-8': `${packet()}\xff`,
+    'over 64 KiB': packet(TITLE, ' '.repeat(64 * 1024))
+  };
+  for (const [label, body] of Object.entries(refused)) {
+    await t.test(`refused: ${label}`, () => {
+      const bytes = label === 'bytes that are not UTF-8' ? null : body;
+      const result = bytes === null
+        ? checkTail(classicTail(original, [[1, '<< /ModDate (D:20040102030405) /Producer (Acrobat Distiller 6.0.1) /Title (New) >>'], [3, catalog],
+          [n, `<< /Type /Metadata /Subtype /XML /Length ${body.length} >>\nstream\n${body}\nendstream`]], trailer), original.length, facts, TITLE)
+        : check(bytes);
+      assert.equal(result, 'tail-xmp-body');
+    });
+  }
+
+  await t.test('a long unclosed tag is refused quickly', () => {
+    const started = Date.now();
+    assert.equal(check(packet(TITLE, `<x:a${' b="1"'.repeat(5000)}${' '.repeat(30000)}`)), 'tail-xmp-body');
+    assert.ok(Date.now() - started < 1000);
+  });
+});
+
+test('Info /Title decodes to the wanted title', () => {
+  const { original } = load('classic-info');
+  const check = async (title, info) => {
+    const facts = await readFacts(original);
+    const trailer = `/Size ${facts.size} /Root 3 0 R /Info 1 0 R /Prev ${facts.prev}`;
+    const kept = '/Producer (Acrobat Distiller 6.0.1) /ModDate (D:20040102030405)';
+    return checkTail(classicTail(original, [[1, `<< ${kept} /Title ${info} >>`]], trailer), original.length, facts, title);
+  };
+  return Promise.all([
+    check('a\u2013b', '(a\\205b)').then(r => assert.equal(r, null, 'PDFDocEncoding en dash')),
+    check('\u4e2d', '<FEFF4E2D>').then(r => assert.equal(r, null, 'UTF-16BE')),
+    check('caf\u00e9', '(caf\\351)').then(r => assert.equal(r, null, 'Latin-1 e acute')),
+    check('a\u2013b', '(a-b)').then(r => assert.equal(r, 'tail-info-title')),
+    check('x', '(x\\237)').then(r => assert.equal(r, 'tail-info-title', 'an undefined PDFDocEncoding byte'))
+  ]);
+});
+
+test('a revised Info changes only /Title; a new Info holds only /Title', async (t) => {
+  const { original } = load('classic-info');
+  const facts = await readFacts(original);
+  const trailer = `/Size ${facts.size} /Root 3 0 R /Info 1 0 R /Prev ${facts.prev}`;
+  const kept = '/Producer (Acrobat Distiller 6\\0560\\0561) /ModDate (D\\07220040102030405)';
+  const check = (info) => checkTail(classicTail(original, [[1, info]], trailer), original.length, facts);
+
+  assert.equal(check(`<< ${kept} /Title (New) >>`), null);
+  assert.equal(check(`<< ${kept} /Title (New) /Author (x) >>`), 'tail-info-changed');
+  assert.equal(check(`<< ${kept.replace('6\\0560', '7\\0560')} /Title (New) >>`), 'tail-info-changed');
+  assert.equal(check(`<< ${kept.replace('2004', '2026')} /Title (New) >>`), 'tail-info-changed');
+  assert.equal(check('<< /Producer (Acrobat Distiller 6.0.1) /Title (New) >>'), 'tail-info-changed');
+  assert.equal(check(`<< ${kept} /Title /New >>`), 'tail-info');
+
+  await t.test('a new Info', async () => {
+    const { original: bare } = load('xrefstream-noinfo');
+    const bareFacts = await readFacts(bare);
+    const n = bareFacts.size;
+    const fresh = (info) => checkTail(classicTail(bare, [[n, info]], `/Size ${n + 1} /Root 1 0 R /Info ${n} 0 R /Prev ${bareFacts.prev}`), bare.length, bareFacts);
+    assert.equal(fresh('<< /Title (New) >>'), null);
+    assert.equal(fresh('<< /Title (New) /Author (x) >>'), 'tail-info');
+    // A new number may be one an original page names as an ExtGState and never defines.
+    assert.equal(fresh('<< /Title (New) /ca 0 >>'), 'tail-info');
+  });
+});
+
+test('deep nesting in an increment is refused, not a stack overflow', () => {
+  const tail = (depth) => Buffer.from(`1 0 obj\n<< /Title (x) /K ${'['.repeat(depth)}${']'.repeat(depth)} >>\nendobj\n`, 'latin1');
+  const facts = { size: 9, root: [3, 0], info: [1, 0], metadata: null, catalog: '', infoKept: '' };
+  // The Info dictionary is one level, so 31 arrays inside it reach the cap and pass the parse.
+  assert.equal(checkTail(tail(31), 100, facts), 'tail-info-changed');
+  assert.equal(checkTail(tail(32), 100, facts), 'tail-syntax');
+  assert.equal(checkTail(tail(100000), 100, facts), 'tail-syntax');
+});
+
+test('facts not in the structural reader\'s shape are refused', async () => {
+  const { original, titled } = load('classic-info');
   const facts = await readFacts(original);
   const tail = titled.subarray(original.length);
-  const [num, gen] = facts.metadata;
-  assert.equal(checkTail(tail, original.length, { ...facts, metadataObjects: new Set() }), null);
-  assert.equal(checkTail(tail, original.length, { ...facts, metadata: null, metadataObjects: new Set([`${num} ${gen}`]) }), 'tail-xmp-number');
+  // The previous reader's shape, without the Catalog and Info it now keeps, fails closed.
+  const { catalog, infoKept, ...older } = facts;
+  assert.ok(catalog && infoKept);
+  assert.equal(checkTail(tail, original.length, older, FINAL), 'original-unscanned');
+  // So does the retired text scan's shape.
+  assert.equal(checkTail(tail, original.length, { ...older, metadataObjects: [] }, FINAL), 'original-unscanned');
+  assert.equal(checkTail(tail, original.length, null, FINAL), 'original-unscanned');
+  assert.equal(checkTail(tail, original.length, facts, FINAL), null);
+  assert.equal(checkTail(tail, original.length, facts, null), 'tail-no-title');
 });
 
 test('a fake metadata header after a literal endstream cannot make a page XMP (N9)', async () => {
@@ -86,15 +345,13 @@ test('a fake metadata header after a literal endstream cannot make a page XMP (N
   const xmp = '<< /Type /Metadata /Subtype /XML /Length 5 >>\nstream\n<x/>\n\nendstream';
   const tail = classicTail(original, [[1, '<< /Title (New) >>'], [4, xmp]], `/Size 7 /Root 2 0 R /Info 1 0 R /Prev ${facts.prev}`);
   assert.equal(checkTail(tail, original.length, facts), 'tail-xmp-number');
-  // The older text scan is fooled by the same bytes, which is why its facts are on the way out.
-  assert.equal(checkTail(tail, original.length, factsOf(original)), null);
 });
 
 test('hostile increments are refused', async (t) => {
   const { original } = load('classic-info');
-  const facts = factsOf(original);
+  const facts = await readFacts(original);
   const trailer = `/Size ${facts.size} /Root ${facts.root.join(' ')} R /Info 1 0 R /Prev ${facts.prev}`;
-  const info = '<< /Title (Site C Report) /Producer (x) >>';
+  const info = '<< /Title (New) /Producer (Acrobat Distiller 6.0.1) /ModDate (D:20040102030405) >>';
   const check = (tail) => checkTail(tail, original.length, facts);
 
   await t.test('the hand-built control passes, so each refusal below is its own', () => {
@@ -107,8 +364,8 @@ test('hostile increments are refused', async (t) => {
     'JavaScript as a name value': [[[1, '<< /Title (x) /S /JavaScript >>']], /tail-forbidden:JavaScript/],
     'a hex-escaped JS key': [[[1, '<< /Title (x) /#4A#53 (app.alert(1)) >>']], /tail-forbidden:JS/],
     'a URI inside an array': [[[1, '<< /Title (x) /K [/URI] >>']], /tail-forbidden:URI/],
-    'an Info value that is a reference': [[[1, '<< /Title (x) /Author 4 0 R >>']], /tail-info/],
-    'an Info value that is a dictionary': [[[1, '<< /Title (x) /Pages << /Count 1 >> >>']], /tail-info/],
+    'an Info value that is a reference': [[[1, '<< /Title (x) /Author 4 0 R >>']], /tail-info-changed/],
+    'an Info value that is a dictionary': [[[1, '<< /Title (x) /Pages << /Count 1 >> >>']], /tail-info-changed/],
     'an Info without a title': [[[1, '<< /Producer (x) >>']], /tail-info/],
     'two Info dictionaries': [[[1, info], [9, info]], /tail-info/],
     'the Info revised under another number': [[[2, info]], /tail-info-number|tail-info-ref/],
@@ -151,7 +408,7 @@ test('hostile increments are refused', async (t) => {
     const bodies = [[1, info], [facts.size + 3, '<< /Title (x) >>']];
     assert.match(String(check(classicTail(original, bodies, trailer))), /tail-info|tail-size/);
     const fresh = { ...facts, info: null };
-    const newInfo = classicTail(original, [[facts.size + 3, info]], trailer.replace('/Info 1 0 R', `/Info ${facts.size + 3} 0 R`));
+    const newInfo = classicTail(original, [[facts.size + 3, '<< /Title (New) >>']], trailer.replace('/Info 1 0 R', `/Info ${facts.size + 3} 0 R`));
     assert.equal(checkTail(newInfo, original.length, fresh), 'tail-size');
   });
 
@@ -165,31 +422,18 @@ test('hostile increments are refused', async (t) => {
     assert.equal(check(Buffer.concat([classicTail(original, [[1, info]], trailer), Buffer.from('% note\n')])), 'tail-trailing-bytes');
   });
 
-  await t.test('an original whose last trailer cannot be read refuses everything', () => {
+  await t.test('an original the reader refused refuses everything', () => {
     const tail = classicTail(original, [[1, info]], trailer);
-    assert.equal(checkTail(tail, original.length, { error: 'original-trailer-unreadable' }), 'original-trailer-unreadable');
-    assert.equal(factsOf(Buffer.from('%PDF-1.4\nno trailer here\n')).error, 'original-no-startxref');
+    assert.equal(checkTail(tail, original.length, { error: 'original-no-startxref' }), 'original-no-startxref');
   });
 });
 
-test('an xref stream may not take a number the original uses', () => {
+test('an xref stream may not take a number the original uses', async () => {
   const { original, titled } = load('xrefstream-noinfo');
-  const facts = factsOf(original);
+  const facts = await readFacts(original);
   const tail = titled.subarray(original.length).toString('latin1');
   const xrefNum = Number(/(\d+) 0 obj\n<< \/Type \/XRef/.exec(tail)[1]);
   assert.ok(xrefNum >= facts.size, 'the titler takes a fresh number');
   // Same bytes, but the original is told its numbers reach past the xref stream's.
-  assert.equal(checkTail(titled.subarray(original.length), original.length, { ...facts, size: xrefNum + 1 }), 'tail-object-number');
-});
-
-test('bytes inside a stream cannot pose as a metadata object', () => {
-  const { original } = load('classic-info');
-  const fake = '9 0 obj\n<< /Type /Metadata /Subtype /XML /Length 0 >>\nstream\n\nendstream\nendobj\n';
-  // An image-like stream with a direct /Length whose data holds a fake header.
-  const decoy = `20 0 obj\n<< /Length ${fake.length} >>\nstream\n${fake}\nendstream\nendobj\n`;
-  // Appended after the original's own end, so its trailer and offsets still read.
-  const withDecoy = Buffer.concat([original, Buffer.from(decoy, 'latin1')]);
-  assert.ok(!factsOf(withDecoy).metadataObjects.has('9 0'));
-  // The same header outside any stream does count.
-  assert.ok(factsOf(Buffer.concat([original, Buffer.from(fake, 'latin1')])).metadataObjects.has('9 0'));
+  assert.equal(checkTail(titled.subarray(original.length), original.length, { ...facts, size: xrefNum + 1 }, FINAL), 'tail-object-number');
 });

@@ -16,7 +16,8 @@ from xml.sax.saxutils import escape
 
 import pikepdf
 from pypdf import PdfReader
-from pypdf.generic import DictionaryObject, NameObject, StreamObject, create_string_object
+from pypdf.generic import (ByteStringObject, DictionaryObject, IndirectObject, NameObject,
+                           StreamObject, TextStringObject, create_string_object)
 
 log = logging.getLogger("titler")
 
@@ -32,6 +33,19 @@ _STARTXREF = re.compile(rb"startxref\s+(\d+)")
 _OBJ_HEADER = re.compile(rb"\d+\s+\d+\s+obj")
 _STREAM_NAME = re.compile(r"stream <[^>]*>")
 _OFFSET = re.compile(r"offset \d+")
+# Comments, CDATA and processing instructions first, so the tag pattern never starts inside one.
+_XML_MARKUP = re.compile(rb"""<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>|<(?:[^>"']|"[^"]*"|'[^']*')*>""",
+                         re.DOTALL)
+# The API splits words at JS `\s`, which also counts U+FEFF.
+_WORD = re.compile(r"[^\s\ufeff/()]+")
+# The API refuses these in XMP text, and parentheses that do not balance.
+_TEXT_DELIMITER = re.compile(r"[%\\\[\]{}()>]")
+_NUMBER_CHARS = "+-.0123456789"
+# The API's `OPERATORS` (src/helpers/pdf-tail.js) plus `B`: it refuses these words in XMP text.
+_OPERATORS = frozenset("""
+    b B B* b* BDC BI BMC BT BX c cm CS cs d d0 d1 Do DP EI EMC ET EX f F f* G g gs h i ID j J K k l m
+    M MP n q Q re RG rg ri s S SC sc SCN scn sh T* Tc Td TD Tf Tj TJ TL Tm Tr Ts Tw Tz v w W W* y ' "
+""".split())
 
 
 @dataclass
@@ -99,22 +113,26 @@ def _titled(original: bytes, title: str) -> tuple:
         raise Skip("check-qpdf-source-errors") from exc
 
     objects = {}  # (number, generation) -> object, all written after the original bytes
+    new_number = _next_free_number(reader)
+    root = reader.trailer["/Root"]
+    root_ref = (root.indirect_reference.idnum, root.indirect_reference.generation)
     info_ref = _info_ref(reader)
-    has_info = "/Info" in reader.trailer
-    info = DictionaryObject(reader.trailer["/Info"].get_object()) if has_info else DictionaryObject()
+    info = _original_info(reader, info_ref, root_ref)
     info[NameObject("/Title")] = create_string_object(title)
     if info_ref is None:
-        info_ref = (_next_free_number(reader), 0)
+        info_ref = (new_number, 0)
+        new_number += 1
     objects[info_ref] = info
 
-    root = reader.trailer["/Root"]
     has_xmp = "/Metadata" in root
     if has_xmp:
-        # Revise the existing stream object: a new number has collided in xref-stream files.
-        meta_ref = root.raw_get("/Metadata")
-        if not hasattr(meta_ref, "idnum"):
+        if not hasattr(root.raw_get("/Metadata"), "idnum"):
             raise Skip("xmp-direct")
-        objects[(meta_ref.idnum, meta_ref.generation)] = _xmp_stream(_xmp_bytes(reader), title)
+        # A new number, never the original's: that object may also be a page's content stream.
+        objects[(new_number, 0)] = _xmp_stream(_xmp_bytes(reader), title)
+        catalog = DictionaryObject(root)  # raw entries, so references stay references
+        catalog[NameObject("/Metadata")] = IndirectObject(new_number, 0, None)
+        objects[root_ref] = catalog
 
     updated = _append(original, reader, objects, info_ref)
     _check(original, reader, updated, title, has_xmp)
@@ -125,8 +143,21 @@ def _titled(original: bytes, title: str) -> tuple:
 def _info_ref(reader: PdfReader) -> Optional[tuple]:
     if "/Info" not in reader.trailer:
         return None
-    ref = reader.trailer["/Info"].indirect_reference
+    ref = getattr(reader.trailer["/Info"], "indirect_reference", None)
     return (ref.idnum, ref.generation) if ref is not None else None
+
+
+def _original_info(reader: PdfReader, info_ref: Optional[tuple], root_ref: tuple) -> DictionaryObject:
+    """The original Info entries, or none. Skips an Info whose number may serve as another object."""
+    if "/Info" not in reader.trailer:
+        return DictionaryObject()
+    info = reader.trailer["/Info"].get_object()
+    if (info_ref is None or info_ref == root_ref or isinstance(info, StreamObject)
+            or not isinstance(info, DictionaryObject)
+            or any(not isinstance(value, (TextStringObject, ByteStringObject))
+                   for key, value in info.items() if key != "/Trapped")):
+        raise Skip("info-unsafe")
+    return DictionaryObject(info)
 
 
 def _next_free_number(reader: PdfReader) -> int:
@@ -241,12 +272,37 @@ def _xmp_with_title(xmp: bytes, title: str) -> bytes:
     element = (b'<dc:title><rdf:Alt><rdf:li xml:lang="x-default">' + value
                + b"</rdf:li></rdf:Alt></dc:title>")
     if _DC_TITLE.search(xmp):
-        return _DC_TITLE.sub(lambda _m: element, xmp, count=1)
+        return _inert_text(_DC_TITLE.sub(lambda _m: element, xmp, count=1))
     if not _RDF_END.search(xmp):
         raise Skip("xmp-unrecognised")
     description = (b'<rdf:Description rdf:about="" xmlns:dc="' + _DC.encode() + b'">'
                    + element + b"</rdf:Description>")
-    return _RDF_END.sub(lambda _m: description + b"</rdf:RDF>", xmp, count=1)
+    return _inert_text(_RDF_END.sub(lambda _m: description + b"</rdf:RDF>", xmp, count=1))
+
+
+def _inert_text(xmp: bytes) -> bytes:
+    """Write XML text delimiters, and each operator word's first character, as references; same XML."""
+    out, pos = [], 0
+    for markup in _XML_MARKUP.finditer(xmp):
+        out += [_inert_run(xmp[pos:markup.start()]), markup.group()]
+        pos = markup.end()
+    out.append(_inert_run(xmp[pos:]))
+    return b"".join(out)
+
+
+def _inert_run(raw: bytes) -> bytes:
+    text = _TEXT_DELIMITER.sub(lambda m: f"&#{ord(m.group())};", raw.decode("utf-8", "surrogateescape"))
+    # Words after the delimiter pass: the API splits the text as written, references included.
+    return _WORD.sub(_inert_word, text).encode("utf-8", "surrogateescape")
+
+
+def _inert_word(match: re.Match) -> str:
+    word = match.group()
+    operator = word.lstrip(_NUMBER_CHARS)
+    if operator not in _OPERATORS:
+        return word
+    number = word[: len(word) - len(operator)]
+    return f"{number}&#{ord(operator[0])};{operator[1:]}"
 
 
 def xmp_title(xmp: bytes) -> Optional[str]:

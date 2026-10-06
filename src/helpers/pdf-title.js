@@ -24,12 +24,15 @@ function isEligible(doc) {
   return levelOfRead(doc.read) === 4 && isPdf(doc) && Boolean(doc.s3Key) && pdfTitleFor(doc) !== null;
 }
 
-/** The record was made from this file under this name, whatever its status. */
+/**
+ * The record was made from this file under this name, whatever its status, or a retitle to this
+ * name was refused (`skippedTitle`), so it is not tried again.
+ */
 function isCurrent(doc) {
   const record = doc && doc.pdfTitle;
-  return Boolean(record) && typeof record === 'object' && Boolean(doc.s3Key) &&
-    record.sourceKey === doc.s3Key &&
-    record.title === pdfTitleFor(doc);
+  if (!record || typeof record !== 'object' || !doc.s3Key || record.sourceKey !== doc.s3Key) return false;
+  const wanted = pdfTitleFor(doc);
+  return record.title === wanted || (Boolean(record.skippedTitle) && record.skippedTitle === wanted);
 }
 
 /** This file carries a title the public may no longer read. A replaced file was never titled. */

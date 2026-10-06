@@ -3,8 +3,8 @@
 /**
  * PDF title lease API against an in-memory row store and object store. The object store keeps
  * versions and honours copy-source If-Match like the NRS bucket, so every assertion about "the
- * original is still whole" reads real bytes back. The PDFs are real `pdf-title/titler.py` output
- * (test/fixtures/pdf-title).
+ * original is still whole" reads real bytes back. Most PDFs are real `pdf-title/titler.py` output
+ * (test/fixtures/pdf-title); the rest are built with `test/helpers/pdf-build.js`.
  */
 
 process.env.NODE_ENV = 'test';
@@ -25,6 +25,7 @@ const controller = require('../../../src/controllers/nosql/pdf-title');
 const { logger } = require('../../../src/utils/logger');
 const { makeRes } = require('../../../src/http/router');
 const { readForLevel } = require('../../../src/helpers/access-sql');
+const { classicTail, classicPdf } = require('../../helpers/pdf-build');
 
 const FIXTURES = path.join(__dirname, '..', '..', 'fixtures', 'pdf-title');
 const fixture = name => fs.readFileSync(path.join(FIXTURES, name));
@@ -34,6 +35,11 @@ const BACKUP = storage.backupKeyFor(KEY);
 const ORIGINAL = fixture('classic-info.original.pdf');
 const TITLED = fixture('classic-info.titled.pdf');
 const RETITLED = fixture('classic-info.retitled.pdf');
+const XMP_ORIGINAL = fixture('classic-xmp.original.pdf');
+const XMP_TITLED = fixture('classic-xmp.titled.pdf');
+/** The titles TITLED and RETITLED carry. */
+const FIRST = 'Site C Report, Final (2026) \u00e9';
+const SECOND = 'Site C Report';
 
 // Mongo ObjectIds, as the seed and the Eagle push write `id`. No `eaglePushedAt`: the seed never sets it.
 const ID = '5f1d7a3c9b2e4d6f8a0b1c2d';
@@ -43,7 +49,7 @@ const DOC = {
   id: ID,
   projectId: 'p1',
   s3Key: KEY,
-  displayName: 'Site C Report',
+  displayName: FIRST,
   mimeType: 'application/pdf',
   fileExt: 'pdf',
   fileSize: ORIGINAL.length,
@@ -65,7 +71,7 @@ function world(t, { rows = [DOC], objects = { [KEY]: ORIGINAL }, gate = { ok: tr
     store.set(key, { bytes, etag: md5Hex(bytes), versionId: `v${++version}`, contentType });
   for (const [key, bytes] of Object.entries(objects)) put(key, bytes);
 
-  const calls = { patches: [], removes: [], copies: [], uploads: [], gate: [] };
+  const calls = { patches: [], removes: [], copies: [], uploads: [], gate: [], ranges: [] };
 
   t.mock.method(documents, 'readForWrite', async (id) => (db.has(id) ? clone(db.get(id)) : null));
   t.mock.method(cosmos, 'patch', async (container, id, pk, ops, condition, etag) => {
@@ -113,6 +119,12 @@ function world(t, { rows = [DOC], objects = { [KEY]: ORIGINAL }, gate = { ok: tr
     // Several chunks, so prefix, tail and scan are exercised across chunk edges.
     return Readable.from([0, 100, 333, 700].map((at, i, all) => bytes.subarray(at, all[i + 1])).filter(b => b.length));
   });
+  t.mock.method(storage, 'readRange', async (key, offset, length, { versionId } = {}) => {
+    calls.ranges.push({ key, offset, length, versionId });
+    const o = store.get(key);
+    if (!o || o.versionId !== versionId) throw new Error('NoSuchVersion');
+    return o.bytes.subarray(offset, offset + length);
+  });
   t.mock.method(storage, 'getDownloadUrl', async (key) => `https://store.test/${key}?sig=get`);
   t.mock.method(storage, 'getUploadUrl', async (key, opts) => {
     calls.uploads.push({ key, ...opts });
@@ -150,17 +162,17 @@ const commit = (body, opts = {}) => call(controller.commit, { ...opts, body });
 const report = (body, opts = {}) => call(controller.report, { ...opts, body });
 const pending = async () => (await call(controller.listPending)).body.items;
 
-function commitBody(leaseId, bytes, { first = true } = {}) {
+function commitBody(leaseId, bytes, { first = true, original = ORIGINAL } = {}) {
   const body = { leaseId, newLength: bytes.length, newSha256: sha256(bytes), newMd5: md5B64(bytes) };
-  if (first) Object.assign(body, { originalLength: ORIGINAL.length, originalSha256: sha256(ORIGINAL) });
+  if (first) Object.assign(body, { originalLength: original.length, originalSha256: sha256(original) });
   return body;
 }
 
 /** Lease, commit and PUT `bytes` as the worker would. */
-async function titleOnce(w, bytes, { id = ID, first = true, query = {} } = {}) {
+async function titleOnce(w, bytes, { id = ID, first = true, query = {}, original } = {}) {
   const leased = await lease({ id, query });
   assert.equal(leased.status, 201, JSON.stringify(leased.body));
-  const committed = await commit(commitBody(leased.body.leaseId, bytes, { first }), { id });
+  const committed = await commit(commitBody(leased.body.leaseId, bytes, { first, original }), { id });
   assert.equal(committed.status, 200, JSON.stringify(committed.body));
   const putStatus = w.workerPut(w.row(id).s3Key, bytes, committed.body.headers);
   return { leased, committed, putStatus, leaseId: leased.body.leaseId };
@@ -182,11 +194,11 @@ test('pdf title lease API', async (t) => {
     const w = world(t);
     const logged = t.mock.method(logger, 'info', () => {});
 
-    assert.deepEqual(await pending(), [{ id: ID, projectId: 'p1', mode: 'title', title: 'Site C Report' }]);
+    assert.deepEqual(await pending(), [{ id: ID, projectId: 'p1', mode: 'title', title: FIRST }]);
 
     const { leased, committed, putStatus, leaseId } = await titleOnce(w, TITLED);
     assert.equal(leased.body.backupUrl, `https://store.test/${BACKUP}?sig=get`);
-    assert.equal(leased.body.title, 'Site C Report');
+    assert.equal(leased.body.title, FIRST);
     assert.equal(leased.body.maxGrowth, controller.MAX_GROWTH);
     assert.deepEqual(w.calls.copies[0], { src: KEY, dest: BACKUP, ifSourceEtag: md5Hex(ORIGINAL) });
     assert.deepEqual(w.calls.gate[0], { key: KEY, size: ORIGINAL.length, etag: md5Hex(ORIGINAL) });
@@ -208,7 +220,7 @@ test('pdf title lease API', async (t) => {
 
     const record = w.row().pdfTitle;
     assert.equal(record.status, 'titled');
-    assert.equal(record.title, 'Site C Report');
+    assert.equal(record.title, FIRST);
     assert.equal(record.sourceKey, KEY);
     assert.equal(record.originalLength, ORIGINAL.length);
     assert.equal(record.originalSha256, sha256(ORIGINAL));
@@ -393,6 +405,30 @@ test('pdf title lease API', async (t) => {
       assert.equal(w.row().pdfTitle.status, 'skipped');
     });
 
+    await t.test('an original the reader refuses is skipped with its reason, before any link', async (t) => {
+      const encrypted = fixture('encrypted.original.pdf');
+      const w = world(t, { objects: { [KEY]: encrypted } });
+      const leased = await lease();
+      const res = await commit(commitBody(leased.body.leaseId, Buffer.concat([encrypted, Buffer.from('\n')]), { original: encrypted }));
+      assert.equal(res.status, 409);
+      assert.equal(res.body.reason, 'original-encrypted');
+      assert.equal(w.calls.uploads.length, 0);
+      assert.ok(!w.store.has(BACKUP));
+      const record = w.row().pdfTitle;
+      assert.deepEqual([record.status, record.reason, record.lease], ['skipped', 'original-encrypted', undefined]);
+      assert.equal(record.originalSha256, undefined, 'an unread original is not recorded');
+    });
+
+    await t.test('a backup with no versionId is never read unpinned', async (t) => {
+      const w = world(t);
+      const leased = await lease();
+      w.row().pdfTitle.lease.backupVersionId = null;
+      assert.equal((await commit(commitBody(leased.body.leaseId, TITLED))).body.reason, 'backup-unversioned');
+      assert.equal(w.calls.ranges.length, 0);
+      assert.equal(w.calls.uploads.length, 0);
+      assert.equal(w.row().pdfTitle.status, undefined, 'not a fact about the file, so not a skip');
+    });
+
     await t.test('too little lease left for the PUT link', async (t) => {
       const w = world(t);
       const leased = await lease();
@@ -460,12 +496,12 @@ test('pdf title lease API', async (t) => {
    * PUT refused bytes, report inside the window (undone at once, nothing final), PUT the same bytes
    * again through the same link, then report after the window. Returns the final report body.
    */
-  async function refusedTwice(w, leaseId, bytes, headers) {
+  async function refusedTwice(w, leaseId, bytes, headers, original = ORIGINAL) {
     assert.equal(w.workerPut(KEY, bytes, headers), 200);
     const inWindow = await report({ leaseId });
     assert.equal(inWindow.status, 409);
     assert.equal(inWindow.body.reason, 'put-window-open');
-    assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL), 'undone at once');
+    assert.ok(w.store.get(KEY).bytes.equals(original), 'undone at once');
     assert.ok(w.store.has(BACKUP), 'backup kept inside the window');
     assert.ok(w.row().pdfTitle.lease, 'lease kept inside the window');
     assert.equal(w.row().pdfTitle.status, undefined, 'no final status inside the window');
@@ -476,7 +512,7 @@ test('pdf title lease API', async (t) => {
     w.closePutWindow();
     const final = await report({ leaseId });
     assert.equal(final.status, 200);
-    assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL), 'the original is in the store at the end');
+    assert.ok(w.store.get(KEY).bytes.equals(original), 'the original is in the store at the end');
     return final.body;
   }
 
@@ -518,6 +554,107 @@ test('pdf title lease API', async (t) => {
       assert.ok(!w.store.has(BACKUP), 'deleted only after the window');
     });
 
+    await t.test('an XMP stream under a number that is not the original\'s metadata is undone and skipped', async (t) => {
+      const w = world(t, { objects: { [KEY]: XMP_ORIGINAL } });
+      const leased = await lease();
+      const text = XMP_TITLED.toString('latin1');
+      const at = text.indexOf('7 0 obj', XMP_ORIGINAL.length);
+      assert.ok(at > 0 && text.slice(at, at + 200).includes('/Type /Metadata'), 'the XMP object of the increment');
+      // Object 4 is the original's page: the revision would turn it into an XML stream.
+      const moved = Buffer.from(`${text.slice(0, at)}4${text.slice(at + 1)}`, 'latin1');
+      const committed = await commit(commitBody(leased.body.leaseId, moved, { original: XMP_ORIGINAL }));
+      const final = await refusedTwice(w, leased.body.leaseId, moved, committed.body.headers, XMP_ORIGINAL);
+      assert.deepEqual(final, { outcome: 'skipped', status: 'skipped', reason: 'tail-xmp-number' });
+    });
+
+    await t.test('facts the reader did not write fail closed, and nothing is released inside the window', async (t) => {
+      const cases = [
+        ['original-unscanned', { prev: 441, root: [3, 0], info: [1, 0], size: 6, metadataObjects: [] }],
+        // The previous reader's facts, without the Catalog and Info it now keeps.
+        ['original-unscanned', { prev: 441, root: [3, 0], info: [1, 0], size: 6, metadata: null }],
+        ['original-xref', { error: 'original-xref' }]
+      ];
+      for (const [reason, facts] of cases) {
+        const w = world(t);
+        const leased = await lease();
+        const committed = await commit(commitBody(leased.body.leaseId, TITLED));
+        w.row().pdfTitle.inFlight.facts = facts;
+        const final = await refusedTwice(w, leased.body.leaseId, TITLED, committed.body.headers);
+        assert.deepEqual(final, { outcome: 'skipped', status: 'skipped', reason }, reason);
+        t.mock.restoreAll();
+        for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});
+      }
+    });
+
+    await t.test('an Info nested 100,000 deep is refused as a shape, not a crash, and undone', async (t) => {
+      const w = world(t);
+      const deep = `<< /Title (x) /K ${'['.repeat(100000)}${']'.repeat(100000)} >>`;
+      const bytes = Buffer.concat([ORIGINAL, classicTail(ORIGINAL, [[1, deep]], '/Size 6 /Root 3 0 R /Info 1 0 R /Prev 441')]);
+      const { leaseId } = await titleOnce(w, bytes);
+      w.closePutWindow();
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'skipped', status: 'skipped', reason: 'tail-syntax' });
+      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+    });
+
+    await t.test('a titled file for another title than the lease\'s is undone and skipped', async (t) => {
+      const w = world(t, { rows: [{ ...DOC, displayName: SECOND }] });
+      const { leaseId } = await titleOnce(w, TITLED);
+      w.closePutWindow();
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'skipped', status: 'skipped', reason: 'tail-info-title' });
+      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+    });
+
+    /** The next object read throws once, as a dropped connection would. */
+    const throwOnce = (t) => {
+      const stream = storage.getObjectStream;
+      let thrown = false;
+      t.mock.method(storage, 'getObjectStream', async (key) => {
+        if (thrown) return stream(key);
+        thrown = true;
+        throw new Error('connection reset');
+      });
+    };
+
+    await t.test('a check that throws copies the backup back and releases for a retry', async (t) => {
+      const w = world(t);
+      const { leaseId } = await titleOnce(w, TITLED);
+      w.closePutWindow();
+      throwOnce(t);
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'released', status: null, reason: null });
+      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+      assert.ok(!w.store.has(BACKUP));
+      const record = w.row().pdfTitle;
+      assert.deepEqual([record.lease, record.status, record.title, record.skippedTitle], [undefined, undefined, undefined, undefined]);
+      assert.equal((await pending()).length, 1, 'offered again');
+    });
+
+    await t.test('a check that throws inside the PUT window is undone and later released for a retry', async (t) => {
+      const w = world(t);
+      const { leaseId } = await titleOnce(w, TITLED);
+      throwOnce(t);
+      assert.equal((await report({ leaseId })).body.reason, 'put-window-open');
+      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL), 'undone at once');
+      w.closePutWindow();
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'released', status: null, reason: null });
+      assert.equal((await pending()).length, 1, 'offered again');
+    });
+
+    await t.test('a refused shape on a titled file stays terminal for that title', async (t) => {
+      const w = world(t);
+      await titled(w);
+      w.row().displayName = SECOND;
+      const leased = await lease();
+      const text = RETITLED.toString('latin1');
+      const at = text.lastIndexOf('/Producer');
+      const hostile = Buffer.from(`${text.slice(0, at)}/AA      ${text.slice(at + 9)}`, 'latin1');
+      const committed = await commit(commitBody(leased.body.leaseId, hostile, { first: false }));
+      assert.equal(w.workerPut(KEY, hostile, committed.body.headers), 200);
+      w.closePutWindow();
+      assert.equal((await report({ leaseId: leased.body.leaseId })).body.outcome, 'skipped');
+      assert.deepEqual([w.row().pdfTitle.status, w.row().pdfTitle.skippedTitle], ['titled', SECOND]);
+      assert.deepEqual(await pending(), [], 'not offered again');
+    });
+
     await t.test('a changed Content-Type', async (t) => {
       const w = world(t);
       const leased = await lease();
@@ -547,8 +684,8 @@ test('pdf title lease API', async (t) => {
     await titled(w);
     const recorded = { ...w.row().pdfTitle };
 
-    w.row().displayName = 'Site C Report, Final';
-    assert.deepEqual((await pending()).map(i => [i.mode, i.title]), [['title', 'Site C Report, Final']]);
+    w.row().displayName = SECOND;
+    assert.deepEqual((await pending()).map(i => [i.mode, i.title]), [['title', SECOND]]);
 
     const { leased, leaseId } = await titleOnce(w, RETITLED, { first: false });
     assert.equal(leased.body.originalLength, ORIGINAL.length);
@@ -559,16 +696,114 @@ test('pdf title lease API', async (t) => {
     w.closePutWindow();
     assert.equal((await report({ leaseId })).body.outcome, 'titled');
     const record = w.row().pdfTitle;
-    assert.equal(record.title, 'Site C Report, Final');
+    assert.equal(record.title, SECOND);
     assert.equal(record.originalLength, recorded.originalLength);
     assert.equal(record.originalSha256, recorded.originalSha256);
     assert.equal(record.titledSha256, sha256(RETITLED));
   });
 
+  await t.test('the original is read in ranges of the backup version, never past its length', async (t) => {
+    const w = world(t);
+    await titled(w);
+    w.row().displayName = SECOND;
+    const max = storage.MAX_RANGE_BYTES;
+    storage.MAX_RANGE_BYTES = 100;
+    t.after(() => { storage.MAX_RANGE_BYTES = max; });
+    w.calls.ranges.length = 0;
+
+    // The backup is the titled file: longer than the original, so a read past the original lands in the increment.
+    const { leased } = await titleOnce(w, RETITLED, { first: false });
+    const version = w.row().pdfTitle.lease.backupVersionId;
+    assert.ok(w.store.get(BACKUP).bytes.equals(TITLED));
+    assert.ok(w.calls.ranges.length > 1);
+    for (const r of w.calls.ranges) {
+      assert.deepEqual([r.key, r.versionId], [BACKUP, version]);
+      assert.ok(r.offset >= 0 && r.length >= 1 && r.length <= 100, JSON.stringify(r));
+      assert.ok(r.offset + r.length <= ORIGINAL.length, `${r.offset}+${r.length} reaches past ${ORIGINAL.length}`);
+    }
+    assert.equal(leased.body.originalLength, ORIGINAL.length);
+  });
+
+  await t.test('a Catalog inside an object stream, revised for XMP at a new number, commits and is recorded titled', async (t) => {
+    const original = fixture('objstm-xmp.original.pdf');
+    const titledBytes = fixture('objstm-xmp.titled.pdf');
+    const w = world(t, { rows: [{ ...DOC, displayName: SECOND }], objects: { [KEY]: original } });
+    const { leaseId } = await titleOnce(w, titledBytes, { original });
+    assert.equal(w.row().pdfTitle.inFlight.facts.metadata.join(' '), '6 0');
+    w.closePutWindow();
+    assert.equal((await report({ leaseId })).body.outcome, 'titled');
+    assert.equal(w.row().pdfTitle.status, 'titled');
+    assert.ok(w.store.get(KEY).bytes.equals(titledBytes));
+  });
+
+  await t.test('a backup with no version is refused at lease, before any hash', async (t) => {
+    const w = world(t);
+    const copy = storage.copyObject;
+    t.mock.method(storage, 'copyObject', async (...args) => ({ ...(await copy(...args)), versionId: null }));
+    const res = await lease();
+    assert.deepEqual([res.status, res.body.reason], [409, 'backup-unversioned']);
+    assert.ok(!w.store.has(BACKUP));
+    assert.equal(w.row().pdfTitle.lease, undefined);
+  });
+
+  await t.test('a backup replaced after the lease is never hashed as the leased one', async (t) => {
+    const w = world(t);
+    const leased = await lease();
+    w.put(BACKUP, ORIGINAL);
+    assert.equal((await commit(commitBody(leased.body.leaseId, TITLED))).body.reason, 'backup-changed');
+    assert.equal(w.calls.uploads.length, 0);
+  });
+
+  await t.test('a retitle the reader now refuses records why, and the file stays titled', async (t) => {
+    // Titled before the reader refused an Info that holds a number.
+    const original = classicPdf([
+      [1, '<< /Title (Old) /ca 0 >>'],
+      [2, '<< /Type /Catalog /Pages 3 0 R >>'],
+      [3, '<< /Type /Pages /Kids [4 0 R] /Count 1 >>'],
+      [4, '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 200 200] >>']
+    ], '/Size 5 /Root 2 0 R /Info 1 0 R');
+    const titledBytes = Buffer.concat([original, Buffer.from('% titled\n')]);
+    const pdfTitle = {
+      sourceKey: KEY, status: 'titled', title: 'Old Name', originalLength: original.length,
+      originalSha256: sha256(original), originalEtag: md5Hex(original),
+      titledLength: titledBytes.length, titledSha256: sha256(titledBytes)
+    };
+    const w = world(t, { rows: [{ ...DOC, pdfTitle }], objects: { [KEY]: titledBytes } });
+    const leased = await lease();
+    const res = await commit(commitBody(leased.body.leaseId, Buffer.concat([titledBytes, Buffer.from('\n')]), { first: false }));
+    assert.deepEqual([res.status, res.body.reason], [409, 'original-info-value']);
+    const record = w.row().pdfTitle;
+    assert.deepEqual([record.status, record.reason, record.title, record.lease], ['titled', 'retitle skipped: original-info-value', 'Old Name', undefined]);
+    assert.equal(record.skippedTitle, FIRST);
+    assert.deepEqual(await pending(), [], 'not offered again for the refused title');
+    assert.equal((await lease()).body.reason, 'current');
+    w.row().displayName = SECOND;
+    assert.deepEqual((await pending()).map(i => [i.mode, i.title]), [['title', SECOND]], 'offered for a new title');
+  });
+
+  await t.test('a worker skip of a retitle is not offered again; a later titling clears it', async (t) => {
+    const w = world(t);
+    await titled(w);
+    w.row().displayName = SECOND;
+    const leased = await lease();
+    const res = await report({ leaseId: leased.body.leaseId, skipped: true, reason: 'titler-failed' });
+    assert.equal(res.body.outcome, 'skipped');
+    assert.deepEqual([w.row().pdfTitle.status, w.row().pdfTitle.skippedTitle], ['titled', SECOND]);
+    assert.deepEqual(await pending(), []);
+
+    w.row().displayName = FIRST;
+    // The record names another title, so FIRST is written again over the same bytes.
+    w.row().pdfTitle.title = 'Older';
+    const { leaseId } = await titleOnce(w, TITLED, { first: false });
+    w.closePutWindow();
+    assert.equal((await report({ leaseId })).body.outcome, 'titled');
+    assert.equal(w.row().pdfTitle.skippedTitle, null);
+  });
+
   await t.test('a titled file that no longer matches its record is never leased', async (t) => {
     const w = world(t);
     await titled(w);
-    w.row().displayName = 'Site C Report, Final';
+    w.row().displayName = SECOND;
     w.put(KEY, Buffer.concat([TITLED, Buffer.from('\n')]));
     assert.equal((await lease()).body.reason, 'record-mismatch');
     assert.equal(w.row().pdfTitle.status, 'needs-review');
@@ -578,7 +813,7 @@ test('pdf title lease API', async (t) => {
   await t.test('same size, other bytes: refused at commit by the backup hash', async (t) => {
     const w = world(t);
     await titled(w);
-    w.row().displayName = 'Site C Report, Final';
+    w.row().displayName = SECOND;
     const same = Buffer.from(TITLED);
     same[same.length - 30] ^= 1;
     w.put(KEY, same);

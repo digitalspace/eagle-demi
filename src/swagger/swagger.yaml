@@ -1541,7 +1541,8 @@ paths:
             Refused, with `reason`: `lease-held`, `sweep-pending`, `needs-review`,
             `not-from-eagle`, `sealed`, `not-pdf`, `no-file`, `not-public`, `no-public-name`,
             `current`, `no-original`, `not-titled`, `no-project`, `no-object`, `record-mismatch`,
-            `empty`, `over-cap`, `shared-key`, `orphan-backup-differs`, `source-changed`, or a
+            `empty`, `over-cap`, `shared-key`, `orphan-backup-differs`, `source-changed`,
+            `backup-unversioned` (a title lease whose backup copy has no version), or a
             backup gate reason (`no-backup`, `size-mismatch`, `md5-mismatch`, `not-archive`,
             `backup-unconfigured`).
         '412':
@@ -1614,10 +1615,14 @@ paths:
         '409':
           description: >-
             `no-lease`, `lease-expired`, `already-committed`, `lease-too-short`, `key-changed`,
-            `source-changed`, `not-pdf-bytes`, `original-mismatch`, `record-mismatch`, or a reason
-            the original cannot be read for the increment check (`original-no-startxref`,
-            `original-trailer-unreadable`). All but `lease-too-short` release the lease. The store
-            is untouched.
+            `source-changed`, `not-pdf-bytes`, `original-mismatch`, `record-mismatch`,
+            `backup-unversioned`, `backup-changed`, or an `original-*` reason the original's
+            structure cannot be read for the increment check (for example `original-encrypted`,
+            `original-filter`, `original-xref`, `original-too-many-objects`,
+            `original-free-object`, `original-info-value`). An `original-*` reason on a file never
+            titled is recorded as a skip; on a titled file it is recorded as `retitle skipped: <reason>`
+            with `skippedTitle`, and the file is not offered again for that title.
+            All but `lease-too-short` release the lease. The store is untouched.
         '412':
           description: The row changed while the commit was recorded (`lease-race`).
         '503':
@@ -1633,9 +1638,12 @@ paths:
         409 `put-window-open`, nothing is released or recorded, and the backup is kept. A write
         that fails a check inside that window is copied back from the backup at once. A new
         object is verified by size, ETag, Content-Type, whole sha256, original-prefix
-        sha256, and an increment that holds only what the titler writes (Info dictionary, XMP
-        metadata stream, one xref section). It is recorded `titled` or `restored`. An increment of
-        any other shape is copied back from the backup and recorded as a skip. An unchanged source
+        sha256, and an increment that holds only what the titler writes (Info dictionary with only
+        /Title changed, to the lease's title; an XMP metadata stream under a new number, strict
+        XML whose dc:title is the lease's title and whose other text is inert, with the Catalog
+        changed only to name it; one xref section). It is recorded `titled` or `restored`. An increment of
+        any other shape, or one the check cannot finish (`check-failed`), is copied back from
+        the backup and recorded as a skip. An unchanged source
         releases the lease. Anything else is copied back from the backup and recorded
         `needs-review`, and the backup is kept. While the PUT link may still be used the answer is
         409 `put-window-open`: report again after `putExpiresAt`.

@@ -2,13 +2,16 @@
 
 /**
  * Does the increment after a stored original hold exactly what `pdf-title/titler.py` writes, and
- * nothing else? The titler appends an Info dictionary with /Title, optionally a revised XMP
- * /Metadata stream (unfiltered), and one xref section (table plus trailer, or an xref stream).
- * Anything else in the increment could change what the public sees, so it is refused.
+ * nothing else? The titler appends an Info dictionary with /Title, optionally a new XMP /Metadata
+ * stream (unfiltered) under a new number with the Catalog revised to name it, and one xref section
+ * (table plus trailer, or an xref stream). Anything else in the increment could change what the
+ * public sees, so it is refused.
  *
  * The original's facts come from `readOriginal` in `pdf-original.js`, which follows its xref
- * structure. `originalScanner` is the older text scan, kept until the controller moves over.
+ * structure.
  */
+
+const crypto = require('crypto');
 
 // Names that can run code, open links, or change pages or annotations, plus compression.
 const FORBIDDEN = new Set([
@@ -18,8 +21,43 @@ const FORBIDDEN = new Set([
 const XREF_KEYS = new Set(['Type', 'W', 'Index', 'Size', 'Root', 'Info', 'Prev', 'ID', 'Length']);
 const TRAILER_KEYS = new Set(['Size', 'Root', 'Info', 'Prev', 'ID']);
 const XMP_KEYS = new Set(['Type', 'Subtype', 'Length']);
-/** The original's last trailer must sit in this many final bytes; an xref stream's data comes after it. */
-const TRAILER_WINDOW = 1024 * 1024;
+/** Arrays and dictionaries nest at most this deep; real files stay far below it. */
+const MAX_DEPTH = 32;
+/** XMP bodies longer than this are refused; the titler's packets are a few KiB. */
+const MAX_XMP = 64 * 1024;
+/**
+ * Content-stream operators, refused as a word in raw XMP text: an original may name the XMP's new
+ * number as page content. The titler writes such words as character references (`&#66;`).
+ */
+const OPERATORS = new Set([
+  'B', 'b', 'B*', 'b*', 'BDC', 'BI', 'BMC', 'BT', 'BX', 'c', 'cm', 'CS', 'cs', 'd', 'd0', 'd1', 'Do', 'DP',
+  'EI', 'EMC', 'ET', 'EX', 'f', 'F', 'f*', 'G', 'g', 'gs', 'h', 'i', 'ID', 'j', 'J', 'K', 'k', 'l', 'm',
+  'M', 'MP', 'n', 'q', 'Q', 're', 'RG', 'rg', 'ri', 's', 'S', 'SC', 'sc', 'SCN', 'scn', 'sh', 'T*', 'Tc',
+  'Td', 'TD', 'Tf', 'Tj', 'TJ', 'TL', 'Tm', 'Tr', 'Ts', 'Tw', 'Tz', 'v', 'w', 'W', 'W*', 'y', "'", '"'
+]);
+/** Hex-string, comment, escape, array and dictionary delimiters, refused in XMP text. */
+const XMP_TEXT_DELIMITERS = /[<>%\\[\]{}]/;
+/** XML 1.0 NameStartChar and NameChar; none of them is '<' or '>'. */
+const NAME_START = ':A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D' +
+  '\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}';
+const XML_NAME = `[${NAME_START}][\\u0300-\\u036F${NAME_START}.0-9\\u00B7\\u203F\\u2040-]*`;
+const XMP_START = new RegExp(`<(${XML_NAME})((?:\\s+${XML_NAME}\\s*=\\s*(?:"[^"]*"|'[^']*'))*)\\s*(/?)>`, 'uy');
+const XMP_ATTRS = new RegExp(`(${XML_NAME})\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'gu');
+const XMP_END = new RegExp(`</(${XML_NAME})\\s*>`, 'uy');
+/** The header in either quote style, with the older optional `bytes` and `encoding` attributes. */
+const PACKET_BEGIN = /<\?xpacket begin=(["'])\uFEFF?\1 id=(["'])[A-Za-z0-9]*\2(?:\s+bytes=(["'])[0-9]+\3)?(?:\s+encoding=(["'])[A-Za-z0-9_-]+\4)?\s*\?>/y;
+const PACKET_END = /<\?xpacket end=(["'])[rw]\1\s*\?>/y;
+const XMP_PI = /<\?([A-Za-z_][A-Za-z0-9_.-]*)(?:\s[^<>]*?)?\?>/y;
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+/** PDFDocEncoding where it differs from Latin-1; null marks an undefined byte. */
+const PDFDOC = {
+  0x18: 0x2d8, 0x19: 0x2c7, 0x1a: 0x2c6, 0x1b: 0x2d9, 0x1c: 0x2dd, 0x1d: 0x2db, 0x1e: 0x2da, 0x1f: 0x2dc,
+  0x7f: null, 0x80: 0x2022, 0x81: 0x2020, 0x82: 0x2021, 0x83: 0x2026, 0x84: 0x2014, 0x85: 0x2013,
+  0x86: 0x192, 0x87: 0x2044, 0x88: 0x2039, 0x89: 0x203a, 0x8a: 0x2212, 0x8b: 0x2030, 0x8c: 0x201e,
+  0x8d: 0x201c, 0x8e: 0x201d, 0x8f: 0x2018, 0x90: 0x2019, 0x91: 0x201a, 0x92: 0x2122, 0x93: 0xfb01,
+  0x94: 0xfb02, 0x95: 0x141, 0x96: 0x152, 0x97: 0x160, 0x98: 0x178, 0x99: 0x17d, 0x9a: 0x131, 0x9b: 0x142,
+  0x9c: 0x153, 0x9d: 0x161, 0x9e: 0x17e, 0x9f: null, 0xa0: 0x20ac, 0xad: null
+};
 
 const WS = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20]);
 const DELIM = new Set([...'()<>[]{}/%'].map(c => c.charCodeAt(0)));
@@ -32,7 +70,11 @@ const refuse = (reason) => { throw new Refused(reason); };
  * `forbid: false` reads names such as /Filter without refusing, for parsing an original.
  */
 class Reader {
-  constructor(buf, pos = 0, { forbid = true } = {}) { this.buf = buf; this.pos = pos; this.forbid = forbid; }
+  constructor(buf, pos = 0, { forbid = true } = {}) { this.buf = buf; this.pos = pos; this.forbid = forbid; this.depth = 0; }
+
+  nest() {
+    if (++this.depth > MAX_DEPTH) refuse('tail-syntax');
+  }
 
   ws() {
     for (;;) {
@@ -80,7 +122,7 @@ class Reader {
         if (/^\d+$/.test(gen) && this.word() === 'R') return { ref: [Number(w), Number(gen)] };
         this.pos = back;
       }
-      return { number: Number(w) };
+      return { number: Number(w), token: w };
     }
     if (w === 'true' || w === 'false' || w === 'null') return { keyword: w };
     this.pos = start;
@@ -119,10 +161,11 @@ class Reader {
 
   array() {
     this.pos++;
+    this.nest();
     const items = [];
     for (;;) {
       this.ws();
-      if (this.buf[this.pos] === 0x5d) { this.pos++; return items; }
+      if (this.buf[this.pos] === 0x5d) { this.pos++; this.depth--; return items; }
       if (this.pos >= this.buf.length) refuse('tail-syntax');
       items.push(this.value());
     }
@@ -130,10 +173,11 @@ class Reader {
 
   dict() {
     this.pos += 2;
+    this.nest();
     const map = new Map();
     for (;;) {
       this.ws();
-      if (this.buf[this.pos] === 0x3e && this.buf[this.pos + 1] === 0x3e) { this.pos += 2; return map; }
+      if (this.buf[this.pos] === 0x3e && this.buf[this.pos + 1] === 0x3e) { this.pos += 2; this.depth--; return map; }
       if (this.buf[this.pos] !== 0x2f) refuse('tail-syntax');
       const key = this.name();
       if (map.has(key)) refuse('tail-syntax');
@@ -145,118 +189,200 @@ class Reader {
 const refOf = (v) => (v && v.ref ? v.ref : null);
 const sameRef = (a, b) => Boolean(a && b) && a[0] === b[0] && a[1] === b[1];
 
-/** How far past an object header the scan waits for `stream` or `endobj` before it gives up. */
-const HEADER_LOOKAHEAD = 64 * 1024;
-const HEADER = /(\d+)\s+(\d+)\s+obj\b/g;
-const BODY_END = /\bendobj\b|(?<!end)stream(?:\r\n|\n|\r)/g;
+const ESCAPES = { n: 0x0a, r: 0x0d, t: 0x09, b: 0x08, f: 0x0c };
 
-/**
- * Collects the original's facts from its chunks, in order, without holding the whole file.
- *
- * Object headers are looked for only outside stream data: a stream with a direct /Length is
- * skipped by that length, one with an indirect /Length up to its `endstream`. Bytes inside a
- * stream therefore cannot pose as a metadata object, except in a stream whose indirect length
- * hides a literal `endstream` in its data.
- */
-function originalScanner() {
-  const metadataObjects = new Set();
-  let window = Buffer.alloc(0);
-  let length = 0;
-  let text = '';
-  let skip = 0;
-  let inStream = false;
-
-  function noteHeader(num, gen, dict) {
-    if (/\/Type\s*\/Metadata\b/.test(dict) && /\/Subtype\s*\/XML\b/.test(dict)) metadataObjects.add(`${num} ${gen}`);
-    // Writers often leave /Type off the stream itself, so the catalog's reference counts too.
-    const fromCatalog = /\/Type\s*\/Catalog\b/.test(dict) && /\/Metadata\s+(\d+)\s+(\d+)\s+R/.exec(dict);
-    if (fromCatalog) metadataObjects.add(`${fromCatalog[1]} ${fromCatalog[2]}`);
+/** The bytes a literal `(...)` or hex `<...>` string stands for, escapes and line ends decoded. */
+function stringBytes(text) {
+  if (text[0] === '<') {
+    const hex = text.slice(1, -1).replace(/\s/g, '');
+    return Buffer.from(hex.length % 2 ? `${hex}0` : hex, 'hex');
   }
-
-  /** Consume `text` as far as it can be read without more bytes; `final` means no more come. */
-  function advance(final) {
-    for (;;) {
-      if (skip) {
-        const n = Math.min(skip, text.length);
-        text = text.slice(n);
-        skip -= n;
-        if (skip) return;
-      }
-      if (inStream) {
-        const end = text.indexOf('endstream');
-        if (end < 0) { text = final ? '' : text.slice(-8); return; }
-        text = text.slice(end + 'endstream'.length);
-        inStream = false;
-      }
-      HEADER.lastIndex = 0;
-      const head = HEADER.exec(text);
-      if (!head) { text = final ? '' : text.slice(-40); return; }
-      BODY_END.lastIndex = head.index + head[0].length;
-      const body = BODY_END.exec(text);
-      if (!body) {
-        if (!final && text.length - head.index < HEADER_LOOKAHEAD) { text = text.slice(head.index); return; }
-        // A header with no end in reach: skip past it rather than read its bytes as a dictionary.
-        text = text.slice(head.index + head[0].length);
-        continue;
-      }
-      const dict = text.slice(head.index + head[0].length, body.index);
-      noteHeader(head[1], head[2], dict);
-      text = text.slice(body.index + body[0].length);
-      if (body[0].startsWith('stream')) {
-        const direct = /\/Length\s+(\d+)(?!\s+\d+\s+R)/.exec(dict);
-        if (direct) skip = Number(direct[1]);
-        else inStream = true;
-      }
-    }
+  const out = [];
+  const code = (i) => text.charCodeAt(i);
+  const isOctal = (i) => code(i) >= 0x30 && code(i) <= 0x37;
+  for (let i = 1; i < text.length - 1; i++) {
+    let c = code(i);
+    if (c === 0x5c) {
+      c = code(++i);
+      if (text[i] in ESCAPES) out.push(ESCAPES[text[i]]);
+      else if (isOctal(i)) {
+        let v = 0;
+        for (let k = 0; k < 3 && isOctal(i); k++, i++) v = v * 8 + code(i) - 0x30;
+        i--;
+        out.push(v & 0xff);
+      } else if (c === 0x0d) {
+        if (code(i + 1) === 0x0a) i++;
+      } else if (c !== 0x0a) out.push(c);
+    } else if (c === 0x0d) {
+      if (code(i + 1) === 0x0a) i++;
+      out.push(0x0a);
+    } else out.push(c);
   }
-
-  return {
-    push(chunk) {
-      length += chunk.length;
-      window = Buffer.concat([window, chunk]);
-      if (window.length > TRAILER_WINDOW) window = window.subarray(window.length - TRAILER_WINDOW);
-      text += chunk.toString('latin1');
-      advance(false);
-    },
-
-    /** `{prev, root, info, size, metadataObjects}`, or `{error}` when the last trailer cannot be read. */
-    result() {
-      advance(true);
-      const text = window.toString('latin1');
-      const found = [...text.matchAll(/startxref\s+(\d+)/g)];
-      if (!found.length) return { error: 'original-no-startxref' };
-      const prev = Number(found.at(-1)[1]);
-      const windowStart = length - window.length;
-      try {
-        let trailer;
-        if (prev >= windowStart && text.startsWith('xref', prev - windowStart)) {
-          const at = text.lastIndexOf('trailer', found.at(-1).index);
-          if (at < 0) return { error: 'original-trailer-unreadable' };
-          const reader = new Reader(window, at + 'trailer'.length);
-          reader.ws();
-          trailer = reader.dict();
-        } else if (prev >= windowStart) {
-          const reader = new Reader(window, prev - windowStart);
-          reader.int(); reader.int(); reader.expect('obj'); reader.ws();
-          trailer = reader.dict();
-        } else {
-          return { error: 'original-trailer-unreadable' };
-        }
-        const size = trailer.get('Size');
-        const root = refOf(trailer.get('Root'));
-        if (!size || !Number.isInteger(size.number) || !root) return { error: 'original-trailer-unreadable' };
-        return { prev, root, info: refOf(trailer.get('Info')), size: size.number, metadataObjects };
-      } catch (err) {
-        if (err instanceof Refused) return { error: 'original-trailer-unreadable' };
-        throw err;
-      }
-    }
-  };
+  return Buffer.from(out);
 }
 
-/** Values an Info dictionary may hold: text and plain scalars, never a reference or structure. */
-function isPlainValue(v) {
-  return 'string' in v || 'name' in v || 'number' in v || 'keyword' in v;
+/** A number token without a plus sign, leading zeros or trailing fraction zeros; exact past 2^53. */
+function numberText(token) {
+  const [, sign, int, frac = ''] = /^([+-]?)(\d*)\.?(\d*)$/.exec(token);
+  const whole = int.replace(/^0+/, '') || '0';
+  const fraction = frac.replace(/0+$/, '');
+  const text = fraction ? `${whole}.${fraction}` : whole;
+  return sign === '-' && text !== '0' ? `-${text}` : text;
+}
+
+/**
+ * One text per meaning of a value: dictionary keys sorted, names and strings as hex of their
+ * decoded bytes, numbers from their token digits. Two writers' spellings of one value compare equal.
+ */
+function canonical(v) {
+  const name = (n) => `/${Buffer.from(n, 'latin1').toString('hex')}`;
+  if ('dict' in v) return `<<${[...v.dict.keys()].sort().map(k => `${name(k)} ${canonical(v.dict.get(k))}`).join(' ')}>>`;
+  if ('array' in v) return `[${v.array.map(canonical).join(' ')}]`;
+  if ('name' in v) return name(v.name);
+  if ('string' in v) return `<${stringBytes(v.string).toString('hex')}>`;
+  if ('ref' in v) return `${v.ref[0]} ${v.ref[1]} R`;
+  if ('number' in v) return numberText(v.token);
+  return v.keyword;
+}
+
+/** sha256 of the canonical form of dictionary `dict` without `keys`: short enough for the row. */
+function fingerprint(dict, keys) {
+  const text = canonical({ dict: new Map([...dict].filter(([k]) => !keys.includes(k))) });
+  return crypto.createHash('sha256').update(text, 'latin1').digest('hex');
+}
+
+const sameTitle = (a, b) => typeof a === 'string' && a.normalize('NFC') === b.normalize('NFC');
+
+/** A PDF text string as Unicode: UTF-16BE or UTF-8 after their byte order marks, else PDFDocEncoding. */
+function pdfText(bytes) {
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return bytes.subarray(2).swap16().toString('utf16le');
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.subarray(3).toString('utf8');
+  const codes = [...bytes].map(b => (b in PDFDOC ? PDFDOC[b] : b));
+  return codes.includes(null) ? null : String.fromCodePoint(...codes);
+}
+
+/**
+ * A string /Title equal to the wanted title; a revised Info keeps every other entry as it was, a
+ * new one holds nothing else.
+ */
+function checkInfo(dict, facts, wanted) {
+  const title = dict.get('Title');
+  if (!title || !('string' in title)) refuse('tail-info');
+  if (!facts.info) {
+    if (dict.size !== 1) refuse('tail-info');
+  } else if (fingerprint(dict, ['Title']) !== facts.infoKept) {
+    refuse('tail-info-changed');
+  }
+  const bytes = stringBytes(title.string);
+  // An odd UTF-16 length cannot be swapped, and is not text.
+  if ((bytes[0] === 0xfe && bytes[1] === 0xff && bytes.length % 2) || !sameTitle(pdfText(bytes), wanted)) refuse('tail-info-title');
+}
+
+/** XML text with only the predefined entities and character references decoded. */
+function xmlText(raw) {
+  if (/&(?!(?:amp|lt|gt|quot|apos|#[0-9]{1,7}|#x[0-9a-fA-F]{1,6});)/.test(raw)) refuse('tail-xmp-body');
+  return raw.replace(/&(?:(amp|lt|gt|quot|apos)|#([0-9]+)|#x([0-9a-fA-F]+));/g, (_, name, dec, hex) => {
+    if (name) return ENTITIES[name];
+    const code = dec ? Number(dec) : parseInt(hex, 16);
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : refuse('tail-xmp-body');
+  });
+}
+
+/** Parentheses that open and close within `text`, so no string runs on past it. */
+function isBalanced(text) {
+  let depth = 0;
+  for (const c of text) {
+    if (c === '(') depth++;
+    else if (c === ')' && --depth < 0) return false;
+  }
+  return depth === 0;
+}
+
+/** Text a content-stream lexer reads as operands and unknown words only, never as an operator. */
+function isInertText(text) {
+  xmlText(text);
+  const printable = [...text].every(c => (c >= ' ' && c !== '\x7f') || c === '\t' || c === '\r' || c === '\n');
+  return printable && !XMP_TEXT_DELIMITERS.test(text) && isBalanced(text) &&
+    text.split(/[\s/()]+/).every(word => !OPERATORS.has(word.replace(/^[+\-.0-9]*/, '')));
+}
+
+/**
+ * The new XMP packet, read as strict XML: no DOCTYPE, entity, CDATA or comment, and no '<' or '>'
+ * inside a processing instruction. Every dc:title (element or attribute) holds `wanted`; every
+ * other text is inert if the packet is ever read as page content, and no attribute ends a tag early.
+ */
+function checkXmp(data, wanted) {
+  const bad = () => refuse('tail-xmp-body');
+  if (data.length > MAX_XMP) bad();
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { bad(); }
+  const stack = [];
+  let rooted = false;
+  let instructed = false;
+  let packet = 0;
+  let titles = 0;
+  let liText = null;
+  const at = (k) => stack[stack.length - k];
+  const inTitleLi = () => at(1) === 'rdf:li' && at(2) === 'rdf:Alt' && at(3) === 'dc:title';
+  const match = (re, pos) => { re.lastIndex = pos; return re.exec(text); };
+  for (let pos = 0; pos < text.length;) {
+    const lt = text.indexOf('<', pos);
+    const chunk = text.slice(pos, lt < 0 ? text.length : lt);
+    if (chunk) {
+      if (inTitleLi()) {
+        // The raw bytes are what a content-stream lexer would see; the decoded text is the title.
+        if (!isInertText(chunk) || !sameTitle(xmlText(chunk), wanted)) bad();
+        liText = chunk;
+      } else if (stack.length ? !isInertText(chunk) : /\S/.test(chunk)) {
+        bad();
+      }
+    }
+    if (lt < 0) break;
+    let m;
+    if ((m = match(PACKET_BEGIN, lt))) {
+      if (packet || rooted || instructed) bad();
+      packet = 1;
+    } else if ((m = match(PACKET_END, lt))) {
+      if (packet === 2 || !rooted || stack.length) bad();
+      packet = 2;
+    } else if ((m = match(XMP_PI, lt))) {
+      // Like a tag, a lexer reads it as one hex string, so only its place in the packet matters.
+      if (m[1] === 'xpacket' || packet === 2 || inTitleLi()) bad();
+      instructed = true;
+    } else if ((m = match(XMP_END, lt))) {
+      if (stack.pop() !== m[1]) bad();
+      if (m[1] === 'rdf:li' && at(1) === 'rdf:Alt' && at(2) === 'dc:title') {
+        if (liText === null) bad();
+        titles++;
+      }
+    } else if ((m = match(XMP_START, lt))) {
+      const [, name, attrs, empty] = m;
+      if ((!stack.length && rooted) || packet === 2 || inTitleLi()) bad();
+      if (at(1) === 'dc:title' ? name !== 'rdf:Alt' : at(1) === 'rdf:Alt' && at(2) === 'dc:title' && name !== 'rdf:li') bad();
+      const seen = new Set();
+      for (const [, key, dq, sq] of attrs.matchAll(XMP_ATTRS)) {
+        const raw = dq !== undefined ? dq : sq;
+        if (seen.has(key)) bad();
+        seen.add(key);
+        if (key === 'dc:title') {
+          if (/[<>]/.test(raw) || !sameTitle(xmlText(raw), wanted)) bad();
+          titles++;
+        } else {
+          // Inside a tag a lexer reads one hex string up to '>', so only '<' and '>' matter.
+          if (/[<>]/.test(raw)) bad();
+          xmlText(raw);
+        }
+      }
+      rooted = true;
+      if (!empty) stack.push(name);
+      if (inTitleLi()) liText = null;
+      if (name === 'rdf:li' && empty && at(1) === 'rdf:Alt' && at(2) === 'dc:title') bad();
+    } else {
+      bad();
+    }
+    pos = lt + m[0].length;
+  }
+  if (!rooted || stack.length || packet === 1 || !titles) bad();
 }
 
 function checkTrailer(dict, facts, info, allowed, highest) {
@@ -293,23 +419,21 @@ function xrefStreamEntries(dict, data) {
   return entries;
 }
 
-/** True when `[num, gen]` is the original's XMP stream: `facts.metadata`, else the older scanner's set. */
-function isMetadata(facts, num, gen) {
-  if ('metadata' in facts) return sameRef(facts.metadata, [num, gen]);
-  return Boolean(facts.metadataObjects && facts.metadataObjects.has(`${num} ${gen}`));
-}
-
 /**
  * Null when `tail` (the bytes after the original) is exactly a titler increment for `facts`
- * (from `readOriginal`, or the older `originalScanner().result()`), else the reason it is refused.
+ * (from `readOriginal`) that writes `title`, the lease's wanted title, else the reason it is refused.
  */
-function checkTail(tail, originalLength, facts) {
-  if (!facts || facts.error) return (facts && facts.error) || 'original-unscanned';
+function checkTail(tail, originalLength, facts, title) {
+  if (facts && facts.error) return facts.error;
+  if (typeof title !== 'string' || !title) return 'tail-no-title';
+  // Facts of any other shape, such as an older reader's without the Catalog, are not trusted.
+  if (!facts || !('catalog' in facts) || !('infoKept' in facts)) return 'original-unscanned';
   try {
     const r = new Reader(tail);
     const objects = new Map();
     let info = null;
     let xmp = null;
+    let catalog = null;
     let xrefStream = null;
     for (;;) {
       r.ws();
@@ -318,9 +442,15 @@ function checkTail(tail, originalLength, facts) {
       const num = r.int();
       const gen = r.int();
       r.expect('obj');
+      // Another object may share the XMP number, so the XMP is never revised in place.
+      if (facts.metadata && num === facts.metadata[0]) refuse('tail-xmp-in-place');
       r.ws();
       if (!(r.buf[r.pos] === 0x3c && r.buf[r.pos + 1] === 0x3c)) refuse('tail-object');
+      const isCatalog = num === facts.root[0];
+      // The revised Catalog may keep the original's actions; it is compared with the original below.
+      r.forbid = !isCatalog;
       const dict = r.dict();
+      r.forbid = true;
       let data = null;
       r.ws();
       if (r.peekWord('stream')) {
@@ -345,19 +475,31 @@ function checkTail(tail, originalLength, facts) {
       } else if (data && type && type.name === 'Metadata') {
         const subtype = dict.get('Subtype');
         if (xmp || !subtype || subtype.name !== 'XML' || ![...dict.keys()].every(k => XMP_KEYS.has(k))) refuse('tail-xmp');
-        if (!isMetadata(facts, num, gen)) refuse('tail-xmp-number');
+        // A number no section of the original lists, so no object of the original holds it.
+        if (num < facts.size || gen !== 0) refuse('tail-xmp-number');
+        checkXmp(data, title);
         xmp = [num, gen];
-      } else if (!data) {
-        if (info || !dict.has('Title') || ![...dict.values()].every(isPlainValue)) refuse('tail-info');
-        info = [num, gen];
-      } else {
+      } else if (data) {
         refuse('tail-object');
+      } else if (isCatalog) {
+        if (gen !== facts.root[1]) refuse('tail-catalog-changed');
+        catalog = dict;
+      } else {
+        if (info) refuse('tail-info');
+        checkInfo(dict, facts, title);
+        info = [num, gen];
       }
       if (xrefStream && num !== xrefStream.num) refuse('tail-object');
     }
-    // Only the Info and XMP objects revise an object the original has; anything else is new.
+    // Only the Info and Catalog revise an object the original has; anything else is new.
     if (xrefStream && (xrefStream.num < facts.size || xrefStream.gen !== 0)) refuse('tail-object-number');
     if (!info) refuse('tail-info');
+    if (xmp && !catalog) refuse('tail-xmp');
+    // A file with no XMP gets none, so its Catalog is never revised.
+    if (catalog && (!facts.metadata || !xmp || !sameRef(refOf(catalog.get('Metadata')), xmp) ||
+        fingerprint(catalog, ['Metadata']) !== facts.catalog)) {
+      refuse('tail-catalog-changed');
+    }
     // A revised Info keeps its number; a new one takes a number the original never used.
     if (facts.info ? !sameRef(info, facts.info) : (info[0] < facts.size || info[1] !== 0)) refuse('tail-info-number');
     const highest = Math.max(...objects.keys());
@@ -411,4 +553,4 @@ function checkTail(tail, originalLength, facts) {
   }
 }
 
-module.exports = { originalScanner, checkTail, Reader, Refused, refuse };
+module.exports = { checkTail, Reader, Refused, refuse, fingerprint };
