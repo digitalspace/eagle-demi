@@ -11,6 +11,7 @@
  *
  * <selection> is exactly one of `--id <docId>`, `--ids <file>`, `--project <projectId>`,
  * `--all-changed`. Every mode takes `--max <n>` and `--concurrency <n>`.
+ * Set `BACKUP_CLIENT_ID` to reach blob storage as that identity; Cosmos stays on `AZURE_CLIENT_ID`.
  *
  * **DRY RUN BY DEFAULT**: without `--live` nothing is written. A row is one bucket key with the
  * selected documents that store it. `rehydrate` copies the archived blob into `restore` at Cool

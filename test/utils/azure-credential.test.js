@@ -3,32 +3,11 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const IDENTITY = require.resolve('@azure/identity');
 const { createCredential } = require('../../src/utils/azure-credential');
+const { recordCredentials } = require('../helpers/record-credentials');
 
 const CLIENT_ID = '00000000-0000-0000-0000-000000000001';
 const HOST_ENDPOINT = 'http://localhost:8081/msi/token';
-
-/** Swap @azure/identity in the require cache for classes that record their constructor options. */
-function recordCredentials(t) {
-  const original = require.cache[IDENTITY];
-  const built = [];
-  const recorder = (kind) => class { constructor(options) { built.push({ kind, options }); } };
-  require.cache[IDENTITY] = {
-    id: IDENTITY,
-    filename: IDENTITY,
-    loaded: true,
-    exports: {
-      ManagedIdentityCredential: recorder('managed'),
-      DefaultAzureCredential: recorder('default')
-    }
-  };
-  t.after(() => {
-    if (original) require.cache[IDENTITY] = original;
-    else delete require.cache[IDENTITY];
-  });
-  return built;
-}
 
 test('App Service or Functions host with a client id uses that managed identity alone', (t) => {
   const built = recordCredentials(t);

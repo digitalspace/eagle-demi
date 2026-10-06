@@ -14,6 +14,7 @@ const { Readable } = require('stream');
 // Script first: once the logger loads, its exception handler turns a failed require into a pass.
 const { parseArgs, run } = require('../../src/scripts/restore-originals');
 const { logger } = require('../../src/utils/logger');
+const { recordCredentials } = require('../helpers/record-credentials');
 
 const ACCOUNT = 'eaglebaktestabc';
 const NOW = new Date('2026-10-05T12:00:00Z');
@@ -413,6 +414,36 @@ test('no signed URL reaches the log output, even when the PUT fails', async (t) 
   const result = await run(['apply', '--id', 'a', '--manifest', manifest, '--account', ACCOUNT, '--live', '--confirm', '1'], deps);
   assert.strictEqual(result.summary.failed, 1);
   assert.ok(!s.logs.join('\n').includes(SIGNATURE));
+});
+
+test('blob storage runs as BACKUP_CLIENT_ID when set, else AZURE_CLIENT_ID; Cosmos keeps AZURE_CLIENT_ID', async (t) => {
+  const saved = ['AZURE_CLIENT_ID', 'BACKUP_CLIENT_ID', 'IDENTITY_ENDPOINT'].map(k => [k, process.env[k]]);
+  t.after(() => {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+  const s = setup(t);
+  const built = recordCredentials(t);
+  // No containerFor, so run builds the real blob clients; plan makes no blob call.
+  const deps = {
+    storage: s.store.storage, documents: s.docs.documents, readRows: s.docs.readRows, patch: s.docs.patch, now: () => NOW
+  };
+  const plan = () => run(['plan', '--id', 'a', '--manifest', path.join(s.dir, 'objects.jsonl.gz'), '--account', ACCOUNT], deps);
+  delete process.env.IDENTITY_ENDPOINT;
+  process.env.AZURE_CLIENT_ID = 'cosmos-identity';
+
+  process.env.BACKUP_CLIENT_ID = 'backup-writer';
+  await plan();
+  delete process.env.BACKUP_CLIENT_ID;
+  await plan();
+
+  assert.deepStrictEqual(built.map(b => b.options), [
+    { managedIdentityClientId: 'backup-writer' },
+    { managedIdentityClientId: 'cosmos-identity' }
+  ]);
+  assert.strictEqual(process.env.AZURE_CLIENT_ID, 'cosmos-identity');
 });
 
 test('parseArgs needs exactly one selection and a manifest', () => {
