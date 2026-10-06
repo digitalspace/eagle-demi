@@ -336,7 +336,7 @@ async function inspect(row) {
       return { kind: 'bad', reason: 'hash-mismatch' };
     }
     if (lease.mode === 'title') {
-      const refused = check.tail ? checkTail(check.tail, original.length, inFlight.facts) : 'tail-too-large';
+      const refused = check.tail ? checkTail(check.tail, original.length, inFlight.facts, lease.title) : 'tail-too-large';
       if (refused) return { kind: 'bad', reason: refused, shape: true };
     }
     return { kind: 'good' };

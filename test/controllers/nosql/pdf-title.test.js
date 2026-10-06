@@ -37,6 +37,9 @@ const TITLED = fixture('classic-info.titled.pdf');
 const RETITLED = fixture('classic-info.retitled.pdf');
 const XMP_ORIGINAL = fixture('classic-xmp.original.pdf');
 const XMP_TITLED = fixture('classic-xmp.titled.pdf');
+/** The titles TITLED and RETITLED carry. */
+const FIRST = 'Site C Report, Final (2026) \u00e9';
+const SECOND = 'Site C Report';
 
 // Mongo ObjectIds, as the seed and the Eagle push write `id`. No `eaglePushedAt`: the seed never sets it.
 const ID = '5f1d7a3c9b2e4d6f8a0b1c2d';
@@ -46,7 +49,7 @@ const DOC = {
   id: ID,
   projectId: 'p1',
   s3Key: KEY,
-  displayName: 'Site C Report',
+  displayName: FIRST,
   mimeType: 'application/pdf',
   fileExt: 'pdf',
   fileSize: ORIGINAL.length,
@@ -191,11 +194,11 @@ test('pdf title lease API', async (t) => {
     const w = world(t);
     const logged = t.mock.method(logger, 'info', () => {});
 
-    assert.deepEqual(await pending(), [{ id: ID, projectId: 'p1', mode: 'title', title: 'Site C Report' }]);
+    assert.deepEqual(await pending(), [{ id: ID, projectId: 'p1', mode: 'title', title: FIRST }]);
 
     const { leased, committed, putStatus, leaseId } = await titleOnce(w, TITLED);
     assert.equal(leased.body.backupUrl, `https://store.test/${BACKUP}?sig=get`);
-    assert.equal(leased.body.title, 'Site C Report');
+    assert.equal(leased.body.title, FIRST);
     assert.equal(leased.body.maxGrowth, controller.MAX_GROWTH);
     assert.deepEqual(w.calls.copies[0], { src: KEY, dest: BACKUP, ifSourceEtag: md5Hex(ORIGINAL) });
     assert.deepEqual(w.calls.gate[0], { key: KEY, size: ORIGINAL.length, etag: md5Hex(ORIGINAL) });
@@ -217,7 +220,7 @@ test('pdf title lease API', async (t) => {
 
     const record = w.row().pdfTitle;
     assert.equal(record.status, 'titled');
-    assert.equal(record.title, 'Site C Report');
+    assert.equal(record.title, FIRST);
     assert.equal(record.sourceKey, KEY);
     assert.equal(record.originalLength, ORIGINAL.length);
     assert.equal(record.originalSha256, sha256(ORIGINAL));
@@ -593,6 +596,14 @@ test('pdf title lease API', async (t) => {
       assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
     });
 
+    await t.test('a titled file for another title than the lease\'s is undone and skipped', async (t) => {
+      const w = world(t, { rows: [{ ...DOC, displayName: SECOND }] });
+      const { leaseId } = await titleOnce(w, TITLED);
+      w.closePutWindow();
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'skipped', status: 'skipped', reason: 'tail-info-title' });
+      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+    });
+
     await t.test('a check that throws copies the backup back and skips', async (t) => {
       const w = world(t);
       const { leaseId } = await titleOnce(w, TITLED);
@@ -638,8 +649,8 @@ test('pdf title lease API', async (t) => {
     await titled(w);
     const recorded = { ...w.row().pdfTitle };
 
-    w.row().displayName = 'Site C Report, Final';
-    assert.deepEqual((await pending()).map(i => [i.mode, i.title]), [['title', 'Site C Report, Final']]);
+    w.row().displayName = SECOND;
+    assert.deepEqual((await pending()).map(i => [i.mode, i.title]), [['title', SECOND]]);
 
     const { leased, leaseId } = await titleOnce(w, RETITLED, { first: false });
     assert.equal(leased.body.originalLength, ORIGINAL.length);
@@ -650,7 +661,7 @@ test('pdf title lease API', async (t) => {
     w.closePutWindow();
     assert.equal((await report({ leaseId })).body.outcome, 'titled');
     const record = w.row().pdfTitle;
-    assert.equal(record.title, 'Site C Report, Final');
+    assert.equal(record.title, SECOND);
     assert.equal(record.originalLength, recorded.originalLength);
     assert.equal(record.originalSha256, recorded.originalSha256);
     assert.equal(record.titledSha256, sha256(RETITLED));
@@ -659,7 +670,7 @@ test('pdf title lease API', async (t) => {
   await t.test('the original is read in ranges of the backup version, never past its length', async (t) => {
     const w = world(t);
     await titled(w);
-    w.row().displayName = 'Site C Report, Final';
+    w.row().displayName = SECOND;
     const max = storage.MAX_RANGE_BYTES;
     storage.MAX_RANGE_BYTES = 100;
     t.after(() => { storage.MAX_RANGE_BYTES = max; });
@@ -681,7 +692,7 @@ test('pdf title lease API', async (t) => {
   await t.test('a Catalog inside an object stream, revised for XMP at a new number, commits and is recorded titled', async (t) => {
     const original = fixture('objstm-xmp.original.pdf');
     const titledBytes = fixture('objstm-xmp.titled.pdf');
-    const w = world(t, { objects: { [KEY]: original } });
+    const w = world(t, { rows: [{ ...DOC, displayName: SECOND }], objects: { [KEY]: original } });
     const { leaseId } = await titleOnce(w, titledBytes, { original });
     assert.equal(w.row().pdfTitle.inFlight.facts.metadata.join(' '), '6 0');
     w.closePutWindow();
@@ -733,7 +744,7 @@ test('pdf title lease API', async (t) => {
   await t.test('a titled file that no longer matches its record is never leased', async (t) => {
     const w = world(t);
     await titled(w);
-    w.row().displayName = 'Site C Report, Final';
+    w.row().displayName = SECOND;
     w.put(KEY, Buffer.concat([TITLED, Buffer.from('\n')]));
     assert.equal((await lease()).body.reason, 'record-mismatch');
     assert.equal(w.row().pdfTitle.status, 'needs-review');
@@ -743,7 +754,7 @@ test('pdf title lease API', async (t) => {
   await t.test('same size, other bytes: refused at commit by the backup hash', async (t) => {
     const w = world(t);
     await titled(w);
-    w.row().displayName = 'Site C Report, Final';
+    w.row().displayName = SECOND;
     const same = Buffer.from(TITLED);
     same[same.length - 30] ^= 1;
     w.put(KEY, same);
