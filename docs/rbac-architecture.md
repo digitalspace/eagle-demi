@@ -224,8 +224,9 @@ claim path in `rolesFor` and `src/helpers/auth.js`. DEMI creates no realm roles 
 
 ### User, group and inspection mirrors (2026-10-06)
 
-eagle-api pushes five more kinds (`DEMI_PUSH_OPT_IN_KINDS` in eagle-api). The handlers are written
-and exported; routes, swagger and containers are not wired yet. Wiring:
+eagle-api pushes five more kinds (`DEMI_PUSH_OPT_IN_KINDS` in eagle-api). Routes are in
+`src/http/routes.js`, paths in `src/swagger/swagger.yaml`, containers in
+`azure/modules/cosmos-nosql.bicep`:
 
 | Route | Handler | Container | Partition key |
 |---|---|---|---|
@@ -263,7 +264,8 @@ PUT routes take the same guards as the other `/eagle/*` mirrors. GET routes take
   and reports `aclMismatch` and `missingParent` per kind.
 - Until the containers exist, the project cascade and the reconcile skip a kind whose container
   answers 404 (`helpers/unprovisioned.js`, one warning per process); the reconcile line reads
-  `skipped` for it.
+  `skipped` for it. `cosmos-nosql.bicep` creates all three, so once that deploys the skip
+  should not fire.
 - Field levels are in `src/vis/catalog/users.js`, `groups.js` and `inspections.js`. Every user
   contact field (email, phone, cell, fax, postal address) and the user notes are 2/2. So are the
   inspector `email` on an inspection, the stored-file internals on an item, and group `members`.

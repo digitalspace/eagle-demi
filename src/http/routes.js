@@ -50,6 +50,11 @@ const credentialController = () => require('../controllers/nosql/credentials');
 const userDataController = () => require('../controllers/nosql/userdata');
 const sealedController = () => require('../controllers/nosql/sealed');
 const pdfTitleController = () => require('../controllers/nosql/pdf-title');
+const userController = () => require('../controllers/nosql/user');
+const groupController = () => require('../controllers/nosql/group');
+const inspectionController = () => require('../controllers/nosql/inspection');
+const commentExportController = () => require('../controllers/nosql/comment-export');
+const reportController = () => require('../controllers/report');
 
 /**
  * Liveness only — the process is up. Deliberately does NOT claim anything about the database; it
@@ -226,11 +231,35 @@ const routes = [
   { method: 'put', path: '/eagle/comments/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => commentController().upsertFromEagle },
   { method: 'put', path: '/eagle/organizations/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => organizationController().upsertFromEagle },
   { method: 'put', path: '/eagle/notifications/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => notificationController().upsertFromEagle },
+  { method: 'put', path: '/eagle/users/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => userController().upsertFromEagle },
+  { method: 'put', path: '/eagle/groups/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => groupController().upsertFromEagle },
+  { method: 'put', path: '/eagle/inspections/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => inspectionController().upsertInspectionFromEagle },
+  { method: 'put', path: '/eagle/inspection-elements/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => inspectionController().upsertElementFromEagle },
+  { method: 'put', path: '/eagle/inspection-items/:eagleId', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => inspectionController().upsertItemFromEagle },
   // The config mirror. No `:eagleId` — there is one public config document and Eagle has no id for
   // it — so the body is the payload itself rather than `{ doc }`, and only PUBLIC_KEYS are stored.
   { method: 'put', path: '/eagle/config/public', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => configController().upsertPublicFromEagle },
   // No `PUT /eagle/lists/:eagleId`: Eagle `List` has no write controller (migrations only), so the
   // `lists` container takes its `kind: 'List'` rows from the backfill and nothing else.
+
+  // Reads of the user, group and inspection mirrors (docs/rbac-architecture.md). Same chain as
+  // GET /documents: the repository filters rows by the caller's access, so anonymous reads the
+  // public tier rather than getting a 401.
+  { method: 'get', path: '/users', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => userController().getUsers },
+  { method: 'get', path: '/users/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => userController().getUser },
+  { method: 'get', path: '/groups', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => groupController().getGroups },
+  { method: 'get', path: '/groups/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => groupController().getGroup },
+  { method: 'get', path: '/inspections', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspections },
+  { method: 'get', path: '/inspections/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspection },
+  { method: 'get', path: '/inspection-elements', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElements },
+  { method: 'get', path: '/inspection-elements/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElement },
+  { method: 'get', path: '/inspection-items', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItems },
+  { method: 'get', path: '/inspection-items/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItem },
+
+  // CSV reports (README "CSV reports"). The comment export is signed in only, as eagle-api's was;
+  // the caller's level then picks the columns. The BCGW feed reads as anonymous whoever asks.
+  { method: 'get', path: '/commentperiods/:periodId/comments/export', guards: [authMiddleware, credentialsMiddleware], load: () => commentExportController().exportComments },
+  { method: 'get', path: '/reports', guards: [passiveAuthMiddleware], load: () => reportController().getReport },
 
   // Boundaries (Borders) Routes. Regions went with an empty collection nothing consumed.
   { method: 'get', path: '/boundaries', guards: [passiveAuthMiddleware], load: () => boundaryController().getBoundaries },

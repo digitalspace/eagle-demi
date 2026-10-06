@@ -508,6 +508,104 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
   }
 }
 
+// Eagle `User`, mirrored by eagle-api (docs/rbac-architecture.md, "User, group and inspection
+// mirrors"). Lists order on c.id, which the system index serves; see the documents container.
+resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'users'
+  properties: {
+    resource: {
+      id: 'users'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/read/[]/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
+// Eagle `Group`, a project's contact group. Listed per project, so /projectId is the partition.
+resource groupsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'groups'
+  properties: {
+    resource: {
+      id: 'groups'
+      partitionKey: {
+        paths: [
+          '/projectId'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/projectId/?'
+          }
+          {
+            path: '/read/[]/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
+// Eagle `Inspection`, `InspectionElement` and `InspectionItem` in one container, discriminated by
+// `kind`. /inspection keeps one inspection and everything under it in one logical partition.
+resource inspectionsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'inspections'
+  properties: {
+    resource: {
+      id: 'inspections'
+      partitionKey: {
+        paths: [
+          '/inspection'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/kind/?'
+          }
+          {
+            path: '/inspection/?'
+          }
+          {
+            path: '/projectId/?'
+          }
+          {
+            path: '/element/?'
+          }
+          {
+            path: '/read/[]/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
 // Extracted document text. replaceChunks deletes then reinserts every chunk for a document,
 // which /documentId confines to a single logical partition. /content stays unindexed.
 resource chunksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {

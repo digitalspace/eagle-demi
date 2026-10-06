@@ -668,7 +668,7 @@ the document record. Any other store error, such as access denied, is a 500.
 ## CSV reports
 
 Two eagle-api CSV reads have DEMI handlers. Rows and fields come from DEMI's own access rules, not
-from eagle-api's role checks. The routes are not wired yet; these are the intended paths.
+from eagle-api's role checks.
 
 | Path | Handler | Replaces in eagle-api |
 |---|---|---|

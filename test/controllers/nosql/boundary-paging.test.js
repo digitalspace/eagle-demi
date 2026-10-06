@@ -7,7 +7,6 @@ const assert = require('node:assert');
 
 const boundaries = require('../../../src/repositories/boundaries');
 const boundaryController = require('../../../src/controllers/nosql/boundary');
-const { pageOptions } = require('../../../src/repositories/_sql');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const { logger } = require('../../../src/utils/logger');
 
