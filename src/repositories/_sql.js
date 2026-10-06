@@ -130,7 +130,10 @@ function selectFor(entity, access, partitionField) {
     if (visible(level, entry.maxVis)) fields.add(key.split('.')[0]);
   }
 
-  return [...fields].map(field => `c.${field}`).join(', ');
+  // Quoted keys and bracket accessors, because catalog fields include SQL keywords (inspections'
+  // `case`). Cosmos documents `x AS p` as `VALUE { p: x }`, so rows keep their shape.
+  const props = [...fields].map(field => `${JSON.stringify(field)}: c[${JSON.stringify(field)}]`);
+  return `VALUE { ${props.join(', ')} }`;
 }
 
 /**

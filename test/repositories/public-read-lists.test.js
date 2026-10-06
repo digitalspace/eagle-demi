@@ -154,12 +154,12 @@ test('comments list by period', async (t) => {
 
     await comments.listByPeriod('p1', ANON);
 
-    assert.match(seen.spec.query, /c\.comment\b/);
+    assert.ok(seen.spec.query.includes('c["comment"]'));
     // `author` IS fetched: its ceiling is 4 and `commentAttributed` can widen it at the response
     // boundary, which a projection cannot decide because it has not read the row yet. `sources`
     // has a ceiling of 0, so nothing can ever widen it and it must not leave Cosmos.
-    assert.match(seen.spec.query, /c\.author\b/);
-    assert.ok(!/c\.sources\b/.test(seen.spec.query));
+    assert.ok(seen.spec.query.includes('c["author"]'));
+    assert.ok(!/c(\.sources\b|\["sources"\])/.test(seen.spec.query));
   });
 });
 

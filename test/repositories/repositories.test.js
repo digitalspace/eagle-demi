@@ -58,7 +58,8 @@ test('projects repository', async (t) => {
 
     const { spec } = calls[0];
     // A catalog projection, not `*` — PUBLIC carries no level, which is the anonymous one.
-    assert.match(spec.query, /^SELECT c\.\w+(, c\.\w+)* FROM c WHERE /);
+    assert.match(spec.query,
+      /^SELECT VALUE \{ "(\w+)": c\["\1"\](, "(\w+)": c\["\3"\])* \} FROM c WHERE /);
     assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/);
     assert.ok(spec.parameters.some(p => p.value === 'public'));
   });
@@ -71,8 +72,8 @@ test('projects repository', async (t) => {
     await projects.listVisible({ ...PUBLIC, level: 4 }, {});
     await projects.listVisible(systemAccess(), {});
 
-    assert.match(calls[0].spec.query, /^SELECT c\./, 'an anonymous read projects named fields');
-    assert.ok(!calls[0].spec.query.includes('c._etag'),
+    assert.match(calls[0].spec.query, /^SELECT VALUE \{ "/, 'an anonymous read projects named fields');
+    assert.ok(!calls[0].spec.query.includes('c["_etag"]'),
       'the concurrency token has maxVis 2 and must not leave Cosmos for an anonymous caller');
     assert.match(calls[1].spec.query, /^SELECT \* FROM c WHERE /, 'level 0 reads the whole row');
   });
@@ -180,8 +181,8 @@ test('documents repository', async (t) => {
     await documents.listVisible({ ...PUBLIC, level: 4 }, {});
     await documents.listVisible(systemAccess(), {});
 
-    assert.match(calls[0].spec.query, /^SELECT c\./, 'an anonymous read projects named fields');
-    assert.ok(!calls[0].spec.query.includes('c.s3Key'),
+    assert.match(calls[0].spec.query, /^SELECT VALUE \{ "/, 'an anonymous read projects named fields');
+    assert.ok(!calls[0].spec.query.includes('c["s3Key"]'),
       'the object key has maxVis 0 and must not leave Cosmos');
     assert.match(calls[1].spec.query, /^SELECT \* FROM c WHERE /, 'level 0 reads the whole row');
   });
