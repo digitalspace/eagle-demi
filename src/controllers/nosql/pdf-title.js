@@ -21,7 +21,8 @@ const cosmos = require('../../db/cosmos-nosql');
 const storage = require('../../storage');
 const backupCheck = require('../../helpers/backup-check');
 const { isPdf, isEligible, isCurrent, needsRestore } = require('../../helpers/pdf-title');
-const { originalScanner, checkTail } = require('../../helpers/pdf-tail');
+const { checkTail, refuse: refuseRead } = require('../../helpers/pdf-tail');
+const { readOriginal } = require('../../helpers/pdf-original');
 const { pdfTitleFor } = require('../../helpers/file-name');
 const { levelOfRead, isDemiSeal } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
@@ -168,13 +169,11 @@ async function sharedKeys(keys) {
 
 /**
  * One read of an object: whole sha256, the sha256 of its first `prefixLength` bytes, its first
- * bytes, the bytes after the prefix (up to `tailMax`), and with `scan` the facts of the original,
- * which is the prefix when one is given.
+ * bytes, and the bytes after the prefix (up to `tailMax`).
  */
-async function hashObject(key, { prefixLength, tailMax = 0, scan = false } = {}) {
+async function hashObject(key, { prefixLength, tailMax = 0 } = {}) {
   const whole = crypto.createHash('sha256');
   const prefix = crypto.createHash('sha256');
-  const scanner = scan ? originalScanner() : null;
   const tail = [];
   let tailLength = 0;
   let head = Buffer.alloc(0);
@@ -183,11 +182,9 @@ async function hashObject(key, { prefixLength, tailMax = 0, scan = false } = {})
   for await (const chunk of stream) {
     whole.update(chunk);
     if (head.length < 8) head = Buffer.concat([head, chunk.subarray(0, 8 - head.length)]);
-    if (scanner && !Number.isInteger(prefixLength)) scanner.push(chunk);
     if (Number.isInteger(prefixLength)) {
       const inPrefix = Math.max(0, Math.min(chunk.length, prefixLength - length));
       if (inPrefix) prefix.update(chunk.subarray(0, inPrefix));
-      if (inPrefix && scanner) scanner.push(chunk.subarray(0, inPrefix));
       if (inPrefix < chunk.length && tailLength <= tailMax) {
         tail.push(chunk.subarray(inPrefix));
         tailLength += chunk.length - inPrefix;
@@ -200,8 +197,29 @@ async function hashObject(key, { prefixLength, tailMax = 0, scan = false } = {})
     sha256: whole.digest('hex'),
     prefixSha256: Number.isInteger(prefixLength) && length >= prefixLength ? prefix.digest('hex') : null,
     head,
-    tail: tailLength <= tailMax ? Buffer.concat(tail) : null,
-    facts: scanner ? scanner.result() : null
+    tail: tailLength <= tailMax ? Buffer.concat(tail) : null
+  };
+}
+
+/**
+ * The first `length` bytes of one backup version, read in ranges, for `readOriginal`. No read
+ * reaches past `length` or leaves the version, whatever the reader asks for.
+ */
+function backupRange(backupKey, versionId, length) {
+  return async (offset, want) => {
+    if (!Number.isInteger(offset) || !Number.isInteger(want) || offset < 0 || want < 1 || offset + want > length) {
+      refuseRead('original-offset');
+    }
+    const parts = [];
+    for (let at = offset; at < offset + want;) {
+      const ask = Math.min(storage.MAX_RANGE_BYTES, offset + want - at);
+      const part = await storage.readRange(backupKey, at, ask, { versionId });
+      parts.push(part);
+      // A short part means the version ended early; the reader refuses the short result.
+      if (part.length < ask) break;
+      at += ask;
+    }
+    return Buffer.concat(parts);
   };
 }
 
@@ -230,13 +248,13 @@ async function release(row, extra = {}) {
 
 /**
  * What a skip records. A file that holds no title is marked skipped for this title, so it is not
- * offered again. A titled file stays `titled`, or a later withheld name would never be restored.
- * A restore that cannot run needs a person.
+ * offered again. A titled file stays `titled`, or a later withheld name would never be restored,
+ * and records the title it was skipped for. A restore that cannot run needs a person.
  */
 function skipFields(row, lease, report) {
   if (!report) return {};
   if (lease.mode === 'restore') return { status: 'needs-review', reason: report.reason };
-  if (recordOf(row).status === 'titled') return { reason: `retitle skipped: ${report.reason}` };
+  if (recordOf(row).status === 'titled') return { reason: `retitle skipped: ${report.reason}`, skippedTitle: lease.title };
   return { status: 'skipped', reason: report.reason, title: lease.title };
 }
 
@@ -318,8 +336,7 @@ async function inspect(row) {
       return { kind: 'bad', reason: 'hash-mismatch' };
     }
     if (lease.mode === 'title') {
-      const facts = inFlight.facts && { ...inFlight.facts, metadataObjects: new Set(inFlight.facts.metadataObjects) };
-      const refused = check.tail ? checkTail(check.tail, original.length, facts) : 'tail-too-large';
+      const refused = check.tail ? checkTail(check.tail, original.length, inFlight.facts, lease.title) : 'tail-too-large';
       if (refused) return { kind: 'bad', reason: refused, shape: true };
     }
     return { kind: 'good' };
@@ -342,6 +359,7 @@ async function finish(row, fields) {
     status: isRestore ? 'restored' : 'titled',
     reason: null,
     title: isRestore ? null : lease.title,
+    skippedTitle: null,
     titledLength: isRestore ? null : inFlight.newLength,
     titledSha256: isRestore ? null : inFlight.newSha256
   });
@@ -371,7 +389,15 @@ async function settle(stored, report = null) {
     return { row: await release(row, skipFields(row, lease, report)), outcome: report ? 'skipped' : 'released' };
   }
 
-  const verdict = await inspect(row);
+  let verdict;
+  try {
+    verdict = await inspect(row);
+  } catch (err) {
+    // A check that cannot finish never leaves an unchecked object live: undo it like a bad shape,
+    // but record no skip (`retry`), since nothing is known against the file.
+    logger.error('[pdf-title] check of the stored object failed', { ...fields, error: err.message });
+    verdict = { kind: 'bad', reason: 'check-failed', shape: true, retry: true };
+  }
 
   // INVARIANT: while the PUT link can still land (now < putExpiresAt + skew), never release the
   // lease, never delete the backup and never record a final status, whatever the store holds now:
@@ -380,7 +406,7 @@ async function settle(stored, report = null) {
   if (Date.now() < Date.parse(record.inFlight.putExpiresAt) + PUT_SKEW_MS) {
     if (verdict.kind !== 'bad') return { row: stored, outcome: 'waiting' };
     const { restored, overwritten } = await copyBack(row, fields);
-    const refusal = { reason: verdict.reason, shape: Boolean(verdict.shape), restored, overwritten, at: nowIso() };
+    const refusal = { reason: verdict.reason, shape: Boolean(verdict.shape), retry: Boolean(verdict.retry), restored, overwritten, at: nowIso() };
     logger.warn('[pdf-title] write refused inside the PUT window; undone, decision waits', { ...fields, reason: verdict.reason });
     return { row: await save(row, { ...record, inFlight: { ...record.inFlight, refusal } }), outcome: 'waiting' };
   }
@@ -390,7 +416,7 @@ async function settle(stored, report = null) {
   if (verdict.kind === 'source') {
     if (refusal && !refusal.shape) return park(row, refusal.reason, true, refusal.overwritten, fields);
     await dropBackup(record.inFlight.backupKey, record.inFlight.backupVersionId, fields);
-    const why = refusal ? { reason: refusal.reason } : report;
+    const why = refusal && !refusal.retry ? { reason: refusal.reason } : report;
     logger.info('[pdf-title] lease ended; store holds the source', { ...fields, reason: why ? why.reason : 'released' });
     return { row: await release(row, skipFields(row, lease, why)), outcome: why ? 'skipped' : 'released' };
   }
@@ -398,6 +424,7 @@ async function settle(stored, report = null) {
   if (restored && verdict.shape) {
     await dropBackup(record.inFlight.backupKey, record.inFlight.backupVersionId, fields);
     logger.warn('[pdf-title] write refused and undone', { ...fields, reason: verdict.reason });
+    if (verdict.retry) return { row: await release(row), outcome: 'released' };
     return { row: await release(row, skipFields(row, lease, { reason: verdict.reason })), outcome: 'skipped' };
   }
   return park(row, verdict.reason, restored, overwritten, fields);
@@ -627,6 +654,13 @@ async function backupAndAnswer(res, row, leaseRecord, original, title) {
 
   const record = recordOf(row);
   const withBackup = { ...leaseRecord, backupKey, backupVersionId: copied.versionId || null };
+  if (leaseRecord.mode === 'title' && !copied.versionId) {
+    // The original is read by version at commit; refusing here costs no hash of the file.
+    logger.warn('[pdf-title] backup has no version; lease released', fields);
+    await dropBackup(backupKey, null, fields);
+    await release(row);
+    return refuse(res, 409, 'backup-unversioned');
+  }
   try {
     row = await save(row, { ...record, lease: withBackup });
     const backupUrl = await storage.getDownloadUrl(backupKey, { expirySeconds: BACKUP_GET_SECONDS });
@@ -715,26 +749,38 @@ async function commit(req, res) {
       return giveUp('source-changed');
     }
 
+    if (held.mode === 'title' && !held.backupVersionId) return giveUp('backup-unversioned');
     // The API's own read of the backup decides; the worker's numbers are only compared with it.
-    const hashed = await hashObject(held.backupKey, {
-      scan: held.mode === 'title', prefixLength: original ? original.length : undefined
-    });
-    const neverWritten = (why) => (original ? {} : { title: held.title, status: 'skipped', reason: why });
-    if (hashed.head.toString('latin1', 0, 5) !== '%PDF-') return giveUp('not-pdf-bytes', neverWritten('not-pdf-bytes'));
+    const hashed = await hashObject(held.backupKey);
+    // The stream reads the current version; it is the leased one only if nothing replaced it.
+    const backupNow = await storage.statObject(held.backupKey);
+    if (!backupNow || (backupNow.versionId || null) !== (held.backupVersionId || null)) return giveUp('backup-changed');
+    const skipped = (why) => skipFields(row, held, { reason: why });
+    if (hashed.head.toString('latin1', 0, 5) !== '%PDF-') return giveUp('not-pdf-bytes', skipped('not-pdf-bytes'));
     if (hashed.length !== stat.size) return giveUp('source-changed');
-    if (held.mode === 'title' && hashed.facts.error) return giveUp(hashed.facts.error, neverWritten(hashed.facts.error));
 
     if (!original) {
       if (body.originalLength !== stat.size || hashed.sha256 !== body.originalSha256) {
-        return giveUp('original-mismatch', neverWritten('original-mismatch'));
+        return giveUp('original-mismatch', skipped('original-mismatch'));
       }
+    } else if (hashed.sha256 !== expectedNow(row).sha256) {
+      return giveUp('record-mismatch', { status: 'needs-review', reason: 'record-mismatch' });
+    }
+
+    // The increment check needs the original's structure, read from the backup version the lease copied.
+    let facts = null;
+    if (held.mode === 'title') {
+      const length = original ? original.length : stat.size;
+      facts = await readOriginal(backupRange(held.backupKey, held.backupVersionId, length), length);
+      if (facts.error) return giveUp(facts.error, skipped(facts.error));
+    }
+
+    if (!original) {
       row = await save(row, {
         ...record, originalLength: stat.size, originalSha256: hashed.sha256, originalEtag: bareEtag(stat.etag)
       });
       original = originalFor(row);
       logger.info('pdf-title.original', { id: row.id, s3Key: row.s3Key, length: original.length, sha256: original.sha256 });
-    } else if (hashed.sha256 !== expectedNow(row).sha256) {
-      return giveUp('record-mismatch', { status: 'needs-review', reason: 'record-mismatch' });
     }
 
     // Signed first, so putExpiresAt (taken after signing) is never earlier than the link's own
@@ -742,7 +788,6 @@ async function commit(req, res) {
     // store's clock running behind this one; that skew was not measured on ECS.
     const uploadUrl = await storage.getUploadUrl(row.s3Key, { expirySeconds: PUT_SECONDS, contentMd5: body.newMd5 });
     const putExpiresAt = new Date(Date.now() + PUT_SECONDS * 1000).toISOString();
-    const facts = hashed.facts && { ...hashed.facts, metadataObjects: [...hashed.facts.metadataObjects] };
     const inFlight = {
       newLength: body.newLength, newSha256: body.newSha256, newMd5: body.newMd5,
       backupKey: held.backupKey, backupVersionId: held.backupVersionId || null, putExpiresAt, facts
