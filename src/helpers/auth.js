@@ -169,6 +169,28 @@ function getKey(header, callback) {
 }
 
 /**
+ * Is this the break-glass ADMIN_API_KEY? Through config, so an unresolved Key Vault reference is
+ * no key at all rather than a shared secret every caller can read off the template.
+ */
+function isBreakGlassKey(apiKey) {
+  const validKeys = [config.adminApiKey].filter(Boolean);
+  return Boolean(apiKey) && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys);
+}
+
+/** Would `authenticate` accept this X-Api-Key? A failed registry lookup counts as no. */
+async function isValidApiKey(apiKey) {
+  if (isBreakGlassKey(apiKey)) return true;
+  const parsed = apiKey ? parseKey(apiKey) : null;
+  if (!parsed) return false;
+  try {
+    return Boolean(await resolveRegistryKey(parsed));
+  } catch (err) {
+    logger.error(`[demi-api] API key lookup failed: ${err.message}`);
+    return false;
+  }
+}
+
+/**
  * Authenticates request via X-Api-Key or Keycloak Bearer token.
  *
  * @param {object} req Express request
@@ -212,11 +234,7 @@ function authenticate(req, onSuccess, onFailure) {
   // that happens to be shaped like `demi_<env>_<id>_<secret>` would otherwise parse as a registry
   // key, take that branch, miss in Cosmos and 401 — permanently disabling the one credential whose
   // whole purpose is working when nothing else does. It costs one timingSafeEqual, no Cosmos read.
-  // Through config, so an unresolved Key Vault reference is no key at all rather than a shared
-  // secret every caller can read off the template.
-  const validKeys = [config.adminApiKey].filter(Boolean);
-
-  if (apiKey && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys)) {
+  if (isBreakGlassKey(apiKey)) {
     logger.info('[demi-api] Authenticated internal-service via break-glass ADMIN_API_KEY');
     // No `compliance`: one shared secret must not open the sealed compartment
     // (docs/rbac-architecture.md §1, condition 1).
@@ -320,6 +338,7 @@ function authenticate(req, onSuccess, onFailure) {
 module.exports = {
   authenticate,
   fromGateway,
+  isValidApiKey,
   matchesConfiguredKey,
   isAllowedClient,
   isRegistryIdentity,

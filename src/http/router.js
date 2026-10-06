@@ -17,7 +17,7 @@ const { Readable } = require('stream');
 
 const { logger, runWithRequestId } = require('../utils/logger');
 const { logRequest } = require('../middleware/http-logger');
-const { fromGateway } = require('../helpers/auth');
+const { fromGateway, isValidApiKey } = require('../helpers/auth');
 const { fromEdge } = require('../utils/caller-ip');
 const config = require('../config');
 const routes = require('./routes');
@@ -96,16 +96,22 @@ function compile(routePath) {
 
 const TABLE = routes.map(route => ({ ...route, ...compile(route.path) }));
 
-/**
- * @returns {object|null} the matched route with its `params`, or null for a 404.
- */
-function match(method, pathname) {
+/** The path the route table sees. */
+function routePath(pathname) {
   // One leading `/api` only: rproxy mounts this API at both `/api` and `/`, which is what the old
   // app got from mounting the same router twice.
   let target = pathname;
   if (target === '/api') target = '/';
   else if (target.startsWith('/api/')) target = target.slice(4);
   if (target.length > 1) target = target.replace(/\/+$/, '') || '/';
+  return target;
+}
+
+/**
+ * @returns {object|null} the matched route with its `params`, or null for a 404.
+ */
+function match(method, pathname) {
+  const target = routePath(pathname);
 
   // HEAD answers off the GET route and drops the body, as Express did.
   const verb = method === 'HEAD' ? 'get' : method.toLowerCase();
@@ -267,16 +273,17 @@ const EDGE_GATE_MODES = new Set(['log', 'enforce']);
  * The Function host and the APIM host are both public, so a caller can go around the edge's rate
  * limits and WAF by asking either one directly. APIM proves the gateway hop; the edge secret proves
  * the Front Door hop. Two keyed callers pass without the edge: an APIM subscription (eagle-api's
- * `/machine` push) and an X-Api-Key, which the route's own auth then checks, so a bad key still 401s.
+ * `/machine` push) and a valid X-Api-Key. The key is checked here because passiveAuth routes serve
+ * a bad one as anonymous.
  */
-function edgeGateReason(req, pathname) {
-  if (pathname === '/health' || pathname.startsWith('/health/')) return null;
+async function edgeGateReason(req, pathname) {
+  const target = routePath(pathname);
+  if (target === '/health' || target.startsWith('/health/')) return null;
   if (!fromGateway(req)) return 'no-gateway';
   const { headers } = req;
-  if (fromEdge(headers) || headers['x-apim-subscription'] || headers['x-api-key'] !== undefined) {
-    return null;
-  }
-  return 'no-edge';
+  if (fromEdge(headers) || headers['x-apim-subscription']) return null;
+  if (headers['x-api-key'] === undefined) return 'no-edge';
+  return (await isValidApiKey(headers['x-api-key'])) ? null : 'bad-key';
 }
 
 /** Guards are the existing `(req, res, next)` middleware, run unchanged. */
@@ -324,7 +331,7 @@ async function dispatch(request, context) {
       } else {
         const route = match(request.method, url.pathname);
         const gateReason = route && EDGE_GATE_MODES.has(config.edgeGate)
-          ? edgeGateReason(req, url.pathname) : null;
+          ? await edgeGateReason(req, url.pathname) : null;
         if (!route) {
           res.status(404).json({ error: 'Endpoint not found.' });
         } else if (gateReason && config.edgeGate === 'enforce') {
