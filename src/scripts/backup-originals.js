@@ -14,6 +14,7 @@
  *
  * `--exclude-prefix <prefix>` (repeatable) leaves keys under that prefix out of list-bucket, copy
  * and verify alike; verify records the prefixes and the excluded totals in its summary.
+ * Set `BACKUP_CLIENT_ID` to reach blob storage as that identity; Cosmos stays on `AZURE_CLIENT_ID`.
  *
  * **DRY RUN BY DEFAULT**: without `--live` nothing is written to Azure. Each blob name is the
  * s3Key unchanged. A blob is committed straight to Archive, create-only, and only after the bytes
@@ -180,7 +181,9 @@ function defaultSource() {
 
 function defaultContainers(account) {
   const { BlobServiceClient } = require('@azure/storage-blob');
-  const service = new BlobServiceClient(`https://${account}.blob.core.windows.net`, createCredential());
+  // No one identity holds both the Cosmos roles and the archive storage roles, so blob calls may run as their own.
+  const env = process.env.BACKUP_CLIENT_ID ? { ...process.env, AZURE_CLIENT_ID: process.env.BACKUP_CLIENT_ID } : process.env;
+  const service = new BlobServiceClient(`https://${account}.blob.core.windows.net`, createCredential(env));
   return name => service.getContainerClient(name);
 }
 
