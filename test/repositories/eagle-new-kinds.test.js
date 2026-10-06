@@ -40,7 +40,7 @@ test('users repository', async (t) => {
     assert.strictEqual(container, 'users');
     assert.match(spec.query, /ARRAY_CONTAINS/);
     assert.match(spec.query, /ORDER BY c\.id ASC$/);
-    assert.ok(!/c\.email\b/.test(spec.query.split(' FROM ')[0]), spec.query);
+    assert.ok(!spec.query.split(' FROM ')[0].includes('c["email"]'), spec.query);
     assert.strictEqual(options.maxItemCount, 10);
   });
 
@@ -90,6 +90,17 @@ test('inspections repository', async (t) => {
     const values = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
     assert.strictEqual(values['@kind'], 'InspectionItem');
     assert.strictEqual(values['@element'], 'e1');
+  });
+
+  await t.test('anonymous list projects `case`, a SQL keyword, as a quoted property', async () => {
+    // `c.case` is a Cosmos syntax error (SC1001): every anonymous GET /api/inspections answered 500.
+    const seen = capture(t);
+    await inspections.listVisible(ANON, inspections.KINDS.INSPECTION, { projectId: '207' });
+    const [{ spec }] = seen;
+    cosmos.assertQuerySpec(spec, 'inspections');
+    const projection = spec.query.split(' FROM ')[0];
+    assert.ok(projection.includes('"case": c["case"]'), projection);
+    assert.doesNotMatch(projection, /\bc\.case\b/);
   });
 
   await t.test('by id: a row of another kind is not this kind', async () => {
