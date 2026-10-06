@@ -15,15 +15,16 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead, levelOfRead } = require('../helpers/access-sql');
+const { canRead, levelOfRead, systemAccess } = require('../helpers/access-sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 const {
-  eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn
+  eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn, fetchAll
 } = require('./_sql');
 
 const CONTAINER = 'inspections';
 const PARTITION_FIELD = 'inspection';
 const SCOPE_FIELD = 'projectId';
+const ACL_SELECT = 'c.id, c.read, c.isDeleted, c.sources.eagle.read AS eagleRead';
 
 const KINDS = Object.freeze({
   INSPECTION: 'Inspection',
@@ -128,18 +129,16 @@ async function deleteById(id, inspectionId) {
   return cosmos.remove(CONTAINER, String(id), String(inspectionId));
 }
 
-/** The ACL inputs of one kind in one inspection, optionally under one element. Unfiltered on purpose. */
+/** The ACL inputs a cascade derives from. systemAccess skips a sealed row, as the comment cascade does. */
+function aclSpec(criteria) {
+  return selectWhere({ access: systemAccess(), partitionField: SCOPE_FIELD, criteria, select: ACL_SELECT });
+}
+
+/** The ACL inputs of one kind in one inspection, optionally under one element. */
 async function aclRows(inspectionId, kind, elementId) {
-  const criteria = ['c.inspection = @inspection', 'c.kind = @kind'];
-  const parameters = [{ name: '@inspection', value: String(inspectionId) }, { name: '@kind', value: kind }];
-  if (elementId) {
-    criteria.push('c.element = @element');
-    parameters.push({ name: '@element', value: String(elementId) });
-  }
-  const { items } = await cosmos.query(CONTAINER, {
-    query: `SELECT c.id, c.read, c.isDeleted, c.sources.eagle.read AS eagleRead FROM c WHERE ${criteria.join(' AND ')}`,
-    parameters
-  }, { partitionKey: String(inspectionId) });
+  const criteria = [eq(PARTITION_FIELD, String(inspectionId), '@inspection'), eq('kind', kind, '@kind')];
+  if (elementId) criteria.push(eq('element', String(elementId), '@element'));
+  const { items } = await cosmos.query(CONTAINER, aclSpec(criteria), { partitionKey: String(inspectionId) });
   return items;
 }
 
@@ -164,7 +163,33 @@ async function setAclForInspection(inspectionId, read) {
   return total;
 }
 
+/**
+ * Re-derive every inspection of one project from the project's ACL, then the chain under each.
+ * Cross-partition: one partition per inspection, and a project holds few.
+ */
+async function setAclForProject(projectId, read) {
+  const spec = aclSpec([eq('kind', KINDS.INSPECTION, '@kind'), eq(SCOPE_FIELD, String(projectId), '@projectId')]);
+  const { items } = await cosmos.query(CONTAINER, spec);
+  let total = { succeeded: 0, failed: 0 };
+  for (const row of items) {
+    const own = await cascadeAcl(CONTAINER, row.id, [row], read);
+    total = sum(total, own);
+    total = sum(total, await setAclForInspection(row.id, own.rows[0].read));
+  }
+  return total;
+}
+
+/** Every row of all three kinds with its ACL inputs and parent links — for the reconcile only. */
+async function listAclRows(access) {
+  return fetchAll(CONTAINER, selectWhere({
+    access,
+    partitionField: SCOPE_FIELD,
+    select: `${ACL_SELECT}, c.kind, c.projectId, c.inspection, c.element, c.isPublished, c.sealedAt`
+  }));
+}
+
 module.exports = {
+  listAclRows,
   CONTAINER,
   PARTITION_FIELD,
   SCOPE_FIELD,
@@ -179,5 +204,6 @@ module.exports = {
   upsert,
   deleteById,
   setAclForElement,
-  setAclForInspection
+  setAclForInspection,
+  setAclForProject
 };

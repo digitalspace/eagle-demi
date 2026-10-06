@@ -130,6 +130,11 @@ const assertSystem = (access) => assert.strictEqual(access && access.tier, 'priv
 const countOfRead = (read, counted = {}) => async (partition, access) =>
   counted[partition] ?? (await read(partition, access)).length;
 
+/** A users, groups or inspections fake: the reconcile reads each whole, once, as the system. */
+const storedRows = (rows) => ({
+  listAclRows: async (access) => { assertSystem(access); return rows; }
+});
+
 function makeDeps(over = {}, counts = {}) {
   const deps = {
     sources: stubSources(),
@@ -167,6 +172,9 @@ function makeDeps(over = {}, counts = {}) {
     comments: {
       listEveryByPeriod: async (periodId, access) => { assertSystem(access); return [{ id: 'C1' }]; }
     },
+    users: storedRows([]),
+    groups: storedRows([]),
+    inspections: storedRows([]),
     ...over
   };
   deps.commentPeriods = {
@@ -823,6 +831,9 @@ test('summaryLine is the alert contract', async (t) => {
       'lists: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
       'notifications: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
       'updates: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
+      'users: aclMismatch=0 missingParent=0 groups: aclMismatch=0 missingParent=0 ' +
+      'inspections: aclMismatch=0 missingParent=0 inspectionElements: aclMismatch=0 missingParent=0 ' +
+      'inspectionItems: aclMismatch=0 missingParent=0 ' +
       'comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=5');
   });
 
@@ -853,6 +864,8 @@ test('summaryLine is the alert contract', async (t) => {
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 aclMismatch=0 ' +
       'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 aclMismatch=0 ' +
       'commentPeriods: skipped lists: skipped notifications: skipped updates: skipped ' +
+      'users: skipped groups: skipped inspections: skipped inspectionElements: skipped ' +
+      'inspectionItems: skipped ' +
       'comments: skipped engageOrphans: skipped parentFieldsPending=0 drift=0');
   });
 
@@ -1102,4 +1115,82 @@ test('a malformed metURL escape is unknown, and does not fail the sibling period
   // The sibling with a good slug still made its round trip and resolved live.
   assert.strictEqual(summary.engageOrphans.checked, 1);
   assert.deepStrictEqual(summary.engageOrphans.dead, []);
+});
+
+/**
+ * Users, groups and inspections: eagle-api publishes none of them, so each row is checked against
+ * the rule applied to its own stored Eagle read and its stored parent. Every fixture row below is
+ * what the mirror writes, except the ones named as planted drift.
+ */
+test('the user, group and inspection mirrors are checked against their stored Eagle copy', async (t) => {
+  const projectsWithRead = {
+    listWithEagleId: async () => [{ id: '207', eagleId: 'P1', sourceSystem: 'track', read: ['staff', 'idir', 'public'] }],
+    countWithEagleId: async () => 1
+  };
+  const cleanUser = { id: 'U-ok', read: ['sysadmin', 'staff'], isPublished: false, eagleRead: ['sysadmin'] };
+  const cleanChain = [
+    { id: 'I1', kind: 'Inspection', projectId: '207', inspection: 'I1', read: ['staff'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] },
+    { id: 'E1', kind: 'InspectionElement', projectId: '207', inspection: 'I1', read: ['staff'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] },
+    { id: 'IT1', kind: 'InspectionItem', projectId: '207', inspection: 'I1', element: 'E1', read: ['staff'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] }
+  ];
+  const deps = (over) => makeDeps({ projects: projectsWithRead, ...over });
+
+  await t.test('a clean set reports nothing', async () => {
+    const summary = await reconcile([], deps({
+      users: storedRows([cleanUser]),
+      groups: storedRows([{ id: 'G1', projectId: '207', read: ['staff'], isPublished: false, eagleRead: ['sysadmin'] }]),
+      inspections: storedRows(cleanChain)
+    }));
+    for (const label of ['users', 'groups', 'inspections', 'inspectionElements', 'inspectionItems']) {
+      assert.deepStrictEqual(summary[label].aclMismatch, [], label);
+      assert.deepStrictEqual(summary[label].missingParent, [], label);
+    }
+  });
+
+  await t.test('a user stored public that Eagle keeps at sysadmin is drift', async () => {
+    const planted = { id: 'U-leak', read: ['staff', 'idir', 'public'], isPublished: true, eagleRead: ['sysadmin'] };
+    const summary = await reconcile([], deps({ users: storedRows([cleanUser, planted]) }));
+    assert.deepStrictEqual(summary.users.aclMismatch, ['U-leak']);
+    assert.match(summaryLine(summary), /users: aclMismatch=1 missingParent=0 /);
+    assert.match(report(summary), /users: 2 mirrored in DEMI[\s\S]*aclMismatch[^\n]*: 1 — U-leak/);
+  });
+
+  await t.test('an item wider than its element is drift, and so is one whose element is gone', async () => {
+    const wider = { ...cleanChain[2], id: 'IT-wide', read: ['staff', 'idir'], eagleRead: ['public'] };
+    const orphan = { ...cleanChain[2], id: 'IT-orphan', element: 'E-gone' };
+    const summary = await reconcile([], deps({ inspections: storedRows([...cleanChain, wider, orphan]) }));
+    assert.deepStrictEqual(summary.inspectionItems.aclMismatch, ['IT-wide']);
+    assert.deepStrictEqual(summary.inspectionItems.missingParent, ['IT-orphan']);
+    const clean = await reconcile([], deps({ inspections: storedRows(cleanChain) }));
+    assert.strictEqual(summary.drift - clean.drift, 2, 'both reach the alert total');
+  });
+
+  const failing = (container, err) => ({ CONTAINER: container, listAclRows: async () => { throw err; } });
+
+  await t.test('a container not provisioned yet reads `skipped`; the rest of the run still reports', async () => {
+    const notFound = Object.assign(new Error('Resource Not Found'), { code: 404 });
+    const summary = await reconcile([], deps({
+      users: failing('users', notFound),
+      inspections: failing('inspections', notFound),
+      groups: storedRows([{ id: 'G1', projectId: '207', read: ['staff', 'idir', 'public'], isPublished: true, eagleRead: ['sysadmin'] }])
+    }));
+    assert.strictEqual(summary.users, undefined);
+    assert.strictEqual(summary.inspectionItems, undefined);
+    assert.deepStrictEqual(summary.groups.aclMismatch, ['G1'], 'a provisioned kind is still checked');
+    assert.ok(summary.documents.unpublishedOrDeleted.length > 0, 'the Eagle-diffed kinds still report');
+    const line = summaryLine(summary);
+    assert.match(line, /users: skipped groups: aclMismatch=1 missingParent=0 inspections: skipped /);
+    assert.match(line, /inspectionItems: skipped /);
+  });
+
+  await t.test('any other error from those containers still fails the run', async () => {
+    const throttled = Object.assign(new Error('throttled'), { code: 429 });
+    await assert.rejects(reconcile([], deps({ users: failing('users', throttled) })), /throttled/);
+  });
+
+  await t.test('a deleted row is held to the deleted ceiling, not to its Eagle read', async () => {
+    const deleted = { id: 'U-del', read: ['staff'], isPublished: false, isDeleted: true, eagleRead: ['public', 'sysadmin'] };
+    const summary = await reconcile([], deps({ users: storedRows([deleted]) }));
+    assert.deepStrictEqual(summary.users.aclMismatch, []);
+  });
 });

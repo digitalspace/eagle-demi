@@ -14,6 +14,7 @@ const assert = require('node:assert');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const { levelOfRead } = require('../../../src/helpers/access-sql');
 const { redactForAccess } = require('../../../src/vis/redact');
+const groups = require('../../../src/repositories/groups');
 const userController = require('../../../src/controllers/nosql/user');
 const inspectionController = require('../../../src/controllers/nosql/inspection');
 const {
@@ -112,9 +113,21 @@ test('group mirror', async (t) => {
   });
 
   await t.test('update keeps the row in its partition and replaces it', async () => {
+    const removed = t.mock.method(groups, 'deleteById', async () => {});
     const existing = { id: eagleGroup()._id, projectId: '207', read: STAFF_READ, name: 'Old', _etag: 'e1' };
     const { row } = await captureMirror(t, 'groups', eagleGroup({ name: 'New' }), { existing });
     assert.strictEqual(row.name, 'New');
+    assert.strictEqual(removed.mock.callCount(), 0, 'nothing to remove when the project is the same');
+  });
+
+  await t.test('a group moved to another project is removed from the old partition', async () => {
+    const removed = t.mock.method(groups, 'deleteById', async () => {});
+    const existing = { id: eagleGroup()._id, projectId: '999', read: STAFF_READ, _etag: 'e1' };
+    const { res, row } = await captureMirror(t, 'groups', null, { existing });
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(row.projectId, '207');
+    assert.deepStrictEqual(removed.mock.calls.map(c => c.arguments), [[eagleGroup()._id, '999']],
+      'otherwise the group stays listable under its old project');
   });
 
   await t.test('delete flag: the removed record is kept, flagged, at level 2', async () => {
