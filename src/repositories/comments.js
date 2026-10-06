@@ -71,7 +71,7 @@ function byPeriodSpec(periodId, access, orderBy, eaoStatuses) {
   });
 }
 
-/** Every comment of one period, past `listByPeriod`'s MAX_PAGE_SIZE cap — for the reconcile only. */
+/** Every comment of one period, past `listByPeriod`'s MAX_PAGE_SIZE cap — for the reconcile and the export. */
 async function listEveryByPeriod(periodId, access) {
   return fetchAll(CONTAINER, byPeriodSpec(periodId, access), { partitionKey: String(periodId) });
 }
