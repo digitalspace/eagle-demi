@@ -25,7 +25,7 @@ const controller = require('../../../src/controllers/nosql/pdf-title');
 const { logger } = require('../../../src/utils/logger');
 const { makeRes } = require('../../../src/http/router');
 const { readForLevel } = require('../../../src/helpers/access-sql');
-const { classicTail } = require('../../helpers/pdf-build');
+const { classicTail, classicPdf } = require('../../helpers/pdf-build');
 
 const FIXTURES = path.join(__dirname, '..', '..', 'fixtures', 'pdf-title');
 const fixture = name => fs.readFileSync(path.join(FIXTURES, name));
@@ -565,11 +565,13 @@ test('pdf title lease API', async (t) => {
     });
 
     await t.test('facts the reader did not write fail closed, and nothing is released inside the window', async (t) => {
-      const cases = {
-        'original-unscanned': { prev: 441, root: [3, 0], info: [1, 0], size: 6, metadataObjects: [] },
-        'original-xref': { error: 'original-xref' }
-      };
-      for (const [reason, facts] of Object.entries(cases)) {
+      const cases = [
+        ['original-unscanned', { prev: 441, root: [3, 0], info: [1, 0], size: 6, metadataObjects: [] }],
+        // The previous reader's facts, without the Catalog and Info it now keeps.
+        ['original-unscanned', { prev: 441, root: [3, 0], info: [1, 0], size: 6, metadata: null }],
+        ['original-xref', { error: 'original-xref' }]
+      ];
+      for (const [reason, facts] of cases) {
         const w = world(t);
         const leased = await lease();
         const committed = await commit(commitBody(leased.body.leaseId, TITLED));
@@ -579,6 +581,32 @@ test('pdf title lease API', async (t) => {
         t.mock.restoreAll();
         for (const level of ['info', 'warn', 'error']) t.mock.method(logger, level, () => {});
       }
+    });
+
+    await t.test('an Info nested 100,000 deep is refused as a shape, not a crash, and undone', async (t) => {
+      const w = world(t);
+      const deep = `<< /Title (x) /K ${'['.repeat(100000)}${']'.repeat(100000)} >>`;
+      const bytes = Buffer.concat([ORIGINAL, classicTail(ORIGINAL, [[1, deep]], '/Size 6 /Root 3 0 R /Info 1 0 R /Prev 441')]);
+      const { leaseId } = await titleOnce(w, bytes);
+      w.closePutWindow();
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'skipped', status: 'skipped', reason: 'tail-syntax' });
+      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+    });
+
+    await t.test('a check that throws copies the backup back and skips', async (t) => {
+      const w = world(t);
+      const { leaseId } = await titleOnce(w, TITLED);
+      w.closePutWindow();
+      const stream = storage.getObjectStream;
+      let thrown = false;
+      t.mock.method(storage, 'getObjectStream', async (key) => {
+        if (thrown) return stream(key);
+        thrown = true;
+        throw new Error('connection reset');
+      });
+      assert.deepEqual((await report({ leaseId })).body, { outcome: 'skipped', status: 'skipped', reason: 'check-failed' });
+      assert.ok(w.store.get(KEY).bytes.equals(ORIGINAL));
+      assert.equal(w.row().pdfTitle.lease, undefined);
     });
 
     await t.test('a changed Content-Type', async (t) => {
@@ -663,6 +691,46 @@ test('pdf title lease API', async (t) => {
     assert.equal((await report({ leaseId })).body.outcome, 'titled');
     assert.equal(w.row().pdfTitle.status, 'titled');
     assert.ok(w.store.get(KEY).bytes.equals(titledBytes));
+  });
+
+  await t.test('a backup with no version is refused at lease, before any hash', async (t) => {
+    const w = world(t);
+    const copy = storage.copyObject;
+    t.mock.method(storage, 'copyObject', async (...args) => ({ ...(await copy(...args)), versionId: null }));
+    const res = await lease();
+    assert.deepEqual([res.status, res.body.reason], [409, 'backup-unversioned']);
+    assert.ok(!w.store.has(BACKUP));
+    assert.equal(w.row().pdfTitle.lease, undefined);
+  });
+
+  await t.test('a backup replaced after the lease is never hashed as the leased one', async (t) => {
+    const w = world(t);
+    const leased = await lease();
+    w.put(BACKUP, ORIGINAL);
+    assert.equal((await commit(commitBody(leased.body.leaseId, TITLED))).body.reason, 'backup-changed');
+    assert.equal(w.calls.uploads.length, 0);
+  });
+
+  await t.test('a retitle the reader now refuses records why, and the file stays titled', async (t) => {
+    // Titled before the reader refused an Info that holds a number.
+    const original = classicPdf([
+      [1, '<< /Title (Old) /ca 0 >>'],
+      [2, '<< /Type /Catalog /Pages 3 0 R >>'],
+      [3, '<< /Type /Pages /Kids [4 0 R] /Count 1 >>'],
+      [4, '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 200 200] >>']
+    ], '/Size 5 /Root 2 0 R /Info 1 0 R');
+    const titledBytes = Buffer.concat([original, Buffer.from('% titled\n')]);
+    const pdfTitle = {
+      sourceKey: KEY, status: 'titled', title: 'Old Name', originalLength: original.length,
+      originalSha256: sha256(original), originalEtag: md5Hex(original),
+      titledLength: titledBytes.length, titledSha256: sha256(titledBytes)
+    };
+    const w = world(t, { rows: [{ ...DOC, pdfTitle }], objects: { [KEY]: titledBytes } });
+    const leased = await lease();
+    const res = await commit(commitBody(leased.body.leaseId, Buffer.concat([titledBytes, Buffer.from('\n')]), { first: false }));
+    assert.deepEqual([res.status, res.body.reason], [409, 'original-info-value']);
+    const record = w.row().pdfTitle;
+    assert.deepEqual([record.status, record.reason, record.title, record.lease], ['titled', 'retitle skipped: original-info-value', 'Old Name', undefined]);
   });
 
   await t.test('a titled file that no longer matches its record is never leased', async (t) => {

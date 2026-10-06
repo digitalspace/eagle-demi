@@ -388,7 +388,14 @@ async function settle(stored, report = null) {
     return { row: await release(row, skipFields(row, lease, report)), outcome: report ? 'skipped' : 'released' };
   }
 
-  const verdict = await inspect(row);
+  let verdict;
+  try {
+    verdict = await inspect(row);
+  } catch (err) {
+    // A check that cannot finish never leaves an unchecked object live: undo it like a bad shape.
+    logger.error('[pdf-title] check of the stored object failed', { ...fields, error: err.message });
+    verdict = { kind: 'bad', reason: 'check-failed', shape: true };
+  }
 
   // INVARIANT: while the PUT link can still land (now < putExpiresAt + skew), never release the
   // lease, never delete the backup and never record a final status, whatever the store holds now:
@@ -644,6 +651,13 @@ async function backupAndAnswer(res, row, leaseRecord, original, title) {
 
   const record = recordOf(row);
   const withBackup = { ...leaseRecord, backupKey, backupVersionId: copied.versionId || null };
+  if (leaseRecord.mode === 'title' && !copied.versionId) {
+    // The original is read by version at commit; refusing here costs no hash of the file.
+    logger.warn('[pdf-title] backup has no version; lease released', fields);
+    await dropBackup(backupKey, null, fields);
+    await release(row);
+    return refuse(res, 409, 'backup-unversioned');
+  }
   try {
     row = await save(row, { ...record, lease: withBackup });
     const backupUrl = await storage.getDownloadUrl(backupKey, { expirySeconds: BACKUP_GET_SECONDS });
@@ -732,15 +746,19 @@ async function commit(req, res) {
       return giveUp('source-changed');
     }
 
+    if (held.mode === 'title' && !held.backupVersionId) return giveUp('backup-unversioned');
     // The API's own read of the backup decides; the worker's numbers are only compared with it.
     const hashed = await hashObject(held.backupKey);
-    const neverWritten = (why) => (original ? {} : { title: held.title, status: 'skipped', reason: why });
-    if (hashed.head.toString('latin1', 0, 5) !== '%PDF-') return giveUp('not-pdf-bytes', neverWritten('not-pdf-bytes'));
+    // The stream reads the current version; it is the leased one only if nothing replaced it.
+    const backupNow = await storage.statObject(held.backupKey);
+    if (!backupNow || (backupNow.versionId || null) !== (held.backupVersionId || null)) return giveUp('backup-changed');
+    const skipped = (why) => skipFields(row, held, { reason: why });
+    if (hashed.head.toString('latin1', 0, 5) !== '%PDF-') return giveUp('not-pdf-bytes', skipped('not-pdf-bytes'));
     if (hashed.length !== stat.size) return giveUp('source-changed');
 
     if (!original) {
       if (body.originalLength !== stat.size || hashed.sha256 !== body.originalSha256) {
-        return giveUp('original-mismatch', neverWritten('original-mismatch'));
+        return giveUp('original-mismatch', skipped('original-mismatch'));
       }
     } else if (hashed.sha256 !== expectedNow(row).sha256) {
       return giveUp('record-mismatch', { status: 'needs-review', reason: 'record-mismatch' });
@@ -749,10 +767,9 @@ async function commit(req, res) {
     // The increment check needs the original's structure, read from the backup version the lease copied.
     let facts = null;
     if (held.mode === 'title') {
-      if (!held.backupVersionId) return giveUp('backup-unversioned');
       const length = original ? original.length : stat.size;
       facts = await readOriginal(backupRange(held.backupKey, held.backupVersionId, length), length);
-      if (facts.error) return giveUp(facts.error, neverWritten(facts.error));
+      if (facts.error) return giveUp(facts.error, skipped(facts.error));
     }
 
     if (!original) {
