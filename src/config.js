@@ -445,6 +445,11 @@ const config = {
   // and the anonymous bulk quota becomes one global bucket again; the secret is the only reason
   // X-Azure-SocketIP can be believed. Empty = the header is ignored. See utils/caller-ip.js.
   edgeSecret:            secretFromEnv('EDGE_SECRET'),
+
+  // Refuse requests that reached the Function or APIM without passing Front Door
+  // (src/http/router.js, edgeGate). '' = off, 'log' = serve and write one warn line,
+  // 'enforce' = 403. Anything else counts as off.
+  edgeGate:              (process.env.EDGE_GATE || '').trim().toLowerCase(),
 };
 
 // Optional second object-store credential, read by src/scripts/backfill-objects.js: the test

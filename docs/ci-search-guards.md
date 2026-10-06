@@ -102,8 +102,10 @@ is what makes forgetting it visible.
 | `SEARCH_SCHEMA_ALLOW_MISSING` | env var read by the probe script; the prod workflow's `allow_missing_schema_probe` input sets it | unset — a 404 fails |
 | `skip_schema_probe` | prod workflow input | false; both gates run |
 
-Both smoke targets are the Function App's own host, not `www.projects.eao.gov.bc.ca/demi-search`:
-the public path also depends on the OpenShift rproxy, which these workflows do not deploy.
+The staging smoke goes through Front Door, `https://test.projects.eao.gov.bc.ca/demi-search`,
+because `EDGE_GATE` on test refuses a search sent to the Function App's own host. The production
+smoke still targets the Function App's host, which works only while prod `EDGE_GATE` is not
+`enforce`.
 
 ## Running them by hand
 

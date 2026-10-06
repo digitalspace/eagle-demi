@@ -17,6 +17,9 @@ const { Readable } = require('stream');
 
 const { logger, runWithRequestId } = require('../utils/logger');
 const { logRequest } = require('../middleware/http-logger');
+const { fromGateway } = require('../helpers/auth');
+const { fromEdge } = require('../utils/caller-ip');
+const config = require('../config');
 const routes = require('./routes');
 
 /** Matches `express.json({ limit: '10mb' })`, the ceiling the ingest routes were sized against. */
@@ -254,6 +257,28 @@ function applyCors(origin, res) {
   }
 }
 
+/** Fixed text so one KQL `has` filter finds every line; the variable parts go in path and reason. */
+const EDGE_GATE_MESSAGE = '[demi-api] edge gate: request did not come through Front Door';
+const EDGE_GATE_MODES = new Set(['log', 'enforce']);
+
+/**
+ * Why this request skipped Front Door, or null when it did not.
+ *
+ * The Function host and the APIM host are both public, so a caller can go around the edge's rate
+ * limits and WAF by asking either one directly. APIM proves the gateway hop; the edge secret proves
+ * the Front Door hop. Two keyed callers pass without the edge: an APIM subscription (eagle-api's
+ * `/machine` push) and an X-Api-Key, which the route's own auth then checks, so a bad key still 401s.
+ */
+function edgeGateReason(req, pathname) {
+  if (pathname === '/health' || pathname.startsWith('/health/')) return null;
+  if (!fromGateway(req)) return 'no-gateway';
+  const { headers } = req;
+  if (fromEdge(headers) || headers['x-apim-subscription'] || headers['x-api-key'] !== undefined) {
+    return null;
+  }
+  return 'no-edge';
+}
+
 /** Guards are the existing `(req, res, next)` middleware, run unchanged. */
 async function runGuards(guards, req, res) {
   for (const guard of guards) {
@@ -298,9 +323,16 @@ async function dispatch(request, context) {
         res.status(204).send('');
       } else {
         const route = match(request.method, url.pathname);
+        const gateReason = route && EDGE_GATE_MODES.has(config.edgeGate)
+          ? edgeGateReason(req, url.pathname) : null;
         if (!route) {
           res.status(404).json({ error: 'Endpoint not found.' });
+        } else if (gateReason && config.edgeGate === 'enforce') {
+          res.status(403).json({ error: 'Forbidden. Use the public site address.' });
         } else {
+          if (gateReason) {
+            logger.warn(EDGE_GATE_MESSAGE, { evt: 'edge-gate', path: url.pathname, reason: gateReason });
+          }
           req.params = route.params;
           await attachBody(req, request);
           await runGuards(route.guards, req, res);
