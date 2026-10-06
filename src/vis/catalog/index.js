@@ -8,6 +8,9 @@ const comments = require('./comments');
 const notifications = require('./notifications');
 const lists = require('./lists');
 const updates = require('./updates');
+const users = require('./users');
+const groups = require('./groups');
+const { inspections, inspectionElements, inspectionItems } = require('./inspections');
 // Keyed on AI SEARCH field names, not Cosmos ones — the indexer renames columns
 // (docs/rbac-architecture.md §2 item 9).
 const indexProjects = require('./index-projects');
@@ -23,6 +26,11 @@ const CATALOGS = {
   notifications,
   lists,
   updates,
+  users,
+  groups,
+  inspections,
+  inspectionElements,
+  inspectionItems,
   'index-projects': indexProjects,
   'index-documents': indexDocuments
 };

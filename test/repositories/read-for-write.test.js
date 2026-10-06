@@ -176,12 +176,15 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'controllers/nosql/comment-period.js',
     'controllers/nosql/comment.js',
     'controllers/nosql/document.js',
+    'controllers/nosql/group.js',
+    'controllers/nosql/inspection.js',
     'controllers/nosql/notification.js',
     'controllers/nosql/organization.js',
     // The PDF title writer: it must see a row's full state to refuse or restore it; answers carry no row.
     'controllers/nosql/pdf-title.js',
     'controllers/nosql/project.js',
     'controllers/nosql/update.js',
+    'controllers/nosql/user.js',
     'helpers/parent-admit.js',
     'helpers/project-twin.js',
     // An Update's parent, read to narrow the Update's own read: a filtered read would miss a sealed one.
@@ -191,10 +194,14 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'repositories/comment-periods.js',
     'repositories/comments.js',
     'repositories/documents.js',
+    'repositories/groups.js',
+    // Also `findParent`: a child's cap must come from its parent whatever level that parent is at.
+    'repositories/inspections.js',
     'repositories/lists.js',
     'repositories/notifications.js',
     'repositories/projects.js',
     'repositories/updates.js',
+    'repositories/users.js',
     // The archive restore: it must see a sealed row's pdfTitle record to refuse or update it.
     'scripts/restore-originals.js',
     'scripts/seed-public-reads.js'

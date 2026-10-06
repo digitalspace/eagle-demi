@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Raw Eagle records for the four public-read mirrors, and the one call that drives a mirror and
+ * Raw Eagle records for the record mirrors (not projects or documents), and the one call that drives a mirror and
  * hands back the row it wrote.
  *
  * Shared by the push suite and the catalog-completeness suite: they assert different things about
@@ -25,6 +25,12 @@ const organizationController = require('../../src/controllers/nosql/organization
 const notificationController = require('../../src/controllers/nosql/notification');
 const updateController = require('../../src/controllers/nosql/update');
 const updates = require('../../src/repositories/updates');
+const users = require('../../src/repositories/users');
+const groups = require('../../src/repositories/groups');
+const inspections = require('../../src/repositories/inspections');
+const userController = require('../../src/controllers/nosql/user');
+const groupController = require('../../src/controllers/nosql/group');
+const inspectionController = require('../../src/controllers/nosql/inspection');
 
 const { resolveAccess, systemAccess } = require('../../src/helpers/access-sql');
 
@@ -39,6 +45,14 @@ const COMMENT_EAGLE_ID = '5b8bcf0d0f5e9c0019a7a1c2';
 const ORG_EAGLE_ID = '58850f69aaecd9001b8085cc';
 const NOTIFICATION_EAGLE_ID = '5f0e4a0c3f4b1a0021a1b2c3';
 const UPDATE_EAGLE_ID = '5f0e4a0c3f4b1a0021a1b2c4';
+const USER_EAGLE_ID = '5c0e4a0c3f4b1a0021a1b2d1';
+const GROUP_EAGLE_ID = '5c0e4a0c3f4b1a0021a1b2d2';
+const INSPECTION_EAGLE_ID = '5c0e4a0c3f4b1a0021a1b2d3';
+const ELEMENT_EAGLE_ID = '5c0e4a0c3f4b1a0021a1b2d4';
+const ITEM_EAGLE_ID = '5c0e4a0c3f4b1a0021a1b2d5';
+
+/** What Eagle writes on a new inspection and its children. */
+const INSPECTOR_ACL = ['sysadmin', 'inspector'];
 
 /**
  * Stamped by `POST /sealed` only. A level-0 row without it was sealed by an Eagle push carrying
@@ -291,6 +305,123 @@ function eagleNotification(overrides = {}) {
   };
 }
 
+/** An Eagle `User` as eagle-api pushes it: `password` and `salt` already dropped. */
+function eagleUser(overrides = {}) {
+  return {
+    _id: USER_EAGLE_ID,
+    firstName: 'Robin',
+    middleName: null,
+    lastName: 'Inspector',
+    displayName: 'Robin Inspector',
+    salutation: 'Ms.',
+    title: 'Senior Inspector',
+    department: 'Compliance',
+    org: ORG_EAGLE_ID,
+    orgName: 'Nicomen Energy Ltd',
+    email: 'robin.inspector@example.invalid',
+    phoneNumber: '250 555 0110',
+    cellPhoneNumber: '250 555 0111',
+    faxNumber: '250 555 0112',
+    address1: '1 Main St',
+    address2: 'Suite 2',
+    city: 'Victoria',
+    province: 'BC',
+    country: 'Canada',
+    postalCode: 'V8W 1A1',
+    notes: 'Prefers phone.',
+    read: ['sysadmin'],
+    ...overrides
+  };
+}
+
+function eagleGroup(overrides = {}) {
+  return {
+    _id: GROUP_EAGLE_ID,
+    name: 'Working Group',
+    project: PROJECT_EAGLE_ID,
+    members: [USER_EAGLE_ID],
+    links: [{ title: 'Terms of reference' }],
+    read: ['sysadmin'],
+    ...overrides
+  };
+}
+
+const EAGLE_AUDIT_COLUMNS = Object.freeze({
+  _createdDate: '2026-08-01T00:00:00.000Z',
+  _updatedDate: '2026-08-02T00:00:00.000Z',
+  _addedBy: 'idir\\inspector',
+  _updatedBy: 'idir\\inspector'
+});
+
+function eagleInspection(overrides = {}) {
+  return {
+    _id: INSPECTION_EAGLE_ID,
+    _schemaName: 'Inspection',
+    ...EAGLE_AUDIT_COLUMNS,
+    name: 'Site visit',
+    label: 'Nicomen 2026-08',
+    case: 'IR-2026-001',
+    email: 'robin.inspector@example.invalid',
+    startDate: '2026-08-01T00:00:00.000Z',
+    endDate: '2026-08-01T00:00:00.000Z',
+    elements: [ELEMENT_EAGLE_ID],
+    customProjectName: '',
+    project: PROJECT_EAGLE_ID,
+    inspectionId: 'client-insp-1',
+    read: INSPECTOR_ACL,
+    ...overrides
+  };
+}
+
+function eagleInspectionElement(overrides = {}) {
+  return {
+    _id: ELEMENT_EAGLE_ID,
+    _schemaName: 'InspectionElement',
+    ...EAGLE_AUDIT_COLUMNS,
+    title: 'Erosion control',
+    requirement: 'Condition 12',
+    description: 'Silt fence intact.',
+    timestamp: '2026-08-01T10:00:00.000Z',
+    items: [ITEM_EAGLE_ID],
+    elementId: 'client-elem-1',
+    read: INSPECTOR_ACL,
+    ...overrides
+  };
+}
+
+function eagleInspectionItem(overrides = {}) {
+  return {
+    _id: ITEM_EAGLE_ID,
+    _schemaName: 'InspectionItem',
+    ...EAGLE_AUDIT_COLUMNS,
+    type: 'photo',
+    uri: 'photo-1.jpg',
+    geo: { type: 'Point', coordinates: [-120.8, 50.1] },
+    caption: 'North fence line',
+    timestamp: '2026-08-01T10:05:00.000Z',
+    internalURL: 'inspections/photo-1.jpg',
+    internalExt: 'jpg',
+    internalSize: '1024',
+    internalMime: 'image/jpeg',
+    itemId: 'client-item-1',
+    read: INSPECTOR_ACL,
+    ...overrides
+  };
+}
+
+/** The stored inspection an element push finds as its parent. */
+function storedInspection(read = ['sysadmin', 'inspector', 'staff']) {
+  return { id: INSPECTION_EAGLE_ID, kind: 'Inspection', inspection: INSPECTION_EAGLE_ID, projectId: '207', read };
+}
+
+/** The stored element an item push finds as its parent. */
+function storedElement(read = ['sysadmin', 'inspector', 'staff']) {
+  return { id: ELEMENT_EAGLE_ID, kind: 'InspectionElement', inspection: INSPECTION_EAGLE_ID, projectId: '207', read };
+}
+
+/** One inspection kind's push handler, under the name every mirror's handler has. */
+const pushOf = (handler) => ({ upsertFromEagle: handler });
+
 /** entity name in src/vis/catalog -> everything a test needs to drive that mirror. */
 const MIRRORS = {
   commentPeriods: {
@@ -312,6 +443,26 @@ const MIRRORS = {
   notifications: {
     controller: notificationController, repo: notifications,
     eagleId: NOTIFICATION_EAGLE_ID, fixture: eagleNotification
+  },
+  users: {
+    controller: userController, repo: users,
+    eagleId: USER_EAGLE_ID, fixture: eagleUser
+  },
+  groups: {
+    controller: groupController, repo: groups,
+    eagleId: GROUP_EAGLE_ID, fixture: eagleGroup
+  },
+  inspections: {
+    controller: pushOf(inspectionController.upsertInspectionFromEagle), repo: inspections,
+    eagleId: INSPECTION_EAGLE_ID, fixture: eagleInspection
+  },
+  inspectionElements: {
+    controller: pushOf(inspectionController.upsertElementFromEagle), repo: inspections,
+    eagleId: ELEMENT_EAGLE_ID, fixture: eagleInspectionElement, parent: storedInspection
+  },
+  inspectionItems: {
+    controller: pushOf(inspectionController.upsertItemFromEagle), repo: inspections,
+    eagleId: ITEM_EAGLE_ID, fixture: eagleInspectionItem, parent: storedElement
   }
 };
 
@@ -348,12 +499,19 @@ function documentReadForWriteFromGet(t) {
  * The caller's `t` owns the mocks; restore them with `t.mock.restoreAll()`.
  */
 async function captureMirror(t, entity, doc, {
-  existing = null, project, period, pushedAt, losses = 0
+  existing = null, project, period, parent, pushedAt, losses = 0
 } = {}) {
   const { controller, repo, eagleId } = MIRRORS[entity];
 
   t.mock.method(projects, 'getByEagleId', async () => (project === undefined ? storedProject() : project));
   t.mock.method(commentPeriods, 'getById', async () => (period === undefined ? storedPeriod() : period));
+  const defaultParent = MIRRORS[entity].parent || (() => null);
+  t.mock.method(inspections, 'findParent', async () => (parent === undefined ? defaultParent() : parent));
+  // The cascade under a re-levelled inspection is its own suite's concern; this one returns the row.
+  const cascades = [];
+  const cascaded = (name) => async (...args) => { cascades.push([name, ...args]); return { succeeded: 0, failed: 0 }; };
+  t.mock.method(inspections, 'setAclForInspection', cascaded('inspection'));
+  t.mock.method(inspections, 'setAclForElement', cascaded('element'));
   // An Error as `existing` is what the read throws, e.g. a duplicated id.
   t.mock.method(repo, 'readForWrite', async () => {
     if (existing instanceof Error) throw existing;
@@ -378,7 +536,7 @@ async function captureMirror(t, entity, doc, {
     },
     res
   );
-  return { res, row, writes: () => writes };
+  return { res, row, writes: () => writes, cascades };
 }
 
 /** The stored mirror row a push is ordered against — only the stamp and the ids matter to it. */
@@ -389,6 +547,7 @@ function storedStamped(entity, eaglePushedAt) {
     // send the controller into a cleanup this case is not about.
     projectId: '207',
     periodId: PERIOD_EAGLE_ID,
+    inspection: INSPECTION_EAGLE_ID,
     read: [...PUBLIC_ACL],
     eaglePushedAt
   };
@@ -403,6 +562,19 @@ module.exports = {
   ORG_EAGLE_ID,
   NOTIFICATION_EAGLE_ID,
   UPDATE_EAGLE_ID,
+  USER_EAGLE_ID,
+  GROUP_EAGLE_ID,
+  INSPECTION_EAGLE_ID,
+  ELEMENT_EAGLE_ID,
+  ITEM_EAGLE_ID,
+  INSPECTOR_ACL,
+  eagleUser,
+  eagleGroup,
+  eagleInspection,
+  eagleInspectionElement,
+  eagleInspectionItem,
+  storedInspection,
+  storedElement,
   DOCUMENT_EAGLE_ID,
   TYPE_ID,
   MILESTONE_ID,
