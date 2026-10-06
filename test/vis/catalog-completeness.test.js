@@ -404,7 +404,7 @@ test('chunks catalog covers the chunker output', async (t) => {
 
 
 /**
- * The four public-read mirrors. Same rule as the project and document catalogs above: the row is
+ * The record mirrors (MIRRORS in the fixtures). Same rule as the project and document catalogs above: the row is
  * captured from the REAL controller, so a field a mirror grows is catalogued here or this fails —
  * and an uncatalogued field is dropped from every response, which is silent.
  */
@@ -438,6 +438,22 @@ test('the public-read catalogs cover every field their mirror writes', async (t)
     assert.strictEqual(comments.author.defaultVis, 2);
     assert.strictEqual(comments.author.maxVis, 4);
     assert.strictEqual(comments.author.when, 'commentAttributed');
+  });
+
+  await t.test('every user contact field is staff-only, and no secret is catalogued', () => {
+    const users = catalogFor('users');
+    const contact = /mail|phone|fax|address|postal|city|province|country/i;
+    const contactKeys = Object.keys(users).filter(k => contact.test(k));
+    assert.ok(contactKeys.length >= 10, 'the pattern still finds the contact fields');
+    for (const key of contactKeys) assert.strictEqual(users[key].maxVis, 2, key);
+    assert.deepStrictEqual(Object.keys(users).filter(k => /password|salt/i.test(k)), []);
+  });
+
+  await t.test('the inspector email and stored-file internals are staff-only', () => {
+    assert.strictEqual(catalogFor('inspections').email.maxVis, 2);
+    for (const key of ['internalURL', 'internalExt', 'internalSize', 'internalMime']) {
+      assert.strictEqual(catalogFor('inspectionItems')[key].maxVis, 2, key);
+    }
   });
 
   await t.test('no comment field is an email', () => {

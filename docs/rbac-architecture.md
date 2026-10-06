@@ -222,6 +222,52 @@ callers until it is written with one (P3-2 removes the legacy `unsetIsPublic` ar
 **Identity.** Keycloak now, Entra later; role names are the contract, the issuer only changes the
 claim path in `rolesFor` and `src/helpers/auth.js`. DEMI creates no realm roles of its own.
 
+### User, group and inspection mirrors (2026-10-06)
+
+eagle-api pushes five more kinds (`DEMI_PUSH_OPT_IN_KINDS` in eagle-api). The handlers are written
+and exported; routes, swagger and containers are not wired yet. Wiring:
+
+| Route | Handler | Container | Partition key |
+|---|---|---|---|
+| `PUT /eagle/users/:eagleId` | `nosql/user.upsertFromEagle` | `users` | `/id` |
+| `GET /users`, `GET /users/:id` | `nosql/user.getUsers`, `getUser` | `users` | `/id` |
+| `PUT /eagle/groups/:eagleId` | `nosql/group.upsertFromEagle` | `groups` | `/projectId` |
+| `GET /groups?project=`, `GET /groups/:id?project=` | `nosql/group.getGroups`, `getGroup` | `groups` | `/projectId` |
+| `PUT /eagle/inspections/:eagleId` | `nosql/inspection.upsertInspectionFromEagle` | `inspections` | `/inspection` |
+| `PUT /eagle/inspection-elements/:eagleId` | `nosql/inspection.upsertElementFromEagle` | `inspections` | `/inspection` |
+| `PUT /eagle/inspection-items/:eagleId` | `nosql/inspection.upsertItemFromEagle` | `inspections` | `/inspection` |
+| `GET /inspections?project=`, `GET /inspections/:id?inspection=` | `getInspections`, `getInspection` | `inspections` | `/inspection` |
+| `GET /inspection-elements?inspection=`, `GET /inspection-elements/:id?inspection=` | `getInspectionElements`, `getInspectionElement` | `inspections` | `/inspection` |
+| `GET /inspection-items?inspection=&element=`, `GET /inspection-items/:id?inspection=` | `getInspectionItems`, `getInspectionItem` | `inspections` | `/inspection` |
+
+PUT routes take the same guards as the other `/eagle/*` mirrors. GET routes take
+`passiveAuthMiddleware, credentialsMiddleware`, as `GET /documents`. Lists order on `c.id`; the
+`inspections` container filters on `kind`, `projectId` and `element`, so those paths must be indexed.
+
+- `users` is partitioned by `/id` and that is also the scope field, so a project-scoped key reads
+  no user. Eagle's `password` and `salt` are dropped before the row and its raw copy are built.
+- `groups` sits under the DEMI project id and is capped by the project.
+- Elements and items share `inspections` with their inspection. The partition key is the
+  inspection's DEMI id (its own id on an `Inspection` row), so one inspection and everything under
+  it is one logical partition. The parent cap is read in that partition, and the ACL cascade is one
+  single-partition batch. Eagle links only downward (`elements[]`, `items[]`), so a child finds its
+  parent by the stored row that lists it. A child pushed before its parent lists it gets a 503,
+  which eagle-api retries once. `projectId` rides on every row as the scope field. It is null on an
+  inspection Eagle filed without a project, and no scoped caller reads that row.
+- Rows are capped by their parent through `eagleReadUnder`: a group and an inspection by the
+  project, an element by its inspection, an item by its element. A parent whose level moves
+  re-derives the rows under it, and a project level change re-derives its groups and its
+  inspection chain. `isDeleted: true` flags the row and narrows it to level 2.
+- eagle-api publishes none of these kinds, so `reconcile-eagle.js` has no Eagle id set to diff.
+  It checks each row against the rule applied to its own stored Eagle read and its stored parent,
+  and reports `aclMismatch` and `missingParent` per kind.
+- Until the containers exist, the project cascade and the reconcile skip a kind whose container
+  answers 404 (`helpers/unprovisioned.js`, one warning per process); the reconcile line reads
+  `skipped` for it.
+- Field levels are in `src/vis/catalog/users.js`, `groups.js` and `inspections.js`. Every user
+  contact field (email, phone, cell, fax, postal address) and the user notes are 2/2. So are the
+  inspector `email` on an inspection, the stored-file internals on an item, and group `members`.
+
 ## 2. Corrections to the source design
 
 Each item below overrides the corresponding section of the source document.

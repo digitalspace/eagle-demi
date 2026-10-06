@@ -9,6 +9,7 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { writeGuarded } = require('../../helpers/etag-write');
 const { heldSealed } = require('../../helpers/access-sql');
+const { constrainToProject, DELETED_CEILING } = require('../../repositories/documents');
 
 /**
  * The pusher's clock, carried on the mirrored row.
@@ -134,6 +135,14 @@ async function upsertWithRetry(repo, build, readExisting, { pushedAt = null } = 
   });
 }
 
+/**
+ * `read` under the deleted ceiling (level 2) when Eagle pushed the record with `isDeleted: true`,
+ * as the comment-period mirror does: DEMI flags and narrows a delete, it never removes the row.
+ */
+function underDeleteCeiling(read, doc) {
+  return doc.isDeleted === true ? constrainToProject(read, DELETED_CEILING) : read;
+}
+
 /** The Mongo `ObjectId | { _id }` a populated Eagle reference arrives as, as a string or null. */
 function refId(value) {
   if (!value) return null;
@@ -148,5 +157,6 @@ module.exports = {
   pushConflict,
   keepSeal,
   upsertWithRetry,
+  underDeleteCeiling,
   refId
 };

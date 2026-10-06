@@ -17,7 +17,8 @@
  *
  * It covers the containers the Eagle push and the backfill write: projects, documents, comment
  * periods, lists (both kinds), notifications, updates, and — only with `--comments`, which costs
- * one eagle-api round trip per comment period — comments.
+ * one eagle-api round trip per comment period — comments. Users, groups and inspections are checked
+ * against their own stored Eagle copy only (`storedMirrorDrift`).
  *
  * Runs on the devbox via `demi-run` — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
@@ -39,6 +40,11 @@ const comments = require('../repositories/comments');
 const lists = require('../repositories/lists');
 const notifications = require('../repositories/notifications');
 const updates = require('../repositories/updates');
+const users = require('../repositories/users');
+const groups = require('../repositories/groups');
+const inspections = require('../repositories/inspections');
+const { constrainToProject, DELETED_CEILING } = documents;
+const { unlessUnprovisioned } = require('../helpers/unprovisioned');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
 const { seedAcl, eagleReadUnder } = require('../seed/transform');
@@ -50,6 +56,8 @@ const { logger } = require('../utils/logger');
 /** The containers reported, in the order `report` prints them and `summaryLine` names them. */
 const LABELS = ['projects', 'documents', 'commentPeriods', 'lists', 'notifications', 'updates',
   'comments'];
+/** The mirrors checked against their own stored Eagle copy — see `storedMirrorDrift`. */
+const STORED_LABELS = ['users', 'groups', 'inspections', 'inspectionElements', 'inspectionItems'];
 
 /**
  * The ENGAGE API a period's `metURL` slug is resolved against. NOT the public site host —
@@ -273,6 +281,58 @@ function updateRead(upstream, parent) {
   return readUnder(upstream, parent && { read: parent });
 }
 
+/**
+ * Ids whose stored `read[]` is not what the mirror would write from the Eagle copy stored beside
+ * it, under its stored parent, or whose `isPublished` has come apart from it. A DEMI seal is kept
+ * by the mirror on purpose, so it is skipped; a row without a stored Eagle read has nothing to
+ * derive from.
+ */
+function storedAclMismatch(rows, parentReadOf) {
+  return rows.filter(row => {
+    if (row.sealedAt || !Array.isArray(row.eagleRead) || row.eagleRead.length === 0) return false;
+    const read = Array.isArray(row.read) ? row.read : [];
+    const derived = mirroredRead(row.eagleRead, parentReadOf(row));
+    const expected = row.isDeleted === true ? constrainToProject(derived, DELETED_CEILING) : derived;
+    return !sameAccess(read, expected) || row.isPublished !== read.includes('public');
+  }).map(row => String(row.id));
+}
+
+/**
+ * The user, group and inspection mirrors. eagle-api serves none of them to an anonymous caller,
+ * so there is no Eagle id set to diff against: drift here is a row that disagrees with the rule
+ * applied to its own stored Eagle copy and its stored parent, and a child whose parent row is gone.
+ */
+async function storedMirrorDrift(access, projectRead, repos) {
+  // null for a container not provisioned yet: its labels stay out of the summary and read `skipped`.
+  const rowsOf = repo => unlessUnprovisioned(repo.CONTAINER, () => repo.listAclRows(access));
+  const userRows = await rowsOf(repos.users);
+  const groupRows = await rowsOf(repos.groups);
+  const inspectionRows = await rowsOf(repos.inspections);
+
+  const projectOf = row => projectRead.get(String(row.projectId)) || null;
+  const missing = (rows, parentReadOf) => rows.filter(row => !parentReadOf(row)).map(row => String(row.id));
+  const section = (rows, parentReadOf, hasParent = () => true) => ({
+    inDemi: rows.length,
+    aclMismatch: storedAclMismatch(rows.filter(row => !hasParent(row) || parentReadOf(row)), parentReadOf),
+    missingParent: missing(rows.filter(hasParent), parentReadOf)
+  });
+
+  const out = {};
+  if (userRows) out.users = section(userRows, () => null, () => false);
+  if (groupRows) out.groups = section(groupRows, projectOf);
+  if (!inspectionRows) return out;
+
+  const byId = new Map(inspectionRows.map(row => [String(row.id), row]));
+  const ofKind = kind => inspectionRows.filter(row => row.kind === kind);
+  out.inspections = section(ofKind('Inspection'),
+    row => (row.projectId == null ? null : projectOf(row)), row => row.projectId != null);
+  out.inspectionElements = section(ofKind('InspectionElement'),
+    row => (byId.get(String(row.inspection)) || {}).read || null);
+  out.inspectionItems = section(ofKind('InspectionItem'),
+    row => (byId.get(String(row.element)) || {}).read || null);
+  return out;
+}
+
 /** Every id set a diff produced, as one drift number. */
 function driftOf(summary) {
   // A dead ENGAGE slug is in Eagle AND in DEMI, so every id-set diff reads it as clean — but it is
@@ -281,6 +341,10 @@ function driftOf(summary) {
   const orphans = summary.engageOrphans
     ? summary.engageOrphans.dead.length - summary.engageOrphans.dropped.length
     : 0;
+  const stored = STORED_LABELS.reduce((total, label) => {
+    const s = summary[label];
+    return s ? total + s.aclMismatch.length + s.missingParent.length : total;
+  }, 0);
   return LABELS.reduce((total, label) => {
     const s = summary[label];
     if (!s) return total;
@@ -288,7 +352,7 @@ function driftOf(summary) {
     // wrong parent — so it counts here or the alert stays quiet about it.
     return total + s.unpublishedOrDeleted.length + s.eagleOnly.length +
       (s.misfiledParent ? s.misfiledParent.length : 0) + (s.aclMismatch ? s.aclMismatch.length : 0);
-  }, orphans);
+  }, orphans + stored);
 }
 
 /**
@@ -312,6 +376,10 @@ function summaryLine(summary) {
     `documents: unpublishedOrDeleted=${d.unpublishedOrDeleted.length} eagleOnly=${d.eagleOnly.length} ` +
     `unresolvedParent=${d.unresolvedParent.length} aclMismatch=${(d.aclMismatch || []).length} ` +
     counts('commentPeriods') + counts('lists') + counts('notifications') + counts('updates') +
+    STORED_LABELS.map(label => (summary[label]
+      ? `${label}: aclMismatch=${summary[label].aclMismatch.length} ` +
+        `missingParent=${summary[label].missingParent.length} `
+      : `${label}: skipped `)).join('') +
     counts('comments') +
     // `skipped`, not zero, for the same reason `comments` says it: a sweep that never ran must not
     // read as a sweep that found nothing.
@@ -509,6 +577,10 @@ async function reconcile(argv = [], deps = {}) {
       row => updateParentRead.get(String(row.projectId)) || null, updateRead)
   };
 
+  Object.assign(summary, await storedMirrorDrift(access, projectRead, {
+    users: deps.users || users, groups: deps.groups || groups, inspections: deps.inspections || inspections
+  }));
+
   summary.failures.push(...await truncated([
     ['lists', listRows, async (a) =>
       (await listsRepo.countByKind(listsRepo.KINDS.LIST, a)) +
@@ -616,6 +688,18 @@ function report(summary, { json } = {}) {
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +
         'public search — that is close-unpublished-track-projects.js, not the push');
+    }
+  }
+  for (const label of STORED_LABELS) {
+    const s = summary[label];
+    if (!s) continue;
+    lines.push(`${label}: ${s.inDemi} mirrored in DEMI (checked against the stored Eagle copy, ` +
+      'no Eagle id set: eagle-api does not publish this kind)');
+    for (const [text, ids] of [
+      ['aclMismatch (read[] is not what the mirror would write from its own Eagle read and parent)', s.aclMismatch],
+      ['missingParent (the parent row it is capped by is not in DEMI)', s.missingParent]
+    ]) {
+      if (ids.length) lines.push(`  ${text}: ${ids.length} — ${ids.slice(0, 20).join(', ')}${ids.length > 20 ? ', …' : ''}`);
     }
   }
   const orphans = summary.engageOrphans;
