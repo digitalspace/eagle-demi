@@ -9,8 +9,9 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead } = require('../helpers/access-sql');
-const { eq, selectWhere, selectFor, pageOptions, upsertItem, readForWriteIn } = require('./_sql');
+const { canRead, systemAccess } = require('../helpers/access-sql');
+const { cascadeAcl } = require('../helpers/acl-cascade');
+const { eq, selectWhere, selectFor, pageOptions, upsertItem, readForWriteIn, fetchAll } = require('./_sql');
 
 const CONTAINER = 'groups';
 const PARTITION_FIELD = 'projectId';
@@ -55,4 +56,28 @@ async function deleteById(id, projectId) {
   return cosmos.remove(CONTAINER, String(id), String(projectId));
 }
 
-module.exports = { CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, upsert, deleteById };
+/** Re-derive every group of one project from the project's ACL. systemAccess skips a sealed row. */
+async function setAclForProject(projectId, read) {
+  const spec = selectWhere({
+    access: systemAccess(),
+    partitionField: PARTITION_FIELD,
+    criteria: [eq(PARTITION_FIELD, String(projectId), '@projectId')],
+    select: 'c.id, c.read, c.isDeleted, c.sources.eagle.read AS eagleRead'
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
+  return cascadeAcl(CONTAINER, projectId, items, read);
+}
+
+/** Every row's ACL inputs, whole container — for the reconcile only. */
+async function listAclRows(access) {
+  return fetchAll(CONTAINER, selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    select: 'c.id, c.projectId, c.read, c.isPublished, c.isDeleted, c.sealedAt, c.sources.eagle.read AS eagleRead'
+  }));
+}
+
+module.exports = {
+  CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, upsert, deleteById, setAclForProject,
+  listAclRows
+};

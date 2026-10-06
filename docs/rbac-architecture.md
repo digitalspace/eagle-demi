@@ -256,9 +256,11 @@ PUT routes take the same guards as the other `/eagle/*` mirrors. GET routes take
   inspection Eagle filed without a project, and no scoped caller reads that row.
 - Rows are capped by their parent through `eagleReadUnder`: a group and an inspection by the
   project, an element by its inspection, an item by its element. A parent whose level moves
-  re-derives the rows under it. `isDeleted: true` flags the row and narrows it to level 2. The
-  project push does not cascade into `groups` or `inspections` yet: a project narrowed below
-  level 2 leaves those rows at their stored level until their next push.
+  re-derives the rows under it, and a project level change re-derives its groups and its
+  inspection chain. `isDeleted: true` flags the row and narrows it to level 2.
+- eagle-api publishes none of these kinds, so `reconcile-eagle.js` has no Eagle id set to diff.
+  It checks each row against the rule applied to its own stored Eagle read and its stored parent,
+  and reports `aclMismatch` and `missingParent` per kind.
 - Field levels are in `src/vis/catalog/users.js`, `groups.js` and `inspections.js`. Every user
   contact field (email, phone, cell, fax, postal address) and the user notes are 2/2. So are the
   inspector `email` on an inspection, the stored-file internals on an item, and group `members`.

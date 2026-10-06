@@ -14,6 +14,8 @@ const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
+const groups = require('../../repositories/groups');
+const inspections = require('../../repositories/inspections');
 const {
   resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
@@ -148,7 +150,9 @@ async function cascadeProjectVisibility(projectId, acl, eagleId, { updates = tru
   const failures = [
     await cascadeDocumentVisibility(projectId, acl),
     await cascadeEngagementVisibility(projectId, acl.read),
-    updates ? await cascadeUpdateVisibility(projectId, eagleId, acl.read) : null
+    await cascadeMirrorVisibility('groups', groups, projectId, acl.read),
+    await cascadeMirrorVisibility('inspections', inspections, projectId, acl.read),
+    updates ?await cascadeUpdateVisibility(projectId, eagleId, acl.read) : null
   ].filter(Boolean);
   return failures.length ? failures.join(' ') : null;
 }
@@ -213,6 +217,30 @@ async function cascadeUpdateVisibility(projectId, eagleId, read) {
       projectId, eagleId, error: cascadeErr.message
     });
     return 'Project visibility changed, but its updates were not updated.';
+  }
+}
+
+/**
+ * The project's groups, or its inspections and the elements and items under each: every row was
+ * capped by the project at push time and is gated by its own stored `read[]`.
+ *
+ * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ */
+async function cascadeMirrorVisibility(label, repo, projectId, read) {
+  try {
+    const cascade = await repo.setAclForProject(projectId, read);
+    if (cascade.failed > 0) {
+      logger.error(`[Project Controller] ${label} ACL cascade partially failed`, {
+        projectId, succeeded: cascade.succeeded, failed: cascade.failed
+      });
+      return `Project visibility changed, but its ${label} were not fully updated.`;
+    }
+    return null;
+  } catch (cascadeErr) {
+    logger.error(`[Project Controller] ${label} ACL cascade failed`, {
+      projectId, error: cascadeErr.message
+    });
+    return `Project visibility changed, but its ${label} were not updated.`;
   }
 }
 

@@ -72,9 +72,19 @@ function projected(rows, query) {
  *
  * @returns {{writes: Array, unexpected: Array}} the bulk patches, in the order they were sent
  */
-function stubCosmos(t, { periods, commentsByPeriod = {}, updates = null }) {
+function stubCosmos(t, { periods, commentsByPeriod = {}, updates = null, mirrorRows = [] }) {
   const writes = [];
   const unexpected = [];
+  // `groups` and `inspections` rows, filtered by the partition the read names and every bound
+  // `c.<field> = @param` equality it sends, so a read aimed at the wrong project finds nothing.
+  const mirrored = (container, spec, options) => {
+    const equalities = [...spec.query.matchAll(/c\.(\w+) = (@\w+)/g)]
+      .map(([, field, name]) => [field, spec.parameters.find(p => p.name === name).value]);
+    const partitionField = container === 'groups' ? 'projectId' : 'inspection';
+    return projected(mirrorRows.filter(row => row.container === container &&
+      (options.partitionKey === undefined || String(row[partitionField]) === String(options.partitionKey)) &&
+      equalities.every(([field, value]) => String(row[field]) === String(value))), spec.query);
+  };
 
   t.mock.method(aiSearch, 'indexes', () => ({
     chunks: 'chunks', projects: 'projects', documents: 'documents'
@@ -90,6 +100,9 @@ function stubCosmos(t, { periods, commentsByPeriod = {}, updates = null }) {
       return { items: projected(commentsByPeriod[String(options.partitionKey)] || [], query) };
     }
     if (container === 'updates' && updates) return { items: updates.map(u => ({ ...u })) };
+    if (container === 'groups' || container === 'inspections') {
+      return { items: mirrored(container, spec, options) };
+    }
     unexpected.push(container);
     return { items: [] };
   });
@@ -101,6 +114,10 @@ function stubCosmos(t, { periods, commentsByPeriod = {}, updates = null }) {
         const row = updates.find(u => u.id === op.id);
         row.read = op.resourceBody.operations.find(o => o.path === '/read').value;
       }
+    }
+    for (const op of operations) {
+      const row = mirrorRows.find(r => r.container === container && r.id === op.id);
+      if (row) row.read = opValue(op, '/read');
     }
     return { succeeded: operations.length, failed: 0, statusCounts: {}, requestCharge: 1 };
   });
@@ -301,4 +318,61 @@ test('a project visibility change carries to its Updates', async (t) => {
       assert.strictEqual(res.statusCode, 500);
       assert.match(res.body.error, /updates were not updated/);
     });
+});
+
+/**
+ * Groups, and the inspection chain under the project, follow it both ways. Each row derives from
+ * its own Eagle read under its parent's NEW read: an item follows its element, not the project.
+ */
+test('a project visibility change carries to its groups and inspections', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const fixture = () => [
+    { container: 'groups', id: 'G1', projectId: '207', read: STAFF_READ, eagleRead: ['sysadmin'] },
+    { container: 'groups', id: 'G-other', projectId: '999', read: STAFF_READ, eagleRead: ['sysadmin'] },
+    { container: 'inspections', id: 'I1', kind: 'Inspection', inspection: 'I1', projectId: '207',
+      read: STAFF_READ, eagleRead: ['sysadmin', 'inspector'] },
+    // Privileged-only in Eagle, so under a team-level inspection it stays at sysadmin, and the item
+    // under it must follow it there rather than land at the inspection's `team`.
+    { container: 'inspections', id: 'E1', kind: 'InspectionElement', inspection: 'I1', projectId: '207',
+      read: STAFF_READ, eagleRead: ['sysadmin'] },
+    { container: 'inspections', id: 'IT1', kind: 'InspectionItem', inspection: 'I1', element: 'E1',
+      projectId: '207', read: STAFF_READ, eagleRead: ['sysadmin', 'inspector'] },
+    { container: 'inspections', id: 'I-other', kind: 'Inspection', inspection: 'I-other', projectId: '999',
+      read: STAFF_READ, eagleRead: ['sysadmin', 'inspector'] }
+  ];
+  const readOf = (rows, id) => rows.find(r => r.id === id).read;
+
+  await t.test('narrowed to team, the groups and the whole chain narrow; widened back, they return',
+    async (tt) => {
+      const rows = fixture();
+      const { writes } = stubCosmos(tt, { periods: [], mirrorRows: rows });
+      tt.mock.method(notifications, 'readForWrite', async () => null);
+
+      const narrowed = await moveTo(tt, 1, 2);
+      assert.strictEqual(narrowed.statusCode, 200, JSON.stringify(narrowed.body));
+      assert.deepStrictEqual(readOf(rows, 'G1'), ['sysadmin']);
+      assert.deepStrictEqual(readOf(rows, 'I1'), ['team']);
+      assert.deepStrictEqual(readOf(rows, 'E1'), ['sysadmin']);
+      assert.deepStrictEqual(readOf(rows, 'IT1'), ['sysadmin'], 'capped by its element, not the project');
+      assert.ok(patchesTo(writes, 'inspections').every(w => w.operations.every(op => op.partitionKey === 'I1')),
+        'the chain is patched in its inspection\'s partition');
+
+      const widened = await moveTo(tt, 2, 1, { read: ['team'] });
+      assert.strictEqual(widened.statusCode, 200, JSON.stringify(widened.body));
+      for (const id of ['G1', 'I1', 'E1', 'IT1']) assert.deepStrictEqual(readOf(rows, id), STAFF_READ, id);
+    });
+
+  await t.test('rows of another project are untouched', async (tt) => {
+    const rows = fixture();
+    const { writes } = stubCosmos(tt, { periods: [], mirrorRows: rows });
+    tt.mock.method(notifications, 'readForWrite', async () => null);
+
+    await moveTo(tt, 1, 2);
+
+    const patched = writes.flatMap(w => w.operations.map(op => op.id));
+    assert.ok(!patched.includes('G-other') && !patched.includes('I-other'), patched.join(','));
+    assert.deepStrictEqual(readOf(rows, 'G-other'), STAFF_READ);
+    assert.deepStrictEqual(readOf(rows, 'I-other'), STAFF_READ);
+  });
 });

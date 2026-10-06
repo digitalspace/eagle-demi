@@ -10,7 +10,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { selectWhere, selectFor, pageOptions, upsertItem, readForWriteIn } = require('./_sql');
+const { selectWhere, selectFor, pageOptions, upsertItem, readForWriteIn, fetchAll } = require('./_sql');
 
 const CONTAINER = 'users';
 const PARTITION_FIELD = 'id';
@@ -42,4 +42,13 @@ async function upsert(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
 }
 
-module.exports = { CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, upsert };
+/** Every row's ACL inputs, whole container — for the reconcile only. */
+async function listAclRows(access) {
+  return fetchAll(CONTAINER, selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    select: 'c.id, c.read, c.isPublished, c.isDeleted, c.sealedAt, c.sources.eagle.read AS eagleRead'
+  }));
+}
+
+module.exports = { CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, upsert, listAclRows };
