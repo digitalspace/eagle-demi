@@ -84,6 +84,7 @@ function fakeAzure() {
         return {
           url: `https://${ACCOUNT}.blob.core.windows.net/${cname}/${name}`,
           async exists() {
+            if (c.existsFails && c.existsFails[name]) throw c.existsFails[name];
             if (c.existsLiesOnce === name) { c.existsLiesOnce = null; return false; }
             return c.blobs.has(name);
           },
@@ -124,7 +125,12 @@ function fakeAzure() {
           },
           async getProperties() {
             const b = c.blobs.get(name);
-            if (!b) throw Object.assign(new Error('BlobNotFound'), { statusCode: 404 });
+            // Like Azure on HEAD: no body, so an empty message; the code is only in a header.
+            if (!b) {
+              throw Object.assign(new Error(''), {
+                name: 'RestError', statusCode: 404, response: { headers: { get: () => 'BlobNotFound' } }
+              });
+            }
             return { copyStatus: b.copyStatus, accessTier: b.accessTier, archiveStatus: b.archiveStatus };
           },
           async download() {
@@ -557,6 +563,32 @@ test('drill check fails a copy left in the Archive tier with no rehydration unde
   assert.deepStrictEqual([result.summary.matched, result.exitCode], [0, 1]);
   // Refused from its properties, never by attempting a download Azure would refuse.
   assert.match(result.summary.failures[0], /tier Archive, archiveStatus none/);
+});
+
+test('drill check names the status and error code when a restored copy is gone', async (t) => {
+  const { azure, check } = await drillStarted(t);
+  azure.restore.blobs.clear();
+  const result = await check();
+
+  assert.strictEqual(result.exitCode, 1);
+  assert.match(result.summary.failures[0], /: 404 BlobNotFound$/);
+});
+
+test('copy names the status and error code when the exists check fails with no message', async (t) => {
+  const objects = { 'p1/a.pdf': { body: PDF } };
+  const s = setup(t, objects);
+  const azure = fakeAzure();
+  // A HEAD response has no body, so Azure's RestError carries an empty message.
+  azure.originals.existsFails = {
+    'p1/a.pdf': {
+      name: 'RestError', message: '', statusCode: 403,
+      response: { headers: { get: () => 'AuthorizationPermissionMismatch' } }
+    }
+  };
+  const result = await run(s.copyArgs('--live'), deps(fakeSource(objects), azure));
+
+  assert.strictEqual(result.exitCode, 1);
+  assert.match(result.summary.failures[0], /^p1\/a\.pdf: 403 AuthorizationPermissionMismatch$/);
 });
 
 test('list-bucket writes key, size and unquoted ETag, and counts multipart ETags', async (t) => {
