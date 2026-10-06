@@ -37,7 +37,7 @@ A rollout goes ahead when the summary shows all of these:
 - `encrypted read as original-encrypted` equals `encrypted`.
 - `facts equal` equals `facts compared with pikepdf and titler`, apart from `facts differ: size-vs-pikepdf`. On some files qpdf creates objects in memory that are not in the file, so pikepdf counts a higher size than the file has. Look at each such file in the CSV. The reader's size must still match the titler's, so no `facts differ: size-vs-titler` line may appear.
 
-Reference run, on 91 sample PDFs taken from the test environment:
+Reference run on 2026-10-06, on 91 sample PDFs taken from the test environment. Their XMP includes the older `<?xpacket … bytes='…'?>` header, Adobe's `<?adobe-xap-filters?>` instruction, and a non-ASCII element name.
 
 | Line | Count |
 |---|---|
@@ -50,6 +50,7 @@ Reference run, on 91 sample PDFs taken from the test environment:
 | facts compared with pikepdf and titler | 62 |
 | facts equal | 59 |
 | facts differ: size-vs-pikepdf | 3 |
+| encrypted | 29 |
 | encrypted read as original-encrypted | 29 |
 | reader exceptions | 0 |
 | failing | 0 |

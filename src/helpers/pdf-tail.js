@@ -37,12 +37,17 @@ const OPERATORS = new Set([
 ]);
 /** Hex-string, comment, escape, array and dictionary delimiters, refused in XMP text. */
 const XMP_TEXT_DELIMITERS = /[<>%\\[\]{}]/;
-const XML_NAME = '[A-Za-z_][A-Za-z0-9_.:-]*';
-const XMP_START = new RegExp(`<(${XML_NAME})((?:\\s+${XML_NAME}\\s*=\\s*(?:"[^"]*"|'[^']*'))*)\\s*(/?)>`, 'y');
-const XMP_ATTRS = new RegExp(`(${XML_NAME})\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'g');
-const XMP_END = new RegExp(`</(${XML_NAME})\\s*>`, 'y');
-const PACKET_BEGIN = /<\?xpacket begin=(["'])\uFEFF?\1 id=(["'])[A-Za-z0-9]*\2\s*\?>/y;
+/** XML 1.0 NameStartChar and NameChar; none of them is '<' or '>'. */
+const NAME_START = ':A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D' +
+  '\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}';
+const XML_NAME = `[${NAME_START}][\\u0300-\\u036F${NAME_START}.0-9\\u00B7\\u203F\\u2040-]*`;
+const XMP_START = new RegExp(`<(${XML_NAME})((?:\\s+${XML_NAME}\\s*=\\s*(?:"[^"]*"|'[^']*'))*)\\s*(/?)>`, 'uy');
+const XMP_ATTRS = new RegExp(`(${XML_NAME})\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'gu');
+const XMP_END = new RegExp(`</(${XML_NAME})\\s*>`, 'uy');
+/** The header in either quote style, with the older optional `bytes` and `encoding` attributes. */
+const PACKET_BEGIN = /<\?xpacket begin=(["'])\uFEFF?\1 id=(["'])[A-Za-z0-9]*\2(?:\s+bytes=(["'])[0-9]+\3)?(?:\s+encoding=(["'])[A-Za-z0-9_-]+\4)?\s*\?>/y;
 const PACKET_END = /<\?xpacket end=(["'])[rw]\1\s*\?>/y;
+const XMP_PI = /<\?([A-Za-z_][A-Za-z0-9_.-]*)(?:\s[^<>]*?)?\?>/y;
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 /** PDFDocEncoding where it differs from Latin-1; null marks an undefined byte. */
 const PDFDOC = {
@@ -302,8 +307,8 @@ function isInertText(text) {
 }
 
 /**
- * The new XMP packet, read as strict XML: no DOCTYPE, entity, CDATA, comment or processing
- * instruction other than xpacket. Every dc:title (element or attribute) holds `wanted`; every
+ * The new XMP packet, read as strict XML: no DOCTYPE, entity, CDATA or comment, and no '<' or '>'
+ * inside a processing instruction. Every dc:title (element or attribute) holds `wanted`; every
  * other text is inert if the packet is ever read as page content, and no attribute ends a tag early.
  */
 function checkXmp(data, wanted) {
@@ -313,6 +318,7 @@ function checkXmp(data, wanted) {
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { bad(); }
   const stack = [];
   let rooted = false;
+  let instructed = false;
   let packet = 0;
   let titles = 0;
   let liText = null;
@@ -334,11 +340,15 @@ function checkXmp(data, wanted) {
     if (lt < 0) break;
     let m;
     if ((m = match(PACKET_BEGIN, lt))) {
-      if (packet || rooted) bad();
+      if (packet || rooted || instructed) bad();
       packet = 1;
     } else if ((m = match(PACKET_END, lt))) {
       if (packet === 2 || !rooted || stack.length) bad();
       packet = 2;
+    } else if ((m = match(XMP_PI, lt))) {
+      // Like a tag, a lexer reads it as one hex string, so only its place in the packet matters.
+      if (m[1] === 'xpacket' || packet === 2 || inTitleLi()) bad();
+      instructed = true;
     } else if ((m = match(XMP_END, lt))) {
       if (stack.pop() !== m[1]) bad();
       if (m[1] === 'rdf:li' && at(1) === 'rdf:Alt' && at(2) === 'dc:title') {
