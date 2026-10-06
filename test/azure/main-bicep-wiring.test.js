@@ -20,6 +20,7 @@ const ROUTES = fs.readFileSync(path.join(ROOT, 'src', 'http', 'routes.js'), 'utf
 const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
 const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
+const PDF_TITLE_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'pdf-title-worker.bicep'), 'utf8');
 const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
 const AI_SEARCH_PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'ai-search.prod.bicepparam'), 'utf8');
 
@@ -553,6 +554,41 @@ test('prod names neither the eagle-notify host nor its vault secret', () => {
   assert.ok(base, 'prod must state notifyApiBase, empty or otherwise');
   assert.strictEqual(base[1], '', 'prod has no eagle-notify to announce to yet');
   assert.doesNotMatch(PROD_PARAMS, /'notify-api-key'/,
+    'naming the secret prod never set makes the deploy check demand a credential prod does not use');
+});
+
+// The PDF title worker's key is set by hand, so the app must not deploy where the vault was never
+// said to hold it: the Key Vault reference would stay unresolved and every run would 401.
+test('the PDF title worker deploys only where its vault secret is named', () => {
+  assert.match(MAIN, /^var pdfTitleWorkerApiKeySecretName = 'pdf-title-worker-api-key'$/m,
+    'the secret name is declared once in main.bicep');
+  assert.match(MAIN,
+    /^var deployPdfTitleWorkerApp = deployPdfTitleWorker && contains\(optionalSecretNames, pdfTitleWorkerApiKeySecretName\)/m,
+    'the gate must require the secret in optionalSecretNames, not only the deploy flag');
+  assert.match(MAIN, /^module pdfTitleWorker '\.\/modules\/pdf-title-worker\.bicep' = if \(deployPdfTitleWorkerApp\) \{$/m,
+    'the module must deploy on that gate');
+});
+
+test('the PDF title worker reads its key as a Key Vault reference by name', () => {
+  assert.match(PDF_TITLE_MODULE,
+    /name: 'DEMI_API_KEY'\n\s+value: '@Microsoft\.KeyVault\(VaultName=\$\{keyVaultName\};SecretName=\$\{apiKeySecretName\}\)'/,
+    'DEMI_API_KEY must be a VaultName/SecretName reference: the secret is created out of band, so no ' +
+    'module outputs its URI');
+  assert.doesNotMatch(MAIN, /^param pdfTitleWorkerApiKey /m,
+    'the key must not be a parameter — a parameter is a value in ARM deployment history');
+});
+
+test('the PDF title worker live flag reaches the app as lowercase true or false', () => {
+  assert.match(PDF_TITLE_MODULE, /name: 'PDF_TITLE_LIVE'\n(\s+\/\/.*\n)?\s+value: live \? 'true' : 'false'$/m,
+    'PDF_TITLE_LIVE must be written as the literal true or false');
+  assert.doesNotMatch(PDF_TITLE_MODULE, /value: string\(live\)/,
+    'ARM renders string(true) as True, which a case-sensitive check reads as off');
+});
+
+test('prod names neither the PDF title worker nor its vault secret', () => {
+  assert.doesNotMatch(PROD_PARAMS, /deployPdfTitleWorker/,
+    'prod runs no PDF title worker; the default false keeps it off');
+  assert.doesNotMatch(PROD_PARAMS, /'pdf-title-worker-api-key'/,
     'naming the secret prod never set makes the deploy check demand a credential prod does not use');
 });
 

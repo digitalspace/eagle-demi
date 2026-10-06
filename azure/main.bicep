@@ -144,7 +144,7 @@ param trustedProxyIps string = ''
 // eagle-notify push dark; `access-gate-password` unnamed leaves POST /api/gate answering 404, which
 // is what prod runs. The flag the browser sees is the boolean ACCESS_GATE in the `public` config
 // document, not the secret, so the curtain's two halves are set in different places on purpose.
-@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password.')
+@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password, pdf-title-worker-api-key.')
 param optionalSecretNames array = []
 
 // The OpenShift namespaces the secret sync writes to. Empty deploys no sync app — which is what an
@@ -157,6 +157,24 @@ param syncNamespaces string = ''
 // sync app would sit there failing every run.
 @description('Deploy the OpenShift secret sync app. False leaves that environment\'s OpenShift secrets to be set by hand.')
 param deploySecretSync bool = true
+
+// Deploys only where `pdf-title-worker-api-key` is also in optionalSecretNames, so the vault is
+// known to hold the key the app setting references.
+@description('Deploy the PDF title worker app. Needs pdf-title-worker-api-key in optionalSecretNames.')
+param deployPdfTitleWorker bool = false
+
+@description('True lets the PDF title worker write; false lists its work and writes nothing.')
+param pdfTitleLive bool = false
+
+@description('Rows the PDF title worker takes from its work list per run.')
+param pdfTitleMaxRows int = 20
+
+// Under the schedule's 10 minutes, so runs do not overlap.
+@description('Minutes after which a PDF title run starts no new row.')
+param pdfTitleMaxMinutes int = 5
+
+@description('NCRONTAB schedule of the PDF title worker timer.')
+param pdfTitleSchedule string = '0 */10 * * * *'
 
 // Flex needs its own subnet, delegated to `Microsoft.App/environments`. Empty deploys no API app
 // at all, so an environment that wants one must supply it.
@@ -791,6 +809,29 @@ module secretSync './modules/secret-sync.bicep' = if (deploySecretSync && !empty
   }
 }
 
+// 7e. The PDF title worker. Calls the Flex host directly rather than through APIM, whose 30 s
+// limit is shorter than a title write.
+var pdfTitleWorkerApiKeySecretName = 'pdf-title-worker-api-key'
+var deployPdfTitleWorkerApp = deployPdfTitleWorker && contains(optionalSecretNames, pdfTitleWorkerApiKeySecretName) && !empty(apiFlexSubnetId)
+
+module pdfTitleWorker './modules/pdf-title-worker.bicep' = if (deployPdfTitleWorkerApp) {
+  name: 'deploy-pdf-title-worker'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    virtualNetworkSubnetId: apiFlexSubnetId
+    keyVaultName: vaultName
+    apiKeySecretName: pdfTitleWorkerApiKeySecretName
+    demiApiUrl: 'https://${apiFunctionFlex!.outputs.apiFunctionAppHostName}/api'
+    schedule: pdfTitleSchedule
+    live: pdfTitleLive
+    maxRows: pdfTitleMaxRows
+    maxMinutes: pdfTitleMaxMinutes
+    appInsightsConnectionString: appInsightsConnectionString
+  }
+}
+
 // 7c. The gateway. After the Flex app because it fronts it, and skipped whenever that app is.
 module apim './modules/apim.bicep' = if (deployFoundation && deployApim && !empty(apiFlexSubnetId)) {
   name: 'deploy-apim'
@@ -911,6 +952,8 @@ output apimGatewayUrl string = (deployFoundation && deployApim && !empty(apiFlex
 // Empty where the environment deploys no sync app. The deploy workflow publishes the package to
 // this name, so it is read rather than rebuilt from environmentName.
 output secretSyncAppName string = (deploySecretSync && !empty(syncNamespaces) && !empty(apiFlexSubnetId)) ? secretSync!.outputs.secretSyncAppName : ''
+// Empty where the worker is not deployed; the worker's deploy workflow publishes to this name.
+output pdfTitleWorkerAppName string = deployPdfTitleWorkerApp ? pdfTitleWorker!.outputs.pdfTitleWorkerAppName : ''
 // The VM every `az vm run-command invoke` addresses. Empty when the devbox is not deployed.
 output devboxName string = (deployDevbox && !empty(devboxSubnetId)) ? devbox!.outputs.devboxName : ''
 output searchEndpoint string = searchEndpoint
