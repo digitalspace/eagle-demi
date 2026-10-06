@@ -4,6 +4,7 @@ import hashlib
 import io
 import re
 from collections import Counter
+from xml.etree import ElementTree
 
 import pikepdf
 import pytest
@@ -87,6 +88,17 @@ def _reopen(data):
 
 def _xmp_title(reader):
     return titler.xmp_title(reader.trailer["/Root"]["/Metadata"].get_object().get_data())
+
+
+def _xmp_data(data):
+    return _reopen(data).trailer["/Root"]["/Metadata"].get_object().get_data()
+
+
+def _pikepdf_xmp(data):
+    """dc:title and PDF/A status as qpdf's side (pikepdf) reads the XMP."""
+    with pikepdf.open(io.BytesIO(data)) as pdf:
+        with pdf.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as meta:
+            return meta.get("dc:title"), meta.pdfa_status
 
 
 def _qpdf_problems(data):
@@ -369,8 +381,49 @@ def test_missing_info_dict_gets_a_number_no_section_already_uses():
 def test_pdfa_id_survives_the_xmp_update():
     result = set_title(_pdf(xmp=PDFA_XMP), TITLE)
 
-    xmp = _reopen(result.data).trailer["/Root"]["/Metadata"].get_object().get_data()
-    assert b"<pdfaid:part>1</pdfaid:part>" in xmp
+    assert b"<pdfaid:part>1</pdfaid:part>" in _xmp_data(result.data)
+
+
+OPERATOR_TITLES = {
+    "word": ("Appendix F", b"Appendix &#70;"),
+    "leading-number": ("Scale 1re", b"Scale 1&#114;e"),
+    "slash-and-two-letters": ("Sheet Tj/q", b"Sheet &#84;j/&#113;"),
+    "parentheses": ("Map (f)", b"Map (&#102;)"),
+}
+
+
+@pytest.mark.parametrize("title,raw", OPERATOR_TITLES.values(), ids=OPERATOR_TITLES.keys())
+def test_operator_words_in_the_xmp_title_are_written_as_character_references(title, raw):
+    result = set_title(_pdf(xmp=PDFA_XMP), title)
+
+    assert b'<rdf:li xml:lang="x-default">' + raw + b"</rdf:li>" in _xmp_data(result.data)
+    assert _xmp_title(_reopen(result.data)) == title
+    assert _pikepdf_xmp(result.data)[0] == title
+
+
+def test_copied_pdfa_conformance_is_a_character_reference_and_the_xml_is_unchanged():
+    result = set_title(_pdf(xmp=PDFA_XMP), "Appendix F")
+
+    xmp = _xmp_data(result.data)
+    assert b"<pdfaid:conformance>&#66;</pdfaid:conformance>" in xmp
+    assert _pikepdf_xmp(result.data) == ("Appendix F", "1B")
+    plain = PDFA_XMP.replace(OLD_XMP_TITLE, b"Appendix F")
+    assert ElementTree.canonicalize(xmp) == ElementTree.canonicalize(plain)
+
+
+def test_xmp_title_with_no_operator_words_is_written_unchanged():
+    title = "Appendix A7.13-2 Palaeontological Resources"
+
+    xmp = _xmp_data(set_title(_pdf(xmp=PDFA_XMP), title).data)
+
+    assert b'<rdf:li xml:lang="x-default">' + title.encode() + b"</rdf:li>" in xmp
+
+
+def test_only_xml_text_is_encoded_not_tags_attributes_or_comments():
+    xmp = b"""<?xpacket begin="F"?><a b="F > q Tj" c='Tj'><!-- F --><d/>F q</a>"""
+
+    assert titler._inert_text(xmp) == (b"""<?xpacket begin="F"?><a b="F > q Tj" c='Tj'><!-- F --><d/>"""
+                                       b"&#70; &#113;</a>")
 
 
 def test_flate_xmp_is_rewritten_unfiltered():
@@ -402,12 +455,9 @@ xmlns:dc='http://purl.org/dc/elements/1.1/' dc:creator='Mike' dc:title='ArcView 
 def test_xmp_title_held_as_an_attribute_is_replaced_for_qpdf_and_pdfjs():
     result = set_title(_pdf(xmp=ATTRIBUTE_XMP), TITLE)
 
-    with pikepdf.open(io.BytesIO(result.data)) as pdf:
-        with pdf.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as meta:
-            assert meta.get("dc:title") == TITLE
-    updated = _reopen(result.data)
-    assert _xmp_title(updated) == TITLE
-    assert b"ArcView Print Job" not in updated.trailer["/Root"]["/Metadata"].get_object().get_data()
+    assert _pikepdf_xmp(result.data)[0] == TITLE
+    assert _xmp_title(_reopen(result.data)) == TITLE
+    assert b"ArcView Print Job" not in _xmp_data(result.data)
 
 
 def test_xmp_with_whitespace_inside_closing_tags_is_edited():

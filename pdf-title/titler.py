@@ -33,6 +33,17 @@ _STARTXREF = re.compile(rb"startxref\s+(\d+)")
 _OBJ_HEADER = re.compile(rb"\d+\s+\d+\s+obj")
 _STREAM_NAME = re.compile(r"stream <[^>]*>")
 _OFFSET = re.compile(r"offset \d+")
+# Comments, CDATA and processing instructions first, so the tag pattern never starts inside one.
+_XML_MARKUP = re.compile(rb"""<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>|<(?:[^>"']|"[^"]*"|'[^']*')*>""",
+                         re.DOTALL)
+# The API splits words at JS `\s`, which also counts U+FEFF.
+_WORD = re.compile(r"[^\s﻿/()]+")
+_NUMBER_CHARS = "+-.0123456789"
+# The API's `OPERATORS` (src/helpers/pdf-tail.js) plus `B`: it refuses these words in XMP text.
+_OPERATORS = frozenset("""
+    b B B* b* BDC BI BMC BT BX c cm CS cs d d0 d1 Do DP EI EMC ET EX f F f* G g gs h i ID j J K k l m
+    M MP n q Q re RG rg ri s S SC sc SCN scn sh T* Tc Td TD Tf Tj TJ TL Tm Tr Ts Tw Tz v w W W* y ' "
+""".split())
 
 
 @dataclass
@@ -259,12 +270,36 @@ def _xmp_with_title(xmp: bytes, title: str) -> bytes:
     element = (b'<dc:title><rdf:Alt><rdf:li xml:lang="x-default">' + value
                + b"</rdf:li></rdf:Alt></dc:title>")
     if _DC_TITLE.search(xmp):
-        return _DC_TITLE.sub(lambda _m: element, xmp, count=1)
+        return _inert_text(_DC_TITLE.sub(lambda _m: element, xmp, count=1))
     if not _RDF_END.search(xmp):
         raise Skip("xmp-unrecognised")
     description = (b'<rdf:Description rdf:about="" xmlns:dc="' + _DC.encode() + b'">'
                    + element + b"</rdf:Description>")
-    return _RDF_END.sub(lambda _m: description + b"</rdf:RDF>", xmp, count=1)
+    return _inert_text(_RDF_END.sub(lambda _m: description + b"</rdf:RDF>", xmp, count=1))
+
+
+def _inert_text(xmp: bytes) -> bytes:
+    """Write each operator word in XML text with its first character as a reference; same XML."""
+    out, pos = [], 0
+    for markup in _XML_MARKUP.finditer(xmp):
+        out += [_inert_run(xmp[pos:markup.start()]), markup.group()]
+        pos = markup.end()
+    out.append(_inert_run(xmp[pos:]))
+    return b"".join(out)
+
+
+def _inert_run(raw: bytes) -> bytes:
+    text = raw.decode("utf-8", "surrogateescape")
+    return _WORD.sub(_inert_word, text).encode("utf-8", "surrogateescape")
+
+
+def _inert_word(match: re.Match) -> str:
+    word = match.group()
+    operator = word.lstrip(_NUMBER_CHARS)
+    if operator not in _OPERATORS:
+        return word
+    number = word[: len(word) - len(operator)]
+    return f"{number}&#{ord(operator[0])};{operator[1:]}"
 
 
 def xmp_title(xmp: bytes) -> Optional[str]:
