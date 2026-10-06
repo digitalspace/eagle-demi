@@ -652,6 +652,33 @@ the document record. Any other store error, such as access denied, is a 500.
 
 ---
 
+## CSV reports
+
+Two eagle-api CSV reads have DEMI handlers. Rows and fields come from DEMI's own access rules, not
+from eagle-api's role checks. The routes are not wired yet; these are the intended paths.
+
+| Path | Handler | Replaces in eagle-api |
+|---|---|---|
+| `GET /commentperiods/:periodId/comments/export` (signed in) | `src/controllers/nosql/comment-export.js` `exportComments` | `GET /api/comment/export/{periodId}` |
+| `GET /reports?type=bcgw` (public) | `src/controllers/report.js` `getReport` | `GET /api/reports?type=bcgw` |
+
+**Comment export.** The caller's level picks the columns. Level 2 or lower (sysadmin, staff) gets
+the staff columns. Any other level gets the proponent columns, only published comments, and a blank
+`Author`. `Author` is also blank on every anonymous comment. Rows are the comments the caller can
+read, and each row goes through the field redactor first, so a hidden field is an empty cell.
+Attachment links point at `/documents/:id/download` on the host the caller used, and list only
+documents the caller can read. Text that starts with `=`, `+`, `-` or `@` gets a leading `'` so a
+spreadsheet does not run it as a formula. `Pillar` is always empty: DEMI does not copy that field.
+
+**BCGW report.** The feed of published projects for the BC Geographic Warehouse. It always reads
+as an anonymous caller, so a signed-in caller gets the same file. Columns and values match
+eagle-api's file, including the `Project GUID` cell wrapped in quotes that eagle-api has always
+written.
+
+Both responses are built whole, because the Functions host sends one buffered body.
+
+---
+
 ## Project data model
 
 Projects are a merge of two upstream sources, keyed by the Track project id:
