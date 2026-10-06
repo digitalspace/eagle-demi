@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { run, MIN_GAP_MS } = require('../../src/scripts/parity-eagle');
+const { run, parseCsv, MIN_GAP_MS } = require('../../src/scripts/parity-eagle');
 const { PARITY_MAP } = require('../../src/scripts/parity-map');
 const { unknownParams } = require('../../src/search/eagle-query');
 
@@ -105,9 +105,9 @@ test('an id listed under a class in --known-ids is counted under that class and 
 
 test('a pending read is reported as skipped and makes no request', async () => {
   const h = harness(() => assert.fail('no request expected'));
-  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'group-members'], h.deps);
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'topic-vc'], h.deps);
   assert.strictEqual(code, 0);
-  assert.match(h.out[0], /group-members identity=anonymous skipped \(pending\)/);
+  assert.match(h.out[0], /topic-vc identity=anonymous skipped \(pending\)/);
   assert.strictEqual(h.calls.length, 0);
 });
 
@@ -235,4 +235,114 @@ test('--max-pages reads that many pages per side and reports the read as truncat
   await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public', '--max-pages', '1'], h.deps);
   assert.strictEqual(h.calls.length, 2);
   assert.match(h.out[0], /missingInDemi=0 extraInDemi=0 .* truncated$/);
+});
+
+test('a quoted CSV field keeps its comma', () => {
+  assert.deepStrictEqual(parseCsv('a,b\r\n"x, y",z\r\n'), [['a', 'b'], ['x, y', 'z']]);
+});
+
+test('a quoted CSV field keeps its line break', () => {
+  assert.deepStrictEqual(parseCsv('a,b\n"line 1\nline 2",z'), [['a', 'b'], ['line 1\nline 2', 'z']]);
+});
+
+test('a doubled quote inside a quoted CSV field reads as one quote', () => {
+  assert.deepStrictEqual(parseCsv('a\n"say ""hi"""\n'), [['a'], ['say "hi"']]);
+});
+
+const COMMENT_COLUMNS = ['Comment_No', 'Author', 'Comment', 'Attachments', 'Export_Date'];
+const csvText = (columns, rows) => [columns, ...rows]
+  .map(cells => cells.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+  .join('\r\n') + '\r\n';
+const exportRow = (no, extra = {}) => {
+  const row = { Comment_No: no, Author: 'Anonymous', Comment: 'Too loud,\nat night', Attachments: '[]',
+    Export_Date: '2026-10-06', ...extra };
+  return COMMENT_COLUMNS.map(c => row[c]);
+};
+const csvSides = (eagleRows, demiRows, columns = COMMENT_COLUMNS) => (host) =>
+  new Response(csvText(columns, host === 'eagle.test' ? eagleRows : demiRows));
+const exportRun = async (answer) => {
+  const h = harness(answer, { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'comment-export', '--id', `period=${A}`], h.deps);
+  return { code, line: h.out[0] };
+};
+
+test('a comment export row that differs between the CSVs is unexplained and exits 1', async () => {
+  const { code, line } = await exportRun(csvSides([exportRow(1), exportRow(2)],
+    [exportRow(1), exportRow(2, { Comment: 'Edited' })]));
+  assert.strictEqual(code, 1);
+  assert.match(line, /comment-export identity=staff match=1 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=1/);
+});
+
+test('comment export CSVs that differ only in Export_Date match and exit 0', async () => {
+  const { code, line } = await exportRun(csvSides([exportRow(1, { Export_Date: '2026-10-05' })], [exportRow(1)]));
+  assert.strictEqual(code, 0);
+  assert.match(line, /match=1 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+});
+
+test('a comment number only DEMI exports is unexplained, not excused as demi-only', async () => {
+  const { code, line } = await exportRun(csvSides([exportRow(1)], [exportRow(1), exportRow(2)]));
+  assert.strictEqual(code, 1);
+  assert.match(line, /extraInDemi=1 fieldDiff=0 unexplained=1/);
+});
+
+test('a column only one export has is a header difference and exits 1', async () => {
+  const { code, line } = await exportRun((host) => (host === 'eagle.test'
+    ? new Response(csvText([...COMMENT_COLUMNS, 'Pillar'], [[...exportRow(1), '']]))
+    : new Response(csvText(COMMENT_COLUMNS, [exportRow(1)]))));
+  assert.strictEqual(code, 1);
+  assert.match(line, /match=1 .*fieldDiff=1 unexplained=1/);
+});
+
+test('attachment links to the same documents on each API are counted as a known difference', async () => {
+  const { code, line } = await exportRun(csvSides(
+    [exportRow(1, { Attachments: JSON.stringify([`https://eagle.test/api/document/${B}/fetch`]) })],
+    [exportRow(1, { Attachments: JSON.stringify([`https://demi.test/api/documents/${B}/download`]) })]));
+  assert.strictEqual(code, 0);
+  assert.match(line, /fieldDiff=1 unexplained=0 known=export-attachment-route:1/);
+});
+
+test('a BCGW project link that differs only by host is counted as a known difference', async () => {
+  const columns = ['Project name', 'URL to Epic Project', 'Project GUID'];
+  const row = host => ['Mine', `https://${host}/p/${A}/project-details`, `"${A}"`];
+  const h = harness(csvSides([row('projects.eao.gov.bc.ca')], [row('eagle-test.example')], columns));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'report-bcgw'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0],
+    /report-bcgw identity=anonymous match=0 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=0 known=bcgw-link-host:1/);
+});
+
+const [INSPECTION, ELEMENT, GROUP] = ['1'.repeat(24), '2'.repeat(24), '3'.repeat(24)];
+
+test('--id inspection, element and group fill the paths and queries of both APIs', async () => {
+  const h = harness(() => json([]), { env: { PARITY_TOKEN: TOKEN } });
+  await run([...staff, '--id', `inspection=${INSPECTION}`, '--id', `element=${ELEMENT}`, '--only', 'inspection-item'], h.deps);
+  await run([...staff, '--id', `group=${GROUP}`, '--id', `project=${A}`, '--only', 'group-members'], h.deps);
+  const urls = h.calls.map(c => `${c.host}${c.url.pathname}${c.url.search}`);
+  assert.deepStrictEqual(urls, [
+    `eagle.test/api/search?dataset=Item&_id=${ELEMENT}&_schemaName=InspectionElement`,
+    `demi.test/api/inspection-items?inspection=${INSPECTION}&element=${ELEMENT}`,
+    `eagle.test/api/project/${A}/group/${GROUP}/members`,
+    `demi.test/api/groups/${GROUP}?project=${A}`
+  ]);
+});
+
+/** Eagle's member read answers User rows in a count facet; DEMI's group read the Group itself. */
+const groupRun = async (users, members) => {
+  const h = harness((host) => (host === 'eagle.test'
+    ? json([{ total_items: users.length, results: users.map(id => ({ _id: id, displayName: 'Casey' })) }])
+    : json({ id: GROUP, eagleId: GROUP, name: 'Team', members })), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--id', `project=${A}`, '--id', `group=${GROUP}`, '--only', 'group-members'], h.deps);
+  return { code, line: h.out[0] };
+};
+
+test('group members pair Eagle User rows with the DEMI group member ids', async () => {
+  const { code, line } = await groupRun([A, B], [B, A]);
+  assert.strictEqual(code, 0);
+  assert.match(line, /group-members identity=staff match=2 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+});
+
+test('a member Eagle lists and the DEMI group lacks is unexplained and exits 1', async () => {
+  const { code, line } = await groupRun([A, B], [A]);
+  assert.strictEqual(code, 1);
+  assert.match(line, /match=1 missingInDemi=1 extraInDemi=0 .*unexplained=1/);
 });

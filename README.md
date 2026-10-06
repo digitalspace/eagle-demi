@@ -324,11 +324,19 @@ node src/scripts/parity-eagle.js --eagle https://<eagle host>/api --demi https:/
 Checks that a consumer of eagle-api would see the same rows and fields from DEMI. Each read in
 `src/scripts/parity-map.js` is sent to both APIs with the same identity (`anonymous`, the default,
 or `staff`/`sysadmin` with a bearer token read from the variable `--token-env` names; a token is
-never taken on the command line). Rows pair on Eagle `_id` against DEMI `eagleId` or `id`.
+never taken on the command line). Rows pair on Eagle `_id` against DEMI `eagleId` or `id`. `--id`
+takes `project`, `period`, `document`, `comment`, `organization`, `inspection`, `element` and
+`group`; `--help` lists them.
+
+The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
+one column (`Comment_No`, `Project GUID`) across every column both files have. `Export_Date` is
+skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group.
+`inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element; it
+never calls Eagle's item route, which streams the file and records a download.
 
 It only sends GET, at most two requests a second per API, and retries once on 429 or 5xx. It never
 calls Eagle's public download route, which counts hits. Keyword searches still send Eagle analytics
-events.
+events, and Eagle records a `Get` action for each `group-members` read.
 
 One line per read:
 

@@ -19,14 +19,14 @@ const { logger } = require('../utils/logger');
 /** Two requests a second per API: well under eagle-api's 200 a minute. */
 const MIN_GAP_MS = 500;
 const IDENTITIES = ['anonymous', 'staff', 'sysadmin'];
-const ID_NAMES = ['project', 'period', 'document', 'comment', 'organization'];
+const ID_NAMES = ['project', 'period', 'document', 'comment', 'organization', 'inspection', 'element', 'group'];
 const SAMPLE_CAP = 20;
 const REDIRECTS = [301, 302, 303, 307, 308];
 
 const USAGE = `usage: node src/scripts/parity-eagle.js --eagle <eagle-api base> --demi <DEMI base>
   [--identity anonymous|staff|sysadmin] [--token-env <VAR>] [--only <read>] [--max-pages <n>]
-  [--id project|period|document|comment|organization=<eagleId>]... [--known-ids <file>] [--report <file>]
-  [--download-sample <n>]`;
+  [--id <name>=<eagleId>]... [--known-ids <file>] [--report <file>] [--download-sample <n>]
+  --id names: ${ID_NAMES.join(', ')}`;
 
 function parseArgs(argv) {
   const args = { identity: 'anonymous', ids: {}, maxPages: Infinity, downloadSample: 0 };
@@ -120,9 +120,59 @@ function urlOf(base, spec, ids, extra = {}) {
   return url.toString();
 }
 
-async function okJson(res, url) {
+function okOrThrow(res, url) {
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).pathname}`);
-  return res.json();
+  return res;
+}
+const okJson = (res, url) => okOrThrow(res, url).json();
+
+/** RFC 4180 records: quoted fields may hold commas, line breaks and doubled quotes. */
+function parseCsv(text) {
+  const records = [];
+  let record = [];
+  let field = '';
+  let quoted = false;
+  let open = false;
+  for (let i = text.charCodeAt(0) === 0xfeff ? 1 : 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c !== '"') field += c;
+      else if (text[i + 1] === '"') field += text[++i];
+      else quoted = false;
+      continue;
+    }
+    open = true;
+    if (c === '"') quoted = true;
+    else if (c === ',') {
+      record.push(field);
+      field = '';
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      record.push(field);
+      records.push(record);
+      record = [];
+      field = '';
+      open = false;
+    } else field += c;
+  }
+  if (quoted) throw new Error('unterminated quoted CSV field');
+  if (open) records.push([...record, field]);
+  return records;
+}
+
+// BCGW's Project GUID cell carries literal quotes around the id.
+const keyCell = value => String(value ?? '').replace(/^"(.*)"$/, '$1');
+
+/** A CSV read: its header, and its rows as objects keyed by `_id` from the entry's key column. */
+async function csvOf(api, entry, spec, ids) {
+  const url = urlOf(api.base, spec, ids);
+  const [header = [], ...records] = parseCsv(await okOrThrow(await api.get(url), url).text());
+  if (!header.includes(entry.key)) throw new Error(`no ${entry.key} column from ${new URL(url).pathname}`);
+  const rows = records.map(cells => ({
+    ...Object.fromEntries(header.map((column, i) => [column, cells[i]])),
+    _id: keyCell(cells[header.indexOf(entry.key)])
+  }));
+  return { header, rows, truncated: false };
 }
 
 function arrayOf(body, url) {
@@ -185,7 +235,7 @@ const keyOf = row => String(row.eagleId || row._id || row.id);
  * Counts for one read. Samples carry ids and field names only, never values: a comment row's
  * values can be personal data.
  */
-function compare(entry, identity, eagle, demi, knownIds) {
+function compare(entry, identity, eagle, demi, knownIds, fields = fieldsFor(entry, identity), headerDiffs = []) {
   const out = { match: 0, missingInDemi: 0, extraInDemi: 0, fieldDiff: 0, unexplained: 0, classes: {}, samples: [] };
   const tally = (ctx) => {
     const hit = KNOWN_DIFFERENCES.find(k => k.kind === ctx.kind &&
@@ -213,11 +263,10 @@ function compare(entry, identity, eagle, demi, knownIds) {
     }
     for (const row of [...sets.unpublishedOrDeleted, ...sets.trackOnly]) {
       out.extraInDemi++;
-      tally({ kind: 'extraInDemi', id: keyOf(row), demi: row });
+      tally({ kind: 'extraInDemi', id: keyOf(row), demi: row, byEagleId: !entry.format || !!entry.keyIsEagleId });
     }
   }
 
-  const fields = fieldsFor(entry, identity);
   for (const row of demi.rows) {
     const id = keyOf(row);
     const eagleRow = eagleById.get(id);
@@ -229,7 +278,24 @@ function compare(entry, identity, eagle, demi, knownIds) {
       tally({ kind: 'fieldDiff', id, dataset: entry.dataset, field: e, eagleValue: eagleRow[e], demiValue: row[d] });
     }
   }
+  for (const field of headerDiffs) {
+    out.fieldDiff++;
+    tally({ kind: 'fieldDiff', id: 'header', field });
+  }
   return out;
+}
+
+/** A CSV read: rows on every shared column, and header differences under id `header`. */
+function compareCsv(entry, identity, eagle, demi, knownIds) {
+  const ignored = new Set([entry.key, ...(entry.ignoreColumns || [])]);
+  const [eagleCols, demiCols] = [eagle.header, demi.header].map(h => h.filter(c => !ignored.has(c)));
+  const shared = eagleCols.filter(c => demiCols.includes(c));
+  const headerDiffs = [
+    ...eagleCols.filter(c => !demiCols.includes(c)),
+    ...demiCols.filter(c => !eagleCols.includes(c)),
+    ...(JSON.stringify(shared) === JSON.stringify(demiCols.filter(c => eagleCols.includes(c))) ? [] : ['column order'])
+  ];
+  return compare(entry, identity, eagle, demi, knownIds, shared.map(c => [c, c]), headerDiffs);
 }
 
 /** sha256 and byte length of a response body, read as a stream. */
@@ -370,14 +436,21 @@ async function run(argv, deps = {}) {
       record(entry, { status: 'skipped', reason: `needs ${missing.map(n => `--id ${n}=<eagleId>`).join(' ')}` });
       continue;
     }
+    const sideOf = async (api, spec, map) => {
+      const side = entry.format === 'csv'
+        ? await csvOf(api, entry, spec, args.ids)
+        : await rowsOf(api, spec, args.ids, args.maxPages);
+      return map ? { ...side, rows: map(side.rows) } : side;
+    };
     try {
-      const eagleSide = await rowsOf(eagle, entry.eagle, args.ids, args.maxPages);
-      const demiSide = await rowsOf(demi, entry.demi, args.ids, args.maxPages);
+      const eagleSide = await sideOf(eagle, entry.eagle, entry.mapEagle);
+      const demiSide = await sideOf(demi, entry.demi, entry.mapDemi);
       if (entry.dataset === 'Document') {
         const eagleIds = new Set(eagleSide.rows.map(keyOf));
         demiSide.rows.map(keyOf).filter(id => eagleIds.has(id)).forEach(id => pairedDocuments.add(id));
       }
-      record(entry, { status: 'compared', ...compare(entry, identity, eagleSide, demiSide, knownIds) });
+      const compareRead = entry.format === 'csv' ? compareCsv : compare;
+      record(entry, { status: 'compared', ...compareRead(entry, identity, eagleSide, demiSide, knownIds) });
     } catch (err) {
       record(entry, { status: 'error', message: err.message });
     }
@@ -408,7 +481,7 @@ async function run(argv, deps = {}) {
   return failed ? 1 : 0;
 }
 
-module.exports = { parseArgs, run, MIN_GAP_MS };
+module.exports = { parseArgs, parseCsv, run, MIN_GAP_MS };
 
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }, err => {
