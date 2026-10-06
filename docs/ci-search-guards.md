@@ -102,10 +102,10 @@ is what makes forgetting it visible.
 | `SEARCH_SCHEMA_ALLOW_MISSING` | env var read by the probe script; the prod workflow's `allow_missing_schema_probe` input sets it | unset — a 404 fails |
 | `skip_schema_probe` | prod workflow input | false; both gates run |
 
-The staging smoke goes through Front Door, `https://test.projects.eao.gov.bc.ca/demi-search`,
-because `EDGE_GATE` on test refuses a search sent to the Function App's own host. The production
-smoke still targets the Function App's host, which works only while prod `EDGE_GATE` is not
-`enforce`.
+Both smoke runs go through Front Door (`https://test.projects.eao.gov.bc.ca/demi-search`,
+`https://projects.eao.gov.bc.ca/demi-search`), because `EDGE_GATE=enforce` refuses a search sent
+to the Function App's own host. The edge does not cache these routes. The `/health*` probes stay on
+the Function App's host, which the gate always lets through.
 
 ## Running them by hand
 
@@ -113,7 +113,7 @@ smoke still targets the Function App's host, which works only while prod `EDGE_G
 scripts/search-schema-probe.sh https://demi-api-fc-prod.azurewebsites.net
 scripts/search-schema-probe.sh https://demi-api-fc-prod.azurewebsites.net release/azure/search/indexes
 scripts/search-data-probe.sh https://demi-api-fc-prod.azurewebsites.net
-scripts/search-smoke.sh https://demi-api-fc-prod.azurewebsites.net
+scripts/search-smoke.sh https://projects.eao.gov.bc.ca/demi-search
 scripts/search-select-changed.sh main
 ```
 
