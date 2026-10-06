@@ -230,14 +230,107 @@ def test_xmp_title_that_differs_is_replaced_so_info_and_xmp_agree(build):
     assert _xmp_title(updated) == TITLE
 
 
-def test_xref_stream_xmp_is_revised_in_place_not_pointed_elsewhere():
-    original = _xref_stream_pdf(xmp=PDFA_XMP)
+def _requalified(data, edit):
+    """`data` saved again by qpdf after `edit(pdf)`: for originals pypdf's writer cannot make."""
+    with pikepdf.open(io.BytesIO(data)) as pdf:
+        edit(pdf)
+        out = io.BytesIO()
+        pdf.save(out, fix_metadata_version=False)  # else qpdf writes the XMP as a new stream
+        return out.getvalue()
 
-    updated = _reopen(set_title(original, TITLE).data)
 
-    metadata_ref = updated.trailer["/Root"].raw_get("/Metadata")
-    assert metadata_ref.idnum == 5
-    assert updated.get_object(metadata_ref)["/Subtype"] == "/XML"
+def _richer_catalog(pdf):
+    pdf.Root.Lang = pikepdf.String("en-CA")
+    pdf.Root.ViewerPreferences = pikepdf.Dictionary(DisplayDocTitle=True)
+    pdf.Root.PageLabels = pdf.make_indirect(pikepdf.Dictionary(Nums=[0, pikepdf.Dictionary(S=pikepdf.Name.D)]))
+
+
+def _entries(dictionary, without):
+    """Each entry as qpdf writes it; an indirect value as its number, so a moved value differs."""
+    return {key: value.objgen if value.is_indirect else value.unparse()
+            for key, value in dictionary.items() if key != without}
+
+
+XMP_ORIGINALS = {
+    "classic": lambda: _requalified(_pdf(xmp=PDFA_XMP), _richer_catalog),
+    "classic-flate-xmp": lambda: _pdf(xmp=PDFA_XMP, flate_xmp=True),
+    "xref-stream": lambda: _xref_stream_pdf(xmp=PDFA_XMP),
+}
+
+
+@pytest.mark.parametrize("build", XMP_ORIGINALS.values(), ids=XMP_ORIGINALS.keys())
+def test_xmp_goes_to_a_new_number_and_only_the_catalog_metadata_entry_changes(build):
+    original = build()
+    size = int(_reopen(original).trailer["/Size"])
+
+    result = set_title(original, TITLE)
+
+    with pikepdf.open(io.BytesIO(original)) as before, pikepdf.open(io.BytesIO(result.data)) as after:
+        old_xmp, new_xmp = before.Root.Metadata, after.Root.Metadata
+        assert new_xmp.objgen[0] >= size
+        assert (new_xmp.Type, new_xmp.Subtype, "/Filter" in new_xmp) == ("/Metadata", "/XML", False)
+        assert after.Root.objgen == before.Root.objgen
+        assert _entries(after.Root, "/Metadata") == _entries(before.Root, "/Metadata")
+        # The original stream is not revised: its number still resolves to its own bytes.
+        assert after.get_object(old_xmp.objgen).read_raw_bytes() == old_xmp.read_raw_bytes()
+        assert str(after.docinfo.Title) == TITLE
+        with after.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as meta:
+            assert meta.get("dc:title") == TITLE
+
+
+def test_metadata_that_is_also_page_content_leaves_the_page_as_it_was():
+    def share(pdf):
+        pdf.pages[0].Contents = pdf.Root.Metadata
+    original = _requalified(_pdf(xmp=PDFA_XMP), share)
+
+    result = set_title(original, TITLE)
+
+    with pikepdf.open(io.BytesIO(original)) as before, pikepdf.open(io.BytesIO(result.data)) as after:
+        assert after.pages[0].Contents.read_raw_bytes() == before.pages[0].Contents.read_raw_bytes()
+        assert after.Root.Metadata.objgen != after.pages[0].Contents.objgen
+        with after.open_metadata(set_pikepdf_as_editor=False, update_docinfo=False) as meta:
+            assert meta.get("dc:title") == TITLE
+
+
+def test_trapped_name_is_kept_and_only_the_info_title_changes():
+    def trapped(pdf):
+        pdf.docinfo.Trapped = pikepdf.Name.False_
+    original = _requalified(_pdf(), trapped)
+
+    result = set_title(original, TITLE)
+
+    with pikepdf.open(io.BytesIO(original)) as before, pikepdf.open(io.BytesIO(result.data)) as after:
+        assert after.docinfo.objgen == before.docinfo.objgen
+        assert _entries(after.docinfo, "/Title") == _entries(before.docinfo, "/Title")
+        assert "/Trapped" in after.docinfo
+        assert str(after.docinfo.Title) == TITLE
+
+
+def _info_stream(pdf):
+    pdf.trailer.Info = pdf.make_stream(b"BT ET", Title=pikepdf.String("Old"))
+
+
+def _info_is_root(pdf):
+    pdf.trailer.Info = pdf.Root
+
+
+def _info_with_a_name(pdf):
+    pdf.docinfo.BaseFont = pikepdf.Name.Symbol
+
+
+def _info_with_a_reference(pdf):
+    pdf.docinfo.Subject = pdf.make_indirect(pikepdf.String("held elsewhere"))
+
+
+UNSAFE_INFO = {"stream": _info_stream, "root": _info_is_root, "name": _info_with_a_name,
+               "reference": _info_with_a_reference}
+
+
+@pytest.mark.parametrize("edit", UNSAFE_INFO.values(), ids=UNSAFE_INFO.keys())
+def test_info_that_could_be_another_object_is_skipped(edit):
+    result = set_title(_requalified(_pdf(), edit), TITLE)
+
+    assert (result.status, result.reason, result.data) == ("skipped", "info-unsafe", None)
 
 
 def test_missing_info_dict_gets_a_number_no_section_already_uses():

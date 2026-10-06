@@ -16,7 +16,8 @@ from xml.sax.saxutils import escape
 
 import pikepdf
 from pypdf import PdfReader
-from pypdf.generic import DictionaryObject, NameObject, StreamObject, create_string_object
+from pypdf.generic import (ByteStringObject, DictionaryObject, IndirectObject, NameObject,
+                           StreamObject, TextStringObject, create_string_object)
 
 log = logging.getLogger("titler")
 
@@ -99,22 +100,26 @@ def _titled(original: bytes, title: str) -> tuple:
         raise Skip("check-qpdf-source-errors") from exc
 
     objects = {}  # (number, generation) -> object, all written after the original bytes
+    new_number = _next_free_number(reader)
+    root = reader.trailer["/Root"]
+    root_ref = (root.indirect_reference.idnum, root.indirect_reference.generation)
     info_ref = _info_ref(reader)
-    has_info = "/Info" in reader.trailer
-    info = DictionaryObject(reader.trailer["/Info"].get_object()) if has_info else DictionaryObject()
+    info = _original_info(reader, info_ref, root_ref)
     info[NameObject("/Title")] = create_string_object(title)
     if info_ref is None:
-        info_ref = (_next_free_number(reader), 0)
+        info_ref = (new_number, 0)
+        new_number += 1
     objects[info_ref] = info
 
-    root = reader.trailer["/Root"]
     has_xmp = "/Metadata" in root
     if has_xmp:
-        # Revise the existing stream object: a new number has collided in xref-stream files.
-        meta_ref = root.raw_get("/Metadata")
-        if not hasattr(meta_ref, "idnum"):
+        if not hasattr(root.raw_get("/Metadata"), "idnum"):
             raise Skip("xmp-direct")
-        objects[(meta_ref.idnum, meta_ref.generation)] = _xmp_stream(_xmp_bytes(reader), title)
+        # A new number, never the original's: that object may also be a page's content stream.
+        objects[(new_number, 0)] = _xmp_stream(_xmp_bytes(reader), title)
+        catalog = DictionaryObject(root)  # raw entries, so references stay references
+        catalog[NameObject("/Metadata")] = IndirectObject(new_number, 0, None)
+        objects[root_ref] = catalog
 
     updated = _append(original, reader, objects, info_ref)
     _check(original, reader, updated, title, has_xmp)
@@ -127,6 +132,19 @@ def _info_ref(reader: PdfReader) -> Optional[tuple]:
         return None
     ref = reader.trailer["/Info"].indirect_reference
     return (ref.idnum, ref.generation) if ref is not None else None
+
+
+def _original_info(reader: PdfReader, info_ref: Optional[tuple], root_ref: tuple) -> DictionaryObject:
+    """The original Info entries, or none. Skips an Info whose number may serve as another object."""
+    if "/Info" not in reader.trailer:
+        return DictionaryObject()
+    info = reader.trailer["/Info"].get_object()
+    if (info_ref is None or info_ref == root_ref or isinstance(info, StreamObject)
+            or not isinstance(info, DictionaryObject)
+            or any(not isinstance(value, (TextStringObject, ByteStringObject))
+                   for key, value in info.items() if key != "/Trapped")):
+        raise Skip("info-unsafe")
+    return DictionaryObject(info)
 
 
 def _next_free_number(reader: PdfReader) -> int:
