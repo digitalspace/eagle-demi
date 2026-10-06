@@ -257,7 +257,7 @@ function applyCors(origin, res) {
   res.set('vary', 'Origin');
   // Browsers hide every response header from cross-origin JS except a six-name safelist, so the
   // paging token the API hands out would be unreadable by the client it is meant for.
-  res.set('access-control-expose-headers', 'x-continuation-token');
+  res.set('access-control-expose-headers', 'x-continuation-token, x-total-count');
   if (origin && (allowAnyOrigin || allowedOrigins.includes(origin))) {
     res.set('access-control-allow-origin', origin);
   }

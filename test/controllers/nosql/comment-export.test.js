@@ -196,6 +196,28 @@ test('comment export', async (t) => {
     assert.strictEqual(records[0].Comment, '\'=HYPERLINK("http://x")');
   });
 
+  /** A CAC member's comment and a non-member's, told apart by Comment_No. */
+  const cacPair = () => [
+    comment({ id: 'c1', commentId: 1, submittedCAC: true }),
+    comment({ id: 'c2', commentId: 2, submittedCAC: false })
+  ];
+
+  await t.test('CACMember is 1 for a CAC member and empty otherwise in the staff export', async () => {
+    fakeCosmos(t, cacPair());
+    const { records } = await exportAs(STAFF);
+
+    assert.strictEqual(records.find(r => r.Comment_No === '1').CACMember, '1');
+    assert.strictEqual(records.find(r => r.Comment_No === '2').CACMember, '');
+  });
+
+  await t.test('CACMember is 1 for a CAC member and empty otherwise in the proponent export', async () => {
+    fakeCosmos(t, cacPair());
+    const { records } = await exportAs(undefined);
+
+    assert.strictEqual(records.find(r => r.Comment_No === '1').CACMember, '1');
+    assert.strictEqual(records.find(r => r.Comment_No === '2').CACMember, '');
+  });
+
   await t.test('a period the caller cannot read is a 404', async () => {
     fakeCosmos(t, []);
     t.mock.method(commentPeriods, 'getById', async () => null);

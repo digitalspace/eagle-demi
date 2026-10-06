@@ -10,7 +10,9 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { selectWhere, selectFor, pageOptions, upsertItem, readForWriteIn, fetchAll } = require('./_sql');
+const {
+  selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn, fetchAll
+} = require('./_sql');
 
 const CONTAINER = 'users';
 const PARTITION_FIELD = 'id';
@@ -27,15 +29,29 @@ async function readForWrite(id) {
   return readForWriteIn(CONTAINER, id, id, PARTITION_FIELD);
 }
 
-/** One page of the users this caller may read, in id order. */
-async function listVisible(access, { pageSize, continuationToken } = {}) {
-  const spec = selectWhere({
+function visibleSpec(access) {
+  return selectWhere({
     access,
     partitionField: PARTITION_FIELD,
     select: selectFor(ENTITY, access, PARTITION_FIELD),
     orderBy: 'c.id ASC'
   });
-  return cosmos.query(CONTAINER, spec, pageOptions({ pageSize, continuationToken }));
+}
+
+/** One page of the users this caller may read, in id order. */
+async function listVisible(access, { pageSize, continuationToken } = {}) {
+  return cosmos.query(CONTAINER, visibleSpec(access), pageOptions({ pageSize, continuationToken }));
+}
+
+/** One offset page (`pageNum`, `pageSize`) of `listVisible`'s rows, as `/search` pages. */
+async function listPage(access, { pageNum, pageSize } = {}) {
+  return readPage(CONTAINER, visibleSpec(access), { pageNum, pageSize });
+}
+
+/** The same predicate as the read, so the total never counts a user the page could not hold. */
+async function countVisible(access) {
+  const { items } = await cosmos.query(CONTAINER, countWhere({ access, partitionField: PARTITION_FIELD }), {});
+  return items[0] || 0;
 }
 
 async function upsert(item, existing) {
@@ -51,4 +67,6 @@ async function listAclRows(access) {
   }));
 }
 
-module.exports = { CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, upsert, listAclRows };
+module.exports = {
+  CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, listPage, countVisible, upsert, listAclRows
+};

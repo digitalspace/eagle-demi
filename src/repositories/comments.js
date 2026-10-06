@@ -11,7 +11,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
-  eq, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, readForWriteIn, fetchAll
+  eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, readForWriteIn, fetchAll
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 
@@ -21,6 +21,8 @@ const PARTITION_FIELD = 'periodId';
 const SCOPE_FIELD = 'projectId';
 
 const SORTABLE = ['dateAdded', 'commentId'];
+/** Eagle's comment moderation states, as eagle-admin filters and counts them. */
+const EAO_STATUSES = Object.freeze(['Pending', 'Published', 'Rejected', 'Deferred']);
 const DEFAULT_ORDER = 'c.commentId ASC';
 
 /** Point read. With the period it is single-partition; without, the predicate runs in the query. */
@@ -46,21 +48,24 @@ async function readForWrite(id, periodId) {
   return readForWriteIn(CONTAINER, id, periodId, PARTITION_FIELD);
 }
 
-function criteriaFor(periodId) {
-  return [eq(PARTITION_FIELD, String(periodId), '@periodId')];
+/** `eaoStatuses`: a list of EAO_STATUSES the caller validated; empty or absent narrows nothing. */
+function criteriaFor(periodId, eaoStatuses) {
+  const criteria = [eq(PARTITION_FIELD, String(periodId), '@periodId')];
+  if (eaoStatuses && eaoStatuses.length) criteria.push(inList('eaoStatus', eaoStatuses, '@eaoStatus'));
+  return criteria;
 }
 
-async function listByPeriod(periodId, access, { pageNum, pageSize, sortBy } = {}) {
-  const spec = byPeriodSpec(periodId, access, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER));
+async function listByPeriod(periodId, access, { pageNum, pageSize, sortBy, eaoStatuses } = {}) {
+  const spec = byPeriodSpec(periodId, access, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER), eaoStatuses);
 
   return readPage(CONTAINER, spec, { pageNum, pageSize, partitionKey: String(periodId) });
 }
 
-function byPeriodSpec(periodId, access, orderBy) {
+function byPeriodSpec(periodId, access, orderBy, eaoStatuses) {
   return selectWhere({
     access,
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor(periodId),
+    criteria: criteriaFor(periodId, eaoStatuses),
     select: selectFor(CONTAINER, access, SCOPE_FIELD),
     orderBy
   });
@@ -75,8 +80,8 @@ async function listEveryByPeriod(periodId, access) {
  * The same predicate as the read. eagle-public renders this number as "N comments", so a count
  * built from a different filter would advertise the size of a set the caller cannot open.
  */
-async function countByPeriod(periodId, access) {
-  const spec = countWhere({ access, partitionField: SCOPE_FIELD, criteria: criteriaFor(periodId) });
+async function countByPeriod(periodId, access, { eaoStatuses } = {}) {
+  const spec = countWhere({ access, partitionField: SCOPE_FIELD, criteria: criteriaFor(periodId, eaoStatuses) });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(periodId) });
   return items[0] || 0;
 }
@@ -120,6 +125,7 @@ module.exports = {
   PARTITION_FIELD,
   SCOPE_FIELD,
   SORTABLE,
+  EAO_STATUSES,
   getById,
   readForWrite,
   listByPeriod,

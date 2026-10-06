@@ -351,6 +351,19 @@ documents both sides returned, plus `--id document` if given, through Eagle's pr
 object storage without the bearer token, and compares sha256 and byte length while streaming;
 nothing is written to disk. Any mismatch counts as unexplained.
 
+`GET /search` serves eagle-api's staff datasets `User`, `Group`, `Inspection`, `InspectionElement`
+and `Item` (`_id` plus `_schemaName`), and adds `InspectionItem`. Each reads under the caller's ACL,
+so Eagle's default `['sysadmin']` rows reach staff and sysadmin only, and user contact fields stay
+staff-only. A level-2 caller also gets the twenty staff project fields on `dataset=Project`. Every
+answer with a measured total sets `x-total-count`, and `HEAD` returns the same headers. Known gaps:
+
+- `GET /commentperiod/:id/summary` has no DEMI route. Its counts are four requests:
+  `dataset=Comment&and[period]=<id>&and[eaoStatus]=<state>&pageSize=1`, reading `x-total-count`.
+- `dataset=Item` answers the models above plus `Comment`, `CommentPeriod`, `ProjectNotification` and
+  `RecentActivity`. `Project`, `Document` and the rest are a 400.
+- The User, Group and inspection datasets order by id only. A `sortBy` is reported in
+  `meta[0].dropped.sort`. They have no text index, so `keywords` is a 400.
+
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
 exception — the high-water mark cannot see them, so the application removes index entries explicitly.
@@ -655,7 +668,7 @@ the document record. Any other store error, such as access denied, is a 500.
 ## CSV reports
 
 Two eagle-api CSV reads have DEMI handlers. Rows and fields come from DEMI's own access rules, not
-from eagle-api's role checks. The routes are not wired yet; these are the intended paths.
+from eagle-api's role checks.
 
 | Path | Handler | Replaces in eagle-api |
 |---|---|---|

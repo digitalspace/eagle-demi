@@ -1052,10 +1052,15 @@ test('the mirror routes are behind authMiddleware + requireWrite', async (t) => 
       // suite is test/controllers/config-public.test.js.
       '/eagle/config/public',
       '/eagle/documents/:eagleId',
+      '/eagle/groups/:eagleId',
+      '/eagle/inspection-elements/:eagleId',
+      '/eagle/inspection-items/:eagleId',
+      '/eagle/inspections/:eagleId',
       '/eagle/notifications/:eagleId',
       '/eagle/organizations/:eagleId',
       '/eagle/projects/:eagleId',
-      '/eagle/updates/:eagleId'
+      '/eagle/updates/:eagleId',
+      '/eagle/users/:eagleId'
     ], 'a new mirror route must be listed here, or it is ungated and untested');
     for (const r of mirror) {
       assert.match(r.chain, /\bauthMiddleware\b/);

@@ -5,8 +5,8 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 41 of the 54 paths in src/http/routes.js
-    (53 of its 70 operations), and has drifted from what the API actually serves. Undocumented here:
+    NOT THE CONTRACT. This file is hand-maintained, covers 75 of the 86 paths in src/http/routes.js
+    (89 of its 104 operations), and has drifted from what the API actually serves. Undocumented here:
     /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on
@@ -44,6 +44,12 @@ paths:
               - RecentActivity
               - ProjectNotification
               - HomeFeed
+              - User
+              - Group
+              - Inspection
+              - InspectionElement
+              - InspectionItem
+              - Item
         - name: q
           in: query
           required: false
@@ -135,9 +141,43 @@ paths:
           in: query
           required: false
           description: >-
-            Fetch one record by Eagle id, on CommentPeriod, Comment, ProjectNotification and
-            RecentActivity. Also accepted as `and[_id]`. Answers `count: 0` and no rows when the id
-            matches nothing this caller may read, never a page of other records.
+            Fetch one record by Eagle id, on CommentPeriod, Comment, ProjectNotification,
+            RecentActivity, User, Group, Inspection, InspectionElement and InspectionItem. Also
+            accepted as `and[_id]`. Answers `count: 0` and no rows when the id matches nothing this
+            caller may read, never a page of other records. Required on dataset=Item.
+          schema:
+            type: string
+        - name: _schemaName
+          in: query
+          required: false
+          description: >-
+            dataset=Item only, and required there; any other dataset answers 400. Names the model
+            `_id` belongs to, as eagle-api's `dataset=Item` does. Item takes `_id` and
+            `_schemaName` and nothing else, and answers a BARE array of zero or one record rather
+            than the search envelope.
+          schema:
+            type: string
+            enum: [User, Group, Inspection, InspectionElement, InspectionItem, Comment, CommentPeriod, ProjectNotification, RecentActivity]
+        - name: and[eaoStatus]
+          in: query
+          required: false
+          description: >-
+            dataset=Comment only. The comment's EAO review state. Several values comma-separated
+            are ORed. Any other value is a 400.
+          schema:
+            type: string
+            enum: [Pending, Published, Rejected, Deferred]
+        - name: and[inspection]
+          in: query
+          required: false
+          description: >-
+            dataset=InspectionElement and InspectionItem. Eagle id of the parent inspection.
+          schema:
+            type: string
+        - name: and[element]
+          in: query
+          required: false
+          description: dataset=InspectionItem only. Eagle id of the parent element.
           schema:
             type: string
         - name: and[status]
@@ -291,8 +331,20 @@ paths:
             type: string
       responses:
         '200':
+          headers:
+            x-total-count:
+              description: >-
+                The measured total, the same number as `meta[0].searchResultsTotal`; on
+                dataset=Item, the number of rows in the array. Exposed to CORS. A HEAD request gets
+                it with no body.
+              schema:
+                type: integer
           description: >-
-            One-element array of search results, the measured total and metadata. A field the live
+            One-element array of search results, the measured total and metadata. dataset=Item
+            is the exception: a bare array of zero or one record.
+            User, Group, Inspection, InspectionElement and InspectionItem are Cosmos list reads of
+            the Eagle mirrors under the caller's access. User has no project axis, so a `project`
+            filter answers no rows. A field the live
             index could not answer is dropped from the query and named under
             `meta[0].degraded.missing`, so the page is served with that column missing rather than
             failed — except for the visibility fields, which stay a 502. On DocumentChunk,
@@ -333,7 +385,10 @@ paths:
             texts in the same order.
         '400':
           description: >-
-            Unknown dataset, unsupported query parameter, dataset=Comment with no period, or a
+            Unknown dataset, unsupported query parameter, dataset=Comment with no period, an
+            unknown `and[eaoStatus]`, keywords (`q`) on User, Group, Inspection, InspectionElement
+            or InspectionItem, `_schemaName` on any dataset but Item, dataset=Item with a missing
+            or unknown `_schemaName` or any other parameter, or a
             page past the deepest one a Cosmos list serves: for dataset=RecentActivity, Comment,
             ProjectNotification, List, Organization, CommentPeriod with a `project`, and Project
             with no keywords, filter or sort, `pageNum * pageSize + pageSize` (pageSize clamped to 1000) must stay within 20000 rows.
@@ -1616,7 +1671,7 @@ paths:
               properties:
                 leaseId: { type: string }
                 skipped: { type: boolean }
-                reason: { type: string, description: Printable ASCII, cut to 200 characters. }
+                reason: { type: string, description: 'Printable ASCII, cut to 200 characters.' }
       responses:
         '200':
           description: Outcome.
@@ -2437,12 +2492,7 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: |-
-            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
-            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
-            through API Management), hold `demi-service-write`, and carry no project scope.
-            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
-            get 403. An empty setting refuses everyone.
+          $ref: '#/components/responses/EagleMirrorForbidden'
         '409':
           description: >-
             The id is stored in more than one DEMI row, so nothing was written. Not retried: a
@@ -2496,12 +2546,7 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: |-
-            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
-            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
-            through API Management), hold `demi-service-write`, and carry no project scope.
-            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
-            get 403. An empty setting refuses everyone.
+          $ref: '#/components/responses/EagleMirrorForbidden'
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
         '409':
@@ -2567,12 +2612,7 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: |-
-            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
-            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
-            through API Management), hold `demi-service-write`, and carry no project scope.
-            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
-            get 403. An empty setting refuses everyone.
+          $ref: '#/components/responses/EagleMirrorForbidden'
         '503':
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.
@@ -2624,12 +2664,7 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: |-
-            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
-            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
-            through API Management), hold `demi-service-write`, and carry no project scope.
-            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
-            get 403. An empty setting refuses everyone.
+          $ref: '#/components/responses/EagleMirrorForbidden'
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
         '409':
@@ -2682,12 +2717,7 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: |-
-            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
-            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
-            through API Management), hold `demi-service-write`, and carry no project scope.
-            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
-            get 403. An empty setting refuses everyone.
+          $ref: '#/components/responses/EagleMirrorForbidden'
         '404':
           description: The comment period named by `doc.period` is not mirrored yet.
         '409':
@@ -2735,12 +2765,7 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: |-
-            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
-            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
-            through API Management), hold `demi-service-write`, and carry no project scope.
-            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
-            get 403. An empty setting refuses everyone.
+          $ref: '#/components/responses/EagleMirrorForbidden'
         '503':
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.
@@ -2782,16 +2807,222 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: |-
-            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
-            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
-            through API Management), hold `demi-service-write`, and carry no project scope.
-            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
-            get 403. An empty setting refuses everyone.
+          $ref: '#/components/responses/EagleMirrorForbidden'
         '503':
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.
 
+  /api/eagle/users/{eagleId}:
+    put:
+      summary: Mirror a user from eagle-api
+      description: |-
+        Receives one Eagle `User`, keyed by the Eagle `_id`. Stored in the `users` container, partition
+        `/id`. `password` and `salt` are dropped before anything is stored. Every contact field and the
+        notes are level 2 (staff) only.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/EagleMirrorForbidden'
+        '503':
+          description: >-
+            The record changed repeatedly while the push was retried. eagle-api retries.
+  /api/eagle/groups/{eagleId}:
+    put:
+      summary: Mirror a group from eagle-api
+      description: |-
+        Receives one Eagle `Group`, a project's contact group, keyed by the Eagle `_id`. Stored in the
+        `groups` container under the DEMI project id and capped by that project's level. `members` is
+        level 2 (staff) only.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/EagleMirrorForbidden'
+        '404':
+          description: The parent project is not mirrored.
+        '503':
+          description: >-
+            The record changed repeatedly while the push was retried. eagle-api retries.
+  /api/eagle/inspections/{eagleId}:
+    put:
+      summary: Mirror an inspection from eagle-api
+      description: |-
+        Receives one Eagle `Inspection`, keyed by the Eagle `_id`. Stored in the `inspections` container
+        as `kind: Inspection`, partition `/inspection` (its own DEMI id), and capped by its project. A
+        level change re-derives the elements and items under it.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/EagleMirrorForbidden'
+        '404':
+          description: The parent project is not mirrored.
+        '503':
+          description: >-
+            The record changed repeatedly while the push was retried. eagle-api retries.
+  /api/eagle/inspection-elements/{eagleId}:
+    put:
+      summary: Mirror an inspection element from eagle-api
+      description: |-
+        Receives one Eagle `InspectionElement`, keyed by the Eagle `_id`. Stored in the `inspections`
+        container as `kind: InspectionElement`, in its inspection's partition, and capped by that
+        inspection. The parent is the stored inspection whose `elements[]` lists this record.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/EagleMirrorForbidden'
+        '503':
+          description: >-
+            No stored parent lists this record yet, or the record changed repeatedly while the
+            push was retried. eagle-api retries.
+  /api/eagle/inspection-items/{eagleId}:
+    put:
+      summary: Mirror an inspection item from eagle-api
+      description: |-
+        Receives one Eagle `InspectionItem`, keyed by the Eagle `_id`. Stored in the `inspections`
+        container as `kind: InspectionItem`, in its inspection's partition, and capped by its element.
+        The parent is the stored element whose `items[]` lists this record.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: >-
+            Record mirrored, or ignored because a newer push already landed — see
+            `EaglePushResult`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/EagleMirrorForbidden'
+        '503':
+          description: >-
+            No stored parent lists this record yet, or the record changed repeatedly while the
+            push was retried. eagle-api retries.
   /api/eagle/config/public:
     put:
       summary: Mirror the public site configuration from eagle-api
@@ -2843,12 +3074,375 @@ paths:
         '401':
           description: Unauthorized.
         '403':
-          description: |-
-            Forbidden. Only eagle-api may write the mirror: the caller must be a registry
-            principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
-            through API Management), hold `demi-service-write`, and carry no project scope.
-            Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
-            get 403. An empty setting refuses everyone.
+          $ref: '#/components/responses/EagleMirrorForbidden'
+
+  /api/users:
+    get:
+      summary: List mirrored users
+      description: >-
+        Eagle `User` rows from the `users` container. A project-scoped key reads none. Rows are the ones the caller may read, ordered by `id`, with hidden fields left
+        out. An anonymous caller gets the public tier, which is often empty.
+      parameters:
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - $ref: '#/components/parameters/MirrorContinuationToken'
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-continuation-token:
+              description: Send as `continuationToken` for the next page. Absent on the last page.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: pageSize above the caller's cap.
+
+  /api/users/{id}:
+    get:
+      summary: Read one mirrored user
+      description: >-
+        One record the caller may read, with hidden fields left out. A record the caller cannot
+        read is a 404, the same as one that does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: User not found.
+
+  /api/groups:
+    get:
+      summary: List mirrored groups
+      description: >-
+        Eagle `Group` rows from the `groups` container. Rows are the ones the caller may read, ordered by `id`, with hidden fields left
+        out. An anonymous caller gets the public tier, which is often empty.
+      parameters:
+        - name: project
+          in: query
+          required: false
+          description: DEMI project id. Narrows the list to that project.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - $ref: '#/components/parameters/MirrorContinuationToken'
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-continuation-token:
+              description: Send as `continuationToken` for the next page. Absent on the last page.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: pageSize above the caller's cap.
+
+  /api/groups/{id}:
+    get:
+      summary: Read one mirrored group
+      description: >-
+        One record the caller may read, with hidden fields left out. A record the caller cannot
+        read is a 404, the same as one that does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`).
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          description: DEMI project id, the partition. Omit it and the read searches every partition.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Group not found.
+
+  /api/inspections:
+    get:
+      summary: List mirrored inspections
+      description: >-
+        Eagle `Inspection` rows from the `inspections` container. Rows are the ones the caller may read, ordered by `id`, with hidden fields left
+        out. An anonymous caller gets the public tier, which is often empty.
+      parameters:
+        - name: project
+          in: query
+          required: false
+          description: DEMI project id. Narrows the list to that project.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - $ref: '#/components/parameters/MirrorContinuationToken'
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-continuation-token:
+              description: Send as `continuationToken` for the next page. Absent on the last page.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: pageSize above the caller's cap.
+
+  /api/inspections/{id}:
+    get:
+      summary: Read one mirrored inspection
+      description: >-
+        One record the caller may read, with hidden fields left out. A record the caller cannot
+        read is a 404, the same as one that does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`).
+          schema:
+            type: string
+        - name: inspection
+          in: query
+          required: false
+          description: DEMI id of the inspection, the partition. Omit it and the read searches every partition.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Inspection not found.
+
+  /api/inspection-elements:
+    get:
+      summary: List mirrored inspection elements
+      description: >-
+        Eagle `InspectionElement` rows from the `inspections` container. Rows are the ones the caller may read, ordered by `id`, with hidden fields left
+        out. An anonymous caller gets the public tier, which is often empty.
+      parameters:
+        - name: project
+          in: query
+          required: false
+          description: DEMI project id. Narrows the list to that project.
+          schema:
+            type: string
+        - name: inspection
+          in: query
+          required: false
+          description: DEMI id of the inspection, the partition. Narrows the list to rows under it.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - $ref: '#/components/parameters/MirrorContinuationToken'
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-continuation-token:
+              description: Send as `continuationToken` for the next page. Absent on the last page.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: pageSize above the caller's cap.
+
+  /api/inspection-elements/{id}:
+    get:
+      summary: Read one mirrored inspection element
+      description: >-
+        One record the caller may read, with hidden fields left out. A record the caller cannot
+        read is a 404, the same as one that does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`).
+          schema:
+            type: string
+        - name: inspection
+          in: query
+          required: false
+          description: DEMI id of the inspection, the partition. Omit it and the read searches every partition.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Inspection element not found.
+
+  /api/inspection-items:
+    get:
+      summary: List mirrored inspection items
+      description: >-
+        Eagle `InspectionItem` rows from the `inspections` container. Rows are the ones the caller may read, ordered by `id`, with hidden fields left
+        out. An anonymous caller gets the public tier, which is often empty.
+      parameters:
+        - name: project
+          in: query
+          required: false
+          description: DEMI project id. Narrows the list to that project.
+          schema:
+            type: string
+        - name: inspection
+          in: query
+          required: false
+          description: DEMI id of the inspection, the partition. Narrows the list to rows under it.
+          schema:
+            type: string
+        - name: element
+          in: query
+          required: false
+          description: Eagle id of an inspection element. Narrows items to that element.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - $ref: '#/components/parameters/MirrorContinuationToken'
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-continuation-token:
+              description: Send as `continuationToken` for the next page. Absent on the last page.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: pageSize above the caller's cap.
+
+  /api/inspection-items/{id}:
+    get:
+      summary: Read one mirrored inspection item
+      description: >-
+        One record the caller may read, with hidden fields left out. A record the caller cannot
+        read is a 404, the same as one that does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`).
+          schema:
+            type: string
+        - name: inspection
+          in: query
+          required: false
+          description: DEMI id of the inspection, the partition. Omit it and the read searches every partition.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Inspection item not found.
+
+  /api/commentperiods/{periodId}/comments/export:
+    get:
+      summary: Export a comment period's comments as CSV
+      description: >-
+        Replaces eagle-api's `GET /api/comment/export/{periodId}`. Level 2 or lower (sysadmin,
+        staff) gets the staff columns; any other level gets the proponent columns and only
+        published comments. Rows are the comments the caller may read, each redacted first, so a
+        hidden field is an empty cell. Attachment links point at `/api/documents/{id}/download`
+        and list only documents the caller may read. Text starting with `=`, `+`, `-` or `@` gets
+        a leading `'`.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: periodId
+          in: path
+          required: true
+          description: DEMI id of the comment period.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: CSV file, sent as the attachment `export.csv`.
+          content:
+            text/csv:
+              schema:
+                type: string
+        '401':
+          description: Unauthorized. There is no anonymous export.
+        '404':
+          description: The period does not exist or the caller cannot read it.
+
+  /api/reports:
+    get:
+      summary: CSV report
+      description: >-
+        Replaces eagle-api's `GET /api/reports?type=`. `bcgw` is the feed of published projects
+        for the BC Geographic Warehouse. It always reads as an anonymous caller, so a signed-in
+        caller gets the same file. Columns and values match eagle-api's file, including the
+        `Project GUID` cell wrapped in quotes.
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [bcgw]
+      responses:
+        '200':
+          description: CSV file, sent as the attachment `export_<type>.csv`.
+          content:
+            text/csv:
+              schema:
+                type: string
+        '400':
+          description: Missing or unknown report type.
 
   /api/links:
     get:
@@ -3880,6 +4474,35 @@ components:
         When `SSO_AUDIENCE` is set, a token whose `aud` does not match it fails verification with
         401. Empty, which is what every environment ships today, means the claim is not checked.
 
+  parameters:
+    MirrorPageSize:
+      name: pageSize
+      in: query
+      required: false
+      description: >-
+        Rows per page. Unauthenticated requests are capped at 100 and asking for more is refused
+        with 400; authenticated requests may ask for up to 1000.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+    MirrorContinuationToken:
+      name: continuationToken
+      in: query
+      required: false
+      description: The `x-continuation-token` header of the previous page.
+      schema:
+        type: string
+
+  responses:
+    EagleMirrorForbidden:
+      description: |-
+        Forbidden. Only eagle-api may write the mirror: the caller must be a registry
+        principal listed in `DEMI_EAGLE_MIRROR_PRINCIPALS` (default `apim:eagle-api`, eagle-api
+        through API Management), hold `demi-service-write`, and carry no project scope.
+        Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
+        get 403. An empty setting refuses everyone.
+
   schemas:
     RequestStats:
       type: object
@@ -3908,10 +4531,10 @@ components:
     BulkDownloadAccepted:
       type: object
       properties:
-        id: { type: string, format: uuid, description: The job id, and the capability that reads it back. }
+        id: { type: string, format: uuid, description: 'The job id, and the capability that reads it back.' }
         status: { type: string, enum: [queued] }
-        documentCount: { type: integer, description: Documents visible to this caller, so possibly fewer than were asked for. }
-        estimatedPartCount: { type: integer, description: Zip parts the selection is expected to pack into. An estimate — a document with no recorded size counts as nothing here, so the real count can differ. Poll for `partCount`. }
+        documentCount: { type: integer, description: 'Documents visible to this caller, so possibly fewer than were asked for.' }
+        estimatedPartCount: { type: integer, description: 'Zip parts the selection is expected to pack into. An estimate — a document with no recorded size counts as nothing here, so the real count can differ. Poll for `partCount`.' }
         statusUrl: { type: string, example: /api/bulk-downloads/6f1c4b9e-0d2a-4d9d-9c3e-1f5f9a2b7c40 }
     BulkDownloadStatus:
       type: object
@@ -3930,7 +4553,7 @@ components:
             type: object
             properties:
               documentId: { type: string }
-              name: { type: string, description: File name, empty when the document could not be read at all. }
+              name: { type: string, description: 'File name, empty when the document could not be read at all.' }
               reason: { type: string, example: not available }
         bytes: { type: integer }
         parts:
