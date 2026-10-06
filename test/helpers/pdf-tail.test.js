@@ -179,6 +179,18 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
     assert.equal(check(packet('Plan &#66;'), { title: 'Plan B', info: '(Plan B)' }), null);
   });
 
+  await t.test('a title holding lexer delimiters is accepted only as character references', () => {
+    const title = '50% {draft} [2] a\\b (x';
+    const info = '(50% {draft} [2] a\\\\b \\(x)';
+    assert.equal(check(packet('50&#37; &#123;draft&#125; &#91;2&#93; a&#92;b &#40;x'), { title, info }), null);
+    // Each raw form decodes to its title and the Info matches, so only the raw XMP text is at fault.
+    const raws = { '50% x': '50% x', '&#123;draft}': '{draft}', '[2]': '[2]', 'a\\b': 'a\\b', '(x': '(x', 'a > b': 'a > b' };
+    for (const [raw, decoded] of Object.entries(raws)) {
+      const hex = `<${Buffer.from(decoded, 'latin1').toString('hex')}>`;
+      assert.equal(check(packet(raw), { title: decoded, info: hex }), 'tail-xmp-body', raw);
+    }
+  });
+
   await t.test('accepted: a title with markup characters, escaped', () => {
     assert.equal(check(packet('A &amp; &#66; &lt;1&gt;'), { title: 'A & B <1>', info: '(A & B <1>)' }), null);
   });
