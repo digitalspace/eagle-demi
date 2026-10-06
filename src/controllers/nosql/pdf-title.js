@@ -248,13 +248,13 @@ async function release(row, extra = {}) {
 
 /**
  * What a skip records. A file that holds no title is marked skipped for this title, so it is not
- * offered again. A titled file stays `titled`, or a later withheld name would never be restored.
- * A restore that cannot run needs a person.
+ * offered again. A titled file stays `titled`, or a later withheld name would never be restored,
+ * and records the title it was skipped for. A restore that cannot run needs a person.
  */
 function skipFields(row, lease, report) {
   if (!report) return {};
   if (lease.mode === 'restore') return { status: 'needs-review', reason: report.reason };
-  if (recordOf(row).status === 'titled') return { reason: `retitle skipped: ${report.reason}` };
+  if (recordOf(row).status === 'titled') return { reason: `retitle skipped: ${report.reason}`, skippedTitle: lease.title };
   return { status: 'skipped', reason: report.reason, title: lease.title };
 }
 
@@ -359,6 +359,7 @@ async function finish(row, fields) {
     status: isRestore ? 'restored' : 'titled',
     reason: null,
     title: isRestore ? null : lease.title,
+    skippedTitle: null,
     titledLength: isRestore ? null : inFlight.newLength,
     titledSha256: isRestore ? null : inFlight.newSha256
   });

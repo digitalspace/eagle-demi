@@ -79,6 +79,14 @@ test('isCurrent', async (t) => {
     assert.equal(isCurrent({ ...TITLED, pdfTitle: { ...TITLED.pdfTitle, status: 'skipped' } }), true);
   });
 
+  await t.test('a titled file whose retitle to this name was refused is current: no retry', () => {
+    const renamed = { ...TITLED, displayName: 'Site C Report (amended)' };
+    assert.equal(isCurrent(renamed), false);
+    assert.equal(isCurrent({ ...renamed, pdfTitle: { ...TITLED.pdfTitle, skippedTitle: 'Site C Report (amended)' } }), true);
+    // Renamed again, the refusal no longer applies.
+    assert.equal(isCurrent({ ...renamed, displayName: 'Site C Report v3', pdfTitle: { ...TITLED.pdfTitle, skippedTitle: 'Site C Report (amended)' } }), false);
+  });
+
   await t.test('a newline in the stored name matches its one-line title', () => {
     assert.equal(isCurrent({ ...TITLED, displayName: 'Site C\nReport' }), true);
   });

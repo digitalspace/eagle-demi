@@ -739,6 +739,30 @@ test('pdf title lease API', async (t) => {
     assert.deepEqual([res.status, res.body.reason], [409, 'original-info-value']);
     const record = w.row().pdfTitle;
     assert.deepEqual([record.status, record.reason, record.title, record.lease], ['titled', 'retitle skipped: original-info-value', 'Old Name', undefined]);
+    assert.equal(record.skippedTitle, FIRST);
+    assert.deepEqual(await pending(), [], 'not offered again for the refused title');
+    assert.equal((await lease()).body.reason, 'current');
+    w.row().displayName = SECOND;
+    assert.deepEqual((await pending()).map(i => [i.mode, i.title]), [['title', SECOND]], 'offered for a new title');
+  });
+
+  await t.test('a worker skip of a retitle is not offered again; a later titling clears it', async (t) => {
+    const w = world(t);
+    await titled(w);
+    w.row().displayName = SECOND;
+    const leased = await lease();
+    const res = await report({ leaseId: leased.body.leaseId, skipped: true, reason: 'titler-failed' });
+    assert.equal(res.body.outcome, 'skipped');
+    assert.deepEqual([w.row().pdfTitle.status, w.row().pdfTitle.skippedTitle], ['titled', SECOND]);
+    assert.deepEqual(await pending(), []);
+
+    w.row().displayName = FIRST;
+    // The record names another title, so FIRST is written again over the same bytes.
+    w.row().pdfTitle.title = 'Older';
+    const { leaseId } = await titleOnce(w, TITLED, { first: false });
+    w.closePutWindow();
+    assert.equal((await report({ leaseId })).body.outcome, 'titled');
+    assert.equal(w.row().pdfTitle.skippedTitle, null);
   });
 
   await t.test('a titled file that no longer matches its record is never leased', async (t) => {

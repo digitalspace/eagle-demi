@@ -1565,7 +1565,8 @@ paths:
             structure cannot be read for the increment check (for example `original-encrypted`,
             `original-filter`, `original-xref`, `original-too-many-objects`,
             `original-free-object`, `original-info-value`). An `original-*` reason on a file never
-            titled is recorded as a skip; on a titled file it is recorded as `retitle skipped: <reason>`.
+            titled is recorded as a skip; on a titled file it is recorded as `retitle skipped: <reason>`
+            with `skippedTitle`, and the file is not offered again for that title.
             All but `lease-too-short` release the lease. The store is untouched.
         '412':
           description: The row changed while the commit was recorded (`lease-race`).
