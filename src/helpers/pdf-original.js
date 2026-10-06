@@ -8,12 +8,16 @@
  */
 
 const zlib = require('zlib');
-const { Reader, Refused, refuse } = require('./pdf-tail');
+const { Reader, Refused, refuse, fingerprint } = require('./pdf-tail');
 
 /** Bytes fetched from one original, in total, retries included. */
 const READ_BUDGET = 16 * 1024 * 1024;
 /** Bytes inflated from its xref and object streams, in total. */
 const INFLATE_BUDGET = 32 * 1024 * 1024;
+/** Xref rows read from one original, in total, over every section. */
+const MAX_ROWS = 2000000;
+/** A subsection's `first + count` stays at or below 2^23 - 1, the PDF object number limit. */
+const NUMBER_LIMIT = 8388607;
 /** Sections followed through /Prev and /XRefStm. */
 const MAX_SECTIONS = 64;
 /** The last startxref must sit in this many final bytes. */
@@ -158,7 +162,7 @@ function streamHead(r, ref) {
 }
 
 /** Rows of an xref stream as `[number, entry]`; entry `{type: 1, offset, gen}`, `{type: 2, stm, idx}` or `{type: 0}`. */
-function xrefRows(dict, data) {
+function xrefRows(dict, data, rowsLeft) {
   const w = dict.get('W');
   const widths = w && w.array && w.array.length === 3 && w.array.every(v => isInt(v) && v.number <= 8)
     ? w.array.map(v => v.number) : refuse('original-xref');
@@ -167,6 +171,12 @@ function xrefRows(dict, data) {
   const index = dict.get('Index');
   const pairs = index ? (index.array && index.array.every(isInt) ? index.array.map(v => v.number) : refuse('original-xref')) : [0, size.number];
   if (pairs.length % 2) refuse('original-xref');
+  let declared = 0;
+  for (let i = 0; i < pairs.length; i += 2) {
+    if (pairs[i] + pairs[i + 1] > NUMBER_LIMIT) refuse('original-xref');
+    declared += pairs[i + 1];
+  }
+  if (declared > rowsLeft) refuse('original-too-many-objects');
   const row = widths[0] + widths[1] + widths[2];
   if (!row) refuse('original-xref');
   const rows = [];
@@ -192,7 +202,7 @@ function xrefRows(dict, data) {
 }
 
 /** The section at `offset`: a table with its trailer, or an xref stream. */
-async function readSection(src, inflate, offset) {
+async function readSection(src, inflate, offset, rowsLeft) {
   const head = await src.parseAt(offset, (r, buf) => {
     if (buf.toString('latin1', 0, 4) !== 'xref') return { stream: streamHead(r) };
     r.pos = 4;
@@ -202,6 +212,8 @@ async function readSection(src, inflate, offset) {
       if (r.peekWord('trailer')) break;
       const first = r.int();
       const count = r.int();
+      if (first + count > NUMBER_LIMIT) refuse('original-xref');
+      if (rows.length + count > rowsLeft) refuse('original-too-many-objects');
       for (let n = first; n < first + count; n++) {
         const at = r.int();
         const gen = r.int();
@@ -220,11 +232,15 @@ async function readSection(src, inflate, offset) {
   const type = dict.get('Type');
   if (!type || type.name !== 'XRef' || !isInt(dict.get('Length'))) refuse('original-xref');
   const data = await src.exact(offset + dataAt, dict.get('Length').number);
-  return { rows: xrefRows(dict, decode(dict, data, inflate)), trailer: dict };
+  return { rows: xrefRows(dict, decode(dict, data, inflate), rowsLeft), trailer: dict };
 }
 
-/** `{prev, root, info, size, metadata}` of the original, or `{error}` with an `original-*` reason. */
-async function readOriginal(readRange, originalLength) {
+/**
+ * `{prev, root, info, size, metadata, catalog, infoKept}` of the original, or `{error}` with an
+ * `original-*` reason. `catalog` is the `fingerprint` of the Catalog without /Metadata, `infoKept`
+ * of the Info without /Title (null without an Info).
+ */
+async function read(readRange, originalLength) {
   try {
     if (!Number.isInteger(originalLength) || originalLength < 1) refuse('original-empty');
     const src = source(readRange, originalLength);
@@ -235,19 +251,16 @@ async function readOriginal(readRange, originalLength) {
     if (!last) refuse('original-no-startxref');
     const prev = Number(last[1]);
 
-    // Newest section first: its in-use entries and trailer keys win over older ones.
+    // Newest section first: its entries, free ones too, and trailer keys win over older ones.
     const entries = new Map();
     const trailer = new Map();
     let highest = -1;
+    let rowsLeft = MAX_ROWS;
     const seen = new Set();
-    const take = (section) => {
-      for (const [n, entry] of section.rows) {
-        if (!entry.type) continue;
-        highest = Math.max(highest, n);
+    const take = (rows) => {
+      for (const [n, entry] of rows) {
+        if (entry.type) highest = Math.max(highest, n);
         if (!entries.has(n)) entries.set(n, entry);
-      }
-      for (const key of ['Root', 'Info', 'Size']) {
-        if (section.trailer.has(key) && !trailer.has(key)) trailer.set(key, section.trailer.get(key));
       }
     };
     const visit = (offset) => {
@@ -257,18 +270,25 @@ async function readOriginal(readRange, originalLength) {
     };
     for (let at = prev; at !== null;) {
       visit(at);
-      const section = await readSection(src, inflate, at);
+      const section = await readSection(src, inflate, at, rowsLeft);
+      rowsLeft -= section.rows.length;
       if (section.trailer.has('Encrypt')) refuse('original-encrypted');
-      take(section);
+      for (const key of ['Root', 'Info', 'Size']) {
+        if (section.trailer.has(key) && !trailer.has(key)) trailer.set(key, section.trailer.get(key));
+      }
       const stm = section.trailer.get('XRefStm');
       if (stm) {
         // Only a table's trailer may name a hybrid xref stream, and it must name one.
         if (!isInt(stm) || section.trailer.get('Type')) refuse('original-xref');
         visit(stm.number);
-        const hybrid = await readSection(src, inflate, stm.number);
+        const hybrid = await readSection(src, inflate, stm.number, rowsLeft);
+        rowsLeft -= hybrid.rows.length;
         if (!hybrid.trailer.get('Type')) refuse('original-xref');
-        take({ rows: hybrid.rows, trailer: new Map() });
+        // A hybrid table lists its compressed objects as free for older readers; the stream wins.
+        take(section.rows.filter(([, entry]) => entry.type));
+        take(hybrid.rows);
       }
+      take(section.rows);
       const next = section.trailer.get('Prev');
       if (next && !isInt(next)) refuse('original-prev');
       at = next ? next.number : null;
@@ -279,6 +299,7 @@ async function readOriginal(readRange, originalLength) {
     if (!isInt(size)) refuse('original-size');
     if (!root) refuse('original-no-root');
     const info = refOf(trailer.get('Info'));
+    if (trailer.has('Info') && !info) refuse('original-info-direct');
 
     const streams = new Map();
     /** Decoded object stream `num`: its data, where objects start, and `[number, offset]` pairs. */
@@ -306,9 +327,18 @@ async function readOriginal(readRange, originalLength) {
     const value = async (ref, inStream = true) => {
       const entry = entries.get(ref[0]);
       if (!entry) refuse('original-unlisted');
+      if (!entry.type) refuse('original-free-object');
       if (entry.type === 1) {
         if (entry.gen !== ref[1]) refuse('original-object-header');
-        return src.parseAt(entry.offset, (r) => { objectHeader(r, ref); return r.value(); });
+        return src.parseAt(entry.offset, (r) => {
+          objectHeader(r, ref);
+          const v = r.value();
+          r.ws();
+          if (r.peekWord('stream')) return { ...v, stream: true };
+          // Without endobj a window cut mid-number could read as a shorter number.
+          r.expect('endobj');
+          return v;
+        });
       }
       if (!inStream) refuse('original-object-stream');
       if (ref[1] !== 0) refuse('original-object-header');
@@ -319,17 +349,37 @@ async function readOriginal(readRange, originalLength) {
     };
 
     const catalog = await value(root);
-    if (!catalog.dict) refuse('original-root');
-    if (info) await value(info);
+    if (!catalog.dict || catalog.stream) refuse('original-root');
+    let infoKept = null;
+    if (info) {
+      // The titler revises Info in place, so it must be an Info and nothing else: only strings.
+      if (info[0] === root[0]) refuse('original-info-root');
+      const object = await value(info);
+      if (object.stream) refuse('original-info-stream');
+      if (!object.dict) refuse('original-info-type');
+      for (const [key, v] of object.dict) if (key !== 'Trapped' && !('string' in v)) refuse('original-info-value');
+      infoKept = fingerprint(object.dict, ['Title']);
+    }
     const metadata = refOf(catalog.dict.get('Metadata'));
-    // The titler revises the XMP stream in place, so it must be a plain stream object.
-    if (metadata) await value(metadata, false);
     // The titler's next free number: never one any section lists as in use.
-    return { prev, root, info, size: Math.max(size.number, highest + 1), metadata };
+    return {
+      prev, root, info, size: Math.max(size.number, highest + 1), metadata,
+      catalog: fingerprint(catalog.dict, ['Metadata']), infoKept
+    };
   } catch (err) {
     if (err instanceof Refused) return { error: err.message.startsWith('tail-') ? 'original-syntax' : err.message };
     throw err;
   }
 }
 
-module.exports = { readOriginal, READ_BUDGET, INFLATE_BUDGET };
+// ponytail: one read per instance; a small pool if commits queue behind it.
+let queue = Promise.resolve();
+
+/** `read`, one original at a time in this process, so the budgets bound the instance. */
+function readOriginal(readRange, originalLength) {
+  const run = queue.then(() => read(readRange, originalLength));
+  queue = run.catch(() => {});
+  return run;
+}
+
+module.exports = { readOriginal, READ_BUDGET, INFLATE_BUDGET, MAX_ROWS };

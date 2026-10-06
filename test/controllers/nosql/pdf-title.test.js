@@ -3,8 +3,8 @@
 /**
  * PDF title lease API against an in-memory row store and object store. The object store keeps
  * versions and honours copy-source If-Match like the NRS bucket, so every assertion about "the
- * original is still whole" reads real bytes back. The PDFs are real `pdf-title/titler.py` output
- * (test/fixtures/pdf-title).
+ * original is still whole" reads real bytes back. Most PDFs are real `pdf-title/titler.py` output
+ * (test/fixtures/pdf-title); the rest are built with `test/helpers/pdf-build.js`.
  */
 
 process.env.NODE_ENV = 'test';
@@ -25,6 +25,7 @@ const controller = require('../../../src/controllers/nosql/pdf-title');
 const { logger } = require('../../../src/utils/logger');
 const { makeRes } = require('../../../src/http/router');
 const { readForLevel } = require('../../../src/helpers/access-sql');
+const { classicTail } = require('../../helpers/pdf-build');
 
 const FIXTURES = path.join(__dirname, '..', '..', 'fixtures', 'pdf-title');
 const fixture = name => fs.readFileSync(path.join(FIXTURES, name));
@@ -649,9 +650,12 @@ test('pdf title lease API', async (t) => {
     assert.equal(leased.body.originalLength, ORIGINAL.length);
   });
 
-  await t.test('a Catalog inside an object stream commits and is recorded titled', async (t) => {
+  await t.test('a Catalog inside an object stream, revised for XMP at a new number, commits and is recorded titled', async (t) => {
     const original = fixture('objstm-xmp.original.pdf');
-    const titledBytes = fixture('objstm-xmp.titled.pdf');
+    const xmp = '<< /Type /Metadata /Subtype /XML /Length 5 >>\nstream\n<x/>\n\nendstream';
+    const titledBytes = Buffer.concat([original, classicTail(original, [
+      [2, '<< /Type /Catalog /Pages 3 0 R /Metadata 9 0 R >>'], [5, '<< /Title (Site C Report) >>'], [9, xmp]
+    ], '/Size 10 /Root 2 0 R /Info 5 0 R /Prev 990')]);
     const w = world(t, { objects: { [KEY]: original } });
     const { leaseId } = await titleOnce(w, titledBytes, { original });
     assert.equal(w.row().pdfTitle.inFlight.facts.metadata.join(' '), '6 0');

@@ -1579,8 +1579,9 @@ paths:
         409 `put-window-open`, nothing is released or recorded, and the backup is kept. A write
         that fails a check inside that window is copied back from the backup at once. A new
         object is verified by size, ETag, Content-Type, whole sha256, original-prefix
-        sha256, and an increment that holds only what the titler writes (Info dictionary, XMP
-        metadata stream, one xref section). It is recorded `titled` or `restored`. An increment of
+        sha256, and an increment that holds only what the titler writes (Info dictionary with only
+        /Title changed, an XMP metadata stream under a new number with the Catalog changed only
+        to name it, one xref section). It is recorded `titled` or `restored`. An increment of
         any other shape is copied back from the backup and recorded as a skip. An unchanged source
         releases the lease. Anything else is copied back from the backup and recorded
         `needs-review`, and the backup is kept. While the PUT link may still be used the answer is

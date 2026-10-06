@@ -9,7 +9,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlib = require('zlib');
-const { readOriginal, READ_BUDGET } = require('../../src/helpers/pdf-original');
+const { readOriginal, READ_BUDGET, MAX_ROWS } = require('../../src/helpers/pdf-original');
+const { Reader, fingerprint } = require('../../src/helpers/pdf-tail');
 const { fixture, classicTail, classicPdf } = require('./pdf-build');
 
 /** Facts read from `bytes` as an original of `length` bytes, plus every range asked for. */
@@ -21,6 +22,15 @@ async function read(bytes, length = bytes.length) {
   }, length);
   return { facts, reads };
 }
+
+/** The facts the cross-reference walk gives, without the canonical Catalog and Info. */
+async function walked(bytes) {
+  const { facts: { error, prev, root, info, size, metadata } } = await read(bytes);
+  return error ? { error } : { prev, root, info, size, metadata };
+}
+
+/** `fingerprint` of the dictionary written as `text`. */
+const canon = (text, without = []) => fingerprint(new Reader(Buffer.from(text, 'latin1'), 0, { forbid: false }).dict(), without);
 
 const BODIES = [
   [1, '<< /Title (Old) >>'],
@@ -105,7 +115,7 @@ test('facts match pikepdf on real files', async (t) => {
   };
   for (const [file, facts] of Object.entries(expected)) {
     await t.test(file, async () => {
-      assert.deepEqual((await read(fixture(file))).facts, facts);
+      assert.deepEqual(await walked(fixture(file)), facts);
     });
   }
 });
@@ -139,9 +149,10 @@ test('a hybrid file finds its compressed Catalog through /XRefStm', async () => 
   ];
   // The table lists the compressed Catalog as free, as hybrid writers do for older readers.
   const hybrid = classicPdf(bodies, (offsets) => `/Size 8 /Root 2 0 R /Info 1 0 R /XRefStm ${offsets.get(7)}`, { free: [2] });
-  assert.deepEqual((await read(hybrid)).facts, { prev: lastTable(hybrid), root: [2, 0], info: [1, 0], size: 8, metadata: [6, 0] });
+  assert.deepEqual(await walked(hybrid), { prev: lastTable(hybrid), root: [2, 0], info: [1, 0], size: 8, metadata: [6, 0] });
+  // Without the stream the table's free entry stands, and a Catalog that is free is refused.
   const tableOnly = classicPdf(bodies, '/Size 8 /Root 2 0 R /Info 1 0 R', { free: [2] });
-  assert.equal((await read(tableOnly)).facts.error, 'original-unlisted');
+  assert.equal((await read(tableOnly)).facts.error, 'original-free-object');
 });
 
 test('a newer section wins over an older one for objects and trailer keys', async () => {
@@ -150,10 +161,94 @@ test('a newer section wins over an older one for objects and trailer keys', asyn
   const catalog = '<< /Type /Catalog /Pages 3 0 R /Metadata 6 0 R >>';
   // Catalog 2 revised in place to name an XMP stream.
   const revised = Buffer.concat([older, classicTail(older, [[2, catalog], [6, xmp]], `${TRAILER} /Prev ${lastTable(older)}`)]);
-  assert.deepEqual((await read(revised)).facts, { prev: lastTable(revised), root: [2, 0], info: [1, 0], size: 7, metadata: [6, 0] });
+  assert.deepEqual(await walked(revised), { prev: lastTable(revised), root: [2, 0], info: [1, 0], size: 7, metadata: [6, 0] });
   // /Root moved to a new Catalog 7; the older trailer still names 2.
   const moved = Buffer.concat([older, classicTail(older, [[6, xmp], [7, catalog]], `/Size 8 /Root 7 0 R /Info 1 0 R /Prev ${lastTable(older)}`)]);
-  assert.deepEqual((await read(moved)).facts, { prev: lastTable(moved), root: [7, 0], info: [1, 0], size: 8, metadata: [6, 0] });
+  assert.deepEqual(await walked(moved), { prev: lastTable(moved), root: [7, 0], info: [1, 0], size: 8, metadata: [6, 0] });
+});
+
+test('a free entry in a newer section hides an in-use one in an older section', async () => {
+  const older = classicPdf(BODIES, TRAILER);
+  const freed = Buffer.concat([older, classicTail(older, [[1, '<< /Title (New) >>']], `${TRAILER} /Prev ${lastTable(older)}`, { free: [2] })]);
+  assert.equal((await read(freed)).facts.error, 'original-free-object');
+});
+
+test('the Catalog and Info are kept in canonical form', async () => {
+  const { facts } = await read(fixture('classic-xmp.original.pdf'));
+  assert.equal(facts.catalog, canon('<< /Pages 2 0 R /Type /Catalog >>'));
+  assert.equal(facts.infoKept, canon('<< /ModDate <443a3230303430313032303330343035> /Producer (Acrobat Distiller 6.0.1) >>'));
+  assert.equal((await read(fixture('xrefstream-noinfo.original.pdf'))).facts.infoKept, null);
+  // Spelling never matters: escapes, line ends, hex case and number forms decode to one form.
+  assert.equal(canon('<< /A (a\\101\\\nb\r\nc) /B 1.50 /C <4A6> /D /x#41 >>'), canon('<< /D /xA /C <4a60> /B 1.5 /A (aAb\nc) >>'));
+});
+
+test('an Info the titler would revise in place must be an Info', async (t) => {
+  const info = (body, trailer = TRAILER) => read(classicPdf([[1, body], ...BODIES.slice(1)], trailer));
+  await t.test('strings, and /Trapped of any kind, are read', async () => {
+    assert.equal((await info('<< /Title (Old) /Trapped /True >>')).facts.infoKept, canon('<< /Trapped /True >>'));
+  });
+  const cases = {
+    'a stream': ['<< /Length 5 >>\nstream\nBT ET\nendstream', 'original-info-stream'],
+    'a number value, as an ExtGState holds': ['<< /Title (Old) /ca 0 >>', 'original-info-value'],
+    'a name value, as an action holds': ['<< /S /Named /N /Print >>', 'original-info-value'],
+    'an array': ['[1 2]', 'original-info-type']
+  };
+  for (const [label, [body, reason]] of Object.entries(cases)) {
+    await t.test(label, async () => assert.equal((await info(body)).facts.error, reason));
+  }
+  await t.test('the Catalog', async () => {
+    assert.equal((await info('<< /Title (Old) >>', TRAILER.replace('/Info 1 0 R', '/Info 2 0 R'))).facts.error, 'original-info-root');
+  });
+  await t.test('a dictionary written in the trailer', async () => {
+    assert.equal((await info('<< /Title (Old) >>', TRAILER.replace('/Info 1 0 R', '/Info << /Title (Old) >>'))).facts.error, 'original-info-direct');
+  });
+});
+
+test('deep nesting in an original is an original-* refusal, not a stack overflow', async () => {
+  const deep = `<< /Type /Catalog /Pages 3 0 R /X ${'['.repeat(100000)}${']'.repeat(100000)} >>`;
+  assert.equal((await read(classicPdf([BODIES[0], [2, deep], BODIES[2], BODIES[3]], TRAILER))).facts.error, 'original-syntax');
+});
+
+test('a value ends at endobj, so a window cut mid-number is read wider', async () => {
+  // Object stream 5 holds the Catalog; its /Length is object 8, whose digits straddle the first 4,096-byte window.
+  const packed = zlib.deflateSync(Buffer.from('2 0 << /Type /Catalog /Pages 3 0 R >>', 'latin1'));
+  assert.ok(packed.length >= 10 && packed.length < 100);
+  const header = '8 0 obj\n';
+  const bodies = [
+    BODIES[0], BODIES[2], BODIES[3],
+    [5, `<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /Length 8 0 R >>\nstream\n${packed.toString('latin1')}\nendstream`],
+    [7, `<< /Type /XRef /Size 9 /W [1 2 1] /Index [2 1] /Length 4 >>\nstream\n${Buffer.from([2, 0, 5, 0]).toString('latin1')}\nendstream`],
+    [8, `${' '.repeat(4096 - header.length - 1)}${packed.length}`]
+  ];
+  const file = classicPdf(bodies, (offsets) => `/Size 9 /Root 2 0 R /Info 1 0 R /XRefStm ${offsets.get(7)}`, { free: [2] });
+  const { facts } = await read(file);
+  assert.equal(facts.error, undefined);
+  assert.equal(facts.catalog, canon('<< /Type /Catalog /Pages 3 0 R >>'));
+});
+
+test('xref row counts are bounded before any row is built', async (t) => {
+  await t.test('a subsection past the highest object number, such as 2^53', async () => {
+    assert.equal((await read(xrefStreamPdf('/Index [9007199254740992 2]', Buffer.from([1, 0, 0, 1, 0, 0])))).facts.error, 'original-xref');
+    assert.equal((await read(xrefStreamPdf('/Index [8388600 8]', Buffer.alloc(24)))).facts.error, 'original-xref');
+  });
+  await t.test('more rows than the cap', async () => {
+    assert.equal((await read(xrefStreamPdf(`/Index [0 ${MAX_ROWS + 1}]`, Buffer.from([1, 0, 0])))).facts.error, 'original-too-many-objects');
+  });
+});
+
+test('one original is read at a time', async () => {
+  const plain = classicPdf(BODIES, TRAILER);
+  let active = 0;
+  let most = 0;
+  const range = async (offset, n) => {
+    most = Math.max(most, ++active);
+    await new Promise(resolve => setImmediate(resolve));
+    active--;
+    return plain.subarray(offset, offset + n);
+  };
+  const all = await Promise.all([1, 2, 3].map(() => readOriginal(range, plain.length)));
+  assert.equal(most, 1);
+  assert.ok(all.every(facts => !facts.error));
 });
 
 test('xref streams: every PNG row predictor, zero values and a missing type field', async (t) => {
@@ -162,12 +257,12 @@ test('xref streams: every PNG row predictor, zero values and a missing type fiel
 
   await t.test('None, Sub, Up, Average and Paeth rows, with /Index from 0', async () => {
     const file = xrefStreamFile(BODIES, trailer, { w: [1, 4, 1], zero: true, png: [0, 3, 4, 1, 2, 4] }); // Average on Info's row, Paeth on the Catalog's
-    assert.deepEqual((await read(file)).facts, expected(file));
+    assert.deepEqual(await walked(file), expected(file));
   });
 
   await t.test('/W [0 4 0]: type 1 and generation 0 by default', async () => {
     const file = xrefStreamFile(BODIES, trailer, { w: [0, 4, 0] });
-    assert.deepEqual((await read(file)).facts, expected(file));
+    assert.deepEqual(await walked(file), expected(file));
   });
 });
 
