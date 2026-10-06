@@ -38,7 +38,11 @@ const xmpObject = (body = packet()) => {
 const XMP = xmpObject();
 
 test('real titler output passes', async (t) => {
-  const shapes = [['classic-info', FINAL], ['classic-info', 'Site C Report', 'retitled'], ['xrefstream-noinfo', FINAL]];
+  const shapes = [
+    ['classic-info', FINAL], ['classic-info', 'Site C Report', 'retitled'], ['xrefstream-noinfo', FINAL],
+    ['classic-xmp', FINAL], ['xrefstream-xmp', FINAL], ['objstm-xmp', 'Site C Report'],
+    ['linearized-large', 'Site C Report', 'titled', '.pdf.gz']
+  ];
   for (const [name, title, titledAs = 'titled', ext] of shapes) {
     await t.test(`${name} ${titledAs}`, async () => {
       const { original, titled } = load(name, titledAs, ext);
@@ -52,15 +56,13 @@ test('real titler output passes', async (t) => {
   }
 });
 
-test('XMP fixtures from a titler that copies PDF/A conformance B raw are refused', async (t) => {
-  // Rebuild them once the titler writes operator words as character references.
-  const shapes = [['classic-xmp', FINAL], ['xrefstream-xmp', FINAL], ['objstm-xmp', 'Site C Report'], ['linearized-large', 'Site C Report', '.pdf.gz']];
-  for (const [name, title, ext] of shapes) {
-    await t.test(name, async () => {
+test('the titler writes PDF/A conformance B as a character reference', async (t) => {
+  for (const [name, ext] of [['classic-xmp'], ['xrefstream-xmp'], ['objstm-xmp'], ['linearized-large', '.pdf.gz']]) {
+    await t.test(name, () => {
       const { original, titled } = load(name, 'titled', ext);
-      assert.match(titled.subarray(original.length).toString('latin1'), /<pdfaid:conformance>B</);
-      const facts = await readFacts(original);
-      assert.equal(checkTail(titled.subarray(original.length), original.length, facts, title), 'tail-xmp-body');
+      // The original holds it raw; the increment never does.
+      assert.match(original.toString('latin1'), /<pdfaid:conformance>B</);
+      assert.match(titled.subarray(original.length).toString('latin1'), /<pdfaid:conformance>&#66;</);
     });
   }
 });

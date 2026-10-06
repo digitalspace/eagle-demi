@@ -94,14 +94,14 @@ endobj
 <<
 /Type /Metadata
 /Subtype /XML
-/Length 571
+/Length 575
 >>
 stream
 <?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
-<pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>
+<pdfaid:part>1</pdfaid:part><pdfaid:conformance>&#66;</pdfaid:conformance>
 </rdf:Description>
 <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
 <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Site C Report, Final (2026) é</rdf:li></rdf:Alt></dc:title>
@@ -121,5 +121,5 @@ xref
 trailer
 << /Size 8 /Root 3 0 R /Info 1 0 R /Prev 1069 >>
 startxref
-2147
+2151
 %%EOF

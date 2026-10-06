@@ -691,14 +691,7 @@ test('pdf title lease API', async (t) => {
 
   await t.test('a Catalog inside an object stream, revised for XMP at a new number, commits and is recorded titled', async (t) => {
     const original = fixture('objstm-xmp.original.pdf');
-    // Built by hand: the titled fixture copies PDF/A conformance B raw, which the check refuses.
-    const packet = Buffer.from('<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
-      '<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt>' +
-      '<rdf:li xml:lang="x-default">Site C Report</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>', 'latin1');
-    const xmp = `<< /Type /Metadata /Subtype /XML /Length ${packet.length} >>\nstream\n${packet.toString('latin1')}\nendstream`;
-    const titledBytes = Buffer.concat([original, classicTail(original, [
-      [2, '<< /Type /Catalog /Pages 3 0 R /Metadata 9 0 R >>'], [5, '<< /Title (Site C Report) >>'], [9, xmp]
-    ], '/Size 10 /Root 2 0 R /Info 5 0 R /Prev 990')]);
+    const titledBytes = fixture('objstm-xmp.titled.pdf');
     const w = world(t, { rows: [{ ...DOC, displayName: SECOND }], objects: { [KEY]: original } });
     const { leaseId } = await titleOnce(w, titledBytes, { original });
     assert.equal(w.row().pdfTitle.inFlight.facts.metadata.join(' '), '6 0');
