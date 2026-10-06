@@ -38,11 +38,7 @@ const xmpObject = (body = packet()) => {
 const XMP = xmpObject();
 
 test('real titler output passes', async (t) => {
-  const shapes = [
-    ['classic-info', FINAL], ['classic-info', 'Site C Report', 'retitled'], ['xrefstream-noinfo', FINAL],
-    ['classic-xmp', FINAL], ['xrefstream-xmp', FINAL], ['objstm-xmp', 'Site C Report'],
-    ['linearized-large', 'Site C Report', 'titled', '.pdf.gz']
-  ];
+  const shapes = [['classic-info', FINAL], ['classic-info', 'Site C Report', 'retitled'], ['xrefstream-noinfo', FINAL]];
   for (const [name, title, titledAs = 'titled', ext] of shapes) {
     await t.test(`${name} ${titledAs}`, async () => {
       const { original, titled } = load(name, titledAs, ext);
@@ -54,6 +50,40 @@ test('real titler output passes', async (t) => {
       assert.equal(checkTail(titled.subarray(original.length), original.length, facts, `${title}.`), 'tail-info-title');
     });
   }
+});
+
+test('XMP fixtures from a titler that copies PDF/A conformance B raw are refused', async (t) => {
+  // Rebuild them once the titler writes operator words as character references.
+  const shapes = [['classic-xmp', FINAL], ['xrefstream-xmp', FINAL], ['objstm-xmp', 'Site C Report'], ['linearized-large', 'Site C Report', '.pdf.gz']];
+  for (const [name, title, ext] of shapes) {
+    await t.test(name, async () => {
+      const { original, titled } = load(name, 'titled', ext);
+      assert.match(titled.subarray(original.length).toString('latin1'), /<pdfaid:conformance>B</);
+      const facts = await readFacts(original);
+      assert.equal(checkTail(titled.subarray(original.length), original.length, facts, title), 'tail-xmp-body');
+    });
+  }
+});
+
+test('an XMP word cannot paint a path an earlier content stream left open', async () => {
+  // Page 3 draws stream 4, which builds a path and never paints it, then object 7, which the original never defines.
+  const original = classicPdf([
+    [1, '<< /Title (Old) >>'],
+    [2, '<< /Type /Catalog /Pages 3 0 R /Metadata 5 0 R >>'],
+    [3, '<< /Type /Page /MediaBox [0 0 200 200] /Contents [4 0 R 7 0 R] >>'],
+    [4, '<< /Length 14 >>\nstream\n0 0 200 200 re\nendstream'],
+    [5, xmpObject(packet('Old'))],
+    [6, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>']
+  ], '/Size 7 /Root 2 0 R /Info 1 0 R');
+  const facts = await readFacts(original);
+  assert.equal(facts.size, 7);
+  const titled = (conformance) => classicTail(original, [
+    [1, '<< /Title (New) >>'],
+    [2, '<< /Type /Catalog /Pages 3 0 R /Metadata 7 0 R >>'],
+    [7, xmpObject(packet(TITLE, `<pdfaid:conformance>${conformance}</pdfaid:conformance>`))]
+  ], `/Size 8 /Root 2 0 R /Info 1 0 R /Prev ${facts.prev}`);
+  assert.equal(checkTail(titled('B'), original.length, facts), 'tail-xmp-body');
+  assert.equal(checkTail(titled('&#66;'), original.length, facts), null);
 });
 
 test('XMP revised in place is refused, whatever the object at that number is', async (t) => {
@@ -127,7 +157,7 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
 
   const accepted = {
     'the titler\'s packet': packet(),
-    'PDF/A identification values': packet(TITLE, '<pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>'),
+    'PDF/A identification values, B as a character reference': packet(TITLE, '<pdfaid:part>1</pdfaid:part><pdfaid:conformance>&#66;</pdfaid:conformance>'),
     'dates and ids as text': packet(TITLE, '<xmp:CreateDate>2004-01-02T03:04:05Z</xmp:CreateDate><xmpMM:DocumentID>uuid:6c9a-11</xmpMM:DocumentID>'),
     'an older dc:title attribute': packet(TITLE, '<x:a dc:title="New"/>'),
     'a Producer with parentheses': packet(TITLE, '<pdf:Producer>Adobe Acrobat 11.0 (Windows)</pdf:Producer>'),
@@ -138,11 +168,21 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
   for (const [label, body] of Object.entries(accepted)) {
     await t.test(`accepted: ${label}`, () => assert.equal(check(body), null));
   }
+  await t.test('a title holding an operator word is accepted only as a character reference', () => {
+    const info = '(Appendix F)';
+    assert.equal(check(packet('Appendix &#70;'), { title: 'Appendix F', info }), null);
+    assert.equal(check(packet('Appendix &#x46;'), { title: 'Appendix F', info }), null);
+    assert.equal(check(packet('Appendix F'), { title: 'Appendix F', info }), 'tail-xmp-body');
+    assert.equal(check(packet('Plan B'), { title: 'Plan B', info: '(Plan B)' }), 'tail-xmp-body');
+    assert.equal(check(packet('Plan &#66;'), { title: 'Plan B', info: '(Plan B)' }), null);
+  });
+
   await t.test('accepted: a title with markup characters, escaped', () => {
-    assert.equal(check(packet('A &amp; B &lt;1&gt;'), { title: 'A & B <1>', info: '(A & B <1>)' }), null);
+    assert.equal(check(packet('A &amp; &#66; &lt;1&gt;'), { title: 'A & B <1>', info: '(A & B <1>)' }), null);
   });
 
   const refused = {
+    'PDF/A conformance B written raw': packet(TITLE, '<pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>'),
     'page operators as a text node': packet(TITLE, '<x:a>BT /F1 48 Tf 72 700 Td (x) Tj ET</x:a>'),
     'path operators without delimiters': packet(TITLE, '<x:a>0 0 999 999 re f</x:a>'),
     'an operator glued to a number': packet(TITLE, '<x:a>1re</x:a>'),

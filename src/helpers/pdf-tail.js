@@ -26,12 +26,11 @@ const MAX_DEPTH = 32;
 /** XMP bodies longer than this are refused; the titler's packets are a few KiB. */
 const MAX_XMP = 64 * 1024;
 /**
- * Content-stream operators, refused as a word in XMP text: an original may name the XMP's new
- * number as page content. `B` is left out for PDF/A conformance `B`; it paints only a current
- * path, and every path operator is refused.
+ * Content-stream operators, refused as a word in raw XMP text: an original may name the XMP's new
+ * number as page content. The titler writes such words as character references (`&#66;`).
  */
 const OPERATORS = new Set([
-  'b', 'B*', 'b*', 'BDC', 'BI', 'BMC', 'BT', 'BX', 'c', 'cm', 'CS', 'cs', 'd', 'd0', 'd1', 'Do', 'DP',
+  'B', 'b', 'B*', 'b*', 'BDC', 'BI', 'BMC', 'BT', 'BX', 'c', 'cm', 'CS', 'cs', 'd', 'd0', 'd1', 'Do', 'DP',
   'EI', 'EMC', 'ET', 'EX', 'f', 'F', 'f*', 'G', 'g', 'gs', 'h', 'i', 'ID', 'j', 'J', 'K', 'k', 'l', 'm',
   'M', 'MP', 'n', 'q', 'Q', 're', 'RG', 'rg', 'ri', 's', 'S', 'SC', 'sc', 'SCN', 'scn', 'sh', 'T*', 'Tc',
   'Td', 'TD', 'Tf', 'Tj', 'TJ', 'TL', 'Tm', 'Tr', 'Ts', 'Tw', 'Tz', 'v', 'w', 'W', 'W*', 'y', "'", '"'
@@ -316,7 +315,8 @@ function checkXmp(data, wanted) {
     const chunk = text.slice(pos, lt < 0 ? text.length : lt);
     if (chunk) {
       if (inTitleLi()) {
-        if (!sameTitle(xmlText(chunk), wanted)) bad();
+        // The raw bytes are what a content-stream lexer would see; the decoded text is the title.
+        if (!isInertText(chunk) || !sameTitle(xmlText(chunk), wanted)) bad();
         liText = chunk;
       } else if (stack.length ? !isInertText(chunk) : /\S/.test(chunk)) {
         bad();

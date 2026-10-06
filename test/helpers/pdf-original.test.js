@@ -231,6 +231,24 @@ test('xref row counts are bounded before any row is built', async (t) => {
     assert.equal((await read(xrefStreamPdf('/Index [9007199254740992 2]', Buffer.from([1, 0, 0, 1, 0, 0])))).facts.error, 'original-xref');
     assert.equal((await read(xrefStreamPdf('/Index [8388600 8]', Buffer.alloc(24)))).facts.error, 'original-xref');
   });
+  await t.test('sections each under the cap, together over it, through /Prev', async () => {
+    const count = Math.ceil(MAX_ROWS * 0.55);
+    const data = zlib.deflateSync(Buffer.alloc(count));
+    const section = (num, prev) => Buffer.concat([
+      Buffer.from(`${num} 0 obj\n<< /Type /XRef /Size ${count} /W [1 0 0] /Index [0 ${count}] ${prev} /Filter /FlateDecode /Length ${data.length} >>\nstream\n`, 'latin1'),
+      data,
+      Buffer.from('\nendstream\nendobj\n', 'latin1')
+    ]);
+    const head = Buffer.from('%PDF-1.7\n', 'latin1');
+    const older = section(1, '');
+    const newer = section(2, `/Prev ${head.length}`);
+    const end = (at) => Buffer.from(`startxref\n${at}\n%%EOF\n`, 'latin1');
+    const one = Buffer.concat([head, older, end(head.length)]);
+    assert.notEqual((await read(one)).facts.error, 'original-too-many-objects', 'one section fits');
+    const two = Buffer.concat([head, older, newer, end(head.length + older.length)]);
+    assert.equal((await read(two)).facts.error, 'original-too-many-objects');
+  });
+
   await t.test('more rows than the cap', async () => {
     assert.equal((await read(xrefStreamPdf(`/Index [0 ${MAX_ROWS + 1}]`, Buffer.from([1, 0, 0])))).facts.error, 'original-too-many-objects');
   });
