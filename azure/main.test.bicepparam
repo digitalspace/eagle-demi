@@ -161,6 +161,9 @@ param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194
 // in optionalSecretNames above. Both sides read the SAME value — rotate it in eagle-edge and in the
 // vault together, or callers fall back to the shared anonymous quota key for a while.
 
+// `log` while the list of callers that skip Front Door is measured (AppTraces, evt 'edge-gate').
+param edgeGate = 'log'
+
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
 // Both client secrets are vault-only (`track-client-secret`, `role-sync-client-secret`).

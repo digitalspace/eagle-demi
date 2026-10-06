@@ -136,6 +136,11 @@ param ssoAudience string = ''
 @description('Comma-separated egress IPs of proxies we run. An APIM-asserted address on this list makes the browser hop of X-Forwarded-For the caller.')
 param trustedProxyIps string = ''
 
+// Off by default: `log` first to list who still skips Front Door, `enforce` once that list is known.
+@description('EDGE_GATE on the API: empty off, log, or enforce (403 for requests that skipped Front Door).')
+@allowed(['', 'log', 'enforce'])
+param edgeGate string = ''
+
 // Which OPTIONAL secrets this environment's vault already holds. Values are set by hand on the
 // devbox, so this template cannot see whether one exists — naming it here is the statement that it
 // does, and an unnamed one leaves its app setting empty rather than pointing at nothing.
@@ -757,6 +762,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
     edgeSecretUri: edgeSecretUri
+    edgeGate: edgeGate
     accessGateSecretUri: accessGateSecretUri
     virtualNetworkSubnetId: apiFlexSubnetId
     identityId: identityId

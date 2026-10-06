@@ -33,10 +33,11 @@ env:
   # Still `eagle-extractor-*`: the code moved repositories, the deployed app did not.
   EXTRACTOR_APP_NAME: eagle-extractor-prod
   API_FLEX_APP_NAME: demi-api-fc-prod
-  # The app's own host, the same one the staging workflow smokes. Not the public
-  # www.projects.eao.gov.bc.ca/demi-search path: that answer also depends on the OpenShift rproxy,
-  # which this workflow does not deploy and must not be able to fail on.
+  # The app's own host, for the /health* probes, which EDGE_GATE always lets through.
   API_BASE_URL: https://demi-api-fc-prod.azurewebsites.net
+  # Search goes through Front Door, as eagle-public does: under EDGE_GATE=enforce the Function
+  # host refuses it. The edge does not cache this route, so it still answers from the new build.
+  SEARCH_BASE_URL: https://projects.eao.gov.bc.ca/demi-search
 
 jobs:
   deploy-extractor:
@@ -336,7 +337,7 @@ jobs:
           SMOKE_PROJECT_ID: ${{ vars.SEARCH_SMOKE_PROJECT_ID }}
         run: |
           set -uo pipefail
-          if ! ./scripts/search-smoke.sh "$API_BASE_URL" "$SMOKE_PROJECT_ID"; then
+          if ! ./scripts/search-smoke.sh "$SEARCH_BASE_URL" "$SMOKE_PROJECT_ID"; then
             # Recorded BEFORE failing: the rollback job keys off this output.
             echo "failed=true" >> "$GITHUB_OUTPUT"
             exit 1
@@ -427,7 +428,7 @@ jobs:
       - name: Smoke test production search
         env:
           SMOKE_PROJECT_ID: ${{ vars.SEARCH_SMOKE_PROJECT_ID }}
-        run: ./scripts/search-smoke.sh "$API_BASE_URL" "$SMOKE_PROJECT_ID"
+        run: ./scripts/search-smoke.sh "$SEARCH_BASE_URL" "$SMOKE_PROJECT_ID"
 
       # The run is already red — deploy-api failed. This says what production is now running, which
       # is the fact the person reading the failure needs first.

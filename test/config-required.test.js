@@ -106,6 +106,12 @@ test('EDGE_SECRET reaches config.edgeSecret under that exact name', () => {
   }
 });
 
+// Pins the name api-function-flex.bicep sets; a mismatch would leave the gate off with no error.
+test('EDGE_GATE reaches config.edgeGate under that exact name', () => {
+  assert.strictEqual(readConfig({ EDGE_GATE: ' Enforce ' }, c => c.edgeGate), 'enforce');
+  assert.strictEqual(readConfig({}, c => c.edgeGate), '', 'unset must be off');
+});
+
 // App Service substitutes the secret for `@Microsoft.KeyVault(SecretUri=...)`, and hands the app
 // the reference text itself when that fails — no RBAC, vault unreachable, secret deleted. Every
 // credential in azure/modules/api-function-flex.bicep is deployed as one of those references, so
