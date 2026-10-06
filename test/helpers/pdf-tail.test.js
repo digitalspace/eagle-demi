@@ -2,8 +2,8 @@
 
 /**
  * The increment check against real `pdf-title/titler.py` output (fixtures written by it from the
- * titler's own test builders) and against hand-built increments. The `*-xmp` titled fixtures are
- * from the titler that revised XMP in place, which the check now refuses.
+ * titler's own test builders) and against hand-built increments. `classic-xmp.in-place.pdf` is
+ * from the earlier titler that revised XMP in place, which the check now refuses.
  */
 
 const test = require('node:test');
@@ -12,7 +12,6 @@ const { checkTail } = require('../../src/helpers/pdf-tail');
 const { readOriginal } = require('../../src/helpers/pdf-original');
 const { fixture, classicTail, classicPdf } = require('./pdf-build');
 
-const IN_PLACE = [['classic-xmp'], ['xrefstream-xmp'], ['objstm-xmp'], ['linearized-large', '.pdf.gz']];
 
 function load(name, titled = 'titled', ext = '.pdf') {
   return { original: fixture(`${name}.original${ext}`), titled: fixture(`${name}.${titled}${ext}`) };
@@ -23,9 +22,13 @@ const readFacts = (original) => readOriginal(async (offset, length) => original.
 const XMP = '<< /Type /Metadata /Subtype /XML /Length 5 >>\nstream\n<x/>\n\nendstream';
 
 test('real titler output passes', async (t) => {
-  for (const [name, titledAs = 'titled'] of [['classic-info'], ['classic-info', 'retitled'], ['xrefstream-noinfo']]) {
+  const shapes = [
+    ['classic-info'], ['classic-info', 'retitled'], ['xrefstream-noinfo'],
+    ['classic-xmp'], ['xrefstream-xmp'], ['objstm-xmp'], ['linearized-large', 'titled', '.pdf.gz']
+  ];
+  for (const [name, titledAs = 'titled', ext] of shapes) {
     await t.test(`${name} ${titledAs}`, async () => {
-      const { original, titled } = load(name, titledAs);
+      const { original, titled } = load(name, titledAs, ext);
       assert.ok(titled.subarray(0, original.length).equals(original));
       const facts = await readFacts(original);
       assert.ok(!facts.error, facts.error);
@@ -35,13 +38,11 @@ test('real titler output passes', async (t) => {
 });
 
 test('XMP revised in place is refused, whatever the object at that number is', async (t) => {
-  for (const [name, ext] of IN_PLACE) {
-    await t.test(name, async () => {
-      const { original, titled } = load(name, 'titled', ext);
-      const facts = await readFacts(original);
-      assert.equal(checkTail(titled.subarray(original.length), original.length, facts), 'tail-xmp-in-place');
-    });
-  }
+  await t.test('the earlier titler\'s output', async () => {
+    const { original, titled } = load('classic-xmp', 'in-place');
+    const facts = await readFacts(original);
+    assert.equal(checkTail(titled.subarray(original.length), original.length, facts), 'tail-xmp-in-place');
+  });
 
   await t.test('a /Metadata that is also page 1\'s content stream', async () => {
     const original = classicPdf([

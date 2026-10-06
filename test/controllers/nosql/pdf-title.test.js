@@ -555,7 +555,7 @@ test('pdf title lease API', async (t) => {
       const w = world(t, { objects: { [KEY]: XMP_ORIGINAL } });
       const leased = await lease();
       const text = XMP_TITLED.toString('latin1');
-      const at = text.indexOf('6 0 obj', XMP_ORIGINAL.length);
+      const at = text.indexOf('7 0 obj', XMP_ORIGINAL.length);
       assert.ok(at > 0 && text.slice(at, at + 200).includes('/Type /Metadata'), 'the XMP object of the increment');
       // Object 4 is the original's page: the revision would turn it into an XML stream.
       const moved = Buffer.from(`${text.slice(0, at)}4${text.slice(at + 1)}`, 'latin1');
@@ -680,10 +680,7 @@ test('pdf title lease API', async (t) => {
 
   await t.test('a Catalog inside an object stream, revised for XMP at a new number, commits and is recorded titled', async (t) => {
     const original = fixture('objstm-xmp.original.pdf');
-    const xmp = '<< /Type /Metadata /Subtype /XML /Length 5 >>\nstream\n<x/>\n\nendstream';
-    const titledBytes = Buffer.concat([original, classicTail(original, [
-      [2, '<< /Type /Catalog /Pages 3 0 R /Metadata 9 0 R >>'], [5, '<< /Title (Site C Report) >>'], [9, xmp]
-    ], '/Size 10 /Root 2 0 R /Info 5 0 R /Prev 990')]);
+    const titledBytes = fixture('objstm-xmp.titled.pdf');
     const w = world(t, { objects: { [KEY]: original } });
     const { leaseId } = await titleOnce(w, titledBytes, { original });
     assert.equal(w.row().pdfTitle.inFlight.facts.metadata.join(' '), '6 0');

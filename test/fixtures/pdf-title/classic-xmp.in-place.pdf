@@ -83,14 +83,7 @@ startxref
 /ModDate (D\07220040102030405)
 >>
 endobj
-3 0 obj
-<<
-/Type /Catalog
-/Pages 2 0 R
-/Metadata 7 0 R
->>
-endobj
-7 0 obj
+6 0 obj
 <<
 /Type /Metadata
 /Subtype /XML
@@ -114,12 +107,10 @@ endobj
 xref
 1 1
 0000001285 00000 n
-3 1
+6 1
 0000001430 00000 n
-7 1
-0000001495 00000 n
 trailer
-<< /Size 8 /Root 3 0 R /Info 1 0 R /Prev 1069 >>
+<< /Size 7 /Root 3 0 R /Info 1 0 R /Prev 1069 >>
 startxref
-2147
+2082
 %%EOF
