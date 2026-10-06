@@ -44,6 +44,7 @@ const users = require('../repositories/users');
 const groups = require('../repositories/groups');
 const inspections = require('../repositories/inspections');
 const { constrainToProject, DELETED_CEILING } = documents;
+const { unlessUnprovisioned } = require('../helpers/unprovisioned');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
 const { seedAcl, eagleReadUnder } = require('../seed/transform');
@@ -302,18 +303,13 @@ function storedAclMismatch(rows, parentReadOf) {
  * applied to its own stored Eagle copy and its stored parent, and a child whose parent row is gone.
  */
 async function storedMirrorDrift(access, projectRead, repos) {
-  const userRows = await repos.users.listAclRows(access);
-  const groupRows = await repos.groups.listAclRows(access);
-  const inspectionRows = await repos.inspections.listAclRows(access);
+  // null for a container not provisioned yet: its labels stay out of the summary and read `skipped`.
+  const rowsOf = repo => unlessUnprovisioned(repo.CONTAINER, () => repo.listAclRows(access));
+  const userRows = await rowsOf(repos.users);
+  const groupRows = await rowsOf(repos.groups);
+  const inspectionRows = await rowsOf(repos.inspections);
 
-  const byId = new Map(inspectionRows.map(row => [String(row.id), row]));
-  const ofKind = kind => inspectionRows.filter(row => row.kind === kind);
   const projectOf = row => projectRead.get(String(row.projectId)) || null;
-  const parentOf = {
-    Inspection: row => (row.projectId == null ? null : projectOf(row)),
-    InspectionElement: row => (byId.get(String(row.inspection)) || {}).read || null,
-    InspectionItem: row => (byId.get(String(row.element)) || {}).read || null
-  };
   const missing = (rows, parentReadOf) => rows.filter(row => !parentReadOf(row)).map(row => String(row.id));
   const section = (rows, parentReadOf, hasParent = () => true) => ({
     inDemi: rows.length,
@@ -321,13 +317,20 @@ async function storedMirrorDrift(access, projectRead, repos) {
     missingParent: missing(rows.filter(hasParent), parentReadOf)
   });
 
-  return {
-    users: section(userRows, () => null, () => false),
-    groups: section(groupRows, projectOf),
-    inspections: section(ofKind('Inspection'), parentOf.Inspection, row => row.projectId != null),
-    inspectionElements: section(ofKind('InspectionElement'), parentOf.InspectionElement),
-    inspectionItems: section(ofKind('InspectionItem'), parentOf.InspectionItem)
-  };
+  const out = {};
+  if (userRows) out.users = section(userRows, () => null, () => false);
+  if (groupRows) out.groups = section(groupRows, projectOf);
+  if (!inspectionRows) return out;
+
+  const byId = new Map(inspectionRows.map(row => [String(row.id), row]));
+  const ofKind = kind => inspectionRows.filter(row => row.kind === kind);
+  out.inspections = section(ofKind('Inspection'),
+    row => (row.projectId == null ? null : projectOf(row)), row => row.projectId != null);
+  out.inspectionElements = section(ofKind('InspectionElement'),
+    row => (byId.get(String(row.inspection)) || {}).read || null);
+  out.inspectionItems = section(ofKind('InspectionItem'),
+    row => (byId.get(String(row.element)) || {}).read || null);
+  return out;
 }
 
 /** Every id set a diff produced, as one drift number. */

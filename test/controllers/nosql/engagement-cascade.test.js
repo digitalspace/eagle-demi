@@ -72,7 +72,7 @@ function projected(rows, query) {
  *
  * @returns {{writes: Array, unexpected: Array}} the bulk patches, in the order they were sent
  */
-function stubCosmos(t, { periods, commentsByPeriod = {}, updates = null, mirrorRows = [] }) {
+function stubCosmos(t, { periods, commentsByPeriod = {}, updates = null, mirrorRows = [], mirrorError = null }) {
   const writes = [];
   const unexpected = [];
   // `groups` and `inspections` rows, filtered by the partition the read names and every bound
@@ -101,6 +101,7 @@ function stubCosmos(t, { periods, commentsByPeriod = {}, updates = null, mirrorR
     }
     if (container === 'updates' && updates) return { items: updates.map(u => ({ ...u })) };
     if (container === 'groups' || container === 'inspections') {
+      if (mirrorError) throw mirrorError;
       return { items: mirrored(container, spec, options) };
     }
     unexpected.push(container);
@@ -362,6 +363,53 @@ test('a project visibility change carries to its groups and inspections', async 
       assert.strictEqual(widened.statusCode, 200, JSON.stringify(widened.body));
       for (const id of ['G1', 'I1', 'E1', 'IT1']) assert.deepStrictEqual(readOf(rows, id), STAFF_READ, id);
     });
+
+  await t.test('an element follows its inspection\'s new read, not the project\'s', async (tt) => {
+    // Published project; a staff-only inspection; an element Eagle marked public. Capping the
+    // element by the project would publish an element of a staff-only inspection.
+    const rows = [
+      { container: 'inspections', id: 'I1', kind: 'Inspection', inspection: 'I1', projectId: '207',
+        read: STAFF_READ, eagleRead: ['sysadmin'] },
+      { container: 'inspections', id: 'E1', kind: 'InspectionElement', inspection: 'I1', projectId: '207',
+        read: STAFF_READ, eagleRead: ['public'] }
+    ];
+    stubCosmos(tt, { periods: [], mirrorRows: rows });
+    tt.mock.method(notifications, 'readForWrite', async () => null);
+
+    const res = await moveTo(tt, 4, 2);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(readOf(rows, 'I1'), STAFF_READ);
+    assert.deepStrictEqual(readOf(rows, 'E1'), STAFF_READ);
+  });
+
+  await t.test('a container not provisioned yet is skipped; the rest of the cascade still runs',
+    async (tt) => {
+      const { writes } = stubCosmos(tt, {
+        periods: [{ id: 'cp1', read: STAFF_READ, eagleRead: ['public'] }],
+        commentsByPeriod: { cp1: [{ id: 'c1', read: STAFF_READ, eagleRead: ['public'] }] },
+        mirrorError: Object.assign(new Error('Resource Not Found'), { code: 404 })
+      });
+      tt.mock.method(notifications, 'readForWrite', async () => null);
+
+      const res = await moveTo(tt, 4, 2);
+
+      assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+      assert.strictEqual(documents.setAclForProject.mock.callCount(), 1, 'documents still re-derived');
+      assert.strictEqual(patchesTo(writes, 'commentPeriods').length, 1, 'periods still re-derived');
+      assert.strictEqual(patchesTo(writes, 'comments').length, 1, 'comments still re-derived');
+    });
+
+  await t.test('any other error from those containers still fails the cascade', async (tt) => {
+    stubCosmos(tt, { periods: [], mirrorError: Object.assign(new Error('throttled'), { code: 503 }) });
+    tt.mock.method(notifications, 'readForWrite', async () => null);
+
+    const res = await moveTo(tt, 4, 2);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.match(res.body.error, /groups were not updated/);
+    assert.match(res.body.error, /inspections were not updated/);
+  });
 
   await t.test('rows of another project are untouched', async (tt) => {
     const rows = fixture();

@@ -1165,6 +1165,29 @@ test('the user, group and inspection mirrors are checked against their stored Ea
     assert.strictEqual(summary.drift - clean.drift, 2, 'both reach the alert total');
   });
 
+  const failing = (container, err) => ({ CONTAINER: container, listAclRows: async () => { throw err; } });
+
+  await t.test('a container not provisioned yet reads `skipped`; the rest of the run still reports', async () => {
+    const notFound = Object.assign(new Error('Resource Not Found'), { code: 404 });
+    const summary = await reconcile([], deps({
+      users: failing('users', notFound),
+      inspections: failing('inspections', notFound),
+      groups: storedRows([{ id: 'G1', projectId: '207', read: ['staff', 'idir', 'public'], isPublished: true, eagleRead: ['sysadmin'] }])
+    }));
+    assert.strictEqual(summary.users, undefined);
+    assert.strictEqual(summary.inspectionItems, undefined);
+    assert.deepStrictEqual(summary.groups.aclMismatch, ['G1'], 'a provisioned kind is still checked');
+    assert.ok(summary.documents.unpublishedOrDeleted.length > 0, 'the Eagle-diffed kinds still report');
+    const line = summaryLine(summary);
+    assert.match(line, /users: skipped groups: aclMismatch=1 missingParent=0 inspections: skipped /);
+    assert.match(line, /inspectionItems: skipped /);
+  });
+
+  await t.test('any other error from those containers still fails the run', async () => {
+    const throttled = Object.assign(new Error('throttled'), { code: 429 });
+    await assert.rejects(reconcile([], deps({ users: failing('users', throttled) })), /throttled/);
+  });
+
   await t.test('a deleted row is held to the deleted ceiling, not to its Eagle read', async () => {
     const deleted = { id: 'U-del', read: ['staff'], isPublished: false, isDeleted: true, eagleRead: ['public', 'sysadmin'] };
     const summary = await reconcile([], deps({ users: storedRows([deleted]) }));

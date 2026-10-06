@@ -16,6 +16,7 @@ const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
 const groups = require('../../repositories/groups');
 const inspections = require('../../repositories/inspections');
+const { unlessUnprovisioned } = require('../../helpers/unprovisioned');
 const {
   resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
@@ -152,7 +153,7 @@ async function cascadeProjectVisibility(projectId, acl, eagleId, { updates = tru
     await cascadeEngagementVisibility(projectId, acl.read),
     await cascadeMirrorVisibility('groups', groups, projectId, acl.read),
     await cascadeMirrorVisibility('inspections', inspections, projectId, acl.read),
-    updates ?await cascadeUpdateVisibility(projectId, eagleId, acl.read) : null
+    updates ? await cascadeUpdateVisibility(projectId, eagleId, acl.read) : null
   ].filter(Boolean);
   return failures.length ? failures.join(' ') : null;
 }
@@ -228,7 +229,8 @@ async function cascadeUpdateVisibility(projectId, eagleId, read) {
  */
 async function cascadeMirrorVisibility(label, repo, projectId, read) {
   try {
-    const cascade = await repo.setAclForProject(projectId, read);
+    const cascade = await unlessUnprovisioned(repo.CONTAINER, () => repo.setAclForProject(projectId, read));
+    if (!cascade) return null;
     if (cascade.failed > 0) {
       logger.error(`[Project Controller] ${label} ACL cascade partially failed`, {
         projectId, succeeded: cascade.succeeded, failed: cascade.failed

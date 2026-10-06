@@ -261,6 +261,9 @@ PUT routes take the same guards as the other `/eagle/*` mirrors. GET routes take
 - eagle-api publishes none of these kinds, so `reconcile-eagle.js` has no Eagle id set to diff.
   It checks each row against the rule applied to its own stored Eagle read and its stored parent,
   and reports `aclMismatch` and `missingParent` per kind.
+- Until the containers exist, the project cascade and the reconcile skip a kind whose container
+  answers 404 (`helpers/unprovisioned.js`, one warning per process); the reconcile line reads
+  `skipped` for it.
 - Field levels are in `src/vis/catalog/users.js`, `groups.js` and `inspections.js`. Every user
   contact field (email, phone, cell, fax, postal address) and the user notes are 2/2. So are the
   inspector `email` on an inspection, the stored-file internals on an item, and group `members`.
