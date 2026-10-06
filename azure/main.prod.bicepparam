@@ -111,6 +111,9 @@ param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194
 // in optionalSecretNames above. Both sides read the SAME value — rotate it in eagle-edge and in the
 // vault together, or callers fall back to the shared anonymous quota key for a while.
 
+// Off until test has run `log`, then `enforce`, with no unknown caller left.
+param edgeGate = ''
+
 // The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
 // so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
 // same-origin through rproxy. The one entry is the DEMI admin console's Front Door endpoint on

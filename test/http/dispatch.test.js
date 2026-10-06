@@ -20,6 +20,10 @@ const { dispatch } = require('../../src/http/router');
 const configController = require('../../src/controllers/config');
 const documentController = require('../../src/controllers/nosql/document');
 const links = require('../../src/repositories/links');
+const healthController = require('../../src/controllers/health');
+const searchSchemaController = require('../../src/controllers/search-schema');
+const config = require('../../src/config');
+const { logger } = require('../../src/utils/logger');
 
 const AUTHED = { 'x-api-key': SUITE_KEY };
 
@@ -160,4 +164,150 @@ test('a 200 with an empty body still carries content-length: 0', async (t) => {
   assert.strictEqual(res.status, 200);
   assert.strictEqual(res.body, '', 'only null-body statuses lose their body');
   assert.strictEqual(res.headers['content-length'], '0');
+});
+
+test('edge gate', async (t) => {
+  // Fake values: the gate compares what the request presents against these.
+  const GATEWAY = { 'x-gateway-secret': 'gateway-secret-for-edge-gate-suite' };
+  const EDGE = { 'x-edge-secret': 'edge-secret-for-edge-gate-suite' };
+  const saved = { edgeGate: config.edgeGate, edgeSecret: config.edgeSecret };
+
+  t.beforeEach((t) => {
+    process.env.APIM_GATEWAY_SECRET = GATEWAY['x-gateway-secret'];
+    config.edgeSecret = EDGE['x-edge-secret'];
+    config.edgeGate = 'enforce';
+    t.mock.method(configController, 'getConfig', (req, res) => res.json({ ok: true }));
+  });
+  t.afterEach(() => {
+    delete process.env.APIM_GATEWAY_SECRET;
+    Object.assign(config, saved);
+  });
+
+  const gateWarnings = (warn) =>
+    warn.mock.calls.filter(c => String(c.arguments[0]).includes('edge gate'));
+
+  await t.test('enforce refuses a direct call to the Function host', async () => {
+    const res = await call('/api/config');
+    assert.strictEqual(res.status, 403);
+    assert.match(JSON.parse(res.body).error, /^Forbidden/);
+  });
+
+  await t.test('enforce refuses APIM without the edge secret', async () => {
+    const res = await call('/api/config', { headers: { ...GATEWAY } });
+    assert.strictEqual(res.status, 403);
+  });
+
+  await t.test('a wrong edge secret counts as no edge', async () => {
+    const res = await call('/api/config', { headers: { ...GATEWAY, 'x-edge-secret': 'guess' } });
+    assert.strictEqual(res.status, 403);
+  });
+
+  await t.test('the edge secret without APIM is refused', async () => {
+    const res = await call('/api/config', { headers: { ...EDGE } });
+    assert.strictEqual(res.status, 403);
+  });
+
+  await t.test('APIM plus the edge secret is served', async () => {
+    const res = await call('/api/config', { headers: { ...GATEWAY, ...EDGE } });
+    assert.strictEqual(res.status, 200);
+  });
+
+  await t.test('APIM plus a subscription name is served', async () => {
+    const res = await call('/api/config', { headers: { ...GATEWAY, 'x-apim-subscription': 'eagle-api' } });
+    assert.strictEqual(res.status, 200);
+  });
+
+  await t.test('APIM plus a valid X-Api-Key is served and reaches auth', async (t) => {
+    t.mock.method(documentController, 'createDocument', (req, res) => res.json({}));
+    t.mock.method(documentController, 'getDocuments', (req, res) => res.json({ user: req.user.preferred_username }));
+    const headers = { ...GATEWAY, 'x-api-key': SUITE_KEY };
+
+    assert.strictEqual((await call('/api/config', { headers })).status, 200);
+    const read = await call('/api/documents', { headers });
+    assert.strictEqual(read.status, 200);
+    assert.strictEqual(JSON.parse(read.body).user, 'internal-service');
+    const write = await call('/api/documents', {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: { string: '{}' }
+    });
+    assert.strictEqual(write.status, 200);
+  });
+
+  // passiveAuth serves a rejected key as anonymous and /config has no guard, so only the gate
+  // stops a junk key sent straight to APIM.
+  await t.test('APIM plus a bogus or empty X-Api-Key is refused, even on public routes', async (t) => {
+    let reached = 0;
+    t.mock.method(documentController, 'getDocuments', (req, res) => { reached++; res.json({}); });
+
+    for (const key of ['not-a-key', '']) {
+      const headers = { ...GATEWAY, 'x-api-key': key };
+      assert.strictEqual((await call('/api/config', { headers })).status, 403, `config, key '${key}'`);
+      assert.strictEqual((await call('/api/documents', { headers })).status, 403, `documents, key '${key}'`);
+    }
+    assert.strictEqual(reached, 0);
+  });
+
+  await t.test('log serves a bogus key and writes one bad-key line', async (t) => {
+    config.edgeGate = 'log';
+    const warn = t.mock.method(logger, 'warn');
+
+    const res = await call('/api/config', { headers: { ...GATEWAY, 'x-api-key': 'not-a-key' } });
+
+    assert.strictEqual(res.status, 200);
+    const lines = gateWarnings(warn);
+    assert.strictEqual(lines.length, 1);
+    assert.deepStrictEqual(lines[0].arguments[1], { evt: 'edge-gate', path: '/api/config', reason: 'bad-key' });
+  });
+
+  await t.test('/health/db is served with no headers at all', async (t) => {
+    t.mock.method(healthController, 'db', (req, res) => res.json({ ok: true }));
+    const res = await call('/health/db');
+    assert.strictEqual(res.status, 200);
+  });
+
+  await t.test('the /api/health aliases are served with no headers at all', async (t) => {
+    t.mock.method(searchSchemaController, 'searchSchema', (req, res) => res.json({ ok: true }));
+    assert.strictEqual((await call('/api/health')).status, 200);
+    assert.strictEqual((await call('/api/health/search-schema')).status, 200);
+  });
+
+  await t.test('log serves the request and writes exactly one gate line', async (t) => {
+    config.edgeGate = 'log';
+    const warn = t.mock.method(logger, 'warn');
+
+    const res = await call('/api/config', { headers: { ...GATEWAY } });
+
+    assert.strictEqual(res.status, 200);
+    const lines = gateWarnings(warn);
+    assert.strictEqual(lines.length, 1);
+    assert.deepStrictEqual(lines[0].arguments[1], { evt: 'edge-gate', path: '/api/config', reason: 'no-edge' });
+  });
+
+  await t.test('log names a missing gateway hop and never logs header values', async (t) => {
+    config.edgeGate = 'log';
+    const warn = t.mock.method(logger, 'warn');
+
+    await call('/api/config', { headers: { ...EDGE } });
+
+    const lines = gateWarnings(warn);
+    assert.strictEqual(lines.length, 1);
+    assert.strictEqual(lines[0].arguments[1].reason, 'no-gateway');
+    assert.ok(!JSON.stringify(lines[0].arguments).includes(EDGE['x-edge-secret']));
+  });
+
+  await t.test('log stays quiet for a request that came through the edge', async (t) => {
+    config.edgeGate = 'log';
+    const warn = t.mock.method(logger, 'warn');
+    await call('/api/config', { headers: { ...GATEWAY, ...EDGE } });
+    assert.strictEqual(gateWarnings(warn).length, 0);
+  });
+
+  await t.test('off serves everything and logs nothing', async (t) => {
+    config.edgeGate = '';
+    const warn = t.mock.method(logger, 'warn');
+    const res = await call('/api/config');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(gateWarnings(warn).length, 0);
+  });
 });

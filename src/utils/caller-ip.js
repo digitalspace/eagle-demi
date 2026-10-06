@@ -149,4 +149,4 @@ function callerIp(req) {
   return last || (req.socket && req.socket.remoteAddress) || '127.0.0.1';
 }
 
-module.exports = { callerIp };
+module.exports = { callerIp, fromEdge };

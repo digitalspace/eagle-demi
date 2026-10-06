@@ -105,7 +105,8 @@ jobs:
         env:
           # Empty falls back to the id documented in the script.
           SMOKE_PROJECT_ID: ${{ vars.SEARCH_SMOKE_PROJECT_ID }}
-        run: ./scripts/search-smoke.sh "https://${API_FLEX_APP_NAME}.azurewebsites.net" "$SMOKE_PROJECT_ID"
+        # Through Front Door, the path eagle-public uses: EDGE_GATE refuses the Function host direct.
+        run: ./scripts/search-smoke.sh "https://test.projects.eao.gov.bc.ca/demi-search" "$SMOKE_PROJECT_ID"
 
       - name: Report API Failure to Job Summary
         if: failure()
