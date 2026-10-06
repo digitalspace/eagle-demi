@@ -810,6 +810,7 @@ It does not record a foundation deployment. The next `deploy-infra.sh <env> --li
 | `notify-api-key` | function key eagle-notify accepts on `POST /api/events` | only where `notifyApiBase` is set |
 | `edge-secret` | value the eagle-edge Front Door rule set stamps as `X-Edge-Secret` | only where Front Door fronts the app |
 | `access-gate-password` | password `POST /api/gate` accepts, gating the public site | only where the site runs a curtain; not prod |
+| `pdf-title-worker-api-key` | registry key the PDF title worker presents as `X-Api-Key` | only where `deployPdfTitleWorker` is true; see [PDF title worker](#pdf-title-worker) |
 | `openshift-token-<env>` | ServiceAccount token the secret sync writes OpenShift Secrets with | `demi-kv-test` only; prod runs no sync |
 | `dev-openshift-token` | the same for `6cdc9e-dev`, which `demi-kv-test` also serves | `demi-kv-test` only |
 
@@ -901,6 +902,75 @@ one line with its counts: `checked`, `updated`, `restarted`, `missing`.
 **To disable it**: stop the function app
 (`az functionapp stop -g <rg> -n demi-secret-sync-test`). Nothing else depends on it running — the
 secrets it last wrote stay where they are, and deploys bind them by name.
+
+### PDF title worker
+
+`demi-pdf-title-<env>` is a third Function app, a Python timer app on Flex Consumption. On the
+schedule in `PDF_TITLE_SCHEDULE` it runs `pdf-title/run.py`, which takes PDFs without a title from
+the API's work list and sets one. It is a dry run, listing the work and writing nothing, unless
+`PDF_TITLE_LIVE` is `true`.
+
+On test the app is not yet deployed. Prod has no worker: `azure/main.prod.bicepparam` sets neither
+`deployPdfTitleWorker` nor the secret name.
+
+- Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflow:
+  `.github/workflows/azure-deploy-staging-pdf-title.yaml`.
+- It has its own identity, `demi-pdf-title-identity-<env>`, not `demi-identity-<env>`. The identity
+  reads one vault secret and its own host storage, and nothing else.
+- It calls the API Function app directly at `DEMI_API_URL`, not through APIM, with
+  `DEMI_API_KEY` as `X-Api-Key`. `DEMI_API_KEY` is a Key Vault reference to
+  `pdf-title-worker-api-key`.
+- Other settings: `PDF_TITLE_MAX_ROWS` (rows per run), `PDF_TITLE_MAX_MINUTES` (after this many
+  minutes a run starts no new row; must be set and below 15), `PDF_TITLE_CONCURRENCY`. The bicep
+  parameters are `pdfTitleLive`, `pdfTitleMaxRows`, `pdfTitleMaxMinutes` and `pdfTitleSchedule`.
+
+**To enable it in an environment**, in that environment's param file:
+
+1. Set `deployPdfTitleWorker = true`.
+2. Add `pdf-title-worker-api-key` to `optionalSecretNames`. `deploy-infra.sh` refuses to deploy
+   until the vault holds the secret, and the app is created only when both are set.
+3. Mint the key (below) and put its key id in `pdfTitleWorkerPrincipals`. Until then the API
+   refuses the worker on every route.
+4. Run `scripts/deploy-infra.sh <env> --live`.
+5. Grant `demi-cicd-test` Website Contributor on the new app (see
+   the RBAC row in the CI identity table under Deployment), so the workflow can deploy it.
+
+**To mint the key**, from the devbox, as a caller that holds `sysadmin`. The key has the role
+`demi-service-write`, `allowWrite: true` and no project scope. The plaintext goes straight into the
+vault and is never printed:
+
+```bash
+curl -sS -X POST "$DEMI_API/admin/api-keys" -H "X-Api-Key: $DEMI_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"name":"pdf-title-worker <env>","roles":["demi-service-write"],"allowWrite":true}' \
+  | jq -r .key \
+  | az keyvault secret set --vault-name demi-kv-<env> --name pdf-title-worker-api-key \
+      --file /dev/stdin --encoding utf-8 --query attributes.enabled -o tsv
+```
+
+Read the key's id from `GET /admin/api-keys`; it is the value for `pdfTitleWorkerPrincipals`. To
+check the secret, use `--query attributes.enabled`. Never use `--query value`: it prints the key.
+
+**To rotate the key**, before the 90-day expiry:
+
+1. Mint a new key as above. `az keyvault secret set` writes a new version of the same secret.
+2. In `pdfTitleWorkerPrincipals`, list both key ids, comma-separated.
+3. Run `scripts/deploy-infra.sh <env> --live`.
+4. Recycle the app so it reads the new version: `az functionapp stop`, then `start`
+   (`restart` does not re-read a reference).
+5. Check that the next run succeeds, then revoke the old key with
+   `DELETE /admin/api-keys/<old id>`.
+6. Remove the old id from `pdfTitleWorkerPrincipals` and deploy again.
+
+**To stop it**: either stop the app
+(`az functionapp stop -g <rg> -n demi-pdf-title-<env>`), or set `pdfTitleLive = false` and deploy
+infrastructure, which turns the next runs into dry runs. A run killed part way is safe: the next
+run sweeps what it left.
+
+**The deploy workflow** pushes the code on a push to main that touches `pdf-title/`. It first asks
+Azure for the app. If the app does not exist, or CI does not hold Website Contributor on it, the
+workflow prints a notice and skips the deploy instead of failing. Any other error fails the run.
+After a deploy it waits until the function `pdf_title_run` is registered.
 
 ### `demi-frontend-test` is gone — decommissioned 2026-08-15
 
@@ -1018,6 +1088,7 @@ not redeploy the other:
 |---|---|---|
 | `azure-deploy-staging-frontend.yaml` | `$web` on the static-website storage account (repo variable `AZURE_FRONTEND_STORAGE_ACCOUNT`) | `frontend/**` |
 | `azure-deploy-staging-api.yaml` | `demi-api-fc-test` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
+| `azure-deploy-staging-pdf-title.yaml` | `demi-pdf-title-test`, when it exists (see [PDF title worker](#pdf-title-worker)) | `pdf-title/**` except tests, `scripts/package-pdf-title.sh` |
 | `draft-release.yaml` | nothing — mints the tag and draft release for the same push (see [Releases](#releases)) | *any path* |
 
 **The two staging workflows stay separate, and `draft-release.yaml` is a third.** Folding the deploys
@@ -1042,7 +1113,7 @@ federated credential, with no client secret anywhere:
 |---|---|
 | Identity | `demi-cicd-test`, in `c4b0a8-test-rg` |
 | Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:environment:test`, audience `api://AzureADTokenExchange` |
-| RBAC | Website Contributor on `demi-api-fc-test` **individually**, plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
+| RBAC | Website Contributor on `demi-api-fc-test` and on `demi-pdf-title-test`, each granted **individually** by hand, outside bicep (the worker app exists only once `deployPdfTitleWorker` is true), plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
 | Config | All four values live on the **`test` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
 
 **Declaring `environment: test` changes the OIDC subject claim, and that is the trap.** With an
