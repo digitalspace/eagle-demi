@@ -27,7 +27,11 @@ const FIELDS = {
   ProjectNotification: ['name', 'type', 'subType'],
   RecentActivity: ['headline', 'dateAdded'],
   List: ['name', 'type', 'legislation'],
-  Pin: ['name', 'province', 'website']
+  Pin: ['name', 'province', 'website'],
+  User: ['firstName', 'lastName', 'displayName', 'email'],
+  Group: ['name'],
+  Inspection: ['name', 'case', 'startDate'],
+  InspectionElement: ['title', 'requirement']
 };
 
 /** Staff fields DEMI does not promote yet: a staff row lacking one in DEMI is class L3. */
@@ -100,6 +104,8 @@ const rows = (path, query) => ({ path, query, shape: 'array', paged: false });
 const pagedRows = (path, query) => ({ path, query, shape: 'array', paged: true });
 const one = (path, at) => ({ path, shape: 'object', at });
 const pending = (read, plan, reason) => ({ read, plan, pending: true, skip: reason });
+// DEMI sets x-total-count on GET and HEAD of /search; this script sends GET only.
+const HEAD_REASON = 'HEAD not sent by this script';
 
 const PROJECT_ONE_FIELDS = ['name', 'sector', 'region', ['type', 'projectType'], ['location', 'address']];
 const DOCUMENT_ONE_FIELDS = ['documentFileName', 'displayName', 'datePosted', 'documentSource', ['type', 'typeId']];
@@ -109,12 +115,12 @@ const REST_READS = [
     eagle: pagedRows('/public/project'), demi: search('Project') },
   { read: 'project-public', plan: '2', identities: ANON, dataset: 'Project', fields: PROJECT_ONE_FIELDS,
     eagle: rows('/public/project/:project'), demi: one('/projects/:project') },
-  pending('project-head-public', '3', 'HEAD needs x-total-count on DEMI (S3)'),
+  pending('project-head-public', '3', HEAD_REASON),
   { read: 'project-list', plan: '4', identities: STAFF, dataset: 'Project',
     eagle: pagedRows('/project'), demi: search('Project') },
   { read: 'project', plan: '5', identities: STAFF, dataset: 'Project', fields: PROJECT_ONE_FIELDS,
     eagle: rows('/project/:project'), demi: one('/projects/:project') },
-  pending('project-head', '6-7', 'HEAD needs x-total-count on DEMI (S3)'),
+  pending('project-head', '6-7', HEAD_REASON),
   { read: 'pins-public', plan: '8', identities: ANON, dataset: 'Pin',
     eagle: pagedRows('/public/project/:project/pin'), demi: one('/projects/:project', 'pins') },
   { read: 'pins', plan: '9', identities: STAFF, dataset: 'Pin',
@@ -126,7 +132,7 @@ const REST_READS = [
   { read: 'featured', plan: '13', identities: STAFF, dataset: 'Document',
     eagle: rows('/project/:project/FeaturedDocuments'),
     demi: search('Document', { 'and[isFeatured]': 'true', project: ':project' }) },
-  pending('featured-head', '12, 14', 'HEAD maps to the Project count, needs x-total-count (S3)'),
+  pending('featured-head', '12, 14', HEAD_REASON),
   { read: 'document-list-public', plan: '15', identities: ANON, dataset: 'Document',
     eagle: rows('/public/document', { project: ':project' }), demi: search('Document', { project: ':project' }) },
   { read: 'document-public', plan: '16', identities: ANON, dataset: 'Document', fields: DOCUMENT_ONE_FIELDS,
@@ -150,18 +156,18 @@ const REST_READS = [
     demi: search('CommentPeriod', { 'and[project]': ':project' }) },
   { read: 'commentperiod', plan: '27', identities: STAFF, dataset: 'CommentPeriod',
     eagle: rows('/commentperiod/:period'), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
-  pending('commentperiod-head', '28', 'HEAD needs x-total-count on DEMI (S3)'),
-  pending('commentperiod-summary', '29', 'needs the eaoStatus filter (S3)'),
+  pending('commentperiod-head', '28', HEAD_REASON),
+  pending('commentperiod-summary', '29', 'no summary route; four and[eaoStatus] counts give it (S3)'),
   { read: 'comment-list-public', plan: '30', identities: ANON, dataset: 'Comment',
     eagle: pagedRows('/public/comment', { period: ':period' }), demi: search('Comment', { 'and[period]': ':period' }) },
   { read: 'comment-public', plan: '31', identities: ANON, dataset: 'Comment',
     eagle: rows('/public/comment/:comment'), demi: search('Comment', { 'and[_id]': ':comment' }) },
-  pending('comment-head-public', '32', 'HEAD needs x-total-count on DEMI (S3)'),
+  pending('comment-head-public', '32', HEAD_REASON),
   { read: 'comment-list', plan: '33', identities: STAFF, dataset: 'Comment',
     eagle: pagedRows('/comment', { period: ':period' }), demi: search('Comment', { 'and[period]': ':period' }) },
   { read: 'comment', plan: '34', identities: STAFF, dataset: 'Comment',
     eagle: rows('/comment/:comment'), demi: search('Comment', { 'and[_id]': ':comment' }) },
-  pending('comment-head', '35', 'HEAD needs x-total-count on DEMI (S3)'),
+  pending('comment-head', '35', HEAD_REASON),
   pending('comment-export', '36', 'no DEMI export route yet (S8, S7)'),
   { read: 'organization-list-public', plan: '37', identities: ANON, dataset: 'Organization',
     eagle: rows('/public/organization'), demi: search('Organization') },
@@ -196,8 +202,9 @@ const SEARCH_READS = [
       eagle: search(dataset), demi: search(dataset) }
   ]),
   { read: 'search-Comment', plan: '55-56', skip: "Eagle's Comment search fails; nothing to compare against" },
-  ...['User', 'Group', 'Inspection', 'InspectionElement', 'Item'].map(dataset =>
-    pending(`search-${dataset}`, '55-56', `no DEMI ${dataset} dataset yet (S3)`)),
+  ...['User', 'Group', 'Inspection', 'InspectionElement'].map(dataset =>
+    ({ read: `search-${dataset}`, plan: '55', identities: STAFF, dataset, eagle: search(dataset), demi: search(dataset) })),
+  pending('search-Item', '55-56', 'needs an id per _schemaName; not wired to --id yet'),
   pending('search-CACUser', '55-56', 'no DEMI CACUser dataset yet (S9)')
 ];
 

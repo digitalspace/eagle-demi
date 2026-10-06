@@ -10,7 +10,9 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, selectWhere, selectFor, pageOptions, upsertItem, readForWriteIn } = require('./_sql');
+const {
+  eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn
+} = require('./_sql');
 
 const CONTAINER = 'groups';
 const PARTITION_FIELD = 'projectId';
@@ -31,18 +33,41 @@ async function readForWrite(id, projectId) {
   return readForWriteIn(CONTAINER, id, projectId, PARTITION_FIELD);
 }
 
-/** One page of the groups this caller may read, single-partition when `projectId` is given. */
-async function listVisible(access, { projectId, pageSize, continuationToken } = {}) {
-  const spec = selectWhere({
+function criteriaFor(projectId) {
+  return projectId ? [eq(PARTITION_FIELD, String(projectId), '@projectId')] : [];
+}
+
+function visibleSpec(access, projectId) {
+  return selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: projectId ? [eq(PARTITION_FIELD, String(projectId), '@projectId')] : [],
+    criteria: criteriaFor(projectId),
     select: selectFor(ENTITY, access, PARTITION_FIELD),
     orderBy: 'c.id ASC'
   });
-  return cosmos.query(CONTAINER, spec, pageOptions({
-    pageSize, continuationToken, partitionKey: projectId ? String(projectId) : undefined
+}
+
+const partitionOf = (projectId) => (projectId ? String(projectId) : undefined);
+
+/** One page of the groups this caller may read, single-partition when `projectId` is given. */
+async function listVisible(access, { projectId, pageSize, continuationToken } = {}) {
+  return cosmos.query(CONTAINER, visibleSpec(access, projectId), pageOptions({
+    pageSize, continuationToken, partitionKey: partitionOf(projectId)
   }));
+}
+
+/** One offset page (`pageNum`, `pageSize`) of `listVisible`'s rows, as `/search` pages. */
+async function listPage(access, { projectId, pageNum, pageSize } = {}) {
+  return readPage(CONTAINER, visibleSpec(access, projectId), {
+    pageNum, pageSize, partitionKey: partitionOf(projectId)
+  });
+}
+
+/** The same predicate as the read. */
+async function countVisible(access, { projectId } = {}) {
+  const spec = countWhere({ access, partitionField: PARTITION_FIELD, criteria: criteriaFor(projectId) });
+  const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ partitionKey: partitionOf(projectId) }));
+  return items[0] || 0;
 }
 
 /** Whole-item write. A group moved to another project changes partition — see `upsertItem`. */
@@ -55,4 +80,6 @@ async function deleteById(id, projectId) {
   return cosmos.remove(CONTAINER, String(id), String(projectId));
 }
 
-module.exports = { CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, upsert, deleteById };
+module.exports = {
+  CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, listPage, countVisible, upsert, deleteById
+};

@@ -43,11 +43,38 @@ const PARTITION_FIELD = {
   commentPeriods: 'projectId',
   comments: 'periodId',
   notifications: 'id',
-  updates: 'id'
+  updates: 'id',
+  users: 'id',
+  groups: 'projectId',
+  inspections: 'inspection'
 };
 
 /** One spec's bound parameters, by name. */
 const bound = (spec) => Object.fromEntries((spec.parameters || []).map(p => [p.name, p.value]));
+
+/**
+ * The role arm of `readClause`, run over a row the way Cosmos would: a spec carrying the
+ * `EXISTS(... r IN (@role0, ...))` arm admits a row whose `read[]` holds one of those roles; a spec
+ * without it (a privileged caller) admits every row. Team and credential arms are not modelled.
+ */
+function admitsByRole(spec, row) {
+  if (!/EXISTS\(SELECT VALUE r FROM r IN c\.read WHERE r IN \(/.test(spec.query)) return true;
+  const roles = (spec.parameters || []).filter(p => /^@role\d+$/.test(p.name)).map(p => p.value);
+  return (row.read || []).some(token => roles.includes(token));
+}
+
+/** Equality criteria `strict` honours, bound name -> row field. */
+const STRICT_EQ = { '@id': 'id', '@kind': 'kind', '@inspection': 'inspection', '@element': 'element', '@projectId': 'projectId' };
+
+/** The criteria a `strict` stub runs over a row: `STRICT_EQ`, and the `eaoStatus IN (...)` list. */
+function matchesCriteria(spec, row) {
+  const params = bound(spec);
+  for (const [name, field] of Object.entries(STRICT_EQ)) {
+    if (params[name] !== undefined && String(row[field]) !== String(params[name])) return false;
+  }
+  const statuses = (spec.parameters || []).filter(p => /^@eaoStatus\d+$/.test(p.name)).map(p => p.value);
+  return statuses.length === 0 || statuses.includes(row.eaoStatus);
+}
 
 /**
  * Serve Cosmos by CONTAINER, and record every spec.
@@ -55,8 +82,10 @@ const bound = (spec) => Object.fromEntries((spec.parameters || []).map(p => [p.n
  * `rows` is keyed by container name; a `VALUE COUNT(1)` query is answered from `counts`, defaulting
  * to the number of rows served, so a branch that builds its total from a different predicate than
  * its read is still visible in `seen`. A `VALUE c.id` query answers the served rows' ids.
+ * `strict: true` also runs the role arm of the read predicate (`admitsByRole`) and the criteria in
+ * `matchesCriteria`, for suites that assert on rows rather than on SQL.
  */
-function stubCosmos(t, rows, counts = {}) {
+function stubCosmos(t, rows, counts = {}, { strict = false } = {}) {
   const seen = [];
   // The Update parent gate caches parent rows per process; each stub is a new store.
   updatesRepo.forgetParents();
@@ -73,7 +102,8 @@ function stubCosmos(t, rows, counts = {}) {
       (options.partitionKey === undefined ||
         String(row[PARTITION_FIELD[container]]) === String(options.partitionKey)) &&
       !(row.projectId && hidden.includes(String(row.projectId))) &&
-      (eagleId === undefined || String(row.eagleId) === String(eagleId)));
+      (eagleId === undefined || String(row.eagleId) === String(eagleId)) &&
+      (!strict || (admitsByRole(spec, row) && matchesCriteria(spec, row))));
 
     if (/COUNT\(1\)/.test(spec.query)) return { items: [counts[container] ?? served.length] };
     if (/^SELECT VALUE c\.id /.test(spec.query)) {
@@ -114,19 +144,26 @@ const specsFor = (seen, container) =>
 /** Every parameter value one spec bound, so an ACL token can be looked for by value. */
 const boundValues = (spec) => (spec.parameters || []).map(p => String(p.value));
 
-async function get(path) {
-  let payload;
-  let status;
+/** One response as the tests read it. A HEAD has no body to parse. */
+async function readResponse(res, init) {
+  return {
+    status: res.status,
+    headers: res.headers,
+    body: init.method === 'HEAD' ? await res.text() : await res.json()
+  };
+}
+
+/** `init` is fetch's: a `method`, extra `headers`. */
+async function get(path, init = {}) {
+  let out;
   await withServer(async (call) => {
-    const res = await call(path);
-    status = res.status;
-    payload = await res.json();
+    out = await readResponse(await call(path, init), init);
   });
-  return { status, body: payload };
+  return out;
 }
 
 /** The same call under a credential (staff unless `roles` says otherwise), to compare visibility levels. */
-async function getAsStaff(t, path, roles = ['staff']) {
+async function getAsStaff(t, path, roles = ['staff'], init = {}) {
   const { keyId, plaintext, hash } = generateKey('test');
   forgetCachedKey(keyId);
   t.mock.method(apiKeys, 'getById', async () => ({
@@ -135,15 +172,13 @@ async function getAsStaff(t, path, roles = ['staff']) {
   }));
   t.mock.method(apiKeys, 'touchLastUsed', async () => {});
 
-  let payload;
-  let status;
+  let out;
   await withServer(async (call) => {
-    const res = await call(path, { headers: { 'x-api-key': plaintext } });
-    status = res.status;
-    payload = await res.json();
+    const res = await call(path, { ...init, headers: { ...init.headers, 'x-api-key': plaintext } });
+    out = await readResponse(res, init);
   });
   forgetCachedKey(keyId);
-  return { status, body: payload };
+  return out;
 }
 
 const listRow = (over = {}) => ({

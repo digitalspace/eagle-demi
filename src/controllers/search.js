@@ -6,6 +6,8 @@ const { resolveAccess, isPrivileged, pageSizeFor } = require('../helpers/access-
 // Which container owns an Eagle id, said once for the mirrors, the seed and this read path.
 const { pickParent } = require('../helpers/parent-admit');
 const { redactForAccess, redactAllForAccess } = require('../vis/redact');
+const { levelOf } = require('../vis/level');
+const { EAGLE_STAFF_FIELDS } = require('../merge/project');
 const { dialsForIndex } = require('../vis/catalog/index-projects-renames');
 const { logger } = require('../utils/logger');
 const { filterFor, inClause } = require('../helpers/access-odata');
@@ -22,6 +24,9 @@ const commentsRepo = require('../repositories/comments');
 const notificationsRepo = require('../repositories/notifications');
 const listsRepo = require('../repositories/lists');
 const updatesRepo = require('../repositories/updates');
+const usersRepo = require('../repositories/users');
+const groupsRepo = require('../repositories/groups');
+const inspectionsRepo = require('../repositories/inspections');
 const summarizer = require('../ai/summarize');
 const { analyticsEvent } = require('../utils/audit');
 const config = require('../config');
@@ -498,6 +503,27 @@ function cosmosRows(entity, rows, access, schemaName, decorate) {
   }));
 }
 
+const STAFF_LEVEL = 2;
+
+/** eagle-api's staff project fields, copied off a REDACTED row only: level 3-4 never gets one. */
+function staffProjectFields(redacted) {
+  const out = {};
+  for (const key of EAGLE_STAFF_FIELDS) {
+    if (redacted && redacted[key] !== undefined) out[key] = redacted[key];
+  }
+  return out;
+}
+
+/**
+ * The staff fields for an INDEX page, which does not carry them: the same ids read back from
+ * Cosmos under the caller's access and redacted. No read at all below level 2.
+ */
+async function staffFieldsByProjectId(access, ids) {
+  if (levelOf(access) > STAFF_LEVEL || ids.length === 0) return new Map();
+  const rows = redactAllForAccess('projects', await projectsRepo.listRowsByIds(access, ids), access);
+  return new Map(rows.map(row => [String(row.id), staffProjectFields(row)]));
+}
+
 /**
  * One `projects` INDEX hit, redacted for this caller. The catalog is keyed on INDEX field names
  * because the data source renames columns (docs/rbac-architecture.md §2 item 9).
@@ -856,6 +882,85 @@ async function homeFeed({ access, query }) {
   return { searchResults: rows, count: rows.length, applied: [] };
 }
 
+/** `sortBy` keys a read fixed on `c.id` did not apply (a mirror field may be absent; see `orderByFrom`). */
+function sortKeysDropped(sortBy) {
+  return eagleQuery.sortEntries(sortBy).map(entry => entry.replace(/^[+-]/, ''));
+}
+
+/** These mirrors have no text index: keywords are refused rather than answered with every row. */
+function keywordsRefused(dataset, query) {
+  return query.keywords || query.q ? { error: `dataset=${dataset} does not take keywords` } : null;
+}
+
+/**
+ * The one DEMI project id a `project` filter names, from the translated query. Two are REFUSED: the
+ * repositories read one partition, and taking the first would answer for a project nobody chose.
+ */
+function oneProject(filterQuery) {
+  const ids = eagleQuery.projectIdsFrom(filterQuery);
+  if (ids.length > 1) return { error: `and[project] takes one value, not ${ids.join(', ')}` };
+  return { projectId: ids[0] || null };
+}
+
+/**
+ * Eagle's `project` (its ObjectId) beside the stored DEMI `projectId`, looked up under the caller's
+ * access. A project the caller cannot read gives `project: null`; the row itself already passed its
+ * own ACL, which is capped by the project's.
+ */
+async function eagleProjectOf(access, rows) {
+  const demiIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
+  const parents = demiIds.length
+    ? redactAllForAccess('projects', await projectsRepo.listByIds(access, demiIds), access)
+    : [];
+  const byId = new Map(parents.map(p => [String(p.id), p.eagleId ? String(p.eagleId) : null]));
+  return (row) => ({ project: byId.get(String(row.projectId)) || null });
+}
+
+/** The three `inspections` kinds as datasets: the stored kind and the parent filters each one reads. */
+const INSPECTION_DATASETS = Object.freeze({
+  Inspection: { kind: inspectionsRepo.KINDS.INSPECTION, filters: [] },
+  InspectionElement: { kind: inspectionsRepo.KINDS.ELEMENT, filters: ['inspection'] },
+  InspectionItem: { kind: inspectionsRepo.KINDS.ITEM, filters: ['inspection', 'element'] }
+});
+
+/** One `inspections` kind as a `/search` dataset. `and[inspection]` and `and[element]` are Eagle ids. */
+async function inspectionRows(dataset, { access, query, filterQuery, pageNum, pageSize, sortBy }) {
+  const refused = keywordsRefused(dataset, query);
+  if (refused) return refused;
+  const { kind, filters } = INSPECTION_DATASETS[dataset];
+  const entity = inspectionsRepo.ENTITY[kind];
+  const decorateFor = (rows) => (kind === inspectionsRepo.KINDS.INSPECTION ? eagleProjectOf(access, rows) : null);
+
+  const id = filterValue(query, '_id');
+  if (id) {
+    const row = await inspectionsRepo.getById(access, kind, id);
+    const rows = row ? [row] : [];
+    return { searchResults: cosmosRows(entity, rows, access, dataset, await decorateFor(rows)), count: rows.length, applied: ['_id'] };
+  }
+
+  const scoped = oneProject(filterQuery);
+  if (scoped.error) return scoped;
+  const applied = scoped.projectId ? ['project'] : [];
+  const criteria = { projectId: scoped.projectId };
+  for (const key of filters) {
+    const value = filterValue(query, key);
+    if (value === null) continue;
+    criteria[key === 'inspection' ? 'inspectionId' : 'elementId'] = value;
+    applied.push(key);
+  }
+
+  const [rows, count] = await Promise.all([
+    inspectionsRepo.listPage(access, kind, { ...criteria, pageNum, pageSize }),
+    inspectionsRepo.countVisible(access, kind, criteria)
+  ]);
+  return {
+    searchResults: cosmosRows(entity, rows, access, dataset, await decorateFor(rows)),
+    count,
+    applied,
+    sortDropped: sortKeysDropped(sortBy)
+  };
+}
+
 /**
  * The Cosmos-backed `/search` datasets — the reads eagle-public used to make against eagle-api's
  * own `/api/search`, `/api/organization`, `/api/commentperiod`, `/api/public/comment` and
@@ -934,12 +1039,23 @@ const COSMOS_DATASETS = {
       return { error: 'dataset=Comment requires and[period]=<id> or _id' };
     }
 
+    // Eagle's moderation filter. An unknown state is REFUSED: dropping it would answer every comment.
+    const eaoStatuses = filterValues(query, 'eaoStatus');
+    const unknownStatus = (eaoStatuses || []).filter(v => !commentsRepo.EAO_STATUSES.includes(v));
+    if (unknownStatus.length) {
+      return { error: `and[eaoStatus] must be one of ${commentsRepo.EAO_STATUSES.join(', ')}, not ${unknownStatus.join(', ')}` };
+    }
+
     const [rows, count] = await Promise.all([
-      commentsRepo.listByPeriod(periodId, access, { pageNum, pageSize, sortBy }),
-      // The total for the WHOLE period, which is what eagle-public pages the comment table against.
-      commentsRepo.countByPeriod(periodId, access)
+      commentsRepo.listByPeriod(periodId, access, { pageNum, pageSize, sortBy, eaoStatuses }),
+      // The total for the WHOLE period under the same filter, which eagle-public pages against.
+      commentsRepo.countByPeriod(periodId, access, { eaoStatuses })
     ]);
-    return { searchResults: commentRows(access, rows), count, applied: ['period'] };
+    return {
+      searchResults: commentRows(access, rows),
+      count,
+      applied: ['period', ...(eaoStatuses !== null ? ['eaoStatus'] : [])]
+    };
   },
 
   async RecentActivity({ access, query, pageNum, pageSize, sortBy }) {
@@ -1034,8 +1150,62 @@ const COSMOS_DATASETS = {
       count,
       applied
     };
-  }
+  },
+
+  /** Eagle `User`. No project axis: a project filter answers nothing (`canScopeToProject`). */
+  async User({ access, query, pageNum, pageSize, sortBy }) {
+    const refused = keywordsRefused('User', query);
+    if (refused) return refused;
+    const id = filterValue(query, '_id');
+    if (id) {
+      const row = await usersRepo.getById(access, id);
+      return { searchResults: cosmosRows('users', row ? [row] : [], access, 'User'), count: row ? 1 : 0, applied: ['_id'] };
+    }
+    const [rows, count] = await Promise.all([
+      usersRepo.listPage(access, { pageNum, pageSize }),
+      usersRepo.countVisible(access)
+    ]);
+    return { searchResults: cosmosRows('users', rows, access, 'User'), count, applied: [], sortDropped: sortKeysDropped(sortBy) };
+  },
+
+  /** Eagle `Group`, a project's contact group. `project` on the row is the Eagle id, as Eagle has it. */
+  async Group({ access, query, filterQuery, pageNum, pageSize, sortBy }) {
+    const refused = keywordsRefused('Group', query);
+    if (refused) return refused;
+    const id = filterValue(query, '_id');
+    if (id) {
+      const row = await groupsRepo.getById(access, id);
+      const rows = row ? [row] : [];
+      return { searchResults: cosmosRows('groups', rows, access, 'Group', await eagleProjectOf(access, rows)), count: rows.length, applied: ['_id'] };
+    }
+    const scoped = oneProject(filterQuery);
+    if (scoped.error) return scoped;
+    const { projectId } = scoped;
+    const [rows, count] = await Promise.all([
+      groupsRepo.listPage(access, { projectId, pageNum, pageSize }),
+      groupsRepo.countVisible(access, { projectId })
+    ]);
+    return {
+      searchResults: cosmosRows('groups', rows, access, 'Group', await eagleProjectOf(access, rows)),
+      count,
+      applied: projectId ? ['project'] : [],
+      sortDropped: sortKeysDropped(sortBy)
+    };
+  },
+
+  Inspection: (ctx) => inspectionRows('Inspection', ctx),
+  InspectionElement: (ctx) => inspectionRows('InspectionElement', ctx),
+  InspectionItem: (ctx) => inspectionRows('InspectionItem', ctx)
 };
+
+/**
+ * eagle-api's `dataset=Item&_id=&_schemaName=`: one record by id from any model it names. DEMI
+ * answers the models whose dataset above takes `_id`, through that dataset's own point read.
+ */
+const ITEM_SCHEMAS = Object.freeze([
+  'User', 'Group', 'Inspection', 'InspectionElement', 'InspectionItem',
+  'Comment', 'CommentPeriod', 'ProjectNotification', 'RecentActivity'
+]);
 
 /**
  * The `activities` index filter for this caller: role ACL and project scope, plus the publish gate
@@ -1284,6 +1454,9 @@ exports.search = async (req, res) => {
     if (unknown.length > 0) {
       return res.status(400).json({ error: `Unsupported query parameter: ${unknown.join(', ')}` });
     }
+    if (req.query._schemaName !== undefined && dataset !== 'Item') {
+      return res.status(400).json({ error: '_schemaName applies to dataset=Item only' });
+    }
 
     // The name filter carries typed text rather than an id, so a dataset that has no name cell and
     // a value past the cap are refused here rather than trimmed into a filter nobody asked for.
@@ -1362,6 +1535,8 @@ exports.search = async (req, res) => {
       // response shape ever varies.
       if (first && Array.isArray(first.searchResults)) {
         const total = Number.isFinite(first.count) ? first.count : undefined;
+        // eagle-admin pages on this header, as eagle-api's list routes set it. Measured totals only.
+        if (total !== undefined) res.set?.('x-total-count', String(total));
         if (total === undefined) {
           logger.warn(
             `[search] ${dataset}: answering with no measured total — ` +
@@ -1446,6 +1621,7 @@ exports.search = async (req, res) => {
             noteDegraded(meta);
 
             if (items.length > 0) {
+              const staffFields = await staffFieldsByProjectId(access, items.map(hit => String(hit.id)));
               const searchResults = items.map(hit => {
                 // Redact the INDEX row, then map, exactly as the Cosmos branch below does.
                 const doc = redactIndexProject(hit, access);
@@ -1487,8 +1663,9 @@ exports.search = async (req, res) => {
                 // `read[]` is NOT emitted, here or on any other row shape: it is the caller's own
                 // ACL restated, it publishes internal role names, and nothing reads it. The
                 // redactor drops it and derives `isPublished`, the mirror the frontends render.
-                isPublished: doc.isPublished
+                isPublished: doc.isPublished,
                 // No `sources`: the `projects` index has no such field.
+                ...staffFields.get(String(doc.id))
                 };
               });
 
@@ -1583,7 +1760,8 @@ exports.search = async (req, res) => {
             // Only DEMI's own wildfire aggregate. The raw Track and Eagle payloads sharing this
             // field are traceability, not API surface — the catalog publishes `sources.wildfire`
             // and nothing else.
-            sources: row.sources || {}
+            sources: row.sources || {},
+            ...staffProjectFields(row)
           };
         });
 
@@ -1875,6 +2053,27 @@ exports.search = async (req, res) => {
         // renders a non-2xx as an unknown count.
         logger.error(`[search] chunk search failed: ${err.message}`);
         return res.status(502).json(searchUnavailable(req, err, 'Deep Search is unavailable'));
+      }
+    } else if (dataset === 'Item') {
+      const schemaName = firstValue(req.query._schemaName);
+      if (!ITEM_SCHEMAS.includes(schemaName)) {
+        return res.status(400).json({ error: `_schemaName must be one of ${ITEM_SCHEMAS.join(', ')}` });
+      }
+      const id = filterValue(req.query, '_id');
+      const extra = eagleQuery.filterKeysIn(req.query).filter(key => key !== '_id');
+      if (!id || extra.length) {
+        return res.status(400).json({ error: 'dataset=Item takes _id and _schemaName only' });
+      }
+      try {
+        const { searchResults } = await COSMOS_DATASETS[schemaName]({
+          access, query: { _id: id }, filterQuery: { _id: id }, pageNum: 0, pageSize: 1
+        });
+        res.set?.('x-total-count', String(searchResults.length));
+        // A BARE array, not the search envelope: eagle-api answers Item that way and eagle-admin reads `[0]`.
+        return sendJson(searchResults);
+      } catch (err) {
+        logger.error(`[search] Item ${schemaName} read failed: ${err.message}`);
+        return res.status(502).json(searchUnavailable(req, err, 'Item lookup is unavailable'));
       }
     } else if (COSMOS_DATASETS[dataset]) {
       // A KEYWORD search over one of the two indexed datasets is ranked by the index; everything

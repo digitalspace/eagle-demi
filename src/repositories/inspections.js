@@ -17,7 +17,9 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead, levelOfRead } = require('../helpers/access-sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
-const { eq, selectWhere, selectFor, pageOptions, upsertItem, readForWriteIn } = require('./_sql');
+const {
+  eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn
+} = require('./_sql');
 
 const CONTAINER = 'inspections';
 const PARTITION_FIELD = 'inspection';
@@ -75,23 +77,45 @@ async function findParent(childKind, childId) {
   return items.reduce((a, b) => (levelOfRead(b.read) < levelOfRead(a.read) ? b : a));
 }
 
-/** One page of one kind this caller may read, single-partition when `inspectionId` is given. */
-async function listVisible(access, kind, { projectId, inspectionId, elementId, pageSize, continuationToken } = {}) {
+function criteriaFor(kind, { projectId, inspectionId, elementId }) {
   const criteria = [eq('kind', kind, '@kind')];
   if (projectId) criteria.push(eq(SCOPE_FIELD, String(projectId), '@projectId'));
   if (inspectionId) criteria.push(eq(PARTITION_FIELD, String(inspectionId), '@inspection'));
   if (elementId) criteria.push(eq('element', String(elementId), '@element'));
+  return criteria;
+}
 
-  const spec = selectWhere({
+function visibleSpec(access, kind, filters) {
+  return selectWhere({
     access,
     partitionField: SCOPE_FIELD,
-    criteria,
+    criteria: criteriaFor(kind, filters),
     select: selectFor(ENTITY[kind], access, SCOPE_FIELD),
     orderBy: 'c.id ASC'
   });
-  return cosmos.query(CONTAINER, spec, pageOptions({
-    pageSize, continuationToken, partitionKey: inspectionId ? String(inspectionId) : undefined
+}
+
+const partitionOf = (inspectionId) => (inspectionId ? String(inspectionId) : undefined);
+
+/** One page of one kind this caller may read, single-partition when `inspectionId` is given. */
+async function listVisible(access, kind, { projectId, inspectionId, elementId, pageSize, continuationToken } = {}) {
+  return cosmos.query(CONTAINER, visibleSpec(access, kind, { projectId, inspectionId, elementId }), pageOptions({
+    pageSize, continuationToken, partitionKey: partitionOf(inspectionId)
   }));
+}
+
+/** One offset page (`pageNum`, `pageSize`) of `listVisible`'s rows, as `/search` pages. */
+async function listPage(access, kind, { projectId, inspectionId, elementId, pageNum, pageSize } = {}) {
+  return readPage(CONTAINER, visibleSpec(access, kind, { projectId, inspectionId, elementId }), {
+    pageNum, pageSize, partitionKey: partitionOf(inspectionId)
+  });
+}
+
+/** The same predicate as the read. */
+async function countVisible(access, kind, filters = {}) {
+  const spec = countWhere({ access, partitionField: SCOPE_FIELD, criteria: criteriaFor(kind, filters) });
+  const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ partitionKey: partitionOf(filters.inspectionId) }));
+  return items[0] || 0;
 }
 
 /** Whole-item write. A child moved to another inspection changes partition — see `upsertItem`. */
@@ -150,6 +174,8 @@ module.exports = {
   readForWrite,
   findParent,
   listVisible,
+  listPage,
+  countVisible,
   upsert,
   deleteById,
   setAclForElement,

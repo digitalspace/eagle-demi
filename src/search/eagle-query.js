@@ -240,6 +240,8 @@ const KNOWN_PARAMS = new Set([
   'dataset', 'keywords', 'q', 'fuzzy', 'prefix', 'pageSize',
   // eagle-public's (api.ts:160-206). The last four are read by nobody here.
   'pageNum', 'sortBy', 'project', 'categorized', 'projectLegislation', 'populate', 'fields',
+  // eagle-admin's: the model `dataset=Item` reads one record from.
+  '_schemaName',
   ...BARE_FILTER_KEYS
 ]);
 
@@ -808,7 +810,9 @@ function sortFieldFor(name, dataset, fields) {
  * NOT derivable from `fieldsFor`: these datasets have no index at all, and an absent index reads
  * the same as an index without the field.
  */
-const COSMOS_PROJECT_DATASETS = new Set(['CommentPeriod', 'RecentActivity']);
+const COSMOS_PROJECT_DATASETS = new Set([
+  'CommentPeriod', 'RecentActivity', 'Group', 'Inspection', 'InspectionElement', 'InspectionItem'
+]);
 
 /**
  * Can a `project` filter be EXPRESSED against this dataset at all?

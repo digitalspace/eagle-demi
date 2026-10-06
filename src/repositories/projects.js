@@ -173,6 +173,20 @@ async function listByIds(access, ids) {
   return items;
 }
 
+/** Whole rows (this caller's `selectFor` projection) for ids, unordered: an index page joined back. */
+async function listRowsByIds(access, ids) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  if (unique.length === 0) return [];
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [inList(PARTITION_FIELD, unique, '@pid')],
+    select: selectFor('projects', access, PARTITION_FIELD)
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
 /** The most ids `listIdsByName` answers; a wider match is cut here and logged. */
 const NAME_MATCH_MAX_IDS = 500;
 
@@ -427,6 +441,7 @@ module.exports = {
   readForWriteByEagleId,
   readForWrite,
   listByIds,
+  listRowsByIds,
   listIdsByName,
   NAME_MATCH_MAX_IDS,
   listByEagleIds,
