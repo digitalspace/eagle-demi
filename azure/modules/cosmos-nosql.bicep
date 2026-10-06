@@ -233,6 +233,9 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
             // documents.js listParentFieldsPending and countParentFieldsPending filter on it.
             path: '/parentFieldsPending/?'
           }
+          {
+            path: '/pdfTitle/lease/expiresAt/?'
+          }
         ]
         excludedPaths: noIndex
       }
