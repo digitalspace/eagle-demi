@@ -926,9 +926,11 @@ On test the app is not yet deployed. Prod has no worker: `azure/main.prod.bicepp
 
 **To enable it in an environment**, in that environment's param file:
 
-1. Set `deployPdfTitleWorker = true`.
+1. Set `deployPdfTitleWorker = true`. `apiFlexSubnetId` must also be set, because the worker reads
+   the API host from the Flex API module.
 2. Add `pdf-title-worker-api-key` to `optionalSecretNames`. `deploy-infra.sh` refuses to deploy
-   until the vault holds the secret, and the app is created only when both are set.
+   until the vault holds the secret, and the app is created only when the flag, the secret and
+   `apiFlexSubnetId` are all set.
 3. Mint the key (below) and put its key id in `pdfTitleWorkerPrincipals`. Until then the API
    refuses the worker on every route.
 4. Run `scripts/deploy-infra.sh <env> --live`.
@@ -943,10 +945,13 @@ vault and is never printed:
 curl -sS -X POST "$DEMI_API/admin/api-keys" -H "X-Api-Key: $DEMI_KEY" \
   -H 'content-type: application/json' \
   -d '{"name":"pdf-title-worker <env>","roles":["demi-service-write"],"allowWrite":true}' \
-  | jq -r .key \
+  | jq -j .key \
   | az keyvault secret set --vault-name demi-kv-<env> --name pdf-title-worker-api-key \
       --file /dev/stdin --encoding utf-8 --query attributes.enabled -o tsv
 ```
+
+The key must be stored without a trailing newline, which `jq -j` guarantees; a newline in the
+secret breaks the worker's `X-Api-Key` header.
 
 Read the key's id from `GET /admin/api-keys`; it is the value for `pdfTitleWorkerPrincipals`. To
 check the secret, use `--query attributes.enabled`. Never use `--query value`: it prints the key.
