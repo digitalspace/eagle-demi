@@ -130,6 +130,9 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
     'PDF/A identification values': packet(TITLE, '<pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>'),
     'dates and ids as text': packet(TITLE, '<xmp:CreateDate>2004-01-02T03:04:05Z</xmp:CreateDate><xmpMM:DocumentID>uuid:6c9a-11</xmpMM:DocumentID>'),
     'an older dc:title attribute': packet(TITLE, '<x:a dc:title="New"/>'),
+    'a Producer with parentheses': packet(TITLE, '<pdf:Producer>Adobe Acrobat 11.0 (Windows)</pdf:Producer>'),
+    'an attribute with a comma and parentheses': packet(TITLE, '<x:a x:xmptk="Adobe XMP Core 5.6-c015 (84.1), 2016/09/10"/>'),
+    'non-ASCII and apostrophes as text': packet(TITLE, '<xmp:CreatorTool>Microsoft\u00ae Word\u2019s</xmp:CreatorTool>'),
     'no xpacket wrapper': packet().replace(/<\?xpacket[^>]*>/g, '')
   };
   for (const [label, body] of Object.entries(accepted)) {
@@ -154,7 +157,17 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
     'a comment': packet(TITLE, '<!-- > re f -->'),
     'another processing instruction': packet(TITLE, '<?x y?>'),
     'a > inside an attribute value': packet(TITLE, '<x:a b="1 > re"/>'),
-    'a ( inside an attribute value': packet(TITLE, '<x:a b="(x"/>'),
+    'an unbalanced ( in text': packet(TITLE, '<pdf:Producer>Adobe (Windows</pdf:Producer>'),
+    'a ) before its ( in text': packet(TITLE, '<pdf:Producer>a) (b</pdf:Producer>'),
+    'a % in text': packet(TITLE, '<x:a>100%</x:a>'),
+    'a backslash in text': packet(TITLE, '<x:a>a\\b</x:a>'),
+    'brackets in text': packet(TITLE, '<x:a>[1]</x:a>'),
+    'a control character in text': packet(TITLE, '<x:a>a\u0007b</x:a>'),
+    'a > in text': packet(TITLE, '<x:a>a > b</x:a>'),
+    'an operator after a string': packet(TITLE, '<x:a>(x) Tj</x:a>'),
+    'an operator glued to a string': packet(TITLE, '<x:a>(x)Tj</x:a>'),
+    'a lone quote operator': packet(TITLE, '<x:a>(x) \'</x:a>'),
+    'a stray & in an attribute': packet(TITLE, '<x:a b="a & b"/>'),
     'mismatched tags': packet(TITLE, '<x:a></x:b>'),
     'a second root': `${packet()}<x:b/>`,
     'text after the packet': `${packet()}f`,

@@ -36,9 +36,8 @@ const OPERATORS = new Set([
   'M', 'MP', 'n', 'q', 'Q', 're', 'RG', 'rg', 'ri', 's', 'S', 'SC', 'sc', 'SCN', 'scn', 'sh', 'T*', 'Tc',
   'Td', 'TD', 'Tf', 'Tj', 'TJ', 'TL', 'Tm', 'Tr', 'Ts', 'Tw', 'Tz', 'v', 'w', 'W', 'W*', 'y', "'", '"'
 ]);
-/** XMP text and attribute characters: no string, array, comment or hex-string delimiters. */
-const XMP_TEXT = /^[A-Za-z0-9 :/._#?=+\-\t\r\n]*$/;
-const XMP_ATTR = /^[A-Za-z0-9 :/._#?=+-]*$/;
+/** Hex-string, comment, escape, array and dictionary delimiters, refused in XMP text. */
+const XMP_TEXT_DELIMITERS = /[<>%\\[\]{}]/;
 const XML_NAME = '[A-Za-z_][A-Za-z0-9_.:-]*';
 const XMP_START = new RegExp(`<(${XML_NAME})((?:\\s+${XML_NAME}\\s*=\\s*(?:"[^"]*"|'[^']*'))*)\\s*(/?)>`, 'y');
 const XMP_ATTRS = new RegExp(`(${XML_NAME})\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'g');
@@ -276,15 +275,28 @@ function xmlText(raw) {
   });
 }
 
+/** Parentheses that open and close within `text`, so no string runs on past it. */
+function isBalanced(text) {
+  let depth = 0;
+  for (const c of text) {
+    if (c === '(') depth++;
+    else if (c === ')' && --depth < 0) return false;
+  }
+  return depth === 0;
+}
+
 /** Text a content-stream lexer reads as operands and unknown words only, never as an operator. */
 function isInertText(text) {
-  return XMP_TEXT.test(text) && text.split(/[\s/]+/).every(word => !OPERATORS.has(word.replace(/^[+\-.0-9]*/, '')));
+  xmlText(text);
+  const printable = [...text].every(c => (c >= ' ' && c !== '\x7f') || c === '\t' || c === '\r' || c === '\n');
+  return printable && !XMP_TEXT_DELIMITERS.test(text) && isBalanced(text) &&
+    text.split(/[\s/()]+/).every(word => !OPERATORS.has(word.replace(/^[+\-.0-9]*/, '')));
 }
 
 /**
  * The new XMP packet, read as strict XML: no DOCTYPE, entity, CDATA, comment or processing
  * instruction other than xpacket. Every dc:title (element or attribute) holds `wanted`; every
- * other text and attribute value is inert if the packet is ever read as page content.
+ * other text is inert if the packet is ever read as page content, and no attribute ends a tag early.
  */
 function checkXmp(data, wanted) {
   const bad = () => refuse('tail-xmp-body');
@@ -334,11 +346,12 @@ function checkXmp(data, wanted) {
         if (seen.has(key)) bad();
         seen.add(key);
         if (key === 'dc:title') {
-          // Inside a tag a lexer reads a hex string up to the first '>', so only '>' matters here.
           if (/[<>]/.test(raw) || !sameTitle(xmlText(raw), wanted)) bad();
           titles++;
-        } else if (!XMP_ATTR.test(raw)) {
-          bad();
+        } else {
+          // Inside a tag a lexer reads one hex string up to '>', so only '<' and '>' matter.
+          if (/[<>]/.test(raw)) bad();
+          xmlText(raw);
         }
       }
       rooted = true;
