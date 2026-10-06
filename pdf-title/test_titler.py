@@ -406,6 +406,16 @@ def test_operator_words_and_delimiters_in_the_xmp_title_are_character_references
     assert _pikepdf_xmp(result.data)[0] == title
 
 
+def test_word_after_a_zero_width_no_break_space_in_the_xmp_title_is_a_character_reference():
+    title = "x﻿F"  # the API's JavaScript \s counts U+FEFF, so _WORD splits on it
+
+    result = set_title(_pdf(xmp=PDFA_XMP), title)
+
+    assert b'<rdf:li xml:lang="x-default">x\xef\xbb\xbf&#70;</rdf:li>' in _xmp_data(result.data)
+    assert _xmp_title(_reopen(result.data)) == title
+    assert _pikepdf_xmp(result.data)[0] == title
+
+
 def test_copied_pdfa_conformance_is_a_character_reference_and_the_xml_is_unchanged():
     result = set_title(_pdf(xmp=PDFA_XMP), "Appendix F")
 
