@@ -5,8 +5,12 @@
  * answers it, and the differences already explained. Plan numbers are the read-by-read map in the
  * eagle-reads-in-DEMI plan; the map doubles as the consumer switch checklist.
  *
- * Path and query values `:project`, `:period`, `:document`, `:comment`, `:organization` are filled
- * from `--id <name>=<eagleId>`. Field entries are names both sides share or `[eagleName, demiName]`.
+ * Path and query values `:project`, `:period`, `:document`, `:comment`, `:organization`,
+ * `:inspection`, `:element`, `:group` are filled from `--id <name>=<eagleId>`. Field entries are
+ * names both sides share or `[eagleName, demiName]`.
+ *
+ * `format: 'csv'` reads compare the header and then rows paired on the `key` column, every shared
+ * column but `ignoreColumns`. `mapEagle` / `mapDemi` reshape one side's rows before pairing.
  */
 
 const { EAGLE_STAFF_FIELDS } = require('../merge/project');
@@ -63,6 +67,15 @@ const OPEN_GAPS = {
 const EAGLE_ID = /^[0-9a-f]{24}$/i;
 
 const readOf = (row) => (row && Array.isArray(row.read) ? row.read : null);
+const eagleIdsIn = (value) => [...String(value || '').matchAll(/[0-9a-f]{24}/gi)].map(m => m[0].toLowerCase());
+const sameIds = (a, b) => JSON.stringify(eagleIdsIn(a).sort()) === JSON.stringify(eagleIdsIn(b).sort());
+const pathOf = (value) => {
+  try {
+    return new URL(value).pathname;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Every class a difference may be explained by. `ids: true` classes match only ids listed under
@@ -85,7 +98,7 @@ const KNOWN_DIFFERENCES = [
     why: 'DEMI took the row down (record.takedown audit entry)' },
   { name: 'demi-only', kind: 'extraInDemi',
     why: 'Track-only project or row created in DEMI: its id is not an Eagle ObjectId',
-    match: ({ id }) => !EAGLE_ID.test(id) },
+    match: ({ id, byEagleId }) => byEagleId && !EAGLE_ID.test(id) },
   { name: 'eagle-hard-deleted', kind: 'extraInDemi', ids: true,
     why: 'Eagle hard delete that sent no delete notice' },
   { name: 'public-field-difference', kind: 'fieldDiff', identities: ANON,
@@ -96,13 +109,24 @@ const KNOWN_DIFFERENCES = [
     match: ({ eagle }) => !!readOf(eagle) && !readOf(eagle).includes('public') },
   { name: 'open-gap', kind: 'fieldDiff',
     why: 'documented DEMI gap, plan section 2',
-    match: ({ dataset, field }) => (OPEN_GAPS[dataset] || []).includes(field) }
+    match: ({ dataset, field }) => (OPEN_GAPS[dataset] || []).includes(field) },
+  { name: 'export-attachment-route', kind: 'fieldDiff', reads: ['comment-export'],
+    why: 'Eagle links /api/document/:id/fetch on its host, DEMI /documents/:id/download on its own; same documents',
+    match: ({ field, eagleValue, demiValue }) => field === 'Attachments' &&
+      typeof eagleValue === 'string' && typeof demiValue === 'string' && sameIds(eagleValue, demiValue) },
+  { name: 'bcgw-link-host', kind: 'fieldDiff', reads: ['report-bcgw'],
+    why: 'Eagle writes the prod site host; DEMI writes LINK_BASE_URL, the site of its own environment',
+    match: ({ field, eagleValue, demiValue }) => field === 'URL to Epic Project' &&
+      pathOf(eagleValue) !== null && pathOf(eagleValue) === pathOf(demiValue) }
 ];
 
 const search = (dataset, query = {}) => ({ path: '/search', query: { dataset, ...query }, shape: 'search', paged: true });
 const rows = (path, query) => ({ path, query, shape: 'array', paged: false });
 const pagedRows = (path, query) => ({ path, query, shape: 'array', paged: true });
-const one = (path, at) => ({ path, shape: 'object', at });
+const one = (path, at, query) => ({ path, query, shape: 'object', at });
+const csv = (path, query) => ({ path, query });
+/** Id-only rows, for reads where one side answers a list of refs rather than the rows. */
+const idRows = refs => refs.map(ref => ({ _id: String(ref && ref._id ? ref._id : ref) }));
 const pending = (read, plan, reason) => ({ read, plan, pending: true, skip: reason });
 // DEMI sets x-total-count on GET and HEAD of /search; this script sends GET only.
 const HEAD_REASON = 'HEAD not sent by this script';
@@ -125,7 +149,12 @@ const REST_READS = [
     eagle: pagedRows('/public/project/:project/pin'), demi: one('/projects/:project', 'pins') },
   { read: 'pins', plan: '9', identities: STAFF, dataset: 'Pin',
     eagle: pagedRows('/project/:project/pin'), demi: one('/projects/:project', 'pins') },
-  pending('group-members', '10', 'Eagle answers User rows, DEMI /groups/:id the Group with member ids; needs a --id group'),
+  // Eagle answers the member User rows in a count facet, DEMI the Group with member ids.
+  { read: 'group-members', plan: '10', identities: STAFF, dataset: 'Group', fields: [],
+    eagle: rows('/project/:project/group/:group/members'),
+    demi: one('/groups/:group', undefined, { project: ':project' }),
+    mapEagle: facets => idRows(facets.flatMap(f => f.results || [])),
+    mapDemi: groups => idRows(groups.flatMap(g => g.members || [])) },
   { read: 'featured-public', plan: '11', identities: ANON, dataset: 'Document',
     eagle: rows('/Public/project/:project/FeaturedDocuments'),
     demi: search('Document', { 'and[isFeatured]': 'true', project: ':project' }) },
@@ -168,7 +197,9 @@ const REST_READS = [
   { read: 'comment', plan: '34', identities: STAFF, dataset: 'Comment',
     eagle: rows('/comment/:comment'), demi: search('Comment', { 'and[_id]': ':comment' }) },
   pending('comment-head', '35', HEAD_REASON),
-  pending('comment-export', '36', 'CSV: this script compares JSON only'),
+  { read: 'comment-export', plan: '36', identities: STAFF, format: 'csv', key: 'Comment_No',
+    ignoreColumns: ['Export_Date'],
+    eagle: csv('/comment/export/:period', { format: 'staff' }), demi: csv('/commentperiods/:period/comments/export') },
   { read: 'organization-list-public', plan: '37', identities: ANON, dataset: 'Organization',
     eagle: rows('/public/organization'), demi: search('Organization') },
   { read: 'organization-public', plan: '38', identities: ANON, dataset: 'Organization',
@@ -184,9 +215,16 @@ const REST_READS = [
     eagle: rows('/public/recentActivity', { top: 'true' }),
     demi: { ...search('HomeFeed', { pageSize: '4' }), paged: false } },
   pending('topic-vc', '43-46', 'no DEMI Topic or Vc kind yet (S9)'),
-  pending('inspection-item', '47', 'needs --id inspection and element, which this script does not take yet'),
+  // Item ids of one element. Eagle's item route streams the file and records a download, so the
+  // element row's `items` refs stand in for it.
+  { read: 'inspection-item', plan: '47', identities: STAFF, dataset: 'InspectionItem', fields: [],
+    eagle: rows('/search', { dataset: 'Item', _id: ':element', _schemaName: 'InspectionElement' }),
+    demi: rows('/inspection-items', { inspection: ':inspection', element: ':element' }),
+    mapEagle: elements => idRows(elements.flatMap(e => e.items || [])) },
   { read: 'config', plan: '48', skip: 'runtime config: the two documents differ by design, compared by hand' },
-  pending('report-bcgw', '49', 'CSV: this script compares JSON only'),
+  // Anonymous only: both APIs answer every caller the anonymous file.
+  { read: 'report-bcgw', plan: '49', identities: ANON, format: 'csv', key: 'Project GUID',
+    keyIsEagleId: true, eagle: csv('/reports', { type: 'bcgw' }), demi: csv('/reports', { type: 'bcgw' }) },
   pending('materialized-views', '50-53', 'not ported: internal to Eagle'),
   pending('audit', '54', 'not ported: dead route')
 ];
