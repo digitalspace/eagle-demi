@@ -285,11 +285,23 @@ test('setAclForProject — the Eagle staff rule, never team', async (t) => {
     assert.deepStrictEqual(await cascade(tt, seeded, ['team']), ['sysadmin']);
   });
 
-  await t.test('an Eagle row with no ownRead takes the plain cap and gains no snapshot', async (tt) => {
+  await t.test('an Eagle row stored before the rule, with no ownRead, captures its read and takes the rule', async (tt) => {
     const cap = harness(tt, [{ id: 'd1', read: ['sysadmin'], sourceSystem: 'eagle' }]);
     await documents.setAclForProject(systemAccess(), '207', ['staff', 'idir', 'public']);
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
-    assert.strictEqual(opValue(cap.ops[0], '/ownRead'), undefined);
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['staff']);
+    assert.deepStrictEqual(opValue(cap.ops[0], '/ownRead'), ['sysadmin']);
+  });
+
+  await t.test("an Eagle ['staff'] row with no ownRead narrowed to team and re-published comes back to staff", async (tt) => {
+    // Stored before the rule, so `['staff']` is Eagle's own `['sysadmin','staff']`.
+    const legacy = { id: 'd1', read: ['staff'], sourceSystem: 'eagle' };
+    const cap = harness(tt, [legacy]);
+    await documents.setAclForProject(systemAccess(), '207', ['team']);
+    const narrowed = { ...legacy, read: opValue(cap.ops[0], '/read'), ownRead: opValue(cap.ops[0], '/ownRead') };
+    tt.mock.restoreAll();
+    assert.deepStrictEqual(narrowed.read, ['team']);
+    assert.deepStrictEqual(narrowed.ownRead, ['staff'], 'the read before narrowing is the snapshot');
+    assert.deepStrictEqual(await cascade(tt, narrowed, ['staff', 'idir', 'public']), ['staff']);
   });
 });
 

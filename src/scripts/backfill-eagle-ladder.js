@@ -23,10 +23,10 @@
  *   level-2 result is written, so nothing lands at `team` or `public`;
  * - a row whose parent is not in DEMI.
  *
- * A document with no `ownRead` also gains one, in the same patch: its `read` before this run, which
- * on a row written before the rule is Eagle's own read. `setAclForProject` re-derives an Eagle row
- * from `ownRead` only, and a stored `read` holding `staff` may carry the token the rule added, so
- * such a row is counted (`staffNoOwnRead`) and not written.
+ * A document with no `ownRead` also gains one, in the same patch: its `read` before this run. Every
+ * writer that adds the rule's `staff` also stores `ownRead`, so a row lacking one predates the rule
+ * and that `read`, `staff` included, is Eagle's own. Without it, `setAclForProject` would capture
+ * this run's promoted `['staff']` and cap it to `team`.
  *
  * Parents are planned first and children are capped by the parent's planned read, so a dry run
  * counts what a live run writes. Each patch is conditioned on the row still having no ladder token,
@@ -132,13 +132,10 @@ function planRow(step, row, parentRead) {
   return { read: next };
 }
 
-/**
- * A document's missing `ownRead`: its stored `read`, or null when it has one, has no `read`, or is
- * not a document. `ambiguous` when that `read` holds `staff`, which the rule may have added.
- */
+/** A document's missing `ownRead`: its stored `read`, or null when it has one or has no `read`. */
 function ownReadPlan(step, row) {
   if (step.container !== 'documents' || isNonEmpty(row.ownRead) || !isNonEmpty(row.read)) return null;
-  return row.read.includes(LEVEL_TOKENS[2]) ? { ambiguous: true } : { ownRead: row.read };
+  return row.read;
 }
 
 function patchOp(step, row, plan, ownRead, now) {
@@ -165,7 +162,7 @@ function patchOp(step, row, plan, ownRead, now) {
 function summaryLine(s) {
   return `[eagle-ladder] container=${s.container} mode=${s.mode} scanned=${s.scanned} ` +
     `planned=${s.planned} heldByParent=${s.heldByParent} ` +
-    `noParent=${s.noParent} ownRead=${s.ownRead} staffNoOwnRead=${s.staffNoOwnRead} ` +
+    `noParent=${s.noParent} ownRead=${s.ownRead} ` +
     `patched=${s.patched} skipped=${s.skipped} failed=${s.failed}`;
 }
 
@@ -187,7 +184,7 @@ async function backfillEagleLadder(argv = [], deps = {}) {
   for (const step of STEPS) {
     const s = {
       container: step.container, mode: args.live ? 'live' : 'dry-run',
-      scanned: 0, planned: 0, heldByParent: 0, noParent: 0, ownRead: 0, staffNoOwnRead: 0,
+      scanned: 0, planned: 0, heldByParent: 0, noParent: 0, ownRead: 0,
       patched: 0, skipped: 0, failed: 0
     };
     const ops = [];
@@ -210,9 +207,7 @@ async function backfillEagleLadder(argv = [], deps = {}) {
       } else if (step.container === 'commentPeriods') {
         parents.periods.set(String(row.id), read);
       }
-      const own = ownReadPlan(step, row);
-      if (own && own.ambiguous) s.staffNoOwnRead++;
-      const ownRead = own && own.ownRead;
+      const ownRead = ownReadPlan(step, row);
       if (ownRead) s.ownRead++;
       if (!plan && !ownRead) continue;
       s.planned++;

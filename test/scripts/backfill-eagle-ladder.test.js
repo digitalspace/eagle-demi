@@ -300,15 +300,15 @@ test('backfill-eagle-ladder', async (t) => {
     assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 1);
   });
 
-  await t.test('a document holding staff with no ownRead is counted and not written', async (t) => {
+  await t.test('a document holding staff with no ownRead gains it, read unchanged', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [STAFF_PROJECT],
       documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['staff'] }]
     });
     const summaries = await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.length, 0);
-    assert.strictEqual(summaryOf(summaries, 'documents').staffNoOwnRead, 1);
-    assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 0);
+    assert.deepStrictEqual(valueOf(writes, 'd-1', '/ownRead'), ['staff']);
+    assert.strictEqual(readOf(writes, 'd-1'), undefined);
+    assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 1);
   });
 
   await t.test('a dry run counts the ownRead writes and writes nothing', async (t) => {

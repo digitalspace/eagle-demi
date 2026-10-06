@@ -412,11 +412,11 @@ const DELETED_CEILING = readForLevel(2);
  * Every cascade re-derives from `ownRead`, the snapshot of the document's own ACL, rather than from
  * a value a previous cascade already narrowed. Eagle mirrors write it on every seed and push
  * (`seed/transform.js:transformDocument`), and `backfill-eagle-ladder.js` writes it on Eagle rows
- * stored before that. A DEMI-native row without one has it CAPTURED here, lazily, from its `read`.
+ * stored before that. A row without one has it CAPTURED here, lazily, from its `read`.
  *
- * An Eagle row is never captured that way. Its stored `read` may carry the `staff` the Eagle rule
- * added (`helpers/eagle-acl.js:withEagleStaff`), so it cannot stand in for Eagle's read: the row
- * takes the plain cap and keeps no snapshot until a push or re-seed writes one.
+ * That capture is safe on an Eagle row too. Every writer that adds the Eagle rule's `staff`
+ * (`helpers/eagle-acl.js:withEagleStaff`) also stores `ownRead`, so a row lacking one predates the
+ * rule and its stored `read`, `staff` included, is Eagle's own read.
  *
  * The one lossy set is documents a PREVIOUS cascade already flattened: their own ACL is gone, so
  * capture records the flattened value and a re-publish leaves them private. Fail-closed, bounded,
@@ -446,8 +446,8 @@ async function setAclForProject(access, projectId, read) {
   // without re-deriving the rule a second way.
   const derived = [];
   const result = await cosmos.bulkVerified(CONTAINER, rows.map(row => {
-    // The snapshot if there is one, otherwise what the row carries today — which on a DEMI-native
-    // row's first cascade IS its own ACL, the value the snapshot exists to preserve.
+    // The snapshot if there is one, otherwise what the row carries today — which on a first
+    // cascade IS the row's own ACL, the value the snapshot exists to preserve.
     //
     // `: []` and not `: row.read`, because a row with NO `read` field would put `undefined` in a
     // `set` op, and Cosmos rejects a `set` with no value. Patch ops are atomic per item, so that
@@ -456,13 +456,13 @@ async function setAclForProject(access, projectId, read) {
     // `[]` fails closed to level 1 instead. No current write path produces such a row (all
     // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
     // nobody can rule out from outside the private endpoint.
-    const snapshot = Array.isArray(row.ownRead) && row.ownRead.length > 0;
-    const eagle = row.sourceSystem === 'eagle';
-    const own = snapshot ? row.ownRead : (Array.isArray(row.read) ? row.read : []);
-    // An Eagle mirror's `ownRead` is Eagle's read without `staff`; the push's rule adds it. An
-    // Eagle row with no `ownRead` never goes through `eagleReadUnder`: a stored `['staff']` may be
-    // Eagle's `['sysadmin']` plus the added token, and that rule would open it to `team`.
-    const capped = eagle && snapshot ? eagleReadUnder(own, read) : constrainToProject(own, read);
+    const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
+      : (Array.isArray(row.read) ? row.read : []);
+    // An Eagle mirror's `ownRead` is Eagle's read without `staff`; the push's rule adds it. A
+    // DEMI-native row, or an empty `own`, keeps the plain cap so neither is widened.
+    const capped = row.sourceSystem === 'eagle' && own.length > 0
+      ? eagleReadUnder(own, read)
+      : constrainToProject(own, read);
     // Both ceilings, lower wins: the project's, and level 2 once Eagle has deleted the record —
     // without the second, the next project publish would republish a document Eagle no longer has.
     const next = row.isDeleted === true ? constrainToProject(capped, DELETED_CEILING) : capped;
@@ -473,8 +473,7 @@ async function setAclForProject(access, projectId, read) {
       id: String(row.id),
       resourceBody: {
         operations: [
-          // Not captured on an Eagle row (header): a later cascade would treat it as Eagle's read.
-          ...(eagle && !snapshot ? [] : [{ op: 'set', path: '/ownRead', value: own }]),
+          { op: 'set', path: '/ownRead', value: own },
           { op: 'set', path: '/read', value: next },
           { op: 'set', path: '/isPublished', value: next.includes('public') },
           { op: 'set', path: '/updatedAt', value: updatedAt }

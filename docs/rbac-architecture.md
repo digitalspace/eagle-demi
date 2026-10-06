@@ -104,16 +104,16 @@ result would be `team` (a level-1 parent that is not privileged-only, such as `[
 `['project-team']`), the row stores what it stored before the rule, `['sysadmin']`. So the result is
 never wider than the parent, never `team` and never `public`. The document, period, comment and
 Update mirrors, the period and comment cascade (`helpers/acl-cascade.js`), the document project
-cascade (`setAclForProject`, Eagle rows with an `ownRead` only) and the reconcile drift check all
-derive through it. A document's `ownRead` holds Eagle's read without `staff`; the cascade adds it.
-Every writer of an Eagle document row must store `ownRead`, because an Eagle row without one takes
-the plain cap and a stored `['staff']` from Eagle's `['sysadmin']` would then land at `team`.
+cascade (`setAclForProject`) and the reconcile drift check all derive through it. A document's
+`ownRead` holds Eagle's read without `staff`; the cascade adds it. Every writer of an Eagle
+document row must store `ownRead`, because the cascade captures a missing one from the stored
+`read`, and a `['staff']` the rule added to Eagle's `['sysadmin']` would then land at `team`.
 DEMI-native documents keep the plain cap. Existing rows are rewritten by
 `src/scripts/backfill-eagle-ladder.js`, which caps each row's `read` by the same rule against its
 parent's stored read, a DEMI narrow or takedown included. On a document with no `ownRead` it
-stores the pre-run `read` as `ownRead`, and counts one that already holds `staff`
-(`staffNoOwnRead`) without writing it. `staff` stays out of `SECURE_ROLES`. To drop the rule,
-remove `withEagleStaff` and that script.
+stores the pre-run `read` as `ownRead`: a row lacking one predates the rule, so that `read` is
+Eagle's own. `staff` stays out of `SECURE_ROLES`. To drop the rule, remove `withEagleStaff` and
+that script.
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.
