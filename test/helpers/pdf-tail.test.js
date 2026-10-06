@@ -30,6 +30,8 @@ const packet = (title = TITLE, inner = '') => '<?xpacket begin="\ufeff" id="W5M0
   '<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">\n' +
   `<dc:title><rdf:Alt><rdf:li xml:lang="x-default">${title}</rdf:li></rdf:Alt></dc:title>${inner}\n` +
   '</rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end="w"?>';
+/** The older packet header some writers still copy: single quotes, an empty begin, a byte count. */
+const OLD_HEADER = "<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d' bytes='1030'?>";
 /** An XMP stream object holding `body` as UTF-8, as a latin1 body string for `classicTail`. */
 const xmpObject = (body = packet()) => {
   const bytes = Buffer.from(body, 'utf8');
@@ -165,7 +167,13 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
     'a Producer with parentheses': packet(TITLE, '<pdf:Producer>Adobe Acrobat 11.0 (Windows)</pdf:Producer>'),
     'an attribute with a comma and parentheses': packet(TITLE, '<x:a x:xmptk="Adobe XMP Core 5.6-c015 (84.1), 2016/09/10"/>'),
     'non-ASCII and apostrophes as text': packet(TITLE, '<xmp:CreatorTool>Microsoft\u00ae Word\u2019s</xmp:CreatorTool>'),
-    'no xpacket wrapper': packet().replace(/<\?xpacket[^>]*>/g, '')
+    'no xpacket wrapper': packet().replace(/<\?xpacket[^>]*>/g, ''),
+    'an Adobe filters instruction after the header': packet().replace('?>\n', '?>\n<?adobe-xap-filters esc="CRLF"?>\n'),
+    'the older header in single quotes with a byte count': packet()
+      .replace(/^<\?xpacket[^>]*>/, OLD_HEADER)
+      .replace('<?xpacket end="w"?>', '<?xpacket end=\'r\'?>'),
+    'a header with an encoding': packet().replace('kc9d"?>', 'kc9d" encoding="UTF-8"?>'),
+    'a non-ASCII element name': packet(TITLE, '<pdfx:Solutionↂ0020ID>42</pdfx:Solutionↂ0020ID>')
   };
   for (const [label, body] of Object.entries(accepted)) {
     await t.test(`accepted: ${label}`, () => assert.equal(check(body), null));
@@ -209,7 +217,14 @@ test('the new XMP body is strict XML whose only text is the title', async (t) =>
     'an undeclared entity': packet(TITLE, '<x:a>&e;</x:a>'),
     'CDATA': packet(TITLE, '<x:a><![CDATA[BT]]></x:a>'),
     'a comment': packet(TITLE, '<!-- > re f -->'),
-    'another processing instruction': packet(TITLE, '<?x y?>'),
+    'a > inside a processing instruction': packet(TITLE, '<?x a > re f?>'),
+    'a processing instruction before the header': `<?x y?>${packet()}`,
+    'a processing instruction after the packet': `${packet()}<?x y?>`,
+    'an xpacket instruction in another form': packet(TITLE, '<?xpacket z?>'),
+    'a processing instruction inside the title': packet(`<?x y?>${TITLE}`),
+    'a name character XML does not allow': packet(TITLE, '<x:a×b>1</x:a×b>'),
+    'a second root after a processing instruction': packet().replace('<?xpacket end', '<?x y?><x:b/><?xpacket end'),
+    'text after a packet with the older header': `${packet().replace(/^<\?xpacket[^>]*>/, OLD_HEADER)}f`,
     'a > inside an attribute value': packet(TITLE, '<x:a b="1 > re"/>'),
     'an unbalanced ( in text': packet(TITLE, '<pdf:Producer>Adobe (Windows</pdf:Producer>'),
     'a ) before its ( in text': packet(TITLE, '<pdf:Producer>a) (b</pdf:Producer>'),
