@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import re
 from collections import Counter
 
 import pikepdf
@@ -230,12 +231,12 @@ def test_xmp_title_that_differs_is_replaced_so_info_and_xmp_agree(build):
     assert _xmp_title(updated) == TITLE
 
 
-def _requalified(data, edit):
+def _requalified(data, edit, **save):
     """`data` saved again by qpdf after `edit(pdf)`: for originals pypdf's writer cannot make."""
     with pikepdf.open(io.BytesIO(data)) as pdf:
         edit(pdf)
         out = io.BytesIO()
-        pdf.save(out, fix_metadata_version=False)  # else qpdf writes the XMP as a new stream
+        pdf.save(out, fix_metadata_version=False, **save)  # else qpdf writes the XMP as a new stream
         return out.getvalue()
 
 
@@ -329,6 +330,29 @@ UNSAFE_INFO = {"stream": _info_stream, "root": _info_is_root, "name": _info_with
 @pytest.mark.parametrize("edit", UNSAFE_INFO.values(), ids=UNSAFE_INFO.keys())
 def test_info_that_could_be_another_object_is_skipped(edit):
     result = set_title(_requalified(_pdf(), edit), TITLE)
+
+    assert (result.status, result.reason, result.data) == ("skipped", "info-unsafe", None)
+
+
+def test_unfiltered_info_stream_holding_only_strings_is_skipped():
+    original = _requalified(_pdf(), _info_stream, compress_streams=False)
+    info = _reopen(original).trailer["/Info"].get_object()
+    assert isinstance(info, StreamObject)
+    assert dict(info) == {"/Title": "Old"}  # no /Filter or /Length: every value is a string
+
+    result = set_title(original, TITLE)
+
+    assert (result.status, result.reason, result.data) == ("skipped", "info-unsafe", None)
+
+
+def test_info_held_directly_in_the_trailer_is_skipped():
+    original = _pdf()
+    at = original.rindex(b"trailer")  # after the xref table, so no offset moves
+    direct = original[:at] + re.sub(rb"/Info \d+ 0 R", b"/Info << /Title (Old) >>", original[at:])
+    assert _reopen(direct).metadata.title == "Old"
+    assert _qpdf_problems(direct) == []
+
+    result = set_title(direct, TITLE)
 
     assert (result.status, result.reason, result.data) == ("skipped", "info-unsafe", None)
 

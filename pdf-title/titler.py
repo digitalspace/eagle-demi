@@ -130,7 +130,7 @@ def _titled(original: bytes, title: str) -> tuple:
 def _info_ref(reader: PdfReader) -> Optional[tuple]:
     if "/Info" not in reader.trailer:
         return None
-    ref = reader.trailer["/Info"].indirect_reference
+    ref = getattr(reader.trailer["/Info"], "indirect_reference", None)
     return (ref.idnum, ref.generation) if ref is not None else None
 
 
