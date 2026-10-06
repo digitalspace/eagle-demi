@@ -567,7 +567,7 @@ def test_lease_too_short_at_commit_is_released_by_a_plain_report(world):
 
 
 @pytest.mark.parametrize("reason", ["not-pdf-bytes", "key-changed", "record-mismatch", "original-no-startxref",
-                                    "original-trailer-unreadable"])
+                                    "original-xref"])
 def test_commit_refusal_that_released_the_lease_is_refused_and_not_reported(world, reason):
     world.add("d1", _pdf())
     world.faults["commit"] = [run.Response(409, json.dumps({"reason": reason}).encode())]
