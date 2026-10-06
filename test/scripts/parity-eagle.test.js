@@ -301,14 +301,60 @@ test('attachment links to the same documents on each API are counted as a known 
   assert.match(line, /fieldDiff=1 unexplained=0 known=export-attachment-route:1/);
 });
 
+test('attachment links to different documents are unexplained and exit 1', async () => {
+  const { code, line } = await exportRun(csvSides(
+    [exportRow(1, { Attachments: JSON.stringify([`https://eagle.test/api/document/${A}/fetch`]) })],
+    [exportRow(1, { Attachments: JSON.stringify([`https://demi.test/api/documents/${B}/download`]) })]));
+  assert.strictEqual(code, 1);
+  assert.match(line, /match=0 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=1/);
+});
+
+test('the same columns in a different order are a header difference and exit 1', async () => {
+  const reordered = ['Comment_No', 'Comment', 'Author', 'Attachments', 'Export_Date'];
+  const cells = exportRow(1);
+  const { code, line } = await exportRun((host) => new Response(host === 'eagle.test'
+    ? csvText(COMMENT_COLUMNS, [cells])
+    : csvText(reordered, [reordered.map(c => cells[COMMENT_COLUMNS.indexOf(c)])])));
+  assert.strictEqual(code, 1);
+  assert.match(line, /match=1 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=1/);
+});
+
+const BCGW_COLUMNS = ['Project name', 'URL to Epic Project', 'Project GUID'];
+// Both report writers wrap the Project GUID cell in literal quotes.
+const bcgwRow = (id, host = 'projects.eao.gov.bc.ca', linkId = id) =>
+  ['Mine', `https://${host}/p/${linkId}/project-details`, `"${id}"`];
+const bcgwRun = async (eagleRows, demiRows, { args = [], files } = {}) => {
+  const h = harness(csvSides(eagleRows, demiRows, BCGW_COLUMNS), { files });
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'report-bcgw', ...args], h.deps);
+  return { code, line: h.out[0] };
+};
+
 test('a BCGW project link that differs only by host is counted as a known difference', async () => {
-  const columns = ['Project name', 'URL to Epic Project', 'Project GUID'];
-  const row = host => ['Mine', `https://${host}/p/${A}/project-details`, `"${A}"`];
-  const h = harness(csvSides([row('projects.eao.gov.bc.ca')], [row('eagle-test.example')], columns));
-  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'report-bcgw'], h.deps);
+  const { code, line } = await bcgwRun([bcgwRow(A)], [bcgwRow(A, 'eagle-test.example')]);
   assert.strictEqual(code, 0);
-  assert.match(h.out[0],
+  assert.match(line,
     /report-bcgw identity=anonymous match=0 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=0 known=bcgw-link-host:1/);
+});
+
+test('a BCGW project link that points at a different project is unexplained and exits 1', async () => {
+  const { code, line } = await bcgwRun([bcgwRow(A)], [bcgwRow(A, 'eagle-test.example', B)]);
+  assert.strictEqual(code, 1);
+  assert.match(line, /match=0 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=1/);
+});
+
+test('a quoted BCGW Project GUID is matched against bare Eagle ids in --known-ids', async () => {
+  const { code, line } = await bcgwRun([bcgwRow(A), bcgwRow(B)], [bcgwRow(A)], {
+    args: ['--known-ids', 'known.json'],
+    files: { 'known.json': JSON.stringify({ 'L2-never-mirrored': [B] }) }
+  });
+  assert.strictEqual(code, 0);
+  assert.match(line, /match=1 missingInDemi=1 extraInDemi=0 fieldDiff=0 unexplained=0 known=L2-never-mirrored:1/);
+});
+
+test('a BCGW row only DEMI has, keyed by a quoted Eagle id, is unexplained, not excused as demi-only', async () => {
+  const { code, line } = await bcgwRun([bcgwRow(A)], [bcgwRow(A), bcgwRow(B)]);
+  assert.strictEqual(code, 1);
+  assert.match(line, /match=1 missingInDemi=0 extraInDemi=1 fieldDiff=0 unexplained=1/);
 });
 
 const [INSPECTION, ELEMENT, GROUP] = ['1'.repeat(24), '2'.repeat(24), '3'.repeat(24)];
