@@ -49,7 +49,7 @@ jobs:
 
       # The app exists only once the bicep runs with deployPdfTitleWorker = true, and CI's Website
       # Contributor role is granted per site by hand, so an absent site answers Forbidden as well as
-      # NotFound. Either skips; any other error must still fail the run.
+      # NotFound. Either skips, with its own notice; any other error must still fail the run.
       - name: Does the PDF title app exist yet?
         id: probe
         run: |
@@ -57,10 +57,16 @@ jobs:
           if err=$(az functionapp show -g "$AZURE_RESOURCE_GROUP" -n "$PDF_TITLE_APP_NAME" \
                      --query name -o tsv 2>&1 >/dev/null); then
             echo "found=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$err" == *ResourceNotFound* || "$err" == *AuthorizationFailed* ]]; then
+          elif [[ "$err" == *ResourceNotFound* ]]; then
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::$PDF_TITLE_APP_NAME not present or not granted to CI; skipping the deploy."
-            echo "⏭️ $PDF_TITLE_APP_NAME not present — skipping the PDF title deploy." >> "$GITHUB_STEP_SUMMARY"
+            msg="$PDF_TITLE_APP_NAME does not exist yet. Deploy the test bicep with deployPdfTitleWorker = true first. Skipping the deploy."
+            echo "::notice::$msg"
+            echo "⏭️ $msg" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$err" == *AuthorizationFailed* ]]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            msg="$PDF_TITLE_APP_NAME exists but CI lacks Website Contributor on it. Grant the role and rerun. Skipping the deploy."
+            echo "::notice::$msg"
+            echo "⏭️ $msg" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::error::az functionapp show failed for $PDF_TITLE_APP_NAME: $err"
             exit 1
