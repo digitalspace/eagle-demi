@@ -37,7 +37,9 @@ _OFFSET = re.compile(r"offset \d+")
 _XML_MARKUP = re.compile(rb"""<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>|<(?:[^>"']|"[^"]*"|'[^']*')*>""",
                          re.DOTALL)
 # The API splits words at JS `\s`, which also counts U+FEFF.
-_WORD = re.compile(r"[^\s﻿/()]+")
+_WORD = re.compile(r"[^\s\ufeff/()]+")
+# The API refuses these in XMP text, and parentheses that do not balance.
+_TEXT_DELIMITER = re.compile(r"[%\\\[\]{}()>]")
 _NUMBER_CHARS = "+-.0123456789"
 # The API's `OPERATORS` (src/helpers/pdf-tail.js) plus `B`: it refuses these words in XMP text.
 _OPERATORS = frozenset("""
@@ -279,7 +281,7 @@ def _xmp_with_title(xmp: bytes, title: str) -> bytes:
 
 
 def _inert_text(xmp: bytes) -> bytes:
-    """Write each operator word in XML text with its first character as a reference; same XML."""
+    """Write XML text delimiters, and each operator word's first character, as references; same XML."""
     out, pos = [], 0
     for markup in _XML_MARKUP.finditer(xmp):
         out += [_inert_run(xmp[pos:markup.start()]), markup.group()]
@@ -289,7 +291,8 @@ def _inert_text(xmp: bytes) -> bytes:
 
 
 def _inert_run(raw: bytes) -> bytes:
-    text = raw.decode("utf-8", "surrogateescape")
+    text = _TEXT_DELIMITER.sub(lambda m: f"&#{ord(m.group())};", raw.decode("utf-8", "surrogateescape"))
+    # Words after the delimiter pass: the API splits the text as written, references included.
     return _WORD.sub(_inert_word, text).encode("utf-8", "surrogateescape")
 
 

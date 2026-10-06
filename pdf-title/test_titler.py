@@ -388,12 +388,17 @@ OPERATOR_TITLES = {
     "word": ("Appendix F", b"Appendix &#70;"),
     "leading-number": ("Scale 1re", b"Scale 1&#114;e"),
     "slash-and-two-letters": ("Sheet Tj/q", b"Sheet &#84;j/&#113;"),
-    "parentheses": ("Map (f)", b"Map (&#102;)"),
+}
+DELIMITER_TITLES = {
+    "percent-parentheses-brackets": ("50% (draft) [v2]", b"50&#37; &#40;draft&#41; &#91;v2&#93;"),
+    "braces-backslash": ("{Draft} C:\\Temp", b"&#123;Draft&#125; C:&#92;Temp"),
+    "operator-in-parentheses": ("Map (f)", b"Map &#40;f&#41;"),
 }
 
 
-@pytest.mark.parametrize("title,raw", OPERATOR_TITLES.values(), ids=OPERATOR_TITLES.keys())
-def test_operator_words_in_the_xmp_title_are_written_as_character_references(title, raw):
+@pytest.mark.parametrize("title,raw", [*OPERATOR_TITLES.values(), *DELIMITER_TITLES.values()],
+                         ids=[*OPERATOR_TITLES.keys(), *DELIMITER_TITLES.keys()])
+def test_operator_words_and_delimiters_in_the_xmp_title_are_character_references(title, raw):
     result = set_title(_pdf(xmp=PDFA_XMP), title)
 
     assert b'<rdf:li xml:lang="x-default">' + raw + b"</rdf:li>" in _xmp_data(result.data)
@@ -420,10 +425,10 @@ def test_xmp_title_with_no_operator_words_is_written_unchanged():
 
 
 def test_only_xml_text_is_encoded_not_tags_attributes_or_comments():
-    xmp = b"""<?xpacket begin="F"?><a b="F > q Tj" c='Tj'><!-- F --><d/>F q</a>"""
+    xmp = b"""<?xpacket begin="F"?><a b="F > q Tj" c='Tj'><!-- F --><d/>F q {x}></a>"""
 
     assert titler._inert_text(xmp) == (b"""<?xpacket begin="F"?><a b="F > q Tj" c='Tj'><!-- F --><d/>"""
-                                       b"&#70; &#113;</a>")
+                                       b"&#70; &#113; &#123;x&#125;&#62;</a>")
 
 
 def test_flate_xmp_is_rewritten_unfiltered():
