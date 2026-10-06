@@ -263,6 +263,19 @@ test('aclMismatch', async (t) => {
     assert.deepStrictEqual(aclMismatch(rows, byId, eagle(STAFF)), ['a']);
   });
 
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team']]) {
+    await t.test(`a no-ladder row stored privileged-only under level-1 parent ${JSON.stringify(parent)} is not drift`, () => {
+      const rows = [{ id: 'a', read: ['sysadmin'], isPublished: false }];
+      assert.deepStrictEqual(aclMismatch(rows, byId, eagle(['sysadmin']), () => parent), []);
+    });
+  }
+
+  await t.test('a no-ladder row under a staff parent is drift until it carries staff', () => {
+    const parentOf = () => STAFF;
+    assert.deepStrictEqual(aclMismatch([{ id: 'a', read: ['sysadmin'], isPublished: false }], byId, eagle(['sysadmin']), parentOf), ['a']);
+    assert.deepStrictEqual(aclMismatch([{ id: 'a', read: STAFF, isPublished: false }], byId, eagle(['sysadmin']), parentOf), []);
+  });
+
   await t.test('isPublished out of step with its own read[] is a mismatch', () => {
     const rows = [{ id: 'a', read: PUBLIC, isPublished: false }];
     assert.deepStrictEqual(aclMismatch(rows, byId, eagle(PUBLIC)), ['a']);
@@ -629,8 +642,8 @@ test('reconcile', async (t) => {
           { id: 'U-note', projectId: 'N1', read: ['staff'], isPublished: false },
           // Under public P1, so Eagle's own read verbatim; staff here is drift.
           { id: 'U-open', projectId: 'P1', read: ['staff'], isPublished: false },
-          // Never rewritten to a ladder token: ['sysadmin'] is in step.
-          { id: 'U-admin', projectId: 'P1', read: ['sysadmin'], isPublished: false }
+          // No ladder token from Eagle, so staff is added (`withEagleStaff`): in step.
+          { id: 'U-admin', projectId: 'P1', read: ['sysadmin', 'staff'], isPublished: false }
         ],
         count: async () => 4
       }
@@ -651,9 +664,9 @@ test('reconcile', async (t) => {
       },
       updates: {
         listEvery: async () => [
-          // What the push stores: the token dropped, and sysadmin only when nothing else is left.
+          // What the push stores: the token dropped, and sysadmin plus staff when nothing else is left.
           { id: 'U-comp', projectId: 'P1', read: ['public'], isPublished: true },
-          { id: 'U-only', projectId: 'P1', read: ['sysadmin'], isPublished: false }
+          { id: 'U-only', projectId: 'P1', read: ['sysadmin', 'staff'], isPublished: false }
         ],
         count: async () => 2
       }

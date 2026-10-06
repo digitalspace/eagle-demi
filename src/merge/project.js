@@ -51,6 +51,17 @@ const TRACK_PRECEDENCE = [
 ];
 
 /**
+ * Eagle-only fields eagle-api's project GET returns (its `tagList`), staff-only here: catalog
+ * level 2. Also what src/scripts/backfill-eagle-staff-fields.js copies onto stored rows.
+ */
+const EAGLE_STAFF_FIELDS = [
+  'CELead', 'CELeadEmail', 'CELeadPhone', 'projectLeadId', 'responsibleEPDId', 'projLead',
+  'addedBy', 'intake', 'dateCommentsOpen', 'dateCommentsClosed', 'duration', 'isTermsAgreed',
+  'primaryContact', 'proMember', 'eaStatusDate', 'projectStatusDate', 'activeDate',
+  'substantially', 'substantiallyDate', 'hasMetCommentPeriods'
+];
+
+/**
  * Fields only Eagle has. Copied straight across — the EA process record, contacts and CAC
  * data that make DEMI more than a Track mirror.
  *
@@ -73,8 +84,18 @@ const EAGLE_ONLY_FIELDS = [
   'sector', 'commodity', 'region', 'fedElecDist', 'provElecDist',
   'projectCAC', 'projectCACPublished', 'cacEmail',
   'proponentId', 'pins', 'pinsRead', 'featuredDocuments',
-  'overallProgress', 'code', 'nameSearchTerms'
+  'overallProgress', 'code', 'nameSearchTerms',
+  ...EAGLE_STAFF_FIELDS
 ];
+
+/** The `fields` an Eagle record holds a value for: how both merges fill the Eagle-only gaps. */
+function pickEagleFields(eagle, fields) {
+  const picked = {};
+  for (const field of fields) {
+    if (hasValue(eagle[field])) picked[field] = eagle[field];
+  }
+  return picked;
+}
 
 /**
  * Fields that live ONLY at the top level of a Mongo project — identity, ACL, pins, CAC, featured
@@ -394,11 +415,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   }
 
   // Eagle fills the gaps Track cannot.
-  if (eagle) {
-    for (const field of EAGLE_ONLY_FIELDS) {
-      if (hasValue(eagle[field])) merged[field] = eagle[field];
-    }
-  }
+  if (eagle) Object.assign(merged, pickEagleFields(eagle, EAGLE_ONLY_FIELDS));
 
   // Track-only, and no contest with Eagle: `currentPhaseName` and `phaseHistory` are Eagle's own
   // EA-process record and stay exactly as they are. This is the dated assessment rail, and it is
@@ -458,9 +475,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   for (const [target, , eagleField] of TRACK_PRECEDENCE) {
     if (eagleField && hasValue(eagle[eagleField])) merged[target] = eagle[eagleField];
   }
-  for (const field of EAGLE_ONLY_FIELDS) {
-    if (hasValue(eagle[field])) merged[field] = eagle[field];
-  }
+  Object.assign(merged, pickEagleFields(eagle, EAGLE_ONLY_FIELDS));
   trimLabels(merged);
 
   const centroid = normalizeCentroid(null, eagle);
@@ -584,6 +599,8 @@ function buildProjectIndex(projects) {
 module.exports = {
   TRACK_PRECEDENCE,
   EAGLE_ONLY_FIELDS,
+  EAGLE_STAFF_FIELDS,
+  pickEagleFields,
   EAGLE_TOP_LEVEL_FIELDS,
   flattenEagleProject,
   carryEagleOnlyFields,

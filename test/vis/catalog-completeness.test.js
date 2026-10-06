@@ -109,8 +109,35 @@ const EAGLE_FIXTURE = {
   proponentName: 'Eagle Proponent Ltd',
   pins: [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }],
   pinsRead: ['public'],
-  featuredDocuments: ['5cf00c03a266b7e187750002', '5cf00c03a266b7e187750003']
+  featuredDocuments: ['5cf00c03a266b7e187750002', '5cf00c03a266b7e187750003'],
+  ...staffOnlyEagleFields()
 };
+
+/** The fields eagle-api's project GET returns that DEMI carries for staff only. */
+function staffOnlyEagleFields() {
+  return {
+    CELead: 'Fran Federal',
+    CELeadEmail: 'fran.federal@example.invalid',
+    CELeadPhone: '250 555 0103',
+    projectLeadId: '5cf00c03a266b7e187750004',
+    responsibleEPDId: '5cf00c03a266b7e187750005',
+    projLead: '5cf00c03a266b7e187750006',
+    addedBy: 'idir\\someone',
+    intake: { investment: '100' },
+    dateCommentsOpen: '2019-01-01',
+    dateCommentsClosed: '2019-02-01',
+    duration: '30 days',
+    isTermsAgreed: true,
+    primaryContact: 'Gale Contact',
+    proMember: 'Harper Proponent',
+    eaStatusDate: '2019-03-14T00:00:00.000Z',
+    projectStatusDate: '2019-03-14T00:00:00.000Z',
+    activeDate: '2019-03-14T00:00:00.000Z',
+    substantially: false,
+    substantiallyDate: '2024-03-14T00:00:00.000Z',
+    hasMetCommentPeriods: true
+  };
+}
 
 /** Track work phases, as `seed/sources.js` maps them. Only the merge passes them through. */
 const TRACK_PHASES_FIXTURE = [{
@@ -225,6 +252,12 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     assert.strictEqual(catalog.pins.maxVis, 4);
     assert.strictEqual(catalog.pins.when, 'pinsPublished');
     assert.strictEqual(catalog.pinsRead.maxVis, 0, 'the pins ACL is an ACL');
+  });
+
+  await t.test('the Eagle fields carried for staff are level 2 and can never be raised', () => {
+    for (const field of Object.keys(staffOnlyEagleFields())) {
+      assert.deepStrictEqual(catalog[field], { defaultVis: 2, maxVis: 2 }, field);
+    }
   });
 
   await t.test('cacEmail reaches the public only through its predicate', () => {

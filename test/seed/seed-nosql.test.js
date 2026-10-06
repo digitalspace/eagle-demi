@@ -183,6 +183,14 @@ test('fetchAllPages', async (t) => {
     );
   });
 
+  await t.test('maxPages stops after that many pages and does not read the cut as truncation', async () => {
+    let pages = 0;
+    const items = await withFetch(server(5 * PAGE_SIZE), () =>
+      fetchAllPages('http://x', 'Document', { maxPages: 2, onPage: () => { pages++; } }));
+    assert.strictEqual(pages, 2);
+    assert.strictEqual(items.length, 2 * PAGE_SIZE);
+  });
+
   await t.test('a bare callback third argument still works', async () => {
     let pages = 0;
     await withFetch(server(150), () => fetchAllPages('http://x', 'Document', () => { pages++; }));

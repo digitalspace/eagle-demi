@@ -13,32 +13,9 @@
  * record with no resolvable project is dropped instead of given a fabricated parent.
  */
 
-const { readForLevel, SEALED_TOKEN } = require('../helpers/access-sql');
+const { readForLevel } = require('../helpers/access-sql');
 const { naturalSortKey } = require('../helpers/natural-sort');
-
-/**
- * ACL for a seeded or pushed Eagle item, the one rule every Eagle mirror derives `read[]` through.
- *
- * Upstream `read[]` is preserved when present — Eagle carries role types already (`project-team`,
- * `admin:nrced`, `public`), and rewriting them would either widen an upstream restriction or
- * silently drop a role. Privileged DEMI callers do not need to appear in the list: `readClause`
- * short-circuits them to `true`.
- *
- * Two things are dropped: blank entries, and the sealed token. Eagle has no sealed compartment, so
- * kept, `compliance` would seal the copy and hide it from every ladder caller.
- *
- * With no upstream ACL the item lands at level 2 (All EAO). With only compliance left after the
- * blanks it lands at `['sysadmin']`, exactly what `['compliance','sysadmin']` lands at: no ladder
- * token, so privileged callers only. Not `team`, which the team arm opens to the project's team
- * members. A list of blanks alone stays `[]`, as it always has. Every item gets an explicit `read[]`, which is the condition for
- * deleting the legacy no-ACL tier from the visibility predicate.
- */
-function seedAcl(upstreamRead) {
-  if (!Array.isArray(upstreamRead) || upstreamRead.length === 0) return readForLevel(2);
-  const kept = upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
-  const open = kept.filter(r => r !== SEALED_TOKEN);
-  return open.length === 0 && kept.length > 0 ? ['sysadmin'] : open;
-}
+const { seedAcl, eagleBaseAcl, withEagleStaff, eagleReadUnder } = require('../helpers/eagle-acl');
 
 /** `internalSize` arrives as a number OR a numeric string (261 of 2,961 sampled were strings). */
 function toNumber(value) {
@@ -80,9 +57,7 @@ function listRefId(ref) {
   return ref ? String(ref) : null;
 }
 
-const {
-  EXTRACTION_FIELDS, DEMI_OWNED_FIELDS, constrainToProject
-} = require('../repositories/documents');
+const { EXTRACTION_FIELDS, DEMI_OWNED_FIELDS } = require('../repositories/documents');
 
 function carriedDemiState(existing) {
   if (!existing) return {};
@@ -138,9 +113,7 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
 
   // A document may never out-rank its project. Notification-parented rows have no project ACL to
   // narrow against and stay verbatim.
-  const read = opts.projectRead
-    ? constrainToProject(seedAcl(doc.read), opts.projectRead)
-    : seedAcl(doc.read);
+  const read = opts.projectRead ? eagleReadUnder(doc.read, opts.projectRead) : seedAcl(doc.read);
 
   const displayName = doc.displayName || doc.documentFileName || '';
 
@@ -188,6 +161,9 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     legislation: doc.legislation || null,
 
     read,
+    // Eagle's read without `staff`, which `documents.setAclForProject` re-derives from. The stored
+    // `read` cannot stand in for it: `['staff']` there may be Eagle's `['sysadmin']` plus the rule.
+    ownRead: eagleBaseAcl(doc.read),
     // DERIVED from read[], not copied. Upstream `isPublished` is true on only 66% of documents
     // that are unambiguously public by their ACL, so copying it would hide a third of the
     // corpus. read[] is authoritative and isPublished is its mirror (ADR-004).
@@ -255,6 +231,9 @@ function transformBoundary(item, opts = {}) {
 module.exports = {
   EXTRACTION_FIELDS,
   seedAcl,
+  eagleBaseAcl,
+  withEagleStaff,
+  eagleReadUnder,
   toNumber,
   toIsoOrNull,
   resolveListLabel,

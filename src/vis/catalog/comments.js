@@ -7,8 +7,8 @@
  * comment submitted anonymously carries a name in Mongo that the public site must never render.
  * The Eagle Comment model has no email field, so none is mirrored and none is catalogued.
  *
- * The staff-side halves of the model — `eaoNotes`, `proponentNotes`, `publishedNotes`,
- * `rejectedNotes`, `rejectedReason`, `location` — are not mirrored at all, so they need no entry.
+ * The staff-side review fields are level 2 with a ceiling of 2: staff read them in eagle-api, and
+ * nothing here may publish them.
  */
 module.exports = {
   // Structural / identity.
@@ -35,6 +35,16 @@ module.exports = {
   // The submitter's name, and public ONLY through the predicate: `isAnonymous` defaults to TRUE in
   // Eagle, so a row that never set it is unattributed and this stays withheld.
   author: { defaultVis: 2, maxVis: 4, when: 'commentAttributed' },
+
+  // Staff-side review fields (`staffFields` in the comment mirror).
+  datePosted: { defaultVis: 2, maxVis: 2 },
+  eaoNotes: { defaultVis: 2, maxVis: 2 },
+  proponentNotes: { defaultVis: 2, maxVis: 2 },
+  proponentStatus: { defaultVis: 2, maxVis: 2 },
+  publishedNotes: { defaultVis: 2, maxVis: 2 },
+  rejectedNotes: { defaultVis: 2, maxVis: 2 },
+  rejectedReason: { defaultVis: 2, maxVis: 2 },
+  valuedComponents: { defaultVis: 2, maxVis: 2 },
 
   // Never public. Same entries, same reasons, as catalog/projects.js.
   read: { defaultVis: 0, maxVis: 0 },

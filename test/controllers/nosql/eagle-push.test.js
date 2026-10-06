@@ -32,7 +32,7 @@ const {
   eagleProject, storedEagleProject: storedProject,
   projectReadForWriteFromGet, documentReadForWriteFromGet, SEALED_AT
 } = require('../../helpers/eagle-mirror-fixtures');
-const { canRead } = require('../../../src/helpers/access-sql');
+const { canRead, levelOfRead } = require('../../../src/helpers/access-sql');
 const { logger } = require('../../../src/utils/logger');
 
 function mockRes() {
@@ -617,7 +617,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.isPublished, false);
   });
 
-  await t.test('a document Eagle marks compliance-only lands privileged-only, not sealed', async () => {
+  await t.test('a document Eagle marks compliance-only lands at staff, not sealed', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'getById', async () => null);
     let written;
@@ -628,8 +628,48 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       body: { doc: eagleDocument({ read: ['compliance'] }) }, user: STAFF
     }, mockRes());
 
-    assert.deepStrictEqual(written.read, ['sysadmin']);
-    assert.deepStrictEqual(written.ownRead, ['sysadmin'], 'the cascade restores from the stripped read');
+    assert.deepStrictEqual(written.read, ['staff']);
+    assert.deepStrictEqual(written.ownRead, ['sysadmin'], 'the stripped read, without staff: the cascade adds it');
+  });
+
+  /** The read a document push stores under a project whose stored read is `projectRead`. */
+  async function pushedUnder(projectRead, eagleRead) {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject({ read: projectRead, isPublished: false }));
+    t.mock.method(documents, 'getById', async () => null);
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ read: eagleRead }) }, user: STAFF
+    }, mockRes());
+    t.mock.restoreAll();
+    return written.read;
+  }
+
+  // DEMI's narrow writes `readForLevel(level)`.
+  for (const [label, parentRead] of [['level 1', ['team']], ['level 2', ['staff']]]) {
+    await t.test(`a no-ladder document under a project narrowed to ${label} is no wider than it`, async () => {
+      const read = await pushedUnder(parentRead, ['sysadmin']);
+      assert.ok(levelOfRead(read) <= levelOfRead(parentRead));
+    });
+  }
+
+  await t.test('a no-ladder document under a project narrowed to level 2 lands where a staff document does', async () => {
+    assert.deepStrictEqual(await pushedUnder(['staff'], ['sysadmin']), await pushedUnder(['staff'], ['sysadmin', 'staff']));
+  });
+
+  // Level-1 parents store what the push stored before the staff rule; staff-level parents, staff.
+  for (const [parentRead, expected] of [
+    [['team'], ['sysadmin']], [['sysadmin'], ['sysadmin']], [[], ['sysadmin']],
+    [['project-team'], ['sysadmin']], [['staff'], ['staff']], [['staff', 'idir', 'public'], ['staff']]
+  ]) {
+    await t.test(`an Eagle ['sysadmin'] document pushed under ${JSON.stringify(parentRead)} stores ${JSON.stringify(expected)}`, async () => {
+      assert.deepStrictEqual(await pushedUnder(parentRead, ['sysadmin']), expected);
+    });
+  }
+
+  await t.test('a public document under a project taken down to staff lands at staff, as before', async () => {
+    assert.deepStrictEqual(await pushedUnder(['staff'], ['sysadmin', 'staff', 'public']), ['staff']);
   });
 
   await t.test('a document that moved project leaves no row in the old partition', async () => {
@@ -863,9 +903,9 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     }, mockRes());
 
     assert.strictEqual(indexWrites.length, 1);
-    // `sysadmin` is no ladder token, so level 1, and privileged-only rather than `team`.
+    // `sysadmin` is no ladder token, so `staff` is added: level 2, never `team`.
     assert.deepStrictEqual(indexWrites[0],
-      [{ id: DOC_EAGLE_ID, read: ['sysadmin'], isPublished: false }]);
+      [{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false }]);
 
     indexWrites.length = 0;
     await documentController.upsertFromEagle({

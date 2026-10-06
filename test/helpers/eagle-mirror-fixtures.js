@@ -112,6 +112,62 @@ function storedDocument(overrides = {}) {
   };
 }
 
+/**
+ * The staff-side Eagle fields each mirror promotes at level 2, every one set to a value the mirror
+ * keeps as-is, so a row that drops or mangles one differs from these.
+ */
+const STAFF_PERIOD_FIELDS = Object.freeze({
+  ceaaAdditionalText: 'Federal comment text.',
+  ceaaInformationLabel: 'Federal label',
+  ceaaRelatedDocuments: 'Federal documents',
+  classificationRoles: ['staff'],
+  classifiedPercent: 40,
+  commenterRoles: ['public'],
+  commentIdCount: 12,
+  dateCompletedEst: '2026-08-29T00:00:00.000Z',
+  dateStartedEst: '2026-07-31T00:00:00.000Z',
+  dateUpdated: '2026-07-21T00:00:00.000Z',
+  downloadRoles: ['sysadmin'],
+  isClassified: true,
+  isResolved: false,
+  isVetted: 'Vetted',
+  metURLAdmin: 'https://engage.gov.bc.ca/admin/1',
+  milestone: MILESTONE_ID,
+  periodType: 'Public',
+  phase: '5cf00c03a266b7e187750010',
+  phaseName: 'Application Review',
+  publishedPercent: 30,
+  rangeOption: '30',
+  rangeType: 'days',
+  resolvedPercent: 20,
+  userCan: 'vet',
+  vettedPercent: 50,
+  vettingRoles: ['staff']
+});
+
+const STAFF_COMMENT_FIELDS = Object.freeze({
+  datePosted: '2026-08-05T01:00:00.000Z',
+  eaoNotes: 'Checked against the setback map.',
+  proponentNotes: 'Setback meets the guideline.',
+  proponentStatus: 'Responded',
+  publishedNotes: 'Published unedited.',
+  rejectedNotes: 'Held, then released.',
+  rejectedReason: 'Personal information',
+  valuedComponents: ['5cf00c03a266b7e187750004']
+});
+
+const STAFF_ORGANIZATION_FIELDS = Object.freeze({
+  description: 'Wind energy proponent.',
+  address2: 'Suite 200',
+  company: 'Nicomen',
+  companyLegal: 'Nicomen Energy Limited',
+  parentCompany: '58850f69aaecd9001b8085cd',
+  addedBy: 'idir\\jdoe',
+  updatedBy: 'idir\\jdoe',
+  dateAdded: '2026-01-02T00:00:00.000Z',
+  dateUpdated: '2026-01-03T00:00:00.000Z'
+});
+
 /** The mirrored period a comment push reads its ceiling from — already project-constrained. */
 function storedPeriod(read = ['staff', 'idir', 'public']) {
   return { id: PERIOD_EAGLE_ID, projectId: '207', read };
@@ -133,6 +189,7 @@ function eaglePeriod(overrides = {}) {
     openHouses: [{ eventDate: '2026-08-10T00:00:00.000Z', description: 'Community hall' }],
     relatedDocuments: ['5cf00c03a266b7e187750002'],
     commentTip: 'Comments are public.',
+    ...STAFF_PERIOD_FIELDS,
     read: PUBLIC_ACL,
     ...overrides
   };
@@ -152,6 +209,7 @@ function eagleComment(overrides = {}) {
     documents: ['5cf00c03a266b7e187750003'],
     commentId: 12,
     eaoStatus: 'Published',
+    ...STAFF_COMMENT_FIELDS,
     read: PUBLIC_ACL,
     ...overrides
   };
@@ -197,6 +255,7 @@ function eagleOrganization(overrides = {}) {
     city: 'Merritt',
     postal: 'V1K 1B8',
     website: 'https://example.invalid',
+    ...STAFF_ORGANIZATION_FIELDS,
     read: PUBLIC_ACL,
     ...overrides
   };
@@ -347,6 +406,9 @@ module.exports = {
   DOCUMENT_EAGLE_ID,
   TYPE_ID,
   MILESTONE_ID,
+  STAFF_PERIOD_FIELDS,
+  STAFF_COMMENT_FIELDS,
+  STAFF_ORGANIZATION_FIELDS,
   PUBLIC_ACL,
   SEALED_AT,
   PRIVATE_ACL,

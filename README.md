@@ -313,6 +313,44 @@ hand in test with `EAGLE_API_BASE` overridden instead. Unset, no timer is regist
 alert `demi-reconcile-drift-prod` reads the line out of `AppTraces` hourly and mails the DEMI action
 group whenever `drift=` is over 0; a night the job never runs writes no line and raises nothing.
 
+### Parity with eagle-api
+
+```bash
+node src/scripts/parity-eagle.js --eagle https://<eagle host>/api --demi https://<demi host>/api \
+  --identity staff --token-env PARITY_TOKEN --id project=<eagleId> --id period=<eagleId> \
+  --known-ids known.json --report parity.json
+```
+
+Checks that a consumer of eagle-api would see the same rows and fields from DEMI. Each read in
+`src/scripts/parity-map.js` is sent to both APIs with the same identity (`anonymous`, the default,
+or `staff`/`sysadmin` with a bearer token read from the variable `--token-env` names; a token is
+never taken on the command line). Rows pair on Eagle `_id` against DEMI `eagleId` or `id`.
+
+It only sends GET, at most two requests a second per API, and retries once on 429 or 5xx. It never
+calls Eagle's public download route, which counts hits. Keyword searches still send Eagle analytics
+events.
+
+One line per read:
+
+```
+[parity] search-Project identity=staff match=410 missingInDemi=3 extraInDemi=12 fieldDiff=0 unexplained=0 known=L1-no-ladder-token:3,demi-only:12
+```
+
+Every difference is matched against `KNOWN_DIFFERENCES` in `parity-map.js`; what no class explains
+counts as `unexplained`. Classes that match by id (rows never mirrored, DEMI takedowns, Eagle hard
+deletes) read their ids from `--known-ids`, a JSON object of class name to id list. The run exits 1
+when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI target yet print
+`skipped (pending)`; reads that need an id print `skipped: needs --id ...`. `--only <read>` runs
+one read; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
+extra rows cannot be told from a partial slice. The `--report` file lists ids and field names of
+unexplained differences, never values.
+
+`--download-sample <n>` (default 0, off; needs a staff or sysadmin token) also downloads up to `n`
+documents both sides returned, plus `--id document` if given, through Eagle's protected
+`/document/{id}/download` and DEMI's `/documents/:id/download`. It follows DEMI's redirect to
+object storage without the bearer token, and compares sha256 and byte length while streaming;
+nothing is written to disk. Any mismatch counts as unexplained.
+
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
 exception — the high-water mark cannot see them, so the application removes index entries explicitly.

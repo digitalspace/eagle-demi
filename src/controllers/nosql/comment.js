@@ -14,8 +14,7 @@
 
 const comments = require('../../repositories/comments');
 const commentPeriods = require('../../repositories/comment-periods');
-const { constrainToProject } = require('../../repositories/documents');
-const { seedAcl } = require('../../seed/transform');
+const { eagleReadUnder } = require('../../seed/transform');
 const { systemAccess } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
@@ -25,6 +24,20 @@ const {
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
+
+/** Eagle's staff-side review fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
+function staffFields(doc) {
+  return {
+    datePosted: doc.datePosted || null,
+    eaoNotes: doc.eaoNotes || null,
+    proponentNotes: doc.proponentNotes || null,
+    proponentStatus: doc.proponentStatus || null,
+    publishedNotes: doc.publishedNotes || null,
+    rejectedNotes: doc.rejectedNotes || null,
+    rejectedReason: doc.rejectedReason || null,
+    valuedComponents: Array.isArray(doc.valuedComponents) ? doc.valuedComponents.map(String) : []
+  };
+}
 
 function mirrorItem(eagleId, doc, period, read, existing) {
   return {
@@ -50,6 +63,7 @@ function mirrorItem(eagleId, doc, period, read, existing) {
     documents: Array.isArray(doc.documents) ? doc.documents.map(String) : [],
     commentId: doc.commentId ?? null,
     eaoStatus: doc.eaoStatus || null,
+    ...staffFields(doc),
 
     isPublished: read.includes('public'),
     read,
@@ -95,7 +109,7 @@ async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}
 
   // The period's own ACL is already constrained to its project, so one constrain here carries
   // both ceilings.
-  const read = constrainToProject(seedAcl(doc.read), period.read);
+  const read = eagleReadUnder(doc.read, period.read);
 
   const written = await upsertWithRetry(
     comments,
@@ -117,6 +131,7 @@ async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
+exports.staffFields = staffFields;
 
 exports.upsertFromEagle = async (req, res) => {
   try {

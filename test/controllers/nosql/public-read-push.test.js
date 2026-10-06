@@ -35,7 +35,8 @@ const {
   PROJECT_EAGLE_ID, PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID,
   PUBLIC_ACL, PRIVATE_ACL, storedProject, storedPeriod,
   eaglePeriod, eagleComment, eagleOrganization, eagleNotification,
-  mockRes, STAFF, anonymous, staff, SEALED_AT
+  mockRes, STAFF, anonymous, staff, SEALED_AT,
+  STAFF_PERIOD_FIELDS, STAFF_COMMENT_FIELDS, STAFF_ORGANIZATION_FIELDS
 } = require('../../helpers/eagle-mirror-fixtures');
 
 /**
@@ -155,6 +156,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       openHouses: [{ eventDate: '2026-08-10T00:00:00.000Z', description: 'Community hall' }],
       relatedDocuments: ['5cf00c03a266b7e187750002'],
       commentTip: 'Comments are public.',
+      ...STAFF_PERIOD_FIELDS,
       isDeleted: false,
       isPublished: true,
       read: ['staff', 'idir', 'public'],
@@ -174,14 +176,14 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
-  await t.test('a period Eagle marks compliance-only lands privileged-only, not sealed', async () => {
+  await t.test('a period Eagle marks compliance-only lands at staff, not sealed', async () => {
     // Eagle has no sealed compartment; keeping the token would hide the row from every staff reader.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
 
     const { written } = await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
       eaglePeriod({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['sysadmin']);
+    assert.deepStrictEqual(written().read, ['staff']);
   });
 
   const NO_PARENT_BODY = '{"error":"Parent project or notification not found"}';
@@ -538,6 +540,7 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
       documents: ['5cf00c03a266b7e187750003'],
       commentId: 12,
       eaoStatus: 'Published',
+      ...STAFF_COMMENT_FIELDS,
       isPublished: true,
       read: ['staff', 'idir', 'public'],
       sources: { eagle: eagleComment() }
@@ -554,13 +557,13 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
-  await t.test('a comment Eagle marks compliance-only lands privileged-only, not sealed', async () => {
+  await t.test('a comment Eagle marks compliance-only lands at staff, not sealed', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
 
     const { written } = await pushTo(
       commentController, comments, COMMENT_EAGLE_ID, eagleComment({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['sysadmin']);
+    assert.deepStrictEqual(written().read, ['staff']);
   });
 
   await t.test('an absent isAnonymous is stored as anonymous, matching the Eagle default', async () => {
@@ -727,6 +730,7 @@ test('PUT /eagle/organizations/:eagleId', async (t) => {
       city: 'Merritt',
       postal: 'V1K 1B8',
       website: 'https://example.invalid',
+      ...STAFF_ORGANIZATION_FIELDS,
       isPublished: true,
       read: PUBLIC_ACL,
       sources: { eagle: eagleOrganization() }
@@ -752,7 +756,7 @@ test('PUT /eagle/organizations/:eagleId', async (t) => {
     const { written } = await pushTo(organizationController, lists, ORG_EAGLE_ID,
       eagleOrganization({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['sysadmin']);
+    assert.deepStrictEqual(written().read, ['sysadmin', 'staff']);
   });
 });
 
@@ -797,7 +801,7 @@ test('PUT /eagle/notifications/:eagleId', async (t) => {
     const { written } = await pushTo(notificationController, notifications, NOTIFICATION_EAGLE_ID,
       eagleNotification({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['sysadmin']);
+    assert.deepStrictEqual(written().read, ['sysadmin', 'staff']);
   });
 });
 

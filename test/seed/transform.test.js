@@ -6,9 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  seedAcl, toNumber, toIsoOrNull, resolveListLabel,
+  seedAcl, withEagleStaff, eagleReadUnder, toNumber, toIsoOrNull, resolveListLabel,
   transformDocument, transformBoundary
 } = require('../../src/seed/transform');
+const { levelOfRead } = require('../../src/helpers/access-sql');
 const { naturalSortKey } = require('../../src/helpers/natural-sort');
 
 const NOW = '2026-07-30T00:00:00.000Z';
@@ -65,16 +66,78 @@ test('seedAcl — every seeded item gets an explicit read[]', async (t) => {
 
   await t.test('drops the compliance token, which Eagle has no compartment for', () => {
     assert.deepStrictEqual(seedAcl(['public', 'compliance']), ['public']);
-    assert.deepStrictEqual(seedAcl(['compliance']), ['sysadmin'], 'privileged only, never sealed');
-    assert.deepStrictEqual(seedAcl(['compliance', '']), ['sysadmin'], 'the blank does not hide the removed token');
+    assert.deepStrictEqual(seedAcl(['compliance']), ['sysadmin', 'staff'], 'staff, never sealed');
+    assert.deepStrictEqual(seedAcl(['compliance', '']), ['sysadmin', 'staff'], 'the blank does not hide the removed token');
     // No team token: the team arm would open a bare compliance row to the project's team members.
     assert.deepStrictEqual(seedAcl(['compliance']), seedAcl(['compliance', 'sysadmin']),
       'a bare compliance read lands no wider than one that also names sysadmin');
   });
 
-  await t.test('an all-junk ACL falls back to closed rather than to empty', () => {
-    // An empty read[] would hit the isPublished mirror branch of the visibility predicate.
-    assert.deepStrictEqual(seedAcl(['', '  ']), []);
+  await t.test('an all-junk ACL lands at staff, like a missing one', () => {
+    assert.deepStrictEqual(seedAcl(['', '  ']), ['staff']);
+  });
+});
+
+// Eagle's `staff` role skips every read check, so a row Eagle shows staff must reach staff here.
+test('seedAcl — an Eagle read with no ladder token gains staff', async (t) => {
+  await t.test('a sysadmin-only read gains staff', () => {
+    assert.deepStrictEqual(seedAcl(['sysadmin']), ['sysadmin', 'staff']);
+  });
+
+  await t.test('an admin-role read gains staff', () => {
+    assert.deepStrictEqual(seedAcl(['project-system-admin']), ['project-system-admin', 'staff']);
+  });
+
+  await t.test('an inspection read gains staff and keeps inspector', () => {
+    assert.deepStrictEqual(seedAcl(['sysadmin', 'inspector']), ['sysadmin', 'inspector', 'staff']);
+  });
+
+  await t.test('a read that already reaches staff is unchanged', () => {
+    assert.deepStrictEqual(seedAcl(['sysadmin', 'staff']), ['sysadmin', 'staff']);
+  });
+
+  await t.test('a public read is unchanged', () => {
+    assert.deepStrictEqual(seedAcl(['sysadmin', 'public']), ['sysadmin', 'public']);
+  });
+
+  await t.test('a team read is not widened to staff', () => {
+    assert.deepStrictEqual(seedAcl(['team']), ['team']);
+  });
+
+  await t.test('the rule lands at level 2, never public or team', () => {
+    const read = seedAcl(['sysadmin', 'inspector']);
+    assert.strictEqual(levelOfRead(read), 2);
+    assert.ok(!read.includes('public') && !read.includes('team'));
+  });
+
+  await t.test('a sealed read is left sealed', () => {
+    assert.deepStrictEqual(withEagleStaff(['compliance']), ['compliance']);
+  });
+
+});
+
+test('eagleReadUnder — the added staff never caps to team', async (t) => {
+  // What every capped mirror stored for an Eagle `['sysadmin']` child before the rule.
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team']]) {
+    await t.test(`under a level-1 parent ${JSON.stringify(parent)} it stays ['sysadmin']`, () => {
+      assert.deepStrictEqual(eagleReadUnder(['sysadmin'], parent), ['sysadmin']);
+    });
+  }
+
+  await t.test('under a staff parent it lands at staff', () => {
+    assert.deepStrictEqual(eagleReadUnder(['sysadmin'], ['sysadmin', 'staff']), ['staff']);
+  });
+
+  await t.test('under a public parent it lands at staff, no wider', () => {
+    assert.deepStrictEqual(eagleReadUnder(['sysadmin'], ['staff', 'idir', 'public']), ['staff']);
+  });
+
+  await t.test('an Eagle read that already carries a ladder token caps as before', () => {
+    assert.deepStrictEqual(eagleReadUnder(['sysadmin', 'staff'], ['team']), ['team']);
+  });
+
+  await t.test('a sealed parent still seals it', () => {
+    assert.deepStrictEqual(eagleReadUnder(['sysadmin'], ['compliance']), ['compliance']);
   });
 });
 
@@ -145,6 +208,16 @@ test('transformDocument', async (t) => {
 
     assert.ok(transformDocument(EAGLE_DOC, '207', LIST, OPTS).read.includes('public'),
       'with no projectRead — a notification parent — the ACL stays verbatim');
+  });
+
+  await t.test("stores Eagle's read without staff as ownRead, whatever the project caps read to", () => {
+    // `read` alone is ambiguous: `['staff']` is also what a real Eagle `['sysadmin','staff']` gives.
+    const row = transformDocument({ ...EAGLE_DOC, read: ['sysadmin'] }, '207', LIST,
+      { ...OPTS, projectRead: ['staff', 'idir', 'public'] });
+    assert.deepStrictEqual(row.read, ['staff']);
+    assert.deepStrictEqual(row.ownRead, ['sysadmin']);
+    assert.deepStrictEqual(transformDocument({ ...EAGLE_DOC, read: ['sysadmin'] }, '207', LIST, OPTS).ownRead,
+      ['sysadmin'], 'with no projectRead too');
   });
 
   await t.test('carries the natural-sort key beside the display name', () => {

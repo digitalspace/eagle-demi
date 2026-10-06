@@ -92,9 +92,28 @@ published) already contain `staff`, so they read as level 2 — today's meaning.
 `read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
 stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` minus the
 `compliance` token (`seedAcl`), so a pushed record lands at level 1, 2 or 4 and is never sealed by a
-push. A compliance-only record lands at `['sysadmin']`, the same as `['compliance','sysadmin']`: privileged callers only, not the project team. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
+push. A compliance-only record lands at `['sysadmin','staff']`, the same as `['compliance','sysadmin']`, never at the project team. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
 stays sealed until released; a row sealed by an earlier push has no `sealedAt` and heals on its next
 push.
+
+**Eagle-mirror exception (2026-10-05).** Eagle's `staff` role skips every read check, so a pushed
+record whose `read[]` has no ladder token (for example `['sysadmin']` or `['sysadmin','inspector']`)
+gains `staff` and lands at level 2 (`helpers/eagle-acl.js:withEagleStaff`). Under a parent the read
+is derived by `helpers/eagle-acl.js:eagleReadUnder`: the parent cap applies, and where the capped
+result would be `team` (a level-1 parent that is not privileged-only, such as `['team']`, `[]` or
+`['project-team']`), the row stores what it stored before the rule, `['sysadmin']`. So the result is
+never wider than the parent, never `team` and never `public`. The document, period, comment and
+Update mirrors, the period and comment cascade (`helpers/acl-cascade.js`), the document project
+cascade (`setAclForProject`) and the reconcile drift check all derive through it. A document's
+`ownRead` holds Eagle's read without `staff`; the cascade adds it. Every writer of an Eagle
+document row must store `ownRead`, because the cascade captures a missing one from the stored
+`read`, and a `['staff']` the rule added to Eagle's `['sysadmin']` would then land at `team`.
+DEMI-native documents keep the plain cap. Existing rows are rewritten by
+`src/scripts/backfill-eagle-ladder.js`, which caps each row's `read` by the same rule against its
+parent's stored read, a DEMI narrow or takedown included. On a document with no `ownRead` it
+stores the pre-run `read` as `ownRead`: a row lacking one predates the rule, so that `read` is
+Eagle's own. `staff` stays out of `SECURE_ROLES`. To drop the rule, remove `withEagleStaff` and
+that script.
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.
@@ -103,8 +122,8 @@ push.
 `requireWrite`, audited as `record.widen` / `record.narrow` through `auditEvent`. Level 4 requires
 `confirm: true` and answers 400 without it. Level 4 and a level-0 release also require a `reason`
 body field and answer 400 without it; on every other move `reason` is optional, because the audit
-row already carries actor, time, from and to. Nothing widens automatically — no job, no push, no
-merge raises a record's level. A document still cannot out-rank its project, nor a comment period,
+row already carries actor, time, from and to. Nothing else widens automatically — no job, no push, no
+merge raises a record's level, apart from the Eagle-mirror exception above. A document still cannot out-rank its project, nor a comment period,
 nor a comment its period; a project's change cascades to all three. A document or period parented by
 a `ProjectNotification` instead of a project has no such ceiling — a notification carries no access
 list to narrow against — so it keeps the one Eagle published it with. Which of the two is the parent

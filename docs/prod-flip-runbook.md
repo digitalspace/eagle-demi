@@ -78,21 +78,27 @@ script under `src/scripts/` names the role.
 These scripts read with `systemAccess()`, the level-0 context that passes every ACL, so anything
 they print or write out is unredacted and is handled as level-0 material:
 
-`src/scripts/audit-chunk-quality.js`, `backfill-display-name-sort.js`, `backfill-document-list-ids.js`,
-`backfill-eac-number.js`, `close-unpublished-track-projects.js`, `probe-phrase-presence.js`,
-`purge-extraction.js`, `reconcile-eagle.js`, `score-retrieval.js`, `seed-nosql.js`, `sync-wildfires.js`.
+`src/scripts/audit-chunk-quality.js`, `backfill-chunk-parent-fields.js`, `backfill-display-name-sort.js`,
+`backfill-document-list-ids.js`, `backfill-eac-number.js`, `backfill-eagle-staff-fields.js`,
+`backfill-objects.js`, `backfill-trim-project-labels.js`, `backup-originals.js`,
+`close-unpublished-track-projects.js`, `probe-phrase-presence.js`, `purge-extraction.js`,
+`reconcile-eagle.js`, `restore-originals.js`, `score-retrieval.js`, `seed-nosql.js`,
+`seed-public-reads.js`, `sync-track-projects.js`, `sync-wildfires.js`.
 
 `grep -n systemAccess src/scripts/*.js` is that list; a script added to one is added to the other.
 
-`src/scripts/export-chunks-to-eagle.js` and `src/scripts/copy-to-env.js` are level-0 material as
-well and are deliberately absent from that grep: both query a container directly (`SELECT * FROM c`,
-`export-chunks-to-eagle.js` over `chunks` on a `--dump` run, `copy-to-env.js` over `projects`,
-`documents`, `boundaries` and `chunks`), with no access predicate at all — wider than
-`systemAccess()`, not narrower.
+`src/scripts/export-chunks-to-eagle.js`, `src/scripts/copy-to-env.js` and
+`src/scripts/backfill-eagle-ladder.js` are level-0 material as well and are deliberately absent from
+that grep: all three query a container directly (`SELECT * FROM c`, `export-chunks-to-eagle.js` over
+`chunks` on a `--dump` run, `copy-to-env.js` over `projects`, `documents`, `boundaries` and
+`chunks`; `backfill-eagle-ladder.js` selects ACL fields from every Eagle-mirrored container), with no
+access predicate at all — wider than `systemAccess()`, not narrower.
 
-Five of them leave a file behind rather than only printing: `export-chunks-to-eagle.js --dump`,
-`audit-chunk-quality.js --out`, `probe-phrase-presence.js --out`, `score-retrieval.js --out` and
-`copy-to-env.js` (its `--checkpoint` file, written on every `--live` run, not only `--dump`).
+Ten of them leave a file behind rather than only printing: `export-chunks-to-eagle.js --dump`,
+`audit-chunk-quality.js --out`, `probe-phrase-presence.js --out`, `score-retrieval.js --out`,
+`backup-originals.js --out`, `restore-originals.js --out`, `seed-nosql.js`, `seed-public-reads.js`,
+`backfill-chunk-parent-fields.js` (its state file) and `copy-to-env.js` (its `--checkpoint` file,
+written on every `--live` run, not only `--dump`).
 
 ### Delete the dump
 
