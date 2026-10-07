@@ -993,8 +993,9 @@ the API's work list and sets one. It is a dry run, listing the work and writing 
 On test, `azure/main.test.bicepparam` enables it live (`pdfTitleLive = true`); set it to `false` to list work and write nothing. Prod has
 no worker: `azure/main.prod.bicepparam` sets neither `deployPdfTitleWorker` nor the secret name.
 
-- Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflow:
-  `.github/workflows/azure-deploy-staging-pdf-title.yaml`.
+- Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflows:
+  `.github/workflows/azure-deploy-staging-pdf-title.yaml` for test, and the `deploy-pdf-title` job
+  in `.github/workflows/azure-deploy-prod.yaml` for prod.
 - It has its own identity, `demi-pdf-title-identity-<env>`, not `demi-identity-<env>`. The identity
   reads one vault secret and its own host storage, and nothing else.
 - It calls the API Function app directly at `DEMI_API_URL`, not through APIM, with
@@ -1066,6 +1067,10 @@ run sweeps what it left.
 Azure for the app. If the app does not exist, or CI does not hold Website Contributor on it, the
 workflow prints a notice and skips the deploy instead of failing. Any other error fails the run.
 After a deploy it waits until the function `pdf_title_run` is registered.
+
+In prod the same steps run as the `deploy-pdf-title` job of the prod deploy workflow, after the API
+job, from the tag being deployed. It also skips when that tag has no `pdf-title/function_app.py`.
+The prod rollback job redeploys the API only, never the worker.
 
 ### `demi-frontend-test` is gone — decommissioned 2026-08-15
 
@@ -1239,7 +1244,9 @@ a service principal, so a deploy authenticated as a person fails instead of proc
 
 **The prod deploy workflow is back**: `.github/workflows/azure-deploy-prod.yaml`,
 `workflow_dispatch` only, taking a `version` and checking out `refs/tags/<version>` — a tag verified
-on staging, never a branch. Both jobs declare `environment: prod`, which is what produces the OIDC
+on staging, never a branch. Its jobs run in this order: `verify-search-schema`, `deploy-extractor`,
+`deploy-api`, then `deploy-pdf-title` (skipped with a notice while `demi-pdf-title-prod` does not
+exist). Every Azure job declares `environment: prod`, which is what produces the OIDC
 subject `repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the
 federated credential. An earlier note here said no prod workflow existed, which was true only
 between 2026-08-05 and the prod estate being built.
