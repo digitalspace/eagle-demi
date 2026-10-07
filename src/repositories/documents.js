@@ -527,8 +527,9 @@ async function setAclForProject(access, projectId, read) {
  * Paged: the largest project holds 2,488 documents and a single page caps at 1,000.
  */
 async function extractionRowsForProject(access, projectId) {
+  // `read` and `ownRead`: `holdLevel` caps a held row at them, and reads a missing one as level 1.
   return projectedRowsForProject(access, projectId,
-    [...DEMI_OWNED_FIELDS, ...CHUNK_PARENT_FIELDS, ...PARENT_PENDING_FIELDS]);
+    [...DEMI_OWNED_FIELDS, ...CHUNK_PARENT_FIELDS, ...PARENT_PENDING_FIELDS, 'read', 'ownRead']);
 }
 
 /**
