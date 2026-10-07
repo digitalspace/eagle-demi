@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const config = require('../../src/config');
 const monitor = require('../../src/azure/monitor');
 const cache = require('../../src/repositories/cache');
+const cosmos = require('../../src/db/cosmos-nosql');
 const controller = require('../../src/controllers/admin-reads');
 
 function mockRes() {
@@ -55,7 +56,7 @@ function spyLogs(t, answer) {
 }
 
 test('GET /admin/audit', async (t) => {
-  await t.test('rejects an action that is not a bare action name, and queries nothing', async () => {
+  await t.test('rejects an action that is not a bare action name, and queries nothing', async (t) => {
     // The whole reason the pattern exists: `action` is interpolated into KQL. A rejected value
     // must not reach Log Analytics even in a query that would return nothing.
     configure(t, { auditWorkspaceCustomerId: 'ws-audit' });
@@ -68,7 +69,7 @@ test('GET /admin/audit', async (t) => {
     assert.deepStrictEqual(sent, [], 'no query may be sent for a rejected input');
   });
 
-  await t.test('rejects an actor outside the pattern, an unlisted window and an over-large limit', async () => {
+  await t.test('rejects an actor outside the pattern, an unlisted window and an over-large limit', async (t) => {
     configure(t, { auditWorkspaceCustomerId: 'ws-audit' });
     const sent = spyLogs(t, () => []);
 
@@ -80,7 +81,7 @@ test('GET /admin/audit', async (t) => {
     assert.deepStrictEqual(sent, []);
   });
 
-  await t.test('maps rows to objects and totals the window, not the page', async () => {
+  await t.test('maps rows to objects and totals the window, not the page', async (t) => {
     // `limit` caps the rows; the total has to come off the summary or a filtered page understates
     // the window. Distinct numbers, so a total read from rows.length fails here.
     configure(t, { auditWorkspaceCustomerId: 'ws-audit' });
@@ -110,7 +111,7 @@ test('GET /admin/audit', async (t) => {
     assert.ok(sent[0].query.includes('top 1 by TimeGenerated desc'), 'limit caps the rows');
   });
 
-  await t.test('spans the repoint: this app\'s analytics rows unioned with the old table', async () => {
+  await t.test('spans the repoint: this app\'s analytics rows unioned with the old table', async (t) => {
     // Two workspaces, one panel. EagleAudit_CL is EPIC-wide, so the SourceApp filter has to sit
     // INSIDE that leg: outside it, DemiAudit_CL rows — which have no such column — arrive null and
     // the union drops every pre-cutover row.
@@ -133,7 +134,7 @@ test('GET /admin/audit', async (t) => {
     }
   });
 
-  await t.test('reads the old table alone until the analytics workspace is configured', async () => {
+  await t.test('reads the old table alone until the analytics workspace is configured', async (t) => {
     configure(t, { auditWorkspaceCustomerId: 'ws-audit' });
     const sent = spyLogs(t, () => []);
 
@@ -147,7 +148,7 @@ test('GET /admin/audit', async (t) => {
     }
   });
 
-  await t.test('reads the live table alone once the old workspace is gone', async () => {
+  await t.test('reads the live table alone once the old workspace is gone', async (t) => {
     // The archive is retired when its last row ages out, and the panel must keep working: query the
     // analytics workspace directly, no union, SourceApp filter still applied.
     configure(t, { analyticsWorkspaceCustomerId: 'ws-analytics' });
@@ -165,7 +166,7 @@ test('GET /admin/audit', async (t) => {
     }
   });
 
-  await t.test('answers 503 when no audit workspace is configured', async () => {
+  await t.test('answers 503 when no audit workspace is configured', async (t) => {
     configure(t, {});
     const sent = spyLogs(t, () => []);
 
@@ -179,7 +180,7 @@ test('GET /admin/audit', async (t) => {
 });
 
 test('GET /admin/analytics', async (t) => {
-  await t.test('rejects a window that is not 7 or 30 days, and queries nothing', async () => {
+  await t.test('rejects a window that is not 7 or 30 days, and queries nothing', async (t) => {
     configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
     const sent = spyLogs(t, () => []);
 
@@ -190,7 +191,7 @@ test('GET /admin/analytics', async (t) => {
     assert.deepStrictEqual(sent, []);
   });
 
-  await t.test('reads usage from the audit workspace and requests from the app one', async () => {
+  await t.test('reads usage from the audit workspace and requests from the app one', async (t) => {
     // Two workspaces, and swapping them is silent — each answers the other's query with nothing.
     configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
     const sent = spyLogs(t, (query) => {
@@ -223,7 +224,7 @@ test('GET /admin/analytics', async (t) => {
     assert.deepStrictEqual(requests.map((call) => call.timespan).sort(), ['P30D', 'PT24H']);
   });
 
-  await t.test('reads the hourly rollup and never the raw Auxiliary table', async () => {
+  await t.test('reads the hourly rollup and never the raw Auxiliary table', async (t) => {
     // DemiEvents_CL is Auxiliary-plan: an interactive query against it returns no rows at all,
     // so naming it is the bug this route had rather than a style preference.
     configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
@@ -241,7 +242,7 @@ test('GET /admin/analytics', async (t) => {
     }
   });
 
-  await t.test('rebuilds the hour before taking the peak, and sums events', async () => {
+  await t.test('rebuilds the hour before taking the peak, and sums events', async (t) => {
     // The rollup is one row per (hour, EventName, ActorType, ProjectId, Env), so a max over raw
     // rows reads the biggest bucket rather than the busiest hour.
     configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
@@ -263,7 +264,7 @@ test('GET /admin/analytics', async (t) => {
     assert.ok(top.query.includes('c = sum(Events) by EventName'), top.query);
   });
 
-  await t.test('answers 503 when only one of the two workspaces is configured', async () => {
+  await t.test('answers 503 when only one of the two workspaces is configured', async (t) => {
     configure(t, { auditWorkspaceCustomerId: 'ws-audit' });
     const sent = spyLogs(t, () => []);
 
@@ -277,7 +278,7 @@ test('GET /admin/analytics', async (t) => {
 });
 
 test('GET /admin/cost', async (t) => {
-  await t.test('sums the month to date by resource and by service', async () => {
+  await t.test('sums the month to date by resource and by service', async (t) => {
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg', budgetName: 'demi-budget-test' });
     spyCache(t, null);
     t.mock.method(monitor, 'queryCost', async () => [
@@ -302,7 +303,7 @@ test('GET /admin/cost', async (t) => {
     assert.strictEqual(res.body.budget.amount, 400);
   });
 
-  await t.test('stores the fresh figures so the other instances need not fetch them', async () => {
+  await t.test('stores the fresh figures so the other instances need not fetch them', async (t) => {
     // The whole point of moving the cache off the instance: up to 20 Flex instances, each of
     // which otherwise spends its own call against the same tenant quota.
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
@@ -319,7 +320,7 @@ test('GET /admin/cost', async (t) => {
     assert.deepStrictEqual(puts[0].doc.body, res.body);
   });
 
-  await t.test('a cached document under an hour old answers without a cost query', async () => {
+  await t.test('a cached document under an hour old answers without a cost query', async (t) => {
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
     const body = { success: true, asOf: '2026-09-02T00:00:00.000Z', total: 42 };
     spyCache(t, { id: 'cost-mtd', storedAt: new Date(Date.now() - 60_000).toISOString(), body });
@@ -332,7 +333,7 @@ test('GET /admin/cost', async (t) => {
     assert.deepStrictEqual(res.body, body);
   });
 
-  await t.test('answers a stale cached figure when Cost Management returns 429', async () => {
+  await t.test('answers a stale cached figure when Cost Management returns 429', async (t) => {
     // Cost Management rate-limits per tenant. A figure from yesterday is worth more than a 500,
     // as long as the response says which it is.
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
@@ -349,7 +350,7 @@ test('GET /admin/cost', async (t) => {
     assert.strictEqual(res.body.asOf, '2026-09-01T00:00:00.000Z', 'asOf stays the cache\'s own');
   });
 
-  await t.test('answers 503, never 500, when a 429 finds nothing cached', async () => {
+  await t.test('answers 503, never 500, when a 429 finds nothing cached', async (t) => {
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
     spyCache(t, null);
     t.mock.method(monitor, 'queryCost', async () => { throw new Error('429 Too many requests'); });
@@ -364,7 +365,7 @@ test('GET /admin/cost', async (t) => {
     });
   });
 
-  await t.test('omits the budget rather than the spend when no budget is named', async () => {
+  await t.test('omits the budget rather than the spend when no budget is named', async (t) => {
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
     spyCache(t, null);
     t.mock.method(monitor, 'queryCost', async () => [{ Cost: 3, ResourceId: '/rg/a', ServiceName: 'A', Currency: 'CAD' }]);
@@ -378,7 +379,7 @@ test('GET /admin/cost', async (t) => {
     assert.strictEqual(res.body.total, 3);
   });
 
-  await t.test('reports the spend when the budget read is refused', async () => {
+  await t.test('reports the spend when the budget read is refused', async (t) => {
     // The budget is a role grant away from the cost query, so a 403 on it must not take the spend
     // figures down with it.
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg', budgetName: 'demi-budget-test' });
@@ -397,7 +398,7 @@ test('GET /admin/cost', async (t) => {
     assert.strictEqual(res.body.currency, 'CAD');
   });
 
-  await t.test('answers 503 when no cost scope is configured', async () => {
+  await t.test('answers 503 when no cost scope is configured', async (t) => {
     configure(t, {});
     t.mock.method(monitor, 'queryCost', async () => { throw new Error('must not be called'); });
 
@@ -406,5 +407,57 @@ test('GET /admin/cost', async (t) => {
 
     assert.strictEqual(res.statusCode, 503);
     assert.deepStrictEqual(res.body, { success: false, error: 'not configured' });
+  });
+});
+
+test('GET /admin/reconcile', async (t) => {
+  // Stubbed at the Cosmos layer so the id and container the controller asks for are part of what
+  // is tested: a reader keyed on any other row answers 404 here.
+  function storeReport(t, rows) {
+    t.mock.method(cosmos, 'readItem', async (container, id, partitionKey) =>
+      (container === 'config' && partitionKey === id ? rows[id] || null : null));
+  }
+
+  await t.test('answers the stored report as the job wrote it', async (t) => {
+    const report = {
+      ranAt: '2026-10-07T09:00:00.000Z',
+      documents: { counts: { 'push-missed': 2 }, ids: { 'push-missed': ['d1', 'd2'] }, truncated: false }
+    };
+    storeReport(t, {
+      [cache.RECONCILE_REPORT_ID]: { id: cache.RECONCILE_REPORT_ID, type: 'cache', storedAt: '2026-10-07T09:05:00.000Z', body: report }
+    });
+
+    const res = mockRes();
+    await controller.getReconcileReport({}, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.storedAt, '2026-10-07T09:05:00.000Z');
+    assert.deepStrictEqual(res.body.report, report);
+  });
+
+  await t.test('answers 404 when no report is stored', async (t) => {
+    // The cost row shares the container; it must not be mistaken for a report.
+    storeReport(t, { 'cost-mtd': { id: 'cost-mtd', storedAt: '2026-10-07T00:00:00.000Z', body: { total: 1 } } });
+
+    const res = mockRes();
+    await controller.getReconcileReport({}, res);
+
+    assert.strictEqual(res.statusCode, 404);
+    assert.deepStrictEqual(res.body, { success: false, error: 'no reconcile report stored' });
+  });
+
+  await t.test('answers 503 without the driver message when Cosmos throws', async (t) => {
+    t.mock.method(cosmos, 'readItem', async () => {
+      throw new Error('Request to https://example.documents.azure.com failed');
+    });
+
+    const res = mockRes();
+    await controller.getReconcileReport({}, res);
+
+    assert.strictEqual(res.statusCode, 503);
+    assert.deepStrictEqual(res.body, {
+      success: false,
+      error: 'reconcile report unavailable, retry in a few minutes'
+    });
   });
 });
