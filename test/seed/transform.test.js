@@ -524,6 +524,29 @@ test('a raised pending re-stamp survives a re-seed', async (t) => {
   });
 });
 
+test('a DEMI takedown survives a re-seed', async (t) => {
+  // The shape `documents.extractionRowsForProject` hands the seeder for a row DEMI took down.
+  const held = {
+    id: EAGLE_DOC._id, levelHeldAt: '2026-10-01T00:00:00.000Z', read: ['staff'], ownRead: ['staff']
+  };
+
+  await t.test('Eagle\'s public read does not republish it', () => {
+    const out = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, existing: held });
+
+    assert.deepStrictEqual(out.read, ['staff']);
+    assert.strictEqual(out.isPublished, false);
+    assert.strictEqual(levelOfRead(out.ownRead), 2, 'a later project cascade derives from ownRead');
+    assert.strictEqual(out.levelHeldAt, held.levelHeldAt);
+  });
+
+  await t.test('without the stamp the same re-seed takes Eagle\'s read', () => {
+    const { levelHeldAt: _none, ...unheld } = held;
+    const out = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, existing: unheld });
+
+    assert.strictEqual(out.isPublished, true);
+  });
+});
+
 test('isFeatured is carried onto the Cosmos row', async (t) => {
   await t.test('true only when upstream says exactly true', () => {
     assert.strictEqual(transformDocument({ ...EAGLE_DOC, isFeatured: true }, '207', LIST, OPTS)

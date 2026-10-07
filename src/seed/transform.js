@@ -57,7 +57,7 @@ function listRefId(ref) {
   return ref ? String(ref) : null;
 }
 
-const { EXTRACTION_FIELDS, DEMI_OWNED_FIELDS } = require('../repositories/documents');
+const { EXTRACTION_FIELDS, DEMI_OWNED_FIELDS, holdLevel } = require('../repositories/documents');
 
 function carriedDemiState(existing) {
   if (!existing) return {};
@@ -117,7 +117,8 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
 
   const displayName = doc.displayName || doc.documentFileName || '';
 
-  return {
+  // A row DEMI narrowed or took down keeps the lower level, on a push and on a re-seed alike.
+  return holdLevel({
     // The Eagle _id is the stable natural key. Reusing it means a re-seed is idempotent and
     // epic.submit can later merge onto the same identity rather than creating a duplicate.
     id: String(doc._id),
@@ -180,7 +181,7 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     ...carriedPending(opts.existing),
 
     updatedAt: opts.now || new Date().toISOString()
-  };
+  }, opts.existing);
 }
 
 /**

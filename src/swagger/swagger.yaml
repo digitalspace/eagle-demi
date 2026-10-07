@@ -938,7 +938,8 @@ paths:
         `record.widen` or `record.narrow`, and the change cascades to the project's documents.
         Pulling a project back from level 4 needs the `sysadmin` role and is audited as
         `record.takedown`; narrowing the row alone does not finish a takedown, see
-        `docs/takedown-runbook.md`.
+        `docs/takedown-runbook.md`. A narrow is held across Eagle pushes and re-seeds
+        (`levelHeldAt`) until a widen here reaches level 4 or Eagle's level.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1854,7 +1855,8 @@ paths:
         A document may not out-rank its project, so a widen past the project's own level is
         refused. Every move is audited as `record.widen` or `record.narrow`. Pulling a document
         back from level 4 needs the `sysadmin` role and is audited as `record.takedown`; narrowing
-        the row alone does not finish a takedown, see `docs/takedown-runbook.md`.
+        the row alone does not finish a takedown, see `docs/takedown-runbook.md`. A narrow is
+        held across Eagle pushes and re-seeds (`levelHeldAt`) until a widen here reaches level 4.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

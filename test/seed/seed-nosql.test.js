@@ -1448,7 +1448,10 @@ test('a re-seed carries extraction state forward', async (t) => {
     // stale values back over a re-stamp that landed while it ran.
     const stampedAt = [];
     const repos = {
-      projects: { upsert: async (p) => p },
+      projects: {
+        upsert: async (p) => p,
+        getById: async () => (opts.storedProject ? structuredClone(opts.storedProject) : null)
+      },
       documents: {
         // The REAL raise. A fake returning a constant would let a seed that re-uses the token
         // already on the row pass, and that is the bug the strictly-greater rule exists for.
@@ -1486,10 +1489,31 @@ test('a re-seed carries extraction state forward', async (t) => {
         reStamped.push({ id: String(id), doc });
       }, opts.rejectChunksOf, (instant) => stampedAt.push(instant))
     };
-    const argv = opts.live === false ? ['--only', 'documents'] : ['--live', '--only', 'documents'];
+    const only = opts.only || 'documents';
+    const argv = opts.live === false ? ['--only', only] : ['--live', '--only', only];
     const summary = await seed(argv, { sources: sources(corpus), repos, now: NOW, cosmosReady });
     return { summary, written, partitions, reStamped, cleared, stampedAt };
   };
+
+  for (const only of ['projects,documents', 'documents']) {
+    await t.test(`--only ${only} keeps documents under a project DEMI took down`, async () => {
+      const { levelOfRead } = require('../../src/helpers/access-sql');
+      // The project takedown cascaded `read` onto the document but stamped no hold on it, and
+      // Eagle still sends both public.
+      const { written } = await run(true, { read: ['staff'], ownRead: ['public'] }, {
+        only,
+        storedProject: {
+          id: '207', read: ['staff'], isPublished: false, levelHeldAt: '2026-10-01T00:00:00.000Z'
+        }
+      });
+
+      assert.strictEqual(written.length, 2);
+      for (const doc of written) {
+        assert.strictEqual(levelOfRead(doc.read), 2, `${doc.id} out-ranks its held project`);
+        assert.strictEqual(doc.isPublished, false);
+      }
+    });
+  }
 
   await t.test('an existing document keeps its extraction state, a new one does not', async () => {
     const { summary, written } = await run(true);

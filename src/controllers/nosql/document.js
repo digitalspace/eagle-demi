@@ -1036,7 +1036,9 @@ exports.setLevel = async (req, res) => {
     }
 
     const published = level === 4;
-    const updated = await documents.setPublished(existing.id, existing.projectId, level);
+    // DEMI does not keep Eagle's level for a document once it holds one, so only level 4 clears it.
+    const updated = await documents.setPublished(existing.id, existing.projectId, level,
+      { levelHeldAt: documents.levelHoldAfter(existing, level, null) });
 
     // The highest-value row in the table: this is the call that changes who can see a document.
     // Before the chunk patch below, not after — the change is already applied by here and the

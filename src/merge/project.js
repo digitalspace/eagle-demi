@@ -20,6 +20,7 @@
  */
 
 const { seedAcl } = require('../seed/transform');
+const { capRead } = require('../helpers/access-sql');
 
 /** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
 const eagleOnlyProjectId = (eagleId) => `eagle-${eagleId}`;
@@ -173,15 +174,32 @@ const PUSH_ONLY_FIELDS = [
   'eaglePushedAt', 'cascadePendingAt'
 ];
 
-/** Fields only DEMI writes (`PUT /projects/:id`). No feed sends them, so no re-merge can rebuild them. */
-const DEMI_ONLY_FIELDS = ['tags'];
+/**
+ * Fields only DEMI writes (`PUT /projects/:id`, and `levelHeldAt` from `PUT /projects/:id/level`).
+ * No feed sends them, so no re-merge can rebuild them.
+ */
+const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt'];
 
-/** Carry the DEMI-only fields off the stored row onto a rebuilt one. */
+/** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`). */
+function heldRead(read, existing) {
+  return existing && existing.levelHeldAt && Array.isArray(existing.read)
+    ? capRead(read, existing.read)
+    : read;
+}
+
+/**
+ * Carry the DEMI-only fields off the stored row onto a rebuilt one. A row DEMI holds keeps the
+ * lower of the rebuilt and stored `read` (`heldRead`), so Eagle can narrow it, not widen it.
+ */
 function carryDemiOnlyFields(merged, existing) {
   if (!merged || !existing) return merged;
   for (const field of DEMI_ONLY_FIELDS) {
     const value = existing[field];
     if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
+  }
+  if (existing.levelHeldAt) {
+    merged.read = heldRead(merged.read, existing);
+    merged.isPublished = merged.read.includes('public');
   }
   return merged;
 }
@@ -605,6 +623,7 @@ module.exports = {
   flattenEagleProject,
   carryEagleOnlyFields,
   carryDemiOnlyFields,
+  heldRead,
   hasValue,
   TRIMMED_FIELDS,
   BC_BBOX,

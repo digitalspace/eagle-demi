@@ -515,10 +515,12 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     // caller clearing that flag can do it conditionally.
     assert.strictEqual(spec.query.split(' FROM ')[0].replace('SELECT ', ''),
       ['c.id', 'c._etag', ...[...documents.DEMI_OWNED_FIELDS, ...chunks.CHUNK_PARENT_FIELDS,
-        ...documents.PARENT_PENDING_FIELDS].map(f => `c.${f}`)].join(', '));
+        ...documents.PARENT_PENDING_FIELDS, 'read', 'ownRead'].map(f => `c.${f}`)].join(', '));
     // Named, not taken from the list above: dropped from the list, it would vanish from both sides.
     assert.match(spec.query, /c\.pdfTitle\b/,
       'not read, so every re-seed drops the record of the original PDF bytes');
+    assert.match(spec.query, /c\.levelHeldAt\b/,
+      'not read, so a re-seed republishes what DEMI took down');
     for (const field of documents.PARENT_PENDING_FIELDS) {
       assert.match(spec.query, new RegExp(`c\\.${field}\\b`),
         `${field} is not read, so the seed cannot carry it and every re-seed clears it`);
