@@ -1880,6 +1880,25 @@ test('the eagle-public response contract', async (t) => {
     assert.strictEqual(viaCosmos.trackProjectId, '207', 'a String on both branches, not a Number');
   });
 
+  await t.test('an empty stored region stays empty on both branches, never a placeholder', async () => {
+    // eagle-api answers the stored '' and `/projects/:id` the stored value, so search must too.
+    for (const [stored, expected] of [['', ''], [null, null], [undefined, null]]) {
+      t.mock.restoreAll();
+      const row = { id: '207', name: 'Site C', region: stored, read: ['public'], isPublished: true };
+      t.mock.method(projectsRepo, 'listPage', async () => [row]);
+      t.mock.method(projectsRepo, 'countVisible', async () => 1);
+      t.mock.method(aiSearch, 'searchProjects', async () => ({ count: 1, items: [row] }));
+
+      for (const keywords of ['', 'site c']) {
+        const out = capture();
+        await searchController.search(
+          { query: { dataset: 'Project', keywords, pageSize: '10' }, header: () => null }, out.res);
+        assert.strictEqual(out.out.body[0].searchResults[0].region, expected,
+          `stored ${JSON.stringify(stored)}, keywords '${keywords}'`);
+      }
+    }
+  });
+
   await t.test('an API-created project now reads the SAME state on both branches', async (t2) => {
     // THE ROW COMES FROM THE REAL WRITER, not a literal. The two writers used to disagree —
     // `merge/project.js:38` stored `projectState`, `createProject` stored `status` — and the
