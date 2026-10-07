@@ -1197,6 +1197,8 @@ const COSMOS_DATASETS = {
   InspectionElement: (ctx) => inspectionRows('InspectionElement', ctx),
   InspectionItem: (ctx) => inspectionRows('InspectionItem', ctx)
 };
+/** Test seam: the `_id` suite walks every dataset, so a new one cannot skip the point read. */
+exports.COSMOS_DATASET_NAMES = Object.freeze(Object.keys(COSMOS_DATASETS));
 
 /**
  * eagle-api's `dataset=Item&_id=&_schemaName=`: one record by id from any model it names. DEMI
@@ -1321,6 +1323,13 @@ exports.warnKeywordFallback = warnKeywordFallback;
 
 /** `List` and `Organization`: one container, one handler, told apart by `kind`. */
 async function listRows({ access, query, pageNum, pageSize, sortBy }, kind) {
+  const id = filterValue(query, '_id');
+  if (id) {
+    const row = await listsRepo.getById(access, id, kind);
+    const rows = row ? [row] : [];
+    return { searchResults: cosmosRows('lists', rows, access, kind, listRow), count: rows.length, applied: ['_id'] };
+  }
+
   const applied = [];
   const filters = {};
   for (const key of Object.keys(listsRepo.FILTERS)) {
@@ -1641,7 +1650,8 @@ exports.search = async (req, res) => {
                 sector: wireSector(hit, doc, doc.legislationYear),
                 status: doc.status || 'Active',
                 centroid: geoPoint(doc.centroid),
-                region: doc.region || 'British Columbia',
+                // The stored value, as `/projects/:id` answers it: eagle-api sends '' and no placeholder.
+                region: doc.region ?? null,
                 description: doc.description || 'No project description provided.',
                 proponent: { name: doc.proponent || 'Proponent Organization' },
                 // Rebuilt into the `{_id, name}` shape the template binds and the filter panel
@@ -1736,7 +1746,7 @@ exports.search = async (req, res) => {
             status: row.projectState || 'Active',
             // Same helper as the AI Search branch — one definition of the fallback centroid.
             centroid: geoPoint(row.centroid),
-            region: row.region || 'British Columbia',
+            region: row.region ?? null,
             // `location` on the wire, `address` at rest: the merge renames Eagle's `location` on the
             // way in, and nothing read it back. THE COSMOS BRANCH ONLY — `address` is not a column of
             // the `projects` index, so the two mappers disagree about this one field until it is.

@@ -154,10 +154,18 @@ test('eagle-query filters', async (t) => {
 
   // `_id` is the Eagle ObjectId on the wire. On a project that lives in `legacyEagleId`; filtering
   // the DEMI key with it would match nothing and render as an empty list.
-  await t.test('Project _id redirects to the Eagle id field', () => {
-    const { filter } = eagleQuery.buildFilter(
-      { 'and[_id]': '588511c4aaecd9001b826192' }, 'Project', anonAcl('id'));
-    assert.ok(filter.includes("legacyEagleId eq '588511c4aaecd9001b826192'"));
+  // The index half of the per-dataset `_id` table; the Cosmos half is search.id-filter.test.js.
+  await t.test('and[_id] lands on each index dataset\'s Eagle id field, never dropped', () => {
+    for (const [dataset, field, scope] of [
+      ['Project', 'legacyEagleId', 'id'],
+      ['Document', 'id', 'projectId'],
+      ['DocumentChunk', 'chunkId', 'projectId']
+    ]) {
+      const { filter, dropped } = eagleQuery.buildFilter(
+        { 'and[_id]': '588511c4aaecd9001b826192' }, dataset, anonAcl(scope));
+      assert.ok(filter.includes(`${field} eq '588511c4aaecd9001b826192'`), `${dataset}: ${filter}`);
+      assert.deepStrictEqual(dropped, [], dataset);
+    }
   });
 
   await t.test('a project filter on an index with no project axis is dropped, not ignored', () => {

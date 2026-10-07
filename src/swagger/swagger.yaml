@@ -141,10 +141,11 @@ paths:
           in: query
           required: false
           description: >-
-            Fetch one record by Eagle id, on CommentPeriod, Comment, ProjectNotification,
-            RecentActivity, User, Group, Inspection, InspectionElement and InspectionItem. Also
-            accepted as `and[_id]`. Answers `count: 0` and no rows when the id matches nothing this
-            caller may read, never a page of other records. Required on dataset=Item.
+            Fetch one record by Eagle id, on List, Organization, CommentPeriod, Comment,
+            ProjectNotification, RecentActivity, User, Group, Inspection, InspectionElement and
+            InspectionItem. Also accepted as `and[_id]`. Answers `count: 0` and no rows when the id
+            matches nothing this caller may read, never a page of other records. Required on
+            dataset=Item.
           schema:
             type: string
         - name: _schemaName
