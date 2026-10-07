@@ -17,6 +17,11 @@ Level 2 is staff-only; use level 1 if EAO staff must not see it either. The rout
 patches the document's chunks. On a project it cascades to every document in it, and to its
 comment periods and their comments.
 
+The narrow also stamps `levelHeldAt` on the row. While it is set, an eagle-api push can lower the
+row's level but cannot raise it, so a re-push does not undo the takedown. A later move through the
+same route clears the stamp when it reaches level 4, or for a project when it reaches the level
+Eagle last sent. A re-seed (`seed-nosql.js`) does not yet honour the stamp on documents.
+
 ## 2. Purge the search index
 
 Step 1 leaves the row in the index under a narrowed ACL. Removing it outright is `deleteFromIndex`

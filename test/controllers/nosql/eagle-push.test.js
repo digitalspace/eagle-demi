@@ -1140,6 +1140,129 @@ test('a demi-service-write credential is what the push should hold', async (t) =
   });
 });
 
+test('an Eagle push onto a row DEMI took down or narrowed', async (t) => {
+  const cosmos = require('../../../src/db/cosmos-nosql');
+  const { systemAccess } = require('../../../src/helpers/access-sql');
+  const HELD_AT = '2026-10-01T00:00:00.000Z';
+  t.afterEach(() => t.mock.restoreAll());
+
+  /** Push one project onto `stored`; returns what was written and every cascade the push ran. */
+  async function pushProject(stored, doc) {
+    projectReadForWriteFromGet(t);
+    t.mock.method(projects, 'getByEagleId', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (item) => { saved = item; return item; });
+    t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
+    const cascaded = [];
+    t.mock.method(documents, 'setAclForProject', async (_access, projectId, read) => {
+      cascaded.push(read);
+      return { succeeded: 0, failed: 0, rows: [] };
+    });
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, body: { doc }, user: STAFF
+    }, res);
+    assert.strictEqual(res.statusCode, 200);
+    return { saved, cascaded };
+  }
+
+  /** Push one document under a public project onto `stored`; returns the written row. */
+  async function pushDocument(stored, doc) {
+    documentReadForWriteFromGet(t);
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => structuredClone(stored));
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+    t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
+    const res = mockRes();
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {}, body: { doc }, user: STAFF
+    }, res);
+    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, action: 'upsert' });
+    return written;
+  }
+
+  const heldDocument = (read, extra = {}) => ({
+    id: DOC_EAGLE_ID, projectId: '207', sourceSystem: 'eagle', read, ownRead: read,
+    isPublished: false, levelHeldAt: HELD_AT, ...extra
+  });
+
+  await t.test('a takedown survives a document push carrying public', async () => {
+    const written = await pushDocument(heldDocument(['staff']), eagleDocument());
+
+    assert.deepStrictEqual(written.read, ['staff']);
+    assert.strictEqual(written.isPublished, false);
+    assert.strictEqual(levelOfRead(written.ownRead), 2,
+      'the cascade re-derives from ownRead, so it is held too');
+    assert.strictEqual(written.levelHeldAt, HELD_AT, 'the hold is carried for the next push');
+  });
+
+  await t.test('without the hold the same push republishes, so the stamp is what holds it', async () => {
+    const { levelHeldAt: _none, ...unheld } = heldDocument(['staff']);
+    const written = await pushDocument(unheld, eagleDocument());
+
+    assert.strictEqual(written.isPublished, true);
+    assert.strictEqual(written.levelHeldAt, undefined);
+  });
+
+  await t.test('an Eagle unpublish of a held document narrows it further', async () => {
+    const written = await pushDocument(heldDocument(['staff', 'idir']),
+      eagleDocument({ read: ['sysadmin'] }));
+
+    assert.strictEqual(levelOfRead(written.read), 2, 'Eagle\'s lower level wins over the hold');
+    assert.strictEqual(written.levelHeldAt, HELD_AT);
+  });
+
+  await t.test('a project cascade after a held document push does not republish it', async () => {
+    const written = await pushDocument(heldDocument(['staff']), eagleDocument());
+    // The real cascade, over the row the push just wrote, under a public project.
+    t.mock.method(cosmos, 'query', async () => ({
+      items: [{ id: written.id, read: written.read, ownRead: written.ownRead,
+        isDeleted: false, sourceSystem: 'eagle' }],
+      continuationToken: undefined
+    }));
+    t.mock.method(cosmos, 'bulkVerified', async (_container, operations) =>
+      ({ succeeded: operations.length, failed: 0, statusCounts: {}, requestCharge: 1 }));
+
+    const { rows } = await documents.setAclForProject(systemAccess(), '207',
+      ['public', 'sysadmin', 'staff']);
+
+    assert.strictEqual(levelOfRead(rows[0].read), 2);
+    assert.strictEqual(rows[0].isPublished, false);
+  });
+
+  await t.test('a takedown survives a project push carrying public', async () => {
+    const { saved, cascaded } = await pushProject(
+      storedProject({ read: ['staff'], isPublished: false, levelHeldAt: HELD_AT }), eagleProject());
+
+    assert.deepStrictEqual(saved.read, ['staff']);
+    assert.strictEqual(saved.isPublished, false);
+    assert.strictEqual(saved.levelHeldAt, HELD_AT);
+    assert.deepStrictEqual(cascaded, [], 'nothing moved, so nothing cascades');
+  });
+
+  await t.test('an Eagle unpublish of a held project narrows it and cascades the lower level', async () => {
+    const { saved, cascaded } = await pushProject(
+      storedProject({ read: ['staff', 'idir'], isPublished: false, levelHeldAt: HELD_AT }),
+      eagleProject({ read: ['sysadmin', 'staff'] }));
+
+    assert.strictEqual(levelOfRead(saved.read), 2);
+    assert.deepStrictEqual(cascaded, [saved.read]);
+  });
+
+  await t.test('an owed cascade after a held push carries the held level, not Eagle\'s', async () => {
+    const { saved, cascaded } = await pushProject(
+      storedProject({
+        read: ['staff', 'idir'], isPublished: false, levelHeldAt: HELD_AT,
+        cascadePendingAt: '2026-10-02T00:00:00.000Z'
+      }),
+      eagleProject());
+
+    assert.deepStrictEqual(saved.read, ['staff', 'idir']);
+    assert.deepStrictEqual(cascaded, [['staff', 'idir']], 'the documents are not republished');
+  });
+});
+
 test('keepSeal on an Eagle push', async (t) => {
   const { keepSeal } = require('../../../src/controllers/nosql/eagle-mirror');
   const { SEALED_TOKEN } = require('../../../src/helpers/access-sql');

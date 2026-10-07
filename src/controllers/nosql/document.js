@@ -1036,7 +1036,9 @@ exports.setLevel = async (req, res) => {
     }
 
     const published = level === 4;
-    const updated = await documents.setPublished(existing.id, existing.projectId, level);
+    // DEMI does not keep Eagle's level for a document once it holds one, so only level 4 clears it.
+    const updated = await documents.setPublished(existing.id, existing.projectId, level,
+      { levelHeldAt: documents.levelHoldAfter(existing, level, null) });
 
     // The highest-value row in the table: this is the call that changes who can see a document.
     // Before the chunk patch below, not after — the change is already applied by here and the
@@ -1199,10 +1201,10 @@ exports.upsertFromEagle = async (req, res) => {
         sealed = current;
         return null;
       }
-      const row = transformDocument(
+      const row = documents.holdLevel(transformDocument(
         doc, parent.id, listLookupFrom(doc, req.body.labels),
         { existing: current, projectRead: parent.kind === 'notification' ? undefined : parent.read }
-      );
+      ), current);
       // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` below is
       // what hides it, this is what says why, and it is what stops a cascade widening it again.
       row.isDeleted = doc.isDeleted === true;
