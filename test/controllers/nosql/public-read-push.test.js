@@ -186,10 +186,12 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.deepStrictEqual(written().read, ['staff']);
   });
 
-  const NO_PARENT_BODY = '{"error":"Parent project or notification not found"}';
+  // Literal codes: they are eagle-api's contract, not this repo's constants.
+  const NO_PARENT_BODY = { error: 'Parent project or notification not found', code: 'PARENT_NOT_FOUND' };
+  const BAD_REF_BODY = { error: 'Parent project or notification not found', code: 'PARENT_REF_INVALID' };
 
   /** Push a period whose parent admission refuses, with `stored` as the unfiltered project row. */
-  async function refusedPeriod(t, stored) {
+  async function refusedPeriod(t, stored, doc = eaglePeriod()) {
     t.mock.method(projects, 'getByEagleId', async () => null);
     t.mock.method(notifications, 'readForWrite', async () => null);
     t.mock.method(projects, 'readForWriteByEagleId', async () => stored);
@@ -200,7 +202,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
 
     const res = mockRes();
     await commentPeriodController.upsertFromEagle({
-      params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc: eaglePeriod() }, user: STAFF
+      params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc }, user: STAFF
     }, res);
     return { res, warned, upserts };
   }
@@ -211,8 +213,8 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
 
       assert.strictEqual(res.statusCode, 404);
       assert.strictEqual(upserts, 0);
-      // The body names both containers, as swagger's 404 does: a notification is a parent too.
-      assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+      // The error names both containers, as swagger's 404 does: a notification is a parent too.
+      assert.deepStrictEqual(res.body, NO_PARENT_BODY);
       assert.deepStrictEqual(warned, [{
         message: '[parent-admit] parent not admitted',
         meta: {
@@ -227,9 +229,22 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT });
 
     assert.strictEqual(res.statusCode, 404);
-    assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+    assert.deepStrictEqual(res.body, NO_PARENT_BODY);
     assert.strictEqual(warned[0].meta.project, 'hidden');
   });
+
+  await t.test('a period with a malformed parent ref is a 404 PARENT_REF_INVALID, no write, logged',
+    async () => {
+      const { res, warned, upserts } = await refusedPeriod(t, null,
+        eaglePeriod({ project: 'not-an-object-id' }));
+
+      assert.strictEqual(res.statusCode, 404);
+      assert.strictEqual(upserts, 0);
+      assert.deepStrictEqual(res.body, BAD_REF_BODY);
+      assert.deepStrictEqual(warned.map(w => w.meta), [
+        { childId: PERIOD_EAGLE_ID, project: 'malformed-ref', notification: 'malformed-ref' }
+      ]);
+    });
 
   // Eagle's `project` reference holds either id. Resolving it through `projects` alone dropped 10
   // periods and the 232 comments under them on test, measured 2026-09-07.
@@ -606,7 +621,8 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
       assert.deepStrictEqual([...store.keys()], [`${PERIOD_EAGLE_ID}::${COMMENT_EAGLE_ID}`]);
     });
 
-  const NO_PERIOD_BODY = '{"error":"Parent comment period not found"}';
+  const NO_PERIOD_BODY = { error: 'Parent comment period not found', code: 'PARENT_NOT_FOUND' };
+  const BAD_PERIOD_REF_BODY = { error: 'Parent comment period not found', code: 'PARENT_REF_INVALID' };
 
   /** Push a comment whose period lookup refuses, with `stored` as the unfiltered period row. */
   async function refusedComment(t, stored, doc = eagleComment()) {
@@ -632,7 +648,7 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
 
       assert.strictEqual(res.statusCode, 404);
       assert.deepStrictEqual({ upserts, classifyReads }, { upserts: 0, classifyReads: 1 });
-      assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+      assert.deepStrictEqual(res.body, NO_PERIOD_BODY);
       assert.deepStrictEqual(warned, [{
         message: '[parent-admit] parent not admitted',
         meta: { eagleId: PERIOD_EAGLE_ID, childId: COMMENT_EAGLE_ID, period: 'missing' }
@@ -643,7 +659,8 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     const { res, warned, periodReads } = await refusedComment(t, null,
       eagleComment({ period: 'not-an-object-id' }));
 
-    assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+    assert.strictEqual(res.statusCode, 404);
+    assert.deepStrictEqual(res.body, BAD_PERIOD_REF_BODY);
     assert.deepStrictEqual({ periodReads, warned }, {
       periodReads: 0,
       warned: [{
@@ -654,8 +671,9 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
   });
 
   await t.test('a comment with no period ref reads nothing and is logged no-ref', async () => {
-    const { warned, periodReads } = await refusedComment(t, null, eagleComment({ period: null }));
+    const { res, warned, periodReads } = await refusedComment(t, null, eagleComment({ period: null }));
 
+    assert.deepStrictEqual(res.body, BAD_PERIOD_REF_BODY);
     assert.deepStrictEqual({ periodReads, warned }, {
       periodReads: 0,
       warned: [{
@@ -668,7 +686,7 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
   await t.test('a comment under a read-less period gets the same 404, logged hidden', async () => {
     const { res, warned } = await refusedComment(t, { id: PERIOD_EAGLE_ID, projectId: '207' });
 
-    assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+    assert.deepStrictEqual(res.body, NO_PERIOD_BODY);
     assert.strictEqual(warned[0].meta.period, 'hidden');
   });
 
@@ -676,7 +694,7 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     const { res, warned } = await refusedComment(t,
       { id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT });
 
-    assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+    assert.deepStrictEqual(res.body, NO_PERIOD_BODY);
     assert.strictEqual(warned[0].meta.period, 'hidden');
   });
 
@@ -686,7 +704,7 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
       const { res, warned } = await refusedComment(t,
         { id: PERIOD_EAGLE_ID, projectId: '207', read: ['compliance'] });
 
-      assert.strictEqual(JSON.stringify(res.body), NO_PERIOD_BODY);
+      assert.deepStrictEqual(res.body, NO_PERIOD_BODY);
       assert.strictEqual(warned[0].meta.period, 'eagle-sealed');
     });
 

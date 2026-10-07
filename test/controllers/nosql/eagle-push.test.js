@@ -726,8 +726,10 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.documentAuthorType, null);
   });
 
-  // Operators tell the cases apart from the log alone: the body Eagle gets back never changes.
-  const NO_PARENT_BODY = '{"error":"Parent project or notification not found"}';
+  // `code` tells eagle-api whether waiting for the parent can help; only the log tells missing from
+  // hidden. Literal codes: they are eagle-api's contract, not this repo's constants.
+  const NO_PARENT_BODY = { error: 'Parent project or notification not found', code: 'PARENT_NOT_FOUND' };
+  const BAD_REF_BODY = { error: 'Parent project or notification not found', code: 'PARENT_REF_INVALID' };
 
   /**
    * Push a document whose parent admission refuses. `stored` is the unfiltered project row,
@@ -754,8 +756,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(upserts, 0, 'never seed an orphan document');
-    // The body names both containers, as swagger's 404 does: a notification is a parent here too.
-    assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+    // The error names both containers, as swagger's 404 does: a notification is a parent here too.
+    assert.deepStrictEqual(res.body, NO_PARENT_BODY);
     assert.deepStrictEqual(warned, [{
       eagleId: PROJECT_EAGLE_ID, childId: DOC_EAGLE_ID, project: 'missing', notification: 'missing'
     }]);
@@ -767,16 +769,16 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
         { notification: { id: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT } });
 
       assert.strictEqual(res.statusCode, 404);
-      assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+      assert.deepStrictEqual(res.body, NO_PARENT_BODY);
       assert.strictEqual(warned[0].notification, 'hidden');
     });
 
-  await t.test('a document with a malformed parent ref gets the same 404, logged', async () => {
+  await t.test('a document with a malformed parent ref is a 404 PARENT_REF_INVALID, logged', async () => {
     const { res, warned } = await refusedDocument(t, null,
       { doc: eagleDocument({ project: 'not-an-object-id' }) });
 
     assert.strictEqual(res.statusCode, 404);
-    assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+    assert.deepStrictEqual(res.body, BAD_REF_BODY);
     assert.deepStrictEqual(warned, [
       { childId: DOC_EAGLE_ID, project: 'malformed-ref', notification: 'malformed-ref' }
     ]);
@@ -787,7 +789,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       const { res, warned } = await refusedDocument(t, { id: '207', eagleId: PROJECT_EAGLE_ID });
 
       assert.strictEqual(res.statusCode, 404);
-      assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+      assert.deepStrictEqual(res.body, NO_PARENT_BODY);
       assert.strictEqual(warned[0].project, 'hidden');
     });
 
@@ -796,7 +798,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       { id: '207', eagleId: PROJECT_EAGLE_ID, read: ['compliance', 'sysadmin'], sealedAt: SEALED_AT });
 
     assert.strictEqual(res.statusCode, 404);
-    assert.strictEqual(JSON.stringify(res.body), NO_PARENT_BODY);
+    assert.deepStrictEqual(res.body, NO_PARENT_BODY);
     assert.strictEqual(warned[0].project, 'hidden');
   });
 
@@ -1219,3 +1221,46 @@ test('the mirrors through their real existence reads', async (t) => {
   });
 });
 
+test('the group and inspection mirrors say why they refused a parent', async (t) => {
+  const { captureMirror, eagleGroup, eagleInspection } = require('../../helpers/eagle-mirror-fixtures');
+  t.beforeEach(() => {
+    t.mock.method(projects, 'readForWriteByEagleId', async () => null);
+    t.mock.method(notifications, 'readForWrite', async () => null);
+    t.mock.method(logger, 'warn', () => {});
+  });
+  t.afterEach(() => t.mock.restoreAll());
+
+  const NOT_FOUND = { error: 'Parent project not found', code: 'PARENT_NOT_FOUND' };
+  const BAD_REF = { error: 'Parent project not found', code: 'PARENT_REF_INVALID' };
+
+  await t.test('a group whose project DEMI lacks is a 404 PARENT_NOT_FOUND, nothing written', async () => {
+    const { res, row } = await captureMirror(t, 'groups', null, { project: null });
+    assert.strictEqual(res.statusCode, 404);
+    assert.deepStrictEqual(res.body, NOT_FOUND);
+    assert.strictEqual(row, undefined);
+  });
+
+  await t.test('a group with no project ref is a 404 PARENT_REF_INVALID, nothing written', async () => {
+    const { res, row } = await captureMirror(t, 'groups', eagleGroup({ project: null }));
+    assert.strictEqual(res.statusCode, 404);
+    assert.deepStrictEqual(res.body, BAD_REF);
+    assert.strictEqual(row, undefined);
+  });
+
+  await t.test('an inspection whose project DEMI lacks is a 404 PARENT_NOT_FOUND, nothing written',
+    async () => {
+      const { res, row } = await captureMirror(t, 'inspections', null, { project: null });
+      assert.strictEqual(res.statusCode, 404);
+      assert.deepStrictEqual(res.body, NOT_FOUND);
+      assert.strictEqual(row, undefined);
+    });
+
+  await t.test('an inspection with a malformed project ref is a 404 PARENT_REF_INVALID, nothing written',
+    async () => {
+      const { res, row } = await captureMirror(t, 'inspections',
+        eagleInspection({ project: 'not-an-object-id' }));
+      assert.strictEqual(res.statusCode, 404);
+      assert.deepStrictEqual(res.body, BAD_REF);
+      assert.strictEqual(row, undefined);
+    });
+});

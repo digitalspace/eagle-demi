@@ -20,7 +20,7 @@ const { levelOfRead } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const { logger } = require('../../utils/logger');
-const { admitParent } = require('../../helpers/parent-admit');
+const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict, underDeleteCeiling, refId
 } = require('./eagle-mirror');
@@ -179,7 +179,9 @@ function upsertHandler(kind) {
       const { eagleId, doc, pushedAt } = push;
 
       const written = await mirrorFromEagle(kind, eagleId, doc, { pushedAt });
-      if (written.missing === 404) return res.status(404).json({ error: 'Parent project not found' });
+      if (written.missing === 404) {
+        return res.status(404).json({ error: 'Parent project not found', code: refusalCode(doc.project) });
+      }
       if (written.missing === 503) {
         return res.status(503).json({ error: 'No stored parent lists this record yet. Push it again.' });
       }

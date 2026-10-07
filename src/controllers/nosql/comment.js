@@ -19,7 +19,7 @@ const { systemAccess } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const {
-  eagleRef, badRefReason, classify, warnNotAdmitted
+  eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode
 } = require('../../helpers/parent-admit');
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
@@ -142,7 +142,9 @@ exports.upsertFromEagle = async (req, res) => {
     const { eagleId, doc, pushedAt } = push;
 
     const mirrored = await mirrorFromEagle(eagleId, doc, undefined, { pushedAt });
-    if (!mirrored) return res.status(404).json({ error: 'Parent comment period not found' });
+    if (!mirrored) {
+      return res.status(404).json({ error: 'Parent comment period not found', code: refusalCode(doc.period) });
+    }
     if (mirrored.status === 'conflict') {
       return pushConflict(res, { label: 'Comment Controller', eagleId });
     }

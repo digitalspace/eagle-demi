@@ -17,8 +17,9 @@
  * it — while a notification is not: it has no project ACL to narrow against, so its children keep
  * their own `read[]` minus compliance (`seed/transform.js`, the notification-parented branch).
  *
- * A REFUSAL IS LOGGED, the 404 body unchanged: one `parent not admitted` warn per refused child,
- * after one bounded extra read that also admits a project an Eagle push sealed.
+ * A REFUSAL IS LOGGED: one `parent not admitted` warn per refused child, after one bounded extra
+ * read that also admits a project an Eagle push sealed. The 404 body's `code` (`refusalCode`) tells
+ * eagle-api whether waiting for the parent can help.
  */
 
 const projects = require('../repositories/projects');
@@ -83,6 +84,16 @@ function eagleRef(ref) {
   return id && projects.EAGLE_OBJECT_ID.test(id) ? id : null;
 }
 
+/** 404 `code` for a well-formed ref DEMI holds no admissible parent for; a later push may land it. */
+const PARENT_NOT_FOUND = 'PARENT_NOT_FOUND';
+/** 404 `code` for a ref that is absent or not an Eagle ObjectId; no parent push can fix it. */
+const PARENT_REF_INVALID = 'PARENT_REF_INVALID';
+
+/** The 404 body `code` for a child refused on `ref`. */
+function refusalCode(ref) {
+  return eagleRef(ref) ? PARENT_NOT_FOUND : PARENT_REF_INVALID;
+}
+
 /**
  * A level-0 row an Eagle push sealed (no `sealedAt`) is judged at its Eagle read minus compliance,
  * the read its next push lands. Any other row is judged as stored.
@@ -113,7 +124,7 @@ function missReason(row, scopeField) {
 }
 
 /**
- * The refusal line. The 404 body is unchanged, so only this tells "missing" from "hidden".
+ * The refusal line. The 404 `code` does not tell "missing" from "hidden"; only this does.
  * `childId` is the refused child's Eagle id, so the lines can feed a targeted repush.
  *
  * @param {{eagleId?: string, childId: string|null}} ids  eagleId is absent for a malformed or missing ref
@@ -223,6 +234,6 @@ async function admitParent(ref, { childId } = {}) {
 }
 
 module.exports = {
-  admitParent, pickParent, eagleRef, badRefReason, classify, warnNotAdmitted,
+  admitParent, pickParent, eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode,
   MALFORMED_REF, NO_REF, CLASSIFY_TIMEOUT_MS
 };
