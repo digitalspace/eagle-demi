@@ -343,10 +343,14 @@ skipped. `group-members` pairs Eagle's member User rows with the member ids of D
 `inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element; it
 never calls Eagle's item route, which streams the file and records a download.
 
-eagle-api's project, document, comment period, organization and comment routes return only `_id`
-and `read` unless `fields` names the rest, so each of those reads sends `fields=a|b|c`: the fields
-it compares for the identity, plus `project` on comment periods. Pins and comments come back as
-`[{ total_items, results }]`; each page is unwrapped to its `results`. `recent-activity-top`
+eagle-api's project, document, comment period, organization, comment and project notification
+routes return only `_id` and `read` unless `fields` names the rest, so each of those reads sends
+`fields=a|b|c`: the fields it compares for the identity, plus `project` on comment periods. The
+organization and comment period routes answer only the fields on their controller's
+`ALLOWED_FIELDS`, so those reads compare nothing else (no address fields, no `commentIdCount`);
+`dataset=Organization` and `dataset=CommentPeriod` search still compare them. Pins, comments and
+the staff project list come back as `[{ total_items, results }]`; each page is unwrapped to its
+`results`. `recent-activity-top`
 compares Eagle's newest four with `dataset=RecentActivity&top=true&pageSize=4`.
 
 It only sends GET, at most two requests a second per API, and retries once on 429 or 5xx. It never
@@ -360,8 +364,28 @@ One line per read:
 ```
 
 Every difference is matched against `KNOWN_DIFFERENCES` in `parity-map.js`; what no class explains
-counts as `unexplained`. Classes that match by id (rows never mirrored, DEMI takedowns, Eagle hard
-deletes) read their ids from `--known-ids`, a JSON object of class name to id list. The run exits 1
+counts as `unexplained`. Classes that match by id read their ids from `--known-ids`, a JSON object
+of class name to id list; the flag may repeat, and lists of one class merge. Those classes are rows
+never mirrored, DEMI takedowns and Eagle hard deletes, plus two that only explain a row extra in
+DEMI:
+
+- `seeded-from-prod`: a row from the 2026-08-25 prod seed that Eagle test does not hold.
+- `eagle-staff-widened` (staff runs only): an Eagle row whose `read[]` has no ladder token, which
+  DEMI shows staff because the push adds `staff` (`withEagleStaff` in `src/helpers/eagle-acl.js`).
+
+`--emit-ids <file>` writes ids only, never values: `extraInDemi`, each read's extra DEMI ids, and on
+a sysadmin run `eagle-staff-widened`, the Eagle ids that rule widens. The file is a valid
+`--known-ids` file (`extraInDemi` is skipped), so a sysadmin run's file feeds the staff run:
+
+```bash
+node src/scripts/parity-eagle.js ... --identity sysadmin --token-env ADMIN_TOKEN --emit-ids sysadmin-ids.json
+node src/scripts/parity-eagle.js ... --identity staff --token-env STAFF_TOKEN \
+  --known-ids known.json --known-ids sysadmin-ids.json
+```
+
+Build the `seeded-from-prod` list from `extraInDemi` ids checked against the prod seed.
+
+The run exits 1
 when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI target yet print
 `skipped (pending)`; reads that need an id print `skipped: needs --id ...`. `--only <read>` runs
 one read; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
@@ -369,12 +393,15 @@ extra rows cannot be told from a partial slice. The `--report` file lists ids an
 unexplained differences, never values.
 
 Values are compared after trimming strings; an empty string, an empty list and an absent field all count as null.
-Three classes explain differences that come from how DEMI builds its rows:
+Four classes explain differences that come from how DEMI builds its rows:
 
 - `track-mastered`: a project field DEMI takes from Track (`TRACK_PRECEDENCE` in
   `src/merge/project.js`: name, type, location, description and the rest) differs, DEMI's value is
   not empty, and the DEMI row has a `trackProjectId`. In the BCGW file it covers `Project name`,
-  `Proponent`, `Type`, `Description`, `Latitude` and `Longitude`.
+  `Proponent`, `Type`, `Description`, `Latitude` and `Longitude`; in the comment export, `Project`
+  (Eagle writes the raw project name, blank on legislation-keyed projects).
+- `schema-default-false`: project `substantially` or `hasMetCommentPeriods`, or comment period
+  `isVetted`, is `false` on one side and absent or empty on the other.
 - `list-id-other-env`: a `List` row is missing or extra, and the other side has an unpaired row
   with the same name, type and legislation under another id.
 - `parent-not-public`: an anonymous comment period is missing in DEMI and its project is not in
@@ -386,7 +413,7 @@ script sends. `dataset=Organization` ignores `and[_id]` for now, so `organizatio
 `organization` get the whole list from DEMI and count every other organization as extra.
 
 `--download-sample <n>` (default 0, off; needs a staff or sysadmin token) also downloads up to `n`
-documents both sides returned, plus `--id document` if given, through Eagle's protected
+documents both sides returned to that identity's reads in this run, through Eagle's protected
 `/document/{id}/download` and DEMI's `/documents/:id/download`. It follows DEMI's redirect to
 object storage without the bearer token, and compares sha256 and byte length while streaming;
 nothing is written to disk. Any mismatch counts as unexplained.

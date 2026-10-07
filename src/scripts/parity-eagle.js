@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const { fetchAllPages, unwrapSearchResponse, rateLimitWaitMs, PAGE_SIZE } = require('../seed/sources');
 const { diff } = require('./reconcile-eagle');
+const { eagleBaseAcl, withEagleStaff } = require('../helpers/eagle-acl');
 const {
   PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same
 } = require('./parity-map');
@@ -25,11 +26,12 @@ const REDIRECTS = [301, 302, 303, 307, 308];
 
 const USAGE = `usage: node src/scripts/parity-eagle.js --eagle <eagle-api base> --demi <DEMI base>
   [--identity anonymous|staff|sysadmin] [--token-env <VAR>] [--only <read>] [--max-pages <n>]
-  [--id <name>=<eagleId>]... [--known-ids <file>] [--report <file>] [--download-sample <n>]
+  [--id <name>=<eagleId>]... [--known-ids <file>]... [--emit-ids <file>] [--report <file>]
+  [--download-sample <n>]
   --id names: ${ID_NAMES.join(', ')}`;
 
 function parseArgs(argv) {
-  const args = { identity: 'anonymous', ids: {}, maxPages: Infinity, downloadSample: 0 };
+  const args = { identity: 'anonymous', ids: {}, knownIds: [], maxPages: Infinity, downloadSample: 0 };
   const count = (raw, min) => {
     const n = Number(raw);
     if (!Number.isInteger(n) || n < min) throw new Error(`a whole number of at least ${min} is needed, got ${raw}`);
@@ -48,7 +50,8 @@ function parseArgs(argv) {
       case '--identity': args.identity = value(); break;
       case '--token-env': args.tokenEnv = value(); break;
       case '--only': args.only = value(); break;
-      case '--known-ids': args.knownIds = value(); break;
+      case '--known-ids': args.knownIds.push(value()); break;
+      case '--emit-ids': args.emitIds = value(); break;
       case '--report': args.report = value(); break;
       case '--max-pages': args.maxPages = count(value(), 1); break;
       case '--download-sample': args.downloadSample = count(value(), 0); break;
@@ -227,8 +230,10 @@ async function rowsOf(api, spec, ids, maxPages) {
 
 function fieldsFor(entry, identity) {
   const extra = identity === 'anonymous' ? PUBLIC_FIELDS : STAFF_FIELDS;
+  const allowed = Array.isArray(entry.eagle.fields) ? entry.eagle.fields : null;
   const pairs = [...(entry.fields || FIELDS[entry.dataset]), ...(extra[entry.dataset] || [])]
-    .map(f => (Array.isArray(f) ? f : [f, f]));
+    .map(f => (Array.isArray(f) ? f : [f, f]))
+    .filter(([e]) => !allowed || allowed.includes(e));
   return pairs.filter(([e], i) => pairs.findIndex(([other]) => other === e) === i);
 }
 
@@ -242,8 +247,8 @@ function eagleSpecFor(entry, identity) {
 const keyOf = row => String(row.eagleId || row._id || row.id);
 
 /**
- * Counts for one read. Samples carry ids and field names only, never values: a comment row's
- * values can be personal data.
+ * Counts for one read, and `extraIds` for --emit-ids. Samples carry ids and field names only, never
+ * values: a comment row's values can be personal data.
  */
 function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, identity), headerDiffs = []) {
   const out = { match: 0, missingInDemi: 0, extraInDemi: 0, fieldDiff: 0, unexplained: 0, classes: {}, samples: [] };
@@ -264,9 +269,11 @@ function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, 
   const sets = diff(demi.rows, keyOf, new Set(eagleById.keys()), row => EAGLE_ID.test(keyOf(row)));
   // A capped read sees an arbitrary slice of each side, so absence proves nothing.
   out.truncated = eagle.truncated || demi.truncated;
+  out.extraIds = [];
   if (!out.truncated) {
     const missing = [...sets.eagleOnly, ...sets.unresolvedParent].map(id => eagleById.get(id));
     const extra = [...sets.unpublishedOrDeleted, ...sets.trackOnly];
+    out.extraIds = extra.map(keyOf);
     for (const row of missing) {
       out.missingInDemi++;
       tally({ kind: 'missingInDemi', id: keyOf(row), eagle: row, unpaired: extra });
@@ -361,16 +368,29 @@ function lineOf(read, identity, r) {
     (classes ? ` known=${classes}` : '') + (r.truncated ? ' truncated' : '');
 }
 
-/** `{ "<class>": ["<eagleId>", ...] }`, for the classes that match by id. */
-function loadKnownIds(file, readFile) {
-  if (!file) return {};
-  const raw = JSON.parse(readFile(file, 'utf8'));
+// The one --emit-ids member that is not a class: candidates for a list, not a list.
+const EMITTED_EXTRA = 'extraInDemi';
+
+/** Each file `{ "<class>": ["<eagleId>", ...] }`, for the classes that match by id; lists of one class merge. */
+function loadKnownIds(files, readFile) {
   const idClasses = KNOWN_DIFFERENCES.filter(k => k.ids).map(k => k.name);
-  return Object.fromEntries(Object.entries(raw).map(([name, ids]) => {
-    if (!idClasses.includes(name)) throw new Error(`--known-ids: ${name} is not one of ${idClasses.join(', ')}`);
-    return [name, new Set(ids.map(String))];
-  }));
+  const out = {};
+  for (const file of files) {
+    for (const [name, ids] of Object.entries(JSON.parse(readFile(file, 'utf8')))) {
+      if (name === EMITTED_EXTRA) continue;
+      if (!idClasses.includes(name)) throw new Error(`--known-ids: ${name} is not one of ${idClasses.join(', ')}`);
+      out[name] = new Set([...(out[name] || []), ...ids.map(String)]);
+    }
+  }
+  return out;
 }
+
+/** An Eagle row DEMI shows staff only because `withEagleStaff` added it. */
+const widenedForStaff = (row) => {
+  if (!Array.isArray(row.read)) return false;
+  const base = eagleBaseAcl(row.read);
+  return withEagleStaff(base).length > base.length;
+};
 
 /** @returns {Promise<number>} the exit code */
 async function run(argv, deps = {}) {
@@ -419,6 +439,8 @@ async function run(argv, deps = {}) {
   const results = [];
 
   const pairedDocuments = new Set();
+  const widened = new Set();
+  const extraByRead = {};
   const downloads = [];
   let eaglePublicProjects;
   // Ids of every project Eagle shows the public, or null when --max-pages cut the list short.
@@ -465,6 +487,10 @@ async function run(argv, deps = {}) {
     try {
       const eagleSide = await sideOf(eagle, eagleSpecFor(entry, identity), entry.mapEagle);
       const demiSide = await sideOf(demi, entry.demi, entry.mapDemi);
+      // Sysadmin sees every Eagle row, so its run lists what the staff run gets widened.
+      if (args.emitIds && identity === 'sysadmin') {
+        eagleSide.rows.filter(widenedForStaff).forEach(row => widened.add(keyOf(row)));
+      }
       if (entry.dataset === 'Document') {
         const eagleIds = new Set(eagleSide.rows.map(keyOf));
         demiSide.rows.map(keyOf).filter(id => eagleIds.has(id)).forEach(id => pairedDocuments.add(id));
@@ -474,7 +500,9 @@ async function run(argv, deps = {}) {
         ids: knownIds,
         eaglePublicProjects: identity === 'anonymous' && entry.dataset === 'CommentPeriod' ? await loadEaglePublicProjects() : null
       };
-      record(entry, { status: 'compared', ...compareRead(entry, identity, eagleSide, demiSide, known) });
+      const { extraIds, ...counts } = compareRead(entry, identity, eagleSide, demiSide, known);
+      if (extraIds.length) extraByRead[entry.read] = [...extraIds].sort();
+      record(entry, { status: 'compared', ...counts });
     } catch (err) {
       record(entry, { status: 'error', message: err.message });
     }
@@ -482,12 +510,12 @@ async function run(argv, deps = {}) {
 
   for (const entry of downloads) {
     if (!entry.identities.includes(identity)) continue;
-    const ids = [...new Set([args.ids.document, ...pairedDocuments])]
-      .filter(id => id && EAGLE_ID.test(id)).slice(0, args.downloadSample);
+    // Only documents this identity read on both sides: one it cannot read would 404 on Eagle.
+    const ids = [...pairedDocuments].filter(id => EAGLE_ID.test(id)).slice(0, args.downloadSample);
     if (!args.downloadSample) {
       record(entry, { status: 'skipped', reason: 'off: pass --download-sample <n>' });
     } else if (!ids.length) {
-      record(entry, { status: 'skipped', reason: 'no document paired on both sides, and no --id document' });
+      record(entry, { status: 'skipped', reason: 'no document paired on both sides' });
     } else {
       try {
         record(entry, { status: 'compared', ...await compareDownloads(entry, ids, eagle, demi, store) });
@@ -501,6 +529,10 @@ async function run(argv, deps = {}) {
   d.log(`[parity] identity=${identity} reads=${results.length} failed=${failed}`);
   if (args.report) {
     d.writeFile(args.report, JSON.stringify({ identity, eagle: args.eagle, demi: args.demi, results }, null, 2));
+  }
+  if (args.emitIds) {
+    const emitted = identity === 'sysadmin' ? { 'eagle-staff-widened': [...widened].sort() } : {};
+    d.writeFile(args.emitIds, JSON.stringify({ ...emitted, [EMITTED_EXTRA]: extraByRead }, null, 2));
   }
   return failed ? 1 : 0;
 }

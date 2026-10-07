@@ -66,8 +66,19 @@ const PREDICATE_FIELDS = {
 
 /** Eagle project fields DEMI takes from Track when Track has a value (`TRACK_PRECEDENCE`). */
 const TRACK_FIELDS = TRACK_PRECEDENCE.map(([, , eagleField]) => eagleField).filter(Boolean);
-/** BCGW columns `bcgwRow` in src/controllers/report.js fills from those fields and the Track-first centroid. */
-const BCGW_TRACK_COLUMNS = ['Project name', 'Proponent', 'Type', 'Description', 'Latitude', 'Longitude'];
+/** CSV columns DEMI fills from those fields, per read; Eagle writes its own raw project row. */
+const TRACK_COLUMNS = {
+  // `bcgwRow` in src/controllers/report.js, with the Track-first centroid.
+  'report-bcgw': ['Project name', 'Proponent', 'Type', 'Description', 'Latitude', 'Longitude'],
+  // Eagle's raw project.name is blank on legislation-keyed projects.
+  'comment-export': ['Project']
+};
+
+/** Fields where `false` and absent mean the same: a schema default the push copied, or DEMI's '' for false. */
+const DEFAULT_FALSE_FIELDS = {
+  Project: ['substantially', 'hasMetCommentPeriods'],
+  CommentPeriod: ['isVetted']
+};
 
 /** Fields with a documented DEMI gap still open, per dataset. */
 const OPEN_GAPS = {
@@ -130,6 +141,14 @@ const KNOWN_DIFFERENCES = [
     match: ({ id, byEagleId }) => byEagleId && !EAGLE_ID.test(id) },
   { name: 'eagle-hard-deleted', kind: 'extraInDemi', ids: true,
     why: 'Eagle hard delete that sent no delete notice' },
+  { name: 'seeded-from-prod', kind: 'extraInDemi', ids: true,
+    why: 'row from the 2026-08-25 prod seed that the Eagle test database does not hold' },
+  { name: 'eagle-staff-widened', kind: 'extraInDemi', identities: ['staff'], ids: true,
+    why: 'Eagle read[] has no ladder token; DEMI adds staff (withEagleStaff in src/helpers/eagle-acl.js)' },
+  { name: 'schema-default-false', kind: 'fieldDiff',
+    why: "false on one side, absent on the other: a schema default copied by the push, or DEMI's '' for false",
+    match: ({ dataset, field, eagleValue, demiValue }) => (DEFAULT_FALSE_FIELDS[dataset] || []).includes(field) &&
+      [eagleValue, demiValue].every(v => v === false || norm(v) === null) },
   { name: 'public-field-difference', kind: 'fieldDiff', identities: ANON,
     why: 'Eagle strips the field for non-staff; DEMI shows it',
     match: ({ dataset, field, eagleValue }) => (PUBLIC_FIELDS[dataset] || []).includes(field) && norm(eagleValue) === null },
@@ -151,7 +170,7 @@ const KNOWN_DIFFERENCES = [
     why: 'DEMI projects take these fields from Track when Track has a value (src/merge/project.js)',
     match: ({ read, dataset, field, demiValue, demi }) => filled(demiValue) &&
       ((dataset === 'Project' && TRACK_FIELDS.includes(field) && demi.trackProjectId != null) ||
-        (read === 'report-bcgw' && BCGW_TRACK_COLUMNS.includes(field))) },
+        (TRACK_COLUMNS[read] || []).includes(field)) },
   { name: 'list-id-other-env', kind: ['missingInDemi', 'extraInDemi'],
     why: 'the same List row exists on the other side under another id: each environment seeded its own',
     match: ({ dataset, eagle, demi, unpaired }) => dataset === 'List' &&
@@ -207,7 +226,16 @@ const pagedRows = (path, query, opts) => ({ path, query, shape: 'array', paged: 
 const FIELDED = { fields: true };
 // eagle-api answers these as a count facet, [{ total_items, results }].
 const FACET = { facet: true };
-const COMMENT = { ...FIELDED, ...FACET };
+const FIELDED_FACET = { ...FIELDED, ...FACET };
+// A list: the route answers only these (ALLOWED_FIELDS in eagle-api's controller), so nothing else is compared.
+const ORGANIZATION_ROUTE = { fields: ['code', 'description', 'name', 'companyType', 'parentCompany'] };
+const COMMENT_PERIOD_ROUTE = { fields: ['_schemaName', 'addedBy', 'additionalText', 'ceaaAdditionalText',
+  'ceaaInformationLabel', 'ceaaRelatedDocuments', 'classificationRoles', 'classifiedPercent', 'commenterRoles',
+  'dateAdded', 'dateCompleted', 'dateCompletedEst', 'dateStarted', 'dateStartedEst', 'dateUpdated', 'downloadRoles',
+  'informationLabel', 'instructions', 'commentTip', 'isClassified', 'isPublished', 'isResolved', 'isVetted', 'isMet',
+  'metURL', 'metURLAdmin', 'metBannerImageUrl', 'milestone', 'openHouses', 'periodType', 'phase', 'phaseName',
+  'project', 'publishedPercent', 'rangeOption', 'rangeType', 'relatedDocuments', 'resolvedPercent', 'updatedBy',
+  'userCan', 'vettedPercent', 'vettingRoles', 'read', 'write', 'delete'] };
 const one = (path, at, query) => ({ path, query, shape: 'object', at });
 const csv = (path, query) => ({ path, query });
 /** Id-only rows, for reads where one side answers a list of refs rather than the rows. */
@@ -226,7 +254,7 @@ const REST_READS = [
     eagle: rows('/public/project/:project', undefined, FIELDED), demi: one('/projects/:project') },
   pending('project-head-public', '3', HEAD_REASON),
   { read: 'project-list', plan: '4', identities: STAFF, dataset: 'Project',
-    eagle: pagedRows('/project', undefined, FIELDED), demi: search('Project') },
+    eagle: pagedRows('/project', undefined, FIELDED_FACET), demi: search('Project') },
   { read: 'project', plan: '5', identities: STAFF, dataset: 'Project', fields: PROJECT_ONE_FIELDS,
     eagle: rows('/project/:project', undefined, FIELDED), demi: one('/projects/:project') },
   pending('project-head', '6-7', HEAD_REASON),
@@ -261,40 +289,40 @@ const REST_READS = [
   { read: 'document-download', plan: '21-23', identities: STAFF, download: true,
     eagle: { path: '/document/:document/download' }, demi: { path: '/documents/:document/download' } },
   { read: 'commentperiod-list-public', plan: '24', identities: ANON, dataset: 'CommentPeriod',
-    eagle: rows('/public/commentperiod', { project: ':project' }, FIELDED),
+    eagle: rows('/public/commentperiod', { project: ':project' }, COMMENT_PERIOD_ROUTE),
     demi: search('CommentPeriod', { 'and[project]': ':project' }) },
   { read: 'commentperiod-public', plan: '25', identities: ANON, dataset: 'CommentPeriod',
-    eagle: rows('/public/commentperiod/:period', undefined, FIELDED), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
+    eagle: rows('/public/commentperiod/:period', undefined, COMMENT_PERIOD_ROUTE), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
   { read: 'commentperiod-list', plan: '26', identities: STAFF, dataset: 'CommentPeriod',
-    eagle: rows('/commentperiod', { project: ':project' }, FIELDED),
+    eagle: rows('/commentperiod', { project: ':project' }, COMMENT_PERIOD_ROUTE),
     demi: search('CommentPeriod', { 'and[project]': ':project' }) },
   { read: 'commentperiod', plan: '27', identities: STAFF, dataset: 'CommentPeriod',
-    eagle: rows('/commentperiod/:period', undefined, FIELDED), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
+    eagle: rows('/commentperiod/:period', undefined, COMMENT_PERIOD_ROUTE), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
   pending('commentperiod-head', '28', HEAD_REASON),
   pending('commentperiod-summary', '29', 'no summary route; four and[eaoStatus] counts give it (S3)'),
   { read: 'comment-list-public', plan: '30', identities: ANON, dataset: 'Comment',
-    eagle: pagedRows('/public/comment', { period: ':period' }, COMMENT), demi: search('Comment', { 'and[period]': ':period' }) },
+    eagle: pagedRows('/public/comment', { period: ':period' }, FIELDED_FACET), demi: search('Comment', { 'and[period]': ':period' }) },
   { read: 'comment-public', plan: '31', identities: ANON, dataset: 'Comment',
-    eagle: rows('/public/comment/:comment', undefined, COMMENT), demi: search('Comment', { 'and[_id]': ':comment' }) },
+    eagle: rows('/public/comment/:comment', undefined, FIELDED_FACET), demi: search('Comment', { 'and[_id]': ':comment' }) },
   pending('comment-head-public', '32', HEAD_REASON),
   { read: 'comment-list', plan: '33', identities: STAFF, dataset: 'Comment',
-    eagle: pagedRows('/comment', { period: ':period' }, COMMENT), demi: search('Comment', { 'and[period]': ':period' }) },
+    eagle: pagedRows('/comment', { period: ':period' }, FIELDED_FACET), demi: search('Comment', { 'and[period]': ':period' }) },
   { read: 'comment', plan: '34', identities: STAFF, dataset: 'Comment',
-    eagle: rows('/comment/:comment', undefined, COMMENT), demi: search('Comment', { 'and[_id]': ':comment' }) },
+    eagle: rows('/comment/:comment', undefined, FIELDED_FACET), demi: search('Comment', { 'and[_id]': ':comment' }) },
   pending('comment-head', '35', HEAD_REASON),
   { read: 'comment-export', plan: '36', identities: STAFF, format: 'csv', key: 'Comment_No',
     ignoreColumns: ['Export_Date'],
     eagle: csv('/comment/export/:period', { format: 'staff' }), demi: csv('/commentperiods/:period/comments/export') },
   { read: 'organization-list-public', plan: '37', identities: ANON, dataset: 'Organization',
-    eagle: rows('/public/organization', undefined, FIELDED), demi: search('Organization') },
+    eagle: rows('/public/organization', undefined, ORGANIZATION_ROUTE), demi: search('Organization') },
   { read: 'organization-public', plan: '38', identities: ANON, dataset: 'Organization',
-    eagle: rows('/public/organization/:organization', undefined, FIELDED), demi: search('Organization', { 'and[_id]': ':organization' }) },
+    eagle: rows('/public/organization/:organization', undefined, ORGANIZATION_ROUTE), demi: search('Organization', { 'and[_id]': ':organization' }) },
   { read: 'organization-list', plan: '39', identities: STAFF, dataset: 'Organization',
-    eagle: rows('/organization', undefined, FIELDED), demi: search('Organization') },
+    eagle: rows('/organization', undefined, ORGANIZATION_ROUTE), demi: search('Organization') },
   { read: 'organization', plan: '40', identities: STAFF, dataset: 'Organization',
-    eagle: rows('/organization/:organization', undefined, FIELDED), demi: search('Organization', { 'and[_id]': ':organization' }) },
+    eagle: rows('/organization/:organization', undefined, ORGANIZATION_ROUTE), demi: search('Organization', { 'and[_id]': ':organization' }) },
   { read: 'project-notification-list', plan: '41', identities: STAFF, dataset: 'ProjectNotification',
-    eagle: pagedRows('/projectNotification'), demi: search('ProjectNotification') },
+    eagle: pagedRows('/projectNotification', undefined, FIELDED), demi: search('ProjectNotification') },
   { read: 'recent-activity-top', plan: '42', identities: ANON, dataset: 'RecentActivity',
     // Eagle answers its newest 4 whatever `top` says, so DEMI is asked for one page of 4.
     eagle: rows('/public/recentActivity', { top: 'true' }),

@@ -182,12 +182,13 @@ const downloads = ({ eagleBytes = 'pdf-bytes', storeBytes = 'pdf-bytes' } = {}) 
   return json(url.pathname.endsWith('/search') ? searchBody(rows) : rows);
 };
 const staff = ['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-env', 'PARITY_TOKEN'];
+const downloadLine = h => h.out.find(line => /document-download identity/.test(line));
 
 test('a download with the same bytes on both sides matches, and the store gets no token', async () => {
   const h = harness(downloads(), { env: { PARITY_TOKEN: TOKEN } });
-  const code = await run([...staff, '--only', 'document-download', '--id', `document=${A}`, '--download-sample', '1'], h.deps);
+  const code = await run([...staff, '--download-sample', '1'], h.deps);
   assert.strictEqual(code, 0);
-  assert.match(h.out[0], /document-download identity=staff match=1 .*fieldDiff=0 unexplained=0/);
+  assert.match(downloadLine(h), /document-download identity=staff match=1 .*fieldDiff=0 unexplained=0/);
   const store = h.calls.filter(c => c.host === 'store.test');
   assert.strictEqual(store.length, 1);
   assert.strictEqual(store[0].headers.authorization, undefined);
@@ -195,9 +196,24 @@ test('a download with the same bytes on both sides matches, and the store gets n
 
 test('a download whose bytes differ is unexplained and exits 1', async () => {
   const h = harness(downloads({ storeBytes: 'pdf-bytez' }), { env: { PARITY_TOKEN: TOKEN } });
-  const code = await run([...staff, '--only', 'document-download', '--id', `document=${A}`, '--download-sample', '1'], h.deps);
+  const code = await run([...staff, '--download-sample', '1'], h.deps);
   assert.strictEqual(code, 1);
-  assert.match(h.out[0], /match=0 .*fieldDiff=1 unexplained=1/);
+  assert.match(downloadLine(h), /match=0 .*fieldDiff=1 unexplained=1/);
+});
+
+test('an --id document no read paired is never downloaded', async () => {
+  const h = harness(downloads(), { env: { PARITY_TOKEN: TOKEN } });
+  await run([...staff, '--id', `document=${B}`, '--download-sample', '5'], h.deps);
+  const downloaded = h.calls.filter(c => c.url.pathname.endsWith('/download')).map(c => c.url.pathname);
+  assert.deepStrictEqual(downloaded, [`/api/document/${A}/download`, `/api/documents/${A}/download`]);
+});
+
+test('with --only document-download no read pairs a document, so nothing is downloaded', async () => {
+  const h = harness(downloads(), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'document-download', '--id', `document=${A}`, '--download-sample', '1'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.strictEqual(h.calls.length, 0);
+  assert.match(h.out[0], /document-download identity=staff skipped: no document paired on both sides/);
 });
 
 test('with no --download-sample nothing is downloaded', async () => {
@@ -637,4 +653,178 @@ test('a Track-only row is still demi-only when a parentState is given', () => {
 
 test('a difference no class explains and no parentState given is unexplained', () => {
   assert.strictEqual(classify(idCtx({ kind: 'missingInDemi' })), null);
+});
+
+const facetSides = rowsOf => (host, url) => {
+  const rows = rowsOf(host);
+  if (url.pathname.endsWith('/search')) return json(searchBody(rows));
+  return json(host === 'eagle.test' ? facet(rows) : rows);
+};
+
+test("the staff project list unwraps Eagle's count facet and pairs on the project ids", async () => {
+  const h = harness(facetSides(() => [project(A), project(B)]), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'project-list'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /project-list identity=staff match=2 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+});
+
+test('the project notification list asks Eagle for its compared fields', async () => {
+  const h = harness(restSides({}, searchBody([])), { env: { PARITY_TOKEN: TOKEN } });
+  await run([...staff, '--only', 'project-notification-list'], h.deps);
+  assert.strictEqual(eagleCall(h, '/projectNotification').url.searchParams.get('fields'), 'name|type|subType');
+});
+
+const org = (extra = {}) => ({ _id: A, name: 'Org', companyType: 'Proponent', ...extra });
+
+test("the organization route is asked for and compared on only the fields Eagle's route answers", async () => {
+  const h = harness(restSides({ '/organization': [org()] }, searchBody([org({ city: 'Victoria', address2: 'Unit 4' })])),
+    { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'organization-list'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /match=1 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+  const asked = eagleCall(h, '/organization').url.searchParams.get('fields').split('|');
+  assert.deepStrictEqual(asked.filter(f => ['city', 'province', 'address2'].includes(f)), []);
+});
+
+test('staff organization search still compares the address fields', async () => {
+  const h = harness(searchSides({ eagle: [org({ city: 'Nanaimo' })], demi: [org({ city: 'Victoria' })] }),
+    { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'search-Organization'], h.deps);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], /fieldDiff=1 unexplained=1/);
+});
+
+test('the comment period route does not compare commentIdCount, which Eagle never answers', async () => {
+  const period = { _id: B, project: A, dateStarted: '2026-08-26T07:00:00.000Z', instructions: 'x' };
+  const h = harness(restSides({ [`/commentperiod/${B}`]: [period] }, searchBody([{ ...period, commentIdCount: 7 }])),
+    { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'commentperiod', '--id', `period=${B}`], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /match=1 .*fieldDiff=0 unexplained=0/);
+  assert.ok(!eagleCall(h, `/commentperiod/${B}`).url.searchParams.get('fields').split('|').includes('commentIdCount'));
+});
+
+const staffSearch = async (dataset, eagleRow, demiRow) => {
+  const h = harness(searchSides({ eagle: [eagleRow], demi: [demiRow] }), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', `search-${dataset}`], h.deps);
+  return { code, line: h.out[0] };
+};
+
+test('a project flag false in DEMI and absent in Eagle is counted as schema-default-false', async () => {
+  const { code, line } = await staffSearch('Project', project(A), project(A, { substantially: false, hasMetCommentPeriods: false }));
+  assert.strictEqual(code, 0);
+  assert.match(line, /fieldDiff=2 unexplained=0 known=schema-default-false:2/);
+});
+
+test('a project flag true in DEMI and absent in Eagle is unexplained', async () => {
+  const { code, line } = await staffSearch('Project', project(A), project(A, { substantially: true }));
+  assert.strictEqual(code, 1);
+  assert.match(line, /fieldDiff=1 unexplained=1/);
+});
+
+test("a comment period isVetted false in Eagle and '' in DEMI is counted as schema-default-false", async () => {
+  const period = extra => ({ _id: B, dateStarted: '2026-08-26T07:00:00.000Z', ...extra });
+  const { code, line } = await staffSearch('CommentPeriod', period({ isVetted: false }), period({ isVetted: '' }));
+  assert.strictEqual(code, 0);
+  assert.match(line, /fieldDiff=1 unexplained=0 known=schema-default-false:1/);
+});
+
+test("a blank Eagle Project column in the comment export against DEMI's merged name is track-mastered", async () => {
+  const columns = ['Comment_No', 'Project', 'Comment'];
+  const { code, line } = await exportRun(csvSides([[1, '', 'ok'], [2, 'Mine', 'ok']], [[1, 'Mine', 'ok'], [2, 'Mine', 'ok']], columns));
+  assert.strictEqual(code, 0);
+  assert.match(line, /match=1 .*fieldDiff=1 unexplained=0 known=track-mastered:1/);
+});
+
+const [C, SEALED_ONLY] = ['6'.repeat(24), '7'.repeat(24)];
+
+const knownRun = async (identity, known, extraArgs = []) => {
+  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A), project(B)] }),
+    { env: { PARITY_TOKEN: TOKEN }, files: { 'known.json': JSON.stringify(known), 'more.json': '{}' } });
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', identity, '--token-env', 'PARITY_TOKEN',
+    '--only', 'search-Project', '--known-ids', 'known.json', ...extraArgs], h.deps);
+  return { code, line: h.out[0], written: h.written };
+};
+
+test('an extra DEMI row listed as seeded-from-prod is counted under it', async () => {
+  const { code, line } = await knownRun('staff', { 'seeded-from-prod': [B] });
+  assert.strictEqual(code, 0);
+  assert.match(line, /extraInDemi=1 .*unexplained=0 known=seeded-from-prod:1/);
+});
+
+test('an extra DEMI row listed as eagle-staff-widened is counted under it for staff', async () => {
+  const { code, line } = await knownRun('staff', { 'eagle-staff-widened': [B] });
+  assert.strictEqual(code, 0);
+  assert.match(line, /extraInDemi=1 .*unexplained=0 known=eagle-staff-widened:1/);
+});
+
+test('eagle-staff-widened does not excuse an extra row for sysadmin, who sees every Eagle row', async () => {
+  const { code, line } = await knownRun('sysadmin', { 'eagle-staff-widened': [B] });
+  assert.strictEqual(code, 1);
+  assert.match(line, /extraInDemi=1 .*unexplained=1/);
+});
+
+test('--known-ids may repeat, and lists of one class from several files merge', async () => {
+  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A), project(B), project(C)] }), {
+    env: { PARITY_TOKEN: TOKEN },
+    files: {
+      'a.json': JSON.stringify({ 'seeded-from-prod': [B] }),
+      'b.json': JSON.stringify({ 'seeded-from-prod': [C], extraInDemi: { 'search-Project': [B, C] } })
+    }
+  });
+  const code = await run([...staff, '--only', 'search-Project', '--known-ids', 'a.json', '--known-ids', 'b.json'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /extraInDemi=2 .*unexplained=0 known=seeded-from-prod:2/);
+});
+
+test('a --known-ids class that does not exist is refused', async () => {
+  const { code, line } = await knownRun('staff', { 'seeded-from-pord': [B] });
+  assert.strictEqual(code, 1);
+  assert.match(line, /--known-ids: seeded-from-pord is not one of/);
+});
+
+test('an id listed under the new id classes never explains a row missing in DEMI', () => {
+  const knownIds = { 'seeded-from-prod': new Set([A]), 'eagle-staff-widened': new Set([A]) };
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'staff', knownIds })), null);
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'staff', knownIds, parentState: null })), 'push-missed');
+});
+
+const emitRun = async (identity) => {
+  const eagle = [
+    project(A, { read: ['public'] }),
+    project(B, { read: ['sysadmin'] }),
+    project(C, { read: ['staff', 'sysadmin'] }),
+    project('9'.repeat(24), { read: ['team', 'sysadmin'] }),
+    project(SEALED_ONLY, { read: ['compliance'] })
+  ];
+  const h = harness(searchSides({ eagle, demi: [...eagle, project('8'.repeat(24))] }), { env: { PARITY_TOKEN: TOKEN } });
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', identity, '--token-env', 'PARITY_TOKEN',
+    '--only', 'search-Project', '--emit-ids', 'ids.json'], h.deps);
+  return h.written[0];
+};
+
+test('a sysadmin --emit-ids run lists the Eagle ids DEMI widens to staff, and extra DEMI ids per read', async () => {
+  const emitted = JSON.parse(await emitRun('sysadmin'));
+  assert.deepStrictEqual(emitted['eagle-staff-widened'], [B, SEALED_ONLY].sort());
+  assert.deepStrictEqual(emitted.extraInDemi, { 'search-Project': ['8'.repeat(24)] });
+});
+
+test('--emit-ids writes ids only, never field values', async () => {
+  const text = await emitRun('sysadmin');
+  assert.ok(!/Mine|Hudson Hope|Peace/.test(text), text);
+});
+
+test('a staff --emit-ids run lists no widened ids: staff cannot see the rows that tell them apart', async () => {
+  const emitted = JSON.parse(await emitRun('staff'));
+  assert.ok(!('eagle-staff-widened' in emitted));
+  assert.deepStrictEqual(Object.keys(emitted.extraInDemi), ['search-Project']);
+});
+
+test('an --emit-ids file is accepted as a --known-ids file', async () => {
+  const emitted = await emitRun('sysadmin');
+  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A), project(B)] }),
+    { env: { PARITY_TOKEN: TOKEN }, files: { 'ids.json': emitted } });
+  const code = await run([...staff, '--only', 'search-Project', '--known-ids', 'ids.json'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /known=eagle-staff-widened:1/);
 });
