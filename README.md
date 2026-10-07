@@ -981,7 +981,7 @@ schedule in `PDF_TITLE_SCHEDULE` it runs `pdf-title/run.py`, which takes PDFs wi
 the API's work list and sets one. It is a dry run, listing the work and writing nothing, unless
 `PDF_TITLE_LIVE` is `true`.
 
-On test, `azure/main.test.bicepparam` enables it as a dry run (`pdfTitleLive = false`). Prod has
+On test, `azure/main.test.bicepparam` enables it live (`pdfTitleLive = true`); set it to `false` to list work and write nothing. Prod has
 no worker: `azure/main.prod.bicepparam` sets neither `deployPdfTitleWorker` nor the secret name.
 
 - Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflow:
