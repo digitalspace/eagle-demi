@@ -235,5 +235,5 @@ async function admitParent(ref, { childId } = {}) {
 
 module.exports = {
   admitParent, pickParent, eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode,
-  MALFORMED_REF, NO_REF, CLASSIFY_TIMEOUT_MS, PARENT_NOT_FOUND, PARENT_REF_INVALID
+  MALFORMED_REF, NO_REF, CLASSIFY_TIMEOUT_MS
 };
