@@ -12,7 +12,7 @@ const fs = require('fs');
 const { fetchAllPages, unwrapSearchResponse, rateLimitWaitMs, PAGE_SIZE } = require('../seed/sources');
 const { diff } = require('./reconcile-eagle');
 const {
-  PARITY_MAP, KNOWN_DIFFERENCES, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same
+  PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same
 } = require('./parity-map');
 const { logger } = require('../utils/logger');
 
@@ -248,13 +248,10 @@ const keyOf = row => String(row.eagleId || row._id || row.id);
 function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, identity), headerDiffs = []) {
   const out = { match: 0, missingInDemi: 0, extraInDemi: 0, fieldDiff: 0, unexplained: 0, classes: {}, samples: [] };
   const tally = (ctx) => {
-    const full = { ...ctx, read: entry.read, dataset: entry.dataset, eaglePublicProjects: known.eaglePublicProjects };
-    const hit = KNOWN_DIFFERENCES.find(k => [].concat(k.kind).includes(ctx.kind) &&
-      (!k.identities || k.identities.includes(identity)) &&
-      (!k.reads || k.reads.includes(entry.read)) &&
-      (k.ids ? !!(known.ids[k.name] && known.ids[k.name].has(ctx.id)) : k.match(full)));
+    const hit = classify({ ...ctx, identity, read: entry.read, dataset: entry.dataset,
+      eaglePublicProjects: known.eaglePublicProjects, knownIds: known.ids });
     if (hit) {
-      out.classes[hit.name] = (out.classes[hit.name] || 0) + 1;
+      out.classes[hit] = (out.classes[hit] || 0) + 1;
       return;
     }
     out.unexplained++;

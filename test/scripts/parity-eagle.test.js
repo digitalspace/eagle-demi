@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { run, parseCsv, MIN_GAP_MS } = require('../../src/scripts/parity-eagle');
-const { PARITY_MAP } = require('../../src/scripts/parity-map');
+const { PARITY_MAP, classify } = require('../../src/scripts/parity-map');
 const { unknownParams } = require('../../src/search/eagle-query');
 
 const EAGLE = 'https://eagle.test/api';
@@ -603,4 +603,38 @@ test('a missing public comment period whose project Eagle lists publicly is unex
   const { code, line } = await periodRun([SHOWN, HIDDEN]);
   assert.strictEqual(code, 1);
   assert.match(line, /missingInDemi=1 .*unexplained=1/);
+});
+
+// classify() as reconcile-eagle calls it: id-level, anonymous, one parentState per row.
+const idCtx = (ctx) => ({ identity: 'anonymous', dataset: 'Document', id: A, eagle: { _id: A }, unpaired: [], ...ctx });
+
+test('a missing row whose parent Eagle, DEMI and Track all lack is an orphan', () => {
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', parentState: 'missing-in-eagle' })),
+    'orphan-parent-missing-in-eagle');
+});
+
+test('a missing document whose parent project is not public is parent-not-public', () => {
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', parentState: 'not-public' })), 'parent-not-public');
+});
+
+test('a missing row whose parent DEMI holds is push-missed-parent-in-demi', () => {
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', parentState: 'in-demi' })), 'push-missed-parent-in-demi');
+});
+
+test('a missing row with no parent is push-missed', () => {
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', dataset: 'Project', parentState: null })), 'push-missed');
+});
+
+test('a row only DEMI holds under an Eagle id is push-missed, even with its parent in DEMI', () => {
+  assert.strictEqual(classify(idCtx({ kind: 'extraInDemi', demi: { id: A }, byEagleId: true, parentState: 'in-demi' })),
+    'push-missed');
+});
+
+test('a Track-only row is still demi-only when a parentState is given', () => {
+  assert.strictEqual(classify(idCtx({ kind: 'extraInDemi', id: 'track-42', byEagleId: true, parentState: null })),
+    'demi-only');
+});
+
+test('a difference no class explains and no parentState given is unexplained', () => {
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi' })), null);
 });

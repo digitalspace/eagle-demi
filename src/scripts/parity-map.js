@@ -156,11 +156,47 @@ const KNOWN_DIFFERENCES = [
     why: 'the same List row exists on the other side under another id: each environment seeded its own',
     match: ({ dataset, eagle, demi, unpaired }) => dataset === 'List' &&
       unpaired.some(other => ['name', 'type', 'legislation'].every(f => same(other[f], (eagle || demi)[f]))) },
+  { name: 'orphan-parent-missing-in-eagle', label: 'orphan: parent missing in Eagle', kind: ['missingInDemi', 'extraInDemi'],
+    why: 'the parent ref is empty, malformed, or names a row in neither Eagle, DEMI nor Track',
+    match: ({ parentState }) => parentState === 'missing-in-eagle' },
   { name: 'parent-not-public', kind: 'missingInDemi', identities: ANON,
     why: "Eagle's public comment period routes skip the project read[] check; DEMI applies it",
-    match: ({ dataset, eagle, eaglePublicProjects }) => dataset === 'CommentPeriod' && !!eaglePublicProjects &&
-      filled(eagle.project) && !eaglePublicProjects.has(norm(eagle.project)) }
+    match: ({ dataset, eagle, eaglePublicProjects, parentState }) => parentState === 'not-public' ||
+      (dataset === 'CommentPeriod' && !!eaglePublicProjects &&
+        filled(eagle.project) && !eaglePublicProjects.has(norm(eagle.project))) }
 ];
+
+/**
+ * The class that explains one id-level or field-level difference, shared by parity-eagle and
+ * reconcile-eagle.
+ *
+ * @param {object} ctx
+ * @param {string} ctx.kind          missingInDemi, extraInDemi or fieldDiff
+ * @param {string} ctx.id            the row's Eagle id (or DEMI id when it has none)
+ * @param {string} [ctx.identity]    caller the read ran as; classes with `identities` need it
+ * @param {string} [ctx.read]        PARITY_MAP read name; classes with `reads` need it
+ * @param {string} [ctx.dataset]     Eagle _schemaName
+ * @param {object} [ctx.eagle]       Eagle row; `ctx.demi` the DEMI row
+ * @param {Array}  [ctx.unpaired]    the other side's unpaired rows (list-id-other-env)
+ * @param {boolean} [ctx.byEagleId]  DEMI rows are keyed by Eagle id (demi-only)
+ * @param {string} [ctx.field]       fieldDiff only, with ctx.eagleValue and ctx.demiValue
+ * @param {Set}    [ctx.eaglePublicProjects] ids Eagle lists publicly
+ * @param {Object<string, Set>} [ctx.knownIds] class name -> ids, for `ids: true` classes
+ * @param {string|null} [ctx.parentState] in-demi, not-public, missing-in-eagle, or null for a row
+ *   with no parent. Undefined (field-level parity) leaves an unmatched difference unexplained.
+ * @returns {string|null} class name; null when unexplained
+ */
+function classify(ctx) {
+  const knownIds = ctx.knownIds || {};
+  const hit = KNOWN_DIFFERENCES.find(k => [].concat(k.kind).includes(ctx.kind) &&
+    (!k.identities || k.identities.includes(ctx.identity)) &&
+    (!k.reads || k.reads.includes(ctx.read)) &&
+    (k.ids ? !!(knownIds[k.name] && knownIds[k.name].has(ctx.id)) : k.match(ctx)));
+  if (hit) return hit.name;
+  if (ctx.parentState === undefined) return null;
+  // Only a missing child whose parent DEMI holds is worth a re-push: its first push likely beat the parent's.
+  return ctx.kind === 'missingInDemi' && ctx.parentState === 'in-demi' ? 'push-missed-parent-in-demi' : 'push-missed';
+}
 
 const search = (dataset, query = {}) => ({ path: '/search', query: { dataset, ...query }, shape: 'search', paged: true });
 const rows = (path, query, opts) => ({ path, query, shape: 'array', paged: false, ...opts });
@@ -296,5 +332,5 @@ const SEARCH_READS = [
 const PARITY_MAP = [...REST_READS, ...SEARCH_READS];
 
 module.exports = {
-  PARITY_MAP, KNOWN_DIFFERENCES, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same
+  PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same
 };
