@@ -931,7 +931,7 @@ function classDeps({ docs = [
   { _id: DOC.missed, project: PUB }, { _id: DOC.underHidden, project: HIDDEN },
   { _id: DOC.underGone, project: ABSENT }, { _id: DOC.noRef, project: null },
   { _id: DOC.badRef, project: BAD_REF }, { _id: DOC.underUnmirrored, project: PUB_UNMIRRORED }
-] } = {}) {
+], periods = [], sourcesOver = {}, over = {} } = {}) {
   const projectRows = [
     { id: `eagle-${PUB}`, eagleId: PUB, sourceSystem: 'eagle' },
     { id: `eagle-${HIDDEN}`, eagleId: HIDDEN, sourceSystem: 'eagle' },
@@ -942,8 +942,9 @@ function classDeps({ docs = [
     sources: stubSources({
       loadTrackProjects: () => [],
       fetchEagleProjects: async () => [{ _id: PUB }, { _id: PUB_UNMIRRORED }],
-      streamEagleDocuments: async (onPage) => { await onPage(docs); return { count: docs.length, total: docs.length }; }
-    }, { ...EAGLE_BY_DATASET, CommentPeriod: [] }),
+      streamEagleDocuments: async (onPage) => { await onPage(docs); return { count: docs.length, total: docs.length }; },
+      ...sourcesOver
+    }, { ...EAGLE_BY_DATASET, CommentPeriod: periods }),
     projects: {
       listWithEagleId: async () => projectRows,
       countWithEagleId: async () => projectRows.length
@@ -952,7 +953,8 @@ function classDeps({ docs = [
       listSeededIds: async () => [],
       countSeededIds: async () => 0,
       countParentFieldsPending: async () => 0
-    }
+    },
+    ...over
   });
 }
 
@@ -1006,6 +1008,61 @@ test('run logs the classes on their own line, which the alert cannot match', asy
     'the alert matches "[reconcile] projects" and reads drift=; this line must trip neither');
 });
 
+/**
+ * Comment classes under `--comments`. DEMI mirrors one period, under PUB, and one of its two
+ * comments. Eagle also publishes a period under ABSENT (in no system) and one under HIDDEN (DEMI
+ * holds the project, Eagle does not publish it): the mirror resolves neither period, so their
+ * comments class by the period's own project ref.
+ */
+const CP = { pub: oid(20), underGone: oid(21), underHidden: oid(22) };
+const COMMENT = { mirrored: oid(30), missed: oid(31), underGone: oid(32), underHidden: oid(33) };
+
+function commentClassDeps() {
+  const eagleComments = {
+    [CP.pub]: [{ _id: COMMENT.mirrored }, { _id: COMMENT.missed }],
+    [CP.underGone]: [{ _id: COMMENT.underGone }],
+    [CP.underHidden]: [{ _id: COMMENT.underHidden }]
+  };
+  return classDeps({
+    periods: [{ _id: CP.pub, project: PUB }, { _id: CP.underGone, project: ABSENT },
+      { _id: CP.underHidden, project: HIDDEN }],
+    sourcesOver: {
+      fetchJsonWithHeaders: async (url) => {
+        const body = eagleComments[new URL(url).searchParams.get('period')] || [];
+        return { body, headers: new Headers({ 'x-total-count': String(body.length) }) };
+      }
+    },
+    over: {
+      commentPeriods: {
+        listEveryByProject: async (projectId) =>
+          (projectId === `eagle-${PUB}` ? [{ id: CP.pub, projectId }] : [])
+      },
+      comments: {
+        listEveryByPeriod: async (periodId) => (periodId === CP.pub ? [{ id: COMMENT.mirrored }] : [])
+      }
+    }
+  });
+}
+
+test('--comments classes each drifted comment by the parent its period resolves to', async (t) => {
+  const classesOf = async () => (await reconcile(['--comments'], commentClassDeps())).classes.comments;
+
+  await t.test('a comment under an unresolved period whose project is in no system is an orphan', async () => {
+    const comments = await classesOf();
+    assert.deepStrictEqual(comments['orphan-parent-missing-in-eagle'], [COMMENT.underGone]);
+  });
+
+  await t.test('a comment under an unresolved period whose project Eagle does not publish is parent-not-public', async () => {
+    const comments = await classesOf();
+    assert.deepStrictEqual(comments['parent-not-public'], [COMMENT.underHidden]);
+  });
+
+  await t.test('a comment missing under a period DEMI holds is a retryable push miss', async () => {
+    const comments = await classesOf();
+    assert.deepStrictEqual(comments['push-missed-parent-in-demi'], [COMMENT.missed]);
+  });
+});
+
 test('run --store', async (t) => {
   const quiet = () => t.mock.method(logger, 'info', () => {});
   const recordingCache = (put = async () => {}) => {
@@ -1037,6 +1094,17 @@ test('run --store', async (t) => {
     assert.strictEqual(documents.counts['push-missed-parent-in-demi'], 201);
     assert.strictEqual(documents.ids['push-missed-parent-in-demi'].length, 200);
     assert.strictEqual(documents.truncated, true);
+  });
+
+  await t.test('keeps exactly 200 ids whole, with no truncation flag', async () => {
+    quiet();
+    const docs = Array.from({ length: 200 }, (_, i) => ({ _id: oid(1000 + i), project: PUB }));
+    const cacheDouble = recordingCache();
+    await run({ store: true, deps: { ...classDeps({ docs }), cache: cacheDouble } });
+
+    const { documents } = cacheDouble.puts[0].doc.body;
+    assert.strictEqual(documents.ids['push-missed-parent-in-demi'].length, 200);
+    assert.strictEqual(documents.truncated, false);
   });
 
   await t.test('a failed write is logged and the run still resolves', async () => {
