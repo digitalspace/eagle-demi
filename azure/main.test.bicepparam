@@ -189,13 +189,13 @@ param notifyUpdateReaderLinks = true
 param syncTeamsSchedule = '0 0 10 * * *'
 
 // ── PDF title worker ──────────────────────────────────────────────────────────────────────────
-// Test only, and dry run: with pdfTitleLive false the worker lists its work and writes nothing.
+// Test only. pdfTitleLive true: the worker writes titles into test originals; set false to list work and write nothing.
 // The key is the vault's `pdf-title-worker-api-key`, named in optionalSecretNames above; the
 // principal is that key's registry row id (a key id, not the key). Schedule, rows and minutes keep
 // main.bicep's defaults.
 param deployPdfTitleWorker = true
 param pdfTitleWorkerPrincipals = '9cc56554c70afc46'
-param pdfTitleLive = false
+param pdfTitleLive = true
 
 // APIM Consumption in front of demi-api-fc-test. Test only — prod stays off until this proves out.
 // The gateway secret is created out of band before this deploy, through the ARM control plane —
