@@ -196,6 +196,9 @@ param syncTeamsSchedule = '0 0 10 * * *'
 param deployPdfTitleWorker = true
 param pdfTitleWorkerPrincipals = '9cc56554c70afc46'
 param pdfTitleLive = true
+// The document-backup account (azure/document-backup.test.bicepparam). The API refuses every lease
+// whose original is not archived there; the container keeps main.bicep's default `originals`.
+param backupAccountName = 'eaglebaktestvymaysch2agd'
 
 // APIM Consumption in front of demi-api-fc-test. Test only — prod stays off until this proves out.
 // The gateway secret is created out of band before this deploy, through the ARM control plane —

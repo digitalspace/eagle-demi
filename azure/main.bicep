@@ -126,6 +126,14 @@ param eagleMirrorPrincipals string = 'apim:eagle-api'
 @description('Comma-separated registry row ids permitted on the PDF title worker routes.')
 param pdfTitleWorkerPrincipals string = ''
 
+// Empty keeps the API's backup gate closed, so every PDF title lease is refused. Set it only where
+// the document-backup account exists and holds the originals in Archive tier.
+@description('Backup storage account the PDF title writes are checked against. Empty keeps the gate closed.')
+param backupAccountName string = ''
+
+@description('Container in backupAccountName holding the backed-up originals.')
+param backupContainerName string = 'originals'
+
 // Empty, not 'account': the audience Keycloak actually mints is unmeasured, and a wrong value
 // rejects every token. Empty means the check is not enforced.
 @description('Expected JWT aud claim. Empty disables audience verification.')
@@ -759,6 +767,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     allowedClients: allowedClients
     eagleMirrorPrincipals: eagleMirrorPrincipals
     pdfTitleWorkerPrincipals: pdfTitleWorkerPrincipals
+    backupAccountName: backupAccountName
+    backupContainerName: backupContainerName
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
     edgeSecretUri: edgeSecretUri
