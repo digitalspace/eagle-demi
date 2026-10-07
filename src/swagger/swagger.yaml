@@ -2550,6 +2550,10 @@ paths:
           $ref: '#/components/responses/EagleMirrorForbidden'
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EagleParentRefusal'
         '409':
           description: >-
             The id is stored in more than one DEMI row, so nothing was written. Not retried: a
@@ -2668,6 +2672,10 @@ paths:
           $ref: '#/components/responses/EagleMirrorForbidden'
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EagleParentRefusal'
         '409':
           description: >-
             The id is stored in more than one DEMI row, so nothing was written. Not retried: a
@@ -2721,6 +2729,10 @@ paths:
           $ref: '#/components/responses/EagleMirrorForbidden'
         '404':
           description: The comment period named by `doc.period` is not mirrored yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EagleParentRefusal'
         '409':
           description: >-
             The id is stored in more than one DEMI row, so nothing was written. Not retried: a
@@ -2894,6 +2906,10 @@ paths:
           $ref: '#/components/responses/EagleMirrorForbidden'
         '404':
           description: The parent project is not mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EagleParentRefusal'
         '503':
           description: >-
             The record changed repeatedly while the push was retried. eagle-api retries.
@@ -2937,6 +2953,10 @@ paths:
           $ref: '#/components/responses/EagleMirrorForbidden'
         '404':
           description: The parent project is not mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EagleParentRefusal'
         '503':
           description: >-
             The record changed repeatedly while the push was retried. eagle-api retries.
@@ -4250,6 +4270,69 @@ paths:
             rate-limited by Azure, retry in a few minutes` when Cost Management refused and
             nothing is cached yet.
 
+  /api/admin/reconcile:
+    get:
+      summary: Last Eagle reconcile report
+      description: >-
+        The report the scheduled Eagle reconcile stored on its last run: for each kind, a count
+        per drift class and up to 200 ids per class, with `truncated` set when a class held more.
+        Read only; nothing here runs the reconcile or fixes drift. `storedAt` is when the row was
+        written, `report.ranAt` when the run started.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The stored report.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  storedAt:
+                    type: string
+                    format: date-time
+                  report:
+                    type: object
+                    description: The report exactly as the reconcile job wrote it.
+                    properties:
+                      ranAt:
+                        type: string
+                        format: date-time
+                    additionalProperties:
+                      type: object
+                      description: One kind, keyed by kind name.
+                      properties:
+                        counts:
+                          type: object
+                          description: Count per drift class.
+                          additionalProperties:
+                            type: integer
+                        ids:
+                          type: object
+                          description: Up to 200 ids per drift class.
+                          additionalProperties:
+                            type: array
+                            items:
+                              type: string
+                        truncated:
+                          type: boolean
+                          description: True when some class held more ids than were kept.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires an admin role.
+        '404':
+          description: >-
+            `no reconcile report stored`: the reconcile has not stored a report in this
+            environment yet.
+        '503':
+          description: >-
+            `reconcile report unavailable, retry in a few minutes`: the stored report could not
+            be read.
+
   /api/admin/search-definitions/apply:
     post:
       summary: Apply the committed search definitions
@@ -5051,6 +5134,23 @@ components:
           description: |-
             Ignored pushes only: the `pushedAt` of the push that is stored, which this one lost
             to.
+
+    EagleParentRefusal:
+      type: object
+      description: |-
+        Why a mirror push was refused for its parent. `error` is the text a person reads and may
+        change; `code` is what a caller acts on.
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          enum: [PARENT_NOT_FOUND, PARENT_REF_INVALID]
+          description: |-
+            `PARENT_NOT_FOUND`: the reference is well formed but DEMI holds no such parent yet.
+            The same push can succeed once the parent's own push lands, so eagle-api holds it
+            and sends it again. `PARENT_REF_INVALID`: the reference is empty or not an Eagle id.
+            Sending it again cannot succeed, so it is not retried.
 
     ShortLink:
       type: object

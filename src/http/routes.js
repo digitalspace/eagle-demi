@@ -144,6 +144,8 @@ const routes = [
   { method: 'get', path: '/admin/audit', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getAudit },
   { method: 'get', path: '/admin/analytics', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getAnalytics },
   { method: 'get', path: '/admin/cost', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getCost },
+  // Written by the reconcileEagle timer; this only reads the row back.
+  { method: 'get', path: '/admin/reconcile', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getReconcileReport },
 
   // Projects Routes
   { method: 'get', path: '/projects', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProjects },
