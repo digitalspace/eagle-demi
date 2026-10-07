@@ -180,11 +180,16 @@ function arrayOf(body, url) {
   return body;
 }
 
-/** Eagle's count facet `[{ total_items, results }]` as one page of rows; any other array as is. */
+/**
+ * Eagle's count facet `[{ total_items, results }]` as one page of rows; any other array as is.
+ * The pins route answers an empty set as `[{ total_items: 0 }]`, with no `results`.
+ */
 function facetPage(body) {
-  const facet = body.length === 1 && body[0] && Array.isArray(body[0].results) ? body[0] : null;
-  if (!facet) return { items: body, total: null };
-  return { items: facet.results, total: Number.isFinite(facet.total_items) ? facet.total_items : null };
+  const facet = body.length === 1 && body[0] && typeof body[0] === 'object' ? body[0] : null;
+  const counted = facet && Number.isFinite(facet.total_items);
+  if (facet && Array.isArray(facet.results)) return { items: facet.results, total: counted ? facet.total_items : null };
+  if (counted && !('results' in facet)) return { items: [], total: facet.total_items };
+  return { items: body, total: null };
 }
 
 /** The rows one side answers, and whether --max-pages cut the read short. */

@@ -430,6 +430,19 @@ test('every Eagle project, document, comment period, organization and comment RE
 /** Eagle's count facet. */
 const facet = (rows, total = rows.length) => [{ total_items: total, results: rows, read: ['public'] }];
 
+test('an empty Eagle pin or comment facet with no results array is an empty read', async () => {
+  const empty = () => json([{ total_items: 0 }]);
+  const pins = harness((host) => (host === 'eagle.test' ? empty() : json({ id: 'p1', eagleId: A, pins: [] })));
+  assert.strictEqual(await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'pins-public', '--id', `project=${A}`],
+    pins.deps), 0);
+  assert.match(pins.out[0], /pins-public identity=anonymous match=0 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+
+  const comments = harness((host) => (host === 'eagle.test' ? empty() : json(searchBody([]))));
+  assert.strictEqual(await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'comment-list-public', '--id', `period=${A}`],
+    comments.deps), 0);
+  assert.match(comments.out[0], /comment-list-public identity=anonymous match=0 missingInDemi=0 extraInDemi=0 .*unexplained=0/);
+});
+
 test('Eagle pins in a count facet pair with the DEMI project pins', async () => {
   const pin = id => ({ _id: id, name: 'Nation', province: 'BC' });
   const h = harness((host) => (host === 'eagle.test'
@@ -547,16 +560,25 @@ test('a missing List row whose twin on the other side is already paired is unexp
 });
 
 const [HIDDEN, SHOWN] = ['4'.repeat(24), '5'.repeat(24)];
-const periodRun = async (publicProjects) => {
+const periodRun = async (publicProjects, args = []) => {
   const period = { _id: B, project: HIDDEN, dateStarted: '2026-08-26T07:00:00.000Z', instructions: 'x' };
   const h = harness(restSides({
     '/public/project': publicProjects.map(id => ({ _id: id })),
     '/public/commentperiod': [period]
   }, searchBody([])));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'commentperiod-list-public',
-    '--id', `project=${HIDDEN}`], h.deps);
+    '--id', `project=${HIDDEN}`, ...args], h.deps);
   return { code, line: h.out.find(l => /commentperiod-list-public/.test(l)) };
 };
+
+test('a --max-pages cut of the public project list leaves a missing comment period unexplained', async () => {
+  // One full page and no total: the list may go on, so HIDDEN's absence proves nothing.
+  const fullPage = Array.from({ length: 100 }, (_, i) => (i + 1).toString(16).padStart(24, '6'));
+  const { code, line } = await periodRun(fullPage, ['--max-pages', '1']);
+  assert.strictEqual(code, 1);
+  assert.match(line, /missingInDemi=1 .*unexplained=1/);
+  assert.doesNotMatch(line, /parent-not-public/);
+});
 
 test('a public comment period of a project Eagle does not list publicly is counted as parent-not-public', async () => {
   const { code, line } = await periodRun([SHOWN]);
