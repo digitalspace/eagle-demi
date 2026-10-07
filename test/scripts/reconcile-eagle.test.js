@@ -204,10 +204,11 @@ function updatesDrift() {
 }
 
 test('parseArgs', async (t) => {
-  await t.test('takes --json, --comments, --engage and --drop-orphans', () => {
-    const base = { json: false, comments: false, engage: false, dropOrphans: false };
+  await t.test('takes --json, --comments, --engage, --drop-orphans and --store', () => {
+    const base = { json: false, comments: false, engage: false, dropOrphans: false, store: false };
     assert.deepStrictEqual(parseArgs([]), base);
     assert.deepStrictEqual(parseArgs(['--json']), { ...base, json: true });
+    assert.deepStrictEqual(parseArgs(['--store']), { ...base, store: true });
     assert.deepStrictEqual(parseArgs(['--comments']), { ...base, comments: true });
     assert.deepStrictEqual(parseArgs(['--engage']), { ...base, engage: true });
     // The delete flag IMPLIES the sweep: there is nothing to drop without one, and a
@@ -907,6 +908,225 @@ test('run passes --json through to the report', async (t) => {
 
   assert.ok(lines.some(line => line.includes('"eagleOnly"')),
     '--json is the only way to get the full id sets, and the CLI still passes it');
+});
+
+/**
+ * The drift classes. Fixture ids here are real ObjectIds, because a parent ref that is not one is
+ * a malformed ref the push refuses, and so classes as an orphan.
+ *
+ * Eagle publishes PUB and PUB_UNMIRRORED. DEMI holds PUB and HIDDEN (Eagle no longer publishes
+ * it) plus a Track row Eagle never had. Track holds nothing, so no ref resolves through it.
+ */
+const oid = n => n.toString(16).padStart(24, '0');
+const PUB = oid(1);
+const HIDDEN = oid(2);
+const ABSENT = oid(3);
+const PUB_UNMIRRORED = oid(4);
+// Not an ObjectId, so the push refuses it, even though a DEMI row carries it as its eagleId.
+const BAD_REF = 'not-an-object-id';
+const DOC = { missed: oid(10), underHidden: oid(11), underGone: oid(12), noRef: oid(13),
+  badRef: oid(14), underUnmirrored: oid(15) };
+
+function classDeps({ docs = [
+  { _id: DOC.missed, project: PUB }, { _id: DOC.underHidden, project: HIDDEN },
+  { _id: DOC.underGone, project: ABSENT }, { _id: DOC.noRef, project: null },
+  { _id: DOC.badRef, project: BAD_REF }, { _id: DOC.underUnmirrored, project: PUB_UNMIRRORED }
+], periods = [], sourcesOver = {}, over = {} } = {}) {
+  const projectRows = [
+    { id: `eagle-${PUB}`, eagleId: PUB, sourceSystem: 'eagle' },
+    { id: `eagle-${HIDDEN}`, eagleId: HIDDEN, sourceSystem: 'eagle' },
+    { id: '354', eagleId: oid(99), sourceSystem: 'track' },
+    { id: `eagle-${BAD_REF}`, eagleId: BAD_REF, sourceSystem: 'eagle' }
+  ];
+  return makeDeps({
+    sources: stubSources({
+      loadTrackProjects: () => [],
+      fetchEagleProjects: async () => [{ _id: PUB }, { _id: PUB_UNMIRRORED }],
+      streamEagleDocuments: async (onPage) => { await onPage(docs); return { count: docs.length, total: docs.length }; },
+      ...sourcesOver
+    }, { ...EAGLE_BY_DATASET, CommentPeriod: periods }),
+    projects: {
+      listWithEagleId: async () => projectRows,
+      countWithEagleId: async () => projectRows.length
+    },
+    documents: {
+      listSeededIds: async () => [],
+      countSeededIds: async () => 0,
+      countParentFieldsPending: async () => 0
+    },
+    ...over
+  });
+}
+
+test('every drifted id is classed by what its parent ref names', async (t) => {
+  const classesOf = async () => (await reconcile([], classDeps())).classes;
+
+  await t.test('a document whose project row DEMI holds is a retryable push miss', async () => {
+    const { documents } = await classesOf();
+    assert.deepStrictEqual(documents['push-missed-parent-in-demi'], [DOC.missed]);
+  });
+
+  await t.test('a document under a project DEMI holds but Eagle does not publish is parent-not-public', async () => {
+    const { documents } = await classesOf();
+    assert.deepStrictEqual(documents['parent-not-public'], [DOC.underHidden]);
+  });
+
+  await t.test('a document whose project is in none of Eagle, DEMI or Track is an orphan, as is an empty or malformed ref', async () => {
+    const { documents } = await classesOf();
+    assert.deepStrictEqual(documents['orphan-parent-missing-in-eagle'].sort(),
+      [DOC.underGone, DOC.noRef, DOC.badRef].sort());
+  });
+
+  // Its parent is itself drift, so re-pushing the child alone would be refused again.
+  await t.test('a document whose published project DEMI never mirrored is a plain push miss', async () => {
+    const { documents } = await classesOf();
+    assert.deepStrictEqual(documents['push-missed'], [DOC.underUnmirrored]);
+  });
+
+  await t.test('a Track-sourced project gone from Eagle is demi-only', async () => {
+    const { projects } = await classesOf();
+    assert.deepStrictEqual(projects['demi-only'], ['354']);
+  });
+
+  await t.test('the classes leave the alert line as it was', async () => {
+    const plain = await reconcile([], makeDeps());
+    assert.ok(plain.classes, 'the existing fixtures are classed too');
+    assert.strictEqual(/drift=([0-9]+)/.exec(summaryLine(plain))[1], '5');
+  });
+});
+
+test('run logs the classes on their own line, which the alert cannot match', async (t) => {
+  const lines = [];
+  t.mock.method(logger, 'info', (message) => { lines.push(message); });
+
+  await run({ deps: classDeps() });
+
+  const line = lines.find(l => l.startsWith('[reconcile] classes '));
+  assert.ok(line, lines.join('\n'));
+  assert.match(line, /documents: .*orphan-parent-missing-in-eagle=3/);
+  assert.ok(!line.includes('[reconcile] projects') && !line.includes('drift='),
+    'the alert matches "[reconcile] projects" and reads drift=; this line must trip neither');
+});
+
+/**
+ * Comment classes under `--comments`. DEMI mirrors one period, under PUB, and one of its two
+ * comments. Eagle also publishes a period under ABSENT (in no system) and one under HIDDEN (DEMI
+ * holds the project, Eagle does not publish it): the mirror resolves neither period, so their
+ * comments class by the period's own project ref.
+ */
+const CP = { pub: oid(20), underGone: oid(21), underHidden: oid(22) };
+const COMMENT = { mirrored: oid(30), missed: oid(31), underGone: oid(32), underHidden: oid(33) };
+
+function commentClassDeps() {
+  const eagleComments = {
+    [CP.pub]: [{ _id: COMMENT.mirrored }, { _id: COMMENT.missed }],
+    [CP.underGone]: [{ _id: COMMENT.underGone }],
+    [CP.underHidden]: [{ _id: COMMENT.underHidden }]
+  };
+  return classDeps({
+    periods: [{ _id: CP.pub, project: PUB }, { _id: CP.underGone, project: ABSENT },
+      { _id: CP.underHidden, project: HIDDEN }],
+    sourcesOver: {
+      fetchJsonWithHeaders: async (url) => {
+        const body = eagleComments[new URL(url).searchParams.get('period')] || [];
+        return { body, headers: new Headers({ 'x-total-count': String(body.length) }) };
+      }
+    },
+    over: {
+      commentPeriods: {
+        listEveryByProject: async (projectId) =>
+          (projectId === `eagle-${PUB}` ? [{ id: CP.pub, projectId }] : [])
+      },
+      comments: {
+        listEveryByPeriod: async (periodId) => (periodId === CP.pub ? [{ id: COMMENT.mirrored }] : [])
+      }
+    }
+  });
+}
+
+test('--comments classes each drifted comment by the parent its period resolves to', async (t) => {
+  const classesOf = async () => (await reconcile(['--comments'], commentClassDeps())).classes.comments;
+
+  await t.test('a comment under an unresolved period whose project is in no system is an orphan', async () => {
+    const comments = await classesOf();
+    assert.deepStrictEqual(comments['orphan-parent-missing-in-eagle'], [COMMENT.underGone]);
+  });
+
+  await t.test('a comment under an unresolved period whose project Eagle does not publish is parent-not-public', async () => {
+    const comments = await classesOf();
+    assert.deepStrictEqual(comments['parent-not-public'], [COMMENT.underHidden]);
+  });
+
+  await t.test('a comment missing under a period DEMI holds is a retryable push miss', async () => {
+    const comments = await classesOf();
+    assert.deepStrictEqual(comments['push-missed-parent-in-demi'], [COMMENT.missed]);
+  });
+});
+
+test('run --store', async (t) => {
+  const quiet = () => t.mock.method(logger, 'info', () => {});
+  const recordingCache = (put = async () => {}) => {
+    const puts = [];
+    return { puts, put: async (id, doc) => { puts.push({ id, doc }); return put(id, doc); } };
+  };
+
+  await t.test('writes one report row holding each class count and its ids', async () => {
+    quiet();
+    const cacheDouble = recordingCache();
+    await run({ store: true, deps: { ...classDeps(), cache: cacheDouble } });
+
+    assert.strictEqual(cacheDouble.puts.length, 1);
+    const [{ id, doc }] = cacheDouble.puts;
+    assert.strictEqual(id, 'reconcile-report');
+    assert.ok(!Number.isNaN(Date.parse(doc.body.ranAt)));
+    assert.strictEqual(doc.body.documents.counts['orphan-parent-missing-in-eagle'], 3);
+    assert.deepStrictEqual(doc.body.documents.ids['push-missed-parent-in-demi'], [DOC.missed]);
+    assert.strictEqual(doc.body.documents.truncated, false);
+  });
+
+  await t.test('keeps at most 200 ids per class, and says so, while the count stays whole', async () => {
+    quiet();
+    const docs = Array.from({ length: 201 }, (_, i) => ({ _id: oid(1000 + i), project: PUB }));
+    const cacheDouble = recordingCache();
+    await run({ store: true, deps: { ...classDeps({ docs }), cache: cacheDouble } });
+
+    const { documents } = cacheDouble.puts[0].doc.body;
+    assert.strictEqual(documents.counts['push-missed-parent-in-demi'], 201);
+    assert.strictEqual(documents.ids['push-missed-parent-in-demi'].length, 200);
+    assert.strictEqual(documents.truncated, true);
+  });
+
+  await t.test('keeps exactly 200 ids whole, with no truncation flag', async () => {
+    quiet();
+    const docs = Array.from({ length: 200 }, (_, i) => ({ _id: oid(1000 + i), project: PUB }));
+    const cacheDouble = recordingCache();
+    await run({ store: true, deps: { ...classDeps({ docs }), cache: cacheDouble } });
+
+    const { documents } = cacheDouble.puts[0].doc.body;
+    assert.strictEqual(documents.ids['push-missed-parent-in-demi'].length, 200);
+    assert.strictEqual(documents.truncated, false);
+  });
+
+  await t.test('a failed write is logged and the run still resolves', async () => {
+    quiet();
+    const errors = [];
+    t.mock.method(logger, 'error', (message, meta) => { errors.push({ message, meta }); });
+    const cacheDouble = recordingCache(async () => { throw new Error('cosmos unavailable'); });
+
+    const summary = await run({ store: true, deps: { ...classDeps(), cache: cacheDouble } });
+
+    assert.ok(summary.classes, 'the run resolved with its summary');
+    assert.strictEqual(errors.length, 1);
+    assert.match(errors[0].message, /\[reconcile\] report store failed/);
+    assert.strictEqual(errors[0].meta.error, 'cosmos unavailable');
+  });
+
+  await t.test('without it, nothing is written', async () => {
+    quiet();
+    const cacheDouble = recordingCache();
+    await run({ deps: { ...classDeps(), cache: cacheDouble } });
+    assert.strictEqual(cacheDouble.puts.length, 0);
+  });
 });
 
 /**

@@ -266,6 +266,7 @@ ceiling to `n` for the run — the operator asserting the loss really is that bi
 ```bash
 node src/scripts/reconcile-eagle.js            # --json for the full id sets
 node src/scripts/reconcile-eagle.js --comments # and sweep the comments container
+node src/scripts/reconcile-eagle.js --store    # and save the class report for GET /api/admin/reconcile
 ```
 
 The drift check for the Eagle push, without a re-seed: DEMI rows gone from Eagle's public search
@@ -312,6 +313,14 @@ eagle-test, so a nightly diff there would report the gap between two unrelated c
 hand in test with `EAGLE_API_BASE` overridden instead. Unset, no timer is registered at all. The
 alert `demi-reconcile-drift-prod` reads the line out of `AppTraces` hourly and mails the DEMI action
 group whenever `drift=` is over 0; a night the job never runs writes no line and raises nothing.
+
+A second line, `[reconcile] classes ...`, counts each drifted id under the class that most likely
+explains it, using `classify` from `src/scripts/parity-map.js`. For example, a missing child whose
+parent DEMI holds is `push-missed-parent-in-demi`, and one whose parent ref is empty or names a row
+in neither Eagle, DEMI nor Track is `orphan-parent-missing-in-eagle`. The alert does not read this
+line. With `--store`, which the timer passes, the run also saves the counts and up to 200 ids per
+class as one row in the `config` container, read back with `GET /api/admin/reconcile`. A failed
+save is logged and the run still finishes. Nothing is fixed automatically.
 
 ### Parity with eagle-api
 

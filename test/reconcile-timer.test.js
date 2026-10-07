@@ -55,17 +55,19 @@ test('the handler runs the reconcile', async (t) => {
 
   const script = require.resolve('../src/scripts/reconcile-eagle');
   const cached = require.cache[script];
-  let ran = 0;
+  const calls = [];
   require.cache[script] = {
     id: script,
     filename: script,
     loaded: true,
-    exports: { run: async () => { ran++; return { drift: 0 }; } }
+    exports: { run: async (opts) => { calls.push(opts); return { drift: 0 }; } }
   };
   t.after(() => { require.cache[script] = cached; });
 
   await index.reconcileEagle();
-  assert.strictEqual(ran, 1, 'the timer must call run(), which is what logs the alert line');
+  assert.strictEqual(calls.length, 1, 'the timer must call run(), which is what logs the alert line');
+  assert.strictEqual(calls[0].store, true,
+    'the nightly run is what GET /admin/reconcile serves, so it must store its report');
 });
 
 test('a failing reconcile is logged and does not throw at the host', async (t) => {
