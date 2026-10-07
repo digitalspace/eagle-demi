@@ -28,7 +28,7 @@ const {
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
-const { admitParent } = require('../../helpers/parent-admit');
+const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { writeGuarded } = require('../../helpers/etag-write');
 const {
@@ -1176,7 +1176,9 @@ exports.upsertFromEagle = async (req, res) => {
     // seed makes (`seed-nosql.js:documentAdmission`) and the period mirror makes.
     const parent = await admitParent(doc.project, { childId: eagleId });
     if (!parent) {
-      return res.status(404).json({ error: 'Parent project or notification not found' });
+      return res.status(404).json({
+        error: 'Parent project or notification not found', code: refusalCode(doc.project)
+      });
     }
 
     // Unfiltered: a gated read misses a sealed or read-less row, and a create over it never lands.

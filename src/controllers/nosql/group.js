@@ -13,7 +13,7 @@ const groups = require('../../repositories/groups');
 const { eagleReadUnder } = require('../../seed/transform');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
-const { admitParent } = require('../../helpers/parent-admit');
+const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict, underDeleteCeiling, refId
 } = require('./eagle-mirror');
@@ -72,7 +72,9 @@ exports.upsertFromEagle = async (req, res) => {
     const { eagleId, doc, pushedAt } = push;
 
     const written = await mirrorFromEagle(eagleId, doc, { pushedAt });
-    if (!written) return res.status(404).json({ error: 'Parent project not found' });
+    if (!written) {
+      return res.status(404).json({ error: 'Parent project not found', code: refusalCode(doc.project) });
+    }
     if (written.status === 'conflict') return pushConflict(res, { label: LABEL, eagleId });
     const { saved, existing, ignored } = written;
     if (ignored) {

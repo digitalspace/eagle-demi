@@ -22,7 +22,7 @@ const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
 const { logger } = require('../../src/utils/logger');
 const {
-  admitParent, pickParent, MALFORMED_REF, NO_REF, CLASSIFY_TIMEOUT_MS
+  admitParent, pickParent, refusalCode, MALFORMED_REF, NO_REF, CLASSIFY_TIMEOUT_MS
 } = require('../../src/helpers/parent-admit');
 
 // Track 353's epic_guid on test, 2026-09-08: a ProjectNotification _id in a project's guid field.
@@ -119,6 +119,18 @@ test('admitParent — both containers are read for every ref', async (t) => {
     const noRef = { childId: null, project: NO_REF, notification: NO_REF };
     assert.deepStrictEqual({ reads, warned }, { reads: 0, warned: [noRef, noRef] });
   });
+});
+
+// eagle-api waits for a missing parent and gives up on a bad ref, so the two codes must not blur.
+test('refusalCode — a well-formed ref is PARENT_NOT_FOUND, populated or bare', () => {
+  assert.strictEqual(refusalCode(PROJECT_EAGLE_ID), 'PARENT_NOT_FOUND');
+  assert.strictEqual(refusalCode({ _id: PROJECT_EAGLE_ID, name: 'Sunny Ridge Quarry' }), 'PARENT_NOT_FOUND');
+});
+
+test('refusalCode — a malformed or absent ref is PARENT_REF_INVALID', () => {
+  assert.strictEqual(refusalCode('not-an-object-id'), 'PARENT_REF_INVALID');
+  assert.strictEqual(refusalCode(null), 'PARENT_REF_INVALID');
+  assert.strictEqual(refusalCode(''), 'PARENT_REF_INVALID');
 });
 
 /** Stub both admission reads and the refusal read; return what was warned and what was read. */

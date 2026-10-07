@@ -38,7 +38,7 @@ const comments = require('../../repositories/comments');
 // The widest a deleted period may be stored at, and the ceiling the cascade later re-derives it
 // under: one value, so the two cannot drift apart.
 const { constrainToProject, DELETED_CEILING } = require('../../repositories/documents');
-const { admitParent } = require('../../helpers/parent-admit');
+const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const { seedAcl, eagleReadUnder } = require('../../seed/transform');
 const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
@@ -212,7 +212,9 @@ exports.upsertFromEagle = async (req, res) => {
 
     const mirrored = await mirrorFromEagle(eagleId, doc, undefined, { pushedAt });
     if (!mirrored) {
-      return res.status(404).json({ error: 'Parent project or notification not found' });
+      return res.status(404).json({
+        error: 'Parent project or notification not found', code: refusalCode(doc.project)
+      });
     }
     if (mirrored.status === 'conflict') {
       return pushConflict(res, { label: 'Comment Period Controller', eagleId });
