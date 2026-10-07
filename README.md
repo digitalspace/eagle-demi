@@ -981,8 +981,8 @@ schedule in `PDF_TITLE_SCHEDULE` it runs `pdf-title/run.py`, which takes PDFs wi
 the API's work list and sets one. It is a dry run, listing the work and writing nothing, unless
 `PDF_TITLE_LIVE` is `true`.
 
-On test the app is not yet deployed. Prod has no worker: `azure/main.prod.bicepparam` sets neither
-`deployPdfTitleWorker` nor the secret name.
+On test, `azure/main.test.bicepparam` enables it as a dry run (`pdfTitleLive = false`). Prod has
+no worker: `azure/main.prod.bicepparam` sets neither `deployPdfTitleWorker` nor the secret name.
 
 - Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflow:
   `.github/workflows/azure-deploy-staging-pdf-title.yaml`.
@@ -1018,8 +1018,13 @@ curl -sS -X POST "$DEMI_API/admin/api-keys" -H "X-Api-Key: $DEMI_KEY" \
   -d '{"name":"pdf-title-worker <env>","roles":["demi-service-write"],"allowWrite":true}' \
   | jq -j .key \
   | az keyvault secret set --vault-name demi-kv-<env> --name pdf-title-worker-api-key \
-      --file /dev/stdin --encoding utf-8 --query attributes.enabled -o tsv
+      --file /dev/stdin --encoding utf-8 --content-type text/plain \
+      --expires "$(date -u -d '+89 days' +%Y-%m-%dT%H:%M:%SZ)" \
+      --query attributes.enabled -o tsv
 ```
+
+The landing-zone policy `Enforce-GR-KeyVault` refuses a secret with no content type or no expiry
+date, so the command sets both.
 
 The key must be stored without a trailing newline, which `jq -j` guarantees; a newline in the
 secret breaks the worker's `X-Api-Key` header.
