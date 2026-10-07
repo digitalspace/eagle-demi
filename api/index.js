@@ -222,7 +222,7 @@ async function announceUpdates() {
 async function reconcileEagle() {
   const { logger } = require('../src/utils/logger');
   try {
-    await require('../src/scripts/reconcile-eagle').run();
+    await require('../src/scripts/reconcile-eagle').run({ store: true });
   } catch (err) {
     logger.error('[reconcile] nightly run failed', { error: err.message, stack: err.stack });
   }

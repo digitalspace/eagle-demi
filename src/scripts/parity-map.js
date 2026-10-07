@@ -182,8 +182,10 @@ const KNOWN_DIFFERENCES = [
  * @param {string} [ctx.field]       fieldDiff only, with ctx.eagleValue and ctx.demiValue
  * @param {Set}    [ctx.eaglePublicProjects] ids Eagle lists publicly
  * @param {Object<string, Set>} [ctx.knownIds] class name -> ids, for `ids: true` classes
- * @param {string|null} [ctx.parentState] in-demi, not-public, missing-in-eagle, or null for a row
- *   with no parent. Undefined (field-level parity) leaves an unmatched difference unexplained.
+ * @param {string|null} [ctx.parentState] in-demi, not-public, missing-in-eagle, missing-in-demi
+ *   (parent resolves in Eagle or Track but DEMI holds no row; falls through to push-missed), or
+ *   null for a row with no parent. Undefined (field-level parity) leaves an unmatched difference
+ *   unexplained.
  * @returns {string|null} class name; null when unexplained
  */
 function classify(ctx) {

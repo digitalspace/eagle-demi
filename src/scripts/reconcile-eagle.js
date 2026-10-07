@@ -10,10 +10,11 @@
  * equally be one Eagle merely unpublished, and eagle-api gives an anonymous caller no way to tell
  * the two apart (see `unpublishedOrDeleted` below), so there is nothing here it is safe to delete.
  *
- *   node src/scripts/reconcile-eagle.js [--json] [--comments] [--engage] [--drop-orphans]
+ *   node src/scripts/reconcile-eagle.js [--json] [--comments] [--engage] [--drop-orphans] [--store]
  *
- * `--drop-orphans` IS THE ONE THING HERE THAT WRITES. Everything else above still holds; see
- * `engageOrphans` for what it deletes and why that one set is safe when no other is.
+ * `--drop-orphans` IS THE ONE THING HERE THAT WRITES DATA. Everything else above still holds; see
+ * `engageOrphans` for what it deletes and why that one set is safe when no other is. `--store`
+ * writes only the run's own report row (`cache.RECONCILE_REPORT_ID`), served by GET /admin/reconcile.
  *
  * It covers the containers the Eagle push and the backfill write: projects, documents, comment
  * periods, lists (both kinds), notifications, updates, and — only with `--comments`, which costs
@@ -51,6 +52,9 @@ const { seedAcl, eagleReadUnder } = require('../seed/transform');
 const { readUnder } = require('../helpers/update-parent');
 const { eachCommentPage } = require('./seed-public-reads');
 const { systemAccess, levelOfRead, SECURE_ROLES } = require('../helpers/access-sql');
+const { eagleRef } = require('../helpers/parent-admit');
+const cache = require('../repositories/cache');
+const { classify } = require('./parity-map');
 const { logger } = require('../utils/logger');
 
 /** The containers reported, in the order `report` prints them and `summaryLine` names them. */
@@ -79,9 +83,10 @@ const ENGAGE_API_BASE = process.env.ENGAGE_API_BASE || '';
 const ENGAGE_TIMEOUT_MS = parseInt(process.env.ENGAGE_TIMEOUT_MS || '15000', 10);
 
 function parseArgs(argv) {
-  const args = { json: false, comments: false, engage: false, dropOrphans: false };
+  const args = { json: false, comments: false, engage: false, dropOrphans: false, store: false };
   for (const a of argv) {
     if (a === '--json') args.json = true;
+    else if (a === '--store') args.store = true;
     else if (a === '--comments') args.comments = true;
     else if (a === '--engage') args.engage = true;
     // The destructive half, and it implies the sweep: there is nothing to drop without one.
@@ -406,6 +411,69 @@ async function eagleIds(src, dataset, into = new Set(), onRow) {
   return into;
 }
 
+/** Ids the stored report keeps per class; its counts stay whole. */
+const STORED_IDS_PER_CLASS = 200;
+
+/**
+ * Every drifted id of one container, grouped by the parity-map class that explains it. A class
+ * names a likely cause and nothing acts on it.
+ *
+ * @param {object} s  one container's section: the four id sets `diff` returns
+ * @param {object} opts
+ * @param {string|function} opts.dataset  Eagle _schemaName, or row -> it when the container mixes two
+ * @param {function} opts.eagleRowOf   Eagle id -> the Eagle row (a CommentPeriod's carries `project`)
+ * @param {function} [opts.eagleParent] Eagle id -> parentState; default null, a row with no parent
+ * @param {function} [opts.demiParent]  DEMI row -> parentState; default null
+ * @returns {Object<string, string[]>} class name -> ids
+ */
+function driftClasses(s, { dataset, eagleRowOf, eagleParent = () => null, demiParent = () => null }) {
+  const datasetOf = typeof dataset === 'function' ? dataset : () => dataset;
+  const out = {};
+  const add = (ctx) => {
+    const name = classify({ identity: 'anonymous', dataset: datasetOf(ctx.eagle || ctx.demi), ...ctx });
+    (out[name] = out[name] || []).push(ctx.id);
+  };
+  const missing = [...s.eagleOnly, ...s.unresolvedParent].map(id => ({ id, eagle: eagleRowOf(id) }));
+  const missingRows = missing.map(m => m.eagle);
+  for (const { id, eagle } of missing) {
+    add({ kind: 'missingInDemi', id, eagle, unpaired: s.unpublishedOrDeleted, parentState: eagleParent(id) });
+  }
+  for (const row of s.unpublishedOrDeleted) {
+    add({ kind: 'extraInDemi', id: String(row.id), demi: row, unpaired: missingRows,
+      parentState: demiParent(row) });
+  }
+  // Keyed by their Track id, which is what `demi-only` tells apart from an Eagle id.
+  for (const row of s.trackOnly) {
+    add({ kind: 'extraInDemi', id: String(row.id), demi: row, unpaired: missingRows, byEagleId: true,
+      parentState: null });
+  }
+  return out;
+}
+
+/** The second log line: per container, how many drifted ids each class holds. */
+function classesLine(summary) {
+  const parts = Object.entries(summary.classes)
+    .filter(([, classes]) => Object.keys(classes).length)
+    .map(([label, classes]) => `${label}: ` +
+      Object.keys(classes).sort().map(name => `${name}=${classes[name].length}`).join(' '));
+  return `[reconcile] classes ${parts.join(' ') || 'none'}`;
+}
+
+/** The row `--store` writes: per container, every class's count and at most 200 of its ids. */
+function storedReport(summary, ranAt) {
+  const out = { ranAt };
+  for (const [label, classes] of Object.entries(summary.classes)) {
+    const section = { counts: {}, ids: {}, truncated: false };
+    for (const [name, ids] of Object.entries(classes)) {
+      section.counts[name] = ids.length;
+      section.ids[name] = ids.slice(0, STORED_IDS_PER_CLASS);
+      if (ids.length > STORED_IDS_PER_CLASS) section.truncated = true;
+    }
+    out[label] = section;
+  }
+  return out;
+}
+
 /**
  * @param {string[]} argv
  * @param {object} [deps] test seam: {sources, projects, documents, commentPeriods, comments,
@@ -434,12 +502,16 @@ async function reconcile(argv = [], deps = {}) {
   const noteRead = (row) => {
     if (Array.isArray(row.read) && row.read.length) eagleRead.set(String(row._id), row.read);
   };
+  // Eagle id -> its row, for the drift classes. Every dataset but documents, which are too many to hold.
+  const eagleRows = new Map();
+  const keep = (row) => { noteRead(row); eagleRows.set(String(row._id), row); };
+  const keepAs = dataset => row => keep({ ...row, _schemaName: dataset });
 
   // Eagle first: `fetchAllPages` throws when a fetch falls short of the reported
   // `searchResultsTotal`, so a truncated read can never be mistaken for a shrunken corpus.
   const eagleProjects = await src.fetchEagleProjects();
   const eagleProjectIds = new Set(eagleProjects.map(p => String(p._id)));
-  eagleProjects.forEach(noteRead);
+  eagleProjects.forEach(keep);
   // The registry seed-nosql builds. A Track row's dangling epic_guid resolves here exactly as it
   // does there, which is why this and not `eagleProjectIds` is the parent test: DEMI holds a
   // project row for such a guid, so a child under one is drift rather than unresolvable.
@@ -514,16 +586,16 @@ async function reconcile(argv = [], deps = {}) {
 
   // One `lists` container holds both kinds, so both id sets are one comparison.
   const eagleListIds = await eagleIds(src, 'Organization',
-    await eagleIds(src, 'List', new Set(), noteRead), noteRead);
+    await eagleIds(src, 'List', new Set(), keepAs('List')), keepAs('Organization'));
   // The period's own parent ref rides along: it is the only thing that says whether the mirror
   // could have resolved a parent for it.
   const eaglePeriodProject = new Map(); // period id -> its Eagle parent ref
   const eaglePeriodIds = await eagleIds(src, 'CommentPeriod', new Set(), row => {
     eaglePeriodProject.set(String(row._id), row.project != null ? String(row.project) : null);
-    noteRead(row);
+    keep(row);
   });
-  const eagleNotificationIds = await eagleIds(src, 'ProjectNotification', new Set(), noteRead);
-  const eagleUpdateIds = await eagleIds(src, 'RecentActivity', new Set(), noteRead);
+  const eagleNotificationIds = await eagleIds(src, 'ProjectNotification', new Set(), keep);
+  const eagleUpdateIds = await eagleIds(src, 'RecentActivity', new Set(), keep);
 
   // Rows that ARE mirrored, under a parent the admission rule would not choose. Nothing above sees
   // these: they are in both Eagle and DEMI, so every id-set diff reads them as clean. They are the
@@ -590,6 +662,34 @@ async function reconcile(argv = [], deps = {}) {
     ['commentPeriods', periodRows, async () => periodCount]
   ]));
 
+  // The parent a drifted child names, as the push would find it (states: parity-map `classify`).
+  const demiParentIds = new Set(periodParents.map(row => String(row.id)));
+  const demiEagleIds = new Set(periodParents.map(row => String(row.eagleId || row.id)));
+  const parentOfRef = (ref) => {
+    const id = eagleRef(ref);
+    if (!id) return 'missing-in-eagle';
+    const parent = admit(id);
+    if (parent !== null) return demiParentIds.has(parent) ? 'in-demi' : 'missing-in-demi';
+    return demiEagleIds.has(id) ? 'not-public' : 'missing-in-eagle';
+  };
+  const demiParentOf = row => (demiParentIds.has(String(row.projectId)) ? 'in-demi' : 'missing-in-eagle');
+  const eagleRowOf = id => eagleRows.get(id);
+  const child = (dataset, parentRefOf, demiParent = demiParentOf) => ({
+    dataset, eagleRowOf: id => eagleRows.get(id) || { _id: id, project: parentRefOf(id) },
+    eagleParent: id => parentOfRef(parentRefOf(id)), demiParent
+  });
+  summary.classes = {
+    projects: driftClasses(summary.projects, { dataset: 'Project', eagleRowOf }),
+    documents: driftClasses(summary.documents, child('Document', id => eagleDocumentProject.get(id))),
+    commentPeriods: driftClasses(summary.commentPeriods,
+      child('CommentPeriod', id => eaglePeriodProject.get(id))),
+    lists: driftClasses(summary.lists, { dataset: row => row.kind || row._schemaName, eagleRowOf }),
+    notifications: driftClasses(summary.notifications, { dataset: 'ProjectNotification', eagleRowOf }),
+    // An Update's DEMI `projectId` is its parent's Eagle id, so both sides resolve the same way.
+    updates: driftClasses(summary.updates, child('RecentActivity', id => (eagleRows.get(id) || {}).project,
+      row => parentOfRef(row.projectId)))
+  };
+
   // Comments are OPT-IN: the sweep costs one eagle-api round trip per comment period and two
   // single-partition Cosmos queries (read, COUNT) per period — too much for the nightly timer.
   if (args.comments) {
@@ -598,12 +698,12 @@ async function reconcile(argv = [], deps = {}) {
     // Comments under a period the mirror could not resolve. Walking DEMI's periods alone never
     // fetched them, so they were neither drift nor reported — a silent hole the size of the
     // unresolved-period set. They cost one round trip each, on a flag that is already opt-in.
-    const unresolvedComments = new Set();
+    const unresolvedComments = new Map(); // comment id -> its period id
     for (const periodId of summary.commentPeriods.unresolvedParent) {
       await eachCommentPage(periodId, { sources: src }, (items) => {
         for (const row of items) {
           eagleCommentIds.add(String(row._id));
-          unresolvedComments.add(String(row._id));
+          unresolvedComments.set(String(row._id), periodId);
           noteRead(row);
         }
       });
@@ -632,6 +732,13 @@ async function reconcile(argv = [], deps = {}) {
         row => periodReadOf.get(String(row.id)) || null)
     };
     summary.failures.push(...await truncated([['comments', commentRows, async () => commentCount]]));
+    // Every other comment was read under a period DEMI holds; an unresolved one's period is not
+    // mirrored, for the reason its own project ref gives.
+    summary.classes.comments = driftClasses(summary.comments, {
+      dataset: 'Comment', eagleRowOf: id => ({ _id: id }), demiParent: () => 'in-demi',
+      eagleParent: id => (unresolvedComments.has(id)
+        ? parentOfRef(eaglePeriodProject.get(unresolvedComments.get(id))) : 'in-demi')
+    });
   }
 
   summary.drift = driftOf(summary);
@@ -741,17 +848,19 @@ function report(summary, { json } = {}) {
 
 /**
  * One run, logging exactly what the CLI logs — the nightly schedule and the CLI must not be able
- * to produce different output, because the log alert matches only one of the two lines.
+ * to produce different output, because the log alert matches only one of its lines.
  *
  * `--drop-orphans` is the only mode that writes, and the nightly timer never passes it: a scheduled
  * job that deletes rows off a third party's answer is not something an alert can undo.
  *
  * @param {object} [opts] {json} full id sets, {comments} sweep the comment container too (one
  *   eagle-api round trip per comment period), {engage} resolve every `isMet` period's slug,
- *   {dropOrphans} delete the ones ENGAGE no longer holds, {deps} the test seam `reconcile` takes
+ *   {dropOrphans} delete the ones ENGAGE no longer holds, {store} upsert the class report for
+ *   GET /admin/reconcile, {deps} the test seam `reconcile` takes, plus `cache`
  */
 async function run({ json = false, comments: sweepComments = false, engage = false,
-  dropOrphans = false, deps } = {}) {
+  dropOrphans = false, store = false, deps } = {}) {
+  const ranAt = new Date().toISOString();
   const argv = [
     ...(sweepComments ? ['--comments'] : []),
     ...(dropOrphans ? ['--drop-orphans'] : engage ? ['--engage'] : [])
@@ -760,11 +869,21 @@ async function run({ json = false, comments: sweepComments = false, engage = fal
   logger.info(report(summary, { json }));
   // Its own record, so a log alert matches this line and not the report body around it.
   logger.info(summaryLine(summary));
+  logger.info(classesLine(summary));
+  if (store) {
+    // Logged, not thrown: the drift line is already out, and the timer reads a throw as a failed run.
+    try {
+      await ((deps && deps.cache) || cache).put(cache.RECONCILE_REPORT_ID,
+        { body: storedReport(summary, ranAt) });
+    } catch (err) {
+      logger.error('[reconcile] report store failed', { error: err.message, stack: err.stack });
+    }
+  }
   return summary;
 }
 
 module.exports = {
-  parseArgs, diff, aclMismatch, summaryLine, reconcile, report, run,
+  parseArgs, diff, aclMismatch, summaryLine, classesLine, reconcile, report, run,
   // Exported for the tests: the slug parse and the three-way ENGAGE answer are where a wrong call
   // turns into a deleted row, so both are asserted directly as well as through `reconcile`.
   slugOf, slugState, engageOrphans
@@ -783,7 +902,7 @@ if (require.main === module) {
   initCosmosClient();
 
   run({ json: args.json, comments: args.comments, engage: args.engage,
-    dropOrphans: args.dropOrphans })
+    dropOrphans: args.dropOrphans, store: args.store })
     .catch(err => {
       logger.error(`[reconcile] ${err.stack || err.message}`);
       process.exit(1);
