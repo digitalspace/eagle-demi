@@ -995,6 +995,11 @@ no worker: `azure/main.prod.bicepparam` sets neither `deployPdfTitleWorker` nor 
   minutes a run starts no new row; must be set and below 15), `PDF_TITLE_CONCURRENCY`. The bicep
   parameters are `pdfTitleLive`, `pdfTitleMaxRows`, `pdfTitleMaxMinutes` and `pdfTitleSchedule`.
 
+Backup gate: the API refuses every lease until `backupAccountName` is set for that environment
+(app setting `BACKUP_ACCOUNT`). Even then it grants a lease only when the document's original is in
+the `originals` container (`backupContainerName`, app setting `BACKUP_CONTAINER`), in Archive tier,
+with matching size and MD5. Prod stays unset until the prod backup is in place.
+
 **To enable it in an environment**, in that environment's param file:
 
 1. Set `deployPdfTitleWorker = true`. `apiFlexSubnetId` must also be set, because the worker reads

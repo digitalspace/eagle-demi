@@ -129,7 +129,11 @@ const WIRED = [
   ['analyticsWorkspaceCustomerId', /^\s+analyticsWorkspaceCustomerId: analyticsWorkspaceCustomerId$/m,
     'the API module call — without it GET /admin/audit never sees the rows written since the repoint'],
   ['searchDefinitionsQueue', /^\s+searchDefinitionsQueue: searchDefinitionsQueue$/m,
-    'the API module call — without it the app setting reads empty and the apply route answers 503']
+    'the API module call — without it the app setting reads empty and the apply route answers 503'],
+  ['backupAccountName', /^\s+backupAccountName: backupAccountName$/m,
+    'the API module call — without it BACKUP_ACCOUNT is empty and every PDF title lease is refused'],
+  ['backupContainerName', /^\s+backupContainerName: backupContainerName$/m,
+    'the API module call — without it BACKUP_CONTAINER is empty and every PDF title lease is refused']
 ];
 
 for (const [name, wiring, why] of WIRED) {
@@ -590,6 +594,34 @@ test('prod names neither the PDF title worker nor its vault secret', () => {
     'prod runs no PDF title worker; the default false keeps it off');
   assert.doesNotMatch(PROD_PARAMS, /'pdf-title-worker-api-key'/,
     'naming the secret prod never set makes the deploy check demand a credential prod does not use');
+});
+
+// The backup gate in src/helpers/backup-check.js reads BACKUP_ACCOUNT and BACKUP_CONTAINER and
+// refuses every PDF title lease when either is empty. Both settings must always be written, so an
+// environment with no backup reads empty rather than keeping a stale value.
+test('the API app always carries BACKUP_ACCOUNT and BACKUP_CONTAINER from its params', () => {
+  assert.match(API_MODULE, /^param backupAccountName string = ''$/m,
+    'the module default must be empty, which keeps the gate closed');
+  assert.match(API_MODULE, /name: 'BACKUP_ACCOUNT'\n\s+value: backupAccountName$/m,
+    'BACKUP_ACCOUNT must take the param as is, with no condition that drops the setting');
+  assert.match(API_MODULE, /name: 'BACKUP_CONTAINER'\n\s+value: backupContainerName$/m,
+    'BACKUP_CONTAINER must take the param as is, with no condition that drops the setting');
+  assert.match(MAIN, /^param backupContainerName string = 'originals'$/m,
+    'the container is the one document-backup.bicep creates and grants the API read on');
+});
+
+test('test names its backup account', () => {
+  const account = /^param backupAccountName = '([^']*)'$/m.exec(TEST_PARAMS);
+  assert.ok(account, 'test must state backupAccountName, or every PDF title lease is refused');
+  assert.match(account[1], /^eaglebaktest[a-z0-9]{1,12}$/,
+    'the name is the one document-backup.bicep gives the test account');
+});
+
+test('prod leaves the backup gate closed', () => {
+  assert.doesNotMatch(PROD_PARAMS, /backupAccountName/,
+    'prod has no backup yet; main.bicep\'s empty default makes BACKUP_ACCOUNT empty');
+  assert.match(MAIN, /^param backupAccountName string = ''$/m,
+    'the main.bicep default must be empty, or prod opens the gate without a backup');
 });
 
 // Reader links only where the link base serves /updates/:id (eagle-public's React line): test's

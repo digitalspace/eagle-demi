@@ -124,6 +124,12 @@ param eagleMirrorPrincipals string = 'apim:eagle-api'
 @description('Comma-separated registry row ids permitted on the PDF title worker routes.')
 param pdfTitleWorkerPrincipals string = ''
 
+@description('Storage account holding the Archive backup the PDF title writes are checked against. Empty keeps the gate closed.')
+param backupAccountName string = ''
+
+@description('Container in backupAccountName holding the backed-up originals. Empty keeps the gate closed.')
+param backupContainerName string = ''
+
 @description('Expected JWT aud claim. Empty disables audience verification.')
 param ssoAudience string = ''
 
@@ -862,6 +868,15 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'DEMI_PDF_TITLE_WORKER_PRINCIPALS'
           value: pdfTitleWorkerPrincipals
+        }
+        {
+          // Always present: an empty value makes the gate answer backup-unconfigured and refuse every lease.
+          name: 'BACKUP_ACCOUNT'
+          value: backupAccountName
+        }
+        {
+          name: 'BACKUP_CONTAINER'
+          value: backupContainerName
         }
         {
           name: 'SSO_ISSUER'
