@@ -990,8 +990,8 @@ schedule in `PDF_TITLE_SCHEDULE` it runs `pdf-title/run.py`, which takes PDFs wi
 the API's work list and sets one. It is a dry run, listing the work and writing nothing, unless
 `PDF_TITLE_LIVE` is `true`.
 
-On test, `azure/main.test.bicepparam` enables it live (`pdfTitleLive = true`); set it to `false` to list work and write nothing. Prod has
-no worker: `azure/main.prod.bicepparam` sets neither `deployPdfTitleWorker` nor the secret name.
+On test, `azure/main.test.bicepparam` enables it live (`pdfTitleLive = true`); set it to `false` to list work and write nothing. Prod
+deploys the worker with `pdfTitleLive = false` until the first live tick is verified.
 
 - Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflows:
   `.github/workflows/azure-deploy-staging-pdf-title.yaml` for test, and the `deploy-pdf-title` job
@@ -1008,7 +1008,7 @@ no worker: `azure/main.prod.bicepparam` sets neither `deployPdfTitleWorker` nor 
 Backup gate: the API refuses every lease until `backupAccountName` is set for that environment
 (app setting `BACKUP_ACCOUNT`). Even then it grants a lease only when the document's original is in
 the `originals` container (`backupContainerName`, app setting `BACKUP_CONTAINER`), in Archive tier,
-with matching size and MD5. Prod stays unset until the prod backup is in place.
+with matching size and MD5. Test and prod both set it.
 
 **To enable it in an environment**, in that environment's param file:
 
