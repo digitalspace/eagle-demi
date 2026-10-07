@@ -334,6 +334,12 @@ skipped. `group-members` pairs Eagle's member User rows with the member ids of D
 `inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element; it
 never calls Eagle's item route, which streams the file and records a download.
 
+eagle-api's project, document, comment period, organization and comment routes return only `_id`
+and `read` unless `fields` names the rest, so each of those reads sends `fields=a|b|c`: the fields
+it compares for the identity, plus `project` on comment periods. Pins and comments come back as
+`[{ total_items, results }]`; each page is unwrapped to its `results`. `recent-activity-top`
+compares Eagle's newest four with `dataset=RecentActivity&top=true&pageSize=4`.
+
 It only sends GET, at most two requests a second per API, and retries once on 429 or 5xx. It never
 calls Eagle's public download route, which counts hits. Keyword searches still send Eagle analytics
 events, and Eagle records a `Get` action for each `group-members` read.
@@ -352,6 +358,23 @@ when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI
 one read; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
 extra rows cannot be told from a partial slice. The `--report` file lists ids and field names of
 unexplained differences, never values.
+
+Values are compared after trimming strings; an empty list and an absent field both count as null.
+Three classes explain differences that come from how DEMI builds its rows:
+
+- `track-mastered`: a project field DEMI takes from Track (`TRACK_PRECEDENCE` in
+  `src/merge/project.js`: name, type, location, description and the rest) differs, DEMI's value is
+  not empty, and the DEMI row has a `trackProjectId`. In the BCGW file it covers `Project name`,
+  `Proponent`, `Type`, `Description`, `Latitude` and `Longitude`.
+- `list-id-other-env`: a `List` row is missing or extra, and the other side has an unpaired row
+  with the same name, type and legislation under another id.
+- `parent-not-public`: an anonymous comment period is missing in DEMI and its project is not in
+  Eagle's public project list. The list is read once per run; a `--max-pages` cut turns the class
+  off.
+
+Two DEMI limits affect anonymous runs. Anonymous `pageSize` is capped at 100, the page size this
+script sends. `dataset=Organization` ignores `and[_id]` for now, so `organization-public` and
+`organization` get the whole list from DEMI and count every other organization as extra.
 
 `--download-sample <n>` (default 0, off; needs a staff or sysadmin token) also downloads up to `n`
 documents both sides returned, plus `--id document` if given, through Eagle's protected

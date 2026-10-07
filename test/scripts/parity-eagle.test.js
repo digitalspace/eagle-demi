@@ -392,3 +392,180 @@ test('a member Eagle lists and the DEMI group lacks is unexplained and exits 1',
   assert.strictEqual(code, 1);
   assert.match(line, /match=1 missingInDemi=1 extraInDemi=0 .*unexplained=1/);
 });
+
+const eagleCall = (h, path) => h.calls.find(c => c.host === 'eagle.test' && c.url.pathname === `/api${path}`);
+/** Eagle answers `byPath[path]` (a plain array) and DEMI `demiBody`. */
+const restSides = (byPath, demiBody) => (host, url) => (host === 'eagle.test'
+  ? json(byPath[url.pathname.replace(/^\/api/, '')] || [])
+  : json(demiBody));
+
+test('each Eagle REST read asks for its own compared fields, pipe-joined, per identity', async () => {
+  const anon = harness(restSides({ [`/public/project/${A}`]: [project(A)] }, project(A)));
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'project-public', '--id', `project=${A}`], anon.deps);
+  assert.strictEqual(eagleCall(anon, `/public/project/${A}`).url.searchParams.get('fields'),
+    'name|sector|region|type|location|review180Start|review45Start|reviewSuspensions|reviewExtensions');
+  assert.ok(!anon.calls.some(c => c.host === 'demi.test' && c.url.searchParams.has('fields')), 'DEMI gets no fields');
+
+  const staffRun = harness(restSides({ [`/project/${A}`]: [project(A)] }, project(A)), { env: { PARITY_TOKEN: TOKEN } });
+  await run([...staff, '--only', 'project', '--id', `project=${A}`], staffRun.deps);
+  const staffFields = eagleCall(staffRun, `/project/${A}`).url.searchParams.get('fields').split('|');
+  assert.ok(staffFields.includes('CELead') && staffFields.includes('directoryStructure'));
+  assert.ok(!staffFields.includes('review180Start'));
+
+  const period = harness(restSides({ [`/public/commentperiod/${B}`]: [] }, searchBody([])));
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'commentperiod-public', '--id', `period=${B}`], period.deps);
+  assert.strictEqual(eagleCall(period, `/public/commentperiod/${B}`).url.searchParams.get('fields'),
+    'dateStarted|dateCompleted|instructions|project');
+});
+
+test('every Eagle project, document, comment period, organization and comment REST read sends fields', () => {
+  const unfielded = PARITY_MAP
+    .filter(e => !e.skip && !e.download && !e.format &&
+      /^\/(public\/)?(project|document|commentperiod|organization|comment)(\/:[a-z]+)?$/.test(e.eagle.path))
+    .filter(e => !e.eagle.fields)
+    .map(e => e.read);
+  assert.deepStrictEqual(unfielded, []);
+});
+
+/** Eagle's count facet. */
+const facet = (rows, total = rows.length) => [{ total_items: total, results: rows, read: ['public'] }];
+
+test('Eagle pins in a count facet pair with the DEMI project pins', async () => {
+  const pin = id => ({ _id: id, name: 'Nation', province: 'BC' });
+  const h = harness((host) => (host === 'eagle.test'
+    ? json(facet([pin(A), pin(B)]))
+    : json({ id: 'p1', eagleId: A, pins: [pin(B), pin(A)] })));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'pins-public', '--id', `project=${A}`], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /pins-public identity=anonymous match=2 missingInDemi=0 extraInDemi=0 .*unexplained=0/);
+});
+
+test('a comment list in count facets is read page by page to its total', async () => {
+  const ids = Array.from({ length: 250 }, (_, i) => i.toString(16).padStart(24, '0'));
+  const comment = id => ({ _id: id, commentId: 1, comment: 'ok', dateAdded: '2026-10-01T00:00:00.000Z',
+    location: 'BC', isAnonymous: true });
+  const h = harness((host, url) => {
+    const page = Number(url.searchParams.get('pageNum'));
+    const rows = ids.slice(page * 100, page * 100 + 100).map(comment);
+    return json(host === 'eagle.test' ? facet(rows, ids.length) : searchBody(rows, ids.length));
+  });
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'comment-list-public', '--id', `period=${A}`], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /match=250 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+  assert.strictEqual(h.calls.filter(c => c.host === 'eagle.test').length, 3);
+});
+
+test("recent activity compares Eagle's top 4 with DEMI's RecentActivity top page of 4", async () => {
+  const activity = { _id: A, headline: 'News', dateAdded: '2026-10-01T00:00:00.000Z' };
+  const h = harness((host) => json(host === 'eagle.test' ? [activity] : searchBody([activity])));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'recent-activity-top'], h.deps);
+  assert.strictEqual(code, 0);
+  const demiQuery = Object.fromEntries(h.calls.find(c => c.host === 'demi.test').url.searchParams);
+  assert.deepStrictEqual(demiQuery, { dataset: 'RecentActivity', top: 'true', pageSize: '4' });
+});
+
+test('values equal but for surrounding spaces, or an empty list against none, match', async () => {
+  const h = harness(searchSides({
+    eagle: [project(A, { name: 'Mine ', reviewSuspensions: [] })],
+    demi: [project(A, { name: ' Mine' })]
+  }));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /match=1 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+});
+
+test('a list with values against none still differs', async () => {
+  const h = harness(searchSides({ eagle: [project(A, { reviewSuspensions: ['2020-01-01'] })], demi: [project(A)] }));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], /fieldDiff=1 unexplained=1/);
+});
+
+test('an organization city and province only DEMI shows are public-field differences, counted once', async () => {
+  const org = (extra = {}) => ({ _id: A, name: 'Org', companyType: 'Proponent', ...extra });
+  const h = harness(searchSides({ eagle: [org()], demi: [org({ city: 'Victoria', province: 'BC' })] }));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Organization-public'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /fieldDiff=2 unexplained=0 known=public-field-difference:2/);
+});
+
+const trackRun = async (demiExtra) => {
+  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A, { trackProjectId: 12, ...demiExtra })] }));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
+  return { code, line: h.out[0] };
+};
+
+test('a Track-mastered project field DEMI fills differently is counted as track-mastered', async () => {
+  const { code, line } = await trackRun({ type: 'Mines - Coal', location: 'Near Hudson Hope' });
+  assert.strictEqual(code, 0);
+  assert.match(line, /fieldDiff=2 unexplained=0 known=track-mastered:2/);
+});
+
+test('a Track field differing on a project with no Track row is unexplained', async () => {
+  const { code, line } = await trackRun({ trackProjectId: null, type: 'Mines - Coal' });
+  assert.strictEqual(code, 1);
+  assert.match(line, /fieldDiff=1 unexplained=1/);
+});
+
+test('a differing field Track does not master, or an empty DEMI value, is unexplained', async () => {
+  const { code, line } = await trackRun({ sector: 'Metals', location: '' });
+  assert.strictEqual(code, 1);
+  assert.match(line, /fieldDiff=2 unexplained=2/);
+});
+
+test('a BCGW Type DEMI fills from Track is track-mastered; a differing MOE Region is not', async () => {
+  const columns = ['Type', 'MOE Region', 'Project GUID'];
+  const h = harness(csvSides([['Mines', 'Peace', `"${A}"`]], [['Mines - Coal', 'Omineca', `"${A}"`]], columns));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'report-bcgw'], h.deps);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], /fieldDiff=2 unexplained=1 known=track-mastered:1/);
+});
+
+const listRow = (id, extra = {}) => ({ _id: id, name: 'Project News', type: 'updateCategory', legislation: 0, ...extra });
+const listRun = async (eagle, demi) => {
+  const h = harness(searchSides({ eagle, demi }));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-List-public'], h.deps);
+  return { code, line: h.out[0] };
+};
+
+test('a List row each side holds under its own id is counted as list-id-other-env', async () => {
+  const { code, line } = await listRun([listRow(A)], [listRow(B, { name: 'Project News ' })]);
+  assert.strictEqual(code, 0);
+  assert.match(line, /missingInDemi=1 extraInDemi=1 fieldDiff=0 unexplained=0 known=list-id-other-env:2/);
+});
+
+test('a List row whose legislation differs on the other side is unexplained', async () => {
+  const { code, line } = await listRun([listRow(A)], [listRow(B, { legislation: 2018 })]);
+  assert.strictEqual(code, 1);
+  assert.match(line, /missingInDemi=1 extraInDemi=1 fieldDiff=0 unexplained=2/);
+});
+
+test('a missing List row whose twin on the other side is already paired is unexplained', async () => {
+  const { code, line } = await listRun([listRow(A), listRow(B)], [listRow(A)]);
+  assert.strictEqual(code, 1);
+  assert.match(line, /match=1 missingInDemi=1 extraInDemi=0 fieldDiff=0 unexplained=1/);
+});
+
+const [HIDDEN, SHOWN] = ['4'.repeat(24), '5'.repeat(24)];
+const periodRun = async (publicProjects) => {
+  const period = { _id: B, project: HIDDEN, dateStarted: '2026-08-26T07:00:00.000Z', instructions: 'x' };
+  const h = harness(restSides({
+    '/public/project': publicProjects.map(id => ({ _id: id })),
+    '/public/commentperiod': [period]
+  }, searchBody([])));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'commentperiod-list-public',
+    '--id', `project=${HIDDEN}`], h.deps);
+  return { code, line: h.out.find(l => /commentperiod-list-public/.test(l)) };
+};
+
+test('a public comment period of a project Eagle does not list publicly is counted as parent-not-public', async () => {
+  const { code, line } = await periodRun([SHOWN]);
+  assert.strictEqual(code, 0);
+  assert.match(line, /missingInDemi=1 .*unexplained=0 known=parent-not-public:1/);
+});
+
+test('a missing public comment period whose project Eagle lists publicly is unexplained', async () => {
+  const { code, line } = await periodRun([SHOWN, HIDDEN]);
+  assert.strictEqual(code, 1);
+  assert.match(line, /missingInDemi=1 .*unexplained=1/);
+});
