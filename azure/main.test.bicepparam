@@ -27,7 +27,7 @@ param minioKeyPrefix = ''
 
 // The vault holds admin-api-key, track-client-secret, role-sync-client-secret, docling-api-key,
 // minio-access-key, minio-secret-key, analytics-shared-header and analytics-audit-header, plus the
-// two named here. No value for any of them passes through this file: they are set once by hand from
+// ones named here. No value for any of them passes through this file: they are set once by hand from
 // the devbox with `az keyvault secret set` and the app resolves them by reference. Naming one here
 // says it has been set — deploy-infra.sh checks the live vault against this list before deploying.
 param optionalSecretNames = [
@@ -41,6 +41,8 @@ param optionalSecretNames = [
   // src/secret-sync/mapping.json.
   'openshift-token-test'
   'dev-openshift-token'
+  // The PDF title worker's own key; see the PDF title worker section below.
+  'pdf-title-worker-api-key'
 ]
 
 // The namespaces demi-secret-sync-test owns. Both nonprod namespaces, and prod is deliberately not
@@ -185,6 +187,15 @@ param notifyUpdateReaderLinks = true
 
 // Nightly 10:00 UTC. Armed 2026-09-02 after the first live run against epictrack-api-c8b80a-test.
 param syncTeamsSchedule = '0 0 10 * * *'
+
+// ── PDF title worker ──────────────────────────────────────────────────────────────────────────
+// Test only, and dry run: with pdfTitleLive false the worker lists its work and writes nothing.
+// The key is the vault's `pdf-title-worker-api-key`, named in optionalSecretNames above; the
+// principal is that key's registry row id (a key id, not the key). Schedule, rows and minutes keep
+// main.bicep's defaults.
+param deployPdfTitleWorker = true
+param pdfTitleWorkerPrincipals = '9cc56554c70afc46'
+param pdfTitleLive = false
 
 // APIM Consumption in front of demi-api-fc-test. Test only — prod stays off until this proves out.
 // The gateway secret is created out of band before this deploy, through the ARM control plane —
