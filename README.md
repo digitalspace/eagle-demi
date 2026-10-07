@@ -359,7 +359,7 @@ one read; `--max-pages <n>` caps paging, and a capped read compares fields only,
 extra rows cannot be told from a partial slice. The `--report` file lists ids and field names of
 unexplained differences, never values.
 
-Values are compared after trimming strings; an empty list and an absent field both count as null.
+Values are compared after trimming strings; an empty string, an empty list and an absent field all count as null.
 Three classes explain differences that come from how DEMI builds its rows:
 
 - `track-mastered`: a project field DEMI takes from Track (`TRACK_PRECEDENCE` in

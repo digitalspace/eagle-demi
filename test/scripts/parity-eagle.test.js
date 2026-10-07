@@ -487,6 +487,19 @@ test('values equal but for surrounding spaces, or an empty list against none, ma
   assert.match(h.out[0], /match=1 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
 });
 
+test('an empty or blank string against null matches, but differing trimmed text still differs', async () => {
+  const same = harness(searchSides({
+    eagle: [project(A, { region: '', location: '   ' })],
+    demi: [project(A, { region: null, location: null })]
+  }));
+  assert.strictEqual(await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], same.deps), 0);
+  assert.match(same.out[0], /match=1 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+
+  const differ = harness(searchSides({ eagle: [project(A, { region: ' Peace ' })], demi: [project(A, { region: 'Skeena' })] }));
+  assert.strictEqual(await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], differ.deps), 1);
+  assert.match(differ.out[0], /fieldDiff=1 unexplained=1/);
+});
+
 test('a list with values against none still differs', async () => {
   const h = harness(searchSides({ eagle: [project(A, { reviewSuspensions: ['2020-01-01'] })], demi: [project(A)] }));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);

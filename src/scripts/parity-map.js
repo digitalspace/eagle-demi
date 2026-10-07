@@ -77,8 +77,8 @@ const OPEN_GAPS = {
 const EAGLE_ID = /^[0-9a-f]{24}$/i;
 
 /**
- * A value both APIs can be compared on: strings trimmed, an empty list or absent value is null, a
- * populated ref is its id, an ISO date is canonical.
+ * A value both APIs can be compared on: strings trimmed, an empty string, empty list or absent value
+ * is null, a populated ref is its id, an ISO date is canonical.
  */
 function norm(value) {
   if (value === undefined || value === null) return null;
@@ -86,12 +86,13 @@ function norm(value) {
   if (typeof value === 'object') return '_id' in value ? String(value._id) : value;
   if (typeof value === 'string') {
     const text = value.trim();
+    if (text === '') return null;
     return /^\d{4}-\d{2}-\d{2}T/.test(text) && !Number.isNaN(Date.parse(text)) ? new Date(text).toISOString() : text;
   }
   return value;
 }
 const same = (a, b) => JSON.stringify(norm(a)) === JSON.stringify(norm(b));
-const filled = value => norm(value) !== null && norm(value) !== '';
+const filled = value => norm(value) !== null;
 
 const readOf = (row) => (row && Array.isArray(row.read) ? row.read : null);
 const eagleIdsIn = (value) => [...String(value || '').matchAll(/[0-9a-f]{24}/gi)].map(m => m[0].toLowerCase());
