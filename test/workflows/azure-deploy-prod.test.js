@@ -282,6 +282,28 @@ test('the deploy and timer check run only when the probe found the app', () => {
   }
 });
 
+test('the PDF title worker is packaged from the tag checkout, not the workflow ref', () => {
+  const tagPath = scalars(block(step(PDF_TITLE_JOB, 'Checkout the tag'), 8, 'with'), 10).path;
+  const packagedFrom = withTmp((dir) => {
+    const capture = path.join(dir, 'args');
+    fs.mkdirSync(path.join(dir, 'scripts'));
+    fs.writeFileSync(path.join(dir, 'scripts', 'package-pdf-title.sh'),
+      `#!/usr/bin/env bash\necho "$1" > '${capture}'\n`, { mode: 0o755 });
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'az'), '#!/usr/bin/env bash\n', { mode: 0o755 });
+    const run = spawnSync('bash', ['-e', '-c', runScript(step(PDF_TITLE_JOB, 'Deploy the PDF title worker'))], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: { PATH: `${bin}:${process.env.PATH}`, AZURE_RESOURCE_GROUP: 'rg-demi-prod', PDF_TITLE_APP_NAME: 'demi-pdf-title-prod' },
+    });
+    assert.strictEqual(run.status, 0, run.stderr);
+    return fs.readFileSync(capture, 'utf8').trim();
+  });
+  assert.strictEqual(tagPath, 'release');
+  assert.strictEqual(packagedFrom, tagPath);
+});
+
 // Runs the probe against a fake `az` that fails with `azErr` on stderr, or succeeds when it is null.
 function probe({ tagHasWorker = true, azErr = null }) {
   return withTmp((dir) => {
