@@ -12,7 +12,7 @@ const fs = require('fs');
 const { fetchAllPages, unwrapSearchResponse, rateLimitWaitMs, PAGE_SIZE } = require('../seed/sources');
 const { diff } = require('./reconcile-eagle');
 const {
-  PARITY_MAP, KNOWN_DIFFERENCES, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, EAGLE_ID
+  PARITY_MAP, KNOWN_DIFFERENCES, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same
 } = require('./parity-map');
 const { logger } = require('../utils/logger');
 
@@ -180,6 +180,18 @@ function arrayOf(body, url) {
   return body;
 }
 
+/**
+ * Eagle's count facet `[{ total_items, results }]` as one page of rows; any other array as is.
+ * The pins route answers an empty set as `[{ total_items: 0 }]`, with no `results`.
+ */
+function facetPage(body) {
+  const facet = body.length === 1 && body[0] && typeof body[0] === 'object' ? body[0] : null;
+  const counted = facet && Number.isFinite(facet.total_items);
+  if (facet && Array.isArray(facet.results)) return { items: facet.results, total: counted ? facet.total_items : null };
+  if (counted && !('results' in facet)) return { items: [], total: facet.total_items };
+  return { items: body, total: null };
+}
+
 /** The rows one side answers, and whether --max-pages cut the read short. */
 async function rowsOf(api, spec, ids, maxPages) {
   if (spec.shape === 'object') {
@@ -194,6 +206,8 @@ async function rowsOf(api, spec, ids, maxPages) {
     const res = await api.get(url);
     const body = await okJson(res, url);
     if (spec.shape === 'search') return unwrapSearchResponse(body, url);
+    // Unwrapped per page: a facet is one item, so paging on the raw body would stop after page one.
+    if (spec.facet) return facetPage(arrayOf(body, url));
     const total = Number(res.headers.get('x-total-count'));
     return { items: arrayOf(body, url), total: res.headers.get('x-total-count') !== null && Number.isFinite(total) ? total : null };
   };
@@ -211,22 +225,18 @@ async function rowsOf(api, spec, ids, maxPages) {
   return { rows, truncated };
 }
 
-/** A value both APIs can be compared on: a populated ref is its id, an ISO date is canonical. */
-function norm(value) {
-  if (value === undefined || value === null) return null;
-  if (Array.isArray(value)) return value.map(norm);
-  if (typeof value === 'object') return '_id' in value ? String(value._id) : value;
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value))) {
-    return new Date(value).toISOString();
-  }
-  return value;
-}
-const same = (a, b) => JSON.stringify(norm(a)) === JSON.stringify(norm(b));
-
 function fieldsFor(entry, identity) {
   const extra = identity === 'anonymous' ? PUBLIC_FIELDS : STAFF_FIELDS;
-  return [...(entry.fields || FIELDS[entry.dataset]), ...(extra[entry.dataset] || [])]
+  const pairs = [...(entry.fields || FIELDS[entry.dataset]), ...(extra[entry.dataset] || [])]
     .map(f => (Array.isArray(f) ? f : [f, f]));
+  return pairs.filter(([e], i) => pairs.findIndex(([other]) => other === e) === i);
+}
+
+/** The Eagle spec with `fields=a|b|c` (eagle-api's pipe format) when the route takes it. */
+function eagleSpecFor(entry, identity) {
+  if (!entry.eagle.fields) return entry.eagle;
+  const names = [...fieldsFor(entry, identity).map(([e]) => e), ...(PREDICATE_FIELDS[entry.dataset] || [])];
+  return { ...entry.eagle, query: { ...entry.eagle.query, fields: [...new Set(names)].join('|') } };
 }
 
 const keyOf = row => String(row.eagleId || row._id || row.id);
@@ -235,13 +245,14 @@ const keyOf = row => String(row.eagleId || row._id || row.id);
  * Counts for one read. Samples carry ids and field names only, never values: a comment row's
  * values can be personal data.
  */
-function compare(entry, identity, eagle, demi, knownIds, fields = fieldsFor(entry, identity), headerDiffs = []) {
+function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, identity), headerDiffs = []) {
   const out = { match: 0, missingInDemi: 0, extraInDemi: 0, fieldDiff: 0, unexplained: 0, classes: {}, samples: [] };
   const tally = (ctx) => {
-    const hit = KNOWN_DIFFERENCES.find(k => k.kind === ctx.kind &&
+    const full = { ...ctx, read: entry.read, dataset: entry.dataset, eaglePublicProjects: known.eaglePublicProjects };
+    const hit = KNOWN_DIFFERENCES.find(k => [].concat(k.kind).includes(ctx.kind) &&
       (!k.identities || k.identities.includes(identity)) &&
       (!k.reads || k.reads.includes(entry.read)) &&
-      (k.ids ? !!(knownIds[k.name] && knownIds[k.name].has(ctx.id)) : k.match(ctx)));
+      (k.ids ? !!(known.ids[k.name] && known.ids[k.name].has(ctx.id)) : k.match(full)));
     if (hit) {
       out.classes[hit.name] = (out.classes[hit.name] || 0) + 1;
       return;
@@ -257,13 +268,16 @@ function compare(entry, identity, eagle, demi, knownIds, fields = fieldsFor(entr
   // A capped read sees an arbitrary slice of each side, so absence proves nothing.
   out.truncated = eagle.truncated || demi.truncated;
   if (!out.truncated) {
-    for (const id of [...sets.eagleOnly, ...sets.unresolvedParent]) {
+    const missing = [...sets.eagleOnly, ...sets.unresolvedParent].map(id => eagleById.get(id));
+    const extra = [...sets.unpublishedOrDeleted, ...sets.trackOnly];
+    for (const row of missing) {
       out.missingInDemi++;
-      tally({ kind: 'missingInDemi', id, eagle: eagleById.get(id) });
+      tally({ kind: 'missingInDemi', id: keyOf(row), eagle: row, unpaired: extra });
     }
-    for (const row of [...sets.unpublishedOrDeleted, ...sets.trackOnly]) {
+    for (const row of extra) {
       out.extraInDemi++;
-      tally({ kind: 'extraInDemi', id: keyOf(row), demi: row, byEagleId: !entry.format || !!entry.keyIsEagleId });
+      tally({ kind: 'extraInDemi', id: keyOf(row), demi: row, unpaired: missing,
+        byEagleId: !entry.format || !!entry.keyIsEagleId });
     }
   }
 
@@ -275,7 +289,7 @@ function compare(entry, identity, eagle, demi, knownIds, fields = fieldsFor(entr
     if (!differing.length) out.match++;
     for (const [e, d] of differing) {
       out.fieldDiff++;
-      tally({ kind: 'fieldDiff', id, dataset: entry.dataset, field: e, eagleValue: eagleRow[e], demiValue: row[d] });
+      tally({ kind: 'fieldDiff', id, field: e, eagleValue: eagleRow[e], demiValue: row[d], eagle: eagleRow, demi: row });
     }
   }
   for (const field of headerDiffs) {
@@ -286,7 +300,7 @@ function compare(entry, identity, eagle, demi, knownIds, fields = fieldsFor(entr
 }
 
 /** A CSV read: rows on every shared column, and header differences under id `header`. */
-function compareCsv(entry, identity, eagle, demi, knownIds) {
+function compareCsv(entry, identity, eagle, demi, known) {
   const ignored = new Set([entry.key, ...(entry.ignoreColumns || [])]);
   const [eagleCols, demiCols] = [eagle.header, demi.header].map(h => h.filter(c => !ignored.has(c)));
   const shared = eagleCols.filter(c => demiCols.includes(c));
@@ -295,7 +309,7 @@ function compareCsv(entry, identity, eagle, demi, knownIds) {
     ...demiCols.filter(c => !eagleCols.includes(c)),
     ...(JSON.stringify(shared) === JSON.stringify(demiCols.filter(c => eagleCols.includes(c))) ? [] : ['column order'])
   ];
-  return compare(entry, identity, eagle, demi, knownIds, shared.map(c => [c, c]), headerDiffs);
+  return compare(entry, identity, eagle, demi, known, shared.map(c => [c, c]), headerDiffs);
 }
 
 /** sha256 and byte length of a response body, read as a stream. */
@@ -409,6 +423,15 @@ async function run(argv, deps = {}) {
 
   const pairedDocuments = new Set();
   const downloads = [];
+  let eaglePublicProjects;
+  // Ids of every project Eagle shows the public, or null when --max-pages cut the list short.
+  const loadEaglePublicProjects = async () => {
+    if (eaglePublicProjects === undefined) {
+      const side = await rowsOf(eagle, { path: '/public/project', shape: 'array', paged: true }, args.ids, args.maxPages);
+      eaglePublicProjects = side.truncated ? null : new Set(side.rows.map(keyOf));
+    }
+    return eaglePublicProjects;
+  };
   const record = (entry, outcome) => {
     results.push({ read: entry.read, plan: entry.plan, ...outcome });
     if (outcome.status === 'skipped') {
@@ -443,14 +466,18 @@ async function run(argv, deps = {}) {
       return map ? { ...side, rows: map(side.rows) } : side;
     };
     try {
-      const eagleSide = await sideOf(eagle, entry.eagle, entry.mapEagle);
+      const eagleSide = await sideOf(eagle, eagleSpecFor(entry, identity), entry.mapEagle);
       const demiSide = await sideOf(demi, entry.demi, entry.mapDemi);
       if (entry.dataset === 'Document') {
         const eagleIds = new Set(eagleSide.rows.map(keyOf));
         demiSide.rows.map(keyOf).filter(id => eagleIds.has(id)).forEach(id => pairedDocuments.add(id));
       }
       const compareRead = entry.format === 'csv' ? compareCsv : compare;
-      record(entry, { status: 'compared', ...compareRead(entry, identity, eagleSide, demiSide, knownIds) });
+      const known = {
+        ids: knownIds,
+        eaglePublicProjects: identity === 'anonymous' && entry.dataset === 'CommentPeriod' ? await loadEaglePublicProjects() : null
+      };
+      record(entry, { status: 'compared', ...compareRead(entry, identity, eagleSide, demiSide, known) });
     } catch (err) {
       record(entry, { status: 'error', message: err.message });
     }

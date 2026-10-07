@@ -13,7 +13,7 @@
  * column but `ignoreColumns`. `mapEagle` / `mapDemi` reshape one side's rows before pairing.
  */
 
-const { EAGLE_STAFF_FIELDS } = require('../merge/project');
+const { EAGLE_STAFF_FIELDS, TRACK_PRECEDENCE } = require('../merge/project');
 const commentMirror = require('../controllers/nosql/comment');
 const commentPeriodMirror = require('../controllers/nosql/comment-period');
 const organizationMirror = require('../controllers/nosql/organization');
@@ -56,8 +56,18 @@ const STAFF_FIELDS = {
 /** Fields Eagle strips for non-staff callers and DEMI shows: compared for anonymous only. */
 const PUBLIC_FIELDS = {
   Project: ['review180Start', 'review45Start', 'reviewSuspensions', 'reviewExtensions'],
-  Organization: ['postal']
+  Organization: ['city', 'province', 'postal']
 };
+
+/** Eagle fields the known-difference predicates read: requested from Eagle, never compared. */
+const PREDICATE_FIELDS = {
+  CommentPeriod: ['project']
+};
+
+/** Eagle project fields DEMI takes from Track when Track has a value (`TRACK_PRECEDENCE`). */
+const TRACK_FIELDS = TRACK_PRECEDENCE.map(([, , eagleField]) => eagleField).filter(Boolean);
+/** BCGW columns `bcgwRow` in src/controllers/report.js fills from those fields and the Track-first centroid. */
+const BCGW_TRACK_COLUMNS = ['Project name', 'Proponent', 'Type', 'Description', 'Latitude', 'Longitude'];
 
 /** Fields with a documented DEMI gap still open, per dataset. */
 const OPEN_GAPS = {
@@ -65,6 +75,23 @@ const OPEN_GAPS = {
 };
 
 const EAGLE_ID = /^[0-9a-f]{24}$/i;
+
+/**
+ * A value both APIs can be compared on: strings trimmed, an empty list or absent value is null, a
+ * populated ref is its id, an ISO date is canonical.
+ */
+function norm(value) {
+  if (value === undefined || value === null) return null;
+  if (Array.isArray(value)) return value.length ? value.map(norm) : null;
+  if (typeof value === 'object') return '_id' in value ? String(value._id) : value;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    return /^\d{4}-\d{2}-\d{2}T/.test(text) && !Number.isNaN(Date.parse(text)) ? new Date(text).toISOString() : text;
+  }
+  return value;
+}
+const same = (a, b) => JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+const filled = value => norm(value) !== null && norm(value) !== '';
 
 const readOf = (row) => (row && Array.isArray(row.read) ? row.read : null);
 const eagleIdsIn = (value) => [...String(value || '').matchAll(/[0-9a-f]{24}/gi)].map(m => m[0].toLowerCase());
@@ -80,7 +107,8 @@ const pathOf = (value) => {
 /**
  * Every class a difference may be explained by. `ids: true` classes match only ids listed under
  * their name in `--known-ids <file>`; the others match on the rows themselves.
- * kind: missingInDemi (Eagle row, no DEMI row), extraInDemi (DEMI row, no Eagle row), fieldDiff.
+ * kind: missingInDemi (Eagle row, no DEMI row), extraInDemi (DEMI row, no Eagle row), fieldDiff;
+ * one kind or a list. A missing or extra row's `unpaired` holds the other side's unpaired rows.
  */
 const KNOWN_DIFFERENCES = [
   { name: 'L1-no-ladder-token', kind: 'missingInDemi', identities: ['staff'],
@@ -90,7 +118,7 @@ const KNOWN_DIFFERENCES = [
     why: 'Eagle row never reached DEMI; closed by backfill' },
   { name: 'L3-staff-field-not-promoted', kind: 'fieldDiff', identities: STAFF,
     why: 'staff field DEMI does not promote yet',
-    match: ({ dataset, field, demiValue }) => (UNPROMOTED_STAFF_FIELDS[dataset] || []).includes(field) && demiValue == null },
+    match: ({ dataset, field, demiValue }) => (UNPROMOTED_STAFF_FIELDS[dataset] || []).includes(field) && norm(demiValue) === null },
   { name: 'L4-soft-deleted', kind: 'missingInDemi',
     why: 'Eagle isDeleted row; not ported',
     match: ({ eagle }) => eagle.isDeleted === true },
@@ -103,7 +131,7 @@ const KNOWN_DIFFERENCES = [
     why: 'Eagle hard delete that sent no delete notice' },
   { name: 'public-field-difference', kind: 'fieldDiff', identities: ANON,
     why: 'Eagle strips the field for non-staff; DEMI shows it',
-    match: ({ dataset, field, eagleValue }) => (PUBLIC_FIELDS[dataset] || []).includes(field) && eagleValue == null },
+    match: ({ dataset, field, eagleValue }) => (PUBLIC_FIELDS[dataset] || []).includes(field) && norm(eagleValue) === null },
   { name: 'eagle-ungated-featured', kind: 'missingInDemi', identities: ANON, reads: ['featured-public'],
     why: 'Eagle public FeaturedDocuments skips the read[] check; DEMI applies it',
     match: ({ eagle }) => !!readOf(eagle) && !readOf(eagle).includes('public') },
@@ -117,12 +145,30 @@ const KNOWN_DIFFERENCES = [
   { name: 'bcgw-link-host', kind: 'fieldDiff', reads: ['report-bcgw'],
     why: 'Eagle writes the prod site host; DEMI writes LINK_BASE_URL, the site of its own environment',
     match: ({ field, eagleValue, demiValue }) => field === 'URL to Epic Project' &&
-      pathOf(eagleValue) !== null && pathOf(eagleValue) === pathOf(demiValue) }
+      pathOf(eagleValue) !== null && pathOf(eagleValue) === pathOf(demiValue) },
+  { name: 'track-mastered', kind: 'fieldDiff',
+    why: 'DEMI projects take these fields from Track when Track has a value (src/merge/project.js)',
+    match: ({ read, dataset, field, demiValue, demi }) => filled(demiValue) &&
+      ((dataset === 'Project' && TRACK_FIELDS.includes(field) && demi.trackProjectId != null) ||
+        (read === 'report-bcgw' && BCGW_TRACK_COLUMNS.includes(field))) },
+  { name: 'list-id-other-env', kind: ['missingInDemi', 'extraInDemi'],
+    why: 'the same List row exists on the other side under another id: each environment seeded its own',
+    match: ({ dataset, eagle, demi, unpaired }) => dataset === 'List' &&
+      unpaired.some(other => ['name', 'type', 'legislation'].every(f => same(other[f], (eagle || demi)[f]))) },
+  { name: 'parent-not-public', kind: 'missingInDemi', identities: ANON,
+    why: "Eagle's public comment period routes skip the project read[] check; DEMI applies it",
+    match: ({ dataset, eagle, eaglePublicProjects }) => dataset === 'CommentPeriod' && !!eaglePublicProjects &&
+      filled(eagle.project) && !eaglePublicProjects.has(norm(eagle.project)) }
 ];
 
 const search = (dataset, query = {}) => ({ path: '/search', query: { dataset, ...query }, shape: 'search', paged: true });
-const rows = (path, query) => ({ path, query, shape: 'array', paged: false });
-const pagedRows = (path, query) => ({ path, query, shape: 'array', paged: true });
+const rows = (path, query, opts) => ({ path, query, shape: 'array', paged: false, ...opts });
+const pagedRows = (path, query, opts) => ({ path, query, shape: 'array', paged: true, ...opts });
+// eagle-api answers only _id and read[] unless `fields` names the rest.
+const FIELDED = { fields: true };
+// eagle-api answers these as a count facet, [{ total_items, results }].
+const FACET = { facet: true };
+const COMMENT = { ...FIELDED, ...FACET };
 const one = (path, at, query) => ({ path, query, shape: 'object', at });
 const csv = (path, query) => ({ path, query });
 /** Id-only rows, for reads where one side answers a list of refs rather than the rows. */
@@ -136,24 +182,24 @@ const DOCUMENT_ONE_FIELDS = ['documentFileName', 'displayName', 'datePosted', 'd
 
 const REST_READS = [
   { read: 'project-list-public', plan: '1', identities: ANON, dataset: 'Project',
-    eagle: pagedRows('/public/project'), demi: search('Project') },
+    eagle: pagedRows('/public/project', undefined, FIELDED), demi: search('Project') },
   { read: 'project-public', plan: '2', identities: ANON, dataset: 'Project', fields: PROJECT_ONE_FIELDS,
-    eagle: rows('/public/project/:project'), demi: one('/projects/:project') },
+    eagle: rows('/public/project/:project', undefined, FIELDED), demi: one('/projects/:project') },
   pending('project-head-public', '3', HEAD_REASON),
   { read: 'project-list', plan: '4', identities: STAFF, dataset: 'Project',
-    eagle: pagedRows('/project'), demi: search('Project') },
+    eagle: pagedRows('/project', undefined, FIELDED), demi: search('Project') },
   { read: 'project', plan: '5', identities: STAFF, dataset: 'Project', fields: PROJECT_ONE_FIELDS,
-    eagle: rows('/project/:project'), demi: one('/projects/:project') },
+    eagle: rows('/project/:project', undefined, FIELDED), demi: one('/projects/:project') },
   pending('project-head', '6-7', HEAD_REASON),
   { read: 'pins-public', plan: '8', identities: ANON, dataset: 'Pin',
-    eagle: pagedRows('/public/project/:project/pin'), demi: one('/projects/:project', 'pins') },
+    eagle: pagedRows('/public/project/:project/pin', undefined, FACET), demi: one('/projects/:project', 'pins') },
   { read: 'pins', plan: '9', identities: STAFF, dataset: 'Pin',
-    eagle: pagedRows('/project/:project/pin'), demi: one('/projects/:project', 'pins') },
+    eagle: pagedRows('/project/:project/pin', undefined, FACET), demi: one('/projects/:project', 'pins') },
   // Eagle answers the member User rows in a count facet, DEMI the Group with member ids.
   { read: 'group-members', plan: '10', identities: STAFF, dataset: 'Group', fields: [],
-    eagle: rows('/project/:project/group/:group/members'),
+    eagle: rows('/project/:project/group/:group/members', undefined, FACET),
     demi: one('/groups/:group', undefined, { project: ':project' }),
-    mapEagle: facets => idRows(facets.flatMap(f => f.results || [])),
+    mapEagle: idRows,
     mapDemi: groups => idRows(groups.flatMap(g => g.members || [])) },
   { read: 'featured-public', plan: '11', identities: ANON, dataset: 'Document',
     eagle: rows('/Public/project/:project/FeaturedDocuments'),
@@ -163,57 +209,57 @@ const REST_READS = [
     demi: search('Document', { 'and[isFeatured]': 'true', project: ':project' }) },
   pending('featured-head', '12, 14', HEAD_REASON),
   { read: 'document-list-public', plan: '15', identities: ANON, dataset: 'Document',
-    eagle: rows('/public/document', { project: ':project' }), demi: search('Document', { project: ':project' }) },
+    eagle: rows('/public/document', { project: ':project' }, FIELDED), demi: search('Document', { project: ':project' }) },
   { read: 'document-public', plan: '16', identities: ANON, dataset: 'Document', fields: DOCUMENT_ONE_FIELDS,
-    eagle: rows('/public/document/:document'), demi: one('/documents/:document') },
+    eagle: rows('/public/document/:document', undefined, FIELDED), demi: one('/documents/:document') },
   { read: 'document-download-public', plan: '17-18',
     skip: 'never called: the public download route increments publicHitCount' },
   { read: 'document-list', plan: '19', identities: STAFF, dataset: 'Document',
-    eagle: rows('/document', { isDeleted: 'false', project: ':project' }), demi: search('Document', { project: ':project' }) },
+    eagle: rows('/document', { isDeleted: 'false', project: ':project' }, FIELDED), demi: search('Document', { project: ':project' }) },
   { read: 'document', plan: '20', identities: STAFF, dataset: 'Document', fields: DOCUMENT_ONE_FIELDS,
-    eagle: rows('/document/:document'), demi: one('/documents/:document') },
+    eagle: rows('/document/:document', undefined, FIELDED), demi: one('/documents/:document') },
   // Run by --download-sample over document ids paired by the reads above, not by --id.
   { read: 'document-download', plan: '21-23', identities: STAFF, download: true,
     eagle: { path: '/document/:document/download' }, demi: { path: '/documents/:document/download' } },
   { read: 'commentperiod-list-public', plan: '24', identities: ANON, dataset: 'CommentPeriod',
-    eagle: rows('/public/commentperiod', { project: ':project' }),
+    eagle: rows('/public/commentperiod', { project: ':project' }, FIELDED),
     demi: search('CommentPeriod', { 'and[project]': ':project' }) },
   { read: 'commentperiod-public', plan: '25', identities: ANON, dataset: 'CommentPeriod',
-    eagle: rows('/public/commentperiod/:period'), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
+    eagle: rows('/public/commentperiod/:period', undefined, FIELDED), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
   { read: 'commentperiod-list', plan: '26', identities: STAFF, dataset: 'CommentPeriod',
-    eagle: rows('/commentperiod', { project: ':project' }),
+    eagle: rows('/commentperiod', { project: ':project' }, FIELDED),
     demi: search('CommentPeriod', { 'and[project]': ':project' }) },
   { read: 'commentperiod', plan: '27', identities: STAFF, dataset: 'CommentPeriod',
-    eagle: rows('/commentperiod/:period'), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
+    eagle: rows('/commentperiod/:period', undefined, FIELDED), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
   pending('commentperiod-head', '28', HEAD_REASON),
   pending('commentperiod-summary', '29', 'no summary route; four and[eaoStatus] counts give it (S3)'),
   { read: 'comment-list-public', plan: '30', identities: ANON, dataset: 'Comment',
-    eagle: pagedRows('/public/comment', { period: ':period' }), demi: search('Comment', { 'and[period]': ':period' }) },
+    eagle: pagedRows('/public/comment', { period: ':period' }, COMMENT), demi: search('Comment', { 'and[period]': ':period' }) },
   { read: 'comment-public', plan: '31', identities: ANON, dataset: 'Comment',
-    eagle: rows('/public/comment/:comment'), demi: search('Comment', { 'and[_id]': ':comment' }) },
+    eagle: rows('/public/comment/:comment', undefined, COMMENT), demi: search('Comment', { 'and[_id]': ':comment' }) },
   pending('comment-head-public', '32', HEAD_REASON),
   { read: 'comment-list', plan: '33', identities: STAFF, dataset: 'Comment',
-    eagle: pagedRows('/comment', { period: ':period' }), demi: search('Comment', { 'and[period]': ':period' }) },
+    eagle: pagedRows('/comment', { period: ':period' }, COMMENT), demi: search('Comment', { 'and[period]': ':period' }) },
   { read: 'comment', plan: '34', identities: STAFF, dataset: 'Comment',
-    eagle: rows('/comment/:comment'), demi: search('Comment', { 'and[_id]': ':comment' }) },
+    eagle: rows('/comment/:comment', undefined, COMMENT), demi: search('Comment', { 'and[_id]': ':comment' }) },
   pending('comment-head', '35', HEAD_REASON),
   { read: 'comment-export', plan: '36', identities: STAFF, format: 'csv', key: 'Comment_No',
     ignoreColumns: ['Export_Date'],
     eagle: csv('/comment/export/:period', { format: 'staff' }), demi: csv('/commentperiods/:period/comments/export') },
   { read: 'organization-list-public', plan: '37', identities: ANON, dataset: 'Organization',
-    eagle: rows('/public/organization'), demi: search('Organization') },
+    eagle: rows('/public/organization', undefined, FIELDED), demi: search('Organization') },
   { read: 'organization-public', plan: '38', identities: ANON, dataset: 'Organization',
-    eagle: rows('/public/organization/:organization'), demi: search('Organization', { 'and[_id]': ':organization' }) },
+    eagle: rows('/public/organization/:organization', undefined, FIELDED), demi: search('Organization', { 'and[_id]': ':organization' }) },
   { read: 'organization-list', plan: '39', identities: STAFF, dataset: 'Organization',
-    eagle: rows('/organization'), demi: search('Organization') },
+    eagle: rows('/organization', undefined, FIELDED), demi: search('Organization') },
   { read: 'organization', plan: '40', identities: STAFF, dataset: 'Organization',
-    eagle: rows('/organization/:organization'), demi: search('Organization', { 'and[_id]': ':organization' }) },
+    eagle: rows('/organization/:organization', undefined, FIELDED), demi: search('Organization', { 'and[_id]': ':organization' }) },
   { read: 'project-notification-list', plan: '41', identities: STAFF, dataset: 'ProjectNotification',
     eagle: pagedRows('/projectNotification'), demi: search('ProjectNotification') },
   { read: 'recent-activity-top', plan: '42', identities: ANON, dataset: 'RecentActivity',
     // Eagle answers its newest 4 whatever `top` says, so DEMI is asked for one page of 4.
     eagle: rows('/public/recentActivity', { top: 'true' }),
-    demi: { ...search('HomeFeed', { pageSize: '4' }), paged: false } },
+    demi: { ...search('RecentActivity', { top: 'true', pageSize: '4' }), paged: false } },
   pending('topic-vc', '43-46', 'no DEMI Topic or Vc kind yet (S9)'),
   // Item ids of one element. Eagle's item route streams the file and records a download, so the
   // element row's `items` refs stand in for it.
@@ -249,5 +295,5 @@ const SEARCH_READS = [
 const PARITY_MAP = [...REST_READS, ...SEARCH_READS];
 
 module.exports = {
-  PARITY_MAP, KNOWN_DIFFERENCES, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, EAGLE_ID
+  PARITY_MAP, KNOWN_DIFFERENCES, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same
 };
