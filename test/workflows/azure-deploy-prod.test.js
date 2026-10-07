@@ -89,7 +89,10 @@ function runs(stepLines, ctx) {
 function runScript(stepLines) {
   const at = stepLines.findIndex((l) => l === '        run: |');
   assert.notStrictEqual(at, -1, 'step has no block run:');
-  return stepLines.slice(at + 1).map((l) => l.slice(10)).join('\n');
+  const body = stepLines.slice(at + 1);
+  // Stop before the next step's leading comments, which `steps()` leaves on this chunk.
+  const end = body.findIndex((l) => l.trim() !== '' && indentOf(l) < 10);
+  return (end === -1 ? body : body.slice(0, end)).map((l) => l.slice(10)).join('\n');
 }
 
 function bash(script, env) {
@@ -253,4 +256,98 @@ test('the release notes keep their body and gain the skip line', () => {
   });
 
   assert.strictEqual(notes, 'Existing notes\n\nskip_schema_probe: skipped by octo-dispatcher\n');
+});
+
+// The PDF title worker job skips rather than fails while prod has no worker app, so a release
+// before the infra deploy still publishes.
+const PDF_TITLE_JOB = job('deploy-pdf-title');
+const PDF_TITLE_PROBE = 'Does the PDF title app exist yet?';
+
+test('the PDF title job runs after the API, as prod, from the tag being deployed', () => {
+  const top = scalars(PDF_TITLE_JOB, 4);
+  assert.strictEqual(top.needs, 'deploy-api');
+  assert.strictEqual(top.environment, 'prod');
+  assert.strictEqual(scalars(block(step(PDF_TITLE_JOB, 'Checkout the tag'), 8, 'with'), 10).ref,
+    'refs/tags/${{ inputs.version }}');
+  assert.ok(stepIndex(PDF_TITLE_JOB, VALIDATE) < stepIndex(PDF_TITLE_JOB, 'Checkout the tag'));
+});
+
+test('publish-release waits for the PDF title job', () => {
+  assert.match(scalars(PUBLISH_JOB, 4).needs, /\bdeploy-pdf-title\b/);
+});
+
+test('the deploy and timer check run only when the probe found the app', () => {
+  for (const name of ['Deploy the PDF title worker', 'Verify the timer is registered']) {
+    assert.strictEqual(scalars(step(PDF_TITLE_JOB, name), 8).if, "steps.probe.outputs.found == 'true'");
+  }
+});
+
+// Runs the probe against a fake `az` that fails with `azErr` on stderr, or succeeds when it is null.
+function probe({ tagHasWorker = true, azErr = null }) {
+  return withTmp((dir) => {
+    if (tagHasWorker) {
+      fs.mkdirSync(path.join(dir, 'release', 'pdf-title'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'release', 'pdf-title', 'function_app.py'), '');
+    }
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'az'), azErr === null
+      ? '#!/usr/bin/env bash\necho demi-pdf-title-prod\n'
+      : `#!/usr/bin/env bash\necho '${azErr}' >&2\nexit 1\n`, { mode: 0o755 });
+    const summary = path.join(dir, 'summary.md');
+    const output = path.join(dir, 'output');
+    fs.writeFileSync(output, '');
+    const run = spawnSync('bash', ['-e', '-c', runScript(step(PDF_TITLE_JOB, PDF_TITLE_PROBE))], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        AZURE_RESOURCE_GROUP: 'rg-demi-prod',
+        PDF_TITLE_APP_NAME: 'demi-pdf-title-prod',
+        GITHUB_STEP_SUMMARY: summary,
+        GITHUB_OUTPUT: output,
+      },
+    });
+    return {
+      status: run.status,
+      stdout: run.stdout,
+      found: fs.readFileSync(output, 'utf8').trim(),
+      summary: fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '',
+    };
+  });
+}
+
+test('the probe deploys when the app exists', () => {
+  const r = probe({});
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.found, 'found=true');
+});
+
+test('the probe skips with a notice when the app does not exist yet', () => {
+  const r = probe({ azErr: '(ResourceNotFound) The Resource was not found.' });
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.found, 'found=false');
+  assert.match(r.stdout, /^::notice::demi-pdf-title-prod does not exist yet/m);
+  assert.match(r.summary, /does not exist yet/);
+});
+
+test('the probe skips when CI cannot see the app', () => {
+  const r = probe({ azErr: '(AuthorizationFailed) no access' });
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.found, 'found=false');
+  assert.match(r.stdout, /lacks Website Contributor/);
+});
+
+test('the probe skips a tag that predates the worker without asking Azure', () => {
+  const r = probe({ tagHasWorker: false, azErr: 'az must not be called' });
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.found, 'found=false');
+  assert.match(r.stdout, /The tag has no pdf-title\/function_app\.py/);
+});
+
+test('any other Azure error fails the job', () => {
+  const r = probe({ azErr: '(InternalServerError) boom' });
+  assert.strictEqual(r.status, 1);
+  assert.strictEqual(r.found, '');
+  assert.match(r.stdout, /^::error::az functionapp show failed for demi-pdf-title-prod/m);
 });
