@@ -180,9 +180,16 @@ const PUSH_ONLY_FIELDS = [
  */
 const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt'];
 
+/** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`). */
+function heldRead(read, existing) {
+  return existing && existing.levelHeldAt && Array.isArray(existing.read)
+    ? capRead(read, existing.read)
+    : read;
+}
+
 /**
- * Carry the DEMI-only fields off the stored row onto a rebuilt one. A row DEMI holds
- * (`levelHeldAt`) keeps the lower of the rebuilt and stored `read`, so Eagle can narrow, not widen.
+ * Carry the DEMI-only fields off the stored row onto a rebuilt one. A row DEMI holds keeps the
+ * lower of the rebuilt and stored `read` (`heldRead`), so Eagle can narrow it, not widen it.
  */
 function carryDemiOnlyFields(merged, existing) {
   if (!merged || !existing) return merged;
@@ -190,8 +197,8 @@ function carryDemiOnlyFields(merged, existing) {
     const value = existing[field];
     if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
   }
-  if (merged.levelHeldAt && Array.isArray(existing.read)) {
-    merged.read = capRead(merged.read, existing.read);
+  if (existing.levelHeldAt) {
+    merged.read = heldRead(merged.read, existing);
     merged.isPublished = merged.read.includes('public');
   }
   return merged;
@@ -616,6 +623,7 @@ module.exports = {
   flattenEagleProject,
   carryEagleOnlyFields,
   carryDemiOnlyFields,
+  heldRead,
   hasValue,
   TRIMMED_FIELDS,
   BC_BBOX,

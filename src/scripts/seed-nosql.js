@@ -36,7 +36,7 @@ const sources = require('../seed/sources');
 const transform = require('../seed/transform');
 const {
   buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
-  eagleOnlyProjectId, isEagleOnlyProjectId
+  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead
 } = require('../merge/project');
 
 const { systemAccess } = require('../helpers/access-sql');
@@ -532,12 +532,23 @@ async function seed(argv = [], deps = {}) {
       return existingByProject.get(projectId);
     };
 
+    // The registry's read is Eagle's, so a project DEMI holds caps its documents at the STORED
+    // level (dry run and `--only documents` included). Set in place: the pre-write gate reads it.
+    const heldChecked = new Set();
+    const holdParentRead = async (projectId) => {
+      const key = String(projectId);
+      if (!cosmosReady || heldChecked.has(key) || !projectRead.has(key)) return;
+      heldChecked.add(key);
+      projectRead.set(key, heldRead(projectRead.get(key), await repos.projects.getById(access, key)));
+    };
+
     const flush = async (projectId, rawDocs) => {
       // Transformed HERE rather than on the way into the buffer, because the extraction state a
       // re-seed must carry forward is read one partition at a time and this is where the
       // partition is known. A Cosmos upsert replaces the item, so without it every re-seed marks
       // the whole corpus unextracted while its chunks stay behind.
       const existingRows = await existingFor(projectId);
+      await holdParentRead(projectId);
       const docs = [];
       // Documents whose four List refs MOVED in this re-seed. Their chunks each carry a copy taken
       // at ingest, and nothing else refreshes it — see `chunks.CHUNK_PARENT_FIELDS`. Collected here
