@@ -183,6 +183,34 @@ test('a streamed body arrives whole under the length the handler preset', async 
   assert.strictEqual(await sent.text(), 'hello world');
 });
 
+test('a public answer never echoes the caller\'s request id', async (t) => {
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Cache-Control', 'public, max-age=300').json({});
+  });
+  const res = await call('/api/config', { headers: { 'x-request-id': 'caller-chosen' } });
+  assert.match(res.headers['x-request-id'], /^[0-9a-f]{8}$/);
+});
+
+test('the served request id is logged beside the caller\'s', async (t) => {
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Cache-Control', 'public, max-age=300').json({});
+  });
+  const info = t.mock.method(logger, 'info', () => {});
+  const res = await call('/api/config', { headers: { 'x-request-id': 'caller-chosen' } });
+  const line = info.mock.calls.map(c => c.arguments[1])
+    .find(meta => meta && meta.evt === 'request-id-replaced');
+  assert.strictEqual(line.servedId, res.headers['x-request-id']);
+  assert.strictEqual(line.callerId, 'caller-chosen');
+});
+
+test('a private answer keeps the caller\'s request id', async (t) => {
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Cache-Control', 'no-store').json({});
+  });
+  const res = await call('/api/config', { headers: { 'x-request-id': 'caller-chosen' } });
+  assert.strictEqual(res.headers['x-request-id'], 'caller-chosen');
+});
+
 test('a 304 the handler answers carries no body and no content-length', async (t) => {
   // A conditional GET states the file's size before it learns the copy is fresh; the 304 must drop
   // that length, or undici refuses the Response and the host serves an empty 500.

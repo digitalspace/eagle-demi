@@ -1704,7 +1704,7 @@ paths:
 
   /api/documents/{id}/download:
     get:
-      summary: Presigned download for a document's bytes
+      summary: A document's file - presigned URL, redirect, or the bytes themselves
       description: >-
         A short-lived presigned URL for the stored file. Unauthenticated callers get the public
         tier rather than a 401, exactly as `GET /api/documents/{id}` does — the row's `read[]` is
@@ -1712,10 +1712,26 @@ paths:
         who may not see it. A download of a document the public cannot see is audited as
         `document.download`; every download is an analytics event.
 
-        TWO MODES, same visibility check. By default the URL is returned as JSON. With `redirect=1`,
-        or an `Accept` that starts with `text/html`, the caller is sent to the file with a 302
-        instead — that is what an `<a href>` needs, since a browser navigation cannot read the JSON
-        body. Only a 200 redirects: a 404 or 500 answers JSON in both modes.
+        THREE MODES, same visibility check. By default the URL is returned as JSON. With
+        `redirect=1`, or an `Accept` that starts with `text/html`, the caller is sent to the file
+        with a 302 instead — that is what an `<a href>` needs, since a browser navigation cannot
+        read the JSON body. With `inline=1` and no `redirect=1`, the file itself is the answer
+        (stream mode, below). Only a 200 redirects: a 404 or 500 answers JSON in every mode.
+
+        STREAM MODE serves the bytes from this URL, so the link never expires and an edge cache can
+        hold it. It applies when the file may open in the browser (see `inline`) and the stored
+        object is no larger than `DOWNLOAD_STREAM_MAX_BYTES` (default 32 MiB; 0 turns the mode
+        off), and the instance is serving fewer than `DOWNLOAD_STREAM_MAX_CONCURRENT` streams
+        (default 8; 0 = no limit). Any other case, including a store that cannot be read or sends
+        no bytes within 10 seconds, gets the 302 above, never JSON. A single byte range answers 206;
+        a multi-part range, or an `If-Range` that no longer matches, answers the whole file; a
+        range starting past the end answers 416 with `Content-Range: bytes */<size>`. A matching
+        `If-None-Match`, or an `If-Modified-Since` at or after `Last-Modified` and not in the
+        future, answers 304. The analytics event is written once per view: on an answer with no
+        range or a range starting at byte 0. The audit row for a document the public cannot see is
+        written on every 200 and 206. Neither is written on a 304.
+
+        Every answer that is not a streamed file says `Cache-Control: no-store`.
 
         The presigned URL carries the file name as `response-content-disposition`, so the browser
         saves `Site C Report.pdf` rather than the storage key. The name is `documentFileName`, else
@@ -1755,10 +1771,70 @@ paths:
             the browser shows it instead of saving it. Only for `application/pdf`, `image/png`,
             `image/jpeg`, `image/gif` and `image/webp`, taken from the recorded MIME type, or from
             the file extension when that is missing or `application/octet-stream`. Any other type
-            stays `attachment`. Works in both modes. HEAD ignores it.
+            stays `attachment`. Without `redirect=1` it selects stream mode; with it, the 302 is
+            signed inline. HEAD ignores it.
+        - name: Range
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Stream mode only. One range, `bytes=a-b`, `bytes=a-` or `bytes=-n`.
+        - name: If-Range
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Stream mode only. An `ETag` or `Last-Modified` value; a mismatch sends the whole file.
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Stream mode only. A matching `ETag` answers 304.
+        - name: If-Modified-Since
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Stream mode only, ignored when `If-None-Match` is sent or the date is in the future. Answers 304 when not older than `Last-Modified`.
       responses:
         '200':
-          description: A presigned download URL. JSON mode.
+          description: >-
+            JSON mode: a presigned download URL. Stream mode: the whole file, with the headers
+            listed here.
+          headers:
+            Content-Type:
+              description: Stream mode. The inline type, e.g. `application/pdf`.
+              schema:
+                type: string
+            Content-Length:
+              description: Stream mode. Always sent; the answer is never chunked.
+              schema:
+                type: integer
+            Content-Disposition:
+              description: Stream mode. `inline` with the same file name the presigned URL is signed with.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Stream mode. `bytes`.
+              schema:
+                type: string
+            Last-Modified:
+              description: >-
+                Stream mode. The later of the stored object's modification time and the document
+                record's `updatedAt`, so a rename reaches a cache that revalidates by date.
+              schema:
+                type: string
+            ETag:
+              description: Stream mode. Changes when the stored object or the file name changes.
+              schema:
+                type: string
+            Cache-Control:
+              description: >-
+                Stream mode: `public, max-age=300` to a caller with no credential, `private,
+                no-store` to one with a credential. JSON mode: `no-store`.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -1773,10 +1849,25 @@ paths:
                   inline:
                     type: boolean
                     description: >-
-                      Whether the URL is signed `inline`. False when `inline=1` was not sent or the
-                      file type is not one that may open in the browser.
+                      Whether the URL is signed `inline`. Always false here: `inline=1` streams or
+                      redirects instead of answering JSON.
+            application/pdf:
+              schema: { type: string, format: binary }
+            image/*:
+              schema: { type: string, format: binary }
+        '206':
+          description: >-
+            Stream mode, one byte range. `Content-Range: bytes a-b/<size>` and a matching
+            `Content-Length`; the other headers as for 200.
+        '304':
+          description: Stream mode. Not modified; `ETag`, `Last-Modified` and `Cache-Control` as for 200, no body.
+        '416':
+          description: >-
+            Stream mode. The range starts past the end; `Content-Range: bytes */<size>`.
         '302':
-          description: Redirect mode. The presigned URL is the `Location`.
+          description: >-
+            Redirect mode, or stream mode for a file it cannot stream. The presigned URL is the
+            `Location`.
           headers:
             Location:
               description: The presigned URL. Expires with the same TTL the JSON mode reports.

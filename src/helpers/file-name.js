@@ -54,7 +54,9 @@ function fileNameFor(doc, access, fallback = '') {
   const base = ext && name.toLowerCase().endsWith(ext.toLowerCase())
     ? name.slice(0, -ext.length)
     : name;
-  return base.slice(0, Math.max(1, MAX_NAME_LENGTH - ext.length)) + ext;
+  // A cut between the halves of a surrogate pair leaves a string encodeURIComponent throws on.
+  const cut = base.slice(0, Math.max(1, MAX_NAME_LENGTH - ext.length)).replace(/[\uD800-\uDBFF]$/, '');
+  return cut + ext;
 }
 
 /**

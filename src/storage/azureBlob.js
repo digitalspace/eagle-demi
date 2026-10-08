@@ -85,12 +85,13 @@ async function getObjectStream(key, { versionId } = {}) {
 }
 
 /** A byte range of a blob, or of one version of it. The facade checks key, offset and length. */
-async function getRangeStream(key, offset, length, { versionId } = {}) {
+async function getRangeStream(key, offset, length, { versionId, ifMatch } = {}) {
   // The SDK reads to the end of the blob when count is 0 or absent.
   if (!(length > 0)) throw new Error('[storage] a range read needs a length');
   const client = getBlobClient(key);
   // withVersion puts `versionid` on the URL, so the SDK's retried reads stay on that version too.
-  const res = await (versionId ? client.withVersion(versionId) : client).download(offset, length);
+  const res = await (versionId ? client.withVersion(versionId) : client)
+    .download(offset, length, ifMatch ? { conditions: { ifMatch } } : undefined);
   return res.readableStreamBody;
 }
 

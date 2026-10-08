@@ -58,11 +58,25 @@ async function getObjectStream(key, { versionId } = {}) {
 }
 
 /** A byte range of an object, or of one version of it. The facade checks key, offset and length. */
-async function getRangeStream(key, offset, length, { versionId } = {}) {
+async function getRangeStream(key, offset, length, { versionId, ifMatch } = {}) {
   // The SDK reads to the end of the object when length is 0.
   if (!(length > 0)) throw new Error('[storage] a range read needs a length');
-  return getClient().getPartialObject(config.minioBucket, resolveObjectKey(key), offset, length,
-    versionId ? { versionId } : undefined);
+  if (!ifMatch) {
+    return getClient().getPartialObject(config.minioBucket, resolveObjectKey(key), offset, length,
+      versionId ? { versionId } : undefined);
+  }
+  // getPartialObject sends its options as query parameters, so a precondition header needs the
+  // request it makes underneath. statObject hands the etag back unquoted.
+  return getClient().makeRequestAsync({
+    method: 'GET',
+    bucketName: config.minioBucket,
+    objectName: resolveObjectKey(key),
+    headers: {
+      range: `bytes=${offset}-${offset + length - 1}`,
+      'if-match': ifMatch.startsWith('"') ? ifMatch : `"${ifMatch}"`
+    },
+    query: versionId ? new URLSearchParams({ versionId }).toString() : ''
+  }, '', [200, 206]);
 }
 
 async function getDownloadUrl(key, opts = {}) {

@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { finished } = require('stream/promises');
+const { once } = require('events');
 const storage = require('../../storage');
 const { contentDisposition, inlineType } = require('../../storage/content-disposition');
 
@@ -49,6 +50,13 @@ const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
 // How long HEAD waits on the store's stat. The SDKs wait far longer than a link checker will, and
 // past this HEAD answers from the record, as for any other outage.
 const STAT_TIMEOUT_MS = 3000;
+
+// Edge and browser lifetime of a streamed public file: the window an unpublish takes to reach a
+// cached copy, as the presigned URL's TTL was before.
+const STREAM_MAX_AGE_SECONDS = 5 * 60;
+
+// How long a stream answer waits for the store's first bytes before sending the 302 instead.
+const STREAM_OPEN_TIMEOUT_MS = 10000;
 
 // Marks a request that arrived through the deprecated `published` alias. A symbol, so no request
 // body can set it.
@@ -572,53 +580,65 @@ async function resolveDownload(req, id, { inline = false } = {}) {
   try {
     const found = await findStoredFile(req, id);
     if (found.status) return found;
-    const { doc, record, fileName } = found;
-
-    // The storage layer owns key resolution and expiry. It used to be done here, with the
-    // client borrowed from the extraction script — which is how extract.js came to read keys
-    // without the environment prefix while this path applied it.
-    const signedType = inline ? inlineType(doc.mimeType, fileName) : null;
-    const url = await storage.getDownloadUrl(doc.s3Key, {
-      expirySeconds: DOWNLOAD_URL_TTL_SECONDS,
-      fileName,
-      inlineType: signedType
-    });
-    // A view and a save share one event name; this tells them apart.
-    const viewDetail = signedType ? { inline: true } : {};
-
-    analyticsEvent(req, {
-      eventName: 'document.download',
-      projectId: doc.projectId,
-      documentId: doc.id,
-      detail: viewDetail
-    });
-
-    // A download of a document the public cannot see is an access to restricted material, which
-    // is an audit question and not a usage statistic. Public downloads stay in the analytics
-    // table only — recording every one of those for seven years is neither useful nor cheap.
-    if (!doc.isPublished) {
-      auditEvent(req, {
-        action: 'document.download',
-        targetType: 'document',
-        targetId: doc.id,
-        projectId: doc.projectId,
-        detail: { displayName: doc.displayName || null, ...viewDetail }
-      });
-    }
-
-    return {
-      status: 200,
-      body: {
-        url, expiresIn: DOWNLOAD_URL_TTL_SECONDS, fileName, displayName: record.displayName || null,
-        inline: Boolean(signedType)
-      }
-    };
+    return await presignDownload(req, found,
+      inline ? inlineType(found.doc.mimeType, found.fileName) : null);
   } catch (err) {
     return downloadFailed(err);
   }
 }
 
 exports.resolveDownload = resolveDownload;
+
+/** The presigned answer for a file `findStoredFile` already cleared. Throws on a failed presign. */
+async function presignDownload(req, { doc, record, fileName }, signedType) {
+  // The storage layer owns key resolution and expiry. It used to be done here, with the
+  // client borrowed from the extraction script — which is how extract.js came to read keys
+  // without the environment prefix while this path applied it.
+  const url = await storage.getDownloadUrl(doc.s3Key, {
+    expirySeconds: DOWNLOAD_URL_TTL_SECONDS,
+    fileName,
+    inlineType: signedType
+  });
+  recordDownload(req, doc, Boolean(signedType));
+  return {
+    status: 200,
+    body: {
+      url, expiresIn: DOWNLOAD_URL_TTL_SECONDS, fileName, displayName: record.displayName || null,
+      inline: Boolean(signedType)
+    }
+  };
+}
+
+/**
+ * The analytics event a download writes, and the audit row a non-public one adds. `view: false`
+ * skips only the event: every read of restricted bytes is audited, ranged or not.
+ */
+function recordDownload(req, doc, inline, { view = true } = {}) {
+  // A view and a save share one event name; this tells them apart.
+  const viewDetail = inline ? { inline: true } : {};
+
+  if (view) {
+    analyticsEvent(req, {
+      eventName: 'document.download',
+      projectId: doc.projectId,
+      documentId: doc.id,
+      detail: viewDetail
+    });
+  }
+
+  // A download of a document the public cannot see is an access to restricted material, which
+  // is an audit question and not a usage statistic. Public downloads stay in the analytics
+  // table only — recording every one of those for seven years is neither useful nor cheap.
+  if (!doc.isPublished) {
+    auditEvent(req, {
+      action: 'document.download',
+      targetType: 'document',
+      targetId: doc.id,
+      projectId: doc.projectId,
+      detail: { displayName: doc.displayName || null, ...viewDetail }
+    });
+  }
+}
 
 /**
  * Whether the caller wants to BE SENT to the file rather than told where it is. An `<a href>` sends
@@ -677,19 +697,23 @@ function isBadObjectName(err) {
   return err.name === 'InvalidObjectNameError' || BAD_OBJECT_NAME.has(storeErrorCode(err));
 }
 
-/** `storage.statObject`, rejected with an ETIMEDOUT after `STAT_TIMEOUT_MS`. */
-async function statBounded(key) {
+/** `promise`, rejected with an ETIMEDOUT after `ms`. */
+async function withTimeout(promise, ms, what) {
   let timer;
   const timeout = new Promise((resolve, reject) => {
     timer = setTimeout(() => reject(Object.assign(
-      new Error(`store stat timed out after ${STAT_TIMEOUT_MS} ms`), { code: 'ETIMEDOUT' })),
-    STAT_TIMEOUT_MS);
+      new Error(`${what} timed out after ${ms} ms`), { code: 'ETIMEDOUT' })), ms);
   });
   try {
-    return await Promise.race([storage.statObject(key), timeout]);
+    return await Promise.race([promise, timeout]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** `storage.statObject`, rejected with an ETIMEDOUT after `STAT_TIMEOUT_MS`. */
+function statBounded(key) {
+  return withTimeout(storage.statObject(key), STAT_TIMEOUT_MS, 'store stat');
 }
 
 /**
@@ -735,18 +759,216 @@ async function headDownload(req, res) {
   return res.send('');
 }
 
+/**
+ * `?inline=1` without `redirect=1`: the bytes from this origin, so the address bar keeps a link
+ * that never expires and the edge can cache it. Same visibility check as the other modes. A file
+ * that cannot be streamed gets the 302 the redirect mode sends, never JSON: a browser asked.
+ */
+async function inlineDownload(req, res) {
+  try {
+    const found = await findStoredFile(req, req.params.id);
+    if (found.status) return res.status(found.status).json(found.body);
+    const type = inlineType(found.doc.mimeType, found.fileName);
+    const stat = type && config.downloadStreamMaxBytes > 0 && await streamableStat(found.doc.s3Key);
+    const sent = stat && await sendBytes(req, res, found, type, stat);
+    if (sent) return sent;
+    const { body } = await presignDownload(req, found, type);
+    return res.redirect(302, body.url);
+  } catch (err) {
+    const { status, body } = downloadFailed(err);
+    return res.status(status).json(body);
+  }
+}
+
+/** The store's stat when the object fits the stream cap and has both validators, else null. */
+async function streamableStat(key) {
+  let stat;
+  try {
+    stat = await statBounded(key);
+  } catch (err) {
+    logger.warn(`[Document Controller] stream stat failed, redirecting instead: ${err.message}`);
+    return null;
+  }
+  if (stat && stat.size > config.downloadStreamMaxBytes) {
+    logger.info(`[Document Controller] ${stat.size} bytes is over the stream cap, redirecting`);
+    return null;
+  }
+  // Front Door revalidates by Last-Modified only, so no date means no stream.
+  return stat && stat.size > 0 && stat.lastModified && stat.etag ? stat : null;
+}
+
+/** Whole seconds: Last-Modified and the dates compared against it carry no finer precision. */
+function httpSeconds(value) {
+  const ms = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+/** RFC 9110 13.1.2/13.1.3: a weak comparison against our one tag; If-None-Match beats the date. */
+function notModified(req, etag, lastModified) {
+  const tags = req.headers['if-none-match'];
+  if (tags) {
+    return tags.trim() === '*' || tags.split(',').some(tag => tag.trim().replace(/^W\//, '') === etag);
+  }
+  const since = httpSeconds(req.headers['if-modified-since']);
+  // RFC 9110 13.1.3: a date in the future is invalid, so it cannot vouch for the copy.
+  return since !== null && since <= Date.now() / 1000 && httpSeconds(lastModified) <= since;
+}
+
+const UNSATISFIABLE = 'unsatisfiable';
+
+/**
+ * The one byte range to send, `UNSATISFIABLE`, or null for the whole file. A malformed or
+ * multi-part Range, or an If-Range that no longer matches, is ignored as RFC 9110 14.2 allows.
+ */
+function byteRange(req, size, etag, lastModified) {
+  const header = req.headers.range;
+  const m = /^bytes=[ \t]*(\d*)-(\d*)[ \t]*$/.exec(String(header || ''));
+  if (!m || (!m[1] && !m[2])) return null;
+
+  const ifRange = req.headers['if-range'];
+  if (ifRange) {
+    const fresh = /^(W\/)?"/.test(ifRange)
+      ? ifRange === etag
+      : httpSeconds(ifRange) !== null && httpSeconds(ifRange) === httpSeconds(lastModified);
+    if (!fresh) return null;
+  }
+
+  if (!m[1]) {
+    const suffix = Number(m[2]);
+    return suffix > 0 ? { start: Math.max(0, size - suffix), end: size - 1 } : UNSATISFIABLE;
+  }
+  const start = Number(m[1]);
+  const last = m[2] ? Number(m[2]) : Infinity;
+  if (last < start) return null;
+  return start < size ? { start, end: Math.min(last, size - 1) } : UNSATISFIABLE;
+}
+
+// Streams this process is serving; capped by config.downloadStreamMaxConcurrent.
+let activeStreams = 0;
+
+/**
+ * Takes a stream slot before any await, so requests opening at once cannot all pass the cap.
+ * Returns its release, safe to call twice, or null at the cap.
+ */
+function takeStreamSlot() {
+  const max = config.downloadStreamMaxConcurrent;
+  if (max !== 0 && activeStreams >= max) return null;
+  activeStreams += 1;
+  let held = true;
+  return () => {
+    if (held) activeStreams -= 1;
+    held = false;
+  };
+}
+
+/**
+ * The store read, once its first bytes are in. Null, with the stream released, when it fails or
+ * has not started within STREAM_OPEN_TIMEOUT_MS: the caller can still send the 302 then.
+ */
+async function openStream(key, opts) {
+  let stream;
+  const started = (async () => {
+    stream = await storage.getObjectStream(key, opts);
+    await once(stream, 'readable');
+    return stream;
+  })();
+  try {
+    return await withTimeout(started, STREAM_OPEN_TIMEOUT_MS, 'store read');
+  } catch (err) {
+    // Released whenever the open settles, in case it is still pending.
+    started.then(s => s.destroy(), () => {});
+    if (stream) stream.destroy();
+    logger.warn(`[Document Controller] stream open failed, redirecting instead: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * The 200, 206, 304 or 416. Null when the answer cannot be built, the instance is at its stream
+ * cap, or the store will not start the read; the caller then sends the 302, and nothing set here
+ * survives it but headers that answer overwrites.
+ */
+async function sendBytes(req, res, { doc, fileName }, type, stat) {
+  const { size } = stat;
+  // A rename or a visibility change moves the record, not the object, and Front Door revalidates
+  // by date alone.
+  const modified = new Date(Math.max(stat.lastModified.getTime(), Date.parse(doc.updatedAt) || 0));
+  let validators;
+  let disposition;
+  try {
+    validators = {
+      // The name is in the tag: the same bytes under a renamed document are a different answer.
+      ETag: `"${crypto.createHash('sha256').update(`${stat.etag}\n${fileName}`)
+        .digest('base64url').slice(0, 32)}"`,
+      'Last-Modified': modified.toUTCString(),
+      'Content-Type': type,
+      'Cache-Control': isAnonymous(resolveAccess(req))
+        ? `public, max-age=${STREAM_MAX_AGE_SECONDS}` : 'private, no-store'
+    };
+    disposition = contentDisposition(fileName, { inline: true });
+  } catch (err) {
+    logger.warn(`[Document Controller] stream headers failed, redirecting instead: ${err.message}`);
+    return null;
+  }
+  const setValidators = () => Object.entries(validators).forEach(([name, value]) => res.set(name, value));
+
+  if (notModified(req, validators.ETag, modified)) {
+    setValidators();
+    return res.status(304).send('');
+  }
+
+  const range = byteRange(req, size, validators.ETag, modified);
+  if (range === UNSATISFIABLE) {
+    res.set('Content-Range', `bytes */${size}`);
+    return res.status(416).send('');
+  }
+
+  const release = takeStreamSlot();
+  if (!release) {
+    logger.info(`[Document Controller] ${activeStreams} streams open, redirecting`);
+    return null;
+  }
+
+  const { start, end } = range || { start: 0, end: size - 1 };
+  // Pinned to the stat's version, or in an unversioned store to its etag, so a replace between
+  // the stat and the read cannot send bytes the headers do not describe.
+  const body = await openStream(doc.s3Key, {
+    offset: start, length: end - start + 1, versionId: stat.versionId || undefined,
+    ifMatch: stat.versionId ? undefined : stat.etag
+  });
+  if (!body) {
+    release();
+    return null;
+  }
+  // Closes on end, error or destroy; the router destroys it when the caller goes away.
+  body.once('close', release);
+
+  // A viewer fetching the rest of a file it already counted is not a second view.
+  recordDownload(req, doc, true, { view: start === 0 });
+  setValidators();
+  res.set('Accept-Ranges', 'bytes');
+  res.set('Content-Disposition', disposition);
+  // Always a length: Front Door will not chunk a large object sent with chunked encoding.
+  res.set('Content-Length', String(end - start + 1));
+  if (range) res.set('Content-Range', `bytes ${start}-${end}/${size}`);
+  return res.stream(body, { status: range ? 206 : 200 });
+}
+
 exports.downloadDocument = async (req, res) => {
+  // Every answer states its cacheability: Front Door keeps one without a Cache-Control for days.
+  res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'HEAD') return headDownload(req, res);
 
-  const { status, body } = await resolveDownload(req, req.params.id,
-    { inline: queryFlag(req, 'inline') });
+  const inline = queryFlag(req, 'inline');
+  if (inline && !queryFlag(req, 'redirect')) return inlineDownload(req, res);
+
+  const { status, body } = await resolveDownload(req, req.params.id, { inline });
 
   // Only a 200 redirects. A 404 or 500 stays JSON in both modes: there is nowhere to send the
   // caller, and a browser gets the same body it would have got before.
   if (status === 200 && wantsRedirect(req)) {
     // The Location IS the credential: presigned and short-lived, so no cache or history entry may
     // replay it. The presign already carries the file name (src/storage/content-disposition.js).
-    res.set('Cache-Control', 'no-store');
     return res.redirect(302, body.url);
   }
 

@@ -22,6 +22,8 @@ process.env.AUDIT_MAX_BATCH = '1';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { once } = require('events');
+const { Readable } = require('stream');
 const { HttpRequest } = require('@azure/functions');
 
 const storage = require('../../src/storage');
@@ -32,6 +34,7 @@ const { logger } = require('../../src/utils/logger');
 const { makeRes, dispatch } = require('../../src/http/router');
 const { withServer } = require('../helpers/with-server');
 const { TIER } = require('../../src/helpers/access-sql');
+const config = require('../../src/config');
 
 // Both streams (analytics and audit) land here instead of the ingestion API.
 const sent = [];
@@ -231,6 +234,10 @@ test('download in redirect mode', async (t) => {
 
 test('download in inline mode', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
+  // Streaming off: these cases are about the presign, which the stream mode falls back to.
+  const streamMax = config.downloadStreamMaxBytes;
+  config.downloadStreamMaxBytes = 0;
+  t.after(() => { config.downloadStreamMaxBytes = streamMax; });
 
   /** The inlineType the presign was asked for. */
   async function signedType(t, query, doc = DOC) {
@@ -248,10 +255,19 @@ test('download in inline mode', async (t) => {
     assert.equal(response.statusCode, 302);
   });
 
-  await t.test('the JSON mode takes the flag too', async (t) => {
+  await t.test('?inline=1 alone, streaming off, answers the inline 302', async (t) => {
     const { response, type } = await signedType(t, { inline: '1' });
     assert.equal(type, 'application/pdf', 'no recorded type: the .pdf name decides');
-    assert.equal(response.statusCode, 200);
+    assert.equal(response.statusCode, 302);
+    assert.equal(response.headers['cache-control'], 'no-store');
+  });
+
+  await t.test('?inline=1 never answers JSON, even to an XHR Accept', async (t) => {
+    allow(t);
+    const response = res();
+    await controller.downloadDocument(req({ query: { inline: '1' }, headers: { accept: 'application/json' } }),
+      response);
+    assert.equal(response.statusCode, 302);
   });
 
   await t.test('the last inline value wins', async (t) => {
@@ -259,17 +275,9 @@ test('download in inline mode', async (t) => {
     assert.strictEqual(type, 'application/pdf');
   });
 
-  await t.test('the JSON body says whether inline was honoured for this file', async (t) => {
-    const cases = [
-      [{ inline: '1' }, { ...DOC, mimeType: 'application/pdf' }, true],
-      [{}, { ...DOC, mimeType: 'application/pdf' }, false],
-      [{ inline: '1' }, { ...DOC, mimeType: 'text/html', s3Key: 'etl/page.html' }, false]
-    ];
-    for (const [query, doc, expected] of cases) {
-      const { response } = await signedType(t, query, doc);
-      assert.strictEqual(JSON.parse(response.body).inline, expected, JSON.stringify({ query, doc }));
-      t.mock.restoreAll();
-    }
+  await t.test('the JSON body says the URL is an attachment', async (t) => {
+    const { response } = await signedType(t, {}, { ...DOC, mimeType: 'application/pdf' });
+    assert.strictEqual(JSON.parse(response.body).inline, false);
   });
 
   await t.test('an inline view is marked in the analytics and audit detail; a save is not', async (t) => {
@@ -563,5 +571,423 @@ test('HEAD is answered here, never redirected', async (t) => {
     assert.ok(!('content-length' in out.headers), `content-length: ${out.headers['content-length']}`);
     assert.equal(out.headers['content-type'], 'application/octet-stream');
     assert.equal(out.body, undefined);
+  });
+});
+
+test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const { downloadStreamMaxBytes, downloadStreamMaxConcurrent } = config;
+  t.afterEach(() => Object.assign(config, { downloadStreamMaxBytes, downloadStreamMaxConcurrent }));
+
+  const BYTES = Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 251));
+  const PDF = { ...DOC, mimeType: 'application/pdf' };
+  const STAT = {
+    size: BYTES.length, contentType: 'application/pdf', etag: 'store-etag-1', versionId: 'v1',
+    lastModified: new Date('2026-09-01T10:00:00Z')
+  };
+  const LAST_MODIFIED = 'Tue, 01 Sep 2026 10:00:00 GMT';
+  const PATH = `/api/documents/${DOC.id}/download?inline=1`;
+  const STAFF = { realm_access: { roles: ['staff'] } };
+
+  /** A visible document with a stored object; returns the mocks a case may inspect. */
+  function stored(t, { doc = PDF, stat = STAT } = {}) {
+    const presign = allow(t, { doc });
+    const statObject = t.mock.method(storage, 'statObject', async () => stat);
+    const open = t.mock.method(storage, 'getObjectStream', async (key, { offset, length }) =>
+      Readable.from([BYTES.subarray(offset, offset + length)]));
+    return { presign, statObject, open };
+  }
+
+  /** One request through the dispatcher, body read whole. */
+  async function get(headers = {}, path = PATH) {
+    let out;
+    await withServer(async (call) => {
+      const r = await call(path, { headers });
+      out = { res: r, body: Buffer.from(await r.arrayBuffer()) };
+    });
+    return out;
+  }
+
+  /**
+   * The handler called directly, for a credentialed caller the dispatcher would need a token for.
+   * The body is drained, so the stream's slot is free for the next case.
+   */
+  async function getAs(user, headers = {}) {
+    const out = res();
+    await controller.downloadDocument(req({ user, headers, query: { inline: '1' } }), out);
+    if (out.streamed) await out.body.toArray();
+    return out;
+  }
+
+  /** The handler called directly, stream left open: it holds a slot until destroyed. */
+  async function holdOpen() {
+    const out = res();
+    await controller.downloadDocument(req({ query: { inline: '1' } }), out);
+    assert.equal(out.statusCode, 200);
+    return out.body;
+  }
+
+  await t.test('an anonymous public PDF answers 200 with the bytes and every header', async (t) => {
+    const { open, presign } = stored(t);
+    const { res: r, body } = await get();
+    assert.equal(r.status, 200);
+    assert.deepEqual(body, BYTES);
+    assert.equal(r.headers.get('content-type'), 'application/pdf');
+    assert.equal(r.headers.get('content-length'), '4096');
+    assert.equal(r.headers.get('accept-ranges'), 'bytes');
+    assert.equal(r.headers.get('last-modified'), LAST_MODIFIED);
+    assert.match(r.headers.get('etag'), /^"[\w-]{32}"$/);
+    assert.equal(r.headers.get('cache-control'), 'public, max-age=300');
+    assert.equal(r.headers.get('content-disposition'),
+      'inline; filename="Site C Report.pdf"; filename*=UTF-8\'\'Site%20C%20Report.pdf');
+    assert.equal(r.headers.get('location'), null);
+    assert.equal(open.mock.calls[0].arguments[1].versionId, 'v1', 'bytes pinned to the stat version');
+    assert.equal(presign.mock.callCount(), 0);
+  });
+
+  await t.test('the ETag changes with the file name, not only the bytes', async (t) => {
+    stored(t);
+    const before = (await get()).res.headers.get('etag');
+    t.mock.restoreAll();
+    stored(t, { doc: { ...PDF, documentFileName: 'Renamed.pdf' } });
+    assert.notEqual((await get()).res.headers.get('etag'), before);
+  });
+
+  await t.test('Range bytes=0-1023 answers 206 with that slice', async (t) => {
+    stored(t);
+    const { res: r, body } = await get({ range: 'bytes=0-1023' });
+    assert.equal(r.status, 206);
+    assert.equal(r.headers.get('content-range'), 'bytes 0-1023/4096');
+    assert.equal(r.headers.get('content-length'), '1024');
+    assert.deepEqual(body, BYTES.subarray(0, 1024));
+  });
+
+  await t.test('a suffix range answers the last bytes', async (t) => {
+    stored(t);
+    const { res: r, body } = await get({ range: 'bytes=-100' });
+    assert.equal(r.status, 206);
+    assert.equal(r.headers.get('content-range'), 'bytes 3996-4095/4096');
+    assert.deepEqual(body, BYTES.subarray(3996));
+  });
+
+  await t.test('a range running past the end is cut at the size', async (t) => {
+    stored(t);
+    const { res: r } = await get({ range: 'bytes=4000-9999' });
+    assert.equal(r.status, 206);
+    assert.equal(r.headers.get('content-range'), 'bytes 4000-4095/4096');
+  });
+
+  await t.test('a range starting past the end is 416 with the size', async (t) => {
+    const { open } = stored(t);
+    const { res: r } = await get({ range: 'bytes=4096-' });
+    assert.equal(r.status, 416);
+    assert.equal(r.headers.get('content-range'), 'bytes */4096');
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.equal(open.mock.callCount(), 0);
+  });
+
+  await t.test('an inverted range is ignored: the whole file', async (t) => {
+    stored(t);
+    const { res: r } = await get({ range: 'bytes=5-3' });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-length'), '4096');
+  });
+
+  await t.test('a multi-part range answers the whole file', async (t) => {
+    stored(t);
+    const { res: r, body } = await get({ range: 'bytes=0-9,20-29' });
+    assert.equal(r.status, 200);
+    assert.equal(body.length, 4096);
+  });
+
+  await t.test('an If-Range that no longer matches answers the whole file', async (t) => {
+    stored(t);
+    const { res: r } = await get({ range: 'bytes=0-9', 'if-range': '"stale-tag"' });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-length'), '4096');
+  });
+
+  await t.test('an If-Range equal to Last-Modified keeps the range', async (t) => {
+    stored(t);
+    const { res: r } = await get({ range: 'bytes=0-9', 'if-range': LAST_MODIFIED });
+    assert.equal(r.status, 206);
+  });
+
+  await t.test('a matching If-None-Match is 304 with the validators and no body', async (t) => {
+    stored(t);
+    const etag = (await get()).res.headers.get('etag');
+    const { res: r, body } = await get({ 'if-none-match': `W/${etag}` });
+    assert.equal(r.status, 304);
+    assert.equal(r.headers.get('etag'), etag);
+    assert.equal(r.headers.get('last-modified'), LAST_MODIFIED);
+    assert.equal(r.headers.get('cache-control'), 'public, max-age=300');
+    assert.equal(body.length, 0);
+  });
+
+  await t.test('If-Modified-Since at Last-Modified is 304', async (t) => {
+    const { open } = stored(t);
+    const { res: r } = await get({ 'if-modified-since': LAST_MODIFIED });
+    assert.equal(r.status, 304);
+    assert.equal(open.mock.callCount(), 0);
+  });
+
+  await t.test('If-Modified-Since before Last-Modified sends the file', async (t) => {
+    stored(t);
+    const { res: r } = await get({ 'if-modified-since': 'Mon, 31 Aug 2026 10:00:00 GMT' });
+    assert.equal(r.status, 200);
+  });
+
+  await t.test('a credentialed caller gets private, no-store', async (t) => {
+    stored(t);
+    const out = await getAs(STAFF);
+    assert.equal(out.statusCode, 200);
+    assert.equal(out.headers['cache-control'], 'private, no-store');
+  });
+
+  await t.test('a document hidden from an anonymous caller is a 404, no-store', async (t) => {
+    t.mock.method(documents, 'getById',
+      async (access) => (access.tier === TIER.PUBLIC ? null : { ...PDF, isPublished: false }));
+    const statObject = t.mock.method(storage, 'statObject', async () => STAT);
+    const { res: r } = await get();
+    assert.equal(r.status, 404);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.equal(statObject.mock.callCount(), 0);
+  });
+
+  await t.test('a file over the cap is the inline 302, no-store', async (t) => {
+    config.downloadStreamMaxBytes = BYTES.length - 1;
+    const { presign, open } = stored(t);
+    t.mock.method(logger, 'info', () => {});
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.get('location'), URL_WITH_DISPOSITION);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.equal(presign.mock.calls[0].arguments[1].inlineType, 'application/pdf');
+    assert.equal(open.mock.callCount(), 0);
+  });
+
+  await t.test('a cap of 0 is the 302 without asking the store', async (t) => {
+    config.downloadStreamMaxBytes = 0;
+    const { statObject } = stored(t);
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(statObject.mock.callCount(), 0);
+  });
+
+  await t.test('a type that may not open inline, like docx, is the attachment 302', async (t) => {
+    const { presign, statObject } = stored(t, { doc: { ...DOC, s3Key: 'etl/site-c/report.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' } });
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(presign.mock.calls[0].arguments[1].inlineType, null);
+    assert.equal(statObject.mock.callCount(), 0);
+  });
+
+  await t.test('a failed stat is the 302, logged', async (t) => {
+    stored(t);
+    t.mock.method(storage, 'statObject', async () => { throw new Error('store down'); });
+    const warn = t.mock.method(logger, 'warn', () => {});
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(warn.mock.callCount(), 1);
+  });
+
+  await t.test('a store that will not open the read is the 302 with no-store', async (t) => {
+    stored(t);
+    t.mock.method(storage, 'getObjectStream', async () => { throw new Error('refused'); });
+    t.mock.method(logger, 'warn', () => {});
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.equal(r.headers.get('etag'), null);
+  });
+
+  await t.test('redirect=1&inline=1 is still the 302', async (t) => {
+    const { open } = stored(t);
+    const { res: r } = await get({}, `${PATH}&redirect=1`);
+    assert.equal(r.status, 302);
+    assert.equal(open.mock.callCount(), 0);
+  });
+
+  await t.test('the JSON mode answers no-store', async (t) => {
+    stored(t);
+    const { res: r } = await get({}, `/api/documents/${DOC.id}/download`);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+  });
+
+  await t.test('the JSON 404 answers no-store', async (t) => {
+    t.mock.method(documents, 'getById', async () => null);
+    const { res: r } = await get({}, `/api/documents/${DOC.id}/download`);
+    assert.equal(r.status, 404);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+  });
+
+  /** Analytics rows one request wrote. */
+  async function events(headers) {
+    sent.length = 0;
+    await get(headers);
+    await audit.flush();
+    return sent.filter(r => r.stream === audit.EVENTS_STREAM);
+  }
+
+  await t.test('an unranged view writes one analytics event, marked inline', async (t) => {
+    stored(t);
+    const rows = await events({});
+    assert.equal(rows.length, 1);
+    assert.deepStrictEqual(rows[0].Detail, { inline: true });
+  });
+
+  await t.test('a range from byte 0 writes the event', async (t) => {
+    stored(t);
+    assert.equal((await events({ range: 'bytes=0-1023' })).length, 1);
+  });
+
+  await t.test('a range from mid-file writes no analytics event', async (t) => {
+    stored(t);
+    assert.equal((await events({ range: 'bytes=1024-2047' })).length, 0);
+  });
+
+  await t.test('a mid-file range of a document the public cannot see is still audited', async (t) => {
+    // `bytes=1-` is all but one byte of the file: skipping its audit row would be a way around it.
+    stored(t, { doc: { ...PDF, isPublished: false } });
+    sent.length = 0;
+    const out = await getAs(STAFF, { range: 'bytes=1-' });
+    assert.equal(out.statusCode, 206);
+    await audit.flush();
+    assert.equal(sent.filter(r => r.stream === audit.EVENTS_STREAM).length, 0);
+    assert.equal(sent.filter(r => r.stream === audit.AUDIT_STREAM).length, 1);
+  });
+
+  await t.test('a streamed document the public cannot see writes the audit row', async (t) => {
+    stored(t, { doc: { ...PDF, isPublished: false } });
+    sent.length = 0;
+    const out = await getAs(STAFF);
+    assert.equal(out.statusCode, 200);
+    await audit.flush();
+    const row = sent.find(r => r.stream === audit.AUDIT_STREAM);
+    assert.deepStrictEqual(row.Detail, { displayName: 'Site C Report', inline: true });
+  });
+
+  await t.test('a record changed after the object moves Last-Modified', async (t) => {
+    // A rename touches the record only; the edge revalidates by date, so the date must move.
+    stored(t, { doc: { ...PDF, updatedAt: '2026-09-20T08:00:00.000Z' } });
+    const { res: r } = await get({ 'if-modified-since': LAST_MODIFIED });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('last-modified'), 'Sun, 20 Sep 2026 08:00:00 GMT');
+  });
+
+  await t.test('an If-Modified-Since in the future is ignored', async (t) => {
+    stored(t);
+    const { res: r } = await get({ 'if-modified-since': 'Fri, 01 Jan 2100 00:00:00 GMT' });
+    assert.equal(r.status, 200);
+  });
+
+  await t.test('an object with no modification date is the 302', async (t) => {
+    const { open } = stored(t, { stat: { ...STAT, lastModified: null } });
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(open.mock.callCount(), 0);
+  });
+
+  await t.test('an object with no etag is the 302', async (t) => {
+    const { open } = stored(t, { stat: { ...STAT, etag: null } });
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(open.mock.callCount(), 0);
+  });
+
+  await t.test('a file name the header cannot carry is the 302, with no read opened', async (t) => {
+    // A lone surrogate, which encodeURIComponent throws on.
+    const { open } = stored(t, { doc: { ...PDF, documentFileName: 'Report \uD83D draft.pdf' } });
+    const warn = t.mock.method(logger, 'warn', () => {});
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(open.mock.callCount(), 0);
+    assert.equal(warn.mock.callCount(), 1);
+  });
+
+  await t.test('an unversioned store pins the read to the stat etag', async (t) => {
+    const { open } = stored(t, { stat: { ...STAT, versionId: null } });
+    const { res: r } = await get();
+    assert.equal(r.status, 200);
+    assert.equal(open.mock.calls[0].arguments[1].ifMatch, 'store-etag-1');
+    assert.equal(open.mock.calls[0].arguments[1].versionId, undefined);
+  });
+
+  await t.test('an object replaced between stat and read (412) is the 302', async (t) => {
+    stored(t, { stat: { ...STAT, versionId: null } });
+    t.mock.method(storage, 'getObjectStream', async () => {
+      throw Object.assign(new Error('precondition failed'), { statusCode: 412, code: 'ConditionNotMet' });
+    });
+    t.mock.method(logger, 'warn', () => {});
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+  });
+
+  await t.test('a store read with no bytes after 10 s is dropped for the 302', async (t) => {
+    stored(t);
+    const stalled = new Readable({ read() {} });
+    let opened;
+    const called = new Promise((resolve) => { opened = resolve; });
+    t.mock.method(storage, 'getObjectStream', async () => { opened(); return stalled; });
+    t.mock.method(logger, 'warn', () => {});
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const out = res();
+      const pending = controller.downloadDocument(req({ query: { inline: '1' } }), out);
+      await called;
+      // setImmediate is not mocked: the open has settled as far as it can before time moves.
+      await new Promise(resolve => setImmediate(resolve));
+      t.mock.timers.tick(10000);
+      await pending;
+      assert.equal(out.statusCode, 302);
+      assert.equal(stalled.destroyed, true, 'a stalled read would hold its store connection');
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+
+  await t.test('at the stream cap the next viewer gets the 302 until a stream closes', async (t) => {
+    config.downloadStreamMaxConcurrent = 1;
+    const { open } = stored(t);
+    t.mock.method(logger, 'info', () => {});
+    const held = await holdOpen();
+
+    const { res: capped } = await get();
+    assert.equal(capped.status, 302);
+    assert.equal(capped.headers.get('cache-control'), 'no-store');
+
+    const source = await open.mock.calls[0].result;
+    held.destroy();
+    await once(source, 'close');
+    assert.equal((await get()).res.status, 200);
+  });
+
+  await t.test('a 304 or a 416 takes no stream slot', async (t) => {
+    config.downloadStreamMaxConcurrent = 1;
+    const { open } = stored(t);
+    assert.equal((await get({ 'if-modified-since': LAST_MODIFIED })).res.status, 304);
+    assert.equal((await get({ range: 'bytes=9999-' })).res.status, 416);
+    const held = await holdOpen();
+    const source = await open.mock.calls[0].result;
+    held.destroy();
+    await once(source, 'close');
+  });
+
+  await t.test('viewers arriving together get one stream at a cap of 1, the rest the 302', async (t) => {
+    // The open is slow, so all three are past the cap check before any read has started.
+    config.downloadStreamMaxConcurrent = 1;
+    stored(t);
+    t.mock.method(storage, 'getObjectStream', async (key, { offset, length }) => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return Readable.from([BYTES.subarray(offset, offset + length)]);
+    });
+    t.mock.method(logger, 'info', () => {});
+    const outs = [res(), res(), res()];
+    await Promise.all(outs.map(out => controller.downloadDocument(req({ query: { inline: '1' } }), out)));
+    assert.deepEqual(outs.map(out => out.statusCode).sort(), [200, 302, 302]);
+    await Promise.all(outs.filter(out => out.streamed).map(out => out.body.toArray()));
   });
 });
