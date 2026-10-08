@@ -13,8 +13,10 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { once } = require('node:events');
+const { Readable } = require('node:stream');
 const { SUITE_KEY } = require('../helpers/suite-key');
-const { HttpRequest } = require('@azure/functions');
+const { HttpRequest, HttpResponse } = require('@azure/functions');
 
 const { dispatch } = require('../../src/http/router');
 const configController = require('../../src/controllers/config');
@@ -164,6 +166,81 @@ test('a 200 with an empty body still carries content-length: 0', async (t) => {
   assert.strictEqual(res.status, 200);
   assert.strictEqual(res.body, '', 'only null-body statuses lose their body');
   assert.strictEqual(res.headers['content-length'], '0');
+});
+
+test('a streamed body arrives whole under the length the handler preset', async (t) => {
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Content-Length', 11);
+    res.stream(Readable.from([Buffer.from('hello '), Buffer.from('world')]));
+  });
+
+  const res = await call('/api/config');
+  // HttpResponse is what the host builds from dispatch's return value.
+  const sent = new HttpResponse(res);
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.headers['content-length'], '11', 'the preset length, not the length of an empty buffer');
+  assert.strictEqual(await sent.text(), 'hello world');
+});
+
+test('a 304 the handler answers carries no body and no content-length', async (t) => {
+  // A conditional GET states the file's size before it learns the copy is fresh; the 304 must drop
+  // that length, or undici refuses the Response and the host serves an empty 500.
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Content-Length', 11).set('ETag', '"abc"');
+    res.status(304).send('');
+  });
+
+  const res = await call('/api/config');
+
+  assert.strictEqual(res.status, 304);
+  assert.strictEqual(res.body, undefined);
+  assert.strictEqual(res.headers['content-length'], undefined);
+  assert.strictEqual(res.headers.etag, '"abc"');
+  assert.doesNotThrow(() => new Response(res.body, { status: res.status, headers: res.headers }));
+});
+
+// Bounded: the failure mode is a body that never ends.
+test('a stream answered as 304 sends nothing and releases its source', { timeout: 5000 }, async (t) => {
+  // Never ends by itself, like a store read nobody consumes.
+  const source = new Readable({ read() {} });
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Content-Length', 5);
+    res.stream(source, { status: 304 });
+  });
+
+  const res = await call('/api/config');
+
+  assert.strictEqual(res.status, 304);
+  assert.strictEqual(res.body, undefined);
+  assert.strictEqual(res.headers['content-length'], undefined);
+  await once(source, 'close');
+  assert.strictEqual(source.destroyed, true, 'an unread store stream would hold its connection open');
+});
+
+// Bounded: the failure mode is a body that never ends.
+test('a stream that fails after the headers is logged and ends short', { timeout: 5000 }, async (t) => {
+  const error = t.mock.method(logger, 'error', () => {});
+  let sentFirst = false;
+  const source = new Readable({
+    read() {
+      if (sentFirst) return this.destroy(new Error('store connection reset'));
+      sentFirst = true;
+      this.push('partial');
+    }
+  });
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Content-Length', 100);
+    res.stream(source);
+  });
+
+  const res = await call('/api/config');
+  const text = await new HttpResponse(res).text();
+
+  assert.strictEqual(res.headers['content-length'], '100');
+  assert.strictEqual(text, 'partial', 'the bytes read before the failure, then a clean end');
+  const logged = error.mock.calls.map((c) => c.arguments[1]).find((meta) => meta && meta.evt === 'stream-error');
+  assert.strictEqual(logged && logged.error, 'store connection reset');
 });
 
 test('edge gate', async (t) => {
