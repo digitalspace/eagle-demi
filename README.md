@@ -350,7 +350,7 @@ routes return only `_id` and `read` unless `fields` names the rest, so each of t
 `fields=a|b|c`: the fields it compares for the identity, plus `project` on comment periods and
 documents. The
 organization and comment period routes answer only the fields on their controller's
-`ALLOWED_FIELDS`, so those reads compare nothing else (no address fields, no `commentIdCount`);
+`ALLOWED_FIELDS`, so those reads compare nothing else (no address fields or staff dates, no `commentIdCount`);
 `dataset=Organization` and `dataset=CommentPeriod` search still compare them. Pins, comments and
 the staff project list come back as `[{ total_items, results }]`; each page is unwrapped to its
 `results`. `recent-activity-top`
