@@ -521,7 +521,10 @@ carries the row's etag. The counters per container are:
 - `skippedHeld`: a document with `levelHeldAt`, or a row DEMI sealed. Left as stored.
 - `skippedDiffers`: the stored read is neither Eagle's nor the dropped rule's, for example after a
   DEMI narrow. Left as stored.
-- `noParent`: the parent row is not in DEMI.
+- `noParent`: the parent row is not in DEMI. Left as stored.
+- `parentMissing`: a document whose project is not in DEMI. A seed stores such a document at Eagle's
+  read with no parent cap, so the script treats it as having no parent; every other child kind is
+  only stored under its parent, so it counts under `noParent` instead.
 - `stale`: the row changed after the scan (412). Run again.
 - `failed`: the write was refused. The script exits 1.
 

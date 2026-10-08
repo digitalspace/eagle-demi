@@ -264,6 +264,27 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.strictEqual(summaryOf(summaries, 'comments').noParent, 1);
   });
 
+  // A seed stores a document whose project is not stored at its uncapped read.
+  const orphanDocument = read => ({
+    id: 'd-1', projectId: 'p-gone', eagleId: 'd-1', read, ownRead: ['sysadmin'], _etag: 'x'
+  });
+
+  await t.test('a document whose project is not stored loses the added staff, and is counted', async (t) => {
+    const writes = fakeCosmos(t, { documents: [orphanDocument(['sysadmin', 'staff'])] });
+    const summaries = await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['sysadmin']);
+    const s = summaryOf(summaries, 'documents');
+    assert.deepStrictEqual([s.patched, s.parentMissing, s.noParent], [1, 1, 0]);
+  });
+
+  await t.test('a document whose project is not stored keeps a read the rule did not give', async (t) => {
+    const writes = fakeCosmos(t, { documents: [orphanDocument(['sysadmin', 'staff', 'idir', 'public'])] });
+    const summaries = await reverse('--live');
+    assert.strictEqual(writes.length, 0);
+    const s = summaryOf(summaries, 'documents');
+    assert.deepStrictEqual([s.skippedDiffers, s.parentMissing], [1, 1]);
+  });
+
   await t.test('a row changed since the scan is counted stale, not failed', async (t) => {
     fakeCosmos(t, { projects: [WIDENED_PROJECT] }, { stale: true });
     const summaries = await reverse('--live');

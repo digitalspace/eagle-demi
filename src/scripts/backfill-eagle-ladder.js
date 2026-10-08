@@ -33,7 +33,8 @@ const STEPS = Object.freeze([
   { container: 'lists', pk: 'kind' },
   { container: 'users', pk: 'id', deleteCeiling: true },
   { container: 'commentPeriods', pk: 'projectId', parent: 'project', loadAll: true, deleteCeiling: true },
-  { container: 'documents', pk: 'projectId', parent: 'project', deleteCeiling: true },
+  // A seed stores a document whose project is not stored uncapped; a push refuses every other orphan.
+  { container: 'documents', pk: 'projectId', parent: 'project', deleteCeiling: true, ownWhenParentMissing: true },
   { container: 'groups', pk: 'projectId', parent: 'project', capByNotification: true, deleteCeiling: true },
   { container: 'inspections', pk: 'inspection', parent: 'inspection', loadAll: true, deleteCeiling: true },
   { container: 'comments', pk: 'periodId', parent: 'period', deleteCeiling: true },
@@ -265,13 +266,19 @@ function candidates(step, row, eagleRead, parent) {
 
 /**
  * The read a row is patched to, or why not: `{read}`, `{skip: 'held'|'differs'|'noParent'}`, or
- * null when the dropped rule never touched it.
+ * null when the dropped rule never touched it. A row whose step stores it uncapped when its parent
+ * is not stored is planned as having no parent, flagged `parentMissing`.
  */
 function planReverse(step, row, parents) {
   const eagleRead = eagleReadOf(step, row);
   if (step.parent !== 'eagle' && eagleRead === undefined) return null;
   const parent = parentOf(step, row, parents);
-  if (parent === null) return { skip: 'noParent' };
+  if (parent === null && !step.ownWhenParentMissing) return { skip: 'noParent' };
+  if (parent === null) return { ...planAgainst(step, row, eagleRead, undefined), parentMissing: true };
+  return planAgainst(step, row, eagleRead, parent);
+}
+
+function planAgainst(step, row, eagleRead, parent) {
   const pairs = candidates(step, row, eagleRead, parent).filter(p => !sameRead(p.dropped, p.target));
   if (pairs.length === 0 || pairs.some(p => sameRead(row.read, p.target))) return null;
   if (row.levelHeldAt || (levelOfRead(row.read) === 0 && isDemiSeal(row))) return { skip: 'held' };
@@ -341,6 +348,7 @@ async function runReverse(args, io) {
         if (plan && plan.skip === 'held') s.skippedHeld++;
         else if (plan && plan.skip === 'differs') s.skippedDiffers++;
         else if (plan && plan.skip === 'noParent') s.noParent++;
+        if (plan && plan.parentMissing) s.parentMissing++;
         const read = plan && plan.read;
         // Children are capped by what the parent becomes, so a dry run counts what a live run writes.
         const entry = step.loadAll && rememberParent(step, row, read || row.read, parents);
@@ -367,7 +375,8 @@ async function runReverse(args, io) {
 function newSummary(container, args) {
   return {
     container, mode: args.live ? 'live' : 'dry-run', direction: args.reverse ? 'reverse' : 'forward',
-    scanned: 0, planned: 0, patched: 0, skippedHeld: 0, skippedDiffers: 0, noParent: 0, stale: 0, failed: 0
+    scanned: 0, planned: 0, patched: 0, skippedHeld: 0, skippedDiffers: 0, noParent: 0, parentMissing: 0,
+    stale: 0, failed: 0
   };
 }
 
@@ -387,7 +396,8 @@ async function writeAll(write, container, ops, s) {
 function summaryLine(s) {
   return `[eagle-ladder] container=${s.container} direction=${s.direction} mode=${s.mode} ` +
     `scanned=${s.scanned} planned=${s.planned} patched=${s.patched} skippedHeld=${s.skippedHeld} ` +
-    `skippedDiffers=${s.skippedDiffers} noParent=${s.noParent} stale=${s.stale} failed=${s.failed}`;
+    `skippedDiffers=${s.skippedDiffers} noParent=${s.noParent} parentMissing=${s.parentMissing} ` +
+    `stale=${s.stale} failed=${s.failed}`;
 }
 
 /**
