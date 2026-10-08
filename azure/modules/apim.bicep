@@ -633,7 +633,7 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-05-01' = {
       <value>@(context.Request.IpAddress)</value>
     </set-header>
   </inbound>
-  <backend><forward-request /></backend>
+  <backend><forward-request buffer-response="false" /></backend>
   <outbound />
   <on-error />
 </policies>'''
