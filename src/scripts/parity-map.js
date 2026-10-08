@@ -17,6 +17,7 @@ const { EAGLE_STAFF_FIELDS, TRACK_PRECEDENCE } = require('../merge/project');
 const commentMirror = require('../controllers/nosql/comment');
 const commentPeriodMirror = require('../controllers/nosql/comment-period');
 const organizationMirror = require('../controllers/nosql/organization');
+const { LEVEL_TOKENS, levelOfRead } = require('../helpers/access-sql');
 
 const STAFF = ['staff', 'sysadmin'];
 const ANON = ['anonymous'];
@@ -99,6 +100,10 @@ const OPEN_GAPS = {
 
 const EAGLE_ID = /^[0-9a-f]{24}$/i;
 
+const STAFF_LEVEL = levelOfRead([LEVEL_TOKENS[2]]);
+/** A child read staff reaches under a parent read staff does not: `capRead` keeps it from DEMI staff. */
+const cappedFromStaff = (own, parent) => levelOfRead(own) >= STAFF_LEVEL && levelOfRead(parent) < STAFF_LEVEL;
+
 /**
  * A value both APIs can be compared on: strings trimmed, an empty string, empty list or absent value
  * is null, a populated ref is its id, an ISO date is canonical.
@@ -159,6 +164,8 @@ const KNOWN_DIFFERENCES = [
     why: 'row from the 2026-08-25 prod seed that the Eagle test database does not hold' },
   { name: 'ladder-above-public', kind: 'extraInDemi', identities: ['staff'], ids: true,
     why: "Eagle read[] (or its project's) has public, not staff: Eagle staff routes hide it, DEMI's ladder ranks staff above public" },
+  { name: 'capped-under-parent', kind: 'missingInDemi', identities: ['staff'], ids: true,
+    why: "Eagle row's own read[] admits staff, its project's does not: DEMI caps a child's read under its parent's" },
   { name: 'display-name-from-file-name', kind: 'fieldDiff',
     why: 'Eagle displayName is empty; the seed falls back to documentFileName (src/seed/transform.js)',
     match: ({ dataset, field, eagleValue, demiValue, eagle }) => dataset === 'Document' && field === 'displayName' &&
@@ -383,5 +390,5 @@ const PARITY_MAP = [...REST_READS, ...SEARCH_READS];
 
 module.exports = {
   PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same,
-  sameField, search
+  sameField, search, cappedFromStaff
 };

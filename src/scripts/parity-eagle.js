@@ -14,7 +14,7 @@ const { diff } = require('./reconcile-eagle');
 const { eagleRef } = require('../helpers/parent-admit');
 const {
   PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, sameField,
-  search
+  search, cappedFromStaff
 } = require('./parity-map');
 const { logger } = require('../utils/logger');
 
@@ -25,7 +25,9 @@ const ID_NAMES = ['project', 'period', 'document', 'comment', 'organization', 'i
 const SAMPLE_CAP = 20;
 const REDIRECTS = [301, 302, 303, 307, 308];
 /** Datasets whose rows hang off an Eagle project through `project`. */
-const CHILD_DATASETS = ['CommentPeriod', 'Document'];
+const CHILD_DATASETS = ['CommentPeriod', 'Document', 'Group', 'Inspection', 'RecentActivity'];
+/** Children whose Eagle staff routes also check the project's read[], so they follow it above public. */
+const LADDER_CHILD_DATASETS = ['CommentPeriod', 'Document'];
 
 const USAGE = `usage: node src/scripts/parity-eagle.js --eagle <eagle-api base> --demi <DEMI base>
   [--identity anonymous|staff|sysadmin] [--token-env <VAR>] [--only <read>] [--max-pages <n>]
@@ -526,7 +528,7 @@ async function run(argv, deps = {}) {
           if (publicNotStaff(row.read)) ladder.add(id);
           if (entry.dataset === 'Project') projectReads.set(id, row.read);
           const parent = CHILD_DATASETS.includes(entry.dataset) && eagleRef(row.project);
-          if (parent) childParents.set(id, parent);
+          if (parent) childParents.set(id, { parent, read: row.read, followsParent: LADDER_CHILD_DATASETS.includes(entry.dataset) });
         }
       }
       if (entry.dataset === 'Document') {
@@ -571,9 +573,14 @@ async function run(argv, deps = {}) {
     d.writeFile(args.report, JSON.stringify({ identity, eagle: args.eagle, demi: args.demi, results }, null, 2));
   }
   if (args.emitIds) {
-    for (const [id, parent] of childParents) if (publicNotStaff(projectReads.get(parent))) ladder.add(id);
+    const capped = new Set();
+    for (const [id, { parent, read, followsParent }] of childParents) {
+      if (!projectReads.has(parent)) continue;
+      if (followsParent && publicNotStaff(projectReads.get(parent))) ladder.add(id);
+      if (cappedFromStaff(read, projectReads.get(parent))) capped.add(id);
+    }
     const emitted = identity === 'sysadmin'
-      ? { 'ladder-above-public': [...ladder].sort() }
+      ? { 'ladder-above-public': [...ladder].sort(), 'capped-under-parent': [...capped].sort() }
       : {};
     d.writeFile(args.emitIds, JSON.stringify({ ...emitted, [EMITTED_EXTRA]: extraByRead }, null, 2));
   }

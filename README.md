@@ -370,17 +370,22 @@ Every difference is matched against `KNOWN_DIFFERENCES` in `parity-map.js`; what
 counts as `unexplained`. Classes that match by id read their ids from `--known-ids`, a JSON object
 of class name to id list; the flag may repeat, and lists of one class merge. Those classes are rows
 never mirrored, DEMI takedowns and Eagle hard deletes, plus two that only explain a row extra in
-DEMI:
+DEMI and one that only explains a row missing from it:
 
 - `seeded-from-prod`: a row from the 2026-08-25 prod seed that Eagle test does not hold.
 - `ladder-above-public` (staff runs only): an Eagle row whose `read[]` has `public` but not
   `staff`, or a comment period or document under such a project. Eagle matches `read[]` tokens to
   roles literally, so its staff routes hide these rows. DEMI ranks staff above public by design, so
   DEMI staff sees them.
+- `capped-under-parent` (staff runs only): a comment period, document, group, inspection or recent
+  activity whose own `read[]` admits staff while its project's has no `staff`, `idir` or `public`
+  token. DEMI caps a child's read under its parent's (`capRead`), so DEMI staff cannot see it, while
+  Eagle's group, inspection and recent activity search checks only the row's own `read[]`. Comments,
+  inspection elements and items, and updates are not covered, since the run cannot look up their project.
 
 `--emit-ids <file>` writes ids only, never values: `extraInDemi`, each read's extra DEMI ids, and on
-a sysadmin run `ladder-above-public`, the Eagle ids that rule covers. A
-child counts under `ladder-above-public` only when the same run read its project. The file is a valid
+a sysadmin run `ladder-above-public` and `capped-under-parent`, the Eagle ids those rules cover. A
+child counts under either only when the same run read its project. The file is a valid
 `--known-ids` file (`extraInDemi` is skipped), so a sysadmin run's file feeds the staff run:
 
 ```bash

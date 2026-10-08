@@ -901,7 +901,7 @@ const emitRun = async (identity) => {
 
 test('a sysadmin --emit-ids run lists ladder-above-public ids and extra DEMI ids per read, no widened class', async () => {
   const emitted = JSON.parse(await emitRun('sysadmin'));
-  assert.deepStrictEqual(Object.keys(emitted).sort(), ['extraInDemi', 'ladder-above-public']);
+  assert.deepStrictEqual(Object.keys(emitted).sort(), ['capped-under-parent', 'extraInDemi', 'ladder-above-public']);
   assert.deepStrictEqual(emitted['ladder-above-public'], [A]);
   assert.deepStrictEqual(emitted.extraInDemi, { 'search-Project': ['8'.repeat(24)] });
 });
@@ -937,6 +937,66 @@ test('ladder-above-public explains an extra DEMI row for staff only, never a mis
   assert.strictEqual(classify(idCtx({ ...extra, identity: 'staff' })), 'ladder-above-public');
   assert.strictEqual(classify(idCtx({ ...extra, identity: 'sysadmin' })), null);
   assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'staff', knownIds })), null);
+});
+
+// Test groups 5d6ff652... and 5ea73b4b... under project 58990017..., whose read[] has no ladder token.
+const CAPPED_PROJECT = '58990017d334ee001d608bbd';
+const STAFF_PROJECT = '58990017d334ee001d608bbe';
+const CAPPED_GROUPS = ['5d6ff652fa1745001ad60725', '5ea73b4be97c750024d04907'];
+const STAFF_GROUP = '5ea73b4be97c750024d04908';
+const group = (id, projectId) => ({ _id: id, project: projectId, name: 'Working group', read: ['project-system-admin', 'sysadmin', 'staff'] });
+const groupRows = {
+  Project: [project(CAPPED_PROJECT, { read: ['project-system-admin', 'sysadmin'] }),
+    project(STAFF_PROJECT, { read: ['staff', 'sysadmin'] })],
+  Group: [...CAPPED_GROUPS.map(id => group(id, CAPPED_PROJECT)), group(STAFF_GROUP, STAFF_PROJECT)]
+};
+const groupEmit = async (rows = groupRows, reads = ['search-Project', 'search-Group']) => {
+  const h = harness((host, url) => json(searchBody(rows[url.searchParams.get('dataset')] || [])),
+    { env: { PARITY_TOKEN: TOKEN } });
+  const map = PARITY_MAP.filter(e => reads.includes(e.read));
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'sysadmin', '--token-env', 'PARITY_TOKEN',
+    '--emit-ids', 'ids.json'], { ...h.deps, map });
+  return h.written[0];
+};
+// DEMI holds none of the groups, as a staff caller sees it.
+const missingGroupsRun = async (identity, emitted) => {
+  const h = harness(searchSides({ eagle: groupRows.Group, demi: [] }),
+    { env: { PARITY_TOKEN: TOKEN }, files: { 'ids.json': emitted } });
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', identity, '--token-env', 'PARITY_TOKEN',
+    '--only', 'search-Group', '--known-ids', 'ids.json'], h.deps);
+  return { code, line: h.out[0] };
+};
+
+test('a sysadmin --emit-ids run lists a staff group under a project with no ladder token as capped-under-parent', async () => {
+  const emitted = JSON.parse(await groupEmit());
+  assert.deepStrictEqual(emitted['capped-under-parent'], CAPPED_GROUPS);
+  assert.deepStrictEqual(emitted['ladder-above-public'], []);
+});
+
+test('a sysadmin --emit-ids run that did not read the projects lists no group as capped-under-parent', async () => {
+  const emitted = JSON.parse(await groupEmit(groupRows, ['search-Group']));
+  assert.deepStrictEqual(emitted['capped-under-parent'], []);
+});
+
+test('a group under a public-only project stays out of ladder-above-public: only periods and documents follow their project', async () => {
+  const rows = { Project: [project(CAPPED_PROJECT, { read: ['public', 'sysadmin'] })], Group: [group(STAFF_GROUP, CAPPED_PROJECT)] };
+  const emitted = JSON.parse(await groupEmit(rows));
+  assert.deepStrictEqual(emitted['ladder-above-public'], [CAPPED_PROJECT]);
+});
+
+test('a staff run counts the capped groups under capped-under-parent; a group under a staff project stays unexplained', async () => {
+  const { code, line } = await missingGroupsRun('staff', await groupEmit());
+  assert.strictEqual(code, 1);
+  assert.match(line, /missingInDemi=3 .*unexplained=1 known=capped-under-parent:2/);
+});
+
+test('capped-under-parent never explains a missing row for a privileged identity', async () => {
+  const { code, line } = await missingGroupsRun('sysadmin', await groupEmit());
+  assert.strictEqual(code, 1);
+  assert.match(line, /missingInDemi=3 .*unexplained=3$/);
+  const knownIds = { 'capped-under-parent': new Set([A]) };
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'sysadmin', knownIds })), null);
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'staff', knownIds })), 'capped-under-parent');
 });
 
 test('--emit-ids writes ids only, never field values', async () => {
