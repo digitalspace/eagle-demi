@@ -64,7 +64,7 @@ const updateMirror = require('../controllers/nosql/update');
 const commentPeriodMirror = require('../controllers/nosql/comment-period');
 const commentMirror = require('../controllers/nosql/comment');
 const { upsertWithRetry } = require('../controllers/nosql/eagle-mirror');
-const { seedAcl } = require('../seed/transform');
+const { eagleBaseAcl } = require('../seed/transform');
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 
@@ -159,7 +159,7 @@ function mirrorListItem(eagleId, doc, read, existing) {
 
 /** The `List` half of the `lists` container, written the way every mirror writes. */
 function mirrorList(eagleId, doc, repo = listsRepo) {
-  const read = seedAcl(doc.read);
+  const read = eagleBaseAcl(doc.read);
   return upsertWithRetry(
     repo,
     (current) => mirrorListItem(eagleId, doc, read, current),

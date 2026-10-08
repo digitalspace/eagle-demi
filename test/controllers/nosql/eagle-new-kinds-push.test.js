@@ -18,13 +18,12 @@ const groups = require('../../../src/repositories/groups');
 const userController = require('../../../src/controllers/nosql/user');
 const inspectionController = require('../../../src/controllers/nosql/inspection');
 const {
-  PUBLIC_ACL, PRIVATE_ACL, INSPECTION_EAGLE_ID, ELEMENT_EAGLE_ID, USER_EAGLE_ID,
+  PUBLIC_ACL, PRIVATE_ACL, INSPECTOR_ACL, INSPECTION_EAGLE_ID, ELEMENT_EAGLE_ID, USER_EAGLE_ID,
   storedProject, storedElement, eagleUser, eagleGroup, eagleInspection,
   eagleInspectionElement, eagleInspectionItem, captureMirror, mockRes, anonymous, staff
 } = require('../../helpers/eagle-mirror-fixtures');
 
 const STAFF_READ = ['sysadmin', 'staff'];
-const INSPECTOR_STAFF_READ = ['sysadmin', 'inspector', 'staff'];
 
 function anonymousReq(params = {}, query = {}) {
   return { params, query, headers: {} };
@@ -37,11 +36,11 @@ function staffReq(params = {}, query = {}) {
 test('user mirror', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('create: Eagle `[sysadmin]` lands at sysadmin + staff, never public', async () => {
+  await t.test('create: Eagle `[sysadmin]` stays privileged-only, nothing added', async () => {
     const { res, row } = await captureMirror(t, 'users');
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(res.body, { id: USER_EAGLE_ID, action: 'upsert' });
-    assert.deepStrictEqual(row.read, STAFF_READ);
+    assert.deepStrictEqual(row.read, ['sysadmin']);
     assert.strictEqual(row.isPublished, false);
     assert.strictEqual(row.email, 'robin.inspector@example.invalid');
   });
@@ -96,12 +95,11 @@ test('user mirror', async (t) => {
 test('group mirror', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  // Under a parent, `eagleReadUnder` rewrites the read to its ladder level: `[staff]` is level 2.
-  await t.test('create: partitioned under the DEMI project, `[sysadmin]` lands at level 2', async () => {
+  await t.test('create: partitioned under the DEMI project, `[sysadmin]` stays privileged-only', async () => {
     const { res, row } = await captureMirror(t, 'groups');
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(row.projectId, '207');
-    assert.deepStrictEqual(row.read, ['staff']);
+    assert.deepStrictEqual(row.read, ['sysadmin']);
     assert.deepStrictEqual(row.members, [USER_EAGLE_ID]);
   });
 
@@ -149,10 +147,11 @@ test('group mirror', async (t) => {
 test('inspection mirror', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('create: `[sysadmin, inspector]` under a public project lands at level 2', async () => {
+  // `capRead` rewrites a level-1 read that is not privileged-only to `team`.
+  await t.test('create: `[sysadmin, inspector]` under a public project lands at team, never staff', async () => {
     const { res, row } = await captureMirror(t, 'inspections');
     assert.strictEqual(res.statusCode, 200);
-    assert.deepStrictEqual(row.read, ['staff']);
+    assert.deepStrictEqual(row.read, ['team']);
     assert.strictEqual(row.inspection, INSPECTION_EAGLE_ID);
     assert.strictEqual(row.projectId, '207');
     assert.strictEqual(row.kind, 'Inspection');
@@ -169,7 +168,7 @@ test('inspection mirror', async (t) => {
       eagleInspection({ project: null, customProjectName: 'Unlisted mine' }));
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(row.projectId, null);
-    assert.deepStrictEqual(row.read, INSPECTOR_STAFF_READ);
+    assert.deepStrictEqual(row.read, INSPECTOR_ACL);
   });
 
   await t.test('update with a level change re-derives the elements under it', async () => {
@@ -179,7 +178,7 @@ test('inspection mirror', async (t) => {
   });
 
   await t.test('update at the same level cascades nothing', async () => {
-    const existing = { id: INSPECTION_EAGLE_ID, inspection: INSPECTION_EAGLE_ID, read: INSPECTOR_STAFF_READ, _etag: 'e1' };
+    const existing = { id: INSPECTION_EAGLE_ID, inspection: INSPECTION_EAGLE_ID, read: ['team'], _etag: 'e1' };
     const { res, cascades } = await captureMirror(t, 'inspections', null, { existing });
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(cascades, []);
@@ -235,7 +234,7 @@ test('inspection element mirror', async (t) => {
   });
 
   await t.test('a level change re-derives its items', async () => {
-    const existing = { id: ELEMENT_EAGLE_ID, inspection: INSPECTION_EAGLE_ID, read: ['sysadmin'], _etag: 'e1' };
+    const existing = { id: ELEMENT_EAGLE_ID, inspection: INSPECTION_EAGLE_ID, read: PUBLIC_ACL, _etag: 'e1' };
     const { row, cascades } = await captureMirror(t, 'inspectionElements', null, { existing });
     assert.deepStrictEqual(cascades, [['element', INSPECTION_EAGLE_ID, ELEMENT_EAGLE_ID, row.read]]);
   });
@@ -264,14 +263,14 @@ test('inspection item mirror', async (t) => {
   });
 
   await t.test('update: replaced in place', async () => {
-    const existing = { id: eagleInspectionItem()._id, inspection: INSPECTION_EAGLE_ID, read: INSPECTOR_STAFF_READ, _etag: 'e1' };
+    const existing = { id: eagleInspectionItem()._id, inspection: INSPECTION_EAGLE_ID, read: INSPECTOR_ACL, _etag: 'e1' };
     const { row, cascades } = await captureMirror(t, 'inspectionItems', eagleInspectionItem({ caption: 'New' }), { existing });
     assert.strictEqual(row.caption, 'New');
     assert.deepStrictEqual(cascades, [], 'an item has nothing under it');
   });
 
   await t.test('delete flag', async () => {
-    const { row } = await captureMirror(t, 'inspectionItems', eagleInspectionItem({ isDeleted: true }));
+    const { row } = await captureMirror(t, 'inspectionItems', eagleInspectionItem({ read: PUBLIC_ACL, isDeleted: true }));
     assert.strictEqual(row.isDeleted, true);
     assert.strictEqual(levelOfRead(row.read), 2);
   });

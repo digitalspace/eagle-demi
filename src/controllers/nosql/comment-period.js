@@ -39,7 +39,7 @@ const comments = require('../../repositories/comments');
 // under: one value, so the two cannot drift apart.
 const { constrainToProject, DELETED_CEILING } = require('../../repositories/documents');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
-const { seedAcl, eagleReadUnder } = require('../../seed/transform');
+const { eagleBaseAcl, eagleReadUnder } = require('../../seed/transform');
 const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { logger } = require('../../utils/logger');
@@ -138,7 +138,7 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
 
   // A notification carries no ACL a period could out-rank, so there is nothing to narrow against
   // and the period keeps what Eagle published it as.
-  const constrained = parent.kind === 'notification' ? seedAcl(doc.read) : eagleReadUnder(doc.read, parent.read);
+  const constrained = parent.kind === 'notification' ? eagleBaseAcl(doc.read) : eagleReadUnder(doc.read, parent.read);
   // Both ceilings, lower wins: the parent's, and level 2 once Eagle has deleted the record.
   const read = doc.isDeleted === true
     ? constrainToProject(constrained, DELETED_CEILING)

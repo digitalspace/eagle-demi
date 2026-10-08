@@ -244,8 +244,8 @@ test('setAclForProject', async (t) => {
   });
 });
 
-test('setAclForProject — the Eagle staff rule, never team', async (t) => {
-  // What the push stores for an Eagle `['sysadmin']` document: `ownRead` without staff.
+test('setAclForProject — an Eagle privileged-only document stays privileged-only', async (t) => {
+  // What the push stores for an Eagle `['sysadmin']` document.
   const EAGLE_ADMIN_DOC = { id: 'd1', read: ['sysadmin'], ownRead: ['sysadmin'], sourceSystem: 'eagle' };
   const cascade = async (tt, row, projectRead) => {
     const cap = harness(tt, [row]);
@@ -254,20 +254,17 @@ test('setAclForProject — the Eagle staff rule, never team', async (t) => {
   };
 
   // `[]`, the sixth parent the push loop covers, is refused here (above).
-  for (const [projectRead, expected] of [
-    [['team'], ['sysadmin']], [['sysadmin'], ['sysadmin']], [['project-team'], ['sysadmin']],
-    [['staff'], ['staff']], [['staff', 'idir', 'public'], ['staff']]
-  ]) {
-    await t.test(`an Eagle ['sysadmin'] document under ${JSON.stringify(projectRead)} stores ${JSON.stringify(expected)}`, async (tt) => {
-      assert.deepStrictEqual(await cascade(tt, EAGLE_ADMIN_DOC, projectRead), expected);
+  for (const projectRead of [['team'], ['sysadmin'], ['project-team'], ['staff'], ['staff', 'idir', 'public']]) {
+    await t.test(`an Eagle ['sysadmin'] document under ${JSON.stringify(projectRead)} stores ['sysadmin']`, async (tt) => {
+      assert.deepStrictEqual(await cascade(tt, EAGLE_ADMIN_DOC, projectRead), ['sysadmin']);
     });
   }
 
-  await t.test('a project narrowed to team and widened back restores staff', async (tt) => {
+  await t.test('a project narrowed to team and widened back keeps it privileged-only', async (tt) => {
     const narrowed = { ...EAGLE_ADMIN_DOC, read: await cascade(tt, EAGLE_ADMIN_DOC, ['team']) };
     tt.mock.restoreAll();
     assert.deepStrictEqual(narrowed.read, ['sysadmin']);
-    assert.deepStrictEqual(await cascade(tt, narrowed, ['staff', 'idir', 'public']), ['staff']);
+    assert.deepStrictEqual(await cascade(tt, narrowed, ['staff', 'idir', 'public']), ['sysadmin']);
   });
 
   await t.test('a DEMI-native privileged-only document under a project moved to level 2 stays privileged-only', async (tt) => {
@@ -281,14 +278,14 @@ test('setAclForProject — the Eagle staff rule, never team', async (t) => {
   await t.test("an Eagle ['sysadmin'] document seeded under a public project stays privileged-only under team", async (tt) => {
     const seeded = transformDocument({ _id: 'd1', read: ['sysadmin'] }, '207', new Map(),
       { projectRead: ['staff', 'idir', 'public'] });
-    assert.deepStrictEqual(seeded.read, ['staff'], 'the stored read alone would cap to team');
+    assert.deepStrictEqual(seeded.read, ['sysadmin']);
     assert.deepStrictEqual(await cascade(tt, seeded, ['team']), ['sysadmin']);
   });
 
-  await t.test('an Eagle row stored before the rule, with no ownRead, captures its read and takes the rule', async (tt) => {
+  await t.test('an Eagle row with no ownRead captures its read and stays privileged-only', async (tt) => {
     const cap = harness(tt, [{ id: 'd1', read: ['sysadmin'], sourceSystem: 'eagle' }]);
     await documents.setAclForProject(systemAccess(), '207', ['staff', 'idir', 'public']);
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['staff']);
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
     assert.deepStrictEqual(opValue(cap.ops[0], '/ownRead'), ['sysadmin']);
   });
 

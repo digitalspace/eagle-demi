@@ -15,7 +15,7 @@
  */
 
 const inspections = require('../../repositories/inspections');
-const { seedAcl, eagleReadUnder } = require('../../seed/transform');
+const { eagleBaseAcl, eagleReadUnder } = require('../../seed/transform');
 const { levelOfRead } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
@@ -82,7 +82,7 @@ const FIELDS = {
 async function placeRow(kind, eagleId, doc) {
   if (kind === KINDS.INSPECTION) {
     // Eagle files an inspection without a project under `customProjectName`: no parent to cap by.
-    if (!refId(doc.project)) return { inspection: eagleId, projectId: null, read: seedAcl(doc.read) };
+    if (!refId(doc.project)) return { inspection: eagleId, projectId: null, read: eagleBaseAcl(doc.read) };
     const project = await admitParent(doc.project, { childId: eagleId });
     if (!project) return { missing: 404 };
     return { inspection: eagleId, projectId: project.id, read: eagleReadUnder(doc.read, project.read) };

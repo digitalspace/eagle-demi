@@ -15,7 +15,7 @@
 
 const { readForLevel } = require('../helpers/access-sql');
 const { naturalSortKey } = require('../helpers/natural-sort');
-const { seedAcl, eagleBaseAcl, withEagleStaff, eagleReadUnder } = require('../helpers/eagle-acl');
+const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
 
 /** `internalSize` arrives as a number OR a numeric string (261 of 2,961 sampled were strings). */
 function toNumber(value) {
@@ -113,7 +113,7 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
 
   // A document may never out-rank its project. Notification-parented rows have no project ACL to
   // narrow against and stay verbatim.
-  const read = opts.projectRead ? eagleReadUnder(doc.read, opts.projectRead) : seedAcl(doc.read);
+  const read = opts.projectRead ? eagleReadUnder(doc.read, opts.projectRead) : eagleBaseAcl(doc.read);
 
   const displayName = doc.displayName || doc.documentFileName || '';
 
@@ -162,8 +162,7 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     legislation: doc.legislation || null,
 
     read,
-    // Eagle's read without `staff`, which `documents.setAclForProject` re-derives from. The stored
-    // `read` cannot stand in for it: `['staff']` there may be Eagle's `['sysadmin']` plus the rule.
+    // Eagle's read before the project cap, which `documents.setAclForProject` re-derives from.
     ownRead: eagleBaseAcl(doc.read),
     // DERIVED from read[], not copied. Upstream `isPublished` is true on only 66% of documents
     // that are unambiguously public by their ACL, so copying it would hide a third of the
@@ -209,11 +208,11 @@ function transformBoundary(item, opts = {}) {
     throw new TypeError(`[seed] boundary ${item._id} has no simplifiedGeometry`);
   }
 
-  // Reference geography is public by default — that is what every seeded row is. `seedAcl`
+  // Reference geography is public by default — that is what every seeded row is. `eagleBaseAcl`
   // preserves an upstream `read[]`, minus compliance, when the source supplies one, so a restricted
   // shapefile keeps its restriction through a re-seed instead of being republished.
   const read = Array.isArray(item.read) && item.read.length > 0
-    ? seedAcl(item.read)
+    ? eagleBaseAcl(item.read)
     : readForLevel(4);
 
   return {
@@ -231,9 +230,7 @@ function transformBoundary(item, opts = {}) {
 
 module.exports = {
   EXTRACTION_FIELDS,
-  seedAcl,
   eagleBaseAcl,
-  withEagleStaff,
   eagleReadUnder,
   toNumber,
   toIsoOrNull,

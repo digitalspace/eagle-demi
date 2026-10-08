@@ -48,7 +48,7 @@ const { constrainToProject, DELETED_CEILING } = documents;
 const { unlessUnprovisioned } = require('../helpers/unprovisioned');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
-const { seedAcl, eagleReadUnder } = require('../seed/transform');
+const { eagleBaseAcl, eagleReadUnder } = require('../seed/transform');
 const { readUnder } = require('../helpers/update-parent');
 const { eachCommentPage } = require('./seed-public-reads');
 const { systemAccess, levelOfRead, SECURE_ROLES } = require('../helpers/access-sql');
@@ -278,7 +278,7 @@ function aclMismatch(rows, keyOf, eagleRead, parentReadOf = () => null, derive =
 
 /** What the document, period, list and notification mirrors write. */
 function mirroredRead(upstream, parent) {
-  return parent ? eagleReadUnder(upstream, parent) : seedAcl(upstream);
+  return parent ? eagleReadUnder(upstream, parent) : eagleBaseAcl(upstream);
 }
 
 /** What the Update mirror writes: its own rule, `update-parent:readUnder`. */

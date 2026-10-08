@@ -442,10 +442,6 @@ function holdLevel(row, stored) {
  * (`seed/transform.js:transformDocument`), and `backfill-eagle-ladder.js` writes it on Eagle rows
  * stored before that. A row without one has it CAPTURED here, lazily, from its `read`.
  *
- * That capture is safe on an Eagle row too. Every writer that adds the Eagle rule's `staff`
- * (`helpers/eagle-acl.js:withEagleStaff`) also stores `ownRead`, so a row lacking one predates the
- * rule and its stored `read`, `staff` included, is Eagle's own read.
- *
  * The one lossy set is documents a PREVIOUS cascade already flattened: their own ACL is gone, so
  * capture records the flattened value and a re-publish leaves them private. Fail-closed, bounded,
  * and enumerable from audit rows (`record.narrow` / `record.takedown` from `setLevel`, project
@@ -482,12 +478,12 @@ async function setAclForProject(access, projectId, read) {
     // 400 would take the `/read` narrowing down with it — the row keeps its old ACL and the failure
     // is counted, but the effect is fail-OPEN for exactly the row that had no ACL to begin with.
     // `[]` fails closed to level 1 instead. No current write path produces such a row (all
-    // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
+    // four write an explicit `read[]`, and `eagleBaseAcl` fails closed), so this guards a legacy row
     // nobody can rule out from outside the private endpoint.
     const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
       : (Array.isArray(row.read) ? row.read : []);
-    // An Eagle mirror's `ownRead` is Eagle's read without `staff`; the push's rule adds it. A
-    // DEMI-native row, or an empty `own`, keeps the plain cap so neither is widened.
+    // An Eagle mirror's `ownRead` goes through the Eagle rule, so a captured `compliance` is not
+    // kept. A DEMI-native row, or an empty `own`, keeps the plain cap so neither is widened.
     const capped = row.sourceSystem === 'eagle' && own.length > 0
       ? eagleReadUnder(own, read)
       : constrainToProject(own, read);
