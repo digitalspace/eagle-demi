@@ -15,9 +15,10 @@
  *
  * **DRY RUN BY DEFAULT**: without `--live` nothing is written. A row is one bucket key with the
  * selected documents that store it. `rehydrate` copies the archived blob into `restore` at Cool
- * (up to 15 hours); `apply` checks those bytes against the verify manifest, writes them back with
- * If-Match on the ETag seen at plan time and a signed Content-MD5, reads them back, and only then
- * marks each document's `pdfTitle` record `restored`. Nothing in the bucket is deleted; the
+ * (up to 15 hours); `apply` checks those bytes against the verify manifest, checks the object still
+ * has the ETag seen at plan time, writes them back with a signed Content-MD5, reads them back, and
+ * only then marks each document's `pdfTitle` record `restored`. The PUT carries no If-Match: the
+ * NRS store answers 412 to it on objects stored years ago even when the ETag matches. Nothing in the bucket is deleted; the
  * replaced object stays as an older version.
  * Exit codes: 0 clean, 1 any row refused, changed or failed, 2 rows still rehydrating.
  */
@@ -159,7 +160,7 @@ async function assess(row, ctx) {
   }
   row.entry = entry;
   const stat = await ctx.storage.statObject(row.key);
-  // Without an ETag there is nothing to make the write conditional on.
+  // Without an ETag there is nothing to check the object against before the write.
   if (!stat || !stat.etag) return { decision: 'refused', reason: 'missing-in-bucket' };
   row.etag = stripQuotes(stat.etag);
   const why = difference(stat, entry);
@@ -266,13 +267,14 @@ async function writeOne(row, ctx) {
 
     const contentMd5 = Buffer.from(got.md5, 'hex').toString('base64');
     const url = await ctx.storage.getUploadUrl(row.key, { expirySeconds: UPLOAD_SECONDS, contentMd5 });
+    // Stands in for If-Match, which the store refuses on old objects; the read-back below decides.
+    const now = await ctx.storage.statObject(row.key);
+    if (!now || stripQuotes(now.etag || '') !== row.etag) return { outcome: 'changed', reason: 'object changed since plan' };
     const status = await ctx.put(url, file, {
       'Content-Length': String(got.size),
       'Content-MD5': contentMd5,
-      'Content-Type': row.contentType || 'application/octet-stream',
-      'If-Match': `"${row.etag}"`
+      'Content-Type': row.contentType || 'application/octet-stream'
     });
-    if (status === 412) return { outcome: 'changed', reason: 'object changed since plan' };
     if (status < 200 || status >= 300) throw new Error(`PUT returned ${status}`);
 
     const back = await digest(await ctx.storage.getObjectStream(row.key));

@@ -1561,8 +1561,9 @@ paths:
         and, for a file already titled or restored, hash to the recorded value. On first titling
         it records `originalLength` and `originalSha256` once. Returns a 120-second PUT link for
         exactly the leased key with Content-MD5 signed in, and the headers the PUT must carry.
-        If-Match on the source ETag is not signed: the store honours it unsigned, and the report
-        checks the stored result whatever the worker sent.
+        The PUT carries no If-Match, because the store refuses it on older objects even when the
+        ETag matches. The report checks the stored object (size, ETag, hashes, tail) before it is
+        titled, and copies the backup back otherwise.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1604,7 +1605,7 @@ paths:
                   putExpiresAt: { type: string, format: date-time }
                   headers:
                     type: object
-                    description: Content-Type, Content-MD5 and If-Match; send all three.
+                    description: Content-Type and Content-MD5; send both.
                     additionalProperties: { type: string }
         '400':
           description: Body fails validation.

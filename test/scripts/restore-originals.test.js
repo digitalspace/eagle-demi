@@ -28,7 +28,7 @@ const OTHER = Buffer.from('%PDF-1.7 another original');
 const OTHER_TITLED = Buffer.concat([OTHER, Buffer.from(' titled')]);
 
 /**
- * Object store double. `put` honours If-Match and Content-MD5 the way the store does. An object is
+ * Object store double. `put` honours If-Match, when sent, and Content-MD5 the way the store does. An object is
  * its bytes, or `{ body, etag }` for an ETag that is not the MD5 (multipart).
  */
 function fakeStore(objects, { onUploadUrl, readBack = {} } = {}) {
@@ -243,14 +243,14 @@ test('apply waits on a copy that reports success but is still rehydrating', asyn
   assert.strictEqual(s.store.puts.length, 0);
 });
 
-test('apply writes the backup back under If-Match and Content-MD5, then marks the record restored', async (t) => {
+test('apply writes the backup back under Content-MD5 without If-Match, then marks the record restored', async (t) => {
   const s = setup(t);
   await rehydrated(s, '--id', 'a');
   const result = await s.go('apply', '--id', 'a', '--live', '--confirm', '1');
 
   assert.strictEqual(result.exitCode, 0);
   assert.ok(s.store.store.get('p1/a.pdf').body.equals(ORIGINAL));
-  assert.strictEqual(s.store.puts[0].headers['If-Match'], `"${md5(TITLED)}"`);
+  assert.ok(!('If-Match' in s.store.puts[0].headers), 'the store refuses If-Match on old objects');
   assert.strictEqual(s.store.puts[0].headers['Content-MD5'], Buffer.from(md5(ORIGINAL), 'hex').toString('base64'));
   const record = s.docs.stored.get('a').pdfTitle;
   assert.deepStrictEqual([record.status, record.title, record.titledLength, record.titledSha256], ['restored', null, null, null]);
@@ -332,12 +332,24 @@ test('apply updates only the records that claim a titled file, not every documen
   assert.deepStrictEqual(s.docs.stored.get('d').pdfTitle, skipped);
 });
 
-test('apply skips and reports a row whose object changed after the plan (412)', async (t) => {
+test('apply skips and reports a row whose object changed after the plan, writing nothing', async (t) => {
   const s = setup(t, { store: { onUploadUrl: (store, key) => store.set(key, { body: OTHER_TITLED, etag: md5(OTHER_TITLED) }) } });
   await rehydrated(s, '--id', 'a');
   const result = await s.go('apply', '--id', 'a', '--live', '--confirm', '1');
   assert.strictEqual(result.summary.changed, 1);
+  assert.strictEqual(s.store.puts.length, 0);
   assert.ok(s.store.store.get('p1/a.pdf').body.equals(OTHER_TITLED));
+  assert.strictEqual(s.docs.patches.length, 0);
+  assert.strictEqual(result.exitCode, 1);
+});
+
+test('apply skips and reports a row whose object was deleted after the plan, writing nothing', async (t) => {
+  const s = setup(t, { store: { onUploadUrl: (store, key) => store.delete(key) } });
+  await rehydrated(s, '--id', 'a');
+  const result = await s.go('apply', '--id', 'a', '--live', '--confirm', '1');
+  assert.strictEqual(result.summary.changed, 1);
+  assert.strictEqual(s.store.puts.length, 0);
+  assert.ok(!s.store.store.has('p1/a.pdf'));
   assert.strictEqual(s.docs.patches.length, 0);
   assert.strictEqual(result.exitCode, 1);
 });

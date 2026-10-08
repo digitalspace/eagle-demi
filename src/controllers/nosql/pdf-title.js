@@ -802,12 +802,11 @@ async function commit(req, res) {
       uploadUrl,
       expiresIn: PUT_SECONDS,
       putExpiresAt,
-      // Send all three. If-Match is not signed: the store honours it unsigned, and the report
-      // checks the result whatever the worker sent. Content-MD5 is signed into the link.
+      // Content-MD5 is signed into the link. No If-Match: the NRS store answers 412 to it on
+      // objects stored years ago even when the ETag matches. The report checks the stored result.
       headers: {
         'Content-Type': held.contentType,
-        'Content-MD5': body.newMd5,
-        'If-Match': `"${bareEtag(held.sourceEtag)}"`
+        'Content-MD5': body.newMd5
       }
     });
   } catch (err) {
