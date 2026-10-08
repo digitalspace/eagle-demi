@@ -83,6 +83,14 @@ function secretFromEnv(name) {
   return '';
 }
 
+/** A comma list of registry principals. Unset takes `fallback`; set but empty is nobody. */
+function principalsFromEnv(name, fallback = '') {
+  const raw = process.env[name];
+  return (raw === undefined ? fallback : raw).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+const envTrim = (name) => (process.env[name] || '').trim();
+
 const config = {
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),
@@ -393,16 +401,14 @@ const config = {
   // Registry row ids (`req.user.keyId`) allowed to write the Eagle mirror, PUT /eagle/*. Unset means
   // eagle-api through APIM; set but empty means nobody, so blanking the setting closes the mirror
   // instead of opening it. A getter, like adminApiKey, so the suites can change it per test.
-  get eagleMirrorPrincipals() {
-    const raw = process.env.DEMI_EAGLE_MIRROR_PRINCIPALS;
-    return (raw === undefined ? 'apim:eagle-api' : raw).split(',').map(s => s.trim()).filter(Boolean);
-  },
+  get eagleMirrorPrincipals() { return principalsFromEnv('DEMI_EAGLE_MIRROR_PRINCIPALS', 'apim:eagle-api'); },
   // Registry row ids allowed to call the PDF title worker routes. Unset or empty means nobody: the
   // routes sign writes to stored originals, so there is no default principal. Never list a
   // principal that is also in eagleMirrorPrincipals: one key would hold both powers.
-  get pdfTitleWorkerPrincipals() {
-    return (process.env.DEMI_PDF_TITLE_WORKER_PRINCIPALS || '').split(',').map(s => s.trim()).filter(Boolean);
-  },
+  get pdfTitleWorkerPrincipals() { return principalsFromEnv('DEMI_PDF_TITLE_WORKER_PRINCIPALS'); },
+  // Registry row ids allowed to call the ENGAGE ingest, PUT /engage/*. Same rules as the Eagle
+  // mirror's list, defaulting to ENGAGE through APIM. Never share a principal with that list.
+  get engagePrincipals() { return principalsFromEnv('DEMI_ENGAGE_PRINCIPALS', 'apim:engage'); },
   // Short links: destinations are allowlisted by hostname suffix at write time (helpers/link-url).
   // linkBaseUrl is a Bicep app setting per environment so test hands back the test host, not prod's.
   linkAllowedHosts:      (process.env.LINK_ALLOWED_HOSTS || 'gov.bc.ca').split(',').map(s => s.trim()).filter(Boolean),
@@ -418,6 +424,30 @@ const config = {
   // On until src/scripts/backfill-update-publish-date.js reports no undated row: a sort on an
   // Update's publishDate runs on dateAdded, since an ORDER BY leaves out rows without its field.
   updatesPublishDateFallback: process.env.UPDATES_PUBLISH_DATE_FALLBACK !== 'false',
+
+  // Sync-out (src/sync-out): ENGAGE-owned rows written on to Eagle. Getters, read per access, so a
+  // suite can change them after load. Empty queue is OFF: enqueue refuses and api/index.js binds no
+  // worker.
+  syncOut: {
+    get queue() { return envTrim('SYNC_OUT_QUEUE'); },
+    get maxAttempts() {
+      const value = Number(envTrim('SYNC_OUT_MAX_ATTEMPTS'));
+      return Number.isInteger(value) && value > 0 ? value : 3;
+    },
+    eagle: {
+      get enabled() { return envTrim('SYNC_OUT_EAGLE_ENABLED') === 'true'; },
+      // eagle-api's protected `/api`, not EAGLE_API_BASE: that one is the public base the seed reads.
+      get apiBase() { return envTrim('EAGLE_PROTECTED_API_BASE').replace(/\/+$/, ''); },
+      get issuer() { return envTrim('EAGLE_KC_ISSUER').replace(/\/+$/, ''); },
+      get clientId() { return envTrim('EAGLE_KC_CLIENT_ID'); },
+      get clientSecret() { return secretFromEnv('EAGLE_KC_CLIENT_SECRET').trim(); },
+      get milestone() { return envTrim('EAGLE_ENGAGE_MILESTONE'); }
+    }
+  },
+  // ENGAGE's public API, read by both reconcile scripts. Empty skips their ENGAGE side.
+  engageApiBase:           process.env.ENGAGE_API_BASE || '',
+  // Read by api/index.js off process.env, like every timer schedule; listed so the key lives here.
+  reconcileEngageSchedule: process.env.RECONCILE_ENGAGE_SCHEDULE || '',
 
   // Track team feed → `project:<id>` realm roles (src/scripts/sync-track-teams.js). Two
   // client-credentials identities in the realm above: one reads Track, one holds

@@ -13,7 +13,7 @@ const queues = require('../jobs/queue-client');
 const commentPeriods = require('../repositories/comment-periods');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
-const settings = require('./settings');
+const settings = require('../config').syncOut;
 
 const consumers = [
   require('./eagle')

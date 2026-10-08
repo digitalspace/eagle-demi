@@ -2688,6 +2688,126 @@ paths:
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.
 
+  /api/engage/engagements/{engagementId}:
+    put:
+      summary: Store a comment period pushed by ENGAGE
+      description: |-
+        Receives one ENGAGE engagement. ENGAGE owns the row (`sourceSystem: 'engage'`): the row
+        tied to this engagement is updated, else the Eagle period named by `trackingId` is adopted,
+        else a new row `engage-<engagementId>` is created. The Eagle mirror writes only Eagle's own
+        fields onto it afterwards. The stored ACL is the engagement's own, constrained to the
+        parent's, and a deleted engagement is narrowed to staff rather than removed.
+
+        When the stored level moves, the comments under the period are re-derived from it. The
+        row is then queued for sync-out, which writes it on to Eagle. A failed enqueue is logged,
+        not answered: the ENGAGE reconcile reports the row and `--repair` queues it again.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: engagementId
+          in: path
+          required: true
+          description: The ENGAGE engagement id. Must equal `engagement.id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pushedAt, engagement]
+              properties:
+                pushedAt:
+                  type: string
+                  format: date-time
+                  description: >-
+                    When ENGAGE sent this push. A push older than the stored one is refused with
+                    409; an equal one is written again.
+                engagement:
+                  type: object
+                  required: [id, projectId]
+                  properties:
+                    id:
+                      oneOf:
+                        - type: integer
+                        - type: string
+                    projectId:
+                      type: string
+                      description: Eagle id of the parent project or `ProjectNotification`.
+                    trackingId:
+                      type: string
+                      nullable: true
+                      description: >-
+                        Eagle comment period id this engagement already has in Eagle. Adopts
+                        that row on the first push.
+                    name:
+                      type: string
+                      description: Stored as `informationLabel`.
+                    description:
+                      type: string
+                      description: Stored as `instructions`.
+                    status:
+                      type: string
+                    start:
+                      type: string
+                      format: date-time
+                      description: Stored as `dateStarted`.
+                    end:
+                      type: string
+                      format: date-time
+                      description: Stored as `dateCompleted`.
+                    metURL:
+                      type: string
+                    metURLAdmin:
+                      type: string
+                    bannerUrl:
+                      type: string
+                      description: Also stored as `metBannerImageUrl`.
+                    isPublished:
+                      type: boolean
+                    isDeleted:
+                      type: boolean
+      responses:
+        '200':
+          description: An existing row was updated or adopted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EngagePushResult'
+        '201':
+          description: A new row was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EngagePushResult'
+        '400':
+          description: >-
+            `code` is `ENGAGEMENT_ID_MISMATCH` (body id differs from the path),
+            `PUSHED_AT_INVALID` (not an ISO 8601 time) or `TRACKING_ID_INVALID` (not an Eagle id).
+        '401':
+          description: Unauthorized.
+        '403':
+          $ref: '#/components/responses/EngageForbidden'
+        '404':
+          description: The parent named by `engagement.projectId` is in neither `projects` nor `notifications`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EagleParentRefusal'
+        '409':
+          description: >-
+            Nothing was written. `code` is `STALE_PUSH` (a newer push already landed; the body
+            carries `id` and the stored `engagePushedAt`) or `TRACKING_ID_CLAIMED` (another
+            engagement owns that Eagle period). Without a `code`, the id is stored in more than
+            one row.
+        '500':
+          description: >-
+            The row was stored and queued, but the comments under it were not all re-derived.
+        '503':
+          description: The row changed repeatedly while the push was retried. The caller retries.
+
   /api/eagle/comments/{eagleId}:
     put:
       summary: Mirror a public comment from eagle-api
@@ -4333,6 +4453,45 @@ paths:
             `reconcile report unavailable, retry in a few minutes`: the stored report could not
             be read.
 
+  /api/admin/reconcile-engage:
+    get:
+      summary: Last ENGAGE reconcile report
+      description: >-
+        The report the scheduled ENGAGE reconcile (`src/scripts/reconcile-engage.js`) stored on
+        its last run: ENGAGE-owned rows never sent to Eagle, rows Eagle no longer holds, drift, and
+        Eagle projects with two periods on one engagement URL. Read only; the timer never repairs.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The stored report.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  storedAt:
+                    type: string
+                    format: date-time
+                  report:
+                    type: object
+                    description: The report exactly as the reconcile job wrote it.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires an admin role.
+        '404':
+          description: >-
+            `no reconcile report stored`: the ENGAGE reconcile has not stored a report in this
+            environment yet.
+        '503':
+          description: >-
+            `reconcile report unavailable, retry in a few minutes`: the stored report could not
+            be read.
+
   /api/admin/search-definitions/apply:
     post:
       summary: Apply the committed search definitions
@@ -4586,6 +4745,12 @@ components:
         through API Management), hold `demi-service-write`, and carry no project scope.
         Staff users, the break-glass `ADMIN_API_KEY` and any other `demi-service-write` key
         get 403. An empty setting refuses everyone.
+    EngageForbidden:
+      description: |-
+        Forbidden. Only ENGAGE may call the ingest: the caller must be a registry principal listed
+        in `DEMI_ENGAGE_PRINCIPALS` (default `apim:engage`), hold `demi-service-write`, and carry
+        no project scope. eagle-api's principal, staff users and any other key get 403. An empty
+        setting refuses everyone.
 
   schemas:
     RequestStats:
@@ -5135,6 +5300,26 @@ components:
             Ignored pushes only: the `pushedAt` of the push that is stored, which this one lost
             to.
 
+    EngagePushResult:
+      type: object
+      properties:
+        id:
+          type: string
+          description: The DEMI row id, `engage-<engagementId>` or the adopted Eagle id.
+        engagementId:
+          type: string
+        eagleId:
+          type: string
+          nullable: true
+          description: The Eagle comment period id, null until sync-out has created one.
+        engagePushedAt:
+          type: integer
+          description: The stored push time, epoch milliseconds.
+        queued:
+          type: array
+          description: Sync-out consumers the row was queued for. Empty when none is enabled or the enqueue failed.
+          items:
+            type: string
     EagleParentRefusal:
       type: object
       description: |-

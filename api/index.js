@@ -29,11 +29,11 @@ if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
 
 const { app } = require('@azure/functions');
 
-// Exported for test/reconcile-timer.test.js and test/sync-teams-timer.test.js — the host is the
-// only other caller of either.
+// Exported for the timer and trigger suites (test/*-timer.test.js, test/*-triggers.test.js) — the
+// host is the only other caller.
 module.exports = {
-  reconcileEagle, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads, restampChunksWorker,
-  searchDefinitionsWorker, announceUpdates
+  reconcileEagle, reconcileEngage, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads,
+  restampChunksWorker, searchDefinitionsWorker, syncOutWorker, announceUpdates
 };
 
 // Drain buffered audit events before the worker goes away.
@@ -87,6 +87,16 @@ if (process.env.RECONCILE_SCHEDULE) {
   });
 }
 
+// The ENGAGE drift report, on the same terms and guarded the same way. Report only: `--repair` stays
+// a hand run, since it re-sends rows to Eagle.
+if (process.env.RECONCILE_ENGAGE_SCHEDULE) {
+  app.timer('reconcileEngage', {
+    schedule: '%RECONCILE_ENGAGE_SCHEDULE%',
+    runOnStartup: false,
+    handler: reconcileEngage
+  });
+}
+
 // The Track team feed, on the same terms and guarded the same way. Stays empty until both realm
 // clients exist in the environment's realm — see TODO-rbac.md P3-0.
 if (process.env.SYNC_TEAMS_SCHEDULE) {
@@ -129,6 +139,15 @@ if (process.env.SEARCH_DEFINITIONS_QUEUE) {
     queueName: '%SEARCH_DEFINITIONS_QUEUE%',
     connection: 'AzureWebJobsStorage',
     handler: searchDefinitionsWorker
+  });
+}
+
+// ENGAGE-owned rows written on to Eagle, one row per message. Same guard again.
+if (process.env.SYNC_OUT_QUEUE) {
+  app.storageQueue('syncOutWorker', {
+    queueName: '%SYNC_OUT_QUEUE%',
+    connection: 'AzureWebJobsStorage',
+    handler: syncOutWorker
   });
 }
 
@@ -194,6 +213,14 @@ async function searchDefinitionsWorker(message, context) {
     .run(jobId, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
 
+/**
+ * Throws on the LAST attempt only, like the re-stamp: earlier failures re-queue themselves with
+ * backoff (src/sync-out/index.js), because host.json's hour-long `visibilityTimeout` is the zip worker's.
+ */
+async function syncOutWorker(message, context) {
+  await require('../src/sync-out').workerHandler(message, context);
+}
+
 /** Swallows the failure for the reason the reconcile does: the next run is the retry. */
 async function cleanupBulkDownloads() {
   const { logger } = require('../src/utils/logger');
@@ -225,6 +252,16 @@ async function reconcileEagle() {
     await require('../src/scripts/reconcile-eagle').run({ store: true });
   } catch (err) {
     logger.error('[reconcile] nightly run failed', { error: err.message, stack: err.stack });
+  }
+}
+
+/** `store: true` is what GET /admin/reconcile-engage serves. Swallows the failure as reconcileEagle does. */
+async function reconcileEngage() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    await require('../src/scripts/reconcile-engage').run({ store: true });
+  } catch (err) {
+    logger.error('[reconcile-engage] nightly run failed', { error: err.message, stack: err.stack });
   }
 }
 

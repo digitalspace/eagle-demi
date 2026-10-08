@@ -15,11 +15,12 @@ const commentPeriods = require('../repositories/comment-periods');
 const cache = require('../repositories/cache');
 const syncOut = require('../sync-out');
 const eagle = require('../sync-out/eagle');
-const settings = require('../sync-out/settings');
+const config = require('../config');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
 
-const REPORT_ID = 'reconcile-engage-report';
+const REPORT_ID = cache.RECONCILE_ENGAGE_REPORT_ID;
+const settings = config.syncOut;
 const TIMEOUT_MS = 15000;
 const EAGLE_FIELDS = 'dateStarted|dateCompleted|isPublished|metURL';
 const ENGAGE_PAGE_SIZE = 100;
@@ -267,7 +268,7 @@ async function reconcileEngage({ repair: doRepair = false, limit = null, deps = 
     if (doRepair) await repair(repairs, { repo, enqueue: deps.enqueue || syncOut.enqueue }, report);
   }
 
-  const base = (deps.engageApiBase !== undefined ? deps.engageApiBase : process.env.ENGAGE_API_BASE || '')
+  const base = (deps.engageApiBase !== undefined ? deps.engageApiBase : config.engageApiBase)
     .replace(/\/+$/, '');
   if (!base) {
     report.warnings.push('ENGAGE_API_BASE is unset: ENGAGE side not checked');

@@ -103,6 +103,9 @@ function namedWriter(principalsOf, label) {
 
 const requireEagleMirror = namedWriter(() => config.eagleMirrorPrincipals, 'Eagle mirror');
 
+/** The ENGAGE ingest, PUT /engage/*. Same terms as the Eagle mirror, its own list (`config.engagePrincipals`). */
+const requireEngageWriter = namedWriter(() => config.engagePrincipals, 'ENGAGE');
+
 /**
  * The PDF title worker, /documents/pdf-title/* and /documents/:id/pdf-title*. Those routes read
  * every row unfiltered and hand out links that read and write stored originals, so a scoped key or
@@ -110,4 +113,4 @@ const requireEagleMirror = namedWriter(() => config.eagleMirrorPrincipals, 'Eagl
  */
 const requirePdfTitleWorker = namedWriter(() => config.pdfTitleWorkerPrincipals, 'PDF title worker');
 
-module.exports = { requireWrite, requireAdmin, requireRole, requireEagleMirror, requirePdfTitleWorker };
+module.exports = { requireWrite, requireAdmin, requireRole, requireEagleMirror, requireEngageWriter, requirePdfTitleWorker };

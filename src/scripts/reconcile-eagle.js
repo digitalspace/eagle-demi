@@ -77,7 +77,7 @@ const STORED_LABELS = ['users', 'groups', 'inspections', 'inspectionElements', '
  * UNSET MEANS SKIP. Guessing a host and getting it wrong reports every live period as an orphan,
  * which is the one outcome a delete flag must not be offered alongside.
  */
-const ENGAGE_API_BASE = process.env.ENGAGE_API_BASE || '';
+const ENGAGE_API_BASE = require('../config').engageApiBase;
 
 /** How long one slug lookup may take before it counts as unknown rather than as an answer. */
 const ENGAGE_TIMEOUT_MS = parseInt(process.env.ENGAGE_TIMEOUT_MS || '15000', 10);

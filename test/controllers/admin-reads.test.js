@@ -460,4 +460,31 @@ test('GET /admin/reconcile', async (t) => {
       error: 'reconcile report unavailable, retry in a few minutes'
     });
   });
+
+  await t.test('GET /admin/reconcile-engage answers the ENGAGE report, each route its own row', async (t) => {
+    const eagleReport = { ranAt: '2026-10-07T09:00:00.000Z', drift: 3 };
+    const engageReport = { ranAt: '2026-10-07T10:30:00.000Z', neverSent: [{ id: 'engage-42' }] };
+    storeReport(t, {
+      [cache.RECONCILE_REPORT_ID]: { storedAt: '2026-10-07T09:05:00.000Z', body: eagleReport },
+      'reconcile-engage-report': { storedAt: '2026-10-07T10:35:00.000Z', body: engageReport }
+    });
+
+    const engage = mockRes();
+    await controller.getReconcileEngageReport({}, engage);
+    const eagle = mockRes();
+    await controller.getReconcileReport({}, eagle);
+
+    assert.strictEqual(engage.statusCode, 200);
+    assert.deepStrictEqual(engage.body, { success: true, storedAt: '2026-10-07T10:35:00.000Z', report: engageReport });
+    assert.deepStrictEqual(eagle.body.report, eagleReport);
+  });
+
+  await t.test('GET /admin/reconcile-engage answers 404 before the first ENGAGE run', async (t) => {
+    storeReport(t, { [cache.RECONCILE_REPORT_ID]: { storedAt: '2026-10-07T09:05:00.000Z', body: { drift: 0 } } });
+
+    const res = mockRes();
+    await controller.getReconcileEngageReport({}, res);
+
+    assert.strictEqual(res.statusCode, 404);
+  });
 });

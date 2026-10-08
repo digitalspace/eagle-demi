@@ -3,11 +3,11 @@
 /**
  * Sync-out consumer: ENGAGE-owned comment periods written into Eagle through eagle-api.
  *
- * Remove this file, its line in `./index.js` and the `eagle` block in `./settings.js` to stop it.
+ * Remove this file, its line in `./index.js` and the `syncOut.eagle` block in `src/config.js` to stop it.
  */
 
 const crypto = require('node:crypto');
-const settings = require('./settings');
+const settings = require('../config').syncOut;
 const { logger } = require('../utils/logger');
 
 const NAME = 'eagle';

@@ -339,6 +339,28 @@ DEMI's copy wins; the script never writes to Eagle itself. With `ENGAGE_API_BASE
 EPIC engagements that have no DEMI row, and published DEMI rows ENGAGE no longer lists. That part
 only reports.
 
+Set `RECONCILE_ENGAGE_SCHEDULE` (NCRONTAB, like `RECONCILE_SCHEDULE`) and the API app registers the
+timer `reconcileEngage`, which runs with `--store` and never with `--repair`. `GET
+/api/admin/reconcile-engage` reads the stored report back. Unset, no timer is registered.
+
+### Sync-out to Eagle
+
+ENGAGE pushes its engagements to `PUT /api/engage/engagements/:engagementId`, and DEMI writes
+those comment periods on to Eagle through a storage queue (`src/sync-out`). All keys are declared
+in `src/config.js` (`syncOut`, `engageApiBase`):
+
+| Setting | Meaning |
+|---|---|
+| `SYNC_OUT_QUEUE` | Queue name. Unset: no worker is registered and enqueue fails, logged per push. |
+| `SYNC_OUT_EAGLE_ENABLED` | `true` to send to Eagle. Anything else queues nothing. |
+| `SYNC_OUT_MAX_ATTEMPTS` | Sends per row before the message goes to the poison queue. Default 3. |
+| `EAGLE_PROTECTED_API_BASE` | eagle-api's protected `/api` base. Not `EAGLE_API_BASE`, which is the public base the seed reads. |
+| `EAGLE_KC_ISSUER`, `EAGLE_KC_CLIENT_ID`, `EAGLE_KC_CLIENT_SECRET` | Client-credentials login to eagle-api. The secret comes from Key Vault. |
+| `EAGLE_ENGAGE_MILESTONE` | Milestone id sent on every Eagle write. eagle-api stores a bad id when it is missing. |
+| `ENGAGE_API_BASE` | ENGAGE's API, read by both reconcile scripts. Unset skips their ENGAGE side. |
+| `RECONCILE_ENGAGE_SCHEDULE` | Timer schedule above. |
+| `DEMI_ENGAGE_PRINCIPALS` | Who may call the ingest. Default `apim:engage`; see "Authentication & authorization". |
+
 ### Parity with eagle-api
 
 ```bash
@@ -638,6 +660,10 @@ The PDF title worker routes, `/api/documents/pdf-title/*` and `/api/documents/:i
 use the same check with their own list, `DEMI_PDF_TITLE_WORKER_PRINCIPALS` (bicep
 `pdfTitleWorkerPrincipals`). It has no default: unset or empty, the routes refuse everyone. Never
 put one principal on both lists, or one key can both mirror Eagle data and rewrite stored PDFs.
+
+The ENGAGE ingest, `PUT /api/engage/*`, uses the same check with `DEMI_ENGAGE_PRINCIPALS`, which
+defaults to `apim:engage`. Set but empty, it refuses everyone. eagle-api's principal gets 403
+there, and ENGAGE's gets 403 on the Eagle mirror.
 
 **Never hardcode a key literal** — this repository is public, so a literal there is a world-readable
 credential. (`DOCLING_API_KEY` was exactly that until it was split out; it is now outbound-only and

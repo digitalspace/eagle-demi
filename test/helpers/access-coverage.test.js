@@ -134,6 +134,8 @@ const gatedPrefixes = {
   // The stored reconcile report lists Eagle ids by drift class, private ones included.
   '/admin/reconcile': ['authMiddleware', 'requireAdmin'],
   '/eagle/': ['authMiddleware', 'requireWrite', 'requireEagleMirror'],
+  // The ENGAGE ingest writes through systemAccess() too, so it is pinned the same way to ENGAGE.
+  '/engage/': ['authMiddleware', 'requireWrite', 'requireEngageWriter'],
   // The executable half of the `credentials.js` reason above. `requireRole` is the narrow gate a
   // grant needs: requireWrite alone would let the machine writer mint one for itself.
   '/credentials': ['authMiddleware', 'requireRole'],
