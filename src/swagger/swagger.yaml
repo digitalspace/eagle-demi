@@ -1634,7 +1634,8 @@ paths:
     put:
       summary: Report the end of a PDF title lease
       description: >-
-        `{leaseId}` releases the lease, after a PUT or after a failure that wrote nothing.
+        `{leaseId}` releases the lease, after a PUT or after a failure that wrote nothing; a
+        `reason` sent with it is logged, not stored.
         `{leaseId, skipped: true, reason}` records a skip. The store decides the outcome either
         way, and only once the PUT link is dead: until `putExpiresAt` plus 30 s every report answers
         409 `put-window-open`, nothing is released or recorded, and the backup is kept. A write
@@ -1673,7 +1674,7 @@ paths:
               properties:
                 leaseId: { type: string }
                 skipped: { type: boolean }
-                reason: { type: string, description: 'Printable ASCII, cut to 200 characters.' }
+                reason: { type: string, description: 'Printable ASCII. With `skipped`, the skip reason, cut to 200 characters. Without it, the worker''s failure text, cut to 300 characters and only logged.' }
       responses:
         '200':
           description: Outcome.

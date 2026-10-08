@@ -7,10 +7,13 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { capRead, levelOfRead, isDemiSeal, LEVEL_TOKENS, SEALED_TOKEN } = require('../helpers/access-sql');
+const {
+  capRead, levelOfRead, readForLevel, isDemiSeal, LEVEL_TOKENS, SEALED_TOKEN, SECURE_ROLES
+} = require('../helpers/access-sql');
 const eagleAcl = require('../helpers/eagle-acl');
+const { inheritsParentRead, updateRead } = require('../helpers/update-parent');
 
-const { eagleBaseAcl } = eagleAcl;
+const { eagleBaseAcl, eagleReadUnder } = eagleAcl;
 const { DELETED_CEILING } = require('../repositories/documents');
 const { logger } = require('../utils/logger');
 
@@ -37,28 +40,68 @@ const STEPS = Object.freeze([
   { container: 'updates', pk: 'id', parent: 'eagle' }
 ]);
 
-/** The dropped rule, frozen here so the reverse can recognise what it wrote. Never call it on a push. */
+/**
+ * The rule as it stood before 2026-10-08, frozen here so the reverse recognises what it wrote: the
+ * old `eagleBaseAcl` and `capRead` (level-1 reads made only of SECURE_ROLES kept), plus the staff
+ * widening. Never call it on a push.
+ */
 const droppedRule = Object.freeze({
+  base(upstreamRead) {
+    if (!Array.isArray(upstreamRead) || upstreamRead.length === 0) return readForLevel(2);
+    const kept = upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
+    const open = kept.filter(r => r !== SEALED_TOKEN);
+    return open.length === 0 && kept.length > 0 ? ['sysadmin'] : open;
+  },
+  cap(own, cap) {
+    const level = Math.min(levelOfRead(own), levelOfRead(cap));
+    if (level !== 1) return readForLevel(level);
+    const privilegedOnly = read => Array.isArray(read) && read.every(r => SECURE_ROLES.includes(r));
+    if (privilegedOnly(own)) return own;
+    if (privilegedOnly(cap) && cap.length > 0) return cap;
+    return readForLevel(1);
+  },
   widen(read) {
     if (read.includes(SEALED_TOKEN) || read.some(r => LADDER.includes(r))) return read;
     return [...read, STAFF];
   },
   own(eagleRead) {
-    return droppedRule.widen(eagleBaseAcl(eagleRead));
+    return droppedRule.widen(droppedRule.base(eagleRead));
   },
-  under(eagleRead, cap, under = capRead) {
-    const base = eagleBaseAcl(eagleRead);
+  under(eagleRead, cap, under = droppedRule.cap) {
+    const base = droppedRule.base(eagleRead);
     const read = under(droppedRule.widen(base), cap);
     // The dropped rule fell back to the plain cap where the widened read landed at `team`.
     return read.includes(LEVEL_TOKENS[1]) ? under(base, cap) : read;
+  },
+  /** The old `update-parent:updateRead`: capped only where the ceiling's level is lower. */
+  update(row, parent, parentRead) {
+    const ceiling = () => (levelOfRead(parentRead) !== 0 || parent.sealedAt
+      ? parentRead : droppedRule.own(parent.eagleRead));
+    const capIfLower = (own, cap) => (levelOfRead(cap) < levelOfRead(own) ? droppedRule.cap(own, cap) : own);
+    if (parent && inheritsParentRead(updateSource(row))) return ceiling();
+    const own = isNonEmpty(row.eagleRead) ? droppedRule.own(row.eagleRead) : [];
+    if (!parent) return own;
+    return own.length === 0 ? capIfLower(own, ceiling()) : droppedRule.under(row.eagleRead, ceiling(), capIfLower);
   }
 });
 
-/** Eagle's read as DEMI applies it now. */
+/** Eagle's read as DEMI applies it now: the push's own helpers. */
 const eagleRule = Object.freeze({
-  own: eagleRead => eagleBaseAcl(eagleRead),
-  under: (eagleRead, cap, under = capRead) => under(eagleBaseAcl(eagleRead), cap)
+  cap: capRead,
+  own: eagleBaseAcl,
+  under: eagleReadUnder,
+  update(row, parent, parentRead) {
+    const stored = parent && {
+      read: parentRead, doc: { sealedAt: parent.sealedAt, sources: { eagle: { read: parent.eagleRead } } }
+    };
+    return updateRead(updateSource(row), stored || null);
+  }
 });
+
+/** The Eagle record fields an Update's read derives from, as the query projects them. */
+function updateSource(row) {
+  return { read: row.eagleRead, status: row.eagleStatus, active: row.eagleActive };
+}
 
 function parseArgs(argv) {
   const args = { live: false, reverse: false };
@@ -199,21 +242,9 @@ function parentOf(step, row, parents) {
   return lookup(parents.projects, row.projectId);
 }
 
-/** `update-parent:updateRead`, under either rule. */
-function updateRead(rule, row, parent, parentRead) {
-  const ceiling = () => (levelOfRead(parentRead) !== 0 || parent.sealedAt ? parentRead : rule.own(parent.eagleRead));
-  const capIfLower = (own, cap) => (levelOfRead(cap) < levelOfRead(own) ? capRead(own, cap) : own);
-  const noRead = row.eagleRead === undefined || row.eagleRead === null;
-  const noStatus = row.eagleStatus === undefined || row.eagleStatus === null;
-  if (parent && noRead && noStatus && row.eagleActive === true) return ceiling();
-  const own = isNonEmpty(row.eagleRead) ? rule.own(row.eagleRead) : [];
-  if (!parent) return own;
-  return own.length === 0 ? capIfLower(own, ceiling()) : rule.under(row.eagleRead, ceiling(), capIfLower);
-}
-
 /** The read a row gets under `rule` against `parentRead`, before any delete ceiling. */
 function derive(step, rule, row, eagleRead, parent, parentRead) {
-  if (step.parent === 'eagle') return updateRead(rule, row, parent, parentRead);
+  if (step.parent === 'eagle') return rule.update(row, parent, parentRead);
   return parent === undefined ? rule.own(eagleRead) : rule.under(eagleRead, parentRead);
 }
 
@@ -226,7 +257,7 @@ function candidates(step, row, eagleRead, parent) {
   const after = derive(step, eagleRule, row, eagleRead, parent, parent && parent.after);
   const pairs = [{ dropped: before, target: after }];
   if (step.deleteCeiling && isDeletedRow(row)) {
-    pairs.unshift({ dropped: capRead(before, DELETED_CEILING), target: capRead(after, DELETED_CEILING) });
+    pairs.unshift({ dropped: droppedRule.cap(before, DELETED_CEILING), target: eagleRule.cap(after, DELETED_CEILING) });
   }
   return pairs;
 }
@@ -263,28 +294,31 @@ function reverseOp(step, row, read, now) {
   };
 }
 
-/** Record a row's read after this run, where it caps others. */
+/** Record a row's read after this run, where it caps others. Returns the entry, or undefined. */
 function rememberParent(step, row, after, parents) {
   const entry = parentEntry(row, after);
+  const id = String(row.id);
   if (step.container === 'projects') {
-    parents.projects.set(String(row.id), entry);
+    parents.projects.set(id, entry);
     if (row.eagleId) parents.projectsByEagleId.set(String(row.eagleId), entry);
   } else if (step.container === 'notifications') {
-    parents.notifications.set(String(row.id), entry);
+    parents.notifications.set(id, entry);
   } else if (step.container === 'commentPeriods') {
-    parents.periods.set(String(row.id), entry);
+    parents.periods.set(id, entry);
   } else if (row.kind === 'Inspection') {
-    parents.inspections.set(String(row.id), entry);
+    parents.inspections.set(id, entry);
   } else if (row.kind === 'InspectionElement') {
-    parents.elements.set(String(row.id), entry);
+    parents.elements.set(id, entry);
+  } else {
+    return undefined;
   }
+  return entry;
 }
 
-/** Inspections, elements, then items: each kind is capped by the one before it. */
-function parentFirst(step, rows) {
-  if (step.container !== 'inspections') return rows;
-  const rank = row => INSPECTION_KINDS.indexOf(row.kind);
-  return [...rows].sort((a, b) => rank(a) - rank(b));
+/** Inspections, elements, then items, each written before the next is planned against it. */
+function batches(step, rows) {
+  if (step.container !== 'inspections') return [rows];
+  return INSPECTION_KINDS.map(kind => rows.filter(row => row.kind === kind));
 }
 
 async function runReverse(args, io) {
@@ -295,23 +329,32 @@ async function runReverse(args, io) {
   const summaries = [];
   for (const step of STEPS) {
     const s = newSummary(step.container, args);
-    const ops = [];
     const rows = await allRows(io.queryPage, step.container, reverseSpec(step));
-    for (const row of parentFirst(step, rows)) {
-      if (!row.eagleId && row.hasEagleSource !== true) continue;
-      s.scanned++;
-      const plan = planReverse(step, row, parents);
-      if (plan && plan.skip === 'held') s.skippedHeld++;
-      else if (plan && plan.skip === 'differs') s.skippedDiffers++;
-      else if (plan && plan.skip === 'noParent') s.noParent++;
-      const read = plan && plan.read;
-      // Children are capped by what the parent becomes, so a dry run counts what a live run writes.
-      if (step.loadAll) rememberParent(step, row, read || row.read, parents);
-      if (!read) continue;
-      s.planned++;
-      ops.push(reverseOp(step, row, read, io.now));
+    for (const batch of batches(step, rows)) {
+      const ops = [];
+      const remembered = new Map();
+      for (const row of batch) {
+        if (!row.eagleId && row.hasEagleSource !== true) continue;
+        s.scanned++;
+        const plan = planReverse(step, row, parents);
+        if (plan && plan.skip === 'held') s.skippedHeld++;
+        else if (plan && plan.skip === 'differs') s.skippedDiffers++;
+        else if (plan && plan.skip === 'noParent') s.noParent++;
+        const read = plan && plan.read;
+        // Children are capped by what the parent becomes, so a dry run counts what a live run writes.
+        const entry = step.loadAll && rememberParent(step, row, read || row.read, parents);
+        if (entry) remembered.set(String(row.id), entry);
+        if (!read) continue;
+        s.planned++;
+        ops.push(reverseOp(step, row, read, io.now));
+      }
+      if (!args.live) continue;
+      // A parent whose patch did not land still caps its children at its stored read.
+      for (const id of await writeAll(io.write, step.container, ops, s)) {
+        const entry = remembered.get(id);
+        if (entry) entry.after = entry.before;
+      }
     }
-    if (args.live) await writeAll(io.write, step.container, ops, s);
     logger.info(summaryLine(s));
     summaries.push(s);
   }
@@ -327,13 +370,17 @@ function newSummary(container, args) {
   };
 }
 
+/** Write `ops` in bulk batches. Returns the ids that did not land: failed, or 412. */
 async function writeAll(write, container, ops, s) {
+  const missed = [];
   for (let i = 0; i < ops.length; i += cosmos.BULK_MAX_OPERATIONS) {
     const result = await write(container, ops.slice(i, i + cosmos.BULK_MAX_OPERATIONS));
     s.patched += result.succeeded || 0;
     s.failed += result.failed || 0;
     s.stale += (result.skippedIds || []).length;
+    missed.push(...(result.failedIds || []), ...(result.skippedIds || []));
   }
+  return missed.map(String);
 }
 
 function summaryLine(s) {

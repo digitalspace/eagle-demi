@@ -61,15 +61,16 @@ test('a field value that differs with no known cause exits 1', async () => {
   assert.match(h.out[0], /match=0 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=1/);
 });
 
-test('a staff row with no ladder token is counted under L1 and exits 0', async () => {
+// Eagle and DEMI both keep a no-ladder row from staff, so a staff gap there is real drift.
+test('a staff row with no ladder token missing in DEMI is unexplained', async () => {
   const h = harness(searchSides({
     eagle: [project(A), project(B, { read: ['sysadmin'] })],
     demi: [project(A)]
   }), { env: { PARITY_TOKEN: TOKEN } });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-env', 'PARITY_TOKEN',
     '--only', 'search-Project'], h.deps);
-  assert.strictEqual(code, 0);
-  assert.match(h.out[0], /missingInDemi=1 .*unexplained=0 known=L1-no-ladder-token:1/);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], /missingInDemi=1 .*unexplained=1/);
 });
 
 const staffProjectRun = async (demiExtra) => {
@@ -853,16 +854,10 @@ test('an extra DEMI row listed as seeded-from-prod is counted under it', async (
   assert.match(line, /extraInDemi=1 .*unexplained=0 known=seeded-from-prod:1/);
 });
 
-test('an extra DEMI row listed as eagle-staff-widened is counted under it for staff', async () => {
+test('eagle-staff-widened, dropped with the rule, is no longer a --known-ids class', async () => {
   const { code, line } = await knownRun('staff', { 'eagle-staff-widened': [B] });
-  assert.strictEqual(code, 0);
-  assert.match(line, /extraInDemi=1 .*unexplained=0 known=eagle-staff-widened:1/);
-});
-
-test('eagle-staff-widened does not excuse an extra row for sysadmin, who sees every Eagle row', async () => {
-  const { code, line } = await knownRun('sysadmin', { 'eagle-staff-widened': [B] });
   assert.strictEqual(code, 1);
-  assert.match(line, /extraInDemi=1 .*unexplained=1/);
+  assert.match(line, /--known-ids: eagle-staff-widened is not one of/);
 });
 
 test('--known-ids may repeat, and lists of one class from several files merge', async () => {
@@ -885,7 +880,7 @@ test('a --known-ids class that does not exist is refused', async () => {
 });
 
 test('an id listed under the new id classes never explains a row missing in DEMI', () => {
-  const knownIds = { 'seeded-from-prod': new Set([A]), 'eagle-staff-widened': new Set([A]) };
+  const knownIds = { 'seeded-from-prod': new Set([A]), 'ladder-above-public': new Set([A]) };
   assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'staff', knownIds })), null);
   assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'staff', knownIds, parentState: null })), 'push-missed');
 });
@@ -904,9 +899,9 @@ const emitRun = async (identity) => {
   return h.written[0];
 };
 
-test('a sysadmin --emit-ids run lists the Eagle ids DEMI widens to staff, and extra DEMI ids per read', async () => {
+test('a sysadmin --emit-ids run lists ladder-above-public ids and extra DEMI ids per read, no widened class', async () => {
   const emitted = JSON.parse(await emitRun('sysadmin'));
-  assert.deepStrictEqual(emitted['eagle-staff-widened'], [B, SEALED_ONLY].sort());
+  assert.deepStrictEqual(Object.keys(emitted).sort(), ['extraInDemi', 'ladder-above-public']);
   assert.deepStrictEqual(emitted['ladder-above-public'], [A]);
   assert.deepStrictEqual(emitted.extraInDemi, { 'search-Project': ['8'.repeat(24)] });
 });
@@ -928,12 +923,12 @@ test('a sysadmin --emit-ids run lists the children of a public-only project unde
 test('a sysadmin --emit-ids run lists inspection items by their element read[]', async () => {
   const ITEM = '8'.repeat(24);
   const h = harness((host) => json(host === 'eagle.test'
-    ? [{ _id: ELEMENT, read: ['sysadmin', 'inspector'], items: [ITEM] }]
+    ? [{ _id: ELEMENT, read: ['sysadmin', 'public'], items: [ITEM] }]
     : [{ id: ITEM }]), { env: { PARITY_TOKEN: TOKEN } });
   await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'sysadmin', '--token-env', 'PARITY_TOKEN',
     '--id', `inspection=${INSPECTION}`, '--id', `element=${ELEMENT}`, '--only', 'inspection-item',
     '--emit-ids', 'ids.json'], h.deps);
-  assert.deepStrictEqual(JSON.parse(h.written[0])['eagle-staff-widened'], [ITEM]);
+  assert.deepStrictEqual(JSON.parse(h.written[0])['ladder-above-public'], [ITEM]);
 });
 
 test('ladder-above-public explains an extra DEMI row for staff only, never a missing one', () => {
@@ -949,17 +944,17 @@ test('--emit-ids writes ids only, never field values', async () => {
   assert.ok(!/Mine|Hudson Hope|Peace/.test(text), text);
 });
 
-test('a staff --emit-ids run lists no widened ids: staff cannot see the rows that tell them apart', async () => {
+test('a staff --emit-ids run lists no ladder ids: staff cannot see the rows that tell them apart', async () => {
   const emitted = JSON.parse(await emitRun('staff'));
-  assert.ok(!('eagle-staff-widened' in emitted));
+  assert.ok(!('ladder-above-public' in emitted));
   assert.deepStrictEqual(Object.keys(emitted.extraInDemi), ['search-Project']);
 });
 
 test('an --emit-ids file is accepted as a --known-ids file', async () => {
   const emitted = await emitRun('sysadmin');
-  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A), project(B)] }),
+  const h = harness(searchSides({ eagle: [project(C)], demi: [project(C), project(A)] }),
     { env: { PARITY_TOKEN: TOKEN }, files: { 'ids.json': emitted } });
   const code = await run([...staff, '--only', 'search-Project', '--known-ids', 'ids.json'], h.deps);
   assert.strictEqual(code, 0);
-  assert.match(h.out[0], /known=eagle-staff-widened:1/);
+  assert.match(h.out[0], /known=ladder-above-public:1/);
 });

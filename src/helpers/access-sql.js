@@ -25,6 +25,7 @@ const PUBLIC_ROLES = Object.freeze(['public']);
  * Role TYPES, never ids: which projects a `team` row belongs to is the partition key's job.
  */
 const LEVEL_TOKENS = Object.freeze({ 1: 'team', 2: 'staff', 3: 'idir', 4: 'public' });
+const LADDER_TOKENS = Object.freeze(Object.values(LEVEL_TOKENS));
 
 /**
  * The sealed compartment's token — level 0, off the ladder (docs/rbac-architecture.md §1,
@@ -73,18 +74,44 @@ function levelOfRead(read) {
 /**
  * `own` narrowed to `cap`'s level, never widened by it: the lower of the two ladder levels.
  *
- * At level 1 a read made only of privileged role names (`['sysadmin']`, or `[]`) is kept rather
- * than rewritten to `readForLevel(1)`: `team` is what the team arm opens to the project's team
- * members, and such a read opens to privileged callers only. The row's own read wins, then the
- * cap's. A legacy role like `project-team` still lands at `team`, as does an empty or missing cap.
+ * At level 1 the result never lets in a caller the cap keeps out. A read with no ladder token
+ * (`['sysadmin','inspector']`) opens only to privileged callers and holders of the roles it names,
+ * so it keeps its privileged names plus those the cap also admits (every name, under a public cap),
+ * and never becomes `team`. A ladder read under a cap with no ladder token keeps only the cap's
+ * privileged names. Either way, nothing left is `['sysadmin']`, never `[]`. Otherwise, an empty or
+ * missing cap included, it lands at `team`.
  */
 function capRead(own, cap) {
   const level = Math.min(levelOfRead(own), levelOfRead(cap));
   if (level !== 1) return readForLevel(level);
-  const privilegedOnly = read => Array.isArray(read) && read.every(r => SECURE_ROLES.includes(r));
-  if (privilegedOnly(own)) return own;
-  if (privilegedOnly(cap) && cap.length > 0) return cap;
+  const capList = Array.isArray(cap) ? cap : [];
+  const orSysadmin = read => (read.length > 0 ? read : ['sysadmin']);
+  if (noLadderToken(own)) {
+    return orSysadmin(own.filter(r => SECURE_ROLES.includes(r) || capList.includes(r) || capList.includes(LEVEL_TOKENS[4])));
+  }
+  if (noLadderToken(cap) && cap.length > 0) return orSysadmin(cap.filter(r => SECURE_ROLES.includes(r)));
   return readForLevel(1);
+}
+
+/** A `read[]` list carrying none of `team`, `staff`, `idir`, `public`. */
+function noLadderToken(read) {
+  return Array.isArray(read) && !read.some(r => LADDER_TOKENS.includes(r));
+}
+
+/**
+ * Do two `read[]`s let in the same callers under `readClause`? Every caller holds `public`, so two
+ * level-4 reads always do; at 2 and 3 privileged names are ignored, as those callers pass anyway.
+ * Levels 0 and 1 compare exactly: `['team']`, `['sysadmin']` and `['sysadmin','inspector']` are
+ * all level 1, so a level alone cannot tell a move.
+ */
+function sameAccess(a, b) {
+  const level = levelOfRead(a);
+  if (level !== levelOfRead(b)) return false;
+  if (level === 4) return true;
+  const kept = level < 2 ? read => read || [] : read => read.filter(r => !SECURE_ROLES.includes(r));
+  const left = new Set(kept(a));
+  const right = new Set(kept(b));
+  return left.size === right.size && [...left].every(r => right.has(r));
 }
 
 /**
@@ -686,6 +713,8 @@ module.exports = {
   readForLevel,
   levelOfRead,
   capRead,
+  noLadderToken,
+  sameAccess,
   isDemiSeal,
   heldSealed,
   levelTokens,

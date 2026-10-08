@@ -18,9 +18,10 @@ const NOTIFICATION = { id: 'n-1', read: ['sysadmin', 'staff'], eagleRead: ['sysa
 /**
  * `cosmos.queryPage` and `cosmos.bulkVerified` replaced for the run. A write applies its `set` ops
  * to a private copy of the row when `ifMatch` holds, and answers a 412 (`skippedIds`) when it does
- * not. `stale` hands every row out with an etag that no longer matches.
+ * not. `stale` hands every row out with an etag that no longer matches; `refuse` maps an id to the
+ * answer its write gets instead, `'stale'` (412) or `'failed'`.
  */
-function fakeCosmos(t, seed, { stale = false } = {}) {
+function fakeCosmos(t, seed, { stale = false, refuse = {} } = {}) {
   const rows = structuredClone(seed);
   const writes = [];
   let etag = 0;
@@ -28,14 +29,20 @@ function fakeCosmos(t, seed, { stale = false } = {}) {
     (rows[container] || []).slice(skip, skip + size).map(r => ({ ...r, ...(stale && { _etag: 'old' }) })));
   t.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
     const skippedIds = [];
+    const failedIds = [];
     for (const op of operations) {
       writes.push({ container, ...op });
       const row = rows[container].find(r => String(r.id) === op.id);
-      if (op.ifMatch !== undefined && row._etag !== op.ifMatch) { skippedIds.push(op.id); continue; }
+      if (refuse[op.id] === 'failed') { failedIds.push(op.id); continue; }
+      const etagMoved = op.ifMatch !== undefined && row._etag !== op.ifMatch;
+      if (etagMoved || refuse[op.id] === 'stale') { skippedIds.push(op.id); continue; }
       for (const set of op.resourceBody.operations) row[set.path.slice(1)] = set.value;
       row._etag = `e${++etag}`;
     }
-    return { succeeded: operations.length - skippedIds.length, failed: 0, skippedIds };
+    return {
+      succeeded: operations.length - skippedIds.length - failedIds.length,
+      failed: failedIds.length, skippedIds, failedIds
+    };
   });
   return writes;
 }
@@ -110,13 +117,43 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.deepStrictEqual(readOf(writes, 'd-1'), ['sysadmin']);
   });
 
-  await t.test('a child whose Eagle read has no ladder token lands at team under a public parent', async (t) => {
+  await t.test('a child whose Eagle read has no ladder token keeps it under a public parent', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [PUBLIC_PROJECT],
       groups: [{ id: 'g-1', projectId: 'p-pub', eagleId: 'g-1', read: ['staff'], eagleRead: ['sysadmin', 'inspector'], _etag: 'x' }]
     });
     await reverse('--live');
-    assert.deepStrictEqual(readOf(writes, 'g-1'), ['team']);
+    assert.deepStrictEqual(readOf(writes, 'g-1'), ['sysadmin', 'inspector']);
+  });
+
+  await t.test('a row the old cap stored at team under a team parent goes to the current cap', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [{ ...WIDENED_PROJECT, read: ['team'], eagleRead: ['team'] }],
+      groups: [{ id: 'g-1', projectId: 'p-w', eagleId: 'g-1', read: ['team'], eagleRead: ['sysadmin', 'inspector'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'g-1'), ['sysadmin']);
+  });
+
+  await t.test('a parent whose patch is refused still caps its children at its stored read', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [WIDENED_PROJECT],
+      documents: [{ id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['staff'], ownRead: ['public'], _etag: 'x' }]
+    }, { refuse: { 'p-w': 'stale' } });
+    await reverse('--live');
+    assert.strictEqual(writes.some(w => w.id === 'd-1'), false);
+  });
+
+  await t.test('an inspection whose patch fails still caps its elements at its stored read', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      inspections: [
+        { id: 'el-1', kind: 'InspectionElement', inspection: 'i-1', eagleId: 'el-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' },
+        { id: 'i-1', kind: 'Inspection', inspection: 'i-1', projectId: 'p-pub', eagleId: 'i-1', read: ['staff'], eagleRead: ['sysadmin'], _etag: 'x' }
+      ]
+    }, { refuse: { 'i-1': 'failed' } });
+    await reverse('--live');
+    assert.strictEqual(writes.some(w => w.id === 'el-1'), false);
   });
 
   await t.test('a document under a notification is not capped by it', async (t) => {

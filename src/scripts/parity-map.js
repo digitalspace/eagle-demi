@@ -140,9 +140,6 @@ const pathOf = (value) => {
  * one kind or a list. A missing or extra row's `unpaired` holds the other side's unpaired rows.
  */
 const KNOWN_DIFFERENCES = [
-  { name: 'L1-no-ladder-token', kind: 'missingInDemi', identities: ['staff'],
-    why: 'Eagle row has neither staff nor public in read[]: privileged-only in DEMI until D1',
-    match: ({ eagle }) => !!readOf(eagle) && !readOf(eagle).includes('staff') && !readOf(eagle).includes('public') },
   { name: 'L2-never-mirrored', kind: 'missingInDemi', ids: true,
     why: 'Eagle row never reached DEMI; closed by backfill' },
   { name: 'L3-staff-field-not-promoted', kind: 'fieldDiff', identities: STAFF,
@@ -160,8 +157,6 @@ const KNOWN_DIFFERENCES = [
     why: 'Eagle hard delete that sent no delete notice' },
   { name: 'seeded-from-prod', kind: 'extraInDemi', ids: true,
     why: 'row from the 2026-08-25 prod seed that the Eagle test database does not hold' },
-  { name: 'eagle-staff-widened', kind: 'extraInDemi', identities: ['staff'], ids: true,
-    why: 'Eagle read[] has no ladder token; DEMI adds staff (withEagleStaff in src/helpers/eagle-acl.js)' },
   { name: 'ladder-above-public', kind: 'extraInDemi', identities: ['staff'], ids: true,
     why: "Eagle read[] (or its project's) has public, not staff: Eagle staff routes hide it, DEMI's ladder ranks staff above public" },
   { name: 'display-name-from-file-name', kind: 'fieldDiff',

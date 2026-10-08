@@ -83,7 +83,7 @@ test('setAclForProject — updates follow their project', async (t) => {
     await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
 
     assert.deepStrictEqual(patched(seen.ops[0])['/read'], ['public']);
-    assert.deepStrictEqual(patched(seen.ops[1])['/read'], ['sysadmin', 'staff']);
+    assert.deepStrictEqual(patched(seen.ops[1])['/read'], ['sysadmin']);
   });
 
   await t.test('a sealed notification holding the id still cascades nothing', async () => {
@@ -113,12 +113,12 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.deepStrictEqual(patched(seen.ops[0]), { '/read': [], '/isPublished': false, ...CLEARED });
   });
 
-  await t.test('[\'sysadmin\'] under a public project gains staff, never team', async () => {
-    const seen = stub(t, [{ id: 'u1', read: ['sysadmin'], eagleRead: ['sysadmin'] }]);
+  await t.test('[\'sysadmin\'] under a public project stays [\'sysadmin\'], nothing added', async () => {
+    const seen = stub(t, [{ id: 'u1', read: STAFF_PARENT, eagleRead: ['sysadmin'] }]);
 
     await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
 
-    assert.deepStrictEqual(patched(seen.ops[0])['/read'], ['sysadmin', 'staff']);
+    assert.deepStrictEqual(patched(seen.ops[0])['/read'], ['sysadmin']);
   });
 
   await t.test('an Update DEMI sealed keeps its seal', async () => {

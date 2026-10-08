@@ -363,25 +363,23 @@ events, and Eagle records a `Get` action for each `group-members` read.
 One line per read:
 
 ```
-[parity] search-Project identity=staff match=410 missingInDemi=3 extraInDemi=12 fieldDiff=0 unexplained=0 known=L1-no-ladder-token:3,demi-only:12
+[parity] search-Project identity=staff match=410 missingInDemi=3 extraInDemi=12 fieldDiff=0 unexplained=0 known=L2-never-mirrored:3,demi-only:12
 ```
 
 Every difference is matched against `KNOWN_DIFFERENCES` in `parity-map.js`; what no class explains
 counts as `unexplained`. Classes that match by id read their ids from `--known-ids`, a JSON object
 of class name to id list; the flag may repeat, and lists of one class merge. Those classes are rows
-never mirrored, DEMI takedowns and Eagle hard deletes, plus three that only explain a row extra in
+never mirrored, DEMI takedowns and Eagle hard deletes, plus two that only explain a row extra in
 DEMI:
 
 - `seeded-from-prod`: a row from the 2026-08-25 prod seed that Eagle test does not hold.
-- `eagle-staff-widened` (staff runs only): an Eagle row whose `read[]` has no ladder token, which
-  DEMI shows staff because the push adds `staff` (`withEagleStaff` in `src/helpers/eagle-acl.js`).
 - `ladder-above-public` (staff runs only): an Eagle row whose `read[]` has `public` but not
   `staff`, or a comment period or document under such a project. Eagle matches `read[]` tokens to
   roles literally, so its staff routes hide these rows. DEMI ranks staff above public by design, so
   DEMI staff sees them.
 
 `--emit-ids <file>` writes ids only, never values: `extraInDemi`, each read's extra DEMI ids, and on
-a sysadmin run `eagle-staff-widened` and `ladder-above-public`, the Eagle ids those rules cover. A
+a sysadmin run `ladder-above-public`, the Eagle ids that rule covers. A
 child counts under `ladder-above-public` only when the same run read its project. The file is a valid
 `--known-ids` file (`extraInDemi` is skipped), so a sysadmin run's file feeds the staff run:
 
@@ -492,22 +490,26 @@ scripts/demi-devbox.sh run --env test -- 'git pull && yarn install && node src/s
 Without `--reverse` it gives each Eagle document that has no `ownRead` its stored `read`. The
 project cascade re-derives a document's read from `ownRead`. Run it once on a new environment.
 
-`--reverse` undoes a rule that is being dropped. From 2026-10-05 the mirrors add `staff` to an
-Eagle read with no ladder token (`team`, `staff`, `idir`, `public`). Once the rule is gone, DEMI
-stores Eagle's own read, minus blanks and `compliance`, capped by the parent's read.
+`--reverse` undoes a rule dropped on 2026-10-08. From 2026-10-05 the mirrors added `staff` to an
+Eagle read with no ladder token (`team`, `staff`, `idir`, `public`). DEMI now stores Eagle's own
+read, minus blanks and `compliance`, capped by the parent's read through `capRead`. A read with no
+ladder token under a cap keeps only its privileged names and the names the cap also carries; it no
+longer lands at `team`.
 
 Run `--reverse` only on a build where `src/helpers/eagle-acl.js` no longer exports `withEagleStaff`
 or `seedAcl`, deployed to the API first. Otherwise the next push, merge or cascade adds `staff`
 back, and the nightly reconcile reports the reversed rows as drift. The script checks the build it
 runs from and exits 2 with a message if either export is still there.
 
-The script works parents first:
-projects and notifications, then lists, users, comment periods, documents, groups, inspections
-(inspection, element, item), comments and Updates. Each child is capped by its parent's read after
-the reverse.
+The script works parents first: projects and notifications, then lists, users, comment periods,
+documents, groups, inspections, comments and Updates. Inspections are written kind by kind:
+inspection, element, item. Each child is capped by its parent's read after the reverse. A parent
+whose write fails or gets a 412 keeps capping its children at its stored read.
 
-A row is rewritten only when its stored `read` is exactly what the dropped rule gives for the same
-Eagle read and parent. Every patch carries the row's etag. The counters per container are:
+A row is rewritten only when its stored `read` is exactly what the old rule gives for the same
+Eagle read and parent. The script keeps a frozen copy of that rule: the staff widening plus the old
+`capRead`, which stored `['team']` where the current one keeps privileged names. Every patch
+carries the row's etag. The counters per container are:
 
 - `planned` and `patched`: rows the run rewrites, and rows it did rewrite.
 - `skippedHeld`: a document with `levelHeldAt`, or a row DEMI sealed. Left as stored.

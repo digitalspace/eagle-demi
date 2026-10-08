@@ -64,7 +64,7 @@ test('updateRead — every other update keeps today\'s rule', async (t) => {
   await t.test('a non-empty read is its own, and still capped by the parent', () => {
     assert.deepStrictEqual(updateRead(legacy({ read: PUBLIC_ACL }), PUBLIC_PARENT), PUBLIC_ACL);
     assert.deepStrictEqual(updateRead(legacy({ read: PUBLIC_ACL }), PRIVATE_PARENT), ['staff']);
-    assert.deepStrictEqual(updateRead(legacy({ read: ['sysadmin'] }), PUBLIC_PARENT), ['sysadmin', 'staff']);
+    assert.deepStrictEqual(updateRead(legacy({ read: ['sysadmin'] }), PUBLIC_PARENT), ['sysadmin']);
   });
 
   await t.test('a read that is not a list is not missing: stored as [], never widened', () => {
@@ -74,14 +74,29 @@ test('updateRead — every other update keeps today\'s rule', async (t) => {
 });
 
 test('readUnder — an Eagle read with no ladder token is never opened to team', async (t) => {
-  for (const parent of [['team'], ['sysadmin'], [], ['project-team']]) {
-    await t.test(`under a level-1 parent ${JSON.stringify(parent)} it stays ['sysadmin']`, () => {
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team'], ['staff'], ['staff', 'idir', 'public']]) {
+    await t.test(`under parent ${JSON.stringify(parent)} it stays ['sysadmin']`, () => {
       assert.deepStrictEqual(readUnder(['sysadmin'], { read: parent }), ['sysadmin']);
     });
   }
 
-  await t.test('under a staff parent it keeps its own read, widened', () => {
-    assert.deepStrictEqual(readUnder(['sysadmin'], { read: ['staff'] }), ['sysadmin', 'staff']);
+  await t.test('a ladder read above its parent is capped', () => {
+    assert.deepStrictEqual(readUnder(['sysadmin', 'public'], { read: ['staff'] }), ['staff']);
+  });
+
+  await t.test('a read with no ladder token keeps only the names its parent admits', () => {
+    assert.deepStrictEqual(readUnder(['sysadmin', 'inspector'], { read: ['sysadmin'] }), ['sysadmin']);
+    assert.deepStrictEqual(readUnder(['sysadmin', 'inspector'], { read: ['staff'] }), ['sysadmin']);
+    assert.deepStrictEqual(readUnder(['sysadmin', 'inspector'], { read: ['staff', 'idir', 'public'] }),
+      ['sysadmin', 'inspector'], 'a public parent admits every caller');
+  });
+
+  await t.test('a ladder read under a parent with no ladder token keeps only its privileged names', () => {
+    assert.deepStrictEqual(readUnder(['team'], { read: ['sysadmin', 'inspector'] }), ['sysadmin']);
+  });
+
+  await t.test('[] stays [] under an unsealed parent', () => {
+    assert.deepStrictEqual(readUnder([], { read: ['sysadmin'] }), []);
   });
 
   await t.test('an empty read under a sealed parent is sealed, as before', () => {

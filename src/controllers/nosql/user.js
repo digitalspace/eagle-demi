@@ -3,14 +3,14 @@
 /**
  * User controller — the Eagle mirror for `User`, and the only writer of `users`.
  *
- * No parent: a user's own `read[]` through `seedAcl` is the whole ACL, so Eagle's default
- * `['sysadmin']` lands at level 2. Contact fields are 2/2 in catalog/users.js. Eagle's `password`
+ * No parent: a user's own `read[]` through `eagleBaseAcl` is the whole ACL, so Eagle's default
+ * `['sysadmin']` stays privileged-only. Contact fields are 2/2 in catalog/users.js. Eagle's `password`
  * and `salt` are dropped before anything is built, the raw copy under `sources` included: eagle-api
  * already strips them, and a legacy row it missed must still not land here.
  */
 
 const users = require('../../repositories/users');
-const { seedAcl } = require('../../seed/transform');
+const { eagleBaseAcl } = require('../../seed/transform');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const {
@@ -63,7 +63,7 @@ function mirrorItem(eagleId, doc, read, existing) {
 /** @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}|{status: 'conflict'}>} */
 function mirrorFromEagle(eagleId, rawDoc, { pushedAt = null } = {}) {
   const doc = withoutSecrets(rawDoc);
-  const read = underDeleteCeiling(seedAcl(doc.read), doc);
+  const read = underDeleteCeiling(eagleBaseAcl(doc.read), doc);
   return upsertWithRetry(
     users,
     (current) => mirrorItem(eagleId, doc, read, current),

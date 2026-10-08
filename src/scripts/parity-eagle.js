@@ -11,7 +11,6 @@ const crypto = require('crypto');
 const fs = require('fs');
 const { fetchAllPages, unwrapSearchResponse, rateLimitWaitMs, PAGE_SIZE } = require('../seed/sources');
 const { diff } = require('./reconcile-eagle');
-const { eagleBaseAcl, withEagleStaff } = require('../helpers/eagle-acl');
 const { eagleRef } = require('../helpers/parent-admit');
 const {
   PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, sameField,
@@ -404,13 +403,6 @@ const orphanStateOf = parentIds => (row) => {
 /** A read[] Eagle's staff role cannot see and DEMI's ladder lets staff see: public, not staff. */
 const publicNotStaff = read => Array.isArray(read) && read.includes('public') && !read.includes('staff');
 
-/** An Eagle row DEMI shows staff only because `withEagleStaff` added it. */
-const widenedForStaff = (row) => {
-  if (!Array.isArray(row.read)) return false;
-  const base = eagleBaseAcl(row.read);
-  return withEagleStaff(base).length > base.length;
-};
-
 /** @returns {Promise<number>} the exit code */
 async function run(argv, deps = {}) {
   const d = {
@@ -458,7 +450,6 @@ async function run(argv, deps = {}) {
   const results = [];
 
   const pairedDocuments = new Set();
-  const widened = new Set();
   const ladder = new Set();
   const projectReads = new Map();
   const childParents = new Map();
@@ -528,11 +519,10 @@ async function run(argv, deps = {}) {
     try {
       const eagleSide = await sideOf(eagle, eagleSpecFor(entry, identity), entry.mapEagle);
       const demiSide = await sideOf(demi, entry.demi, entry.mapDemi);
-      // Sysadmin sees every Eagle row, so its run lists what the staff run gets widened.
+      // Sysadmin sees every Eagle row, so its run lists what the staff run sees above public.
       if (args.emitIds && identity === 'sysadmin') {
         for (const row of eagleSide.rows) {
           const id = keyOf(row);
-          if (widenedForStaff(row)) widened.add(id);
           if (publicNotStaff(row.read)) ladder.add(id);
           if (entry.dataset === 'Project') projectReads.set(id, row.read);
           const parent = CHILD_DATASETS.includes(entry.dataset) && eagleRef(row.project);
@@ -583,7 +573,7 @@ async function run(argv, deps = {}) {
   if (args.emitIds) {
     for (const [id, parent] of childParents) if (publicNotStaff(projectReads.get(parent))) ladder.add(id);
     const emitted = identity === 'sysadmin'
-      ? { 'eagle-staff-widened': [...widened].sort(), 'ladder-above-public': [...ladder].sort() }
+      ? { 'ladder-above-public': [...ladder].sort() }
       : {};
     d.writeFile(args.emitIds, JSON.stringify({ ...emitted, [EMITTED_EXTRA]: extraByRead }, null, 2));
   }
