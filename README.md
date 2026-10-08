@@ -477,6 +477,58 @@ The email links to `LINK_BASE_URL` plus a path. By default the path is the proje
 page, `/updates/<id>`, instead. Only the React line of eagle-public has that page. Keep the flag off
 while `LINK_BASE_URL` serves the Angular site, which is the case in test and prod today.
 
+### Eagle read ladder backfill
+
+`src/scripts/backfill-eagle-ladder.js` fixes the `read[]` of rows mirrored from Eagle. It is a dry
+run by default and prints counts per container. `--live` writes. Run it on the devbox:
+
+```bash
+scripts/demi-devbox.sh run --env test -- 'git pull && yarn install && node src/scripts/backfill-eagle-ladder.js --reverse'
+scripts/demi-devbox.sh run --env test -- 'git pull && yarn install && node src/scripts/backfill-eagle-ladder.js --reverse --live'
+```
+
+Without `--reverse` it gives each Eagle document that has no `ownRead` its stored `read`. The
+project cascade re-derives a document's read from `ownRead`. Run it once on a new environment.
+
+`--reverse` undoes a rule dropped on 2026-10-08. From 2026-10-05 the mirrors added `staff` to an
+Eagle read with no ladder token (`team`, `staff`, `idir`, `public`). DEMI now stores Eagle's own
+read, minus blanks and `compliance`, capped by the parent's read through `capRead`. A read with no
+ladder token under a cap keeps only its privileged names and the names the cap also carries; it no
+longer lands at `team`.
+
+Two checks go with a `--live` run:
+
+1. Before it, confirm the API runs a build that contains #549, which dropped the rule. `GET
+   /api/config` returns `BUILD_ID`, stamped into the deploy package as `git describe --tags` of the
+   deployed commit plus a time. Take the commit from its `g<sha>` part and check that
+   `git merge-base --is-ancestor 9fc2e5c <sha>` succeeds. On an older build the next push, merge
+   or cascade adds `staff` back.
+2. After it, run the dry run again. It must plan 0 rows. If it plans any, a push added `staff`
+   back in between. The nightly reconcile alert also reports those rows as drift.
+
+The script works parents first: projects and notifications, then lists, users, comment periods,
+documents, groups, inspections, comments and Updates. Inspections are written kind by kind:
+inspection, element, item. Each child is capped by its parent's read after the reverse. A parent
+whose write fails or gets a 412 keeps capping its children at its stored read. Parent containers
+and Updates are read in full; the rest only where `read` carries `staff` or `team`.
+
+A row is rewritten only when its stored `read` is exactly what the old rule gives for the same
+Eagle read and parent. The script keeps a frozen copy of that rule: the staff widening plus the old
+`capRead`, which stored `['team']` where the current one keeps privileged names. Every patch
+carries the row's etag. The counters per container are:
+
+- `planned` and `patched`: rows the run rewrites, and rows it did rewrite.
+- `skippedHeld`: a document with `levelHeldAt`, or a row DEMI sealed. Left as stored.
+- `skippedDiffers`: the stored read is neither Eagle's nor the dropped rule's, for example after a
+  DEMI narrow. Left as stored.
+- `noParent`: the parent row is not in DEMI.
+- `stale`: the row changed after the scan (412). Run again.
+- `failed`: the write was refused. The script exits 1.
+
+A second `--live` run plans nothing. An Update pushed while the rule was live also stored the added
+`staff` in `sources.eagle.read`, so the script cannot tell it from Eagle's own read. Those Updates
+come right on their next push from Eagle.
+
 ---
 
 ## Tests

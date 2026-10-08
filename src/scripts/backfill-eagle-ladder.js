@@ -1,226 +1,359 @@
 'use strict';
 
 /**
- * Give `staff` to the Eagle-mirrored rows already in Cosmos whose `read[]` carries no ladder token.
- * The push rule this mirrored was removed 2026-10-08 (docs/rbac-architecture.md §1), so a run now
- * plans no writes.
- *
- * In DEMI, no ladder token means privileged callers only. In Eagle, `staff` skips every read
- * check, so those rows (for example `['sysadmin']` or `['sysadmin','inspector']`) are visible to
- * every staff user there. This rewrites them in DEMI itself: no re-push from Eagle, no chunk scan.
- *
- *   node src/scripts/backfill-eagle-ladder.js [--live]
- *
- * **DRY RUN BY DEFAULT**: prints per-container counts and writes nothing. `--live` writes. Cosmos is
- * private-endpoint-only and keyless, so a live run executes on the devbox via `demi-run` (README
- * "Running anything against the database").
- *
- * What it never widens:
- * - sealed rows (`compliance`) and any row with a ladder token. A DEMI takedown or narrow writes
- *   `readForLevel(level)`, which always carries one, so those rows are never candidates;
- * - a row whose parent caps it below level 2. The cap is the push's own, `helpers/eagle-acl:
- *   eagleReadUnder` (through `update-parent:readUnder` for Updates), against the parent's stored
- *   read, a DEMI narrow or takedown included: the rule a push applies, so the two agree. Only a
- *   level-2 result is written, so nothing lands at `team` or `public`;
- * - a row whose parent is not in DEMI.
- *
- * A document with no `ownRead` also gains one, in the same patch: its `read` before this run. Every
- * writer that adds the rule's `staff` also stores `ownRead`, so a row lacking one predates the rule
- * and that `read`, `staff` included, is Eagle's own. Without it, `setAclForProject` would capture
- * this run's promoted `['staff']` and cap it to `team`.
- *
- * Parents are planned first and children are capped by the parent's planned read, so a dry run
- * counts what a live run writes. Each patch is conditioned on the row still having no ladder token,
- * and on a document still having no `ownRead`, so a push or a level change that lands meanwhile wins.
+ * Forward: `ownRead` on Eagle documents lacking one. `--reverse`: undo the dropped 2026-10-05 rule
+ * that added `staff` to Eagle reads with no ladder token. Dry run unless `--live`; README "Eagle read
+ * ladder backfill" has the rules and counters.
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { readUnder } = require('../helpers/update-parent');
-const { levelOfRead, LEVEL_TOKENS, SEALED_TOKEN } = require('../helpers/access-sql');
-const { eagleBaseAcl, eagleReadUnder } = require('../seed/transform');
+const {
+  capRead, levelOfRead, readForLevel, isDemiSeal, LEVEL_TOKENS, SEALED_TOKEN, SECURE_ROLES
+} = require('../helpers/access-sql');
+const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
+const { inheritsParentRead, updateRead } = require('../helpers/update-parent');
+const { DELETED_CEILING } = require('../repositories/documents');
 const { logger } = require('../utils/logger');
 
 const PAGE_SIZE = 500;
+const TEAM = LEVEL_TOKENS[1];
+const STAFF = LEVEL_TOKENS[2];
+const LADDER = Object.freeze(Object.values(LEVEL_TOKENS));
+const INSPECTION_KINDS = Object.freeze(['Inspection', 'InspectionElement', 'InspectionItem']);
 
-/** Containers in parent-first order. `parent` names how a row finds the read that caps it. */
+/**
+ * Containers in parent-first order, with each one's partition key and parent. Every output of the
+ * dropped rule carries `staff` or is `['team']`, so a container is read only where `read` carries
+ * one of them, except: `loadAll` containers cap others and are read in full, and Updates
+ * (`scanAll`) are read in full because the old cap kept some at their own roles.
+ */
 const STEPS = Object.freeze([
-  { container: 'projects', pk: 'id' },
-  { container: 'notifications', pk: 'id' },
+  { container: 'projects', pk: 'id', loadAll: true },
+  { container: 'notifications', pk: 'id', loadAll: true },
   { container: 'lists', pk: 'kind' },
-  { container: 'updates', pk: 'id', parent: 'eagle' },
-  { container: 'commentPeriods', pk: 'projectId', parent: 'project' },
-  { container: 'documents', pk: 'projectId', parent: 'project' },
-  { container: 'comments', pk: 'periodId', parent: 'period' }
+  { container: 'users', pk: 'id', deleteCeiling: true },
+  { container: 'commentPeriods', pk: 'projectId', parent: 'project', loadAll: true, deleteCeiling: true },
+  { container: 'documents', pk: 'projectId', parent: 'project', deleteCeiling: true },
+  { container: 'groups', pk: 'projectId', parent: 'project', capByNotification: true, deleteCeiling: true },
+  { container: 'inspections', pk: 'inspection', parent: 'inspection', loadAll: true, deleteCeiling: true },
+  { container: 'comments', pk: 'periodId', parent: 'period', deleteCeiling: true },
+  { container: 'updates', pk: 'id', parent: 'eagle', scanAll: true }
 ]);
 
-/** Containers whose every row is loaded, because they cap other containers' rows. */
-const PARENT_CONTAINERS = new Set(['projects', 'notifications', 'commentPeriods']);
+/**
+ * The rule as it stood before 2026-10-08, frozen here so the reverse recognises what it wrote: the
+ * old `eagleBaseAcl` and `capRead` (level-1 reads made only of SECURE_ROLES kept), plus the staff
+ * widening. Never call it on a push.
+ */
+const droppedRule = Object.freeze({
+  base(upstreamRead) {
+    if (!Array.isArray(upstreamRead) || upstreamRead.length === 0) return readForLevel(2);
+    const kept = upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
+    const open = kept.filter(r => r !== SEALED_TOKEN);
+    return open.length === 0 && kept.length > 0 ? ['sysadmin'] : open;
+  },
+  cap(own, cap) {
+    const level = Math.min(levelOfRead(own), levelOfRead(cap));
+    if (level !== 1) return readForLevel(level);
+    const privilegedOnly = read => Array.isArray(read) && read.every(r => SECURE_ROLES.includes(r));
+    if (privilegedOnly(own)) return own;
+    if (privilegedOnly(cap) && cap.length > 0) return cap;
+    return readForLevel(1);
+  },
+  widen(read) {
+    if (read.includes(SEALED_TOKEN) || read.some(r => LADDER.includes(r))) return read;
+    return [...read, STAFF];
+  },
+  own(eagleRead) {
+    return droppedRule.widen(droppedRule.base(eagleRead));
+  },
+  under(eagleRead, cap, under = droppedRule.cap) {
+    const base = droppedRule.base(eagleRead);
+    const read = under(droppedRule.widen(base), cap);
+    // The dropped rule fell back to the plain cap where the widened read landed at `team`.
+    return read.includes(TEAM) ? under(base, cap) : read;
+  },
+  /** The old `update-parent:updateRead`: capped only where the ceiling's level is lower. */
+  update(row, parent, parentRead) {
+    const ceiling = () => (levelOfRead(parentRead) !== 0 || parent.sealedAt
+      ? parentRead : droppedRule.own(parent.eagleRead));
+    const capIfLower = (own, cap) => (levelOfRead(cap) < levelOfRead(own) ? droppedRule.cap(own, cap) : own);
+    if (parent && inheritsParentRead(updateSource(row))) return ceiling();
+    const own = isNonEmpty(row.eagleRead) ? droppedRule.own(row.eagleRead) : [];
+    if (!parent) return own;
+    return own.length === 0 ? capIfLower(own, ceiling()) : droppedRule.under(row.eagleRead, ceiling(), capIfLower);
+  }
+});
 
-const BLOCKING = [...Object.values(LEVEL_TOKENS), SEALED_TOKEN];
-const NO_LADDER_SQL = field => `(IS_ARRAY(${field}) AND ARRAY_LENGTH(${field}) > 0 AND ` +
-  `NOT EXISTS(SELECT VALUE r FROM r IN ${field} WHERE ARRAY_CONTAINS(@blocking, r)))`;
-// Patch conditions take no parameters; the tokens are constants, never input.
-const NO_LADDER_PREDICATE = field => `NOT EXISTS(SELECT VALUE r FROM r IN ${field} ` +
-  `WHERE r IN (${BLOCKING.map(t => `'${t}'`).join(', ')}))`;
-const NO_OWN_READ_SQL = 'NOT (IS_ARRAY(c.ownRead) AND ARRAY_LENGTH(c.ownRead) > 0)';
+/** Eagle's read as DEMI applies it now: the push's own helpers. */
+const eagleRule = Object.freeze({
+  cap: capRead,
+  own: eagleBaseAcl,
+  under: eagleReadUnder,
+  update(row, parent, parentRead) {
+    const stored = parent && {
+      read: parentRead, doc: { sealedAt: parent.sealedAt, sources: { eagle: { read: parent.eagleRead } } }
+    };
+    return updateRead(updateSource(row), stored || null);
+  }
+});
+
+/** The Eagle record fields an Update's read derives from, as the query projects them. */
+function updateSource(row) {
+  return { read: row.eagleRead, status: row.eagleStatus, active: row.eagleActive };
+}
 
 function parseArgs(argv) {
-  const args = { live: false };
+  const args = { live: false, reverse: false };
   for (const a of argv) {
     if (a === '--live') args.live = true;
     else if (a === '--dry-run') args.live = false;
+    else if (a === '--reverse') args.reverse = true;
     else throw new Error(`[eagle-ladder] unknown argument: ${a}`);
   }
   return args;
 }
 
-function rowsSpec(container, skip) {
-  const candidates = container === 'documents'
-    ? `(${NO_LADDER_SQL('c.read')} OR ${NO_OWN_READ_SQL})` : NO_LADDER_SQL('c.read');
-  const candidatesOnly = PARENT_CONTAINERS.has(container) ? '' : ` AND ${candidates}`;
-  return {
-    query: 'SELECT c.id, c.read, c.ownRead, c.eagleId, c.projectId, c.periodId, c.kind, ' +
-      'IS_DEFINED(c.sources.eagle) AS hasEagleSource FROM c ' +
-      `WHERE (IS_DEFINED(c.eagleId) OR IS_DEFINED(c.sources.eagle))${candidatesOnly} ` +
-      'ORDER BY c.id OFFSET @skip LIMIT @size',
-    parameters: [
-      { name: '@blocking', value: BLOCKING },
-      { name: '@skip', value: skip },
-      { name: '@size', value: PAGE_SIZE }
-    ]
-  };
-}
+const isNonEmpty = read => Array.isArray(read) && read.length > 0;
+const sameRead = (a, b) => Array.isArray(a) && Array.isArray(b) &&
+  a.length === b.length && a.every((r, i) => r === b[i]);
 
-async function allRows(queryPage, container) {
+async function allRows(queryPage, container, spec) {
   const rows = [];
   for (let skip = 0; ; skip += PAGE_SIZE) {
-    const page = await queryPage(container, rowsSpec(container, skip), { size: PAGE_SIZE, skip });
+    const page = await queryPage(container, spec(skip), { size: PAGE_SIZE, skip });
     rows.push(...page);
     if (page.length < PAGE_SIZE) return rows;
   }
 }
 
-const hasNoLadder = read => Array.isArray(read) && read.length > 0 &&
-  !read.some(r => BLOCKING.includes(r));
-const isNonEmpty = read => Array.isArray(read) && read.length > 0;
-
-/**
- * The parent read a row is capped by: `undefined` for no cap, `null` when the parent is missing.
- * A notification wins over a project, as `parent-admit:pickParent` says, and caps nothing except
- * an Update.
- */
-function parentReadOf(step, row, parents) {
-  if (!step.parent) return undefined;
-  const ref = String(step.parent === 'period' ? row.periodId : row.projectId);
-  if (step.parent === 'period') return parents.periods.has(ref) ? parents.periods.get(ref) : null;
-  if (parents.notifications.has(ref)) {
-    return step.parent === 'eagle' ? parents.notifications.get(ref) : undefined;
-  }
-  const project = step.parent === 'eagle' ? parents.projectsByEagleId.get(ref) : parents.projects.get(ref);
-  return project === undefined ? null : project;
+function pageParams(skip) {
+  return [{ name: '@skip', value: skip }, { name: '@size', value: PAGE_SIZE }];
 }
 
-/**
- * The `read` one row is patched to, or null. Only a level-2 `read` is written. A document's
- * `ownRead` stays Eagle's read without `staff`: the project cascade adds it through `eagleReadUnder`.
- */
-function planRow(step, row, parentRead) {
-  if (!hasNoLadder(row.read) || parentRead === null) return null;
-  const next = step.parent === 'eagle'
-    ? readUnder(row.read, parentRead === undefined ? null : { read: parentRead })
-    : (parentRead === undefined ? eagleBaseAcl(row.read) : eagleReadUnder(row.read, parentRead));
-  if (levelOfRead(next) !== 2) return null;
-  return { read: next };
+// ---------------------------------------------------------------------------------------------
+// Forward: `ownRead` on documents that lack one.
+// ---------------------------------------------------------------------------------------------
+
+const NO_OWN_READ_SQL = 'NOT (IS_ARRAY(c.ownRead) AND ARRAY_LENGTH(c.ownRead) > 0)';
+
+function forwardSpec(skip) {
+  return {
+    query: 'SELECT c.id, c.read, c.ownRead, c.projectId FROM c ' +
+      `WHERE (IS_DEFINED(c.eagleId) OR IS_DEFINED(c.sources.eagle)) AND ${NO_OWN_READ_SQL} ` +
+      'ORDER BY c.id OFFSET @skip LIMIT @size',
+    parameters: pageParams(skip)
+  };
 }
 
 /** A document's missing `ownRead`: its stored `read`, or null when it has one or has no `read`. */
-function ownReadPlan(step, row) {
-  if (step.container !== 'documents' || isNonEmpty(row.ownRead) || !isNonEmpty(row.read)) return null;
+function ownReadPlan(row) {
+  if (isNonEmpty(row.ownRead) || !isNonEmpty(row.read)) return null;
   return row.read;
 }
 
-function patchOp(step, row, plan, ownRead, now) {
-  const operations = [{ op: 'set', path: '/updatedAt', value: now }];
-  const guards = [];
-  if (plan) {
-    operations.push(
-      { op: 'set', path: '/read', value: plan.read },
-      { op: 'set', path: '/isPublished', value: plan.read.includes('public') });
-    guards.push(NO_LADDER_PREDICATE('c.read'));
+function forwardOp(row, ownRead, now) {
+  return {
+    operationType: 'Patch',
+    partitionKey: row.projectId,
+    id: String(row.id),
+    resourceBody: {
+      operations: [
+        { op: 'set', path: '/updatedAt', value: now },
+        { op: 'set', path: '/ownRead', value: ownRead }
+      ],
+      condition: `FROM c WHERE ${NO_OWN_READ_SQL}`
+    }
+  };
+}
+
+async function runForward(args, io) {
+  const s = newSummary('documents', args);
+  const ops = [];
+  for (const row of await allRows(io.queryPage, 'documents', forwardSpec)) {
+    s.scanned++;
+    const ownRead = ownReadPlan(row);
+    if (!ownRead) continue;
+    s.planned++;
+    ops.push(forwardOp(row, ownRead, io.now));
   }
-  if (ownRead) {
-    operations.push({ op: 'set', path: '/ownRead', value: ownRead });
-    guards.push(NO_OWN_READ_SQL);
+  if (args.live) await writeAll(io.write, 'documents', ops, s);
+  logger.info(summaryLine(s));
+  return [s];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reverse.
+// ---------------------------------------------------------------------------------------------
+
+function reverseSpec(step) {
+  const touched = step.loadAll || step.scanAll ? ''
+    : ` AND (ARRAY_CONTAINS(c.read, '${STAFF}') OR ARRAY_CONTAINS(c.read, '${TEAM}'))`;
+  return skip => ({
+    query: 'SELECT c.id, c.read, c.ownRead, c.eagleId, c.projectId, c.periodId, c.kind, ' +
+      'c.inspection, c.element, c.isDeleted, c.levelHeldAt, c.sealedAt, c._etag, ' +
+      'c.sources.eagle.read AS eagleRead, c.sources.eagle.isDeleted AS eagleDeleted, ' +
+      'c.sources.eagle.status AS eagleStatus, c.sources.eagle.active AS eagleActive, ' +
+      'IS_DEFINED(c.sources.eagle) AS hasEagleSource FROM c ' +
+      `WHERE (IS_DEFINED(c.eagleId) OR IS_DEFINED(c.sources.eagle))${touched} ` +
+      'ORDER BY c.id OFFSET @skip LIMIT @size',
+    parameters: pageParams(skip)
+  });
+}
+
+/**
+ * Eagle's own read for a row: a document's `ownRead`, every other mirror's `sources.eagle.read`.
+ * `undefined` when the row keeps none, which leaves it alone.
+ */
+function eagleReadOf(step, row) {
+  if (step.container === 'documents') return isNonEmpty(row.ownRead) ? row.ownRead : undefined;
+  return row.eagleRead;
+}
+
+const isDeletedRow = row => row.isDeleted === true || row.eagleDeleted === true;
+
+/** A stored parent: its read before this run, after it, and what an Update's ceiling needs. */
+function parentEntry(row, after) {
+  return { before: row.read, after, sealedAt: row.sealedAt, eagleRead: row.eagleRead };
+}
+
+/**
+ * The parent that caps a row, `undefined` for none, `null` when the parent is not stored. A
+ * notification wins its id over a project (`parent-admit:pickParent`); it caps only groups,
+ * inspections and Updates.
+ */
+function parentOf(step, row, parents) {
+  const lookup = (map, ref) => (map.has(String(ref)) ? map.get(String(ref)) : null);
+  if (step.parent === 'period') return lookup(parents.periods, row.periodId);
+  if (step.parent === 'eagle') {
+    if (!row.projectId) return undefined;
+    if (parents.notifications.has(String(row.projectId))) return parents.notifications.get(String(row.projectId));
+    // A missing parent caps nothing on a push either (`update-parent:readParent`).
+    return parents.projectsByEagleId.get(String(row.projectId));
   }
+  if (step.parent === 'inspection' && row.kind === 'InspectionElement') {
+    return lookup(parents.inspections, row.inspection);
+  }
+  if (step.parent === 'inspection' && row.kind === 'InspectionItem') return lookup(parents.elements, row.element);
+  if (!step.parent || !row.projectId) return undefined;
+  if (parents.notifications.has(String(row.projectId))) {
+    const capsUnderNotification = step.capByNotification || step.container === 'inspections';
+    return capsUnderNotification ? parents.notifications.get(String(row.projectId)) : undefined;
+  }
+  return lookup(parents.projects, row.projectId);
+}
+
+/** The read a row gets under `rule` against `parentRead`, before any delete ceiling. */
+function derive(step, rule, row, eagleRead, parent, parentRead) {
+  if (step.parent === 'eagle') return rule.update(row, parent, parentRead);
+  return parent === undefined ? rule.own(eagleRead) : rule.under(eagleRead, parentRead);
+}
+
+/**
+ * What the dropped rule and Eagle's rule give for one row, as pairs. A deleted row may hold either
+ * pair: a push or cascade applies the delete ceiling, an inspection push does not.
+ */
+function candidates(step, row, eagleRead, parent) {
+  const before = derive(step, droppedRule, row, eagleRead, parent, parent && parent.before);
+  const after = derive(step, eagleRule, row, eagleRead, parent, parent && parent.after);
+  const pairs = [{ dropped: before, target: after }];
+  if (step.deleteCeiling && isDeletedRow(row)) {
+    pairs.unshift({ dropped: droppedRule.cap(before, DELETED_CEILING), target: eagleRule.cap(after, DELETED_CEILING) });
+  }
+  return pairs;
+}
+
+/**
+ * The read a row is patched to, or why not: `{read}`, `{skip: 'held'|'differs'|'noParent'}`, or
+ * null when the dropped rule never touched it.
+ */
+function planReverse(step, row, parents) {
+  const eagleRead = eagleReadOf(step, row);
+  if (step.parent !== 'eagle' && eagleRead === undefined) return null;
+  const parent = parentOf(step, row, parents);
+  if (parent === null) return { skip: 'noParent' };
+  const pairs = candidates(step, row, eagleRead, parent).filter(p => !sameRead(p.dropped, p.target));
+  if (pairs.length === 0 || pairs.some(p => sameRead(row.read, p.target))) return null;
+  if (row.levelHeldAt || (levelOfRead(row.read) === 0 && isDemiSeal(row))) return { skip: 'held' };
+  const match = pairs.find(p => sameRead(row.read, p.dropped));
+  return match ? { read: match.target } : { skip: 'differs' };
+}
+
+function reverseOp(step, row, read, now) {
   return {
     operationType: 'Patch',
     partitionKey: row[step.pk],
     id: String(row.id),
-    resourceBody: { operations, condition: `FROM c WHERE ${guards.join(' AND ')}` }
+    ifMatch: row._etag,
+    resourceBody: {
+      operations: [
+        { op: 'set', path: '/updatedAt', value: now },
+        { op: 'set', path: '/read', value: read },
+        { op: 'set', path: '/isPublished', value: read.includes('public') }
+      ]
+    }
   };
 }
 
-function summaryLine(s) {
-  return `[eagle-ladder] container=${s.container} mode=${s.mode} scanned=${s.scanned} ` +
-    `planned=${s.planned} heldByParent=${s.heldByParent} ` +
-    `noParent=${s.noParent} ownRead=${s.ownRead} ` +
-    `patched=${s.patched} skipped=${s.skipped} failed=${s.failed}`;
+/** Record a row's read after this run, where it caps others. Returns the entry, or undefined. */
+function rememberParent(step, row, after, parents) {
+  const entry = parentEntry(row, after);
+  const id = String(row.id);
+  if (step.container === 'projects') {
+    parents.projects.set(id, entry);
+    if (row.eagleId) parents.projectsByEagleId.set(String(row.eagleId), entry);
+  } else if (step.container === 'notifications') {
+    parents.notifications.set(id, entry);
+  } else if (step.container === 'commentPeriods') {
+    parents.periods.set(id, entry);
+  } else if (row.kind === 'Inspection') {
+    parents.inspections.set(id, entry);
+  } else if (row.kind === 'InspectionElement') {
+    parents.elements.set(id, entry);
+  } else {
+    return undefined;
+  }
+  return entry;
 }
 
-/**
- * @param {string[]} argv
- * @param {object} [deps] test seam: {queryPage, bulkVerified, now}
- * @returns {Promise<object[]>} one summary per container, in `STEPS` order
- */
-async function backfillEagleLadder(argv = [], deps = {}) {
-  const args = parseArgs(argv);
-  const queryPage = deps.queryPage || cosmos.queryPage;
-  const write = deps.bulkVerified || cosmos.bulkVerified;
-  const now = deps.now || new Date().toISOString();
+/** Inspections, elements, then items, each written before the next is planned against it. */
+function batches(step, rows) {
+  if (step.container !== 'inspections') return [rows];
+  return INSPECTION_KINDS.map(kind => rows.filter(row => row.kind === kind));
+}
+
+async function runReverse(args, io) {
   const parents = {
-    projects: new Map(), projectsByEagleId: new Map(), notifications: new Map(), periods: new Map()
+    projects: new Map(), projectsByEagleId: new Map(), notifications: new Map(), periods: new Map(),
+    inspections: new Map(), elements: new Map()
   };
   const summaries = [];
-
   for (const step of STEPS) {
-    const s = {
-      container: step.container, mode: args.live ? 'live' : 'dry-run',
-      scanned: 0, planned: 0, heldByParent: 0, noParent: 0, ownRead: 0,
-      patched: 0, skipped: 0, failed: 0
-    };
-    const ops = [];
-    for (const row of await allRows(queryPage, step.container)) {
-      if (!row.eagleId && row.hasEagleSource !== true) continue;
-      s.scanned++;
-      const parentRead = parentReadOf(step, row, parents);
-      const plan = planRow(step, row, parentRead);
-      if (hasNoLadder(row.read) && !plan) {
-        if (parentRead === null) s.noParent++;
-        else s.heldByParent++;
+    const s = newSummary(step.container, args);
+    const rows = await allRows(io.queryPage, step.container, reverseSpec(step));
+    for (const batch of batches(step, rows)) {
+      const ops = [];
+      const remembered = new Map();
+      for (const row of batch) {
+        if (!row.eagleId && row.hasEagleSource !== true) continue;
+        s.scanned++;
+        const plan = planReverse(step, row, parents);
+        if (plan && plan.skip === 'held') s.skippedHeld++;
+        else if (plan && plan.skip === 'differs') s.skippedDiffers++;
+        else if (plan && plan.skip === 'noParent') s.noParent++;
+        const read = plan && plan.read;
+        // Children are capped by what the parent becomes, so a dry run counts what a live run writes.
+        const entry = step.loadAll && rememberParent(step, row, read || row.read, parents);
+        if (entry) remembered.set(String(row.id), entry);
+        if (!read) continue;
+        s.planned++;
+        ops.push(reverseOp(step, row, read, io.now));
       }
-      // Children are capped by what the parent becomes, so the dry run counts the live result.
-      const read = plan ? plan.read : row.read;
-      if (step.container === 'projects') {
-        parents.projects.set(String(row.id), read);
-        if (row.eagleId) parents.projectsByEagleId.set(String(row.eagleId), read);
-      } else if (step.container === 'notifications') {
-        parents.notifications.set(String(row.id), read);
-      } else if (step.container === 'commentPeriods') {
-        parents.periods.set(String(row.id), read);
-      }
-      const ownRead = ownReadPlan(step, row);
-      if (ownRead) s.ownRead++;
-      if (!plan && !ownRead) continue;
-      s.planned++;
-      ops.push(patchOp(step, row, plan, ownRead, now));
-    }
-
-    if (args.live) {
-      for (let i = 0; i < ops.length; i += cosmos.BULK_MAX_OPERATIONS) {
-        const result = await write(step.container, ops.slice(i, i + cosmos.BULK_MAX_OPERATIONS));
-        s.patched += result.succeeded || 0;
-        s.failed += result.failed || 0;
-        s.skipped += (result.skippedIds || []).length;
+      if (!args.live) continue;
+      // A parent whose patch did not land still caps its children at its stored read.
+      for (const id of await writeAll(io.write, step.container, ops, s)) {
+        const entry = remembered.get(id);
+        if (entry) entry.after = entry.before;
       }
     }
     logger.info(summaryLine(s));
@@ -229,12 +362,57 @@ async function backfillEagleLadder(argv = [], deps = {}) {
   return summaries;
 }
 
+// ---------------------------------------------------------------------------------------------
+
+function newSummary(container, args) {
+  return {
+    container, mode: args.live ? 'live' : 'dry-run', direction: args.reverse ? 'reverse' : 'forward',
+    scanned: 0, planned: 0, patched: 0, skippedHeld: 0, skippedDiffers: 0, noParent: 0, stale: 0, failed: 0
+  };
+}
+
+/** Write `ops` in bulk batches. Returns the ids that did not land: failed, or 412. */
+async function writeAll(write, container, ops, s) {
+  const missed = [];
+  for (let i = 0; i < ops.length; i += cosmos.BULK_MAX_OPERATIONS) {
+    const result = await write(container, ops.slice(i, i + cosmos.BULK_MAX_OPERATIONS));
+    s.patched += result.succeeded || 0;
+    s.failed += result.failed || 0;
+    s.stale += (result.skippedIds || []).length;
+    missed.push(...(result.failedIds || []), ...(result.skippedIds || []));
+  }
+  return missed.map(String);
+}
+
+function summaryLine(s) {
+  return `[eagle-ladder] container=${s.container} direction=${s.direction} mode=${s.mode} ` +
+    `scanned=${s.scanned} planned=${s.planned} patched=${s.patched} skippedHeld=${s.skippedHeld} ` +
+    `skippedDiffers=${s.skippedDiffers} noParent=${s.noParent} stale=${s.stale} failed=${s.failed}`;
+}
+
+/**
+ * @param {string[]} argv
+ * @param {object} [deps] test seam: {queryPage, bulkVerified, now}
+ * @returns {Promise<object[]>} one summary per container processed, in order
+ */
+async function backfillEagleLadder(argv = [], deps = {}) {
+  const args = parseArgs(argv);
+  const io = {
+    queryPage: deps.queryPage || cosmos.queryPage,
+    write: deps.bulkVerified || cosmos.bulkVerified,
+    now: deps.now || new Date().toISOString()
+  };
+  return args.reverse ? runReverse(args, io) : runForward(args, io);
+}
+
 /** A rejected write exits 1; a 412 is a row that changed meanwhile, not a failure. */
 function exitCodeFor(summaries) {
   return summaries.some(s => s.failed > 0) ? 1 : 0;
 }
 
-module.exports = { parseArgs, planRow, backfillEagleLadder, exitCodeFor, summaryLine, STEPS };
+module.exports = {
+  parseArgs, backfillEagleLadder, exitCodeFor, summaryLine, STEPS
+};
 
 if (require.main === module) {
   cosmos.initCosmosClient();
