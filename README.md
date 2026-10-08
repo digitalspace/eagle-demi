@@ -339,13 +339,16 @@ takes `project`, `period`, `document`, `comment`, `organization`, `inspection`, 
 
 The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
 one column (`Comment_No`, `Project GUID`) across every column both files have. `Export_Date` is
-skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group.
-`inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element; it
-never calls Eagle's item route, which streams the file and records a download.
+skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group; the
+DEMI read sends no `project`, since DEMI takes that value as the Track id partition key.
+`inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element, each
+item carrying its element's `read[]`; it never calls Eagle's item route, which streams the file and
+records a download.
 
 eagle-api's project, document, comment period, organization, comment and project notification
 routes return only `_id` and `read` unless `fields` names the rest, so each of those reads sends
-`fields=a|b|c`: the fields it compares for the identity, plus `project` on comment periods. The
+`fields=a|b|c`: the fields it compares for the identity, plus `project` on comment periods and
+documents. The
 organization and comment period routes answer only the fields on their controller's
 `ALLOWED_FIELDS`, so those reads compare nothing else (no address fields, no `commentIdCount`);
 `dataset=Organization` and `dataset=CommentPeriod` search still compare them. Pins, comments and
@@ -366,15 +369,20 @@ One line per read:
 Every difference is matched against `KNOWN_DIFFERENCES` in `parity-map.js`; what no class explains
 counts as `unexplained`. Classes that match by id read their ids from `--known-ids`, a JSON object
 of class name to id list; the flag may repeat, and lists of one class merge. Those classes are rows
-never mirrored, DEMI takedowns and Eagle hard deletes, plus two that only explain a row extra in
+never mirrored, DEMI takedowns and Eagle hard deletes, plus three that only explain a row extra in
 DEMI:
 
 - `seeded-from-prod`: a row from the 2026-08-25 prod seed that Eagle test does not hold.
 - `eagle-staff-widened` (staff runs only): an Eagle row whose `read[]` has no ladder token, which
   DEMI shows staff because the push adds `staff` (`withEagleStaff` in `src/helpers/eagle-acl.js`).
+- `ladder-above-public` (staff runs only): an Eagle row whose `read[]` has `public` but not
+  `staff`, or a comment period or document under such a project. Eagle matches `read[]` tokens to
+  roles literally, so its staff routes hide these rows. DEMI ranks staff above public by design, so
+  DEMI staff sees them.
 
 `--emit-ids <file>` writes ids only, never values: `extraInDemi`, each read's extra DEMI ids, and on
-a sysadmin run `eagle-staff-widened`, the Eagle ids that rule widens. The file is a valid
+a sysadmin run `eagle-staff-widened` and `ladder-above-public`, the Eagle ids those rules cover. A
+child counts under `ladder-above-public` only when the same run read its project. The file is a valid
 `--known-ids` file (`extraInDemi` is skipped), so a sysadmin run's file feeds the staff run:
 
 ```bash
@@ -393,7 +401,9 @@ extra rows cannot be told from a partial slice. The `--report` file lists ids an
 unexplained differences, never values.
 
 Values are compared after trimming strings; an empty string, an empty list and an absent field all count as null.
-Four classes explain differences that come from how DEMI builds its rows:
+Comment period `isVetted` counts the strings `'true'` and `'false'` as booleans, and `commentIdCount`
+counts null as 0. Comment period `userCan` is not compared: Eagle computes it for each caller.
+These classes explain differences that come from how DEMI builds its rows:
 
 - `track-mastered`: a project field DEMI takes from Track (`TRACK_PRECEDENCE` in
   `src/merge/project.js`: name, type, location, description and the rest) differs, DEMI's value is
@@ -407,6 +417,12 @@ Four classes explain differences that come from how DEMI builds its rows:
 - `parent-not-public`: an anonymous comment period is missing in DEMI and its project is not in
   Eagle's public project list. The list is read once per run; a `--max-pages` cut turns the class
   off.
+- `display-name-from-file-name`: a document's Eagle `displayName` is empty and DEMI's equals the
+  Eagle `documentFileName`, the fallback the seed writes (`src/seed/transform.js`).
+- `orphan-parent-missing-in-eagle`: on staff and sysadmin runs, a comment period is missing in DEMI
+  and its `project` ref is empty, malformed, or in none of Eagle's `/project` and
+  `/projectNotification` lists and DEMI's `Project` and `ProjectNotification` searches. The lists
+  are read once per run; a `--max-pages` cut turns the list check off.
 
 Two DEMI limits affect anonymous runs. Anonymous `pageSize` is capped at 100, the page size this
 script sends. `dataset=Organization` ignores `and[_id]` for now, so `organization-public` and
