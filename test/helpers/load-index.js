@@ -25,11 +25,11 @@ const setEnv = (name, value) => {
 
 /**
  * @param {object} t         the node:test context, for restoring the cache and the environment
- * @param {string} name      the app setting under test, one of SCHEDULE_VARS
+ * @param {string} [name]    the app setting under test, one of SCHEDULE_VARS; omitted = all cleared
  * @param {string} [schedule] its value, or undefined for "the environment never set it"
  */
 function loadIndex(t, name, schedule) {
-  const registered = { timers: [], https: [], queues: [] };
+  const registered = { timers: [], https: [], queues: [], setups: [] };
   const cachedFunctions = require.cache[FUNCTIONS];
   const cachedIndex = require.cache[INDEX];
   const cachedEnv = SCHEDULE_VARS.map(v => [v, process.env[v]]);
@@ -40,6 +40,7 @@ function loadIndex(t, name, schedule) {
     loaded: true,
     exports: {
       app: {
+        setup: options => registered.setups.push(options),
         timer: (timerName, options) => registered.timers.push({ name: timerName, options }),
         http: (httpName, options) => registered.https.push({ name: httpName, options }),
         storageQueue: (queueName, options) => registered.queues.push({ name: queueName, options }),
