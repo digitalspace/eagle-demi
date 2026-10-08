@@ -950,10 +950,10 @@ const groupRows = {
     project(STAFF_PROJECT, { read: ['staff', 'sysadmin'] })],
   Group: [...CAPPED_GROUPS.map(id => group(id, CAPPED_PROJECT)), group(STAFF_GROUP, STAFF_PROJECT)]
 };
-const groupEmit = async () => {
-  const h = harness((host, url) => json(searchBody(groupRows[url.searchParams.get('dataset')] || [])),
+const groupEmit = async (rows = groupRows, reads = ['search-Project', 'search-Group']) => {
+  const h = harness((host, url) => json(searchBody(rows[url.searchParams.get('dataset')] || [])),
     { env: { PARITY_TOKEN: TOKEN } });
-  const map = PARITY_MAP.filter(e => ['search-Project', 'search-Group'].includes(e.read));
+  const map = PARITY_MAP.filter(e => reads.includes(e.read));
   await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'sysadmin', '--token-env', 'PARITY_TOKEN',
     '--emit-ids', 'ids.json'], { ...h.deps, map });
   return h.written[0];
@@ -971,6 +971,17 @@ test('a sysadmin --emit-ids run lists a staff group under a project with no ladd
   const emitted = JSON.parse(await groupEmit());
   assert.deepStrictEqual(emitted['capped-under-parent'], CAPPED_GROUPS);
   assert.deepStrictEqual(emitted['ladder-above-public'], []);
+});
+
+test('a sysadmin --emit-ids run that did not read the projects lists no group as capped-under-parent', async () => {
+  const emitted = JSON.parse(await groupEmit(groupRows, ['search-Group']));
+  assert.deepStrictEqual(emitted['capped-under-parent'], []);
+});
+
+test('a group under a public-only project stays out of ladder-above-public: only periods and documents follow their project', async () => {
+  const rows = { Project: [project(CAPPED_PROJECT, { read: ['public', 'sysadmin'] })], Group: [group(STAFF_GROUP, CAPPED_PROJECT)] };
+  const emitted = JSON.parse(await groupEmit(rows));
+  assert.deepStrictEqual(emitted['ladder-above-public'], [CAPPED_PROJECT]);
 });
 
 test('a staff run counts the capped groups under capped-under-parent; a group under a staff project stays unexplained', async () => {
