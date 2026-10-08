@@ -43,6 +43,8 @@ param optionalSecretNames = [
   'dev-openshift-token'
   // The PDF title worker's own key; see the PDF title worker section below.
   'pdf-title-worker-api-key'
+  // The Keycloak client secret the Eagle sync-out consumer uses; see the Sync-out section below.
+  'eagle-sync-out-client-secret'
 ]
 
 // The namespaces demi-secret-sync-test owns. Both nonprod namespaces, and prod is deliberately not
@@ -94,13 +96,14 @@ param cosmosRuPerHourAlert = 3000000
 param searchDefinitionsQueue = 'search-definitions'
 
 // ── Sync-out to eagle-api ─────────────────────────────────────────────────────────────────────
-// Queue on, Eagle consumer off until the cutover. EAGLE_KC_CLIENT_SECRET stays blank until
-// `eagle-sync-out-client-secret` is in demi-kv-test and named in optionalSecretNames above.
-// eagleEngageMilestone stays '' until the Eagle milestone id is chosen; set it before the consumer goes on.
+// Queue on, Eagle consumer off until the cutover. EAGLE_KC_CLIENT_SECRET resolves from
+// `eagle-sync-out-client-secret` in demi-kv-test, named in optionalSecretNames above.
 param syncOutQueue = 'sync-out'
 param syncOutEagleEnabled = false
 param eagleProtectedApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api'
+// Eagle List item "Time Limit Imposition", the milestone on every ENGAGE comment period in Eagle test and prod.
+param eagleEngageMilestone = '5e152bc0ee4d476b56fa2175'
 
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
