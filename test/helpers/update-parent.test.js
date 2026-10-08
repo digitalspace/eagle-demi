@@ -84,6 +84,21 @@ test('readUnder — an Eagle read with no ladder token is never opened to team',
     assert.deepStrictEqual(readUnder(['sysadmin', 'public'], { read: ['staff'] }), ['staff']);
   });
 
+  await t.test('a read with no ladder token keeps only the names its parent admits', () => {
+    assert.deepStrictEqual(readUnder(['sysadmin', 'inspector'], { read: ['sysadmin'] }), ['sysadmin']);
+    assert.deepStrictEqual(readUnder(['sysadmin', 'inspector'], { read: ['staff'] }), ['sysadmin']);
+    assert.deepStrictEqual(readUnder(['sysadmin', 'inspector'], { read: ['staff', 'idir', 'public'] }),
+      ['sysadmin', 'inspector'], 'a public parent admits every caller');
+  });
+
+  await t.test('a ladder read under a parent with no ladder token keeps only its privileged names', () => {
+    assert.deepStrictEqual(readUnder(['team'], { read: ['sysadmin', 'inspector'] }), ['sysadmin']);
+  });
+
+  await t.test('[] stays [] under an unsealed parent', () => {
+    assert.deepStrictEqual(readUnder([], { read: ['sysadmin'] }), []);
+  });
+
   await t.test('an empty read under a sealed parent is sealed, as before', () => {
     assert.deepStrictEqual(readUnder([], { read: ['compliance'], doc: { sealedAt: 'x' } }), ['compliance']);
   });

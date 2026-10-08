@@ -78,18 +78,24 @@ function levelOfRead(read) {
  * (`['sysadmin','inspector']`) opens only to privileged callers and holders of the roles it names,
  * so it keeps its privileged names plus those the cap also admits (every name, under a public cap),
  * and never becomes `team`. A ladder read under a cap with no ladder token keeps only the cap's
- * privileged names. Otherwise, an empty or missing cap included, it lands at `team`.
+ * privileged names. Either way, nothing left is `['sysadmin']`, never `[]`. Otherwise, an empty or
+ * missing cap included, it lands at `team`.
  */
 function capRead(own, cap) {
   const level = Math.min(levelOfRead(own), levelOfRead(cap));
   if (level !== 1) return readForLevel(level);
-  const noLadder = read => Array.isArray(read) && !read.some(r => LADDER_TOKENS.includes(r));
   const capList = Array.isArray(cap) ? cap : [];
-  if (noLadder(own)) {
-    return own.filter(r => SECURE_ROLES.includes(r) || capList.includes(r) || capList.includes(LEVEL_TOKENS[4]));
+  const orSysadmin = read => (read.length > 0 ? read : ['sysadmin']);
+  if (noLadderToken(own)) {
+    return orSysadmin(own.filter(r => SECURE_ROLES.includes(r) || capList.includes(r) || capList.includes(LEVEL_TOKENS[4])));
   }
-  if (noLadder(cap) && cap.length > 0) return cap.filter(r => SECURE_ROLES.includes(r));
+  if (noLadderToken(cap) && cap.length > 0) return orSysadmin(cap.filter(r => SECURE_ROLES.includes(r)));
   return readForLevel(1);
+}
+
+/** A `read[]` list carrying none of `team`, `staff`, `idir`, `public`. */
+function noLadderToken(read) {
+  return Array.isArray(read) && !read.some(r => LADDER_TOKENS.includes(r));
 }
 
 /**
@@ -707,6 +713,7 @@ module.exports = {
   readForLevel,
   levelOfRead,
   capRead,
+  noLadderToken,
   sameAccess,
   isDemiSeal,
   heldSealed,

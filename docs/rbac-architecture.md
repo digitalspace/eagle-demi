@@ -108,7 +108,9 @@ at level 2. Under a parent it stores that read capped by the parent (`eagleReadU
 as `['sysadmin','inspector']`, keeps its privileged names plus the names the parent also carries,
 or all of them under a public parent, and never becomes `['team']`. So an inspection under a public
 project stores `['sysadmin','inspector']`, and under a staff or team project `['sysadmin']`. A
-ladder read under a parent with no ladder token keeps only the parent's privileged names. A
+ladder read under a parent with no ladder token keeps only the parent's privileged names. A read
+left with no names becomes `['sysadmin']`, never `[]`. Updates follow the same cap
+(`helpers/update-parent.js:readUnder`), except that an empty Update read stays `[]`. A
 document's `ownRead` is Eagle's base read, so `read` and `ownRead` differ only by the parent cap. A
 `--reverse` mode for `src/scripts/backfill-eagle-ladder.js`, which strips the `staff` token the rule
 already wrote, lands in PR #548.

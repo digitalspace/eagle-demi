@@ -264,9 +264,11 @@ test('the ladder vocabulary', async (t) => {
     assert.deepStrictEqual(capRead(['sysadmin'], TEAM), ['sysadmin'], 'team members must not gain it');
     assert.deepStrictEqual(capRead(['team'], TEAM), ['team']);
     assert.deepStrictEqual(capRead(['staff'], TEAM), ['team']);
-    assert.deepStrictEqual(capRead([], TEAM), []);
-    assert.deepStrictEqual(capRead(['project-team'], TEAM), [],
+    assert.deepStrictEqual(capRead([], TEAM), ['sysadmin'], 'never an empty read');
+    assert.deepStrictEqual(capRead(['project-team'], TEAM), ['sysadmin'],
       'a legacy role is not privileged, and any realm role of that name could read it: not kept, not team');
+    assert.deepStrictEqual(capRead(['project-team'], ['staff']), ['sysadmin']);
+    assert.deepStrictEqual(capRead(['staff'], ['inspector']), ['sysadmin'], 'a cap with no privileged name');
     assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], TEAM), ['sysadmin']);
     assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], ['sysadmin']), ['sysadmin']);
     assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], ['sysadmin', 'inspector']), ['sysadmin', 'inspector']);
@@ -286,7 +288,7 @@ test('the ladder vocabulary', async (t) => {
 
   // Ladder parts in the nested form every writer stores (`readForLevel`), and callers without project
   // teams: ladder-against-ladder capping is the ladder's own rule, not under test here.
-  await t.test('every caller who can read capRead(own, cap) can read cap, and no role is borrowed from cap', () => {
+  await t.test('every caller who can read capRead(own, cap) can read cap, no role is borrowed from cap, and it is never empty', () => {
     const subsets = list => list.reduce((all, x) => all.concat(all.map(s => [...s, x])), [[]]);
     const ladders = [[], ...[1, 2, 3, 4].map(readForLevel)];
     const LADDER = readForLevel(4).concat(readForLevel(1));
@@ -298,6 +300,7 @@ test('the ladder vocabulary', async (t) => {
     for (const own of reads) {
       for (const cap of reads) {
         const result = capRead(own, cap);
+        assert.ok(result.length > 0, `capRead(${JSON.stringify(own)}, ${JSON.stringify(cap)}) is empty`);
         const borrowed = result.filter(r => !own.includes(r) && !LADDER.includes(r) && r !== 'sysadmin');
         assert.deepStrictEqual(borrowed, [], `capRead(${JSON.stringify(own)}, ${JSON.stringify(cap)}) = ${JSON.stringify(result)}`);
         for (const access of callers) {

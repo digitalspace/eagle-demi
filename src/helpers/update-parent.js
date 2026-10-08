@@ -9,7 +9,7 @@ const cosmos = require('../db/cosmos-nosql');
 const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
 const { pickParent } = require('./parent-admit');
-const { levelOfRead, capRead, isDemiSeal } = require('./access-sql');
+const { levelOfRead, capRead, isDemiSeal, noLadderToken } = require('./access-sql');
 const { eagleBaseAcl } = require('../seed/transform');
 
 /**
@@ -62,13 +62,20 @@ function ceilingRead(parent) {
   return eagleBaseAcl(doc.sources && doc.sources.eagle && doc.sources.eagle.read);
 }
 
-/** Capped only where the ceiling sits lower; otherwise kept verbatim, not rewritten to ladder tokens. */
-const capIfLower = (own, ceiling) => (levelOfRead(ceiling) < levelOfRead(own) ? capRead(own, ceiling) : own);
+/**
+ * Capped by `capRead` where the ceiling sits lower, or where either side carries no ladder token (a
+ * level-1 audience a level alone cannot compare); otherwise kept verbatim, not rewritten to ladder
+ * tokens. `[]` is capped only by a lower ceiling.
+ */
+const capIfLower = (own, ceiling) => {
+  const byRoles = own.length > 0 && (noLadderToken(own) || (noLadderToken(ceiling) && ceiling.length > 0));
+  return byRoles || levelOfRead(ceiling) < levelOfRead(own) ? capRead(own, ceiling) : own;
+};
 
 /**
- * An Update's `read[]` under its parent: `ownRead`, capped by `ceilingRead` where the ceiling sits
- * lower. So `['sysadmin']` stays `['sysadmin']` under any unsealed parent. `[]` stays `[]`. No
- * parent, no ceiling.
+ * An Update's `read[]` under its parent: `ownRead`, capped by `ceilingRead`. So
+ * `['sysadmin','inspector']` under a `['sysadmin']` parent stores `['sysadmin']`. `[]` stays `[]`.
+ * No parent, no ceiling.
  */
 function readUnder(eagleRead, parent) {
   const own = ownRead(eagleRead);

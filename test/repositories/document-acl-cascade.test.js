@@ -50,7 +50,7 @@ test('constrainToProject — the lower of the two levels', async (t) => {
     // project's level 2 over it would WIDEN the row, and `team` would too. A holder of the role may
     // not hold `staff`, so the name is dropped: privileged callers only.
     assert.deepStrictEqual(
-      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), []);
+      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['sysadmin']);
   });
 
   await t.test('fail-closed under a level-1 project yields team', () => {
@@ -62,7 +62,7 @@ test('constrainToProject — the lower of the two levels', async (t) => {
   await t.test('fail-closed under a public project never takes the project reach', () => {
     // A document with no ACL knows nothing about itself, and a project cannot supply that —
     // inheriting the parent's reach is exactly the widening this rule exists to stop.
-    assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), []);
+    assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), ['sysadmin']);
     assert.deepStrictEqual(documents.constrainToProject(undefined, PUBLIC_PROJECT), ['team']);
   });
 
@@ -100,7 +100,7 @@ test('setAclForProject', async (t) => {
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
-      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), []);
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
     });
 
   await t.test('captures ownRead on the first cascade', async (tt) => {
@@ -193,7 +193,7 @@ test('setAclForProject', async (t) => {
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
-      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), []);
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
     });
 
   await t.test('every row is patched in one request, pinned to the project partition',
@@ -208,7 +208,7 @@ test('setAclForProject', async (t) => {
       assert.ok(cap.ops.every(o => o.partitionKey === '207'), 'one partition, one bulk request');
       assert.ok(cap.ops.every(o => o.operationType === 'Patch'));
       assert.deepStrictEqual(result.ids, ['d1', 'd2', 'd3']);
-      assert.deepStrictEqual(opValue(cap.ops[2], '/read'), [],
+      assert.deepStrictEqual(opValue(cap.ops[2], '/read'), ['sysadmin'],
         'a row with no ACL at all still fails closed rather than being skipped');
     });
 
@@ -228,7 +228,7 @@ test('setAclForProject', async (t) => {
     for (const op of wire) {
       assert.ok('value' in op, `${op.path} reaches Cosmos with no value key, which is a 400`);
     }
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), [], 'and it still fails closed');
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin'], 'and it still fails closed');
   });
 
   await t.test('an empty project writes nothing', async (tt) => {
@@ -273,7 +273,7 @@ test('setAclForProject — an Eagle privileged-only document stays privileged-on
   });
 
   await t.test('an Eagle row with nothing to derive from keeps the plain cap', async (tt) => {
-    assert.deepStrictEqual(await cascade(tt, { id: 'd1', sourceSystem: 'eagle' }, ['staff']), []);
+    assert.deepStrictEqual(await cascade(tt, { id: 'd1', sourceSystem: 'eagle' }, ['staff']), ['sysadmin']);
   });
 
   await t.test("an Eagle ['sysadmin'] document seeded under a public project stays privileged-only under team", async (tt) => {
