@@ -378,6 +378,16 @@ async function readForWriteByEngagementId(engagementId, projectId) {
   return readForWriteByField('engagementId', engagementId, projectId);
 }
 
+/** The ENGAGE row whose sync-out deleted this Eagle period to recreate it under a new project, else null. */
+async function readForWriteEngageByDroppedEagleId(eagleId) {
+  const engage = eq('sourceSystem', 'engage', '@sourceSystem');
+  const { items } = await cosmos.query(CONTAINER, {
+    query: `SELECT * FROM c WHERE ${engage.clause} AND ARRAY_CONTAINS(c.syncOut.eagle.droppedIds, @eagleId)`,
+    parameters: [...engage.params, { name: '@eagleId', value: String(eagleId) }]
+  });
+  return items[0] || null;
+}
+
 // ---- ENGAGE reconcile ----
 
 /** Every ENGAGE-owned row, deleted ones too, across partitions and unfiltered — for reconcile-engage.js only. */
@@ -398,6 +408,7 @@ module.exports = {
   readForWriteByEagleId,
   readForWriteEngageByMetUrl,
   readForWriteByEngagementId,
+  readForWriteEngageByDroppedEagleId,
   listByProject,
   listEveryByProject,
   listByIds,

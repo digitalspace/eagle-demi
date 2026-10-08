@@ -9,8 +9,8 @@
  * store stops enforcing it, so the test that relies on it goes red.
  *
  * Supported: AND, OR, parentheses, `c.f <op> value` (=, !=, <, <=, >, >=; value a @param, a
- * "string", a number, true or false), IS_STRING, IS_DEFINED, IS_NULL, NOT, ARRAY_CONTAINS, and on
- * queries ORDER BY one field, maxItemCount and a continuation.
+ * "string", a number, true or false), IS_STRING, IS_DEFINED, IS_NULL, NOT, ARRAY_CONTAINS on a dotted
+ * path, and on queries ORDER BY one field, maxItemCount and a continuation.
  */
 
 const cosmos = require('../../src/db/cosmos-nosql');
@@ -89,8 +89,11 @@ function evaluate(text, row, params) {
     if (m[1] === 'DEFINED') return value !== undefined;
     return value === null;
   }
-  m = /^ARRAY_CONTAINS\(c\.(\w+), '([^']*)'\)$/.exec(expr);
-  if (m) return Array.isArray(row[m[1]]) && row[m[1]].includes(m[2]);
+  m = /^ARRAY_CONTAINS\(c\.([\w.]+), ('[^']*'|@\w+)\)$/.exec(expr);
+  if (m) {
+    const array = m[1].split('.').reduce((value, key) => (value == null ? undefined : value[key]), row);
+    return Array.isArray(array) && array.includes(valueOf(m[2], params));
+  }
   m = /^c\.(\w+) (=|!=|<=|>=|<|>) (\S+)$/.exec(expr);
   if (m) {
     const left = row[m[1]];

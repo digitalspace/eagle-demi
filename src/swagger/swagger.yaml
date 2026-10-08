@@ -2639,7 +2639,9 @@ paths:
         eagle-api hard-deletes a period, so it pushes the record it removed with
         `doc.isDeleted: true`. The row is kept and narrowed to staff instead of deleted, and its
         comments are narrowed with it. Nothing in DEMI widens it again. A delete for a period DEMI
-        holds no row for writes nothing and answers 200 `{ id, action: 'ignored' }`.
+        holds no row for writes a staff-only row, so a create that arrives after it stays narrowed.
+        The one exception is an Eagle id that sync-out deleted to move an ENGAGE period to a new
+        project: that delete writes nothing and answers 200 `{ id, action: 'ignored' }`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -5299,7 +5301,7 @@ components:
           description: |-
             `delete` when the push carried `doc.isDeleted: true`. Documents and comment periods
             only — the other mirrors always answer `upsert`. Absent when the push was ignored as
-            stale. `ignored` is a comment period delete for a period DEMI holds no row for.
+            stale. `ignored` is the delete of a comment period sync-out removed in a project move.
         ok:
           type: boolean
           description: Present, and `true`, only on an ignored push. Nothing was written.

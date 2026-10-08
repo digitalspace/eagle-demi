@@ -20,6 +20,8 @@ const TIMEOUT_MS = 10000;
 const ERROR_BODY_CHARS = 300;
 /** A create claim older than this belongs to a delivery that died: past a token, a GET, a PUT and a POST at TIMEOUT_MS each. */
 const CLAIM_LEASE_MS = 180000;
+/** Eagle ids a project move deleted that the row remembers, so their delete echo is not tombstoned. */
+const DROPPED_IDS_KEPT = 20;
 /** Re-mint this long before Keycloak's expiry so a token never lapses mid-call. */
 const TOKEN_SKEW_MS = 30000;
 
@@ -173,6 +175,16 @@ function endClaim(update, claim, status, eagleId = null) {
   });
 }
 
+/** Note on the row an Eagle id a project move is about to delete, before the DELETE so its echo finds it. */
+function recordDropped(update, eagleId) {
+  return update((current) => {
+    const entry = (current.syncOut && current.syncOut[NAME]) || {};
+    const kept = (entry.droppedIds || []).filter(id => id !== eagleId);
+    const droppedIds = [...kept, eagleId].slice(-DROPPED_IDS_KEPT);
+    return { ...current, syncOut: { ...current.syncOut, [NAME]: { ...entry, droppedIds } } };
+  });
+}
+
 async function put(s, eagleId, body, logFields) {
   const path = `/commentperiod/${encodeURIComponent(eagleId)}`;
   const res = await call(s, 'PUT', path, body, { ...logFields, eagleId });
@@ -268,6 +280,7 @@ async function send(row, { update }) {
     if (!body.metURL) return create(s, row, body, update, logFields, row.eagleId);
     logger.info(`[sync-out eagle] row ${row.id} moved project, recreating its Eagle period`,
       { ...logFields, from: String(sentUnder), to: String(row.eagleProjectId) });
+    await recordDropped(update, String(row.eagleId));
     await remove(s, row.eagleId, logFields);
   } else if (await put(s, row.eagleId, body, logFields)) {
     return sent(row.eagleId, body);

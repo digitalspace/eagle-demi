@@ -512,6 +512,34 @@ test('sync-out', async (t) => {
     assert.strictEqual(store.row.syncOut.eagle.projectId, 'eagle-new');
   });
 
+  await t.test('a project move notes the old Eagle id in droppedIds before its DELETE, keeping the last 20', async (tt) => {
+    // The DELETE's echo can reach DEMI before sync-out finishes; it must already find the id here.
+    const older = Array.from({ length: 20 }, (_, i) => `cp-${i}`);
+    const store = wireStore(tt, engageRow({
+      eagleId: 'cp-old', eagleProjectId: 'eagle-new',
+      syncOut: { eagle: { sentVersion: VERSION - 1, status: 'sent', projectId: 'eagle-old', droppedIds: older } }
+    }));
+    wireQueue(tt);
+    wireEagle(tt, {
+      'DELETE /commentperiod/cp-old': { body: {} },
+      'GET /commentperiod?project=eagle-new&fields=metURL': { body: [] },
+      'POST /commentperiod': { body: { _id: 'cp-new' } }
+    });
+    let atDelete;
+    const served = globalThis.fetch;
+    tt.mock.method(globalThis, 'fetch', async (url, opts) => {
+      if (opts && opts.method === 'DELETE') atDelete = store.row.syncOut.eagle.droppedIds;
+      return served(url, opts);
+    });
+
+    await run(message());
+
+    const expected = [...older.slice(1), 'cp-old'];
+    assert.deepStrictEqual(atDelete, expected, 'stored before the DELETE');
+    assert.deepStrictEqual(store.row.syncOut.eagle.droppedIds, expected, 'kept through the create');
+    assert.strictEqual(store.row.eagleId, 'cp-new');
+  });
+
   await t.test('a claim taken over while looking up Eagle stops the POST', async (tt) => {
     const store = wireStore(tt, engageRow());
     const sent = wireQueue(tt);
