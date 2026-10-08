@@ -96,10 +96,10 @@ param cosmosRuPerHourAlert = 3000000
 param searchDefinitionsQueue = 'search-definitions'
 
 // ── Sync-out to eagle-api ─────────────────────────────────────────────────────────────────────
-// Queue on, Eagle consumer off until the cutover. EAGLE_KC_CLIENT_SECRET resolves from
+// Queue on, sync-out to Eagle test on (ENGAGE test to DEMI cutover 2026-10-08). EAGLE_KC_CLIENT_SECRET resolves from
 // `eagle-sync-out-client-secret` in demi-kv-test, named in optionalSecretNames above.
 param syncOutQueue = 'sync-out'
-param syncOutEagleEnabled = false
+param syncOutEagleEnabled = true
 param eagleProtectedApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api'
 // Eagle List item "Time Limit Imposition", the milestone on every ENGAGE comment period in Eagle test and prod.
