@@ -335,7 +335,8 @@ node src/scripts/reconcile-engage.js --limit 20
 It compares each ENGAGE row with its Eagle copy (dates to the minute, `isPublished`, `metURL`) and
 reports rows never sent to Eagle, rows Eagle no longer holds, drift, Eagle projects with two
 periods on one engagement URL, and rows sync-out marked `conflict` (their URL matched an Eagle period
-DEMI already mirrors as an Eagle-owned row). `--repair` sends the first three through the sync-out
+DEMI already mirrors as an Eagle-owned row), and rows sync-out will not create in Eagle because they
+have no `metURL` (`skipped`). `--repair` sends the first three through the sync-out
 queue again, so DEMI's copy wins; the script never writes to Eagle itself. With `ENGAGE_API_BASE` set
 it also lists published ENGAGE engagements under a project that have no DEMI row. That part only
 reports.
