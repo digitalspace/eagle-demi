@@ -135,7 +135,7 @@ function world(t, { rows = [DOC], objects = { [KEY]: ORIGINAL }, gate = { ok: tr
     return typeof gate === 'function' ? gate(key, stat) : gate;
   });
 
-  /** The worker's PUT, with the store's If-Match and Content-MD5 checks. */
+  /** The worker's PUT, with the store's Content-MD5 check and, when sent, If-Match. */
   function workerPut(key, bytes, headers) {
     const current = store.get(key);
     const ifMatch = String(headers['If-Match'] || '').replace(/"/g, '');
@@ -203,11 +203,10 @@ test('pdf title lease API', async (t) => {
     assert.deepEqual(w.calls.copies[0], { src: KEY, dest: BACKUP, ifSourceEtag: md5Hex(ORIGINAL) });
     assert.deepEqual(w.calls.gate[0], { key: KEY, size: ORIGINAL.length, etag: md5Hex(ORIGINAL) });
 
-    // Content-MD5 is signed into the link; If-Match and Content-MD5 are required on the PUT.
+    // Content-MD5 is signed into the link. No If-Match: the NRS store refuses it on old objects.
     assert.deepEqual(w.calls.uploads, [{ key: KEY, expirySeconds: 120, contentMd5: md5B64(TITLED) }]);
-    assert.equal(committed.body.headers['If-Match'], `"${md5Hex(ORIGINAL)}"`);
-    assert.equal(committed.body.headers['Content-MD5'], md5B64(TITLED));
-    assert.equal(committed.body.headers['Content-Type'], 'application/pdf');
+    assert.deepEqual(committed.body.headers, { 'Content-Type': 'application/pdf', 'Content-MD5': md5B64(TITLED) });
+    assert.ok(!('If-Match' in committed.body.headers));
     assert.ok(Date.parse(committed.body.putExpiresAt) > Date.now());
     assert.equal(putStatus, 200);
     assert.ok(logged.mock.calls.some(c => c.arguments[0] === 'pdf-title.original' &&
@@ -469,10 +468,11 @@ test('pdf title lease API', async (t) => {
     assert.ok(!w.store.has(BACKUP));
   });
 
-  await t.test('a PUT refused on If-Match, reported once the link is dead, leaves the store as it was', async (t) => {
+  await t.test('a PUT the store refuses, reported once the link is dead, leaves the store as it was', async (t) => {
     const w = world(t);
     const leased = await lease();
     const committed = await commit(commitBody(leased.body.leaseId, TITLED));
+    // A stale If-Match is just a handy way to make the fake store answer 412.
     assert.equal(w.workerPut(KEY, TITLED, { ...committed.body.headers, 'If-Match': '"0000"' }), 412);
     w.closePutWindow();
     const res = await report({ leaseId: leased.body.leaseId, skipped: true, reason: 'put-412' });
@@ -540,7 +540,7 @@ test('pdf title lease API', async (t) => {
     assert.ok(w.row().pdfTitle.lease, 'lease kept inside the window');
     assert.equal(w.row().pdfTitle.status, undefined, 'no final status inside the window');
 
-    // If-Match is unsigned and the object is the source again, so the same link lands again.
+    // The link is still live and carries no If-Match, so the same PUT lands again.
     assert.equal(w.workerPut(KEY, bytes, headers), 200);
     assert.ok(w.store.has(BACKUP));
     w.closePutWindow();

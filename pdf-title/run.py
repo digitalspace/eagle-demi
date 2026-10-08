@@ -140,7 +140,7 @@ class Client:
         return r.body
 
     def upload(self, url, headers, data):
-        # Exactly the commit's headers: Content-MD5 is signed into the link and If-Match guards the key.
+        # Exactly the commit's headers: Content-MD5 is signed into the link.
         r = self._send("PUT", url, "upload", dict(headers), data)
         if not 200 <= r.status < 300:
             raise Failed(f"upload: HTTP {r.status}")
