@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { finished } = require('stream/promises');
+const { once } = require('events');
 const storage = require('../../storage');
 const { contentDisposition, inlineType } = require('../../storage/content-disposition');
 
@@ -53,6 +54,9 @@ const STAT_TIMEOUT_MS = 3000;
 // Edge and browser lifetime of a streamed public file: the window an unpublish takes to reach a
 // cached copy, as the presigned URL's TTL was before.
 const STREAM_MAX_AGE_SECONDS = 5 * 60;
+
+// How long a stream answer waits for the store's first bytes before sending the 302 instead.
+const STREAM_OPEN_TIMEOUT_MS = 10000;
 
 // Marks a request that arrived through the deprecated `published` alias. A symbol, so no request
 // body can set it.
@@ -605,17 +609,22 @@ async function presignDownload(req, { doc, record, fileName }, signedType) {
   };
 }
 
-/** The analytics event every download writes, and the audit row a non-public one adds. */
-function recordDownload(req, doc, inline) {
+/**
+ * The analytics event a download writes, and the audit row a non-public one adds. `view: false`
+ * skips only the event: every read of restricted bytes is audited, ranged or not.
+ */
+function recordDownload(req, doc, inline, { view = true } = {}) {
   // A view and a save share one event name; this tells them apart.
   const viewDetail = inline ? { inline: true } : {};
 
-  analyticsEvent(req, {
-    eventName: 'document.download',
-    projectId: doc.projectId,
-    documentId: doc.id,
-    detail: viewDetail
-  });
+  if (view) {
+    analyticsEvent(req, {
+      eventName: 'document.download',
+      projectId: doc.projectId,
+      documentId: doc.id,
+      detail: viewDetail
+    });
+  }
 
   // A download of a document the public cannot see is an access to restricted material, which
   // is an audit question and not a usage statistic. Public downloads stay in the analytics
@@ -688,19 +697,23 @@ function isBadObjectName(err) {
   return err.name === 'InvalidObjectNameError' || BAD_OBJECT_NAME.has(storeErrorCode(err));
 }
 
-/** `storage.statObject`, rejected with an ETIMEDOUT after `STAT_TIMEOUT_MS`. */
-async function statBounded(key) {
+/** `promise`, rejected with an ETIMEDOUT after `ms`. */
+async function withTimeout(promise, ms, what) {
   let timer;
   const timeout = new Promise((resolve, reject) => {
     timer = setTimeout(() => reject(Object.assign(
-      new Error(`store stat timed out after ${STAT_TIMEOUT_MS} ms`), { code: 'ETIMEDOUT' })),
-    STAT_TIMEOUT_MS);
+      new Error(`${what} timed out after ${ms} ms`), { code: 'ETIMEDOUT' })), ms);
   });
   try {
-    return await Promise.race([storage.statObject(key), timeout]);
+    return await Promise.race([promise, timeout]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** `storage.statObject`, rejected with an ETIMEDOUT after `STAT_TIMEOUT_MS`. */
+function statBounded(key) {
+  return withTimeout(storage.statObject(key), STAT_TIMEOUT_MS, 'store stat');
 }
 
 /**
@@ -797,7 +810,8 @@ function notModified(req, etag, lastModified) {
     return tags.trim() === '*' || tags.split(',').some(tag => tag.trim().replace(/^W\//, '') === etag);
   }
   const since = httpSeconds(req.headers['if-modified-since']);
-  return since !== null && httpSeconds(lastModified) <= since;
+  // RFC 9110 13.1.3: a date in the future is invalid, so it cannot vouch for the copy.
+  return since !== null && since <= Date.now() / 1000 && httpSeconds(lastModified) <= since;
 }
 
 const UNSATISFIABLE = 'unsatisfiable';
@@ -829,50 +843,102 @@ function byteRange(req, size, etag, lastModified) {
   return start < size ? { start, end: Math.min(last, size - 1) } : UNSATISFIABLE;
 }
 
+// Streams this process is serving; capped by config.downloadStreamMaxConcurrent.
+let activeStreams = 0;
+
+function streamSlotFree() {
+  const max = config.downloadStreamMaxConcurrent;
+  return max === 0 || activeStreams < max;
+}
+
+/** Holds a slot until the store stream closes, which it does on end, error or destroy. */
+function holdStreamSlot(stream) {
+  activeStreams += 1;
+  stream.once('close', () => { activeStreams -= 1; });
+}
+
 /**
- * The 200, 206, 304 or 416. Null when the store will not open the read, so the caller falls back
- * to the 302 with nothing set here but the headers it overwrites.
+ * The store read, once its first bytes are in. Null, with the stream released, when it fails or
+ * has not started within STREAM_OPEN_TIMEOUT_MS: the caller can still send the 302 then.
+ */
+async function openStream(key, opts) {
+  let stream;
+  const started = (async () => {
+    stream = await storage.getObjectStream(key, opts);
+    await once(stream, 'readable');
+    return stream;
+  })();
+  try {
+    return await withTimeout(started, STREAM_OPEN_TIMEOUT_MS, 'store read');
+  } catch (err) {
+    // Released whenever the open settles, in case it is still pending.
+    started.then(s => s.destroy(), () => {});
+    if (stream) stream.destroy();
+    logger.warn(`[Document Controller] stream open failed, redirecting instead: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * The 200, 206, 304 or 416. Null when the answer cannot be built, the instance is at its stream
+ * cap, or the store will not start the read; the caller then sends the 302, and nothing set here
+ * survives it but headers that answer overwrites.
  */
 async function sendBytes(req, res, { doc, fileName }, type, stat) {
   const { size } = stat;
-  // The name is in the tag: the same bytes under a renamed document are a different answer.
-  const etag = `"${crypto.createHash('sha256').update(`${stat.etag}\n${fileName}`)
-    .digest('base64url').slice(0, 32)}"`;
-  const validators = () => {
-    res.set('ETag', etag);
-    res.set('Last-Modified', stat.lastModified.toUTCString());
-    res.set('Content-Type', type);
-    res.set('Cache-Control', isAnonymous(resolveAccess(req))
-      ? `public, max-age=${STREAM_MAX_AGE_SECONDS}` : 'private, no-store');
-  };
+  // A rename or a visibility change moves the record, not the object, and Front Door revalidates
+  // by date alone.
+  const modified = new Date(Math.max(stat.lastModified.getTime(), Date.parse(doc.updatedAt) || 0));
+  let validators;
+  let disposition;
+  try {
+    validators = {
+      // The name is in the tag: the same bytes under a renamed document are a different answer.
+      ETag: `"${crypto.createHash('sha256').update(`${stat.etag}\n${fileName}`)
+        .digest('base64url').slice(0, 32)}"`,
+      'Last-Modified': modified.toUTCString(),
+      'Content-Type': type,
+      'Cache-Control': isAnonymous(resolveAccess(req))
+        ? `public, max-age=${STREAM_MAX_AGE_SECONDS}` : 'private, no-store'
+    };
+    disposition = contentDisposition(fileName, { inline: true });
+  } catch (err) {
+    logger.warn(`[Document Controller] stream headers failed, redirecting instead: ${err.message}`);
+    return null;
+  }
+  const setValidators = () => Object.entries(validators).forEach(([name, value]) => res.set(name, value));
 
-  if (notModified(req, etag, stat.lastModified)) {
-    validators();
+  if (notModified(req, validators.ETag, modified)) {
+    setValidators();
     return res.status(304).send('');
   }
 
-  const range = byteRange(req, size, etag, stat.lastModified);
+  const range = byteRange(req, size, validators.ETag, modified);
   if (range === UNSATISFIABLE) {
     res.set('Content-Range', `bytes */${size}`);
     return res.status(416).send('');
   }
 
-  const { start, end } = range || { start: 0, end: size - 1 };
-  let body;
-  try {
-    // Pinned to the stat's version, so a replace mid-read cannot splice two files.
-    body = await storage.getObjectStream(doc.s3Key,
-      { offset: start, length: end - start + 1, versionId: stat.versionId });
-  } catch (err) {
-    logger.warn(`[Document Controller] stream open failed, redirecting instead: ${err.message}`);
+  if (!streamSlotFree()) {
+    logger.info(`[Document Controller] ${activeStreams} streams open, redirecting`);
     return null;
   }
 
+  const { start, end } = range || { start: 0, end: size - 1 };
+  // Pinned to the stat's version, or in an unversioned store to its etag, so a replace between
+  // the stat and the read cannot send bytes the headers do not describe.
+  const body = await openStream(doc.s3Key, {
+    offset: start, length: end - start + 1, versionId: stat.versionId || undefined,
+    ifMatch: stat.versionId ? undefined : stat.etag
+  });
+  if (!body) return null;
+  holdStreamSlot(body);
+
   // A viewer fetching the rest of a file it already counted is not a second view.
-  if (start === 0) recordDownload(req, doc, true);
-  validators();
+  recordDownload(req, doc, true, { view: start === 0 });
+  setValidators();
   res.set('Accept-Ranges', 'bytes');
-  res.set('Content-Disposition', contentDisposition(fileName, { inline: true }));
+  res.set('Content-Disposition', disposition);
   // Always a length: Front Door will not chunk a large object sent with chunked encoding.
   res.set('Content-Length', String(end - start + 1));
   if (range) res.set('Content-Range', `bytes ${start}-${end}/${size}`);

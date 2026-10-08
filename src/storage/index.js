@@ -178,7 +178,7 @@ async function readRange(key, offset, length, { versionId } = {}) {
   if (length > MAX_RANGE_BYTES) throw refuse('range read', `length must be 1 to ${MAX_RANGE_BYTES} bytes`, fields);
   const chunks = [];
   let total = 0;
-  for await (const chunk of await openRange('range read', key, offset, length, versionId, fields)) {
+  for await (const chunk of await openRange('range read', key, offset, length, { versionId }, fields)) {
     total += chunk.length;
     chunks.push(chunk);
   }
@@ -196,8 +196,9 @@ async function* capped(op, stream, length, fields) {
   }
 }
 
-async function openRange(op, key, offset, length, versionId, fields) {
-  const stream = await backend.getRangeStream(key, offset, length, { versionId: versionId || undefined });
+async function openRange(op, key, offset, length, { versionId, ifMatch }, fields) {
+  const stream = await backend.getRangeStream(key, offset, length,
+    { versionId: versionId || undefined, ifMatch: ifMatch || undefined });
   return capped(op, stream, length, fields);
 }
 
@@ -217,21 +218,25 @@ function putFile(key, filePath, contentType) {
  *
  * With no options, the whole current object of any key, as before. Any option limits the key to
  * an original or its backup, as readRange does. `offset` and `length` go together and have no
- * size cap; the stream errors if the store sends more than `length` bytes.
+ * size cap; the stream errors if the store sends more than `length` bytes. `ifMatch` (ranged only)
+ * makes the store refuse the read with a 412 unless the object still has that etag.
  *
  * @param {string} key
- * @param {{offset?: number, length?: number, versionId?: string|null}} [opts]
+ * @param {{offset?: number, length?: number, versionId?: string|null, ifMatch?: string}} [opts]
  * @returns {Promise<import('stream').Readable>}
  */
-async function getObjectStream(key, { offset, length, versionId } = {}) {
+async function getObjectStream(key, { offset, length, versionId, ifMatch } = {}) {
   const ranged = offset !== undefined || length !== undefined;
-  if (!ranged && versionId === undefined) return backend.getObjectStream(key);
+  if (!ranged && versionId === undefined && ifMatch === undefined) return backend.getObjectStream(key);
   const fields = { key: String(key), offset, length, versionId };
   checkReadKey('stream read', key, versionId, fields);
+  if (ifMatch !== undefined && (!ranged || typeof ifMatch !== 'string' || ifMatch === '')) {
+    throw refuse('stream read', 'ifMatch must be a non-empty string on a ranged read', fields);
+  }
   if (!ranged) return backend.getObjectStream(key, { versionId: versionId || undefined });
   checkRange('stream read', offset, length, fields);
   logger.debug('[storage] range stream', fields);
-  return Readable.from(await openRange('stream read', key, offset, length, versionId, fields),
+  return Readable.from(await openRange('stream read', key, offset, length, { versionId, ifMatch }, fields),
     { objectMode: false });
 }
 

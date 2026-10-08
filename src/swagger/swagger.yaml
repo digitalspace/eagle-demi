@@ -1721,13 +1721,15 @@ paths:
         STREAM MODE serves the bytes from this URL, so the link never expires and an edge cache can
         hold it. It applies when the file may open in the browser (see `inline`) and the stored
         object is no larger than `DOWNLOAD_STREAM_MAX_BYTES` (default 32 MiB; 0 turns the mode
-        off). Any other case, including a store that cannot be read, gets the 302 above, never
-        JSON. A single byte range answers 206; a multi-part range, or an `If-Range` that no longer
-        matches, answers the whole file; a range starting past the end answers 416 with
-        `Content-Range: bytes */<size>`. A matching `If-None-Match`, or an `If-Modified-Since` at or
-        after `Last-Modified`, answers 304. The analytics event, and the audit row for a document
-        the public cannot see, are written once per view: on an answer with no range or a range
-        starting at byte 0, never on a 304.
+        off), and the instance is serving fewer than `DOWNLOAD_STREAM_MAX_CONCURRENT` streams
+        (default 8; 0 = no limit). Any other case, including a store that cannot be read or sends
+        no bytes within 10 seconds, gets the 302 above, never JSON. A single byte range answers 206;
+        a multi-part range, or an `If-Range` that no longer matches, answers the whole file; a
+        range starting past the end answers 416 with `Content-Range: bytes */<size>`. A matching
+        `If-None-Match`, or an `If-Modified-Since` at or after `Last-Modified` and not in the
+        future, answers 304. The analytics event is written once per view: on an answer with no
+        range or a range starting at byte 0. The audit row for a document the public cannot see is
+        written on every 200 and 206. Neither is written on a 304.
 
         Every answer that is not a streamed file says `Cache-Control: no-store`.
 
@@ -1794,7 +1796,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Stream mode only, ignored when `If-None-Match` is sent. Answers 304 when not older than `Last-Modified`.
+          description: Stream mode only, ignored when `If-None-Match` is sent or the date is in the future. Answers 304 when not older than `Last-Modified`.
       responses:
         '200':
           description: >-
@@ -1818,7 +1820,9 @@ paths:
               schema:
                 type: string
             Last-Modified:
-              description: Stream mode. The stored object's modification time.
+              description: >-
+                Stream mode. The later of the stored object's modification time and the document
+                record's `updatedAt`, so a rename reaches a cache that revalidates by date.
               schema:
                 type: string
             ETag:

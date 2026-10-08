@@ -22,6 +22,7 @@ process.env.AUDIT_MAX_BATCH = '1';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { once } = require('events');
 const { Readable } = require('stream');
 const { HttpRequest } = require('@azure/functions');
 
@@ -575,8 +576,8 @@ test('HEAD is answered here, never redirected', async (t) => {
 
 test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
-  const streamMax = config.downloadStreamMaxBytes;
-  t.afterEach(() => { config.downloadStreamMaxBytes = streamMax; });
+  const { downloadStreamMaxBytes, downloadStreamMaxConcurrent } = config;
+  t.afterEach(() => Object.assign(config, { downloadStreamMaxBytes, downloadStreamMaxConcurrent }));
 
   const BYTES = Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 251));
   const PDF = { ...DOC, mimeType: 'application/pdf' };
@@ -607,11 +608,23 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
     return out;
   }
 
-  /** The handler called directly, for a credentialed caller the dispatcher would need a token for. */
-  async function getAs(user) {
+  /**
+   * The handler called directly, for a credentialed caller the dispatcher would need a token for.
+   * The body is drained, so the stream's slot is free for the next case.
+   */
+  async function getAs(user, headers = {}) {
     const out = res();
-    await controller.downloadDocument(req({ user, query: { inline: '1' } }), out);
+    await controller.downloadDocument(req({ user, headers, query: { inline: '1' } }), out);
+    if (out.streamed) await out.body.toArray();
     return out;
+  }
+
+  /** The handler called directly, stream left open: it holds a slot until destroyed. */
+  async function holdOpen() {
+    const out = res();
+    await controller.downloadDocument(req({ query: { inline: '1' } }), out);
+    assert.equal(out.statusCode, 200);
+    return out.body;
   }
 
   await t.test('an anonymous public PDF answers 200 with the bytes and every header', async (t) => {
@@ -823,9 +836,20 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
     assert.equal((await events({ range: 'bytes=0-1023' })).length, 1);
   });
 
-  await t.test('a range from mid-file writes none', async (t) => {
+  await t.test('a range from mid-file writes no analytics event', async (t) => {
     stored(t);
     assert.equal((await events({ range: 'bytes=1024-2047' })).length, 0);
+  });
+
+  await t.test('a mid-file range of a document the public cannot see is still audited', async (t) => {
+    // `bytes=1-` is all but one byte of the file: skipping its audit row would be a way around it.
+    stored(t, { doc: { ...PDF, isPublished: false } });
+    sent.length = 0;
+    const out = await getAs(STAFF, { range: 'bytes=1-' });
+    assert.equal(out.statusCode, 206);
+    await audit.flush();
+    assert.equal(sent.filter(r => r.stream === audit.EVENTS_STREAM).length, 0);
+    assert.equal(sent.filter(r => r.stream === audit.AUDIT_STREAM).length, 1);
   });
 
   await t.test('a streamed document the public cannot see writes the audit row', async (t) => {
@@ -836,5 +860,109 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
     await audit.flush();
     const row = sent.find(r => r.stream === audit.AUDIT_STREAM);
     assert.deepStrictEqual(row.Detail, { displayName: 'Site C Report', inline: true });
+  });
+
+  await t.test('a record changed after the object moves Last-Modified', async (t) => {
+    // A rename touches the record only; the edge revalidates by date, so the date must move.
+    stored(t, { doc: { ...PDF, updatedAt: '2026-09-20T08:00:00.000Z' } });
+    const { res: r } = await get({ 'if-modified-since': LAST_MODIFIED });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('last-modified'), 'Sun, 20 Sep 2026 08:00:00 GMT');
+  });
+
+  await t.test('an If-Modified-Since in the future is ignored', async (t) => {
+    stored(t);
+    const { res: r } = await get({ 'if-modified-since': 'Fri, 01 Jan 2100 00:00:00 GMT' });
+    assert.equal(r.status, 200);
+  });
+
+  await t.test('an object with no modification date is the 302', async (t) => {
+    const { open } = stored(t, { stat: { ...STAT, lastModified: null } });
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(open.mock.callCount(), 0);
+  });
+
+  await t.test('an object with no etag is the 302', async (t) => {
+    const { open } = stored(t, { stat: { ...STAT, etag: null } });
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(open.mock.callCount(), 0);
+  });
+
+  await t.test('a file name the header cannot carry is the 302, with no read opened', async (t) => {
+    // A lone surrogate, which encodeURIComponent throws on.
+    const { open } = stored(t, { doc: { ...PDF, documentFileName: 'Report \uD83D draft.pdf' } });
+    const warn = t.mock.method(logger, 'warn', () => {});
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(open.mock.callCount(), 0);
+    assert.equal(warn.mock.callCount(), 1);
+  });
+
+  await t.test('an unversioned store pins the read to the stat etag', async (t) => {
+    const { open } = stored(t, { stat: { ...STAT, versionId: null } });
+    const { res: r } = await get();
+    assert.equal(r.status, 200);
+    assert.equal(open.mock.calls[0].arguments[1].ifMatch, 'store-etag-1');
+    assert.equal(open.mock.calls[0].arguments[1].versionId, undefined);
+  });
+
+  await t.test('an object replaced between stat and read (412) is the 302', async (t) => {
+    stored(t, { stat: { ...STAT, versionId: null } });
+    t.mock.method(storage, 'getObjectStream', async () => {
+      throw Object.assign(new Error('precondition failed'), { statusCode: 412, code: 'ConditionNotMet' });
+    });
+    t.mock.method(logger, 'warn', () => {});
+    const { res: r } = await get();
+    assert.equal(r.status, 302);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+  });
+
+  await t.test('a store read with no bytes after 10 s is dropped for the 302', async (t) => {
+    stored(t);
+    const stalled = new Readable({ read() {} });
+    let opened;
+    const called = new Promise((resolve) => { opened = resolve; });
+    t.mock.method(storage, 'getObjectStream', async () => { opened(); return stalled; });
+    t.mock.method(logger, 'warn', () => {});
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const out = res();
+      const pending = controller.downloadDocument(req({ query: { inline: '1' } }), out);
+      await called;
+      // setImmediate is not mocked: the open has settled as far as it can before time moves.
+      await new Promise(resolve => setImmediate(resolve));
+      t.mock.timers.tick(10000);
+      await pending;
+      assert.equal(out.statusCode, 302);
+      assert.equal(stalled.destroyed, true, 'a stalled read would hold its store connection');
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+
+  await t.test('at the stream cap the next viewer gets the 302 until a stream closes', async (t) => {
+    config.downloadStreamMaxConcurrent = 1;
+    const { open } = stored(t);
+    t.mock.method(logger, 'info', () => {});
+    const held = await holdOpen();
+
+    const { res: capped } = await get();
+    assert.equal(capped.status, 302);
+    assert.equal(capped.headers.get('cache-control'), 'no-store');
+
+    const source = await open.mock.calls[0].result;
+    held.destroy();
+    await once(source, 'close');
+    assert.equal((await get()).res.status, 200);
+  });
+
+  await t.test('a 304 or a 416 takes no stream slot', async (t) => {
+    config.downloadStreamMaxConcurrent = 1;
+    stored(t);
+    assert.equal((await get({ 'if-modified-since': LAST_MODIFIED })).res.status, 304);
+    assert.equal((await get({ range: 'bytes=9999-' })).res.status, 416);
+    (await holdOpen()).destroy();
   });
 });

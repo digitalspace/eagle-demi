@@ -349,8 +349,8 @@ async function dispatch(request, context) {
   for (const [name, value] of request.headers.entries()) headers[name.toLowerCase()] = value;
 
   // Reuse an upstream trace id (rproxy, eagle-api) so one request is one id end to end.
-  const requestId = headers['x-request-id'] || headers['x-correlation-id'] ||
-    crypto.randomUUID().slice(0, 8);
+  const ownId = crypto.randomUUID().slice(0, 8);
+  const requestId = headers['x-request-id'] || headers['x-correlation-id'] || ownId;
 
   const res = makeRes(requestId);
   applyCors(headers.origin, res);
@@ -402,6 +402,9 @@ async function dispatch(request, context) {
     // After logRequest, so the access log still reports the byte count the handler produced.
     const nullBody = NULL_BODY_STATUSES.has(res.statusCode);
     if (nullBody) delete res.headers['content-length'];
+
+    // A shared cache would replay one caller's id to everyone after; it goes in the log line only.
+    if (/^\s*public\b/i.test(String(res.headers['cache-control'] || ''))) res.headers['x-request-id'] = ownId;
 
     const noBody = nullBody || request.method === 'HEAD';
     if (noBody && res.streamed) res.body.destroy();

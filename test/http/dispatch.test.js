@@ -183,6 +183,22 @@ test('a streamed body arrives whole under the length the handler preset', async 
   assert.strictEqual(await sent.text(), 'hello world');
 });
 
+test('a public answer never echoes the caller\'s request id', async (t) => {
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Cache-Control', 'public, max-age=300').json({});
+  });
+  const res = await call('/api/config', { headers: { 'x-request-id': 'caller-chosen' } });
+  assert.match(res.headers['x-request-id'], /^[0-9a-f]{8}$/);
+});
+
+test('a private answer keeps the caller\'s request id', async (t) => {
+  t.mock.method(configController, 'getConfig', (req, res) => {
+    res.set('Cache-Control', 'no-store').json({});
+  });
+  const res = await call('/api/config', { headers: { 'x-request-id': 'caller-chosen' } });
+  assert.strictEqual(res.headers['x-request-id'], 'caller-chosen');
+});
+
 test('a 304 the handler answers carries no body and no content-length', async (t) => {
   // A conditional GET states the file's size before it learns the copy is fresh; the 304 must drop
   // that length, or undici refuses the Response and the host serves an empty 500.

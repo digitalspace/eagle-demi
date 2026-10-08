@@ -613,6 +613,22 @@ test('upload URLs and backup copies', async (t) => {
     assert.strictEqual(await drain(stream), '0123456789');
   });
 
+  await t.test('a ranged stream with ifMatch sends the etag quoted, as an If-Match', async () => {
+    const req = storeReturns('0123');
+    const stream = await storage.getObjectStream(KEY, { offset: 4, length: 4, ifMatch: 'abc123' });
+    const { objectName, headers } = req.mock.calls[0].arguments[0];
+    assert.strictEqual(objectName, `ozwdez/${KEY}`);
+    assert.strictEqual(headers['if-match'], '"abc123"');
+    assert.strictEqual(headers.range, 'bytes=4-7');
+    assert.strictEqual(await drain(stream), '0123');
+  });
+
+  await t.test('ifMatch on a whole-object stream is refused', async () => {
+    const req = storeReturns('x');
+    await assert.rejects(storage.getObjectStream(KEY, { ifMatch: 'abc' }), /stream read refused/);
+    assert.strictEqual(req.mock.callCount(), 0);
+  });
+
   await t.test(`a ranged stream is not capped at ${storage.MAX_RANGE_BYTES} bytes`, async () => {
     const req = storeReturns('x');
     await storage.getObjectStream(KEY, { offset: 0, length: storage.MAX_RANGE_BYTES + 1 });
@@ -944,6 +960,17 @@ test('azure blob backend', async (t) => {
     await azure.getRangeStream('etl/abc.pdf', 0, 4);
     assert.strictEqual(seen.url.searchParams.has('versionid'), false);
     assert.deepStrictEqual([seen.offset, seen.count], [0, 4]);
+  });
+
+  await t.test('a ranged read with ifMatch passes it as the download condition', async () => {
+    let seen;
+    t.mock.method(BlockBlobClient.prototype, 'download', async function (offset, count, options) {
+      seen = options;
+      return { readableStreamBody: require('stream').Readable.from(['%PDF']) };
+    });
+
+    await azure.getRangeStream('etl/abc.pdf', 0, 4, { ifMatch: '"0x8DCE1"' });
+    assert.strictEqual(seen.conditions.ifMatch, '"0x8DCE1"');
   });
 
   await t.test('the backend refuses a ranged read with no length, which would read the whole blob', async () => {

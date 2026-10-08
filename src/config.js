@@ -184,6 +184,9 @@ const config = {
   // 32 MiB is ~5 s at the measured 6.4 MB/s store read, under APIM Consumption's 30 s request cap
   // and Front Door's 60 s origin timeout. 0 turns streaming off.
   downloadStreamMaxBytes: intFromEnv('DOWNLOAD_STREAM_MAX_BYTES', 33554432),
+  // Streams one instance serves at once; past it the 302. Bounds what slow readers or cache-busting
+  // query strings can hold open. 0 = no limit.
+  downloadStreamMaxConcurrent: intFromEnv('DOWNLOAD_STREAM_MAX_CONCURRENT', 8),
 
   // Bulk document download (PUBLIC-148). Caps REFUSE rather than truncate: a job that silently
   // dropped documents would hand someone an incomplete download they had no way to notice.
