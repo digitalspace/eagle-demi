@@ -322,6 +322,23 @@ line. With `--store`, which the timer passes, the run also saves the counts and 
 class as one row in the `config` container, read back with `GET /api/admin/reconcile`. A failed
 save is logged and the run still finishes. Nothing is fixed automatically.
 
+Comment periods ENGAGE owns (`sourceSystem: 'engage'`) are left out of this diff and out of
+`--drop-orphans`; the report counts them as `engageOwned`. `reconcile-engage.js` checks them:
+
+```bash
+node src/scripts/reconcile-engage.js           # report only
+node src/scripts/reconcile-engage.js --repair  # and re-queue drifted rows through sync-out
+node src/scripts/reconcile-engage.js --store   # and save the report (cache id reconcile-engage-report)
+node src/scripts/reconcile-engage.js --limit 20
+```
+
+It compares each ENGAGE row with its Eagle copy (dates to the minute, `isPublished`, `metURL`) and
+reports rows never sent to Eagle, rows Eagle no longer holds, drift, and Eagle projects with two
+periods on one engagement URL. `--repair` sends those rows through the sync-out queue again, so
+DEMI's copy wins; the script never writes to Eagle itself. With `ENGAGE_API_BASE` set it also lists
+EPIC engagements that have no DEMI row, and published DEMI rows ENGAGE no longer lists. That part
+only reports.
+
 ### Parity with eagle-api
 
 ```bash
