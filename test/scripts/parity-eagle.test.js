@@ -695,6 +695,30 @@ test('staff organization search still compares the address fields', async () => 
   assert.match(h.out[0], /fieldDiff=1 unexplained=1/);
 });
 
+const ADDED = '2019-03-01T08:00:00.000Z';
+const UPDATED = '2024-06-01T08:00:00.000Z';
+
+test('staff organization search compares dateAdded and dateUpdated; null and absent match', async () => {
+  for (const field of ['dateAdded', 'dateUpdated']) {
+    const { code, line } = await staffSearch('Organization', org({ [field]: ADDED }), org({ [field]: UPDATED }));
+    assert.strictEqual(code, 1, field);
+    assert.match(line, /fieldDiff=1 unexplained=1/, field);
+  }
+  const { code, line } = await staffSearch('Organization', org({ dateAdded: ADDED }), org({ dateAdded: ADDED, dateUpdated: null }));
+  assert.strictEqual(code, 0);
+  assert.match(line, /match=1 .*fieldDiff=0/);
+});
+
+test('the organization route neither asks for nor compares the dates', async () => {
+  const h = harness(restSides({ '/organization': [org({ dateAdded: ADDED, dateUpdated: ADDED })] },
+    searchBody([org({ dateAdded: UPDATED, dateUpdated: UPDATED })])), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'organization-list'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], /match=1 .*fieldDiff=0 unexplained=0/);
+  const asked = eagleCall(h, '/organization').url.searchParams.get('fields').split('|');
+  assert.deepStrictEqual(asked.filter(f => ['dateAdded', 'dateUpdated'].includes(f)), []);
+});
+
 test('the comment period route does not compare commentIdCount, which Eagle never answers', async () => {
   const period = { _id: B, project: A, dateStarted: '2026-08-26T07:00:00.000Z', instructions: 'x' };
   const h = harness(restSides({ [`/commentperiod/${B}`]: [period] }, searchBody([{ ...period, commentIdCount: 7 }])),
