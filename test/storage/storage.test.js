@@ -225,19 +225,30 @@ test('minio backend applies the key prefix to every operation', async (t) => {
       'swallowing this would report a permission problem as a completed sweep');
   });
 
-  await t.test('statObject reads the prefixed key and maps size, type, etag and version', async () => {
+  await t.test('statObject reads the prefixed key and maps size, type, etag, version and date', async () => {
     let seen;
+    const lastModified = new Date('2026-10-05T01:02:03Z');
     t.mock.method(Minio.Client.prototype, 'statObject', async (b, key) => {
       seen = key;
       return {
-        size: 48213, etag: '9b2cf535f27731c974343645a3985328', versionId: 'v7',
+        size: 48213, etag: '9b2cf535f27731c974343645a3985328', versionId: 'v7', lastModified,
         metaData: { 'content-type': 'application/pdf' }
       };
     });
 
-    assert.deepStrictEqual(await minio.statObject('etl/site-c/abc.pdf'),
-      { size: 48213, contentType: 'application/pdf', etag: '9b2cf535f27731c974343645a3985328', versionId: 'v7' });
+    assert.deepStrictEqual(await minio.statObject('etl/site-c/abc.pdf'), {
+      size: 48213, contentType: 'application/pdf', etag: '9b2cf535f27731c974343645a3985328',
+      versionId: 'v7', lastModified
+    });
     assert.strictEqual(seen, 'ozwdez/etl/site-c/abc.pdf');
+  });
+
+  await t.test('statObject gives a null date, not an Invalid Date, when the store sends none', async () => {
+    t.mock.method(Minio.Client.prototype, 'statObject', async () => ({
+      size: 1, etag: 'x', lastModified: new Date(undefined), metaData: {}
+    }));
+
+    assert.strictEqual((await minio.statObject('etl/abc.pdf')).lastModified, null);
   });
 
   await t.test('statObject is null for a missing key', async () => {
@@ -586,6 +597,76 @@ test('upload URLs and backup copies', async (t) => {
     assert.ok(logged.some((line) => line.includes('range read refused')), 'refusal not logged');
     assert.ok(!logged.some((line) => /https?:|objects\.example\.invalid|X-Amz-/.test(line)));
   });
+
+  const drain = async (stream) => Buffer.concat(await stream.toArray()).toString();
+
+  await t.test('a ranged stream asks for offset to offset+length-1 of the pinned version', async () => {
+    const req = storeReturns('0123456789');
+    const versionId = 'a1b2/c3+d4=';
+
+    const stream = await storage.getObjectStream(KEY, { offset: 100, length: 10, versionId });
+
+    const { objectName, headers, query } = req.mock.calls[0].arguments[0];
+    assert.strictEqual(objectName, `ozwdez/${KEY}`);
+    assert.strictEqual(headers.range, 'bytes=100-109');
+    assert.strictEqual(new URLSearchParams(query).get('versionId'), versionId);
+    assert.strictEqual(await drain(stream), '0123456789');
+  });
+
+  await t.test(`a ranged stream is not capped at ${storage.MAX_RANGE_BYTES} bytes`, async () => {
+    const req = storeReturns('x');
+    await storage.getObjectStream(KEY, { offset: 0, length: storage.MAX_RANGE_BYTES + 1 });
+    assert.strictEqual(req.mock.calls[0].arguments[0].headers.range, `bytes=0-${storage.MAX_RANGE_BYTES}`);
+  });
+
+  await t.test('a ranged stream errors when the store sends more bytes than asked', async () => {
+    storeReturns('%PDF-1.7 the whole object');
+    const stream = await storage.getObjectStream(KEY, { offset: 9, length: 4 });
+    await assert.rejects(drain(stream), /more bytes than asked/);
+  });
+
+  for (const key of ['../x', 'zips/abc.zip', 'ozwdez/zips/abc.zip', 'pdf-title-backup/zips/abc.zip']) {
+    await t.test(`a ranged stream of ${JSON.stringify(key)} is refused`, async () => {
+      const req = storeReturns('x');
+      await assert.rejects(storage.getObjectStream(key, { offset: 0, length: 10 }), /stream read refused/);
+      assert.strictEqual(req.mock.callCount(), 0);
+    });
+  }
+
+  await t.test('a pinned full read of a zip is refused', async () => {
+    const req = storeReturns('x');
+    await assert.rejects(storage.getObjectStream('zips/abc.zip', { versionId: 'v1' }), /stream read refused/);
+    assert.strictEqual(req.mock.callCount(), 0);
+  });
+
+  for (const [what, opts] of [['an offset and no length', { offset: 0 }], ['a length and no offset', { length: 10 }],
+    ['a zero length', { offset: 0, length: 0 }], ['a negative offset', { offset: -1, length: 10 }]]) {
+    await t.test(`a stream with ${what} is refused`, async () => {
+      const req = storeReturns('x');
+      await assert.rejects(storage.getObjectStream(KEY, opts), /stream read refused/);
+      assert.strictEqual(req.mock.callCount(), 0);
+    });
+  }
+
+  await t.test('a full stream with no options reads the whole current object', async () => {
+    const req = storeReturns('%PDF-1.7 the whole object');
+
+    const stream = await storage.getObjectStream(KEY);
+
+    const { headers, query } = req.mock.calls[0].arguments[0];
+    assert.strictEqual(headers.range, undefined);
+    assert.strictEqual(query, '');
+    assert.strictEqual(await drain(stream), '%PDF-1.7 the whole object');
+  });
+
+  await t.test('a full stream with a versionId reads the whole of that version', async () => {
+    const req = storeReturns('%PDF');
+    await storage.getObjectStream(KEY, { versionId: 'v3' });
+
+    const { headers, query } = req.mock.calls[0].arguments[0];
+    assert.strictEqual(headers.range, undefined);
+    assert.strictEqual(new URLSearchParams(query).get('versionId'), 'v3');
+  });
 });
 
 // ── Azure Blob backend ───────────────────────────────────────────────────────
@@ -824,6 +905,18 @@ test('azure blob backend', async (t) => {
     assert.strictEqual(await azure.getObjectStream('etl/abc.pdf'), body);
   });
 
+  await t.test('getObjectStream with a versionId downloads the whole of that version', async () => {
+    let seen;
+    t.mock.method(BlobClient.prototype, 'download', async function (offset, count) {
+      seen = { url: new URL(this.url), offset, count };
+      return { readableStreamBody: require('stream').Readable.from(['%PDF']) };
+    });
+
+    await azure.getObjectStream('etl/abc.pdf', { versionId: '2026-10-05T01:02:03.1234567Z' });
+    assert.strictEqual(seen.url.searchParams.get('versionid'), '2026-10-05T01:02:03.1234567Z');
+    assert.deepStrictEqual([seen.offset, seen.count], [undefined, undefined]);
+  });
+
   await t.test('a ranged read downloads offset and count from the pinned version', async () => {
     const body = require('stream').Readable.from(['%PDF']);
     let seen;
@@ -860,15 +953,17 @@ test('azure blob backend', async (t) => {
     assert.strictEqual(download.mock.callCount(), 0);
   });
 
-  await t.test('statObject maps contentLength, contentType and etag', async () => {
+  await t.test('statObject maps contentLength, contentType, etag and lastModified', async () => {
     let seen;
+    const lastModified = new Date('2026-10-05T01:02:03Z');
     t.mock.method(BlockBlobClient.prototype, 'getProperties', async function () {
       seen = this.name;
-      return { contentLength: 48213, contentType: 'application/pdf', etag: '"0x8DCB1A2B3C4D5E6"' };
+      return { contentLength: 48213, contentType: 'application/pdf', etag: '"0x8DCB1A2B3C4D5E6"', lastModified };
     });
 
-    assert.deepStrictEqual(await azure.statObject('etl/abc.pdf'),
-      { size: 48213, contentType: 'application/pdf', etag: '"0x8DCB1A2B3C4D5E6"', versionId: null });
+    assert.deepStrictEqual(await azure.statObject('etl/abc.pdf'), {
+      size: 48213, contentType: 'application/pdf', etag: '"0x8DCB1A2B3C4D5E6"', versionId: null, lastModified
+    });
     assert.strictEqual(seen, 'etl/abc.pdf');
   });
 

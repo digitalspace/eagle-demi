@@ -52,8 +52,9 @@ async function getBuffer(key) {
 }
 
 /** The un-draining half of getBuffer: for objects too big to hold in memory. */
-async function getObjectStream(key) {
-  return getClient().getObject(config.minioBucket, resolveObjectKey(key));
+async function getObjectStream(key, { versionId } = {}) {
+  return getClient().getObject(config.minioBucket, resolveObjectKey(key),
+    versionId ? { versionId } : undefined);
 }
 
 /** A byte range of an object, or of one version of it. The facade checks key, offset and length. */
@@ -134,14 +135,16 @@ function isMissing(err) {
   return Boolean(err) && (err.code === 'NoSuchKey' || err.code === 'NotFound' || err.statusCode === 404);
 }
 
-/** Size and type of a stored object, or null when it is not there. */
+/** Size, type and last-modified Date of a stored object, or null when it is not there. */
 async function statObject(key) {
   try {
     const stat = await getClient().statObject(config.minioBucket, resolveObjectKey(key));
     const meta = stat.metaData || {};
     return {
       size: stat.size, contentType: meta['content-type'] || null, etag: stat.etag || null,
-      versionId: stat.versionId || null
+      versionId: stat.versionId || null,
+      // The SDK builds an Invalid Date when the store sends no Last-Modified.
+      lastModified: Number.isNaN(Number(stat.lastModified)) ? null : stat.lastModified
     };
   } catch (err) {
     if (isMissing(err)) return null;

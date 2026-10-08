@@ -14,6 +14,7 @@
  * decides where documents are read from and written to — it must never be a side effect.
  */
 
+const { Readable } = require('stream');
 const config = require('../config');
 const { logger } = require('../utils/logger');
 
@@ -136,11 +137,26 @@ async function copyObject(src, dest, { ifSourceEtag } = {}) {
  *
  * @param {string} key
  * @returns {Promise<{size: number, contentType: string|null, etag: string|null,
- *   versionId: string|null}|null>} null when the object is absent. The etag is opaque: pass it
- *   back to copyObject on the same backend.
+ *   versionId: string|null, lastModified: Date|null}|null>} null when the object is absent. The
+ *   etag is opaque: pass it back to copyObject on the same backend.
  */
 function statObject(key) {
   return backend.statObject(key);
+}
+
+/** Throws unless `key` is one original or its backup, and `versionId` is absent or non-empty. */
+function checkReadKey(op, key, versionId, fields) {
+  if (!isExactKey(key)) throw refuse(op, 'not one exact key', fields);
+  const original = key.startsWith(BACKUP_PREFIX) ? key.slice(BACKUP_PREFIX.length) : key;
+  if (PROTECTED_SEGMENT.test(original)) throw refuse(op, 'key is neither an original nor its backup', fields);
+  if (versionId !== undefined && versionId !== null && (typeof versionId !== 'string' || versionId === '')) {
+    throw refuse(op, 'versionId must be a non-empty string', fields);
+  }
+}
+
+function checkRange(op, offset, length, fields) {
+  if (!Number.isSafeInteger(offset) || offset < 0) throw refuse(op, 'offset must be a non-negative integer', fields);
+  if (!Number.isSafeInteger(length) || length < 1) throw refuse(op, 'length must be a positive integer', fields);
 }
 
 /**
@@ -157,31 +173,32 @@ function statObject(key) {
  */
 async function readRange(key, offset, length, { versionId } = {}) {
   const fields = { key: String(key), offset, length, versionId };
-  if (!isExactKey(key)) throw refuse('range read', 'not one exact key', fields);
-  const original = key.startsWith(BACKUP_PREFIX) ? key.slice(BACKUP_PREFIX.length) : key;
-  if (PROTECTED_SEGMENT.test(original)) {
-    throw refuse('range read', 'key is neither an original nor its backup', fields);
-  }
-  if (!Number.isSafeInteger(offset) || offset < 0) {
-    throw refuse('range read', 'offset must be a non-negative integer', fields);
-  }
-  if (!Number.isInteger(length) || length < 1 || length > MAX_RANGE_BYTES) {
-    throw refuse('range read', `length must be 1 to ${MAX_RANGE_BYTES} bytes`, fields);
-  }
-  if (versionId !== undefined && versionId !== null && (typeof versionId !== 'string' || versionId === '')) {
-    throw refuse('range read', 'versionId must be a non-empty string', fields);
-  }
-  const stream = await backend.getRangeStream(key, offset, length, { versionId: versionId || undefined });
+  checkReadKey('range read', key, versionId, fields);
+  checkRange('range read', offset, length, fields);
+  if (length > MAX_RANGE_BYTES) throw refuse('range read', `length must be 1 to ${MAX_RANGE_BYTES} bytes`, fields);
   const chunks = [];
   let total = 0;
-  for await (const chunk of stream) {
+  for await (const chunk of await openRange('range read', key, offset, length, versionId, fields)) {
     total += chunk.length;
-    // Leaving the loop destroys the stream, so an unranged body is never drained.
-    if (total > length) throw refuse('range read', 'store returned more bytes than asked', fields);
     chunks.push(chunk);
   }
   logger.debug('[storage] range read', { ...fields, bytes: total });
   return Buffer.concat(chunks, total);
+}
+
+/** The range's chunks, failing past `length` bytes. Leaving the loop early destroys the store stream. */
+async function* capped(op, stream, length, fields) {
+  let total = 0;
+  for await (const chunk of stream) {
+    total += chunk.length;
+    if (total > length) throw refuse(op, 'store returned more bytes than asked', fields);
+    yield chunk;
+  }
+}
+
+async function openRange(op, key, offset, length, versionId, fields) {
+  const stream = await backend.getRangeStream(key, offset, length, { versionId: versionId || undefined });
+  return capped(op, stream, length, fields);
 }
 
 /**
@@ -198,10 +215,24 @@ function putFile(key, filePath, contentType) {
 /**
  * Read an object as a stream, for bytes too large to buffer.
  *
+ * With no options, the whole current object of any key, as before. Any option limits the key to
+ * an original or its backup, as readRange does. `offset` and `length` go together and have no
+ * size cap; the stream errors if the store sends more than `length` bytes.
+ *
+ * @param {string} key
+ * @param {{offset?: number, length?: number, versionId?: string|null}} [opts]
  * @returns {Promise<import('stream').Readable>}
  */
-function getObjectStream(key) {
-  return backend.getObjectStream(key);
+async function getObjectStream(key, { offset, length, versionId } = {}) {
+  const ranged = offset !== undefined || length !== undefined;
+  if (!ranged && versionId === undefined) return backend.getObjectStream(key);
+  const fields = { key: String(key), offset, length, versionId };
+  checkReadKey('stream read', key, versionId, fields);
+  if (!ranged) return backend.getObjectStream(key, { versionId: versionId || undefined });
+  checkRange('stream read', offset, length, fields);
+  logger.debug('[storage] range stream', fields);
+  return Readable.from(await openRange('stream read', key, offset, length, versionId, fields),
+    { objectMode: false });
 }
 
 /**

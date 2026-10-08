@@ -78,8 +78,9 @@ async function getBuffer(key) {
 }
 
 /** The un-draining half of getBuffer: for objects too big to hold in memory. */
-async function getObjectStream(key) {
-  const res = await getBlobClient(key).download();
+async function getObjectStream(key, { versionId } = {}) {
+  const client = getBlobClient(key);
+  const res = await (versionId ? client.withVersion(versionId) : client).download();
   return res.readableStreamBody;
 }
 
@@ -178,13 +179,13 @@ async function putObjectStream(key, stream, contentType) {
   return key;
 }
 
-/** Size and type of a stored blob, or null when it is not there. */
+/** Size, type and last-modified Date of a stored blob, or null when it is not there. */
 async function statObject(key) {
   try {
     const props = await getBlobClient(key).getProperties();
     return {
       size: props.contentLength, contentType: props.contentType || null, etag: props.etag || null,
-      versionId: props.versionId || null
+      versionId: props.versionId || null, lastModified: props.lastModified || null
     };
   } catch (err) {
     // A HEAD error has no body, so the SDK carries x-ms-error-code in `details`, as its own
