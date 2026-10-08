@@ -2638,7 +2638,8 @@ paths:
 
         eagle-api hard-deletes a period, so it pushes the record it removed with
         `doc.isDeleted: true`. The row is kept and narrowed to staff instead of deleted, and its
-        comments are narrowed with it. Nothing in DEMI widens it again.
+        comments are narrowed with it. Nothing in DEMI widens it again. A delete for a period DEMI
+        holds no row for writes nothing and answers 200 `{ id, action: 'ignored' }`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -2759,8 +2760,9 @@ paths:
                       type: string
                       nullable: true
                       description: >-
-                        Stored as `dateStarted`, as ISO 8601 UTC. ENGAGE's `YYYY-MM-DD HH:MM:SS`
-                        carries no zone and is read as UTC.
+                        Stored as `dateStarted`, as ISO 8601 UTC. ISO 8601, or ENGAGE's
+                        `YYYY-MM-DD HH:MM:SS`; a time with no zone is read as UTC. Any other text
+                        is refused with 400 `PUSHED_DATES_INVALID`.
                     end:
                       type: string
                       nullable: true
@@ -2794,7 +2796,7 @@ paths:
           description: >-
             `code` is `ENGAGEMENT_ID_MISMATCH` (body id differs from the path),
             `PUSHED_AT_INVALID` (not an ISO 8601 time), `TRACKING_ID_INVALID` (not an Eagle id),
-            `PUSHED_DATES_INVALID` (`start` or `end` is not a date) or `METURL_REQUIRED` (a
+            `PUSHED_DATES_INVALID` (`start` or `end` is neither ISO 8601 nor `YYYY-MM-DD HH:MM:SS`) or `METURL_REQUIRED` (a
             published engagement with no `metURL`).
         '401':
           description: Unauthorized.
@@ -5293,10 +5295,11 @@ components:
           description: The DEMI id of the mirrored record.
         action:
           type: string
-          enum: [upsert, delete]
+          enum: [upsert, delete, ignored]
           description: |-
             `delete` when the push carried `doc.isDeleted: true`. Documents and comment periods
-            only — the other mirrors always answer `upsert`. Absent when the push was ignored.
+            only — the other mirrors always answer `upsert`. Absent when the push was ignored as
+            stale. `ignored` is a comment period delete for a period DEMI holds no row for.
         ok:
           type: boolean
           description: Present, and `true`, only on an ignored push. Nothing was written.

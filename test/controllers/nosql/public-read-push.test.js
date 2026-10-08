@@ -369,12 +369,28 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
 test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('the row is kept, flagged, and narrowed out of the public\'s reach', async () => {
+  /** The live row the delete lands on: a delete for a period DEMI does not hold writes nothing. */
+  const LIVE = { id: PERIOD_EAGLE_ID, eagleId: PERIOD_EAGLE_ID, projectId: '207', sourceSystem: 'eagle',
+    read: ['staff', 'idir', 'public'], isPublished: true, isDeleted: false };
+
+  await t.test('a delete for a period DEMI holds no row for writes nothing and answers 200', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     stubCommentCascade(t, []);
 
     const { res, written } = await pushTo(commentPeriodController, commentPeriods,
       PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(res.body, { id: PERIOD_EAGLE_ID, action: 'ignored' });
+    assert.strictEqual(written(), undefined, 'no tombstone row');
+  });
+
+  await t.test('the row is kept, flagged, and narrowed out of the public\'s reach', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    stubCommentCascade(t, []);
+
+    const { res, written } = await pushTo(commentPeriodController, commentPeriods,
+      PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t, { existing: LIVE });
 
     assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
     assert.deepStrictEqual(res.body, { id: PERIOD_EAGLE_ID, action: 'delete' });
@@ -398,7 +414,7 @@ test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
     ]);
 
     const { res } = await pushTo(commentPeriodController, commentPeriods,
-      PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t);
+      PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t, { existing: LIVE });
 
     assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
     assert.deepStrictEqual(writes.map(w => w.container), ['comments']);
@@ -420,7 +436,7 @@ test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
       stubCommentCascade(t, [{ id: 'c1', read: PUBLIC_ACL, eagleRead: PUBLIC_ACL }], { failed: 1 });
 
       const { res, written } = await pushTo(commentPeriodController, commentPeriods,
-        PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t);
+        PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t, { existing: LIVE });
 
       assert.strictEqual(res.statusCode, 500);
       assert.match(res.body.error, /comments were not fully updated/);
@@ -546,6 +562,38 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     assert.deepStrictEqual(lookups, [PERIOD_EAGLE_ID]);
     assert.strictEqual(written().periodId, 'engage-42');
     assert.strictEqual(written().projectId, '207');
+  });
+
+  for (const [label, row] of [
+    ['an Eagle-owned row', { ...storedPeriod(), id: 'other', eagleId: PERIOD_EAGLE_ID, sourceSystem: 'eagle' }],
+    ['a sealed ENGAGE row', { ...storedPeriod(['compliance']), id: 'engage-42', eagleId: PERIOD_EAGLE_ID, sourceSystem: 'engage' }],
+    ['a read-less ENGAGE row', { id: 'engage-42', projectId: '207', eagleId: PERIOD_EAGLE_ID, sourceSystem: 'engage' }]
+  ]) {
+    await t.test(`the eagleId fallback never admits ${label}: 404, nothing written`, async () => {
+      t.mock.method(commentPeriods, 'getById', async () => null);
+      t.mock.method(commentPeriods, 'readForWriteByEagleId', async () => row);
+      t.mock.method(commentPeriods, 'readForWrite', async () => null);
+      t.mock.method(logger, 'warn', () => {});
+
+      const { res, written } = await pushTo(commentController, comments, COMMENT_EAGLE_ID, eagleComment(), t);
+
+      assert.strictEqual(res.statusCode, 404);
+      assert.strictEqual(written(), undefined);
+    });
+  }
+
+  await t.test('an Eagle id stored on two period rows is a logged 500, not the mirror 409', async () => {
+    t.mock.method(commentPeriods, 'getById', async () => null);
+    t.mock.method(commentPeriods, 'readForWriteByEagleId', async () => {
+      throw Object.assign(new Error('dup'), { code: 'DUPLICATE_ID' });
+    });
+    const errors = [];
+    t.mock.method(logger, 'error', (message) => errors.push(message));
+
+    const { res } = await pushTo(commentController, comments, COMMENT_EAGLE_ID, eagleComment(), t);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.ok(errors.some(m => /stored on more than one row/.test(m)));
   });
 
   await t.test('the Eagle record is stored as a comment row under its period', async () => {
@@ -1192,11 +1240,16 @@ test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => 
       assert.strictEqual(row.isDeleted, false);
     });
 
-  await t.test('a delete never joins an ENGAGE row on its URL', async () => {
-    const { store } = partitionedCosmos(t, 'projectId', [engageRow()]);
+  await t.test('the delete echo after sync-out cleared the eagleId changes nothing and creates no row', async () => {
+    // claimCreate cleared eagleId on engage-42 before recreating the period under a new project; this
+    // is the echo of the old period's DELETE.
+    const { store, created } = partitionedCosmos(t, 'projectId', [engageRow()]);
 
-    await push(echo({ isDeleted: true }));
+    const res = await push(echo({ isDeleted: true }));
 
+    assert.deepStrictEqual(res.body, { id: PERIOD_EAGLE_ID, action: 'ignored' });
+    assert.deepStrictEqual(created, []);
+    assert.deepStrictEqual([...store.keys()], ['207::engage-42']);
     assert.deepStrictEqual(store.get('207::engage-42'), engageRow());
   });
 });

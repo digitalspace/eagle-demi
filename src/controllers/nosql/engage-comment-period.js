@@ -33,14 +33,24 @@ const TRACKING_ID_CLAIMED = 'TRACKING_ID_CLAIMED';
 const engageRowId = (engagementId) => `engage-${engagementId}`;
 
 // ENGAGE formats its dates as UTC wall time with no zone, 'YYYY-MM-DD HH:MM:SS'.
-const ZONELESS = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+const ZONELESS = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+// ISO 8601: a date, or a date and time with an optional zone. Date.parse alone admits free text.
+const ISO_8601 = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
 
-/** ISO UTC with a `Z`, null for no date, undefined when the value is not a date. Zone-less text is UTC. */
+/** ISO UTC with a `Z`, null for no date, undefined for anything else. A time with no zone is UTC. */
 function utcIso(value) {
   if (value == null || value === '') return null;
   if (typeof value !== 'string') return undefined;
   const text = value.trim();
-  const ms = Date.parse(ZONELESS.test(text) ? `${text.replace(' ', 'T')}Z` : text);
+  let iso;
+  if (ZONELESS.test(text)) {
+    iso = `${text.replace(' ', 'T')}Z`;
+  } else {
+    const match = ISO_8601.exec(text);
+    if (!match) return undefined;
+    iso = text.includes('T') && !match[1] ? `${text}Z` : text;
+  }
+  const ms = Date.parse(iso);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
 }
 
@@ -66,7 +76,7 @@ function engagePush(req) {
   const start = utcIso(engagement.start);
   const end = utcIso(engagement.end);
   if (start === undefined || end === undefined) {
-    return { refusal: ['PUSHED_DATES_INVALID', 'body.engagement.start and end must be dates, UTC when they carry no zone'] };
+    return { refusal: ['PUSHED_DATES_INVALID', 'body.engagement.start and end must be ISO 8601 or YYYY-MM-DD HH:MM:SS (UTC)'] };
   }
   // Without a URL the Eagle copy cannot be matched to this row, so only a draft or a delete may lack one.
   if (engagement.isPublished === true && engagement.isDeleted !== true && !engagement.metURL) {

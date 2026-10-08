@@ -357,14 +357,25 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
     assert.strictEqual(store.get('engage-42').dateCompleted, null);
   });
 
-  await t.test('a date that does not parse is 400 PUSHED_DATES_INVALID, nothing written', async () => {
+  for (const end of ['next Tuesday', 'October 31, 2026', '2026-10-31 07:00', '2026-13-45 07:00:00']) {
+    await t.test(`a date neither ISO 8601 nor YYYY-MM-DD HH:MM:SS is 400 PUSHED_DATES_INVALID: ${end}`, async () => {
+      const { store } = stage(t);
+
+      const res = await push(pushOf({ end }));
+
+      assert.strictEqual(res.statusCode, 400);
+      assert.strictEqual(res.body.code, 'PUSHED_DATES_INVALID');
+      assert.strictEqual(store.size, 0);
+    });
+  }
+
+  await t.test('an ISO time with no zone is UTC, and a date alone is midnight UTC', async () => {
     const { store } = stage(t);
 
-    const res = await push(pushOf({ end: 'next Tuesday' }));
+    await push(pushOf({ start: '2026-10-01T07:00:00', end: '2026-10-31' }));
 
-    assert.strictEqual(res.statusCode, 400);
-    assert.strictEqual(res.body.code, 'PUSHED_DATES_INVALID');
-    assert.strictEqual(store.size, 0);
+    assert.strictEqual(store.get('engage-42').dateStarted, '2026-10-01T07:00:00.000Z');
+    assert.strictEqual(store.get('engage-42').dateCompleted, '2026-10-31T00:00:00.000Z');
   });
 
   await t.test('a published engagement with no metURL is 400 METURL_REQUIRED; a draft or delete may lack one', async () => {

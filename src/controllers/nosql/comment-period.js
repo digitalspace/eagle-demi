@@ -156,7 +156,7 @@ async function readTarget(eagleId, doc, projectId) {
  *   `helpers/parent-admit` returns. A row without `kind` is read as a project, which is what every
  *   stored project row is.
  * @returns {Promise<{saved: object, existing: object|null, cascadeError: string|null}
- *   |{ignored: string, existing: object}|null>}
+ *   |{ignored: string, existing: object|null}|null>} `ignored: 'unknown-delete'` wrote nothing
  */
 async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}) {
   const parent = parentRow || await admitParent(doc.project, { childId: eagleId });
@@ -169,6 +169,14 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
   const read = doc.isDeleted === true
     ? constrainToProject(constrained, DELETED_CEILING)
     : constrained;
+
+  // A delete of a period DEMI holds no row for is not one to record: it is most often the echo of
+  // sync-out removing an old Eagle period after a project move, and a tombstone there is a stray row.
+  if (doc.isDeleted === true && !await readTarget(eagleId, doc, parent.id)) {
+    logger.info('[Comment Period Controller] eagle delete for a period DEMI does not hold, ignored',
+      { eagleId, projectId: parent.id });
+    return { ignored: 'unknown-delete', existing: null };
+  }
 
   const written = await upsertWithRetry(
     commentPeriods,
@@ -253,6 +261,7 @@ exports.upsertFromEagle = async (req, res) => {
       return pushConflict(res, { label: 'Comment Period Controller', eagleId });
     }
     const { saved, existing, cascadeError, ignored } = mirrored;
+    if (ignored === 'unknown-delete') return res.json({ id: eagleId, action: 'ignored' });
     if (ignored) {
       return ignoreStalePush(req, res, {
         label: 'Comment Period Controller', action: 'commentPeriod.push',
