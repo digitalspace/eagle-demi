@@ -352,11 +352,15 @@ def test_412_on_put_releases_without_a_skip_and_leaves_the_original(world):
 
 def test_row_lines_are_logged_on_the_main_thread(world, caplog):
     caplog.set_level(logging.INFO, logger="pdf-title")
-    world.add("d1", _pdf())
+    d1_key = world.add("d1", _pdf())
     world.add("d2", _pdf())
-    world.faults["upload"] = [run.Response(412)]
 
-    run.run(_client(world), max_rows=10, live=True, concurrency=2)
+    def send(method, url, headers, body, timeout):
+        if method == "PUT" and url.startswith(f"{STORE}{d1_key}?"):
+            return run.Response(412)
+        return world(method, url, headers, body, timeout)
+
+    run.run(run.Client(API, KEY, timeout=7, send=send), max_rows=10, live=True, concurrency=2)
 
     rows = [r for r in caplog.records if r.getMessage().startswith("id=")]
     assert sorted(r.getMessage() for r in rows) == [
