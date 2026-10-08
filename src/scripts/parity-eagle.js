@@ -12,8 +12,10 @@ const fs = require('fs');
 const { fetchAllPages, unwrapSearchResponse, rateLimitWaitMs, PAGE_SIZE } = require('../seed/sources');
 const { diff } = require('./reconcile-eagle');
 const { eagleBaseAcl, withEagleStaff } = require('../helpers/eagle-acl');
+const { eagleRef } = require('../helpers/parent-admit');
 const {
-  PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same
+  PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, sameField,
+  search
 } = require('./parity-map');
 const { logger } = require('../utils/logger');
 
@@ -23,6 +25,8 @@ const IDENTITIES = ['anonymous', 'staff', 'sysadmin'];
 const ID_NAMES = ['project', 'period', 'document', 'comment', 'organization', 'inspection', 'element', 'group'];
 const SAMPLE_CAP = 20;
 const REDIRECTS = [301, 302, 303, 307, 308];
+/** Datasets whose rows hang off an Eagle project through `project`. */
+const CHILD_DATASETS = ['CommentPeriod', 'Document'];
 
 const USAGE = `usage: node src/scripts/parity-eagle.js --eagle <eagle-api base> --demi <DEMI base>
   [--identity anonymous|staff|sysadmin] [--token-env <VAR>] [--only <read>] [--max-pages <n>]
@@ -276,7 +280,8 @@ function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, 
     out.extraIds = extra.map(keyOf);
     for (const row of missing) {
       out.missingInDemi++;
-      tally({ kind: 'missingInDemi', id: keyOf(row), eagle: row, unpaired: extra });
+      tally({ kind: 'missingInDemi', id: keyOf(row), eagle: row, unpaired: extra,
+        parentState: known.parentStateOf ? known.parentStateOf(row) : undefined });
     }
     for (const row of extra) {
       out.extraInDemi++;
@@ -289,7 +294,7 @@ function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, 
     const id = keyOf(row);
     const eagleRow = eagleById.get(id);
     if (!eagleRow) continue;
-    const differing = fields.filter(([e, d]) => !same(eagleRow[e], row[d]));
+    const differing = fields.filter(([e, d]) => !sameField(entry.dataset, e, eagleRow[e], row[d]));
     if (!differing.length) out.match++;
     for (const [e, d] of differing) {
       out.fieldDiff++;
@@ -385,6 +390,20 @@ function loadKnownIds(files, readFile) {
   return out;
 }
 
+/**
+ * `missing-in-eagle` when the row's project ref is empty or malformed, or names an id in none of
+ * `parentIds`; undefined otherwise, since any other parentState would let classify fall back to
+ * push-missed.
+ */
+const orphanStateOf = parentIds => (row) => {
+  const id = eagleRef(row.project);
+  if (!id) return 'missing-in-eagle';
+  return parentIds && !parentIds.has(id) ? 'missing-in-eagle' : undefined;
+};
+
+/** A read[] Eagle's staff role cannot see and DEMI's ladder lets staff see: public, not staff. */
+const publicNotStaff = read => Array.isArray(read) && read.includes('public') && !read.includes('staff');
+
 /** An Eagle row DEMI shows staff only because `withEagleStaff` added it. */
 const widenedForStaff = (row) => {
   if (!Array.isArray(row.read)) return false;
@@ -440,6 +459,9 @@ async function run(argv, deps = {}) {
 
   const pairedDocuments = new Set();
   const widened = new Set();
+  const ladder = new Set();
+  const projectReads = new Map();
+  const childParents = new Map();
   const extraByRead = {};
   const downloads = [];
   let eaglePublicProjects;
@@ -450,6 +472,25 @@ async function run(argv, deps = {}) {
       eaglePublicProjects = side.truncated ? null : new Set(side.rows.map(keyOf));
     }
     return eaglePublicProjects;
+  };
+  let parentIds;
+  // Every project and notification id either side lists, or null when --max-pages cut a list short.
+  const loadParentIds = async () => {
+    if (parentIds !== undefined) return parentIds;
+    const lists = [
+      [eagle, { path: '/project', shape: 'array', paged: true, facet: true }],
+      [eagle, { path: '/projectNotification', shape: 'array', paged: true }],
+      [demi, search('Project')],
+      [demi, search('ProjectNotification')]
+    ];
+    // Cached only once every list is read: a failed read must not leave a partial set as proof.
+    const ids = new Set();
+    for (const [api, spec] of lists) {
+      const side = await rowsOf(api, spec, args.ids, args.maxPages);
+      if (side.truncated) return (parentIds = null);
+      for (const row of side.rows) [row._id, row.id, row.eagleId].filter(Boolean).forEach(id => ids.add(String(id)));
+    }
+    return (parentIds = ids);
   };
   const record = (entry, outcome) => {
     results.push({ read: entry.read, plan: entry.plan, ...outcome });
@@ -489,7 +530,14 @@ async function run(argv, deps = {}) {
       const demiSide = await sideOf(demi, entry.demi, entry.mapDemi);
       // Sysadmin sees every Eagle row, so its run lists what the staff run gets widened.
       if (args.emitIds && identity === 'sysadmin') {
-        eagleSide.rows.filter(widenedForStaff).forEach(row => widened.add(keyOf(row)));
+        for (const row of eagleSide.rows) {
+          const id = keyOf(row);
+          if (widenedForStaff(row)) widened.add(id);
+          if (publicNotStaff(row.read)) ladder.add(id);
+          if (entry.dataset === 'Project') projectReads.set(id, row.read);
+          const parent = CHILD_DATASETS.includes(entry.dataset) && eagleRef(row.project);
+          if (parent) childParents.set(id, parent);
+        }
       }
       if (entry.dataset === 'Document') {
         const eagleIds = new Set(eagleSide.rows.map(keyOf));
@@ -498,7 +546,9 @@ async function run(argv, deps = {}) {
       const compareRead = entry.format === 'csv' ? compareCsv : compare;
       const known = {
         ids: knownIds,
-        eaglePublicProjects: identity === 'anonymous' && entry.dataset === 'CommentPeriod' ? await loadEaglePublicProjects() : null
+        eaglePublicProjects: identity === 'anonymous' && entry.dataset === 'CommentPeriod' ? await loadEaglePublicProjects() : null,
+        // Anonymous lists hide non-public parents, so absence there proves no orphan.
+        parentStateOf: identity !== 'anonymous' && entry.dataset === 'CommentPeriod' ? orphanStateOf(await loadParentIds()) : null
       };
       const { extraIds, ...counts } = compareRead(entry, identity, eagleSide, demiSide, known);
       if (extraIds.length) extraByRead[entry.read] = [...extraIds].sort();
@@ -531,7 +581,10 @@ async function run(argv, deps = {}) {
     d.writeFile(args.report, JSON.stringify({ identity, eagle: args.eagle, demi: args.demi, results }, null, 2));
   }
   if (args.emitIds) {
-    const emitted = identity === 'sysadmin' ? { 'eagle-staff-widened': [...widened].sort() } : {};
+    for (const [id, parent] of childParents) if (publicNotStaff(projectReads.get(parent))) ladder.add(id);
+    const emitted = identity === 'sysadmin'
+      ? { 'eagle-staff-widened': [...widened].sort(), 'ladder-above-public': [...ladder].sort() }
+      : {};
     d.writeFile(args.emitIds, JSON.stringify({ ...emitted, [EMITTED_EXTRA]: extraByRead }, null, 2));
   }
   return failed ? 1 : 0;

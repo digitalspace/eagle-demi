@@ -384,7 +384,8 @@ test('--id inspection, element and group fill the paths and queries of both APIs
     `eagle.test/api/search?dataset=Item&_id=${ELEMENT}&_schemaName=InspectionElement`,
     `demi.test/api/inspection-items?inspection=${INSPECTION}&element=${ELEMENT}`,
     `eagle.test/api/project/${A}/group/${GROUP}/members`,
-    `demi.test/api/groups/${GROUP}?project=${A}`
+    // DEMI's `project` query is a Track id partition key; an Eagle id there answers 404.
+    `demi.test/api/groups/${GROUP}`
   ]);
 });
 
@@ -736,6 +737,82 @@ test("a blank Eagle Project column in the comment export against DEMI's merged n
   assert.match(line, /match=1 .*fieldDiff=1 unexplained=0 known=track-mastered:1/);
 });
 
+test("a comment period isVetted 'false' in DEMI against false in Eagle matches; 'false' against true differs", async () => {
+  const period = extra => ({ _id: B, dateStarted: '2026-08-26T07:00:00.000Z', ...extra });
+  const equal = await staffSearch('CommentPeriod', period({ isVetted: false }), period({ isVetted: 'false' }));
+  assert.match(equal.line, /match=1 .*fieldDiff=0 unexplained=0/);
+  const differ = await staffSearch('CommentPeriod', period({ isVetted: true }), period({ isVetted: 'false' }));
+  assert.match(differ.line, /fieldDiff=1 unexplained=1/);
+});
+
+test('a comment period commentIdCount null in Eagle and 0 in DEMI matches; 3 against 0 differs', async () => {
+  const period = extra => ({ _id: B, dateStarted: '2026-08-26T07:00:00.000Z', ...extra });
+  const equal = await staffSearch('CommentPeriod', period({ commentIdCount: null }), period({ commentIdCount: 0 }));
+  assert.match(equal.line, /match=1 .*fieldDiff=0 unexplained=0/);
+  const differ = await staffSearch('CommentPeriod', period({ commentIdCount: 3 }), period({ commentIdCount: 0 }));
+  assert.match(differ.line, /fieldDiff=1 unexplained=1/);
+});
+
+test("a comment period userCan, which Eagle computes per caller, is not compared", async () => {
+  const period = extra => ({ _id: B, dateStarted: '2026-08-26T07:00:00.000Z', ...extra });
+  const { code, line } = await staffSearch('CommentPeriod', period({ userCan: { addComment: true } }), period({ userCan: '' }));
+  assert.strictEqual(code, 0);
+  assert.match(line, /match=1 .*fieldDiff=0 unexplained=0/);
+});
+
+const doc = extra => ({ _id: B, documentFileName: 'report.pdf', datePosted: '2026-08-26T07:00:00.000Z', ...extra });
+
+test("an empty Eagle displayName against DEMI's documentFileName fallback is display-name-from-file-name", async () => {
+  const { code, line } = await staffSearch('Document', doc({ displayName: '' }), doc({ displayName: 'report.pdf' }));
+  assert.strictEqual(code, 0);
+  assert.match(line, /fieldDiff=1 unexplained=0 known=display-name-from-file-name:1/);
+});
+
+test('a DEMI displayName that is not the file name, or an Eagle displayName that is set, is unexplained', async () => {
+  const other = await staffSearch('Document', doc({ displayName: '' }), doc({ displayName: 'Annual report' }));
+  assert.match(other.line, /fieldDiff=1 unexplained=1/);
+  const set = await staffSearch('Document', doc({ displayName: 'Annual report' }), doc({ displayName: 'report.pdf' }));
+  assert.match(set.line, /fieldDiff=1 unexplained=1/);
+});
+
+/**
+ * Staff `search-CommentPeriod` with one period, under HIDDEN, only Eagle holds. Eagle's `/project`
+ * lists `eagleProjects`; DEMI's project search answers `demiProjects`.
+ */
+const orphanRun = async ({ eagleProjects = [], eagleTotal = eagleProjects.length, demiProjects = [], args = [] } = {}) => {
+  const period = { _id: B, project: HIDDEN, dateStarted: '2026-08-26T07:00:00.000Z', instructions: 'x' };
+  const h = harness((host, url) => {
+    const dataset = url.searchParams.get('dataset');
+    if (host === 'demi.test') return json(searchBody(dataset === 'Project' ? demiProjects : []));
+    if (url.pathname === '/api/project') return json(facet(eagleProjects.map(id => ({ _id: id })), eagleTotal));
+    return json(dataset === 'CommentPeriod' ? searchBody([period]) : []);
+  }, { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'search-CommentPeriod', ...args], h.deps);
+  return { code, line: h.out.find(l => /search-CommentPeriod identity/.test(l)) };
+};
+
+test('a missing comment period whose project neither Eagle nor DEMI lists is an orphan', async () => {
+  const { code, line } = await orphanRun({ eagleProjects: [SHOWN], demiProjects: [{ id: '297', eagleId: SHOWN }] });
+  assert.strictEqual(code, 0);
+  assert.match(line, /missingInDemi=1 .*unexplained=0 known=orphan-parent-missing-in-eagle:1/);
+});
+
+test('a missing comment period whose project Eagle or DEMI lists is unexplained, not an orphan', async () => {
+  for (const sides of [{ eagleProjects: [HIDDEN] }, { demiProjects: [{ id: '297', eagleId: HIDDEN }] }]) {
+    const { code, line } = await orphanRun(sides);
+    assert.strictEqual(code, 1);
+    assert.match(line, /missingInDemi=1 .*unexplained=1/);
+    assert.doesNotMatch(line, /orphan|push-missed/);
+  }
+});
+
+test('a --max-pages cut of the parent project lists leaves a missing comment period unexplained', async () => {
+  const fullPage = Array.from({ length: 100 }, (_, i) => (i + 1).toString(16).padStart(24, '6'));
+  const { code, line } = await orphanRun({ eagleProjects: fullPage, eagleTotal: 200, args: ['--max-pages', '1'] });
+  assert.strictEqual(code, 1);
+  assert.match(line, /missingInDemi=1 .*unexplained=1/);
+});
+
 const [C, SEALED_ONLY] = ['6'.repeat(24), '7'.repeat(24)];
 
 const knownRun = async (identity, known, extraArgs = []) => {
@@ -806,7 +883,41 @@ const emitRun = async (identity) => {
 test('a sysadmin --emit-ids run lists the Eagle ids DEMI widens to staff, and extra DEMI ids per read', async () => {
   const emitted = JSON.parse(await emitRun('sysadmin'));
   assert.deepStrictEqual(emitted['eagle-staff-widened'], [B, SEALED_ONLY].sort());
+  assert.deepStrictEqual(emitted['ladder-above-public'], [A]);
   assert.deepStrictEqual(emitted.extraInDemi, { 'search-Project': ['8'.repeat(24)] });
+});
+
+test('a sysadmin --emit-ids run lists the children of a public-only project under ladder-above-public', async () => {
+  const period = (id, projectId, read) => ({ _id: id, project: projectId, read, dateStarted: '2026-08-26T07:00:00.000Z' });
+  const rows = {
+    Project: [project(A, { read: ['public', 'sysadmin'] }), project(B, { read: ['public', 'staff'] })],
+    CommentPeriod: [period(C, A, ['staff', 'sysadmin']), period(SEALED_ONLY, B, ['staff', 'sysadmin'])]
+  };
+  const h = harness((host, url) => json(searchBody(rows[url.searchParams.get('dataset')] || [])),
+    { env: { PARITY_TOKEN: TOKEN } });
+  const map = PARITY_MAP.filter(e => ['search-Project', 'search-CommentPeriod'].includes(e.read));
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'sysadmin', '--token-env', 'PARITY_TOKEN',
+    '--emit-ids', 'ids.json'], { ...h.deps, map });
+  assert.deepStrictEqual(JSON.parse(h.written[0])['ladder-above-public'], [A, C].sort());
+});
+
+test('a sysadmin --emit-ids run lists inspection items by their element read[]', async () => {
+  const ITEM = '8'.repeat(24);
+  const h = harness((host) => json(host === 'eagle.test'
+    ? [{ _id: ELEMENT, read: ['sysadmin', 'inspector'], items: [ITEM] }]
+    : [{ id: ITEM }]), { env: { PARITY_TOKEN: TOKEN } });
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'sysadmin', '--token-env', 'PARITY_TOKEN',
+    '--id', `inspection=${INSPECTION}`, '--id', `element=${ELEMENT}`, '--only', 'inspection-item',
+    '--emit-ids', 'ids.json'], h.deps);
+  assert.deepStrictEqual(JSON.parse(h.written[0])['eagle-staff-widened'], [ITEM]);
+});
+
+test('ladder-above-public explains an extra DEMI row for staff only, never a missing one', () => {
+  const knownIds = { 'ladder-above-public': new Set([A]) };
+  const extra = { kind: 'extraInDemi', demi: { id: A }, byEagleId: true, knownIds };
+  assert.strictEqual(classify(idCtx({ ...extra, identity: 'staff' })), 'ladder-above-public');
+  assert.strictEqual(classify(idCtx({ ...extra, identity: 'sysadmin' })), null);
+  assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'staff', knownIds })), null);
 });
 
 test('--emit-ids writes ids only, never field values', async () => {
