@@ -846,15 +846,19 @@ function byteRange(req, size, etag, lastModified) {
 // Streams this process is serving; capped by config.downloadStreamMaxConcurrent.
 let activeStreams = 0;
 
-function streamSlotFree() {
+/**
+ * Takes a stream slot before any await, so requests opening at once cannot all pass the cap.
+ * Returns its release, safe to call twice, or null at the cap.
+ */
+function takeStreamSlot() {
   const max = config.downloadStreamMaxConcurrent;
-  return max === 0 || activeStreams < max;
-}
-
-/** Holds a slot until the store stream closes, which it does on end, error or destroy. */
-function holdStreamSlot(stream) {
+  if (max !== 0 && activeStreams >= max) return null;
   activeStreams += 1;
-  stream.once('close', () => { activeStreams -= 1; });
+  let held = true;
+  return () => {
+    if (held) activeStreams -= 1;
+    held = false;
+  };
 }
 
 /**
@@ -919,7 +923,8 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
     return res.status(416).send('');
   }
 
-  if (!streamSlotFree()) {
+  const release = takeStreamSlot();
+  if (!release) {
     logger.info(`[Document Controller] ${activeStreams} streams open, redirecting`);
     return null;
   }
@@ -931,8 +936,12 @@ async function sendBytes(req, res, { doc, fileName }, type, stat) {
     offset: start, length: end - start + 1, versionId: stat.versionId || undefined,
     ifMatch: stat.versionId ? undefined : stat.etag
   });
-  if (!body) return null;
-  holdStreamSlot(body);
+  if (!body) {
+    release();
+    return null;
+  }
+  // Closes on end, error or destroy; the router destroys it when the caller goes away.
+  body.once('close', release);
 
   // A viewer fetching the rest of a file it already counted is not a second view.
   recordDownload(req, doc, true, { view: start === 0 });

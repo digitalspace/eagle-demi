@@ -403,8 +403,13 @@ async function dispatch(request, context) {
     const nullBody = NULL_BODY_STATUSES.has(res.statusCode);
     if (nullBody) delete res.headers['content-length'];
 
-    // A shared cache would replay one caller's id to everyone after; it goes in the log line only.
-    if (/^\s*public\b/i.test(String(res.headers['cache-control'] || ''))) res.headers['x-request-id'] = ownId;
+    // A shared cache would replay one caller's id to everyone after, so the answer carries ours and
+    // this line ties the two together.
+    if (requestId !== ownId && /^\s*public\b/i.test(String(res.headers['cache-control'] || ''))) {
+      res.headers['x-request-id'] = ownId;
+      logger.info('request id replaced on a public answer',
+        { evt: 'request-id-replaced', callerId: requestId, servedId: ownId });
+    }
 
     const noBody = nullBody || request.method === 'HEAD';
     if (noBody && res.streamed) res.body.destroy();

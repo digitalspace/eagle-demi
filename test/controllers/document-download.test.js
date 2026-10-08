@@ -686,6 +686,13 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
     assert.equal(open.mock.callCount(), 0);
   });
 
+  await t.test('an inverted range is ignored: the whole file', async (t) => {
+    stored(t);
+    const { res: r } = await get({ range: 'bytes=5-3' });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-length'), '4096');
+  });
+
   await t.test('a multi-part range answers the whole file', async (t) => {
     stored(t);
     const { res: r, body } = await get({ range: 'bytes=0-9,20-29' });
@@ -960,9 +967,27 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
 
   await t.test('a 304 or a 416 takes no stream slot', async (t) => {
     config.downloadStreamMaxConcurrent = 1;
-    stored(t);
+    const { open } = stored(t);
     assert.equal((await get({ 'if-modified-since': LAST_MODIFIED })).res.status, 304);
     assert.equal((await get({ range: 'bytes=9999-' })).res.status, 416);
-    (await holdOpen()).destroy();
+    const held = await holdOpen();
+    const source = await open.mock.calls[0].result;
+    held.destroy();
+    await once(source, 'close');
+  });
+
+  await t.test('viewers arriving together get one stream at a cap of 1, the rest the 302', async (t) => {
+    // The open is slow, so all three are past the cap check before any read has started.
+    config.downloadStreamMaxConcurrent = 1;
+    stored(t);
+    t.mock.method(storage, 'getObjectStream', async (key, { offset, length }) => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return Readable.from([BYTES.subarray(offset, offset + length)]);
+    });
+    t.mock.method(logger, 'info', () => {});
+    const outs = [res(), res(), res()];
+    await Promise.all(outs.map(out => controller.downloadDocument(req({ query: { inline: '1' } }), out)));
+    assert.deepEqual(outs.map(out => out.statusCode).sort(), [200, 302, 302]);
+    await Promise.all(outs.filter(out => out.streamed).map(out => out.body.toArray()));
   });
 });
