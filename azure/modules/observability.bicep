@@ -31,6 +31,9 @@ param deployBulkDownloadPoisonAlert bool = false
 @description('Storage queue the chunk parent-field re-stamp worker triggers on. Gates the poison alert below directly rather than through its own bool: an environment with no queue name never writes the line the alert reads.')
 param chunkRestampQueue string = ''
 
+@description('Storage queue the sync-out worker triggers on. Gates its poison alert the same way chunkRestampQueue gates its own.')
+param syncOutQueue string = ''
+
 @description('Who to tell when ingestion approaches the daily cap. Also reused by audit-logs.bicep, which cannot own the action group itself: main.bicep deploys this module first, so a shared group has to live on this side of the dependency.')
 param contactEmails array = [
   'Daniel.T.Truong@gov.bc.ca'
@@ -291,6 +294,43 @@ resource chunkRestampPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
           query: 'AppTraces | where Message contains "[chunk restamp] job failed"'
           timeAggregation: 'Count'
           // One line, one dead job.
+          operator: 'GreaterThanOrEqual'
+          threshold: 1
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// A sync-out message that died. Same shape as chunkRestampPoisonAlert: the worker writes
+// `[sync-out] job failed` once, on the attempt that runs out of retries.
+resource syncOutPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(syncOutQueue)) {
+  name: 'demi-sync-out-failed-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI sync-out job failed'
+    description: 'A sync-out message failed after its retries, so Eagle did not get that comment period change. The message is in the `${syncOutQueue}-poison` queue and the log line names the row.'
+    // Warning: one period is stale in Eagle until the next send or reconcile.
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT15M'
+    criteria: {
+      allOf: [
+        {
+          query: 'AppTraces | where Message contains "[sync-out] job failed"'
+          timeAggregation: 'Count'
           operator: 'GreaterThanOrEqual'
           threshold: 1
           failingPeriods: {

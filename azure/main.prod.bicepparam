@@ -205,6 +205,13 @@ param cosmosRuPerHourAlert = 3000000
 // Service Contributor grant, so the queue existing does not by itself let anything write a definition.
 param searchDefinitionsQueue = ''
 
+// ── Sync-out to eagle-api ─────────────────────────────────────────────────────────────────────
+// OFF: set syncOutQueue = 'sync-out' and name `eagle-sync-out-client-secret` in optionalSecretNames
+// after test has run the cutover and demi-kv-prod holds the secret.
+param syncOutQueue = ''
+param syncOutEagleEnabled = false
+param eagleProtectedApiBase ='https://projects.eao.gov.bc.ca/api'
+
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.
 param budgetAmount = 400

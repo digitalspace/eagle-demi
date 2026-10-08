@@ -288,6 +288,25 @@ param searchDefinitionsQueue string = ''
 @description('Resource id of the user-assigned identity the search service runs its indexers as. Written into every data source the apply PUTs, so an empty value makes the indexer fail its next run on "Ensure managed identity is enabled".')
 param dataSourceIdentityId string = ''
 
+// ── Sync-out to eagle-api ────────────────────────────────────────────────────
+@description('Storage queue the sync-out worker triggers on, e.g. `sync-out`. Empty registers no worker.')
+param syncOutQueue string = ''
+
+@description('Send DEMI-owned comment periods on to eagle-api. Off until the cutover turns it on.')
+param syncOutEagleEnabled bool = false
+
+@description('eagle-api base the sync-out consumer writes to, e.g. https://eagle-test.apps.silver.devops.gov.bc.ca/api. Not eagleApiBase, which is the public read path.')
+param eagleProtectedApiBase string = ''
+
+@description('NCRONTAB schedule for the ENGAGE reconcile timer. Empty registers no timer.')
+param reconcileEngageSchedule string = ''
+
+@description('Key Vault URI of the `demi-sync-out` Keycloak client secret. Empty leaves EAGLE_KC_CLIENT_SECRET blank.')
+param syncOutEagleClientSecretUri string = ''
+
+@description('Eagle milestone id the consumer sends on every comment period write; eagle-api replaces a missing one with a new ObjectId.')
+param eagleEngageMilestone string = ''
+
 // eagle-notify wired means the announce on: eagle-api never pushes again when a scheduled Update
 // goes live, so without the timer it would never reach subscribers. An explicit schedule wins.
 var updatesAnnounceSchedule = empty(announceUpdatesSchedule) && !empty(notifyApiBase)
@@ -349,8 +368,8 @@ resource devboxRunOutputContainer 'Microsoft.Storage/storageAccounts/blobService
 }
 
 // Shared by every queue below, so its condition is the OR of theirs — an environment that runs
-// only one of the two features still needs the service.
-resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue) || !empty(searchDefinitionsQueue)) {
+// only one of the features still needs the service.
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue) || !empty(searchDefinitionsQueue) || !empty(syncOutQueue)) {
   parent: apiStorage
   name: 'default'
 }
@@ -397,6 +416,18 @@ resource searchDefinitionsQueueResource 'Microsoft.Storage/storageAccounts/queue
 resource searchDefinitionsPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(searchDefinitionsQueue)) {
   parent: queueService
   name: '${searchDefinitionsQueue}-poison'
+}
+
+// Comment periods waiting to be sent to eagle-api. One row id per message; the consumer re-reads the row.
+resource syncOutQueueResource 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(syncOutQueue)) {
+  parent: queueService
+  name: syncOutQueue
+}
+
+// Declared so it exists to be watched: a message here is a period Eagle never received.
+resource syncOutPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(syncOutQueue)) {
+  parent: queueService
+  name: '${syncOutQueue}-poison'
 }
 
 resource blobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -669,6 +700,43 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SEARCH_DEFINITIONS_QUEUE'
           value: searchDefinitionsQueue
+        }
+        // Sync-out to eagle-api. The queue can run with the Eagle consumer off; the flag is the cutover switch.
+        {
+          name: 'SYNC_OUT_QUEUE'
+          value: syncOutQueue
+        }
+        {
+          name: 'SYNC_OUT_EAGLE_ENABLED'
+          value: syncOutEagleEnabled ? 'true' : 'false'
+        }
+        {
+          name: 'SYNC_OUT_MAX_ATTEMPTS'
+          value: '3'
+        }
+        {
+          name: 'EAGLE_PROTECTED_API_BASE'
+          value: eagleProtectedApiBase
+        }
+        {
+          name: 'EAGLE_KC_ISSUER'
+          value: '${keycloakUrl}/realms/${keycloakRealm}'
+        }
+        {
+          name: 'EAGLE_KC_CLIENT_ID'
+          value: 'demi-sync-out'
+        }
+        {
+          name: 'EAGLE_KC_CLIENT_SECRET'
+          value: empty(syncOutEagleClientSecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${syncOutEagleClientSecretUri})'
+        }
+        {
+          name: 'EAGLE_ENGAGE_MILESTONE'
+          value: eagleEngageMilestone
+        }
+        {
+          name: 'RECONCILE_ENGAGE_SCHEDULE'
+          value: reconcileEngageSchedule
         }
         // What src/scripts/put-search-datasources.js needs to build a data source's connection
         // string: the Cosmos account it names lives in this deployment's subscription and group,

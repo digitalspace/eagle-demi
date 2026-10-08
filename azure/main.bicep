@@ -311,6 +311,23 @@ param chunkRestampQueue string = ''
 @description('Storage queue the search definition apply worker triggers on, e.g. `search-definitions`. Empty answers POST /admin/search-definitions/apply with 503, and the devbox recipe in docs/runbook-search-outage.md is the way through.')
 param searchDefinitionsQueue string = ''
 
+// Sync-out: DEMI-owned comment periods sent on to eagle-api. The client secret is the vault's
+// optional `eagle-sync-out-client-secret`, not a parameter.
+@description('Storage queue the sync-out worker triggers on, e.g. `sync-out`. Empty runs no worker and deploys no queue.')
+param syncOutQueue string = ''
+
+@description('Turn on the Eagle consumer of the sync-out queue. Off until the cutover.')
+param syncOutEagleEnabled bool = false
+
+@description('eagle-api base the sync-out consumer writes to, e.g. https://eagle-test.apps.silver.devops.gov.bc.ca/api. Distinct from eagleApiBase, the public read path.')
+param eagleProtectedApiBase string = ''
+
+@description('Eagle milestone id sent on every comment period the consumer writes.')
+param eagleEngageMilestone string = ''
+
+@description('NCRONTAB schedule for the ENGAGE reconcile timer, e.g. `0 30 10 * * *`. Empty runs it never.')
+param reconcileEngageSchedule string = ''
+
 @description('Deploy the log alert that fires when a bulk job fails.')
 param deployBulkDownloadPoisonAlert bool = false
 
@@ -528,6 +545,10 @@ var edgeSecretUri = deployFoundation
 var accessGateSecretUri = deployFoundation
   ? keyVault!.outputs.accessGateSecretUri
   : (contains(optionalSecretNames, 'access-gate-password') ? '${secretUriBase}access-gate-password' : '')
+// Same test, one branch: key-vault.bicep has no output for it, and both branches compose from vaultUri anyway.
+var syncOutEagleClientSecretUri = contains(optionalSecretNames, 'eagle-sync-out-client-secret')
+  ? '${secretUriBase}eagle-sync-out-client-secret'
+  : ''
 
 var appInsightsConnectionString = deployFoundation ? observability!.outputs.connectionString : appInsightsExisting.properties.ConnectionString
 var appInsightsId = deployFoundation ? observability!.outputs.appInsightsId : appInsightsExisting.id
@@ -665,6 +686,7 @@ module observability './modules/observability.bicep' = if (deployFoundation) {
     deployReconcileDriftAlert: deployReconcileDriftAlert
     deployBulkDownloadPoisonAlert: deployBulkDownloadPoisonAlert
     chunkRestampQueue: chunkRestampQueue
+    syncOutQueue: syncOutQueue
   }
 }
 
@@ -748,6 +770,12 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     bulkCleanupSchedule: bulkCleanupSchedule
     chunkRestampQueue: chunkRestampQueue
     searchDefinitionsQueue: searchDefinitionsQueue
+    syncOutQueue: syncOutQueue
+    syncOutEagleEnabled: syncOutEagleEnabled
+    eagleProtectedApiBase: eagleProtectedApiBase
+    syncOutEagleClientSecretUri: syncOutEagleClientSecretUri
+    eagleEngageMilestone: eagleEngageMilestone
+    reconcileEngageSchedule: reconcileEngageSchedule
     // The identity the SEARCH service runs indexers as, which is only ours when we deployed the
     // service: prod's `demi-search-prod` runs as `eagle-search-identity-prod`.
     dataSourceIdentityId: deploySearch ? identityId : existingSearchIndexerIdentityId

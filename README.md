@@ -1350,6 +1350,8 @@ Everything below mails one action group, `demi-alerts-<env>`, created in
 | `demi-logs-quota-<env>` | `Usage` | 2 | Billable ingest over 24h passed 80% of the workspace's daily cap |
 | `demi-reconcile-drift-<env>` | `AppTraces` | 2 | The nightly reconcile line says `drift=` over 0. Prod only |
 | `demi-bulk-download-failed-<env>` | `AppTraces` | 2 | A bulk download job failed after its retries. Test only |
+| `demi-chunk-restamp-failed-<env>` | `AppTraces` | 2 | A chunk parent-field re-stamp job failed after its retries. Wherever `chunkRestampQueue` is set |
+| `demi-sync-out-failed-<env>` | `AppTraces` | 2 | A sync-out message to eagle-api failed after its retries. Wherever `syncOutQueue` is set: test only |
 | `demi-chunk-ingest-failures-<env>` | `AppTraces` | 2 | Five or more `chunk write incomplete`, `chunk ingest rejected` or `Chunk ingest failed` lines in an hour |
 | `demi-cosmos-ru-<env>` | Cosmos `TotalRequestUnits` metric | 2 | Cosmos used more than `cosmosRuPerHourAlert` RU in the last hour: 3M on test and prod |
 | `demi-search-failures-<env>` | `AppTraces` | 1 | Three or more search errors in five minutes: `[search] … failed`, `[search/summary] … failed`, or `[ai-search] … retried without it` |
