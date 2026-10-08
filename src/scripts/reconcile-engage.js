@@ -74,7 +74,7 @@ const isDeletedRow = row => Boolean(row.isDeleted || (row.sources && row.sources
 function eagleReader(get) {
   const s = settings.eagle;
   const missing = [
-    ['EAGLE_API_BASE', s.apiBase], ['EAGLE_KC_ISSUER', s.issuer], ['EAGLE_KC_CLIENT_ID', s.clientId],
+    ['EAGLE_PROTECTED_API_BASE', s.apiBase], ['EAGLE_KC_ISSUER', s.issuer], ['EAGLE_KC_CLIENT_ID', s.clientId],
     ['EAGLE_KC_CLIENT_SECRET', s.clientSecret]
   ].filter(([, value]) => !value).map(([name]) => name);
   if (missing.length) return { missing };

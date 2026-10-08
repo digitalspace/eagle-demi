@@ -28,7 +28,7 @@ function clearToken() {
 function requireSettings() {
   const s = settings.eagle;
   const missing = [
-    ['EAGLE_API_BASE', s.apiBase], ['EAGLE_KC_ISSUER', s.issuer], ['EAGLE_KC_CLIENT_ID', s.clientId],
+    ['EAGLE_PROTECTED_API_BASE', s.apiBase], ['EAGLE_KC_ISSUER', s.issuer], ['EAGLE_KC_CLIENT_ID', s.clientId],
     ['EAGLE_KC_CLIENT_SECRET', s.clientSecret], ['EAGLE_ENGAGE_MILESTONE', s.milestone]
   ].filter(([, value]) => !value).map(([name]) => name);
   if (missing.length) throw new Error(`sync-out eagle is not configured: ${missing.join(', ')} not set`);

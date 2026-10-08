@@ -21,7 +21,7 @@ const settings = {
 
   eagle: {
     get enabled() { return env('SYNC_OUT_EAGLE_ENABLED') === 'true'; },
-    get apiBase() { return env('EAGLE_API_BASE').replace(/\/+$/, ''); },
+    get apiBase() { return env('EAGLE_PROTECTED_API_BASE').replace(/\/+$/, ''); },
     get issuer() { return env('EAGLE_KC_ISSUER').replace(/\/+$/, ''); },
     get clientId() { return env('EAGLE_KC_CLIENT_ID'); },
     get clientSecret() { return env('EAGLE_KC_CLIENT_SECRET'); },

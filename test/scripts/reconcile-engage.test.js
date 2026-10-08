@@ -21,7 +21,7 @@ const EAGLE_PROJECT = '5cf00c03a266b7e1877504db';
 
 const ENV = {
   SYNC_OUT_EAGLE_ENABLED: 'true',
-  EAGLE_API_BASE: API,
+  EAGLE_PROTECTED_API_BASE: API,
   EAGLE_KC_ISSUER: ISSUER,
   EAGLE_KC_CLIENT_ID: 'demi-sync-out',
   EAGLE_KC_CLIENT_SECRET: 'not-a-real-value',
@@ -36,7 +36,7 @@ function engageRow(overrides = {}) {
     engagementId: 42,
     eagleProjectId: EAGLE_PROJECT,
     eagleId: 'cp-42',
-    syncOut: { eagle: { status: 'sent', sentVersion: '2026-10-08T17:00:00.000Z' } },
+    syncOut: { eagle: { status: 'sent', sentVersion: 1791478800000 } },
     sources: {
       engage: {
         start: '2026-10-10T07:00:00.000Z',
@@ -170,7 +170,7 @@ test('DEMI vs Eagle', async (t) => {
       ]
     }]);
     assert.deepStrictEqual(dry.queued, []);
-    assert.strictEqual(dry.repo.store.get('engage-42').syncOut.eagle.sentVersion, '2026-10-08T17:00:00.000Z',
+    assert.strictEqual(dry.repo.store.get('engage-42').syncOut.eagle.sentVersion, 1791478800000,
       'a dry run writes nothing');
     assert.ok(dry.logged.info.some(line => /drift engage-42 .*dateCompleted demi=/.test(line)));
   });

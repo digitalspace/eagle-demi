@@ -16,6 +16,8 @@ const syncOut = require('../../sync-out');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { upsertWithRetry } = require('./eagle-mirror');
+const { cascadeToComments } = require('./comment-period');
+const { levelOfRead } = require('../../helpers/access-sql');
 
 const LABEL = '[ENGAGE Comment Period Controller]';
 const PUSHED_AT_FIELD = 'engagePushedAt';
@@ -171,6 +173,9 @@ async function upsertFromEngage(req, res) {
     if (existing && String(existing.projectId) !== saved.projectId) {
       await commentPeriods.deleteById(existing.id, existing.projectId);
     }
+    // Comments carry their own `read[]`, so a period that changed level re-derives them, as the mirror does.
+    const moved = existing && levelOfRead(existing.read) !== levelOfRead(saved.read);
+    const cascadeError = moved ? await cascadeToComments(saved) : null;
 
     auditEvent(req, {
       action: saved.isDeleted ? 'commentPeriod.delete' : 'commentPeriod.push',
@@ -190,6 +195,8 @@ async function upsertFromEngage(req, res) {
       { id: saved.id, engagementId, projectId: saved.projectId, created: !existing, isDeleted: saved.isDeleted });
 
     const queued = await enqueueQuietly(saved);
+    // The row is written and queued; only the comments under it lag behind its level.
+    if (cascadeError) return res.status(500).json({ error: cascadeError, id: saved.id, queued });
     return res.status(existing ? 200 : 201).json({
       id: saved.id,
       engagementId,

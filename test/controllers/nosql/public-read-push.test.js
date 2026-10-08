@@ -1044,7 +1044,7 @@ test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => 
       sourceSystem: 'engage',
       engagementId: '42',
       eagleProjectId: PROJECT_EAGLE_ID,
-      engagePushedAt: '2026-10-01T17:00:00.000Z',
+      engagePushedAt: Date.parse('2026-10-01T17:00:00.000Z'),
       eagleId: null,
       dateStarted: '2026-09-01T00:00:00.000Z',
       dateCompleted: '2026-09-30T00:00:00.000Z',

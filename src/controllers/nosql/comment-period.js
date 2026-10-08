@@ -227,6 +227,7 @@ async function cascadeToComments(period) {
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
+exports.cascadeToComments = cascadeToComments;
 exports.staffFields = staffFields;
 
 exports.upsertFromEagle = async (req, res) => {

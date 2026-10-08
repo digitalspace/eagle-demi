@@ -20,11 +20,11 @@ const eagle = require('../../src/sync-out/eagle');
 const API = 'https://eagle.example/api';
 const ISSUER = 'https://login.example/auth/realms/eao-epic';
 const MILESTONE = '5cf00c03a266b7e1877504aa';
-const PUSHED_AT = '2026-10-08T17:00:00.000Z';
+const PUSHED_AT = Date.parse('2026-10-08T17:00:00.000Z');
 
 const ENV = {
   SYNC_OUT_EAGLE_ENABLED: 'true',
-  EAGLE_API_BASE: API,
+  EAGLE_PROTECTED_API_BASE: API,
   EAGLE_KC_ISSUER: ISSUER,
   EAGLE_KC_CLIENT_ID: 'demi-sync-out',
   EAGLE_KC_CLIENT_SECRET: 'not-a-real-value',
@@ -263,6 +263,19 @@ test('sync-out', async (t) => {
 
     assert.deepStrictEqual(await syncOut.run(message()), { skipped: 'current' });
     assert.strictEqual(calls.length, 0);
+  });
+
+  await t.test('a row sent at an older version is sent again', async (tt) => {
+    const store = wireStore(tt, engageRow({
+      eagleId: 'cp-9', syncOut: { eagle: { sentVersion: PUSHED_AT - 1, status: 'sent' } }
+    }));
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'PUT /commentperiod/cp-9': { body: { matchedCount: 1 } } });
+
+    await syncOut.run(message());
+
+    assert.ok(calls.some(c => c.method === 'PUT'), 'the newer version is written to Eagle');
+    assert.strictEqual(store.row.syncOut.eagle.sentVersion, PUSHED_AT);
   });
 
   await t.test('enqueue sends one message per enabled consumer that wants the row', async (tt) => {

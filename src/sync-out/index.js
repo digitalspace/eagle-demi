@@ -61,7 +61,11 @@ function parseMessage(message) {
   };
 }
 
-const versionMs = (value) => (value ? Date.parse(value) : NaN);
+// `engagePushedAt` is epoch milliseconds; a string version is parsed as a date.
+const versionMs = (value) => {
+  if (typeof value === 'number') return value;
+  return value ? Date.parse(value) : NaN;
+};
 
 /** True when `sentVersion` is at or past `version`; an unparseable version is never current. */
 function isCurrent(sentVersion, version) {

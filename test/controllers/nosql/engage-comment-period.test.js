@@ -14,6 +14,7 @@ const assert = require('node:assert');
 
 const cosmos = require('../../../src/db/cosmos-nosql');
 const commentPeriods = require('../../../src/repositories/comment-periods');
+const comments = require('../../../src/repositories/comments');
 const notifications = require('../../../src/repositories/notifications');
 const projects = require('../../../src/repositories/projects');
 const syncOut = require('../../../src/sync-out');
@@ -70,11 +71,16 @@ function eagleRow() {
 
 /**
  * Stage the parent, an in-memory comment period store and the sync-out queue.
- * @returns {{ store: Map, queued: object[] }}
+ * @returns {{ store: Map, queued: object[], cascades: object[] }}
  */
-function stage(t, { rows = [], parent = storedProject(), enqueue } = {}) {
+function stage(t, { rows = [], parent = storedProject(), enqueue, cascade = { succeeded: 0, failed: 0 } } = {}) {
   const store = new Map(rows.map(row => [row.id, { ...row }]));
   const queued = [];
+  const cascades = [];
+  t.mock.method(comments, 'setAclForPeriod', async (access, periodId, read) => {
+    cascades.push({ periodId, read });
+    return cascade;
+  });
   t.mock.method(projects, 'getByEagleId', async () => parent);
   t.mock.method(projects, 'readForWriteByEagleId', async () => null);
   t.mock.method(notifications, 'readForWrite', async () => null);
@@ -84,7 +90,7 @@ function stage(t, { rows = [], parent = storedProject(), enqueue } = {}) {
   t.mock.method(commentPeriods, 'upsert', async (item) => { store.set(item.id, item); return item; });
   t.mock.method(commentPeriods, 'deleteById', async () => {});
   t.mock.method(syncOut, 'enqueue', enqueue || (async (row) => { queued.push(row); return ['eagle']; }));
-  return { store, queued };
+  return { store, queued, cascades };
 }
 
 async function push(body, { engagementId = ENGAGEMENT_ID } = {}) {
@@ -272,6 +278,40 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
     assert.ok(store.has('engage-42'));
     assert.strictEqual(errors.length, 1);
     assert.strictEqual(errors[0].meta.error, 'queue down');
+  });
+
+  await t.test('unpublishing a stored engagement re-derives the comments under it', async () => {
+    const { store, cascades } = stage(t);
+    await push(pushOf());
+    assert.deepStrictEqual(cascades, [], 'a new row has no comments yet');
+
+    const res = await push(pushOf({ isPublished: false }, new Date(PUSHED_AT_MS + 1000).toISOString()));
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(cascades, [{ periodId: 'engage-42', read: store.get('engage-42').read }]);
+    assert.strictEqual(cascades[0].read.includes('public'), false);
+  });
+
+  await t.test('a push that keeps the level leaves the comments alone', async () => {
+    const { cascades } = stage(t);
+    await push(pushOf());
+
+    await push(pushOf({ name: 'Renamed' }, new Date(PUSHED_AT_MS + 1000).toISOString()));
+
+    assert.deepStrictEqual(cascades, []);
+  });
+
+  await t.test('a failed comment cascade answers 500, the row still stored and queued', async () => {
+    t.mock.method(logger, 'error', () => {});
+    const { store, queued } = stage(t, { cascade: { succeeded: 1, failed: 2 } });
+    await push(pushOf());
+
+    const res = await push(pushOf({ isPublished: false }, new Date(PUSHED_AT_MS + 1000).toISOString()));
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.strictEqual(res.body.id, 'engage-42');
+    assert.strictEqual(store.get('engage-42').isPublished, false);
+    assert.strictEqual(queued.length, 2, 'both pushes queued for sync-out');
   });
 });
 
