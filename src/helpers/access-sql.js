@@ -74,19 +74,38 @@ function levelOfRead(read) {
 /**
  * `own` narrowed to `cap`'s level, never widened by it: the lower of the two ladder levels.
  *
- * At level 1 a read with no ladder token (`['sysadmin']`, `['sysadmin','inspector']`, `[]`) is kept
- * rather than rewritten to `readForLevel(1)`: `team` is what the team arm opens to the project's
- * team members, and a read with no ladder token opens only to privileged callers and holders of the
- * roles it names, as in Eagle. The row's own read wins, then the cap's. An empty or missing cap, or
- * two `team` reads, land at `team`.
+ * At level 1 the result never lets in a caller the cap keeps out. A read with no ladder token
+ * (`['sysadmin','inspector']`) opens only to privileged callers and holders of the roles it names,
+ * so it keeps its privileged names plus those the cap also admits (every name, under a public cap),
+ * and never becomes `team`. A ladder read under a cap with no ladder token keeps only the cap's
+ * privileged names. Otherwise, an empty or missing cap included, it lands at `team`.
  */
 function capRead(own, cap) {
   const level = Math.min(levelOfRead(own), levelOfRead(cap));
   if (level !== 1) return readForLevel(level);
-  const privilegedOnly = read => Array.isArray(read) && !read.some(r => LADDER_TOKENS.includes(r));
-  if (privilegedOnly(own)) return own;
-  if (privilegedOnly(cap) && cap.length > 0) return cap;
+  const noLadder = read => Array.isArray(read) && !read.some(r => LADDER_TOKENS.includes(r));
+  const capList = Array.isArray(cap) ? cap : [];
+  if (noLadder(own)) {
+    return own.filter(r => SECURE_ROLES.includes(r) || capList.includes(r) || capList.includes(LEVEL_TOKENS[4]));
+  }
+  if (noLadder(cap) && cap.length > 0) return cap.filter(r => SECURE_ROLES.includes(r));
   return readForLevel(1);
+}
+
+/**
+ * Do two `read[]`s let in the same callers under `readClause`? Every caller holds `public`, so two
+ * level-4 reads always do; at 2 and 3 privileged names are ignored, as those callers pass anyway.
+ * Levels 0 and 1 compare exactly: `['team']`, `['sysadmin']` and `['sysadmin','inspector']` are
+ * all level 1, so a level alone cannot tell a move.
+ */
+function sameAccess(a, b) {
+  const level = levelOfRead(a);
+  if (level !== levelOfRead(b)) return false;
+  if (level === 4) return true;
+  const kept = level < 2 ? read => read || [] : read => read.filter(r => !SECURE_ROLES.includes(r));
+  const left = new Set(kept(a));
+  const right = new Set(kept(b));
+  return left.size === right.size && [...left].every(r => right.has(r));
 }
 
 /**
@@ -688,6 +707,7 @@ module.exports = {
   readForLevel,
   levelOfRead,
   capRead,
+  sameAccess,
   isDemiSeal,
   heldSealed,
   levelTokens,

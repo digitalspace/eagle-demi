@@ -51,7 +51,7 @@ const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql')
 const { eagleBaseAcl, eagleReadUnder } = require('../seed/transform');
 const { readUnder } = require('../helpers/update-parent');
 const { eachCommentPage } = require('./seed-public-reads');
-const { systemAccess, levelOfRead, SECURE_ROLES } = require('../helpers/access-sql');
+const { systemAccess, sameAccess } = require('../helpers/access-sql');
 const { eagleRef } = require('../helpers/parent-admit');
 const cache = require('../repositories/cache');
 const { classify } = require('./parity-map');
@@ -236,26 +236,6 @@ function diff(rows, keyOf, eagleIds, pushOwned = () => true, parentPublished = (
   };
 }
 
-/** Same members, any order. */
-function sameSet(a, b) {
-  const left = new Set(a);
-  const right = new Set(b);
-  return left.size === right.size && [...left].every(x => right.has(x));
-}
-
-/**
- * Do two `read[]`s let in the same callers under `readClause`? Every caller holds `public`, so two
- * level-4 reads always do; at 2 and 3 privileged names are ignored, as those callers pass anyway.
- * Levels 0 and 1 compare exactly: `['team']`, `['sysadmin']` and `[]` are all level 1.
- */
-function sameAccess(a, b) {
-  const level = levelOfRead(a);
-  if (level !== levelOfRead(b)) return false;
-  if (level === 4) return true;
-  if (level < 2) return sameSet(a, b);
-  const unprivileged = read => read.filter(r => !SECURE_ROLES.includes(r));
-  return sameSet(unprivileged(a), unprivileged(b));
-}
 
 /**
  * Ids in both Eagle and DEMI whose DEMI `read[]` grants different access than the one the mirror

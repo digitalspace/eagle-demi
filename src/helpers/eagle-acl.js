@@ -19,22 +19,21 @@ const { readForLevel, capRead, SEALED_TOKEN } = require('./access-sql');
  * Two things are dropped: blank entries, and the sealed token. Eagle has no sealed compartment, so
  * kept, `compliance` would seal the copy and hide it from every ladder caller.
  *
- * With no upstream ACL, or only blanks, the item lands at level 2 (All EAO). With only compliance
- * left after the blanks it lands at `['sysadmin']`. Every item gets an explicit `read[]`, which is the condition
- * for deleting the legacy no-ACL tier from the visibility predicate. Under a parent, derive through
+ * With no `read[]` at all (a legacy row) the item lands at level 2 (All EAO). An empty list, or one
+ * left empty once blanks and compliance are dropped, lands at `['sysadmin']`: Eagle hides
+ * `read: []` from everyone. Every item gets an explicit `read[]`, which is the condition for
+ * deleting the legacy no-ACL tier from the visibility predicate. Under a parent, derive through
  * `eagleReadUnder`.
  */
 function eagleBaseAcl(upstreamRead) {
-  const kept = Array.isArray(upstreamRead) ? upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '') : [];
-  if (kept.length === 0) return readForLevel(2);
-  const open = kept.filter(r => r !== SEALED_TOKEN);
+  if (!Array.isArray(upstreamRead)) return readForLevel(2);
+  const open = upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '' && r !== SEALED_TOKEN);
   return open.length === 0 ? ['sysadmin'] : open;
 }
 
 /**
  * An Eagle read under a parent's `cap`, the one rule for every capped Eagle mirror: `eagleBaseAcl`,
- * then `capRead`. That keeps a privileged-only read such as `['sysadmin']` as it is under a `team`
- * parent, so such a row never opens to the project's team.
+ * then `capRead`, so the row lets in no caller its parent keeps out and never becomes `team`.
  */
 function eagleReadUnder(upstreamRead, cap) {
   return capRead(eagleBaseAcl(upstreamRead), cap);

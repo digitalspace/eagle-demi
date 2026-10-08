@@ -501,6 +501,23 @@ test('PUT /eagle/commentperiods/:eagleId — a period that changed level', async
       anonymous()), false);
   });
 
+  await t.test('a move inside level 1 still narrows the comments under it', async () => {
+    // `['sysadmin','project-team']` and `['sysadmin']` are both level 1, with different readers.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const writes = stubCommentCascade(t, [
+      { id: 'c1', read: ['sysadmin', 'project-team'], eagleRead: ['sysadmin', 'project-team'] }
+    ]);
+
+    const { res, written } = await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
+      eaglePeriod({ read: ['sysadmin'] }), t, { existing: storedAt(['sysadmin', 'project-team']) });
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(written().read, ['sysadmin']);
+    const [patch] = writes;
+    assert.ok(patch, 'the comments are re-derived');
+    assert.deepStrictEqual(opValue(patch.operations[0], '/read'), ['sysadmin']);
+  });
+
   await t.test('a push that did not move the level costs no cascade', async () => {
     // Most pushes are an edit to the text. Re-deriving every comment on each of them is a bulk
     // patch per push for no change.

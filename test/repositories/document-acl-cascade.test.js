@@ -46,10 +46,11 @@ test('constrainToProject — the lower of the two levels', async (t) => {
   });
 
   await t.test('a legacy role name carries no level of its own', () => {
-    // `project-team` is not a ladder token, so the document reads as level 1 and is kept as is —
-    // stamping the project's level 2 over it would WIDEN the row, and `team` would too.
+    // `project-team` is not a ladder token, so the document reads as level 1 — stamping the
+    // project's level 2 over it would WIDEN the row, and `team` would too. A holder of the role may
+    // not hold `staff`, so the name is dropped: privileged callers only.
     assert.deepStrictEqual(
-      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['project-team']);
+      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), []);
   });
 
   await t.test('fail-closed under a level-1 project yields team', () => {
@@ -99,7 +100,7 @@ test('setAclForProject', async (t) => {
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
-      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['project-team']);
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), []);
     });
 
   await t.test('captures ownRead on the first cascade', async (tt) => {
@@ -192,7 +193,7 @@ test('setAclForProject', async (t) => {
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
-      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['project-team']);
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), []);
     });
 
   await t.test('every row is patched in one request, pinned to the project partition',

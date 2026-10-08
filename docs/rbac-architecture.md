@@ -101,14 +101,17 @@ push.
 `staff` to any Eagle `read[]` with no ladder token, on the belief that Eagle's `staff` role skips
 read checks. It does not: eagle-api's `$redact` matches `read[]` tokens to roles literally, so Eagle
 shows `['sysadmin']` or `['sysadmin','inspector']` rows to those roles only. DEMI now matches Eagle.
-A pushed record stores Eagle's own read (`helpers/eagle-acl.js:eagleBaseAcl`). Under a parent it
-stores that read capped by the parent (`eagleReadUnder`, which is `capRead`). `capRead` keeps any
-read with no ladder token as it is under every unsealed parent, so `['sysadmin']`,
-`['sysadmin','inspector']` and `['project-team']` are stored literally, never as `['team']`, and
-reach only privileged callers and holders of the roles they name, as in Eagle. A ladder read under
-such a parent takes the parent's read. A document's `ownRead` is Eagle's base read, so `read` and
-`ownRead` differ only by the parent cap.
-`src/scripts/backfill-eagle-ladder.js --reverse` strips the `staff` token the rule already wrote.
+A pushed record stores Eagle's own read (`helpers/eagle-acl.js:eagleBaseAcl`); an empty Eagle
+`read[]` is stored as `['sysadmin']`, since Eagle shows it to no one, and only a missing one lands
+at level 2. Under a parent it stores that read capped by the parent (`eagleReadUnder`, which is
+`capRead`). The cap never lets in a caller the parent keeps out. A read with no ladder token, such
+as `['sysadmin','inspector']`, keeps its privileged names plus the names the parent also carries,
+or all of them under a public parent, and never becomes `['team']`. So an inspection under a public
+project stores `['sysadmin','inspector']`, and under a staff or team project `['sysadmin']`. A
+ladder read under a parent with no ladder token keeps only the parent's privileged names. A
+document's `ownRead` is Eagle's base read, so `read` and `ownRead` differ only by the parent cap. A
+`--reverse` mode for `src/scripts/backfill-eagle-ladder.js`, which strips the `staff` token the rule
+already wrote, lands in PR #548.
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.

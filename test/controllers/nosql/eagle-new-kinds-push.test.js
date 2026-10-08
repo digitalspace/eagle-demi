@@ -176,6 +176,13 @@ test('inspection mirror', async (t) => {
     assert.deepStrictEqual(cascades, [['inspection', INSPECTION_EAGLE_ID, row.read]]);
   });
 
+  await t.test('a move inside level 1 re-derives the elements under it', async () => {
+    const existing = { id: INSPECTION_EAGLE_ID, inspection: INSPECTION_EAGLE_ID, read: ['sysadmin'], _etag: 'e1' };
+    const { row, cascades } = await captureMirror(t, 'inspections', null, { existing });
+    assert.deepStrictEqual(row.read, INSPECTOR_ACL);
+    assert.deepStrictEqual(cascades, [['inspection', INSPECTION_EAGLE_ID, row.read]]);
+  });
+
   await t.test('update at the same level cascades nothing', async () => {
     const existing = { id: INSPECTION_EAGLE_ID, inspection: INSPECTION_EAGLE_ID, read: INSPECTOR_ACL, _etag: 'e1' };
     const { res, cascades } = await captureMirror(t, 'inspections', null, { existing });

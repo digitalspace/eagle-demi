@@ -51,13 +51,15 @@ test('eagleBaseAcl — every seeded item gets an explicit read[]', async (t) => 
     assert.deepStrictEqual(eagleBaseAcl(upstream), upstream);
   });
 
-  await t.test('fails closed with no upstream ACL', () => {
+  await t.test('a missing upstream ACL, a legacy row, lands at level 2', () => {
     // Literal level-2 tokens, not read off `readForLevel`: a re-seed must write exactly what a
     // controller writes, and reading the value off the helper would pass whatever it becomes.
     assert.deepStrictEqual(eagleBaseAcl(undefined), ['staff']);
-    assert.deepStrictEqual(eagleBaseAcl([]), ['staff']);
     assert.deepStrictEqual(eagleBaseAcl(null), ['staff']);
-    assert.ok(!eagleBaseAcl([]).includes('public'));
+  });
+
+  await t.test('an empty upstream ACL is Eagle hiding the row from everyone: privileged-only', () => {
+    assert.deepStrictEqual(eagleBaseAcl([]), ['sysadmin']);
   });
 
   await t.test('drops junk entries without emptying the list', () => {
@@ -70,8 +72,8 @@ test('eagleBaseAcl — every seeded item gets an explicit read[]', async (t) => 
     assert.deepStrictEqual(eagleBaseAcl(['compliance', '']), ['sysadmin'], 'the blank does not hide the removed token');
   });
 
-  await t.test('an all-junk ACL lands at staff, like a missing one', () => {
-    assert.deepStrictEqual(eagleBaseAcl(['', '  ']), ['staff']);
+  await t.test('an all-junk ACL lands privileged-only, like an empty one', () => {
+    assert.deepStrictEqual(eagleBaseAcl(['', '  ']), ['sysadmin']);
   });
 });
 

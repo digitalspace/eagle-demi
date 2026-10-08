@@ -16,7 +16,7 @@
 
 const inspections = require('../../repositories/inspections');
 const { eagleBaseAcl, eagleReadUnder } = require('../../seed/transform');
-const { levelOfRead } = require('../../helpers/access-sql');
+const { sameAccess } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const { logger } = require('../../utils/logger');
@@ -163,7 +163,7 @@ async function mirrorFromEagle(kind, eagleId, doc, { pushedAt = null } = {}) {
     await inspections.deleteById(existing.id, existing.inspection);
   }
 
-  const moved = kind !== KINDS.ITEM && existing && levelOfRead(existing.read) !== levelOfRead(saved.read);
+  const moved = kind !== KINDS.ITEM && existing && !sameAccess(existing.read, saved.read);
   return { saved, existing, cascadeError: moved ? await cascade(saved) : null };
 }
 

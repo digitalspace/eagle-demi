@@ -265,12 +265,16 @@ test('the ladder vocabulary', async (t) => {
     assert.deepStrictEqual(capRead(['team'], TEAM), ['team']);
     assert.deepStrictEqual(capRead(['staff'], TEAM), ['team']);
     assert.deepStrictEqual(capRead([], TEAM), []);
-    // No ladder token: kept as is, so only holders of the roles it names (and privileged callers) read it.
-    assert.deepStrictEqual(capRead(['project-team'], TEAM), ['project-team']);
-    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], TEAM), ['sysadmin', 'inspector']);
-    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], ['staff', 'idir', 'public']), ['sysadmin', 'inspector']);
-    assert.deepStrictEqual(capRead(['staff'], ['sysadmin', 'inspector']), ['sysadmin', 'inspector'],
-      'a cap with no ladder token is kept, never rewritten to team');
+    assert.deepStrictEqual(capRead(['project-team'], TEAM), [],
+      'a legacy role is not privileged, and any realm role of that name could read it: not kept, not team');
+    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], TEAM), ['sysadmin']);
+    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], ['sysadmin']), ['sysadmin']);
+    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], ['sysadmin', 'inspector']), ['sysadmin', 'inspector']);
+    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], ['staff']), ['sysadmin']);
+    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], ['staff', 'idir', 'public']), ['sysadmin', 'inspector'],
+      'a public cap admits every caller, so the row keeps its own read');
+    assert.deepStrictEqual(capRead(['staff'], ['sysadmin', 'inspector']), ['sysadmin'],
+      'a ladder row under a cap with no ladder token keeps only its privileged names');
 
     assert.deepStrictEqual(capRead(['staff', 'idir', 'public'], ['sysadmin']), ['sysadmin'],
       'a privileged-only cap keeps the row privileged-only');
@@ -278,6 +282,31 @@ test('the ladder vocabulary', async (t) => {
     assert.deepStrictEqual(capRead(['sysadmin'], ['compliance']), ['compliance']);
     assert.deepStrictEqual(capRead(['compliance'], ['public']), ['compliance']);
     assert.deepStrictEqual(capRead(['sysadmin', 'staff', 'demi-admin'], ['public']), ['staff']);
+  });
+
+  // Ladder parts in the nested form every writer stores (`readForLevel`), and callers without project
+  // teams: ladder-against-ladder capping is the ladder's own rule, not under test here.
+  await t.test('every caller who can read capRead(own, cap) can read cap, and no role is borrowed from cap', () => {
+    const subsets = list => list.reduce((all, x) => all.concat(all.map(s => [...s, x])), [[]]);
+    const ladders = [[], ...[1, 2, 3, 4].map(readForLevel)];
+    const LADDER = readForLevel(4).concat(readForLevel(1));
+    const reads = subsets(['sysadmin', 'inspector', 'project-team'])
+      .flatMap(names => ladders.map(ladder => [...names, ...ladder]));
+    const callers = subsets(['sysadmin', 'inspector', 'project-team', 'staff']).flatMap(roles => [false, true]
+      .map(idir => resolveAccess({ user: { realm_access: { roles }, ...(idir ? { identity_provider: 'idir' } : {}) } })));
+    const row = read => ({ read, projectId: '207' });
+    for (const own of reads) {
+      for (const cap of reads) {
+        const result = capRead(own, cap);
+        const borrowed = result.filter(r => !own.includes(r) && !LADDER.includes(r) && r !== 'sysadmin');
+        assert.deepStrictEqual(borrowed, [], `capRead(${JSON.stringify(own)}, ${JSON.stringify(cap)}) = ${JSON.stringify(result)}`);
+        for (const access of callers) {
+          if (canRead(row(result), access) && !canRead(row(cap), access)) {
+            assert.fail(`capRead(${JSON.stringify(own)}, ${JSON.stringify(cap)}) = ${JSON.stringify(result)} lets in ${JSON.stringify(access.roles)}`);
+          }
+        }
+      }
+    }
   });
 });
 
