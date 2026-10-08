@@ -589,7 +589,7 @@ test('the PDF title worker live flag reaches the app as lowercase true or false'
     'ARM renders string(true) as True, which a case-sensitive check reads as off');
 });
 
-test('prod deploys the PDF title worker as a dry run', () => {
+test('prod deploys the PDF title worker live', () => {
   assert.match(PROD_PARAMS, /^param deployPdfTitleWorker = true$/m,
     'prod must ask for the worker');
   assert.match(PROD_PARAMS, /^param optionalSecretNames = \[[^\]]*^\s+'pdf-title-worker-api-key'$[^\]]*\]/m,
@@ -600,8 +600,8 @@ test('prod deploys the PDF title worker as a dry run', () => {
     'without the Flex subnet main.bicep skips the worker app');
   assert.match(PROD_PARAMS, /^param pdfTitleWorkerPrincipals = 'c4e6496061d859df'$/m,
     'the prod worker key id, or the API refuses the worker on every route');
-  assert.match(PROD_PARAMS, /^param pdfTitleLive = false$/m,
-    'prod stays a dry run until a live tick is verified');
+  assert.match(PROD_PARAMS, /^param pdfTitleLive = true$/m,
+    'prod runs the worker live since 2026-10-08');
   assert.doesNotMatch(PROD_PARAMS, /^param pdfTitle(MaxRows|MaxMinutes|Schedule) /m,
     'prod keeps the main.bicep defaults, as test does');
 });

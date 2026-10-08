@@ -245,13 +245,13 @@ param notifyApiBase = ''
 param syncTeamsSchedule = '0 0 11 * * *'
 
 // ── PDF title worker ──────────────────────────────────────────────────────────────────────────
-// Dry run: pdfTitleLive false lists the work and writes nothing. Flip it to true once a prod tick
-// has been checked. The key is the vault's `pdf-title-worker-api-key`, named in optionalSecretNames
+// Live since 2026-10-08. Set pdfTitleLive to false for a dry run that lists the work and writes
+// nothing. The key is the vault's `pdf-title-worker-api-key`, named in optionalSecretNames
 // above; the principal is that key's registry row id (a key id, not the key). Schedule, rows and
 // minutes keep main.bicep's defaults, as on test.
 param deployPdfTitleWorker = true
 param pdfTitleWorkerPrincipals = 'c4e6496061d859df'
-param pdfTitleLive = false
+param pdfTitleLive = true
 // The document-backup account (azure/document-backup.prod.bicepparam). The API refuses every lease
 // whose original is not archived there; the container keeps main.bicep's default `originals`.
 param backupAccountName = 'eaglebakproduvtikwlcqtpg'

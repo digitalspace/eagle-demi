@@ -1139,8 +1139,9 @@ schedule in `PDF_TITLE_SCHEDULE` it runs `pdf-title/run.py`, which takes PDFs wi
 the API's work list and sets one. It is a dry run, listing the work and writing nothing, unless
 `PDF_TITLE_LIVE` is `true`.
 
-On test, `azure/main.test.bicepparam` enables it live (`pdfTitleLive = true`); set it to `false` to list work and write nothing. Prod
-deploys the worker with `pdfTitleLive = false` until the first live tick is verified.
+The worker runs on test and prod. `azure/main.test.bicepparam` and `azure/main.prod.bicepparam`
+both set `pdfTitleLive = true`; set it to `false` to list work and write nothing. Prod went live
+on 2026-10-08.
 
 - Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflows:
   `.github/workflows/azure-deploy-staging-pdf-title.yaml` for test, and the `deploy-pdf-title` job
@@ -1394,8 +1395,8 @@ a service principal, so a deploy authenticated as a person fails instead of proc
 **The prod deploy workflow is back**: `.github/workflows/azure-deploy-prod.yaml`,
 `workflow_dispatch` only, taking a `version` and checking out `refs/tags/<version>` — a tag verified
 on staging, never a branch. Its jobs run in this order: `verify-search-schema`, `deploy-extractor`,
-`deploy-api`, then `deploy-pdf-title` (skipped with a notice while `demi-pdf-title-prod` does not
-exist). Every Azure job declares `environment: prod`, which is what produces the OIDC
+`deploy-api`, then `deploy-pdf-title`, which deploys the worker to `demi-pdf-title-prod` (it skips
+with a notice only if that app does not exist). Every Azure job declares `environment: prod`, which is what produces the OIDC
 subject `repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the
 federated credential. An earlier note here said no prod workflow existed, which was true only
 between 2026-08-05 and the prod estate being built.
