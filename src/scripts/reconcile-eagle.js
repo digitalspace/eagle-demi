@@ -567,7 +567,7 @@ async function reconcile(argv = [], deps = {}) {
   // drops it, because its parent project row is not in DEMI. Measured on test 2026-09-07: 29 such
   // periods under 20 unpublished projects, every one of them reported as push drift.
   const notificationRows = await notificationsRepo.listEvery(access);
-  const periodRows = [];
+  const everyPeriodRow = [];
   // Every partition a period can live in: `commentPeriods` partitions on the parent, and the
   // mirror admits a project or a `ProjectNotification` — nothing else.
   const periodParents = [...projectRows, ...notificationRows];
@@ -575,9 +575,14 @@ async function reconcile(argv = [], deps = {}) {
   // periods under parents this walk never visits.
   let periodCount = 0;
   for (const parent of periodParents) {
-    for (const row of await periodsRepo.listEveryByProject(parent.id, access)) periodRows.push(row);
+    for (const row of await periodsRepo.listEveryByProject(parent.id, access)) everyPeriodRow.push(row);
     periodCount += await periodsRepo.countByProject(parent.id, access);
   }
+  // ENGAGE owns these rows and Eagle holds only the copy DEMI sent it, so neither the id diff nor
+  // `--drop-orphans` may act on them; reconcile-engage.js checks them instead.
+  const engageOwned = row => row.sourceSystem === 'engage';
+  const periodRows = everyPeriodRow.filter(row => !engageOwned(row));
+  const engagePeriodRows = everyPeriodRow.filter(engageOwned);
   const listRows = [
     ...await listsRepo.listEveryOfKind(listsRepo.KINDS.LIST, access),
     ...await listsRepo.listEveryOfKind(listsRepo.KINDS.ORGANIZATION, access)
@@ -594,6 +599,8 @@ async function reconcile(argv = [], deps = {}) {
     eaglePeriodProject.set(String(row._id), row.project != null ? String(row.project) : null);
     keep(row);
   });
+  // The Eagle copy of an ENGAGE row is stored under a DEMI id, so it would read as eagleOnly.
+  for (const row of engagePeriodRows) if (row.eagleId) eaglePeriodIds.delete(String(row.eagleId));
   const eagleNotificationIds = await eagleIds(src, 'ProjectNotification', new Set(), keep);
   const eagleUpdateIds = await eagleIds(src, 'RecentActivity', new Set(), keep);
 
@@ -614,7 +621,8 @@ async function reconcile(argv = [], deps = {}) {
     ...diff(periodRows, row => String(row.id), eaglePeriodIds, undefined,
       id => admit(eaglePeriodProject.get(id)) !== null),
     misfiledParent: misfiledPeriods,
-    aclMismatch: aclMismatch(periodRows, row => String(row.id), eagleRead, projectReadOf)
+    aclMismatch: aclMismatch(periodRows, row => String(row.id), eagleRead, projectReadOf),
+    engageOwned: engagePeriodRows.length
   };
 
   // OPT-IN, like `--comments`, and for the same reason: one ENGAGE round trip per `isMet` period.
@@ -659,7 +667,7 @@ async function reconcile(argv = [], deps = {}) {
       (await listsRepo.countByKind(listsRepo.KINDS.ORGANIZATION, a))],
     ['notifications', notificationRows, notificationsRepo.count],
     ['updates', updateRows, updatesRepo.count],
-    ['commentPeriods', periodRows, async () => periodCount]
+    ['commentPeriods', everyPeriodRow, async () => periodCount]
   ]));
 
   // The parent a drifted child names, as the push would find it (states: parity-map `classify`).
@@ -764,6 +772,9 @@ function report(summary, { json } = {}) {
       lines.push(`  ${text}: ${ids.length}${ids.length ? ` — ${preview(ids)}` : ''}`);
 
     lines.push(`${label}: ${s.inDemi} mirrored in DEMI, ${s.inEagle} published in Eagle`);
+    if (s.engageOwned) {
+      lines.push(`  engageOwned (ENGAGE-owned, left out of this diff and never dropped): ${s.engageOwned}`);
+    }
     // NOT a delete list. eagle-api's `/api/public/{document,project}/{id}` answers `200 []` for a
     // deleted row AND for one that merely lost `public` from its `read[]` — both are what
     // `runDataQuery(..., ['public'], ...)` returns when nothing matches — so an anonymous caller

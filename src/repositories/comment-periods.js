@@ -357,6 +357,14 @@ async function setAclForProject(access, projectId, read) {
   return cascadeAcl(CONTAINER, projectId, await aclRowsForProject(access, projectId), read);
 }
 
+// --- ENGAGE reconcile ---
+
+/** Every ENGAGE-owned row, deleted ones too, across partitions and unfiltered — for reconcile-engage.js only. */
+async function listEveryEngage() {
+  const { clause, params } = eq('sourceSystem', 'engage', '@sourceSystem');
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${clause}`, parameters: params });
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
@@ -379,5 +387,6 @@ module.exports = {
   aclRowsForProject,
   setAclForProject,
   upsert,
-  deleteById
+  deleteById,
+  listEveryEngage
 };
