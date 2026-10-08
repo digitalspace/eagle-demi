@@ -111,9 +111,9 @@ project stores `['sysadmin','inspector']`, and under a staff or team project `['
 ladder read under a parent with no ladder token keeps only the parent's privileged names. A read
 left with no names becomes `['sysadmin']`, never `[]`. Updates follow the same cap
 (`helpers/update-parent.js:readUnder`), except that an empty Update read stays `[]`. A
-document's `ownRead` is Eagle's base read, so `read` and `ownRead` differ only by the parent cap. A
-`--reverse` mode for `src/scripts/backfill-eagle-ladder.js`, which strips the `staff` token the rule
-already wrote, lands in PR #548.
+document's `ownRead` is Eagle's base read, so `read` and `ownRead` differ only by the parent cap. The
+`--reverse` mode of `src/scripts/backfill-eagle-ladder.js` rewrites rows the removed rule widened;
+see the README section "Eagle read ladder backfill".
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.
