@@ -492,6 +492,40 @@ test('pdf title lease API', async (t) => {
     assert.equal((await pending()).length, 1, 'offered again');
   });
 
+  await t.test('a failure reason in a plain report is logged with the release, never stored', async (t) => {
+    const released = async (reason) => {
+      const w = world(t);
+      const logged = t.mock.method(logger, 'info', () => {});
+      const leased = await lease();
+      await commit(commitBody(leased.body.leaseId, TITLED));
+      w.closePutWindow();
+      const res = await report({ leaseId: leased.body.leaseId, reason });
+      assert.deepEqual(res.body, { outcome: 'released', status: null, reason: null });
+      assert.equal(w.row().pdfTitle.status, undefined);
+      assert.equal(w.row().pdfTitle.reason, undefined);
+      const call = logged.mock.calls.find((c) => c.arguments[0] === '[pdf-title] lease ended; store holds the source');
+      return call.arguments[1];
+    };
+
+    const fields = await released(`  upload: HTTP 403\n${'x'.repeat(400)}`);
+    assert.equal(fields.reason, 'released');
+    assert.equal(fields.workerFailure, `upload: HTTP 403 ${'x'.repeat(283)}`);
+    assert.ok(!('workerFailure' in await released(42)), 'a non-string reason is ignored');
+    assert.ok(!('workerFailure' in await released('   ')), 'a blank reason is ignored');
+  });
+
+  await t.test('a failure reason before commit is logged with the release, never stored', async (t) => {
+    const w = world(t);
+    const logged = t.mock.method(logger, 'info', () => {});
+    const leased = await lease();
+    const res = await report({ leaseId: leased.body.leaseId, reason: 'download: HTTP 403' });
+    assert.deepEqual(res.body, { outcome: 'released', status: null, reason: null });
+    assert.equal(w.row().pdfTitle.status, undefined);
+    const call = logged.mock.calls.find((c) => c.arguments[0] === '[pdf-title] lease ended with no write');
+    assert.equal(call.arguments[1].workerFailure, 'download: HTTP 403');
+    assert.equal(call.arguments[1].reason, 'released');
+  });
+
   /**
    * PUT refused bytes, report inside the window (undone at once, nothing final), PUT the same bytes
    * again through the same link, then report after the window. Returns the final report body.

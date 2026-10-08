@@ -346,7 +346,38 @@ def test_412_on_put_releases_without_a_skip_and_leaves_the_original(world):
     assert outcomes == {"error": 1, "titled": 1}
     assert world.stored("d1") == original
     assert len(world.calls("upload")) == 2  # 412 is never retried; the second is d2's
-    assert json.loads(world.calls("report")[0]["body"]) == {"leaseId": json.loads(world.calls("commit")[0]["body"])["leaseId"]}
+    assert json.loads(world.calls("report")[0]["body"]) == {
+        "leaseId": json.loads(world.calls("commit")[0]["body"])["leaseId"], "reason": "upload: HTTP 412"}
+
+
+def test_row_lines_are_logged_on_the_main_thread(world, caplog):
+    caplog.set_level(logging.INFO, logger="pdf-title")
+    world.add("d1", _pdf())
+    world.add("d2", _pdf())
+    world.faults["upload"] = [run.Response(412)]
+
+    run.run(_client(world), max_rows=10, live=True, concurrency=2)
+
+    rows = [r for r in caplog.records if r.getMessage().startswith("id=")]
+    assert sorted(r.getMessage() for r in rows) == [
+        "id=d1 mode=title result=error reason=upload: HTTP 412; lease released",
+        "id=d2 mode=title result=titled reason=-",
+    ]
+    assert {r.thread for r in rows} == {threading.main_thread().ident}
+
+
+def test_row_whose_worker_raises_is_logged_and_counted_as_an_error(world, caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger="pdf-title")
+    world.add("d1", _pdf())
+
+    def boom(*_):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(run, "start", boom)
+
+    outcomes = run.run(_client(world), max_rows=10, live=True)
+
+    assert outcomes == {"error": 1}
+    assert "id=d1 mode=title result=error reason=RuntimeError: boom" in caplog.text
 
 
 def test_put_that_dies_mid_body_leaves_the_original(world):
@@ -562,7 +593,8 @@ def test_lease_too_short_at_commit_is_released_by_a_plain_report(world):
 
     assert outcomes == {"error": 1}
     assert world.calls("upload") == []
-    assert json.loads(world.calls("report")[0]["body"]) == {"leaseId": json.loads(world.calls("commit")[0]["body"])["leaseId"]}
+    assert json.loads(world.calls("report")[0]["body"]) == {
+        "leaseId": json.loads(world.calls("commit")[0]["body"])["leaseId"], "reason": "commit: HTTP 409 lease-too-short"}
     assert world.leases == {} and world.stored("d1") == original
 
 
@@ -701,7 +733,8 @@ def test_restore_by_id_releases_a_lease_that_came_back_in_title_mode(world, monk
 
     assert code == 1
     assert world.calls("download") == [] and world.calls("commit") == []
-    assert json.loads(world.calls("report")[0]["body"]) == {"leaseId": "x"}
+    assert json.loads(world.calls("report")[0]["body"]) == {
+        "leaseId": "x", "reason": "lease came back in title mode, wanted restore"}
     assert world.stored("d1") == original
 
 

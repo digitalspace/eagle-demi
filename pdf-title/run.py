@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter
+from collections import Counter, namedtuple
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime
@@ -57,6 +57,9 @@ PUT_SKEW_SECONDS = 30
 CLOCK_MARGIN_SECONDS = 5
 # `tail-refused`: the API undid our own titler's output, so the two disagree on what is allowed.
 FAILED = {"error", "needs-review", "tail-refused", "sweep-failed", "sweep-needs-review"}
+# The API logs a failed write's reason up to this length.
+REPORT_REASON_MAX = 300
+TIME_BOUND_IN_WINDOW = "run time bound reached inside the PUT window; the sweep settles it"
 
 
 class Failed(Exception):
@@ -228,6 +231,11 @@ def log_row(doc_id, mode, result, reason=None):
     return result
 
 
+# A row's result line. Workers return it and the main thread logs it: the Functions host drops
+# log records made on pool threads.
+Done = namedtuple("Done", "doc_id mode result reason")
+
+
 def _epoch(iso):
     try:
         return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
@@ -248,25 +256,25 @@ class Waiting:
     rescheduled: bool = False
 
     def line(self, result, *parts):
-        return log_row(self.doc_id, self.mode, result, "; ".join(filter(None, [self.failure, *parts])))
+        return Done(self.doc_id, self.mode, result, "; ".join(filter(None, [self.failure, *parts])))
 
 
 def start(client, row, want=None):
-    """Lease and write one row. Returns a result, or a Waiting to report later. Never raises."""
+    """Lease and write one row. Returns a Done, or a Waiting to report later. Never raises."""
     doc_id, mode = row["id"], row.get("mode")
     path = f"/documents/{urllib.parse.quote(str(doc_id), safe='')}/pdf-title"
     query = {"project": row["projectId"]} if row.get("projectId") is not None else {}
     try:
         r = client.api("POST", f"{path}/lease", {**query, **({"mode": want} if want else {})}, {})
     except Failed as exc:
-        return log_row(doc_id, mode, "error", str(exc))
+        return Done(doc_id, mode, "error", str(exc))
     if r.status != 201:
-        return log_row(doc_id, mode, "refused", f"lease: HTTP {r.status} {r.reason()}".strip())
+        return Done(doc_id, mode, "refused", f"lease: HTTP {r.status} {r.reason()}".strip())
     try:
         lease = r.json()
         mode, lease_id = lease["mode"], lease["leaseId"]
     except (ValueError, KeyError, TypeError) as exc:
-        return log_row(doc_id, mode, "error", f"lease: unreadable answer ({type(exc).__name__})")
+        return Done(doc_id, mode, "error", f"lease: unreadable answer ({type(exc).__name__})")
 
     report, failure, due = {"leaseId": lease_id}, None, time.time()
     try:
@@ -276,15 +284,17 @@ def start(client, row, want=None):
     except Skipped as skip:
         report = {"leaseId": lease_id, "skipped": True, "reason": str(skip)[:200]}
     except Released as exc:
-        return log_row(doc_id, mode, "refused", str(exc))
+        return Done(doc_id, mode, "refused", str(exc))
     except Exception as exc:
         # The plain report has no skip flag: a passing failure must not mark the file skipped.
         failure = str(exc) if isinstance(exc, Failed) else f"{type(exc).__name__}: {exc}"
+    if failure:
+        report["reason"] = failure[:REPORT_REASON_MAX]
     return Waiting(doc_id, mode, path, query, report, failure, due)
 
 
 def finish(client, waiting):
-    """Report a row. Returns its result, or the Waiting once more if the API still holds the PUT window."""
+    """Report a row. Returns its Done, or the Waiting once more if the API still holds the PUT window."""
     try:
         r = client.api("PUT", waiting.path, waiting.query, waiting.report)
     except Failed as exc:
@@ -314,14 +324,15 @@ def _past(due, deadline):
 
 
 def process(client, row, want=None, deadline=None):
-    """Lease, write, wait out the PUT window and report one row. Never raises."""
+    """Lease, write, wait out the PUT window and report one row. Logs and returns its result."""
     result = start(client, row, want)
     while isinstance(result, Waiting):
         if _past(result.due, deadline):
-            return result.line("pending", "run time bound reached inside the PUT window; the sweep settles it")
+            result = result.line("pending", TIME_BOUND_IN_WINDOW)
+            break
         time.sleep(max(0.0, result.due - time.time()))
         result = finish(client, result)
-    return result
+    return log_row(*result)
 
 
 def _sweep(client):
@@ -337,14 +348,17 @@ def _sweep(client):
 
 def _drive(client, rows, concurrency, deadline):
     """Run rows `concurrency` at a time. A row waiting out its PUT window holds no worker."""
-    outcomes, held, order = Counter(), [], itertools.count()
+    outcomes, held, order, names = Counter(), [], itertools.count(), {}
     rows = iter(rows)
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         # At most `concurrency` rows start at once, so a report that is due never queues behind them.
         running, starting = set(), set()
         while True:
             while held and held[0][0] <= time.time():
-                running.add(pool.submit(finish, client, heapq.heappop(held)[2]))
+                waiting = heapq.heappop(held)[2]
+                future = pool.submit(finish, client, waiting)
+                running.add(future)
+                names[future] = waiting.doc_id, waiting.mode
             starting &= running
             while len(starting) < concurrency:
                 if deadline is not None and time.time() >= deadline:
@@ -358,6 +372,7 @@ def _drive(client, rows, concurrency, deadline):
                     break
                 future = pool.submit(start, client, row)
                 running.add(future)
+                names[future] = row["id"], row.get("mode")
                 starting.add(future)
             if not running and not held:
                 return outcomes
@@ -367,14 +382,17 @@ def _drive(client, rows, concurrency, deadline):
             timeout = max(0.0, held[0][0] - time.time()) if held else None
             done, running = wait(running, timeout=timeout, return_when=FIRST_COMPLETED)
             for future in done:
-                result = future.result()
-                if not isinstance(result, Waiting):
-                    outcomes[result] += 1
-                elif _past(result.due, deadline):
-                    outcomes[result.line("pending", "run time bound reached inside the PUT window; "
-                                                    "the sweep settles it")] += 1
-                else:
-                    heapq.heappush(held, (result.due, next(order), result))
+                doc_id, mode = names.pop(future)
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = Done(doc_id, mode, "error", f"{type(exc).__name__}: {exc}")
+                if isinstance(result, Waiting):
+                    if not _past(result.due, deadline):
+                        heapq.heappush(held, (result.due, next(order), result))
+                        continue
+                    result = result.line("pending", TIME_BOUND_IN_WINDOW)
+                outcomes[log_row(*result)] += 1
 
 
 def run(client, max_rows, live=False, concurrency=4, deadline=None):
