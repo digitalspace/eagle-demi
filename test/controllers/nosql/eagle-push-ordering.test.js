@@ -18,6 +18,7 @@ const assert = require('node:assert');
 const comments = require('../../../src/repositories/comments');
 const { logger } = require('../../../src/utils/logger');
 const { MIRRORS, captureMirror, storedStamped } = require('../../helpers/eagle-mirror-fixtures');
+const { upsertWithRetry } = require('../../../src/controllers/nosql/eagle-mirror');
 
 /** Two stamps eagle-api could have sent, oldest first, a clear gap apart. */
 const OLDER = 1757980000000;
@@ -135,4 +136,16 @@ test('a push carrying no stamp writes, and leaves the stored one alone', async (
       assert.strictEqual(row.eaglePushedAt, NEWER);
     });
   }
+});
+
+test('upsertWithRetry orders and stamps on the field it is given', async () => {
+  // An ENGAGE ingest is ordered by its own clock, not refused by a newer Eagle echo.
+  const stored = { id: 'engage-42', engagePushedAt: NEWER, eaglePushedAt: NEWER + 1000 };
+  const repo = { upsert: async (item) => item };
+  const write = (pushedAt) => upsertWithRetry(repo, (current) => ({ ...current }), async () => ({ ...stored }),
+    { pushedAt, pushedAtField: 'engagePushedAt' });
+
+  assert.strictEqual((await write(OLDER)).ignored, 'stale');
+  const { saved } = await write(NEWER + 1);
+  assert.deepStrictEqual(saved, { ...stored, engagePushedAt: NEWER + 1 }, 'the Eagle stamp is left alone');
 });

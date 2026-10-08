@@ -1029,3 +1029,119 @@ test('the four mirror routes reject anonymous and admit eagle-api', async (t) =>
       [PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID]);
   });
 });
+
+test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const ENGAGE_URL = 'https://engage.gov.bc.ca/nicomen-wind';
+  const PUSHED_AT = 1757980005000;
+
+  /** A row the ENGAGE ingest wrote: every field ENGAGE owns differs from what `eaglePeriod` sends. */
+  function engageRow(overrides = {}) {
+    return {
+      id: 'engage-42',
+      projectId: '207',
+      sourceSystem: 'engage',
+      engagementId: '42',
+      eagleProjectId: PROJECT_EAGLE_ID,
+      engagePushedAt: '2026-10-01T17:00:00.000Z',
+      eagleId: null,
+      dateStarted: '2026-09-01T00:00:00.000Z',
+      dateCompleted: '2026-09-30T00:00:00.000Z',
+      isMet: true,
+      metURL: ENGAGE_URL,
+      metURLAdmin: 'https://engage.gov.bc.ca/admin/engagements/42',
+      metBannerImageUrl: 'https://engage.gov.bc.ca/engage-banner.jpg',
+      informationLabel: 'Nicomen Wind engagement',
+      instructions: 'Share your feedback on Engage.',
+      isDeleted: false,
+      isPublished: true,
+      read: ['staff', 'idir', 'public'],
+      syncOut: {
+        eagle: { sentVersion: '2026-10-01T17:00:00.000Z', sentAt: '2026-10-01T17:00:02.000Z', status: 'sent', error: null }
+      },
+      sources: { engage: { name: 'Nicomen Wind', status: 'Published' } },
+      ...overrides
+    };
+  }
+
+  /** What an Eagle push may leave on an ENGAGE row: its id, its raw copy, its staff fields, its clock. */
+  function withEagleEcho(row, doc) {
+    const { metURLAdmin: _engageOwned, ...staff } = STAFF_PERIOD_FIELDS;
+    return { ...row, ...staff, eagleId: PERIOD_EAGLE_ID, sources: { ...row.sources, eagle: doc }, eaglePushedAt: PUSHED_AT };
+  }
+
+  async function push(doc) {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const res = mockRes();
+    await commentPeriodController.upsertFromEagle({
+      params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc, pushedAt: PUSHED_AT }, user: STAFF
+    }, res);
+    return res;
+  }
+
+  // The echo eagle-api sends after DEMI wrote the period there, carrying Eagle's own view of it.
+  const echo = (overrides) => eaglePeriod({ metURL: ENGAGE_URL, read: ['staff'], ...overrides });
+
+  await t.test('an Eagle push changes only the Eagle-owned fields', async () => {
+    const stored = engageRow({ id: PERIOD_EAGLE_ID, eagleId: PERIOD_EAGLE_ID });
+    const { store } = partitionedCosmos(t, 'projectId', [stored]);
+    const doc = echo();
+
+    const res = await push(doc);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(store.get(`207::${PERIOD_EAGLE_ID}`), withEagleEcho(stored, doc));
+  });
+
+  await t.test('an Eagle delete leaves the ENGAGE row live and only lands in the raw copy',
+    async () => {
+      const stored = engageRow({ id: PERIOD_EAGLE_ID, eagleId: PERIOD_EAGLE_ID });
+      const { store } = partitionedCosmos(t, 'projectId', [stored]);
+      const doc = echo({ isDeleted: true });
+
+      const res = await push(doc);
+
+      assert.deepStrictEqual(res.body, { id: PERIOD_EAGLE_ID, action: 'upsert' });
+      const row = store.get(`207::${PERIOD_EAGLE_ID}`);
+      assert.strictEqual(row.isDeleted, false);
+      assert.deepStrictEqual(row.read, stored.read);
+      assert.strictEqual(row.sources.eagle.isDeleted, true);
+    });
+
+  await t.test('a push that misses on id joins the ENGAGE row on its URL, no second row',
+    async () => {
+      const { store, created } = partitionedCosmos(t, 'projectId', [engageRow()]);
+      const doc = echo();
+
+      const res = await push(doc);
+
+      assert.deepStrictEqual(res.body, { id: 'engage-42', action: 'upsert' });
+      assert.deepStrictEqual(created, []);
+      assert.deepStrictEqual([...store.keys()], ['207::engage-42']);
+      assert.deepStrictEqual(store.get('207::engage-42'), withEagleEcho(engageRow(), doc));
+    });
+
+  await t.test('a push that misses on id joins the ENGAGE row already tied to it', async () => {
+    // The engagement URL changed in ENGAGE after the period reached Eagle.
+    const stored = engageRow({ eagleId: PERIOD_EAGLE_ID, metURL: 'https://engage.gov.bc.ca/renamed' });
+    const { store, created } = partitionedCosmos(t, 'projectId', [stored]);
+    const doc = echo();
+
+    await push(doc);
+
+    assert.deepStrictEqual(created, []);
+    assert.deepStrictEqual(store.get('207::engage-42'), withEagleEcho(stored, doc));
+  });
+
+  await t.test('an ENGAGE row tied to another Eagle period is not joined on a shared URL',
+    async () => {
+      const stored = engageRow({ eagleId: '5b8bcf0d0f5e9c0019a7a1ff' });
+      const { store } = partitionedCosmos(t, 'projectId', [stored]);
+
+      await push(echo());
+
+      assert.deepStrictEqual(store.get('207::engage-42'), stored);
+      assert.strictEqual(store.get(`207::${PERIOD_EAGLE_ID}`).sourceSystem, 'eagle');
+    });
+});

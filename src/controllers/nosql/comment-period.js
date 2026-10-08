@@ -31,6 +31,10 @@
  * beside it still says `public`, so `helpers/acl-cascade` gates on the flag rather than on the
  * copy. Mongo does not reuse an ObjectId, so a later push under this id is Eagle holding a record
  * again, which is the one thing that should bring it back.
+ *
+ * A ROW ENGAGE OWNS (`sourceSystem: 'engage'`) takes only Eagle's own fields from a push: the Eagle
+ * id, the raw copy and the staff fields. Dates, URLs, labels, ACL and the delete flag are ENGAGE's,
+ * and an Eagle push is often just the echo of what DEMI sent there, so it must not write them back.
  */
 
 const commentPeriods = require('../../repositories/comment-periods');
@@ -121,6 +125,23 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
   };
 }
 
+/** The Eagle echo applied to a row ENGAGE owns. */
+function eagleOwnedOnto(current, eagleId, doc) {
+  // `metURLAdmin` is an ENGAGE link that Eagle also carries: ENGAGE keeps it.
+  const { metURLAdmin: _engageOwned, ...staff } = staffFields(doc);
+  return { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
+}
+
+/**
+ * The row this push writes to: the one stored under the Eagle id, else an ENGAGE-created row in the
+ * same partition already tied to it, or one on the same engagement URL that the echo got to first.
+ */
+async function readTarget(eagleId, doc, projectId) {
+  return await commentPeriods.readForWrite(eagleId, projectId)
+    || await commentPeriods.readForWriteByEagleId(eagleId, projectId)
+    || await commentPeriods.readForWriteEngageByMetUrl(doc.metURL, projectId);
+}
+
 /**
  * Mirror one raw Eagle `CommentPeriod`, whoever asked — the push handler below or the backfill
  * (src/scripts/seed-public-reads.js). NULL when the parent is in neither container: a push answers
@@ -146,14 +167,20 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
 
   const written = await upsertWithRetry(
     commentPeriods,
-    (current) => mirrorItem(eagleId, doc, parent.id, read, current),
-    () => commentPeriods.readForWrite(eagleId, parent.id),
+    (current) => (current && current.sourceSystem === 'engage'
+      ? eagleOwnedOnto(current, eagleId, doc)
+      : mirrorItem(eagleId, doc, parent.id, read, current)),
+    () => readTarget(eagleId, doc, parent.id),
     { pushedAt }
   );
   // Nothing was written, so neither the partition cleanup nor the cascade below has anything to
   // answer for — the newer push settled both, or no write landed at all.
   if (written.status === 'conflict' || written.ignored) return written;
   const { saved, existing } = written;
+  if (existing && existing.sourceSystem === 'engage') {
+    logger.info('[Comment Period Controller] eagle push kept to Eagle fields on an ENGAGE row',
+      { eagleId, id: saved.id, projectId: saved.projectId });
+  }
 
   // A period whose parent changed lands in a NEW partition, and Cosmos leaves the old row
   // behind — still listable under the old parent. Same removal as the document mirror.
