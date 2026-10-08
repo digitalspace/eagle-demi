@@ -180,6 +180,11 @@ const config = {
 
   batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
 
+  // Largest file GET /documents/:id/download?inline=1 streams itself; bigger ones get the 302.
+  // 32 MiB is ~5 s at the measured 6.4 MB/s store read, under APIM Consumption's 30 s request cap
+  // and Front Door's 60 s origin timeout. 0 turns streaming off.
+  downloadStreamMaxBytes: intFromEnv('DOWNLOAD_STREAM_MAX_BYTES', 33554432),
+
   // Bulk document download (PUBLIC-148). Caps REFUSE rather than truncate: a job that silently
   // dropped documents would hand someone an incomplete download they had no way to notice.
   //
