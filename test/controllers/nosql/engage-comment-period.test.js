@@ -33,13 +33,14 @@ const PUSHED_AT_MS = Date.parse(PUSHED_AT);
 
 function engagement(overrides = {}) {
   return {
-    // ENGAGE ids are integers; the path carries the same id as text.
+    // ENGAGE's own shapes: integer ids and status_id, dates as zone-less UTC text
+    // (met-api project_service.py _construct_demi_payload). The path carries the id as text.
     id: 42,
     name: 'Nicomen Wind engagement',
     description: 'Share your feedback on Engage.',
-    status: 'Open',
-    start: '2026-10-01T00:00:00.000Z',
-    end: '2026-10-31T00:00:00.000Z',
+    status: 2,
+    start: '2026-10-01 07:00:00',
+    end: '2026-10-31 06:59:00',
     metURL: 'https://engage.gov.bc.ca/nicomen-wind',
     metURLAdmin: 'https://engage.gov.bc.ca/admin/engagements/42',
     bannerUrl: 'https://engage.gov.bc.ca/banner.jpg',
@@ -73,7 +74,10 @@ function eagleRow() {
  * Stage the parent, an in-memory comment period store and the sync-out queue.
  * @returns {{ store: Map, queued: object[], cascades: object[] }}
  */
-function stage(t, { rows = [], parent = storedProject(), enqueue, cascade = { succeeded: 0, failed: 0 } } = {}) {
+function stage(t, {
+  rows = [], parent = storedProject(), notification = null, enqueue, deleteById, readByEngagement,
+  cascade = { succeeded: 0, failed: 0 }
+} = {}) {
   const store = new Map(rows.map(row => [row.id, { ...row }]));
   const queued = [];
   const cascades = [];
@@ -83,12 +87,15 @@ function stage(t, { rows = [], parent = storedProject(), enqueue, cascade = { su
   });
   t.mock.method(projects, 'getByEagleId', async () => parent);
   t.mock.method(projects, 'readForWriteByEagleId', async () => null);
-  t.mock.method(notifications, 'readForWrite', async () => null);
-  t.mock.method(commentPeriods, 'readForWriteByEngagementId', async (engagementId, projectId) =>
-    [...store.values()].find(r => r.engagementId === engagementId && r.projectId === projectId) || null);
+  t.mock.method(notifications, 'readForWrite', async () => notification);
+  // The repository's order: the asked partition, then any other.
+  t.mock.method(commentPeriods, 'readForWriteByEngagementId', readByEngagement || (async (engagementId, projectId) => {
+    const tied = [...store.values()].filter(r => r.engagementId === engagementId);
+    return tied.find(r => r.projectId === projectId) || tied[0] || null;
+  }));
   t.mock.method(commentPeriods, 'readForWrite', async (id) => store.get(String(id)) || null);
   t.mock.method(commentPeriods, 'upsert', async (item) => { store.set(item.id, item); return item; });
-  t.mock.method(commentPeriods, 'deleteById', async () => {});
+  t.mock.method(commentPeriods, 'deleteById', deleteById || (async () => {}));
   t.mock.method(syncOut, 'enqueue', enqueue || (async (row) => { queued.push(row); return ['eagle']; }));
   return { store, queued, cascades };
 }
@@ -118,7 +125,12 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
     assert.strictEqual(row.sourceSystem, 'engage');
     assert.strictEqual(row.eagleProjectId, PROJECT_EAGLE_ID);
     assert.strictEqual(row.informationLabel, 'Nicomen Wind engagement');
-    assert.strictEqual(row.dateCompleted, '2026-10-31T00:00:00.000Z');
+    assert.strictEqual(row.dateStarted, '2026-10-01T07:00:00.000Z', 'zone-less ENGAGE time is read as UTC');
+    assert.strictEqual(row.dateCompleted, '2026-10-31T06:59:00.000Z');
+    assert.strictEqual(row.syncVersion, 1);
+    assert.ok(Date.parse(row.dateAdded) > 0, 'dateAdded set on create');
+    assert.strictEqual(row.metBannerImageUrl, 'https://engage.gov.bc.ca/banner.jpg');
+    assert.strictEqual('bannerUrl' in row, false, 'the banner lives in metBannerImageUrl and sources.engage only');
     assert.deepStrictEqual(queued.map(r => r.id), ['engage-42']);
   });
 
@@ -254,13 +266,13 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
     assert.strictEqual(res.body.code, 'PUSHED_AT_INVALID');
   });
 
-  await t.test('a tracking id another engagement owns is 409, its row untouched', async () => {
+  await t.test('a tracking id another engagement owns is 422, its row untouched', async () => {
     const stored = { ...eagleRow(), sourceSystem: 'engage', engagementId: '41' };
     const { store, queued } = stage(t, { rows: [stored] });
 
     const res = await push(pushOf({ trackingId: PERIOD_EAGLE_ID }));
 
-    assert.strictEqual(res.statusCode, 409);
+    assert.strictEqual(res.statusCode, 422);
     assert.strictEqual(res.body.code, 'TRACKING_ID_CLAIMED');
     assert.strictEqual(store.get(PERIOD_EAGLE_ID).engagementId, '41');
     assert.deepStrictEqual(queued, []);
@@ -313,12 +325,122 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
     assert.strictEqual(store.get('engage-42').isPublished, false);
     assert.strictEqual(queued.length, 2, 'both pushes queued for sync-out');
   });
+  await t.test('every write raises syncVersion, even one that changes nothing, and dateAdded stays', async () => {
+    const { store } = stage(t);
+    await push(pushOf());
+    const added = store.get('engage-42').dateAdded;
+
+    const res = await push(pushOf({}, new Date(PUSHED_AT_MS + 1000).toISOString()));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(store.get('engage-42').syncVersion, 2);
+    assert.strictEqual(store.get('engage-42').dateAdded, added);
+  });
+
+  await t.test('zone-less ENGAGE time is UTC whatever zone the host runs in', async (st) => {
+    const before = process.env.TZ;
+    process.env.TZ = 'America/Vancouver';
+    st.after(() => { if (before === undefined) delete process.env.TZ; else process.env.TZ = before; });
+    const { store } = stage(t);
+
+    await push(pushOf());
+
+    assert.strictEqual(store.get('engage-42').dateStarted, '2026-10-01T07:00:00.000Z');
+  });
+
+  await t.test('dates with a zone are kept to the instant, empty ones stored null', async () => {
+    const { store } = stage(t);
+
+    await push(pushOf({ start: '2026-10-01T00:00:00-07:00', end: null }));
+
+    assert.strictEqual(store.get('engage-42').dateStarted, '2026-10-01T07:00:00.000Z');
+    assert.strictEqual(store.get('engage-42').dateCompleted, null);
+  });
+
+  await t.test('a date that does not parse is 400 PUSHED_DATES_INVALID, nothing written', async () => {
+    const { store } = stage(t);
+
+    const res = await push(pushOf({ end: 'next Tuesday' }));
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body.code, 'PUSHED_DATES_INVALID');
+    assert.strictEqual(store.size, 0);
+  });
+
+  await t.test('a published engagement with no metURL is 400 METURL_REQUIRED; a draft or delete may lack one', async () => {
+    const { store } = stage(t);
+
+    const res = await push(pushOf({ metURL: '' }));
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body.code, 'METURL_REQUIRED');
+    assert.strictEqual(store.size, 0);
+
+    assert.strictEqual((await push(pushOf({ metURL: '', isPublished: false }))).statusCode, 201);
+    const deleted = await push(pushOf({ metURL: '', isDeleted: true }, new Date(PUSHED_AT_MS + 1000).toISOString()));
+    assert.strictEqual(deleted.statusCode, 200);
+  });
+
+  await t.test('an engagement under a notification is 422 PARENT_KIND_UNSUPPORTED, nothing written', async () => {
+    const { store, queued } = stage(t, { parent: null, notification: { id: PROJECT_EAGLE_ID, read: PRIVATE_ACL } });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 422);
+    assert.strictEqual(res.body.code, 'PARENT_KIND_UNSUPPORTED');
+    assert.strictEqual(store.size, 0);
+    assert.deepStrictEqual(queued, []);
+  });
+
+  await t.test('a project move writes the row under the new project and deletes the old copy', async () => {
+    const stored = {
+      id: 'engage-42', projectId: '206', sourceSystem: 'engage', engagementId: '42', eagleProjectId: 'old-eagle',
+      eagleId: PERIOD_EAGLE_ID, engagePushedAt: PUSHED_AT_MS - 1000, syncVersion: 4, read: ['staff', 'sysadmin']
+    };
+    const deletes = [];
+    const { store, queued } = stage(t, { rows: [stored], deleteById: async (id, projectId) => deletes.push([id, projectId]) });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    const row = store.get('engage-42');
+    assert.strictEqual(row.projectId, '207');
+    assert.strictEqual(row.eagleProjectId, PROJECT_EAGLE_ID);
+    assert.strictEqual(row.movedFromProjectId, '206');
+    assert.strictEqual(row.eagleId, PERIOD_EAGLE_ID, 'the Eagle id rides; sync-out recreates it under the new project');
+    assert.strictEqual(row.syncVersion, 5);
+    assert.deepStrictEqual(deletes, [['engage-42', '206']]);
+    assert.deepStrictEqual(queued.map(r => r.projectId), ['207']);
+  });
+
+  await t.test('a failed old-partition delete is logged, the push still answers and is queued', async () => {
+    const errors = [];
+    t.mock.method(logger, 'error', (message, meta) => errors.push({ message, meta }));
+    const stored = { id: 'engage-42', projectId: '206', sourceSystem: 'engage', engagementId: '42', engagePushedAt: 1 };
+    const { queued } = stage(t, { rows: [stored], deleteById: async () => { throw new Error('cosmos down'); } });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(queued.length, 1);
+    assert.strictEqual(errors.length, 1);
+    assert.match(errors[0].message, /old partition copy not removed/);
+  });
+
+  await t.test('an engagement stored more than once is 500 DUPLICATE_ID, never the 409 ENGAGE reads as current', async () => {
+    t.mock.method(logger, 'error', () => {});
+    stage(t, { readByEngagement: async () => { throw Object.assign(new Error('dup'), { code: 'DUPLICATE_ID' }); } });
+
+    const res = await push(pushOf());
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.strictEqual(res.body.code, 'DUPLICATE_ID');
+  });
 });
 
 test('commentPeriods.readForWriteByEngagementId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('finds the engagement row in the asked partition only', async () => {
+  await t.test('finds the engagement row in the asked partition first, then in any other', async () => {
     const rows = [
       { id: 'engage-42', projectId: '207', engagementId: '42' },
       { id: 'engage-42', projectId: '208', engagementId: '42' },
@@ -331,6 +453,10 @@ test('commentPeriods.readForWriteByEngagementId', async (t) => {
     });
 
     assert.deepStrictEqual(await commentPeriods.readForWriteByEngagementId('42', '208'), rows[1]);
+    assert.deepStrictEqual(await commentPeriods.readForWriteByEngagementId('43', '300'), rows[2], 'moved project');
     assert.strictEqual(await commentPeriods.readForWriteByEngagementId('44', '207'), null);
+    t.mock.method(logger, 'error', () => {});
+    await assert.rejects(commentPeriods.readForWriteByEngagementId('42', '300'), { code: 'DUPLICATE_ID' },
+      'two unmarked rows in other partitions are a duplicate, not a pick');
   });
 });

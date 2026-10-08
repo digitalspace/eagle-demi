@@ -127,19 +127,24 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
 
 /** The Eagle echo applied to a row ENGAGE owns. */
 function eagleOwnedOnto(current, eagleId, doc) {
+  // The delete of an Eagle period the row no longer names: sync-out removed it to recreate the period
+  // under a new project. It must not tie the row back to the old id.
+  if (doc.isDeleted === true && current.eagleId !== eagleId) return current;
   // `metURLAdmin` is an ENGAGE link that Eagle also carries: ENGAGE keeps it.
   const { metURLAdmin: _engageOwned, ...staff } = staffFields(doc);
   return { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
 }
 
 /**
- * The row this push writes to: the one stored under the Eagle id, else an ENGAGE-created row in the
- * same partition already tied to it, or one on the same engagement URL that the echo got to first.
+ * The row this push writes to: the one stored under the Eagle id, else an ENGAGE-created row already
+ * tied to it (in any partition, so a project move in ENGAGE does not fork a second row), else one on
+ * the same engagement URL that the echo got to first. A delete never claims a row by URL.
  */
 async function readTarget(eagleId, doc, projectId) {
   return await commentPeriods.readForWrite(eagleId, projectId)
     || await commentPeriods.readForWriteByEagleId(eagleId, projectId)
-    || await commentPeriods.readForWriteEngageByMetUrl(doc.metURL, projectId);
+    || (doc.isDeleted !== true && await commentPeriods.readForWriteEngageByMetUrl(doc.metURL, projectId))
+    || null;
 }
 
 /**

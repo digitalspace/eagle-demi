@@ -82,7 +82,9 @@ async function admitPeriod(ref, childId) {
     warnNotAdmitted(child, { period: badRefReason(ref) });
     return null;
   }
-  const period = await commentPeriods.getById(systemAccess(), periodEagleId);
+  // A period ENGAGE created is stored as `engage-<id>` and names its Eagle id in `eagleId`.
+  const period = await commentPeriods.getById(systemAccess(), periodEagleId)
+    || await commentPeriods.readForWriteByEagleId(periodEagleId);
   if (!period) {
     const reason = await classify(() => commentPeriods.readForWrite(periodEagleId), {
       eagleId: periodEagleId,

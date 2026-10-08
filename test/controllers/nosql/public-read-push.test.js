@@ -531,6 +531,23 @@ test('PUT /eagle/commentperiods/:eagleId — a period that changed level', async
 test('PUT /eagle/comments/:eagleId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
+  await t.test('a comment on a period ENGAGE created is stored under that row, found by its eagleId', async () => {
+    t.mock.method(commentPeriods, 'getById', async () => null);
+    const lookups = [];
+    t.mock.method(commentPeriods, 'readForWriteByEagleId', async (eagleId) => {
+      lookups.push(eagleId);
+      return { ...storedPeriod(), id: 'engage-42', eagleId: PERIOD_EAGLE_ID, sourceSystem: 'engage' };
+    });
+
+    const { res, written } = await pushTo(
+      commentController, comments, COMMENT_EAGLE_ID, eagleComment(), t);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(lookups, [PERIOD_EAGLE_ID]);
+    assert.strictEqual(written().periodId, 'engage-42');
+    assert.strictEqual(written().projectId, '207');
+  });
+
   await t.test('the Eagle record is stored as a comment row under its period', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
 
@@ -628,6 +645,7 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
   async function refusedComment(t, stored, doc = eagleComment()) {
     let periodReads = 0;
     t.mock.method(commentPeriods, 'getById', async () => { periodReads++; return null; });
+    t.mock.method(commentPeriods, 'readForWriteByEagleId', async () => null);
     let classifyReads = 0;
     t.mock.method(commentPeriods, 'readForWrite', async () => { classifyReads++; return stored; });
     const warned = [];
@@ -1144,4 +1162,41 @@ test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => 
       assert.deepStrictEqual(store.get('207::engage-42'), stored);
       assert.strictEqual(store.get(`207::${PERIOD_EAGLE_ID}`).sourceSystem, 'eagle');
     });
+
+  await t.test('a push under the old project finds the ENGAGE row ENGAGE moved, and writes Eagle fields there',
+    async () => {
+      // ENGAGE moved the engagement to project 208; Eagle still files the period under 207.
+      const stored = engageRow({ projectId: '208', eagleId: PERIOD_EAGLE_ID });
+      const { store, created } = partitionedCosmos(t, 'projectId', [stored]);
+      const doc = echo();
+
+      const res = await push(doc);
+
+      assert.deepStrictEqual(res.body, { id: 'engage-42', action: 'upsert' });
+      assert.deepStrictEqual(created, []);
+      assert.deepStrictEqual([...store.keys()], ['208::engage-42']);
+      assert.deepStrictEqual(store.get('208::engage-42'), withEagleEcho(stored, doc));
+    });
+
+  await t.test('the delete of an Eagle period the row no longer names leaves the row tied to its new one',
+    async () => {
+      // Sync-out deleted the old Eagle period to recreate it under a new project; this is that delete's echo.
+      const stored = engageRow({ id: PERIOD_EAGLE_ID, eagleId: '5b8bcf0d0f5e9c0019a7a1ff' });
+      const { store } = partitionedCosmos(t, 'projectId', [stored]);
+
+      await push(echo({ isDeleted: true }));
+
+      const row = store.get(`207::${PERIOD_EAGLE_ID}`);
+      assert.strictEqual(row.eagleId, '5b8bcf0d0f5e9c0019a7a1ff');
+      assert.strictEqual(row.sources.eagle, undefined);
+      assert.strictEqual(row.isDeleted, false);
+    });
+
+  await t.test('a delete never joins an ENGAGE row on its URL', async () => {
+    const { store } = partitionedCosmos(t, 'projectId', [engageRow()]);
+
+    await push(echo({ isDeleted: true }));
+
+    assert.deepStrictEqual(store.get('207::engage-42'), engageRow());
+  });
 });

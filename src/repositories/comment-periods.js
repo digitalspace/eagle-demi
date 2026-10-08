@@ -12,7 +12,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
-  assertFilterable, readForWriteIn, fetchAll, readPage
+  assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 
@@ -63,10 +63,24 @@ async function readForWriteWhere(projectId, criteria) {
   return items;
 }
 
+/**
+ * The one stored row whose `field` is `value`: in the partition first, then across partitions, so a
+ * row a project move left under another parent is still found. Unfiltered, like `readForWrite`.
+ */
+async function readForWriteByField(field, value, projectId) {
+  const criterion = eq(field, String(value), `@${field}`);
+  if (projectId != null) {
+    const [row] = await readForWriteWhere(projectId, [criterion]);
+    if (row) return row;
+  }
+  const { items } = await cosmos.query(CONTAINER,
+    { query: `SELECT * FROM c WHERE ${criterion.clause}`, parameters: criterion.params });
+  return oneRowOf(CONTAINER, value, items, PARTITION_FIELD);
+}
+
 /** The row that names this Eagle period without being stored under its id: an ENGAGE-created one. */
 async function readForWriteByEagleId(eagleId, projectId) {
-  const [row] = await readForWriteWhere(projectId, [eq('eagleId', String(eagleId), '@eagleId')]);
-  return row || null;
+  return readForWriteByField('eagleId', eagleId, projectId);
 }
 
 /**
@@ -359,10 +373,9 @@ async function setAclForProject(access, projectId, read) {
 
 // ---- ENGAGE ingest (controllers/nosql/engage-comment-period.js) ----
 
-/** The row ENGAGE already tied to this engagement, within one partition. */
+/** The row ENGAGE already tied to this engagement, in this partition or, after a project move, another. */
 async function readForWriteByEngagementId(engagementId, projectId) {
-  const [row] = await readForWriteWhere(projectId, [eq('engagementId', String(engagementId), '@engagementId')]);
-  return row || null;
+  return readForWriteByField('engagementId', engagementId, projectId);
 }
 
 // ---- ENGAGE reconcile ----

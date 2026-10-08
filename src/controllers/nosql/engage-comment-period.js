@@ -10,8 +10,9 @@
 const commentPeriods = require('../../repositories/comment-periods');
 const { constrainToProject, DELETED_CEILING } = require('../../repositories/documents');
 const { admitParent, refusalCode, eagleRef } = require('../../helpers/parent-admit');
-const { seedAcl, eagleReadUnder } = require('../../seed/transform');
-const { mirrorError } = require('../../helpers/duplicate-id');
+const { eagleReadUnder } = require('../../seed/transform');
+const { DUPLICATE_ID } = require('../../helpers/duplicate-id');
+const { serverError } = require('../../helpers/response');
 const syncOut = require('../../sync-out');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
@@ -31,7 +32,19 @@ const TRACKING_ID_CLAIMED = 'TRACKING_ID_CLAIMED';
 
 const engageRowId = (engagementId) => `engage-${engagementId}`;
 
-/** `{ engagementId, engagement, pushedAt, trackingId }`, or `{ refusal: [code, message] }`. */
+// ENGAGE formats its dates as UTC wall time with no zone, 'YYYY-MM-DD HH:MM:SS'.
+const ZONELESS = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+
+/** ISO UTC with a `Z`, null for no date, undefined when the value is not a date. Zone-less text is UTC. */
+function utcIso(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  const ms = Date.parse(ZONELESS.test(text) ? `${text.replace(' ', 'T')}Z` : text);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
+/** `{ engagementId, engagement, pushedAt, trackingId, start, end }`, or `{ refusal: [code, message] }`. */
 function engagePush(req) {
   const engagementId = String(req.params.engagementId);
   const body = req.body || {};
@@ -50,10 +63,22 @@ function engagePush(req) {
   if (trackingId && !eagleRef(trackingId)) {
     return { refusal: ['TRACKING_ID_INVALID', 'body.engagement.trackingId must be an Eagle comment period id'] };
   }
-  return { engagementId, engagement, pushedAt, trackingId };
+  const start = utcIso(engagement.start);
+  const end = utcIso(engagement.end);
+  if (start === undefined || end === undefined) {
+    return { refusal: ['PUSHED_DATES_INVALID', 'body.engagement.start and end must be dates, UTC when they carry no zone'] };
+  }
+  // Without a URL the Eagle copy cannot be matched to this row, so only a draft or a delete may lack one.
+  if (engagement.isPublished === true && engagement.isDeleted !== true && !engagement.metURL) {
+    return { refusal: ['METURL_REQUIRED', 'body.engagement.metURL is required on a published engagement'] };
+  }
+  return { engagementId, engagement, pushedAt, trackingId, start, end };
 }
 
-/** The row this engagement writes to: already tied to it, else the Eagle period it names, else its own. */
+/**
+ * The row this engagement writes to: already tied to it (in any partition, so a project move finds
+ * it), else the Eagle period it names, else its own.
+ */
 async function readTarget({ engagementId, trackingId }, projectId) {
   return await commentPeriods.readForWriteByEngagementId(engagementId, projectId)
     || (trackingId && await commentPeriods.readForWrite(trackingId, projectId))
@@ -61,21 +86,27 @@ async function readTarget({ engagementId, trackingId }, projectId) {
 }
 
 /** The ENGAGE-owned fields written over `current`; everything Eagle owns rides through untouched. */
-function engageItem({ engagementId, engagement, trackingId }, parent, current) {
+function engageItem({ engagementId, engagement, trackingId, start, end }, parent, current) {
   if (current && current.engagementId && String(current.engagementId) !== engagementId) {
     throw Object.assign(new Error('tracking id already tied to another engagement'),
       { refusal: TRACKING_ID_CLAIMED, claimedBy: String(current.engagementId), id: current.id });
   }
   const own = engagement.isPublished === true ? PUBLISHED_READ : UNPUBLISHED_READ;
-  const capped = parent.kind === 'notification' ? seedAcl(own) : eagleReadUnder(own, parent.read);
+  const capped = eagleReadUnder(own, parent.read);
   const isDeleted = engagement.isDeleted === true;
   const read = isDeleted ? constrainToProject(capped, DELETED_CEILING) : capped;
-  const bannerUrl = engagement.bannerUrl || '';
+  const projectId = String(parent.id);
+  const moved = Boolean(current) && String(current.projectId) !== projectId;
 
   return {
     ...current,
     id: current ? current.id : engageRowId(engagementId),
-    projectId: String(parent.id),
+    projectId,
+    // Names the partition a move leaves behind, so a failed delete there reads as a move, not a duplicate.
+    ...(moved ? { movedFromProjectId: String(current.projectId) } : {}),
+    // Every write raises it, even one that changes nothing sync-out sends: sync-out sends what it has not sent.
+    syncVersion: (current && Number.isInteger(current.syncVersion) ? current.syncVersion : 0) + 1,
+    dateAdded: (current && current.dateAdded) || new Date().toISOString(),
     sourceSystem: 'engage',
     engagementId,
     eagleProjectId: String(engagement.projectId),
@@ -83,13 +114,12 @@ function engageItem({ engagementId, engagement, trackingId }, parent, current) {
     isMet: true,
     metURL: engagement.metURL || '',
     metURLAdmin: engagement.metURLAdmin || '',
-    bannerUrl,
     // The field eagle-public and the Eagle mirror render the banner from.
-    metBannerImageUrl: bannerUrl,
+    metBannerImageUrl: engagement.bannerUrl || '',
     informationLabel: engagement.name || '',
     instructions: engagement.description || '',
-    dateStarted: engagement.start || null,
-    dateCompleted: engagement.end || null,
+    dateStarted: start,
+    dateCompleted: end,
     isDeleted,
     isPublished: read.includes('public'),
     read,
@@ -142,6 +172,12 @@ async function upsertFromEngage(req, res) {
         error: 'Parent project or notification not found', code: refusalCode(engagement.projectId)
       });
     }
+    // Engagements under a notification still go to Eagle from ENGAGE directly.
+    if (parent.kind === 'notification') {
+      return res.status(422).json({
+        error: 'Engagements under a project notification are not taken yet.', code: 'PARENT_KIND_UNSUPPORTED'
+      });
+    }
 
     let written;
     try {
@@ -155,7 +191,7 @@ async function upsertFromEngage(req, res) {
       if (err.refusal !== TRACKING_ID_CLAIMED) throw err;
       logger.warn(`${LABEL} tracking id already tied to another engagement`,
         { engagementId, trackingId: push.trackingId, claimedBy: err.claimedBy, id: err.id });
-      return res.status(409).json({
+      return res.status(422).json({
         error: 'body.engagement.trackingId names a period another engagement owns.',
         code: TRACKING_ID_CLAIMED
       });
@@ -169,9 +205,16 @@ async function upsertFromEngage(req, res) {
     if (written.ignored) return refuseStale(req, res, { engagementId, pushedAt, current: written.existing });
 
     const { saved, existing } = written;
-    // Same partition move as the Eagle mirror: Cosmos leaves the old row behind.
+    const queued = await enqueueQuietly(saved);
+    // Same partition move as the Eagle mirror: Cosmos leaves the old row behind. The new row is marked,
+    // so a copy this fails to remove reads as a half-finished move, not a duplicate.
     if (existing && String(existing.projectId) !== saved.projectId) {
-      await commentPeriods.deleteById(existing.id, existing.projectId);
+      try {
+        await commentPeriods.deleteById(existing.id, existing.projectId);
+      } catch (err) {
+        logger.error(`${LABEL} old partition copy not removed after a project move`,
+          { id: saved.id, engagementId, from: existing.projectId, to: saved.projectId, error: err.message });
+      }
     }
     // Comments carry their own `read[]`, so a period that changed level re-derives them, as the mirror does.
     const moved = existing && levelOfRead(existing.read) !== levelOfRead(saved.read);
@@ -194,7 +237,6 @@ async function upsertFromEngage(req, res) {
     logger.info(`${LABEL} engage push written`,
       { id: saved.id, engagementId, projectId: saved.projectId, created: !existing, isDeleted: saved.isDeleted });
 
-    const queued = await enqueueQuietly(saved);
     // The row is written and queued; only the comments under it lag behind its level.
     if (cascadeError) return res.status(500).json({ error: cascadeError, id: saved.id, queued });
     return res.status(existing ? 200 : 201).json({
@@ -205,7 +247,11 @@ async function upsertFromEngage(req, res) {
       queued
     });
   } catch (err) {
-    return mirrorError(res, err, 'engage comment period controller failed');
+    // 500, not the mirror's 409: ENGAGE reads a 409 as "already current" and stops.
+    if (err && err.code === DUPLICATE_ID) {
+      return res.status(500).json({ error: 'This engagement is stored more than once. Nothing was written.', code: DUPLICATE_ID });
+    }
+    return serverError(res, err, 'engage comment period controller failed');
   }
 }
 
