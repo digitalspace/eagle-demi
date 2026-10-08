@@ -390,6 +390,8 @@ const config = {
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
   keycloakClientId:      process.env.KEYCLOAK_CLIENT_ID || 'eagle-admin-console',
   keycloakEnabled:       process.env.KEYCLOAK_ENABLED !== 'false',
+  // The realm URL a client-credentials token is minted at (services/keycloak-client-token.js).
+  get keycloakIssuer() { return `${config.keycloakUrl.replace(/\/+$/, '')}/realms/${config.keycloakRealm}`; },
   // Tag baked into minted API keys so a dev key is visibly not a prod key. Cosmetic only —
   // nothing authorises on it.
   // ENVIRONMENT, and only ENVIRONMENT: it is what api-function-flex.bicep sets. It labels every
@@ -430,15 +432,12 @@ const config = {
   // worker.
   syncOut: {
     get queue() { return envTrim('SYNC_OUT_QUEUE'); },
-    get maxAttempts() {
-      const value = Number(envTrim('SYNC_OUT_MAX_ATTEMPTS'));
-      return Number.isInteger(value) && value > 0 ? value : 3;
-    },
     eagle: {
       get enabled() { return envTrim('SYNC_OUT_EAGLE_ENABLED') === 'true'; },
       // eagle-api's protected `/api`, not EAGLE_API_BASE: that one is the public base the seed reads.
       get apiBase() { return envTrim('EAGLE_PROTECTED_API_BASE').replace(/\/+$/, ''); },
-      get issuer() { return envTrim('EAGLE_KC_ISSUER').replace(/\/+$/, ''); },
+      // The realm eagle-api trusts is DEMI's own, so the issuer comes from KEYCLOAK_URL and KEYCLOAK_REALM.
+      get issuer() { return config.keycloakIssuer; },
       get clientId() { return envTrim('EAGLE_KC_CLIENT_ID'); },
       get clientSecret() { return secretFromEnv('EAGLE_KC_CLIENT_SECRET').trim(); },
       get milestone() { return envTrim('EAGLE_ENGAGE_MILESTONE'); }
@@ -446,8 +445,8 @@ const config = {
   },
   // ENGAGE's public API, read by both reconcile scripts. Empty skips their ENGAGE side.
   engageApiBase:           process.env.ENGAGE_API_BASE || '',
-  // Read by api/index.js off process.env, like every timer schedule; listed so the key lives here.
-  reconcileEngageSchedule: process.env.RECONCILE_ENGAGE_SCHEDULE || '',
+  // Empty registers no reconcileEngage timer. A getter: the trigger suites reload api/index.js per value.
+  get reconcileEngageSchedule() { return envTrim('RECONCILE_ENGAGE_SCHEDULE'); },
 
   // Track team feed → `project:<id>` realm roles (src/scripts/sync-track-teams.js). Two
   // client-credentials identities in the realm above: one reads Track, one holds

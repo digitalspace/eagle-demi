@@ -210,7 +210,8 @@ param searchDefinitionsQueue = ''
 // after test has run the cutover and demi-kv-prod holds the secret.
 param syncOutQueue = ''
 param syncOutEagleEnabled = false
-param eagleProtectedApiBase ='https://projects.eao.gov.bc.ca/api'
+param eagleProtectedApiBase = 'https://projects.eao.gov.bc.ca/api'
+param engageApiBase = 'https://epic-engage-web-prod.apps.gold.devops.gov.bc.ca/api'
 
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.

@@ -89,7 +89,7 @@ if (process.env.RECONCILE_SCHEDULE) {
 
 // The ENGAGE drift report, on the same terms and guarded the same way. Report only: `--repair` stays
 // a hand run, since it re-sends rows to Eagle.
-if (process.env.RECONCILE_ENGAGE_SCHEDULE) {
+if (require('../src/config').reconcileEngageSchedule) {
   app.timer('reconcileEngage', {
     schedule: '%RECONCILE_ENGAGE_SCHEDULE%',
     runOnStartup: false,
@@ -214,11 +214,13 @@ async function searchDefinitionsWorker(message, context) {
 }
 
 /**
- * Throws on the LAST attempt only, like the re-stamp: earlier failures re-queue themselves with
- * backoff (src/sync-out/index.js), because host.json's hour-long `visibilityTimeout` is the zip worker's.
+ * Earlier failures re-queue themselves with backoff, because host.json's hour-long `visibilityTimeout`
+ * is the zip worker's. The last attempt does NOT throw: it parks the message in the poison queue itself
+ * and writes the alert line once (src/sync-out/index.js).
  */
 async function syncOutWorker(message, context) {
-  await require('../src/sync-out').workerHandler(message, context);
+  await require('../src/sync-out')
+    .run(message, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
 
 /** Swallows the failure for the reason the reconcile does: the next run is the retry. */

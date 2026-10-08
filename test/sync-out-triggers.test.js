@@ -35,21 +35,22 @@ test('a queue name registers the worker against the app setting, not its value',
     'the producer sends on the host storage account; a different connection is a different queue');
 });
 
-test('the handler passes the message and delivery to sync-out, and rethrows', async (t) => {
+test('the handler passes the message, the delivery and host.json\'s ceiling to sync-out, and rethrows', async (t) => {
   const { index } = loadIndex(t, 'SYNC_OUT_QUEUE', 'sync-out');
   const resolved = require.resolve('../src/sync-out');
   const cached = require.cache[resolved];
   const calls = [];
-  const workerHandler = async (message, context) => {
-    calls.push({ message, context });
-    throw new Error('last attempt');
+  const run = async (message, delivery) => {
+    calls.push({ message, delivery });
+    throw new Error('retry not queued');
   };
-  require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: { workerHandler } };
+  require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: { run } };
   t.after(() => { require.cache[resolved] = cached; });
 
   const body = '{"consumer":"eagle","id":"engage-42"}';
-  const context = { triggerMetadata: { dequeueCount: 3 } };
-  await assert.rejects(index.syncOutWorker(body, context), /last attempt/,
-    'a failure the worker throws must reach the host, or the message never reaches the poison queue');
-  assert.deepStrictEqual(calls, [{ message: body, context }]);
+  const context = { triggerMetadata: { dequeueCount: 2 } };
+  await assert.rejects(index.syncOutWorker(body, context), /retry not queued/,
+    'a failure the worker throws must reach the host, so the message is delivered again');
+  const { maxDequeueCount } = require('../host.json').extensions.queues;
+  assert.deepStrictEqual(calls, [{ message: body, delivery: { attempt: 2, maxAttempts: maxDequeueCount } }]);
 });

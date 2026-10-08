@@ -209,7 +209,9 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'scripts/reconcile-engage.js',
     'scripts/seed-public-reads.js',
     // Sync-out writes `syncOut` and `eagleId` back onto the row it sends, sealed or not.
-    'sync-out/index.js'
+    'sync-out/index.js',
+    // Refuses to adopt an Eagle period DEMI already holds as an Eagle-owned row, whatever its level.
+    'sync-out/eagle.js'
   ].map(file => path.join(...file.split('/'))));
   const allowed = (file) => ALLOWED.has(file);
 

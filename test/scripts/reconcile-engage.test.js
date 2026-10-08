@@ -13,16 +13,16 @@ const assert = require('node:assert');
 
 const { logger } = require('../../src/utils/logger');
 const { REPORT_ID, parseArgs, run } = require('../../src/scripts/reconcile-engage');
+const config = require('../../src/config');
 
 const API = 'https://eagle.example/api';
-const ISSUER = 'https://login.example/auth/realms/eao-epic';
+const ISSUER = config.keycloakIssuer;
 const ENGAGE = 'https://engage.example/api';
 const EAGLE_PROJECT = '5cf00c03a266b7e1877504db';
 
 const ENV = {
   SYNC_OUT_EAGLE_ENABLED: 'true',
   EAGLE_PROTECTED_API_BASE: API,
-  EAGLE_KC_ISSUER: ISSUER,
   EAGLE_KC_CLIENT_ID: 'demi-sync-out',
   EAGLE_KC_CLIENT_SECRET: 'not-a-real-value',
   EAGLE_ENGAGE_MILESTONE: '5cf00c03a266b7e1877504aa'
@@ -36,11 +36,14 @@ function engageRow(overrides = {}) {
     engagementId: 42,
     eagleProjectId: EAGLE_PROJECT,
     eagleId: 'cp-42',
-    syncOut: { eagle: { status: 'sent', sentVersion: 1791478800000 } },
+    syncVersion: 2,
+    syncOut: { eagle: { status: 'sent', sentVersion: 2 } },
+    dateStarted: '2026-10-10T07:00:00.000Z',
+    dateCompleted: '2026-11-10T07:00:00.000Z',
     sources: {
       engage: {
-        start: '2026-10-10T07:00:00.000Z',
-        end: '2026-11-10T07:00:00.000Z',
+        start: '2026-10-10 07:00:00',
+        end: '2026-11-10 07:00:00',
         metURL: 'https://engage.example/have-your-say',
         isPublished: true,
         isDeleted: false
@@ -65,7 +68,9 @@ const json = (status, body) => ({ status, ok: status >= 200 && status < 300, jso
  * Fake fetch. `periods` maps an Eagle id to its record (absent = 200 []), `status` overrides one
  * id's HTTP status, `byProject` is the project list, `engagements` and `metadata` are ENGAGE's.
  */
-function fakeFetch({ periods = { 'cp-42': EAGLE_COPY }, status = {}, byProject, engagements = [], metadata = {} } = {}) {
+function fakeFetch({
+  periods = { 'cp-42': EAGLE_COPY }, status = {}, byProject, engagements = [], metadata = {}, metadataStatus = {}
+} = {}) {
   const calls = [];
   const get = async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET' });
@@ -86,6 +91,7 @@ function fakeFetch({ periods = { 'cp-42': EAGLE_COPY }, status = {}, byProject, 
       return json(200, { items: engagements.slice(start, start + size), total: engagements.length });
     }
     const meta = url.match(/^https:\/\/engage\.example\/api\/engagementsmetadata\/(\d+)$/);
+    if (meta && metadataStatus[meta[1]]) return json(metadataStatus[meta[1]], null);
     if (meta) return json(200, { engagement_id: Number(meta[1]), project_id: metadata[meta[1]] ?? null });
     throw new Error(`unexpected fetch ${url}`);
   };
@@ -107,7 +113,7 @@ function fakeRepo(rows) {
   };
 }
 
-function setup(t, { rows = [engageRow()], fetchOpts, engageApiBase = '', env = {} } = {}) {
+function setup(t, { rows = [engageRow()], fetchOpts, engageApiBase = '', env = {}, notificationIds = [] } = {}) {
   for (const [key, value] of Object.entries({ ...ENV, ...env })) {
     const before = process.env[key];
     process.env[key] = value;
@@ -124,6 +130,7 @@ function setup(t, { rows = [engageRow()], fetchOpts, engageApiBase = '', env = {
     fetch: fetcher.get,
     engageApiBase,
     enqueue: async (row) => { queued.push(String(row.id)); return ['eagle']; },
+    admitParent: async (eagleId) => ({ id: `demi-${eagleId}`, kind: notificationIds.includes(eagleId) ? 'notification' : 'project' }),
     cache: { put: async (id, doc) => { stored.push({ id, doc }); } }
   };
   return { deps, repo, queued, stored, logged, calls: fetcher.calls };
@@ -170,7 +177,7 @@ test('DEMI vs Eagle', async (t) => {
       ]
     }]);
     assert.deepStrictEqual(dry.queued, []);
-    assert.strictEqual(dry.repo.store.get('engage-42').syncOut.eagle.sentVersion, 1791478800000,
+    assert.strictEqual(dry.repo.store.get('engage-42').syncOut.eagle.sentVersion, 2,
       'a dry run writes nothing');
     assert.ok(dry.logged.info.some(line => /drift engage-42 .*dateCompleted demi=/.test(line)));
   });
@@ -232,6 +239,17 @@ test('DEMI vs Eagle', async (t) => {
       [{ eagleProjectId: EAGLE_PROJECT, metURL: EAGLE_COPY.metURL, eagleIds: ['cp-42', 'cp-43'] }]);
   });
 
+  await t.test('a row sync-out marked conflict is reported with its candidate and never re-queued', async (tt) => {
+    const { deps, queued } = setup(tt, { rows: [engageRow({
+      eagleId: null, syncOut: { eagle: { status: 'conflict', candidateEagleId: 'cp-legacy', sentVersion: 2 } }
+    })] });
+    const report = await run({ repair: true, deps });
+
+    assert.deepStrictEqual(report.conflicts, [{ id: 'engage-42', engagementId: 42, eagleId: null, candidateEagleId: 'cp-legacy' }]);
+    assert.deepStrictEqual(report.neverSynced, []);
+    assert.deepStrictEqual(queued, []);
+  });
+
   await t.test('--repair with the Eagle consumer off queues nothing and says why', async (tt) => {
     const { deps, queued, repo } = setup(tt, { rows: [engageRow({ eagleId: null })], env: { SYNC_OUT_EAGLE_ENABLED: 'false' } });
     const report = await run({ repair: true, deps });
@@ -255,28 +273,39 @@ test('ENGAGE vs DEMI', async (t) => {
     assert.ok(!calls.some(c => c.url.startsWith(ENGAGE)));
     assert.strictEqual(report.engageChecked, false);
     assert.ok(logged.warn.some(w => /ENGAGE_API_BASE is unset/.test(w)));
-    assert.match(logged.info[0], /engageMissingInDemi=skipped demiMissingInEngage=skipped/);
+    assert.match(logged.info[0], /engageMissingInDemi=skipped queued=0$/);
   });
 
-  await t.test('reports EPIC engagements DEMI lacks and published DEMI rows ENGAGE no longer lists', async (tt) => {
-    // 150 engagements: two pages. 42 is in DEMI, 7 is an EPIC one DEMI lacks, the rest carry no project.
+  await t.test('reports engagements under a project that DEMI lacks; notification parents and DEMI-only rows are not findings', async (tt) => {
+    // 150 engagements: two pages. 42 is in DEMI, 7 is under a project DEMI lacks, 8 under a notification,
+    // the rest carry no project. engage-900 is in DEMI only, which says nothing: internal engagements are unlisted.
     const engagements = Array.from({ length: 150 }, (_, i) => ({ id: i + 1 }));
-    const { deps } = setup(tt, {
+    const NOTIFICATION = '6a0c1a0e81de4d0022bf1d99';
+    const { deps, calls } = setup(tt, {
       engageApiBase: `${ENGAGE}/`,
-      rows: [
-        engageRow(),
-        engageRow({ id: 'engage-900', engagementId: 900, eagleId: null }),
-        engageRow({ id: 'engage-901', engagementId: 901, eagleId: null,
-          sources: { engage: { ...engageRow().sources.engage, isPublished: false } } })
-      ],
-      fetchOpts: { engagements, metadata: { 42: EAGLE_PROJECT, 7: '647e19af81de4d0022bf1d42' } }
+      rows: [engageRow(), engageRow({ id: 'engage-900', engagementId: 900, eagleId: null })],
+      notificationIds: [NOTIFICATION],
+      fetchOpts: { engagements, metadata: { 42: EAGLE_PROJECT, 7: '647e19af81de4d0022bf1d42', 8: NOTIFICATION } }
     });
     const report = await run({ deps });
 
     assert.strictEqual(report.engageChecked, true);
     assert.deepStrictEqual(report.engageMissingInDemi, [{ engagementId: 7, projectId: '647e19af81de4d0022bf1d42' }]);
-    // 901 is unpublished, and the anonymous list never carries those.
-    assert.deepStrictEqual(report.demiMissingInEngage, [{ id: 'engage-900', engagementId: 900, eagleId: null }]);
+    assert.strictEqual('demiMissingInEngage' in report, false);
+    assert.ok(!calls.some(c => c.url.endsWith('/engagementsmetadata/42')), 'an engagement DEMI holds needs no metadata read');
+  });
+
+  await t.test('metadata failures are one warning per status with the ids, not one per engagement', async (tt) => {
+    const { deps, logged } = setup(tt, {
+      engageApiBase: ENGAGE,
+      rows: [],
+      fetchOpts: { engagements: [{ id: 3 }, { id: 4 }, { id: 5 }], metadataStatus: { 3: 500, 5: 500 } }
+    });
+    const report = await run({ deps });
+
+    const metadata = report.warnings.filter(w => /metadata/.test(w));
+    assert.deepStrictEqual(metadata, ['ENGAGE metadata HTTP 500 for 2 engagement(s), not checked: 3,5']);
+    assert.strictEqual(logged.warn.filter(w => /metadata/.test(w)).length, 1);
   });
 });
 
@@ -285,7 +314,7 @@ test('run logs one summary line, one per finding, and --store keeps the report',
   const report = await run({ store: true, deps });
 
   assert.strictEqual(logged.info[0], '[reconcile-engage] checked=1 neverSynced=1 missingInEagle=0 drift=0 ' +
-    'duplicates=0 engageMissingInDemi=skipped demiMissingInEngage=skipped queued=0');
+    'duplicates=0 conflicts=0 engageMissingInDemi=skipped queued=0');
   assert.match(logged.info[1], /never-synced engage-42 engagement=42/);
   assert.deepStrictEqual(stored, [{ id: REPORT_ID, doc: { body: report } }]);
 });

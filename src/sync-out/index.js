@@ -5,8 +5,8 @@
  *
  * A consumer is `{ name, enabled(), wants(row), send(row, { update }) }`. The message carries ids
  * only; the worker re-reads the row, so a redelivered or late message sends the current state.
- * `engagePushedAt` is the version: a row whose `syncOut[name].sentVersion` is at or past it is not
- * sent again.
+ * `syncVersion` is the version, raised by every ENGAGE ingest write: a row whose
+ * `syncOut[name].sentVersion` is at or past it is not sent again.
  */
 
 const queues = require('../jobs/queue-client');
@@ -57,21 +57,16 @@ function parseMessage(message) {
     consumer: String(body.consumer),
     id: String(body.id),
     projectId: body.projectId ?? null,
-    attempt: Number(body.attempt) || 1
+    attempt: Number(body.attempt) || 1,
+    ...(body.resend === true ? { resend: true } : {})
   };
 }
 
-// `engagePushedAt` is epoch milliseconds; a string version is parsed as a date.
-const versionMs = (value) => {
-  if (typeof value === 'number') return value;
-  return value ? Date.parse(value) : NaN;
-};
+const versionOf = (row) => (Number.isInteger(row.syncVersion) ? row.syncVersion : 0);
 
-/** True when `sentVersion` is at or past `version`; an unparseable version is never current. */
+/** True when `sentVersion` is at or past `version`; a cleared or missing sentVersion is never current. */
 function isCurrent(sentVersion, version) {
-  const sent = versionMs(sentVersion);
-  const wanted = versionMs(version);
-  return Number.isFinite(sent) && Number.isFinite(wanted) && sent >= wanted;
+  return Number.isInteger(sentVersion) && sentVersion >= version;
 }
 
 /**
@@ -96,18 +91,22 @@ async function updateRow(id, projectId, mutate) {
   return result;
 }
 
-function recordOutcome(consumer, row, outcome) {
-  return updateRow(row.id, row.projectId, (current) => {
+/** Store the outcome on the row; resolves to the row as stored afterwards, null when it is gone. */
+async function recordOutcome(consumer, row, outcome) {
+  const result = await updateRow(row.id, row.projectId, (current) => {
     const previous = (current.syncOut && current.syncOut[consumer]) || {};
-    // A later delivery already recorded a newer send; never move the version back.
-    if (isCurrent(previous.sentVersion, outcome.sentVersion) && previous.sentVersion !== outcome.sentVersion) {
-      return null;
+    if (outcome.status === 'failed') {
+      const entry = { ...previous, status: 'failed', error: outcome.error, failedAt: outcome.at,
+        failedVersion: outcome.version };
+      return { ...current, syncOut: { ...current.syncOut, [consumer]: entry } };
     }
-    const entry = outcome.status === 'failed'
-      ? { ...previous, status: 'failed', error: outcome.error, failedAt: outcome.at }
-      : { sentVersion: outcome.sentVersion, sentAt: outcome.at, status: outcome.status, error: null };
+    // A later delivery already recorded a newer send; never move the version back.
+    if (isCurrent(previous.sentVersion, outcome.version) && previous.sentVersion !== outcome.version) return null;
+    const entry = { ...previous, ...outcome.record, sentVersion: outcome.version, sentAt: outcome.at,
+      status: outcome.status, error: null };
     return { ...current, syncOut: { ...current.syncOut, [consumer]: entry } };
   });
+  return result.row;
 }
 
 async function requeue(message, maxAttempts, err) {
@@ -125,21 +124,40 @@ async function requeue(message, maxAttempts, err) {
   return true;
 }
 
+/** The last attempt failed: record it, park the message in the poison queue, write the alert line once. */
+async function giveUp(job, consumer, row, version, err) {
+  try {
+    await recordOutcome(consumer.name, row, {
+      status: 'failed', error: err.message, version, at: new Date().toISOString()
+    });
+  } catch (recordErr) {
+    logger.error('[sync-out] could not record failure', { ...job, error: recordErr.message });
+  }
+  const poison = `${settings.queue}-poison`;
+  try {
+    await queues.queueClientFor({ name: poison, setting: 'SYNC_OUT_QUEUE', feature: 'sync-out' })
+      .sendMessage(JSON.stringify(job));
+  } catch (poisonErr) {
+    logger.error(`[sync-out] could not move the message to ${poison}`, { ...job, error: poisonErr.message });
+  }
+  // The poison alert matches this prefix; written once per message, after it is parked.
+  logger.error(`[sync-out] job failed ${job.consumer} ${job.id}: ${err.message}`, {
+    ...job, engagementId: row.engagementId, error: err.message, stack: err.stack
+  });
+}
+
 /**
- * One delivery. Throws only on the last attempt, so the message reaches the poison queue; earlier
- * failures re-queue with a doubled delay and complete the original.
+ * One delivery. Earlier failures re-queue with a doubled delay and complete the original. The last
+ * attempt never throws: it records the failure and moves the message to the poison queue itself,
+ * so the alert line is written exactly once.
  *
- * @param {object} [delivery] `attempt` is the message's `dequeueCount`, `maxAttempts` the ceiling.
+ * @param {object} [delivery] `attempt` is the message's `dequeueCount`, `maxAttempts` host.json's
+ *   `maxDequeueCount`; api/index.js reads both.
  */
-async function run(message, { attempt: dequeueCount = 1, maxAttempts = settings.maxAttempts } = {}) {
+async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {}) {
   const parsed = parseMessage(message);
   const attempt = Math.max(parsed.attempt, dequeueCount);
   const job = { ...parsed, attempt };
-
-  // Already failed its last attempt and was recorded; only the queue can poison it now.
-  if (parsed.attempt >= maxAttempts && dequeueCount > 1) {
-    throw new Error(`sync-out ${job.consumer} for row ${job.id} already failed its last attempt`);
-  }
 
   const consumer = consumers.find(c => c.name === job.consumer);
   if (!consumer) throw new Error(`sync-out has no consumer named ${job.consumer}`);
@@ -153,43 +171,37 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = settings.
     logger.warn('[sync-out] row not found, message dropped', job);
     return { skipped: 'missing' };
   }
-  const version = row.engagePushedAt;
-  if (isCurrent(row.syncOut && row.syncOut[consumer.name] && row.syncOut[consumer.name].sentVersion, version)) {
-    return { skipped: 'current' };
+  const version = versionOf(row);
+  const entry = (row.syncOut && row.syncOut[consumer.name]) || {};
+
+  // The host redelivered a last attempt that already gave up, e.g. the worker died before completing it.
+  if (attempt >= maxAttempts && dequeueCount > 1 && entry.status === 'failed' && entry.failedVersion === version) {
+    logger.warn(`[sync-out] ${job.consumer} ${job.id} already failed at version ${version}, redelivery dropped`, job);
+    return { skipped: 'failed' };
   }
+  if (!job.resend && isCurrent(entry.sentVersion, version)) return { skipped: 'current' };
 
   try {
     const result = await consumer.send(row, {
       update: (mutate) => updateRow(row.id, row.projectId, mutate)
     });
     const status = (result && result.status) || 'sent';
-    await recordOutcome(consumer.name, row, { status, sentVersion: version, at: new Date().toISOString() });
+    const stored = await recordOutcome(consumer.name, row,
+      { status, version, record: result && result.record, at: new Date().toISOString() });
+    // A write landed while this one was sending, so what reached the consumer may be older than the row.
+    // Another delivery may already have recorded that newer version, so the follow-up sends regardless.
+    if (stored && versionOf(stored) > version) {
+      await send({ consumer: job.consumer, id: job.id, projectId: stored.projectId ?? null, attempt: 1, resend: true });
+    }
     return { status, ...(result && result.eagleId ? { eagleId: result.eagleId } : {}) };
   } catch (err) {
-    if (attempt < maxAttempts && await requeue(job, maxAttempts, err)) {
-      return { retryQueued: attempt + 1 };
+    if (attempt < maxAttempts) {
+      if (await requeue(job, maxAttempts, err)) return { retryQueued: attempt + 1 };
+      throw err;
     }
-    if (attempt >= maxAttempts) {
-      try {
-        await recordOutcome(consumer.name, row, {
-          status: 'failed', error: err.message, sentVersion: version, at: new Date().toISOString()
-        });
-      } catch (recordErr) {
-        logger.error('[sync-out] could not record failure', { ...job, error: recordErr.message });
-      }
-      // Poison alert matches this prefix; logged only on the delivery that will poison.
-      logger.error(`[sync-out] job failed ${job.consumer} ${job.id}: ${err.message}`, {
-        ...job, engagementId: row.engagementId, error: err.message, stack: err.stack
-      });
-    }
-    throw err;
+    await giveUp(job, consumer, row, version, err);
+    return { failed: err.message };
   }
 }
 
-/** `storageQueue` trigger handler. */
-function workerHandler(message, context) {
-  const dequeueCount = Number(context && context.triggerMetadata && context.triggerMetadata.dequeueCount) || 1;
-  return run(message, { attempt: dequeueCount, maxAttempts: settings.maxAttempts });
-}
-
-module.exports = { enqueue, workerHandler, consumers, run, RETRY_VISIBILITY_SECONDS };
+module.exports = { enqueue, consumers, run, RETRY_VISIBILITY_SECONDS };

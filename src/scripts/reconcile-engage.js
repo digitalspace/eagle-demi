@@ -17,6 +17,8 @@ const syncOut = require('../sync-out');
 const eagle = require('../sync-out/eagle');
 const config = require('../config');
 const { writeGuarded } = require('../helpers/etag-write');
+const { admitParent } = require('../helpers/parent-admit');
+const { clientCredentialsToken } = require('../services/keycloak-client-token');
 const { logger } = require('../utils/logger');
 
 const REPORT_ID = cache.RECONCILE_ENGAGE_REPORT_ID;
@@ -68,31 +70,20 @@ function driftFields(expected, actual) {
 /** Same test sync-out's send() applies before it deletes the Eagle copy. */
 const isDeletedRow = row => Boolean(row.isDeleted || (row.sources && row.sources.engage && row.sources.engage.isDeleted));
 
-/**
- * GET against eagle-api with a client-credentials token, from the sync-out Eagle settings.
- * sync-out/eagle.js keeps its token helper private, so this mints its own.
- */
+/** GET against eagle-api with a client-credentials token, from the sync-out Eagle settings. */
 function eagleReader(get) {
   const s = settings.eagle;
   const missing = [
-    ['EAGLE_PROTECTED_API_BASE', s.apiBase], ['EAGLE_KC_ISSUER', s.issuer], ['EAGLE_KC_CLIENT_ID', s.clientId],
+    ['EAGLE_PROTECTED_API_BASE', s.apiBase], ['EAGLE_KC_CLIENT_ID', s.clientId],
     ['EAGLE_KC_CLIENT_SECRET', s.clientSecret]
   ].filter(([, value]) => !value).map(([name]) => name);
   if (missing.length) return { missing };
 
   let bearer = null;
   const token = async () => {
-    if (bearer) return bearer;
-    const res = await get(`${s.issuer}/protocol/openid-connect/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials', client_id: s.clientId, client_secret: s.clientSecret
-      }),
-      signal: AbortSignal.timeout(TIMEOUT_MS)
-    });
-    if (!res.ok) throw new Error(`eagle token for ${s.clientId}: HTTP ${res.status}`);
-    bearer = (await res.json()).access_token;
+    bearer = bearer || (await clientCredentialsToken({
+      issuer: s.issuer, clientId: s.clientId, clientSecret: s.clientSecret, timeoutMs: TIMEOUT_MS, fetch: get
+    })).accessToken;
     return bearer;
   };
   const request = async path => get(`${s.apiBase}${path}`, {
@@ -118,6 +109,12 @@ async function checkEagle(rows, reader, report) {
   for (const row of rows) {
     report.checked++;
     const deleted = isDeletedRow(row);
+    const entry = (row.syncOut && row.syncOut[eagle.name]) || {};
+    // Sync-out found the Eagle period on this URL already mirrored as an Eagle-owned row: a re-send meets the same refusal.
+    if (!row.eagleId && entry.status === 'conflict') {
+      report.conflicts.push({ ...rowRef(row), candidateEagleId: entry.candidateEagleId || null });
+      continue;
+    }
     if (!row.eagleId) {
       if (!deleted) {
         report.neverSynced.push(rowRef(row));
@@ -220,40 +217,45 @@ async function engagementList(base, get) {
   }
 }
 
-/** ENGAGE vs DEMI, report only. */
-async function checkEngage(base, rows, get, report) {
+/**
+ * ENGAGE vs DEMI, report only: published engagements under a project that DEMI holds no row for. One
+ * under a notification is skipped, since those still go to Eagle from ENGAGE directly. The reverse check
+ * is not made: ENGAGE's anonymous list leaves out internal engagements, so a DEMI row missing from it
+ * says nothing.
+ */
+async function checkEngage(base, rows, get, report, admit) {
   const engagements = await engagementList(base, get);
   const demiByEngagement = new Set(rows.map(row => String(row.engagementId)));
+  const unread = new Map();
   for (const engagement of engagements) {
+    if (demiByEngagement.has(String(engagement.id))) continue;
     const url = `${base}/engagementsmetadata/${encodeURIComponent(engagement.id)}`;
     const res = await get(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (!res.ok) {
-      report.warnings.push(`ENGAGE GET ${url}: HTTP ${res.status}, engagement ${engagement.id} not checked`);
+      unread.set(res.status, [...(unread.get(res.status) || []), engagement.id]);
       continue;
     }
     const projectId = (await res.json()).project_id;
-    if (projectId && !demiByEngagement.has(String(engagement.id))) {
-      report.engageMissingInDemi.push({ engagementId: engagement.id, projectId: String(projectId) });
-    }
+    if (!projectId) continue;
+    const parent = await admit(projectId);
+    if (parent && parent.kind === 'notification') continue;
+    report.engageMissingInDemi.push({ engagementId: engagement.id, projectId: String(projectId) });
   }
-  const listed = new Set(engagements.map(engagement => String(engagement.id)));
-  for (const row of rows) {
-    const src = (row.sources && row.sources.engage) || {};
-    if (isDeletedRow(row) || !src.isPublished || listed.has(String(row.engagementId))) continue;
-    report.demiMissingInEngage.push(rowRef(row));
+  for (const [status, ids] of unread) {
+    report.warnings.push(`ENGAGE metadata HTTP ${status} for ${ids.length} engagement(s), not checked: ${ids.join(',')}`);
   }
 }
 
 /**
  * @param {object} [opts] {repair} re-queue drifted rows, {store} keep the report, {limit} rows
- *   checked against Eagle, {deps} test seam: {commentPeriods, enqueue, fetch, cache, engageApiBase}
+ *   checked against Eagle, {deps} test seam: {commentPeriods, enqueue, fetch, cache, engageApiBase, admitParent}
  */
 async function reconcileEngage({ repair: doRepair = false, limit = null, deps = {} } = {}) {
   const repo = deps.commentPeriods || commentPeriods;
   const get = deps.fetch || fetch;
   const report = {
     at: new Date().toISOString(), checked: 0, neverSynced: [], missingInEagle: [], drift: [],
-    duplicates: [], engageMissingInDemi: [], demiMissingInEngage: [], queued: 0, warnings: [],
+    duplicates: [], conflicts: [], engageMissingInDemi: [], queued: 0, warnings: [],
     engageChecked: false
   };
 
@@ -274,7 +276,7 @@ async function reconcileEngage({ repair: doRepair = false, limit = null, deps = 
     report.warnings.push('ENGAGE_API_BASE is unset: ENGAGE side not checked');
   } else {
     try {
-      await checkEngage(base, rows, get, report);
+      await checkEngage(base, rows, get, report, deps.admitParent || admitParent);
       report.engageChecked = true;
     } catch (err) {
       report.warnings.push(`ENGAGE side not checked: ${err.message}`);
@@ -287,8 +289,8 @@ function summaryLine(r) {
   const engageCount = n => (r.engageChecked ? n : 'skipped');
   return `${TAG} checked=${r.checked} neverSynced=${r.neverSynced.length} ` +
     `missingInEagle=${r.missingInEagle.length} drift=${r.drift.length} duplicates=${r.duplicates.length} ` +
-    `engageMissingInDemi=${engageCount(r.engageMissingInDemi.length)} ` +
-    `demiMissingInEngage=${engageCount(r.demiMissingInEngage.length)} queued=${r.queued}`;
+    `conflicts=${r.conflicts.length} engageMissingInDemi=${engageCount(r.engageMissingInDemi.length)} ` +
+    `queued=${r.queued}`;
 }
 
 function findingLines(r) {
@@ -300,9 +302,9 @@ function findingLines(r) {
       f.fields.map(d => `${d.field} demi=${d.demi} eagle=${d.eagle}`).join(' ')),
     ...r.duplicates.map(f => `${TAG} duplicate eagleProject=${f.eagleProjectId} metURL=${f.metURL} ` +
       `eagleIds=${f.eagleIds.join(',')}`),
+    ...r.conflicts.map(f => `${TAG} conflict ${ref(f)} candidateEagleId=${f.candidateEagleId}`),
     ...r.engageMissingInDemi.map(f => `${TAG} engage-missing-in-demi engagement=${f.engagementId} ` +
-      `project=${f.projectId}`),
-    ...r.demiMissingInEngage.map(f => `${TAG} demi-missing-in-engage ${ref(f)}`)
+      `project=${f.projectId}`)
   ];
 }
 

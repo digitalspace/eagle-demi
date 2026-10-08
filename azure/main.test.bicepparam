@@ -99,7 +99,8 @@ param searchDefinitionsQueue = 'search-definitions'
 // eagleEngageMilestone stays '' until the Eagle milestone id is chosen; set it before the consumer goes on.
 param syncOutQueue = 'sync-out'
 param syncOutEagleEnabled = false
-param eagleProtectedApiBase ='https://eagle-test.apps.silver.devops.gov.bc.ca/api'
+param eagleProtectedApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api'
+param engageApiBase = 'https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api'
 
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //

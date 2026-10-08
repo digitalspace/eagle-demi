@@ -298,6 +298,12 @@ param syncOutEagleEnabled bool = false
 @description('eagle-api base the sync-out consumer writes to, e.g. https://eagle-test.apps.silver.devops.gov.bc.ca/api. Not eagleApiBase, which is the public read path.')
 param eagleProtectedApiBase string = ''
 
+@description('ENGAGE public API base, e.g. https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api. Empty skips the ENGAGE side of both reconciles.')
+param engageApiBase string = ''
+
+@description('Comma-separated registry row ids permitted on PUT /engage/*. Empty refuses every writer.')
+param engagePrincipals string = 'apim:engage'
+
 @description('NCRONTAB schedule for the ENGAGE reconcile timer. Empty registers no timer.')
 param reconcileEngageSchedule string = ''
 
@@ -711,16 +717,8 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           value: syncOutEagleEnabled ? 'true' : 'false'
         }
         {
-          name: 'SYNC_OUT_MAX_ATTEMPTS'
-          value: '3'
-        }
-        {
           name: 'EAGLE_PROTECTED_API_BASE'
           value: eagleProtectedApiBase
-        }
-        {
-          name: 'EAGLE_KC_ISSUER'
-          value: '${keycloakUrl}/realms/${keycloakRealm}'
         }
         {
           name: 'EAGLE_KC_CLIENT_ID'
@@ -737,6 +735,11 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'RECONCILE_ENGAGE_SCHEDULE'
           value: reconcileEngageSchedule
+        }
+        // ENGAGE's public API, read by both reconcile scripts. Empty skips their ENGAGE side.
+        {
+          name: 'ENGAGE_API_BASE'
+          value: engageApiBase
         }
         // What src/scripts/put-search-datasources.js needs to build a data source's connection
         // string: the Cosmos account it names lives in this deployment's subscription and group,
@@ -936,6 +939,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'DEMI_PDF_TITLE_WORKER_PRINCIPALS'
           value: pdfTitleWorkerPrincipals
+        }
+        {
+          name: 'DEMI_ENGAGE_PRINCIPALS'
+          value: engagePrincipals
         }
         {
           // Always present: an empty value makes the gate answer backup-unconfigured and refuse every lease.

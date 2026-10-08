@@ -333,11 +333,12 @@ node src/scripts/reconcile-engage.js --limit 20
 ```
 
 It compares each ENGAGE row with its Eagle copy (dates to the minute, `isPublished`, `metURL`) and
-reports rows never sent to Eagle, rows Eagle no longer holds, drift, and Eagle projects with two
-periods on one engagement URL. `--repair` sends those rows through the sync-out queue again, so
-DEMI's copy wins; the script never writes to Eagle itself. With `ENGAGE_API_BASE` set it also lists
-EPIC engagements that have no DEMI row, and published DEMI rows ENGAGE no longer lists. That part
-only reports.
+reports rows never sent to Eagle, rows Eagle no longer holds, drift, Eagle projects with two
+periods on one engagement URL, and rows sync-out marked `conflict` (their URL matched an Eagle period
+DEMI already mirrors as an Eagle-owned row). `--repair` sends the first three through the sync-out
+queue again, so DEMI's copy wins; the script never writes to Eagle itself. With `ENGAGE_API_BASE` set
+it also lists published ENGAGE engagements under a project that have no DEMI row. That part only
+reports.
 
 Set `RECONCILE_ENGAGE_SCHEDULE` (NCRONTAB, like `RECONCILE_SCHEDULE`) and the API app registers the
 timer `reconcileEngage`, which runs with `--store` and never with `--repair`. `GET
@@ -353,13 +354,16 @@ in `src/config.js` (`syncOut`, `engageApiBase`):
 |---|---|
 | `SYNC_OUT_QUEUE` | Queue name. Unset: no worker is registered and enqueue fails, logged per push. |
 | `SYNC_OUT_EAGLE_ENABLED` | `true` to send to Eagle. Anything else queues nothing. |
-| `SYNC_OUT_MAX_ATTEMPTS` | Sends per row before the message goes to the poison queue. Default 3. |
 | `EAGLE_PROTECTED_API_BASE` | eagle-api's protected `/api` base. Not `EAGLE_API_BASE`, which is the public base the seed reads. |
-| `EAGLE_KC_ISSUER`, `EAGLE_KC_CLIENT_ID`, `EAGLE_KC_CLIENT_SECRET` | Client-credentials login to eagle-api. The secret comes from Key Vault. |
+| `EAGLE_KC_CLIENT_ID`, `EAGLE_KC_CLIENT_SECRET` | Client-credentials login to eagle-api, at the realm `KEYCLOAK_URL` and `KEYCLOAK_REALM` name. The secret comes from Key Vault. |
 | `EAGLE_ENGAGE_MILESTONE` | Milestone id sent on every Eagle write. eagle-api stores a bad id when it is missing. |
-| `ENGAGE_API_BASE` | ENGAGE's API, read by both reconcile scripts. Unset skips their ENGAGE side. |
+| `ENGAGE_API_BASE` | ENGAGE's API, read by both reconcile scripts. Unset skips their ENGAGE side. Bicep param `engageApiBase`. |
 | `RECONCILE_ENGAGE_SCHEDULE` | Timer schedule above. |
-| `DEMI_ENGAGE_PRINCIPALS` | Who may call the ingest. Default `apim:engage`; see "Authentication & authorization". |
+| `DEMI_ENGAGE_PRINCIPALS` | Who may call the ingest. Default `apim:engage`; see "Authentication & authorization". Bicep param `engagePrincipals`. |
+
+A message gets host.json's `maxDequeueCount` sends. Earlier failures re-queue with a doubling delay;
+the last one records `failed` on the row, moves the message to `<SYNC_OUT_QUEUE>-poison` and logs
+`[sync-out] job failed` once.
 
 ### Parity with eagle-api
 

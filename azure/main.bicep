@@ -328,6 +328,13 @@ param eagleEngageMilestone string = ''
 @description('NCRONTAB schedule for the ENGAGE reconcile timer, e.g. `0 30 10 * * *`. Empty runs it never.')
 param reconcileEngageSchedule string = ''
 
+@description('ENGAGE public API base the reconcile scripts read. Empty skips their ENGAGE side.')
+param engageApiBase string = ''
+
+// Empty refuses every writer, so blanking it closes the ENGAGE ingest. Never share a principal with eagleMirrorPrincipals.
+@description('Comma-separated registry row ids permitted on PUT /engage/*.')
+param engagePrincipals string = 'apim:engage'
+
 @description('Deploy the log alert that fires when a bulk job fails.')
 param deployBulkDownloadPoisonAlert bool = false
 
@@ -776,6 +783,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     syncOutEagleClientSecretUri: syncOutEagleClientSecretUri
     eagleEngageMilestone: eagleEngageMilestone
     reconcileEngageSchedule: reconcileEngageSchedule
+    engageApiBase: engageApiBase
+    engagePrincipals: engagePrincipals
     // The identity the SEARCH service runs indexers as, which is only ours when we deployed the
     // service: prod's `demi-search-prod` runs as `eagle-search-identity-prod`.
     dataSourceIdentityId: deploySearch ? identityId : existingSearchIndexerIdentityId

@@ -310,8 +310,8 @@ resource chunkRestampPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
   }
 }
 
-// A sync-out message that died. Same shape as chunkRestampPoisonAlert: the worker writes
-// `[sync-out] job failed` once, on the attempt that runs out of retries.
+// A sync-out message that died. The worker itself moves the message to the poison queue on the attempt
+// that runs out of retries, then writes `[sync-out] job failed` once.
 resource syncOutPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(syncOutQueue)) {
   name: 'demi-sync-out-failed-${environmentName}'
   location: location
@@ -319,7 +319,7 @@ resource syncOutPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' 
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI sync-out job failed'
-    description: 'A sync-out message failed after its retries, so Eagle did not get that comment period change. The message is in the `${syncOutQueue}-poison` queue and the log line names the row.'
+    description: 'A sync-out message failed after its retries, so Eagle did not get that comment period change. The worker moved the message to the `${syncOutQueue}-poison` queue before it wrote the line, and the line names the row.'
     // Warning: one period is stale in Eagle until the next send or reconcile.
     severity: 2
     enabled: true
