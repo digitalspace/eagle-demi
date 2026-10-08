@@ -320,6 +320,25 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.strictEqual(second.reduce((n, s) => n + s.planned, 0), 0);
   });
 
+  await t.test('deleted rows the old cap stored against either parent read go under the delete ceiling in one pass', async (t) => {
+    // The old rule gave `staff` against the stored project read and `team` against the reversed one;
+    // the delete ceiling sends both to `sysadmin`, where an uncapped match would give `inspector`.
+    const writes = fakeCosmos(t, {
+      projects: [{ ...WIDENED_PROJECT, read: ['inspector', 'staff'], eagleRead: ['inspector'] }],
+      commentPeriods: [
+        { id: 'cp-1', projectId: 'p-w', eagleId: 'cp-1', read: ['staff'], eagleRead: ['inspector'], isDeleted: true, _etag: 'x' }
+      ],
+      documents: [
+        { id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['team'], ownRead: ['inspector'], isDeleted: true, _etag: 'x' }
+      ]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'cp-1'), ['sysadmin']);
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['sysadmin']);
+    const second = await reverse('--live');
+    assert.strictEqual(second.reduce((n, s) => n + s.planned, 0), 0);
+  });
+
   await t.test('a row under a team parent the rule left alone is not rewritten', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [{ ...WIDENED_PROJECT, read: ['team'], eagleRead: ['team'] }],
