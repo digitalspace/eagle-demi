@@ -12,6 +12,7 @@ const crypto = require('node:crypto');
 const settings = require('../config').syncOut;
 const commentPeriods = require('../repositories/comment-periods');
 const { clientCredentialsToken } = require('../services/keycloak-client-token');
+const { refId } = require('../controllers/nosql/eagle-mirror');
 const { logger } = require('../utils/logger');
 
 const NAME = 'eagle';
@@ -258,7 +259,9 @@ async function send(row, { update }) {
   const body = bodyFor(row, s);
   if (!row.eagleId) return create(s, row, body, update, logFields, null);
 
-  const sentUnder = row.syncOut && row.syncOut[NAME] && row.syncOut[NAME].projectId;
+  // Before the first send, the Eagle copy's own project: an adopted row ENGAGE moved has no send record yet.
+  const sentUnder = (row.syncOut && row.syncOut[NAME] && row.syncOut[NAME].projectId)
+    || refId(row.sources && row.sources.eagle && row.sources.eagle.project);
   if (sentUnder && String(sentUnder) !== String(row.eagleProjectId)) {
     // eagle-api's PUT keeps a period's project, so a move is a delete under the old one and a create under the new.
     // create() refuses an empty metURL before anything is written, so check first rather than delete and stop.
@@ -276,6 +279,8 @@ module.exports = {
   name: NAME,
   enabled: () => settings.eagle.enabled,
   wants: (row) => Boolean(row) && row.sourceSystem === 'engage',
+  // Another delivery holds a live create claim: its outcome, not this one's failure, settles the row.
+  inFlight: (entry) => Boolean(claimHeld(entry, Date.now())),
   send,
   bodyFor,
   clearToken

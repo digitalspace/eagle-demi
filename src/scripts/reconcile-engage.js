@@ -115,6 +115,12 @@ async function checkEagle(rows, reader, report) {
       report.conflicts.push({ ...rowRef(row), candidateEagleId: entry.candidateEagleId || null });
       continue;
     }
+    // Sync-out refused to create it (no metURL); a re-send meets the same refusal until ENGAGE sends a URL.
+    const skippedNow = entry.status === 'skipped' && entry.sentVersion === row.syncVersion;
+    if (!row.eagleId && !deleted && (skippedNow || !row.metURL)) {
+      report.skipped.push(rowRef(row));
+      continue;
+    }
     if (!row.eagleId) {
       if (!deleted) {
         report.neverSynced.push(rowRef(row));
@@ -196,7 +202,7 @@ async function repair(rows, { repo, enqueue }, report) {
   for (const row of rows) {
     try {
       await markUnsent(repo, row);
-      if ((await enqueue(row)).length) report.queued++;
+      if ((await enqueue(row, { repair: true })).length) report.queued++;
     } catch (err) {
       report.warnings.push(`could not re-queue row ${row.id}: ${err.message}`);
     }
@@ -255,7 +261,7 @@ async function reconcileEngage({ repair: doRepair = false, limit = null, deps = 
   const get = deps.fetch || fetch;
   const report = {
     at: new Date().toISOString(), checked: 0, neverSynced: [], missingInEagle: [], drift: [],
-    duplicates: [], conflicts: [], engageMissingInDemi: [], queued: 0, warnings: [],
+    duplicates: [], conflicts: [], skipped: [], engageMissingInDemi: [], queued: 0, warnings: [],
     engageChecked: false
   };
 
@@ -289,7 +295,7 @@ function summaryLine(r) {
   const engageCount = n => (r.engageChecked ? n : 'skipped');
   return `${TAG} checked=${r.checked} neverSynced=${r.neverSynced.length} ` +
     `missingInEagle=${r.missingInEagle.length} drift=${r.drift.length} duplicates=${r.duplicates.length} ` +
-    `conflicts=${r.conflicts.length} engageMissingInDemi=${engageCount(r.engageMissingInDemi.length)} ` +
+    `conflicts=${r.conflicts.length} skipped=${r.skipped.length} engageMissingInDemi=${engageCount(r.engageMissingInDemi.length)} ` +
     `queued=${r.queued}`;
 }
 
@@ -303,6 +309,7 @@ function findingLines(r) {
     ...r.duplicates.map(f => `${TAG} duplicate eagleProject=${f.eagleProjectId} metURL=${f.metURL} ` +
       `eagleIds=${f.eagleIds.join(',')}`),
     ...r.conflicts.map(f => `${TAG} conflict ${ref(f)} candidateEagleId=${f.candidateEagleId}`),
+    ...r.skipped.map(f => `${TAG} skipped ${ref(f)}`),
     ...r.engageMissingInDemi.map(f => `${TAG} engage-missing-in-demi engagement=${f.engagementId} ` +
       `project=${f.projectId}`)
   ];

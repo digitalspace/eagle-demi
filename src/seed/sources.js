@@ -246,7 +246,11 @@ function trackApiToExtract(project) {
 
 /** Client-credentials bearer for a confidential realm client. */
 async function clientToken(clientId, clientSecret) {
-  return (await clientCredentialsToken({ issuer: config.keycloakIssuer, clientId, clientSecret })).accessToken;
+  try {
+    return (await clientCredentialsToken({ issuer: config.keycloakIssuer, clientId, clientSecret })).accessToken;
+  } catch (err) {
+    throw new Error(`[seed] ${err.message}`, { cause: err });
+  }
 }
 
 const trackFeedConfigured = () =>

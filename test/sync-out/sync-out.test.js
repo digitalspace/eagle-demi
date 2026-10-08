@@ -346,6 +346,122 @@ test('sync-out', async (t) => {
     assert.match(logger.warn.mock.calls.at(-1).arguments[0], /no access_token/);
   });
 
+  await t.test('a delivery that sent VERSION after another recorded VERSION+1 keeps VERSION+1 and queues a resend', async (tt) => {
+    const store = wireStore(tt, engageRow({ eagleId: 'cp-9' }));
+    const sent = wireQueue(tt);
+    wireEagle(tt, { 'PUT /commentperiod/cp-9': { body: { matchedCount: 1 } } });
+    const put = globalThis.fetch;
+    let raced = false;
+    tt.mock.method(globalThis, 'fetch', async (url, opts) => {
+      const res = await put(url, opts);
+      if (!raced && opts && opts.method === 'PUT') {
+        raced = true;
+        // Another delivery sent and recorded the next version while this PUT was in flight.
+        store.row = { ...store.row, syncVersion: VERSION + 1, _etag: 'other',
+          syncOut: { eagle: { sentVersion: VERSION + 1, status: 'sent' } } };
+      }
+      return res;
+    });
+
+    await run(message());
+
+    assert.strictEqual(store.row.syncOut.eagle.sentVersion, VERSION + 1);
+    assert.deepStrictEqual(sent.map(s => s.body), [{ ...message(), resend: true }],
+      'Eagle may hold VERSION, so the newer row goes again');
+  });
+
+  await t.test('a last-attempt failure after a newer send was recorded writes no failure and no alert', async (tt) => {
+    const store = wireStore(tt, engageRow({ eagleId: 'cp-9' }));
+    const sent = wireQueue(tt);
+    wireEagle(tt, { 'PUT /commentperiod/cp-9': { status: 503 } });
+    const put = globalThis.fetch;
+    tt.mock.method(globalThis, 'fetch', async (url, opts) => {
+      store.row = { ...store.row, _etag: 'other', syncOut: { eagle: { sentVersion: VERSION, status: 'sent' } } };
+      return put(url, opts);
+    });
+
+    assert.deepStrictEqual(await run(message({ attempt: 3 })), { skipped: 'superseded' });
+    assert.strictEqual(store.row.syncOut.eagle.status, 'sent');
+    assert.strictEqual(sent.length, 0, 'nothing parked in poison');
+    assert.strictEqual(logger.error.mock.calls.filter(c => /job failed/.test(c.arguments[0])).length, 0);
+    assert.match(logger.warn.mock.calls.at(-1).arguments[0], /a newer send or a create in flight/);
+  });
+
+  await t.test('a last-attempt failure while another delivery holds a live create claim writes no failure', async (tt) => {
+    const claim = { status: 'creating', claim: 'other', claimedAt: new Date().toISOString() };
+    const store = wireStore(tt, engageRow({ syncOut: { eagle: claim } }));
+    const sent = wireQueue(tt);
+    wireEagle(tt, {});
+
+    assert.deepStrictEqual(await run(message({ attempt: 3 })), { skipped: 'superseded' });
+    assert.deepStrictEqual(store.row.syncOut.eagle, claim);
+    assert.strictEqual(sent.length, 0);
+    assert.strictEqual(logger.error.mock.calls.filter(c => /job failed/.test(c.arguments[0])).length, 0);
+  });
+
+  await t.test('a read error on the last attempt still parks the message and alerts once', async (tt) => {
+    const sent = wireQueue(tt);
+    tt.mock.method(commentPeriods, 'readForWrite', async () => { throw new Error('cosmos down'); });
+
+    assert.deepStrictEqual(await run(message({ attempt: 3 })), { failed: 'cosmos down' });
+    assert.deepStrictEqual(sent.map(s => [s.queue, s.body]), [['sync-out-poison', message({ attempt: 3 })]]);
+    assert.strictEqual(logger.error.mock.calls.filter(c => /^\[sync-out\] job failed eagle engage-42/.test(c.arguments[0])).length, 1);
+  });
+
+  await t.test('an unparseable message on its last delivery is parked as it came and alerts once', async (tt) => {
+    const sent = [];
+    tt.mock.method(queues, 'queueClientFor', ({ name }) => ({
+      sendMessage: async (body) => { sent.push({ queue: name, body }); }
+    }));
+
+    await assert.rejects(run('not json', { attempt: 1 }), /not JSON/, 'an earlier delivery leaves the retry to the host');
+    const result = await run('not json', { attempt: 3 });
+
+    assert.match(result.failed, /not JSON/);
+    assert.deepStrictEqual(sent, [{ queue: 'sync-out-poison', body: 'not json' }]);
+    assert.strictEqual(logger.error.mock.calls.filter(c => /^\[sync-out\] job failed/.test(c.arguments[0])).length, 1);
+  });
+
+  await t.test('a resend or repair message is never dropped as an already-failed redelivery', async (tt) => {
+    for (const flag of ['resend', 'repair']) {
+      const store = wireStore(tt, engageRow({
+        eagleId: 'cp-9', syncOut: { eagle: { status: 'failed', failedVersion: VERSION } }
+      }));
+      wireQueue(tt);
+      const calls = wireEagle(tt, { 'PUT /commentperiod/cp-9': { body: { matchedCount: 1 } } });
+
+      await run(message({ attempt: 3, [flag]: true }), { attempt: 2 });
+
+      assert.deepStrictEqual(eagleCalls(calls), ['PUT /commentperiod/cp-9'], flag);
+      assert.strictEqual(store.row.syncOut.eagle.status, 'sent', flag);
+      tt.mock.restoreAll();
+      for (const level of ['info', 'warn', 'error']) tt.mock.method(logger, level, () => {});
+    }
+  });
+
+  await t.test('an adopted row moved before its first send is recreated under the new project', async (tt) => {
+    // ENGAGE adopted Eagle period cp-old (under eagle-old), then moved the engagement before sync-out ran.
+    const store = wireStore(tt, engageRow({
+      id: 'cp-old', eagleId: 'cp-old', eagleProjectId: 'eagle-new', sources: {
+        ...engageRow().sources, eagle: { _id: 'cp-old', project: 'eagle-old' }
+      }
+    }));
+    wireQueue(tt);
+    const calls = wireEagle(tt, {
+      'DELETE /commentperiod/cp-old': { body: {} },
+      'GET /commentperiod?project=eagle-new&fields=metURL': { body: [] },
+      'POST /commentperiod': { body: { _id: 'cp-new' } }
+    });
+
+    await run(message({ id: 'cp-old' }));
+
+    assert.deepStrictEqual(eagleCalls(calls), [
+      'DELETE /commentperiod/cp-old', 'GET /commentperiod?project=eagle-new&fields=metURL', 'POST /commentperiod'
+    ]);
+    assert.strictEqual(store.row.eagleId, 'cp-new');
+    assert.strictEqual(store.row.syncOut.eagle.projectId, 'eagle-new');
+  });
+
   await t.test('a write that lands while sending queues a resend, and records only what was sent', async (tt) => {
     let raced = false;
     const store = wireStore(tt, engageRow({ eagleId: 'cp-9' }));

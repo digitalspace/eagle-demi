@@ -31,11 +31,17 @@ async function send(message, options = undefined) {
   await queueClient().sendMessage(JSON.stringify(message), options);
 }
 
-/** Queue one message per enabled consumer that wants this row. */
-async function enqueue(row) {
+/**
+ * Queue one message per enabled consumer that wants this row. `{ repair: true }` marks a reconcile
+ * re-send, which a delivery never drops as an already-failed redelivery.
+ */
+async function enqueue(row, { repair = false } = {}) {
   const wanted = consumers.filter(c => c.enabled() && c.wants(row));
   for (const consumer of wanted) {
-    await send({ consumer: consumer.name, id: String(row.id), projectId: row.projectId ?? null, attempt: 1 });
+    await send({
+      consumer: consumer.name, id: String(row.id), projectId: row.projectId ?? null, attempt: 1,
+      ...(repair ? { repair: true } : {})
+    });
   }
   return wanted.map(c => c.name);
 }
@@ -58,7 +64,8 @@ function parseMessage(message) {
     id: String(body.id),
     projectId: body.projectId ?? null,
     attempt: Number(body.attempt) || 1,
-    ...(body.resend === true ? { resend: true } : {})
+    ...(body.resend === true ? { resend: true } : {}),
+    ...(body.repair === true ? { repair: true } : {})
   };
 }
 
@@ -91,22 +98,29 @@ async function updateRow(id, projectId, mutate) {
   return result;
 }
 
-/** Store the outcome on the row; resolves to the row as stored afterwards, null when it is gone. */
+/**
+ * Store the outcome on the row. Resolves to `{ row, superseded }`: the row as stored afterwards (null
+ * when it is gone), and whether a failure was left unrecorded because the row has moved past it.
+ */
 async function recordOutcome(consumer, row, outcome) {
+  let superseded = false;
   const result = await updateRow(row.id, row.projectId, (current) => {
-    const previous = (current.syncOut && current.syncOut[consumer]) || {};
+    const previous = (current.syncOut && current.syncOut[consumer.name]) || {};
     if (outcome.status === 'failed') {
+      // A newer send already landed, or another delivery is mid-create: that settles the row, not this failure.
+      superseded = isCurrent(previous.sentVersion, outcome.version) || Boolean(consumer.inFlight && consumer.inFlight(previous));
+      if (superseded) return null;
       const entry = { ...previous, status: 'failed', error: outcome.error, failedAt: outcome.at,
         failedVersion: outcome.version };
-      return { ...current, syncOut: { ...current.syncOut, [consumer]: entry } };
+      return { ...current, syncOut: { ...current.syncOut, [consumer.name]: entry } };
     }
     // A later delivery already recorded a newer send; never move the version back.
-    if (isCurrent(previous.sentVersion, outcome.version) && previous.sentVersion !== outcome.version) return null;
+    if (previous.sentVersion > outcome.version) return null;
     const entry = { ...previous, ...outcome.record, sentVersion: outcome.version, sentAt: outcome.at,
       status: outcome.status, error: null };
-    return { ...current, syncOut: { ...current.syncOut, [consumer]: entry } };
+    return { ...current, syncOut: { ...current.syncOut, [consumer.name]: entry } };
   });
-  return result.row;
+  return { row: result.row, superseded };
 }
 
 async function requeue(message, maxAttempts, err) {
@@ -124,69 +138,88 @@ async function requeue(message, maxAttempts, err) {
   return true;
 }
 
-/** The last attempt failed: record it, park the message in the poison queue, write the alert line once. */
-async function giveUp(job, consumer, row, version, err) {
-  try {
-    await recordOutcome(consumer.name, row, {
-      status: 'failed', error: err.message, version, at: new Date().toISOString()
-    });
-  } catch (recordErr) {
-    logger.error('[sync-out] could not record failure', { ...job, error: recordErr.message });
+const messageText = (message) => (Buffer.isBuffer(message) ? message.toString('utf8') : String(message));
+
+/**
+ * The last attempt failed: record it, park the message in the poison queue, write the alert line once.
+ * `job`, `consumer` and `row` are null when the failure came before they were known.
+ */
+async function giveUp({ message, job, consumer, row, version }, err) {
+  const fields = { ...(job || { message: messageText(message).slice(0, 500) }), error: err.message };
+  if (consumer && row) {
+    try {
+      const { superseded } = await recordOutcome(consumer, row, {
+        status: 'failed', error: err.message, version, at: new Date().toISOString()
+      });
+      if (superseded) {
+        logger.warn(`[sync-out] last attempt failed ${job.consumer} ${job.id}, but a newer send or a ` +
+          `create in flight settles the row: ${err.message}`, fields);
+        return { skipped: 'superseded' };
+      }
+    } catch (recordErr) {
+      logger.error('[sync-out] could not record failure', { ...fields, recordError: recordErr.message });
+    }
   }
   const poison = `${settings.queue}-poison`;
   try {
     await queues.queueClientFor({ name: poison, setting: 'SYNC_OUT_QUEUE', feature: 'sync-out' })
-      .sendMessage(JSON.stringify(job));
+      .sendMessage(job ? JSON.stringify(job) : messageText(message));
   } catch (poisonErr) {
-    logger.error(`[sync-out] could not move the message to ${poison}`, { ...job, error: poisonErr.message });
+    logger.error(`[sync-out] could not move the message to ${poison}`, { ...fields, poisonError: poisonErr.message });
   }
   // The poison alert matches this prefix; written once per message, after it is parked.
-  logger.error(`[sync-out] job failed ${job.consumer} ${job.id}: ${err.message}`, {
-    ...job, engagementId: row.engagementId, error: err.message, stack: err.stack
+  logger.error(`[sync-out] job failed ${job ? job.consumer : '?'} ${job ? job.id : '?'}: ${err.message}`, {
+    ...fields, engagementId: row ? row.engagementId : null, stack: err.stack
   });
+  return { failed: err.message };
 }
 
 /**
  * One delivery. Earlier failures re-queue with a doubled delay and complete the original. The last
- * attempt never throws: it records the failure and moves the message to the poison queue itself,
- * so the alert line is written exactly once.
+ * attempt never throws, wherever it failed: it records the failure and moves the message to the poison
+ * queue itself, so the alert line is written exactly once.
  *
  * @param {object} [delivery] `attempt` is the message's `dequeueCount`, `maxAttempts` host.json's
  *   `maxDequeueCount`; api/index.js reads both.
  */
 async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {}) {
-  const parsed = parseMessage(message);
-  const attempt = Math.max(parsed.attempt, dequeueCount);
-  const job = { ...parsed, attempt };
-
-  const consumer = consumers.find(c => c.name === job.consumer);
-  if (!consumer) throw new Error(`sync-out has no consumer named ${job.consumer}`);
-  if (!consumer.enabled()) {
-    logger.info('[sync-out] consumer disabled, message dropped', job);
-    return { skipped: 'disabled' };
-  }
-
-  const row = await commentPeriods.readForWrite(job.id, job.projectId);
-  if (!row) {
-    logger.warn('[sync-out] row not found, message dropped', job);
-    return { skipped: 'missing' };
-  }
-  const version = versionOf(row);
-  const entry = (row.syncOut && row.syncOut[consumer.name]) || {};
-
-  // The host redelivered a last attempt that already gave up, e.g. the worker died before completing it.
-  if (attempt >= maxAttempts && dequeueCount > 1 && entry.status === 'failed' && entry.failedVersion === version) {
-    logger.warn(`[sync-out] ${job.consumer} ${job.id} already failed at version ${version}, redelivery dropped`, job);
-    return { skipped: 'failed' };
-  }
-  if (!job.resend && isCurrent(entry.sentVersion, version)) return { skipped: 'current' };
-
+  const state = { message, job: null, consumer: null, row: null, version: 0 };
   try {
+    const parsed = parseMessage(message);
+    const job = state.job = { ...parsed, attempt: Math.max(parsed.attempt, dequeueCount) };
+
+    const consumer = consumers.find(c => c.name === job.consumer);
+    if (!consumer) throw new Error(`sync-out has no consumer named ${job.consumer}`);
+    if (!consumer.enabled()) {
+      logger.info('[sync-out] consumer disabled, message dropped', job);
+      return { skipped: 'disabled' };
+    }
+    state.consumer = consumer;
+
+    const row = await commentPeriods.readForWrite(job.id, job.projectId);
+    if (!row) {
+      logger.warn('[sync-out] row not found, message dropped', job);
+      return { skipped: 'missing' };
+    }
+    state.row = row;
+    const version = state.version = versionOf(row);
+    const entry = (row.syncOut && row.syncOut[consumer.name]) || {};
+
+    // The host redelivered a last attempt that already gave up, e.g. the worker died before completing
+    // it. A resend or repair message is a fresh request, never that.
+    const fresh = job.resend || job.repair;
+    if (!fresh && job.attempt >= maxAttempts && dequeueCount > 1 && entry.status === 'failed' &&
+      entry.failedVersion === version) {
+      logger.warn(`[sync-out] ${job.consumer} ${job.id} already failed at version ${version}, redelivery dropped`, job);
+      return { skipped: 'failed' };
+    }
+    if (!job.resend && isCurrent(entry.sentVersion, version)) return { skipped: 'current' };
+
     const result = await consumer.send(row, {
       update: (mutate) => updateRow(row.id, row.projectId, mutate)
     });
     const status = (result && result.status) || 'sent';
-    const stored = await recordOutcome(consumer.name, row,
+    const { row: stored } = await recordOutcome(consumer, row,
       { status, version, record: result && result.record, at: new Date().toISOString() });
     // A write landed while this one was sending, so what reached the consumer may be older than the row.
     // Another delivery may already have recorded that newer version, so the follow-up sends regardless.
@@ -195,12 +228,12 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
     }
     return { status, ...(result && result.eagleId ? { eagleId: result.eagleId } : {}) };
   } catch (err) {
+    const attempt = state.job ? state.job.attempt : dequeueCount;
     if (attempt < maxAttempts) {
-      if (await requeue(job, maxAttempts, err)) return { retryQueued: attempt + 1 };
+      if (state.job && await requeue(state.job, maxAttempts, err)) return { retryQueued: attempt + 1 };
       throw err;
     }
-    await giveUp(job, consumer, row, version, err);
-    return { failed: err.message };
+    return giveUp(state, err);
   }
 }
 

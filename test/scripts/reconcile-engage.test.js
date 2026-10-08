@@ -40,6 +40,7 @@ function engageRow(overrides = {}) {
     syncOut: { eagle: { status: 'sent', sentVersion: 2 } },
     dateStarted: '2026-10-10T07:00:00.000Z',
     dateCompleted: '2026-11-10T07:00:00.000Z',
+    metURL: 'https://engage.example/have-your-say',
     sources: {
       engage: {
         start: '2026-10-10 07:00:00',
@@ -129,7 +130,11 @@ function setup(t, { rows = [engageRow()], fetchOpts, engageApiBase = '', env = {
     commentPeriods: repo,
     fetch: fetcher.get,
     engageApiBase,
-    enqueue: async (row) => { queued.push(String(row.id)); return ['eagle']; },
+    enqueue: async (row, options) => {
+      assert.deepStrictEqual(options, { repair: true }, 'a repair message is flagged as one');
+      queued.push(String(row.id));
+      return ['eagle'];
+    },
     admitParent: async (eagleId) => ({ id: `demi-${eagleId}`, kind: notificationIds.includes(eagleId) ? 'notification' : 'project' }),
     cache: { put: async (id, doc) => { stored.push({ id, doc }); } }
   };
@@ -250,6 +255,20 @@ test('DEMI vs Eagle', async (t) => {
     assert.deepStrictEqual(queued, []);
   });
 
+  await t.test('a row sync-out skipped at this version, or with no metURL, is skipped, not never-synced', async (tt) => {
+    const { deps, queued } = setup(tt, { rows: [
+      engageRow({ eagleId: null, syncOut: { eagle: { status: 'skipped', sentVersion: 2 } } }),
+      engageRow({ id: 'engage-43', engagementId: 43, eagleId: null, metURL: '', syncOut: {} }),
+      // Skipped at an older version: the row changed since, so it is worth another send.
+      engageRow({ id: 'engage-44', engagementId: 44, eagleId: null, syncOut: { eagle: { status: 'skipped', sentVersion: 1 } } })
+    ] });
+    const report = await run({ repair: true, deps });
+
+    assert.deepStrictEqual(report.skipped.map(f => f.id), ['engage-42', 'engage-43']);
+    assert.deepStrictEqual(report.neverSynced.map(f => f.id), ['engage-44']);
+    assert.deepStrictEqual(queued, ['engage-44']);
+  });
+
   await t.test('--repair with the Eagle consumer off queues nothing and says why', async (tt) => {
     const { deps, queued, repo } = setup(tt, { rows: [engageRow({ eagleId: null })], env: { SYNC_OUT_EAGLE_ENABLED: 'false' } });
     const report = await run({ repair: true, deps });
@@ -314,7 +333,7 @@ test('run logs one summary line, one per finding, and --store keeps the report',
   const report = await run({ store: true, deps });
 
   assert.strictEqual(logged.info[0], '[reconcile-engage] checked=1 neverSynced=1 missingInEagle=0 drift=0 ' +
-    'duplicates=0 conflicts=0 engageMissingInDemi=skipped queued=0');
+    'duplicates=0 conflicts=0 skipped=0 engageMissingInDemi=skipped queued=0');
   assert.match(logged.info[1], /never-synced engage-42 engagement=42/);
   assert.deepStrictEqual(stored, [{ id: REPORT_ID, doc: { body: report } }]);
 });
