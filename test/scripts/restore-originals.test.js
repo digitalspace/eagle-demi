@@ -343,6 +343,17 @@ test('apply skips and reports a row whose object changed after the plan, writing
   assert.strictEqual(result.exitCode, 1);
 });
 
+test('apply skips and reports a row whose object was deleted after the plan, writing nothing', async (t) => {
+  const s = setup(t, { store: { onUploadUrl: (store, key) => store.delete(key) } });
+  await rehydrated(s, '--id', 'a');
+  const result = await s.go('apply', '--id', 'a', '--live', '--confirm', '1');
+  assert.strictEqual(result.summary.changed, 1);
+  assert.strictEqual(s.store.puts.length, 0);
+  assert.ok(!s.store.store.has('p1/a.pdf'));
+  assert.strictEqual(s.docs.patches.length, 0);
+  assert.strictEqual(result.exitCode, 1);
+});
+
 test('apply reports a read-back that differs and leaves the record untouched', async (t) => {
   const s = setup(t, { store: { readBack: { 'p1/a.pdf': TITLED } } });
   await rehydrated(s, '--id', 'a');
