@@ -334,8 +334,7 @@ test('a project visibility change carries to its groups and inspections', async 
     { container: 'groups', id: 'G-other', projectId: '999', read: STAFF_READ, eagleRead: ['sysadmin'] },
     { container: 'inspections', id: 'I1', kind: 'Inspection', inspection: 'I1', projectId: '207',
       read: STAFF_READ, eagleRead: ['sysadmin', 'inspector'] },
-    // Privileged-only in Eagle, so under a team-level inspection it stays at sysadmin, and the item
-    // under it must follow it there rather than land at the inspection's `team`.
+    // No ladder token in Eagle, so each row of the chain keeps its own Eagle read, never `team`.
     { container: 'inspections', id: 'E1', kind: 'InspectionElement', inspection: 'I1', projectId: '207',
       read: STAFF_READ, eagleRead: ['sysadmin'] },
     { container: 'inspections', id: 'IT1', kind: 'InspectionItem', inspection: 'I1', element: 'E1',
@@ -355,18 +354,18 @@ test('a project visibility change carries to its groups and inspections', async 
       assert.strictEqual(narrowed.statusCode, 200, JSON.stringify(narrowed.body));
       assert.deepStrictEqual(readOf(rows, 'G1'), ['sysadmin']);
       assert.deepStrictEqual(readOf(rows, 'G2'), ['team']);
-      assert.deepStrictEqual(readOf(rows, 'I1'), ['team']);
+      assert.deepStrictEqual(readOf(rows, 'I1'), ['sysadmin', 'inspector']);
       assert.deepStrictEqual(readOf(rows, 'E1'), ['sysadmin']);
-      assert.deepStrictEqual(readOf(rows, 'IT1'), ['sysadmin'], 'capped by its element, not the project');
+      assert.deepStrictEqual(readOf(rows, 'IT1'), ['sysadmin', 'inspector']);
       assert.ok(patchesTo(writes, 'inspections').every(w => w.operations.every(op => op.partitionKey === 'I1')),
         'the chain is patched in its inspection\'s partition');
 
       const widened = await moveTo(tt, 2, 1, { read: ['team'] });
       assert.strictEqual(widened.statusCode, 200, JSON.stringify(widened.body));
       assert.deepStrictEqual(readOf(rows, 'G2'), STAFF_READ);
-      // No ladder token from Eagle, so nothing to widen back to: privileged-only stays so.
-      for (const id of ['G1', 'E1', 'IT1']) assert.deepStrictEqual(readOf(rows, id), ['sysadmin'], id);
-      assert.deepStrictEqual(readOf(rows, 'I1'), ['team']);
+      // No ladder token from Eagle, so nothing to widen back to: each keeps its Eagle read.
+      for (const id of ['G1', 'E1']) assert.deepStrictEqual(readOf(rows, id), ['sysadmin'], id);
+      for (const id of ['I1', 'IT1']) assert.deepStrictEqual(readOf(rows, id), ['sysadmin', 'inspector'], id);
     });
 
   await t.test('an element follows its inspection\'s new read, not the project\'s', async (tt) => {

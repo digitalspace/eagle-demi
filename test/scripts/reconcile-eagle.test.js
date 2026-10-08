@@ -1348,11 +1348,12 @@ test('the user, group and inspection mirrors are checked against their stored Ea
     countWithEagleId: async () => 1
   };
   const cleanUser = { id: 'U-ok', read: ['sysadmin'], isPublished: false, eagleRead: ['sysadmin'] };
-  // `capRead` puts a level-1 read that is not privileged-only at `team`.
+  // No ladder token in Eagle, so each row stores its Eagle read as is.
+  const INSPECTOR = ['sysadmin', 'inspector'];
   const cleanChain = [
-    { id: 'I1', kind: 'Inspection', projectId: '207', inspection: 'I1', read: ['team'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] },
-    { id: 'E1', kind: 'InspectionElement', projectId: '207', inspection: 'I1', read: ['team'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] },
-    { id: 'IT1', kind: 'InspectionItem', projectId: '207', inspection: 'I1', element: 'E1', read: ['team'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] }
+    { id: 'I1', kind: 'Inspection', projectId: '207', inspection: 'I1', read: INSPECTOR, isPublished: false, eagleRead: INSPECTOR },
+    { id: 'E1', kind: 'InspectionElement', projectId: '207', inspection: 'I1', read: INSPECTOR, isPublished: false, eagleRead: INSPECTOR },
+    { id: 'IT1', kind: 'InspectionItem', projectId: '207', inspection: 'I1', element: 'E1', read: INSPECTOR, isPublished: false, eagleRead: INSPECTOR }
   ];
   const deps = (over) => makeDeps({ projects: projectsWithRead, ...over });
 

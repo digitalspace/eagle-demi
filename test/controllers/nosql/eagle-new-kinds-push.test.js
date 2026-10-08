@@ -147,11 +147,10 @@ test('group mirror', async (t) => {
 test('inspection mirror', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  // `capRead` rewrites a level-1 read that is not privileged-only to `team`.
-  await t.test('create: `[sysadmin, inspector]` under a public project lands at team, never staff', async () => {
+  await t.test('create: `[sysadmin, inspector]` under a public project is stored as Eagle has it', async () => {
     const { res, row } = await captureMirror(t, 'inspections');
     assert.strictEqual(res.statusCode, 200);
-    assert.deepStrictEqual(row.read, ['team']);
+    assert.deepStrictEqual(row.read, INSPECTOR_ACL);
     assert.strictEqual(row.inspection, INSPECTION_EAGLE_ID);
     assert.strictEqual(row.projectId, '207');
     assert.strictEqual(row.kind, 'Inspection');
@@ -178,7 +177,7 @@ test('inspection mirror', async (t) => {
   });
 
   await t.test('update at the same level cascades nothing', async () => {
-    const existing = { id: INSPECTION_EAGLE_ID, inspection: INSPECTION_EAGLE_ID, read: ['team'], _etag: 'e1' };
+    const existing = { id: INSPECTION_EAGLE_ID, inspection: INSPECTION_EAGLE_ID, read: INSPECTOR_ACL, _etag: 'e1' };
     const { res, cascades } = await captureMirror(t, 'inspections', null, { existing });
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(cascades, []);

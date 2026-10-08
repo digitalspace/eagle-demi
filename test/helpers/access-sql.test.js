@@ -265,8 +265,12 @@ test('the ladder vocabulary', async (t) => {
     assert.deepStrictEqual(capRead(['team'], TEAM), ['team']);
     assert.deepStrictEqual(capRead(['staff'], TEAM), ['team']);
     assert.deepStrictEqual(capRead([], TEAM), []);
-    assert.deepStrictEqual(capRead(['project-team'], TEAM), ['team'],
-      'a legacy role is not privileged, and any realm role of that name could read it');
+    // No ladder token: kept as is, so only holders of the roles it names (and privileged callers) read it.
+    assert.deepStrictEqual(capRead(['project-team'], TEAM), ['project-team']);
+    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], TEAM), ['sysadmin', 'inspector']);
+    assert.deepStrictEqual(capRead(['sysadmin', 'inspector'], ['staff', 'idir', 'public']), ['sysadmin', 'inspector']);
+    assert.deepStrictEqual(capRead(['staff'], ['sysadmin', 'inspector']), ['sysadmin', 'inspector'],
+      'a cap with no ladder token is kept, never rewritten to team');
 
     assert.deepStrictEqual(capRead(['staff', 'idir', 'public'], ['sysadmin']), ['sysadmin'],
       'a privileged-only cap keeps the row privileged-only');

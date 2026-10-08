@@ -385,8 +385,8 @@ async function aclRowsForProject(access, projectId) {
  *
  * The LOWER of the two ladder levels (`access-sql:capRead`), which cannot widen either side by
  * construction. A missing or empty project ACL reads as level 1 (`levelOfRead([])`), so an unknown
- * fails closed to `team` rather than to a fixed level 2 a level-1 project never allowed; a level-1
- * read with no ladder token (`['sysadmin']`) stays privileged-only.
+ * fails closed to `team` rather than to a fixed level 2 a level-1 project never allowed; a read with
+ * no ladder token (`['sysadmin']`, `['project-team']`) is kept as it is.
  */
 function constrainToProject(ownRead, projectRead) {
   return capRead(ownRead, projectRead);

@@ -46,10 +46,10 @@ test('constrainToProject — the lower of the two levels', async (t) => {
   });
 
   await t.test('a legacy role name carries no level of its own', () => {
-    // `project-team` is not a ladder token, so the document reads as level 1 and stays there —
-    // stamping the project's level 2 over it would WIDEN the row.
+    // `project-team` is not a ladder token, so the document reads as level 1 and is kept as is —
+    // stamping the project's level 2 over it would WIDEN the row, and `team` would too.
     assert.deepStrictEqual(
-      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['team']);
+      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['project-team']);
   });
 
   await t.test('fail-closed under a level-1 project yields team', () => {
@@ -99,7 +99,7 @@ test('setAclForProject', async (t) => {
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
-      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['team']);
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['project-team']);
     });
 
   await t.test('captures ownRead on the first cascade', async (tt) => {
@@ -192,7 +192,7 @@ test('setAclForProject', async (t) => {
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
-      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['team']);
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['project-team']);
     });
 
   await t.test('every row is patched in one request, pinned to the project partition',
@@ -384,7 +384,7 @@ test('setAclForProject reports the ACLs it derived', async (t) => {
       { id: 'd1', read: ['staff', 'idir', 'public'], isPublished: true },
       // Narrower than its project and it stays that way — so the index must NOT be told the
       // project's ACL for this row.
-      { id: 'd2', read: ['team'], isPublished: false }
+      { id: 'd2', read: ['sysadmin', 'project-team'], isPublished: false }
     ]);
     assert.deepStrictEqual(result.ids, ['d1', 'd2']);
   });

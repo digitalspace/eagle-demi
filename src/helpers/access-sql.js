@@ -25,6 +25,7 @@ const PUBLIC_ROLES = Object.freeze(['public']);
  * Role TYPES, never ids: which projects a `team` row belongs to is the partition key's job.
  */
 const LEVEL_TOKENS = Object.freeze({ 1: 'team', 2: 'staff', 3: 'idir', 4: 'public' });
+const LADDER_TOKENS = Object.freeze(Object.values(LEVEL_TOKENS));
 
 /**
  * The sealed compartment's token — level 0, off the ladder (docs/rbac-architecture.md §1,
@@ -73,15 +74,16 @@ function levelOfRead(read) {
 /**
  * `own` narrowed to `cap`'s level, never widened by it: the lower of the two ladder levels.
  *
- * At level 1 a read made only of privileged role names (`['sysadmin']`, or `[]`) is kept rather
- * than rewritten to `readForLevel(1)`: `team` is what the team arm opens to the project's team
- * members, and such a read opens to privileged callers only. The row's own read wins, then the
- * cap's. A legacy role like `project-team` still lands at `team`, as does an empty or missing cap.
+ * At level 1 a read with no ladder token (`['sysadmin']`, `['sysadmin','inspector']`, `[]`) is kept
+ * rather than rewritten to `readForLevel(1)`: `team` is what the team arm opens to the project's
+ * team members, and a read with no ladder token opens only to privileged callers and holders of the
+ * roles it names, as in Eagle. The row's own read wins, then the cap's. An empty or missing cap, or
+ * two `team` reads, land at `team`.
  */
 function capRead(own, cap) {
   const level = Math.min(levelOfRead(own), levelOfRead(cap));
   if (level !== 1) return readForLevel(level);
-  const privilegedOnly = read => Array.isArray(read) && read.every(r => SECURE_ROLES.includes(r));
+  const privilegedOnly = read => Array.isArray(read) && !read.some(r => LADDER_TOKENS.includes(r));
   if (privilegedOnly(own)) return own;
   if (privilegedOnly(cap) && cap.length > 0) return cap;
   return readForLevel(1);

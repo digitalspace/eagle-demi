@@ -102,10 +102,12 @@ push.
 read checks. It does not: eagle-api's `$redact` matches `read[]` tokens to roles literally, so Eagle
 shows `['sysadmin']` or `['sysadmin','inspector']` rows to those roles only. DEMI now matches Eagle.
 A pushed record stores Eagle's own read (`helpers/eagle-acl.js:eagleBaseAcl`). Under a parent it
-stores that read capped by the parent (`eagleReadUnder`, which is `capRead`). A privileged-only read
-such as `['sysadmin']` stays as it is under any unsealed parent. A level-1 read that is not
-privileged-only, such as an inspection's `['sysadmin','inspector']`, caps to `['team']`. A
-document's `ownRead` is Eagle's base read, so `read` and `ownRead` differ only by the parent cap.
+stores that read capped by the parent (`eagleReadUnder`, which is `capRead`). `capRead` keeps any
+read with no ladder token as it is under every unsealed parent, so `['sysadmin']`,
+`['sysadmin','inspector']` and `['project-team']` are stored literally, never as `['team']`, and
+reach only privileged callers and holders of the roles they name, as in Eagle. A ladder read under
+such a parent takes the parent's read. A document's `ownRead` is Eagle's base read, so `read` and
+`ownRead` differ only by the parent cap.
 `src/scripts/backfill-eagle-ladder.js --reverse` strips the `staff` token the rule already wrote.
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
