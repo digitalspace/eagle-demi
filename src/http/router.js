@@ -13,7 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const querystring = require('querystring');
-const { Readable } = require('stream');
+const { PassThrough, Readable } = require('stream');
 
 const { logger, runWithRequestId } = require('../utils/logger');
 const { logRequest } = require('../middleware/http-logger');
@@ -140,7 +140,10 @@ function httpError(status, message) {
   return err;
 }
 
-/** The response surface the controllers use. Nothing streams: the host wants one buffered body. */
+/**
+ * The response surface the controllers use. Bodies are buffered, except one handed to `stream()`,
+ * which dispatch passes on as a Node readable (an AsyncIterable body to the host).
+ */
 function makeRes(requestId) {
   const headers = { ...SECURITY_HEADERS, 'x-request-id': requestId };
 
@@ -165,6 +168,7 @@ function makeRes(requestId) {
     headers,
     body: undefined,
     finished: false,
+    streamed: false,
     /** Resolves the guard chain when a guard answers instead of calling next(). */
     _done: null,
     status(code) { res.statusCode = code; return res; },
@@ -173,6 +177,22 @@ function makeRes(requestId) {
     type(value) { return res.set('content-type', MIME[value] || value); },
     json(data) { return finish(JSON.stringify(data), MIME.json); },
     send(body) { return finish(body, MIME.html); },
+    /**
+     * Sends a Node readable as the body. Content-Length stays as preset; unset or null leaves it
+     * out, since the size is not known here.
+     */
+    stream(readable, { status } = {}) {
+      if (res.finished) return res;
+      if (status) res.statusCode = status;
+      if (headers['content-length'] == null) delete headers['content-length'];
+      else headers['content-length'] = String(headers['content-length']);
+      if (!headers['content-type']) headers['content-type'] = 'application/octet-stream';
+      res.finished = true;
+      res.streamed = true;
+      res.body = guardStream(readable, requestId);
+      if (res._done) res._done();
+      return res;
+    },
     redirect(status, url) {
       if (typeof status === 'string') { url = status; status = 302; }
       res.statusCode = status;
@@ -182,6 +202,22 @@ function makeRes(requestId) {
   };
   res.setHeader = res.set;
   return res;
+}
+
+/**
+ * Wraps a handler's readable so a source error, which can only come after the headers, is logged
+ * and ends the body short rather than surfacing as an unhandled 'error' event.
+ */
+function guardStream(readable, requestId) {
+  const out = new PassThrough();
+  readable.on('error', (err) => {
+    logger.error('Response stream failed after headers were sent', { requestId, evt: 'stream-error', error: err.message });
+    out.end();
+  });
+  // A client that goes away cancels `out`; release the store connection behind it too.
+  out.on('close', () => readable.destroy());
+  readable.pipe(out);
+  return out;
 }
 
 /**
@@ -303,7 +339,7 @@ async function runGuards(guards, req, res) {
 }
 
 /**
- * The Functions HTTP handler. Returns an HttpResponseInit — never a stream, never a 304.
+ * The Functions HTTP handler. Returns an HttpResponseInit; a streamed answer's body is a Node readable.
  */
 async function dispatch(request, context) {
   const started = process.hrtime.bigint();
@@ -367,11 +403,10 @@ async function dispatch(request, context) {
     const nullBody = NULL_BODY_STATUSES.has(res.statusCode);
     if (nullBody) delete res.headers['content-length'];
 
-    return {
-      status: res.statusCode,
-      headers: res.headers,
-      body: nullBody || request.method === 'HEAD' ? undefined : res.body
-    };
+    const noBody = nullBody || request.method === 'HEAD';
+    if (noBody && res.streamed) res.body.destroy();
+
+    return { status: res.statusCode, headers: res.headers, body: noBody ? undefined : res.body };
   });
 }
 
