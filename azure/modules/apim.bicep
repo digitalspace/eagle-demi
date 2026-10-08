@@ -70,6 +70,7 @@ var proxyMethods = [
 // Server-to-server consumers, one subscription each so a key can be rotated or revoked alone.
 var machineConsumers = [
   'eagle-api'
+  'engage'
 ]
 
 // The Consumption tier emits no resource logs, so there is no GatewayLogs diagnostic setting here.
