@@ -548,6 +548,55 @@ test('PUT /eagle/commentperiods/:eagleId — a period that changed level', async
 test('PUT /eagle/comments/:eagleId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
+  await t.test('a comment on a period ENGAGE created is stored under that row, found by its eagleId', async () => {
+    t.mock.method(commentPeriods, 'getById', async () => null);
+    const lookups = [];
+    t.mock.method(commentPeriods, 'readForWriteByEagleId', async (eagleId) => {
+      lookups.push(eagleId);
+      return { ...storedPeriod(), id: 'engage-42', eagleId: PERIOD_EAGLE_ID, sourceSystem: 'engage' };
+    });
+
+    const { res, written } = await pushTo(
+      commentController, comments, COMMENT_EAGLE_ID, eagleComment(), t);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(lookups, [PERIOD_EAGLE_ID]);
+    assert.strictEqual(written().periodId, 'engage-42');
+    assert.strictEqual(written().projectId, '207');
+  });
+
+  for (const [label, row] of [
+    ['an Eagle-owned row', { ...storedPeriod(), id: 'other', eagleId: PERIOD_EAGLE_ID, sourceSystem: 'eagle' }],
+    ['a sealed ENGAGE row', { ...storedPeriod(['compliance']), id: 'engage-42', eagleId: PERIOD_EAGLE_ID, sourceSystem: 'engage' }],
+    ['a read-less ENGAGE row', { id: 'engage-42', projectId: '207', eagleId: PERIOD_EAGLE_ID, sourceSystem: 'engage' }]
+  ]) {
+    await t.test(`the eagleId fallback never admits ${label}: 404, nothing written`, async () => {
+      t.mock.method(commentPeriods, 'getById', async () => null);
+      t.mock.method(commentPeriods, 'readForWriteByEagleId', async () => row);
+      t.mock.method(commentPeriods, 'readForWrite', async () => null);
+      t.mock.method(logger, 'warn', () => {});
+
+      const { res, written } = await pushTo(commentController, comments, COMMENT_EAGLE_ID, eagleComment(), t);
+
+      assert.strictEqual(res.statusCode, 404);
+      assert.strictEqual(written(), undefined);
+    });
+  }
+
+  await t.test('an Eagle id stored on two period rows is a logged 500, not the mirror 409', async () => {
+    t.mock.method(commentPeriods, 'getById', async () => null);
+    t.mock.method(commentPeriods, 'readForWriteByEagleId', async () => {
+      throw Object.assign(new Error('dup'), { code: 'DUPLICATE_ID' });
+    });
+    const errors = [];
+    t.mock.method(logger, 'error', (message) => errors.push(message));
+
+    const { res } = await pushTo(commentController, comments, COMMENT_EAGLE_ID, eagleComment(), t);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.ok(errors.some(m => /stored on more than one row/.test(m)));
+  });
+
   await t.test('the Eagle record is stored as a comment row under its period', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
 
@@ -645,6 +694,7 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
   async function refusedComment(t, stored, doc = eagleComment()) {
     let periodReads = 0;
     t.mock.method(commentPeriods, 'getById', async () => { periodReads++; return null; });
+    t.mock.method(commentPeriods, 'readForWriteByEagleId', async () => null);
     let classifyReads = 0;
     t.mock.method(commentPeriods, 'readForWrite', async () => { classifyReads++; return stored; });
     const warned = [];
@@ -1044,5 +1094,181 @@ test('the four mirror routes reject anonymous and admit eagle-api', async (t) =>
 
     assert.deepStrictEqual(written,
       [PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID]);
+  });
+});
+
+test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const ENGAGE_URL = 'https://engage.gov.bc.ca/nicomen-wind';
+  const PUSHED_AT = 1757980005000;
+
+  /** A row the ENGAGE ingest wrote: every field ENGAGE owns differs from what `eaglePeriod` sends. */
+  function engageRow(overrides = {}) {
+    return {
+      id: 'engage-42',
+      projectId: '207',
+      sourceSystem: 'engage',
+      engagementId: '42',
+      eagleProjectId: PROJECT_EAGLE_ID,
+      engagePushedAt: Date.parse('2026-10-01T17:00:00.000Z'),
+      eagleId: null,
+      dateStarted: '2026-09-01T00:00:00.000Z',
+      dateCompleted: '2026-09-30T00:00:00.000Z',
+      isMet: true,
+      metURL: ENGAGE_URL,
+      metURLAdmin: 'https://engage.gov.bc.ca/admin/engagements/42',
+      metBannerImageUrl: 'https://engage.gov.bc.ca/engage-banner.jpg',
+      informationLabel: 'Nicomen Wind engagement',
+      instructions: 'Share your feedback on Engage.',
+      isDeleted: false,
+      isPublished: true,
+      read: ['staff', 'idir', 'public'],
+      syncOut: {
+        eagle: { sentVersion: '2026-10-01T17:00:00.000Z', sentAt: '2026-10-01T17:00:02.000Z', status: 'sent', error: null }
+      },
+      sources: { engage: { name: 'Nicomen Wind', status: 'Published' } },
+      ...overrides
+    };
+  }
+
+  /** What an Eagle push may leave on an ENGAGE row: its id, its raw copy, its staff fields, its clock. */
+  function withEagleEcho(row, doc) {
+    const { metURLAdmin: _engageOwned, ...staff } = STAFF_PERIOD_FIELDS;
+    return { ...row, ...staff, eagleId: PERIOD_EAGLE_ID, sources: { ...row.sources, eagle: doc }, eaglePushedAt: PUSHED_AT };
+  }
+
+  async function push(doc) {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const res = mockRes();
+    await commentPeriodController.upsertFromEagle({
+      params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc, pushedAt: PUSHED_AT }, user: STAFF
+    }, res);
+    return res;
+  }
+
+  // The echo eagle-api sends after DEMI wrote the period there, carrying Eagle's own view of it.
+  const echo = (overrides) => eaglePeriod({ metURL: ENGAGE_URL, read: ['staff'], ...overrides });
+
+  await t.test('an Eagle push changes only the Eagle-owned fields', async () => {
+    const stored = engageRow({ id: PERIOD_EAGLE_ID, eagleId: PERIOD_EAGLE_ID });
+    const { store } = partitionedCosmos(t, 'projectId', [stored]);
+    const doc = echo();
+
+    const res = await push(doc);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(store.get(`207::${PERIOD_EAGLE_ID}`), withEagleEcho(stored, doc));
+  });
+
+  await t.test('an Eagle delete leaves the ENGAGE row live and only lands in the raw copy',
+    async () => {
+      const stored = engageRow({ id: PERIOD_EAGLE_ID, eagleId: PERIOD_EAGLE_ID });
+      const { store } = partitionedCosmos(t, 'projectId', [stored]);
+      const doc = echo({ isDeleted: true });
+
+      const res = await push(doc);
+
+      assert.deepStrictEqual(res.body, { id: PERIOD_EAGLE_ID, action: 'upsert' });
+      const row = store.get(`207::${PERIOD_EAGLE_ID}`);
+      assert.strictEqual(row.isDeleted, false);
+      assert.deepStrictEqual(row.read, stored.read);
+      assert.strictEqual(row.sources.eagle.isDeleted, true);
+    });
+
+  await t.test('a push that misses on id joins the ENGAGE row on its URL, no second row',
+    async () => {
+      const { store, created } = partitionedCosmos(t, 'projectId', [engageRow()]);
+      const doc = echo();
+
+      const res = await push(doc);
+
+      assert.deepStrictEqual(res.body, { id: 'engage-42', action: 'upsert' });
+      assert.deepStrictEqual(created, []);
+      assert.deepStrictEqual([...store.keys()], ['207::engage-42']);
+      assert.deepStrictEqual(store.get('207::engage-42'), withEagleEcho(engageRow(), doc));
+    });
+
+  await t.test('a push that misses on id joins the ENGAGE row already tied to it', async () => {
+    // The engagement URL changed in ENGAGE after the period reached Eagle.
+    const stored = engageRow({ eagleId: PERIOD_EAGLE_ID, metURL: 'https://engage.gov.bc.ca/renamed' });
+    const { store, created } = partitionedCosmos(t, 'projectId', [stored]);
+    const doc = echo();
+
+    await push(doc);
+
+    assert.deepStrictEqual(created, []);
+    assert.deepStrictEqual(store.get('207::engage-42'), withEagleEcho(stored, doc));
+  });
+
+  await t.test('an ENGAGE row tied to another Eagle period is not joined on a shared URL',
+    async () => {
+      const stored = engageRow({ eagleId: '5b8bcf0d0f5e9c0019a7a1ff' });
+      const { store } = partitionedCosmos(t, 'projectId', [stored]);
+
+      await push(echo());
+
+      assert.deepStrictEqual(store.get('207::engage-42'), stored);
+      assert.strictEqual(store.get(`207::${PERIOD_EAGLE_ID}`).sourceSystem, 'eagle');
+    });
+
+  await t.test('a push under the old project finds the ENGAGE row ENGAGE moved, and writes Eagle fields there',
+    async () => {
+      // ENGAGE moved the engagement to project 208; Eagle still files the period under 207.
+      const stored = engageRow({ projectId: '208', eagleId: PERIOD_EAGLE_ID });
+      const { store, created } = partitionedCosmos(t, 'projectId', [stored]);
+      const doc = echo();
+
+      const res = await push(doc);
+
+      assert.deepStrictEqual(res.body, { id: 'engage-42', action: 'upsert' });
+      assert.deepStrictEqual(created, []);
+      assert.deepStrictEqual([...store.keys()], ['208::engage-42']);
+      assert.deepStrictEqual(store.get('208::engage-42'), withEagleEcho(stored, doc));
+    });
+
+  await t.test('the delete of an Eagle period the row no longer names leaves the row tied to its new one',
+    async () => {
+      // Sync-out deleted the old Eagle period to recreate it under a new project; this is that delete's echo.
+      const stored = engageRow({ id: PERIOD_EAGLE_ID, eagleId: '5b8bcf0d0f5e9c0019a7a1ff' });
+      const { store } = partitionedCosmos(t, 'projectId', [stored]);
+
+      await push(echo({ isDeleted: true }));
+
+      const row = store.get(`207::${PERIOD_EAGLE_ID}`);
+      assert.strictEqual(row.eagleId, '5b8bcf0d0f5e9c0019a7a1ff');
+      assert.strictEqual(row.sources.eagle, undefined);
+      assert.strictEqual(row.isDeleted, false);
+    });
+
+  /** engage-42 after a project move: sync-out deleted `droppedId` in Eagle and cleared its eagleId. */
+  const movedRow = (droppedId) => engageRow({
+    syncOut: { eagle: { ...engageRow().syncOut.eagle, droppedIds: ['5b8bcf0d0f5e9c0019a7a100', droppedId] } }
+  });
+
+  await t.test('the delete echo after sync-out cleared the eagleId changes nothing and creates no row', async () => {
+    const stored = movedRow(PERIOD_EAGLE_ID);
+    const { store, created } = partitionedCosmos(t, 'projectId', [stored]);
+
+    const res = await push(echo({ isDeleted: true }));
+
+    assert.deepStrictEqual(res.body, { id: PERIOD_EAGLE_ID, action: 'ignored' });
+    assert.deepStrictEqual(created, []);
+    assert.deepStrictEqual([...store.keys()], ['207::engage-42']);
+    assert.deepStrictEqual(store.get('207::engage-42'), stored);
+  });
+
+  await t.test('a delete for a period no ENGAGE row dropped is kept as a staff-only tombstone', async () => {
+    // Eagle's delete reached DEMI before its create: the late create must land on this tombstone, not live.
+    stubCommentCascade(t, []);
+    const { store } = partitionedCosmos(t, 'projectId', [movedRow('5b8bcf0d0f5e9c0019a7a1ff')]);
+
+    const res = await push(echo({ isDeleted: true }));
+
+    assert.deepStrictEqual(res.body, { id: PERIOD_EAGLE_ID, action: 'delete' });
+    const tombstone = store.get(`207::${PERIOD_EAGLE_ID}`);
+    assert.strictEqual(tombstone.isDeleted, true);
+    assert.deepStrictEqual(tombstone.read, ['staff']);
+    assert.deepStrictEqual(store.get('207::engage-42'), movedRow('5b8bcf0d0f5e9c0019a7a1ff'), 'the ENGAGE row is untouched');
   });
 });

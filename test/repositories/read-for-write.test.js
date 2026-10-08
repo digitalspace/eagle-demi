@@ -176,6 +176,7 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'controllers/nosql/comment-period.js',
     'controllers/nosql/comment.js',
     'controllers/nosql/document.js',
+    'controllers/nosql/engage-comment-period.js',
     'controllers/nosql/group.js',
     'controllers/nosql/inspection.js',
     'controllers/nosql/notification.js',
@@ -204,7 +205,13 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'repositories/users.js',
     // The archive restore: it must see a sealed row's pdfTitle record to refuse or update it.
     'scripts/restore-originals.js',
-    'scripts/seed-public-reads.js'
+    // Repair clears `syncOut.<target>.sentVersion` on the row so the worker resends it, sealed or not.
+    'scripts/reconcile-engage.js',
+    'scripts/seed-public-reads.js',
+    // Sync-out writes `syncOut` and `eagleId` back onto the row it sends, sealed or not.
+    'sync-out/index.js',
+    // Refuses to adopt an Eagle period DEMI already holds as an Eagle-owned row, whatever its level.
+    'sync-out/eagle.js'
   ].map(file => path.join(...file.split('/'))));
   const allowed = (file) => ALLOWED.has(file);
 

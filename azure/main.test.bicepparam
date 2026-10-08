@@ -93,6 +93,15 @@ param cosmosRuPerHourAlert = 3000000
 // 503 and every index change goes back through the devbox.
 param searchDefinitionsQueue = 'search-definitions'
 
+// ── Sync-out to eagle-api ─────────────────────────────────────────────────────────────────────
+// Queue on, Eagle consumer off until the cutover. EAGLE_KC_CLIENT_SECRET stays blank until
+// `eagle-sync-out-client-secret` is in demi-kv-test and named in optionalSecretNames above.
+// eagleEngageMilestone stays '' until the Eagle milestone id is chosen; set it before the consumer goes on.
+param syncOutQueue = 'sync-out'
+param syncOutEagleEnabled = false
+param eagleProtectedApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api'
+param engageApiBase = 'https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api'
+
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
 // The browser origins allowed to call the API.

@@ -10,7 +10,9 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // credential (demi-service-read) can be issued without also granting the ability to delete.
 // `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
 // mirror data without being able to mint itself a wider credential.
-const { requireWrite, requireAdmin, requireRole, requireEagleMirror, requirePdfTitleWorker } = require('../middleware/require-roles');
+const {
+  requireWrite, requireAdmin, requireRole, requireEagleMirror, requireEngageWriter, requirePdfTitleWorker
+} = require('../middleware/require-roles');
 // Loads the caller's Selected Credentials. Mounted after the auth layer on the read routes where a
 // grant can widen what one caller sees — see middleware/credentials.js.
 const { credentialsMiddleware } = require('../middleware/credentials');
@@ -39,6 +41,7 @@ const projectSummaryController = () => require('../controllers/project-summary')
 const documentController = () => require('../controllers/nosql/document');
 const updateController = () => require('../controllers/nosql/update');
 const commentPeriodController = () => require('../controllers/nosql/comment-period');
+const engageCommentPeriodController = () => require('../controllers/nosql/engage-comment-period');
 const commentController = () => require('../controllers/nosql/comment');
 const organizationController = () => require('../controllers/nosql/organization');
 const notificationController = () => require('../controllers/nosql/notification');
@@ -146,6 +149,8 @@ const routes = [
   { method: 'get', path: '/admin/cost', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getCost },
   // Written by the reconcileEagle timer; this only reads the row back.
   { method: 'get', path: '/admin/reconcile', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getReconcileReport },
+  // Written by the reconcileEngage timer.
+  { method: 'get', path: '/admin/reconcile-engage', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getReconcileEngageReport },
 
   // Projects Routes
   { method: 'get', path: '/projects', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProjects },
@@ -243,6 +248,10 @@ const routes = [
   { method: 'put', path: '/eagle/config/public', guards: [authMiddleware, requireWrite, requireEagleMirror], load: () => configController().upsertPublicFromEagle },
   // No `PUT /eagle/lists/:eagleId`: Eagle `List` has no write controller (migrations only), so the
   // `lists` container takes its `kind: 'List'` rows from the backfill and nothing else.
+
+  // ENGAGE ingest. ENGAGE owns the comment periods it pushes and DEMI writes them on to Eagle
+  // (src/sync-out). Pinned to DEMI_ENGAGE_PRINCIPALS on the same terms as the Eagle mirror.
+  { method: 'put', path: '/engage/engagements/:engagementId', guards: [authMiddleware, requireWrite, requireEngageWriter], load: () => engageCommentPeriodController().upsertFromEngage },
 
   // Reads of the user, group and inspection mirrors (docs/rbac-architecture.md). Same chain as
   // GET /documents: the repository filters rows by the caller's access, so anonymous reads the

@@ -240,15 +240,22 @@ async function readForWriteIn(container, id, partitionKey, partitionField) {
   // Bounded by how many partitions hold this id, not by the corpus.
   const { items } = await cosmos.query(container,
     { query: `SELECT * FROM c WHERE ${clause}`, parameters: params });
-  // A move whose old-partition delete failed leaves two rows, the new one naming the old one's
-  // partition. That is one document owed a delete, not a duplicate: the marked row is current.
+  return oneRowOf(container, id, items, partitionField);
+}
+
+/**
+ * The one row a cross-partition lookup found, null for none. A move whose old-partition delete failed
+ * leaves two rows, the new one naming the old one's partition: one row owed a delete, not a duplicate,
+ * so the marked row is current. Any other second row throws `DUPLICATE_ID`.
+ */
+function oneRowOf(container, key, items, partitionField) {
   if (items.length === 2 && partitionField) {
     const marked = items.find((row, i) => row.movedFromProjectId != null &&
       String(row.movedFromProjectId) === String(items[1 - i][partitionField]));
     if (marked) return marked;
   }
   if (items.length > 1) {
-    throw duplicateIdError(container, id,
+    throw duplicateIdError(container, key,
       partitionField ? items.map(row => row[partitionField]) : undefined);
   }
   return items[0] || null;
@@ -359,6 +366,7 @@ module.exports = {
   readPage,
   upsertItem,
   readForWriteIn,
+  oneRowOf,
   upsertWithEtag,
   createItem,
   isDefinedAndNotNull,

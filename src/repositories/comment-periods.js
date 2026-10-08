@@ -12,7 +12,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
-  assertFilterable, readForWriteIn, fetchAll, readPage
+  assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 
@@ -51,6 +51,49 @@ async function readForWrite(id, projectId) {
 
 function criteriaFor(projectId) {
   return [eq(PARTITION_FIELD, String(projectId), '@projectId')];
+}
+
+/** Stored rows of one partition matching every criterion, unfiltered, like `readForWrite`. */
+async function readForWriteWhere(projectId, criteria) {
+  const all = [...criteriaFor(projectId), ...criteria];
+  const { items } = await cosmos.query(CONTAINER, {
+    query: `SELECT * FROM c WHERE ${all.map(c => c.clause).join(' AND ')}`,
+    parameters: all.flatMap(c => c.params)
+  }, { partitionKey: String(projectId) });
+  return items;
+}
+
+/**
+ * The one stored row whose `field` is `value`: in the partition first, then across partitions, so a
+ * row a project move left under another parent is still found. Unfiltered, like `readForWrite`.
+ */
+async function readForWriteByField(field, value, projectId) {
+  const criterion = eq(field, String(value), `@${field}`);
+  if (projectId != null) {
+    const [row] = await readForWriteWhere(projectId, [criterion]);
+    if (row) return row;
+  }
+  const { items } = await cosmos.query(CONTAINER,
+    { query: `SELECT * FROM c WHERE ${criterion.clause}`, parameters: criterion.params });
+  return oneRowOf(CONTAINER, value, items, PARTITION_FIELD);
+}
+
+/** The row that names this Eagle period without being stored under its id: an ENGAGE-created one. */
+async function readForWriteByEagleId(eagleId, projectId) {
+  return readForWriteByField('eagleId', eagleId, projectId);
+}
+
+/**
+ * The ENGAGE row for this engagement URL that no Eagle period has claimed yet. A row already tied to
+ * another Eagle id is left alone, so a second Eagle period on the same URL cannot overwrite its echo.
+ */
+async function readForWriteEngageByMetUrl(metURL, projectId) {
+  if (!metURL) return null;
+  const rows = await readForWriteWhere(projectId, [
+    eq('sourceSystem', 'engage', '@sourceSystem'),
+    eq('metURL', String(metURL), '@metURL')
+  ]);
+  return rows.find(row => !row.eagleId) || null;
 }
 
 /**
@@ -298,6 +341,9 @@ async function deleteById(id, projectId) {
  *
  * `isDeleted` rides along because that upstream ACL outlives the record: a deleted period's raw
  * copy still says `public`, and `deriveAcls` needs the flag to refuse to act on it.
+ *
+ * An ENGAGE-owned row takes its upstream ACL from `sources.engage.read`, never from the Eagle echo,
+ * which only reflects what DEMI last sent there.
  */
 async function aclRowsForProject(access, projectId) {
   // Callers pass systemAccess on purpose: a sealed child is skipped, and a `read`-less one heals on
@@ -306,10 +352,12 @@ async function aclRowsForProject(access, projectId) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: criteriaFor(projectId),
-    select: 'c.id, c.read, c.isDeleted, c.sources.eagle.read AS eagleRead'
+    select: 'c.id, c.read, c.isDeleted, c.sourceSystem, c.sources.eagle.read AS eagleRead, '
+      + 'c.sources.engage.read AS engageRead'
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
-  return items;
+  return items.map(({ sourceSystem, engageRead, eagleRead, ...row }) =>
+    ({ ...row, eagleRead: sourceSystem === 'engage' ? engageRead : eagleRead }));
 }
 
 /**
@@ -323,6 +371,31 @@ async function setAclForProject(access, projectId, read) {
   return cascadeAcl(CONTAINER, projectId, await aclRowsForProject(access, projectId), read);
 }
 
+// ---- ENGAGE ingest (controllers/nosql/engage-comment-period.js) ----
+
+/** The row ENGAGE already tied to this engagement, in this partition or, after a project move, another. */
+async function readForWriteByEngagementId(engagementId, projectId) {
+  return readForWriteByField('engagementId', engagementId, projectId);
+}
+
+/** The ENGAGE row whose sync-out deleted this Eagle period to recreate it under a new project, else null. */
+async function readForWriteEngageByDroppedEagleId(eagleId) {
+  const engage = eq('sourceSystem', 'engage', '@sourceSystem');
+  const { items } = await cosmos.query(CONTAINER, {
+    query: `SELECT * FROM c WHERE ${engage.clause} AND ARRAY_CONTAINS(c.syncOut.eagle.droppedIds, @eagleId)`,
+    parameters: [...engage.params, { name: '@eagleId', value: String(eagleId) }]
+  });
+  return items[0] || null;
+}
+
+// ---- ENGAGE reconcile ----
+
+/** Every ENGAGE-owned row, deleted ones too, across partitions and unfiltered — for reconcile-engage.js only. */
+async function listEveryEngage() {
+  const { clause, params } = eq('sourceSystem', 'engage', '@sourceSystem');
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${clause}`, parameters: params });
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
@@ -332,6 +405,10 @@ module.exports = {
   startOfPacificDay,
   getById,
   readForWrite,
+  readForWriteByEagleId,
+  readForWriteEngageByMetUrl,
+  readForWriteByEngagementId,
+  readForWriteEngageByDroppedEagleId,
   listByProject,
   listEveryByProject,
   listByIds,
@@ -343,5 +420,6 @@ module.exports = {
   aclRowsForProject,
   setAclForProject,
   upsert,
-  deleteById
+  deleteById,
+  listEveryEngage
 };

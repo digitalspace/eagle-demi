@@ -200,6 +200,19 @@ test('publishing a project publishes the engagement Eagle published', async (t) 
       'under a period Eagle kept private, the same comment stays private');
     assert.strictEqual(opValue(commentWrites[1].operations[0], '/isPublished'), false);
   });
+
+  await t.test('a period ENGAGE owns follows its ENGAGE ACL, not the Eagle echo', async (tt) => {
+    const { writes } = stubCosmos(tt, {
+      periods: [{ id: 'engage-42', read: STAFF_READ, sourceSystem: 'engage', eagleRead: ['staff'], engageRead: ['public'] }],
+      commentsByPeriod: { 'engage-42': [] }
+    });
+
+    const res = await moveTo(tt, 4, 2);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    const [periodWrite] = patchesTo(writes, 'commentPeriods');
+    assert.deepStrictEqual(opValue(periodWrite.operations[0], '/read'), PUBLIC_READ);
+  });
 });
 
 test('a takedown takes the engagement down with it', async (t) => {

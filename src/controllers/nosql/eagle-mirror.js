@@ -48,9 +48,9 @@ function eaglePush(req) {
  * hook only (`api/helpers/models.js:71`), and the publish, unpublish and extension paths write
  * through `doc.save()` and `Model.updateOne`, which that hook never sees.
  */
-function isStalePush(pushedAt, current) {
+function isStalePush(pushedAt, current, field = PUSHED_AT_FIELD) {
   if (!Number.isFinite(pushedAt) || !current) return false;
-  const stored = current[PUSHED_AT_FIELD];
+  const stored = current[field];
   return Number.isFinite(stored) && pushedAt < stored;
 }
 
@@ -59,9 +59,9 @@ function isStalePush(pushedAt, current) {
  * stored row holds — a Cosmos write replaces the item, so not carrying it would clear the ordering
  * for every push behind it.
  */
-function stampPush(item, pushedAt, current) {
-  const stamp = Number.isFinite(pushedAt) ? pushedAt : (current && current[PUSHED_AT_FIELD]);
-  return Number.isFinite(stamp) ? { ...item, [PUSHED_AT_FIELD]: stamp } : item;
+function stampPush(item, pushedAt, current, field = PUSHED_AT_FIELD) {
+  const stamp = Number.isFinite(pushedAt) ? pushedAt : (current && current[field]);
+  return Number.isFinite(stamp) ? { ...item, [field]: stamp } : item;
 }
 
 /**
@@ -118,18 +118,22 @@ function keepSeal(item, current) {
  * `pushedAt` is judged inside each attempt, against the row THAT attempt read: a retry after a
  * lost race decides against the push that won, not against the revision this request first saw.
  *
+ * `pushedAtField` names the stamp: each source orders its own pushes, so an ENGAGE ingest stamps
+ * `engagePushedAt` and is never refused by an Eagle push's clock, or the other way round.
+ *
  * @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}
  *   |{status: 'conflict'}>} `conflict` once every try has lost.
  */
-async function upsertWithRetry(repo, build, readExisting, { pushedAt = null } = {}) {
+async function upsertWithRetry(repo, build, readExisting,
+  { pushedAt = null, pushedAtField = PUSHED_AT_FIELD } = {}) {
   const existing = await readExisting();
 
   return writeGuarded({
     existing,
     reread: readExisting,
     attempt: async (current) => {
-      if (isStalePush(pushedAt, current)) return { ignored: 'stale', existing: current };
-      const item = keepSeal(stampPush(await build(current), pushedAt, current), current);
+      if (isStalePush(pushedAt, current, pushedAtField)) return { ignored: 'stale', existing: current };
+      const item = keepSeal(stampPush(await build(current), pushedAt, current, pushedAtField), current);
       return { saved: await repo.upsert(item, current), existing: current };
     }
   });

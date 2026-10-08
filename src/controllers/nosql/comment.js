@@ -15,8 +15,9 @@
 const comments = require('../../repositories/comments');
 const commentPeriods = require('../../repositories/comment-periods');
 const { eagleReadUnder } = require('../../seed/transform');
-const { systemAccess } = require('../../helpers/access-sql');
-const { mirrorError } = require('../../helpers/duplicate-id');
+const { systemAccess, canRead } = require('../../helpers/access-sql');
+const { mirrorError, DUPLICATE_ID } = require('../../helpers/duplicate-id');
+const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
   eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode
@@ -72,6 +73,25 @@ function mirrorItem(eagleId, doc, period, read, existing) {
 }
 
 /**
+ * A period ENGAGE created, stored as `engage-<id>` with its Eagle id in `eagleId`. Held to the same
+ * system read as `getById`, so a sealed or read-less period still refuses its comments.
+ */
+async function engagePeriodByEagleId(eagleId, child) {
+  let row;
+  try {
+    row = await commentPeriods.readForWriteByEagleId(eagleId);
+  } catch (err) {
+    if (err.code !== DUPLICATE_ID) throw err;
+    logger.error('[Comment Controller] comment period Eagle id stored on more than one row',
+      { eagleId, ...child, error: err.message });
+    // Not the mirror's 409: a duplicate here is DEMI's fault, never a stale push.
+    throw new Error(`comment period ${eagleId} is stored on more than one row`, { cause: err });
+  }
+  if (!row || row.sourceSystem !== 'engage') return null;
+  return canRead(row, systemAccess(), commentPeriods.PARTITION_FIELD) ? row : null;
+}
+
+/**
  * The DEMI period a comment hangs off, or null after one `parent not admitted` warn. A miss costs
  * one extra unfiltered read, made before the 404, to log `missing` or `hidden`.
  */
@@ -82,7 +102,8 @@ async function admitPeriod(ref, childId) {
     warnNotAdmitted(child, { period: badRefReason(ref) });
     return null;
   }
-  const period = await commentPeriods.getById(systemAccess(), periodEagleId);
+  const period = await commentPeriods.getById(systemAccess(), periodEagleId)
+    || await engagePeriodByEagleId(periodEagleId, child);
   if (!period) {
     const reason = await classify(() => commentPeriods.readForWrite(periodEagleId), {
       eagleId: periodEagleId,

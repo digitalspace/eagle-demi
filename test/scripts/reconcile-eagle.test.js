@@ -1416,3 +1416,38 @@ test('the user, group and inspection mirrors are checked against their stored Ea
     assert.deepStrictEqual(summary.users.aclMismatch, []);
   });
 });
+
+/** ENGAGE-owned periods belong to reconcile-engage.js: Eagle holds only the copy DEMI sent it. */
+test('ENGAGE-owned periods stay out of the Eagle diff', async (t) => {
+  const ENGAGE_ROW = {
+    id: 'engage-42', projectId: '207', sourceSystem: 'engage', eagleId: 'CP-E', isMet: true,
+    metURL: 'https://engage.example/dead-slug'
+  };
+  const withEngageRow = (extra = {}) => engageDeps({
+    rows: [...PERIOD_ROWS[207], ENGAGE_ROW], respond: respondOnlyAliveSlug, ...extra
+  });
+
+  await t.test('neither the row nor its Eagle copy is drift, and the row is counted apart', async () => {
+    const deps = withEngageRow();
+    deps.sources = stubSources({}, {
+      ...EAGLE_BY_DATASET, CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-E', project: 'P1' }]
+    });
+    const summary = await reconcile([], deps);
+
+    assert.strictEqual(summary.commentPeriods.engageOwned, 1);
+    assert.strictEqual(summary.commentPeriods.inDemi, 1);
+    assert.deepStrictEqual(summary.commentPeriods.unpublishedOrDeleted, []);
+    assert.deepStrictEqual(summary.commentPeriods.eagleOnly, []);
+    assert.deepStrictEqual(summary.failures, [], 'the truncation guard still counts the ENGAGE row');
+    assert.match(report(summary), /engageOwned \(ENGAGE-owned, left out of this diff and never dropped\): 1/);
+  });
+
+  await t.test('--drop-orphans never deletes one, even when its slug is gone', async () => {
+    const deleted = [];
+    const summary = await reconcile(['--drop-orphans'], withEngageRow({ deleted }));
+
+    assert.deepStrictEqual(deleted, []);
+    assert.deepStrictEqual(summary.engageOrphans.dead, []);
+    assert.strictEqual(summary.engageOrphans.checked, 0);
+  });
+});

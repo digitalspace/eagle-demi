@@ -10,8 +10,8 @@
  *
  * Supported: AND, OR, parentheses, `c.f <op> value` (=, !=, <, <=, >, >=; value a @param, a
  * "string", a number, true or false), IS_STRING, IS_DEFINED, IS_NULL, IS_ARRAY (these four also on
- * a dotted `c.a.b`), NOT, ARRAY_CONTAINS, `ARRAY_LENGTH(c.a.b) <op> value`, and on queries ORDER BY
- * one field, maxItemCount and a continuation.
+ * a dotted `c.a.b`), NOT, ARRAY_CONTAINS on a dotted path with a 'string' or @param,
+ * `ARRAY_LENGTH(c.a.b) <op> value`, and on queries ORDER BY one field, maxItemCount and a continuation.
  */
 
 const cosmos = require('../../src/db/cosmos-nosql');
@@ -105,8 +105,11 @@ function evaluate(text, row, params) {
     const value = pathOf(row, m[1]);
     return compare(Array.isArray(value) ? value.length : undefined, m[2], valueOf(m[3], params));
   }
-  m = /^ARRAY_CONTAINS\(c\.(\w+), '([^']*)'\)$/.exec(expr);
-  if (m) return Array.isArray(row[m[1]]) && row[m[1]].includes(m[2]);
+  m = /^ARRAY_CONTAINS\(c\.([\w.]+), ('[^']*'|@\w+)\)$/.exec(expr);
+  if (m) {
+    const array = pathOf(row, m[1]);
+    return Array.isArray(array) && array.includes(valueOf(m[2], params));
+  }
   m = /^c\.(\w+) (=|!=|<=|>=|<|>) (\S+)$/.exec(expr);
   if (m) return compare(row[m[1]], m[2], valueOf(m[3], params));
   throw new Error(`updates-store: cannot evaluate "${expr}"`);

@@ -322,6 +322,50 @@ line. With `--store`, which the timer passes, the run also saves the counts and 
 class as one row in the `config` container, read back with `GET /api/admin/reconcile`. A failed
 save is logged and the run still finishes. Nothing is fixed automatically.
 
+Comment periods ENGAGE owns (`sourceSystem: 'engage'`) are left out of this diff and out of
+`--drop-orphans`; the report counts them as `engageOwned`. `reconcile-engage.js` checks them:
+
+```bash
+node src/scripts/reconcile-engage.js           # report only
+node src/scripts/reconcile-engage.js --repair  # and re-queue drifted rows through sync-out
+node src/scripts/reconcile-engage.js --store   # and save the report (cache id reconcile-engage-report)
+node src/scripts/reconcile-engage.js --limit 20
+```
+
+It compares each ENGAGE row with its Eagle copy (dates to the minute, `isPublished`, `metURL`) and
+reports rows never sent to Eagle, rows Eagle no longer holds, drift, Eagle projects with two
+periods on one engagement URL, and rows sync-out marked `conflict` (their URL matched an Eagle period
+DEMI already mirrors as an Eagle-owned row), and rows sync-out will not create in Eagle because they
+have no `metURL` (`skipped`). `--repair` sends the first three through the sync-out
+queue again, so DEMI's copy wins; the script never writes to Eagle itself. With `ENGAGE_API_BASE` set
+it also lists published ENGAGE engagements under a project that have no DEMI row. That part only
+reports.
+
+Set `RECONCILE_ENGAGE_SCHEDULE` (NCRONTAB, like `RECONCILE_SCHEDULE`) and the API app registers the
+timer `reconcileEngage`, which runs with `--store` and never with `--repair`. `GET
+/api/admin/reconcile-engage` reads the stored report back. Unset, no timer is registered.
+
+### Sync-out to Eagle
+
+ENGAGE pushes its engagements to `PUT /api/engage/engagements/:engagementId`, and DEMI writes
+those comment periods on to Eagle through a storage queue (`src/sync-out`). All keys are declared
+in `src/config.js` (`syncOut`, `engageApiBase`):
+
+| Setting | Meaning |
+|---|---|
+| `SYNC_OUT_QUEUE` | Queue name. Unset: no worker is registered and enqueue fails, logged per push. |
+| `SYNC_OUT_EAGLE_ENABLED` | `true` to send to Eagle. Anything else queues nothing. |
+| `EAGLE_PROTECTED_API_BASE` | eagle-api's protected `/api` base. Not `EAGLE_API_BASE`, which is the public base the seed reads. |
+| `EAGLE_KC_CLIENT_ID`, `EAGLE_KC_CLIENT_SECRET` | Client-credentials login to eagle-api, at the realm `KEYCLOAK_URL` and `KEYCLOAK_REALM` name. The secret comes from Key Vault. |
+| `EAGLE_ENGAGE_MILESTONE` | Milestone id sent on every Eagle write. eagle-api stores a bad id when it is missing. |
+| `ENGAGE_API_BASE` | ENGAGE's API, read by both reconcile scripts. Unset skips their ENGAGE side. Bicep param `engageApiBase`. |
+| `RECONCILE_ENGAGE_SCHEDULE` | Timer schedule above. |
+| `DEMI_ENGAGE_PRINCIPALS` | Who may call the ingest. Default `apim:engage`; see "Authentication & authorization". Bicep param `engagePrincipals`. |
+
+A message gets host.json's `maxDequeueCount` sends. Earlier failures re-queue with a doubling delay;
+the last one records `failed` on the row, moves the message to `<SYNC_OUT_QUEUE>-poison` and logs
+`[sync-out] job failed` once.
+
 ### Parity with eagle-api
 
 ```bash
@@ -722,6 +766,10 @@ The PDF title worker routes, `/api/documents/pdf-title/*` and `/api/documents/:i
 use the same check with their own list, `DEMI_PDF_TITLE_WORKER_PRINCIPALS` (bicep
 `pdfTitleWorkerPrincipals`). It has no default: unset or empty, the routes refuse everyone. Never
 put one principal on both lists, or one key can both mirror Eagle data and rewrite stored PDFs.
+
+The ENGAGE ingest, `PUT /api/engage/*`, uses the same check with `DEMI_ENGAGE_PRINCIPALS`, which
+defaults to `apim:engage`. Set but empty, it refuses everyone. eagle-api's principal gets 403
+there, and ENGAGE's gets 403 on the Eagle mirror.
 
 **Never hardcode a key literal** — this repository is public, so a literal there is a world-readable
 credential. (`DOCLING_API_KEY` was exactly that until it was split out; it is now outbound-only and
@@ -1415,6 +1463,8 @@ Everything below mails one action group, `demi-alerts-<env>`, created in
 | `demi-logs-quota-<env>` | `Usage` | 2 | Billable ingest over 24h passed 80% of the workspace's daily cap |
 | `demi-reconcile-drift-<env>` | `AppTraces` | 2 | The nightly reconcile line says `drift=` over 0. Prod only |
 | `demi-bulk-download-failed-<env>` | `AppTraces` | 2 | A bulk download job failed after its retries. Test only |
+| `demi-chunk-restamp-failed-<env>` | `AppTraces` | 2 | A chunk parent-field re-stamp job failed after its retries. Wherever `chunkRestampQueue` is set |
+| `demi-sync-out-failed-<env>` | `AppTraces` | 2 | A sync-out message to eagle-api failed after its retries. Wherever `syncOutQueue` is set: test only |
 | `demi-chunk-ingest-failures-<env>` | `AppTraces` | 2 | Five or more `chunk write incomplete`, `chunk ingest rejected` or `Chunk ingest failed` lines in an hour |
 | `demi-cosmos-ru-<env>` | Cosmos `TotalRequestUnits` metric | 2 | Cosmos used more than `cosmosRuPerHourAlert` RU in the last hour: 3M on test and prod |
 | `demi-search-failures-<env>` | `AppTraces` | 1 | Three or more search errors in five minutes: `[search] … failed`, `[search/summary] … failed`, or `[ai-search] … retried without it` |

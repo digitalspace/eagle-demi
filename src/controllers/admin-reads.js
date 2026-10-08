@@ -228,23 +228,26 @@ async function getCost(req, res) {
   }
 }
 
-/** GET /admin/reconcile — the last stored Eagle reconcile report, as the job wrote it. */
-async function getReconcileReport(req, res) {
-  let stored;
-  try {
-    stored = await cache.get(cache.RECONCILE_REPORT_ID);
-  } catch (err) {
-    // Not err.message in the body: a Cosmos SDK message names the account endpoint.
-    logger.warn('GET /admin/reconcile: report read failed', { error: err.message, stack: err.stack });
-    return sendError(res, 'reconcile report unavailable, retry in a few minutes', 503);
-  }
-  if (!stored || !stored.body) return sendError(res, 'no reconcile report stored', 404);
-  return res.json({ success: true, storedAt: stored.storedAt, report: stored.body });
+/** A handler serving one stored reconcile report, as its job wrote it. */
+function storedReport(id, route) {
+  return async (req, res) => {
+    let stored;
+    try {
+      stored = await cache.get(id);
+    } catch (err) {
+      // Not err.message in the body: a Cosmos SDK message names the account endpoint.
+      logger.warn(`GET ${route}: report read failed`, { error: err.message, stack: err.stack });
+      return sendError(res, 'reconcile report unavailable, retry in a few minutes', 503);
+    }
+    if (!stored || !stored.body) return sendError(res, 'no reconcile report stored', 404);
+    return res.json({ success: true, storedAt: stored.storedAt, report: stored.body });
+  };
 }
 
 module.exports = {
   getAudit,
   getAnalytics,
   getCost,
-  getReconcileReport
+  getReconcileReport: storedReport(cache.RECONCILE_REPORT_ID, '/admin/reconcile'),
+  getReconcileEngageReport: storedReport(cache.RECONCILE_ENGAGE_REPORT_ID, '/admin/reconcile-engage')
 };

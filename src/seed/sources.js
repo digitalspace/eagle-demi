@@ -20,6 +20,7 @@ const path = require('path');
 
 const config = require('../config');
 const { logger } = require('../utils/logger');
+const { clientCredentialsToken } = require('../services/keycloak-client-token');
 
 const EAGLE_API_BASE = process.env.EAGLE_API_BASE ||
   'https://eagle-dev.apps.silver.devops.gov.bc.ca/api/public';
@@ -245,16 +246,11 @@ function trackApiToExtract(project) {
 
 /** Client-credentials bearer for a confidential realm client. */
 async function clientToken(clientId, clientSecret) {
-  const res = await fetch(
-    `${config.keycloakUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret
-      })
-    });
-  if (!res.ok) throw new Error(`[seed] token for ${clientId}: HTTP ${res.status}`);
-  return (await res.json()).access_token;
+  try {
+    return (await clientCredentialsToken({ issuer: config.keycloakIssuer, clientId, clientSecret })).accessToken;
+  } catch (err) {
+    throw new Error(`[seed] ${err.message}`, { cause: err });
+  }
 }
 
 const trackFeedConfigured = () =>
