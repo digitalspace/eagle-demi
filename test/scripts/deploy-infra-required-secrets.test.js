@@ -58,7 +58,8 @@ const VAULT_NAMES = [
   'access-gate-password',
   'openshift-token-test',
   'dev-openshift-token',
-  'pdf-title-worker-api-key'
+  'pdf-title-worker-api-key',
+  'eagle-sync-out-client-secret'
 ];
 
 const GOOD_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0 demo';
