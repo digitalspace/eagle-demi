@@ -29,6 +29,9 @@ if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
 
 const { app } = require('@azure/functions');
 
+// Streaming response bodies for document downloads; needs @azure/functions 4.3.0+ and runtime 4.28+.
+app.setup({ enableHttpStream: true });
+
 // Exported for the timer and trigger suites (test/*-timer.test.js, test/*-triggers.test.js) — the
 // host is the only other caller.
 module.exports = {
