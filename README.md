@@ -562,7 +562,9 @@ whose write fails or gets a 412 keeps capping its children at its stored read. P
 and Updates are read in full; the rest only where `read` carries `staff` or `team`.
 
 A row is rewritten only when its stored `read` is exactly what the old rule gives for the same
-Eagle read and parent. The script keeps a frozen copy of that rule: the staff widening plus the old
+Eagle read, under its parent's read either before or after the reverse. The second case is a row
+the old rule capped while the parent still held Eagle's read; matching it too lets one run finish
+the job. The script keeps a frozen copy of that rule: the staff widening plus the old
 `capRead`, which stored `['team']` where the current one keeps privileged names. Every patch
 carries the row's etag. The counters per container are:
 

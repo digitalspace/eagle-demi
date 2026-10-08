@@ -305,6 +305,21 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.strictEqual(second.reduce((n, s) => n + s.planned, 0), 0);
   });
 
+  await t.test('groups the old cap stored against the parent\'s reversed read are patched in one pass', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [{ ...WIDENED_PROJECT, read: ['inspector', 'staff'], eagleRead: ['inspector'] }],
+      groups: [
+        { id: 'g-1', projectId: 'p-w', eagleId: 'g-1', read: ['team'], eagleRead: ['public'], _etag: 'x' },
+        { id: 'g-2', projectId: 'p-w', eagleId: 'g-2', read: ['team'], eagleRead: ['sysadmin', 'inspector'], _etag: 'x' }
+      ]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'g-1'), ['sysadmin']);
+    assert.deepStrictEqual(readOf(writes, 'g-2'), ['sysadmin', 'inspector']);
+    const second = await reverse('--live');
+    assert.strictEqual(second.reduce((n, s) => n + s.planned, 0), 0);
+  });
+
   await t.test('a row under a team parent the rule left alone is not rewritten', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [{ ...WIDENED_PROJECT, read: ['team'], eagleRead: ['team'] }],

@@ -252,14 +252,17 @@ function derive(step, rule, row, eagleRead, parent, parentRead) {
 
 /**
  * What the dropped rule and Eagle's rule give for one row, as pairs. A deleted row may hold either
- * pair: a push or cascade applies the delete ceiling, an inspection push does not.
+ * pair: a push or cascade applies the delete ceiling, an inspection push does not. The dropped
+ * rule is tried against the parent's read after this run too, as a second pass would see it.
  */
 function candidates(step, row, eagleRead, parent) {
-  const before = derive(step, droppedRule, row, eagleRead, parent, parent && parent.before);
   const after = derive(step, eagleRule, row, eagleRead, parent, parent && parent.after);
-  const pairs = [{ dropped: before, target: after }];
+  const parentReads = parent ? [parent.before, parent.after] : [undefined];
+  const pairs = parentReads.map(read => ({ dropped: derive(step, droppedRule, row, eagleRead, parent, read), target: after }));
   if (step.deleteCeiling && isDeletedRow(row)) {
-    pairs.unshift({ dropped: droppedRule.cap(before, DELETED_CEILING), target: eagleRule.cap(after, DELETED_CEILING) });
+    pairs.unshift(...pairs.map(p => ({
+      dropped: droppedRule.cap(p.dropped, DELETED_CEILING), target: eagleRule.cap(p.target, DELETED_CEILING)
+    })));
   }
   return pairs;
 }
