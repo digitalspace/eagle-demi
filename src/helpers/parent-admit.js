@@ -25,7 +25,7 @@
 const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
 const { canRead, systemAccess, levelOfRead, isDemiSeal } = require('./access-sql');
-const { seedAcl } = require('../seed/transform');
+const { eagleBaseAcl } = require('../seed/transform');
 const { logger } = require('../utils/logger');
 // Dependency-free reference parser shared with every mirror, so a populated `{_id}` and a bare
 // ObjectId resolve here exactly as they do there.
@@ -101,7 +101,7 @@ function refusalCode(ref) {
 function asPushed(row) {
   if (!row || levelOfRead(row.read) !== 0 || isDemiSeal(row)) return row;
   const eagle = row.sources && row.sources.eagle;
-  return { ...row, read: seedAcl(eagle && eagle.read) };
+  return { ...row, read: eagleBaseAcl(eagle && eagle.read) };
 }
 
 /** The row, at `asPushed`'s read, when the system caller reads it; else null. */

@@ -39,8 +39,8 @@ const comments = require('../../repositories/comments');
 // under: one value, so the two cannot drift apart.
 const { constrainToProject, DELETED_CEILING } = require('../../repositories/documents');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
-const { seedAcl, eagleReadUnder } = require('../../seed/transform');
-const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
+const { eagleBaseAcl, eagleReadUnder } = require('../../seed/transform');
+const { systemAccess, sameAccess } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
@@ -138,7 +138,7 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
 
   // A notification carries no ACL a period could out-rank, so there is nothing to narrow against
   // and the period keeps what Eagle published it as.
-  const constrained = parent.kind === 'notification' ? seedAcl(doc.read) : eagleReadUnder(doc.read, parent.read);
+  const constrained = parent.kind === 'notification' ? eagleBaseAcl(doc.read) : eagleReadUnder(doc.read, parent.read);
   // Both ceilings, lower wins: the parent's, and level 2 once Eagle has deleted the record.
   const read = doc.isDeleted === true
     ? constrainToProject(constrained, DELETED_CEILING)
@@ -161,11 +161,11 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
     await commentPeriods.deleteById(existing.id, existing.projectId);
   }
 
-  // WHENEVER THE LEVEL MOVED, not only on a delete. A comment is gated by its own stored `read[]`
+  // WHENEVER THE READ MOVED, not only on a delete. A comment is gated by its own stored `read[]`
   // and nothing re-reads its period at query time — unlike a chunk, which derives from its parent
   // document in the search branch — so a period Eagle unpublished leaves every comment under it
   // readable until they are re-derived here.
-  const moved = !existing || levelOfRead(existing.read) !== levelOfRead(saved.read);
+  const moved = !existing || !sameAccess(existing.read, saved.read);
   const cascadeError = moved ? await cascadeToComments(saved) : null;
 
   return { saved, existing, cascadeError };

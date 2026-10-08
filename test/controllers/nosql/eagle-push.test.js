@@ -617,7 +617,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.isPublished, false);
   });
 
-  await t.test('a document Eagle marks compliance-only lands at staff, not sealed', async () => {
+  await t.test('a document Eagle marks compliance-only lands privileged-only, not sealed', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'getById', async () => null);
     let written;
@@ -628,8 +628,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       body: { doc: eagleDocument({ read: ['compliance'] }) }, user: STAFF
     }, mockRes());
 
-    assert.deepStrictEqual(written.read, ['staff']);
-    assert.deepStrictEqual(written.ownRead, ['sysadmin'], 'the stripped read, without staff: the cascade adds it');
+    assert.deepStrictEqual(written.read, ['sysadmin']);
+    assert.deepStrictEqual(written.ownRead, ['sysadmin']);
   });
 
   /** The read a document push stores under a project whose stored read is `projectRead`. */
@@ -654,17 +654,10 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     });
   }
 
-  await t.test('a no-ladder document under a project narrowed to level 2 lands where a staff document does', async () => {
-    assert.deepStrictEqual(await pushedUnder(['staff'], ['sysadmin']), await pushedUnder(['staff'], ['sysadmin', 'staff']));
-  });
-
-  // Level-1 parents store what the push stored before the staff rule; staff-level parents, staff.
-  for (const [parentRead, expected] of [
-    [['team'], ['sysadmin']], [['sysadmin'], ['sysadmin']], [[], ['sysadmin']],
-    [['project-team'], ['sysadmin']], [['staff'], ['staff']], [['staff', 'idir', 'public'], ['staff']]
-  ]) {
-    await t.test(`an Eagle ['sysadmin'] document pushed under ${JSON.stringify(parentRead)} stores ${JSON.stringify(expected)}`, async () => {
-      assert.deepStrictEqual(await pushedUnder(parentRead, ['sysadmin']), expected);
+  // Eagle's own read under every parent: nothing is added, and it never caps to team.
+  for (const parentRead of [['team'], ['sysadmin'], [], ['project-team'], ['staff'], ['staff', 'idir', 'public']]) {
+    await t.test(`an Eagle ['sysadmin'] document pushed under ${JSON.stringify(parentRead)} stores ['sysadmin']`, async () => {
+      assert.deepStrictEqual(await pushedUnder(parentRead, ['sysadmin']), ['sysadmin']);
     });
   }
 
@@ -905,9 +898,9 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     }, mockRes());
 
     assert.strictEqual(indexWrites.length, 1);
-    // `sysadmin` is no ladder token, so `staff` is added: level 2, never `team`.
+    // Eagle's own read: nothing added, never `team`.
     assert.deepStrictEqual(indexWrites[0],
-      [{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false }]);
+      [{ id: DOC_EAGLE_ID, read: ['sysadmin'], isPublished: false }]);
 
     indexWrites.length = 0;
     await documentController.upsertFromEagle({
@@ -1207,7 +1200,7 @@ test('an Eagle push onto a row DEMI took down or narrowed', async (t) => {
 
   await t.test('an Eagle unpublish of a held document narrows it further', async () => {
     const written = await pushDocument(heldDocument(['staff', 'idir']),
-      eagleDocument({ read: ['sysadmin'] }));
+      eagleDocument({ read: ['sysadmin', 'staff'] }));
 
     assert.strictEqual(levelOfRead(written.read), 2, 'Eagle\'s lower level wins over the hold');
     assert.strictEqual(written.levelHeldAt, HELD_AT);

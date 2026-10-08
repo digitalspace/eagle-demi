@@ -363,25 +363,23 @@ events, and Eagle records a `Get` action for each `group-members` read.
 One line per read:
 
 ```
-[parity] search-Project identity=staff match=410 missingInDemi=3 extraInDemi=12 fieldDiff=0 unexplained=0 known=L1-no-ladder-token:3,demi-only:12
+[parity] search-Project identity=staff match=410 missingInDemi=3 extraInDemi=12 fieldDiff=0 unexplained=0 known=L2-never-mirrored:3,demi-only:12
 ```
 
 Every difference is matched against `KNOWN_DIFFERENCES` in `parity-map.js`; what no class explains
 counts as `unexplained`. Classes that match by id read their ids from `--known-ids`, a JSON object
 of class name to id list; the flag may repeat, and lists of one class merge. Those classes are rows
-never mirrored, DEMI takedowns and Eagle hard deletes, plus three that only explain a row extra in
+never mirrored, DEMI takedowns and Eagle hard deletes, plus two that only explain a row extra in
 DEMI:
 
 - `seeded-from-prod`: a row from the 2026-08-25 prod seed that Eagle test does not hold.
-- `eagle-staff-widened` (staff runs only): an Eagle row whose `read[]` has no ladder token, which
-  DEMI shows staff because the push adds `staff` (`withEagleStaff` in `src/helpers/eagle-acl.js`).
 - `ladder-above-public` (staff runs only): an Eagle row whose `read[]` has `public` but not
   `staff`, or a comment period or document under such a project. Eagle matches `read[]` tokens to
   roles literally, so its staff routes hide these rows. DEMI ranks staff above public by design, so
   DEMI staff sees them.
 
 `--emit-ids <file>` writes ids only, never values: `extraInDemi`, each read's extra DEMI ids, and on
-a sysadmin run `eagle-staff-widened` and `ladder-above-public`, the Eagle ids those rules cover. A
+a sysadmin run `ladder-above-public`, the Eagle ids that rule covers. A
 child counts under `ladder-above-public` only when the same run read its project. The file is a valid
 `--known-ids` file (`extraInDemi` is skipped), so a sysadmin run's file feeds the staff run:
 

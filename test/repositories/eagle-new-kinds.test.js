@@ -129,7 +129,7 @@ test('inspections repository', async (t) => {
     t.mock.method(cosmos, 'query', async (_c, spec) => {
       const kind = spec.parameters.find(p => p.name === '@kind').value;
       // A level-2 element under a level-3 inspection: its item must land at 2, not at the inspection's 3.
-      if (kind === 'InspectionElement') return { items: [{ id: 'e1', read: ['staff', 'idir', 'public'], eagleRead: ['sysadmin'] }] };
+      if (kind === 'InspectionElement') return { items: [{ id: 'e1', read: ['staff', 'idir', 'public'], eagleRead: ['sysadmin', 'staff'] }] };
       return { items: [{ id: 'it1', read: ['staff', 'idir', 'public'], eagleRead: ['public', 'sysadmin'] }] };
     });
     const patched = [];

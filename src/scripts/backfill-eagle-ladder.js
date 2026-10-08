@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * Give `staff` to the Eagle-mirrored rows already in Cosmos whose `read[]` carries no ladder token,
- * by the rule the mirrors now apply on every push (`helpers/eagle-acl.js:withEagleStaff`).
+ * Give `staff` to the Eagle-mirrored rows already in Cosmos whose `read[]` carries no ladder token.
+ * The push rule this mirrored was removed 2026-10-08 (docs/rbac-architecture.md §1), so a run now
+ * plans no writes.
  *
  * In DEMI, no ladder token means privileged callers only. In Eagle, `staff` skips every read
  * check, so those rows (for example `['sysadmin']` or `['sysadmin','inspector']`) are visible to
@@ -36,7 +37,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const { readUnder } = require('../helpers/update-parent');
 const { levelOfRead, LEVEL_TOKENS, SEALED_TOKEN } = require('../helpers/access-sql');
-const { seedAcl, eagleReadUnder } = require('../seed/transform');
+const { eagleBaseAcl, eagleReadUnder } = require('../seed/transform');
 const { logger } = require('../utils/logger');
 
 const PAGE_SIZE = 500;
@@ -127,7 +128,7 @@ function planRow(step, row, parentRead) {
   if (!hasNoLadder(row.read) || parentRead === null) return null;
   const next = step.parent === 'eagle'
     ? readUnder(row.read, parentRead === undefined ? null : { read: parentRead })
-    : (parentRead === undefined ? seedAcl(row.read) : eagleReadUnder(row.read, parentRead));
+    : (parentRead === undefined ? eagleBaseAcl(row.read) : eagleReadUnder(row.read, parentRead));
   if (levelOfRead(next) !== 2) return null;
   return { read: next };
 }

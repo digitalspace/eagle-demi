@@ -10,7 +10,7 @@
  */
 
 const lists = require('../../repositories/lists');
-const { seedAcl } = require('../../seed/transform');
+const { eagleBaseAcl } = require('../../seed/transform');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const {
@@ -63,7 +63,7 @@ function mirrorItem(eagleId, doc, read, existing) {
  * @returns {Promise<{saved: object, existing: object|null}>}
  */
 function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
-  const read = seedAcl(doc.read);
+  const read = eagleBaseAcl(doc.read);
 
   return upsertWithRetry(
     lists,

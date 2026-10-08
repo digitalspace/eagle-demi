@@ -19,7 +19,7 @@
  * instead of erroring — so every rule here is data, and tested as data.
  */
 
-const { seedAcl } = require('../seed/transform');
+const { eagleBaseAcl } = require('../seed/transform');
 const { capRead } = require('../helpers/access-sql');
 
 /** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
@@ -355,7 +355,7 @@ function normalizeCentroid(track, eagle) {
  * The ACL for a merged project.
  *
  * Eagle already carries a `read[]` in the EPIC role-type vocabulary; preserve it when present so
- * an upstream restriction is never widened by the merge, minus the sealed token (`seedAcl`).
+ * an upstream restriction is never widened by the merge, minus the sealed token (`eagleBaseAcl`).
  *
  * **With no Eagle match, a project is NOT public.** Product owner, 2026-08-23: *"if track has a
  * project that eagle does not have, this project is NOT public."* Eagle is what publishes; a
@@ -373,7 +373,7 @@ function normalizeCentroid(track, eagle) {
 function resolveProjectAcl(eagle) {
   // Level 2 when Eagle sent none, or only the sealed token: the level the legacy admin-role list
   // already meant, written in ladder tokens so a re-merge does not rewrite what a controller wrote.
-  return seedAcl(eagle && eagle.read);
+  return eagleBaseAcl(eagle && eagle.read);
 }
 
 /**

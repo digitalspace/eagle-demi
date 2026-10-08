@@ -272,17 +272,17 @@ test('aclMismatch', async (t) => {
     assert.deepStrictEqual(aclMismatch(rows, byId, eagle(STAFF)), ['a']);
   });
 
-  for (const parent of [['team'], ['sysadmin'], [], ['project-team']]) {
-    await t.test(`a no-ladder row stored privileged-only under level-1 parent ${JSON.stringify(parent)} is not drift`, () => {
+  for (const parent of [['team'], ['sysadmin'], [], ['project-team'], STAFF]) {
+    await t.test(`a no-ladder row stored privileged-only under parent ${JSON.stringify(parent)} is not drift`, () => {
       const rows = [{ id: 'a', read: ['sysadmin'], isPublished: false }];
       assert.deepStrictEqual(aclMismatch(rows, byId, eagle(['sysadmin']), () => parent), []);
     });
   }
 
-  await t.test('a no-ladder row under a staff parent is drift until it carries staff', () => {
+  await t.test('a no-ladder row still carrying the dropped staff token is drift', () => {
     const parentOf = () => STAFF;
-    assert.deepStrictEqual(aclMismatch([{ id: 'a', read: ['sysadmin'], isPublished: false }], byId, eagle(['sysadmin']), parentOf), ['a']);
-    assert.deepStrictEqual(aclMismatch([{ id: 'a', read: STAFF, isPublished: false }], byId, eagle(['sysadmin']), parentOf), []);
+    assert.deepStrictEqual(aclMismatch([{ id: 'a', read: STAFF, isPublished: false }], byId, eagle(['sysadmin']), parentOf), ['a']);
+    assert.deepStrictEqual(aclMismatch([{ id: 'a', read: STAFF, isPublished: false }], byId, eagle(['sysadmin'])), ['a']);
   });
 
   await t.test('isPublished out of step with its own read[] is a mismatch', () => {
@@ -651,8 +651,8 @@ test('reconcile', async (t) => {
           { id: 'U-note', projectId: 'N1', read: ['staff'], isPublished: false },
           // Under public P1, so Eagle's own read verbatim; staff here is drift.
           { id: 'U-open', projectId: 'P1', read: ['staff'], isPublished: false },
-          // No ladder token from Eagle, so staff is added (`withEagleStaff`): in step.
-          { id: 'U-admin', projectId: 'P1', read: ['sysadmin', 'staff'], isPublished: false }
+          // No ladder token from Eagle, stored as Eagle has it: in step.
+          { id: 'U-admin', projectId: 'P1', read: ['sysadmin'], isPublished: false }
         ],
         count: async () => 4
       }
@@ -673,9 +673,9 @@ test('reconcile', async (t) => {
       },
       updates: {
         listEvery: async () => [
-          // What the push stores: the token dropped, and sysadmin plus staff when nothing else is left.
+          // What the push stores: the token dropped, and sysadmin when nothing else is left.
           { id: 'U-comp', projectId: 'P1', read: ['public'], isPublished: true },
-          { id: 'U-only', projectId: 'P1', read: ['sysadmin', 'staff'], isPublished: false }
+          { id: 'U-only', projectId: 'P1', read: ['sysadmin'], isPublished: false }
         ],
         count: async () => 2
       }
@@ -1347,18 +1347,20 @@ test('the user, group and inspection mirrors are checked against their stored Ea
     listWithEagleId: async () => [{ id: '207', eagleId: 'P1', sourceSystem: 'track', read: ['staff', 'idir', 'public'] }],
     countWithEagleId: async () => 1
   };
-  const cleanUser = { id: 'U-ok', read: ['sysadmin', 'staff'], isPublished: false, eagleRead: ['sysadmin'] };
+  const cleanUser = { id: 'U-ok', read: ['sysadmin'], isPublished: false, eagleRead: ['sysadmin'] };
+  // No ladder token in Eagle, so each row stores its Eagle read as is.
+  const INSPECTOR = ['sysadmin', 'inspector'];
   const cleanChain = [
-    { id: 'I1', kind: 'Inspection', projectId: '207', inspection: 'I1', read: ['staff'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] },
-    { id: 'E1', kind: 'InspectionElement', projectId: '207', inspection: 'I1', read: ['staff'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] },
-    { id: 'IT1', kind: 'InspectionItem', projectId: '207', inspection: 'I1', element: 'E1', read: ['staff'], isPublished: false, eagleRead: ['sysadmin', 'inspector'] }
+    { id: 'I1', kind: 'Inspection', projectId: '207', inspection: 'I1', read: INSPECTOR, isPublished: false, eagleRead: INSPECTOR },
+    { id: 'E1', kind: 'InspectionElement', projectId: '207', inspection: 'I1', read: INSPECTOR, isPublished: false, eagleRead: INSPECTOR },
+    { id: 'IT1', kind: 'InspectionItem', projectId: '207', inspection: 'I1', element: 'E1', read: INSPECTOR, isPublished: false, eagleRead: INSPECTOR }
   ];
   const deps = (over) => makeDeps({ projects: projectsWithRead, ...over });
 
   await t.test('a clean set reports nothing', async () => {
     const summary = await reconcile([], deps({
       users: storedRows([cleanUser]),
-      groups: storedRows([{ id: 'G1', projectId: '207', read: ['staff'], isPublished: false, eagleRead: ['sysadmin'] }]),
+      groups: storedRows([{ id: 'G1', projectId: '207', read: ['sysadmin'], isPublished: false, eagleRead: ['sysadmin'] }]),
       inspections: storedRows(cleanChain)
     }));
     for (const label of ['users', 'groups', 'inspections', 'inspectionElements', 'inspectionItems']) {

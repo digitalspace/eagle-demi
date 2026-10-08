@@ -414,12 +414,12 @@ test('ACL — the merge never widens visibility', async (t) => {
 
   await t.test('an existing Eagle read[] is preserved, minus the compliance token', () => {
     const acl = resolveProjectAcl({ read: ['sysadmin', 'compliance'] });
-    assert.deepStrictEqual(acl, ['sysadmin', 'staff']);
+    assert.deepStrictEqual(acl, ['sysadmin']);
     assert.ok(!acl.includes('public'), 'the merge must never widen an upstream restriction');
   });
 
-  await t.test('a compliance-only Eagle read[] lands at staff, not sealed', () => {
-    assert.deepStrictEqual(resolveProjectAcl({ read: ['compliance'] }), ['sysadmin', 'staff']);
+  await t.test('a compliance-only Eagle read[] lands privileged-only, not sealed', () => {
+    assert.deepStrictEqual(resolveProjectAcl({ read: ['compliance'] }), ['sysadmin']);
   });
 
   await t.test('a Track project with no Eagle match is NOT public', () => {
@@ -435,12 +435,9 @@ test('ACL — the merge never widens visibility', async (t) => {
     assert.ok(!acl.includes('public'), 'no Eagle counterpart means nobody published it');
   });
 
-  await t.test('an empty read[] array is absent, and absent now fails CLOSED', () => {
-    // Still "absent, not deny-all" in the sense that staff retain access — what changed is that
-    // absence no longer grants `public`.
-    const acl = resolveProjectAcl({ read: [] });
-    assert.ok(!acl.includes('public'));
-    assert.deepStrictEqual(acl, ['staff']);
+  await t.test('an empty read[] is Eagle hiding the project from everyone: privileged-only', () => {
+    assert.deepStrictEqual(resolveProjectAcl({ read: [] }), ['sysadmin']);
+    assert.deepStrictEqual(resolveProjectAcl({}), ['staff'], 'only a missing read[] is the legacy level 2');
   });
 
   await t.test('isPublished MIRRORS read[] — it is never an independent signal', () => {
