@@ -383,14 +383,21 @@ takes `project`, `period`, `document`, `comment`, `organization`, `inspection`, 
 
 The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
 one column (`Comment_No`, `Project GUID`) across every column both files have. `Export_Date` is
-skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group.
-`inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element; it
-never calls Eagle's item route, which streams the file and records a download.
+skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group; the
+DEMI read sends no `project`, since DEMI takes that value as the Track id partition key.
+`inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element, each
+item carrying its element's `read[]`; it never calls Eagle's item route, which streams the file and
+records a download.
 
-eagle-api's project, document, comment period, organization and comment routes return only `_id`
-and `read` unless `fields` names the rest, so each of those reads sends `fields=a|b|c`: the fields
-it compares for the identity, plus `project` on comment periods. Pins and comments come back as
-`[{ total_items, results }]`; each page is unwrapped to its `results`. `recent-activity-top`
+eagle-api's project, document, comment period, organization, comment and project notification
+routes return only `_id` and `read` unless `fields` names the rest, so each of those reads sends
+`fields=a|b|c`: the fields it compares for the identity, plus `project` on comment periods and
+documents. The
+organization and comment period routes answer only the fields on their controller's
+`ALLOWED_FIELDS`, so those reads compare nothing else (no address fields or staff dates, no `commentIdCount`);
+`dataset=Organization` and `dataset=CommentPeriod` search still compare them. Pins, comments and
+the staff project list come back as `[{ total_items, results }]`; each page is unwrapped to its
+`results`. `recent-activity-top`
 compares Eagle's newest four with `dataset=RecentActivity&top=true&pageSize=4`.
 
 It only sends GET, at most two requests a second per API, and retries once on 429 or 5xx. It never
@@ -400,12 +407,40 @@ events, and Eagle records a `Get` action for each `group-members` read.
 One line per read:
 
 ```
-[parity] search-Project identity=staff match=410 missingInDemi=3 extraInDemi=12 fieldDiff=0 unexplained=0 known=L1-no-ladder-token:3,demi-only:12
+[parity] search-Project identity=staff match=410 missingInDemi=3 extraInDemi=12 fieldDiff=0 unexplained=0 known=L2-never-mirrored:3,demi-only:12
 ```
 
 Every difference is matched against `KNOWN_DIFFERENCES` in `parity-map.js`; what no class explains
-counts as `unexplained`. Classes that match by id (rows never mirrored, DEMI takedowns, Eagle hard
-deletes) read their ids from `--known-ids`, a JSON object of class name to id list. The run exits 1
+counts as `unexplained`. Classes that match by id read their ids from `--known-ids`, a JSON object
+of class name to id list; the flag may repeat, and lists of one class merge. Those classes are rows
+never mirrored, DEMI takedowns and Eagle hard deletes, plus two that only explain a row extra in
+DEMI and one that only explains a row missing from it:
+
+- `seeded-from-prod`: a row from the 2026-08-25 prod seed that Eagle test does not hold.
+- `ladder-above-public` (staff runs only): an Eagle row whose `read[]` has `public` but not
+  `staff`, or a comment period or document under such a project. Eagle matches `read[]` tokens to
+  roles literally, so its staff routes hide these rows. DEMI ranks staff above public by design, so
+  DEMI staff sees them.
+- `capped-under-parent` (staff runs only): a comment period, document, group, inspection or recent
+  activity whose own `read[]` admits staff while its project's has no `staff`, `idir` or `public`
+  token. DEMI caps a child's read under its parent's (`capRead`), so DEMI staff cannot see it, while
+  Eagle's group, inspection and recent activity search checks only the row's own `read[]`. Comments,
+  inspection elements and items, and updates are not covered, since the run cannot look up their project.
+
+`--emit-ids <file>` writes ids only, never values: `extraInDemi`, each read's extra DEMI ids, and on
+a sysadmin run `ladder-above-public` and `capped-under-parent`, the Eagle ids those rules cover. A
+child counts under either only when the same run read its project. The file is a valid
+`--known-ids` file (`extraInDemi` is skipped), so a sysadmin run's file feeds the staff run:
+
+```bash
+node src/scripts/parity-eagle.js ... --identity sysadmin --token-env ADMIN_TOKEN --emit-ids sysadmin-ids.json
+node src/scripts/parity-eagle.js ... --identity staff --token-env STAFF_TOKEN \
+  --known-ids known.json --known-ids sysadmin-ids.json
+```
+
+Build the `seeded-from-prod` list from `extraInDemi` ids checked against the prod seed.
+
+The run exits 1
 when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI target yet print
 `skipped (pending)`; reads that need an id print `skipped: needs --id ...`. `--only <read>` runs
 one read; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
@@ -413,24 +448,35 @@ extra rows cannot be told from a partial slice. The `--report` file lists ids an
 unexplained differences, never values.
 
 Values are compared after trimming strings; an empty string, an empty list and an absent field all count as null.
-Three classes explain differences that come from how DEMI builds its rows:
+Comment period `isVetted` counts the strings `'true'` and `'false'` as booleans, and `commentIdCount`
+counts null as 0. Comment period `userCan` is not compared: Eagle computes it for each caller.
+These classes explain differences that come from how DEMI builds its rows:
 
 - `track-mastered`: a project field DEMI takes from Track (`TRACK_PRECEDENCE` in
   `src/merge/project.js`: name, type, location, description and the rest) differs, DEMI's value is
   not empty, and the DEMI row has a `trackProjectId`. In the BCGW file it covers `Project name`,
-  `Proponent`, `Type`, `Description`, `Latitude` and `Longitude`.
+  `Proponent`, `Type`, `Description`, `Latitude` and `Longitude`; in the comment export, `Project`
+  (Eagle writes the raw project name, blank on legislation-keyed projects).
+- `schema-default-false`: project `substantially` or `hasMetCommentPeriods`, or comment period
+  `isVetted`, is `false` on one side and absent or empty on the other.
 - `list-id-other-env`: a `List` row is missing or extra, and the other side has an unpaired row
   with the same name, type and legislation under another id.
 - `parent-not-public`: an anonymous comment period is missing in DEMI and its project is not in
   Eagle's public project list. The list is read once per run; a `--max-pages` cut turns the class
   off.
+- `display-name-from-file-name`: a document's Eagle `displayName` is empty and DEMI's equals the
+  Eagle `documentFileName`, the fallback the seed writes (`src/seed/transform.js`).
+- `orphan-parent-missing-in-eagle`: on staff and sysadmin runs, a comment period is missing in DEMI
+  and its `project` ref is empty, malformed, or in none of Eagle's `/project` and
+  `/projectNotification` lists and DEMI's `Project` and `ProjectNotification` searches. The lists
+  are read once per run; a `--max-pages` cut turns the list check off.
 
 Two DEMI limits affect anonymous runs. Anonymous `pageSize` is capped at 100, the page size this
 script sends. `dataset=Organization` ignores `and[_id]` for now, so `organization-public` and
 `organization` get the whole list from DEMI and count every other organization as extra.
 
 `--download-sample <n>` (default 0, off; needs a staff or sysadmin token) also downloads up to `n`
-documents both sides returned, plus `--id document` if given, through Eagle's protected
+documents both sides returned to that identity's reads in this run, through Eagle's protected
 `/document/{id}/download` and DEMI's `/documents/:id/download`. It follows DEMI's redirect to
 object storage without the bearer token, and compares sha256 and byte length while streaming;
 nothing is written to disk. Any mismatch counts as unexplained.
@@ -479,6 +525,61 @@ The email links to `LINK_BASE_URL` plus a path. By default the path is the proje
 `NOTIFY_UPDATE_READER_LINKS=true` (Bicep param `notifyUpdateReaderLinks`) to link the update's own
 page, `/updates/<id>`, instead. Only the React line of eagle-public has that page. Keep the flag off
 while `LINK_BASE_URL` serves the Angular site, which is the case in test and prod today.
+
+### Eagle read ladder backfill
+
+`src/scripts/backfill-eagle-ladder.js` fixes the `read[]` of rows mirrored from Eagle. It is a dry
+run by default and prints counts per container. `--live` writes. Run it on the devbox:
+
+```bash
+scripts/demi-devbox.sh run --env test -- 'git pull && yarn install && node src/scripts/backfill-eagle-ladder.js --reverse'
+scripts/demi-devbox.sh run --env test -- 'git pull && yarn install && node src/scripts/backfill-eagle-ladder.js --reverse --live'
+```
+
+Without `--reverse` it gives each Eagle document that has no `ownRead` its stored `read`. The
+project cascade re-derives a document's read from `ownRead`. Run it once on a new environment.
+
+`--reverse` undoes a rule dropped on 2026-10-08. From 2026-10-05 the mirrors added `staff` to an
+Eagle read with no ladder token (`team`, `staff`, `idir`, `public`). DEMI now stores Eagle's own
+read, minus blanks and `compliance`, capped by the parent's read through `capRead`. A read with no
+ladder token under a cap keeps only its privileged names and the names the cap also carries; it no
+longer lands at `team`.
+
+Two checks go with a `--live` run:
+
+1. Before it, confirm the API runs a build that contains #549, which dropped the rule. `GET
+   /api/config` returns `BUILD_ID`, stamped into the deploy package as `git describe --tags` of the
+   deployed commit plus a time. Take the commit from its `g<sha>` part and check that
+   `git merge-base --is-ancestor 9fc2e5c <sha>` succeeds. On an older build the next push, merge
+   or cascade adds `staff` back.
+2. After it, run the dry run again. It must plan 0 rows. If it plans any, a push added `staff`
+   back in between. The nightly reconcile alert also reports those rows as drift.
+
+The script works parents first: projects and notifications, then lists, users, comment periods,
+documents, groups, inspections, comments and Updates. Inspections are written kind by kind:
+inspection, element, item. Each child is capped by its parent's read after the reverse. A parent
+whose write fails or gets a 412 keeps capping its children at its stored read. Parent containers
+and Updates are read in full; the rest only where `read` carries `staff` or `team`.
+
+A row is rewritten only when its stored `read` is exactly what the old rule gives for the same
+Eagle read and parent. The script keeps a frozen copy of that rule: the staff widening plus the old
+`capRead`, which stored `['team']` where the current one keeps privileged names. Every patch
+carries the row's etag. The counters per container are:
+
+- `planned` and `patched`: rows the run rewrites, and rows it did rewrite.
+- `skippedHeld`: a document with `levelHeldAt`, or a row DEMI sealed. Left as stored.
+- `skippedDiffers`: the stored read is neither Eagle's nor the dropped rule's, for example after a
+  DEMI narrow. Left as stored.
+- `noParent`: the parent row is not in DEMI. Left as stored.
+- `parentMissing`: a document whose project is not in DEMI. A seed stores such a document at Eagle's
+  read with no parent cap, so the script treats it as having no parent; every other child kind is
+  only stored under its parent, so it counts under `noParent` instead.
+- `stale`: the row changed after the scan (412). Run again.
+- `failed`: the write was refused. The script exits 1.
+
+A second `--live` run plans nothing. An Update pushed while the rule was live also stored the added
+`staff` in `sources.eagle.read`, so the script cannot tell it from Eagle's own read. Those Updates
+come right on their next push from Eagle.
 
 ---
 
@@ -1038,11 +1139,12 @@ schedule in `PDF_TITLE_SCHEDULE` it runs `pdf-title/run.py`, which takes PDFs wi
 the API's work list and sets one. It is a dry run, listing the work and writing nothing, unless
 `PDF_TITLE_LIVE` is `true`.
 
-On test, `azure/main.test.bicepparam` enables it live (`pdfTitleLive = true`); set it to `false` to list work and write nothing. Prod has
-no worker: `azure/main.prod.bicepparam` sets neither `deployPdfTitleWorker` nor the secret name.
+On test, `azure/main.test.bicepparam` enables it live (`pdfTitleLive = true`); set it to `false` to list work and write nothing. Prod
+deploys the worker with `pdfTitleLive = false` until the first live tick is verified.
 
-- Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflow:
-  `.github/workflows/azure-deploy-staging-pdf-title.yaml`.
+- Code: `pdf-title/`. Infrastructure: `azure/modules/pdf-title-worker.bicep`. Workflows:
+  `.github/workflows/azure-deploy-staging-pdf-title.yaml` for test, and the `deploy-pdf-title` job
+  in `.github/workflows/azure-deploy-prod.yaml` for prod.
 - It has its own identity, `demi-pdf-title-identity-<env>`, not `demi-identity-<env>`. The identity
   reads one vault secret and its own host storage, and nothing else.
 - It calls the API Function app directly at `DEMI_API_URL`, not through APIM, with
@@ -1055,7 +1157,7 @@ no worker: `azure/main.prod.bicepparam` sets neither `deployPdfTitleWorker` nor 
 Backup gate: the API refuses every lease until `backupAccountName` is set for that environment
 (app setting `BACKUP_ACCOUNT`). Even then it grants a lease only when the document's original is in
 the `originals` container (`backupContainerName`, app setting `BACKUP_CONTAINER`), in Archive tier,
-with matching size and MD5. Prod stays unset until the prod backup is in place.
+with matching size and MD5. Test and prod both set it.
 
 **To enable it in an environment**, in that environment's param file:
 
@@ -1114,6 +1216,10 @@ run sweeps what it left.
 Azure for the app. If the app does not exist, or CI does not hold Website Contributor on it, the
 workflow prints a notice and skips the deploy instead of failing. Any other error fails the run.
 After a deploy it waits until the function `pdf_title_run` is registered.
+
+In prod the same steps run as the `deploy-pdf-title` job of the prod deploy workflow, after the API
+job, from the tag being deployed. It also skips when that tag has no `pdf-title/function_app.py`.
+The prod rollback job redeploys the API only, never the worker.
 
 ### `demi-frontend-test` is gone — decommissioned 2026-08-15
 
@@ -1287,7 +1393,9 @@ a service principal, so a deploy authenticated as a person fails instead of proc
 
 **The prod deploy workflow is back**: `.github/workflows/azure-deploy-prod.yaml`,
 `workflow_dispatch` only, taking a `version` and checking out `refs/tags/<version>` — a tag verified
-on staging, never a branch. Both jobs declare `environment: prod`, which is what produces the OIDC
+on staging, never a branch. Its jobs run in this order: `verify-search-schema`, `deploy-extractor`,
+`deploy-api`, then `deploy-pdf-title` (skipped with a notice while `demi-pdf-title-prod` does not
+exist). Every Azure job declares `environment: prod`, which is what produces the OIDC
 subject `repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the
 federated credential. An earlier note here said no prod workflow existed, which was true only
 between 2026-08-05 and the prod estate being built.

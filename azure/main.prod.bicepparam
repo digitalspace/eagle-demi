@@ -35,6 +35,8 @@ param minioKeyPrefix = ''
 // either: prod runs ungated.
 param optionalSecretNames = [
   'edge-secret'
+  // The PDF title worker's own key; see the PDF title worker section below.
+  'pdf-title-worker-api-key'
 ]
 
 // No sync app in prod. The prod spoke has no route table and policy forbids creating one, so the
@@ -241,6 +243,18 @@ param notifyApiBase = ''
 // Nightly 11:00 UTC, an hour after reconcile. Armed 2026-09-05 after Track prod shipped
 // /api/v1/projects/team-members.
 param syncTeamsSchedule = '0 0 11 * * *'
+
+// ── PDF title worker ──────────────────────────────────────────────────────────────────────────
+// Dry run: pdfTitleLive false lists the work and writes nothing. Flip it to true once a prod tick
+// has been checked. The key is the vault's `pdf-title-worker-api-key`, named in optionalSecretNames
+// above; the principal is that key's registry row id (a key id, not the key). Schedule, rows and
+// minutes keep main.bicep's defaults, as on test.
+param deployPdfTitleWorker = true
+param pdfTitleWorkerPrincipals = 'c4e6496061d859df'
+param pdfTitleLive = false
+// The document-backup account (azure/document-backup.prod.bicepparam). The API refuses every lease
+// whose original is not archived there; the container keeps main.bicep's default `originals`.
+param backupAccountName = 'eaglebakproduvtikwlcqtpg'
 
 // ── Devbox ────────────────────────────────────────────────────────────────────────────────────
 // Same shape as test: dev-access VM on `snet-servers`, a plain landing-zone subnet with its own

@@ -25,7 +25,7 @@ const {
   storedInspection, storedElement
 } = require('../helpers/eagle-mirror-fixtures');
 
-/** Eagle's default `['sysadmin']` as the mirrors store it: `seedAcl` adds the staff token. */
+/** An Eagle row at level 2, `['sysadmin','staff']`. */
 const STAFF_ONLY = PRIVATE_ACL;
 
 const PRIVATE_USER = {

@@ -29,7 +29,7 @@ const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, TRIMMED_FIELDS
+  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS
 } = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
@@ -589,9 +589,14 @@ exports.setLevel = async (req, res) => {
       reread: () => projects.getById(access, req.params.id),
       attempt: async (current) => {
         if (!current) return { status: 'missing' };
+        // Eagle's level from the payload the last push stored; `null` when Eagle never sent one.
+        const eagle = current.sources && current.sources.eagle;
+        const levelHeldAt = documents.levelHoldAfter(current, level,
+          eagle ? levelOfRead(resolveProjectAcl(eagle)) : null);
         const row = {
           ...current,
           ...acl,
+          ...(levelHeldAt === undefined ? {} : { levelHeldAt }),
           id: current.id,
           updatedAt: new Date().toISOString()
         };

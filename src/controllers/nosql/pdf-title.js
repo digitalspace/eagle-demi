@@ -370,14 +370,14 @@ async function finish(row, fields) {
 
 /**
  * End a lease from the store's state; the one path for a worker report and for the sweep.
- * `report` is the worker's skip, if it sent one.
+ * `report` is the worker's skip, if it sent one; `workerFailure` its failure text, only logged.
  *
  * - No in-flight write: nothing was ever signed, so drop the backup and clear.
  * - PUT link maybe still live: undo a bad object at once, then wait (`outcome: 'waiting'`).
  * - After the link is dead: a good object is recorded `titled` or `restored`; the source (or the
  *   undone bad write) releases the lease; anything else is undone and parked for review.
  */
-async function settle(stored, report = null) {
+async function settle(stored, report = null, workerFailure = null) {
   const row = onLeasedKey(stored);
   const record = recordOf(row);
   const lease = record.lease;
@@ -385,7 +385,9 @@ async function settle(stored, report = null) {
 
   if (!record.inFlight) {
     if (lease.backupKey) await dropBackup(lease.backupKey, lease.backupVersionId, fields);
-    logger.info('[pdf-title] lease ended with no write', { ...fields, reason: report ? report.reason : 'released' });
+    logger.info('[pdf-title] lease ended with no write', {
+      ...fields, reason: report ? report.reason : 'released', ...(workerFailure ? { workerFailure } : {}),
+    });
     return { row: await release(row, skipFields(row, lease, report)), outcome: report ? 'skipped' : 'released' };
   }
 
@@ -417,7 +419,9 @@ async function settle(stored, report = null) {
     if (refusal && !refusal.shape) return park(row, refusal.reason, true, refusal.overwritten, fields);
     await dropBackup(record.inFlight.backupKey, record.inFlight.backupVersionId, fields);
     const why = refusal && !refusal.retry ? { reason: refusal.reason } : report;
-    logger.info('[pdf-title] lease ended; store holds the source', { ...fields, reason: why ? why.reason : 'released' });
+    logger.info('[pdf-title] lease ended; store holds the source', {
+      ...fields, reason: why ? why.reason : 'released', ...(workerFailure ? { workerFailure } : {}),
+    });
     return { row: await release(row, skipFields(row, lease, why)), outcome: why ? 'skipped' : 'released' };
   }
   const { restored, overwritten } = await copyBack(row, fields);
@@ -798,12 +802,11 @@ async function commit(req, res) {
       uploadUrl,
       expiresIn: PUT_SECONDS,
       putExpiresAt,
-      // Send all three. If-Match is not signed: the store honours it unsigned, and the report
-      // checks the result whatever the worker sent. Content-MD5 is signed into the link.
+      // Content-MD5 is signed into the link. No If-Match: the NRS store answers 412 to it on
+      // objects stored years ago even when the ETag matches. The report checks the stored result.
       headers: {
         'Content-Type': held.contentType,
-        'Content-MD5': body.newMd5,
-        'If-Match': `"${bareEtag(held.sourceEtag)}"`
+        'Content-MD5': body.newMd5
       }
     });
   } catch (err) {
@@ -812,14 +815,14 @@ async function commit(req, res) {
   }
 }
 
-/** A worker's skip reason as stored: short, printable, one line. */
-function cleanReason(reason) {
-  return String(reason).replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+/** A worker's reason: short, printable, one line. */
+function cleanReason(reason, max = 200) {
+  return String(reason).replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 /**
  * PUT /documents/:id/pdf-title — the worker's report. `{leaseId}` releases the lease, after a PUT
- * or after a failure that wrote nothing; `{leaseId, skipped: true, reason}` records a skip. The
+ * or after a failure that wrote nothing (its `reason` only logged); `{leaseId, skipped: true, reason}` records a skip. The
  * store decides the outcome either way. 409 `put-window-open` while the PUT link may still land.
  */
 async function report(req, res) {
@@ -833,7 +836,8 @@ async function report(req, res) {
     if (reason === 'no-lease') return refuse(res, 409, reason);
     const why = body.skipped ? cleanReason(body.reason || '') : null;
     if (body.skipped && !why) return refuse(res, 400, 'a skip needs a reason');
-    const { row: stored, outcome } = await settle(row, why ? { reason: why } : null);
+    const failure = !body.skipped && typeof body.reason === 'string' ? cleanReason(body.reason, 300) || null : null;
+    const { row: stored, outcome } = await settle(row, why ? { reason: why } : null, failure);
     if (outcome === 'waiting') return refuse(res, 409, 'put-window-open', { putExpiresAt: recordOf(row).inFlight.putExpiresAt });
     const record = recordOf(stored) || {};
     return res.json({ outcome, status: record.status || null, reason: record.reason || null });

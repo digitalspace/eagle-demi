@@ -9,7 +9,9 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead, readForLevel, capRead, systemAccess, SEALED_TOKEN } = require('../helpers/access-sql');
+const {
+  canRead, readForLevel, levelOfRead, capRead, systemAccess, SEALED_TOKEN
+} = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
   upsertWithEtag, createItem, readForWriteIn
@@ -34,8 +36,10 @@ const EXTRACTION_FIELDS = [
  * DEMI-owned state a write that rebuilds the row from upstream must carry forward: the extraction
  * state plus `pdfTitle`, the record of the title written into the stored PDF and of its original
  * length and hash. Dropping `pdfTitle` loses the only way to check or restore the original.
+ * `levelHeldAt` marks a DEMI narrow or takedown (`levelHoldAfter`); dropping it would let the next
+ * Eagle push republish what an operator took down.
  */
-const DEMI_OWNED_FIELDS = [...EXTRACTION_FIELDS, 'pdfTitle'];
+const DEMI_OWNED_FIELDS = [...EXTRACTION_FIELDS, 'pdfTitle', 'levelHeldAt'];
 
 /**
  * The "this document's chunks did not get the new parent fields" flag and when it was raised
@@ -381,8 +385,8 @@ async function aclRowsForProject(access, projectId) {
  *
  * The LOWER of the two ladder levels (`access-sql:capRead`), which cannot widen either side by
  * construction. A missing or empty project ACL reads as level 1 (`levelOfRead([])`), so an unknown
- * fails closed to `team` rather than to a fixed level 2 a level-1 project never allowed; a level-1
- * read with no ladder token (`['sysadmin']`) stays privileged-only.
+ * fails closed to `team` rather than to a fixed level 2 a level-1 project never allowed; a read with
+ * no ladder token (`['sysadmin']`, `['project-team']`) is kept as it is.
  */
 function constrainToProject(ownRead, projectRead) {
   return capRead(ownRead, projectRead);
@@ -395,6 +399,30 @@ function constrainToProject(ownRead, projectRead) {
  * mirrors read it from here so the level is stated once.
  */
 const DELETED_CEILING = readForLevel(2);
+
+/**
+ * The `levelHeldAt` a DEMI level move leaves on a project or document: an ISO stamp on a narrow,
+ * `null` once a widen reaches level 4 or Eagle's level (`null` = unknown), else `undefined` (keep).
+ * While held, an Eagle push may lower the row but not raise it (`holdLevel`, `carryDemiOnlyFields`).
+ */
+function levelHoldAfter(row, to, eagleLevel) {
+  const from = levelOfRead(row && row.read);
+  if (to < from) return new Date().toISOString();
+  if (!row || !row.levelHeldAt || to === from) return undefined;
+  return to === 4 || (eagleLevel !== null && to >= eagleLevel) ? null : undefined;
+}
+
+/** An Eagle push's document row, capped at the stored level while DEMI holds it. Lower wins. */
+function holdLevel(row, stored) {
+  if (!row || !row.levelHeldAt || !stored) return row;
+  row.read = capRead(row.read, stored.read);
+  // Every project cascade re-derives `read` from `ownRead`, so an uncapped one republishes the row.
+  if (Array.isArray(stored.ownRead) && stored.ownRead.length > 0) {
+    row.ownRead = capRead(row.ownRead, stored.ownRead);
+  }
+  row.isPublished = row.read.includes('public');
+  return row;
+}
 
 /**
  * Re-derive every document's ACL from its own and its project's.
@@ -413,10 +441,6 @@ const DELETED_CEILING = readForLevel(2);
  * a value a previous cascade already narrowed. Eagle mirrors write it on every seed and push
  * (`seed/transform.js:transformDocument`), and `backfill-eagle-ladder.js` writes it on Eagle rows
  * stored before that. A row without one has it CAPTURED here, lazily, from its `read`.
- *
- * That capture is safe on an Eagle row too. Every writer that adds the Eagle rule's `staff`
- * (`helpers/eagle-acl.js:withEagleStaff`) also stores `ownRead`, so a row lacking one predates the
- * rule and its stored `read`, `staff` included, is Eagle's own read.
  *
  * The one lossy set is documents a PREVIOUS cascade already flattened: their own ACL is gone, so
  * capture records the flattened value and a re-publish leaves them private. Fail-closed, bounded,
@@ -454,12 +478,12 @@ async function setAclForProject(access, projectId, read) {
     // 400 would take the `/read` narrowing down with it — the row keeps its old ACL and the failure
     // is counted, but the effect is fail-OPEN for exactly the row that had no ACL to begin with.
     // `[]` fails closed to level 1 instead. No current write path produces such a row (all
-    // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
+    // four write an explicit `read[]`, and `eagleBaseAcl` fails closed), so this guards a legacy row
     // nobody can rule out from outside the private endpoint.
     const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
       : (Array.isArray(row.read) ? row.read : []);
-    // An Eagle mirror's `ownRead` is Eagle's read without `staff`; the push's rule adds it. A
-    // DEMI-native row, or an empty `own`, keeps the plain cap so neither is widened.
+    // An Eagle mirror's `ownRead` goes through the Eagle rule, so a captured `compliance` is not
+    // kept. A DEMI-native row, or an empty `own`, keeps the plain cap so neither is widened.
     const capped = row.sourceSystem === 'eagle' && own.length > 0
       ? eagleReadUnder(own, read)
       : constrainToProject(own, read);
@@ -499,8 +523,9 @@ async function setAclForProject(access, projectId, read) {
  * Paged: the largest project holds 2,488 documents and a single page caps at 1,000.
  */
 async function extractionRowsForProject(access, projectId) {
+  // `read` and `ownRead`: `holdLevel` caps a held row at them, and reads a missing one as level 1.
   return projectedRowsForProject(access, projectId,
-    [...DEMI_OWNED_FIELDS, ...CHUNK_PARENT_FIELDS, ...PARENT_PENDING_FIELDS]);
+    [...DEMI_OWNED_FIELDS, ...CHUNK_PARENT_FIELDS, ...PARENT_PENDING_FIELDS, 'read', 'ownRead']);
 }
 
 /**
@@ -867,9 +892,12 @@ async function patchExtraction(id, projectId, fields) {
  * `read[]` is authoritative and `isPublished` mirrors it: only level 4 carries `public`.
  * Privileged roles retain access at every level.
  */
-async function setPublished(id, projectId, level) {
+async function setPublished(id, projectId, level, { levelHeldAt } = {}) {
   const read = readForLevel(level);
+  // `undefined` leaves the stored hold alone; see `levelHoldAfter`.
+  const hold = levelHeldAt === undefined ? [] : [{ op: 'set', path: '/levelHeldAt', value: levelHeldAt }];
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
+    ...hold,
     { op: 'set', path: '/isPublished', value: read.includes('public') },
     { op: 'set', path: '/read', value: read },
     // `ownRead` MOVES WITH IT. This is a deliberate per-document decision about that document, so
@@ -946,6 +974,8 @@ module.exports = {
   PARTITION_FIELD,
   EXTRACTION_FIELDS,
   DEMI_OWNED_FIELDS,
+  levelHoldAfter,
+  holdLevel,
   PARENT_PENDING_FIELDS,
   MANIFEST_FIELDS,
   buildCriteria,

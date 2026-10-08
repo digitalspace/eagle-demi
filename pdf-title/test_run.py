@@ -123,7 +123,8 @@ class World:
             return run.Response(200, self.objects[key])
         if headers.get("Content-MD5") != base64.b64encode(hashlib.md5(body).digest()).decode():
             return run.Response(400)
-        if headers.get("If-Match") != f'"{_md5(self.objects[key])}"':
+        if_match = headers.get("If-Match")
+        if if_match is not None and if_match != f'"{_md5(self.objects[key])}"':
             return run.Response(412)
         self.objects[key] = body
         return run.Response(200)
@@ -198,8 +199,7 @@ class World:
         return run.Response(200, json.dumps({
             "uploadUrl": self._link("PUT", doc["key"], 120), "expiresIn": 120,
             "putExpiresAt": _iso(self.now + 120),
-            "headers": {"Content-Type": CONTENT_TYPE, "Content-MD5": body["newMd5"],
-                        "If-Match": f'"{lease["sourceMd5"]}"'}}).encode())
+            "headers": {"Content-Type": CONTENT_TYPE, "Content-MD5": body["newMd5"]}}).encode())
 
     def _report(self, doc_id, body, _query, key):
         doc, lease = self.docs[doc_id], self._held(doc_id, body, key)
@@ -256,10 +256,21 @@ def test_title_mode_writes_original_plus_one_update_and_reports_titled(world):
     assert (commit["originalLength"], commit["originalSha256"]) == (len(original), _sha(original))
     assert (commit["newLength"], commit["newSha256"]) == (len(stored), _sha(stored))
     upload = world.calls("upload")[0]["headers"]
-    assert upload == {"Content-Type": CONTENT_TYPE, "Content-MD5": commit["newMd5"],
-                      "If-Match": f'"{_md5(original)}"'}
+    assert upload == {"Content-Type": CONTENT_TYPE, "Content-MD5": commit["newMd5"]}
     assert json.loads(world.calls("report")[0]["body"]) == {"leaseId": commit["leaseId"]}
     assert not any(k.startswith("pdf-title-backup/") for k in world.objects)
+
+
+def test_commit_without_if_match_uploads_and_the_row_is_titled(world):
+    # The NRS store answers 412 to If-Match on old objects, so the commit no longer sends it.
+    original = _pdf()
+    world.add("d1", original)
+
+    assert run.run(_client(world), max_rows=10, live=True) == {"titled": 1}
+
+    (put,) = world.calls("upload")
+    assert "If-Match" not in put["headers"]
+    assert world.stored("d1") == put["body"] and put["body"].startswith(original)
 
 
 def test_retitle_is_rebuilt_from_the_original_prefix_not_stacked(world):
@@ -346,7 +357,42 @@ def test_412_on_put_releases_without_a_skip_and_leaves_the_original(world):
     assert outcomes == {"error": 1, "titled": 1}
     assert world.stored("d1") == original
     assert len(world.calls("upload")) == 2  # 412 is never retried; the second is d2's
-    assert json.loads(world.calls("report")[0]["body"]) == {"leaseId": json.loads(world.calls("commit")[0]["body"])["leaseId"]}
+    assert json.loads(world.calls("report")[0]["body"]) == {
+        "leaseId": json.loads(world.calls("commit")[0]["body"])["leaseId"], "reason": "upload: HTTP 412"}
+
+
+def test_row_lines_are_logged_on_the_main_thread(world, caplog):
+    caplog.set_level(logging.INFO, logger="pdf-title")
+    d1_key = world.add("d1", _pdf())
+    world.add("d2", _pdf())
+
+    def send(method, url, headers, body, timeout):
+        if method == "PUT" and url.startswith(f"{STORE}{d1_key}?"):
+            return run.Response(412)
+        return world(method, url, headers, body, timeout)
+
+    run.run(run.Client(API, KEY, timeout=7, send=send), max_rows=10, live=True, concurrency=2)
+
+    rows = [r for r in caplog.records if r.getMessage().startswith("id=")]
+    assert sorted(r.getMessage() for r in rows) == [
+        "id=d1 mode=title result=error reason=upload: HTTP 412; lease released",
+        "id=d2 mode=title result=titled reason=-",
+    ]
+    assert {r.thread for r in rows} == {threading.main_thread().ident}
+
+
+def test_row_whose_worker_raises_is_logged_and_counted_as_an_error(world, caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger="pdf-title")
+    world.add("d1", _pdf())
+
+    def boom(*_):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(run, "start", boom)
+
+    outcomes = run.run(_client(world), max_rows=10, live=True)
+
+    assert outcomes == {"error": 1}
+    assert "id=d1 mode=title result=error reason=RuntimeError: boom" in caplog.text
 
 
 def test_put_that_dies_mid_body_leaves_the_original(world):
@@ -562,7 +608,8 @@ def test_lease_too_short_at_commit_is_released_by_a_plain_report(world):
 
     assert outcomes == {"error": 1}
     assert world.calls("upload") == []
-    assert json.loads(world.calls("report")[0]["body"]) == {"leaseId": json.loads(world.calls("commit")[0]["body"])["leaseId"]}
+    assert json.loads(world.calls("report")[0]["body"]) == {
+        "leaseId": json.loads(world.calls("commit")[0]["body"])["leaseId"], "reason": "commit: HTTP 409 lease-too-short"}
     assert world.leases == {} and world.stored("d1") == original
 
 
@@ -632,8 +679,7 @@ def test_urllib_send_puts_the_commit_headers_on_the_wire_unchanged():
     server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.handle_request)
     thread.start()
-    headers = {"Content-Type": "application/pdf; charset=binary", "Content-MD5": "1B2M2Y8AsgTpgAmY7PhCfg==",
-               "If-Match": '"d41d8cd98f00b204e9800998ecf8427e"'}
+    headers = {"Content-Type": "application/pdf; charset=binary", "Content-MD5": "1B2M2Y8AsgTpgAmY7PhCfg=="}
     try:
         r = run.urllib_send("PUT", f"http://127.0.0.1:{server.server_port}/k", headers, b"%PDF", 5)
     finally:
@@ -701,7 +747,8 @@ def test_restore_by_id_releases_a_lease_that_came_back_in_title_mode(world, monk
 
     assert code == 1
     assert world.calls("download") == [] and world.calls("commit") == []
-    assert json.loads(world.calls("report")[0]["body"]) == {"leaseId": "x"}
+    assert json.loads(world.calls("report")[0]["body"]) == {
+        "leaseId": "x", "reason": "lease came back in title mode, wanted restore"}
     assert world.stored("d1") == original
 
 

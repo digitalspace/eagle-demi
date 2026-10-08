@@ -290,7 +290,7 @@ test('the ladder move routes', async (t) => {
     }, res);
 
     assert.strictEqual(res.statusCode, 200);
-    assert.deepStrictEqual(args, ['d1', '207', 4], 'isPublished: true is level 4');
+    assert.deepStrictEqual(args.slice(0, 3), ['d1', '207', 4], 'isPublished: true is level 4');
     assert.strictEqual(res.rowsAtResponse[0].Action, 'record.widen');
     assert.strictEqual(res.rowsAtResponse[0].Detail.to, 4);
     // The alias synthesises `confirm: true` to clear the level-4 guard. Filing that as a
@@ -321,5 +321,101 @@ test('the ladder move routes', async (t) => {
     }, res);
 
     assert.strictEqual(res.statusCode, 403);
+  });
+});
+
+test('a DEMI level move and the hold it leaves for Eagle pushes', async (t) => {
+  const cosmos = require('../../../src/db/cosmos-nosql');
+  const HELD_AT = '2026-10-01T00:00:00.000Z';
+  const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  t.beforeEach(() => { rows = []; });
+  t.afterEach(() => t.mock.restoreAll());
+
+  /** Move the project and return the row written. Eagle last pushed it at `eagleRead`. */
+  async function moveProject(stored, body, eagleRead = ['public', 'sysadmin']) {
+    t.mock.method(projects, 'getById', async () => structuredClone({
+      ...stored, sources: { eagle: { _id: 'e207', read: eagleRead } }
+    }));
+    let saved;
+    t.mock.method(projects, 'upsert', async (item) => { saved = item; return item; });
+    stubCascade(t);
+    const res = mockRes();
+    await projectController.setLevel({ params: { id: '207' }, query: {}, body, user: SYSADMIN }, res);
+    assert.strictEqual(res.statusCode, 200);
+    return saved;
+  }
+
+  /** Move the document and return the options `setPublished` was handed. */
+  async function moveDocument(stored, body) {
+    t.mock.method(documents, 'getById', async () => structuredClone(stored));
+    t.mock.method(projects, 'getById', async () => PROJECT_AT(4, ['staff', 'idir', 'public']));
+    let options;
+    t.mock.method(documents, 'setPublished', async (id, pid, level, opts) => {
+      options = opts;
+      return { ...stored, read: [] };
+    });
+    stubCascade(t);
+    const res = mockRes();
+    await documentController.setLevel({ params: { id: 'd1' }, query: {}, body, user: SYSADMIN }, res);
+    assert.strictEqual(res.statusCode, 200);
+    return options;
+  }
+
+  await t.test('a project takedown stamps the hold', async () => {
+    const saved = await moveProject(PROJECT_AT(4, ['staff', 'idir', 'public']), { level: 2 });
+    assert.match(saved.levelHeldAt, ISO);
+  });
+
+  await t.test('a project widen back to Eagle\'s level clears the hold', async () => {
+    const saved = await moveProject({ ...PROJECT_AT(2, ['staff']), levelHeldAt: HELD_AT },
+      { level: 3 }, ['idir', 'sysadmin']);
+    assert.strictEqual(saved.levelHeldAt, null);
+  });
+
+  await t.test('a project widen still below Eagle\'s level keeps the hold', async () => {
+    const saved = await moveProject({ ...PROJECT_AT(2, ['staff']), levelHeldAt: HELD_AT },
+      { level: 3 }, ['public', 'sysadmin']);
+    assert.strictEqual(saved.levelHeldAt, HELD_AT,
+      'the next push carrying public would otherwise republish it');
+  });
+
+  await t.test('a project widen to level 4 clears the hold', async () => {
+    const saved = await moveProject({ ...PROJECT_AT(2, ['staff']), levelHeldAt: HELD_AT },
+      { level: 4, confirm: true, reason: 'cleared by the EAO' });
+    assert.strictEqual(saved.levelHeldAt, null);
+  });
+
+  await t.test('a document narrow stamps the hold', async () => {
+    const options = await moveDocument(
+      { id: 'd1', projectId: '207', read: ['staff', 'idir', 'public'] }, { level: 3 });
+    assert.match(options.levelHeldAt, ISO);
+  });
+
+  await t.test('a document widen to level 4 clears the hold; a widen below it keeps it', async () => {
+    const held = { id: 'd1', projectId: '207', read: ['staff'], levelHeldAt: HELD_AT };
+    const published = await moveDocument(held, { level: 4, confirm: true, reason: 'cleared by the EAO' });
+    assert.strictEqual(published.levelHeldAt, null);
+
+    // DEMI does not keep Eagle's level for a held document, so a partial widen keeps the hold.
+    t.mock.restoreAll();
+    const partial = await moveDocument(held, { level: 3 });
+    assert.strictEqual(partial.levelHeldAt, undefined);
+  });
+
+  await t.test('setPublished writes the hold only when handed one', async () => {
+    const patches = [];
+    t.mock.method(cosmos, 'patch', async (_c, _id, _pk, operations) => {
+      patches.push(operations.find(op => op.path === '/levelHeldAt'));
+      return {};
+    });
+    await documents.setPublished('d1', '207', 2, { levelHeldAt: HELD_AT });
+    await documents.setPublished('d1', '207', 4, { levelHeldAt: null });
+    await documents.setPublished('d1', '207', 3);
+
+    assert.deepStrictEqual(patches, [
+      { op: 'set', path: '/levelHeldAt', value: HELD_AT },
+      { op: 'set', path: '/levelHeldAt', value: null },
+      undefined
+    ]);
   });
 });

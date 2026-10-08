@@ -176,14 +176,14 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
-  await t.test('a period Eagle marks compliance-only lands at staff, not sealed', async () => {
-    // Eagle has no sealed compartment; keeping the token would hide the row from every staff reader.
+  await t.test('a period Eagle marks compliance-only lands privileged-only, not sealed', async () => {
+    // Eagle has no sealed compartment; keeping the token would hide the row from DEMI's privileged readers too.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
 
     const { written } = await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
       eaglePeriod({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['staff']);
+    assert.deepStrictEqual(written().read, ['sysadmin']);
   });
 
   // Literal codes: they are eagle-api's contract, not this repo's constants.
@@ -501,6 +501,23 @@ test('PUT /eagle/commentperiods/:eagleId — a period that changed level', async
       anonymous()), false);
   });
 
+  await t.test('a move inside level 1 still narrows the comments under it', async () => {
+    // `['sysadmin','project-team']` and `['sysadmin']` are both level 1, with different readers.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const writes = stubCommentCascade(t, [
+      { id: 'c1', read: ['sysadmin', 'project-team'], eagleRead: ['sysadmin', 'project-team'] }
+    ]);
+
+    const { res, written } = await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
+      eaglePeriod({ read: ['sysadmin'] }), t, { existing: storedAt(['sysadmin', 'project-team']) });
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(written().read, ['sysadmin']);
+    const [patch] = writes;
+    assert.ok(patch, 'the comments are re-derived');
+    assert.deepStrictEqual(opValue(patch.operations[0], '/read'), ['sysadmin']);
+  });
+
   await t.test('a push that did not move the level costs no cascade', async () => {
     // Most pushes are an edit to the text. Re-deriving every comment on each of them is a bulk
     // patch per push for no change.
@@ -621,13 +638,13 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
-  await t.test('a comment Eagle marks compliance-only lands at staff, not sealed', async () => {
+  await t.test('a comment Eagle marks compliance-only lands privileged-only, not sealed', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
 
     const { written } = await pushTo(
       commentController, comments, COMMENT_EAGLE_ID, eagleComment({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['staff']);
+    assert.deepStrictEqual(written().read, ['sysadmin']);
   });
 
   await t.test('an absent isAnonymous is stored as anonymous, matching the Eagle default', async () => {
@@ -824,7 +841,7 @@ test('PUT /eagle/organizations/:eagleId', async (t) => {
     const { written } = await pushTo(organizationController, lists, ORG_EAGLE_ID,
       eagleOrganization({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['sysadmin', 'staff']);
+    assert.deepStrictEqual(written().read, ['sysadmin']);
   });
 });
 
@@ -869,7 +886,7 @@ test('PUT /eagle/notifications/:eagleId', async (t) => {
     const { written } = await pushTo(notificationController, notifications, NOTIFICATION_EAGLE_ID,
       eagleNotification({ read: ['compliance'] }), t);
 
-    assert.deepStrictEqual(written().read, ['sysadmin', 'staff']);
+    assert.deepStrictEqual(written().read, ['sysadmin']);
   });
 });
 

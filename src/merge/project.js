@@ -19,7 +19,8 @@
  * instead of erroring — so every rule here is data, and tested as data.
  */
 
-const { seedAcl } = require('../seed/transform');
+const { eagleBaseAcl } = require('../seed/transform');
+const { capRead } = require('../helpers/access-sql');
 
 /** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
 const eagleOnlyProjectId = (eagleId) => `eagle-${eagleId}`;
@@ -173,15 +174,32 @@ const PUSH_ONLY_FIELDS = [
   'eaglePushedAt', 'cascadePendingAt'
 ];
 
-/** Fields only DEMI writes (`PUT /projects/:id`). No feed sends them, so no re-merge can rebuild them. */
-const DEMI_ONLY_FIELDS = ['tags'];
+/**
+ * Fields only DEMI writes (`PUT /projects/:id`, and `levelHeldAt` from `PUT /projects/:id/level`).
+ * No feed sends them, so no re-merge can rebuild them.
+ */
+const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt'];
 
-/** Carry the DEMI-only fields off the stored row onto a rebuilt one. */
+/** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`). */
+function heldRead(read, existing) {
+  return existing && existing.levelHeldAt && Array.isArray(existing.read)
+    ? capRead(read, existing.read)
+    : read;
+}
+
+/**
+ * Carry the DEMI-only fields off the stored row onto a rebuilt one. A row DEMI holds keeps the
+ * lower of the rebuilt and stored `read` (`heldRead`), so Eagle can narrow it, not widen it.
+ */
 function carryDemiOnlyFields(merged, existing) {
   if (!merged || !existing) return merged;
   for (const field of DEMI_ONLY_FIELDS) {
     const value = existing[field];
     if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
+  }
+  if (existing.levelHeldAt) {
+    merged.read = heldRead(merged.read, existing);
+    merged.isPublished = merged.read.includes('public');
   }
   return merged;
 }
@@ -337,7 +355,7 @@ function normalizeCentroid(track, eagle) {
  * The ACL for a merged project.
  *
  * Eagle already carries a `read[]` in the EPIC role-type vocabulary; preserve it when present so
- * an upstream restriction is never widened by the merge, minus the sealed token (`seedAcl`).
+ * an upstream restriction is never widened by the merge, minus the sealed token (`eagleBaseAcl`).
  *
  * **With no Eagle match, a project is NOT public.** Product owner, 2026-08-23: *"if track has a
  * project that eagle does not have, this project is NOT public."* Eagle is what publishes; a
@@ -355,7 +373,7 @@ function normalizeCentroid(track, eagle) {
 function resolveProjectAcl(eagle) {
   // Level 2 when Eagle sent none, or only the sealed token: the level the legacy admin-role list
   // already meant, written in ladder tokens so a re-merge does not rewrite what a controller wrote.
-  return seedAcl(eagle && eagle.read);
+  return eagleBaseAcl(eagle && eagle.read);
 }
 
 /**
@@ -605,6 +623,7 @@ module.exports = {
   flattenEagleProject,
   carryEagleOnlyFields,
   carryDemiOnlyFields,
+  heldRead,
   hasValue,
   TRIMMED_FIELDS,
   BC_BBOX,

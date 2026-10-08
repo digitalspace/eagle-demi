@@ -9,8 +9,9 @@
  * store stops enforcing it, so the test that relies on it goes red.
  *
  * Supported: AND, OR, parentheses, `c.f <op> value` (=, !=, <, <=, >, >=; value a @param, a
- * "string", a number, true or false), IS_STRING, IS_DEFINED, IS_NULL, NOT, ARRAY_CONTAINS on a dotted
- * path, and on queries ORDER BY one field, maxItemCount and a continuation.
+ * "string", a number, true or false), IS_STRING, IS_DEFINED, IS_NULL, IS_ARRAY (these four also on
+ * a dotted `c.a.b`), NOT, ARRAY_CONTAINS on a dotted path with a 'string' or @param,
+ * `ARRAY_LENGTH(c.a.b) <op> value`, and on queries ORDER BY one field, maxItemCount and a continuation.
  */
 
 const cosmos = require('../../src/db/cosmos-nosql');
@@ -73,6 +74,15 @@ const COMPARE = {
 
 const isNull = (value) => value === undefined || value === null;
 
+/** `a.b` read off `row`, undefined where any step is missing. */
+const pathOf = (row, path) => path.split('.').reduce((value, key) => (isNull(value) ? undefined : value[key]), row);
+
+/** `left <op> right` as Cosmos answers it: across types, or with an undefined side, not true. */
+function compare(left, op, right) {
+  if (isNull(left) || typeof left !== typeof right) return false;
+  return COMPARE[op](left, right);
+}
+
 function evaluate(text, row, params) {
   const expr = text.trim();
   if (wrapped(expr)) return evaluate(expr.slice(1, -1), row, params);
@@ -82,26 +92,26 @@ function evaluate(text, row, params) {
   if (ands.length > 1) return ands.every(part => evaluate(part, row, params));
   if (expr.startsWith('NOT ')) return !evaluate(expr.slice(4), row, params);
 
-  let m = /^IS_(STRING|DEFINED|NULL)\(c\.(\w+)\)$/.exec(expr);
+  let m = /^IS_(STRING|DEFINED|NULL|ARRAY)\(c\.([\w.]+)\)$/.exec(expr);
   if (m) {
-    const value = row[m[2]];
+    const value = pathOf(row, m[2]);
     if (m[1] === 'STRING') return typeof value === 'string';
     if (m[1] === 'DEFINED') return value !== undefined;
+    if (m[1] === 'ARRAY') return Array.isArray(value);
     return value === null;
+  }
+  m = /^ARRAY_LENGTH\(c\.([\w.]+)\) (=|!=|<=|>=|<|>) (\S+)$/.exec(expr);
+  if (m) {
+    const value = pathOf(row, m[1]);
+    return compare(Array.isArray(value) ? value.length : undefined, m[2], valueOf(m[3], params));
   }
   m = /^ARRAY_CONTAINS\(c\.([\w.]+), ('[^']*'|@\w+)\)$/.exec(expr);
   if (m) {
-    const array = m[1].split('.').reduce((value, key) => (value == null ? undefined : value[key]), row);
+    const array = pathOf(row, m[1]);
     return Array.isArray(array) && array.includes(valueOf(m[2], params));
   }
   m = /^c\.(\w+) (=|!=|<=|>=|<|>) (\S+)$/.exec(expr);
-  if (m) {
-    const left = row[m[1]];
-    const right = valueOf(m[3], params);
-    // Cosmos: a comparison across types, or with an undefined side, is undefined, so not true.
-    if (isNull(left) || typeof left !== typeof right) return false;
-    return COMPARE[m[2]](left, right);
-  }
+  if (m) return compare(row[m[1]], m[2], valueOf(m[3], params));
   throw new Error(`updates-store: cannot evaluate "${expr}"`);
 }
 

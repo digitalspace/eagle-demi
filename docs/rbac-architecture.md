@@ -91,29 +91,29 @@ there. The sealed routes (§1 Level 0) mount their own chain, `authenticate` the
 published) already contain `staff`, so they read as level 2 — today's meaning. Admin role names in
 `read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
 stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` minus the
-`compliance` token (`seedAcl`), so a pushed record lands at level 1, 2 or 4 and is never sealed by a
-push. A compliance-only record lands at `['sysadmin','staff']`, the same as `['compliance','sysadmin']`, never at the project team. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
+`compliance` token (`eagleBaseAcl`), so a pushed record lands at level 1, 2 or 4 and is never sealed
+by a push. A compliance-only record lands at `['sysadmin']`, the same as `['compliance','sysadmin']`,
+never at the project team. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
 stays sealed until released; a row sealed by an earlier push has no `sealedAt` and heals on its next
 push.
 
-**Eagle-mirror exception (2026-10-05).** Eagle's `staff` role skips every read check, so a pushed
-record whose `read[]` has no ladder token (for example `['sysadmin']` or `['sysadmin','inspector']`)
-gains `staff` and lands at level 2 (`helpers/eagle-acl.js:withEagleStaff`). Under a parent the read
-is derived by `helpers/eagle-acl.js:eagleReadUnder`: the parent cap applies, and where the capped
-result would be `team` (a level-1 parent that is not privileged-only, such as `['team']`, `[]` or
-`['project-team']`), the row stores what it stored before the rule, `['sysadmin']`. So the result is
-never wider than the parent, never `team` and never `public`. The document, period, comment and
-Update mirrors, the period and comment cascade (`helpers/acl-cascade.js`), the document project
-cascade (`setAclForProject`) and the reconcile drift check all derive through it. A document's
-`ownRead` holds Eagle's read without `staff`; the cascade adds it. Every writer of an Eagle
-document row must store `ownRead`, because the cascade captures a missing one from the stored
-`read`, and a `['staff']` the rule added to Eagle's `['sysadmin']` would then land at `team`.
-DEMI-native documents keep the plain cap. Existing rows are rewritten by
-`src/scripts/backfill-eagle-ladder.js`, which caps each row's `read` by the same rule against its
-parent's stored read, a DEMI narrow or takedown included. On a document with no `ownRead` it
-stores the pre-run `read` as `ownRead`: a row lacking one predates the rule, so that `read` is
-Eagle's own. `staff` stays out of `SECURE_ROLES`. To drop the rule, remove `withEagleStaff` and
-that script.
+**Eagle-mirror staff rule: removed 2026-10-08.** From 2026-10-05 to 2026-10-08 the push added
+`staff` to any Eagle `read[]` with no ladder token, on the belief that Eagle's `staff` role skips
+read checks. It does not: eagle-api's `$redact` matches `read[]` tokens to roles literally, so Eagle
+shows `['sysadmin']` or `['sysadmin','inspector']` rows to those roles only. DEMI now matches Eagle.
+A pushed record stores Eagle's own read (`helpers/eagle-acl.js:eagleBaseAcl`); an empty Eagle
+`read[]` is stored as `['sysadmin']`, since Eagle shows it to no one, and only a missing one lands
+at level 2. Under a parent it stores that read capped by the parent (`eagleReadUnder`, which is
+`capRead`). The cap never lets in a caller the parent keeps out. A read with no ladder token, such
+as `['sysadmin','inspector']`, keeps its privileged names plus the names the parent also carries,
+or all of them under a public parent, and never becomes `['team']`. So an inspection under a public
+project stores `['sysadmin','inspector']`, and under a staff or team project `['sysadmin']`. A
+ladder read under a parent with no ladder token keeps only the parent's privileged names. A read
+left with no names becomes `['sysadmin']`, never `[]`. Updates follow the same cap
+(`helpers/update-parent.js:readUnder`), except that an empty Update read stays `[]`. A
+document's `ownRead` is Eagle's base read, so `read` and `ownRead` differ only by the parent cap. The
+`--reverse` mode of `src/scripts/backfill-eagle-ladder.js` rewrites rows the removed rule widened;
+see the README section "Eagle read ladder backfill".
 
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.

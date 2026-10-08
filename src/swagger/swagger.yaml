@@ -938,7 +938,8 @@ paths:
         `record.widen` or `record.narrow`, and the change cascades to the project's documents.
         Pulling a project back from level 4 needs the `sysadmin` role and is audited as
         `record.takedown`; narrowing the row alone does not finish a takedown, see
-        `docs/takedown-runbook.md`.
+        `docs/takedown-runbook.md`. A narrow is held across Eagle pushes and re-seeds
+        (`levelHeldAt`) until a widen here reaches level 4 or Eagle's level.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1560,8 +1561,9 @@ paths:
         and, for a file already titled or restored, hash to the recorded value. On first titling
         it records `originalLength` and `originalSha256` once. Returns a 120-second PUT link for
         exactly the leased key with Content-MD5 signed in, and the headers the PUT must carry.
-        If-Match on the source ETag is not signed: the store honours it unsigned, and the report
-        checks the stored result whatever the worker sent.
+        The PUT carries no If-Match, because the store refuses it on older objects even when the
+        ETag matches. The report checks the stored object (size, ETag, hashes, tail) before it is
+        titled, and copies the backup back otherwise.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1603,7 +1605,7 @@ paths:
                   putExpiresAt: { type: string, format: date-time }
                   headers:
                     type: object
-                    description: Content-Type, Content-MD5 and If-Match; send all three.
+                    description: Content-Type and Content-MD5; send both.
                     additionalProperties: { type: string }
         '400':
           description: Body fails validation.
@@ -1633,7 +1635,8 @@ paths:
     put:
       summary: Report the end of a PDF title lease
       description: >-
-        `{leaseId}` releases the lease, after a PUT or after a failure that wrote nothing.
+        `{leaseId}` releases the lease, after a PUT or after a failure that wrote nothing; a
+        `reason` sent with it is logged, not stored.
         `{leaseId, skipped: true, reason}` records a skip. The store decides the outcome either
         way, and only once the PUT link is dead: until `putExpiresAt` plus 30 s every report answers
         409 `put-window-open`, nothing is released or recorded, and the backup is kept. A write
@@ -1672,7 +1675,7 @@ paths:
               properties:
                 leaseId: { type: string }
                 skipped: { type: boolean }
-                reason: { type: string, description: 'Printable ASCII, cut to 200 characters.' }
+                reason: { type: string, description: 'Printable ASCII. With `skipped`, the skip reason, cut to 200 characters. Without it, the worker''s failure text, cut to 300 characters and only logged.' }
       responses:
         '200':
           description: Outcome.
@@ -1854,7 +1857,8 @@ paths:
         A document may not out-rank its project, so a widen past the project's own level is
         refused. Every move is audited as `record.widen` or `record.narrow`. Pulling a document
         back from level 4 needs the `sysadmin` role and is audited as `record.takedown`; narrowing
-        the row alone does not finish a takedown, see `docs/takedown-runbook.md`.
+        the row alone does not finish a takedown, see `docs/takedown-runbook.md`. A narrow is
+        held across Eagle pushes and re-seeds (`levelHeldAt`) until a widen here reaches level 4.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

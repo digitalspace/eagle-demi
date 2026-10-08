@@ -589,11 +589,21 @@ test('the PDF title worker live flag reaches the app as lowercase true or false'
     'ARM renders string(true) as True, which a case-sensitive check reads as off');
 });
 
-test('prod names neither the PDF title worker nor its vault secret', () => {
-  assert.doesNotMatch(PROD_PARAMS, /deployPdfTitleWorker/,
-    'prod runs no PDF title worker; the default false keeps it off');
-  assert.doesNotMatch(PROD_PARAMS, /'pdf-title-worker-api-key'/,
-    'naming the secret prod never set makes the deploy check demand a credential prod does not use');
+test('prod deploys the PDF title worker as a dry run', () => {
+  assert.match(PROD_PARAMS, /^param deployPdfTitleWorker = true$/m,
+    'prod must ask for the worker');
+  assert.match(PROD_PARAMS, /^param optionalSecretNames = \[[^\]]*^\s+'pdf-title-worker-api-key'$[^\]]*\]/m,
+    'without the secret name main.bicep skips the worker app');
+  assert.match(PROD_PARAMS, /^param optionalSecretNames = \[[^\]]*^\s+'edge-secret'$[^\]]*\]/m,
+    'the Front Door secret must stay named');
+  assert.match(PROD_PARAMS, /^param apiFlexSubnetId = '\/subscriptions\/[^']+\/subnets\/snet-demi-func-fc1-prod'$/m,
+    'without the Flex subnet main.bicep skips the worker app');
+  assert.match(PROD_PARAMS, /^param pdfTitleWorkerPrincipals = 'c4e6496061d859df'$/m,
+    'the prod worker key id, or the API refuses the worker on every route');
+  assert.match(PROD_PARAMS, /^param pdfTitleLive = false$/m,
+    'prod stays a dry run until a live tick is verified');
+  assert.doesNotMatch(PROD_PARAMS, /^param pdfTitle(MaxRows|MaxMinutes|Schedule) /m,
+    'prod keeps the main.bicep defaults, as test does');
 });
 
 // The backup gate in src/helpers/backup-check.js reads BACKUP_ACCOUNT and BACKUP_CONTAINER and
@@ -617,11 +627,13 @@ test('test names its backup account', () => {
     'the name is the one document-backup.bicep gives the test account');
 });
 
-test('prod leaves the backup gate closed', () => {
-  assert.doesNotMatch(PROD_PARAMS, /backupAccountName/,
-    'prod has no backup yet; main.bicep\'s empty default makes BACKUP_ACCOUNT empty');
+test('prod names its backup account and keeps the default container', () => {
+  assert.match(PROD_PARAMS, /^param backupAccountName = 'eaglebakproduvtikwlcqtpg'$/m,
+    'the name document-backup.bicep gives the prod account, or every PDF title lease is refused');
+  assert.doesNotMatch(PROD_PARAMS, /^param backupContainerName /m,
+    'prod keeps main.bicep\'s default container `originals`');
   assert.match(MAIN, /^param backupAccountName string = ''$/m,
-    'the main.bicep default must be empty, or prod opens the gate without a backup');
+    'the main.bicep default must be empty, so an environment without a backup keeps the gate closed');
 });
 
 // Reader links only where the link base serves /updates/:id (eagle-public's React line): test's

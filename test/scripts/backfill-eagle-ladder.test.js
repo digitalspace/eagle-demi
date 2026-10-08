@@ -7,31 +7,48 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const { backfillEagleLadder, parseArgs, exitCodeFor } = require('../../src/scripts/backfill-eagle-ladder');
-const { eagleReadUnder } = require('../../src/seed/transform');
-const documentsRepo = require('../../src/repositories/documents');
-const { systemAccess } = require('../../src/helpers/access-sql');
+const { evaluate } = require('../helpers/updates-store');
 
-const EAGLE_PUBLIC = ['sysadmin', 'staff', 'public'];
-const STAFF_PROJECT = { id: 'p-staff', eagleId: 'e-staff', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin', 'staff'] };
-const ADMIN_PROJECT = { id: 'p-admin', eagleId: 'e-admin', read: ['sysadmin'], eagleRead: ['sysadmin'] };
-// What `PUT /projects/:id/level` leaves on a project Eagle publishes: `readForLevel(level)`.
-const TEAM_PROJECT = { id: 'p-team', eagleId: 'e-team', read: ['team'], eagleRead: EAGLE_PUBLIC };
-const TAKEN_DOWN_PROJECT = { id: 'p-down', eagleId: 'e-down', read: ['staff'], eagleRead: EAGLE_PUBLIC };
-// Level 1 because Eagle itself says `team`, not because DEMI narrowed it.
-const EAGLE_TEAM_PROJECT = { id: 'p-eteam', eagleId: 'e-eteam', read: ['team'], eagleRead: ['team'] };
-const NOTIFICATION = { id: 'n-1', read: ['sysadmin'], hasEagleSource: true };
+const PUBLIC = ['staff', 'idir', 'public'];
+// A project the dropped rule widened: Eagle says `['sysadmin']`, DEMI stored it with `staff`.
+const WIDENED_PROJECT = { id: 'p-w', eagleId: 'e-w', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], _etag: 'x' };
+const PUBLIC_PROJECT = { id: 'p-pub', eagleId: 'e-pub', read: PUBLIC, eagleRead: ['sysadmin', 'public'], _etag: 'x' };
+const NOTIFICATION = { id: 'n-1', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], hasEagleSource: true, _etag: 'x' };
 
 /**
- * `cosmos.queryPage` and `cosmos.bulkVerified` replaced for the run. Each container serves its rows
- * by `skip`/`size`, as the real one pages; writes are recorded per container and succeed.
+ * `cosmos.queryPage` and `cosmos.bulkVerified` replaced for the run. A query answers the rows its
+ * WHERE holds for, `hasEagleSource` standing in for `sources.eagle`. A write applies its `set` ops
+ * to a private copy of the row when `ifMatch` holds, and answers a 412 (`skippedIds`) when it does
+ * not. `stale` hands every row out with an etag that no longer matches; `refuse` maps an id to the
+ * answer its write gets instead, `'stale'` (412) or `'failed'`.
  */
-function fakeCosmos(t, rows) {
+function fakeCosmos(t, seed, { stale = false, refuse = {} } = {}) {
+  const rows = structuredClone(seed);
   const writes = [];
-  t.mock.method(cosmos, 'queryPage', async (container, _spec, { size, skip }) =>
-    (rows[container] || []).slice(skip, skip + size));
+  let etag = 0;
+  t.mock.method(cosmos, 'queryPage', async (container, spec, { size, skip }) => {
+    const where = / WHERE (.+) ORDER BY /s.exec(spec.query)[1];
+    const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
+    return (rows[container] || [])
+      .filter(r => evaluate(where, { ...r, sources: r.hasEagleSource ? { eagle: {} } : undefined }, params))
+      .slice(skip, skip + size).map(r => ({ ...r, ...(stale && { _etag: 'old' }) }));
+  });
   t.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
-    writes.push(...operations.map(op => ({ container, ...op })));
-    return { succeeded: operations.length, failed: 0, skippedIds: [] };
+    const skippedIds = [];
+    const failedIds = [];
+    for (const op of operations) {
+      writes.push({ container, ...op });
+      const row = rows[container].find(r => String(r.id) === op.id);
+      if (refuse[op.id] === 'failed') { failedIds.push(op.id); continue; }
+      const etagMoved = op.ifMatch !== undefined && row._etag !== op.ifMatch;
+      if (etagMoved || refuse[op.id] === 'stale') { skippedIds.push(op.id); continue; }
+      for (const set of op.resourceBody.operations) row[set.path.slice(1)] = set.value;
+      row._etag = `e${++etag}`;
+    }
+    return {
+      succeeded: operations.length - skippedIds.length - failedIds.length,
+      failed: failedIds.length, skippedIds, failedIds
+    };
   });
   return writes;
 }
@@ -42,311 +59,329 @@ const valueOf = (writes, id, path) => {
   return set ? set.value : undefined;
 };
 const readOf = (writes, id) => valueOf(writes, id, '/read');
-
 const summaryOf = (summaries, container) => summaries.find(s => s.container === container);
+const reverse = (...flags) => backfillEagleLadder(['--reverse', ...flags]);
 
-test('backfill-eagle-ladder', async (t) => {
-  await t.test('a dry run writes nothing', async (t) => {
-    const writes = fakeCosmos(t, { projects: [ADMIN_PROJECT] });
-    await backfillEagleLadder([]);
+test('backfill-eagle-ladder --reverse', async (t) => {
+  await t.test('a dry run writes nothing and counts what a live run writes', async (t) => {
+    const writes = fakeCosmos(t, { projects: [WIDENED_PROJECT, PUBLIC_PROJECT] });
+    const summaries = await reverse();
     assert.strictEqual(writes.length, 0);
-  });
-
-  await t.test('a dry run counts what a live run would change, per container', async (t) => {
-    fakeCosmos(t, { projects: [ADMIN_PROJECT, STAFF_PROJECT] });
-    const summaries = await backfillEagleLadder(['--dry-run']);
     assert.strictEqual(summaryOf(summaries, 'projects').planned, 1);
   });
 
-  await t.test('a sysadmin-only project gains staff', async (t) => {
-    const writes = fakeCosmos(t, { projects: [ADMIN_PROJECT] });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'p-admin'), ['sysadmin', 'staff']);
+  await t.test('a widened project goes back to Eagle\'s read', async (t) => {
+    const writes = fakeCosmos(t, { projects: [WIDENED_PROJECT] });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'p-w'), ['sysadmin']);
+    assert.strictEqual(valueOf(writes, 'p-w', '/isPublished'), false);
   });
 
-  await t.test('an inspection-style read gains staff', async (t) => {
-    const writes = fakeCosmos(t, { notifications: [{ ...NOTIFICATION, read: ['sysadmin', 'inspector'] }] });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'n-1'), ['sysadmin', 'inspector', 'staff']);
-  });
-
-  await t.test('rows that already reach staff or public are unchanged', async (t) => {
+  await t.test('the patch is conditioned on the row\'s etag, in its own partition', async (t) => {
     const writes = fakeCosmos(t, {
-      projects: [STAFF_PROJECT, { id: 'p-pub', eagleId: 'e-pub', read: ['sysadmin', 'public'] }]
+      projects: [WIDENED_PROJECT],
+      documents: [{ id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['staff'], ownRead: ['sysadmin'], _etag: 'd-etag' }]
     });
-    await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.length, 0);
+    await reverse('--live');
+    const op = writes.find(w => w.id === 'd-1');
+    assert.strictEqual(op.ifMatch, 'd-etag');
+    assert.strictEqual(op.partitionKey, 'p-w');
   });
 
-  await t.test('a sealed row is unchanged', async (t) => {
-    const writes = fakeCosmos(t, { projects: [{ ...ADMIN_PROJECT, read: ['compliance'], sealedAt: 'x' }] });
-    await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.length, 0);
-  });
-
-  await t.test('a row DEMI narrowed to team is unchanged', async (t) => {
-    const writes = fakeCosmos(t, { projects: [TEAM_PROJECT] });
-    await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.length, 0);
-  });
-
-  await t.test('a row not mirrored from Eagle is unchanged', async (t) => {
-    const writes = fakeCosmos(t, { projects: [{ id: 'p-track', read: ['sysadmin'] }] });
-    await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.length, 0);
-  });
-
-  await t.test('a document under a staff project lands at staff', async (t) => {
+  await t.test('a notification, a list item and a user lose the added staff', async (t) => {
     const writes = fakeCosmos(t, {
-      projects: [STAFF_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['sysadmin'] }]
+      notifications: [{ ...NOTIFICATION, read: ['sysadmin', 'inspector', 'staff'], eagleRead: ['sysadmin', 'inspector'] }],
+      lists: [{ id: 'o-1', kind: 'organization', eagleId: 'o-1', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], _etag: 'x' }],
+      users: [{ id: 'u-1', eagleId: 'u-1', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin', ''], _etag: 'x' }]
     });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'n-1'), ['sysadmin', 'inspector']);
+    assert.deepStrictEqual(readOf(writes, 'o-1'), ['sysadmin']);
+    assert.deepStrictEqual(readOf(writes, 'u-1'), ['sysadmin']);
   });
 
-  await t.test('a document under a sealed project is not written', async (t) => {
+  await t.test('a deleted user under the delete ceiling goes back to Eagle\'s read', async (t) => {
     const writes = fakeCosmos(t, {
-      projects: [{ id: 'p-sealed', eagleId: 'e-sealed', read: ['compliance'], sealedAt: 'x' }],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-sealed', read: ['sysadmin'] }]
+      users: [{ id: 'u-1', eagleId: 'u-1', read: ['staff'], eagleRead: ['sysadmin'], eagleDeleted: true, _etag: 'x' }]
     });
-    await backfillEagleLadder(['--live']);
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'u-1'), ['sysadmin']);
+  });
+
+  await t.test('children are capped by the parent\'s reversed read, all the way down', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [WIDENED_PROJECT],
+      commentPeriods: [{ id: 'cp-1', projectId: 'p-w', eagleId: 'cp-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' }],
+      comments: [{ id: 'c-1', periodId: 'cp-1', eagleId: 'c-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' }],
+      documents: [{ id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['staff'], ownRead: ['sysadmin', 'inspector'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'cp-1'), ['sysadmin']);
+    assert.deepStrictEqual(readOf(writes, 'c-1'), ['sysadmin']);
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['sysadmin']);
+  });
+
+  await t.test('a child whose Eagle read has no ladder token keeps it under a public parent', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      groups: [{ id: 'g-1', projectId: 'p-pub', eagleId: 'g-1', read: ['staff'], eagleRead: ['sysadmin', 'inspector'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'g-1'), ['sysadmin', 'inspector']);
+  });
+
+  await t.test('a row the old cap stored at team under a team parent goes to the current cap', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [{ ...WIDENED_PROJECT, read: ['team'], eagleRead: ['team'] }],
+      groups: [{ id: 'g-1', projectId: 'p-w', eagleId: 'g-1', read: ['team'], eagleRead: ['sysadmin', 'inspector'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'g-1'), ['sysadmin']);
+  });
+
+  await t.test('a parent whose patch is refused still caps its children at its stored read', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [WIDENED_PROJECT],
+      documents: [{ id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['staff'], ownRead: ['public'], _etag: 'x' }]
+    }, { refuse: { 'p-w': 'stale' } });
+    await reverse('--live');
+    assert.strictEqual(writes.some(w => w.id === 'd-1'), false);
+  });
+
+  await t.test('an inspection whose patch fails still caps its elements at its stored read', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      inspections: [
+        { id: 'el-1', kind: 'InspectionElement', inspection: 'i-1', eagleId: 'el-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' },
+        { id: 'i-1', kind: 'Inspection', inspection: 'i-1', projectId: 'p-pub', eagleId: 'i-1', read: ['staff'], eagleRead: ['sysadmin'], _etag: 'x' }
+      ]
+    }, { refuse: { 'i-1': 'failed' } });
+    await reverse('--live');
+    assert.strictEqual(writes.some(w => w.id === 'el-1'), false);
+  });
+
+  await t.test('a document under a notification is not capped by it', async (t) => {
+    const writes = fakeCosmos(t, {
+      notifications: [{ ...NOTIFICATION, read: PUBLIC, eagleRead: ['public'] }],
+      documents: [{ id: 'd-1', projectId: 'n-1', eagleId: 'd-1', read: ['sysadmin', 'staff'], ownRead: ['sysadmin'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['sysadmin']);
+  });
+
+  await t.test('inspections reverse inspection, then element, then item, whatever the scan order', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      inspections: [
+        { id: 'it-1', kind: 'InspectionItem', inspection: 'i-1', element: 'el-1', eagleId: 'it-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' },
+        { id: 'el-1', kind: 'InspectionElement', inspection: 'i-1', eagleId: 'el-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' },
+        { id: 'i-1', kind: 'Inspection', inspection: 'i-1', projectId: 'p-pub', eagleId: 'i-1', read: ['staff'], eagleRead: ['sysadmin'], _etag: 'x' }
+      ]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'i-1'), ['sysadmin']);
+    assert.deepStrictEqual(readOf(writes, 'el-1'), ['sysadmin']);
+    assert.deepStrictEqual(readOf(writes, 'it-1'), ['sysadmin']);
+  });
+
+  await t.test('an inspection with no project is reversed uncapped', async (t) => {
+    const writes = fakeCosmos(t, {
+      inspections: [{ id: 'i-1', kind: 'Inspection', inspection: 'i-1', projectId: null, eagleId: 'i-1', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'i-1'), ['sysadmin']);
+  });
+
+  await t.test('an Update under a public parent loses the added staff', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      updates: [{ id: 'up-1', projectId: 'e-pub', eagleId: 'up-1', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-1'), ['sysadmin']);
+  });
+
+  await t.test('an Update under a widened parent is capped by its reversed read', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [WIDENED_PROJECT],
+      updates: [{ id: 'up-1', projectId: 'e-w', eagleId: 'up-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-1'), ['sysadmin']);
+  });
+
+  await t.test('a row DEMI narrowed is skipped and counted, and its children capped by it', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [{ ...WIDENED_PROJECT, read: ['team'] }],
+      documents: [{ id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['team'], ownRead: ['public'], _etag: 'x' }]
+    });
+    const summaries = await reverse('--live');
+    assert.strictEqual(writes.length, 0);
+    assert.strictEqual(summaryOf(summaries, 'projects').skippedDiffers, 1);
+  });
+
+  await t.test('a document with a held level is skipped and counted', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [WIDENED_PROJECT],
+      documents: [{ id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['staff'], ownRead: ['sysadmin'], levelHeldAt: '2026-10-06T00:00:00Z', _etag: 'x' }]
+    });
+    const summaries = await reverse('--live');
     assert.strictEqual(readOf(writes, 'd-1'), undefined);
+    assert.strictEqual(summaryOf(summaries, 'documents').skippedHeld, 1);
   });
 
-  await t.test('a document under a project narrowed to level 1 is not written', async (t) => {
+  await t.test('a row DEMI sealed is skipped and counted', async (t) => {
     const writes = fakeCosmos(t, {
-      projects: [TEAM_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-team', read: ['sysadmin'], ownRead: ['sysadmin'] }]
+      projects: [{ ...WIDENED_PROJECT, read: ['compliance'], sealedAt: '2026-10-06T00:00:00Z' }]
     });
-    const summaries = await backfillEagleLadder(['--live']);
+    const summaries = await reverse('--live');
     assert.strictEqual(writes.length, 0);
-    assert.strictEqual(summaryOf(summaries, 'documents').heldByParent, 1);
+    assert.strictEqual(summaryOf(summaries, 'projects').skippedHeld, 1);
   });
 
-  await t.test('an Update under a project narrowed to level 1 is not written', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [TEAM_PROJECT],
-      updates: [{ id: 'u-1', projectId: 'e-team', read: ['sysadmin'], hasEagleSource: true }]
+  await t.test('a row the dropped rule never touched is not counted', async (t) => {
+    fakeCosmos(t, { projects: [PUBLIC_PROJECT] });
+    const summaries = await reverse();
+    const s = summaryOf(summaries, 'projects');
+    assert.deepStrictEqual([s.scanned, s.planned, s.skippedDiffers], [1, 0, 0]);
+  });
+
+  await t.test('a row the dropped rule never touched is not read', async (t) => {
+    fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      documents: [{ id: 'd-1', projectId: 'p-pub', eagleId: 'd-1', read: ['sysadmin'], ownRead: ['sysadmin'], _etag: 'x' }]
     });
-    await backfillEagleLadder(['--live']);
+    const summaries = await reverse();
+    assert.strictEqual(summaryOf(summaries, 'documents').scanned, 0);
+  });
+
+  await t.test('a child whose parent is not stored is counted, not written', async (t) => {
+    const writes = fakeCosmos(t, {
+      comments: [{ id: 'c-1', periodId: 'cp-gone', eagleId: 'c-1', read: ['staff'], eagleRead: ['sysadmin'], _etag: 'x' }]
+    });
+    const summaries = await reverse('--live');
     assert.strictEqual(writes.length, 0);
+    assert.strictEqual(summaryOf(summaries, 'comments').noParent, 1);
   });
 
-  // The push caps by the parent's stored read, a DEMI takedown included, so the backfill does too.
-  await t.test('a document under a project taken down to level 2 lands at staff, as its push would', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [TAKEN_DOWN_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-down', read: ['sysadmin'] }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
+  // A seed stores a document whose project is not stored at its uncapped read.
+  const orphanDocument = read => ({
+    id: 'd-1', projectId: 'p-gone', eagleId: 'd-1', read, ownRead: ['sysadmin'], _etag: 'x'
   });
 
-  await t.test('a document under a project at its Eagle level but a different set lands at staff', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [{ id: 'p-same', eagleId: 'e-same', read: ['staff'], eagleRead: ['sysadmin', 'staff'] }],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-same', read: ['sysadmin'] }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
+  await t.test('a document whose project is not stored loses the added staff, and is counted', async (t) => {
+    const writes = fakeCosmos(t, { documents: [orphanDocument(['sysadmin', 'staff'])] });
+    const summaries = await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['sysadmin']);
+    const s = summaryOf(summaries, 'documents');
+    assert.deepStrictEqual([s.patched, s.parentMissing, s.noParent], [1, 1, 0]);
   });
 
-  await t.test('an Update under a project taken down to level 2 keeps its own read, widened', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [TAKEN_DOWN_PROJECT],
-      updates: [{ id: 'u-1', projectId: 'e-down', read: ['sysadmin'], hasEagleSource: true }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'u-1'), ['sysadmin', 'staff']);
-  });
-
-  await t.test('a comment under a staff period of a taken-down project lands at staff', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [TAKEN_DOWN_PROJECT],
-      commentPeriods: [{ id: 'cp-1', projectId: 'p-down', read: ['staff'], hasEagleSource: true }],
-      comments: [{ id: 'c-1', periodId: 'cp-1', projectId: 'p-down', read: ['sysadmin'], hasEagleSource: true }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'c-1'), ['staff']);
-  });
-
-  for (const parent of [['team'], ['sysadmin'], [], ['project-team'], ['staff'], ['staff', 'idir', 'public']]) {
-    await t.test(`a document under ${JSON.stringify(parent)} is written exactly when a push after the run gives it staff`, async (t) => {
-      const writes = fakeCosmos(t, {
-        projects: [{ id: 'p-x', eagleId: 'e-x', read: parent, eagleRead: EAGLE_PUBLIC }],
-        documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-x', read: ['sysadmin'] }]
-      });
-      await backfillEagleLadder(['--live']);
-      const pushed = eagleReadUnder(['sysadmin'], readOf(writes, 'p-x') || parent);
-      assert.deepStrictEqual(readOf(writes, 'd-1'), pushed.includes('staff') ? pushed : undefined);
-    });
-  }
-
-  await t.test('a document under a project DEMI widened above its Eagle read lands at staff', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [{ id: 'p-up', eagleId: 'e-up', read: ['staff', 'idir', 'public'], eagleRead: ['sysadmin', 'staff'] }],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-up', read: ['sysadmin'] }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
-  });
-
-  await t.test('a document capped below level 2 by its parent is not widened to team', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [EAGLE_TEAM_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-eteam', read: ['sysadmin'] }]
-    });
-    const summaries = await backfillEagleLadder(['--live']);
-    assert.strictEqual(readOf(writes, 'd-1'), undefined);
-    assert.strictEqual(summaryOf(summaries, 'documents').heldByParent, 1);
-  });
-
-  await t.test('a child is capped by the read its parent is planned to, in the same run', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [ADMIN_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-admin', read: ['sysadmin'] }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
-  });
-
-  await t.test('a comment is capped by its period', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [EAGLE_TEAM_PROJECT],
-      commentPeriods: [{ id: 'cp-1', projectId: 'p-eteam', read: ['team'], hasEagleSource: true }],
-      comments: [{ id: 'c-1', periodId: 'cp-1', projectId: 'p-team', read: ['sysadmin'], hasEagleSource: true }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.strictEqual(readOf(writes, 'c-1'), undefined);
-  });
-
-  await t.test('a row whose parent is not in DEMI is counted and not written', async (t) => {
-    const writes = fakeCosmos(t, {
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-gone', read: ['sysadmin'], ownRead: ['sysadmin'] }]
-    });
-    const summaries = await backfillEagleLadder(['--live']);
+  await t.test('a document whose project is not stored keeps a read the rule did not give', async (t) => {
+    const writes = fakeCosmos(t, { documents: [orphanDocument(['sysadmin', 'staff', 'idir', 'public'])] });
+    const summaries = await reverse('--live');
     assert.strictEqual(writes.length, 0);
-    assert.strictEqual(summaryOf(summaries, 'documents').noParent, 1);
+    const s = summaryOf(summaries, 'documents');
+    assert.deepStrictEqual([s.skippedDiffers, s.parentMissing], [1, 1]);
   });
 
-  await t.test('a document under a notification keeps its own read, widened', async (t) => {
-    const writes = fakeCosmos(t, {
-      notifications: [{ ...NOTIFICATION, read: ['sysadmin', 'public'] }],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'n-1', read: ['sysadmin', 'inspector'] }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'd-1'), ['sysadmin', 'inspector', 'staff']);
+  await t.test('a row changed since the scan is counted stale, not failed', async (t) => {
+    fakeCosmos(t, { projects: [WIDENED_PROJECT] }, { stale: true });
+    const summaries = await reverse('--live');
+    assert.deepStrictEqual([summaryOf(summaries, 'projects').stale, summaryOf(summaries, 'projects').failed], [1, 0]);
   });
 
-  await t.test('an Update under a staff project keeps its own read, widened', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [STAFF_PROJECT],
-      updates: [{ id: 'u-1', projectId: 'e-staff', read: ['sysadmin'], hasEagleSource: true }]
+  await t.test('a second live run plans nothing', async (t) => {
+    fakeCosmos(t, {
+      projects: [{ ...WIDENED_PROJECT }],
+      notifications: [{ ...NOTIFICATION }],
+      commentPeriods: [{ id: 'cp-1', projectId: 'p-w', eagleId: 'cp-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' }],
+      comments: [{ id: 'c-1', periodId: 'cp-1', eagleId: 'c-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' }],
+      updates: [{ id: 'up-1', projectId: 'n-1', eagleId: 'up-1', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], _etag: 'x' }]
     });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(readOf(writes, 'u-1'), ['sysadmin', 'staff']);
+    const first = await reverse('--live');
+    const second = await reverse('--live');
+    assert.strictEqual(first.reduce((n, s) => n + s.patched, 0), 5);
+    assert.strictEqual(second.reduce((n, s) => n + s.planned, 0), 0);
   });
 
-  await t.test("a document's ownRead is left without staff: the cascade adds it", async (t) => {
+  await t.test('a row under a team parent the rule left alone is not rewritten', async (t) => {
     const writes = fakeCosmos(t, {
-      projects: [{ id: 'p-up', eagleId: 'e-up', read: ['staff'], eagleRead: [] }],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-up', read: ['sysadmin'], ownRead: ['sysadmin', 'inspector'] }]
+      projects: [{ ...WIDENED_PROJECT, read: ['team'], eagleRead: ['team'] }],
+      documents: [{ id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['team'], ownRead: ['sysadmin'], _etag: 'x' }]
     });
-    await backfillEagleLadder(['--live']);
-    const ops = writes.find(w => w.id === 'd-1').resourceBody.operations;
-    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff']);
-    assert.strictEqual(ops.find(o => o.path === '/ownRead'), undefined);
-  });
-
-  await t.test("a document DEMI narrowed keeps its ownRead", async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [STAFF_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['team'], ownRead: ['sysadmin'] }]
-    });
-    await backfillEagleLadder(['--live']);
+    await reverse('--live');
     assert.strictEqual(writes.length, 0);
   });
 
-  await t.test('a document with no ownRead gains its pre-run read, and a later team narrow keeps it privileged-only', async (t) => {
-    const doc = { id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['sysadmin'], sourceSystem: 'eagle' };
-    const writes = fakeCosmos(t, { projects: [STAFF_PROJECT], documents: [doc] });
-    await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(valueOf(writes, 'd-1', '/ownRead'), ['sysadmin']);
-    assert.deepStrictEqual(readOf(writes, 'd-1'), ['staff'], 'in the same patch that promotes read');
-    assert.match(writes[0].resourceBody.condition, /ownRead/);
-
-    t.mock.restoreAll();
-    const stored = { ...doc, read: ['staff'], ownRead: valueOf(writes, 'd-1', '/ownRead') };
-    t.mock.method(cosmos, 'query', async () => ({ items: [stored], continuationToken: undefined }));
-    let cascaded;
-    t.mock.method(cosmos, 'bulkVerified', async (_container, operations) => {
-      cascaded = operations[0].resourceBody.operations.find(o => o.path === '/read').value;
-      return { succeeded: operations.length, failed: 0, statusCounts: {}, requestCharge: 1 };
-    });
-    await documentsRepo.setAclForProject(systemAccess(), 'p-staff', ['team']);
-    assert.deepStrictEqual(cascaded, ['sysadmin']);
-  });
-
-  await t.test('a document with a ladder read and no ownRead gains ownRead only', async (t) => {
+  await t.test('an Update the old cap kept at its own roles under a team parent goes to the current cap', async (t) => {
     const writes = fakeCosmos(t, {
-      projects: [STAFF_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['public', 'sysadmin'] }]
+      projects: [{ ...WIDENED_PROJECT, read: ['team'], eagleRead: ['team'] }],
+      updates: [{ id: 'up-1', projectId: 'e-w', eagleId: 'up-1', read: ['sysadmin', 'inspector'], eagleRead: ['sysadmin', 'inspector'], _etag: 'x' }]
     });
-    const summaries = await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(valueOf(writes, 'd-1', '/ownRead'), ['public', 'sysadmin']);
-    assert.strictEqual(readOf(writes, 'd-1'), undefined);
-    assert.doesNotMatch(writes[0].resourceBody.condition, /'staff'/, 'not guarded on a ladder token it has');
-    assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 1);
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-1'), ['sysadmin']);
   });
 
-  await t.test('a document holding staff with no ownRead gains it, read unchanged', async (t) => {
+  await t.test('a legacy open Update follows its parent\'s reversed read', async (t) => {
     const writes = fakeCosmos(t, {
-      projects: [STAFF_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['staff'] }]
+      projects: [WIDENED_PROJECT],
+      updates: [{ id: 'up-1', projectId: 'e-w', eagleId: 'up-1', read: ['sysadmin', 'staff'], eagleRead: null, eagleActive: true, hasEagleSource: true, _etag: 'x' }]
     });
-    const summaries = await backfillEagleLadder(['--live']);
-    assert.deepStrictEqual(valueOf(writes, 'd-1', '/ownRead'), ['staff']);
-    assert.strictEqual(readOf(writes, 'd-1'), undefined);
-    assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 1);
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-1'), ['sysadmin']);
   });
 
-  await t.test('a dry run counts the ownRead writes and writes nothing', async (t) => {
+  await t.test('a group under a notification is capped by its reversed read', async (t) => {
     const writes = fakeCosmos(t, {
-      projects: [STAFF_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['sysadmin'] }]
+      notifications: [NOTIFICATION],
+      groups: [{ id: 'g-1', projectId: 'n-1', eagleId: 'g-1', read: ['staff'], eagleRead: ['public'], _etag: 'x' }]
     });
-    const summaries = await backfillEagleLadder([]);
-    assert.strictEqual(writes.length, 0);
-    assert.strictEqual(summaryOf(summaries, 'documents').ownRead, 1);
-  });
-
-  await t.test('each patch is guarded on the row still having no ladder token', async (t) => {
-    const writes = fakeCosmos(t, { projects: [ADMIN_PROJECT] });
-    await backfillEagleLadder(['--live']);
-    assert.match(writes[0].resourceBody.condition, /'staff'/);
-  });
-
-  await t.test('the patch goes to the row\'s own partition', async (t) => {
-    const writes = fakeCosmos(t, {
-      projects: [STAFF_PROJECT],
-      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-staff', read: ['sysadmin'] }]
-    });
-    await backfillEagleLadder(['--live']);
-    assert.strictEqual(writes.find(w => w.id === 'd-1').partitionKey, 'p-staff');
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'g-1'), ['sysadmin']);
   });
 
   await t.test('every page of a container is read', async (t) => {
-    const many = Array.from({ length: 501 }, (_, i) => ({ id: `p-${i}`, eagleId: `e-${i}`, read: ['sysadmin'] }));
+    const many = Array.from({ length: 501 }, (_, i) => ({ ...WIDENED_PROJECT, id: `p-${i}`, eagleId: `e-${i}` }));
     fakeCosmos(t, { projects: many });
-    const summaries = await backfillEagleLadder([]);
+    const summaries = await reverse();
     assert.strictEqual(summaryOf(summaries, 'projects').planned, 501);
+  });
+});
+
+test('backfill-eagle-ladder forward', async (t) => {
+  await t.test('a document with no ownRead gains its stored read, and nothing adds staff', async (t) => {
+    const writes = fakeCosmos(t, {
+      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-w', read: ['sysadmin'] }]
+    });
+    await backfillEagleLadder(['--live']);
+    assert.deepStrictEqual(valueOf(writes, 'd-1', '/ownRead'), ['sysadmin']);
+    assert.strictEqual(readOf(writes, 'd-1'), undefined);
+  });
+
+  await t.test('a document that has ownRead is left alone', async (t) => {
+    const writes = fakeCosmos(t, {
+      documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-w', read: ['sysadmin'], ownRead: ['sysadmin'] }]
+    });
+    await backfillEagleLadder(['--live']);
+    assert.strictEqual(writes.length, 0);
+  });
+
+  await t.test('a dry run writes nothing', async (t) => {
+    const writes = fakeCosmos(t, { documents: [{ id: 'd-1', eagleId: 'd-1', projectId: 'p-w', read: ['sysadmin'] }] });
+    const summaries = await backfillEagleLadder([]);
+    assert.strictEqual(writes.length, 0);
+    assert.strictEqual(summaries[0].planned, 1);
   });
 });
 
 test('arguments and exit code', async (t) => {
   await t.test('an unknown argument is refused', () => {
     assert.throws(() => parseArgs(['--force']), /unknown argument/);
+  });
+
+  await t.test('--reverse selects the reverse pass', () => {
+    assert.strictEqual(parseArgs(['--reverse', '--live']).reverse, true);
   });
 
   await t.test('a failed write exits 1', () => {
