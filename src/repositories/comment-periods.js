@@ -357,6 +357,14 @@ async function setAclForProject(access, projectId, read) {
   return cascadeAcl(CONTAINER, projectId, await aclRowsForProject(access, projectId), read);
 }
 
+// ---- ENGAGE ingest (controllers/nosql/engage-comment-period.js) ----
+
+/** The row ENGAGE already tied to this engagement, within one partition. */
+async function readForWriteByEngagementId(engagementId, projectId) {
+  const [row] = await readForWriteWhere(projectId, [eq('engagementId', String(engagementId), '@engagementId')]);
+  return row || null;
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
@@ -368,6 +376,7 @@ module.exports = {
   readForWrite,
   readForWriteByEagleId,
   readForWriteEngageByMetUrl,
+  readForWriteByEngagementId,
   listByProject,
   listEveryByProject,
   listByIds,

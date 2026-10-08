@@ -176,6 +176,7 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'controllers/nosql/comment-period.js',
     'controllers/nosql/comment.js',
     'controllers/nosql/document.js',
+    'controllers/nosql/engage-comment-period.js',
     'controllers/nosql/group.js',
     'controllers/nosql/inspection.js',
     'controllers/nosql/notification.js',
