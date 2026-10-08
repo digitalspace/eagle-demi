@@ -10,22 +10,22 @@ const cosmos = require('../db/cosmos-nosql');
 const {
   capRead, levelOfRead, readForLevel, isDemiSeal, LEVEL_TOKENS, SEALED_TOKEN, SECURE_ROLES
 } = require('../helpers/access-sql');
-const eagleAcl = require('../helpers/eagle-acl');
+const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
 const { inheritsParentRead, updateRead } = require('../helpers/update-parent');
-
-const { eagleBaseAcl, eagleReadUnder } = eagleAcl;
 const { DELETED_CEILING } = require('../repositories/documents');
 const { logger } = require('../utils/logger');
 
 const PAGE_SIZE = 500;
+const TEAM = LEVEL_TOKENS[1];
 const STAFF = LEVEL_TOKENS[2];
 const LADDER = Object.freeze(Object.values(LEVEL_TOKENS));
 const INSPECTION_KINDS = Object.freeze(['Inspection', 'InspectionElement', 'InspectionItem']);
 
 /**
- * Containers in parent-first order, with each one's partition key and parent. `loadAll` marks a
- * container whose every row is read because it caps another container's rows; the rest are read
- * only where `read` carries `staff`, which every output of the dropped rule does.
+ * Containers in parent-first order, with each one's partition key and parent. Every output of the
+ * dropped rule carries `staff` or is `['team']`, so a container is read only where `read` carries
+ * one of them, except: `loadAll` containers cap others and are read in full, and Updates
+ * (`scanAll`) are read in full because the old cap kept some at their own roles.
  */
 const STEPS = Object.freeze([
   { container: 'projects', pk: 'id', loadAll: true },
@@ -37,7 +37,7 @@ const STEPS = Object.freeze([
   { container: 'groups', pk: 'projectId', parent: 'project', capByNotification: true, deleteCeiling: true },
   { container: 'inspections', pk: 'inspection', parent: 'inspection', loadAll: true, deleteCeiling: true },
   { container: 'comments', pk: 'periodId', parent: 'period', deleteCeiling: true },
-  { container: 'updates', pk: 'id', parent: 'eagle' }
+  { container: 'updates', pk: 'id', parent: 'eagle', scanAll: true }
 ]);
 
 /**
@@ -71,7 +71,7 @@ const droppedRule = Object.freeze({
     const base = droppedRule.base(eagleRead);
     const read = under(droppedRule.widen(base), cap);
     // The dropped rule fell back to the plain cap where the widened read landed at `team`.
-    return read.includes(LEVEL_TOKENS[1]) ? under(base, cap) : read;
+    return read.includes(TEAM) ? under(base, cap) : read;
   },
   /** The old `update-parent:updateRead`: capped only where the ceiling's level is lower. */
   update(row, parent, parentRead) {
@@ -187,14 +187,15 @@ async function runForward(args, io) {
 // ---------------------------------------------------------------------------------------------
 
 function reverseSpec(step) {
-  const staffOnly = step.loadAll ? '' : ` AND ARRAY_CONTAINS(c.read, '${STAFF}')`;
+  const touched = step.loadAll || step.scanAll ? ''
+    : ` AND (ARRAY_CONTAINS(c.read, '${STAFF}') OR ARRAY_CONTAINS(c.read, '${TEAM}'))`;
   return skip => ({
     query: 'SELECT c.id, c.read, c.ownRead, c.eagleId, c.projectId, c.periodId, c.kind, ' +
       'c.inspection, c.element, c.isDeleted, c.levelHeldAt, c.sealedAt, c._etag, ' +
       'c.sources.eagle.read AS eagleRead, c.sources.eagle.isDeleted AS eagleDeleted, ' +
       'c.sources.eagle.status AS eagleStatus, c.sources.eagle.active AS eagleActive, ' +
       'IS_DEFINED(c.sources.eagle) AS hasEagleSource FROM c ' +
-      `WHERE (IS_DEFINED(c.eagleId) OR IS_DEFINED(c.sources.eagle))${staffOnly} ` +
+      `WHERE (IS_DEFINED(c.eagleId) OR IS_DEFINED(c.sources.eagle))${touched} ` +
       'ORDER BY c.id OFFSET @skip LIMIT @size',
     parameters: pageParams(skip)
   });
@@ -389,18 +390,6 @@ function summaryLine(s) {
     `skippedDiffers=${s.skippedDiffers} noParent=${s.noParent} stale=${s.stale} failed=${s.failed}`;
 }
 
-/** Exit code for a reverse run refused because the rule it undoes is still in this build. */
-const RULE_LIVE_EXIT = 2;
-
-/** A reverse run under a build that still widens would be undone by the next push. */
-function assertRuleRemoved(acl) {
-  const live = ['withEagleStaff', 'seedAcl'].filter(name => name in acl);
-  if (live.length === 0) return;
-  throw Object.assign(new Error(`[eagle-ladder] --reverse refused: helpers/eagle-acl still exports ` +
-    `${live.join(', ')}, so the staff rule is live and the next push would undo this run. ` +
-    'Deploy a build without it first.'), { exitCode: RULE_LIVE_EXIT });
-}
-
 /**
  * @param {string[]} argv
  * @param {object} [deps] test seam: {queryPage, bulkVerified, now}
@@ -408,7 +397,6 @@ function assertRuleRemoved(acl) {
  */
 async function backfillEagleLadder(argv = [], deps = {}) {
   const args = parseArgs(argv);
-  if (args.reverse) assertRuleRemoved(deps.eagleAcl || eagleAcl);
   const io = {
     queryPage: deps.queryPage || cosmos.queryPage,
     write: deps.bulkVerified || cosmos.bulkVerified,
@@ -423,7 +411,7 @@ function exitCodeFor(summaries) {
 }
 
 module.exports = {
-  parseArgs, planReverse, backfillEagleLadder, exitCodeFor, summaryLine, STEPS, droppedRule, RULE_LIVE_EXIT
+  parseArgs, planReverse, backfillEagleLadder, exitCodeFor, summaryLine, STEPS, droppedRule
 };
 
 if (require.main === module) {
@@ -433,6 +421,6 @@ if (require.main === module) {
     .then(summaries => process.exit(exitCodeFor(summaries)))
     .catch(err => {
       logger.error('[eagle-ladder] Fatal', { error: err.message, stack: err.stack });
-      process.exit(err.exitCode || 1);
+      process.exit(1);
     });
 }

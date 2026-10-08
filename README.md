@@ -496,15 +496,21 @@ read, minus blanks and `compliance`, capped by the parent's read through `capRea
 ladder token under a cap keeps only its privileged names and the names the cap also carries; it no
 longer lands at `team`.
 
-Run `--reverse` only on a build where `src/helpers/eagle-acl.js` no longer exports `withEagleStaff`
-or `seedAcl`, deployed to the API first. Otherwise the next push, merge or cascade adds `staff`
-back, and the nightly reconcile reports the reversed rows as drift. The script checks the build it
-runs from and exits 2 with a message if either export is still there.
+Two checks go with a `--live` run:
+
+1. Before it, confirm the API runs a build that contains #549, which dropped the rule. `GET
+   /api/config` returns `BUILD_ID`, stamped into the deploy package as `git describe --tags` of the
+   deployed commit plus a time. Take the commit from its `g<sha>` part and check that
+   `git merge-base --is-ancestor 9fc2e5c <sha>` succeeds. On an older build the next push, merge
+   or cascade adds `staff` back.
+2. After it, run the dry run again. It must plan 0 rows. If it plans any, a push added `staff`
+   back in between. The nightly reconcile alert also reports those rows as drift.
 
 The script works parents first: projects and notifications, then lists, users, comment periods,
 documents, groups, inspections, comments and Updates. Inspections are written kind by kind:
 inspection, element, item. Each child is capped by its parent's read after the reverse. A parent
-whose write fails or gets a 412 keeps capping its children at its stored read.
+whose write fails or gets a 412 keeps capping its children at its stored read. Parent containers
+and Updates are read in full; the rest only where `read` carries `staff` or `team`.
 
 A row is rewritten only when its stored `read` is exactly what the old rule gives for the same
 Eagle read and parent. The script keeps a frozen copy of that rule: the staff widening plus the old

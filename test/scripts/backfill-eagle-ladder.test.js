@@ -6,8 +6,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
-const { backfillEagleLadder, parseArgs, exitCodeFor, RULE_LIVE_EXIT } = require('../../src/scripts/backfill-eagle-ladder');
-const { eagleBaseAcl } = require('../../src/helpers/eagle-acl');
+const { backfillEagleLadder, parseArgs, exitCodeFor } = require('../../src/scripts/backfill-eagle-ladder');
+const { evaluate } = require('../helpers/updates-store');
 
 const PUBLIC = ['staff', 'idir', 'public'];
 // A project the dropped rule widened: Eagle says `['sysadmin']`, DEMI stored it with `staff`.
@@ -16,7 +16,8 @@ const PUBLIC_PROJECT = { id: 'p-pub', eagleId: 'e-pub', read: PUBLIC, eagleRead:
 const NOTIFICATION = { id: 'n-1', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], hasEagleSource: true, _etag: 'x' };
 
 /**
- * `cosmos.queryPage` and `cosmos.bulkVerified` replaced for the run. A write applies its `set` ops
+ * `cosmos.queryPage` and `cosmos.bulkVerified` replaced for the run. A query answers the rows its
+ * WHERE holds for, `hasEagleSource` standing in for `sources.eagle`. A write applies its `set` ops
  * to a private copy of the row when `ifMatch` holds, and answers a 412 (`skippedIds`) when it does
  * not. `stale` hands every row out with an etag that no longer matches; `refuse` maps an id to the
  * answer its write gets instead, `'stale'` (412) or `'failed'`.
@@ -25,8 +26,13 @@ function fakeCosmos(t, seed, { stale = false, refuse = {} } = {}) {
   const rows = structuredClone(seed);
   const writes = [];
   let etag = 0;
-  t.mock.method(cosmos, 'queryPage', async (container, _spec, { size, skip }) =>
-    (rows[container] || []).slice(skip, skip + size).map(r => ({ ...r, ...(stale && { _etag: 'old' }) })));
+  t.mock.method(cosmos, 'queryPage', async (container, spec, { size, skip }) => {
+    const where = / WHERE (.+) ORDER BY /s.exec(spec.query)[1];
+    const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
+    return (rows[container] || [])
+      .filter(r => evaluate(where, { ...r, sources: r.hasEagleSource ? { eagle: {} } : undefined }, params))
+      .slice(skip, skip + size).map(r => ({ ...r, ...(stale && { _etag: 'old' }) }));
+  });
   t.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
     const skippedIds = [];
     const failedIds = [];
@@ -54,9 +60,7 @@ const valueOf = (writes, id, path) => {
 };
 const readOf = (writes, id) => valueOf(writes, id, '/read');
 const summaryOf = (summaries, container) => summaries.find(s => s.container === container);
-// `helpers/eagle-acl` as it is once the staff rule is removed; the guard refuses any other build.
-const RULE_REMOVED = { eagleBaseAcl };
-const reverse = (...flags) => backfillEagleLadder(['--reverse', ...flags], { eagleAcl: RULE_REMOVED });
+const reverse = (...flags) => backfillEagleLadder(['--reverse', ...flags]);
 
 test('backfill-eagle-ladder --reverse', async (t) => {
   await t.test('a dry run writes nothing and counts what a live run writes', async (t) => {
@@ -242,6 +246,15 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.deepStrictEqual([s.scanned, s.planned, s.skippedDiffers], [1, 0, 0]);
   });
 
+  await t.test('a row the dropped rule never touched is not read', async (t) => {
+    fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      documents: [{ id: 'd-1', projectId: 'p-pub', eagleId: 'd-1', read: ['sysadmin'], ownRead: ['sysadmin'], _etag: 'x' }]
+    });
+    const summaries = await reverse();
+    assert.strictEqual(summaryOf(summaries, 'documents').scanned, 0);
+  });
+
   await t.test('a child whose parent is not stored is counted, not written', async (t) => {
     const writes = fakeCosmos(t, {
       comments: [{ id: 'c-1', periodId: 'cp-gone', eagleId: 'c-1', read: ['staff'], eagleRead: ['sysadmin'], _etag: 'x' }]
@@ -280,6 +293,15 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.strictEqual(writes.length, 0);
   });
 
+  await t.test('an Update the old cap kept at its own roles under a team parent goes to the current cap', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [{ ...WIDENED_PROJECT, read: ['team'], eagleRead: ['team'] }],
+      updates: [{ id: 'up-1', projectId: 'e-w', eagleId: 'up-1', read: ['sysadmin', 'inspector'], eagleRead: ['sysadmin', 'inspector'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-1'), ['sysadmin']);
+  });
+
   await t.test('a legacy open Update follows its parent\'s reversed read', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [WIDENED_PROJECT],
@@ -296,20 +318,6 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     });
     await reverse('--live');
     assert.deepStrictEqual(readOf(writes, 'g-1'), ['sysadmin']);
-  });
-
-  await t.test('a build that still exports the staff rule is refused with exit 2, before any read', async (t) => {
-    const writes = fakeCosmos(t, { projects: [WIDENED_PROJECT] });
-    const live = { eagleBaseAcl, withEagleStaff: read => read };
-    await assert.rejects(backfillEagleLadder(['--reverse', '--live'], { eagleAcl: live }),
-      err => err.exitCode === RULE_LIVE_EXIT && /withEagleStaff/.test(err.message));
-    assert.strictEqual(cosmos.queryPage.mock.callCount(), 0);
-    assert.strictEqual(writes.length, 0);
-  });
-
-  await t.test('a build that still exports seedAcl is refused', async () => {
-    await assert.rejects(backfillEagleLadder(['--reverse'], { eagleAcl: { eagleBaseAcl, seedAcl: r => r } }),
-      err => err.exitCode === RULE_LIVE_EXIT);
   });
 
   await t.test('every page of a container is read', async (t) => {
