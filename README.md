@@ -492,9 +492,16 @@ scripts/demi-devbox.sh run --env test -- 'git pull && yarn install && node src/s
 Without `--reverse` it gives each Eagle document that has no `ownRead` its stored `read`. The
 project cascade re-derives a document's read from `ownRead`. Run it once on a new environment.
 
-`--reverse` undoes a dropped rule. From 2026-10-05 to 2026-10-08 the mirrors added `staff` to an
-Eagle read with no ladder token (`team`, `staff`, `idir`, `public`). DEMI now stores Eagle's own
-read, minus blanks and `compliance`, capped by the parent's read. The script works parents first:
+`--reverse` undoes a rule that is being dropped. From 2026-10-05 the mirrors add `staff` to an
+Eagle read with no ladder token (`team`, `staff`, `idir`, `public`). Once the rule is gone, DEMI
+stores Eagle's own read, minus blanks and `compliance`, capped by the parent's read.
+
+Run `--reverse` only on a build where `src/helpers/eagle-acl.js` no longer exports `withEagleStaff`
+or `seedAcl`, deployed to the API first. Otherwise the next push, merge or cascade adds `staff`
+back, and the nightly reconcile reports the reversed rows as drift. The script checks the build it
+runs from and exits 2 with a message if either export is still there.
+
+The script works parents first:
 projects and notifications, then lists, users, comment periods, documents, groups, inspections
 (inspection, element, item), comments and Updates. Each child is capped by its parent's read after
 the reverse.

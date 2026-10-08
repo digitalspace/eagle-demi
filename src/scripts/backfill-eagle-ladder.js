@@ -8,7 +8,9 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { capRead, levelOfRead, isDemiSeal, LEVEL_TOKENS, SEALED_TOKEN } = require('../helpers/access-sql');
-const { eagleBaseAcl } = require('../helpers/eagle-acl');
+const eagleAcl = require('../helpers/eagle-acl');
+
+const { eagleBaseAcl } = eagleAcl;
 const { DELETED_CEILING } = require('../repositories/documents');
 const { logger } = require('../utils/logger');
 
@@ -340,6 +342,18 @@ function summaryLine(s) {
     `skippedDiffers=${s.skippedDiffers} noParent=${s.noParent} stale=${s.stale} failed=${s.failed}`;
 }
 
+/** Exit code for a reverse run refused because the rule it undoes is still in this build. */
+const RULE_LIVE_EXIT = 2;
+
+/** A reverse run under a build that still widens would be undone by the next push. */
+function assertRuleRemoved(acl) {
+  const live = ['withEagleStaff', 'seedAcl'].filter(name => name in acl);
+  if (live.length === 0) return;
+  throw Object.assign(new Error(`[eagle-ladder] --reverse refused: helpers/eagle-acl still exports ` +
+    `${live.join(', ')}, so the staff rule is live and the next push would undo this run. ` +
+    'Deploy a build without it first.'), { exitCode: RULE_LIVE_EXIT });
+}
+
 /**
  * @param {string[]} argv
  * @param {object} [deps] test seam: {queryPage, bulkVerified, now}
@@ -347,6 +361,7 @@ function summaryLine(s) {
  */
 async function backfillEagleLadder(argv = [], deps = {}) {
   const args = parseArgs(argv);
+  if (args.reverse) assertRuleRemoved(deps.eagleAcl || eagleAcl);
   const io = {
     queryPage: deps.queryPage || cosmos.queryPage,
     write: deps.bulkVerified || cosmos.bulkVerified,
@@ -360,7 +375,9 @@ function exitCodeFor(summaries) {
   return summaries.some(s => s.failed > 0) ? 1 : 0;
 }
 
-module.exports = { parseArgs, planReverse, backfillEagleLadder, exitCodeFor, summaryLine, STEPS, droppedRule };
+module.exports = {
+  parseArgs, planReverse, backfillEagleLadder, exitCodeFor, summaryLine, STEPS, droppedRule, RULE_LIVE_EXIT
+};
 
 if (require.main === module) {
   cosmos.initCosmosClient();
@@ -369,6 +386,6 @@ if (require.main === module) {
     .then(summaries => process.exit(exitCodeFor(summaries)))
     .catch(err => {
       logger.error('[eagle-ladder] Fatal', { error: err.message, stack: err.stack });
-      process.exit(1);
+      process.exit(err.exitCode || 1);
     });
 }
