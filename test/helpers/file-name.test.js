@@ -48,3 +48,11 @@ test('fileNameFor never cuts a character in half', () => {
   assert.equal(name, `${'a'.repeat(145)}.pdf`);
   assert.doesNotThrow(() => encodeURIComponent(name));
 });
+
+test('fileNameFor turns a lone surrogate into U+FFFD', () => {
+  for (const lone of ['\uD83D', '\uDCC4']) {
+    const name = fileNameFor({ ...DOC, documentFileName: `Report ${lone} draft.pdf` }, {});
+    assert.equal(name, 'Report \uFFFD draft.pdf');
+    assert.doesNotThrow(() => encodeURIComponent(name));
+  }
+});
