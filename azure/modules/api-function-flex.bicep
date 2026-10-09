@@ -147,6 +147,23 @@ param edgeSecretUri string = ''
 @allowed(['', 'log', 'enforce'])
 param edgeGate string = ''
 
+// The edge ban detector (src/scripts/edge-ban.js), timer `edgeBan` in api/index.js.
+@description('EDGE_BAN_MODE: off writes the placeholder back to the Front Door ban rule (the kill switch), shadow records would-bans only, write records them and updates the rule.')
+@allowed(['off', 'shadow', 'write'])
+param edgeBanMode string = 'off'
+
+@description('NCRONTAB schedule for the edge ban timer, six fields.')
+param edgeBanSchedule string = '0 0 * * * *'
+
+@description('Key Vault URI of the `edge-ban-policy` secret (thresholds and allow list, JSON). Not the value: the app resolves it through a Key Vault reference. Empty skips every shadow or write tick; off needs none.')
+param edgeBanPolicySecretUri string = ''
+
+@description('Log Analytics workspace holding the Front Door access log, in the eagle-edge resource group. Empty skips every tick, off included.')
+param edgeLogWorkspaceId string = ''
+
+@description('Resource id of the `banauto` rule in the eagle-edge `rulesdemidocs` rule set. Empty skips every tick, off included.')
+param edgeBanRuleId string = ''
+
 // Empty leaves POST /api/gate answering 404, which is what an ungated environment wants. The
 // boolean the browser reads is ACCESS_GATE in the `public` config document, not this.
 @description('Key Vault URI of the password POST /api/gate accepts. Not the value: the app resolves it through a Key Vault reference. Empty leaves the site ungated.')
@@ -1003,6 +1020,27 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'EDGE_GATE'
           value: edgeGate
+        }
+        // Always set, so the edgeBan timer is registered and an off tick can clear the rule.
+        {
+          name: 'EDGE_BAN_MODE'
+          value: edgeBanMode
+        }
+        {
+          name: 'EDGE_BAN_SCHEDULE'
+          value: edgeBanSchedule
+        }
+        {
+          name: 'EDGE_BAN_POLICY'
+          value: empty(edgeBanPolicySecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${edgeBanPolicySecretUri})'
+        }
+        {
+          name: 'EDGE_LOG_WORKSPACE_ID'
+          value: edgeLogWorkspaceId
+        }
+        {
+          name: 'EDGE_BAN_RULE_ID'
+          value: edgeBanRuleId
         }
         // The public site's access curtain (src/controllers/gate.js). A reference, not the value,
         // for the same reason as every secret above. Empty answers 404 on the route rather than

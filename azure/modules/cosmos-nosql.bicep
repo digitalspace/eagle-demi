@@ -1021,6 +1021,26 @@ resource bulkDownloadsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
   }
 }
 
+// Edge ban history (src/repositories/edge-bans.js), partitioned on id (the prefix with `/` as `_`, plus
+// the `feed:crawlers` row). Rows set their own ttl of 7 days, reset on each write; `-1` only turns TTL on.
+// Default indexing: the container is small, and TTL needs indexing on.
+resource edgeBansContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'edgeBans'
+  properties: {
+    resource: {
+      id: 'edgeBans'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+      defaultTtl: -1
+    }
+  }
+}
+
 // ── Data-plane RBAC ──────────────────────────────────────────────────────────
 // Cosmos NoSQL data-plane role assignments cannot be managed in the Azure portal, so they
 // have to live here. Built-in definitions are used rather than a custom role — a custom

@@ -178,6 +178,15 @@ param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194
 // `log` while the list of callers that skip Front Door is measured (AppTraces, evt 'edge-gate').
 param edgeGate = 'log'
 
+// Edge ban timer (api/index.js `edgeBan`). Every tick skips until both ids are filled in after the
+// eagle-edge ban rules deploy: edgeLogWorkspaceId = the eagle-logs-test workspace, edgeBanRuleId =
+// the rulesdemidocs/banauto rule. Shadow or write also needs the policy: set it once from the devbox
+// with `az keyvault secret set --vault-name demi-kv-test --name edge-ban-policy --file <policy.json>`,
+// then add 'edge-ban-policy' to optionalSecretNames above.
+param edgeBanMode = 'off'
+param edgeLogWorkspaceId = ''
+param edgeBanRuleId = ''
+
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
 // Both client secrets are vault-only (`track-client-secret`, `role-sync-client-secret`).

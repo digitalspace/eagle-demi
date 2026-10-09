@@ -149,6 +149,19 @@ param trustedProxyIps string = ''
 @allowed(['', 'log', 'enforce'])
 param edgeGate string = ''
 
+@description('EDGE_BAN_MODE for the edgeBan timer: off clears the Front Door ban rule, shadow records would-bans, write records and updates the rule.')
+@allowed(['off', 'shadow', 'write'])
+param edgeBanMode string = 'off'
+
+@description('NCRONTAB schedule for the edgeBan timer, six fields.')
+param edgeBanSchedule string = '0 0 * * * *'
+
+@description('Log Analytics workspace holding the Front Door access log (eagle-edge resource group). Empty skips every edgeBan tick.')
+param edgeLogWorkspaceId string = ''
+
+@description('Resource id of the eagle-edge `rulesdemidocs/banauto` rule. Empty skips every edgeBan tick.')
+param edgeBanRuleId string = ''
+
 // Which OPTIONAL secrets this environment's vault already holds. Values are set by hand on the
 // devbox, so this template cannot see whether one exists — naming it here is the statement that it
 // does, and an unnamed one leaves its app setting empty rather than pointing at nothing.
@@ -157,7 +170,7 @@ param edgeGate string = ''
 // eagle-notify push dark; `access-gate-password` unnamed leaves POST /api/gate answering 404, which
 // is what prod runs. The flag the browser sees is the boolean ACCESS_GATE in the `public` config
 // document, not the secret, so the curtain's two halves are set in different places on purpose.
-@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password, pdf-title-worker-api-key.')
+@description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret, access-gate-password, pdf-title-worker-api-key, edge-ban-policy.')
 param optionalSecretNames array = []
 
 // The OpenShift namespaces the secret sync writes to. Empty deploys no sync app — which is what an
@@ -556,6 +569,9 @@ var accessGateSecretUri = deployFoundation
 var syncOutEagleClientSecretUri = contains(optionalSecretNames, 'eagle-sync-out-client-secret')
   ? '${secretUriBase}eagle-sync-out-client-secret'
   : ''
+var edgeBanPolicySecretUri = contains(optionalSecretNames, 'edge-ban-policy')
+  ? '${secretUriBase}edge-ban-policy'
+  : ''
 
 var appInsightsConnectionString = deployFoundation ? observability!.outputs.connectionString : appInsightsExisting.properties.ConnectionString
 var appInsightsId = deployFoundation ? observability!.outputs.appInsightsId : appInsightsExisting.id
@@ -810,6 +826,11 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     trustedProxyIps: trustedProxyIps
     edgeSecretUri: edgeSecretUri
     edgeGate: edgeGate
+    edgeBanMode: edgeBanMode
+    edgeBanSchedule: edgeBanSchedule
+    edgeBanPolicySecretUri: edgeBanPolicySecretUri
+    edgeLogWorkspaceId: edgeLogWorkspaceId
+    edgeBanRuleId: edgeBanRuleId
     accessGateSecretUri: accessGateSecretUri
     virtualNetworkSubnetId: apiFlexSubnetId
     identityId: identityId
