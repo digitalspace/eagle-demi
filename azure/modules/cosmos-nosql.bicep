@@ -1021,8 +1021,9 @@ resource bulkDownloadsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
   }
 }
 
-// Edge ban history (src/repositories/edge-bans.js), partitioned on the banned address. A row expires
-// 7 days after its last write. Default indexing: the container is small, and TTL needs indexing on.
+// Edge ban history (src/repositories/edge-bans.js), partitioned on id (the prefix with `/` as `_`, plus
+// the `feed:crawlers` row). Rows set their own ttl of 7 days, reset on each write; `-1` only turns TTL on.
+// Default indexing: the container is small, and TTL needs indexing on.
 resource edgeBansContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'edgeBans'
@@ -1031,11 +1032,11 @@ resource edgeBansContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
       id: 'edgeBans'
       partitionKey: {
         paths: [
-          '/address'
+          '/id'
         ]
         kind: 'Hash'
       }
-      defaultTtl: 604800 // 7 days
+      defaultTtl: -1
     }
   }
 }
