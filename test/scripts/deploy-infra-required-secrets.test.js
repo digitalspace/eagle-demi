@@ -59,7 +59,8 @@ const VAULT_NAMES = [
   'openshift-token-test',
   'dev-openshift-token',
   'pdf-title-worker-api-key',
-  'eagle-sync-out-client-secret'
+  'eagle-sync-out-client-secret',
+  'edge-ban-policy'
 ];
 
 const GOOD_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0 demo';
