@@ -36,7 +36,7 @@ app.setup({ enableHttpStream: true });
 // host is the only other caller.
 module.exports = {
   reconcileEagle, reconcileEngage, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads,
-  restampChunksWorker, searchDefinitionsWorker, syncOutWorker, announceUpdates
+  restampChunksWorker, searchDefinitionsWorker, syncOutWorker, announceUpdates, edgeBan
 };
 
 // Drain buffered audit events before the worker goes away.
@@ -172,6 +172,16 @@ if (process.env.ANNOUNCE_UPDATES_SCHEDULE) {
   });
 }
 
+// Guarded on EDGE_BAN_MODE being SET, not its value: deployed apps set `off`, and an off tick logs the skip.
+// Schedule as a value, not `%EDGE_BAN_SCHEDULE%`: an unset name would fail host startup, not default hourly.
+if (process.env.EDGE_BAN_MODE) {
+  app.timer('edgeBan', {
+    schedule: require('../src/config').edgeBan.schedule,
+    runOnStartup: false,
+    handler: edgeBan
+  });
+}
+
 // Read from host.json rather than repeated here: the queue extension is what actually decides how
 // many deliveries a message gets, and a copy of the number drifts silently.
 const MAX_DEQUEUE_COUNT = require('../host.json').extensions.queues.maxDequeueCount;
@@ -280,5 +290,44 @@ async function syncTrackTeams() {
     await require('../src/scripts/sync-track-teams').run({ live: true });
   } catch (err) {
     logger.error('[track-teams] nightly run failed', { error: err.message, stack: err.stack });
+  }
+}
+
+/** Swallows the failure as reconcileEagle does; a bad mode or policy setting throws into the same catch. */
+async function edgeBan() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    const { edgeBan: settings } = require('../src/config');
+    const mode = settings.mode;
+    if (mode === 'off') {
+      logger.info('[edge-ban] EDGE_BAN_MODE is off, run skipped');
+      return;
+    }
+    const policy = settings.policy;
+    if (!policy) {
+      logger.error('[edge-ban] EDGE_BAN_POLICY is unset or its Key Vault reference did not resolve, run skipped');
+      return;
+    }
+    const summary = await require('../src/scripts/edge-ban').run({
+      mode,
+      now: new Date(),
+      log: logger,
+      policy,
+      workspaceId: settings.workspaceId,
+      ruleId: settings.ruleId,
+      credential: require('../src/utils/azure-credential').createCredential(),
+      cosmos: require('../src/db/cosmos-nosql')
+    });
+    const count = (v) => (Array.isArray(v) ? v.length : v);
+    logger.info('[edge-ban] run finished', {
+      mode,
+      candidates: count(summary.candidates),
+      banned: count(summary.banned),
+      expired: count(summary.expired),
+      written: summary.written,
+      warnings: summary.warnings
+    });
+  } catch (err) {
+    logger.error('[edge-ban] run failed', { error: err.message, stack: err.stack });
   }
 }

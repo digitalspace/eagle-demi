@@ -91,6 +91,8 @@ function principalsFromEnv(name, fallback = '') {
 
 const envTrim = (name) => (process.env[name] || '').trim();
 
+const EDGE_BAN_MODES = ['off', 'shadow', 'write'];
+
 const config = {
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),
@@ -487,6 +489,38 @@ const config = {
   // (src/http/router.js, edgeGate). '' = off, 'log' = serve and write one warn line,
   // 'enforce' = 403. Anything else counts as off.
   edgeGate:              (process.env.EDGE_GATE || '').trim().toLowerCase(),
+
+  // The edge ban detector (src/scripts/edge-ban.js), run by the `edgeBan` timer in api/index.js.
+  // Getters, and they throw on read rather than at load: a bad value fails the tick and logs, it
+  // does not take the HTTP API down with it.
+  edgeBan: {
+    // off = the tick logs and skips, shadow = records would-bans only, write = also updates the rule.
+    get mode() {
+      const mode = envTrim('EDGE_BAN_MODE').toLowerCase() || 'off';
+      if (!EDGE_BAN_MODES.includes(mode)) {
+        throw new Error(`EDGE_BAN_MODE must be one of ${EDGE_BAN_MODES.join(', ')}, got '${mode}'.`);
+      }
+      return mode;
+    },
+    // NCRONTAB, six fields. Hourly when unset.
+    get schedule() { return envTrim('EDGE_BAN_SCHEDULE') || '0 0 * * * *'; },
+    // Thresholds and allow list, from a Key Vault reference. null when unset or unresolved. The
+    // error never quotes the value or the parser message, which carries a slice of it.
+    get policy() {
+      const raw = secretFromEnv('EDGE_BAN_POLICY').trim();
+      if (!raw) return null;
+      let policy;
+      try { policy = JSON.parse(raw); } catch { throw new Error('EDGE_BAN_POLICY is not valid JSON.'); }
+      if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+        throw new Error('EDGE_BAN_POLICY must be a JSON object.');
+      }
+      return policy;
+    },
+    // Log Analytics workspace holding the Front Door access log, and the `banauto` rule's resource
+    // id. Both live in the eagle-edge resource group; empty where the detector is not wired.
+    get workspaceId() { return envTrim('EDGE_LOG_WORKSPACE_ID'); },
+    get ruleId() { return envTrim('EDGE_BAN_RULE_ID'); }
+  },
 };
 
 // Optional second object-store credential, read by src/scripts/backfill-objects.js: the test

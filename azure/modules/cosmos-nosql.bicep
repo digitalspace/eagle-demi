@@ -1021,6 +1021,25 @@ resource bulkDownloadsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
   }
 }
 
+// Edge ban history (src/repositories/edge-bans.js), partitioned on the banned address. A row expires
+// 7 days after its last write. Default indexing: the container is small, and TTL needs indexing on.
+resource edgeBansContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'edgeBans'
+  properties: {
+    resource: {
+      id: 'edgeBans'
+      partitionKey: {
+        paths: [
+          '/address'
+        ]
+        kind: 'Hash'
+      }
+      defaultTtl: 604800 // 7 days
+    }
+  }
+}
+
 // ── Data-plane RBAC ──────────────────────────────────────────────────────────
 // Cosmos NoSQL data-plane role assignments cannot be managed in the Azure portal, so they
 // have to live here. Built-in definitions are used rather than a custom role — a custom
