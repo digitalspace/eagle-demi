@@ -342,6 +342,38 @@ test('download in inline mode', async (t) => {
     assert.deepStrictEqual(save.audited, { displayName: 'Site C Report' });
   });
 
+  /** Detail of the analytics event a JSON-mode download of `doc` wrote. */
+  async function eventDetail(t, doc) {
+    sent.length = 0;
+    await signedType(t, {}, doc);
+    await audit.flush();
+    t.mock.restoreAll();
+    return sent.find(r => r.stream === audit.EVENTS_STREAM).Detail;
+  }
+
+  await t.test('the download event carries the recorded size in bytes', async (t) => {
+    assert.strictEqual((await eventDetail(t, { ...DOC, fileSize: 1200 })).bytes, 1200);
+    // Many rows hold the size as a numeric string.
+    assert.strictEqual((await eventDetail(t, { ...DOC, fileSize: '1200' })).bytes, 1200);
+  });
+
+  await t.test('the audit row of a restricted download carries no bytes', async (t) => {
+    sent.length = 0;
+    await signedType(t, {}, { ...DOC, isPublished: false, fileSize: 1200 });
+    await audit.flush();
+    t.mock.restoreAll();
+    const audited = sent.find(r => r.stream === audit.AUDIT_STREAM).Detail;
+    assert.ok(!('bytes' in audited));
+  });
+
+  await t.test('a missing size leaves bytes out of the event', async (t) => {
+    assert.ok(!('bytes' in await eventDetail(t, DOC)));
+  });
+
+  await t.test('a size that is not a positive number leaves bytes out of the event', async (t) => {
+    assert.ok(!('bytes' in await eventDetail(t, { ...DOC, fileSize: 'n/a' })));
+  });
+
   await t.test('HTML, SVG or an unknown type stays an attachment', async (t) => {
     for (const doc of [
       { ...DOC, mimeType: 'text/html', s3Key: 'etl/page.html' },
