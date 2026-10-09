@@ -258,7 +258,7 @@ resource blobAudit 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = 
 }
 
 // Fires once per finished (Succeeded or Failed) Administrative operation that can change the account,
-// its containers, immutability, lifecycle, private endpoint connections, role assignments or locks.
+// its containers, immutability, lifecycle, private endpoint connections, role assignments, locks or diagnostic settings.
 // Started and Accepted events are excluded. Policy evaluations, Defender for Storage settings, Event
 // Grid subscription writes and the platform's private endpoint proxy validate action are not in the
 // list and do not fire. A Bicep deploy of this module still produces several mails, one per resource it writes.
@@ -311,6 +311,8 @@ resource changeAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
             'Microsoft.Authorization/roleAssignments/delete'
             'Microsoft.Authorization/locks/write'
             'Microsoft.Authorization/locks/delete'
+            'Microsoft.Insights/diagnosticSettings/write'
+            'Microsoft.Insights/diagnosticSettings/delete'
           ]
         }
       ]
