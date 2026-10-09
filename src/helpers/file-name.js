@@ -22,9 +22,13 @@ const isExtension = ext => EXTENSION.test(ext) && /[A-Za-z]/.test(ext);
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/g;
 
-/** Strip what a file or zip entry path must not carry: separators, control and bidi characters, dots. */
+/**
+ * Strip what a file or zip entry path must not carry: separators, control and bidi characters, dots.
+ * A lone surrogate becomes U+FFFD, so the name can be URI-encoded into a Content-Disposition.
+ */
 function clean(value) {
   return String(value == null ? '' : value)
+    .toWellFormed()
     .replace(CONTROL, '')
     .replace(/[/\\]/g, '')
     .replace(BIDI, '')

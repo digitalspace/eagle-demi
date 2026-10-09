@@ -14,9 +14,13 @@
 const UNSAFE = /[\u0000-\u001f\u007f"\\]/g;
 const NON_ASCII = /[^\x20-\x7e]/g;
 
-/** RFC 6266: a plain ASCII name for old clients, plus the real one as UTF-8. */
+/**
+ * RFC 6266: a plain ASCII name for old clients, plus the real one as UTF-8. A lone surrogate, which
+ * encodeURIComponent throws on, becomes U+FFFD.
+ */
 function contentDisposition(fileName, { inline = false } = {}) {
-  const name = String(fileName == null ? '' : fileName).replace(UNSAFE, '').trim() || 'download';
+  const name = String(fileName == null ? '' : fileName).toWellFormed().replace(UNSAFE, '').trim() ||
+    'download';
   const ascii = name.replace(NON_ASCII, '_');
   const type = inline ? 'inline' : 'attachment';
   return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;

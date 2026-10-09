@@ -47,6 +47,16 @@ test('contentDisposition', async (t) => {
       'attachment; filename="download"; filename*=UTF-8\'\'download');
   });
 
+  await t.test('a lone surrogate becomes U+FFFD instead of throwing', () => {
+    // encodeURIComponent throws URIError on either half of a pair standing alone.
+    for (const lone of ['\uD83D', '\uDCC4']) {
+      assert.strictEqual(contentDisposition(`Report ${lone} draft.pdf`),
+        'attachment; filename="Report _ draft.pdf"; filename*=UTF-8\'\'Report%20%EF%BF%BD%20draft.pdf');
+    }
+    assert.match(contentDisposition('\u{1F4C4}.pdf'), /filename\*=UTF-8''%F0%9F%93%84\.pdf$/,
+      'a whole pair is kept');
+  });
+
   await t.test('inline changes the type and nothing else', () => {
     assert.strictEqual(contentDisposition('Rapport "géo".pdf', { inline: true }),
       'inline; filename="Rapport g_o.pdf"; filename*=UTF-8\'\'Rapport%20g%C3%A9o.pdf');

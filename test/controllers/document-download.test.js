@@ -26,6 +26,7 @@ const { once } = require('events');
 const { Readable } = require('stream');
 const { HttpRequest } = require('@azure/functions');
 
+const Minio = require('minio');
 const storage = require('../../src/storage');
 const documents = require('../../src/repositories/documents');
 const controller = require('../../src/controllers/nosql/document');
@@ -145,6 +146,47 @@ test('the file name the URL is signed with', async (t) => {
     const { signed } = await names(t, { documentFileName: 'Site C EAC Application.pdf' },
       { redirect: '1', inline: '1' });
     assert.strictEqual(signed, 'Site C EAC Application.pdf');
+  });
+});
+
+test('a lone surrogate in the file name', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  // encodeURIComponent throws URIError on one. The real backend builds the signed header here, so
+  // a name it cannot encode fails these cases the way it failed in production: a 500.
+  const doc = { ...DOC, documentFileName: 'Report \uD83D draft.pdf' };
+  const SIGNED = 'attachment; filename="Report _ draft.pdf"; filename*=UTF-8\'\'Report%20%EF%BF%BD%20draft.pdf';
+
+  function presign(t) {
+    t.mock.method(documents, 'getById', async () => doc);
+    return t.mock.method(Minio.Client.prototype, 'presignedGetObject', async (bucket, key, expiry, headers) =>
+      `https://store.invalid/${key}?rscd=${encodeURIComponent(headers['response-content-disposition'])}`);
+  }
+
+  await t.test('?redirect=1 answers 302 to a URL signed with U+FFFD in its place', async (t) => {
+    presign(t);
+    const response = res();
+    await controller.downloadDocument(req({ query: { redirect: '1' } }), response);
+    assert.equal(response.statusCode, 302);
+    assert.equal(new URL(response.headers.location).searchParams.get('rscd'), SIGNED);
+  });
+
+  await t.test('the JSON body names the file the same way', async (t) => {
+    presign(t);
+    const response = res();
+    await controller.downloadDocument(req(), response);
+    assert.equal(response.statusCode, 200);
+    assert.equal(JSON.parse(response.body).fileName, 'Report \uFFFD draft.pdf');
+  });
+
+  await t.test('HEAD answers 200 with a header that carries it', async (t) => {
+    presign(t);
+    t.mock.method(storage, 'statObject', async () => ({ size: 10, contentType: 'application/pdf' }));
+    await withServer(async (call) => {
+      const r = await call(`/api/documents/${DOC.id}/download`, { method: 'HEAD' });
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get('content-disposition'), SIGNED);
+    });
   });
 });
 
@@ -897,14 +939,15 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
     assert.equal(open.mock.callCount(), 0);
   });
 
-  await t.test('a file name the header cannot carry is the 302, with no read opened', async (t) => {
-    // A lone surrogate, which encodeURIComponent throws on.
-    const { open } = stored(t, { doc: { ...PDF, documentFileName: 'Report \uD83D draft.pdf' } });
-    const warn = t.mock.method(logger, 'warn', () => {});
+  await t.test('a lone surrogate in the file name still streams, named with U+FFFD', async (t) => {
+    // encodeURIComponent throws on a lone surrogate; the header must not.
+    const { open, presign } = stored(t, { doc: { ...PDF, documentFileName: 'Report \uD83D draft.pdf' } });
     const { res: r } = await get();
-    assert.equal(r.status, 302);
-    assert.equal(open.mock.callCount(), 0);
-    assert.equal(warn.mock.callCount(), 1);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-disposition'),
+      'inline; filename="Report _ draft.pdf"; filename*=UTF-8\'\'Report%20%EF%BF%BD%20draft.pdf');
+    assert.equal(open.mock.callCount(), 1);
+    assert.equal(presign.mock.callCount(), 0);
   });
 
   await t.test('an unversioned store pins the read to the stat etag', async (t) => {

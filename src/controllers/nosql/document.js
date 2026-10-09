@@ -884,32 +884,25 @@ async function openStream(key, opts) {
 }
 
 /**
- * The 200, 206, 304 or 416. Null when the answer cannot be built, the instance is at its stream
- * cap, or the store will not start the read; the caller then sends the 302, and nothing set here
- * survives it but headers that answer overwrites.
+ * The 200, 206, 304 or 416. Null when the instance is at its stream cap or the store will not
+ * start the read; the caller then sends the 302, and nothing set here survives it but headers that
+ * answer overwrites.
  */
 async function sendBytes(req, res, { doc, fileName }, type, stat) {
   const { size } = stat;
   // A rename or a visibility change moves the record, not the object, and Front Door revalidates
   // by date alone.
   const modified = new Date(Math.max(stat.lastModified.getTime(), Date.parse(doc.updatedAt) || 0));
-  let validators;
-  let disposition;
-  try {
-    validators = {
-      // The name is in the tag: the same bytes under a renamed document are a different answer.
-      ETag: `"${crypto.createHash('sha256').update(`${stat.etag}\n${fileName}`)
-        .digest('base64url').slice(0, 32)}"`,
-      'Last-Modified': modified.toUTCString(),
-      'Content-Type': type,
-      'Cache-Control': isAnonymous(resolveAccess(req))
-        ? `public, max-age=${STREAM_MAX_AGE_SECONDS}` : 'private, no-store'
-    };
-    disposition = contentDisposition(fileName, { inline: true });
-  } catch (err) {
-    logger.warn(`[Document Controller] stream headers failed, redirecting instead: ${err.message}`);
-    return null;
-  }
+  const validators = {
+    // The name is in the tag: the same bytes under a renamed document are a different answer.
+    ETag: `"${crypto.createHash('sha256').update(`${stat.etag}\n${fileName}`)
+      .digest('base64url').slice(0, 32)}"`,
+    'Last-Modified': modified.toUTCString(),
+    'Content-Type': type,
+    'Cache-Control': isAnonymous(resolveAccess(req))
+      ? `public, max-age=${STREAM_MAX_AGE_SECONDS}` : 'private, no-store'
+  };
+  const disposition = contentDisposition(fileName, { inline: true });
   const setValidators = () => Object.entries(validators).forEach(([name, value]) => res.set(name, value));
 
   if (notModified(req, validators.ETag, modified)) {
