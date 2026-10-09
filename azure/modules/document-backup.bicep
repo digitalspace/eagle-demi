@@ -289,30 +289,95 @@ resource changeAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
           ]
         }
         {
-          field: 'operationName'
-          containsAny: [
-            'Microsoft.Storage/storageAccounts/write'
-            'Microsoft.Storage/storageAccounts/delete'
-            'Microsoft.Storage/storageAccounts/regenerateKey/action'
-            'Microsoft.Storage/storageAccounts/blobServices/write'
-            'Microsoft.Storage/storageAccounts/blobServices/containers/write'
-            'Microsoft.Storage/storageAccounts/blobServices/containers/delete'
-            'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/write'
-            'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/delete'
-            'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/lock/action'
-            'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/extend/action'
-            'Microsoft.Storage/storageAccounts/blobServices/containers/setLegalHold/action'
-            'Microsoft.Storage/storageAccounts/blobServices/containers/clearLegalHold/action'
-            'Microsoft.Storage/storageAccounts/managementPolicies/write'
-            'Microsoft.Storage/storageAccounts/managementPolicies/delete'
-            'Microsoft.Storage/storageAccounts/privateEndpointConnections/write'
-            'Microsoft.Storage/storageAccounts/privateEndpointConnections/delete'
-            'Microsoft.Authorization/roleAssignments/write'
-            'Microsoft.Authorization/roleAssignments/delete'
-            'Microsoft.Authorization/locks/write'
-            'Microsoft.Authorization/locks/delete'
-            'Microsoft.Insights/diagnosticSettings/write'
-            'Microsoft.Insights/diagnosticSettings/delete'
+          anyOf: [
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/delete'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/regenerateKey/action'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/containers/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/containers/delete'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/delete'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/lock/action'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/extend/action'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/containers/setLegalHold/action'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/blobServices/containers/clearLegalHold/action'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/managementPolicies/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/managementPolicies/delete'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/privateEndpointConnections/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Storage/storageAccounts/privateEndpointConnections/delete'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Authorization/roleAssignments/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Authorization/roleAssignments/delete'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Authorization/locks/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Authorization/locks/delete'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Insights/diagnosticSettings/write'
+            }
+            {
+              field: 'operationName'
+              equals: 'Microsoft.Insights/diagnosticSettings/delete'
+            }
           ]
         }
       ]
