@@ -22,7 +22,8 @@
 //
 //   DemiAudit_CL        Analytics plan  — archive; interactive queries cost nothing, so the UI can hammer it
 //   DemiEvents_CL       Auxiliary plan  — ~$0.15/GB ingest, queries billed on GB scanned
-//   DemiEventsHourly_CL Analytics plan  — created BY the summary rule below, not declared here
+//   DemiEventsHourly_CL Analytics plan  — written by the summary rule below
+//   DemiDownloadsHourly_CL Analytics plan — downloads and bytes per document per hour, second rule
 //
 // The summary rule is what makes the cheap tier usable: dashboards read the small hourly rollup
 // for free instead of scanning raw events.
@@ -50,6 +51,7 @@ var dcrName = 'demi-audit-dcr-${environmentName}'
 var auditTableName = 'DemiAudit_CL'
 var eventsTableName = 'DemiEvents_CL'
 var summaryTableName = 'DemiEventsHourly_CL'
+var downloadsTableName = 'DemiDownloadsHourly_CL'
 
 // Retention. 2556 days is seven years, the horizon audit records are kept against; the first 730
 // (the platform maximum for interactive retention) stay queryable, the rest sit in long-term
@@ -287,6 +289,28 @@ resource eventsHourlyTable 'Microsoft.OperationalInsights/workspaces/tables@2025
   }
 }
 
+// Declared for the same retention reason as eventsHourlyTable.
+resource downloadsHourlyTable 'Microsoft.OperationalInsights/workspaces/tables@2025-07-01' = {
+  parent: workspace
+  name: downloadsTableName
+  properties: {
+    plan: 'Analytics'
+    retentionInDays: auditInteractiveDays
+    totalRetentionInDays: auditInteractiveDays
+    schema: {
+      name: downloadsTableName
+      columns: [
+        { name: 'TimeGenerated', type: 'datetime' }
+        { name: 'DocumentId', type: 'string' }
+        { name: 'ProjectId', type: 'string' }
+        { name: 'Env', type: 'string' }
+        { name: 'Downloads', type: 'long' }
+        { name: 'Bytes', type: 'long' }
+      ]
+    }
+  }
+}
+
 // Resource-log tables fed by the diagnostic settings in api-function-flex.bicep and cosmos-nosql.bicep.
 //
 // Declared for exactly the reason eventsHourlyTable above is: a table that arrives in this
@@ -348,6 +372,30 @@ resource eventsRollup 'Microsoft.OperationalInsights/workspaces/summaryLogs@2025
     // destination itself — at the workspace default of 30 days, which is the retention defect this
     // module already had once. That bug would come back on any fresh deploy, and only there.
     eventsHourlyTable
+  ]
+}
+
+// Downloads and bytes per document per hour, so bytes per client can be joined against the Front
+// Door log. A rule of its own: DocumentId in the rule above would split dcount(AnonId) per document
+// and inflate the Users sums admin-reads.js reports.
+resource downloadsRollup 'Microsoft.OperationalInsights/workspaces/summaryLogs@2025-07-01' = {
+  parent: workspace
+  name: 'demi-downloads-hourly'
+  properties: {
+    ruleType: 'User'
+    displayName: 'DEMI document downloads, hourly'
+    description: 'Hourly downloads and recorded bytes per document from ${eventsTableName}.'
+    ruleDefinition: {
+      // sum() skips rows with no Detail.bytes (size unknown), so Bytes undercounts rather than fails.
+      query: '${eventsTableName} | where EventName == "document.download" | summarize Downloads = count(), Bytes = sum(tolong(Detail.bytes)) by DocumentId, ProjectId, Env'
+      binSize: 60
+      destinationTable: downloadsTableName
+      timeSelector: 'TimeGenerated'
+    }
+  }
+  dependsOn: [
+    eventsTable
+    downloadsHourlyTable
   ]
 }
 

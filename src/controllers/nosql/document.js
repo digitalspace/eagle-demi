@@ -616,6 +616,9 @@ async function presignDownload(req, { doc, record, fileName }, signedType) {
 function recordDownload(req, doc, inline, { view = true } = {}) {
   // A view and a save share one event name; this tells them apart.
   const viewDetail = inline ? { inline: true } : {};
+  // Left out when unknown, so a sum over Detail.bytes never meets a null.
+  const bytes = recordedSize(doc);
+  if (bytes !== null) viewDetail.bytes = bytes;
 
   if (view) {
     analyticsEvent(req, {
