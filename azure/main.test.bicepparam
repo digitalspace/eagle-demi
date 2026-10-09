@@ -45,6 +45,8 @@ param optionalSecretNames = [
   'pdf-title-worker-api-key'
   // The Keycloak client secret the Eagle sync-out consumer uses; see the Sync-out section below.
   'eagle-sync-out-client-secret'
+  // The edge ban policy JSON; see the Edge ban timer section below.
+  'edge-ban-policy'
 ]
 
 // The namespaces demi-secret-sync-test owns. Both nonprod namespaces, and prod is deliberately not
@@ -178,14 +180,13 @@ param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194
 // `log` while the list of callers that skip Front Door is measured (AppTraces, evt 'edge-gate').
 param edgeGate = 'log'
 
-// Edge ban timer (api/index.js `edgeBan`). Every tick skips until both ids are filled in after the
-// eagle-edge ban rules deploy: edgeLogWorkspaceId = the eagle-logs-test workspace, edgeBanRuleId =
-// the rulesdemidocs/banauto rule. Shadow or write also needs the policy: set it once from the devbox
-// with `az keyvault secret set --vault-name demi-kv-test --name edge-ban-policy --file <policy.json>`,
-// then add 'edge-ban-policy' to optionalSecretNames above.
-param edgeBanMode = 'off'
-param edgeLogWorkspaceId = ''
-param edgeBanRuleId = ''
+// Edge ban timer (api/index.js `edgeBan`), in shadow for the soak on test. edgeLogWorkspaceId = the
+// eagle-logs-test workspace, edgeBanRuleId = the rulesdemidocs/banauto rule. The policy is set by hand
+// from the devbox with `az keyvault secret set --vault-name demi-kv-test --name edge-ban-policy --file <policy.json>`;
+// it is named in optionalSecretNames above.
+param edgeBanMode = 'shadow'
+param edgeLogWorkspaceId = '0012cdde-c428-4b7f-9bcb-8e55ec9c35c7'
+param edgeBanRuleId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourcegroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/rulesets/rulesdemidocs/rules/banauto'
 
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
