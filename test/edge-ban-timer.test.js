@@ -2,8 +2,8 @@
 
 /**
  * The edge ban timer, registered against a recording `app` (test/helpers/load-index.js). Unlike the
- * other timers it registers on EDGE_BAN_MODE, so an `off` environment still runs a tick that logs
- * the skip, and its schedule defaults to hourly.
+ * other timers it registers on EDGE_BAN_MODE, so an `off` environment still runs the tick that
+ * clears the ban rule, and its schedule defaults to hourly.
  */
 
 process.env.NODE_ENV = 'test';
@@ -17,9 +17,9 @@ const { logger } = require('../src/utils/logger');
 const { loadIndex } = require('./helpers/load-index');
 
 const SCRIPT = path.join(__dirname, '..', 'src', 'scripts', 'edge-ban.js');
-const EDGE_VARS = [
-  'EDGE_BAN_MODE', 'EDGE_BAN_SCHEDULE', 'EDGE_BAN_POLICY', 'EDGE_LOG_WORKSPACE_ID', 'EDGE_BAN_RULE_ID'
-];
+// EDGE_BAN_MODE is not here: load-index.js owns it, as it owns every setting that registers a trigger.
+const EDGE_VARS = ['EDGE_BAN_SCHEDULE', 'EDGE_BAN_POLICY', 'EDGE_LOG_WORKSPACE_ID', 'EDGE_BAN_RULE_ID'];
+const IDS = { EDGE_LOG_WORKSPACE_ID: 'workspace-under-test', EDGE_BAN_RULE_ID: 'rule-under-test' };
 const POLICY = { minDocuments: 500, allow: ['198.51.100.7'] };
 
 /** Set the edge settings for one test; anything not named is cleared. Restored after. */
@@ -54,6 +54,13 @@ function stubScript(t, run) {
   });
 }
 
+/** A recording detector; `result` is what each run returns. */
+function recordRuns(t, result = { candidates: [], banned: [], expired: [], written: false, warnings: [] }) {
+  const calls = [];
+  stubScript(t, async (opts) => { calls.push(opts); return result; });
+  return calls;
+}
+
 function recordLogs(t) {
   const logs = { info: [], error: [] };
   t.mock.method(logger, 'info', (message, meta) => { logs.info.push({ message, meta }); });
@@ -63,15 +70,15 @@ function recordLogs(t) {
 
 test('no EDGE_BAN_MODE registers no timer, and leaves the API registered', (t) => {
   setEdgeEnv(t, {});
-  const { registered } = loadIndex(t);
+  const { registered } = loadIndex(t, 'EDGE_BAN_MODE', undefined);
 
   assert.deepStrictEqual(registered.timers, []);
   assert.strictEqual(registered.https.length, 2);
 });
 
 test('EDGE_BAN_MODE with no schedule registers edgeBan hourly', (t) => {
-  setEdgeEnv(t, { EDGE_BAN_MODE: 'off' });
-  const { registered } = loadIndex(t);
+  setEdgeEnv(t, {});
+  const { registered } = loadIndex(t, 'EDGE_BAN_MODE', 'off');
 
   assert.strictEqual(registered.timers.length, 1);
   const [{ name, options }] = registered.timers;
@@ -81,41 +88,61 @@ test('EDGE_BAN_MODE with no schedule registers edgeBan hourly', (t) => {
 });
 
 test('EDGE_BAN_SCHEDULE overrides the hourly default', (t) => {
-  setEdgeEnv(t, { EDGE_BAN_MODE: 'shadow', EDGE_BAN_SCHEDULE: '0 15 * * * *' });
-  const { registered } = loadIndex(t);
+  setEdgeEnv(t, { EDGE_BAN_SCHEDULE: '0 15 * * * *' });
+  const { registered } = loadIndex(t, 'EDGE_BAN_MODE', 'shadow');
 
   assert.strictEqual(registered.timers[0].options.schedule, '0 15 * * * *');
 });
 
-test('off mode logs one skip line and never loads the detector', async (t) => {
-  setEdgeEnv(t, { EDGE_BAN_MODE: 'off', EDGE_BAN_POLICY: JSON.stringify(POLICY) });
-  const { index } = loadIndex(t);
-  let calls = 0;
-  stubScript(t, async () => { calls++; });
+test('off mode still runs the detector, so it can clear the rule, and ignores a broken policy', async (t) => {
+  setEdgeEnv(t, { ...IDS, EDGE_BAN_POLICY: 'not json' });
+  const { index } = loadIndex(t, 'EDGE_BAN_MODE', 'off');
+  const calls = recordRuns(t);
   const logs = recordLogs(t);
 
   await index.edgeBan();
 
-  assert.strictEqual(calls, 0);
+  assert.deepStrictEqual(logs.error, []);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].mode, 'off');
+  assert.strictEqual(calls[0].policy, null);
+  assert.strictEqual(calls[0].ruleId, 'rule-under-test');
+});
+
+test('an unset mode skips with one line and never loads the detector', async (t) => {
+  setEdgeEnv(t, { ...IDS, EDGE_BAN_POLICY: JSON.stringify(POLICY) });
+  const { index } = loadIndex(t, 'EDGE_BAN_MODE', undefined);
+  const calls = recordRuns(t);
+  const logs = recordLogs(t);
+
+  await index.edgeBan();
+
+  assert.strictEqual(calls.length, 0);
   assert.strictEqual(logs.info.length, 1);
-  assert.match(logs.info[0].message, /EDGE_BAN_MODE is off/);
+  assert.match(logs.info[0].message, /run skipped/);
   assert.deepStrictEqual(logs.error, []);
 });
 
-test('shadow mode runs the detector with the parsed policy and the edge ids, and logs the summary', async (t) => {
-  setEdgeEnv(t, {
-    EDGE_BAN_MODE: 'shadow',
-    EDGE_BAN_POLICY: JSON.stringify(POLICY),
-    EDGE_LOG_WORKSPACE_ID: 'workspace-under-test',
-    EDGE_BAN_RULE_ID: 'rule-under-test'
+for (const missing of ['EDGE_LOG_WORKSPACE_ID', 'EDGE_BAN_RULE_ID']) {
+  test(`an empty ${missing} skips with one line, in off mode too`, async (t) => {
+    setEdgeEnv(t, { ...IDS, [missing]: undefined });
+    const { index } = loadIndex(t, 'EDGE_BAN_MODE', 'off');
+    const calls = recordRuns(t);
+    const logs = recordLogs(t);
+
+    await index.edgeBan();
+
+    assert.strictEqual(calls.length, 0);
+    assert.strictEqual(logs.info.length, 1);
+    assert.match(logs.info[0].message, /run skipped/);
   });
-  const { index } = loadIndex(t);
-  const calls = [];
-  stubScript(t, async (opts) => {
-    calls.push(opts);
-    return {
-      candidates: ['192.0.2.1', '192.0.2.2'], banned: ['192.0.2.1'], expired: [], written: false, warnings: ['w']
-    };
+}
+
+test('shadow mode runs the detector with the parsed policy and the edge ids, and logs the summary', async (t) => {
+  setEdgeEnv(t, { ...IDS, EDGE_BAN_POLICY: JSON.stringify(POLICY) });
+  const { index } = loadIndex(t, 'EDGE_BAN_MODE', 'shadow');
+  const calls = recordRuns(t, {
+    candidates: ['192.0.2.1', '192.0.2.2'], banned: ['192.0.2.1'], expired: [], written: false, warnings: ['w']
   });
   const logs = recordLogs(t);
 
@@ -140,8 +167,8 @@ test('shadow mode runs the detector with the parsed policy and the edge ids, and
 });
 
 test('a thrown run is logged once and does not reject at the host', async (t) => {
-  setEdgeEnv(t, { EDGE_BAN_MODE: 'write', EDGE_BAN_POLICY: JSON.stringify(POLICY) });
-  const { index } = loadIndex(t);
+  setEdgeEnv(t, { ...IDS, EDGE_BAN_POLICY: JSON.stringify(POLICY) });
+  const { index } = loadIndex(t, 'EDGE_BAN_MODE', 'write');
   stubScript(t, async () => { throw new Error('rule PATCH 409'); });
   const logs = recordLogs(t);
 
@@ -154,30 +181,28 @@ test('a thrown run is logged once and does not reject at the host', async (t) =>
 });
 
 test('an unknown mode fails the tick, not the app, and never runs the detector', async (t) => {
-  setEdgeEnv(t, { EDGE_BAN_MODE: 'block', EDGE_BAN_POLICY: JSON.stringify(POLICY) });
-  const { index, registered } = loadIndex(t);
-  let calls = 0;
-  stubScript(t, async () => { calls++; });
+  setEdgeEnv(t, { ...IDS, EDGE_BAN_POLICY: JSON.stringify(POLICY) });
+  const { index, registered } = loadIndex(t, 'EDGE_BAN_MODE', 'block');
+  const calls = recordRuns(t);
   const logs = recordLogs(t);
 
   await index.edgeBan();
 
   assert.strictEqual(registered.https.length, 2);
-  assert.strictEqual(calls, 0);
+  assert.strictEqual(calls.length, 0);
   assert.strictEqual(logs.error.length, 1);
   assert.match(logs.error[0].meta.error, /EDGE_BAN_MODE must be one of off, shadow, write, got 'block'/);
 });
 
 test('a policy that is not JSON is refused without quoting the value', async (t) => {
-  setEdgeEnv(t, { EDGE_BAN_MODE: 'shadow', EDGE_BAN_POLICY: '{"minDocuments": 500, allow-marker' });
-  const { index } = loadIndex(t);
-  let calls = 0;
-  stubScript(t, async () => { calls++; });
+  setEdgeEnv(t, { ...IDS, EDGE_BAN_POLICY: '{"minDocuments": 500, allow-marker' });
+  const { index } = loadIndex(t, 'EDGE_BAN_MODE', 'shadow');
+  const calls = recordRuns(t);
   const logs = recordLogs(t);
 
   await index.edgeBan();
 
-  assert.strictEqual(calls, 0);
+  assert.strictEqual(calls.length, 0);
   assert.strictEqual(logs.error.length, 1);
   assert.strictEqual(logs.error[0].meta.error, 'EDGE_BAN_POLICY is not valid JSON.');
   assert.doesNotMatch(logs.error[0].meta.stack, /allow-marker/);
@@ -185,17 +210,16 @@ test('a policy that is not JSON is refused without quoting the value', async (t)
 
 test('shadow mode with no resolved policy skips the run with an error line', async (t) => {
   setEdgeEnv(t, {
-    EDGE_BAN_MODE: 'shadow',
+    ...IDS,
     EDGE_BAN_POLICY: '@Microsoft.KeyVault(SecretUri=https://vault.example/secrets/edge-ban-policy)'
   });
-  const { index } = loadIndex(t);
-  let calls = 0;
-  stubScript(t, async () => { calls++; });
+  const { index } = loadIndex(t, 'EDGE_BAN_MODE', 'shadow');
+  const calls = recordRuns(t);
   const logs = recordLogs(t);
 
   await index.edgeBan();
 
-  assert.strictEqual(calls, 0);
+  assert.strictEqual(calls.length, 0);
   assert.strictEqual(logs.error.length, 1);
   assert.match(logs.error[0].message, /EDGE_BAN_POLICY is unset/);
 });

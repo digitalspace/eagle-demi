@@ -133,7 +133,15 @@ const WIRED = [
   ['backupAccountName', /^\s+backupAccountName: backupAccountName$/m,
     'the API module call — without it BACKUP_ACCOUNT is empty and every PDF title lease is refused'],
   ['backupContainerName', /^\s+backupContainerName: backupContainerName$/m,
-    'the API module call — without it BACKUP_CONTAINER is empty and every PDF title lease is refused']
+    'the API module call — without it BACKUP_CONTAINER is empty and every PDF title lease is refused'],
+  ['edgeBanMode', /^\s+edgeBanMode: edgeBanMode$/m,
+    'the API module call — without it EDGE_BAN_MODE stays off and no param file can turn the detector on'],
+  ['edgeBanSchedule', /^\s+edgeBanSchedule: edgeBanSchedule$/m,
+    'the API module call — without it the edgeBan timer is always hourly'],
+  ['edgeLogWorkspaceId', /^\s+edgeLogWorkspaceId: edgeLogWorkspaceId$/m,
+    'the API module call — without it EDGE_LOG_WORKSPACE_ID is empty and every edgeBan tick skips'],
+  ['edgeBanRuleId', /^\s+edgeBanRuleId: edgeBanRuleId$/m,
+    'the API module call — without it EDGE_BAN_RULE_ID is empty and every edgeBan tick skips']
 ];
 
 for (const [name, wiring, why] of WIRED) {

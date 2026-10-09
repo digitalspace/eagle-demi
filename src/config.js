@@ -494,10 +494,11 @@ const config = {
   // Getters, and they throw on read rather than at load: a bad value fails the tick and logs, it
   // does not take the HTTP API down with it.
   edgeBan: {
-    // off = the tick logs and skips, shadow = records would-bans only, write = also updates the rule.
+    // '' = unset (local runs), off = clear the ban rule, shadow = record would-bans only,
+    // write = record and update the rule.
     get mode() {
-      const mode = envTrim('EDGE_BAN_MODE').toLowerCase() || 'off';
-      if (!EDGE_BAN_MODES.includes(mode)) {
+      const mode = envTrim('EDGE_BAN_MODE').toLowerCase();
+      if (mode && !EDGE_BAN_MODES.includes(mode)) {
         throw new Error(`EDGE_BAN_MODE must be one of ${EDGE_BAN_MODES.join(', ')}, got '${mode}'.`);
       }
       return mode;

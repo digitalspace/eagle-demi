@@ -148,20 +148,20 @@ param edgeSecretUri string = ''
 param edgeGate string = ''
 
 // The edge ban detector (src/scripts/edge-ban.js), timer `edgeBan` in api/index.js.
-@description('EDGE_BAN_MODE: off logs and skips each tick, shadow records would-bans only, write also updates the Front Door ban rule. Setting off is the kill switch.')
+@description('EDGE_BAN_MODE: off writes the placeholder back to the Front Door ban rule (the kill switch), shadow records would-bans only, write records them and updates the rule.')
 @allowed(['off', 'shadow', 'write'])
 param edgeBanMode string = 'off'
 
 @description('NCRONTAB schedule for the edge ban timer, six fields.')
 param edgeBanSchedule string = '0 0 * * * *'
 
-@description('Key Vault URI of the `edge-ban-policy` secret (thresholds and allow list, JSON). Not the value: the app resolves it through a Key Vault reference. Empty leaves the detector skipping every tick.')
+@description('Key Vault URI of the `edge-ban-policy` secret (thresholds and allow list, JSON). Not the value: the app resolves it through a Key Vault reference. Empty skips every shadow or write tick; off needs none.')
 param edgeBanPolicySecretUri string = ''
 
-@description('Log Analytics workspace holding the Front Door access log, in the eagle-edge resource group. Empty where the detector is not wired.')
+@description('Log Analytics workspace holding the Front Door access log, in the eagle-edge resource group. Empty skips every tick, off included.')
 param edgeLogWorkspaceId string = ''
 
-@description('Resource id of the `banauto` rule in the eagle-edge `rulesdemidocs` rule set. Empty where the detector is not wired.')
+@description('Resource id of the `banauto` rule in the eagle-edge `rulesdemidocs` rule set. Empty skips every tick, off included.')
 param edgeBanRuleId string = ''
 
 // Empty leaves POST /api/gate answering 404, which is what an ungated environment wants. The
@@ -1021,7 +1021,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'EDGE_GATE'
           value: edgeGate
         }
-        // Always set, so the edgeBan timer is registered and an off tick logs the skip.
+        // Always set, so the edgeBan timer is registered and an off tick can clear the rule.
         {
           name: 'EDGE_BAN_MODE'
           value: edgeBanMode

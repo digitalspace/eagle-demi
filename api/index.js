@@ -172,7 +172,7 @@ if (process.env.ANNOUNCE_UPDATES_SCHEDULE) {
   });
 }
 
-// Guarded on EDGE_BAN_MODE being SET, not its value: deployed apps set `off`, and an off tick logs the skip.
+// Guarded on EDGE_BAN_MODE being SET, not its value: deployed apps set `off`, and an off tick clears the rule.
 // Schedule as a value, not `%EDGE_BAN_SCHEDULE%`: an unset name would fail host startup, not default hourly.
 if (process.env.EDGE_BAN_MODE) {
   app.timer('edgeBan', {
@@ -298,13 +298,14 @@ async function edgeBan() {
   const { logger } = require('../src/utils/logger');
   try {
     const { edgeBan: settings } = require('../src/config');
-    const mode = settings.mode;
-    if (mode === 'off') {
-      logger.info('[edge-ban] EDGE_BAN_MODE is off, run skipped');
+    const { mode, workspaceId, ruleId } = settings;
+    if (!mode || !workspaceId || !ruleId) {
+      logger.info('[edge-ban] EDGE_BAN_MODE, EDGE_LOG_WORKSPACE_ID or EDGE_BAN_RULE_ID is unset, run skipped');
       return;
     }
-    const policy = settings.policy;
-    if (!policy) {
+    // Off clears the rule and judges nothing, so a missing or broken policy must not block the kill switch.
+    const policy = mode === 'off' ? null : settings.policy;
+    if (mode !== 'off' && !policy) {
       logger.error('[edge-ban] EDGE_BAN_POLICY is unset or its Key Vault reference did not resolve, run skipped');
       return;
     }
@@ -313,8 +314,8 @@ async function edgeBan() {
       now: new Date(),
       log: logger,
       policy,
-      workspaceId: settings.workspaceId,
-      ruleId: settings.ruleId,
+      workspaceId,
+      ruleId,
       credential: require('../src/utils/azure-credential').createCredential(),
       cosmos: require('../src/db/cosmos-nosql')
     });
