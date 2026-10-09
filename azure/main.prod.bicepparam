@@ -37,6 +37,8 @@ param optionalSecretNames = [
   'edge-secret'
   // The PDF title worker's own key; see the PDF title worker section below.
   'pdf-title-worker-api-key'
+  // The edge ban policy JSON; see the Edge ban timer section below.
+  'edge-ban-policy'
 ]
 
 // No sync app in prod. The prod spoke has no route table and policy forbids creating one, so the
@@ -115,6 +117,17 @@ param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194
 
 // Off until test has run `log`, then `enforce`, with no unknown caller left.
 param edgeGate = ''
+
+// Edge ban timer (api/index.js `edgeBan`). Shadow on prod for the 7-day soak (decision 2026-10-09:
+// test has no scraper traffic). Shadow reads the eagle-logs-prod access log and writes Cosmos
+// `edgeBans` rows only; it never writes the Front Door rule. Write mode and block mode wait for
+// the soak result. edgeLogWorkspaceId = the eagle-logs-prod workspace customerId. edgeBanRuleId =
+// the rulesdemidocs/banauto rule on eagle-edge-prod; that rule does not exist until eagle-edge
+// deploys the ban rules to prod, so this is the id it will have, not a live resource. The timer
+// only reads it in write mode.
+param edgeBanMode = 'shadow'
+param edgeLogWorkspaceId = 'c63b7683-1773-4610-97b7-6326b860e9f0'
+param edgeBanRuleId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/ruleSets/rulesdemidocs/rules/banauto'
 
 // The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
 // so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
