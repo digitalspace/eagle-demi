@@ -257,9 +257,11 @@ resource blobAudit 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = 
   }
 }
 
-// Every Administrative event under the account once it has finished (Succeeded or Failed), not the
-// Started and Accepted events: settings (shared keys, network), role assignments,
-// immutability policy changes, lock removal, key listing.
+// Fires once per finished (Succeeded or Failed) Administrative operation that can change the account,
+// its containers, immutability, lifecycle, private endpoint connections, role assignments or locks.
+// Started and Accepted events are excluded. Policy evaluations, Defender for Storage settings, Event
+// Grid subscription writes and the platform's private endpoint proxy validate action are not in the
+// list and do not fire. A Bicep deploy of this module still produces several mails, one per resource it writes.
 resource changeAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
   name: 'eagle-backup-changes-${environmentName}'
   location: 'Global'
@@ -284,6 +286,31 @@ resource changeAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = {
               field: 'status'
               equals: 'Failed'
             }
+          ]
+        }
+        {
+          field: 'operationName'
+          containsAny: [
+            'Microsoft.Storage/storageAccounts/write'
+            'Microsoft.Storage/storageAccounts/delete'
+            'Microsoft.Storage/storageAccounts/regenerateKey/action'
+            'Microsoft.Storage/storageAccounts/blobServices/write'
+            'Microsoft.Storage/storageAccounts/blobServices/containers/write'
+            'Microsoft.Storage/storageAccounts/blobServices/containers/delete'
+            'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/write'
+            'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/delete'
+            'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/lock/action'
+            'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/extend/action'
+            'Microsoft.Storage/storageAccounts/blobServices/containers/setLegalHold/action'
+            'Microsoft.Storage/storageAccounts/blobServices/containers/clearLegalHold/action'
+            'Microsoft.Storage/storageAccounts/managementPolicies/write'
+            'Microsoft.Storage/storageAccounts/managementPolicies/delete'
+            'Microsoft.Storage/storageAccounts/privateEndpointConnections/write'
+            'Microsoft.Storage/storageAccounts/privateEndpointConnections/delete'
+            'Microsoft.Authorization/roleAssignments/write'
+            'Microsoft.Authorization/roleAssignments/delete'
+            'Microsoft.Authorization/locks/write'
+            'Microsoft.Authorization/locks/delete'
           ]
         }
       ]
