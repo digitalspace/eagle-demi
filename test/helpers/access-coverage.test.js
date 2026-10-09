@@ -82,6 +82,9 @@ const UNGATED = {
     'filter for — the destination itself, not the row, is what gets validated. Its one read of ' +
     'the PROJECTS container, listProjectCodes, is gated like any other: it composes selectWhere ' +
     'with the access it is handed, asserted below.',
+  'edge-bans.js':
+    'Ban rows are not application data: banned edge addresses and a crawler range cache, read and ' +
+    'written only by the edge-ban timer and its CLI. No route reaches the container.',
   'bulk-downloads.js':
     'Job rows are not application data: a row records what its own requester asked for, carries no ' +
     'read[] and is never listed. The unguessable job id is the capability, and the controller binds ' +
