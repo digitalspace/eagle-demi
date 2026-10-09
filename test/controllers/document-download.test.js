@@ -357,6 +357,15 @@ test('download in inline mode', async (t) => {
     assert.strictEqual((await eventDetail(t, { ...DOC, fileSize: '1200' })).bytes, 1200);
   });
 
+  await t.test('the audit row of a restricted download carries no bytes', async (t) => {
+    sent.length = 0;
+    await signedType(t, {}, { ...DOC, isPublished: false, fileSize: 1200 });
+    await audit.flush();
+    t.mock.restoreAll();
+    const audited = sent.find(r => r.stream === audit.AUDIT_STREAM).Detail;
+    assert.ok(!('bytes' in audited));
+  });
+
   await t.test('a missing size leaves bytes out of the event', async (t) => {
     assert.ok(!('bytes' in await eventDetail(t, DOC)));
   });
