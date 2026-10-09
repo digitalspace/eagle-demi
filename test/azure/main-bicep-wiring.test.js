@@ -614,6 +614,17 @@ test('prod deploys the PDF title worker live', () => {
     'prod keeps the main.bicep defaults, as test does');
 });
 
+test('prod runs the edge ban timer in shadow mode', () => {
+  assert.match(PROD_PARAMS, /^param optionalSecretNames = \[[^\]]*^\s+'edge-ban-policy'$[^\]]*\]/m,
+    'without the secret name the edge ban timer has no policy to read');
+  assert.match(PROD_PARAMS, /^param edgeBanMode = 'shadow'$/m,
+    'prod soaks the edge ban timer in shadow mode before it writes anything');
+  assert.match(PROD_PARAMS, /^param edgeLogWorkspaceId = 'c63b7683-1773-4610-97b7-6326b860e9f0'$/m,
+    'the eagle-logs-prod workspace customerId the shadow timer reads');
+  assert.match(PROD_PARAMS, /^param edgeBanRuleId = '\/subscriptions\/[^']+\/ruleSets\/rulesdemidocs\/rules\/banauto'$/m,
+    'the banauto rule id write mode will use once eagle-edge deploys it');
+});
+
 // The backup gate in src/helpers/backup-check.js reads BACKUP_ACCOUNT and BACKUP_CONTAINER and
 // refuses every PDF title lease when either is empty. Both settings must always be written, so an
 // environment with no backup reads empty rather than keeping a stale value.
