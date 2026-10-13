@@ -12,5 +12,12 @@
     "filter": "eacDecisionId eq null and isPublished eq true",
     "max": 0,
     "note": "List ref must be resolved at push time; the Id twin is null whenever the name is"
+  },
+  {
+    "index": "documents",
+    "field": "searchVis",
+    "filter": "searchVis eq null",
+    "max": 0,
+    "note": "Projected on every row by demi-documents-ds; null means the index was widened but documents-indexer was not reset"
   }
 ]

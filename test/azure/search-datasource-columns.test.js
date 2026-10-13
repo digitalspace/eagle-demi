@@ -327,3 +327,51 @@ test('the fields the search page sorts and filters on carry the flags that make 
   assert.strictEqual(documentUrl.retrievable, false,
     'the row is read back from Cosmos: this index answers which rows match and nothing else');
 });
+
+// documents-indexer runs with `maxFailedItems: 0`: one dial the Int32 cannot hold stops the run.
+test('searchVis is Int32, filterable, not retrievable, projected with an IS_INTEGER guard', () => {
+  const field = index.fields.find(f => f.name === 'searchVis');
+  assert.ok(field, 'the documents index must declare searchVis');
+  assert.strictEqual(field.type, 'Edm.Int32');
+  assert.strictEqual(field.filterable, true);
+  assert.strictEqual(field.retrievable, false, 'a hit must not carry the dials of its row');
+  assert.strictEqual(field.searchable, false);
+  assert.strictEqual(field.sortable, false);
+  assert.strictEqual(field.facetable, false);
+
+  const expr = projectedColumns(datasource.container.query).get('searchVis');
+  assert.ok(expr, `${datasource.name} must project searchVis`);
+  for (const path of ['displayName', 'documentFileName', 'description']) {
+    assert.ok(expr.includes(`IS_INTEGER(c.vis.${path})`), `the ${path} dial is unguarded`);
+  }
+});
+
+/** The searchVis projection run as JS; every comparison sits behind IS_INTEGER, so both agree. */
+function searchVisOf(row) {
+  const js = projectedColumns(datasource.container.query).get('searchVis')
+    .replace(/NOT IS_DEFINED\(([\w.]+)\)/g, '($1 === undefined)')
+    .replace(/IS_INTEGER\(([\w.]+)\)/g, 'Number.isInteger($1)')
+    .replace(/\bc\.vis\./g, 'c.vis?.')
+    .replace(/ AND /g, ' && ')
+    .replace(/ OR /g, ' || ');
+  assert.doesNotMatch(js, /\b[A-Z_]{2,}\b/, `untranslated Cosmos SQL left in: ${js}`);
+  return new Function('c', `return ${js};`)(row);
+}
+
+test('searchVis is the lowest dial over the three searched fields, 4 when none is set', () => {
+  assert.strictEqual(searchVisOf({}), 4, 'a row with no vis object');
+  assert.strictEqual(searchVisOf({ vis: {} }), 4);
+  assert.strictEqual(searchVisOf({ vis: { description: 2 } }), 2);
+  assert.strictEqual(searchVisOf({ vis: { displayName: 3, documentFileName: 1, description: 2 } }), 1);
+  assert.strictEqual(searchVisOf({ vis: { displayName: 0 } }), 0, 'the sealed compartment only');
+  assert.strictEqual(searchVisOf({ vis: { projectId: 1 } }), 4, 'a dial on an unsearched field');
+});
+
+// Same answer `dialAllows` gives a string or null in Cosmos: hidden at every level.
+test('searchVis holds -1 for a dial that is not an integer, and stays between -1 and 4', () => {
+  assert.strictEqual(searchVisOf({ vis: { displayName: '2' } }), -1);
+  assert.strictEqual(searchVisOf({ vis: { documentFileName: 2.5 } }), -1);
+  assert.strictEqual(searchVisOf({ vis: { description: null } }), -1);
+  assert.strictEqual(searchVisOf({ vis: { description: -7 } }), -1);
+  assert.strictEqual(searchVisOf({ vis: { displayName: 2 ** 40 } }), 4, 'clamped, so Int32 holds it');
+});

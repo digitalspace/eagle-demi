@@ -43,5 +43,8 @@ module.exports = {
   highlighted: { defaultVis: 4, maxVis: 4 },
 
   // The caller's own ACL restated. `isPublished` is derived from it in the redactor.
-  read: { defaultVis: 0, maxVis: 0 }
+  read: { defaultVis: 0, maxVis: 0 },
+  // The row's own dials folded into one number for the index filter. Never a caller filter or
+  // sort key: a count over it answers which documents carry a narrower dial.
+  searchVis: { defaultVis: 0, maxVis: 0 }
 };

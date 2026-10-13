@@ -17,7 +17,7 @@ const path = require('node:path');
 
 const eagleQuery = require('../../src/search/eagle-query');
 const { filterFor } = require('../../src/helpers/access-odata');
-const { resolveAccess } = require('../../src/helpers/access-sql');
+const { resolveAccess, systemAccess } = require('../../src/helpers/access-sql');
 const chunksRepo = require('../../src/repositories/chunks');
 const { catalogFor } = require('../../src/vis/catalog');
 
@@ -150,6 +150,28 @@ test('eagle-query filters', async (t) => {
 
     assert.deepStrictEqual(dropped, ['read']);
     assert.strictEqual(filter, DOC_ANON_FILTER);
+  });
+
+  // `searchVis` is filterable for the native list's own level clause; a caller-built count over it
+  // would say which documents carry a narrower dial.
+  await t.test('and[searchVis] is dropped for staff', () => {
+    const staff = resolveAccess({ header: () => null, user: { realm_access: { roles: ['staff'] } } });
+    const { filter, dropped } = eagleQuery.buildFilter({ 'and[searchVis]': '1' }, 'Document',
+      filterFor(staff, 'projectId'), staff);
+
+    assert.strictEqual(staff.level, 2);
+    assert.deepStrictEqual(dropped, ['searchVis']);
+    assert.ok(!filter.includes('searchVis'), filter);
+  });
+
+  // The contrast that makes the drop above the visibility gate, not an unknown or unfilterable field.
+  await t.test('and[searchVis] reaches the filter for the system caller', () => {
+    const system = systemAccess();
+    const { filter, dropped } = eagleQuery.buildFilter({ 'and[searchVis]': '1' }, 'Document',
+      filterFor(system, 'projectId'), system);
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes('searchVis eq 1'), filter);
   });
 
   // `_id` is the Eagle ObjectId on the wire. On a project that lives in `legacyEagleId`; filtering

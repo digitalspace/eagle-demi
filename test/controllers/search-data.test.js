@@ -13,6 +13,7 @@ process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
 // Deliberately NOT the schema name: the committed checks and the response speak the schema name,
 // the count goes to whatever the app setting points at.
 process.env.SEARCH_INDEX_PROJECTS = 'projects-live';
+process.env.SEARCH_INDEX_DOCUMENTS = 'documents-live';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -70,7 +71,8 @@ test('search data health', async (t) => {
     // the controller reads would hold whatever that file happened to say.
     assert.deepStrictEqual(out.body.checks, [
       { index: 'projects', field: 'currentPhaseNameId', count: 0, max: 0, ok: true },
-      { index: 'projects', field: 'eacDecisionId', count: 0, max: 0, ok: true }
+      { index: 'projects', field: 'eacDecisionId', count: 0, max: 0, ok: true },
+      { index: 'documents', field: 'searchVis', count: 0, max: 0, ok: true }
     ]);
   });
 
@@ -84,7 +86,8 @@ test('search data health', async (t) => {
 
     assert.deepStrictEqual(calls, [
       { indexName: 'projects-live', filter: 'currentPhaseNameId eq null and isPublished eq true' },
-      { indexName: 'projects-live', filter: 'eacDecisionId eq null and isPublished eq true' }
+      { indexName: 'projects-live', filter: 'eacDecisionId eq null and isPublished eq true' },
+      { indexName: 'documents-live', filter: 'searchVis eq null' }
     ]);
   });
 
@@ -136,7 +139,8 @@ test('search data health', async (t) => {
     // No `count` key at all: a count of zero is the passing answer here.
     assert.deepStrictEqual(out.body.checks, [
       { index: 'projects', field: 'currentPhaseNameId', ok: false, error: 'missing' },
-      { index: 'projects', field: 'eacDecisionId', ok: false, error: 'missing' }
+      { index: 'projects', field: 'eacDecisionId', ok: false, error: 'missing' },
+      { index: 'documents', field: 'searchVis', ok: false, error: 'missing' }
     ]);
   });
 
