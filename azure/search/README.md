@@ -311,6 +311,19 @@ stay safe, because every keyword hit is read back from Cosmos through the same g
 `/search/counts` answers from a 45-second cache, so a scheduled Update that goes live appears in the
 counts up to 45 seconds after it appears in the list. This is accepted.
 
+`searchVis` on `documents` was added on 2026-10-13. It is a plain widening: an `Edm.Int32` that is
+filterable and nothing else, not retrievable, searchable, sortable or facetable. It holds the
+widest level every searched field's own dial allows, over `displayName`, `documentFileName` and
+`description`, so a native document list can send `searchVis ge <level>` and page and count in the
+index. `demi-documents-ds` computes it in the SELECT: a missing dial allows every level, an integer
+dial allows levels up to its value, and anything else (a string, `null`, 2.5) allows none, so the
+row holds -1. The value is always between -1 and 4, so no stored dial can stop the indexer run.
+Nothing writes it to Cosmos. A dial change bumps `_ts`, so the next indexer tick carries it.
+The catalog entry is `0/0`, so a caller's `and[searchVis]` is dropped. Apply it with
+`scripts/demi-devbox.sh apply --env test --only documents --yes`, which PUTs the index and
+`demi-documents-ds` and resets `documents-indexer`. Until the reset finishes, the data check
+`documents searchVis` reads over its maximum, because every existing row is null.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 
