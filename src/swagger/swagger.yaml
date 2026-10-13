@@ -1254,30 +1254,145 @@ paths:
 
   /api/documents:
     get:
-      summary: Retrieve documents
-      description: Get all documents, optionally filtered by spatial administrative region of their parent project. Restricts to published documents for unauthenticated public requests. Images uploaded through the Update form (`documentSource` `UPDATE`) are left out.
+      summary: List documents
+      description: >-
+        One page of the documents this caller may read, with hidden fields left out. Images
+        uploaded through the Update form (`documentSource` `UPDATE`) are left out. One project's
+        plain list and an `ids` read come from the database; every other list, `q`, `sort` and the
+        typed filters included, is paged in the documents search index, which serves at most 500
+        rows per page. Each row also carries `projectName` and `projectEagleId` when the caller may
+        read the project. Any parameter not listed here is a 400, `continuationToken` included
+        (token paging is `GET /api/documents/scan`). A parameter given twice is a 400, except the
+        id filters and `legislation`. A rejected Bearer token answers 401; a signed-in read is
+        answered `Cache-Control: private, no-store`.
       parameters:
-        - name: region
+        - name: page
           in: query
           required: false
+          description: 1-based page. Unauthenticated requests may reach row 2000, others row 20000.
           schema:
-            type: string
+            type: integer
+            minimum: 1
         - name: pageSize
           in: query
           required: false
           description: >-
             Rows per page. Unauthenticated requests are capped at 100 and asking for more is
-            refused with 400; authenticated requests may ask for up to 1000. Omitting it returns
-            the cap that applies to the caller.
+            refused with 400. Authenticated requests may ask for up to 500 on an index-paged list
+            and up to 1000 on one project's plain list or an `ids` read. Omitting it returns 100
+            unauthenticated and 500 authenticated.
           schema:
             type: integer
             minimum: 1
             maximum: 1000
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the total row count as the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
+        - name: sort
+          in: query
+          required: false
+          description: >-
+            Sort key, `-` prefix for descending. Default is index rank with `q`, newest
+            `datePosted` first on another index-paged list, and by id on one project's plain list
+            or an `ids` read.
+          schema:
+            type: string
+            enum: [datePosted, -datePosted, displayName, -displayName]
+        - name: q
+          in: query
+          required: false
+          description: >-
+            Keywords, matched by the documents index over the document's own name, file name and
+            description. A row whose searched field the caller cannot see never matches.
+          schema:
+            type: string
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated document ids, at most 100.
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          description: Project id, as stored in `projectId`. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: typeId
+          in: query
+          required: false
+          description: Document type List ObjectId. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: milestoneId
+          in: query
+          required: false
+          description: Milestone List ObjectId. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: projectPhaseId
+          in: query
+          required: false
+          description: Project phase List ObjectId. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: documentAuthorTypeId
+          in: query
+          required: false
+          description: Author type List ObjectId. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: isFeatured
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - name: legislation
+          in: query
+          required: false
+          description: Legislation year, such as `2018`. Repeat it to match any of several.
+          schema:
+            type: integer
+        - name: datePostedStart
+          in: query
+          required: false
+          description: Earliest `datePosted`, one day as `YYYY-MM-DD`, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: datePostedEnd
+          in: query
+          required: false
+          description: Latest `datePosted`, one day as `YYYY-MM-DD`, inclusive.
+          schema:
+            type: string
+            format: date
       responses:
         '200':
-          description: A list of documents.
+          description: One page of documents.
+          headers:
+            x-total-count:
+              description: Rows matching the query, sent when `count=true`.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
         '400':
-          description: pageSize above 100 on an unauthenticated request.
+          description: >-
+            Unknown or repeated parameter (`continuationToken` included), a sort key off the list,
+            a bad value, pageSize above 100 unauthenticated or above 500 on an index-paged list, a
+            page past the caller's depth, or a filter on a field the caller cannot see.
+        '401':
+          description: The Bearer token was rejected.
     post:
       summary: Create document
       description: >-
@@ -1298,6 +1413,156 @@ paths:
           description: Document successfully created.
         '401':
           description: Unauthorized.
+
+  /api/documents/scan:
+    get:
+      summary: Walk documents with a continuation token
+      description: >-
+        Every document the caller may read, one page at a time, for internal callers that walk the
+        whole corpus (the project-summary generator, the extraction host). A credential is
+        required. Pass the `x-continuation-token` header of one page as `continuationToken` to get
+        the next; the last page carries no header. Images uploaded through the Update form
+        (`documentSource` `UPDATE`) are left out. Rows have hidden fields left out.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: project
+          in: query
+          required: false
+          description: Project id, as stored in `projectId`.
+          schema:
+            type: string
+        - name: extracted
+          in: query
+          required: false
+          description: >-
+            `false` keeps documents with no extracted text yet, `true` those with it. Absent, or
+            any other value, does not filter.
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - $ref: '#/components/parameters/MirrorContinuationToken'
+      responses:
+        '200':
+          description: One page of documents.
+          headers:
+            x-continuation-token:
+              description: Pass as `continuationToken` for the next page. Absent on the last page.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '401':
+          description: No credential, or the credential was rejected.
+
+  /api/documents/passages:
+    get:
+      summary: Search document passages
+      description: >-
+        One row per passage of extracted document text that matches `q`, ranked by relevance,
+        only for passages whose parent document the caller may read. A row carries the index
+        highlight as `snippet`, never the passage text. Rows are not grouped by document; read
+        document labels with one `GET /api/documents?ids=` call for the page's `documentId`s. Any
+        parameter not listed here is a 400, `ids` and `sort` included. A parameter given twice is
+        a 400, except the filters. A rejected Bearer token answers 401; a signed-in read is
+        answered `Cache-Control: private, no-store`.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Keywords, matched over the passage text.
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page. Unauthenticated requests may reach row 2000, others row 20000.
+          schema:
+            type: integer
+            minimum: 1
+        - name: pageSize
+          in: query
+          required: false
+          description: Rows per page, at most 100. Omitting it returns 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the total row count as the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
+        - name: project
+          in: query
+          required: false
+          description: Project id, as stored in `projectId`. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: documentId
+          in: query
+          required: false
+          description: Parent document id. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: typeId
+          in: query
+          required: false
+          description: Parent document type List ObjectId. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: milestoneId
+          in: query
+          required: false
+          description: Parent document milestone List ObjectId. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: projectPhaseId
+          in: query
+          required: false
+          description: Parent document project phase List ObjectId. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: documentAuthorTypeId
+          in: query
+          required: false
+          description: Parent document author type List ObjectId. Repeat it to match any of several.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of passages.
+          headers:
+            x-total-count:
+              description: >-
+                Matching passages whose parent document the caller may read, sent when
+                `count=true`.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Passage'
+        '400':
+          description: >-
+            `q` missing, an unknown or repeated parameter (`ids` included), a bad value, pageSize
+            above 100, or a page past the caller's depth.
+        '401':
+          description: The Bearer token was rejected.
+        '503':
+          description: >-
+            A type, milestone, phase or author type filter over passages the index cannot yet
+            filter on that field for this scope. Body `{ error }` names the field and the reason.
 
   /api/documents/recent-uploads:
     get:
@@ -6356,6 +6621,32 @@ components:
             The same push can succeed once the parent's own push lands, so eagle-api holds it
             and sends it again. `PARENT_REF_INVALID`: the reference is empty or not an Eagle id.
             Sending it again cannot succeed, so it is not retried.
+
+    Passage:
+      type: object
+      description: One passage hit. `projectName` and `projectEagleId` are present when the caller may read the project.
+      properties:
+        id:
+          type: string
+          description: Chunk id, `<documentId>::p<page>::c<index>`.
+        documentId:
+          type: string
+        projectId:
+          type: string
+        projectName:
+          type: string
+        projectEagleId:
+          type: string
+        pageNumber:
+          type: integer
+        pageNumbered:
+          type: boolean
+          description: >-
+            True when the extraction recorded real page boundaries, so `pageNumber` is the PDF
+            page. False means `pageNumber` is only the Nth passage of the document.
+        snippet:
+          type: string
+          description: Index highlight of the match. Never the passage text.
 
     ShortLink:
       type: object

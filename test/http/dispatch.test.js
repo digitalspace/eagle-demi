@@ -596,3 +596,82 @@ test('native projects and counts routes', async (t) => {
     });
   }
 });
+
+// --- documents, scan and passages: native list routes beside the token walk ---
+test('native documents, scan and passages routes', async (t) => {
+  const cosmos = require('../../src/db/cosmos-nosql');
+  const aiSearch = require('../../src/search/ai-search');
+  const projects = require('../../src/repositories/projects');
+  const passages = require('../../src/controllers/native/passages');
+  t.afterEach(() => t.mock.restoreAll());
+
+  // `sealedAt` is level 2 on every document.
+  const DOCS = [{ id: 'd1', projectId: 'p1', read: ['public'], displayName: 'Part A', sealedAt: '2026-09-01T00:00:00.000Z' }];
+  const stubStores = () => {
+    t.mock.method(aiSearch, 'searchDocumentIds', async () => ({ ids: ['d1'], count: 1 }));
+    t.mock.method(aiSearch, 'searchChunks', async () => ({ items: [], count: 0 }));
+    t.mock.method(cosmos, 'query', async (container, spec) =>
+      ({ items: spec.query.includes('COUNT(1)') ? [DOCS.length] : structuredClone(DOCS) }));
+    t.mock.method(projects, 'listRowsByIds', async () => []);
+  };
+
+  await t.test('anonymous /api/documents withholds sealedAt', async () => {
+    stubStores();
+    const res = await call('/api/documents');
+    assert.strictEqual(res.status, 200, res.body);
+    const [row] = JSON.parse(res.body);
+    assert.strictEqual(row.id, 'd1');
+    assert.ok(!('sealedAt' in row), 'sealedAt reached an anonymous caller');
+  });
+
+  // probe-acl reads one project's documents by id batch.
+  await t.test('/api/documents?project=<id>&ids=<id> is 200', async () => {
+    stubStores();
+    const res = await call('/api/documents?project=p1&ids=d1');
+    assert.strictEqual(res.status, 200, res.body);
+    assert.deepStrictEqual(JSON.parse(res.body).map(row => row.id), ['d1']);
+  });
+
+  for (const path of ['/api/documents', '/api/documents/passages?q=water']) {
+    await t.test(`rejected Bearer on ${path} is 401`, async () => {
+      stubStores();
+      const res = await call(path, { headers: { authorization: 'Bearer not-a-jwt' } });
+      assert.strictEqual(res.status, 401);
+    });
+
+    await t.test(`authenticated ${path} answer is no-store`, async () => {
+      stubStores();
+      const res = await call(path, { headers: AUTHED });
+      assert.strictEqual(res.status, 200, res.body);
+      assert.strictEqual(res.headers['cache-control'], 'private, no-store');
+    });
+  }
+
+  await t.test('anonymous /api/documents/scan is 401', async () => {
+    const scan = t.mock.method(documentController, 'scanDocuments', (req, res) => res.json([]));
+    const res = await call('/api/documents/scan');
+    assert.strictEqual(res.status, 401);
+    assert.strictEqual(scan.mock.callCount(), 0);
+  });
+
+  await t.test('/api/documents/scan and /api/documents/passages do not hit /documents/:id', async () => {
+    const byId = t.mock.method(documentController, 'getDocument', (req, res) => res.json({ route: 'byId' }));
+    t.mock.method(documentController, 'scanDocuments', (req, res) => res.json({ route: 'scan' }));
+    t.mock.method(passages, 'getPassages', (req, res) => res.json({ route: 'passages' }));
+
+    for (const name of ['scan', 'passages']) {
+      const res = await call(`/api/documents/${name}?q=water`, { headers: AUTHED });
+      assert.strictEqual(res.status, 200, res.body);
+      assert.deepStrictEqual(JSON.parse(res.body), { route: name });
+    }
+    assert.strictEqual(byId.mock.callCount(), 0);
+  });
+
+  await t.test('passages without q 400', async () => {
+    stubStores();
+    const res = await call('/api/documents/passages');
+    assert.strictEqual(res.status, 400);
+    assert.match(JSON.parse(res.body).error, /q is required/);
+    assert.strictEqual(aiSearch.searchChunks.mock.callCount(), 0);
+  });
+});
