@@ -1427,8 +1427,9 @@ paths:
         used the row is left (`waiting`) and its backup kept; a store holding the source releases
         it; anything else is copied back from the backup and recorded `needs-review`. A release
         with no skip and no failure reason from the worker is counted in `pdfTitle.releases`
-        (cleared when the row is titled); the third one records the row as a skip with reason
-        `no-report` (`needs-review` for a restore). Rows that
+        (cleared when the row is titled); the tenth one records the row as a skip with reason
+        `no-report` (`needs-review` for a restore). `outcomes.noReport` counts the rows this page
+        skipped that way; they are also counted in `outcomes.skipped`. Rows that
         fail are named in `failed`. Follow `continuation` until it is null to reach every expired
         lease, and send back the `before` the first page returned with every later page, so one
         sweep reads one query.
@@ -1466,6 +1467,7 @@ paths:
                   scanned: { type: integer }
                   outcomes:
                     type: object
+                    description: Count per outcome, plus `noReport` (a subset of `skipped`).
                     additionalProperties: { type: integer }
                   failed:
                     type: array
