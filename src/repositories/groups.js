@@ -9,8 +9,9 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead, systemAccess } = require('../helpers/access-sql');
+const { systemAccess } = require('../helpers/access-sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
+const { cosmosKind } = require('../helpers/native-query');
 const {
   eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn, fetchAll
 } = require('./_sql');
@@ -19,12 +20,8 @@ const CONTAINER = 'groups';
 const PARTITION_FIELD = 'projectId';
 const ENTITY = 'groups';
 
-/** Point read with the project; without it, the predicate runs in a cross-partition query. */
-async function getById(access, id, projectId) {
-  if (projectId) {
-    const item = await cosmos.readItem(CONTAINER, String(id), String(projectId));
-    return item && canRead(item, access, PARTITION_FIELD) ? item : null;
-  }
+/** The read predicate, narrowed to one id across every partition. */
+async function getById(access, id) {
   const spec = selectWhere({ access, partitionField: PARTITION_FIELD, criteria: [eq('id', String(id), '@id')] });
   return cosmos.queryFirst(CONTAINER, spec, {});
 }
@@ -50,14 +47,7 @@ function visibleSpec(access, projectId) {
 
 const partitionOf = (projectId) => (projectId ? String(projectId) : undefined);
 
-/** One page of the groups this caller may read, single-partition when `projectId` is given. */
-async function listVisible(access, { projectId, pageSize, continuationToken } = {}) {
-  return cosmos.query(CONTAINER, visibleSpec(access, projectId), pageOptions({
-    pageSize, continuationToken, partitionKey: partitionOf(projectId)
-  }));
-}
-
-/** One offset page (`pageNum`, `pageSize`) of `listVisible`'s rows, as `/search` pages. */
+/** One offset page (`pageNum`, `pageSize`) of the groups this caller may read, as `/search` pages. */
 async function listPage(access, { projectId, pageNum, pageSize } = {}) {
   return readPage(CONTAINER, visibleSpec(access, projectId), {
     pageNum, pageSize, partitionKey: partitionOf(projectId)
@@ -102,7 +92,10 @@ async function listAclRows(access) {
   }));
 }
 
+/** The native list contract's reads (`helpers/native-query.js`). */
+const native = cosmosKind({ container: CONTAINER, entity: ENTITY, partitionField: PARTITION_FIELD, defaultOrder: 'c.id ASC' });
+
 module.exports = {
-  CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, listPage, countVisible, upsert, deleteById,
-  setAclForProject, listAclRows
+  CONTAINER, PARTITION_FIELD, getById, readForWrite, listPage, countVisible, upsert, deleteById,
+  setAclForProject, listAclRows, native
 };

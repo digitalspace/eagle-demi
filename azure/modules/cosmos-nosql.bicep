@@ -509,7 +509,8 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
 }
 
 // Eagle `User`, mirrored by eagle-api (docs/rbac-architecture.md, "User, group and inspection
-// mirrors"). Lists order on c.id, which the system index serves; see the documents container.
+// mirrors"). Lists order on c.id, which the system index serves, or on the `sort` key
+// /displayName; the mirror writes it on every row, so that ORDER BY drops none.
 resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'users'
@@ -529,6 +530,9 @@ resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
           {
             path: '/read/[]/?'
           }
+          {
+            path: '/displayName/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -537,6 +541,7 @@ resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
 }
 
 // Eagle `Group`, a project's contact group. Listed per project, so /projectId is the partition.
+// /name is the `sort` key; the mirror writes it on every row, so that ORDER BY drops none.
 resource groupsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'groups'
@@ -558,6 +563,9 @@ resource groupsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
           }
           {
             path: '/read/[]/?'
+          }
+          {
+            path: '/name/?'
           }
         ]
         excludedPaths: noIndex

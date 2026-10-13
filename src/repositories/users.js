@@ -10,8 +10,9 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
+const { cosmosKind } = require('../helpers/native-query');
 const {
-  selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn, fetchAll
+  selectWhere, selectFor, countWhere, readPage, upsertItem, readForWriteIn, fetchAll
 } = require('./_sql');
 
 const CONTAINER = 'users';
@@ -38,12 +39,7 @@ function visibleSpec(access) {
   });
 }
 
-/** One page of the users this caller may read, in id order. */
-async function listVisible(access, { pageSize, continuationToken } = {}) {
-  return cosmos.query(CONTAINER, visibleSpec(access), pageOptions({ pageSize, continuationToken }));
-}
-
-/** One offset page (`pageNum`, `pageSize`) of `listVisible`'s rows, as `/search` pages. */
+/** One offset page (`pageNum`, `pageSize`) of the users this caller may read, in id order, as `/search` pages. */
 async function listPage(access, { pageNum, pageSize } = {}) {
   return readPage(CONTAINER, visibleSpec(access), { pageNum, pageSize });
 }
@@ -67,6 +63,12 @@ async function listAclRows(access) {
   }));
 }
 
+/** The native list contract's reads (`helpers/native-query.js`); by id keeps the point read above. */
+const native = {
+  ...cosmosKind({ container: CONTAINER, entity: ENTITY, partitionField: PARTITION_FIELD, defaultOrder: 'c.id ASC' }),
+  getById
+};
+
 module.exports = {
-  CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, listPage, countVisible, upsert, listAclRows
+  CONTAINER, PARTITION_FIELD, getById, readForWrite, listPage, countVisible, upsert, listAclRows, native
 };

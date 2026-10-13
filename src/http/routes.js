@@ -256,10 +256,12 @@ const routes = [
   // Reads of the user, group and inspection mirrors (docs/rbac-architecture.md). Same chain as
   // GET /documents: the repository filters rows by the caller's access, so anonymous reads the
   // public tier rather than getting a 401.
-  { method: 'get', path: '/users', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => userController().getUsers },
-  { method: 'get', path: '/users/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => userController().getUser },
-  { method: 'get', path: '/groups', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => groupController().getGroups },
-  { method: 'get', path: '/groups/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => groupController().getGroup },
+  // users and groups: native list contract (helpers/native-query.js). Strict: a rejected Bearer is a
+  // 401, so a client refreshes instead of reading the public tier under a 200.
+  { method: 'get', path: '/users', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => userController().getUsers },
+  { method: 'get', path: '/users/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => userController().getUser },
+  { method: 'get', path: '/groups', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => groupController().getGroups },
+  { method: 'get', path: '/groups/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => groupController().getGroup },
   { method: 'get', path: '/inspections', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspections },
   { method: 'get', path: '/inspections/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspection },
   { method: 'get', path: '/inspection-elements', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElements },

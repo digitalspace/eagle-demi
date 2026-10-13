@@ -477,3 +477,17 @@ test('documents container indexes the paths its repository filters and sorts on'
     assert.ok(indexed.includes(field), `/${field}/? is not an included path on documents`);
   }
 });
+
+// Native kinds: every sort key and filter of the kind spec is an included path on its container.
+test('users and groups index every native sort key and filter', () => {
+  const specs = {
+    users: require('../../src/controllers/nosql/user').nativeSpec,
+    groups: require('../../src/controllers/nosql/group').nativeSpec
+  };
+  for (const [container, spec] of Object.entries(specs)) {
+    const indexed = indexedFields(container);
+    for (const field of [...spec.sortKeys, ...spec.filters]) {
+      assert.ok(indexed.includes(field), `${container} sorts or filters on ${field}, which is not an included path`);
+    }
+  }
+});

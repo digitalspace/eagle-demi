@@ -233,7 +233,7 @@ eagle-api pushes five more kinds (`DEMI_PUSH_OPT_IN_KINDS` in eagle-api). Routes
 | `PUT /eagle/users/:eagleId` | `nosql/user.upsertFromEagle` | `users` | `/id` |
 | `GET /users`, `GET /users/:id` | `nosql/user.getUsers`, `getUser` | `users` | `/id` |
 | `PUT /eagle/groups/:eagleId` | `nosql/group.upsertFromEagle` | `groups` | `/projectId` |
-| `GET /groups?project=`, `GET /groups/:id?project=` | `nosql/group.getGroups`, `getGroup` | `groups` | `/projectId` |
+| `GET /groups?project=`, `GET /groups/:id` | `nosql/group.getGroups`, `getGroup` | `groups` | `/projectId` |
 | `PUT /eagle/inspections/:eagleId` | `nosql/inspection.upsertInspectionFromEagle` | `inspections` | `/inspection` |
 | `PUT /eagle/inspection-elements/:eagleId` | `nosql/inspection.upsertElementFromEagle` | `inspections` | `/inspection` |
 | `PUT /eagle/inspection-items/:eagleId` | `nosql/inspection.upsertItemFromEagle` | `inspections` | `/inspection` |
@@ -244,6 +244,9 @@ eagle-api pushes five more kinds (`DEMI_PUSH_OPT_IN_KINDS` in eagle-api). Routes
 PUT routes take the same guards as the other `/eagle/*` mirrors. GET routes take
 `passiveAuthMiddleware, credentialsMiddleware`, as `GET /documents`. Lists order on `c.id`; the
 `inspections` container filters on `kind`, `projectId` and `element`, so those paths must be indexed.
+The user and group GETs follow the native list contract (`helpers/native-query.js`: `page`, `sort`,
+`q`, `ids`, `count`) behind `passiveAuthMiddleware.strict`, so a rejected Bearer is a 401. Staff
+user reads are audited, and a user `q` is never written to analytics.
 
 - `users` is partitioned by `/id` and that is also the scope field, so a project-scoped key reads
   no user. Eagle's `password` and `salt` are dropped before the row and its raw copy are built.
