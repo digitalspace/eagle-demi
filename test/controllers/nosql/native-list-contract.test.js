@@ -351,3 +351,18 @@ test('native list contract', async (t) => {
     assert.strictEqual(res.body.id, 'c1');
   });
 });
+
+test('a store that cannot take Cosmos SQL gets the parsed query, the same object in list and count', async () => {
+  const seen = {};
+  const repository = {
+    async list(access, args) { seen.list = args.parsed; return []; },
+    async count(access, args) { seen.count = args.parsed; return 0; },
+    async getById() { return null; }
+  };
+  const res = await call(listHandler({ ...SPEC, repository }), 'q=late&eaoStatus=Pending&eaoStatus=Published&count=true');
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(seen.list.q, 'late');
+  assert.deepStrictEqual(seen.list.filters, { eaoStatus: ['Pending', 'Published'] });
+  assert.strictEqual(seen.count, seen.list);
+});

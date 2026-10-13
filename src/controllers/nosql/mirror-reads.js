@@ -21,10 +21,11 @@ const UNLOGGED_SEARCH_KINDS = Object.freeze(['users', 'comments']);
 
 /**
  * A kind spec: `{ entity, repository, sortKeys, filters, multiValueFilters, qFields?, parentJoin?,
- * audited?, notFound? }`. `repository` is `{ list(access, {criteria, orderBy, pageNum, pageSize}),
- * count(access, {criteria}), getById(access, id), getByEagleId?(access, id) }`, each bound to the
- * caller's visibility predicate (`cosmosKind` builds one). `parentJoin(access, rows)` runs on
- * redacted rows.
+ * audited?, notFound? }`. `repository` is `{ list(access, {criteria, orderBy, pageNum, pageSize, parsed}),
+ * count(access, {criteria, parsed}), getById(access, id), getByEagleId?(access, id) }`, each bound to
+ * the caller's visibility predicate (`cosmosKind` builds one). `parsed` is the `parseNativeQuery`
+ * result, for a store that cannot take Cosmos SQL (`search/native-index.js`); list and count get the
+ * same object. `parentJoin(access, rows)` runs on redacted rows.
  */
 function nativeListHandler(spec) {
   assertKindSpec(spec);
@@ -38,8 +39,8 @@ function nativeListHandler(spec) {
 
       const { criteria, orderBy } = nativeCriteria(spec, parsed, access);
       const [rows, total] = await Promise.all([
-        spec.repository.list(access, { criteria, orderBy, pageNum: parsed.pageNum, pageSize: parsed.pageSize }),
-        parsed.count ? spec.repository.count(access, { criteria }) : undefined
+        spec.repository.list(access, { criteria, orderBy, pageNum: parsed.pageNum, pageSize: parsed.pageSize, parsed }),
+        parsed.count ? spec.repository.count(access, { criteria, parsed }) : undefined
       ]);
       if (total !== undefined) res.setHeader('x-total-count', String(total));
 

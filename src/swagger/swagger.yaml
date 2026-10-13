@@ -5004,6 +5004,11 @@ components:
             switch that sends it back to eagle-api's own search.
         DEMI_PROJECTS_PATH:
           type: string
+        DEMI_API_PATH:
+          type: string
+          description: >-
+            Where the admin and public sites send native DEMI reads, e.g. `/demi/api`. Unset by
+            default; a client falls back to its own default path.
         ADMIN_PATH:
           type: string
         CONTENT_SEARCH:

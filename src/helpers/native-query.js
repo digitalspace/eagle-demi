@@ -223,6 +223,7 @@ module.exports = {
   assertKindSpec,
   parseNativeQuery,
   nativeCriteria,
+  dialAllows,
   isEagleId,
   cosmosKind,
   projectParentJoin
