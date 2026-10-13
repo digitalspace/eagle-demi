@@ -2,7 +2,8 @@
 
 /**
  * Read-only parity check: replays each eagle-api read in `parity-map.js` against eagle-api and
- * DEMI with the same identity, pairs rows by Eagle id and diffs row sets and field values. Every
+ * DEMI's native kind routes with the same identity, pairs rows by Eagle id and diffs row sets and
+ * field values, read on the DEMI row under its native name (`NATIVE_FIELDS`). Every
  * difference not on the known list counts as unexplained, and any unexplained one exits 1.
  * Usage: README "Parity with eagle-api".
  */
@@ -13,9 +14,10 @@ const { fetchAllPages, unwrapSearchResponse, rateLimitWaitMs, PAGE_SIZE } = requ
 const { diff } = require('./reconcile-eagle');
 const { eagleRef } = require('../helpers/parent-admit');
 const {
-  PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, sameField,
-  search, cappedFromStaff
+  PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, NATIVE_FIELDS, EAGLE_ID,
+  sameField, native, cappedFromStaff
 } = require('./parity-map');
+const { ANON_MAX_PAGE_DEPTH } = require('../helpers/native-query');
 const { logger } = require('../utils/logger');
 
 /** Two requests a second per API: well under eagle-api's 200 a minute. */
@@ -24,13 +26,15 @@ const IDENTITIES = ['anonymous', 'staff', 'sysadmin'];
 const ID_NAMES = ['project', 'period', 'document', 'comment', 'organization', 'inspection', 'element', 'group'];
 const SAMPLE_CAP = 20;
 const REDIRECTS = [301, 302, 303, 307, 308];
+/** DEMI ids native filters take: placeholder -> the `--id` it comes from and the by-id read that holds it. */
+const DEMI_IDS = { demiProject: ['project', '/projects/:project'], demiPeriod: ['period', '/comment-periods/:period'] };
 /** Datasets whose rows hang off an Eagle project through `project`. */
 const CHILD_DATASETS = ['CommentPeriod', 'Document', 'Group', 'Inspection', 'RecentActivity'];
 /** Children whose Eagle staff routes also check the project's read[], so they follow it above public. */
 const LADDER_CHILD_DATASETS = ['CommentPeriod', 'Document'];
 
 const USAGE = `usage: node src/scripts/parity-eagle.js --eagle <eagle-api base> --demi <DEMI base>
-  [--identity anonymous|staff|sysadmin] [--token-env <VAR>] [--only <read>] [--max-pages <n>]
+  [--identity anonymous|staff|sysadmin] [--token-env <VAR>] [--only <read|dataset>] [--max-pages <n>]
   [--id <name>=<eagleId>]... [--known-ids <file>]... [--emit-ids <file>] [--report <file>]
   [--download-sample <n>]
   --id names: ${ID_NAMES.join(', ')}`;
@@ -111,14 +115,15 @@ function client(base, token, deps) {
   };
 }
 
-const fill = (value, ids) => String(value).replace(/:([a-z]+)/g, (_, name) => encodeURIComponent(ids[name]));
+const fill = (value, ids) => String(value).replace(/:([A-Za-z]+)/g, (_, name) => encodeURIComponent(ids[name]));
 
-/** Id names an entry's paths and query values need. */
+/** Id names an entry's paths and query values need, DEMI-id placeholders included. */
 function idsNeeded(entry) {
   const text = [entry.eagle, entry.demi]
     .flatMap(spec => [spec.path, ...Object.values(spec.query || {})]).join(' ');
-  return [...new Set([...text.matchAll(/:([a-z]+)/g)].map(m => m[1]))];
+  return [...new Set([...text.matchAll(/:([A-Za-z]+)/g)].map(m => m[1]))];
 }
+const argNameOf = name => (DEMI_IDS[name] ? DEMI_IDS[name][0] : name);
 
 function urlOf(base, spec, ids, extra = {}) {
   const url = new URL(base + fill(spec.path, ids));
@@ -200,6 +205,19 @@ function facetPage(body) {
   return { items: body, total: null };
 }
 
+/** A list paged by `x-continuation-token`: no total, so a capped read is truncated while a token remains. */
+async function tokenPages(api, spec, ids, maxPages) {
+  const rows = [];
+  for (let pages = 1, token = null; ; pages++) {
+    const url = urlOf(api.base, spec, ids, { pageSize: PAGE_SIZE, ...(token ? { continuationToken: token } : {}) });
+    const res = await api.get(url);
+    rows.push(...arrayOf(await okJson(res, url), url));
+    token = res.headers.get('x-continuation-token');
+    if (!token) return { rows, truncated: false };
+    if (pages >= maxPages) return { rows, truncated: true };
+  }
+}
+
 /** The rows one side answers, and whether --max-pages cut the read short. */
 async function rowsOf(api, spec, ids, maxPages) {
   if (spec.shape === 'object') {
@@ -220,12 +238,17 @@ async function rowsOf(api, spec, ids, maxPages) {
     return { items: arrayOf(body, url), total: res.headers.get('x-total-count') !== null && Number.isFinite(total) ? total : null };
   };
   if (!spec.paged) return { rows: (await fetchPage(urlOf(api.base, spec, ids))).items, truncated: false };
+  if (spec.paging === 'token') return tokenPages(api, spec, ids, maxPages);
 
+  // Native pages are 1-based and send their total only when asked; Eagle's are 0-based.
+  const pageParams = spec.paging === 'page'
+    ? (pageNum, pageSize) => ({ page: pageNum + 1, pageSize, count: 'true' })
+    : (pageNum, pageSize) => ({ pageNum, pageSize });
   let last = { pages: 0, size: 0, count: 0, total: null };
-  const rows = await fetchAllPages(api.base, spec.query && spec.query.dataset, {
+  const rows = await fetchAllPages(api.base, (spec.query && spec.query.dataset) || spec.path, {
     maxPages,
     fetchPage,
-    pageUrl: (pageNum, pageSize) => urlOf(api.base, spec, ids, { pageNum, pageSize }),
+    pageUrl: (pageNum, pageSize) => urlOf(api.base, spec, ids, pageParams(pageNum, pageSize)),
     onPage: (items, count, total) => { last = { pages: last.pages + 1, size: items.length, count, total }; }
   });
   const truncated = last.pages >= maxPages && last.size === PAGE_SIZE &&
@@ -236,8 +259,9 @@ async function rowsOf(api, spec, ids, maxPages) {
 function fieldsFor(entry, identity) {
   const extra = identity === 'anonymous' ? PUBLIC_FIELDS : STAFF_FIELDS;
   const allowed = Array.isArray(entry.eagle.fields) ? entry.eagle.fields : null;
+  const renamed = NATIVE_FIELDS[entry.dataset] || {};
   const pairs = [...(entry.fields || FIELDS[entry.dataset]), ...(extra[entry.dataset] || [])]
-    .map(f => (Array.isArray(f) ? f : [f, f]))
+    .map(f => (Array.isArray(f) ? f : [f, renamed[f] || f]))
     .filter(([e]) => !allowed || allowed.includes(e));
   return pairs.filter(([e], i) => pairs.findIndex(([other]) => other === e) === i);
 }
@@ -405,6 +429,8 @@ const orphanStateOf = parentIds => (row) => {
 /** A read[] Eagle's staff role cannot see and DEMI's ladder lets staff see: public, not staff. */
 const publicNotStaff = read => Array.isArray(read) && read.includes('public') && !read.includes('staff');
 
+const onlyMatches = (entry, only) => entry.read === only || entry.dataset === only;
+
 /** @returns {Promise<number>} the exit code */
 async function run(argv, deps = {}) {
   const d = {
@@ -438,7 +464,7 @@ async function run(argv, deps = {}) {
         throw new Error(`${entry.read}: the public download route is never called`);
       }
     }
-    if (args.only && !d.map.some(e => e.read === args.only)) throw new Error(`--only: no read named ${args.only}`);
+    if (args.only && !d.map.some(e => onlyMatches(e, args.only))) throw new Error(`--only: no read or dataset named ${args.only}`);
   } catch (err) {
     d.error(`[parity] ${err.message}`);
     return 1;
@@ -450,6 +476,27 @@ async function run(argv, deps = {}) {
   const store = client(null, null, d);
   const { identity } = args;
   const results = [];
+  // Anonymous native reads stop at ANON_MAX_PAGE_DEPTH rows; a read cut there reports as truncated.
+  const maxPagesFor = spec => (spec.paging === 'page' && identity === 'anonymous'
+    ? Math.min(args.maxPages, ANON_MAX_PAGE_DEPTH / PAGE_SIZE)
+    : args.maxPages);
+
+  // A route still to ship answers 404 for every path under it; anything else runs the read.
+  const routeStatus = new Map();
+  const routeLive = async (path) => {
+    if (!routeStatus.has(path)) routeStatus.set(path, (await demi.get(demi.base + path)).status);
+    return routeStatus.get(path) !== 404;
+  };
+  const demiIds = {};
+  const resolveDemiId = async (name) => {
+    if (!(name in demiIds)) {
+      const [arg, path] = DEMI_IDS[name];
+      const side = await rowsOf(demi, { path, shape: 'object' }, args.ids, 1);
+      if (!side.rows.length) throw new Error(`DEMI has no ${arg} ${args.ids[arg]} this identity can read`);
+      demiIds[name] = String(side.rows[0].id);
+    }
+    return demiIds[name];
+  };
 
   const pairedDocuments = new Set();
   const ladder = new Set();
@@ -470,16 +517,18 @@ async function run(argv, deps = {}) {
   // Every project and notification id either side lists, or null when --max-pages cut a list short.
   const loadParentIds = async () => {
     if (parentIds !== undefined) return parentIds;
+    // Without DEMI's notification list a notification-parented period cannot be proved an orphan.
+    if (!await routeLive('/notifications')) return (parentIds = null);
     const lists = [
       [eagle, { path: '/project', shape: 'array', paged: true, facet: true }],
       [eagle, { path: '/projectNotification', shape: 'array', paged: true }],
-      [demi, search('Project')],
-      [demi, search('ProjectNotification')]
+      [demi, native('/projects')],
+      [demi, native('/notifications')]
     ];
     // Cached only once every list is read: a failed read must not leave a partial set as proof.
     const ids = new Set();
     for (const [api, spec] of lists) {
-      const side = await rowsOf(api, spec, args.ids, args.maxPages);
+      const side = await rowsOf(api, spec, args.ids, maxPagesFor(spec));
       if (side.truncated) return (parentIds = null);
       for (const row of side.rows) [row._id, row.id, row.eagleId].filter(Boolean).forEach(id => ids.add(String(id)));
     }
@@ -497,7 +546,7 @@ async function run(argv, deps = {}) {
   };
 
   for (const entry of d.map) {
-    if (args.only && entry.read !== args.only) continue;
+    if (args.only && !onlyMatches(entry, args.only)) continue;
     if (entry.download && !entry.skip) {
       downloads.push(entry);
       continue;
@@ -507,18 +556,25 @@ async function run(argv, deps = {}) {
       continue;
     }
     if (!entry.identities.includes(identity)) continue;
-    const missing = idsNeeded(entry).filter(name => !args.ids[name]);
+    const needed = idsNeeded(entry);
+    const missing = [...new Set(needed.map(argNameOf))].filter(name => !args.ids[name]);
     if (missing.length) {
       record(entry, { status: 'skipped', reason: `needs ${missing.map(n => `--id ${n}=<eagleId>`).join(' ')}` });
       continue;
     }
-    const sideOf = async (api, spec, map) => {
-      const side = entry.format === 'csv'
-        ? await csvOf(api, entry, spec, args.ids)
-        : await rowsOf(api, spec, args.ids, args.maxPages);
-      return map ? { ...side, rows: map(side.rows) } : side;
-    };
     try {
+      if (entry.pendingRoute && !await routeLive(entry.pendingRoute)) {
+        record(entry, { status: 'skipped', pending: true, reason: `DEMI ${entry.pendingRoute} answers 404: its route has not shipped` });
+        continue;
+      }
+      const ids = { ...args.ids };
+      for (const name of needed.filter(n => DEMI_IDS[n])) ids[name] = await resolveDemiId(name);
+      const sideOf = async (api, spec, map) => {
+        const side = entry.format === 'csv'
+          ? await csvOf(api, entry, spec, ids)
+          : await rowsOf(api, spec, ids, maxPagesFor(spec));
+        return map ? { ...side, rows: map(side.rows) } : side;
+      };
       const eagleSide = await sideOf(eagle, eagleSpecFor(entry, identity), entry.mapEagle);
       const demiSide = await sideOf(demi, entry.demi, entry.mapDemi);
       // Sysadmin sees every Eagle row, so its run lists what the staff run sees above public.

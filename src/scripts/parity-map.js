@@ -1,13 +1,15 @@
 'use strict';
 
 /**
- * What `parity-eagle.js` replays: one entry per eagle-api read a consumer makes, the DEMI read that
- * answers it, and the differences already explained. Plan numbers are the read-by-read map in the
- * eagle-reads-in-DEMI plan; the map doubles as the consumer switch checklist.
+ * What `parity-eagle.js` replays: one entry per eagle-api read a consumer makes, the native DEMI
+ * read (`/api/<kind>`, never `/search?dataset=`) that answers it, and the differences already
+ * explained. Plan numbers are the read-by-read map in the eagle-reads-in-DEMI plan; the map doubles
+ * as the consumer switch checklist.
  *
  * Path and query values `:project`, `:period`, `:document`, `:comment`, `:organization`,
- * `:inspection`, `:element`, `:group` are filled from `--id <name>=<eagleId>`. Field entries are
- * names both sides share or `[eagleName, demiName]`.
+ * `:inspection`, `:element`, `:group` are filled from `--id <name>=<eagleId>`; `:demiProject` and
+ * `:demiPeriod` are the DEMI ids of those rows, which native filters take. Field entries are Eagle
+ * names, read on the DEMI row through `NATIVE_FIELDS`, or `[eagleName, demiName]`.
  *
  * `format: 'csv'` reads compare the header and then rows paired on the `key` column, every shared
  * column but `ignoreColumns`. `mapEagle` / `mapDemi` reshape one side's rows before pairing.
@@ -37,6 +39,19 @@ const FIELDS = {
   Group: ['name'],
   Inspection: ['name', 'case', 'startDate'],
   InspectionElement: ['title', 'requirement']
+};
+
+/**
+ * Eagle field -> native DEMI field, where the names differ. Lives only here: the native routes answer
+ * DEMI names and never learn Eagle's. Project renames are the ones `TRACK_PRECEDENCE` records.
+ * Every other compared field has the same name on the native row, except `directoryStructure`,
+ * which has no native field yet (class L3 below).
+ */
+const NATIVE_FIELDS = {
+  Project: Object.fromEntries(TRACK_PRECEDENCE
+    .filter(([demiField, , eagleField]) => eagleField && eagleField !== demiField)
+    .map(([demiField, , eagleField]) => [eagleField, demiField])),
+  Document: { type: 'typeId' }
 };
 
 /** Staff fields DEMI does not promote yet: a staff row lacking one in DEMI is class L3. */
@@ -247,6 +262,10 @@ function classify(ctx) {
 const search = (dataset, query = {}) => ({ path: '/search', query: { dataset, ...query }, shape: 'search', paged: true });
 const rows = (path, query, opts) => ({ path, query, shape: 'array', paged: false, ...opts });
 const pagedRows = (path, query, opts) => ({ path, query, shape: 'array', paged: true, ...opts });
+/** A native list: DEMI rows, paged by `page`/`pageSize`, total from `x-total-count` with `count=true`. */
+const native = (path, query, opts) => ({ path, query, shape: 'array', paged: true, paging: 'page', ...opts });
+/** A DEMI list still paged by `x-continuation-token`, with no total: `/documents` until D3b, inspections. */
+const tokenRows = (path, query) => ({ path, query, shape: 'array', paged: true, paging: 'token' });
 // eagle-api answers only _id and read[] unless `fields` names the rest.
 const FIELDED = { fields: true };
 // eagle-api answers these as a count facet, [{ total_items, results }].
@@ -265,50 +284,51 @@ const one = (path, at, query) => ({ path, query, shape: 'object', at });
 const csv = (path, query) => ({ path, query });
 /** Id-only rows, for reads where one side answers a list of refs rather than the rows. */
 const idRows = refs => refs.map(ref => ({ _id: String(ref && ref._id ? ref._id : ref) }));
+/** `{ <eaoStatus>: n }` as one row per status, paired on the status name. */
+const statusRows = counts => Object.entries(counts || {}).map(([status, count]) => ({ _id: status, count }));
 const pending = (read, plan, reason) => ({ read, plan, pending: true, skip: reason });
 // DEMI sets x-total-count on GET and HEAD of /search; this script sends GET only.
 const HEAD_REASON = 'HEAD not sent by this script';
+const D3B_REASON = 'native /documents has no isFeatured filter until D3b';
+// D2c (branch feat-native-updates-notifications) adds these; until DEMI answers them, the read is skipped.
+const UPDATES = { pendingRoute: '/updates' };
+const NOTIFICATIONS = { pendingRoute: '/notifications' };
 
-const PROJECT_ONE_FIELDS = ['name', 'sector', 'region', ['type', 'projectType'], ['location', 'address']];
-const DOCUMENT_ONE_FIELDS = ['documentFileName', 'displayName', 'datePosted', 'documentSource', ['type', 'typeId']];
+const DOCUMENT_ONE_FIELDS = [...FIELDS.Document, 'type'];
 
 const REST_READS = [
   { read: 'project-list-public', plan: '1', identities: ANON, dataset: 'Project',
-    eagle: pagedRows('/public/project', undefined, FIELDED), demi: search('Project') },
-  { read: 'project-public', plan: '2', identities: ANON, dataset: 'Project', fields: PROJECT_ONE_FIELDS,
+    eagle: pagedRows('/public/project', undefined, FIELDED), demi: native('/projects') },
+  { read: 'project-public', plan: '2', identities: ANON, dataset: 'Project',
     eagle: rows('/public/project/:project', undefined, FIELDED), demi: one('/projects/:project') },
   pending('project-head-public', '3', HEAD_REASON),
   { read: 'project-list', plan: '4', identities: STAFF, dataset: 'Project',
-    eagle: pagedRows('/project', undefined, FIELDED_FACET), demi: search('Project') },
-  { read: 'project', plan: '5', identities: STAFF, dataset: 'Project', fields: PROJECT_ONE_FIELDS,
+    eagle: pagedRows('/project', undefined, FIELDED_FACET), demi: native('/projects') },
+  { read: 'project', plan: '5', identities: STAFF, dataset: 'Project',
     eagle: rows('/project/:project', undefined, FIELDED), demi: one('/projects/:project') },
   pending('project-head', '6-7', HEAD_REASON),
   { read: 'pins-public', plan: '8', identities: ANON, dataset: 'Pin',
     eagle: pagedRows('/public/project/:project/pin', undefined, FACET), demi: one('/projects/:project', 'pins') },
   { read: 'pins', plan: '9', identities: STAFF, dataset: 'Pin',
     eagle: pagedRows('/project/:project/pin', undefined, FACET), demi: one('/projects/:project', 'pins') },
-  // Eagle answers the member User rows in a count facet, DEMI the Group with member ids. DEMI's
-  // `project` query is the Track id partition key, not an Eagle id, so the read sends none.
+  // Eagle answers the member User rows in a count facet, DEMI the Group with member ids.
   { read: 'group-members', plan: '10', identities: STAFF, dataset: 'Group', fields: [],
     eagle: rows('/project/:project/group/:group/members', undefined, FACET),
     demi: one('/groups/:group'),
     mapEagle: idRows,
     mapDemi: groups => idRows(groups.flatMap(g => g.members || [])) },
-  { read: 'featured-public', plan: '11', identities: ANON, dataset: 'Document',
-    eagle: rows('/Public/project/:project/FeaturedDocuments'),
-    demi: search('Document', { 'and[isFeatured]': 'true', project: ':project' }) },
-  { read: 'featured', plan: '13', identities: STAFF, dataset: 'Document',
-    eagle: rows('/project/:project/FeaturedDocuments'),
-    demi: search('Document', { 'and[isFeatured]': 'true', project: ':project' }) },
+  pending('featured-public', '11', D3B_REASON),
+  pending('featured', '13', D3B_REASON),
   pending('featured-head', '12, 14', HEAD_REASON),
   { read: 'document-list-public', plan: '15', identities: ANON, dataset: 'Document',
-    eagle: rows('/public/document', { project: ':project' }, FIELDED), demi: search('Document', { project: ':project' }) },
+    eagle: rows('/public/document', { project: ':project' }, FIELDED), demi: tokenRows('/documents', { project: ':demiProject' }) },
   { read: 'document-public', plan: '16', identities: ANON, dataset: 'Document', fields: DOCUMENT_ONE_FIELDS,
     eagle: rows('/public/document/:document', undefined, FIELDED), demi: one('/documents/:document') },
   { read: 'document-download-public', plan: '17-18',
     skip: 'never called: the public download route increments publicHitCount' },
   { read: 'document-list', plan: '19', identities: STAFF, dataset: 'Document',
-    eagle: rows('/document', { isDeleted: 'false', project: ':project' }, FIELDED), demi: search('Document', { project: ':project' }) },
+    eagle: rows('/document', { isDeleted: 'false', project: ':project' }, FIELDED),
+    demi: tokenRows('/documents', { project: ':demiProject' }) },
   { read: 'document', plan: '20', identities: STAFF, dataset: 'Document', fields: DOCUMENT_ONE_FIELDS,
     eagle: rows('/document/:document', undefined, FIELDED), demi: one('/documents/:document') },
   // Run by --download-sample over document ids paired by the reads above, not by --id.
@@ -316,43 +336,47 @@ const REST_READS = [
     eagle: { path: '/document/:document/download' }, demi: { path: '/documents/:document/download' } },
   { read: 'commentperiod-list-public', plan: '24', identities: ANON, dataset: 'CommentPeriod',
     eagle: rows('/public/commentperiod', { project: ':project' }, COMMENT_PERIOD_ROUTE),
-    demi: search('CommentPeriod', { 'and[project]': ':project' }) },
+    demi: native('/comment-periods', { project: ':demiProject' }) },
   { read: 'commentperiod-public', plan: '25', identities: ANON, dataset: 'CommentPeriod',
-    eagle: rows('/public/commentperiod/:period', undefined, COMMENT_PERIOD_ROUTE), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
+    eagle: rows('/public/commentperiod/:period', undefined, COMMENT_PERIOD_ROUTE), demi: one('/comment-periods/:period') },
   { read: 'commentperiod-list', plan: '26', identities: STAFF, dataset: 'CommentPeriod',
     eagle: rows('/commentperiod', { project: ':project' }, COMMENT_PERIOD_ROUTE),
-    demi: search('CommentPeriod', { 'and[project]': ':project' }) },
+    demi: native('/comment-periods', { project: ':demiProject' }) },
   { read: 'commentperiod', plan: '27', identities: STAFF, dataset: 'CommentPeriod',
-    eagle: rows('/commentperiod/:period', undefined, COMMENT_PERIOD_ROUTE), demi: search('CommentPeriod', { 'and[_id]': ':period' }) },
+    eagle: rows('/commentperiod/:period', undefined, COMMENT_PERIOD_ROUTE), demi: one('/comment-periods/:period') },
   pending('commentperiod-head', '28', HEAD_REASON),
-  pending('commentperiod-summary', '29', 'no summary route; four and[eaoStatus] counts give it (S3)'),
+  // Eagle `{ Pending: n, ... }`, DEMI `{ id, total, eaoStatus: { Pending: n, ... } }`: one row per status.
+  { read: 'commentperiod-summary', plan: '29', identities: STAFF, dataset: 'CommentSummary', fields: ['count'],
+    eagle: one('/commentperiod/:period/summary'), demi: one('/comment-periods/:period/summary'),
+    mapEagle: ([summary]) => statusRows(summary),
+    mapDemi: ([summary]) => statusRows(summary && summary.eaoStatus) },
   { read: 'comment-list-public', plan: '30', identities: ANON, dataset: 'Comment',
-    eagle: pagedRows('/public/comment', { period: ':period' }, FIELDED_FACET), demi: search('Comment', { 'and[period]': ':period' }) },
+    eagle: pagedRows('/public/comment', { period: ':period' }, FIELDED_FACET), demi: native('/comments', { period: ':demiPeriod' }) },
   { read: 'comment-public', plan: '31', identities: ANON, dataset: 'Comment',
-    eagle: rows('/public/comment/:comment', undefined, FIELDED_FACET), demi: search('Comment', { 'and[_id]': ':comment' }) },
+    eagle: rows('/public/comment/:comment', undefined, FIELDED_FACET), demi: one('/comments/:comment') },
   pending('comment-head-public', '32', HEAD_REASON),
   { read: 'comment-list', plan: '33', identities: STAFF, dataset: 'Comment',
-    eagle: pagedRows('/comment', { period: ':period' }, FIELDED_FACET), demi: search('Comment', { 'and[period]': ':period' }) },
+    eagle: pagedRows('/comment', { period: ':period' }, FIELDED_FACET), demi: native('/comments', { period: ':demiPeriod' }) },
   { read: 'comment', plan: '34', identities: STAFF, dataset: 'Comment',
-    eagle: rows('/comment/:comment', undefined, FIELDED_FACET), demi: search('Comment', { 'and[_id]': ':comment' }) },
+    eagle: rows('/comment/:comment', undefined, FIELDED_FACET), demi: one('/comments/:comment') },
   pending('comment-head', '35', HEAD_REASON),
   { read: 'comment-export', plan: '36', identities: STAFF, format: 'csv', key: 'Comment_No',
     ignoreColumns: ['Export_Date'],
     eagle: csv('/comment/export/:period', { format: 'staff' }), demi: csv('/commentperiods/:period/comments/export') },
   { read: 'organization-list-public', plan: '37', identities: ANON, dataset: 'Organization',
-    eagle: rows('/public/organization', undefined, ORGANIZATION_ROUTE), demi: search('Organization') },
+    eagle: rows('/public/organization', undefined, ORGANIZATION_ROUTE), demi: native('/organizations') },
   { read: 'organization-public', plan: '38', identities: ANON, dataset: 'Organization',
-    eagle: rows('/public/organization/:organization', undefined, ORGANIZATION_ROUTE), demi: search('Organization', { 'and[_id]': ':organization' }) },
+    eagle: rows('/public/organization/:organization', undefined, ORGANIZATION_ROUTE), demi: one('/organizations/:organization') },
   { read: 'organization-list', plan: '39', identities: STAFF, dataset: 'Organization',
-    eagle: rows('/organization', undefined, ORGANIZATION_ROUTE), demi: search('Organization') },
+    eagle: rows('/organization', undefined, ORGANIZATION_ROUTE), demi: native('/organizations') },
   { read: 'organization', plan: '40', identities: STAFF, dataset: 'Organization',
-    eagle: rows('/organization/:organization', undefined, ORGANIZATION_ROUTE), demi: search('Organization', { 'and[_id]': ':organization' }) },
-  { read: 'project-notification-list', plan: '41', identities: STAFF, dataset: 'ProjectNotification',
-    eagle: pagedRows('/projectNotification', undefined, FIELDED), demi: search('ProjectNotification') },
-  { read: 'recent-activity-top', plan: '42', identities: ANON, dataset: 'RecentActivity',
-    // Eagle answers its newest 4 whatever `top` says, so DEMI is asked for one page of 4.
+    eagle: rows('/organization/:organization', undefined, ORGANIZATION_ROUTE), demi: one('/organizations/:organization') },
+  { read: 'project-notification-list', plan: '41', identities: STAFF, dataset: 'ProjectNotification', ...NOTIFICATIONS,
+    eagle: pagedRows('/projectNotification', undefined, FIELDED), demi: native('/notifications') },
+  { read: 'recent-activity-top', plan: '42', identities: ANON, dataset: 'RecentActivity', ...UPDATES,
+    // Eagle answers its newest 4 whatever `top` says, so DEMI is asked for its newest page of 4.
     eagle: rows('/public/recentActivity', { top: 'true' }),
-    demi: { ...search('RecentActivity', { top: 'true', pageSize: '4' }), paged: false } },
+    demi: { ...native('/updates', { sort: '-dateAdded', pageSize: '4' }), paged: false } },
   pending('topic-vc', '43-46', 'no DEMI Topic or Vc kind yet (S9)'),
   // Item ids of one element. Eagle's item route streams the file and records a download, so the
   // element row's `items` refs stand in for it.
@@ -369,19 +393,32 @@ const REST_READS = [
   pending('audit', '54', 'not ported: dead route')
 ];
 
-const SEARCH_DATASETS = ['Project', 'Document', 'List', 'CommentPeriod', 'Organization', 'RecentActivity',
-  'ProjectNotification'];
+/** The native list that answers each Eagle `/search?dataset=` read, and what gates it. */
+const NATIVE_LISTS = {
+  Project: { demi: native('/projects') },
+  Document: { demi: tokenRows('/documents') },
+  List: { demi: native('/lists') },
+  CommentPeriod: { demi: native('/comment-periods') },
+  Organization: { demi: native('/organizations') },
+  RecentActivity: { demi: native('/updates'), ...UPDATES },
+  ProjectNotification: { demi: native('/notifications'), ...NOTIFICATIONS }
+};
+const STAFF_LISTS = {
+  User: { demi: native('/users') },
+  Group: { demi: native('/groups') },
+  Inspection: { demi: tokenRows('/inspections') },
+  InspectionElement: { demi: tokenRows('/inspection-elements') }
+};
 
 const SEARCH_READS = [
-  ...SEARCH_DATASETS.flatMap(dataset => [
+  ...Object.entries(NATIVE_LISTS).flatMap(([dataset, target]) => [
     { read: `search-${dataset}-public`, plan: '56', identities: ANON, dataset,
-      eagle: { ...search(dataset), path: '/public/search' }, demi: search(dataset) },
-    { read: `search-${dataset}`, plan: '55', identities: STAFF, dataset,
-      eagle: search(dataset), demi: search(dataset) }
+      eagle: { ...search(dataset), path: '/public/search' }, ...target },
+    { read: `search-${dataset}`, plan: '55', identities: STAFF, dataset, eagle: search(dataset), ...target }
   ]),
   { read: 'search-Comment', plan: '55-56', skip: "Eagle's Comment search fails; nothing to compare against" },
-  ...['User', 'Group', 'Inspection', 'InspectionElement'].map(dataset =>
-    ({ read: `search-${dataset}`, plan: '55', identities: STAFF, dataset, eagle: search(dataset), demi: search(dataset) })),
+  ...Object.entries(STAFF_LISTS).map(([dataset, target]) =>
+    ({ read: `search-${dataset}`, plan: '55', identities: STAFF, dataset, eagle: search(dataset), ...target })),
   pending('search-Item', '55-56', 'needs an id per _schemaName; not wired to --id yet'),
   pending('search-CACUser', '55-56', 'no DEMI CACUser dataset yet (S9)')
 ];
@@ -389,6 +426,6 @@ const SEARCH_READS = [
 const PARITY_MAP = [...REST_READS, ...SEARCH_READS];
 
 module.exports = {
-  PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, EAGLE_ID, same,
-  sameField, search, cappedFromStaff
+  PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, NATIVE_FIELDS,
+  EAGLE_ID, same, sameField, native, cappedFromStaff
 };
