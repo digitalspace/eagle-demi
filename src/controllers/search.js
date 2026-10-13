@@ -13,6 +13,7 @@ const { logger } = require('../utils/logger');
 const { filterFor, inClause } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const eagleQuery = require('../search/eagle-query');
+const { updatesIndexAcl } = require('../search/native-index');
 const groupChunks = require('../search/group-chunks');
 const { normalizeSubType } = require('../search/sub-type');
 const documentsRepo = require('../repositories/documents');
@@ -1208,27 +1209,6 @@ const ITEM_SCHEMAS = Object.freeze([
   'User', 'Group', 'Inspection', 'InspectionElement', 'InspectionItem',
   'Comment', 'CommentPeriod', 'ProjectNotification', 'RecentActivity'
 ]);
-
-/**
- * The `activities` index filter for this caller: role ACL and project scope, plus the publish gate
- * `updatesRepo.liveCriteria` applies to the container. The index holds EAGLE project ids, so a
- * scoped caller's DEMI ids are translated first.
- */
-async function updatesIndexAcl(access) {
-  const acl = filterFor(await updatesRepo.inEagleIdSpace(access), 'projectId');
-  if (acl.empty) return acl;
-  const clauses = acl.filter ? [`(${acl.filter})`] : [];
-  // The repository's parent gate, so the index's count cannot describe rows the page will not hold.
-  const hidden = await updatesRepo.hiddenParentIds(access);
-  // `inClause` quotes each id: a stored id is data, and a quote in one must not rewrite the filter.
-  if (hidden.length) clauses.push(`not ${inClause('projectId', hidden)}`);
-  if (updatesRepo.isLiveGated(access)) {
-    const now = new Date().toISOString();
-    // On `publishDate` alone, as updatesRepo.liveCriteria: a gated row without one stays hidden.
-    clauses.push(`(status eq null or (status eq '${updatesRepo.PUBLISHED}' and publishDate le ${now}))`);
-  }
-  return { ...acl, filter: clauses.length ? clauses.join(' and ') : acl.filter };
-}
 
 /**
  * The two Cosmos datasets a KEYWORD search is answered from the index instead.

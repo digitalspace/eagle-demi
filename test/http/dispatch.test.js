@@ -305,6 +305,43 @@ test('native comment period and comment reads', async (t) => {
   }
 });
 
+// Native reads: updates and project notifications.
+test('native update and notification reads', async (t) => {
+  const cosmos = require('../../src/db/cosmos-nosql');
+  const updates = require('../../src/repositories/updates');
+  const PATHS = [
+    '/api/updates', '/api/updates/feed', '/api/updates/u1',
+    '/api/notifications', '/api/notifications/n1'
+  ];
+  // `notifiedBy` and `eaglePushedAt` are level 2: an anonymous read must not carry them.
+  const ROWS = {
+    updates: { id: 'u1', read: ['public'], headline: 'Hello', notifiedBy: 'Hidden Sender' },
+    notifications: { id: 'n1', read: ['public'], name: 'Mine', eaglePushedAt: 'Hidden Sender' }
+  };
+  t.beforeEach((t) => {
+    updates.forgetParents();
+    t.mock.method(cosmos, 'query', async (container, spec) => {
+      if (spec.query.includes('COUNT(1)')) return { items: [1] };
+      return { items: ROWS[container] ? [ROWS[container]] : [] };
+    });
+    t.mock.method(cosmos, 'readItem', async container => ROWS[container] || null);
+  });
+
+  for (const path of PATHS) {
+    await t.test(`${path} answers anonymous without a level-2 field`, async () => {
+      const res = await call(path);
+      assert.strictEqual(res.status, 200, res.body);
+      assert.ok(res.body.includes(path.includes('notifications') ? 'Mine' : 'Hello'), res.body);
+      assert.ok(!res.body.includes('Hidden Sender'), res.body);
+    });
+
+    await t.test(`${path} answers a rejected Bearer with 401`, async () => {
+      const res = await call(path, { headers: { authorization: 'Bearer not-a-token' } });
+      assert.strictEqual(res.status, 401);
+    });
+  }
+});
+
 test('edge gate', async (t) => {
   // Fake values: the gate compares what the request presents against these.
   const GATEWAY = { 'x-gateway-secret': 'gateway-secret-for-edge-gate-suite' };

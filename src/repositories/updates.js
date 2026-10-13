@@ -509,6 +509,42 @@ async function listTop(access, { limit = TOP_ROWS, types } = {}) {
   return [...pinned, ...unpinned.slice(0, Math.max(0, limit - pinned.length))];
 }
 
+/**
+ * The read `GET /updates` goes through (`helpers/native-query.js`): the contract's criteria under
+ * every gate `list` applies, Eagle-id scope, publish gate and parent gate. `readAll` is the unpaged
+ * read-back of a keyword list (`search/native-index.js`).
+ */
+async function nativeSpec(access, criteria, orderBy) {
+  return selectWhere({
+    access: await inEagleIdSpace(access),
+    partitionField: SCOPE_FIELD,
+    criteria: [...liveCriteria(access), ...criteria, ...await parentCriteria(access)],
+    select: selectFor(CONTAINER, access, PARTITION_FIELD),
+    orderBy: orderBy && orderBy.replace(/^c\.publishDate /, `c.${publishOrderField()} `)
+  });
+}
+
+const nativeRepository = Object.freeze({
+  async list(access, { criteria, orderBy, pageNum, pageSize }) {
+    return readPage(CONTAINER, await nativeSpec(access, criteria, orderBy || DEFAULT_ORDER), { pageNum, pageSize });
+  },
+  async count(access, { criteria }) {
+    const spec = countWhere({
+      access: await inEagleIdSpace(access),
+      partitionField: SCOPE_FIELD,
+      criteria: [...liveCriteria(access), ...criteria, ...await parentCriteria(access)]
+    });
+    const { items } = await cosmos.query(CONTAINER, spec, {});
+    return items[0] || 0;
+  },
+  // Unsorted unless asked: the caller re-imposes the index's ranking.
+  async readAll(access, { criteria, orderBy }) {
+    return fetchAll(CONTAINER, await nativeSpec(access, criteria, orderBy));
+  },
+  // Mirrored: the DEMI id is the Eagle `_id`, so one point read answers both.
+  getById
+});
+
 /** Pages one due-list query may read. A tick that stops here leaves the rest for the next one. */
 const DUE_PAGE_CAP = 10;
 
@@ -701,6 +737,7 @@ module.exports = {
   listByIds,
   count,
   listTop,
+  nativeRepository,
   listDueForNotify,
   upsert,
   claimForNotify,

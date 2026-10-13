@@ -21,6 +21,7 @@ const { nativeCriteria, dialAllows, cosmosKind } = require('../helpers/native-qu
 const { inList, selectWhere, selectFor, fetchAll } = require('../repositories/_sql');
 const { levelOf } = require('../vis/level');
 const { PROJECT_TO_INDEX } = require('../vis/catalog/index-projects-renames');
+const updates = require('../repositories/updates');
 
 /** Most ranked ids one keyword list reads: one service request, never a second. */
 const ID_PAGE = aiSearch.SERVICE_MAX_TOP;
@@ -31,10 +32,37 @@ function sourcesOf(renames, column) {
   return sources.length ? sources : [column];
 }
 
+/** The stored fields behind a keyword index's `searchFields`; `nameTokens` is `name` (data source). */
+function keywordSearched(dataset) {
+  const columns = aiSearch.KEYWORD_INDEXES[dataset].searchFields.split(',');
+  return [...new Set(columns.map(column => (column === 'nameTokens' ? 'name' : column)))];
+}
+
 /**
- * Per index: how its search runs, which column carries project identity for the ACL, and the native
- * filter field -> filterable index column. A filter with no column here still narrows in Cosmos;
- * mapping it only spends the id page on rows that can match.
+ * The `activities` index filter for this caller, for the native list and `controllers/search.js`:
+ * role ACL and project scope in the Eagle id space the index holds, the parent gate, and the
+ * publish gate `updates.liveCriteria` applies to the container.
+ */
+async function updatesIndexAcl(access) {
+  const acl = filterFor(await updates.inEagleIdSpace(access), 'projectId');
+  if (acl.empty) return acl;
+  const clauses = acl.filter ? [`(${acl.filter})`] : [];
+  // The repository's parent gate, so the index's count cannot describe rows the page will not hold.
+  const hidden = await updates.hiddenParentIds(access);
+  // `inClause` quotes each id: a stored id is data, and a quote in one must not rewrite the filter.
+  if (hidden.length) clauses.push(`not ${inClause('projectId', hidden)}`);
+  if (updates.isLiveGated(access)) {
+    const now = new Date().toISOString();
+    // On `publishDate` alone, as updates.liveCriteria: a gated row without one stays hidden.
+    clauses.push(`(status eq null or (status eq ${quote(updates.PUBLISHED)} and publishDate le ${now}))`);
+  }
+  return { ...acl, filter: clauses.length ? clauses.join(' and ') : acl.filter };
+}
+
+/**
+ * Per index: how its search runs, which column carries project identity for the ACL (or an `acl`
+ * that builds it), and the native filter field -> filterable index column. A filter with no column
+ * here still narrows in Cosmos; mapping it only spends the id page on rows that can match.
  *
  * `searched` is every native field the keyword matches against. A row is a keyword hit only when
  * the caller may see all of them, because which field matched is not reported back.
@@ -51,6 +79,20 @@ const INDEX_MAPS = Object.freeze({
     },
     searched: [...new Set(aiSearch.PROJECT_SEARCH_FIELDS.split(',')
       .flatMap(column => sourcesOf(PROJECT_TO_INDEX, column)))]
+  },
+  activities: {
+    search: opts => aiSearch.searchActivities(opts),
+    partitionField: 'projectId',
+    acl: updatesIndexAcl,
+    columns: { projectId: 'projectId', type: 'type' },
+    searched: keywordSearched('activities')
+  },
+  // No project axis, like `notifications.SCOPE_FIELD`: role ACL is the whole filter.
+  'project-notifications': {
+    search: opts => aiSearch.searchNotifications(opts),
+    partitionField: null,
+    columns: { type: 'type', region: 'region', pcp: 'pcp', decision: 'decision' },
+    searched: keywordSearched('notifications')
   }
 });
 
@@ -70,8 +112,7 @@ function andOData(...clauses) {
  * `{ filter: null, empty: true }` means the caller can match nothing and no request may be sent;
  * `filter: null` with `empty: false` is unrestricted.
  */
-function indexFilter(map, parsed, access) {
-  const acl = filterFor(access, map.partitionField);
+function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionField)) {
   if (acl.empty) return { filter: null, empty: true };
 
   const clauses = [acl.filter];
@@ -93,14 +134,20 @@ function searchedVisible(map, access) {
 /**
  * A kind spec repository (`controllers/nosql/mirror-reads.js`) that answers `q=` lists from the
  * index and everything else from `cosmosKind` over the same container.
+ *
+ * `store` replaces `cosmosKind` for a container whose reads carry gates of their own (updates):
+ * the kind's native repository plus `readAll(access, {criteria, orderBy})`, the unpaged read-back.
  */
-function indexedKind({ index, container, entity, partitionField, defaultOrder }) {
+function indexedKind({ index, container, entity, partitionField, defaultOrder, store: given }) {
   const map = INDEX_MAPS[index];
   if (!map) throw new Error(`[native-index] no field map for index ${index}`);
-  const store = cosmosKind({ container, entity, partitionField, defaultOrder });
+  const store = given || cosmosKind({ container, entity, partitionField, defaultOrder });
+  const readAll = given ? given.readAll : (access, { criteria, orderBy }) => fetchAll(container, selectWhere({
+    access, partitionField, criteria, select: selectFor(entity, access, partitionField), orderBy
+  }));
 
   async function readMatches(access, parsed) {
-    const { filter, empty } = indexFilter(map, parsed, access);
+    const { filter, empty } = indexFilter(map, parsed, access, map.acl ? await map.acl(access) : undefined);
     if (empty) return [];
 
     const { items } = await map.search({ keywords: parsed.q, filter, top: ID_PAGE });
@@ -109,13 +156,10 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder })
 
     // `q: null`: the index matched the keyword; Cosmos must not re-match it with CONTAINS.
     const { criteria, orderBy } = nativeCriteria({}, { ...parsed, q: null }, access);
-    const rows = await fetchAll(container, selectWhere({
-      access,
-      partitionField,
+    const rows = await readAll(access, {
       criteria: [...criteria, inList('id', ranked, '@xid'), searchedVisible(map, access)],
-      select: selectFor(entity, access, partitionField),
       orderBy
-    }));
+    });
     if (orderBy) return rows;
     const rank = new Map(ranked.map((id, i) => [id, i]));
     return rows.sort((a, b) => rank.get(String(a.id)) - rank.get(String(b.id)));
@@ -143,4 +187,4 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder })
   };
 }
 
-module.exports = { ID_PAGE, INDEX_MAPS, andOData, indexFilter, indexedKind };
+module.exports = { ID_PAGE, INDEX_MAPS, andOData, indexFilter, indexedKind, updatesIndexAcl };

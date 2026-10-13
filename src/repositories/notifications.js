@@ -122,6 +122,26 @@ async function count(access, filters = {}) {
   return items[0] || 0;
 }
 
+/** The contract's criteria (`helpers/native-query.js`) under the role ACL alone; see the header. */
+function nativeSpec(access, criteria, orderBy) {
+  return selectWhere({
+    access, partitionField: SCOPE_FIELD, criteria, select: selectFor(CONTAINER, access, PARTITION_FIELD), orderBy
+  });
+}
+
+/** The read `GET /notifications` goes through. `readAll` is a keyword list's read-back (`search/native-index.js`). */
+const nativeRepository = Object.freeze({
+  list: (access, { criteria, orderBy, pageNum, pageSize }) =>
+    readPage(CONTAINER, nativeSpec(access, criteria, orderBy || DEFAULT_ORDER), { pageNum, pageSize }),
+  async count(access, { criteria }) {
+    const { items } = await cosmos.query(CONTAINER, countWhere({ access, partitionField: SCOPE_FIELD, criteria }), {});
+    return items[0] || 0;
+  },
+  readAll: (access, { criteria, orderBy }) => fetchAll(CONTAINER, nativeSpec(access, criteria, orderBy)),
+  // Mirrored: the DEMI id is the Eagle `_id`, so one point read answers both.
+  getById
+});
+
 async function upsert(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
 }
@@ -139,5 +159,6 @@ module.exports = {
   listByIds,
   listDecisions,
   count,
+  nativeRepository,
   upsert
 };
