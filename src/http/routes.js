@@ -110,8 +110,10 @@ const routes = [
   // read by nothing here. Guessing is bounded by the password's own entropy; the gateway cannot
   // throttle it on the Consumption tier, and controllers/gate.js says why.
   { method: 'post', path: '/gate', guards: [], load: () => gateController().postGate },
-  // Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401.
-  { method: 'get', path: '/me', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => meController().getMe },
+  // Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401. `strict`
+  // because a rejected Bearer must 401 so the admin console refreshes instead of reading itself
+  // as public.
+  { method: 'get', path: '/me', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => meController().getMe },
   // Authenticated, though the body describes a HYPOTHETICAL caller and the handler reads no
   // container: the answer is the whole field catalog plus a role-privilege oracle, the same
   // disclosure /api-docs is gated for below. The Access Model screen is staff-gated anyway.
