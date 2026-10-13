@@ -134,4 +134,4 @@ function getHandler(entity, notFound, get) {
   };
 }
 
-module.exports = { listHandler, getHandler };
+module.exports = { listHandler, getHandler, NO_STORE };

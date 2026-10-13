@@ -16,6 +16,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const projects = require('../../src/repositories/projects');
+const projectController = require('../../src/controllers/nosql/project');
 const { logger } = require('../../src/utils/logger');
 const { withServer } = require('../helpers/with-server');
 const config = require('../../src/config');
@@ -69,6 +70,7 @@ test('no anonymous response carries a restricted field', async (t) => {
       items: [structuredClone(STORED)], continuationToken: undefined
     }));
     t.mock.method(projects, 'listPage', async () => [structuredClone(STORED)]);
+    t.mock.method(projectController.projectsKind.repository, 'list', async () => [structuredClone(STORED)]);
     t.mock.method(projects, 'getById', async () => structuredClone(STORED));
     t.mock.method(projects, 'countVisible', async () => 1);
 

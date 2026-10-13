@@ -14,8 +14,8 @@ const querystring = require('node:querystring');
 // First: the logger's uncaughtException handler would swallow a load failure here into a green run.
 const { cosmosKind, projectParentJoin, MAX_IDS, ANON_MAX_PAGE_DEPTH } = require('../../../src/helpers/native-query');
 const cosmos = require('../../../src/db/cosmos-nosql');
-const config = require('../../../src/config');
 const audit = require('../../../src/utils/audit');
+const { recordEvents } = require('../../helpers/record-events');
 const projects = require('../../../src/repositories/projects');
 const { makeRes } = require('../../../src/http/router');
 const { listHandler, getHandler } = require('../../../src/controllers/nosql/mirror-reads');
@@ -72,28 +72,6 @@ function listQuery(specs) {
 function param(spec, name) {
   const found = spec.parameters.find(p => p.name === name);
   return found && found.value;
-}
-
-const DCR_KEYS = ['auditDcrEndpoint', 'auditDcrImmutableId', 'eventsDcrEndpoint', 'eventsDcrImmutableId'];
-
-/**
- * The audit and events rows a request leaves behind, read at the transport. mirror-reads holds its
- * own references to `analyticsEvent`/`auditEvent`, so the writer is observed rather than mocked.
- */
-function recordEvents(t) {
-  const saved = DCR_KEYS.map(key => config[key]);
-  // Non-empty is what turns the writer on; the transport below means nothing is ever dialled.
-  DCR_KEYS.forEach((key) => { config[key] = 'test-dcr'; });
-  const sent = [];
-  audit._setTransport(async (stream, rows) => { rows.forEach(row => sent.push({ stream, ...row })); });
-  t.after(() => {
-    DCR_KEYS.forEach((key, i) => { config[key] = saved[i]; });
-    audit._resetTransport();
-  });
-  return async (stream) => {
-    await audit.flush();
-    return sent.filter(row => row.stream === stream);
-  };
 }
 
 async function call(handler, qs, { user, id } = {}) {

@@ -18,7 +18,7 @@ const groups = require('../../repositories/groups');
 const inspections = require('../../repositories/inspections');
 const { unlessUnprovisioned } = require('../../helpers/unprovisioned');
 const {
-  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
+  resolveAccess, systemAccess, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
 const { catalogFor } = require('../../vis/catalog');
 const { PATCH_MAX_OPERATIONS } = require('../../db/cosmos-nosql');
@@ -44,6 +44,8 @@ const {
 } = require('./eagle-mirror');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { narrowTwin, mirrorTags, partnerRefusesTags, sameTags } = require('../../helpers/project-twin');
+const { listHandler } = require('./mirror-reads');
+const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -275,31 +277,28 @@ async function cascadeDocumentVisibility(projectId, acl) {
   }
 }
 
-exports.getProjects = async (req, res) => {
-  try {
-    const access = resolveAccess(req);
-    const { regionalDistrict, municipality, electoralDistrict } = req.query;
-
-    // Anonymous callers cap at ANON_MAX_PAGE_SIZE; authenticated ones keep the full ceiling.
-    const { pageSize, error } = pageSizeFor(access, req.query.pageSize);
-    if (error) return res.status(400).json({ error });
-
-    const { items, continuationToken } = await projects.listVisible(access, {
-      regionalDistrict,
-      municipality,
-      electoralDistrict,
-      pageSize,
-      continuationToken: req.query.continuationToken
-    });
-
-    // Continuation token is returned in a header so the body stays a plain array — the
-    // frontend consumes it as one today and paging is opt-in.
-    if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
-    return res.json(items.map(p => redactForAccess('projects', p, access)));
-  } catch (err) {
-    return serverError(res, err, 'project controller failed');
-  }
+/**
+ * The projects kind spec, shared by `GET /projects` and `GET /counts?kind=projects`. `q` ranks
+ * through the projects index and matches every field the index searches.
+ *
+ * No `dateUpdated` sort: the container indexes only listed paths and Cosmos refuses ORDER BY on
+ * an unindexed one.
+ */
+const projectsKind = {
+  entity: 'projects',
+  repository: indexedKind({
+    index: 'projects', container: 'projects', entity: 'projects', partitionField: 'id', defaultOrder: 'c.name ASC'
+  }),
+  sortKeys: ['name'],
+  filters: [
+    'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict'
+  ],
+  multiValueFilters: ['projectState'],
+  qFields: INDEX_MAPS.projects.searched
 };
+exports.projectsKind = projectsKind;
+
+exports.getProjects = listHandler(projectsKind);
 
 exports.getProject = async (req, res) => {
   try {

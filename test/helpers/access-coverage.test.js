@@ -320,7 +320,8 @@ test('access gate coverage', async (t) => {
     // 41: +1 for the Eagle push 500 when the Eagle-only twin could not be narrowed (error string).
     // 42: +1 for the PUT 400 on invalid `tags` (error string).
     // 43: +1 for the PUT 500 when the pair's other row could not take the tags (error string).
-    assert.strictEqual(emissions.length, 43,
+    // 41: -2, GET /projects moved to the native list handler, which redacts in mirror-reads.
+    assert.strictEqual(emissions.length, 41,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
     for (const site of [
