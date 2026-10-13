@@ -15,6 +15,7 @@ const {
   assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
+const { cosmosKind } = require('../helpers/native-query');
 
 const CONTAINER = 'commentPeriods';
 const PARTITION_FIELD = 'projectId';
@@ -322,6 +323,44 @@ async function countByProject(projectId, access) {
   return countMatching(access, criteriaFor(projectId), { partitionKey: String(projectId) });
 }
 
+/** Any of `statuses` (`STATUSES` values), every clause bound to the same clock read. */
+function anyStatusCriterion(statuses, now) {
+  const parts = statuses.map(status => statusCriterion(status, now));
+  const params = new Map();
+  parts.forEach(part => part.params.forEach(p => params.set(p.name, p)));
+  return { clause: `(${parts.map(part => part.clause).join(' OR ')})`, params: [...params.values()] };
+}
+
+const nativeBase = cosmosKind({
+  container: CONTAINER, entity: CONTAINER, partitionField: PARTITION_FIELD, defaultOrder: DEFAULT_ORDER
+});
+
+/**
+ * The repository `GET /comment-periods` reads through (`helpers/native-query.js`), deleted periods
+ * left out as in `listCriteria`. `status` is a clock comparison, not a stored field, so the
+ * contract's generic filter cannot build it; the caller passes the validated values here instead.
+ *
+ * @param {string[]} [statuses]  `STATUSES` values, ORed; empty narrows nothing
+ * @param {Date}     [now]       one clock read for every status clause
+ */
+function nativeRepository(statuses = [], now = new Date()) {
+  const fixed = [NOT_DELETED, ...(statuses.length ? [anyStatusCriterion(statuses, now)] : [])];
+  const where = criteria => [...fixed, ...criteria];
+  // queryFirst drains the cross-partition iterator: a single fetched page can be empty while the row exists.
+  const first = (access, field, value) => cosmos.queryFirst(CONTAINER, selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: where([eq(field, String(value), '@byField')]),
+    select: selectFor(CONTAINER, access, PARTITION_FIELD)
+  }), {});
+  return {
+    list: (access, opts) => nativeBase.list(access, { ...opts, criteria: where(opts.criteria) }),
+    count: (access, opts) => nativeBase.count(access, { criteria: where(opts.criteria) }),
+    getById: (access, id) => first(access, 'id', id),
+    getByEagleId: (access, eagleId) => first(access, 'eagleId', eagleId)
+  };
+}
+
 /** Whole-item write. A period that changed project moves partition — see `upsertItem`. */
 async function upsert(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
@@ -417,6 +456,7 @@ module.exports = {
   listAll,
   countAll,
   countByProject,
+  nativeRepository,
   aclRowsForProject,
   setAclForProject,
   upsert,
