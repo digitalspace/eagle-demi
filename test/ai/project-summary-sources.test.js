@@ -47,7 +47,15 @@ test('apiSource.documents', async (t) => {
     }).documents('272');
 
     assert.deepStrictEqual(rows.map(r => r.id), ['d1', 'd2']);
-    assert.ok(calls[1].url.includes('continuationToken=tok-1'));
+    // Native `/documents` has no token paging; only the credentialed scan route keeps it.
+    for (const call of calls) {
+      const url = new URL(call.url);
+      assert.strictEqual(url.pathname, '/api/documents/scan');
+      assert.strictEqual(url.searchParams.get('project'), '272');
+      assert.strictEqual(url.searchParams.get('pageSize'), '1000');
+    }
+    assert.strictEqual(new URL(calls[0].url).searchParams.get('continuationToken'), null);
+    assert.strictEqual(new URL(calls[1].url).searchParams.get('continuationToken'), 'tok-1');
   });
 });
 

@@ -178,10 +178,15 @@ const routes = [
   { method: 'patch', path: '/projects/:id/visibility', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => projectController().setVisibility },
 
   // Documents Routes
-  { method: 'get', path: '/documents', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getDocuments },
-  // BEFORE `/documents/:id`: the table is matched in order and `:id` is any single segment, so a
-  // literal route placed after it would be answered as a document lookup for the id
-  // "recent-uploads".
+  // Native list contract; `strict` for the same reason as `/projects`.
+  { method: 'get', path: '/documents', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getDocuments },
+  // Literal paths sit BEFORE `/documents/:id`: the table is matched in order and `:id` is any
+  // single segment, so a literal route placed after it would be answered as a document lookup for
+  // the id "scan", "passages" or "recent-uploads".
+  // The token-paged walk for internal callers (summary sources, extraction host). Credential only,
+  // so an anonymous caller cannot scrape the corpus past the native list's offset cap.
+  { method: 'get', path: '/documents/scan', guards: [authMiddleware, credentialsMiddleware], load: () => documentController().scanDocuments },
+  { method: 'get', path: '/documents/passages', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/passages').getPassages },
   { method: 'get', path: '/documents/recent-uploads', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getRecentUploads },
   // The PDF title worker's work list and lease sweep; before `/documents/:id` for the same reason.
   { method: 'get', path: '/documents/pdf-title/pending', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().listPending },

@@ -86,10 +86,10 @@ function apiSource({ baseUrl, token, apiKey, fetchImpl } = {}) {
         });
         if (continuationToken) query.set('continuationToken', continuationToken);
 
-        const res = await doFetch(`${base}/documents?${query}`, { headers });
+        const res = await doFetch(`${base}/documents/scan?${query}`, { headers });
         if (!res.ok) {
           const text = await res.text().catch(() => '');
-          throw new Error(`GET /documents -> ${res.status} ${text.slice(0, 200)}`);
+          throw new Error(`GET /documents/scan -> ${res.status} ${text.slice(0, 200)}`);
         }
         const page = await res.json();
         for (const row of page || []) all.push(row);

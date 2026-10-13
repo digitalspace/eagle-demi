@@ -56,13 +56,13 @@ test('Update-form images stay out of the Cosmos document lists', async (t) => {
     assert.strictEqual(updateSourceOf(specs[0]), 'UPDATE');
   });
 
-  // GET /documents is also the extraction host's work list (`extracted=false`), so this is what
-  // keeps Update images from ever getting chunks.
-  await t.test('GET /documents leaves them out', async (tt) => {
+  // GET /documents/scan is the extraction host's work list (`extracted=false`), so this is what
+  // keeps Update images from ever getting chunks. The native list: native-documents.test.js.
+  await t.test('GET /documents/scan leaves them out', async (tt) => {
     const specs = captureQueries(tt);
     const res = { status() { return this; }, json() { return this; }, setHeader() {} };
 
-    await documentController.getDocuments(
+    await documentController.scanDocuments(
       { query: { extracted: 'false' }, params: {}, header: () => null }, res);
 
     assert.ok(specs[0].query.includes(EXCLUSION), specs[0].query);

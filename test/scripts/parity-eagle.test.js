@@ -262,7 +262,8 @@ const NATIVE_SPECS = {
   '/lists': require('../../src/controllers/native/lists').SPEC,
   '/organizations': require('../../src/controllers/native/organizations').SPEC,
   '/users': require('../../src/controllers/nosql/user').nativeSpec,
-  '/groups': require('../../src/controllers/nosql/group').nativeSpec
+  '/groups': require('../../src/controllers/nosql/group').nativeSpec,
+  '/documents': require('../../src/controllers/nosql/document').documentsKind
 };
 
 test('every native list read in the map sends only parameters its kind takes, so DEMI answers no 400', () => {
@@ -1188,15 +1189,17 @@ test('a status count that differs between the summaries is unexplained and exits
 });
 
 const docRow = id => ({ id, eagleId: id, documentFileName: `${id}.pdf` });
-/** The staff document list: DEMI answers row A with a continuation token, then row B with none. */
+const inspectionRow = id => ({ _id: id, name: 'Site visit' });
+/** Staff inspection search: DEMI answers row A with a continuation token, then row B with none. */
 const tokenRun = async (args = []) => {
   const h = harness((host, url) => {
-    if (host === 'eagle.test') return json([{ _id: A, documentFileName: `${A}.pdf` }, { _id: B, documentFileName: `${B}.pdf` }]);
-    if (url.pathname !== '/api/documents') return demiParents(url);
+    if (host === 'eagle.test') return json(searchBody([inspectionRow(A), inspectionRow(B)]));
     const second = url.searchParams.get('continuationToken') === 't1';
-    return new Response(JSON.stringify([docRow(second ? B : A)]), { headers: second ? {} : { 'x-continuation-token': 't1' } });
+    const id = second ? B : A;
+    return new Response(JSON.stringify([{ ...inspectionRow(id), id, eagleId: id }]),
+      { headers: second ? {} : { 'x-continuation-token': 't1' } });
   }, { env: { PARITY_TOKEN: TOKEN } });
-  const code = await run([...staff, '--only', 'document-list', '--id', `project=${A}`, ...args], h.deps);
+  const code = await run([...staff, '--only', 'search-Inspection', ...args], h.deps);
   return { code, line: h.out[0], calls: demiCalls(h) };
 };
 
@@ -1204,10 +1207,43 @@ test('a DEMI list paged by continuation token is read token by token to the end'
   const { code, line, calls } = await tokenRun();
   assert.strictEqual(code, 0);
   assert.match(line, /match=2 missingInDemi=0 extraInDemi=0/);
-  assert.deepStrictEqual(calls.slice(1), [
-    `/api/documents?project=eagle-${A}&pageSize=100`,
-    `/api/documents?project=eagle-${A}&pageSize=100&continuationToken=t1`
-  ]);
+  assert.deepStrictEqual(calls, ['/api/inspections?pageSize=100', '/api/inspections?pageSize=100&continuationToken=t1']);
+});
+
+/** One document on each side; DEMI answers its native list by page. Returns the DEMI `/documents` calls. */
+const documentRun = async (read, identityArgs) => {
+  const h = harness((host, url) => {
+    if (host === 'eagle.test') return json([{ _id: A, documentFileName: `${A}.pdf` }]);
+    return demiParents(url) || nativeRows([docRow(A)], url);
+  }, { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...identityArgs, '--only', read, '--id', `project=${A}`], h.deps);
+  return { code, line: h.out[0], h, documents: demiCalls(h).filter(u => u.startsWith('/api/documents')) };
+};
+const anonymous = ['--eagle', EAGLE, '--demi', DEMI];
+
+test('document reads use page paging', async () => {
+  assert.deepStrictEqual(PARITY_MAP.filter(e => !e.skip && e.demi.path === '/documents' && e.demi.paging !== 'page')
+    .map(e => e.read), []);
+  for (const [read, identityArgs] of [['document-list-public', anonymous], ['document-list', staff]]) {
+    const { code, line, documents } = await documentRun(read, identityArgs);
+    assert.strictEqual(code, 0, line);
+    assert.match(line, /match=1 missingInDemi=0 extraInDemi=0/);
+    assert.deepStrictEqual(documents, [`/api/documents?project=eagle-${A}&page=1&pageSize=100&count=true`]);
+  }
+});
+
+test('featured reads are not pending', async () => {
+  for (const [read, identityArgs, eaglePath] of [
+    ['featured-public', anonymous, `/Public/project/${A}/FeaturedDocuments`],
+    ['featured', staff, `/project/${A}/FeaturedDocuments`]
+  ]) {
+    const { code, line, h, documents } = await documentRun(read, identityArgs);
+    assert.strictEqual(code, 0, line);
+    assert.match(line, /match=1 missingInDemi=0 extraInDemi=0/);
+    assert.ok(eagleCall(h, eaglePath), `${read} asks Eagle ${eaglePath}`);
+    assert.deepStrictEqual(documents,
+      [`/api/documents?project=eagle-${A}&isFeatured=true&sort=-datePosted&page=1&pageSize=100&count=true`]);
+  }
 });
 
 test('a --max-pages cut with a continuation token left reports the read as truncated, not as missing rows', async () => {

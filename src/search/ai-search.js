@@ -123,6 +123,14 @@ const PROJECT_SEARCH_FIELDS =
   'name,displayName,description,proponent,nameTokens,searchLabels,tags,tagsTokens';
 
 /**
+ * The fields a document keyword query matches on, compat and native alike. One copy, because
+ * compat's leg-two exclusion clause has to complement exactly these. `fileNameTokens` is
+ * documentFileName under the `filename` analyzer — `keywords=mine` matches `2019-mine-plan.pdf`,
+ * which `en.microsoft` on documentFileName does not.
+ */
+const DOCUMENT_SEARCH_FIELDS = 'displayName,documentFileName,description,fileNameTokens';
+
+/**
  * The two datasets whose index answers WHICH ROWS MATCH and nothing else.
  *
  * `select` is the row key plus what the caller's own id space needs; the row itself is read back
@@ -1553,12 +1561,8 @@ async function searchDocuments(opts = {}) {
   // the index carried them: `datePosted` is its Date column, and the four `*Id` values are what
   // `idToList()` resolves against eagle-api's List collection.
   const select = DOCUMENT_SELECT;
-  // Named once because leg two's exclusion clause below has to complement EXACTLY these fields.
-  // A second copy is how the two would drift apart, and a drifted complement is the paging bug
-  // this function carried for its whole life.
-  // `fileNameTokens` is documentFileName under the `filename` analyzer — `keywords=mine` matches
-  // `2019-mine-plan.pdf`, which `en.microsoft` on documentFileName does not.
-  const searchFields = 'displayName,documentFileName,description,fileNameTokens';
+  // Leg two's exclusion clause below has to complement EXACTLY these fields, so it reads this name.
+  const searchFields = DOCUMENT_SEARCH_FIELDS;
   // Resolved once because leg two's exclusion clause re-serialises leg one's query: a `*` on one
   // side and not the other stops the legs being complements, which is the paging bug it exists to
   // fix. Default-on, as in searchProjects.
@@ -1696,6 +1700,43 @@ async function searchDocuments(opts = {}) {
         description: markedField(hit, 'description')
       }
     }))
+  };
+}
+
+/**
+ * Native document ids, ranked: one leg over the document's own fields, with no project-name leg
+ * and no highlight, because the rows are re-read from Cosmos. No keywords means matchAll; keywords
+ * that tokenise to nothing match nothing, as in `runSearch`.
+ *
+ * @param {{keywords?: string, fuzzy?: boolean, prefix?: boolean, filter?: string, orderby?: string,
+ *   top?: number, skip?: number}} opts
+ * @returns {Promise<{ids: string[], count: ?number, meta?: {degraded: object}}>} `count` is
+ *   `@odata.count`, index-wide for the filter.
+ */
+async function searchDocumentIds(opts = {}) {
+  const { configured, documentsIndex } = config();
+  if (!configured) {
+    warnUnconfigured();
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
+  }
+
+  const { value, count, degraded } = await runSearch(documentsIndex, {
+    keywords: opts.keywords,
+    fuzzy: opts.fuzzy,
+    prefix: opts.prefix !== false,
+    matchAll: !String(opts.keywords ?? '').trim(),
+    searchFields: DOCUMENT_SEARCH_FIELDS,
+    select: 'id',
+    filter: opts.filter,
+    orderby: opts.orderby,
+    top: opts.top,
+    skip: opts.skip
+  });
+
+  return {
+    ids: value.map(row => String(row.id)),
+    count,
+    ...(degraded ? { meta: { degraded } } : {})
   };
 }
 
@@ -2246,6 +2287,8 @@ module.exports = {
   searchChunks,
   searchProjects,
   searchDocuments,
+  searchDocumentIds,
+  DOCUMENT_SEARCH_FIELDS,
   searchActivities,
   searchNotifications,
   // The `/search/counts` legs. `countKeyword` is exported for the guard test that pins the request

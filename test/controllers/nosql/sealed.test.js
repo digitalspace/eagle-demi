@@ -211,12 +211,30 @@ test('the sealed compartment routes', async (t) => {
       // Driven through the REAL repository and controllers, so the emitted SQL is what decides.
       stubCosmosReads(t, [PUBLIC_ROW, SEALED_ROW]);
 
+      // The native list over the index: the index may name the sealed row; the Cosmos re-read drops it.
+      t.mock.method(aiSearch, 'searchDocumentIds', async () => ({ ids: ['d1', 's1'], count: 2 }));
       const listed = mockRes();
       await documentController.getDocuments(
         { query: {}, params: {}, user: caller, headers: {} }, listed);
 
       assert.deepStrictEqual(listed.body.map(d => d.id), ['d1'],
         `the document list handed a sealed row to ${who}`);
+
+      // One project's plain list, read from Cosmos alone.
+      const projectListed = mockRes();
+      await documentController.getDocuments(
+        { query: { project: '207' }, params: {}, user: caller, headers: {} }, projectListed);
+
+      assert.deepStrictEqual(projectListed.body.map(d => d.id), ['d1'],
+        `the project document list handed a sealed row to ${who}`);
+
+      // GET /api/documents/scan, the token-paged walk.
+      const scanned = mockRes();
+      await documentController.scanDocuments(
+        { query: {}, params: {}, user: caller, headers: {} }, scanned);
+
+      assert.deepStrictEqual(scanned.body.map(d => d.id), ['d1'],
+        `the document scan handed a sealed row to ${who}`);
 
       // GET /api/documents/:id — the point read, which bypasses the list predicate entirely.
       const fetched = mockRes();

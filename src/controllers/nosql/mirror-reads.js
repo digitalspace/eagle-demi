@@ -62,6 +62,8 @@ function nativeListHandler(spec) {
     } catch (err) {
       // `readPage` refuses a page past MAX_PAGE_DEPTH before reading anything.
       if (err && err.status === 400) return res.status(400).json({ error: err.message });
+      // A store that cannot answer yet (passages over an unstamped scope) says why, not a bare 500.
+      if (err && err.status === 503) return res.status(503).json({ error: err.message });
       return serverError(res, err, `${spec.entity} list failed`);
     }
   };

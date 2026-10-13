@@ -32,6 +32,9 @@ const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 const EAGLE_ID = /^[0-9a-f]{24}$/i;
 
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const RANGE_OPS = Object.freeze(['ge', 'le']);
+
 /** Throws at route load, not per request, on a kind spec that names a field SQL cannot take. */
 function assertKindSpec(spec) {
   if (!spec || typeof spec.entity !== 'string') throw new Error('[native] kind spec needs an entity');
@@ -43,6 +46,13 @@ function assertKindSpec(spec) {
   for (const field of spec.multiValueFilters || []) {
     if (!(spec.filters || []).includes(field)) {
       throw new Error(`[native] ${spec.entity}: multi-value filter ${field} is not a declared filter`);
+    }
+  }
+  for (const [name, { field, op }] of Object.entries(spec.ranges || {})) {
+    if (!FIELD_PATH.test(name) || !FIELD_PATH.test(field)) throw new Error(`[native] ${spec.entity}: bad range ${name}`);
+    if (!RANGE_OPS.includes(op)) throw new Error(`[native] ${spec.entity}: range ${name} needs op ge or le`);
+    if (CONTROL_PARAMS.includes(name) || (spec.filters || []).includes(name) || (spec.aliases || {})[name]) {
+      throw new Error(`[native] ${spec.entity}: range ${name} clashes with a parameter of that name`);
     }
   }
   for (const [name, field] of Object.entries(spec.aliases || {})) {
@@ -79,16 +89,35 @@ function refusal(entity, field, access) {
 }
 
 /**
+ * The instant one edge of a day range stands for: `ge` from the day's first millisecond, `le` to
+ * its last, so a document posted at 09:00 on the end day is in. UTC, as the frontends send it.
+ */
+function rangeBound(op, day) {
+  return `${day}T${op === 'ge' ? '00:00:00.000' : '23:59:59.999'}Z`;
+}
+
+/** A real `YYYY-MM-DD` calendar day: `2026-02-30` passes the shape and fails the round trip. */
+function isDay(value) {
+  if (!DAY.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+/**
  * Parse and validate `query` for `spec`. Answers `{ error }` (a 400) or the parsed query:
- * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]} }`.
- * `filters` is keyed by row field, whatever name the query used (see `filterNames`).
+ * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]},
+ * ranges: [{name, field, op, value}] }`. `filters` is keyed by row field, whatever name the query
+ * used (see `filterNames`). `spec.ranges` is query name -> `{ field, op: 'ge'|'le' }`, one day each,
+ * for a bound with no row field of its own (`datePostedStart` -> `datePosted ge`).
  */
 function parseNativeQuery(spec, query, access) {
   const names = filterNames(spec);
   const multi = spec.multiValueFilters || [];
 
   for (const [key, value] of Object.entries(query || {})) {
-    if (!CONTROL_PARAMS.includes(key) && !names.has(key)) return { error: `unknown parameter: ${key}` };
+    if (!CONTROL_PARAMS.includes(key) && !names.has(key) && !(spec.ranges || {})[key]) {
+      return { error: `unknown parameter: ${key}` };
+    }
     if (Array.isArray(value) && !multi.includes(names.get(key))) return { error: `parameter given more than once: ${key}` };
   }
   const q = query || {};
@@ -146,7 +175,16 @@ function parseNativeQuery(spec, query, access) {
     filterValues[field] = [].concat(q[name]);
   }
 
-  return { pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues };
+  const ranges = [];
+  for (const [name, { field, op }] of Object.entries(spec.ranges || {})) {
+    if (q[name] === undefined) continue;
+    if (!isDay(q[name])) return { error: `${name} takes one day as YYYY-MM-DD` };
+    const refused = refusal(spec.entity, field, access);
+    if (refused) return { error: refused };
+    ranges.push({ name, field, op, value: q[name] });
+  }
+
+  return { pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues, ranges };
 }
 
 /** The record's own dial on `field` may hide it below the caller's level; such a record never matches. */
@@ -168,6 +206,11 @@ function nativeCriteria(spec, parsed, access) {
   Object.entries(parsed.filters).forEach(([field, values], i) => {
     const match = values.length === 1 ? eq(field, values[0], `@nf${i}`) : inList(field, values, `@nf${i}_`);
     criteria.push({ clause: `(${dialAllows(field, level)} AND ${match.clause})`, params: match.params });
+  });
+
+  (parsed.ranges || []).forEach(({ field, op, value }, i) => {
+    const bound = { name: `@nr${i}`, value: rangeBound(op, value) };
+    criteria.push({ clause: `(${dialAllows(field, level)} AND c.${field} ${op === 'ge' ? '>=' : '<='} ${bound.name})`, params: [bound] });
   });
 
   if (parsed.q) {
@@ -245,6 +288,7 @@ module.exports = {
   parseNativeQuery,
   nativeCriteria,
   dialAllows,
+  rangeBound,
   isEagleId,
   cosmosKind,
   projectParentJoin

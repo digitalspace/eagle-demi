@@ -50,13 +50,14 @@ test('document routes withhold the raw Cosmos record', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   // The point read is covered by document-redaction.test.js, which also proves the level 0 side.
-  await t.test('the list does not emit read[], s3Key or _etag', async () => {
+  // The native list's projection is covered by native-documents.test.js.
+  await t.test('the scan does not emit read[], s3Key or _etag', async () => {
     t.mock.method(documents, 'listVisible', async () => ({
       items: [structuredClone(STORED)], continuationToken: undefined
     }));
 
     const res = mockRes();
-    await documentController.getDocuments({ ...ANON }, res);
+    await documentController.scanDocuments({ ...ANON }, res);
     const body = res.body[0];
 
     assert.strictEqual(body.read, undefined, 'the ACL is withheld');

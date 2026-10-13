@@ -3,6 +3,7 @@
 const projects = require('./projects');
 const documents = require('./documents');
 const chunks = require('./chunks');
+const passages = require('./passages');
 const commentPeriods = require('./comment-periods');
 const comments = require('./comments');
 const notifications = require('./notifications');
@@ -21,6 +22,7 @@ const CATALOGS = {
   projects,
   documents,
   chunks,
+  passages,
   commentPeriods,
   comments,
   notifications,

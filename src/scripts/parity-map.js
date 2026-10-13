@@ -264,7 +264,7 @@ const rows = (path, query, opts) => ({ path, query, shape: 'array', paged: false
 const pagedRows = (path, query, opts) => ({ path, query, shape: 'array', paged: true, ...opts });
 /** A native list: DEMI rows, paged by `page`/`pageSize`, total from `x-total-count` with `count=true`. */
 const native = (path, query, opts) => ({ path, query, shape: 'array', paged: true, paging: 'page', ...opts });
-/** A DEMI list still paged by `x-continuation-token`, with no total: `/documents` until D3b, inspections. */
+/** A DEMI list still paged by `x-continuation-token`, with no total: inspections. */
 const tokenRows = (path, query) => ({ path, query, shape: 'array', paged: true, paging: 'token' });
 // eagle-api answers only _id and read[] unless `fields` names the rest.
 const FIELDED = { fields: true };
@@ -289,12 +289,13 @@ const statusRows = counts => Object.entries(counts || {}).map(([status, count]) 
 const pending = (read, plan, reason) => ({ read, plan, pending: true, skip: reason });
 // DEMI sets x-total-count on GET and HEAD of /search; this script sends GET only.
 const HEAD_REASON = 'HEAD not sent by this script';
-const D3B_REASON = 'native /documents has no isFeatured filter until D3b';
 // D2c (branch feat-native-updates-notifications) adds these; until DEMI answers them, the read is skipped.
 const UPDATES = { pendingRoute: '/updates' };
 const NOTIFICATIONS = { pendingRoute: '/notifications' };
 
 const DOCUMENT_ONE_FIELDS = [...FIELDS.Document, 'type'];
+// Eagle answers every featured row; eagle-public asks the same filter and sort for its top five.
+const FEATURED = { project: ':demiProject', isFeatured: 'true', sort: '-datePosted' };
 
 const REST_READS = [
   { read: 'project-list-public', plan: '1', identities: ANON, dataset: 'Project',
@@ -317,18 +318,20 @@ const REST_READS = [
     demi: one('/groups/:group'),
     mapEagle: idRows,
     mapDemi: groups => idRows(groups.flatMap(g => g.members || [])) },
-  pending('featured-public', '11', D3B_REASON),
-  pending('featured', '13', D3B_REASON),
+  { read: 'featured-public', plan: '11', identities: ANON, dataset: 'Document',
+    eagle: rows('/Public/project/:project/FeaturedDocuments'), demi: native('/documents', FEATURED) },
+  { read: 'featured', plan: '13', identities: STAFF, dataset: 'Document',
+    eagle: rows('/project/:project/FeaturedDocuments'), demi: native('/documents', FEATURED) },
   pending('featured-head', '12, 14', HEAD_REASON),
   { read: 'document-list-public', plan: '15', identities: ANON, dataset: 'Document',
-    eagle: rows('/public/document', { project: ':project' }, FIELDED), demi: tokenRows('/documents', { project: ':demiProject' }) },
+    eagle: rows('/public/document', { project: ':project' }, FIELDED), demi: native('/documents', { project: ':demiProject' }) },
   { read: 'document-public', plan: '16', identities: ANON, dataset: 'Document', fields: DOCUMENT_ONE_FIELDS,
     eagle: rows('/public/document/:document', undefined, FIELDED), demi: one('/documents/:document') },
   { read: 'document-download-public', plan: '17-18',
     skip: 'never called: the public download route increments publicHitCount' },
   { read: 'document-list', plan: '19', identities: STAFF, dataset: 'Document',
     eagle: rows('/document', { isDeleted: 'false', project: ':project' }, FIELDED),
-    demi: tokenRows('/documents', { project: ':demiProject' }) },
+    demi: native('/documents', { project: ':demiProject' }) },
   { read: 'document', plan: '20', identities: STAFF, dataset: 'Document', fields: DOCUMENT_ONE_FIELDS,
     eagle: rows('/document/:document', undefined, FIELDED), demi: one('/documents/:document') },
   // Run by --download-sample over document ids paired by the reads above, not by --id.
@@ -396,7 +399,7 @@ const REST_READS = [
 /** The native list that answers each Eagle `/search?dataset=` read, and what gates it. */
 const NATIVE_LISTS = {
   Project: { demi: native('/projects') },
-  Document: { demi: tokenRows('/documents') },
+  Document: { demi: native('/documents') },
   List: { demi: native('/lists') },
   CommentPeriod: { demi: native('/comment-periods') },
   Organization: { demi: native('/organizations') },

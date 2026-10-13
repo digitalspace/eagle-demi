@@ -36,10 +36,9 @@ const ADMIN = isKeyVaultReference(ADMIN_RAW) ? '' : ADMIN_RAW;
 const INDEX_WAIT_MS = 8 * 60 * 1000;
 const INDEX_POLL_MS = 30 * 1000;
 
-if (!ADMIN) {
-  console.error('ADMIN_API_KEY is not set. Read it from demi-app-secrets; never pass it in argv.');
-  process.exit(2);
-}
+// MAX_IDS in helpers/native-query.js, copied: requiring it loads the Cosmos client this script
+// must not need. Also ANON_MAX_PAGE_SIZE, so one page holds a whole batch for the anonymous legs.
+const IDS_BATCH = 100;
 
 const results = [];
 let failures = 0;
@@ -64,35 +63,28 @@ async function api(path, { key, method = 'GET', body } = {}) {
   const text = await res.text();
   let json;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-  return { status: res.status, json, text, continuation: res.headers.get('x-continuation-token') };
+  return { status: res.status, json, text };
 }
 
 /**
  * How many of the planted ids this caller can see on a live Cosmos list.
  *
- * PAGED, not one request: the repository orders by `c.id ASC`, so a planted UUID lands at a random
- * depth. In a project with more than one page of documents, a single request makes "0 rows" mean
- * "beyond the window" just as readily as "the ACL withheld it" — and every zero in this matrix is
- * supposed to mean only the second.
- *
- * 100 rows a page, not 1000: the anonymous legs present no credential at all, and the list routes
- * refuse a larger page from such a caller with a 400.
+ * Read by id (`ids=`), not by paging the project: a planted UUID lands at a random depth, and
+ * offset paging stops a caller with no credential at 2,000 rows. Paging would let "0 rows" mean
+ * "beyond the window" as readily as "the ACL withheld it", and every zero here must mean only the
+ * second. Token paging is not an option either: it lives on the credentialed `/documents/scan`.
  */
 async function listSees(key, projectId, ids) {
   let seen = 0;
-  let token;
-  // A bound, not a limit: 600 pages of 100 is 60,000 rows, well past the largest project in the
-  // corpus. If it ever binds, the caller gets a loud string rather than a silently short count.
-  for (let page = 0; page < 600; page++) {
-    const q = `/api/documents?project=${encodeURIComponent(projectId)}&pageSize=100` +
-      (token ? `&continuationToken=${encodeURIComponent(token)}` : '');
+  for (let i = 0; i < ids.length; i += IDS_BATCH) {
+    const batch = ids.slice(i, i + IDS_BATCH);
+    const q = `/api/documents?project=${encodeURIComponent(projectId)}` +
+      `&ids=${batch.map(encodeURIComponent).join(',')}&pageSize=${IDS_BATCH}`;
     const r = await api(q, { key });
     if (r.status !== 200 || !Array.isArray(r.json)) return `HTTP ${r.status}`;
-    seen += r.json.filter(d => ids.includes(d._id || d.id)).length;
-    token = r.continuation;
-    if (!token) return seen;
+    seen += r.json.filter(d => batch.includes(d._id || d.id)).length;
   }
-  return 'unpaged: more than 600 pages';
+  return seen;
 }
 
 /** How many of the planted ids this caller can find by the nonsense term. */
@@ -286,7 +278,15 @@ async function main() {
   process.exit(failures > 0 ? 1 : (inconclusive > 0 ? 3 : 0));
 }
 
-main().catch(async (err) => {
-  console.error(`\nprobe aborted: ${err.message}`);
-  process.exit(2);
-});
+if (require.main === module) {
+  if (!ADMIN) {
+    console.error('ADMIN_API_KEY is not set. Read it from demi-app-secrets; never pass it in argv.');
+    process.exit(2);
+  }
+  main().catch(async (err) => {
+    console.error(`\nprobe aborted: ${err.message}`);
+    process.exit(2);
+  });
+}
+
+module.exports = { listSees };
