@@ -355,6 +355,12 @@ test('documents list over the paged index', async (t) => {
     assert.strictEqual(searches[0].orderby, 'datePosted desc, id');
   });
 
+  await t.test('q with no sort orders by relevance then id', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('q=report');
+    assert.strictEqual(searches[0].orderby, 'search.score() desc, id');
+  });
+
   await t.test('sort on displayName orders by its sort column, then id', async (t) => {
     const { searches } = fakeDocStores(t);
     await callDocs('q=report&sort=-displayName');

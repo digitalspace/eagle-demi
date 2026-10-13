@@ -12,9 +12,10 @@
  *
  * Paged mode (documents): the index pages and counts itself (`skip`, `top`, `@odata.count`), in one
  * request for list and count, so totals are not capped. It serves every list except the few the map
- * sends to Cosmos (`cosmosServes`), cross-project lists without `q` included. Its `searchVis` column
- * is the lowest dial over the searched fields, so a keyword cannot count a row whose searched field
- * the caller may not see. Filter fields carry no dial in the index; Cosmos re-checks them on the
+ * sends to Cosmos (`cosmosServes`), cross-project lists without `q` included. With no sort, a `q`
+ * list ranks by relevance and any other takes the map's default order, each then by `id`. Its
+ * `searchVis` column is the lowest dial over the searched fields, so a keyword cannot count a row
+ * whose searched field the caller may not see. Filter fields carry no dial in the index; Cosmos re-checks them on the
  * page only, which is latent while no route writes document dials.
  */
 
@@ -215,9 +216,12 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
   return { filter: andOData(...clauses), empty: false };
 }
 
-/** `$orderby` for paged mode: the sort column, or the map's default, then `id` so pages never overlap. */
+/**
+ * `$orderby` for paged mode: the sort column, else relevance with `q`, else the map's default; then
+ * `id` so pages never overlap.
+ */
 function indexOrderby(map, parsed) {
-  if (!parsed.sort) return `${map.defaultOrderby}, id`;
+  if (!parsed.sort) return `${parsed.q ? 'search.score() desc' : map.defaultOrderby}, id`;
   const column = map.sorts[parsed.sort.field];
   if (!column) throw badRequest(`cannot sort on ${parsed.sort.field} here`);
   return `${column} ${parsed.sort.desc ? 'desc' : 'asc'}, id`;
