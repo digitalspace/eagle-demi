@@ -3647,6 +3647,192 @@ paths:
         '404':
           description: Inspection item not found.
 
+  # Native kind reads: lists and organizations.
+  /api/lists:
+    get:
+      summary: List lookup entries
+      description: >-
+        Eagle `List` rows (`kind: List` in the `lists` container) the caller may read, with hidden
+        fields left out, ordered by `name`. Any parameter not listed here, or a parameter given more
+        than once, is a 400. A rejected Bearer token is a 401, not the anonymous view. Responses to
+        a signed-in caller carry `Cache-Control: private, no-store`.
+      parameters:
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number. Without a credential, page times pageSize must stay within 2000 rows.
+          schema:
+            type: integer
+            minimum: 1
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - name: count
+          in: query
+          required: false
+          description: Send `true` to get the number of matching rows in `x-total-count`.
+          schema:
+            type: string
+            enum: ['true']
+        - name: sort
+          in: query
+          required: false
+          description: Sort key, `-` prefix for descending.
+          schema:
+            type: string
+            enum: [name, -name]
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated ids, at most 100.
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          description: Rows whose `name` contains this text, case-insensitive.
+          schema:
+            type: string
+        - name: type
+          in: query
+          required: false
+          description: Rows of this list type only, e.g. `eaoStatus`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-total-count:
+              description: Matching rows, when `count=true`.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Unknown or repeated parameter, sort key not allowed, or page past the depth cap.
+        '401':
+          description: Bearer token rejected.
+
+  /api/lists/{id}:
+    get:
+      summary: Read one lookup entry
+      description: >-
+        One `List` row the caller may read, with hidden fields left out. A row the caller cannot
+        read is a 404, the same as one that does not exist. Takes no query parameters.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: A query parameter was sent.
+        '401':
+          description: Bearer token rejected.
+        '404':
+          description: List not found.
+
+  /api/organizations:
+    get:
+      summary: List organizations
+      description: >-
+        Eagle `Organization` rows (`kind: Organization` in the `lists` container) the caller may
+        read, ordered by `name`. Staff-side fields such as `description` and `companyLegal` are
+        left out below staff level. Any parameter not listed here, or a parameter given more than
+        once, is a 400. A rejected Bearer token is a 401, not the anonymous view. Responses to a
+        signed-in caller carry `Cache-Control: private, no-store`.
+      parameters:
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number. Without a credential, page times pageSize must stay within 2000 rows.
+          schema:
+            type: integer
+            minimum: 1
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - name: count
+          in: query
+          required: false
+          description: Send `true` to get the number of matching rows in `x-total-count`.
+          schema:
+            type: string
+            enum: ['true']
+        - name: sort
+          in: query
+          required: false
+          description: Sort key, `-` prefix for descending.
+          schema:
+            type: string
+            enum: [name, -name]
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated ids, at most 100.
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          description: Rows whose `name` contains this text, case-insensitive.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-total-count:
+              description: Matching rows, when `count=true`.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Unknown or repeated parameter, sort key not allowed, or page past the depth cap.
+        '401':
+          description: Bearer token rejected.
+
+  /api/organizations/{id}:
+    get:
+      summary: Read one organization
+      description: >-
+        One `Organization` row the caller may read, with hidden fields left out. A row the caller
+        cannot read is a 404, the same as one that does not exist. Takes no query parameters.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: A query parameter was sent.
+        '401':
+          description: Bearer token rejected.
+        '404':
+          description: Organization not found.
+
   # Native reads: comment periods and comments.
   /api/comment-periods:
     get:
