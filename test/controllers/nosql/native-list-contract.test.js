@@ -12,8 +12,11 @@ const assert = require('node:assert');
 const querystring = require('node:querystring');
 
 // First: the logger's uncaughtException handler would swallow a load failure here into a green run.
-const { cosmosKind, MAX_IDS, ANON_MAX_PAGE_DEPTH } = require('../../../src/helpers/native-query');
+const { cosmosKind, projectParentJoin, MAX_IDS, ANON_MAX_PAGE_DEPTH } = require('../../../src/helpers/native-query');
 const cosmos = require('../../../src/db/cosmos-nosql');
+const config = require('../../../src/config');
+const audit = require('../../../src/utils/audit');
+const projects = require('../../../src/repositories/projects');
 const { makeRes } = require('../../../src/http/router');
 const { listHandler, getHandler } = require('../../../src/controllers/nosql/mirror-reads');
 
@@ -45,7 +48,8 @@ const SPEC = {
 const list = listHandler(SPEC);
 const get = getHandler(SPEC);
 
-/** Fake Cosmos: COUNT answers 7, an `@id` read answers that row, a list read pages ROWS by size. */
+/** Fake Cosmos: COUNT answers 7, an `@id` read answers that row, a list read pages ROWS by size.
+ * Every query spec is recorded, so a test can read the list query as well as the count. */
 function fakeCosmos(t) {
   const specs = [];
   t.mock.method(cosmos, 'query', async (container, spec, options = {}) => {
@@ -56,6 +60,40 @@ function fakeCosmos(t) {
     return { items: ROWS.slice(0, options.maxItemCount) };
   });
   return specs;
+}
+
+/** The one recorded spec that is neither the COUNT nor a by-id read. */
+function listQuery(specs) {
+  const lists = specs.filter(spec => !spec.query.includes('COUNT(1)') && !spec.parameters.some(p => p.name === '@id'));
+  assert.strictEqual(lists.length, 1, 'expected one list read');
+  return lists[0];
+}
+
+function param(spec, name) {
+  const found = spec.parameters.find(p => p.name === name);
+  return found && found.value;
+}
+
+const DCR_KEYS = ['auditDcrEndpoint', 'auditDcrImmutableId', 'eventsDcrEndpoint', 'eventsDcrImmutableId'];
+
+/**
+ * The audit and events rows a request leaves behind, read at the transport. mirror-reads holds its
+ * own references to `analyticsEvent`/`auditEvent`, so the writer is observed rather than mocked.
+ */
+function recordEvents(t) {
+  const saved = DCR_KEYS.map(key => config[key]);
+  // Non-empty is what turns the writer on; the transport below means nothing is ever dialled.
+  DCR_KEYS.forEach((key) => { config[key] = 'test-dcr'; });
+  const sent = [];
+  audit._setTransport(async (stream, rows) => { rows.forEach(row => sent.push({ stream, ...row })); });
+  t.after(() => {
+    DCR_KEYS.forEach((key, i) => { config[key] = saved[i]; });
+    audit._resetTransport();
+  });
+  return async (stream) => {
+    await audit.flush();
+    return sent.filter(row => row.stream === stream);
+  };
 }
 
 async function call(handler, qs, { user, id } = {}) {
@@ -156,6 +194,47 @@ test('native list contract', async (t) => {
     assert.ok(count.query.includes('(NOT IS_DEFINED(c.vis["author"]) OR c.vis["author"] >= 2)'), count.query);
   });
 
+  await t.test('ids= reads every named id, and only those, through an IN clause', async (t) => {
+    const specs = fakeCosmos(t);
+    const ids = Array.from({ length: MAX_IDS }, (_, i) => `id${i}`);
+    assert.strictEqual((await call(list, `ids=${ids.join(',')}`)).status, 200);
+    const read = listQuery(specs);
+    const names = ids.map((_, i) => `@nid${i}`);
+    assert.ok(read.query.includes(`c.id IN (${names.join(', ')})`), read.query);
+    assert.deepStrictEqual(names.map(name => param(read, name)), ids);
+  });
+
+  await t.test('a filter narrows the list read, inside the per-record dial on that field', async (t) => {
+    const specs = fakeCosmos(t);
+    await call(list, 'author=Jane', { user: STAFF });
+    const read = listQuery(specs);
+    assert.ok(read.query.includes(
+      '((NOT IS_DEFINED(c.vis["author"]) OR c.vis["author"] >= 2) AND c.author = @nf0)'), read.query);
+    assert.strictEqual(param(read, '@nf0'), 'Jane');
+  });
+
+  await t.test('a multi-value filter narrows the list read to any of its values', async (t) => {
+    const specs = fakeCosmos(t);
+    await call(list, 'eaoStatus=Pending&eaoStatus=Published');
+    const read = listQuery(specs);
+    assert.ok(read.query.includes(
+      '((NOT IS_DEFINED(c.vis["eaoStatus"]) OR c.vis["eaoStatus"] >= 4) AND c.eaoStatus IN (@nf0_0, @nf0_1))'),
+    read.query);
+    assert.deepStrictEqual([param(read, '@nf0_0'), param(read, '@nf0_1')], ['Pending', 'Published']);
+  });
+
+  await t.test('q searches every qField of the list read, each inside its per-record dial', async (t) => {
+    const specs = fakeCosmos(t);
+    const twoFields = listHandler({ ...SPEC, qFields: ['comment', 'eaoStatus'] });
+    await call(twoFields, 'q=road');
+    const read = listQuery(specs);
+    assert.ok(read.query.includes(
+      '(((NOT IS_DEFINED(c.vis["comment"]) OR c.vis["comment"] >= 4) AND CONTAINS(c.comment, @nq, true))' +
+      ' OR ((NOT IS_DEFINED(c.vis["eaoStatus"]) OR c.vis["eaoStatus"] >= 4) AND CONTAINS(c.eaoStatus, @nq, true)))'),
+    read.query);
+    assert.strictEqual(param(read, '@nq'), 'road');
+  });
+
   await t.test('q carries the same per-record dial for an anonymous caller', async (t) => {
     const specs = fakeCosmos(t);
     await call(list, 'q=road&count=true');
@@ -217,6 +296,49 @@ test('native list contract', async (t) => {
     const eagle = await call(get, '', { id: '5c1a2b3c4d5e6f7a8b9c0d1e' });
     assert.strictEqual(demi.status, 404);
     assert.deepStrictEqual(eagle.body, demi.body);
+  });
+
+  await t.test('a parent project name its own dial hides from the public is not joined for an anonymous caller', async (t) => {
+    fakeCosmos(t);
+    t.mock.method(projects, 'listRowsByIds', async () => [
+      { id: 'p1', read: ['public'], name: 'Site C', eagleId: '5c1a2b3c4d5e6f7a8b9c0d1e', vis: { name: 2 } }
+    ]);
+    const joined = listHandler({ ...SPEC, parentJoin: projectParentJoin });
+
+    const anonymous = await call(joined, 'pageSize=1');
+    assert.strictEqual(anonymous.body[0].projectName, undefined);
+    assert.strictEqual(anonymous.body[0].projectEagleId, '5c1a2b3c4d5e6f7a8b9c0d1e');
+
+    const staff = await call(joined, 'pageSize=1', { user: STAFF });
+    assert.strictEqual(staff.body[0].projectName, 'Site C');
+  });
+
+  await t.test('a search term on comments or users stays out of analytics; on another kind it is logged', async (t) => {
+    fakeCosmos(t);
+    const events = recordEvents(t);
+    const kind = entity => listHandler({ ...SPEC, entity, filters: [], multiValueFilters: [], qFields: ['displayName'] });
+
+    await call(listHandler({ ...SPEC }), 'q=road');
+    await call(kind('users'), 'q=jane', { user: STAFF });
+    await call(kind('documents'), 'q=bridge');
+    await call(kind('documents'), '');
+
+    const searches = await events(audit.EVENTS_STREAM);
+    assert.deepStrictEqual(searches.map(row => [row.EventName, row.SearchTerm, row.Detail.kind]),
+      [['search', 'bridge', 'documents']]);
+  });
+
+  await t.test('an audited kind writes a list audit row for an authenticated caller only', async (t) => {
+    fakeCosmos(t);
+    const events = recordEvents(t);
+    const audited = listHandler({ ...SPEC, audited: true });
+
+    await call(audited, '');
+    await call(list, '', { user: STAFF });
+    await call(audited, 'pageSize=2', { user: STAFF });
+
+    const rows = await events(audit.AUDIT_STREAM);
+    assert.deepStrictEqual(rows.map(row => [row.Action, row.TargetType, row.Detail.count]), [['comments.list', 'comments', 2]]);
   });
 
   await t.test('a by-id read falls back to the Eagle id lookup for a 24-hex id', async (t) => {
