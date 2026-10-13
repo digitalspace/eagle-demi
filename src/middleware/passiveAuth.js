@@ -10,10 +10,10 @@ const { logger } = require('../utils/logger');
  * than by rejecting the request.
  *
  * A REJECTED credential is not the same as no credential — log it, so a forged or expired
- * token is distinguishable from a logged-out visitor. `strict` (the native kind routes) answers a
- * rejected Bearer with its 401 instead, so a client refreshes rather than reading the public view
- * under a 200. The default stays lenient: the existing public reads serve clients that may still
- * send a stale token.
+ * token is distinguishable from a logged-out visitor. `strict` (GET /me and the native kind
+ * routes) also answers a rejected Bearer with its 401, so a client refreshes rather than reading
+ * the public view under a 200. The default stays lenient: the existing public reads serve clients
+ * that may still send a stale token.
  */
 function passiveAuth({ rejectBearer = false } = {}) {
   return (req, res, next) => {
@@ -25,15 +25,16 @@ function passiveAuth({ rejectBearer = false } = {}) {
       },
       (status, error) => {
         const bearer = String(req.header('Authorization') || '').startsWith('Bearer ');
-        if (rejectBearer && bearer) return res.status(status).json({ error });
+        const refuse = rejectBearer && bearer;
 
         const presented = req.header('Authorization') || req.header('X-Api-Key');
         if (presented) {
           logger.warn(
             `[passiveAuth] Rejected credential on ${req.method} ${req.originalUrl || req.url} ` +
-            `(${status}: ${error}). Continuing as anonymous.`
+            `(${status}: ${error}). ${refuse ? `Answering ${status}.` : 'Continuing as anonymous.'}`
           );
         }
+        if (refuse) return res.status(status).json({ error });
         return next();
       }
     );

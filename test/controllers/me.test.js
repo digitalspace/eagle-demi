@@ -5,7 +5,11 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
+const jwt = require('jsonwebtoken');
+
+const config = require('../../src/config');
 const meController = require('../../src/controllers/me');
+const { logger } = require('../../src/utils/logger');
 const { routeChains } = require('../helpers/router-source');
 const { withServer } = require('../helpers/with-server');
 
@@ -132,7 +136,7 @@ test('me controller', async (t) => {
   await t.test('GET /me loads credentials after passive auth', () => {
     const route = routeChains().find(r => r.method === 'get' && r.path === '/me');
     assert.ok(route, 'no GET /me in the route table');
-    assert.match(route.chain, /passiveAuthMiddleware\s*,\s*credentialsMiddleware/);
+    assert.match(route.chain, /passiveAuthMiddleware(\.strict)?\s*,\s*credentialsMiddleware/);
   });
 
   await t.test('the mounted route answers an anonymous request with 200', async () => {
@@ -143,6 +147,38 @@ test('me controller', async (t) => {
         roles: ['public'], level: 4, tier: 'public', privileged: false, staffUi: false,
         credentials: []
       });
+    });
+  });
+
+  await t.test('the mounted route answers a valid Bearer with that caller\'s identity', async (t) => {
+    const keycloakEnabled = config.keycloakEnabled;
+    config.keycloakEnabled = false;
+    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    const token = jwt.sign({ preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, 'suite-only');
+
+    await withServer(async (call) => {
+      const res = await call('/api/me', { headers: { authorization: `Bearer ${token}` } });
+      assert.strictEqual(res.status, 200);
+      const body = await res.json();
+      assert.deepStrictEqual(body.roles, ['public', 'staff']);
+      assert.strictEqual(body.staffUi, true);
+    });
+  });
+
+  // eagle-admin refreshes its token on a 401. A rejected Bearer answered as the public identity
+  // under a 200 reads as "this user lost staff access", so the console hides itself instead.
+  await t.test('the mounted route answers a rejected Bearer with 401, not the public identity', async (t) => {
+    const keycloakEnabled = config.keycloakEnabled;
+    config.keycloakEnabled = true;
+    t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+    t.mock.method(logger, 'warn', () => {});
+
+    await withServer(async (call) => {
+      const res = await call('/api/me', { headers: { authorization: 'Bearer not-a-real-token' } });
+      assert.strictEqual(res.status, 401);
+      const body = await res.json();
+      assert.deepStrictEqual(Object.keys(body), ['error']);
+      assert.match(body.error, /^Unauthorized\./);
     });
   });
 });
