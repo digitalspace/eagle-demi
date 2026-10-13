@@ -269,6 +269,21 @@ const routes = [
   { method: 'get', path: '/inspection-items', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItems },
   { method: 'get', path: '/inspection-items/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItem },
 
+  // Native kind reads: lists and organizations (helpers/native-query.js). `strict` answers a
+  // rejected Bearer with 401 so a client refreshes instead of reading the public view under a 200.
+  { method: 'get', path: '/lists', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/lists').getLists },
+  { method: 'get', path: '/lists/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/lists').getList },
+  { method: 'get', path: '/organizations', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/organizations').getOrganizations },
+  { method: 'get', path: '/organizations/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/organizations').getOrganization },
+
+  // Native reads: comment periods and comments (helpers/native-query.js). Strict passive auth: a
+  // rejected Bearer is a 401, so a client refreshes instead of reading the public view under a 200.
+  { method: 'get', path: '/comment-periods', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriods },
+  { method: 'get', path: '/comment-periods/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriod },
+  { method: 'get', path: '/comment-periods/:id/summary', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriodSummary },
+  { method: 'get', path: '/comments', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comments').getComments },
+  { method: 'get', path: '/comments/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comments').getComment },
+
   // CSV reports (README "CSV reports"). The comment export is signed in only, as eagle-api's was;
   // the caller's level then picks the columns. The BCGW feed reads as anonymous whoever asks.
   { method: 'get', path: '/commentperiods/:periodId/comments/export', guards: [authMiddleware, credentialsMiddleware], load: () => commentExportController().exportComments },
