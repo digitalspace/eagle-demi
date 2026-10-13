@@ -44,18 +44,14 @@ const ASSIGNMENT_ID = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Se
  */
 const FAKE_AZ = `#!/usr/bin/env bash
 # One log line per call: the run-command payloads are multi-line shell, and a raw echo would split
-# one call across several lines and make "what ran on the VM" unreadable.
-echo "$*" | tr "\\n" " " >> "\${AZ_LOG}"
-echo "" >> "\${AZ_LOG}"
+# one call across several lines and make "what ran on the VM" unreadable. One write, too: Ctrl-C
+# reaches this process, and a line cut off before its newline would glue the next call onto it.
+line="\${*//$'\\n'/ } "
+printf '%s\\n' "$line" >> "\${AZ_LOG}"
 
 state="$(dirname "\${AZ_LOG}")"
 # \`called-vm-run-command-delete\` and the like: the events SIGNAL_DRIVER waits on.
 touch "\${state}/called-$1-$2-\${3:-}"
-
-# \`--scripts\` is invoke's flag, \`--script\` the managed run command's.
-if [[ -n "\${AZ_PAYLOAD_DIR:-}" && "$*" == *--script* ]]; then
-  payload="$(mktemp "\${AZ_PAYLOAD_DIR}/payload-XXXXXX")"
-fi
 
 sub=""; scripts=""; name=""; file=""; query=""; outuri=""; prev=""
 for a in "$@"; do
@@ -72,7 +68,8 @@ done
 
 # Each call to a counter returns how many times it has been called before, so a test can say
 # "not ready for the first N checks".
-count() { local f="\${state}/count-$1" n=0; [[ -f "$f" ]] && n="$(cat "$f")"; echo $((n + 1)) > "$f"; echo "$n"; }
+# Written aside and renamed into place, so a signal mid-write never leaves an empty counter.
+count() { local f="\${state}/count-$1" n=0; [[ -f "$f" ]] && n="$(cat "$f")"; echo $((n + 1)) > "$f.$$"; mv -f "$f.$$" "$f"; echo "$n"; }
 
 # The raw instanceView JSON: AZ_IV for the first AZ_READY_AFTER checks, a settled VM after that.
 # The script classifies it itself, so the fake never decides what counts as ready.
@@ -126,7 +123,11 @@ run_command() {
   esac
 }
 
-if [[ -n "\${payload:-}" ]]; then printf "%s" "$scripts" > "$payload"; fi
+# \`--scripts\` is invoke's flag, \`--script\` the managed run command's. Written outside the payload
+# directory and renamed in, so a signal never leaves an empty or half-written payload there.
+if [[ -n "\${AZ_PAYLOAD_DIR:-}" && "$*" == *--script* ]]; then
+  payload="$(mktemp "\${state}/payload-XXXXXX")"; printf "%s" "$scripts" > "$payload"; mv "$payload" "\${AZ_PAYLOAD_DIR}/"
+fi
 
 group() { if [[ "$sub" == "${PROD_SUB}" ]]; then echo "rg-demi-prod"; else echo "c4b0a8-test-rg"; fi; }
 
