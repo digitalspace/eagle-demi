@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * The users, groups and inspections repositories. What is asserted is the SQL and the partition
+ * The users and inspections repositories (groups reads: test/controllers/nosql/native-users-groups.test.js). What is asserted is the SQL and the partition
  * each read sends, and the ACL a cascade writes: a dropped predicate or a wrong partition answers
  * 200 with rows the caller may not see.
  */
@@ -13,7 +13,6 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const users = require('../../src/repositories/users');
-const groups = require('../../src/repositories/groups');
 const inspections = require('../../src/repositories/inspections');
 const { TIER } = require('../../src/helpers/access-sql');
 
@@ -33,15 +32,14 @@ function capture(t, items = []) {
 test('users repository', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('list: ACL-filtered, paged, and an anonymous projection never fetches an email', async () => {
+  await t.test('native list: ACL-filtered, and an anonymous projection never fetches an email', async () => {
     const seen = capture(t);
-    await users.listVisible(ANON, { pageSize: 10 });
-    const [{ container, spec, options }] = seen;
+    await users.native.list(ANON, { criteria: [], pageNum: 0, pageSize: 10 });
+    const [{ container, spec }] = seen;
     assert.strictEqual(container, 'users');
     assert.match(spec.query, /ARRAY_CONTAINS/);
-    assert.match(spec.query, /ORDER BY c\.id ASC$/);
+    assert.match(spec.query, /ORDER BY c\.id ASC/);
     assert.ok(!spec.query.split(' FROM ')[0].includes('c["email"]'), spec.query);
-    assert.strictEqual(options.maxItemCount, 10);
   });
 
   await t.test('by id: a level-2 user is not returned to a visitor, is to staff', async () => {
@@ -54,26 +52,6 @@ test('users repository', async (t) => {
   await t.test('a project-scoped caller reads no user: users have no project axis', async () => {
     t.mock.method(cosmos, 'readItem', async () => ({ id: 'u1', read: ['sysadmin', 'staff'] }));
     assert.strictEqual(await users.getById(SCOPED, 'u1'), null);
-  });
-});
-
-test('groups repository', async (t) => {
-  t.afterEach(() => t.mock.restoreAll());
-
-  await t.test('list by project: single-partition, ACL-filtered', async () => {
-    const seen = capture(t);
-    await groups.listVisible(ANON, { projectId: '207', pageSize: 5 });
-    const [{ container, spec, options }] = seen;
-    assert.strictEqual(container, 'groups');
-    assert.strictEqual(options.partitionKey, '207');
-    assert.match(spec.query, /ARRAY_CONTAINS/);
-    assert.ok(spec.parameters.some(p => p.name === '@projectId' && p.value === '207'));
-  });
-
-  await t.test('by id with the project: point read gated on the row ACL', async () => {
-    t.mock.method(cosmos, 'readItem', async () => ({ id: 'g1', projectId: '207', read: ['staff'] }));
-    assert.strictEqual(await groups.getById(ANON, 'g1', '207'), null);
-    assert.ok(await groups.getById(STAFF, 'g1', '207'));
   });
 });
 

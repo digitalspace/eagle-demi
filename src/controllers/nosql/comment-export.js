@@ -9,11 +9,12 @@ const comments = require('../../repositories/comments');
 const commentPeriods = require('../../repositories/comment-periods');
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
-const { resolveAccess } = require('../../helpers/access-sql');
-const { levelOf } = require('../../vis/level');
+const { resolveAccess, PUBLIC_ROLES, TIER } = require('../../helpers/access-sql');
+const { levelOf, ANONYMOUS_LEVEL } = require('../../vis/level');
 const { redactForAccess, redactAllForAccess } = require('../../vis/redact');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
+const { auditEvent } = require('../../utils/audit');
 const { toCsv, sendCsv } = require('../report');
 
 /** Levels that get the staff columns: sysadmin 1 and staff 2. */
@@ -36,6 +37,23 @@ const TEXT_COLUMNS = [
 
 /** `listByIds` builds one IN list per call; keep it bounded. */
 const DOCUMENT_BATCH = 200;
+
+/**
+ * `audience=proponent`: the caller's access cut down to the public level, so staff can produce the
+ * file a proponent gets. Only narrows: grants (teams, credentials) are dropped, a project scope kept.
+ */
+function proponentAccess(access) {
+  const scoped = Array.isArray(access.projectScope);
+  return {
+    tier: scoped ? TIER.SCOPED : TIER.PUBLIC,
+    roles: [...PUBLIC_ROLES],
+    projectScope: access.projectScope,
+    teams: [],
+    credentials: [],
+    authenticated: access.authenticated,
+    level: ANONYMOUS_LEVEL
+  };
+}
 
 /** `yyyy-MM-dd` in UTC, as eagle-api's `formatDate` wrote it on its UTC pods. */
 function exportDate(value) {
@@ -99,15 +117,23 @@ function csvRow(comment, { readable, base, projectName, periodTitle, today }) {
   return row;
 }
 
-/** `GET /commentperiods/:periodId/comments/export`. Staff columns at level 2 and below. */
+/**
+ * `GET /commentperiods/:periodId/comments/export`. Staff columns at level 2 and below;
+ * `audience=proponent` gives any caller the public-level file.
+ */
 exports.exportComments = async (req, res) => {
   const periodId = req.params && req.params.periodId;
   if (!periodId || typeof periodId !== 'string') {
     return res.status(400).json({ error: 'periodId is required' });
   }
+  const audience = req.query && req.query.audience;
+  if (audience !== undefined && audience !== 'proponent') {
+    return res.status(400).json({ error: 'audience takes only proponent' });
+  }
 
   try {
-    const access = resolveAccess(req);
+    const callerAccess = resolveAccess(req);
+    const access = audience === 'proponent' ? proponentAccess(callerAccess) : callerAccess;
     const level = levelOf(access);
     const staff = level <= STAFF_MAX_LEVEL;
 
@@ -132,9 +158,14 @@ exports.exportComments = async (req, res) => {
 
     const columns = staff ? STAFF_COLUMNS : PROPONENT_COLUMNS;
     const body = toCsv(columns, rows.map(row => csvRow(row, context)));
-    logger.info('[comment-export] exported', {
-      periodId, level, format: staff ? 'staff' : 'proponent', rows: rows.length
-    });
+    const format = staff ? 'staff' : 'proponent';
+    logger.info('[comment-export] exported', { periodId, level, format, rows: rows.length });
+    if (callerAccess.authenticated) {
+      auditEvent(req, {
+        action: 'comments.export', targetType: 'commentPeriods', targetId: periodId,
+        projectId: stored.projectId, detail: { format, rows: rows.length }
+      });
+    }
     return sendCsv(res, 'export.csv', body);
   } catch (err) {
     return serverError(res, err, 'comment export failed');

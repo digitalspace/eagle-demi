@@ -258,16 +258,33 @@ const routes = [
   // Reads of the user, group and inspection mirrors (docs/rbac-architecture.md). Same chain as
   // GET /documents: the repository filters rows by the caller's access, so anonymous reads the
   // public tier rather than getting a 401.
-  { method: 'get', path: '/users', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => userController().getUsers },
-  { method: 'get', path: '/users/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => userController().getUser },
-  { method: 'get', path: '/groups', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => groupController().getGroups },
-  { method: 'get', path: '/groups/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => groupController().getGroup },
+  // users and groups: native list contract (helpers/native-query.js). Strict: a rejected Bearer is a
+  // 401, so a client refreshes instead of reading the public tier under a 200.
+  { method: 'get', path: '/users', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => userController().getUsers },
+  { method: 'get', path: '/users/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => userController().getUser },
+  { method: 'get', path: '/groups', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => groupController().getGroups },
+  { method: 'get', path: '/groups/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => groupController().getGroup },
   { method: 'get', path: '/inspections', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspections },
   { method: 'get', path: '/inspections/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspection },
   { method: 'get', path: '/inspection-elements', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElements },
   { method: 'get', path: '/inspection-elements/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElement },
   { method: 'get', path: '/inspection-items', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItems },
   { method: 'get', path: '/inspection-items/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItem },
+
+  // Native kind reads: lists and organizations (helpers/native-query.js). `strict` answers a
+  // rejected Bearer with 401 so a client refreshes instead of reading the public view under a 200.
+  { method: 'get', path: '/lists', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/lists').getLists },
+  { method: 'get', path: '/lists/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/lists').getList },
+  { method: 'get', path: '/organizations', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/organizations').getOrganizations },
+  { method: 'get', path: '/organizations/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/organizations').getOrganization },
+
+  // Native reads: comment periods and comments (helpers/native-query.js). Strict passive auth: a
+  // rejected Bearer is a 401, so a client refreshes instead of reading the public view under a 200.
+  { method: 'get', path: '/comment-periods', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriods },
+  { method: 'get', path: '/comment-periods/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriod },
+  { method: 'get', path: '/comment-periods/:id/summary', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comment-periods').getCommentPeriodSummary },
+  { method: 'get', path: '/comments', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comments').getComments },
+  { method: 'get', path: '/comments/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comments').getComment },
 
   // CSV reports (README "CSV reports"). The comment export is signed in only, as eagle-api's was;
   // the caller's level then picks the columns. The BCGW feed reads as anonymous whoever asks.

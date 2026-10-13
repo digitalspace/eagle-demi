@@ -11,6 +11,8 @@ const controller = require('../../../src/controllers/nosql/comment-export');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const commentPeriods = require('../../../src/repositories/comment-periods');
 const projects = require('../../../src/repositories/projects');
+const audit = require('../../../src/utils/audit');
+const { recordEvents } = require('../../helpers/record-events');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
@@ -92,9 +94,9 @@ function parseCsv(text) {
 }
 
 /** The export as `{columns, records}`, each record keyed by column. */
-async function exportAs(user, headers = {}) {
+async function exportAs(user, headers = {}, query = {}) {
   const res = mockRes();
-  await controller.exportComments({ params: { periodId: 'p1' }, query: {}, headers, user }, res);
+  await controller.exportComments({ params: { periodId: 'p1' }, query, headers, user }, res);
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
   const [columns, ...rows] = parseCsv(res.body);
   return {
@@ -216,6 +218,52 @@ test('comment export', async (t) => {
 
     assert.strictEqual(records.find(r => r.Comment_No === '1').CACMember, '1');
     assert.strictEqual(records.find(r => r.Comment_No === '2').CACMember, '');
+  });
+
+  /** A public attributed comment with a staff-only attachment, a public anonymous one, a staff-only one. */
+  const mixed = () => [
+    comment({ id: 'c1', commentId: 1, documents: ['d-public', 'd-sysadmin'] }),
+    comment({ id: 'c2', commentId: 2, isAnonymous: true }),
+    comment({ id: 'c3', commentId: 3, comment: 'staff only', read: ['staff'], isPublished: false })
+  ];
+
+  await t.test('a proponent export by staff carries the same values as an anonymous export', async () => {
+    fakeCosmos(t, mixed());
+    const anonymous = await exportAs(undefined, { host: 'demi.example' });
+    const proponent = await exportAs(STAFF, { host: 'demi.example' }, { audience: 'proponent' });
+
+    assert.deepStrictEqual(proponent.records, anonymous.records);
+    assert.deepStrictEqual(proponent.records.map(r => r.Comment_No), ['1', '2']);
+    assert.strictEqual(proponent.records[0].Published, '', 'datePosted is a level-2 field');
+    assert.deepStrictEqual(JSON.parse(proponent.records[0].Attachments),
+      ['https://demi.example/documents/d-public/download']);
+  });
+
+  await t.test('an anonymous caller cannot ask for a wider audience', async () => {
+    fakeCosmos(t, mixed());
+    const res = mockRes();
+    await controller.exportComments({ params: { periodId: 'p1' }, query: { audience: 'staff' }, headers: {} }, res);
+
+    assert.strictEqual(res.statusCode, 400);
+  });
+
+  await t.test('audience=proponent from an anonymous caller is still the public file', async () => {
+    fakeCosmos(t, mixed());
+    const { columns, res } = await exportAs(undefined, {}, { audience: 'proponent' });
+
+    assert.deepStrictEqual(columns, controller.PROPONENT_COLUMNS);
+    assert.ok(!res.body.includes('staff only'));
+  });
+
+  await t.test('a signed-in export is audited, an anonymous one is not', async (t) => {
+    const events = recordEvents(t);
+    fakeCosmos(t, mixed());
+    await exportAs(undefined);
+    await exportAs(STAFF, {}, { audience: 'proponent' });
+
+    const rows = await events(audit.AUDIT_STREAM);
+    assert.deepStrictEqual(rows.map(row => [row.Action, row.TargetId, row.Detail.format]),
+      [['comments.export', 'p1', 'proponent']]);
   });
 
   await t.test('a period the caller cannot read is a 404', async () => {

@@ -35,7 +35,7 @@ const MIRROR_GETS = [
   { path: '/api/users', controller: userController, handler: 'getUsers' },
   { path: '/api/users/u1', controller: userController, handler: 'getUser' },
   { path: '/api/groups?project=p1', controller: groupController, handler: 'getGroups' },
-  { path: '/api/groups/g1?project=p1', controller: groupController, handler: 'getGroup' },
+  { path: '/api/groups/g1', controller: groupController, handler: 'getGroup' },
   { path: '/api/inspections?project=p1', controller: inspectionController, handler: 'getInspections' },
   { path: '/api/inspections/i1?inspection=i1', controller: inspectionController, handler: 'getInspection' },
   { path: '/api/inspection-elements?inspection=i1', controller: inspectionController, handler: 'getInspectionElements' },

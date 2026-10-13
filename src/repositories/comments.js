@@ -14,6 +14,7 @@ const {
   eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, readForWriteIn, fetchAll
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
+const { cosmosKind } = require('../helpers/native-query');
 
 const CONTAINER = 'comments';
 const PARTITION_FIELD = 'periodId';
@@ -86,6 +87,29 @@ async function countByPeriod(periodId, access, { eaoStatuses } = {}) {
   return items[0] || 0;
 }
 
+const nativeBase = cosmosKind({
+  container: CONTAINER, entity: CONTAINER, partitionField: SCOPE_FIELD, defaultOrder: DEFAULT_ORDER
+});
+
+/** The first row matching `field = value` this caller may read, across every period. */
+async function firstWhere(access, field, value) {
+  // queryFirst drains the cross-partition iterator: a single fetched page can be empty while the row exists.
+  return cosmos.queryFirst(CONTAINER, selectWhere({
+    access,
+    partitionField: SCOPE_FIELD,
+    criteria: [eq(field, String(value), '@byField')],
+    select: selectFor(CONTAINER, access, SCOPE_FIELD)
+  }), {});
+}
+
+/** The repository `GET /comments` reads through (`helpers/native-query.js`). */
+const nativeRepository = Object.freeze({
+  list: nativeBase.list,
+  count: nativeBase.count,
+  getById: (access, id) => firstWhere(access, 'id', id),
+  getByEagleId: (access, eagleId) => firstWhere(access, 'eagleId', eagleId)
+});
+
 /** Whole-item write. A comment that changed period moves partition — see `upsertItem`. */
 async function upsert(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
@@ -131,6 +155,7 @@ module.exports = {
   listByPeriod,
   listEveryByPeriod,
   countByPeriod,
+  nativeRepository,
   aclRowsForPeriod,
   setAclForPeriod,
   upsert,
