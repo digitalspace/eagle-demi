@@ -7,6 +7,7 @@ const assert = require('node:assert');
 const { SUITE_KEY } = require('../helpers/suite-key');
 const jwt = require('jsonwebtoken');
 const passiveAuthMiddleware = require('../../src/middleware/passiveAuth');
+const { makeRes } = require('../../src/http/router');
 const { resolveAccess, TIER } = require('../../src/helpers/access-sql');
 const { filterFor } = require('../../src/helpers/access-odata');
 const config = require('../../src/config');
@@ -171,6 +172,33 @@ test('Passive Auth Middleware Tests', async (t) => {
     const res = {};
 
     passiveAuthMiddleware(req, res, next);
+
+    assert.ok(nextCalled);
+    assert.strictEqual(req.user, undefined);
+  });
+  // Native kind routes: a token that fails verification is a 401 the client can refresh on, not a
+  // public page under a 200 that looks like missing data.
+  await t.test('strict: an expired Bearer answers 401 and never reaches the handler', () => {
+    config.keycloakEnabled = true;
+    t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
+    t.mock.method(jwt, 'verify', (token, getKey, options, callback) => callback(new Error('jwt expired')));
+
+    const req = { header: (name) => (name === 'Authorization' ? 'Bearer expired-token' : null) };
+    const res = makeRes('req-1');
+    let nextCalled = false;
+
+    passiveAuthMiddleware.strict(req, res, () => { nextCalled = true; });
+
+    assert.strictEqual(nextCalled, false);
+    assert.strictEqual(res.statusCode, 401);
+    assert.match(JSON.parse(res.body).error, /JWT verification failed/);
+  });
+
+  await t.test('strict: no credential still continues as anonymous', () => {
+    const req = { header: () => null };
+    let nextCalled = false;
+
+    passiveAuthMiddleware.strict(req, makeRes('req-2'), () => { nextCalled = true; });
 
     assert.ok(nextCalled);
     assert.strictEqual(req.user, undefined);
