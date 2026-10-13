@@ -45,3 +45,41 @@ test('an unresolved Key Vault reference is treated as no key', () => {
   assert.match(output, /ADMIN_API_KEY is not set/);
   assert.strictEqual(status, 2);
 });
+
+test('listSees', async (t) => {
+  const { listSees } = require(SCRIPT);
+
+  /** Answers each request with the asked-for ids that `visible` holds, as the native list would. */
+  function stubList(ctx, visible) {
+    const urls = [];
+    ctx.mock.method(globalThis, 'fetch', async (url) => {
+      const parsed = new URL(url);
+      urls.push(parsed);
+      const rows = parsed.searchParams.get('ids').split(',')
+        .filter(id => visible.includes(id)).map(id => ({ id }));
+      return { status: 200, text: async () => JSON.stringify(rows) };
+    });
+    return urls;
+  }
+
+  await t.test('reads planted ids by id, in batches of at most 100, with no token', async (ctx) => {
+    // Offset paging stops a caller with no credential at 2,000 rows, so only a by-id read makes a
+    // zero mean "withheld" rather than "beyond the window".
+    const ids = Array.from({ length: 150 }, (_, i) => `doc-${i}`);
+    const urls = stubList(ctx, ['doc-3', 'doc-120']);
+
+    const seen = await listSees(null, 'proj-1', ids);
+
+    assert.strictEqual(seen, 2);
+    assert.deepStrictEqual(urls.map(u => u.pathname), ['/api/documents', '/api/documents']);
+    assert.deepStrictEqual(urls.map(u => u.searchParams.get('project')), ['proj-1', 'proj-1']);
+    assert.deepStrictEqual(urls.map(u => u.searchParams.get('ids').split(',').length), [100, 50]);
+    assert.deepStrictEqual(urls.map(u => u.searchParams.has('continuationToken')), [false, false]);
+  });
+
+  await t.test('reports a refused read as its status, not as a zero', async (ctx) => {
+    ctx.mock.method(globalThis, 'fetch', async () => ({ status: 401, text: async () => '' }));
+
+    assert.strictEqual(await listSees(null, 'proj-1', ['doc-1']), 'HTTP 401');
+  });
+});

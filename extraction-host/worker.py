@@ -304,7 +304,7 @@ def build_worklist():
         params = {"extracted": "false", "pageSize": PAGE_SIZE}
         if token:
             params["continuationToken"] = token
-        r = api_get("/documents", params=params)
+        r = api_get("/documents/scan", params=params)
         r.raise_for_status()
         batch = r.json()
         if not batch:
