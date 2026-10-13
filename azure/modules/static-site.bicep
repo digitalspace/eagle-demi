@@ -89,6 +89,16 @@ resource staticSite 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
+// Opt out: new accounts inherit the subscription Defender for Storage plan (about 0.63 CAD a day each). Set isEnabled true to turn it back on for this account.
+resource defenderForStorage 'Microsoft.Security/defenderForStorageSettings@2025-06-01' = {
+  name: 'current'
+  scope: staticSite
+  properties: {
+    isEnabled: false
+    overrideSubscriptionLevelSettings: true
+  }
+}
+
 resource uploaderBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(uploaderPrincipalId)) {
   scope: staticSite
   name: guid(staticSite.id, uploaderPrincipalId, blobDataContributorRoleId)

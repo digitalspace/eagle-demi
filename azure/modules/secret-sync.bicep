@@ -71,6 +71,16 @@ resource syncStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
+// Opt out: new accounts inherit the subscription Defender for Storage plan (about 0.63 CAD a day each). Set isEnabled true to turn it back on for this account.
+resource defenderForStorage 'Microsoft.Security/defenderForStorageSettings@2025-06-01' = {
+  name: 'current'
+  scope: syncStorage
+  properties: {
+    isEnabled: false
+    overrideSubscriptionLevelSettings: true
+  }
+}
+
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: syncStorage
   name: 'default'
