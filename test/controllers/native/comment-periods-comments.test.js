@@ -138,6 +138,7 @@ test('native comment periods', async (t) => {
     const specs = fakeCosmos(t);
     const res = await call(list, 'projectId=p1');
     assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'unknown parameter: projectId');
     assert.strictEqual(specs.length, 0);
   });
 
@@ -159,7 +160,9 @@ test('native comment periods', async (t) => {
 
   await t.test('a repeated project is refused', async (t) => {
     fakeCosmos(t);
-    assert.strictEqual((await call(list, 'project=p1&project=p2')).status, 400);
+    const res = await call(list, 'project=p1&project=p2');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: project');
   });
 });
 
@@ -192,6 +195,22 @@ test('native comments', async (t) => {
     fakeCosmos(t);
     const res = await call(list, 'period=cp1&eaoStatus=Pending&eaoStatus=Rejected', { user: STAFF });
     assert.deepStrictEqual(res.body.map(row => row.id).sort(), ['c3', 'c4']);
+  });
+
+  await t.test('the field spellings periodId and projectId are not parameters', async (t) => {
+    const specs = fakeCosmos(t);
+    const period = await call(list, 'periodId=cp1');
+    const project = await call(list, 'projectId=p1');
+    assert.strictEqual(period.body.error, 'unknown parameter: periodId');
+    assert.strictEqual(project.body.error, 'unknown parameter: projectId');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('project= filters projectId', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(list, 'project=p1')).status, 200);
+    const listSpec = specs.find(spec => !spec.query.includes('COUNT(1)'));
+    assert.match(listSpec.query, /c\.projectId = @nf0/);
   });
 
   await t.test('count=true on a hidden field is refused for anonymous, with no read', async (t) => {

@@ -464,6 +464,7 @@ test('native users and groups reads', async (t) => {
   t.beforeEach((t) => {
     t.mock.method(cosmos, 'query', async (container) => ({ items: ROWS[container] ? [ROWS[container]] : [] }));
     t.mock.method(cosmos, 'readItem', async (container) => ROWS[container] || null);
+    t.mock.method(cosmos, 'queryFirst', async (container) => ROWS[container] || null);
   });
   t.afterEach(() => t.mock.restoreAll());
 

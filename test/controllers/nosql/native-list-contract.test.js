@@ -59,7 +59,24 @@ function fakeCosmos(t) {
     if (id) return { items: ROWS.filter(row => row.id === id.value) };
     return { items: ROWS.slice(0, options.maxItemCount) };
   });
+  t.mock.method(cosmos, 'queryFirst', async (container, spec) => {
+    specs.push(spec);
+    const id = spec.parameters.find(p => p.name === '@id');
+    return ROWS.find(row => row.id === id.value) || null;
+  });
   return specs;
+}
+
+/**
+ * By-id reads as a cross-partition query serves them: `pages` in order, each but the last with a
+ * continuation token. `query` answers one page per call; `queryFirst` drains them all.
+ */
+function pagedById(t, pages) {
+  t.mock.method(cosmos, 'query', async (container, spec, options = {}) => {
+    const at = Number(options.continuationToken || 0);
+    return { items: pages[at] || [], continuationToken: at + 1 < pages.length ? String(at + 1) : undefined };
+  });
+  t.mock.method(cosmos, 'queryFirst', async () => pages.flat()[0] || null);
 }
 
 /** The one recorded spec that is neither the COUNT nor a by-id read. */
@@ -319,6 +336,20 @@ test('native list contract', async (t) => {
     assert.deepStrictEqual(rows.map(row => [row.Action, row.TargetType, row.Detail.count]), [['comments.list', 'comments', 2]]);
   });
 
+  await t.test('a by-id read finds a row the first page of the cross-partition query does not hold', async (t) => {
+    pagedById(t, [[], [ROWS[1]]]);
+    const res = await call(get, '', { id: 'c2' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.id, 'c2');
+  });
+
+  await t.test('a by-id read that exhausts every page is a 404', async (t) => {
+    pagedById(t, [[], [], []]);
+    const res = await call(get, '', { id: 'c2' });
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.body.error, 'Comment not found');
+  });
+
   await t.test('a by-id read falls back to the Eagle id lookup for a 24-hex id', async (t) => {
     fakeCosmos(t);
     const byEagle = getHandler({
@@ -327,6 +358,49 @@ test('native list contract', async (t) => {
     });
     const res = await call(byEagle, '', { id: '5c1a2b3c4d5e6f7a8b9c0d1e' });
     assert.strictEqual(res.body.id, 'c1');
+  });
+});
+
+test('a filter alias', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const aliased = listHandler({ ...SPEC, aliases: { status: 'eaoStatus' } });
+
+  await t.test('the alias filters the row field it names', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(aliased, 'status=Pending')).status, 200);
+    const read = listQuery(specs);
+    assert.ok(read.query.includes('c.eaoStatus = @nf0'), read.query);
+    assert.strictEqual(param(read, '@nf0'), 'Pending');
+  });
+
+  await t.test('the row field spelling is an unknown parameter, refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(aliased, 'eaoStatus=Pending');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'unknown parameter: eaoStatus');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test("a multi-value field stays multi-value under its alias", async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(aliased, 'status=Pending&status=Published')).status, 200);
+    assert.ok(listQuery(specs).query.includes('c.eaoStatus IN'));
+  });
+
+  await t.test('a repeated single-value alias is refused under the name the caller sent', async (t) => {
+    fakeCosmos(t);
+    const single = listHandler({ ...SPEC, aliases: { by: 'author' } });
+    const res = await call(single, 'by=a&by=b', { user: STAFF });
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: by');
+  });
+
+  await t.test('an alias for a field that is not a declared filter fails at route load', () => {
+    assert.throws(() => listHandler({ ...SPEC, aliases: { project: 'projectId' } }), /not a declared filter/);
+  });
+
+  await t.test('an alias that shadows a control parameter fails at route load', () => {
+    assert.throws(() => listHandler({ ...SPEC, aliases: { q: 'author' } }), /clashes/);
   });
 });
 

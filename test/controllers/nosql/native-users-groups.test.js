@@ -52,6 +52,12 @@ function fakeCosmos(t) {
     const id = paramsOf(spec).find(p => p.name === '@id');
     return { items: id ? rows.filter(row => row.id === id.value) : rows };
   });
+  t.mock.method(cosmos, 'queryFirst', async (container, spec) => {
+    if (!ROWS[container]) return null;
+    specs.push(spec);
+    const id = paramsOf(spec).find(p => p.name === '@id');
+    return readable(ROWS[container], spec).find(row => row.id === id.value) || null;
+  });
   t.mock.method(cosmos, 'readItem', async (container, id) => ROWS[container].find(row => row.id === id) || null);
   return specs;
 }

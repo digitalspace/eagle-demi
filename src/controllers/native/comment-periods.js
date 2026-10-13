@@ -13,7 +13,6 @@ const { resolveAccess } = require('../../helpers/access-sql');
 const { assertFilterable } = require('../../repositories/_sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
-const { withParamNames } = require('./params');
 const COMMENTS = require('./comments').SPEC;
 
 // Same as mirror-reads: the Front Door cache key ignores Authorization.
@@ -24,13 +23,12 @@ const BASE_SPEC = Object.freeze({
   repository: commentPeriods.nativeRepository(),
   sortKeys: ['dateStarted', 'dateCompleted'],
   filters: ['projectId'],
+  aliases: { project: 'projectId' },
   multiValueFilters: [],
   parentJoin: projectParentJoin,
   audited: true,
   notFound: 'Comment period not found'
 });
-
-const PARAM_NAMES = Object.freeze({ project: 'projectId' });
 
 const unfiltered = listHandler(BASE_SPEC);
 
@@ -38,8 +36,8 @@ const unfiltered = listHandler(BASE_SPEC);
  * `GET /comment-periods`. `status` (open, upcoming, closed; repeatable) is compared against the
  * clock rather than read from a field, so it is taken out here and handed to the repository.
  */
-exports.getCommentPeriods = withParamNames(PARAM_NAMES, (req, res) => {
-  const { status, ...query } = req.query;
+exports.getCommentPeriods = (req, res) => {
+  const { status, ...query } = req.query || {};
   req.query = query;
   if (status === undefined) return unfiltered(req, res);
 
@@ -49,7 +47,7 @@ exports.getCommentPeriods = withParamNames(PARAM_NAMES, (req, res) => {
     return res.status(400).json({ error: `status takes ${commentPeriods.STATUSES.join(', ')}` });
   }
   return listHandler({ ...BASE_SPEC, repository: commentPeriods.nativeRepository(statuses) })(req, res);
-});
+};
 
 exports.getCommentPeriod = getHandler(BASE_SPEC);
 

@@ -11,7 +11,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const { pageSizeFor, MAX_PAGE_DEPTH } = require('./access-sql');
 const {
-  eq, inList, assertFilterable, selectWhere, selectFor, countWhere, readPage, pageOptions
+  eq, inList, assertFilterable, selectWhere, selectFor, countWhere, readPage
 } = require('../repositories/_sql');
 const { levelOf } = require('../vis/level');
 const { redactForAccess } = require('../vis/redact');
@@ -45,6 +45,27 @@ function assertKindSpec(spec) {
       throw new Error(`[native] ${spec.entity}: multi-value filter ${field} is not a declared filter`);
     }
   }
+  for (const [name, field] of Object.entries(spec.aliases || {})) {
+    if (!(spec.filters || []).includes(field)) {
+      throw new Error(`[native] ${spec.entity}: alias ${name} names ${field}, which is not a declared filter`);
+    }
+    if (CONTROL_PARAMS.includes(name) || (spec.filters || []).includes(name)) {
+      throw new Error(`[native] ${spec.entity}: alias ${name} clashes with a parameter of that name`);
+    }
+  }
+}
+
+/**
+ * Query name -> row field for each of `spec`'s filters. A filter `spec.aliases` renames (e.g.
+ * `{ project: 'projectId' }`) answers to that name only, so each filter has one spelling on the wire.
+ */
+function filterNames(spec) {
+  const aliases = spec.aliases || {};
+  const renamed = Object.values(aliases);
+  return new Map([
+    ...(spec.filters || []).filter(field => !renamed.includes(field)).map(field => [field, field]),
+    ...Object.entries(aliases)
+  ]);
 }
 
 /** `assertFilterable` as a value: the refusal message, or null when the caller may see the field. */
@@ -60,14 +81,15 @@ function refusal(entity, field, access) {
 /**
  * Parse and validate `query` for `spec`. Answers `{ error }` (a 400) or the parsed query:
  * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]} }`.
+ * `filters` is keyed by row field, whatever name the query used (see `filterNames`).
  */
 function parseNativeQuery(spec, query, access) {
-  const filters = spec.filters || [];
+  const names = filterNames(spec);
   const multi = spec.multiValueFilters || [];
 
   for (const [key, value] of Object.entries(query || {})) {
-    if (!CONTROL_PARAMS.includes(key) && !filters.includes(key)) return { error: `unknown parameter: ${key}` };
-    if (Array.isArray(value) && !multi.includes(key)) return { error: `parameter given more than once: ${key}` };
+    if (!CONTROL_PARAMS.includes(key) && !names.has(key)) return { error: `unknown parameter: ${key}` };
+    if (Array.isArray(value) && !multi.includes(names.get(key))) return { error: `parameter given more than once: ${key}` };
   }
   const q = query || {};
 
@@ -117,11 +139,11 @@ function parseNativeQuery(spec, query, access) {
   }
 
   const filterValues = {};
-  for (const field of filters) {
-    if (q[field] === undefined) continue;
+  for (const [name, field] of names) {
+    if (q[name] === undefined) continue;
     const refused = refusal(spec.entity, field, access);
     if (refused) return { error: refused };
-    filterValues[field] = [].concat(q[field]);
+    filterValues[field] = [].concat(q[name]);
   }
 
   return { pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues };
@@ -165,7 +187,8 @@ function isEagleId(id) {
 /**
  * The repository a native kind needs, over one Cosmos container: `list` and `count` share one
  * predicate, `getById` is the same predicate narrowed to one id (cross-partition, so it needs no
- * partition key from the caller).
+ * partition key from the caller, and drains pages through `queryFirst`: one page can come back
+ * empty while the row exists).
  *
  * @param {object} opts
  * @param {string} opts.container
@@ -186,9 +209,7 @@ function cosmosKind({ container, entity, partitionField, defaultOrder }) {
       return items[0] || 0;
     },
     async getById(access, id) {
-      const { items } = await cosmos.query(container,
-        spec(access, [eq('id', String(id), '@id')]), pageOptions({ pageSize: 1 }));
-      return items[0] || null;
+      return cosmos.queryFirst(container, spec(access, [eq('id', String(id), '@id')]), {});
     }
   };
 }
