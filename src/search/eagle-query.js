@@ -139,14 +139,6 @@ const EMPTY_SET = new Set();
 const UNMAPPED_KEYS = {};
 
 /**
- * Images uploaded through the Update form are Documents with `documentSource: 'UPDATE'`. They are
- * shown on their Update only, so every Document read leaves them out unless it filters the field.
- * `ne` rather than `eq 'PROJECT'`: legacy rows hold '' or nothing, and in Azure AI Search
- * `null ne 'UPDATE'` is true, so those rows stay.
- */
-const NOT_UPDATE_IMAGE = "documentSource ne 'UPDATE'";
-
-/**
  * Wire keys that ask WHETHER A FIELD IS FILLED rather than what it holds.
  *
  * `and[documentUrl]=true` is eagle-public's "Documents attached" filter on the activities list. The
@@ -669,7 +661,11 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
   }
 
   // A caller who filters on `documentSource` has said which sources they want; a dropped key has not.
-  if (dataset === 'Document' && !filtered.has('documentSource')) groups.push(NOT_UPDATE_IMAGE);
+  if (dataset === 'Document' && !filtered.has('documentSource')) {
+    // Required here, not at the top: document-query loads the documents repository, whose `_sql`
+    // requires this module, so a top-level require is a cycle.
+    groups.push(require('./document-query').NOT_UPDATE_IMAGE);
+  }
 
   if (acl.filter) groups.push(acl.filter);
   return { filter: groups.length ? groups.join(' and ') : undefined, dropped };
