@@ -21,7 +21,8 @@ const { NO_STORE } = require('../nosql/mirror-reads');
  * counted. A new native kind adds its line here.
  */
 const KINDS = {
-  projects: () => require('../nosql/project').projectsKind
+  projects: () => require('../nosql/project').projectsKind,
+  documents: () => require('../nosql/document').documentsKind
 };
 
 // These shape a page, and a count has none: refused, not ignored.
@@ -53,7 +54,8 @@ exports.counts = async (req, res) => {
     const reads = [];
     for (const name of kinds) {
       const spec = KINDS[name]();
-      const parsed = parseNativeQuery(spec, query, access);
+      // A count reads no page; one row keeps a paged index store under its page cap.
+      const parsed = parseNativeQuery(spec, { ...query, pageSize: '1' }, access);
       if (parsed.error) return res.status(400).json({ error: `${name}: ${parsed.error}` });
       reads.push({ name, spec, parsed, criteria: nativeCriteria(spec, parsed, access).criteria });
     }
@@ -62,6 +64,8 @@ exports.counts = async (req, res) => {
       spec.repository.count(access, { criteria, parsed })));
     return res.json(Object.fromEntries(reads.map(({ name }, i) => [name, totals[i]])));
   } catch (err) {
+    // An index store refuses a value its column cannot take (`legislation=x`) as the list does.
+    if (err && err.status === 400) return res.status(400).json({ error: err.message });
     return serverError(res, err, 'counts failed');
   }
 };

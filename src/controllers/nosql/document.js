@@ -289,7 +289,11 @@ function badParentFieldTypes(changes) {
     changes[field] !== null && typeof changes[field] !== 'string');
 }
 
-exports.getDocuments = async (req, res) => {
+/**
+ * Token-paged scan: `GET /documents/scan`, for callers that walk every row (the extraction host's
+ * `extracted=false` work list, project summaries). The browsable list is `getDocuments`.
+ */
+exports.scanDocuments = async (req, res) => {
   try {
     const access = resolveAccess(req);
 
@@ -318,6 +322,46 @@ exports.getDocuments = async (req, res) => {
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }
+};
+
+const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
+const { projectParentJoin } = require('../../helpers/native-query');
+const { listHandler } = require('./mirror-reads');
+
+const DOCUMENT_ID_FILTERS = ['projectId', ...chunks.CHUNK_PARENT_LIST_REFS];
+
+/**
+ * Native `GET /documents`, on the list contract in `helpers/native-query.js`. One project's plain
+ * list and an `ids=` read come from Cosmos; every other list pages in the documents index
+ * (`INDEX_MAPS.documents.cosmosServes`). Update-form images are left out on both paths.
+ */
+const documentsKind = Object.freeze({
+  entity: 'documents',
+  repository: indexedKind({
+    index: 'documents', container: 'documents', entity: 'documents', partitionField: 'projectId',
+    defaultOrder: 'c.id ASC', baseCriteria: documents.buildCriteria({ withoutUpdateImages: true })
+  }),
+  sortKeys: ['datePosted', 'displayName'],
+  filters: [...DOCUMENT_ID_FILTERS, 'isFeatured', 'legislation'],
+  aliases: { project: 'projectId' },
+  multiValueFilters: [...DOCUMENT_ID_FILTERS, 'legislation'],
+  ranges: {
+    datePostedStart: { field: 'datePosted', op: 'ge' },
+    datePostedEnd: { field: 'datePosted', op: 'le' }
+  },
+  qFields: INDEX_MAPS.documents.searched,
+  parentJoin: projectParentJoin
+});
+exports.documentsKind = documentsKind;
+
+const listDocuments = listHandler(documentsKind);
+
+/** An authenticated caller naming no `pageSize` would get the contract's 1000, past the index's cap. */
+exports.getDocuments = (req, res) => {
+  const query = req.query || {};
+  const fill = query.pageSize === undefined && resolveAccess(req).authenticated;
+  req.query = fill ? { ...query, pageSize: String(aiSearch.MAX_PAGE_ROWS) } : query;
+  return listDocuments(req, res);
 };
 
 // Recent uploads: eagle-public's homepage panel. Five projects by default, ten at most — the
