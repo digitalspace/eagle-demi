@@ -114,5 +114,6 @@ const USERS = {
   notFound: 'User not found'
 };
 
+exports.nativeSpec = USERS;
 exports.getUsers = listHandler(USERS);
 exports.getUser = getHandler(USERS);

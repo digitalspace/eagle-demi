@@ -118,5 +118,6 @@ function projectFilter(handler) {
   };
 }
 
+exports.nativeSpec = GROUPS;
 exports.getGroups = projectFilter(listHandler(GROUPS));
 exports.getGroup = getHandler(GROUPS);
