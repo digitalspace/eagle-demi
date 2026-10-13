@@ -100,17 +100,17 @@ function criteriaFor(kind, opts) {
  * @param {object} [opts]  filter keys from FILTERS, plus `pageNum` / `pageSize` / `sortBy`
  */
 async function listByKind(kind, access, opts = {}) {
-  const spec = byKindSpec(kind, access, opts, orderByFrom(opts.sortBy, SORTABLE[kind] || [], DEFAULT_ORDER));
+  const spec = byKindSpec(access, criteriaFor(kind, opts), orderByFrom(opts.sortBy, SORTABLE[kind] || [], DEFAULT_ORDER));
 
   return readPage(CONTAINER, spec,
     { pageNum: opts.pageNum, pageSize: opts.pageSize, partitionKey: String(kind) });
 }
 
-function byKindSpec(kind, access, opts, orderBy) {
+function byKindSpec(access, criteria, orderBy) {
   return selectWhere({
     access,
     partitionField: SCOPE_FIELD,
-    criteria: criteriaFor(kind, opts),
+    criteria,
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
     orderBy
   });
@@ -118,13 +118,36 @@ function byKindSpec(kind, access, opts, orderBy) {
 
 /** Every row of one kind, past `listByKind`'s MAX_PAGE_SIZE cap — for the reconcile only. */
 async function listEveryOfKind(kind, access) {
-  return fetchAll(CONTAINER, byKindSpec(kind, access, {}), { partitionKey: String(kind) });
+  return fetchAll(CONTAINER, byKindSpec(access, criteriaFor(kind, {})), { partitionKey: String(kind) });
 }
 
 async function countByKind(kind, access, opts = {}) {
   const spec = countWhere({ access, partitionField: SCOPE_FIELD, criteria: criteriaFor(kind, opts) });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(kind) });
   return items[0] || 0;
+}
+
+/**
+ * The native list contract's repository for one kind (the `cosmosKind` shape in
+ * helpers/native-query.js), pinned to that kind's partition. The contract's `q` arrives as a
+ * `CONTAINS(c.name, ...)` criterion, so name search needs nothing more here. By id is the point
+ * read, so `/lists/:id` cannot answer an Organization row or the other way round.
+ */
+function nativeKind(kind) {
+  const pinned = criteria => [eq(PARTITION_FIELD, String(kind), '@kind'), ...criteria];
+  const partition = { partitionKey: String(kind) };
+  return {
+    async list(access, { criteria, orderBy, pageNum, pageSize }) {
+      return readPage(CONTAINER, byKindSpec(access, pinned(criteria), orderBy || DEFAULT_ORDER),
+        { pageNum, pageSize, ...partition });
+    },
+    async count(access, { criteria }) {
+      const spec = countWhere({ access, partitionField: SCOPE_FIELD, criteria: pinned(criteria) });
+      const { items } = await cosmos.query(CONTAINER, spec, partition);
+      return items[0] || 0;
+    },
+    getById: (access, id) => getById(access, id, kind)
+  };
 }
 
 /**
@@ -148,5 +171,6 @@ module.exports = {
   listByKind,
   listEveryOfKind,
   countByKind,
+  nativeKind,
   upsert
 };

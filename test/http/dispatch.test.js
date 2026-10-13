@@ -416,3 +416,42 @@ test('edge gate', async (t) => {
     assert.strictEqual(gateWarnings(warn).length, 0);
   });
 });
+
+// Native kind reads: lists and organizations.
+test('native lists and organizations routes', async (t) => {
+  const cosmos = require('../../src/db/cosmos-nosql');
+  // One row per kind; `description` is level 2 in catalog/lists.js and is set on both, so a route
+  // that skipped the redactor would show it on either kind.
+  const rows = [
+    { id: 'l1', kind: 'List', name: 'Pre-Application', type: 'eaoStatus', description: 'level 2', read: ['public'] },
+    { id: 'o1', kind: 'Organization', name: 'Acme Mining', description: 'level 2', read: ['public'] }
+  ];
+  t.mock.method(cosmos, 'query', async (container, spec, options = {}) =>
+    ({ items: rows.filter(row => row.kind === options.partitionKey) }));
+  t.mock.method(cosmos, 'readItem', async (container, id, kind) =>
+    rows.find(row => row.id === id && row.kind === kind) || null);
+  t.after(() => t.mock.restoreAll());
+
+  const paths = { '/api/lists': 'l1', '/api/lists/l1': 'l1', '/api/organizations': 'o1', '/api/organizations/o1': 'o1' };
+
+  for (const [path, id] of Object.entries(paths)) {
+    await t.test(`anonymous GET ${path} leaves out the level-2 field`, async () => {
+      const res = await call(path);
+      assert.strictEqual(res.status, 200);
+      const [row] = [].concat(JSON.parse(res.body));
+      assert.strictEqual(row.id, id);
+      assert.strictEqual(row.description, undefined);
+    });
+
+    await t.test(`GET ${path} with a rejected Bearer is a 401`, async () => {
+      const res = await call(path, { headers: { authorization: 'Bearer not-a-jwt' } });
+      assert.strictEqual(res.status, 401);
+    });
+
+    await t.test(`authenticated GET ${path} is private, no-store`, async () => {
+      const res = await call(path, { headers: { ...AUTHED } });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.headers['cache-control'], 'private, no-store');
+    });
+  }
+});
