@@ -1,8 +1,8 @@
 'use strict';
 
 // Native update and notification reads, driven through the real handlers and repositories over a
-// fake Cosmos that applies the role arm, equality, IN, `<=`, pinned and ORDER BY clauses of each
-// query, so what a caller may see is observed in the response. The indexes are faked at
+// fake Cosmos that applies the role arm, equality, IN, `<=`, pinned, parent gate and ORDER BY
+// clauses of each query, so what a caller may see is observed in the response. The indexes are faked at
 // `searchActivities`/`searchNotifications`, so the OData filter they are asked with is observed too.
 
 process.env.NODE_ENV = 'test';
@@ -27,21 +27,29 @@ const STAFF = { realm_access: { roles: ['staff'] } };
 const ANON = resolveAccess({ query: {}, headers: {}, header: () => undefined });
 
 const PROJECT_EAGLE_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+const HIDDEN_EAGLE_ID = 'cccccccccccccccccccccccc';
+// An API key scoped to both projects by their Track ids, which the updates container does not hold.
+const SCOPED = { projectScope: ['p1', 'p2'] };
 
 const CONTAINERS = {
   // Live: u1 and u4. u2 is a draft and u3 is scheduled for later; only staff and narrower see them.
+  // u5 is live and public itself, but its parent project p2 is staff-only, so it is hidden below staff.
   updates: [
     { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
     { id: 'u2', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Draft', read: ['public'], status: 'draft', publishDate: '2026-01-03T00:00:00.000Z', dateAdded: '2026-01-03T00:00:00.000Z' },
     { id: 'u3', type: 'News', headline: 'Scheduled', read: ['public'], status: 'published', publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },
-    { id: 'u4', type: 'Notice', headline: 'Pinned notice', pinned: true, read: ['public'], status: 'published', publishDate: '2025-12-01T00:00:00.000Z', dateAdded: '2025-12-01T00:00:00.000Z' }
+    { id: 'u4', type: 'Notice', headline: 'Pinned notice', pinned: true, read: ['public'], status: 'published', publishDate: '2025-12-01T00:00:00.000Z', dateAdded: '2025-12-01T00:00:00.000Z' },
+    { id: 'u5', projectId: HIDDEN_EAGLE_ID, type: 'News', headline: 'Quarry approved', read: ['public'], status: 'published', publishDate: '2026-01-04T00:00:00.000Z', dateAdded: '2026-01-04T00:00:00.000Z' }
   ],
   notifications: [
     { id: 'n1', name: 'Pipeline notice', type: 'Industrial', region: 'Peace', read: ['public'], notificationReceivedDate: '2026-02-01T00:00:00.000Z' },
     { id: 'n2', name: 'Mine notice', type: 'Mines', region: 'Skeena', read: ['public'], notificationReceivedDate: '2026-03-01T00:00:00.000Z' },
     { id: 'n-staff', name: 'Unreleased notice', type: 'Mines', read: ['staff'], notificationReceivedDate: '2026-04-01T00:00:00.000Z' }
   ],
-  projects: [{ id: 'p1', eagleId: PROJECT_EAGLE_ID, name: 'Site C', read: ['public'] }]
+  projects: [
+    { id: 'p1', eagleId: PROJECT_EAGLE_ID, name: 'Site C', read: ['public'] },
+    { id: 'p2', eagleId: HIDDEN_EAGLE_ID, name: 'Unreleased quarry', read: ['staff'] }
+  ]
 };
 
 function param(spec, name) {
@@ -65,6 +73,9 @@ function admitted(container, spec) {
   }
   if (spec.query.includes('c.pinned = true')) tests.push(row => row.pinned === true);
   if (spec.query.includes('c.pinned = false')) tests.push(row => row.pinned !== true);
+  if (spec.query.includes('NOT ARRAY_CONTAINS(@hiddenParents, c.projectId)')) {
+    tests.push(row => !row.projectId || !param(spec, '@hiddenParents').includes(row.projectId));
+  }
 
   const rows = CONTAINERS[container]
     .filter(row => roles.length === 0 || row.read.some(r => roles.includes(r)))
@@ -111,7 +122,7 @@ test('native updates list', async (t) => {
   await t.test('anonymous sees only live rows; staff sees drafts and scheduled rows too', async (t) => {
     fakeStores(t);
     assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4']);
-    assert.deepStrictEqual(ids((await call(list, '', { user: STAFF })).body).sort(), ['u1', 'u2', 'u3', 'u4']);
+    assert.deepStrictEqual(ids((await call(list, '', { user: STAFF })).body).sort(), ['u1', 'u2', 'u3', 'u4', 'u5']);
   });
 
   await t.test('count=true counts the live rows only', async (t) => {
@@ -172,6 +183,59 @@ test('native updates list', async (t) => {
     const [search] = await events(audit.EVENTS_STREAM);
     assert.strictEqual(search.EventName, 'search');
     assert.strictEqual(search.Detail.kind, 'updates');
+  });
+});
+
+test('native updates under a parent the caller cannot read', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const list = updatesController.getUpdates;
+  const get = updatesController.getUpdate;
+
+  await t.test('anonymous: the list leaves the row out', async (t) => {
+    fakeStores(t);
+    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4']);
+  });
+
+  await t.test('anonymous: count=true does not count it', async (t) => {
+    fakeStores(t);
+    assert.strictEqual((await call(list, 'count=true')).headers['x-total-count'], '2');
+  });
+
+  await t.test('anonymous: the q read-back drops it though the index ranked it', async (t) => {
+    fakeStores(t, { ranked: ['u5', 'u1'] });
+    assert.deepStrictEqual(ids((await call(list, 'q=quarry')).body), ['u1']);
+  });
+
+  await t.test('anonymous: by id it is a 404', async (t) => {
+    fakeStores(t);
+    assert.strictEqual((await call(get, '', { id: 'u5' })).status, 404);
+  });
+
+  // The Track ids must become Eagle ids to match projectId at all; the parent gate then drops u5.
+  await t.test('scoped: the list holds its readable project\'s row only', async (t) => {
+    fakeStores(t);
+    assert.deepStrictEqual(ids((await call(list, '', { user: SCOPED })).body), ['u1']);
+  });
+
+  await t.test('scoped: count=true counts that row only', async (t) => {
+    fakeStores(t);
+    assert.strictEqual((await call(list, 'count=true', { user: SCOPED })).headers['x-total-count'], '1');
+  });
+
+  await t.test('scoped: the q read-back drops it though the index ranked it', async (t) => {
+    fakeStores(t, { ranked: ['u5', 'u1'] });
+    assert.deepStrictEqual(ids((await call(list, 'q=quarry', { user: SCOPED })).body), ['u1']);
+  });
+
+  await t.test('scoped: by id it is a 404, while its readable project\'s row reads', async (t) => {
+    fakeStores(t);
+    assert.strictEqual((await call(get, '', { id: 'u5', user: SCOPED })).status, 404);
+    assert.strictEqual((await call(get, '', { id: 'u1', user: SCOPED })).status, 200);
+  });
+
+  await t.test('staff reads the parent, so the row too', async (t) => {
+    fakeStores(t);
+    assert.strictEqual((await call(get, '', { id: 'u5', user: STAFF })).status, 200);
   });
 });
 
