@@ -52,9 +52,10 @@ const SWEEP_DEFAULT = 5;
 const SWEEP_MAX = 20;
 /**
  * Leases a row may end with no word from the worker before it is skipped. A file that kills the
- * worker (out of memory) leaves no report, and would otherwise be offered, and kill a run, forever.
+ * worker (out of memory) leaves no report, but so does a large PDF that runs out of time, and those
+ * can take many leases to finish. 10 gives them room and still ends a crash loop after 10 runs.
  */
-const MAX_SILENT_RELEASES = 3;
+const MAX_SILENT_RELEASES = 10;
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const MD5_B64 = /^[A-Za-z0-9+/]{22}==$/;
@@ -383,6 +384,15 @@ async function finish(row, fields) {
 }
 
 /**
+ * Release a lease that wrote nothing that stays. `noReport` is true when this release hit
+ * MAX_SILENT_RELEASES; skipFields clears `releases` (null) only then.
+ */
+async function endLease(row, lease, report, workerFailure) {
+  const extra = skipFields(row, lease, report, workerFailure);
+  return { row: await release(row, extra), outcome: extra.reason ? 'skipped' : 'released', noReport: extra.releases === null };
+}
+
+/**
  * End a lease from the store's state; the one path for a worker report and for the sweep.
  * `report` is the worker's skip, if it sent one; `workerFailure` its failure text, only logged.
  *
@@ -402,8 +412,7 @@ async function settle(stored, report = null, workerFailure = null) {
     logger.info('[pdf-title] lease ended with no write', {
       ...fields, reason: report ? report.reason : 'released', ...(workerFailure ? { workerFailure } : {}),
     });
-    const extra = skipFields(row, lease, report, workerFailure);
-    return { row: await release(row, extra), outcome: extra.reason ? 'skipped' : 'released' };
+    return endLease(row, lease, report, workerFailure);
   }
 
   let verdict;
@@ -437,8 +446,7 @@ async function settle(stored, report = null, workerFailure = null) {
     logger.info('[pdf-title] lease ended; store holds the source', {
       ...fields, reason: why ? why.reason : 'released', ...(workerFailure ? { workerFailure } : {}),
     });
-    const extra = skipFields(row, lease, why, workerFailure);
-    return { row: await release(row, extra), outcome: extra.reason ? 'skipped' : 'released' };
+    return endLease(row, lease, why, workerFailure);
   }
   const { restored, overwritten } = await copyBack(row, fields);
   if (restored && verdict.shape) {
@@ -532,12 +540,14 @@ async function sweep(req, res) {
       parameters: [{ name: '@now', value: before }]
     }, limit);
     if (!page) return undefined;
-    const counts = { released: 0, skipped: 0, titled: 0, restored: 0, 'needs-review': 0, waiting: 0 };
+    // noReport counts the skips (also in `skipped`) that hit MAX_SILENT_RELEASES.
+    const counts = { released: 0, skipped: 0, titled: 0, restored: 0, 'needs-review': 0, waiting: 0, noReport: 0 };
     const failed = [];
     for (const row of page.items) {
       try {
-        const { outcome } = await settle(row);
+        const { outcome, noReport } = await settle(row);
         counts[outcome] = (counts[outcome] || 0) + 1;
+        if (noReport) counts.noReport += 1;
       } catch (err) {
         failed.push(row.id);
         logger.error('[pdf-title] sweep of an expired lease failed', { id: row.id, error: err.message });

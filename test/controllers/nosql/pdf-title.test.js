@@ -940,35 +940,48 @@ test('pdf title lease API', async (t) => {
       w.expireLease();
       const res = await call(controller.sweep);
       assert.equal(res.body.outcomes.released, 1);
+      assert.equal(res.body.outcomes.noReport, 0);
       assert.equal(w.row().pdfTitle.releases, 1);
       assert.equal((await pending()).length, 1, 'offered again');
     });
 
-    await t.test('the third lease to end with no report skips the row and warns once', async (t) => {
-      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 2 } }] });
+    await t.test('the ninth lease to end with no report still offers the row again', async (t) => {
+      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 8 } }] });
+      await lease();
+      w.expireLease();
+      const res = await call(controller.sweep);
+      assert.equal(res.body.outcomes.released, 1);
+      assert.equal(res.body.outcomes.noReport, 0);
+      assert.equal(w.row().pdfTitle.releases, 9);
+      assert.equal((await pending()).length, 1, 'offered again');
+    });
+
+    await t.test('the tenth lease to end with no report skips the row and warns once', async (t) => {
+      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 9 } }] });
       const warned = t.mock.method(logger, 'warn', () => {});
       await lease();
       w.expireLease();
       const res = await call(controller.sweep);
       assert.equal(res.body.outcomes.skipped, 1);
+      assert.equal(res.body.outcomes.noReport, 1);
       const record = w.row().pdfTitle;
       assert.equal(record.status, 'skipped');
       assert.equal(record.reason, 'no-report');
       assert.equal(record.title, FIRST);
-      assert.deepEqual(warned.mock.calls.map(c => c.arguments[1]), [{ id: ID, releases: 3 }]);
+      assert.deepEqual(warned.mock.calls.map(c => c.arguments[1]), [{ id: ID, releases: 10 }]);
       assert.equal((await pending()).length, 0, 'not offered again');
     });
 
     await t.test('a worker failure report is not counted as a lease with no report', async (t) => {
-      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 2 } }] });
+      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 9 } }] });
       const leased = await lease();
       await report({ leaseId: leased.body.leaseId, reason: 'download: HTTP 403' });
-      assert.equal(w.row().pdfTitle.releases, 2);
+      assert.equal(w.row().pdfTitle.releases, 9);
       assert.equal(w.row().pdfTitle.status, undefined);
     });
 
     await t.test('a title clears the count of leases that ended with no report', async (t) => {
-      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 2 } }] });
+      const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, releases: 9 } }] });
       await titled(w);
       assert.equal(w.row().pdfTitle.status, 'titled');
       assert.equal(w.row().pdfTitle.releases, null);
