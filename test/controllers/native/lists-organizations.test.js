@@ -97,6 +97,17 @@ test('native lists and organizations', async (t) => {
     assert.match(specs[0].query, /ORDER BY c\.name DESC$/);
   });
 
+  await t.test('with no sort, lists and organizations order by name ascending', async (t) => {
+    const specs = fakeCosmos(t);
+    const lists = await call(listsController.getLists, 'type=eaoStatus');
+    const orgs = await call(organizationsController.getOrganizations, '');
+    assert.strictEqual(lists.status, 200);
+    assert.strictEqual(orgs.status, 200);
+    const reads = specs.filter(spec => !spec.query.includes('COUNT(1)'));
+    assert.deepStrictEqual(reads.map(spec => param(spec, '@kind')), ['List', 'Organization']);
+    for (const read of reads) assert.match(read.query, /ORDER BY c\.name ASC$/);
+  });
+
   await t.test('q matches name, case-insensitive, within the kind', async (t) => {
     const specs = fakeCosmos(t);
     const res = await call(organizationsController.getOrganizations, 'q=acme');
