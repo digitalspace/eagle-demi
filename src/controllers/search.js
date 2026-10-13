@@ -1737,8 +1737,8 @@ exports.search = async (req, res) => {
         // parent's ids — but only once this request's own rows are stamped. A facet the live index
         // does not carry, or carries over rows the backfill has not reached, is made INEXPRESSIBLE
         // rather than deleted, so it lands in `dropped` and the recovery below still answers it.
-        const { unavailable, unstampedScope, unknownScope, missingColumn } =
-          await liveChunkFacets(filterQuery, acl, eagleQuery.projectIdsFrom(filterQuery));
+        const liveFacets = await liveChunkFacets(filterQuery, acl, eagleQuery.projectIdsFrom(filterQuery));
+        const { unavailable } = liveFacets;
 
         const { filter, dropped } = eagleQuery.buildFilter(
           filterQuery, dataset, acl, access, { unexpressible: unavailable });
@@ -1767,10 +1767,7 @@ exports.search = async (req, res) => {
         // nothing is coming.
         // See wiki Search-Query-Construction#deep-search-can-be-degraded-three-ways.
         if (capped) {
-          const reasons = [];
-          if (unstampedScope) reasons.push('chunk-parent-fields-unstamped');
-          if (unknownScope) reasons.push('chunk-parent-fields-unknown');
-          if (missingColumn) reasons.push('chunk-parent-fields-missing');
+          const reasons = chunkQuery.facetReasons(liveFacets);
           if (reasons.length) noteDegraded({ degraded: { reasons } });
         }
 

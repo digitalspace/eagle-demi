@@ -13,6 +13,18 @@ const projectsRepo = require('../repositories/projects');
 const { redactAllForAccess } = require('../vis/redact');
 const { logger } = require('../utils/logger');
 
+// What clears each: the backfill finishing, the service answering, the index definition applied.
+const FACET_REASONS = Object.freeze([
+  ['unstampedScope', 'chunk-parent-fields-unstamped'],
+  ['unknownScope', 'chunk-parent-fields-unknown'],
+  ['missingColumn', 'chunk-parent-fields-missing']
+]);
+
+/** The wire reasons for the flags `liveFacetColumns` set, in a fixed order. */
+function facetReasons(live) {
+  return FACET_REASONS.filter(([flag]) => live[flag]).map(([, reason]) => reason);
+}
+
 /**
  * Which of the asked chunk index columns the LIVE chunks index cannot answer for this scope.
  *
@@ -187,6 +199,7 @@ async function gateChunksByParent(access, items, count) {
 
 module.exports = {
   liveFacetColumns,
+  facetReasons,
   staleChunksInScope,
   resetStaleChunkScopeCache,
   gateChunksByParent

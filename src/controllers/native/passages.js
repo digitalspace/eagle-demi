@@ -19,13 +19,6 @@ const { logger } = require('../../utils/logger');
 const FILTERS = ['projectId', 'documentId', ...CHUNK_PARENT_LIST_REFS];
 const INDEX_MAP = Object.freeze({ columns: Object.fromEntries(FILTERS.map(field => [field, field])) });
 
-// What clears each: the backfill finishing, the service answering, the index definition applied.
-const FACET_REASONS = Object.freeze([
-  ['unstampedScope', 'chunk-parent-fields-unstamped'],
-  ['unknownScope', 'chunk-parent-fields-unknown'],
-  ['missingColumn', 'chunk-parent-fields-missing']
-]);
-
 function failure(status, message) {
   return Object.assign(new Error(message), { status });
 }
@@ -43,7 +36,7 @@ async function readPassages(access, parsed) {
   const facets = CHUNK_PARENT_LIST_REFS.filter(column => parsed.filters[column]);
   const live = await chunkQuery.liveFacetColumns(facets, acl, parsed.filters.projectId || []);
   if (live.unavailable.length) {
-    const reasons = FACET_REASONS.filter(([flag]) => live[flag]).map(([, reason]) => reason);
+    const reasons = chunkQuery.facetReasons(live);
     logger.warn('[passages] facet filter refused: chunk index cannot answer it for this scope', {
       columns: live.unavailable, reasons
     });
