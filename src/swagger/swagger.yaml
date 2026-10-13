@@ -3647,6 +3647,253 @@ paths:
         '404':
           description: Inspection item not found.
 
+  # Native reads: comment periods and comments.
+  /api/comment-periods:
+    get:
+      summary: List comment periods
+      description: >-
+        Comment periods the caller may read, deleted ones left out, with hidden fields left out.
+        Each row also carries `projectName` and `projectEagleId` when the caller may read the
+        project. Any parameter not listed here, or a parameter given twice (except `status`), is
+        a 400. A rejected Bearer token is a 401. A signed-in read is audited and answered
+        `Cache-Control: private, no-store`.
+      parameters:
+        - name: project
+          in: query
+          required: false
+          description: DEMI id of the project.
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          description: >-
+            `open`, `upcoming` or `closed`, compared with the current time. Repeat it to match
+            any of several.
+          schema:
+            type: string
+            enum: [open, upcoming, closed]
+        - name: sort
+          in: query
+          required: false
+          description: One of `dateStarted`, `dateCompleted`; a leading `-` sorts descending. Default `-dateStarted`.
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page. An anonymous caller may not read past row 2000.
+          schema:
+            type: integer
+            minimum: 1
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated DEMI ids, at most 100.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-total-count:
+              description: Rows matching the query, sent when `count=true`.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Unknown or repeated parameter, bad value, or a page past the caller's depth.
+        '401':
+          description: The Bearer token was rejected.
+
+  /api/comment-periods/{id}:
+    get:
+      summary: Read one comment period
+      description: >-
+        One comment period the caller may read, with hidden fields left out, plus `projectName`
+        and `projectEagleId`. A period the caller cannot read is a 404, the same as one that does
+        not exist. A signed-in read is audited.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI id, or the 24-hex Eagle id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: The Bearer token was rejected.
+        '404':
+          description: Comment period not found.
+
+  /api/comment-periods/{id}/summary:
+    get:
+      summary: Count a comment period's comments by EAO status
+      description: >-
+        Counts only the comments the caller may read, so a hidden comment is not counted.
+        `total` includes comments in any status. A signed-in read is audited.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI id, or the 24-hex Eagle id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  total:
+                    type: integer
+                  eaoStatus:
+                    type: object
+                    properties:
+                      Pending:
+                        type: integer
+                      Published:
+                        type: integer
+                      Rejected:
+                        type: integer
+                      Deferred:
+                        type: integer
+        '400':
+          description: A query parameter was given; this route takes none.
+        '401':
+          description: The Bearer token was rejected.
+        '404':
+          description: Comment period not found.
+
+  /api/comments:
+    get:
+      summary: List comments
+      description: >-
+        Comments the caller may read, with hidden fields left out (an unattributed `author` is
+        staff only). Each row also carries `projectName` and `projectEagleId` when the caller may
+        read the project. Any parameter not listed here, or a parameter given twice (except
+        `eaoStatus`), is a 400. `q` is not recorded in the analytics events. A signed-in read is
+        audited and answered `Cache-Control: private, no-store`.
+      parameters:
+        - name: period
+          in: query
+          required: false
+          description: DEMI id of the comment period.
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          description: DEMI id of the project.
+          schema:
+            type: string
+        - name: eaoStatus
+          in: query
+          required: false
+          description: Pending, Published, Rejected or Deferred. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          description: Text matched in the comment body, case-insensitive. Never matched on the author.
+          schema:
+            type: string
+        - name: sort
+          in: query
+          required: false
+          description: '`dateAdded`; a leading `-` sorts descending. Default `commentId` ascending.'
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page. An anonymous caller may not read past row 2000.
+          schema:
+            type: integer
+            minimum: 1
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated DEMI ids, at most 100.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-total-count:
+              description: Rows matching the query, sent when `count=true`.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Unknown or repeated parameter, bad value, or a page past the caller's depth.
+        '401':
+          description: The Bearer token was rejected.
+
+  /api/comments/{id}:
+    get:
+      summary: Read one comment
+      description: >-
+        One comment the caller may read, with hidden fields left out, plus `projectName` and
+        `projectEagleId`. A comment the caller cannot read is a 404, the same as one that does not
+        exist. A signed-in read is audited.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI id, or the 24-hex Eagle id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: The Bearer token was rejected.
+        '404':
+          description: Comment not found.
+
   /api/commentperiods/{periodId}/comments/export:
     get:
       summary: Export a comment period's comments as CSV
@@ -3656,7 +3903,9 @@ paths:
         published comments. Rows are the comments the caller may read, each redacted first, so a
         hidden field is an empty cell. Attachment links point at `/api/documents/{id}/download`
         and list only documents the caller may read. Text starting with `=`, `+`, `-` or `@` gets
-        a leading `'`.
+        a leading `'`. `audience=proponent` reads everything at the public level instead, so
+        staff get the file a proponent gets; it can only narrow what the caller sees. A
+        signed-in export is audited.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -3667,6 +3916,13 @@ paths:
           description: DEMI id of the comment period.
           schema:
             type: string
+        - name: audience
+          in: query
+          required: false
+          description: '`proponent` for the public-level file. Any other value is a 400.'
+          schema:
+            type: string
+            enum: [proponent]
       responses:
         '200':
           description: CSV file, sent as the attachment `export.csv`.
@@ -3674,6 +3930,8 @@ paths:
             text/csv:
               schema:
                 type: string
+        '400':
+          description: '`audience` is not `proponent`.'
         '401':
           description: Unauthorized. There is no anonymous export.
         '404':

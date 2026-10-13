@@ -271,6 +271,40 @@ test('a stream that fails after the headers is logged and ends short', { timeout
   assert.strictEqual(logged && logged.error, 'store connection reset');
 });
 
+// Native reads: comment periods and comments.
+test('native comment period and comment reads', async (t) => {
+  const cosmos = require('../../src/db/cosmos-nosql');
+  const projects = require('../../src/repositories/projects');
+  const PATHS = [
+    '/api/comment-periods', '/api/comment-periods/cp1', '/api/comment-periods/cp1/summary',
+    '/api/comments', '/api/comments/c1'
+  ];
+  // `author` on an unattributed comment is level 2: an anonymous read must not carry it.
+  const ROWS = {
+    commentPeriods: { id: 'cp1', projectId: 'p1', read: ['public'] },
+    comments: { id: 'c1', periodId: 'cp1', projectId: 'p1', read: ['public'], comment: 'Fish', author: 'Pat Hidden', isAnonymous: true }
+  };
+  t.beforeEach((t) => {
+    t.mock.method(cosmos, 'query', async (container, spec) =>
+      ({ items: spec.query.includes('COUNT(1)') ? [1] : [ROWS[container]] }));
+    t.mock.method(cosmos, 'queryFirst', async container => ROWS[container]);
+    t.mock.method(projects, 'listRowsByIds', async () => []);
+  });
+
+  for (const path of PATHS) {
+    await t.test(`${path} answers anonymous without a level-2 field`, async () => {
+      const res = await call(path);
+      assert.strictEqual(res.status, 200, res.body);
+      assert.ok(!res.body.includes('Pat Hidden'), res.body);
+    });
+
+    await t.test(`${path} answers a rejected Bearer with 401`, async () => {
+      const res = await call(path, { headers: { authorization: 'Bearer not-a-token' } });
+      assert.strictEqual(res.status, 401);
+    });
+  }
+});
+
 test('edge gate', async (t) => {
   // Fake values: the gate compares what the request presents against these.
   const GATEWAY = { 'x-gateway-secret': 'gateway-secret-for-edge-gate-suite' };
