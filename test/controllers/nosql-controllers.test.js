@@ -52,24 +52,24 @@ test('nosql project controller', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('anonymous list resolves the public tier and scopes on the ACL alone', async () => {
-    let seenAccess, seenOpts;
-    t.mock.method(projects, 'listVisible', async (access, opts) => {
-      seenAccess = access; seenOpts = opts;
-      return { items: [], continuationToken: undefined };
+    let seenAccess, seenArgs;
+    t.mock.method(projectController.projectsKind.repository, 'list', async (access, args) => {
+      seenAccess = access; seenArgs = args;
+      return [];
     });
 
     await projectController.getProjects({ ...ANON }, mockRes());
 
     assert.strictEqual(seenAccess.tier, TIER.PUBLIC);
-    assert.ok(!('trackOnly' in seenOpts),
+    assert.deepStrictEqual(seenArgs.criteria, [],
       'an Eagle-only project is retained and flagged, never filtered out of a public list');
   });
 
   await t.test('a token promotes the tier; a header cannot', async () => {
     let seenAccess;
-    t.mock.method(projects, 'listVisible', async (access) => {
+    t.mock.method(projectController.projectsKind.repository, 'list', async (access) => {
       seenAccess = access;
-      return { items: [], continuationToken: undefined };
+      return [];
     });
 
     await projectController.getProjects({ query: {}, user: ADMIN_USER }, mockRes());
@@ -211,9 +211,7 @@ test('nosql project controller', async (t) => {
   };
 
   await t.test('the raw upstream payloads do not leave over HTTP', async () => {
-    t.mock.method(projects, 'listVisible', async () => ({
-      items: [structuredClone(STORED)], continuationToken: undefined
-    }));
+    t.mock.method(projectController.projectsKind.repository, 'list', async () => [structuredClone(STORED)]);
     t.mock.method(projects, 'getById', async () => structuredClone(STORED));
 
     const list = mockRes();

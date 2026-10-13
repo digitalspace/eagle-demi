@@ -95,6 +95,18 @@ test('public config controller', async (t) => {
     assert.ok(!('ACCESS_GATE' in res.body));
   });
 
+  await t.test('DEMI_API_PATH is served when stored and absent when not', async () => {
+    t.mock.method(configRepository, 'getPublic', async () => ({ ...STORED, DEMI_API_PATH: '/demi/api' }));
+    const set = mockRes();
+    await configController.getPublicConfig(REQ, set);
+    assert.equal(set.body.DEMI_API_PATH, '/demi/api');
+
+    t.mock.method(configRepository, 'getPublic', async () => STORED);
+    const unset = mockRes();
+    await configController.getPublicConfig(REQ, unset);
+    assert.ok(!('DEMI_API_PATH' in unset.body), 'an unset DEMI_API_PATH was given a default');
+  });
+
   await t.test('a stored ACCESS_GATE false is served as boolean false', async () => {
     // Skipping falsy values is the exact bug that would open the curtain on an environment that
     // deliberately turned the gate off, so `false` has to survive as itself.

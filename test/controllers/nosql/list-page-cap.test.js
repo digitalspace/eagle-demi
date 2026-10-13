@@ -15,7 +15,6 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const projects = require('../../../src/repositories/projects');
 const documents = require('../../../src/repositories/documents');
 const projectController = require('../../../src/controllers/nosql/project');
 const documentController = require('../../../src/controllers/nosql/document');
@@ -37,11 +36,17 @@ const STAFF = { realm_access: { roles: ['staff'] } };
 // authenticated without being able to see any more than an anonymous caller.
 const COMPLIANCE_KEY = { keyId: 'probe-key', realm_access: { roles: ['compliance'] } };
 
-// Both routes take the same shape: a repository `listVisible(access, opts)` behind a controller
-// that decides `opts.pageSize`. One table drives both so neither can be hardened alone.
+// Both routes take the same shape: a repository list read behind a controller that decides
+// `opts.pageSize`. One table drives both so neither can be hardened alone.
 const ROUTES = [
-  { name: 'projects', repo: projects, handler: (req, res) => projectController.getProjects(req, res) },
-  { name: 'documents', repo: documents, handler: (req, res) => documentController.getDocuments(req, res) }
+  {
+    name: 'projects', repo: projectController.projectsKind.repository, method: 'list', empty: [],
+    handler: (req, res) => projectController.getProjects(req, res)
+  },
+  {
+    name: 'documents', repo: documents, method: 'listVisible', empty: { items: [], continuationToken: undefined },
+    handler: (req, res) => documentController.getDocuments(req, res)
+  }
 ];
 
 for (const route of ROUTES) {
@@ -52,9 +57,9 @@ for (const route of ROUTES) {
     // expensive read does not happen, not merely that the response is short.
     const stub = () => {
       let seenOpts = null;
-      t.mock.method(route.repo, 'listVisible', async (access, opts) => {
+      t.mock.method(route.repo, route.method, async (access, opts) => {
         seenOpts = opts;
-        return { items: [], continuationToken: undefined };
+        return route.empty;
       });
       return () => seenOpts;
     };

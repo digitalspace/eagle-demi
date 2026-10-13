@@ -153,7 +153,9 @@ const routes = [
   { method: 'get', path: '/admin/reconcile-engage', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getReconcileEngageReport },
 
   // Projects Routes
-  { method: 'get', path: '/projects', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProjects },
+  // projects/counts: native list contract. `strict` answers a rejected Bearer with its 401, not the public view.
+  { method: 'get', path: '/projects', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => projectController().getProjects },
+  { method: 'get', path: '/counts', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/counts').counts },
   { method: 'get', path: '/projects/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProject },
   // The stored AI summary. Same guards as `/search/summary` and for the same reason — every AI
   // surface is privileged-only while cost, abuse and the review workflow are unsettled. A point

@@ -695,17 +695,66 @@ paths:
         '401':
           description: Unauthorized.
 
+  # projects/counts: native list contract
+  /api/counts:
+    get:
+      summary: Count rows of native lists
+      description: >-
+        How many rows each named kind's list would hold for this caller, as `{ <kind>: <count> }`.
+        Each count takes its list's filters, `q` and `ids`, and the same visibility rules, so a
+        filter on a field the caller cannot see is refused with 400 rather than counted. Paging
+        and sort parameters are refused. Supported kinds: `projects`. A rejected Bearer token
+        answers 401; an authenticated answer carries `Cache-Control: private, no-store`.
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          description: Comma-separated kinds. Omitted, every supported kind is counted.
+          schema:
+            type: string
+            example: projects
+        - name: q
+          in: query
+          required: false
+          description: Keyword, matched as the kind's list matches it.
+          schema:
+            type: string
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated ids, at most 100.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Count per kind.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: integer
+        '400':
+          description: Unknown kind or parameter, a repeated parameter, or a filter on a field the caller cannot see.
+        '401':
+          description: The Bearer token was rejected.
   /api/projects:
     get:
       summary: Retrieve projects
-      description: Get all projects, optionally filtered by spatial administrative region containment. Restricted to published projects for unauthenticated public requests.
+      description: >-
+        One page of the projects this caller may read. Unknown and repeated parameters are refused
+        with 400, except `projectState`, which takes several values. A filter, sort or `q` on a
+        field the caller cannot see is refused with 400. A rejected Bearer token answers 401; an
+        authenticated answer carries `Cache-Control: private, no-store`. A `q` search is logged as
+        a `search` analytics event.
       parameters:
-        - name: region
+        - name: page
           in: query
           required: false
-          description: Name of the region shapefile boundary to execute point-in-polygon containment check.
+          description: 1-based page number. Unauthenticated requests may reach row 2000, others row 20000.
           schema:
-            type: string
+            type: integer
+            minimum: 1
         - name: pageSize
           in: query
           required: false
@@ -717,9 +766,81 @@ paths:
             type: integer
             minimum: 1
             maximum: 1000
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the total row count as the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
+        - name: sort
+          in: query
+          required: false
+          description: Sort key, `-` prefix for descending. Default is by name.
+          schema:
+            type: string
+            enum: [name, -name]
+        - name: q
+          in: query
+          required: false
+          description: >-
+            Keyword, ranked by the projects search index. A keyword list holds at most 250 rows.
+          schema:
+            type: string
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated project ids, at most 100.
+          schema:
+            type: string
+        - name: projectType
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: region
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: projectState
+          in: query
+          required: false
+          description: Repeat the parameter to match any of several states.
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: proponentName
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: regionalDistrict
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: municipality
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: electoralDistrict
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         '200':
           description: A list of projects.
+          headers:
+            x-total-count:
+              description: Total rows, when `count=true`.
+              schema:
+                type: integer
           content:
             application/json:
               schema:
@@ -727,7 +848,11 @@ paths:
                 items:
                   $ref: '#/components/schemas/Project'
         '400':
-          description: pageSize above 100 on an unauthenticated request.
+          description: >-
+            Unknown or repeated parameter, a sort key off the list, pageSize above 100 on an
+            unauthenticated request, or a filter on a field the caller cannot see.
+        '401':
+          description: The Bearer token was rejected.
     post:
       summary: Create project
       description: >-
@@ -5532,6 +5657,11 @@ components:
             switch that sends it back to eagle-api's own search.
         DEMI_PROJECTS_PATH:
           type: string
+        DEMI_API_PATH:
+          type: string
+          description: >-
+            Where the admin and public sites send native DEMI reads, e.g. `/demi/api`. Unset by
+            default; a client falls back to its own default path.
         ADMIN_PATH:
           type: string
         CONTENT_SEARCH:

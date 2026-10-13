@@ -523,3 +523,38 @@ test('native lists and organizations routes', async (t) => {
     });
   }
 });
+
+// --- projects/counts: native list routes ---
+test('native projects and counts routes', async (t) => {
+  const projectsCosmos = require('../../src/db/cosmos-nosql');
+  t.afterEach(() => t.mock.restoreAll());
+  // `addedBy` is level 2 on every project.
+  const stubProjects = () => t.mock.method(projectsCosmos, 'query', async (container, spec) =>
+    (spec.query.includes('COUNT(1)')
+      ? { items: [1] }
+      : { items: [{ id: 'p1', name: 'Mine', read: ['public'], addedBy: 'staff-only@example.org' }] }));
+
+  await t.test('an anonymous project list withholds a level-2 field', async () => {
+    stubProjects();
+    const res = await call('/api/projects');
+    assert.strictEqual(res.status, 200);
+    const [row] = JSON.parse(res.body);
+    assert.strictEqual(row.name, 'Mine');
+    assert.ok(!('addedBy' in row), 'addedBy reached an anonymous caller');
+  });
+
+  for (const path of ['/api/projects', '/api/counts?kind=projects']) {
+    await t.test(`a rejected Bearer on ${path} is 401, not the public view`, async () => {
+      stubProjects();
+      const res = await call(path, { headers: { authorization: 'Bearer not-a-jwt' } });
+      assert.strictEqual(res.status, 401);
+    });
+
+    await t.test(`an authenticated ${path} answer is private, no-store`, async () => {
+      stubProjects();
+      const res = await call(path, { headers: AUTHED });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.headers['cache-control'], 'private, no-store');
+    });
+  }
+});
