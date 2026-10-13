@@ -103,5 +103,16 @@ exports.upsertFromEagle = async (req, res) => {
   }
 };
 
-exports.getUsers = listHandler('users', (access, _query, page) => users.listVisible(access, page));
-exports.getUser = getHandler('users', 'User not found', (access, id) => users.getById(access, id));
+// Staff reads of people are audited, as eagle-api records them; `q` (names, emails) never reaches analytics.
+const USERS = {
+  entity: 'users',
+  repository: users.native,
+  sortKeys: ['displayName'],
+  filters: [],
+  qFields: ['displayName', 'email'],
+  audited: true,
+  notFound: 'User not found'
+};
+
+exports.getUsers = listHandler(USERS);
+exports.getUser = getHandler(USERS);

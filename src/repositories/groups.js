@@ -11,6 +11,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead, systemAccess } = require('../helpers/access-sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
+const { cosmosKind } = require('../helpers/native-query');
 const {
   eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn, fetchAll
 } = require('./_sql');
@@ -102,7 +103,10 @@ async function listAclRows(access) {
   }));
 }
 
+/** The native list contract's reads (`helpers/native-query.js`). */
+const native = cosmosKind({ container: CONTAINER, entity: ENTITY, partitionField: PARTITION_FIELD, defaultOrder: 'c.id ASC' });
+
 module.exports = {
   CONTAINER, PARTITION_FIELD, getById, readForWrite, listVisible, listPage, countVisible, upsert, deleteById,
-  setAclForProject, listAclRows
+  setAclForProject, listAclRows, native
 };

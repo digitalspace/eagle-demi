@@ -416,3 +416,37 @@ test('edge gate', async (t) => {
     assert.strictEqual(gateWarnings(warn).length, 0);
   });
 });
+
+// Native reads: users and groups.
+test('native users and groups reads', async (t) => {
+  const cosmos = require('../../src/db/cosmos-nosql');
+  // Public rows that still hold a level-2 field: the dispatched answer must not.
+  const ROWS = {
+    users: { id: 'u1', read: ['public'], displayName: 'Sam Public', email: 'sam@example.invalid' },
+    groups: { id: 'g1', projectId: 'p1', read: ['public'], name: 'Working group', members: ['u1'] }
+  };
+  const HIDDEN = { users: 'email', groups: 'members' };
+
+  t.beforeEach((t) => {
+    t.mock.method(cosmos, 'query', async (container) => ({ items: ROWS[container] ? [ROWS[container]] : [] }));
+    t.mock.method(cosmos, 'readItem', async (container) => ROWS[container] || null);
+  });
+  t.afterEach(() => t.mock.restoreAll());
+
+  for (const kind of ['users', 'groups']) {
+    for (const path of [`/api/${kind}`, `/api/${kind}/${ROWS[kind].id}`]) {
+      await t.test(`${path} answers an anonymous caller without ${HIDDEN[kind]}`, async () => {
+        const res = await call(path);
+        assert.strictEqual(res.status, 200, res.body);
+        const row = [].concat(JSON.parse(res.body))[0];
+        assert.strictEqual(row.id, ROWS[kind].id);
+        assert.ok(!(HIDDEN[kind] in row), `${HIDDEN[kind]} reached an anonymous caller`);
+      });
+
+      await t.test(`${path} answers a rejected Bearer with 401, not the public tier`, async () => {
+        const res = await call(path, { headers: { authorization: 'Bearer not-a-token' } });
+        assert.strictEqual(res.status, 401);
+      });
+    }
+  }
+});

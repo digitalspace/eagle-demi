@@ -3336,21 +3336,59 @@ paths:
         '403':
           $ref: '#/components/responses/EagleMirrorForbidden'
 
+  # users and groups: native list contract (src/helpers/native-query.js)
   /api/users:
     get:
       summary: List mirrored users
       description: >-
-        Eagle `User` rows from the `users` container. A project-scoped key reads none. Rows are the ones the caller may read, ordered by `id`, with hidden fields left
-        out. An anonymous caller gets the public tier, which is often empty.
+        Eagle `User` rows from the `users` container. A project-scoped key reads none. Rows are the
+        ones the caller may read, with hidden fields left out. An anonymous caller gets the public
+        tier, which is often empty. A parameter not listed here, or a repeated one, is a 400. An
+        authenticated read is audited and answered with `Cache-Control: private, no-store`. A `q`
+        term is never written to analytics.
       parameters:
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number.
+          schema:
+            type: integer
+            minimum: 1
         - $ref: '#/components/parameters/MirrorPageSize'
-        - $ref: '#/components/parameters/MirrorContinuationToken'
+        - name: sort
+          in: query
+          required: false
+          description: '`displayName`, or `-displayName` for descending. Default: by id.'
+          schema:
+            type: string
+            enum: [displayName, -displayName]
+        - name: q
+          in: query
+          required: false
+          description: >-
+            Case-insensitive contains match on `displayName` or `email`. `email` is a staff field,
+            so a caller with no credential is refused with 400.
+          schema:
+            type: string
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated user ids, at most 100.
+          schema:
+            type: string
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
       responses:
         '200':
           description: One page of rows.
           headers:
-            x-continuation-token:
-              description: Send as `continuationToken` for the next page. Absent on the last page.
+            x-total-count:
+              description: Rows matching the query. Only with `count=true`.
               schema:
                 type: string
           content:
@@ -3360,14 +3398,19 @@ paths:
                 items:
                   type: object
         '400':
-          description: pageSize above the caller's cap.
+          description: >-
+            Unknown or repeated parameter, a sort key off the list, more than 100 ids, a page past
+            the depth cap, or `q` on a field the caller cannot see.
+        '401':
+          description: A Bearer token was sent and rejected.
 
   /api/users/{id}:
     get:
       summary: Read one mirrored user
       description: >-
         One record the caller may read, with hidden fields left out. A record the caller cannot
-        read is a 404, the same as one that does not exist.
+        read is a 404, the same as one that does not exist. An authenticated read is audited.
+        Takes no query parameters.
       parameters:
         - name: id
           in: path
@@ -3382,6 +3425,10 @@ paths:
             application/json:
               schema:
                 type: object
+        '400':
+          description: Any query parameter.
+        '401':
+          description: A Bearer token was sent and rejected.
         '404':
           description: User not found.
 
@@ -3389,8 +3436,10 @@ paths:
     get:
       summary: List mirrored groups
       description: >-
-        Eagle `Group` rows from the `groups` container. Rows are the ones the caller may read, ordered by `id`, with hidden fields left
-        out. An anonymous caller gets the public tier, which is often empty.
+        Eagle `Group` rows from the `groups` container. Rows are the ones the caller may read, with
+        hidden fields left out, plus `projectName` and `projectEagleId` from the parent project as
+        the caller may see it. An anonymous caller gets the public tier, which is often empty. A
+        parameter not listed here, or a repeated one, is a 400.
       parameters:
         - name: project
           in: query
@@ -3398,14 +3447,46 @@ paths:
           description: DEMI project id. Narrows the list to that project.
           schema:
             type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number.
+          schema:
+            type: integer
+            minimum: 1
         - $ref: '#/components/parameters/MirrorPageSize'
-        - $ref: '#/components/parameters/MirrorContinuationToken'
+        - name: sort
+          in: query
+          required: false
+          description: '`name`, or `-name` for descending. Default: by id.'
+          schema:
+            type: string
+            enum: [name, -name]
+        - name: q
+          in: query
+          required: false
+          description: Case-insensitive contains match on `name`.
+          schema:
+            type: string
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated group ids, at most 100.
+          schema:
+            type: string
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
       responses:
         '200':
           description: One page of rows.
           headers:
-            x-continuation-token:
-              description: Send as `continuationToken` for the next page. Absent on the last page.
+            x-total-count:
+              description: Rows matching the query. Only with `count=true`.
               schema:
                 type: string
           content:
@@ -3415,25 +3496,24 @@ paths:
                 items:
                   type: object
         '400':
-          description: pageSize above the caller's cap.
+          description: >-
+            Unknown or repeated parameter, a sort key off the list, more than 100 ids, or a page
+            past the depth cap.
+        '401':
+          description: A Bearer token was sent and rejected.
 
   /api/groups/{id}:
     get:
       summary: Read one mirrored group
       description: >-
-        One record the caller may read, with hidden fields left out. A record the caller cannot
-        read is a 404, the same as one that does not exist.
+        One record the caller may read, with hidden fields left out, plus `projectName` and
+        `projectEagleId` from the parent project. A record the caller cannot read is a 404, the
+        same as one that does not exist. Takes no query parameters.
       parameters:
         - name: id
           in: path
           required: true
           description: The record id (the Eagle `_id`).
-          schema:
-            type: string
-        - name: project
-          in: query
-          required: false
-          description: DEMI project id, the partition. Omit it and the read searches every partition.
           schema:
             type: string
       responses:
@@ -3443,6 +3523,10 @@ paths:
             application/json:
               schema:
                 type: object
+        '400':
+          description: Any query parameter.
+        '401':
+          description: A Bearer token was sent and rejected.
         '404':
           description: Group not found.
 
