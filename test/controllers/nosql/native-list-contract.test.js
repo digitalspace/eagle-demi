@@ -404,6 +404,49 @@ test('a filter alias', async (t) => {
   });
 });
 
+test('a day range', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const ranged = listHandler({
+    ...SPEC,
+    ranges: { addedFrom: { field: 'dateAdded', op: 'ge' }, addedTo: { field: 'dateAdded', op: 'le' } }
+  });
+
+  await t.test('each edge narrows the row field inside its dial, from the first to the last millisecond', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(ranged, 'addedFrom=2026-01-01&addedTo=2026-01-31')).status, 200);
+    const read = listQuery(specs);
+    assert.ok(read.query.includes('c.vis["dateAdded"]'), read.query);
+    assert.ok(read.query.includes('c.dateAdded >= @nr0') && read.query.includes('c.dateAdded <= @nr1'), read.query);
+    assert.strictEqual(param(read, '@nr0'), '2026-01-01T00:00:00.000Z');
+    assert.strictEqual(param(read, '@nr1'), '2026-01-31T23:59:59.999Z');
+  });
+
+  await t.test('a day that does not exist is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(ranged, 'addedFrom=2026-02-30');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'addedFrom takes one day as YYYY-MM-DD');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('a repeated edge is refused', async (t) => {
+    fakeCosmos(t);
+    const res = await call(ranged, 'addedFrom=2026-01-01&addedFrom=2026-02-01');
+    assert.strictEqual(res.body.error, 'parameter given more than once: addedFrom');
+  });
+
+  await t.test('an edge on a field the caller cannot see is refused', async (t) => {
+    fakeCosmos(t);
+    const hidden = listHandler({ ...SPEC, ranges: { notesFrom: { field: 'eaoNotes', op: 'ge' } } });
+    assert.strictEqual((await call(hidden, 'notesFrom=2026-01-01')).status, 400);
+  });
+
+  await t.test('a range that shadows a filter or names no op fails at route load', () => {
+    assert.throws(() => listHandler({ ...SPEC, ranges: { author: { field: 'dateAdded', op: 'ge' } } }), /clashes/);
+    assert.throws(() => listHandler({ ...SPEC, ranges: { addedFrom: { field: 'dateAdded', op: 'gt' } } }), /ge or le/);
+  });
+});
+
 test('a store that cannot take Cosmos SQL gets the parsed query, the same object in list and count', async () => {
   const seen = {};
   const repository = {

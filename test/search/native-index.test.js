@@ -160,3 +160,288 @@ test('keyword list over the index', async (t) => {
     assert.strictEqual(res.headers['x-total-count'], '3');
   });
 });
+
+// Paged mode: the documents index pages and counts; Cosmos re-reads the page's ids.
+const fs = require('node:fs');
+const path = require('node:path');
+const { documentsAcl } = require('../../src/search/document-query');
+const { logger } = require('../../src/utils/logger');
+
+const DOCS = Array.from({ length: 12 }, (_, i) => ({
+  id: `d${i + 1}`, projectId: 'p1', read: ['public'], displayName: `Document ${i + 1}`
+}));
+const ID_FILTERS = ['projectId', 'typeId', 'milestoneId', 'projectPhaseId', 'documentAuthorTypeId'];
+const UPDATE_IMAGES_OUT = { clause: 'c.documentSource != @src', params: [{ name: '@src', value: 'UPDATE' }] };
+
+const DOC_SPEC = {
+  entity: 'documents',
+  repository: indexedKind({
+    index: 'documents', container: 'documents', entity: 'documents', partitionField: 'projectId',
+    defaultOrder: 'c.id ASC', baseCriteria: [UPDATE_IMAGES_OUT]
+  }),
+  sortKeys: ['datePosted', 'displayName'],
+  // `documentFileName` is a declared filter with no index column.
+  filters: [...ID_FILTERS, 'isFeatured', 'legislation', 'documentFileName'],
+  aliases: { project: 'projectId' },
+  multiValueFilters: [...ID_FILTERS, 'legislation'],
+  ranges: { datePostedStart: { field: 'datePosted', op: 'ge' }, datePostedEnd: { field: 'datePosted', op: 'le' } },
+  qFields: ['displayName', 'description']
+};
+const docList = listHandler(DOC_SPEC);
+const STAFF_USER = { realm_access: { roles: ['staff'] } };
+
+/** The index answers `ids` with `count`; Cosmos answers the `@xid` rows it was asked for, reversed. */
+function fakeDocStores(t, { ids = ['d3', 'd1', 'd2'], count = ids.length } = {}) {
+  const searches = [];
+  const queries = [];
+  t.mock.method(aiSearch, 'searchDocumentIds', async (opts) => {
+    searches.push(opts);
+    return { ids, count };
+  });
+  t.mock.method(cosmos, 'query', async (container, spec) => {
+    queries.push(spec);
+    if (spec.query.includes('COUNT(1)')) return { items: [DOCS.length] };
+    const asked = spec.parameters.filter(p => p.name.startsWith('@xid')).map(p => p.value);
+    const rows = asked.length ? DOCS.filter(row => asked.includes(row.id)) : DOCS;
+    return { items: structuredClone(rows).reverse() };
+  });
+  return { searches, queries };
+}
+
+async function callDocs(qs, { user } = {}) {
+  const req = { query: querystring.parse(qs), params: {}, headers: {}, header: () => undefined, user };
+  const res = makeRes('test');
+  await docList(req, res);
+  return { status: res.statusCode, headers: res.headers, body: res.body ? JSON.parse(res.body) : undefined };
+}
+
+/** The `c.vis.<field>` names in the data source's `searchVis` column, the last one before its alias. */
+function searchVisFields() {
+  const file = path.join(__dirname, '../../azure/search/datasources/demi-documents-ds.json');
+  const query = JSON.parse(fs.readFileSync(file, 'utf8')).container.query;
+  const end = query.indexOf(' AS searchVis');
+  const expression = query.slice(query.lastIndexOf(' AS ', end - 1), end);
+  return [...new Set([...expression.matchAll(/c\.vis\.(\w+)/g)].map(m => m[1]))].sort();
+}
+
+test('documents list over the paged index', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('page 30 of 10 sends skip 290 top 10 and re-reads 10 ids', async (t) => {
+    const ids = DOCS.slice(0, 10).map(row => row.id);
+    const { searches, queries } = fakeDocStores(t, { ids, count: 400 });
+    const res = await callDocs('q=report&page=30&pageSize=10');
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 1);
+    assert.strictEqual(searches[0].skip, 290);
+    assert.strictEqual(searches[0].top, 10);
+    assert.strictEqual(queries.length, 1);
+    assert.deepStrictEqual(queries[0].parameters.filter(p => p.name.startsWith('@xid')).map(p => p.value), ids);
+  });
+
+  await t.test('rows come back in index order, not Cosmos order', async (t) => {
+    fakeDocStores(t, { ids: ['d3', 'd1', 'd2'] });
+    const res = await callDocs('q=report');
+    assert.deepStrictEqual(res.body.map(row => row.id), ['d3', 'd1', 'd2']);
+  });
+
+  await t.test('count is @odata.count above 250', async (t) => {
+    const { searches, queries } = fakeDocStores(t, { count: 1234 });
+    const res = await callDocs('q=report&count=true');
+    assert.strictEqual(res.headers['x-total-count'], '1234');
+    assert.strictEqual(searches.length, 1, 'list and count share one index request');
+    assert.strictEqual(queries.length, 1, 'list and count share one Cosmos re-read');
+  });
+
+  await t.test('the filter is the ACL, the update-image clause, searchVis, then the mapped filters', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('q=report&legislation=2002&legislation=2018');
+    assert.strictEqual(searches[0].filter, `(${documentsAcl(ANON).filter}) and (documentSource ne 'UPDATE')` +
+      ' and (searchVis ge 4) and ((legislation eq 2002 or legislation eq 2018))');
+  });
+
+  await t.test('searchVis clause only with q', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('q=report');
+    await callDocs('typeId=t1');
+    assert.match(searches[0].filter, /\(searchVis ge 4\)/);
+    assert.doesNotMatch(searches[1].filter, /searchVis/);
+  });
+
+  await t.test('searchVis takes the caller level', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('q=report&pageSize=10', { user: STAFF_USER });
+    assert.match(searches[0].filter, /\(searchVis ge 2\)/);
+  });
+
+  await t.test('unmapped filter on index path 400', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    const res = await callDocs('q=report&documentFileName=a.pdf');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /documentFileName/);
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+
+  await t.test('pageSize 600 on index path 400', async (t) => {
+    const { searches } = fakeDocStores(t);
+    const res = await callDocs('q=report&pageSize=600', { user: STAFF_USER });
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /at most 500/);
+    assert.strictEqual(searches.length, 0);
+  });
+
+  await t.test('INDEX_MAPS.documents.searched equals the c.vis fields of the searchVis projection', () => {
+    assert.deepStrictEqual([...INDEX_MAPS.documents.searched].sort(), searchVisFields());
+  });
+
+  await t.test('isFeatured=true sends isFeatured eq true', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('isFeatured=true');
+    assert.match(searches[0].filter, /\(isFeatured eq true\)$/);
+  });
+
+  await t.test('isFeatured=yes 400', async (t) => {
+    const { searches } = fakeDocStores(t);
+    assert.strictEqual((await callDocs('isFeatured=yes')).status, 400);
+    assert.strictEqual(searches.length, 0);
+  });
+
+  await t.test('legislation=2002 sends legislation eq 2002', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('legislation=2002');
+    assert.match(searches[0].filter, /\(legislation eq 2002\)$/);
+  });
+
+  await t.test('legislation=2002&legislation=2018 sends (legislation eq 2002 or legislation eq 2018)', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('legislation=2002&legislation=2018');
+    assert.ok(searches[0].filter.endsWith(' and ((legislation eq 2002 or legislation eq 2018))'), searches[0].filter);
+    assert.doesNotMatch(searches[0].filter, /search\.in\(legislation/);
+  });
+
+  await t.test('legislation=1) or (true 400', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    const res = await callDocs(`legislation=${encodeURIComponent('1) or (true')}&q=report&count=true`);
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.headers['x-total-count'], undefined);
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+
+  await t.test('one bad legislation value among good ones 400', async (t) => {
+    const { searches } = fakeDocStores(t);
+    assert.strictEqual((await callDocs('legislation=2002&legislation=20021')).status, 400);
+    assert.strictEqual(searches.length, 0);
+  });
+
+  await t.test('datePostedStart and datePostedEnd send datePosted ge and le', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('datePostedStart=2026-01-01&datePostedEnd=2026-01-31');
+    assert.ok(searches[0].filter.endsWith(
+      ' and (datePosted ge 2026-01-01T00:00:00.000Z) and (datePosted le 2026-01-31T23:59:59.999Z)'), searches[0].filter);
+  });
+
+  await t.test('datePostedStart=x 400', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    const res = await callDocs('datePostedStart=x');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /YYYY-MM-DD/);
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+
+  await t.test('no q and no sort orders datePosted desc, id', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('typeId=t1');
+    assert.strictEqual(searches[0].orderby, 'datePosted desc, id');
+  });
+
+  await t.test('sort on displayName orders by its sort column, then id', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('q=report&sort=-displayName');
+    assert.strictEqual(searches[0].orderby, 'displayNameSort desc, id');
+  });
+
+  await t.test('re-read checks only the dial for isFeatured', async (t) => {
+    const { queries } = fakeDocStores(t);
+    await callDocs('isFeatured=true&typeId=t1');
+    const sql = queries[0];
+    assert.ok(sql.query.includes('c.vis["isFeatured"]'), sql.query);
+    assert.doesNotMatch(sql.query, /c\.isFeatured\s*=/);
+    assert.ok(!sql.parameters.some(p => p.value === 'true' || p.value === true), 'isFeatured value bound in Cosmos');
+    assert.ok(sql.parameters.some(p => p.value === 't1'), 'a string filter still narrows in Cosmos');
+    assert.doesNotMatch(sql.query, /ORDER BY/);
+  });
+
+  await t.test('re-read checks the searched fields only with q', async (t) => {
+    const { queries } = fakeDocStores(t);
+    await callDocs('q=report');
+    await callDocs('typeId=t1');
+    assert.ok(queries[0].query.includes('c.vis["documentFileName"]'), queries[0].query);
+    assert.ok(!queries[1].query.includes('c.vis["documentFileName"]'), queries[1].query);
+  });
+
+  await t.test('baseCriteria narrow the re-read', async (t) => {
+    const { queries } = fakeDocStores(t);
+    await callDocs('q=report');
+    assert.ok(queries[0].query.includes(UPDATE_IMAGES_OUT.clause), queries[0].query);
+  });
+
+  await t.test('a short re-read warns and serves the shorter page', async (t) => {
+    fakeDocStores(t, { ids: ['d1', 'gone'] });
+    const warn = t.mock.method(logger, 'warn', () => {});
+    const res = await callDocs('q=report');
+    assert.deepStrictEqual(res.body.map(row => row.id), ['d1']);
+    assert.strictEqual(warn.mock.callCount(), 1);
+  });
+
+  await t.test('no index hit reads nothing from Cosmos', async (t) => {
+    const { queries } = fakeDocStores(t, { ids: [], count: 0 });
+    const res = await callDocs('q=nothing&count=true');
+    assert.deepStrictEqual(res.body, []);
+    assert.strictEqual(res.headers['x-total-count'], '0');
+    assert.strictEqual(queries.length, 0);
+  });
+
+  await t.test('a caller that can match nothing sends no request', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    const nothing = { tier: TIER.SCOPED, projectScope: [], roles: [] };
+    const parsed = { q: 'report', filters: {}, ranges: [], pageNum: 0, pageSize: 10 };
+    assert.deepStrictEqual(await DOC_SPEC.repository.list(nothing, { parsed, criteria: [], pageNum: 0, pageSize: 10 }), []);
+    assert.strictEqual(await DOC_SPEC.repository.count(nothing, { parsed, criteria: [] }), 0);
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+});
+
+test('documents store choice', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('project= with no q, sort or typed filter reads Cosmos, with baseCriteria', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    const res = await callDocs('project=p1&typeId=t1&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 0);
+    assert.ok(queries.length === 2 && queries.every(sql => sql.query.includes(UPDATE_IMAGES_OUT.clause)));
+  });
+
+  await t.test('ids= without q reads Cosmos', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('ids=d1,d2');
+    assert.strictEqual(searches.length, 0);
+  });
+
+  await t.test('no project= reads the index', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('typeId=t1');
+    assert.strictEqual(searches.length, 1);
+  });
+
+  const indexed = ['project=p1&isFeatured=true', 'project=p1&legislation=2002', 'project=p1&datePostedEnd=2026-01-01',
+    'project=p1&sort=datePosted', 'project=p1&q=report', 'ids=d1&q=report'];
+  for (const qs of indexed) {
+    await t.test(`${qs} reads the index`, async (t) => {
+      const { searches } = fakeDocStores(t);
+      await callDocs(qs);
+      assert.strictEqual(searches.length, 1);
+    });
+  }
+});
