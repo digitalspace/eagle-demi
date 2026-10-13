@@ -50,6 +50,11 @@ const PAGE_DEFAULT = 100;
 const PAGE_MAX = 500;
 const SWEEP_DEFAULT = 5;
 const SWEEP_MAX = 20;
+/**
+ * Leases a row may end with no word from the worker before it is skipped. A file that kills the
+ * worker (out of memory) leaves no report, and would otherwise be offered, and kill a run, forever.
+ */
+const MAX_SILENT_RELEASES = 3;
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const MD5_B64 = /^[A-Za-z0-9+/]{22}==$/;
@@ -249,10 +254,18 @@ async function release(row, extra = {}) {
 /**
  * What a skip records. A file that holds no title is marked skipped for this title, so it is not
  * offered again. A titled file stays `titled`, or a later withheld name would never be restored,
- * and records the title it was skipped for. A restore that cannot run needs a person.
+ * and records the title it was skipped for. A restore that cannot run needs a person. A lease that
+ * ended with no report and no worker failure counts, and at MAX_SILENT_RELEASES is marked as a
+ * skip report would mark it.
  */
-function skipFields(row, lease, report) {
-  if (!report) return {};
+function skipFields(row, lease, report, workerFailure = null) {
+  if (!report) {
+    if (workerFailure) return {};
+    const releases = (recordOf(row).releases || 0) + 1;
+    if (releases < MAX_SILENT_RELEASES) return { releases };
+    logger.warn('[pdf-title] lease ended with no report too often; skipped', { id: row.id, releases });
+    return { ...skipFields(row, lease, { reason: 'no-report' }), releases: null };
+  }
   if (lease.mode === 'restore') return { status: 'needs-review', reason: report.reason };
   if (recordOf(row).status === 'titled') return { reason: `retitle skipped: ${report.reason}`, skippedTitle: lease.title };
   return { status: 'skipped', reason: report.reason, title: lease.title };
@@ -360,6 +373,7 @@ async function finish(row, fields) {
     reason: null,
     title: isRestore ? null : lease.title,
     skippedTitle: null,
+    releases: null,
     titledLength: isRestore ? null : inFlight.newLength,
     titledSha256: isRestore ? null : inFlight.newSha256
   });
@@ -388,7 +402,8 @@ async function settle(stored, report = null, workerFailure = null) {
     logger.info('[pdf-title] lease ended with no write', {
       ...fields, reason: report ? report.reason : 'released', ...(workerFailure ? { workerFailure } : {}),
     });
-    return { row: await release(row, skipFields(row, lease, report)), outcome: report ? 'skipped' : 'released' };
+    const extra = skipFields(row, lease, report, workerFailure);
+    return { row: await release(row, extra), outcome: extra.reason ? 'skipped' : 'released' };
   }
 
   let verdict;
@@ -422,7 +437,8 @@ async function settle(stored, report = null, workerFailure = null) {
     logger.info('[pdf-title] lease ended; store holds the source', {
       ...fields, reason: why ? why.reason : 'released', ...(workerFailure ? { workerFailure } : {}),
     });
-    return { row: await release(row, skipFields(row, lease, why)), outcome: why ? 'skipped' : 'released' };
+    const extra = skipFields(row, lease, why, workerFailure);
+    return { row: await release(row, extra), outcome: extra.reason ? 'skipped' : 'released' };
   }
   const { restored, overwritten } = await copyBack(row, fields);
   if (restored && verdict.shape) {
