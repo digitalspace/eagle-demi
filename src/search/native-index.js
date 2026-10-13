@@ -47,9 +47,7 @@ const INDEX_MAPS = Object.freeze({
       projectType: 'type',
       region: 'region',
       projectState: 'status',
-      proponentName: 'proponent',
-      sector: 'sector',
-      projectSubType: 'projectSubType'
+      proponentName: 'proponent'
     },
     searched: [...new Set(aiSearch.PROJECT_SEARCH_FIELDS.split(',')
       .flatMap(column => sourcesOf(PROJECT_TO_INDEX, column)))]
@@ -94,13 +92,12 @@ function searchedVisible(map, access) {
 
 /**
  * A kind spec repository (`controllers/nosql/mirror-reads.js`) that answers `q=` lists from the
- * index and everything else from `cosmos`, which defaults to `cosmosKind` over the same container.
- * Pass the kind's own repository as `cosmos` to keep its `getByEagleId`.
+ * index and everything else from `cosmosKind` over the same container.
  */
-function indexedKind({ index, container, entity, partitionField, defaultOrder, cosmos }) {
+function indexedKind({ index, container, entity, partitionField, defaultOrder }) {
   const map = INDEX_MAPS[index];
   if (!map) throw new Error(`[native-index] no field map for index ${index}`);
-  const store = cosmos || cosmosKind({ container, entity, partitionField, defaultOrder });
+  const store = cosmosKind({ container, entity, partitionField, defaultOrder });
 
   async function readMatches(access, parsed) {
     const { filter, empty } = indexFilter(map, parsed, access);

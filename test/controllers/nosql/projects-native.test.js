@@ -9,11 +9,14 @@ const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
 
+// First: the logger's uncaughtException handler would swallow a load failure here into a green run.
+// native-index ahead of the controller, which loads the logger before it.
+require('../../../src/search/native-index');
+const projectController = require('../../../src/controllers/nosql/project');
 const aiSearch = require('../../../src/search/ai-search');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');
 const { makeRes } = require('../../../src/http/router');
-const projectController = require('../../../src/controllers/nosql/project');
 const { recordEvents } = require('../../helpers/record-events');
 
 const ROWS = [{ id: 'p1', name: 'Mine One', read: ['public'] }, { id: 'p2', name: 'Mine Two', read: ['public'] }];
