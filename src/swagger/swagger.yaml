@@ -4289,6 +4289,248 @@ paths:
         '404':
           description: Comment not found.
 
+  # Native reads: updates and project notifications.
+  /api/updates:
+    get:
+      summary: List updates
+      description: >-
+        Updates the caller may read, with hidden fields left out. Below staff level, only
+        published updates whose `publishDate` has passed are listed. `projectId` holds the Eagle
+        project id. Each row also carries `projectName` and `projectEagleId` when the caller may
+        read the project. Any parameter not listed here, or a parameter given twice (except
+        `type`), is a 400. A signed-in read is answered `Cache-Control: private, no-store`.
+      parameters:
+        - name: project
+          in: query
+          required: false
+          description: Eagle id of the project, as stored in `projectId`.
+          schema:
+            type: string
+        - name: type
+          in: query
+          required: false
+          description: Update type, such as `News`. Repeat it to match any of several.
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          description: Keywords ranked by the activities index over headline, short headline, summary, content and notification name.
+          schema:
+            type: string
+        - name: sort
+          in: query
+          required: false
+          description: One of `dateAdded`, `dateUpdated`, `publishDate`; a leading `-` sorts descending. Default `-dateAdded`, or index rank with `q`.
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page. An anonymous caller may not read past row 2000.
+          schema:
+            type: integer
+            minimum: 1
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated ids, at most 100.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-total-count:
+              description: Rows matching the query, sent when `count=true`.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Unknown or repeated parameter, bad value, or a page past the caller's depth.
+        '401':
+          description: The Bearer token was rejected.
+
+  /api/updates/feed:
+    get:
+      summary: Home page updates
+      description: >-
+        Pinned updates first, newest first, then other updates up to `limit` rows in total, under
+        the same rules as the list. Any parameter not listed here, or `limit` given twice, is a 400.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Rows in total, 1 to 20. Default 4.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+        - name: type
+          in: query
+          required: false
+          description: Narrows the rows after the pinned ones. Repeat it to match any of several.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Unknown or repeated parameter, or a bad `limit`.
+        '401':
+          description: The Bearer token was rejected.
+
+  /api/updates/{id}:
+    get:
+      summary: Read one update
+      description: >-
+        One update the caller may read, with hidden fields left out, plus `projectName` and
+        `projectEagleId`. An update the caller cannot read, or one not yet published for a caller
+        below staff level, is a 404, the same as one that does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Update id, which is also its Eagle id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: The Bearer token was rejected.
+        '404':
+          description: Update not found.
+
+  /api/notifications:
+    get:
+      summary: List project notifications
+      description: >-
+        Project notifications the caller may read, with hidden fields left out. Any parameter not
+        listed here, or a parameter given twice, is a 400. A signed-in read is answered
+        `Cache-Control: private, no-store`.
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: region
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: pcp
+          in: query
+          required: false
+          description: Comment period state, stored as text (`none` when there is none).
+          schema:
+            type: string
+        - name: decision
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          description: Keywords ranked by the project-notifications index.
+          schema:
+            type: string
+        - name: sort
+          in: query
+          required: false
+          description: One of `notificationReceivedDate`, `name`; a leading `-` sorts descending. Default `-notificationReceivedDate`, or index rank with `q`.
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page. An anonymous caller may not read past row 2000.
+          schema:
+            type: integer
+            minimum: 1
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
+        - name: ids
+          in: query
+          required: false
+          description: Comma-separated ids, at most 100.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of rows.
+          headers:
+            x-total-count:
+              description: Rows matching the query, sent when `count=true`.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Unknown or repeated parameter, bad value, or a page past the caller's depth.
+        '401':
+          description: The Bearer token was rejected.
+
+  /api/notifications/{id}:
+    get:
+      summary: Read one project notification
+      description: >-
+        One project notification the caller may read, with hidden fields left out. One the caller
+        cannot read is a 404, the same as one that does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Notification id, which is also its Eagle id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The record.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: The Bearer token was rejected.
+        '404':
+          description: Notification not found.
+
   /api/commentperiods/{periodId}/comments/export:
     get:
       summary: Export a comment period's comments as CSV

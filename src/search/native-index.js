@@ -39,18 +39,24 @@ function keywordSearched(dataset) {
 }
 
 /**
- * The `activities` ACL as `controllers/search.js` updatesIndexAcl builds it: scope in the Eagle id
- * space the index holds, the parent gate, and the publish gate. The Cosmos read-back applies all
- * three again; here they keep hidden rows from filling the id page.
+ * The `activities` index filter for this caller, for the native list and `controllers/search.js`:
+ * role ACL and project scope in the Eagle id space the index holds, the parent gate, and the
+ * publish gate `updates.liveCriteria` applies to the container.
  */
-async function updatesAcl(access) {
+async function updatesIndexAcl(access) {
   const acl = filterFor(await updates.inEagleIdSpace(access), 'projectId');
   if (acl.empty) return acl;
+  const clauses = acl.filter ? [`(${acl.filter})`] : [];
+  // The repository's parent gate, so the index's count cannot describe rows the page will not hold.
   const hidden = await updates.hiddenParentIds(access);
-  const live = updates.isLiveGated(access)
-    ? `status eq null or (status eq ${quote(updates.PUBLISHED)} and publishDate le ${new Date().toISOString()})`
-    : null;
-  return { filter: andOData(acl.filter, hidden.length ? `not ${inClause('projectId', hidden)}` : null, live), empty: false };
+  // `inClause` quotes each id: a stored id is data, and a quote in one must not rewrite the filter.
+  if (hidden.length) clauses.push(`not ${inClause('projectId', hidden)}`);
+  if (updates.isLiveGated(access)) {
+    const now = new Date().toISOString();
+    // On `publishDate` alone, as updates.liveCriteria: a gated row without one stays hidden.
+    clauses.push(`(status eq null or (status eq ${quote(updates.PUBLISHED)} and publishDate le ${now}))`);
+  }
+  return { ...acl, filter: clauses.length ? clauses.join(' and ') : acl.filter };
 }
 
 /**
@@ -77,7 +83,7 @@ const INDEX_MAPS = Object.freeze({
   activities: {
     search: opts => aiSearch.searchActivities(opts),
     partitionField: 'projectId',
-    acl: updatesAcl,
+    acl: updatesIndexAcl,
     columns: { projectId: 'projectId', type: 'type' },
     searched: keywordSearched('activities')
   },
@@ -181,4 +187,4 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
   };
 }
 
-module.exports = { ID_PAGE, INDEX_MAPS, andOData, indexFilter, indexedKind };
+module.exports = { ID_PAGE, INDEX_MAPS, andOData, indexFilter, indexedKind, updatesIndexAcl };
