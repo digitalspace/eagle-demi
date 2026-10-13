@@ -1,0 +1,229 @@
+'use strict';
+
+/**
+ * The native list contract, parsed once for every `GET /<kind>` list: offset `page` (1-based) and
+ * `pageSize`, one allow-listed `sort`, `count=true`, `ids=`, `q=` and the kind's declared filters.
+ * Anything else, and any repeated control parameter, is a 400 rather than silently ignored.
+ * Filter and `q` clauses also honour each record's own dial on the field, so `count=true` cannot
+ * reveal a value that record hides.
+ */
+
+const cosmos = require('../db/cosmos-nosql');
+const { pageSizeFor, MAX_PAGE_DEPTH } = require('./access-sql');
+const {
+  eq, inList, assertFilterable, selectWhere, selectFor, countWhere, readPage, pageOptions
+} = require('../repositories/_sql');
+const { levelOf } = require('../vis/level');
+const { redactForAccess } = require('../vis/redact');
+
+/** Most ids one `ids=` read may name. */
+const MAX_IDS = 100;
+
+/**
+ * Deepest row an offset page may reach for a caller with no credential. A public table has no
+ * reason to page past this, and each deep page costs every row before it (see `readPage`).
+ */
+const ANON_MAX_PAGE_DEPTH = 2000;
+
+const CONTROL_PARAMS = Object.freeze(['page', 'pageSize', 'count', 'sort', 'q', 'ids']);
+
+// Spec field names are interpolated into SQL as `c.<path>`; only plain dotted identifiers pass.
+const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+
+const EAGLE_ID = /^[0-9a-f]{24}$/i;
+
+/** Throws at route load, not per request, on a kind spec that names a field SQL cannot take. */
+function assertKindSpec(spec) {
+  if (!spec || typeof spec.entity !== 'string') throw new Error('[native] kind spec needs an entity');
+  const fields = [...(spec.sortKeys || []), ...(spec.filters || []), ...(spec.qFields || [])];
+  for (const field of fields) {
+    if (!FIELD_PATH.test(field)) throw new Error(`[native] ${spec.entity}: bad field name ${field}`);
+    if (CONTROL_PARAMS.includes(field)) throw new Error(`[native] ${spec.entity}: ${field} is a control parameter`);
+  }
+  for (const field of spec.multiValueFilters || []) {
+    if (!(spec.filters || []).includes(field)) {
+      throw new Error(`[native] ${spec.entity}: multi-value filter ${field} is not a declared filter`);
+    }
+  }
+}
+
+/** `assertFilterable` as a value: the refusal message, or null when the caller may see the field. */
+function refusal(entity, field, access) {
+  try {
+    assertFilterable(entity, field, access);
+    return null;
+  } catch (err) {
+    return err.message;
+  }
+}
+
+/**
+ * Parse and validate `query` for `spec`. Answers `{ error }` (a 400) or the parsed query:
+ * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]} }`.
+ */
+function parseNativeQuery(spec, query, access) {
+  const filters = spec.filters || [];
+  const multi = spec.multiValueFilters || [];
+
+  for (const [key, value] of Object.entries(query || {})) {
+    if (!CONTROL_PARAMS.includes(key) && !filters.includes(key)) return { error: `unknown parameter: ${key}` };
+    if (Array.isArray(value) && !multi.includes(key)) return { error: `parameter given more than once: ${key}` };
+  }
+  const q = query || {};
+
+  let pageNum = 0;
+  if (q.page !== undefined) {
+    const page = Number(q.page);
+    if (!/^\d+$/.test(q.page) || !(page >= 1)) return { error: 'page must be a whole number from 1' };
+    pageNum = page - 1;
+  }
+
+  const { pageSize, error } = pageSizeFor(access, q.pageSize);
+  if (error) return { error };
+
+  const anonymous = !access || !access.authenticated;
+  const depth = anonymous ? ANON_MAX_PAGE_DEPTH : MAX_PAGE_DEPTH;
+  if ((pageNum + 1) * pageSize > depth) {
+    return { error: `page * pageSize must stay within ${depth} rows` +
+      (anonymous ? ' for a request with no credential' : '') };
+  }
+
+  if (q.count !== undefined && q.count !== 'true') return { error: 'count takes only true' };
+
+  let sort = null;
+  if (q.sort !== undefined) {
+    const desc = q.sort.startsWith('-');
+    const field = q.sort.replace(/^[-+]/, '');
+    if (!(spec.sortKeys || []).includes(field)) return { error: `cannot sort on: ${q.sort}` };
+    const refused = refusal(spec.entity, field, access);
+    if (refused) return { error: refused };
+    sort = { field, desc };
+  }
+
+  let ids = null;
+  if (q.ids !== undefined) {
+    ids = [...new Set(q.ids.split(',').map(id => id.trim()).filter(Boolean))];
+    if (ids.length === 0) return { error: 'ids needs at least one id' };
+    if (ids.length > MAX_IDS) return { error: `ids takes at most ${MAX_IDS} ids` };
+  }
+
+  const keyword = q.q !== undefined && q.q.trim() ? q.q.trim() : null;
+  if (keyword) {
+    if (!(spec.qFields || []).length) return { error: 'q is not supported on this list' };
+    for (const field of spec.qFields) {
+      const refused = refusal(spec.entity, field, access);
+      if (refused) return { error: refused };
+    }
+  }
+
+  const filterValues = {};
+  for (const field of filters) {
+    if (q[field] === undefined) continue;
+    const refused = refusal(spec.entity, field, access);
+    if (refused) return { error: refused };
+    filterValues[field] = [].concat(q[field]);
+  }
+
+  return { pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues };
+}
+
+/** The record's own dial on `field` may hide it below the caller's level; such a record never matches. */
+function dialAllows(field, level) {
+  const dial = `c.vis[${JSON.stringify(field)}]`;
+  return `(NOT IS_DEFINED(${dial}) OR ${dial} >= ${level})`;
+}
+
+/**
+ * Cosmos criteria and ORDER BY for a parsed query, for `selectWhere`/`countWhere`. The caller's
+ * visibility predicate is added by those, not here.
+ */
+function nativeCriteria(spec, parsed, access) {
+  const level = levelOf(access);
+  const criteria = [];
+
+  if (parsed.ids) criteria.push(inList('id', parsed.ids, '@nid'));
+
+  Object.entries(parsed.filters).forEach(([field, values], i) => {
+    const match = values.length === 1 ? eq(field, values[0], `@nf${i}`) : inList(field, values, `@nf${i}_`);
+    criteria.push({ clause: `(${dialAllows(field, level)} AND ${match.clause})`, params: match.params });
+  });
+
+  if (parsed.q) {
+    const any = spec.qFields.map(field => `(${dialAllows(field, level)} AND CONTAINS(c.${field}, @nq, true))`);
+    criteria.push({ clause: `(${any.join(' OR ')})`, params: [{ name: '@nq', value: parsed.q }] });
+  }
+
+  const orderBy = parsed.sort ? `c.${parsed.sort.field} ${parsed.sort.desc ? 'DESC' : 'ASC'}` : undefined;
+  return { criteria, orderBy };
+}
+
+/** A 24-hex Eagle id, which a by-id read also accepts. */
+function isEagleId(id) {
+  return EAGLE_ID.test(String(id || ''));
+}
+
+/**
+ * The repository a native kind needs, over one Cosmos container: `list` and `count` share one
+ * predicate, `getById` is the same predicate narrowed to one id (cross-partition, so it needs no
+ * partition key from the caller).
+ *
+ * @param {object} opts
+ * @param {string} opts.container
+ * @param {string} opts.entity          catalog entity, for the `selectFor` projection
+ * @param {string} opts.partitionField  'id' or 'projectId'
+ * @param {string} opts.defaultOrder    e.g. 'c.id ASC', used when the caller names no sort
+ */
+function cosmosKind({ container, entity, partitionField, defaultOrder }) {
+  const spec = (access, criteria, orderBy) => selectWhere({
+    access, partitionField, criteria, select: selectFor(entity, access, partitionField), orderBy
+  });
+  return {
+    async list(access, { criteria, orderBy, pageNum, pageSize }) {
+      return readPage(container, spec(access, criteria, orderBy || defaultOrder), { pageNum, pageSize });
+    },
+    async count(access, { criteria }) {
+      const { items } = await cosmos.query(container, countWhere({ access, partitionField, criteria }), {});
+      return items[0] || 0;
+    },
+    async getById(access, id) {
+      const { items } = await cosmos.query(container,
+        spec(access, [eq('id', String(id), '@id')]), pageOptions({ pageSize: 1 }));
+      return items[0] || null;
+    }
+  };
+}
+
+/**
+ * `parentJoin` for a kind whose rows carry `projectId`: adds `projectName` and `projectEagleId` from
+ * the parent as this caller may see it. Runs on rows already redacted; a parent the caller cannot
+ * read adds nothing.
+ */
+async function projectParentJoin(access, rows) {
+  const projects = require('../repositories/projects');
+  const ids = [...new Set(rows.map(row => row && row.projectId).filter(Boolean).map(String))];
+  if (ids.length === 0) return rows;
+
+  const parents = new Map((await projects.listRowsByIds(access, ids))
+    .map(row => [String(row.id), redactForAccess('projects', row, access)]));
+  return rows.map((row) => {
+    const parent = row && parents.get(String(row.projectId));
+    if (!parent) return row;
+    return {
+      ...row,
+      ...(parent.name !== undefined ? { projectName: parent.name } : {}),
+      ...(parent.eagleId !== undefined ? { projectEagleId: parent.eagleId } : {})
+    };
+  });
+}
+
+module.exports = {
+  MAX_IDS,
+  ANON_MAX_PAGE_DEPTH,
+  CONTROL_PARAMS,
+  assertKindSpec,
+  parseNativeQuery,
+  nativeCriteria,
+  isEagleId,
+  cosmosKind,
+  projectParentJoin
+};
