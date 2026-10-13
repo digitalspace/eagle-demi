@@ -391,8 +391,8 @@ document `type` is `typeId`. Every other compared field has the same name. The o
 no native field, project `directoryStructure`, is the known class `L3-staff-field-not-promoted`.
 
 Native lists page by `page` (from 1) and `pageSize`, and send `count=true` so the total comes back
-in `x-total-count`; eagle-api pages by `pageNum` and `pageSize`. `/documents` and the inspection
-lists still page by `x-continuation-token`, with no total, until D3b moves them. A filter on a parent
+in `x-total-count`; eagle-api pages by `pageNum` and `pageSize`. Only the inspection lists still
+page by `x-continuation-token`, with no total. A filter on a parent
 takes the DEMI id: the run reads `/projects/<--id project>` and `/comment-periods/<--id period>` once
 and sends their `id` as `project` and `period`, and a parent the identity cannot read in DEMI fails
 the read. Anonymous native reads stop at 2000 rows, DEMI's anonymous page depth; a list cut there
@@ -401,8 +401,8 @@ reports as truncated.
 Reads on `/updates` and `/notifications` wait for those routes (branch
 `feat-native-updates-notifications`). The run sends one GET to each first; a 404 skips its reads as
 `skipped (pending)`, and any other answer runs them, so a broken route fails rather than hides.
-`featured-public` and `featured` stay pending until D3b, since native `/documents` has no
-`isFeatured` filter yet.
+`featured-public` and `featured` read native `/documents` with `isFeatured=true` and
+`sort=-datePosted`, the query eagle-public's featured list sends, and compare every featured row.
 
 The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
 one column (`Comment_No`, `Project GUID`) across every column both files have. `Export_Date` is
