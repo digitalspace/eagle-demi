@@ -106,7 +106,7 @@ async function firstWhere(access, field, value) {
 const nativeRepository = Object.freeze({
   list: nativeBase.list,
   count: nativeBase.count,
-  getById: (access, id) => firstWhere(access, 'id', id),
+  getById: nativeBase.getById,
   getByEagleId: (access, eagleId) => firstWhere(access, 'eagleId', eagleId)
 });
 

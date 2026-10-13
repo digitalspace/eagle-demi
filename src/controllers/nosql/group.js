@@ -103,21 +103,12 @@ const GROUPS = {
   repository: groups.native,
   sortKeys: ['name'],
   filters: ['projectId'],
+  aliases: { project: 'projectId' },
   qFields: ['name'],
   parentJoin: projectParentJoin,
   notFound: 'Group not found'
 };
 
-/** Callers filter by `project`, as on every other project child; the row field is `projectId`. */
-function projectFilter(handler) {
-  return (req, res) => {
-    const { project, projectId, ...rest } = req.query || {};
-    if (projectId !== undefined) return res.status(400).json({ error: 'unknown parameter: projectId' });
-    req.query = project === undefined ? rest : { ...rest, projectId: project };
-    return handler(req, res);
-  };
-}
-
 exports.nativeSpec = GROUPS;
-exports.getGroups = projectFilter(listHandler(GROUPS));
+exports.getGroups = listHandler(GROUPS);
 exports.getGroup = getHandler(GROUPS);

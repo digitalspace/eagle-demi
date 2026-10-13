@@ -9,13 +9,13 @@
 const comments = require('../../repositories/comments');
 const { listHandler, getHandler } = require('../nosql/mirror-reads');
 const { projectParentJoin } = require('../../helpers/native-query');
-const { withParamNames } = require('./params');
 
 const SPEC = Object.freeze({
   entity: 'comments',
   repository: comments.nativeRepository,
   sortKeys: ['dateAdded'],
   filters: ['periodId', 'projectId', 'eaoStatus'],
+  aliases: { period: 'periodId', project: 'projectId' },
   multiValueFilters: ['eaoStatus'],
   qFields: ['comment'],
   parentJoin: projectParentJoin,
@@ -23,8 +23,6 @@ const SPEC = Object.freeze({
   notFound: 'Comment not found'
 });
 
-const PARAM_NAMES = Object.freeze({ period: 'periodId', project: 'projectId' });
-
 exports.SPEC = SPEC;
-exports.getComments = withParamNames(PARAM_NAMES, listHandler(SPEC));
+exports.getComments = listHandler(SPEC);
 exports.getComment = getHandler(SPEC);
