@@ -374,18 +374,41 @@ node src/scripts/parity-eagle.js --eagle https://<eagle host>/api --demi https:/
   --known-ids known.json --report parity.json
 ```
 
-Checks that a consumer of eagle-api would see the same rows and fields from DEMI. Each read in
-`src/scripts/parity-map.js` is sent to both APIs with the same identity (`anonymous`, the default,
-or `staff`/`sysadmin` with a bearer token read from the variable `--token-env` names; a token is
-never taken on the command line). Rows pair on Eagle `_id` against DEMI `eagleId` or `id`. `--id`
-takes `project`, `period`, `document`, `comment`, `organization`, `inspection`, `element` and
-`group`; `--help` lists them.
+Checks that a consumer of eagle-api would see the same rows and fields from DEMI's native reads.
+Each read in `src/scripts/parity-map.js` is sent to eagle-api and to the DEMI kind route that
+replaces it (`/projects`, `/documents`, `/comment-periods`, `/comments`, `/organizations`, `/lists`,
+`/users`, `/groups`, `/inspections`, `/updates`, `/notifications` and their by-id reads; never
+`/search?dataset=`), with the same identity (`anonymous`, the default, or `staff`/`sysadmin` with a
+bearer token read from the variable `--token-env` names; a token is never taken on the command
+line). Rows pair on Eagle `_id` against DEMI `eagleId` or `id`. `--id` takes `project`, `period`,
+`document`, `comment`, `organization`, `inspection`, `element` and `group`; `--help` lists them.
+
+A native row has DEMI's field names, redacted for the caller. Each Eagle field is read on the DEMI
+row through `NATIVE_FIELDS` in `parity-map.js`, which exists only in the script; the API never maps
+to Eagle names. Project `type`, `status`, `shortName`, `location` and `activeStatus` are
+`projectType`, `projectState`, `abbreviation`, `address` and `isActive` (`TRACK_PRECEDENCE`), and
+document `type` is `typeId`. Every other compared field has the same name. The one Eagle field with
+no native field, project `directoryStructure`, is the known class `L3-staff-field-not-promoted`.
+
+Native lists page by `page` (from 1) and `pageSize`, and send `count=true` so the total comes back
+in `x-total-count`; eagle-api pages by `pageNum` and `pageSize`. `/documents` and the inspection
+lists still page by `x-continuation-token`, with no total, until D3b moves them. A filter on a parent
+takes the DEMI id: the run reads `/projects/<--id project>` and `/comment-periods/<--id period>` once
+and sends their `id` as `project` and `period`, and a parent the identity cannot read in DEMI fails
+the read. Anonymous native reads stop at 2000 rows, DEMI's anonymous page depth; a list cut there
+reports as truncated.
+
+Reads on `/updates` and `/notifications` wait for those routes (branch
+`feat-native-updates-notifications`). The run sends one GET to each first; a 404 skips its reads as
+`skipped (pending)`, and any other answer runs them, so a broken route fails rather than hides.
+`featured-public` and `featured` stay pending until D3b, since native `/documents` has no
+`isFeatured` filter yet.
 
 The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
 one column (`Comment_No`, `Project GUID`) across every column both files have. `Export_Date` is
-skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group; the
-DEMI read sends no `project`, since DEMI takes that value as the Track id partition key.
-`inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element, each
+skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group.
+`commentperiod-summary` pairs Eagle's `{ Pending, Deferred, Published, Rejected }` counts with
+`eaoStatus` of DEMI's `/comment-periods/:id/summary`, one row per status. `inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element, each
 item carrying its element's `read[]`; it never calls Eagle's item route, which streams the file and
 records a download.
 
@@ -395,10 +418,10 @@ routes return only `_id` and `read` unless `fields` names the rest, so each of t
 documents. The
 organization and comment period routes answer only the fields on their controller's
 `ALLOWED_FIELDS`, so those reads compare nothing else (no address fields or staff dates, no `commentIdCount`);
-`dataset=Organization` and `dataset=CommentPeriod` search still compare them. Pins, comments and
-the staff project list come back as `[{ total_items, results }]`; each page is unwrapped to its
-`results`. `recent-activity-top`
-compares Eagle's newest four with `dataset=RecentActivity&top=true&pageSize=4`.
+Eagle's `dataset=Organization` and `dataset=CommentPeriod` search reads still compare them. Pins,
+comments and the staff project list come back as `[{ total_items, results }]`; each page is
+unwrapped to its `results`. `recent-activity-top` compares Eagle's newest four with
+`/updates?sort=-dateAdded&pageSize=4`.
 
 It only sends GET, at most two requests a second per API, and retries once on 429 or 5xx. It never
 calls Eagle's public download route, which counts hits. Keyword searches still send Eagle analytics
@@ -443,7 +466,8 @@ Build the `seeded-from-prod` list from `extraInDemi` ids checked against the pro
 The run exits 1
 when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI target yet print
 `skipped (pending)`; reads that need an id print `skipped: needs --id ...`. `--only <read>` runs
-one read; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
+one read, and `--only <dataset>` (`Project`, `CommentPeriod`, ...) every read of that kind, so its
+exit code is the parity of one kind; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
 extra rows cannot be told from a partial slice. The `--report` file lists ids and field names of
 unexplained differences, never values.
 
@@ -468,12 +492,10 @@ These classes explain differences that come from how DEMI builds its rows:
   Eagle `documentFileName`, the fallback the seed writes (`src/seed/transform.js`).
 - `orphan-parent-missing-in-eagle`: on staff and sysadmin runs, a comment period is missing in DEMI
   and its `project` ref is empty, malformed, or in none of Eagle's `/project` and
-  `/projectNotification` lists and DEMI's `Project` and `ProjectNotification` searches. The lists
-  are read once per run; a `--max-pages` cut turns the list check off.
+  `/projectNotification` lists and DEMI's `/projects` and `/notifications` lists. The lists are read
+  once per run; a `--max-pages` cut, or `/notifications` answering 404, turns the list check off.
 
-Two DEMI limits affect anonymous runs. Anonymous `pageSize` is capped at 100, the page size this
-script sends. `dataset=Organization` ignores `and[_id]` for now, so `organization-public` and
-`organization` get the whole list from DEMI and count every other organization as extra.
+Anonymous `pageSize` is capped at 100, the page size this script sends.
 
 `--download-sample <n>` (default 0, off; needs a staff or sysadmin token) also downloads up to `n`
 documents both sides returned to that identity's reads in this run, through Eagle's protected
@@ -487,8 +509,6 @@ so Eagle's default `['sysadmin']` rows reach staff and sysadmin only, and user c
 staff-only. A level-2 caller also gets the twenty staff project fields on `dataset=Project`. Every
 answer with a measured total sets `x-total-count`, and `HEAD` returns the same headers. Known gaps:
 
-- `GET /commentperiod/:id/summary` has no DEMI route. Its counts are four requests:
-  `dataset=Comment&and[period]=<id>&and[eaoStatus]=<state>&pageSize=1`, reading `x-total-count`.
 - `dataset=Item` answers the models above plus `Comment`, `CommentPeriod`, `ProjectNotification` and
   `RecentActivity`. `Project`, `Document` and the rest are a 400.
 - The User, Group and inspection datasets order by id only. A `sortBy` is reported in

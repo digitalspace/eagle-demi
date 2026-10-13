@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { run, parseCsv, MIN_GAP_MS } = require('../../src/scripts/parity-eagle');
 const { PARITY_MAP, classify } = require('../../src/scripts/parity-map');
-const { unknownParams } = require('../../src/search/eagle-query');
+const { CONTROL_PARAMS } = require('../../src/helpers/native-query');
 
 const EAGLE = 'https://eagle.test/api';
 const DEMI = 'https://demi.test/api';
@@ -42,20 +42,35 @@ function harness(answer, { env = {}, files = {} } = {}) {
   return { deps, calls, out, written };
 }
 
-/** Same rows on both sides of `/search`, except what `eagle`/`demi` override. */
-const searchSides = ({ eagle, demi }) => (host) => json(searchBody(host === 'eagle.test' ? eagle : demi));
+/**
+ * A native DEMI list: the `page` (1-based) of `pageSize` rows, and `x-total-count` when `count=true`.
+ * `total` overrides the header.
+ */
+const nativeRows = (rows, url, total = rows.length) => {
+  const size = Number(url.searchParams.get('pageSize')) || rows.length;
+  const page = Number(url.searchParams.get('page') || 1);
+  const headers = { 'content-type': 'application/json',
+    ...(url.searchParams.get('count') === 'true' ? { 'x-total-count': String(total) } : {}) };
+  return new Response(JSON.stringify(rows.slice((page - 1) * size, page * size)), { status: 200, headers });
+};
+
+/** Eagle answers `eagle` through `/search`, DEMI `demi` through its native list. */
+const searchSides = ({ eagle, demi }) => (host, url) => (host === 'eagle.test' ? json(searchBody(eagle)) : nativeRows(demi, url));
 
 const project = (id, extra = {}) => ({ _id: id, name: 'Mine', type: 'Mines', sector: 'Coal', region: 'Peace', location: 'Hudson Hope', ...extra });
+/** The same project as DEMI's native row: a DEMI id, the Eagle id beside it, native field names. */
+const nativeProject = (id, extra = {}) => ({ id: `eagle-${id}`, eagleId: id, name: 'Mine', projectType: 'Mines', sector: 'Coal',
+  region: 'Peace', address: 'Hudson Hope', ...extra });
 
 test('a row only Eagle has, with no known cause, is unexplained and exits 1', async () => {
-  const h = harness(searchSides({ eagle: [project(A), project(B)], demi: [project(A)] }));
+  const h = harness(searchSides({ eagle: [project(A), project(B)], demi: [nativeProject(A)] }));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
   assert.strictEqual(code, 1);
   assert.match(h.out[0], /search-Project-public identity=anonymous match=1 missingInDemi=1 extraInDemi=0 fieldDiff=0 unexplained=1/);
 });
 
 test('a field value that differs with no known cause exits 1', async () => {
-  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A, { sector: 'Metals' })] }));
+  const h = harness(searchSides({ eagle: [project(A)], demi: [nativeProject(A, { sector: 'Metals' })] }));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
   assert.strictEqual(code, 1);
   assert.match(h.out[0], /match=0 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=1/);
@@ -65,7 +80,7 @@ test('a field value that differs with no known cause exits 1', async () => {
 test('a staff row with no ladder token missing in DEMI is unexplained', async () => {
   const h = harness(searchSides({
     eagle: [project(A), project(B, { read: ['sysadmin'] })],
-    demi: [project(A)]
+    demi: [nativeProject(A)]
   }), { env: { PARITY_TOKEN: TOKEN } });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-env', 'PARITY_TOKEN',
     '--only', 'search-Project'], h.deps);
@@ -76,7 +91,7 @@ test('a staff row with no ladder token missing in DEMI is unexplained', async ()
 const staffProjectRun = async (demiExtra) => {
   const h = harness(searchSides({
     eagle: [project(A, { CELead: 'Casey Federal', directoryStructure: [{ id: 1 }] })],
-    demi: [project(A, { CELead: 'Casey Federal', directoryStructure: [{ id: 1 }], ...demiExtra })]
+    demi: [nativeProject(A, { CELead: 'Casey Federal', directoryStructure: [{ id: 1 }], ...demiExtra })]
   }), { env: { PARITY_TOKEN: TOKEN } });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-env', 'PARITY_TOKEN',
     '--only', 'search-Project'], h.deps);
@@ -96,7 +111,7 @@ test('a staff field DEMI does not promote yet is counted under L3 and exits 0', 
 });
 
 test('an id listed under a class in --known-ids is counted under that class and exits 0', async () => {
-  const h = harness(searchSides({ eagle: [project(A), project(B)], demi: [project(A)] }),
+  const h = harness(searchSides({ eagle: [project(A), project(B)], demi: [nativeProject(A)] }),
     { files: { 'known.json': JSON.stringify({ 'L2-never-mirrored': [B] }) } });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public',
     '--known-ids', 'known.json'], h.deps);
@@ -116,6 +131,7 @@ test('requests to each API are GET only and at least MIN_GAP_MS apart', async ()
   // 250 rows: three pages a side.
   const rows = Array.from({ length: 250 }, (_, i) => project(i.toString(16).padStart(24, '0')));
   const h = harness((host, url) => {
+    if (host === 'demi.test') return nativeRows(rows.map(row => nativeProject(row._id)), url);
     const page = Number(url.searchParams.get('pageNum'));
     return json(searchBody(rows.slice(page * 100, page * 100 + 100), rows.length));
   });
@@ -149,9 +165,10 @@ test('a map entry on the public download route is refused before any request', a
 });
 
 test('the token is sent to both APIs and never appears in output or the report', async () => {
-  const h = harness((host, url) => (url.searchParams.get('dataset') === 'List'
-    ? json({}, 500)
-    : json(searchBody([project(A)]))), { env: { PARITY_TOKEN: TOKEN } });
+  const h = harness((host, url) => {
+    if (url.searchParams.get('dataset') === 'List' || url.pathname === '/api/lists') return json({}, 500);
+    return host === 'eagle.test' ? json(searchBody([project(A)])) : nativeRows([nativeProject(A)], url);
+  }, { env: { PARITY_TOKEN: TOKEN } });
   await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-env', 'PARITY_TOKEN',
     '--report', 'out.json'], h.deps);
   assert.deepStrictEqual([...new Set(h.calls.map(c => c.headers.authorization))], [`Bearer ${TOKEN}`]);
@@ -180,6 +197,7 @@ const downloads = ({ eagleBytes = 'pdf-bytes', storeBytes = 'pdf-bytes' } = {}) 
       : new Response(null, { status: 302, headers: { location: 'https://store.test/zdspnb/a.pdf?sig=s' } });
   }
   const rows = [{ _id: A, documentFileName: 'a.pdf' }];
+  if (url.pathname === `/api/projects/${A}`) return json(nativeProject(A));
   return json(url.pathname.endsWith('/search') ? searchBody(rows) : rows);
 };
 const staff = ['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-env', 'PARITY_TOKEN'];
@@ -233,11 +251,29 @@ test('a sampled run downloads through the protected route only, never the public
   assert.deepStrictEqual(paths.filter(p => /\/public\/.*download/i.test(p)), []);
 });
 
-test('every DEMI search request in the map uses only parameters DEMI knows', () => {
+test('no DEMI read in the map goes through /search', () => {
+  assert.deepStrictEqual(PARITY_MAP.filter(e => !e.skip && e.demi.path === '/search').map(e => e.read), []);
+});
+
+// The kinds whose spec is exported; comment periods take `project`, `status` and the control parameters.
+const NATIVE_SPECS = {
+  '/projects': require('../../src/controllers/nosql/project').projectsKind,
+  '/comments': require('../../src/controllers/native/comments').SPEC,
+  '/lists': require('../../src/controllers/native/lists').SPEC,
+  '/organizations': require('../../src/controllers/native/organizations').SPEC,
+  '/users': require('../../src/controllers/nosql/user').nativeSpec,
+  '/groups': require('../../src/controllers/nosql/group').nativeSpec
+};
+
+test('every native list read in the map sends only parameters its kind takes, so DEMI answers no 400', () => {
   const offenders = PARITY_MAP
-    .filter(e => !e.skip && e.demi.path === '/search')
-    .map(e => [e.read, unknownParams({ ...e.demi.query, pageNum: '0', pageSize: '100' })])
-    .filter(([, unknown]) => unknown.length);
+    .filter(e => !e.skip && NATIVE_SPECS[e.demi.path])
+    .flatMap(e => {
+      const spec = NATIVE_SPECS[e.demi.path];
+      const known = [...CONTROL_PARAMS, ...Object.keys(spec.aliases || {}),
+        ...(spec.filters || []).filter(f => !Object.values(spec.aliases || {}).includes(f))];
+      return Object.keys(e.demi.query || {}).filter(key => !known.includes(key)).map(key => `${e.read}: ${key}`);
+    });
   assert.deepStrictEqual(offenders, []);
 });
 
@@ -412,25 +448,29 @@ test('a member Eagle lists and the DEMI group lacks is unexplained and exits 1',
 });
 
 const eagleCall = (h, path) => h.calls.find(c => c.host === 'eagle.test' && c.url.pathname === `/api${path}`);
-/** Eagle answers `byPath[path]` (a plain array) and DEMI `demiBody`. */
-const restSides = (byPath, demiBody) => (host, url) => (host === 'eagle.test'
-  ? json(byPath[url.pathname.replace(/^\/api/, '')] || [])
-  : json(demiBody));
+/**
+ * Eagle answers `byPath[path]` (a plain array) and DEMI `demiBody`, but for the parent lists a staff
+ * comment period read checks orphans against, which answer empty.
+ */
+const restSides = (byPath, demiBody) => (host, url) => {
+  if (host === 'eagle.test') return json(byPath[url.pathname.replace(/^\/api/, '')] || []);
+  return ['/api/projects', '/api/notifications'].includes(url.pathname) ? nativeRows([], url) : json(demiBody);
+};
 
 test('each Eagle REST read asks for its own compared fields, pipe-joined, per identity', async () => {
-  const anon = harness(restSides({ [`/public/project/${A}`]: [project(A)] }, project(A)));
+  const anon = harness(restSides({ [`/public/project/${A}`]: [project(A)] }, nativeProject(A)));
   await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'project-public', '--id', `project=${A}`], anon.deps);
   assert.strictEqual(eagleCall(anon, `/public/project/${A}`).url.searchParams.get('fields'),
-    'name|sector|region|type|location|review180Start|review45Start|reviewSuspensions|reviewExtensions');
+    'name|type|sector|region|location|review180Start|review45Start|reviewSuspensions|reviewExtensions');
   assert.ok(!anon.calls.some(c => c.host === 'demi.test' && c.url.searchParams.has('fields')), 'DEMI gets no fields');
 
-  const staffRun = harness(restSides({ [`/project/${A}`]: [project(A)] }, project(A)), { env: { PARITY_TOKEN: TOKEN } });
+  const staffRun = harness(restSides({ [`/project/${A}`]: [project(A)] }, nativeProject(A)), { env: { PARITY_TOKEN: TOKEN } });
   await run([...staff, '--only', 'project', '--id', `project=${A}`], staffRun.deps);
   const staffFields = eagleCall(staffRun, `/project/${A}`).url.searchParams.get('fields').split('|');
   assert.ok(staffFields.includes('CELead') && staffFields.includes('directoryStructure'));
   assert.ok(!staffFields.includes('review180Start'));
 
-  const period = harness(restSides({ [`/public/commentperiod/${B}`]: [] }, searchBody([])));
+  const period = harness(restSides({ [`/public/commentperiod/${B}`]: [] }, null));
   await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'commentperiod-public', '--id', `period=${B}`], period.deps);
   assert.strictEqual(eagleCall(period, `/public/commentperiod/${B}`).url.searchParams.get('fields'),
     'dateStarted|dateCompleted|instructions|project');
@@ -445,6 +485,9 @@ test('every Eagle project, document, comment period, organization and comment RE
   assert.deepStrictEqual(unfielded, []);
 });
 
+/** DEMI's by-id period read, which a native `period` filter resolves the DEMI id through; else `other()`. */
+const demiPeriodOr = (url, other) => (url.pathname === `/api/comment-periods/${A}` ? json({ id: A, eagleId: A }) : other());
+
 /** Eagle's count facet. */
 const facet = (rows, total = rows.length) => [{ total_items: total, results: rows, read: ['public'] }];
 
@@ -455,7 +498,7 @@ test('an empty Eagle pin or comment facet with no results array is an empty read
     pins.deps), 0);
   assert.match(pins.out[0], /pins-public identity=anonymous match=0 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
 
-  const comments = harness((host) => (host === 'eagle.test' ? empty() : json(searchBody([]))));
+  const comments = harness((host, url) => (host === 'eagle.test' ? empty() : demiPeriodOr(url, () => nativeRows([], url))));
   assert.strictEqual(await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'comment-list-public', '--id', `period=${A}`],
     comments.deps), 0);
   assert.match(comments.out[0], /comment-list-public identity=anonymous match=0 missingInDemi=0 extraInDemi=0 .*unexplained=0/);
@@ -477,8 +520,8 @@ test('a comment list in count facets is read page by page to its total', async (
     location: 'BC', isAnonymous: true });
   const h = harness((host, url) => {
     const page = Number(url.searchParams.get('pageNum'));
-    const rows = ids.slice(page * 100, page * 100 + 100).map(comment);
-    return json(host === 'eagle.test' ? facet(rows, ids.length) : searchBody(rows, ids.length));
+    if (host === 'demi.test') return demiPeriodOr(url, () => nativeRows(ids.map(comment), url));
+    return json(facet(ids.slice(page * 100, page * 100 + 100).map(comment), ids.length));
   });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'comment-list-public', '--id', `period=${A}`], h.deps);
   assert.strictEqual(code, 0);
@@ -486,19 +529,39 @@ test('a comment list in count facets is read page by page to its total', async (
   assert.strictEqual(h.calls.filter(c => c.host === 'eagle.test').length, 3);
 });
 
-test("recent activity compares Eagle's top 4 with DEMI's RecentActivity top page of 4", async () => {
+test("recent activity compares Eagle's top 4 with DEMI's newest page of 4 updates, once /updates answers", async () => {
   const activity = { _id: A, headline: 'News', dateAdded: '2026-10-01T00:00:00.000Z' };
-  const h = harness((host) => json(host === 'eagle.test' ? [activity] : searchBody([activity])));
+  const h = harness(() => json([activity]));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'recent-activity-top'], h.deps);
   assert.strictEqual(code, 0);
-  const demiQuery = Object.fromEntries(h.calls.find(c => c.host === 'demi.test').url.searchParams);
-  assert.deepStrictEqual(demiQuery, { dataset: 'RecentActivity', top: 'true', pageSize: '4' });
+  assert.match(h.out[0], /recent-activity-top identity=anonymous match=1 /);
+  const read = h.calls.filter(c => c.host === 'demi.test').map(c => `${c.url.pathname}${c.url.search}`);
+  assert.deepStrictEqual(read, ['/api/updates', '/api/updates?sort=-dateAdded&pageSize=4']);
+});
+
+test('a read on a DEMI route not shipped yet is skipped as pending, asks Eagle nothing and exits 0', async () => {
+  const h = harness((host) => (host === 'demi.test' ? json({ error: 'Not found' }, 404) : assert.fail('Eagle not asked')),
+    { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'ProjectNotification'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.deepStrictEqual(h.out.slice(0, 2).map(line => line.replace(/ identity=.*/, '')),
+    ['[parity] project-notification-list', '[parity] search-ProjectNotification']);
+  assert.match(h.out[0], /skipped \(pending\): DEMI \/notifications answers 404/);
+  // One probe per route, not one per read.
+  assert.deepStrictEqual(h.calls.map(c => c.url.pathname), ['/api/notifications']);
+});
+
+test('a pending route that answers anything but 404 is read, so a broken route fails rather than skips', async () => {
+  const h = harness((host) => (host === 'demi.test' ? json({}, 403) : json(searchBody([]))), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'search-ProjectNotification'], h.deps);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], /search-ProjectNotification identity=staff error: HTTP 403 from \/api\/notifications/);
 });
 
 test('values equal but for surrounding spaces, or an empty list against none, match', async () => {
   const h = harness(searchSides({
     eagle: [project(A, { name: 'Mine ', reviewSuspensions: [] })],
-    demi: [project(A, { name: ' Mine' })]
+    demi: [nativeProject(A, { name: ' Mine' })]
   }));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
   assert.strictEqual(code, 0);
@@ -508,18 +571,18 @@ test('values equal but for surrounding spaces, or an empty list against none, ma
 test('an empty or blank string against null matches, but differing trimmed text still differs', async () => {
   const same = harness(searchSides({
     eagle: [project(A, { region: '', location: '   ' })],
-    demi: [project(A, { region: null, location: null })]
+    demi: [nativeProject(A, { region: null, address: null })]
   }));
   assert.strictEqual(await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], same.deps), 0);
   assert.match(same.out[0], /match=1 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
 
-  const differ = harness(searchSides({ eagle: [project(A, { region: ' Peace ' })], demi: [project(A, { region: 'Skeena' })] }));
+  const differ = harness(searchSides({ eagle: [project(A, { region: ' Peace ' })], demi: [nativeProject(A, { region: 'Skeena' })] }));
   assert.strictEqual(await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], differ.deps), 1);
   assert.match(differ.out[0], /fieldDiff=1 unexplained=1/);
 });
 
 test('a list with values against none still differs', async () => {
-  const h = harness(searchSides({ eagle: [project(A, { reviewSuspensions: ['2020-01-01'] })], demi: [project(A)] }));
+  const h = harness(searchSides({ eagle: [project(A, { reviewSuspensions: ['2020-01-01'] })], demi: [nativeProject(A)] }));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
   assert.strictEqual(code, 1);
   assert.match(h.out[0], /fieldDiff=1 unexplained=1/);
@@ -534,25 +597,25 @@ test('an organization city and province only DEMI shows are public-field differe
 });
 
 const trackRun = async (demiExtra) => {
-  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A, { trackProjectId: 12, ...demiExtra })] }));
+  const h = harness(searchSides({ eagle: [project(A)], demi: [nativeProject(A, { trackProjectId: 12, ...demiExtra })] }));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
   return { code, line: h.out[0] };
 };
 
 test('a Track-mastered project field DEMI fills differently is counted as track-mastered', async () => {
-  const { code, line } = await trackRun({ type: 'Mines - Coal', location: 'Near Hudson Hope' });
+  const { code, line } = await trackRun({ projectType: 'Mines - Coal', address: 'Near Hudson Hope' });
   assert.strictEqual(code, 0);
   assert.match(line, /fieldDiff=2 unexplained=0 known=track-mastered:2/);
 });
 
 test('a Track field differing on a project with no Track row is unexplained', async () => {
-  const { code, line } = await trackRun({ trackProjectId: null, type: 'Mines - Coal' });
+  const { code, line } = await trackRun({ trackProjectId: null, projectType: 'Mines - Coal' });
   assert.strictEqual(code, 1);
   assert.match(line, /fieldDiff=1 unexplained=1/);
 });
 
 test('a differing field Track does not master, or an empty DEMI value, is unexplained', async () => {
-  const { code, line } = await trackRun({ sector: 'Metals', location: '' });
+  const { code, line } = await trackRun({ sector: 'Metals', address: '' });
   assert.strictEqual(code, 1);
   assert.match(line, /fieldDiff=2 unexplained=2/);
 });
@@ -657,21 +720,17 @@ test('a difference no class explains and no parentState given is unexplained', (
   assert.strictEqual(classify(idCtx({ kind: 'missingInDemi' })), null);
 });
 
-const facetSides = rowsOf => (host, url) => {
-  const rows = rowsOf(host);
-  if (url.pathname.endsWith('/search')) return json(searchBody(rows));
-  return json(host === 'eagle.test' ? facet(rows) : rows);
-};
-
 test("the staff project list unwraps Eagle's count facet and pairs on the project ids", async () => {
-  const h = harness(facetSides(() => [project(A), project(B)]), { env: { PARITY_TOKEN: TOKEN } });
+  const h = harness((host, url) => (host === 'eagle.test'
+    ? json(facet([project(A), project(B)]))
+    : nativeRows([nativeProject(A), nativeProject(B)], url)), { env: { PARITY_TOKEN: TOKEN } });
   const code = await run([...staff, '--only', 'project-list'], h.deps);
   assert.strictEqual(code, 0);
   assert.match(h.out[0], /project-list identity=staff match=2 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
 });
 
 test('the project notification list asks Eagle for its compared fields', async () => {
-  const h = harness(restSides({}, searchBody([])), { env: { PARITY_TOKEN: TOKEN } });
+  const h = harness(restSides({}, []), { env: { PARITY_TOKEN: TOKEN } });
   await run([...staff, '--only', 'project-notification-list'], h.deps);
   assert.strictEqual(eagleCall(h, '/projectNotification').url.searchParams.get('fields'), 'name|type|subType');
 });
@@ -679,7 +738,7 @@ test('the project notification list asks Eagle for its compared fields', async (
 const org = (extra = {}) => ({ _id: A, name: 'Org', companyType: 'Proponent', ...extra });
 
 test("the organization route is asked for and compared on only the fields Eagle's route answers", async () => {
-  const h = harness(restSides({ '/organization': [org()] }, searchBody([org({ city: 'Victoria', address2: 'Unit 4' })])),
+  const h = harness(restSides({ '/organization': [org()] }, [org({ city: 'Victoria', address2: 'Unit 4' })]),
     { env: { PARITY_TOKEN: TOKEN } });
   const code = await run([...staff, '--only', 'organization-list'], h.deps);
   assert.strictEqual(code, 0);
@@ -712,7 +771,7 @@ test('staff organization search compares dateAdded and dateUpdated; null and abs
 
 test('the organization route neither asks for nor compares the dates', async () => {
   const h = harness(restSides({ '/organization': [org({ dateAdded: ADDED, dateUpdated: ADDED })] },
-    searchBody([org({ dateAdded: UPDATED, dateUpdated: UPDATED })])), { env: { PARITY_TOKEN: TOKEN } });
+    [org({ dateAdded: UPDATED, dateUpdated: UPDATED })]), { env: { PARITY_TOKEN: TOKEN } });
   const code = await run([...staff, '--only', 'organization-list'], h.deps);
   assert.strictEqual(code, 0);
   assert.match(h.out[0], /match=1 .*fieldDiff=0 unexplained=0/);
@@ -722,7 +781,7 @@ test('the organization route neither asks for nor compares the dates', async () 
 
 test('the comment period route does not compare commentIdCount, which Eagle never answers', async () => {
   const period = { _id: B, project: A, dateStarted: '2026-08-26T07:00:00.000Z', instructions: 'x' };
-  const h = harness(restSides({ [`/commentperiod/${B}`]: [period] }, searchBody([{ ...period, commentIdCount: 7 }])),
+  const h = harness(restSides({ [`/commentperiod/${B}`]: [period] }, { ...period, commentIdCount: 7 }),
     { env: { PARITY_TOKEN: TOKEN } });
   const code = await run([...staff, '--only', 'commentperiod', '--id', `period=${B}`], h.deps);
   assert.strictEqual(code, 0);
@@ -737,13 +796,13 @@ const staffSearch = async (dataset, eagleRow, demiRow) => {
 };
 
 test('a project flag false in DEMI and absent in Eagle is counted as schema-default-false', async () => {
-  const { code, line } = await staffSearch('Project', project(A), project(A, { substantially: false, hasMetCommentPeriods: false }));
+  const { code, line } = await staffSearch('Project', project(A), nativeProject(A, { substantially: false, hasMetCommentPeriods: false }));
   assert.strictEqual(code, 0);
   assert.match(line, /fieldDiff=2 unexplained=0 known=schema-default-false:2/);
 });
 
 test('a project flag true in DEMI and absent in Eagle is unexplained', async () => {
-  const { code, line } = await staffSearch('Project', project(A), project(A, { substantially: true }));
+  const { code, line } = await staffSearch('Project', project(A), nativeProject(A, { substantially: true }));
   assert.strictEqual(code, 1);
   assert.match(line, /fieldDiff=1 unexplained=1/);
 });
@@ -808,7 +867,7 @@ const orphanRun = async ({ eagleProjects = [], eagleTotal = eagleProjects.length
   const period = { _id: B, project: HIDDEN, dateStarted: '2026-08-26T07:00:00.000Z', instructions: 'x' };
   const h = harness((host, url) => {
     const dataset = url.searchParams.get('dataset');
-    if (host === 'demi.test') return json(searchBody(dataset === 'Project' ? demiProjects : []));
+    if (host === 'demi.test') return nativeRows(url.pathname === '/api/projects' ? demiProjects : [], url);
     if (url.pathname === '/api/project') return json(facet(eagleProjects.map(id => ({ _id: id })), eagleTotal));
     return json(dataset === 'CommentPeriod' ? searchBody([period]) : []);
   }, { env: { PARITY_TOKEN: TOKEN } });
@@ -841,7 +900,7 @@ test('a --max-pages cut of the parent project lists leaves a missing comment per
 const [C, SEALED_ONLY] = ['6'.repeat(24), '7'.repeat(24)];
 
 const knownRun = async (identity, known, extraArgs = []) => {
-  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A), project(B)] }),
+  const h = harness(searchSides({ eagle: [project(A)], demi: [nativeProject(A), nativeProject(B)] }),
     { env: { PARITY_TOKEN: TOKEN }, files: { 'known.json': JSON.stringify(known), 'more.json': '{}' } });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', identity, '--token-env', 'PARITY_TOKEN',
     '--only', 'search-Project', '--known-ids', 'known.json', ...extraArgs], h.deps);
@@ -861,7 +920,7 @@ test('eagle-staff-widened, dropped with the rule, is no longer a --known-ids cla
 });
 
 test('--known-ids may repeat, and lists of one class from several files merge', async () => {
-  const h = harness(searchSides({ eagle: [project(A)], demi: [project(A), project(B), project(C)] }), {
+  const h = harness(searchSides({ eagle: [project(A)], demi: [nativeProject(A), nativeProject(B), nativeProject(C)] }), {
     env: { PARITY_TOKEN: TOKEN },
     files: {
       'a.json': JSON.stringify({ 'seeded-from-prod': [B] }),
@@ -885,6 +944,11 @@ test('an id listed under the new id classes never explains a row missing in DEMI
   assert.strictEqual(classify(idCtx({ kind: 'missingInDemi', identity: 'staff', knownIds, parentState: null })), 'push-missed');
 });
 
+/** Eagle answers `rows[dataset]` through `/search`; DEMI's native lists answer nothing. */
+const eagleByDataset = rows => (host, url) => (host === 'eagle.test'
+  ? json(searchBody(rows[url.searchParams.get('dataset')] || []))
+  : nativeRows([], url));
+
 const emitRun = async (identity) => {
   const eagle = [
     project(A, { read: ['public'] }),
@@ -893,7 +957,8 @@ const emitRun = async (identity) => {
     project('9'.repeat(24), { read: ['team', 'sysadmin'] }),
     project(SEALED_ONLY, { read: ['compliance'] })
   ];
-  const h = harness(searchSides({ eagle, demi: [...eagle, project('8'.repeat(24))] }), { env: { PARITY_TOKEN: TOKEN } });
+  const demi = [...eagle.map(row => nativeProject(row._id)), nativeProject('8'.repeat(24))];
+  const h = harness(searchSides({ eagle, demi }), { env: { PARITY_TOKEN: TOKEN } });
   await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', identity, '--token-env', 'PARITY_TOKEN',
     '--only', 'search-Project', '--emit-ids', 'ids.json'], h.deps);
   return h.written[0];
@@ -912,8 +977,7 @@ test('a sysadmin --emit-ids run lists the children of a public-only project unde
     Project: [project(A, { read: ['public', 'sysadmin'] }), project(B, { read: ['public', 'staff'] })],
     CommentPeriod: [period(C, A, ['staff', 'sysadmin']), period(SEALED_ONLY, B, ['staff', 'sysadmin'])]
   };
-  const h = harness((host, url) => json(searchBody(rows[url.searchParams.get('dataset')] || [])),
-    { env: { PARITY_TOKEN: TOKEN } });
+  const h = harness(eagleByDataset(rows), { env: { PARITY_TOKEN: TOKEN } });
   const map = PARITY_MAP.filter(e => ['search-Project', 'search-CommentPeriod'].includes(e.read));
   await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'sysadmin', '--token-env', 'PARITY_TOKEN',
     '--emit-ids', 'ids.json'], { ...h.deps, map });
@@ -951,8 +1015,7 @@ const groupRows = {
   Group: [...CAPPED_GROUPS.map(id => group(id, CAPPED_PROJECT)), group(STAFF_GROUP, STAFF_PROJECT)]
 };
 const groupEmit = async (rows = groupRows, reads = ['search-Project', 'search-Group']) => {
-  const h = harness((host, url) => json(searchBody(rows[url.searchParams.get('dataset')] || [])),
-    { env: { PARITY_TOKEN: TOKEN } });
+  const h = harness(eagleByDataset(rows), { env: { PARITY_TOKEN: TOKEN } });
   const map = PARITY_MAP.filter(e => reads.includes(e.read));
   await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'sysadmin', '--token-env', 'PARITY_TOKEN',
     '--emit-ids', 'ids.json'], { ...h.deps, map });
@@ -1012,9 +1075,155 @@ test('a staff --emit-ids run lists no ladder ids: staff cannot see the rows that
 
 test('an --emit-ids file is accepted as a --known-ids file', async () => {
   const emitted = await emitRun('sysadmin');
-  const h = harness(searchSides({ eagle: [project(C)], demi: [project(C), project(A)] }),
+  const h = harness(searchSides({ eagle: [project(C)], demi: [nativeProject(C), nativeProject(A)] }),
     { env: { PARITY_TOKEN: TOKEN }, files: { 'ids.json': emitted } });
   const code = await run([...staff, '--only', 'search-Project', '--known-ids', 'ids.json'], h.deps);
   assert.strictEqual(code, 0);
   assert.match(h.out[0], /known=ladder-above-public:1/);
+});
+
+const demiCalls = h => h.calls.filter(c => c.host === 'demi.test').map(c => `${c.url.pathname}${c.url.search}`);
+/** DEMI's by-id project and period reads, which resolve the DEMI ids its native filters take. */
+const demiParents = (url) => {
+  if (url.pathname === `/api/projects/${A}`) return json(nativeProject(A));
+  if (url.pathname === `/api/comment-periods/${B}`) return json({ id: 'engage-7', eagleId: B });
+  return null;
+};
+
+test('a native list read sends the DEMI id of its parent, page, pageSize and count=true', async () => {
+  const h = harness((host, url) => (host === 'eagle.test' ? json([]) : demiParents(url) || nativeRows([], url)),
+    { env: { PARITY_TOKEN: TOKEN } });
+  await run([...staff, '--only', 'commentperiod-list', '--id', `project=${A}`], h.deps);
+  await run([...staff, '--only', 'comment-list', '--id', `period=${B}`], h.deps);
+  assert.deepStrictEqual(demiCalls(h).filter(u => !/^\/api\/(projects|notifications)(\?|$)/.test(u)), [
+    `/api/projects/${A}`,
+    `/api/comment-periods?project=eagle-${A}&page=1&pageSize=100&count=true`,
+    `/api/comment-periods/${B}`,
+    '/api/comments?period=engage-7&page=1&pageSize=100&count=true'
+  ]);
+});
+
+test('a parent this identity cannot read in DEMI fails the read and exits 1', async () => {
+  const h = harness((host) => (host === 'eagle.test' ? json([]) : json({ error: 'Project not found' }, 404)));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'commentperiod-list-public', '--id', `project=${A}`], h.deps);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], new RegExp(`error: DEMI has no project ${A} this identity can read`));
+});
+
+const eaglePages = (rows, url) =>
+  json(searchBody(rows.slice(Number(url.searchParams.get('pageNum')) * 100).slice(0, 100), rows.length));
+const hexIds = n => Array.from({ length: n }, (_, i) => i.toString(16).padStart(24, '0'));
+
+test('a native list is paged to the x-total-count total, and a total the pages do not reach fails the read', async () => {
+  const ids = hexIds(250);
+  const listRun = async (total) => {
+    const h = harness((host, url) => (host === 'eagle.test'
+      ? eaglePages(ids.map(id => project(id)), url)
+      : nativeRows(ids.map(id => nativeProject(id)), url, total)));
+    const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
+    return { code, line: h.out[0], pages: demiCalls(h).map(u => new URL(u, DEMI).searchParams.get('page')) };
+  };
+  const whole = await listRun(250);
+  assert.strictEqual(whole.code, 0);
+  assert.match(whole.line, /match=250 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+  assert.deepStrictEqual(whole.pages, ['1', '2', '3']);
+
+  const short = await listRun(300);
+  assert.strictEqual(short.code, 1);
+  assert.match(short.line, /error: .*fetched 250 but upstream reports 300/);
+});
+
+test('an Eagle field is compared under its native name: projectType and address, not type and location', async () => {
+  const renamed = await staffSearch('Project', project(A), nativeProject(A));
+  assert.match(renamed.line, /match=1 .*fieldDiff=0 unexplained=0/);
+  // A DEMI row with the Eagle names only has no projectType or address to compare.
+  const eagleNamed = { id: `eagle-${A}`, eagleId: A, name: 'Mine', type: 'Mines', sector: 'Coal', region: 'Peace', location: 'Hudson Hope' };
+  const stale = await staffSearch('Project', project(A), eagleNamed);
+  assert.strictEqual(stale.code, 1);
+  assert.match(stale.line, /fieldDiff=2 unexplained=2/);
+});
+
+const kindPeriod = { _id: B, project: A, dateStarted: '2026-08-26T07:00:00.000Z', instructions: 'x' };
+const kindRun = async (demiPeriod) => {
+  const h = harness((host, url) => {
+    if (host === 'eagle.test') return json(url.pathname.endsWith('/search') ? searchBody([kindPeriod]) : [kindPeriod]);
+    if (url.pathname === `/api/comment-periods/${B}`) return json(demiPeriod);
+    if (url.pathname === `/api/projects/${A}`) return json(nativeProject(A));
+    return nativeRows(url.pathname === '/api/comment-periods' ? [demiPeriod] : [], url);
+  }, { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'CommentPeriod', '--id', `project=${A}`, '--id', `period=${B}`], h.deps);
+  return { code, reads: h.out.filter(l => / match=/.test(l)).map(l => l.split(' ')[1]) };
+};
+
+test('--only <dataset> runs every read of that kind and exits 0 when each holds', async () => {
+  const { code, reads } = await kindRun({ id: B, eagleId: B, projectId: `eagle-${A}`, dateStarted: kindPeriod.dateStarted, instructions: 'x' });
+  assert.strictEqual(code, 0);
+  assert.deepStrictEqual(reads, ['commentperiod-list', 'commentperiod', 'search-CommentPeriod']);
+});
+
+test('--only <dataset> exits 1 when one read of that kind differs', async () => {
+  const { code } = await kindRun({ id: B, eagleId: B, dateStarted: kindPeriod.dateStarted, instructions: 'changed' });
+  assert.strictEqual(code, 1);
+});
+
+const summaryRun = async (eaoStatus) => {
+  const h = harness((host) => json(host === 'eagle.test'
+    ? { Pending: 2, Deferred: 0, Published: 5, Rejected: 1 }
+    : { id: B, total: 8, eaoStatus }), { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'commentperiod-summary', '--id', `period=${B}`], h.deps);
+  return { code, line: h.out[0], paths: h.calls.map(c => c.url.pathname) };
+};
+
+test('the comment period summary pairs Eagle status counts with the DEMI summary, status by status', async () => {
+  const { code, line, paths } = await summaryRun({ Pending: 2, Deferred: 0, Published: 5, Rejected: 1 });
+  assert.strictEqual(code, 0);
+  assert.match(line, /commentperiod-summary identity=staff match=4 .*unexplained=0/);
+  assert.deepStrictEqual(paths, [`/api/commentperiod/${B}/summary`, `/api/comment-periods/${B}/summary`]);
+});
+
+test('a status count that differs between the summaries is unexplained and exits 1', async () => {
+  const { code, line } = await summaryRun({ Pending: 2, Deferred: 0, Published: 4, Rejected: 1 });
+  assert.strictEqual(code, 1);
+  assert.match(line, /match=3 .*fieldDiff=1 unexplained=1/);
+});
+
+const docRow = id => ({ id, eagleId: id, documentFileName: `${id}.pdf` });
+/** The staff document list: DEMI answers row A with a continuation token, then row B with none. */
+const tokenRun = async (args = []) => {
+  const h = harness((host, url) => {
+    if (host === 'eagle.test') return json([{ _id: A, documentFileName: `${A}.pdf` }, { _id: B, documentFileName: `${B}.pdf` }]);
+    if (url.pathname !== '/api/documents') return demiParents(url);
+    const second = url.searchParams.get('continuationToken') === 't1';
+    return new Response(JSON.stringify([docRow(second ? B : A)]), { headers: second ? {} : { 'x-continuation-token': 't1' } });
+  }, { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'document-list', '--id', `project=${A}`, ...args], h.deps);
+  return { code, line: h.out[0], calls: demiCalls(h) };
+};
+
+test('a DEMI list paged by continuation token is read token by token to the end', async () => {
+  const { code, line, calls } = await tokenRun();
+  assert.strictEqual(code, 0);
+  assert.match(line, /match=2 missingInDemi=0 extraInDemi=0/);
+  assert.deepStrictEqual(calls.slice(1), [
+    `/api/documents?project=eagle-${A}&pageSize=100`,
+    `/api/documents?project=eagle-${A}&pageSize=100&continuationToken=t1`
+  ]);
+});
+
+test('a --max-pages cut with a continuation token left reports the read as truncated, not as missing rows', async () => {
+  const { line } = await tokenRun(['--max-pages', '1']);
+  assert.match(line, /missingInDemi=0 extraInDemi=0 .* truncated$/);
+});
+
+test('an anonymous native list stops at the anonymous page depth and is reported truncated, not refused', async () => {
+  const ids = hexIds(2100);
+  const orgRow = id => ({ _id: id, name: 'Org', companyType: 'Proponent' });
+  const h = harness((host, url) => (host === 'eagle.test'
+    ? eaglePages(ids.map(orgRow), url)
+    : nativeRows(ids.map(id => ({ ...orgRow(id), id, eagleId: id })), url)));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Organization-public'], h.deps);
+  assert.strictEqual(code, 0);
+  assert.match(h.out[0], / truncated$/);
+  const pages = demiCalls(h).map(u => Number(new URL(u, DEMI).searchParams.get('page')));
+  assert.strictEqual(Math.max(...pages), 20);
 });
