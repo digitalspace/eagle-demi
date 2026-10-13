@@ -288,6 +288,14 @@ const routes = [
   { method: 'get', path: '/comments', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comments').getComments },
   { method: 'get', path: '/comments/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/comments').getComment },
 
+  // Native reads: updates and project notifications (helpers/native-query.js), strict as above.
+  // `/updates/feed` before `/updates/:id`, or `feed` would be read as an id.
+  { method: 'get', path: '/updates', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/updates').getUpdates },
+  { method: 'get', path: '/updates/feed', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/updates').getFeed },
+  { method: 'get', path: '/updates/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/updates').getUpdate },
+  { method: 'get', path: '/notifications', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/notifications').getNotifications },
+  { method: 'get', path: '/notifications/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/notifications').getNotification },
+
   // CSV reports (README "CSV reports"). The comment export is signed in only, as eagle-api's was;
   // the caller's level then picks the columns. The BCGW feed reads as anonymous whoever asks.
   { method: 'get', path: '/commentperiods/:periodId/comments/export', guards: [authMiddleware, credentialsMiddleware], load: () => commentExportController().exportComments },
