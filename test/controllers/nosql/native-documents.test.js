@@ -24,6 +24,8 @@ const STAFF = { realm_access: { roles: ['staff'] } };
 // Null-safe: a missing or null documentSource must keep the row, which `!=` alone would not.
 const EXCLUSION = '(NOT IS_STRING(c.documentSource) OR c.documentSource != @updateSource)';
 
+const SCAN_CLEARED = "(NOT IS_STRING(c.scanStatus) OR c.scanStatus = 'clean')";
+
 const DOCS = [
   {
     id: 'd1', projectId: '207', read: ['public'], displayName: 'Application Part A',
@@ -208,6 +210,57 @@ test('native documents list', async (t) => {
 
     assert.strictEqual(res.status, 400);
     assert.strictEqual(searches.length, 0);
+  });
+});
+
+// An image uploaded through the eagle-admin Update form: shown on its Update, fetched by id.
+const UPDATE_IMAGE = { id: 'd3', projectId: '207', read: ['public'], documentSource: 'UPDATE', s3Key: '207/photo.jpg' };
+
+/**
+ * A Cosmos fake that honours the two clauses these tests are about: the `@nid` ids an `ids=` read
+ * binds, and the Update-image exclusion. Every spec sent is recorded.
+ */
+function fakeIdsStore(t) {
+  const queries = [];
+  t.mock.method(cosmos, 'query', async (container, spec) => {
+    queries.push({ container, ...spec });
+    const asked = spec.parameters.filter(p => p.name.startsWith('@nid')).map(p => p.value);
+    const rows = [...DOCS, UPDATE_IMAGE]
+      .filter(row => asked.length === 0 || asked.includes(row.id))
+      .filter(row => !spec.query.includes(EXCLUSION) || row.documentSource !== 'UPDATE');
+    return { items: structuredClone(rows) };
+  });
+  t.mock.method(projects, 'listRowsByIds', async () => []);
+  return { queries };
+}
+
+test('native documents ids= read', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('ids= returns an Update-form image, as GET /documents/:id does', async (t) => {
+    fakeIdsStore(t);
+    const res = await list('ids=d3,d1', STAFF);
+
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.map(doc => doc.id).sort(), ['d1', 'd3']);
+  });
+
+  await t.test('a project list without ids= still leaves the Update image out', async (t) => {
+    fakeIdsStore(t);
+    const res = await list('project=207', STAFF);
+
+    assert.ok(!res.body.some(doc => doc.id === 'd3'), JSON.stringify(res.body.map(doc => doc.id)));
+  });
+
+  await t.test("ids= keeps the caller's read and scan gates and anonymous redaction", async (t) => {
+    const { queries } = fakeIdsStore(t);
+    const res = await list('ids=d3');
+
+    const [read] = documentReads(queries);
+    assert.match(read.query, /c\.read/, 'the visibility predicate is in the query');
+    assert.strictEqual(param(read, '@role0'), 'public');
+    assert.ok(read.query.includes(SCAN_CLEARED), 'an unreleased upload stays out');
+    assert.strictEqual(res.body[0].s3Key, undefined, 'the object key is never public');
   });
 });
 

@@ -1333,7 +1333,8 @@ paths:
       summary: List documents
       description: >-
         One page of the documents this caller may read, with hidden fields left out. Images
-        uploaded through the Update form (`documentSource` `UPDATE`) are left out. One project's
+        uploaded through the Update form (`documentSource` `UPDATE`) are left out, except from an
+        `ids` read that the database serves, which returns them as `GET /api/documents/{id}` does. One project's
         plain list and an `ids` read come from the database; every other list, `q`, `sort` and the
         typed filters included, is paged in the documents search index, which serves at most 500
         rows per page. Each row also carries `projectName` and `projectEagleId` when the caller may
