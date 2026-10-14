@@ -45,7 +45,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 
 ### Audit
 
-`src/domain/_write.js` exports `writeRow({ ctx, repo, existing, reread, build, audit })`. It wraps `writeGuarded` and calls `auditEvent(ctx.req, audit(saved, from))` once on success. A call without `audit` throws. The backstop is a route-inventory table in `test/controllers/audit-cud-coverage.test.js`: every non-GET route in `routes.js` has an audit action or an exempt entry with a reason.
+`src/domain/_write.js` exports `writeRow({ ctx, repo, existing, reread, build, audit })`. It wraps `writeGuarded` and calls `auditEvent(ctx.req, audit(saved, from))` once on success. A call without `audit` throws. The backstop is a route-inventory table in `test/controllers/audit-cud-coverage.test.js`: every non-GET route in `routes.js` has an audit action or an exempt entry with a reason. Each ported route's entry also carries a role column: the roles from eagle-api's `x-security-scopes` for that route, copied as written, and the test checks they match the route's `requireRole` guard.
 
 ### Sync-out
 
@@ -104,8 +104,8 @@ Today: `pins` is a field on the project document, resolved to `{_id, name, provi
 
 Routes, with guards taken from eagle-api swagger. `requireWrite` is left out, so `demi-service-write` cannot call these.
 - `GET /projects/:id/pins`: eagle-api `[passiveAuthMiddleware.strict, credentialsMiddleware]`. Keep it only if eagle-admin needs its sort and paging (see Open before build).
-- `POST /projects/:id/pins`: eagle-api scopes `project-system-admin, staff, sysadmin` (`swagger.yaml:1641-1644`). DEMI `[authMiddleware, requireRole('staff','sysadmin')]`.
-- `DELETE /projects/:id/pins/:orgId`: eagle-api scopes `project-system-admin, sysadmin` (`swagger.yaml:1898-1900`). DEMI `[authMiddleware, requireRole('sysadmin')]`.
+- `POST /projects/:id/pins`: eagle-api scopes `project-system-admin, staff, sysadmin` (`swagger.yaml:1641-1644`). DEMI `[authMiddleware, requireRole('project-system-admin','staff','sysadmin')]`.
+- `DELETE /projects/:id/pins/:orgId`: eagle-api scopes `project-system-admin, sysadmin` (`swagger.yaml:1898-1900`). DEMI `[authMiddleware, requireRole('project-system-admin','sysadmin')]`.
 - `PUT /projects/:id/pins/published`: eagle-api scopes `staff, sysadmin` (`swagger.yaml:1696,1745`). DEMI `[authMiddleware, requireRole('staff','sysadmin')]`.
 
 Rules (eagle-api `api/controllers/pins.js`):
@@ -126,7 +126,7 @@ Open before build:
 - (d) Decide now whether `GET /projects/:id/pins` ships at all, since `GET /projects/:id` already returns redacted pins.
 - (e) Decision pending from Daniel: whether add refuses organization ids that DEMI does not hold (recommended: 400, recorded as a rule change).
 
-The `project-system-admin` role is kept. DEMI route guards for staff routes accept `sysadmin`, `staff` and `project-system-admin`. `AUTHENTICATED_ROLES` is at `src/helpers/access-sql.js:214` (built from lines 181-183, 193, 207); `src/middleware/auth.js` only calls `isAuthenticatedRole` (`access-sql.js:276`). The role is held in prod (23 of 26 active users) and test (2 of 11), measured 2026-10-14 from eagle-api audit rows over 90 days. Every holder also has `sysadmin`, so the role admits no extra user. Revisit only if Keycloak is cleaned up.
+The `project-system-admin` role is kept. DEMI route guards accept it only on the routes where eagle-api's `x-security-scopes` lists it, copied per route into the route-inventory table. It never bypasses route scopes or record-level access the way `sysadmin` and `staff` do. `AUTHENTICATED_ROLES` is at `src/helpers/access-sql.js:214` (built from lines 181-183, 193, 207) and does not include it; `src/middleware/auth.js` only calls `isAuthenticatedRole` (`access-sql.js:276`). The role is held in prod (23 of 26 active users) and test (2 of 11), measured 2026-10-14 from eagle-api audit rows over 90 days. Every holder also has `sysadmin`, so the role admits no extra user. Revisit only if Keycloak is cleaned up.
 
 Callers to move: eagle-admin `project.service.ts` pins methods (add, delete, publish, unpublish) on `origin/develop`.
 
