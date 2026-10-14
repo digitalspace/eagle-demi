@@ -796,7 +796,10 @@ paths:
         - name: projectType
           in: query
           required: false
-          description: Repeat it to match any of several.
+          description: >-
+            Repeat it to match any of several. Eagle's and Track's spellings of one type match each
+            other (`Energy-Electricity` also matches `Energy - Electricity`). The 100-value cap counts
+            the values sent.
           schema:
             type: array
             maxItems: 100

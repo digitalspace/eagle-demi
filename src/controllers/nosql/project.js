@@ -46,6 +46,7 @@ const { mirrorError } = require('../../helpers/duplicate-id');
 const { narrowTwin, mirrorTags, partnerRefusesTags, sameTags } = require('../../helpers/project-twin');
 const { listHandler } = require('./mirror-reads');
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
+const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -304,6 +305,7 @@ const projectsKind = {
     'projectType', 'region', 'projectState', 'proponentName',
     'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id'
   ],
+  valueAliases: { projectType: PROJECT_TYPE_SPELLINGS },
   ranges: {
     decisionDateStart: { field: 'decisionDate', op: 'ge' },
     decisionDateEnd: { field: 'decisionDate', op: 'le' }

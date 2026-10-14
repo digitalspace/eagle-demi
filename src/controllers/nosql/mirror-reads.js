@@ -21,7 +21,8 @@ const UNLOGGED_SEARCH_KINDS = Object.freeze(['users', 'comments']);
 
 /**
  * A kind spec: `{ entity, repository, sortKeys, filters, multiValueFilters, aliases?, qFields?,
- * parentJoin?, audited?, notFound? }`. `aliases` is query name -> filter field (`{ project: 'projectId' }`). `repository` is `{ list(access, {criteria, orderBy, pageNum, pageSize, parsed}),
+ * valueAliases?, parentJoin?, audited?, notFound? }`. `valueAliases` is filter field -> spelling pairs
+ * (`helpers/spellings.js`); a value matches every spelling it pairs with. `aliases` is query name -> filter field (`{ project: 'projectId' }`). `repository` is `{ list(access, {criteria, orderBy, pageNum, pageSize, parsed}),
  * count(access, {criteria, parsed}), getById(access, id), getByEagleId?(access, id) }`, each bound to
  * the caller's visibility predicate (`cosmosKind` builds one). `parsed` is the `parseNativeQuery`
  * result, for a store that cannot take Cosmos SQL (`search/native-index.js`); list and count get the

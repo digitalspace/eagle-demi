@@ -79,6 +79,15 @@ test('GET /counts', async (t) => {
     assert.match(specs[0].query, /COUNT\(1\)/);
   });
 
+  await t.test('a projects count on a project type matches both stored spellings', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call('kind=projects&projectType=Tourist%20Destination%20Resorts');
+    assert.strictEqual(res.status, 200);
+    assert.match(specs[0].query, /c\.projectType IN \(@nf0_0, @nf0_1\)/);
+    assert.deepStrictEqual(specs[0].parameters.filter(p => p.name.startsWith('@nf0_')).map(p => p.value),
+      ['Tourist Destination Resorts', 'Tourist Destination Resort']);
+  });
+
   await t.test('a keyword count asks the index, as the keyword list does', async (t) => {
     fakeCosmos(t);
     let asked;

@@ -14,6 +14,7 @@ const {
   eq, inList, assertFilterable, selectWhere, selectFor, countWhere, readPage
 } = require('../repositories/_sql');
 const { levelOf } = require('../vis/level');
+const { spellingsOf } = require('./spellings');
 const { redactForAccess } = require('../vis/redact');
 
 /** Most ids one `ids=` read may name, and most values one repeated filter may take. */
@@ -46,6 +47,11 @@ function assertKindSpec(spec) {
   for (const field of spec.multiValueFilters || []) {
     if (!(spec.filters || []).includes(field)) {
       throw new Error(`[native] ${spec.entity}: multi-value filter ${field} is not a declared filter`);
+    }
+  }
+  for (const field of Object.keys(spec.valueAliases || {})) {
+    if (!(spec.filters || []).includes(field)) {
+      throw new Error(`[native] ${spec.entity}: value aliases for ${field}, which is not a declared filter`);
     }
   }
   for (const [name, { field, op }] of Object.entries(spec.ranges || {})) {
@@ -177,7 +183,9 @@ function parseNativeQuery(spec, query, access) {
     if (refused) return { error: refused };
     const values = [...new Set([].concat(q[name]))];
     if (values.length > MAX_IDS) return { error: `${name} takes at most ${MAX_IDS} values` };
-    filterValues[field] = values;
+    // Capped on what the caller sent; a stored second spelling is ours to match, not theirs to count.
+    const pairs = (spec.valueAliases || {})[field];
+    filterValues[field] = pairs ? [...new Set(values.flatMap(v => spellingsOf(pairs, v)))] : values;
   }
 
   const ranges = [];
