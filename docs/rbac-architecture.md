@@ -251,7 +251,8 @@ eagle-api pushes five more kinds (`DEMI_PUSH_OPT_IN_KINDS` in eagle-api). Routes
 | `GET /inspection-items?inspection=&element=`, `GET /inspection-items/:id?inspection=` | `getInspectionItems`, `getInspectionItem` | `inspections` | `/inspection` |
 
 PUT routes take the same guards as the other `/eagle/*` mirrors. GET routes take
-`passiveAuthMiddleware, credentialsMiddleware`, as `GET /documents`. Lists order on `c.id`; the
+`passiveAuthMiddleware.strict, credentialsMiddleware`, as `GET /documents`, so a rejected Bearer
+is a 401. Lists order on `c.id`; the
 `inspections` container filters on `kind`, `projectId` and `element`, so those paths must be indexed.
 The user and group GETs follow the native list contract (`helpers/native-query.js`: `page`, `sort`,
 `q`, `ids`, `count`) behind `passiveAuthMiddleware.strict`, so a rejected Bearer is a 401. Staff

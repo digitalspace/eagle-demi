@@ -10,10 +10,9 @@ const { logger } = require('../utils/logger');
  * than by rejecting the request.
  *
  * A REJECTED credential is not the same as no credential — log it, so a forged or expired
- * token is distinguishable from a logged-out visitor. `strict` (GET /me and the native kind
- * routes) also answers a rejected Bearer with its 401, so a client refreshes rather than reading
- * the public view under a 200. The default stays lenient: the existing public reads serve clients
- * that may still send a stale token.
+ * token is distinguishable from a logged-out visitor. `strict` (GET /me, the native kind routes
+ * and the by-id reads) also answers a rejected Bearer with its 401, so a client refreshes rather
+ * than reading the public view under a 200. The default stays lenient on the routes not yet moved.
  */
 function passiveAuth({ rejectBearer = false } = {}) {
   return (req, res, next) => {
