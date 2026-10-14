@@ -39,7 +39,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | todo |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
-| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js` | 0 (8 if a catalog edit is needed) | M | todo |
+| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | todo |
 | T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | todo |
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | todo |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo |
@@ -59,15 +59,15 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | R2 | Retire in eagle-api: per object | handlers under "Callers to move", pin routes, extension routes | the object's Flip live on test (retire tag: live on prod) | - | todo |
 | R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle` | the kind's Flip live on prod | - | todo |
 
-### Decisions pending
+### Decisions
 
-Daniel decides these. Each has a recommendation.
+Decided 2026-10-14.
 
-1. CACUser search dataset: drop. No caller, and members live in eagle-notify.
-2. Materialized-view status: keep until DataBC moves to DEMI `/reports`, then remove the call in a small eagle-demi-admin slice.
+1. CACUser search dataset: dropped. No caller, and members live in eagle-notify. Slice T marks it dropped in `parity-map.js`.
+2. Materialized-view status: kept until DataBC moves to DEMI `/reports`, then a small eagle-demi-admin slice removes the call.
 3. Jobs: no port until a caller appears.
-4. Inspections: keep the mirror lines `routes.js:252-254` as a frozen import path, with no Dark slice. Retirement is decided separately.
-5. CAC member store: decide whether DEMI's remove-member and delete cascade call eagle-notify, or only eagle-notify removes members. Members sign up in eagle-notify and DEMI holds no member store.
+4. Inspections: the mirror lines `routes.js:252-254` stay as a frozen import path, with no Dark slice.
+5. CAC member store: eagle-notify stays the member store and never hard-deletes. Members sign up in eagle-notify and DEMI holds no member store. Slice 11 has two halves. Half A (eagle-notify, own PR, merges first): a staff or service-key route that unsubscribes one CAC member, and one that unsubscribes every member of a project's CAC. Both soft delete with the existing TTL and log through the existing logger. Half B (eagle-demi, after half A is live on test): `src/services/notify.js` gains those two calls; `domain/cac.js` remove-member calls the first and CAC delete calls the second. A failed eagle-notify call fails the DEMI write.
 
 ## Layering
 
@@ -173,7 +173,7 @@ Ownership per phase:
 Open before build:
 - (a) `src/repositories/lists.js:77` `listByIds` selects only `c.id, c.name`. It has no `province`, and its key is `id`, not `_id`. The DEMI project read must return organization id, name and province for each pin. The slice must own `lists.js` and add an organization-label read that selects `c.id, c.name, c.province`, mapping `id` to `_id` in the domain.
 - (b) eagle-admin `pins-list.component.ts:128-136` reads the published flag from the eagle-api envelope, `read.includes('public')`. DEMI never returns `pinsRead` (maxVis 0). eagle-admin must read `pinsPublished` from `GET /projects/:id`, and the pins page must show the correct state after a change.
-- (c) The eagle-api pin publish and unpublish guard was `staff, sysadmin`. The flag now rides on project PUT, whose guard is `requireWrite` (`routes.js:170`), and that guard admits the `demi-service-write` service key; the earlier pin design deliberately kept that key out of pin edits. Rule to apply: the domain policy for project PUT rejects changes to `pins` or `pinsPublished` (403) unless the caller holds `sysadmin`, `staff` or `project-system-admin`, so a service key may update other project fields but never pins. Confirm this is acceptable.
+- (c) The eagle-api pin publish and unpublish guard was `staff, sysadmin`. The flag now rides on project PUT, whose guard is `requireWrite` (`routes.js:170`), and that guard admits the `demi-service-write` service key; the earlier pin design deliberately kept that key out of pin edits. Rule to apply: the domain policy for project PUT rejects changes to `pins` or `pinsPublished` (403) unless the caller holds `sysadmin`, `staff` or `project-system-admin`, so a service key may update other project fields but never pins. Confirmed 2026-10-14: DEMI has no pin routes. The pinned organization list and `pinsPublished` ride on project PUT, and a change to either returns 403 unless the caller holds sysadmin, staff or project-system-admin. eagle-api pin routes retire after F1.
 
 Guard note, checked against eagle-api `origin/develop` `swagger.yaml`: `PUT /project/{projId}` lists `project-system-admin` alone (`swagger.yaml:1309-1310`). Of the pin sub-routes, `POST /project/{projId}/pin` (`:1620-1623`) and `DELETE /project/{projId}/pin/{pinId}` (`:1779-1781`) list it; `pin/publish` (`:1675-1677`) and `pin/unpublish` (`:1724-1726`) do not. So the role is already on the project PUT and needs no pins-only rule.
 
@@ -301,7 +301,7 @@ Business rules: legislation year switch on publish; extract the exact condition 
 
 Status: todo (one gap)
 
-Gap: no `CACUser` dataset on `GET /search` (`parity-map.js:426`). eagle-admin still calls eagle-api `/search?dataset=Project` (`full-project.resolver.ts:29-31`); move it.
+Gap: no `CACUser` dataset on `GET /search` (`parity-map.js:426`). Dropped 2026-10-14, not ported. eagle-admin still calls eagle-api `/search?dataset=Project` (`full-project.resolver.ts:29-31`); move it.
 
 ### Sitemap
 
@@ -319,11 +319,11 @@ Status: todo
 
 Today: eagle-demi-admin `src/api/eagle.ts:32` calls eagle-api `/materialized-views/status`. DEMI has nothing. `parity-map.js:395` marks it internal to Eagle.
 
-Target: either a DEMI health or index-status endpoint the admin screen can show, or remove the screen. Decide before porting.
+Target: decided 2026-10-14. Keep the eagle-api call until DataBC moves to DEMI `/reports`, then a small eagle-demi-admin slice removes it.
 
 ### Jobs (bulk export)
 
-Status: todo (decide)
+Status: No port until a caller appears (decided 2026-10-14).
 
 Today: `/bulk-downloads` (`routes.js:223-227`) replaces eagle-api `/jobs` with a document id list capped at 2500 (`src/config.js:199`) and no whole-project `includeAll` export (eagle-api `export-docs-helper.js:34,44`). No caller uses eagle-api `/jobs`.
 

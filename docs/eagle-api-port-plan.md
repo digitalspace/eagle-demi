@@ -204,18 +204,20 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - Publish sets `projectCACPublished` true (`:23`); unpublish sets it false (`:50`).
   - Delete removes the members and sets `projectCAC` false and `cacMembers` [] (`:221-225`).
   - Removing a member pulls it and deletes it (`:167-169`).
-- Questioned: members sign up in eagle-notify (tracker line 222), and DEMI holds no member store. eagle-api's delete ran `CACUser.deleteMany` on its own Mongo (`b072e79^:cac.js:221`). Decide whether DEMI's remove-member and delete cascade call eagle-notify, or whether only eagle-notify removes members.
-- Owns: `domain/cac.js`, `controllers/native/cac.js`. Writes go through the existing projects repository functions.
+  - Members sign up in eagle-notify (tracker line 222), and DEMI holds no member store. eagle-api's delete ran `CACUser.deleteMany` on its own Mongo (`b072e79^:cac.js:221`). Decided 2026-10-14: eagle-notify stays the member store and never hard-deletes. It has no staff or service route to remove members today; its only removal routes are the anonymous code-authorised `subscriptions/unsubscribe*` routes (`api/functions/subscriptions.js:228,269,295`), which soft delete with a TTL. DEMI's client `src/services/notify.js` only POSTs `/api/events`.
+  - Half A (eagle-notify, own PR there, merges first): a staff or service-key route that unsubscribes one CAC member, and one that unsubscribes every member of a project's CAC. Both soft delete with the existing TTL and log through the existing logger.
+  - Half B (eagle-demi, after half A is live on test): `src/services/notify.js` gains those two calls. `domain/cac.js` remove-member calls the first; CAC delete calls the second. A failed eagle-notify call fails the DEMI write.
+- Owns: `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`. Writes go through the existing projects repository functions. Slice 11 also touches eagle-notify (half A, own PR there, merges first).
 
 **T. Parity-map tidy.** Size S. After 4 and 5.
-- Edits in `src/scripts/parity-map.js`: point group-members (`:316-320`) at `/groups/:id/members`, mark topic-vc (`:383`) dropped, and mark CACUser (`:426`) to match the decision below.
+- Edits in `src/scripts/parity-map.js`: point group-members (`:316-320`) at `/groups/:id/members`, mark topic-vc (`:383`) dropped, and mark CACUser (`:426`) dropped (decided 2026-10-14).
 - Owns: `parity-map.js` once slice 5 has merged.
 
-**Decisions with no slice yet, each with a recommendation:**
-- **CACUser search dataset.** No caller: git grep on eagle-admin origin/develop finds none, and members live in eagle-notify. Recommend: drop.
-- **Materialized-view status.** eagle-demi-admin uses it only for BCGW export freshness (`src/api/eagle.ts:24-33`; screens `DataExport.tsx`, `Uptime.tsx`). Recommend: keep it until DataBC moves to DEMI `/reports`, then remove the call in a small eagle-demi-admin slice.
-- **Jobs.** No caller. Recommend: no port until one appears.
-- **Inspections.** eagle-api keeps no inspection write (`inspection.js:10` is the only handler), and `demiPush.inspection` has no live caller. Recommend: keep the mirror lines `routes.js:252-254` as a frozen import path, with no Dark slice. Daniel decides on retirement separately.
+**Decisions with no slice yet (decided 2026-10-14):**
+- **CACUser search dataset.** Dropped. No caller: git grep on eagle-admin origin/develop finds none, and members live in eagle-notify. Slice T marks it dropped.
+- **Materialized-view status.** Kept until DataBC moves to DEMI `/reports`; then a small eagle-demi-admin slice removes the call. eagle-demi-admin uses it only for BCGW export freshness (`src/api/eagle.ts:24-33`; screens `DataExport.tsx`, `Uptime.tsx`).
+- **Jobs.** No port until a caller appears. No caller today.
+- **Inspections.** The mirror lines `routes.js:252-254` stay as a frozen import path, with no Dark slice. eagle-api keeps no inspection write (`inspection.js:10` is the only handler), and `demiPush.inspection` has no live caller.
 - **Topic and vc.** Dropped 2026-10-14.
 
 **eagle-admin slices outside the Flips:**
@@ -314,7 +316,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 - **Already removed in eagle-api:** the CAC admin handlers (b072e79) and the inspection writes.
 - **Kept until DataBC moves:** `/reports`.
 - **eagle-api, one slice per object:** delete the handlers under "Callers to move", the pin routes and the extension routes. A retire PR may merge once that object's Flip is live on test. The retire **tag may reach prod only after that Flip is live on prod**. This is stricter than tracker line 20; record the change there.
-- **DEMI final retire:** delete the mirror lines and each kind's `upsertFromEagle`, only for kinds whose Flip is live on prod. Inspections (`routes.js:252-254`) stay until Daniel decides.
+- **DEMI final retire:** delete the mirror lines and each kind's `upsertFromEagle`, only for kinds whose Flip is live on prod. Inspections (`routes.js:252-254`) stay as a frozen import path (decided 2026-10-14).
 
 Risks:
 - **Prod releases, each needs its own approval from Daniel, from a tag verified on test, never a branch:**
