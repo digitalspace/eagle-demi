@@ -234,4 +234,21 @@ test('organization domain', async (t) => {
     assert.strictEqual(warned[0].orgId, ORG_ID);
     assert.deepStrictEqual(counted.find(meta => meta && 'failed' in meta), { orgId: ORG_ID, updated: 1, failed: 1 });
   });
+
+  await t.test('a user list read that fails is logged and the update still succeeds', async (t) => {
+    const written = fakeLists(t);
+    const userWrites = fakeUsers(t, [{ id: 'u1', org: ORG_ID, orgName: 'Acme Mining' }]);
+    t.mock.method(users, 'listByOrg', async () => { throw new Error('cosmos down'); });
+    const warned = [];
+    t.mock.method(logger, 'warn', (message, meta) => { warned.push(meta); });
+
+    const { result } = await audited(() => organization.update(STAFF, ORG_ID, { name: 'Acme Resources' }));
+
+    assert.strictEqual(result.status, 'ok');
+    assert.deepStrictEqual(written.map(row => row.name), ['Acme Resources']);
+    assert.strictEqual(userWrites.length, 0);
+    assert.strictEqual(warned.length, 1);
+    assert.strictEqual(warned[0].orgId, ORG_ID);
+    assert.strictEqual(warned[0].error, 'cosmos down');
+  });
 });

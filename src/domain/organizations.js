@@ -137,14 +137,24 @@ async function update(ctx, id, changes) {
 
 /**
  * eagle-api renames `orgName` on every user of the organization (organization.js:163). The org row
- * is already saved, so a user that fails is logged, not returned: the next PUT or push repairs it.
+ * is already saved, so a failed cascade is logged, not returned; it waits for the reconcile report
+ * or a later name change, since a PUT with the same name skips this step.
  */
 async function renameUsers(orgId, orgName) {
   let updated = 0;
   let failed = 0;
 
   const access = systemAccess();
-  for (const user of await users.listByOrg(access, orgId)) {
+  let members;
+  try {
+    members = await users.listByOrg(access, orgId);
+  } catch (err) {
+    logger.warn('[Organization] users not listed, orgName not renamed', {
+      orgId, error: err.message, stack: err.stack
+    });
+    return;
+  }
+  for (const user of members) {
     if (user.orgName === orgName) continue;
     try {
       const written = await writeGuarded({
