@@ -45,19 +45,28 @@ function requireAdmin(req, res, next) {
 }
 
 /**
- * One named realm role, for a gate narrower than either set above — classifying fields, releasing
- * a sealed record. Mounted behind `authMiddleware` like the other two.
+ * Named realm roles, for a gate narrower than either set above: classifying fields, releasing a
+ * sealed record, a ported eagle-api route's `x-security-scopes`. Any one listed role admits.
+ * Mounted behind `authMiddleware` like the other two. The list is on the guard as `roles`, so a
+ * test can compare a route's guard with the scopes it was ported from.
  */
-function requireRole(name) {
-  return function (req, res, next) {
+function requireRole(...names) {
+  if (names.length === 0) throw new TypeError('requireRole needs at least one role name');
+  const refusal = names.length === 1
+    ? `Forbidden. Requires role ${names[0]}.`
+    : `Forbidden. Requires one of the roles ${names.join(', ')}.`;
+
+  const guard = function (req, res, next) {
     const roles = (req.user && req.user.realm_access && req.user.realm_access.roles) || [];
 
-    if (!roles.includes(name)) {
-      return res.status(403).json({ error: `Forbidden. Requires role ${name}.` });
+    if (!names.some(name => roles.includes(name))) {
+      return res.status(403).json({ error: refusal });
     }
 
     return next();
   };
+  guard.roles = Object.freeze([...names]);
+  return guard;
 }
 
 /**
