@@ -126,6 +126,9 @@ module.exports = {
   substantially: { defaultVis: 2, maxVis: 2 },
   substantiallyDate: { defaultVis: 2, maxVis: 2 },
   hasMetCommentPeriods: { defaultVis: 2, maxVis: 2 },
+  // Dispute resolution, from the legislation block like `substantially`.
+  dispute: { defaultVis: 2, maxVis: 2 },
+  disputeDate: { defaultVis: 2, maxVis: 2 },
 
   // Pinned documents and the pinned-proponent list, both stored top level in Mongo. They were only
   // ever reachable under `sources.eagle`, which is maxVis 0 — these entries are what publishes them.

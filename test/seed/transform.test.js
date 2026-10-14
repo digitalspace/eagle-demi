@@ -11,6 +11,7 @@ const {
 } = require('../../src/seed/transform');
 const { levelOfRead } = require('../../src/helpers/access-sql');
 const { naturalSortKey } = require('../../src/helpers/natural-sort');
+const { redactForAccess } = require('../../src/vis/redact');
 
 const NOW = '2026-07-30T00:00:00.000Z';
 const OPTS = { now: NOW };
@@ -545,5 +546,24 @@ test('isFeatured is carried onto the Cosmos row', async (t) => {
       .isFeatured, false, 'a string must not read as featured');
     assert.strictEqual(transformDocument(EAGLE_DOC, '207', LIST, OPTS).isFeatured, false,
       'absent means not featured, never undefined');
+  });
+});
+
+test('sortOrder is carried onto the Cosmos row', async (t) => {
+  await t.test("Eagle's number is kept as a number", () => {
+    assert.strictEqual(transformDocument({ ...EAGLE_DOC, sortOrder: 3 }, '207', LIST, OPTS).sortOrder, 3);
+    assert.strictEqual(transformDocument({ ...EAGLE_DOC, sortOrder: 0 }, '207', LIST, OPTS).sortOrder, 0,
+      "0 is Eagle's default order, not a missing one");
+  });
+
+  await t.test('absent or unreadable is null', () => {
+    assert.strictEqual(transformDocument(EAGLE_DOC, '207', LIST, OPTS).sortOrder, null);
+    assert.strictEqual(transformDocument({ ...EAGLE_DOC, sortOrder: 'first' }, '207', LIST, OPTS)
+      .sortOrder, null);
+  });
+
+  await t.test('an anonymous caller reads it, as eagle-api serves it', () => {
+    const row = transformDocument({ ...EAGLE_DOC, sortOrder: 3 }, '207', LIST, OPTS);
+    assert.strictEqual(redactForAccess('documents', row, { level: 4 }).sortOrder, 3);
   });
 });

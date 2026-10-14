@@ -129,10 +129,13 @@ const INDEX_MAPS = Object.freeze({
       documentAuthorTypeId: 'documentAuthorTypeId',
       isFeatured: 'isFeatured',
       legislation: 'legislation',
+      documentSource: 'documentSource',
       datePosted: 'datePosted'
     },
     types: { isFeatured: 'boolean', legislation: 'int', datePosted: 'date' },
-    sorts: { datePosted: 'datePosted', displayName: 'displayNameSort' },
+    sorts: { datePosted: 'datePosted', displayName: 'displayNameSort', sortOrder: 'sortOrder' },
+    // Most rows hold sortOrder 0, so the staff order falls back to newest first, then by name.
+    tiebreaks: { sortOrder: 'datePosted desc, displayNameSort asc' },
     defaultOrderby: 'datePosted desc',
     // Cosmos indexes no `datePosted` or `displayName` and cannot compare typed values the query
     // carries as strings, so it serves only one project's plain list and an `ids=` read.
@@ -222,14 +225,15 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
 }
 
 /**
- * `$orderby` for paged mode: the sort column, else relevance with `q`, else the map's default; then
- * `id` so pages never overlap.
+ * `$orderby` for paged mode: the sort column and its `tiebreaks` entry, else relevance with `q`,
+ * else the map's default; then `id` so pages never overlap.
  */
 function indexOrderby(map, parsed) {
   if (!parsed.sort) return `${parsed.q ? 'search.score() desc' : map.defaultOrderby}, id`;
   const column = map.sorts[parsed.sort.field];
   if (!column) throw badRequest(`cannot sort on ${parsed.sort.field} here`);
-  return `${column} ${parsed.sort.desc ? 'desc' : 'asc'}, id`;
+  const tiebreak = (map.tiebreaks || {})[parsed.sort.field];
+  return `${column} ${parsed.sort.desc ? 'desc' : 'asc'}, ${tiebreak ? `${tiebreak}, ` : ''}id`;
 }
 
 /** Every searched field visible to this caller on the row's own dials. */

@@ -151,6 +151,9 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     documentAuthorTypeId: listRefId(doc.documentAuthorType),
 
     datePosted: toIsoOrNull(doc.datePosted),
+    // Staff's manual order for a project's documents (eagle-admin application sort). Eagle
+    // defaults it to 0, so null means the record never carried one.
+    sortOrder: toNumber(doc.sortOrder),
     dateUploaded: toIsoOrNull(doc.dateUploaded),
     documentAuthor: doc.documentAuthor || '',
     documentSource: doc.documentSource || '',

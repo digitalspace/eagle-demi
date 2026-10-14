@@ -324,6 +324,13 @@ The catalog entry is `0/0`, so a caller's `and[searchVis]` is dropped. Apply it 
 `demi-documents-ds` and resets `documents-indexer`. Until the reset finishes, the data check
 `documents searchVis` reads over its maximum, because every existing row is null.
 
+`sortOrder` on `documents` is a plain widening too: an `Edm.Double` that is sortable and nothing
+else. It is Eagle's staff-set document order, which `GET /documents?sort=sortOrder` pages on.
+Apply it with `scripts/demi-devbox.sh apply --env <env> --only documents --yes` before the app
+that sends it ships. Rows stored before the transform kept `sortOrder` hold none, so the column
+stays null until eagle-api re-pushes them (`scripts/demi-repush.js --kind document` in eagle-api).
+The re-push bumps `_ts`, so the next indexer tick carries the values and no reset is needed.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 

@@ -135,7 +135,9 @@ function staffOnlyEagleFields() {
     activeDate: '2019-03-14T00:00:00.000Z',
     substantially: false,
     substantiallyDate: '2024-03-14T00:00:00.000Z',
-    hasMetCommentPeriods: true
+    hasMetCommentPeriods: true,
+    dispute: true,
+    disputeDate: '2020-05-01T00:00:00.000Z'
   };
 }
 

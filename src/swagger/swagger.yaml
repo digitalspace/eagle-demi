@@ -1374,10 +1374,11 @@ paths:
           description: >-
             Sort key, `-` prefix for descending. Default is index rank with `q`, newest
             `datePosted` first on another index-paged list, and by id on one project's plain list
-            or an `ids` read.
+            or an `ids` read. `sortOrder` is the staff-set document order mirrored from Eagle;
+            rows with the same value come newest `datePosted` first, then by `displayName`.
           schema:
             type: string
-            enum: [datePosted, -datePosted, displayName, -displayName]
+            enum: [datePosted, -datePosted, displayName, -displayName, sortOrder, -sortOrder]
         - name: q
           in: query
           required: false
@@ -1434,6 +1435,15 @@ paths:
           description: Legislation year, such as `2018`. Repeat it to match any of several.
           schema:
             type: integer
+        - name: documentSource
+          in: query
+          required: false
+          description: >-
+            Where the file came from, mirrored from Eagle: `PROJECT` for project documents,
+            `COMMENT` for files attached to public comments. Repeat it to match any of several.
+            Without it the list holds every source except Update images.
+          schema:
+            type: string
         - name: datePostedStart
           in: query
           required: false
@@ -6549,6 +6559,14 @@ components:
             True when the project's pinned-proponent list (`pins`) is public. Staff only, and
             response only: it is worked out from the stored pins access list on each read, and
             `PUT /api/projects/{id}` ignores it.
+        dispute:
+          type: boolean
+          description: >-
+            Whether the project went to dispute resolution, mirrored from Eagle. Staff only.
+        disputeDate:
+          type: string
+          format: date-time
+          description: When dispute resolution started, mirrored from Eagle. Staff only.
     
     ProjectInput:
       type: object
