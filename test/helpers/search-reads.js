@@ -19,6 +19,7 @@
  */
 
 const cosmos = require('../../src/db/cosmos-nosql');
+const { NOT_DELETED } = require('../../src/repositories/_sql');
 const updatesRepo = require('../../src/repositories/updates');
 const apiKeys = require('../../src/repositories/api-keys');
 const { generateKey } = require('../../src/helpers/api-key');
@@ -68,6 +69,7 @@ const STRICT_EQ = { '@id': 'id', '@kind': 'kind', '@inspection': 'inspection', '
 
 /** The criteria a `strict` stub runs over a row: `STRICT_EQ`, and the `eaoStatus IN (...)` list. */
 function matchesCriteria(spec, row) {
+  if (spec.query.includes(NOT_DELETED.clause) && row.isDeleted === true) return false;
   const params = bound(spec);
   for (const [name, field] of Object.entries(STRICT_EQ)) {
     if (params[name] !== undefined && String(row[field]) !== String(params[name])) return false;

@@ -12,7 +12,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
-  assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage
+  assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 const { cosmosKind } = require('../helpers/native-query');
@@ -201,11 +201,8 @@ function statusCriterion(status, now) {
   return { clause, params: params.filter(p => clause.includes(p.name)) };
 }
 
-/**
- * A deleted period keeps its upstream `public` ACL (see `aclRowsForProject`), so the ACL alone would
- * still list it. `IS_BOOL` first: a missing flag must read as "not deleted", not as undefined.
- */
-const NOT_DELETED = { clause: 'NOT (IS_BOOL(c.isDeleted) AND c.isDeleted = true)', params: [] };
+// A deleted period keeps its upstream `public` ACL (see `aclRowsForProject`), so `NOT_DELETED` is
+// what leaves it out of every read below, not the ACL.
 
 /** The one WHERE every cross-partition read and count here builds on. */
 function listCriteria(access, { status, keywords, keywordProjectIds, now } = {}) {
@@ -345,17 +342,17 @@ const nativeBase = cosmosKind({
  */
 function nativeRepository(statuses = [], now = new Date()) {
   const fixed = [NOT_DELETED, ...(statuses.length ? [anyStatusCriterion(statuses, now)] : [])];
-  const where = criteria => [...fixed, ...criteria];
   // queryFirst drains the cross-partition iterator: a single fetched page can be empty while the row exists.
   const first = (access, field, value) => cosmos.queryFirst(CONTAINER, selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: where([eq(field, String(value), '@byField')]),
+    criteria: [...fixed, eq(field, String(value), '@byField')],
     select: selectFor(CONTAINER, access, PARTITION_FIELD)
   }), {});
+  const { list, count } = withCriteria(nativeBase, fixed);
   return {
-    list: (access, opts) => nativeBase.list(access, { ...opts, criteria: where(opts.criteria) }),
-    count: (access, opts) => nativeBase.count(access, { criteria: where(opts.criteria) }),
+    list,
+    count,
     getById: (access, id) => first(access, 'id', id),
     getByEagleId: (access, eagleId) => first(access, 'eagleId', eagleId)
   };

@@ -6,6 +6,9 @@
  * Container `groups` (Eagle `Group`, a project's contact group), partitioned by `/projectId`: a
  * group belongs to one project and every list is "the groups of this project". `projectId` is the
  * DEMI project id, as `documents` and `commentPeriods` store it.
+ *
+ * A group Eagle deleted stays stored, flagged `isDeleted`, for the reconcile and the ACL cascade;
+ * no read here serves it (`NOT_DELETED`), as eagle-api's search never did.
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -13,7 +16,8 @@ const { systemAccess } = require('../helpers/access-sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 const { cosmosKind } = require('../helpers/native-query');
 const {
-  eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn, fetchAll
+  eq, selectWhere, selectFor, countWhere, pageOptions, readPage, upsertItem, readForWriteIn, fetchAll,
+  NOT_DELETED, withCriteria
 } = require('./_sql');
 
 const CONTAINER = 'groups';
@@ -21,8 +25,10 @@ const PARTITION_FIELD = 'projectId';
 const ENTITY = 'groups';
 
 /** The read predicate, narrowed to one id across every partition. */
-async function getById(access, id) {
-  const spec = selectWhere({ access, partitionField: PARTITION_FIELD, criteria: [eq('id', String(id), '@id')] });
+async function getById(access, id, select) {
+  const spec = selectWhere({
+    access, partitionField: PARTITION_FIELD, criteria: [NOT_DELETED, eq('id', String(id), '@id')], select
+  });
   return cosmos.queryFirst(CONTAINER, spec, {});
 }
 
@@ -32,7 +38,7 @@ async function readForWrite(id, projectId) {
 }
 
 function criteriaFor(projectId) {
-  return projectId ? [eq(PARTITION_FIELD, String(projectId), '@projectId')] : [];
+  return [NOT_DELETED, ...(projectId ? [eq(PARTITION_FIELD, String(projectId), '@projectId')] : [])];
 }
 
 function visibleSpec(access, projectId) {
@@ -93,7 +99,12 @@ async function listAclRows(access) {
 }
 
 /** The native list contract's reads (`helpers/native-query.js`). */
-const native = cosmosKind({ container: CONTAINER, entity: ENTITY, partitionField: PARTITION_FIELD, defaultOrder: 'c.id ASC' });
+const native = {
+  ...withCriteria(cosmosKind({
+    container: CONTAINER, entity: ENTITY, partitionField: PARTITION_FIELD, defaultOrder: 'c.id ASC'
+  }), [NOT_DELETED]),
+  getById: (access, id) => getById(access, id, selectFor(ENTITY, access, PARTITION_FIELD))
+};
 
 module.exports = {
   CONTAINER, PARTITION_FIELD, getById, readForWrite, listPage, countVisible, upsert, deleteById,

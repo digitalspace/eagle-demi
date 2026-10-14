@@ -6,13 +6,16 @@
  * Container `users` (Eagle `User`), partitioned by `/id`. A user is not project data, so `id` is
  * also the field the scope and team arms compare: no project scope or team holds a user id, so a
  * project-scoped caller reads no user at all rather than every user.
+ *
+ * A user pushed with `isDeleted` stays stored for the reconcile; no read here serves it
+ * (`NOT_DELETED`), as eagle-api's search never did.
  */
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const { cosmosKind } = require('../helpers/native-query');
 const {
-  selectWhere, selectFor, countWhere, readPage, upsertItem, readForWriteIn, fetchAll
+  selectWhere, selectFor, countWhere, readPage, upsertItem, readForWriteIn, fetchAll, NOT_DELETED, withCriteria
 } = require('./_sql');
 
 const CONTAINER = 'users';
@@ -22,7 +25,7 @@ const ENTITY = 'users';
 /** Point read, then the same predicate the list runs. */
 async function getById(access, id) {
   const item = await cosmos.readItem(CONTAINER, String(id), String(id));
-  return item && canRead(item, access, PARTITION_FIELD) ? item : null;
+  return item && item.isDeleted !== true && canRead(item, access, PARTITION_FIELD) ? item : null;
 }
 
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
@@ -34,6 +37,7 @@ function visibleSpec(access) {
   return selectWhere({
     access,
     partitionField: PARTITION_FIELD,
+    criteria: [NOT_DELETED],
     select: selectFor(ENTITY, access, PARTITION_FIELD),
     orderBy: 'c.id ASC'
   });
@@ -46,7 +50,7 @@ async function listPage(access, { pageNum, pageSize } = {}) {
 
 /** The same predicate as the read, so the total never counts a user the page could not hold. */
 async function countVisible(access) {
-  const { items } = await cosmos.query(CONTAINER, countWhere({ access, partitionField: PARTITION_FIELD }), {});
+  const { items } = await cosmos.query(CONTAINER, countWhere({ access, partitionField: PARTITION_FIELD, criteria: [NOT_DELETED] }), {});
   return items[0] || 0;
 }
 
@@ -65,7 +69,9 @@ async function listAclRows(access) {
 
 /** The native list contract's reads (`helpers/native-query.js`); by id keeps the point read above. */
 const native = {
-  ...cosmosKind({ container: CONTAINER, entity: ENTITY, partitionField: PARTITION_FIELD, defaultOrder: 'c.id ASC' }),
+  ...withCriteria(cosmosKind({
+    container: CONTAINER, entity: ENTITY, partitionField: PARTITION_FIELD, defaultOrder: 'c.id ASC'
+  }), [NOT_DELETED]),
   getById
 };
 
