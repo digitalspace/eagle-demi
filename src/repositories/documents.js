@@ -290,8 +290,8 @@ async function countVisible(access, opts = {}) {
  * document the caller may not see is never returned to this process. When the project is
  * known, pass it to turn this into a single-partition read.
  *
- * An upload intake has not released is not returned. `includeUnscanned` is for the intake itself,
- * which settles exactly those rows; never pass it on a path that answers a caller.
+ * An upload intake has not released is not returned. `includeUnscanned` is for intake paths only (the
+ * scan handler, the sweep, the intake status route, which returns scan fields only), never a general read.
  */
 async function getById(access, id, projectId, { includeUnscanned = false } = {}) {
   // PRESENCE, not truthiness, and through the same helper the reads use: `''` is a real partition,
