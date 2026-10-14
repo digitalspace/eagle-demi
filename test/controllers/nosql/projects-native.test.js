@@ -57,6 +57,25 @@ function assertNarrowed(sql) {
   assert.strictEqual(param(sql, '@nr1'), '2020-12-31T23:59:59.999Z');
 }
 
+// Every filter eagle-admin's project list multi-selects: query name, stored field, index column.
+const REPEATABLE = [
+  { name: 'projectType', field: 'projectType', column: 'type', values: ['Mines', 'Energy-Electricity'] },
+  { name: 'region', field: 'region', column: 'region', values: ['Peace', 'Cariboo'] },
+  { name: 'projectState', field: 'projectState', column: 'status', values: ['Active', 'Closed'] },
+  { name: 'proponentName', field: 'proponentName', column: 'proponent', values: ['BC Hydro', 'Teck'] },
+  { name: 'eacDecision', field: 'eacDecision._id', column: 'eacDecisionId', values: ['E1', 'E2'] },
+  { name: 'currentPhaseName', field: 'currentPhaseName._id', column: 'currentPhaseNameId', values: ['P1', 'P2'] },
+  { name: 'CEAAInvolvement', field: 'CEAAInvolvement._id', column: 'ceaaInvolvementId', values: ['C1', 'C2'] }
+];
+
+/** `field` matches either value, inside the anonymous dial on its top-level field. */
+function assertEither(sql, field, values) {
+  const top = field.split('.')[0];
+  const clause = `((NOT IS_DEFINED(c.vis["${top}"]) OR c.vis["${top}"] >= 4) AND c.${field} IN (@nf0_0, @nf0_1))`;
+  assert.ok(sql.query.includes(clause), `no ${clause} in ${sql.query}`);
+  assert.deepStrictEqual([param(sql, '@nf0_0'), param(sql, '@nf0_1')], values);
+}
+
 async function call(qs) {
   const req = { query: querystring.parse(qs), params: {}, headers: {}, header: () => undefined };
   const res = makeRes('test');
@@ -87,10 +106,41 @@ test('GET /projects native list', async (t) => {
     assert.match(res.body.error, /unknown parameter: continuationToken/);
   });
 
-  await t.test('projectState takes several values; another filter given twice is refused', async (t) => {
-    fakeStores(t);
-    assert.strictEqual((await call('projectState=Active&projectState=Closed')).status, 200);
-    assert.strictEqual((await call('region=Peace&region=Cariboo')).status, 400);
+  await t.test('a filter not marked repeatable given twice is refused before any read', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call('regionalDistrict=Peace%20River&regionalDistrict=Cariboo');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: regionalDistrict');
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+
+  for (const { name, field, column, values } of REPEATABLE) {
+    const qs = values.map(value => `${name}=${encodeURIComponent(value)}`).join('&');
+
+    await t.test(`${name} given twice matches either value in Cosmos`, async (t) => {
+      const { searches, queries } = fakeStores(t);
+      const res = await call(`${qs}&count=true`);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(searches.length, 0);
+      assert.strictEqual(queries.length, 2);
+      assertEither(queries[0], field, values);
+      assertEither(queries[1], field, values);
+    });
+
+    await t.test(`${name} given twice with q matches either value in the index, and Cosmos re-checks`, async (t) => {
+      const { searches, queries } = fakeStores(t);
+      const res = await call(`q=mine&${qs}`);
+      assert.strictEqual(res.status, 200);
+      assert.ok(searches[0].filter.includes(`search.in(${column}, '${values.join(',')}', ',')`), searches[0].filter);
+      assertEither(queries[0], field, values);
+    });
+  }
+
+  await t.test('a proponent name with a comma splits into eq terms, not a search.in list', async (t) => {
+    const { searches } = fakeStores(t);
+    const res = await call('q=mine&proponentName=Teck%2C%20Inc.&proponentName=BC%20Hydro');
+    assert.strictEqual(res.status, 200);
+    assert.ok(searches[0].filter.includes("(proponent eq 'Teck, Inc.' or proponent eq 'BC Hydro')"), searches[0].filter);
   });
 
   await t.test('with no q, List-ref filters and decision-date edges narrow the Cosmos read', async (t) => {

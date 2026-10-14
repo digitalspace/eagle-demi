@@ -14,7 +14,7 @@ const SPEC = Object.freeze({
   repository: lists.nativeKind(lists.KINDS.ORGANIZATION),
   sortKeys: ['name'],
   filters: ['companyType'],
-  multiValueFilters: [],
+  multiValueFilters: ['companyType'],
   qFields: ['name'],
   notFound: 'Organization not found'
 });

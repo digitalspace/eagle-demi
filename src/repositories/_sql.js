@@ -125,6 +125,8 @@ function selectFor(entity, access, partitionField) {
   if (level === 0) return '*';
 
   const fields = new Set(['id', partitionField, 'read', 'isPublished', 'vis']);
+  // Sealed like `read`, but the `pinsPublished` predicate reads it, so the redactor needs it.
+  if (catalogFor(entity).pinsRead) fields.add('pinsRead');
   for (const [key, entry] of Object.entries(catalogFor(entity))) {
     // A dotted key projects its PARENT; the redactor narrows it back to the listed children.
     if (visible(level, entry.maxVis)) fields.add(key.split('.')[0]);

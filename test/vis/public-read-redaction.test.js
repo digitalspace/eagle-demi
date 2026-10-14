@@ -106,6 +106,26 @@ test('project pins are withheld unless pinsRead says public', async (t) => {
       [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }]);
   });
 
+  await t.test('staff see whether the pins are published', () => {
+    assert.strictEqual(redactForAccess('projects', project(), STAFF).pinsPublished, true);
+    assert.strictEqual(
+      redactForAccess('projects', project({ pinsRead: ['sysadmin', 'staff'] }), STAFF).pinsPublished, false);
+  });
+
+  await t.test('a project with no pinsRead reads as unpublished pins to staff', () => {
+    const row = project();
+    delete row.pinsRead;
+
+    assert.strictEqual(redactForAccess('projects', row, STAFF).pinsPublished, false);
+  });
+
+  await t.test('an anonymous caller never sees pinsPublished, even when the pins are public', () => {
+    const out = redactForAccess('projects', project(), ANONYMOUS);
+
+    assert.ok(!('pinsPublished' in out));
+    assert.ok('pins' in out, 'the pins themselves are public here, so only the flag is withheld');
+  });
+
   await t.test('pinsRead itself is never returned', () => {
     assert.ok(!('pinsRead' in redactForAccess('projects', project(), ANONYMOUS)));
     assert.ok(!('pinsRead' in redactForAccess('projects', project(), STAFF)));

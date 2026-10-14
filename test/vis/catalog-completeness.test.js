@@ -254,6 +254,10 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     assert.strictEqual(catalog.pinsRead.maxVis, 0, 'the pins ACL is an ACL');
   });
 
+  await t.test('the derived pins publish state is staff only and can never be raised', () => {
+    assert.deepStrictEqual(catalog.pinsPublished, { defaultVis: 2, maxVis: 2 });
+  });
+
   await t.test('the Eagle fields carried for staff are level 2 and can never be raised', () => {
     for (const field of Object.keys(staffOnlyEagleFields())) {
       assert.deepStrictEqual(catalog[field], { defaultVis: 2, maxVis: 2 }, field);

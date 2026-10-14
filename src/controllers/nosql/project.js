@@ -299,7 +299,11 @@ const projectsKind = {
   aliases: {
     eacDecision: 'eacDecision._id', currentPhaseName: 'currentPhaseName._id', CEAAInvolvement: 'CEAAInvolvement._id'
   },
-  multiValueFilters: ['projectState'],
+  // Every filter eagle-admin's project list offers as a multi-select (project-list.component.html).
+  multiValueFilters: [
+    'projectType', 'region', 'projectState', 'proponentName',
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id'
+  ],
   ranges: {
     decisionDateStart: { field: 'decisionDate', op: 'ge' },
     decisionDateEnd: { field: 'decisionDate', op: 'le' }
@@ -448,6 +452,8 @@ exports.updateProject = async (req, res) => {
       status: wireStatus,
       // The cacPublished predicate reads this, so PUT must not set it (doc §2 item 7).
       projectCACPublished: _ignoredCACPublished,
+      // Derived from `pinsRead` on every read, so a GET-then-PUT must not store a copy.
+      pinsPublished: _ignoredPinsPublished,
       // Push bookkeeping. Catalogued at vis 2, so a staff caller CAN see them and would otherwise
       // be able to send them back: an old `eaglePushedAt` makes every later push read as stale, and
       // clearing `cascadePendingAt` loses a cascade the push recorded as still owed.
