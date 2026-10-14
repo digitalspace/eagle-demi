@@ -183,8 +183,6 @@ if (process.env.EDGE_BAN_MODE) {
   });
 }
 
-// Read from host.json rather than repeated here: the queue extension is what actually decides how
-// many deliveries a message gets, and a copy of the number drifts silently.
 // Document intake: Defender's scan results arrive through an Event Grid subscription, and the sweep
 // rejects uploads that never got one. Guarded on the account so a release that ships before the
 // intake infrastructure exists registers neither.
@@ -197,6 +195,8 @@ if (require('../src/config').intake.storageAccount) {
   });
 }
 
+// Read from host.json rather than repeated here: the queue extension is what actually decides how
+// many deliveries a message gets, and a copy of the number drifts silently.
 const MAX_DEQUEUE_COUNT = require('../host.json').extensions.queues.maxDequeueCount;
 
 // Which delivery this is. Both workers log the string their poison alert matches only on the last

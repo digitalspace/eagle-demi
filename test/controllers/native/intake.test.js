@@ -20,6 +20,7 @@ const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
 const { requireWrite } = require('../../../src/middleware/require-roles');
 const { logger } = require('../../../src/utils/logger');
+const { readForLevel } = require('../../../src/helpers/access-sql');
 
 const AUTHED = { 'content-type': 'application/json', 'x-api-key': SUITE_KEY };
 const PROJECT = { id: '207', read: ['staff', 'idir'], region: 'Peace' };
@@ -214,6 +215,22 @@ test('status: an upload in a project the caller cannot see is 404', async (t) =>
   wire(t, { stored: PENDING, project: null });
   await withServer(async (call) => {
     assert.strictEqual((await getStatus(call, 'u1')).status, 404);
+  });
+});
+
+test('status: a released upload the caller cannot read is 404, as on GET /documents/:id', async (t) => {
+  wire(t, { stored: { ...PENDING, scanStatus: 'clean', read: readForLevel(0) } });
+  await withServer(async (call) => {
+    assert.strictEqual((await getStatus(call, 'u1')).status, 404);
+  });
+});
+
+test('status: a released upload the caller can read answers 200', async (t) => {
+  wire(t, { stored: { ...PENDING, scanStatus: 'clean', read: readForLevel(2) }, project: null });
+  await withServer(async (call) => {
+    const res = await getStatus(call, 'u1');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual((await res.json()).scanStatus, 'clean');
   });
 });
 

@@ -2,8 +2,8 @@
 
 /**
  * `intakeScanResult`: one Defender for Storage scan result for an upload in `incoming/<documentId>`.
- * Clean files go to the object store and the row takes its requested `read` list; every other result
- * moves the file to quarantine and rejects the row.
+ * Clean files go to the object store and the row takes its requested `read` list, capped at the project's
+ * current one; every other result moves the file to quarantine and rejects the row.
  */
 
 const path = require('path');
@@ -11,11 +11,31 @@ const config = require('../config');
 const { logger } = require('../utils/logger');
 const { decide, SWEEP_REASONS } = require('./decision');
 const { moveToQuarantine } = require('./blobs');
+const { capRead, levelOfRead, systemAccess } = require('../helpers/access-sql');
 
 const SCAN_EVENT = 'Microsoft.Security.MalwareScanningResult';
 
 function defaultDeps() {
-  return { store: require('./store'), blobs: require('./blobs'), nrs: require('../storage') };
+  return {
+    store: require('./store'), blobs: require('./blobs'), nrs: require('../storage'),
+    projects: require('../repositories/projects')
+  };
+}
+
+/**
+ * The row's requested read list, capped again at its project's read list as it stands now: the
+ * project may have narrowed while the upload was pending, and the cascade does not run on release.
+ */
+async function releasedRead(row, projects) {
+  const project = await projects.getById(systemAccess(), row.projectId);
+  if (!project) {
+    logger.warn('[intake] project not found, released with an empty read list', {
+      documentId: row.id, projectId: row.projectId
+    });
+    // The system read skips a sealed project too; a request already sealed stays sealed.
+    return levelOfRead(row.requestedRead) === 0 ? row.requestedRead : [];
+  }
+  return capRead(row.requestedRead, project.read);
 }
 
 /** The document id a scanned blob URI names, or null unless it is `<intake account>/<incoming>/<id>`. */
@@ -38,7 +58,7 @@ function objectKeyFor(row) {
 
 const bareEtag = (etag) => String(etag).replace(/"/g, '');
 
-async function release(row, data, scannedAt, { store, blobs, nrs }) {
+async function release(row, data, scannedAt, { store, blobs, nrs, projects }) {
   const client = blobs.staging();
   const stat = await client.statObject(row.id);
   if (!stat) {
@@ -53,9 +73,11 @@ async function release(row, data, scannedAt, { store, blobs, nrs }) {
 
   const key = objectKeyFor(row);
   await nrs.putObjectStream(key, await client.getObjectStream(row.id), stat.contentType || undefined);
-  const read = Array.isArray(row.requestedRead)
-    ? { read: row.requestedRead, isPublished: row.requestedRead.includes('public') }
-    : {};
+  let read = {};
+  if (Array.isArray(row.requestedRead)) {
+    const capped = await releasedRead(row, projects);
+    read = { read: capped, isPublished: capped.includes('public') };
+  }
   const settled = await store.settle(row, {
     scanStatus: 'clean', scanResult: data.scanResultType, scannedAt, scanSizeBytes: stat.size,
     s3Key: key, ...read

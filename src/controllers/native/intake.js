@@ -14,7 +14,7 @@ const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const blobs = require('../../intake/blobs');
 const store = require('../../intake/store');
-const { resolveAccess, capRead, readForLevel, levelOfRead } = require('../../helpers/access-sql');
+const { resolveAccess, canRead, capRead, readForLevel, levelOfRead } = require('../../helpers/access-sql');
 const { naturalSortKey } = require('../../helpers/natural-sort');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
@@ -123,11 +123,16 @@ exports.getUpload = async (req, res) => {
     const id = req.params.id;
     const notFound = () => res.status(404).json({ error: `Upload with id ${id} not found.` });
 
-    // A pending or rejected row has an empty read[], so it is read past the ACL and gated on its project.
+    // Read past the ACL: a pending or rejected row has an empty read[], so it is gated on its project.
     const row = await store.findById(id);
     // No scanStatus = an ordinary document: this route must not become a second document read.
     if (!row || typeof row.scanStatus !== 'string') return notFound();
-    if (!await projects.getById(resolveAccess(req), row.projectId)) return notFound();
+    const access = resolveAccess(req);
+    // A released row has its own read[]: the same check as GET /documents/:id, sealed rows included.
+    const visible = Array.isArray(row.read) && row.read.length > 0
+      ? canRead(row, access)
+      : Boolean(await projects.getById(access, row.projectId));
+    if (!visible) return notFound();
 
     return res.status(200).json({
       documentId: row.id,

@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { onScanResult, SCAN_EVENT } = require('../../src/intake/handler');
+const { readForLevel, systemAccess } = require('../../src/helpers/access-sql');
 const { ACCOUNT, setIntakeEnv, fakeStore, fakeAccount, fakeNrs, recordLogs } = require('./fakes');
 
 const DOC = '6f1c2a9e-0b4d-4c55-9a51-3b7e2f8d9c10';
@@ -35,14 +36,24 @@ function scanEvent(result, data = {}) {
   };
 }
 
+/** The project rows a system read answers; `proj-1` is public unless a test says otherwise. */
+function fakeProjects(rows = { 'proj-1': { id: 'proj-1', read: readForLevel(4) } }) {
+  return {
+    getById: async (access, id) => {
+      assert.deepStrictEqual(access, systemAccess());
+      return rows[id] || null;
+    }
+  };
+}
+
 /** Intake configured, one pending row, its upload in `incoming`. */
-function setup(t, row = pendingRow()) {
+function setup(t, row = pendingRow(), projects = fakeProjects()) {
   setIntakeEnv(t);
   const store = fakeStore([row]);
   const account = fakeAccount({ [DOC]: { bytes: BYTES, etag: ETAG, contentType: 'application/pdf' } });
   const nrs = fakeNrs();
   const logs = recordLogs(t);
-  return { store, account, nrs, logs, deps: { store, blobs: account.blobs, nrs } };
+  return { store, account, nrs, logs, deps: { store, blobs: account.blobs, nrs, projects } };
 }
 
 const scannedLines = logs => logs.info.filter(l => l.message === 'intake scanned');
@@ -59,7 +70,7 @@ test('No threats found: the file goes to the object store under <project>/<hex>.
 });
 
 test('No threats found: the row is clean, keyed, and takes its requested read list', async (t) => {
-  const { store, deps } = setup(t, pendingRow({ requestedRead: ['eao', 'public'] }));
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(3) }));
 
   await onScanResult(scanEvent('No threats found'), deps);
 
@@ -68,8 +79,43 @@ test('No threats found: the row is clean, keyed, and takes its requested read li
   assert.strictEqual(row.scanResult, 'No threats found');
   assert.strictEqual(row.scannedAt, '2026-10-14T18:00:00.0000000Z');
   assert.strictEqual(row.s3Key, 'proj-1/6f1c2a9e0b4d4c559a513b7e2f8d9c10.pdf');
-  assert.deepStrictEqual(row.read, ['eao', 'public']);
-  assert.strictEqual(row.isPublished, true);
+  assert.deepStrictEqual(row.read, readForLevel(3));
+  assert.strictEqual(row.isPublished, false);
+});
+
+test('No threats found caps the requested read list at the project as it is now', async (t) => {
+  // Linked at staff while the project was staff; the project narrowed to team before the scan.
+  const narrowed = fakeProjects({ 'proj-1': { id: 'proj-1', read: readForLevel(1) } });
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(3) }), narrowed);
+
+  await onScanResult(scanEvent('No threats found'), deps);
+
+  const row = store.rows.get(DOC);
+  assert.strictEqual(row.scanStatus, 'clean');
+  assert.deepStrictEqual(row.read, readForLevel(1));
+  assert.strictEqual(row.isPublished, false);
+});
+
+test('No threats found for a project that is gone releases with an empty read list', async (t) => {
+  const { store, logs, deps } = setup(t, pendingRow({ requestedRead: ['public'] }), fakeProjects({}));
+
+  await onScanResult(scanEvent('No threats found'), deps);
+
+  const row = store.rows.get(DOC);
+  assert.strictEqual(row.scanStatus, 'clean');
+  assert.deepStrictEqual(row.read, []);
+  assert.strictEqual(row.isPublished, false);
+  const gone = logs.warn.filter(l => l.message === '[intake] project not found, released with an empty read list');
+  assert.strictEqual(gone.length, 1);
+  assert.strictEqual(gone[0].meta.projectId, 'proj-1');
+});
+
+test('No threats found keeps a sealed request sealed when the system read cannot see the project', async (t) => {
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(0) }), fakeProjects({}));
+
+  await onScanResult(scanEvent('No threats found'), deps);
+
+  assert.deepStrictEqual(store.rows.get(DOC).read, readForLevel(0));
 });
 
 test('No threats found stores the scanned size on the row', async (t) => {
