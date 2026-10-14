@@ -27,7 +27,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 
 | id | objects | owns (main files) | after | size | status |
 |---|---|---|---|---|---|
-| 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | in progress (feat-port-organizations-pins) |
+| 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | in progress (feat-port-scaffold) |
 | 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | in progress (feat-port-organizations-pins) |
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods.js`, `repositories/comment-periods.js` | 0 | M | todo |
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments.js`, `repositories/comments.js` | 2 | M | todo |
@@ -75,8 +75,8 @@ Import direction: `routes.js` -> `controllers/native/<kind>.js` -> `domain/<kind
 
 ### The four layers
 
-1. Route entry. Decides who may call, by role only. Guards per route come from the eagle-api `x-security-scopes`, using `requireRole` extended to accept several role names (it checks one role today, `src/middleware/require-roles.js:51-61`). No new staff guard. `requireAdmin` is not reused, because it admits `demi-admin` (`access-sql.js:193`).
-2. Controller, `src/controllers/native/<kind>.js`. An HTTP adapter. It builds the read `SPEC` and uses `listHandler` and `getHandler` (`controllers/native/organizations.js:12-26`). Each write is one line, `writeHandler(domainFn)`, from a new `src/controllers/native/write.js`. That helper calls `resolveAccess`, calls the domain function, maps `ok`, `invalid`, `forbidden`, `not-found` and `conflict` to 200 or 201, 400, 403, 404 and 409, then runs `redactForAccess` and `serverError`. A controller that imports `domain/` never writes `res.status` or `res.json`. It never imports `db/*`. It imports a repository only for the read `SPEC`.
+1. Route entry. Decides who may call, by role only. Guards per route come from the eagle-api `x-security-scopes`, using `requireRole(...names)`, which admits any one listed role and keeps the list on the guard as `roles` (`src/middleware/require-roles.js:53-70`). Each ported route sits under its slice's `// port: <kind>` anchor in the "Ported objects" section at the end of the route table. No new staff guard. `requireAdmin` is not reused, because it admits `demi-admin` (`access-sql.js:193`).
+2. Controller, `src/controllers/native/<kind>.js`. An HTTP adapter. It builds the read `SPEC` and uses `listHandler` and `getHandler` (`controllers/native/organizations.js:12-26`). Each write is one line, `writeHandler(domainFn, { entity })`, from `src/controllers/native/write.js`; `entity` is the catalog entity that redacts the saved row. That helper calls `resolveAccess`, calls the domain function, maps `ok`, `invalid`, `forbidden`, `not-found` and `conflict` to 200 or 201, 400, 403, 404 and 409, then runs `redactForAccess` and `serverError`. It also maps `busy` (the etag retries of `writeGuarded` ran out) to 503 with body `{ error: 'The record is being written by another request. Try again.' }`, the body the project writes already answer. Every refusal logs a warning through `src/utils/logger.js`; an invalid body logs field names, never values. A controller that imports `domain/` never writes `res.status` or `res.json`. It never imports `db/*`. It imports a repository only for the read `SPEC`.
 3. Domain, `src/domain/<kind>.js`. New directory. It is not `src/services/`, which holds outbound clients. It exports plain functions: `create(ctx, input)`, `update(ctx, id, changes)`, `remove(ctx, id)` and named actions such as `publish` and `setStatus`. `ctx` is `{ access, req }`; `req` is used only for the audit identity. Each function runs these steps in order: check the `SCHEMA` allowlist (unknown key gives 400); load the row through the repository with `access` (an unreadable row is not-found); call `refusedWriteKeys`; apply the named rules; write through `_write.js`. It may import repositories, `helpers/access-sql`, `helpers/etag-write`, `helpers/eagle-acl`, `vis/redact.refusedWriteKeys`, `domain/_schema` and `domain/_write`. It never imports `http/*` or `db/*`, and never touches `res`.
 4. Repository. Storage only. Reads go through `cosmosKind` (`helpers/native-query.js:255`) or `nativeKind` (`lists.js:136`). Writes go through `_sql`. It never imports the domain, controllers, `utils/audit` or `vis/redact`. Specs are `{query, parameters}` only.
 
@@ -95,7 +95,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 
 ### Audit
 
-`src/domain/_write.js` exports `writeRow({ ctx, repo, existing, reread, build, audit })`. It wraps `writeGuarded` and calls `auditEvent(ctx.req, audit(saved, from))` once on success. A call without `audit` throws. The backstop is a route inventory, one file per object under `test/controllers/route-inventory/`, checked by `test/controllers/route-inventory.test.js`: every non-GET route in `routes.js` has an audit action or an exempt entry with a reason. Each ported route's entry also carries a role column: the roles from eagle-api's `x-security-scopes` for that route, copied as written, and the test checks they match the route's `requireRole` guard.
+`src/domain/_write.js` exports `writeRow({ ctx, repo, existing, reread, build, audit })`. It wraps `writeGuarded` and calls `auditEvent(ctx.req, audit(saved, from))` once on success, then logs the action and row id at info. A call without `audit` throws. When every etag retry loses, it returns `busy` and writes no audit row. The backstop is a route inventory, one file per object under `test/controllers/route-inventory/` (`existing.js` holds the routes from before the port), checked by `test/controllers/route-inventory.test.js`, which loads every file in that directory: every non-GET route in `routes.js` has an audit action or an exempt entry with a reason. Each ported route's entry also carries a role column: the roles from eagle-api's `x-security-scopes` for that route, copied as written, and the test checks they match the route's `requireRole` guard.
 
 ### Sync-out
 
@@ -119,10 +119,10 @@ Shared code is the read `SPEC`, `writeHandler`, `_write.js` and `_schema.js`. Ea
 3. `src/repositories/<kind>.js`.
 4. `src/domain/<kind>.js`: `SCHEMA`, write functions, rules, and `writeRow` with audit actions.
 5. `src/controllers/native/<kind>.js`: read `SPEC` and `writeHandler` wrappers.
-6. `src/http/routes.js` entries, with guards per route.
+6. `src/http/routes.js` entries under the slice's `// port: <kind>` anchor, with guards per route.
 7. `src/swagger/swagger.yaml`.
-8. Tests: `test/domain/<kind>.test.js`, `test/controllers/native/<kind>.test.js`, and a route-inventory entry.
-9. README line under "Parity with eagle-api".
+8. Tests: `test/domain/<kind>.test.js`, a new `test/controllers/native/<kind>-write.test.js`, and `test/controllers/route-inventory/<kind>.js`.
+9. README line under its `port: <kind>` anchor in "Parity with eagle-api".
 10. Flip slice: ownership move in the ingress, the push-does-not-overwrite test, and sync-out if needed. It ships with the eagle-admin caller move.
 11. Retire slice.
 
@@ -132,7 +132,7 @@ Shared code is the read `SPEC`, `writeHandler`, `_write.js` and `_schema.js`. Ea
 2. Only mechanics are shared. Rules are explicit per object, because a generic update path caused the ACL bypass.
 3. With about 15 objects the cost is three helpers plus up to 13 domain modules, each with real rules. Read-only objects get none, and so do topic and vc (dropped 2026-10-14).
 4. The hand-rolled schema needs no dependency. Switch to ajv only if nested schemas spread.
-5. The layering test is a text scan. It catches forgetting, not intent (same stance as `router-source.js`).
+5. The layering test, `test/domain/layering.test.js`, is a text scan. It catches forgetting, not intent (same stance as `router-source.js`).
 
 ## Rules that hold for every object
 
