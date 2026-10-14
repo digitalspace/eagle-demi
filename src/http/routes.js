@@ -357,6 +357,9 @@ const routes = [
   // its own anchor, guarded by `requireRole(<eagle-api x-security-scopes>)`.
 
   // port: organizations
+  // eagle-api's auth admits sysadmin and staff on every route (api/helpers/auth.js:35-43), so both join the scopes.
+  { method: 'post', path: '/organizations', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/organizations').createOrganization },
+  { method: 'put', path: '/organizations/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/organizations').updateOrganization },
 
   // port: comment-periods
 
