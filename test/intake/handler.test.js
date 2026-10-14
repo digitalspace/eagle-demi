@@ -83,6 +83,18 @@ test('No threats found: the row is clean, keyed, and takes its requested read li
   assert.strictEqual(row.isPublished, false);
 });
 
+test('No threats found publishes a public request under a public project', async (t) => {
+  const { store, deps } = setup(t, pendingRow({ requestedRead: readForLevel(4) }));
+
+  await onScanResult(scanEvent('No threats found'), deps);
+
+  const row = store.rows.get(DOC);
+  assert.strictEqual(row.scanStatus, 'clean');
+  assert.deepStrictEqual(row.read, readForLevel(4));
+  assert.ok(row.read.includes('public'));
+  assert.strictEqual(row.isPublished, true);
+});
+
 test('No threats found caps the requested read list at the project as it is now', async (t) => {
   // Linked at staff while the project was staff; the project narrowed to team before the scan.
   const narrowed = fakeProjects({ 'proj-1': { id: 'proj-1', read: readForLevel(1) } });
