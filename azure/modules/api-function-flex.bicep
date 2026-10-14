@@ -339,7 +339,7 @@ param intakeIncomingContainer string = ''
 
 param intakeQuarantineContainer string = ''
 
-@description('Resource id of demi-intake-<env>, attached as a second identity for the quarantine copy')
+@description('Resource id of demi-intake-<env>, attached as a second identity for the scan-result tag reads and the quarantine copy')
 param intakeIdentityId string = ''
 
 @description('Client id of demi-intake-<env>')
@@ -1021,7 +1021,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'INTAKE_SWEEP_SCHEDULE'
-          value: empty(intakeStorageAccount) ? '' : '0 */30 * * * *'
+          value: empty(intakeStorageAccount) ? '' : '0 */5 * * * *'
         }
         {
           name: 'INTAKE_PENDING_TIMEOUT_HOURS'
