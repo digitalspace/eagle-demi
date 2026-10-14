@@ -21,7 +21,11 @@ const READS = [
   ['/api/documents/d1', documentController, 'getDocument'],
   ['/api/documents/d1/download', documentController, 'downloadDocument'],
   ['/api/inspections', inspectionController, 'getInspections'],
-  ['/api/inspections/i1', inspectionController, 'getInspection']
+  ['/api/inspections/i1', inspectionController, 'getInspection'],
+  ['/api/inspection-elements', inspectionController, 'getInspectionElements'],
+  ['/api/inspection-elements/e1', inspectionController, 'getInspectionElement'],
+  ['/api/inspection-items', inspectionController, 'getInspectionItems'],
+  ['/api/inspection-items/x1', inspectionController, 'getInspectionItem']
 ];
 
 /** Every read's status, and who each handler that ran saw as the caller. */
@@ -46,28 +50,28 @@ function keycloak(t, enabled) {
   t.after(() => { config.keycloakEnabled = keycloakEnabled; });
 }
 
-const sixOf = value => READS.map(() => value);
+const eachRead = value => READS.map(() => value);
 
 test('by-id reads refuse a rejected Bearer', async (t) => {
   await t.test('a rejected Bearer answers 401 and never reaches the handler', async (t) => {
     keycloak(t, true);
     t.mock.method(logger, 'warn', () => {});
     const { statuses, callers } = await callReads(t, { authorization: 'Bearer not-a-real-token' });
-    assert.deepStrictEqual(statuses, sixOf(401));
+    assert.deepStrictEqual(statuses, eachRead(401));
     assert.deepStrictEqual(callers, []);
   });
 
   await t.test('no Bearer still reads as anonymous under a 200', async (t) => {
     const { statuses, callers } = await callReads(t, {});
-    assert.deepStrictEqual(statuses, sixOf(200));
-    assert.deepStrictEqual(callers, sixOf('anonymous'));
+    assert.deepStrictEqual(statuses, eachRead(200));
+    assert.deepStrictEqual(callers, eachRead('anonymous'));
   });
 
   await t.test('a valid staff Bearer reaches the handler as that caller', async (t) => {
     keycloak(t, false);
     const token = jwt.sign({ preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, 'suite-only');
     const { statuses, callers } = await callReads(t, { authorization: `Bearer ${token}` });
-    assert.deepStrictEqual(statuses, sixOf(200));
-    assert.deepStrictEqual(callers, sixOf('idir-staff'));
+    assert.deepStrictEqual(statuses, eachRead(200));
+    assert.deepStrictEqual(callers, eachRead('idir-staff'));
   });
 });

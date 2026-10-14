@@ -273,10 +273,10 @@ const routes = [
   { method: 'get', path: '/groups/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => groupController().getGroup },
   { method: 'get', path: '/inspections', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspections },
   { method: 'get', path: '/inspections/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspection },
-  { method: 'get', path: '/inspection-elements', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElements },
-  { method: 'get', path: '/inspection-elements/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElement },
-  { method: 'get', path: '/inspection-items', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItems },
-  { method: 'get', path: '/inspection-items/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItem },
+  { method: 'get', path: '/inspection-elements', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspectionElements },
+  { method: 'get', path: '/inspection-elements/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspectionElement },
+  { method: 'get', path: '/inspection-items', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspectionItems },
+  { method: 'get', path: '/inspection-items/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspectionItem },
 
   // Native kind reads: lists and organizations (helpers/native-query.js). `strict` answers a
   // rejected Bearer with 401 so a client refreshes instead of reading the public view under a 200.

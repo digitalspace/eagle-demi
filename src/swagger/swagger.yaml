@@ -4069,6 +4069,8 @@ paths:
                   type: object
         '400':
           description: pageSize above the caller's cap.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
 
   /api/inspection-elements/{id}:
     get:
@@ -4096,6 +4098,8 @@ paths:
             application/json:
               schema:
                 type: object
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
           description: Inspection element not found.
 
@@ -4142,6 +4146,8 @@ paths:
                   type: object
         '400':
           description: pageSize above the caller's cap.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
 
   /api/inspection-items/{id}:
     get:
@@ -4169,6 +4175,8 @@ paths:
             application/json:
               schema:
                 type: object
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
           description: Inspection item not found.
 
