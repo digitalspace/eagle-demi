@@ -18,8 +18,6 @@ const notify = require('../../src/services/notify');
 const { logger } = require('../../src/utils/logger');
 const { updatesStore } = require('../helpers/updates-store');
 const { parentProject, parentNotification } = require('../helpers/update-parents');
-// Required per call, not at load: a load-time throw lands in the logger's uncaughtException handler
-// and node --test then reports the file as passing.
 const script = () => require('../../src/scripts/announce-updates');
 const run = (opts) => script().run(opts);
 

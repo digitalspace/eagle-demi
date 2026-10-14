@@ -30,12 +30,14 @@ const requestIdFormat = format((info) => {
 
 // Set up logger formats
 const isProduction = process.env.NODE_ENV === 'production';
+// Under the test runner a swallowed uncaught exception would let a broken test file exit 0.
+const underTest = Boolean(process.env.NODE_TEST_CONTEXT) || process.env.NODE_ENV === 'test';
 
 const defaultTransports = [
   // 1. Console Transport
   new transports.Console({
     level: config.logLevel,
-    handleExceptions: true,
+    handleExceptions: !underTest,
     format: format.combine(
       format.errors({ stack: true }),
       requestIdFormat(),

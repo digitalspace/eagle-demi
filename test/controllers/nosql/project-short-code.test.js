@@ -156,6 +156,19 @@ test('PUT /projects/:id/short-code', async (t) => {
     assert.strictEqual((await setCode('kemess')).statusCode, 409);
   });
 
+  await t.test('a code whose record keeps moving under the claim is a 503, not a 409', async (t) => {
+    const { upserts } = setup(t, {
+      ids: { 'site-c': { id: 'site-c', url: PAGE, createdBy: 'system', _etag: '"s1"' } },
+      moved: new Set(['site-c'])
+    });
+
+    const res = await setCode('site-c');
+
+    assert.strictEqual(res.statusCode, 503);
+    assert.deepStrictEqual(res.body, { error: 'A short link was being written by another request. Try again.' });
+    assert.deepStrictEqual(upserts, []);
+  });
+
   await t.test('moving back to one of its own legacy codes reuses that record', async (t) => {
     const project = stored({
       shortCode: 'site-c', shortCodeSource: 'staff', legacyShortCodes: ['nicomen-wind-energy']

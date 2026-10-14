@@ -475,18 +475,68 @@ skips the whole corpus instead: the old fields already agree, so every document 
 correct", the new column stays null on all ~1.1M rows, and the run is green throughout.
 `test/azure/search-datasource-columns.test.js` pins steps 1-3 against the two committed JSON files.
 
-**The order across a release, and it is not the obvious one.** Both PUTs go in BEFORE the merge to
-`main`, because the merge deploys the app:
+**The order across a release.** The PUTs go in before the app that writes the field is deployed,
+in both environments. On test the PR gate (`.github/workflows/pr.yaml`, "Search Schema Change")
+probes the test indexes with the branch's definitions and wants `Search-Schema: applied test` in
+the PR body before the merge, which is the staging deploy. On prod the deploy's schema probe checks
+the live index against the tag's definitions and fails when the field is missing.
 
-1. index PUT — `apply-search-definitions.js --live --only chunks`
-2. data-source PUT — `put-search-datasources.js`
-3. merge to `main` (CI deploys the API, and every chunk written from then on carries the field)
-4. `backfill-chunk-parent-fields.js --live`
+`scripts/demi-devbox.sh apply` is the one command for the PUTs. It runs `git pull --ff-only` in the
+devbox checkout and writes what that checkout holds, in this order:
 
-If the app shipped first, the chunks it wrote in between are right in Cosmos and null in the index:
-the indexer re-pulled them under the old `SELECT` and moved its high-water mark past them. The
-ordinary backfill cannot repair those — it skips a chunk whose Cosmos copy already matches its
-document — so run it once with `--force`, which re-patches regardless and moves `_ts` on every row.
+1. with `--datasources`, PUT those data sources first, behind their own `[y/N]` prompt
+2. dry run, print the plan, second `[y/N]` prompt
+3. PUT the index and indexer (`apply-search-definitions.js --live --only chunks`), PUT every data
+   source named or reported as DIFFERS (`put-search-datasources.js`), then reset and run their
+   indexers (`reset-and-run-indexers.js chunks-indexer`; `put-search-datasources.js` resets
+   nothing)
+
+`--datasources demi-chunks-ds` forces the reset; without it `apply` resets only a data source its
+dry run reports as DIFFERS. Answering N at the second prompt leaves `demi-chunks-ds` rewritten with
+no index PUT and no reset: run `apply` again to finish.
+
+On test, before the merge:
+
+1. put the devbox checkout on the PR branch, tracked so `apply`'s pull follows it:
+
+   ```bash
+   scripts/demi-devbox.sh run --env test -- \
+     'git remote set-branches --add origin <branch> && git fetch --depth 1 origin <branch> &&
+      git checkout -B <branch> --track origin/<branch>'
+   ```
+
+   The checkout is a shallow clone that fetches only `main`, so the branch has to be added to its
+   fetch list first, or `--track` refuses it.
+
+2. `scripts/demi-devbox.sh apply --env test --only chunks --datasources demi-chunks-ds --no-wait`
+3. add `Search-Schema: applied test` to the PR body, merge (CI deploys staging), then put the
+   devbox back on `main`:
+
+   ```bash
+   scripts/demi-devbox.sh run --env test -- \
+     'git checkout main && git branch -D <branch> && git remote set-branches origin main &&
+      git pull --ff-only'
+   ```
+
+4. `scripts/demi-devbox.sh watch --env test --datasources demi-chunks-ds` until the indexer run
+   finishes. `watch` gives up after `INDEXER_TIMEOUT_LONG` (80 minutes) with a warning and exit 0;
+   run it again until the run finishes.
+5. `backfill-chunk-parent-fields.js --live`
+
+On prod, after the release merge and while the devbox's `main` has nothing past the release tag
+under `azure/search/`:
+
+1. `scripts/demi-devbox.sh apply --env prod --only chunks --datasources demi-chunks-ds --no-wait`
+2. the `azure-deploy-prod.yaml` dispatch with the release tag
+3. `watch --env prod`, then the backfill, as on test
+
+Chunks written between the PUT and the deploy come from the old app and miss the field in Cosmos;
+the backfill stamps them, because their `parentFieldsVersion` is below the current one. If the app
+went out first, the chunks it wrote before the PUT are right in Cosmos and null in the index; the
+reset `apply` runs repairs them, because it re-pulls every row. A data-source PUT without that
+reset leaves them null, and the ordinary backfill cannot repair them either — it skips a chunk
+whose Cosmos copy already matches its document — so run it once with `--force`, which re-patches
+regardless and moves `_ts` on every row.
 
 **`src/scripts/backfill-document-list-ids.js` must have run to completion first.** The chunk
 backfill copies what the document row holds; a row seeded before that script kept only the List

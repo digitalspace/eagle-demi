@@ -7,8 +7,6 @@ const assert = require('node:assert');
 
 const { logger } = require('../../src/utils/logger');
 const { updatesStore } = require('../helpers/updates-store');
-// Required per call, not at load: a load-time throw lands in the logger's uncaughtException handler
-// and node --test then reports the file as passing.
 const script = () => require('../../src/scripts/backfill-update-publish-date');
 
 const ADDED = '2026-01-01T00:00:00.000Z';

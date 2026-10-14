@@ -139,7 +139,8 @@ function projectLinkRecord(project, id, createdBy = 'system') {
  * @param {{links: object, projects: object}} repos
  * @param {{createdBy?: string, attempt?: object, alsoUrl?: string}} [opts] `attempt` gets
  *   `created: {code, etag}` when this call wrote the record
- * @returns {Promise<boolean>} false when the code belongs to someone else
+ * @returns {Promise<'claimed'|'taken'|'raced'>} `taken` when the code belongs to someone else,
+ *   `raced` when the record kept moving under both tries, so who holds it is not known yet
  */
 async function claimCode(project, code, repos, { createdBy = 'system', attempt = null, alsoUrl = null } = {}) {
   const target = projectTarget(project);
@@ -147,25 +148,26 @@ async function claimCode(project, code, repos, { createdBy = 'system', attempt =
     try {
       const saved = await repos.links.create(projectLinkRecord(project, code, createdBy));
       if (attempt) attempt.created = { code, etag: saved && saved._etag };
-      return true;
+      return 'claimed';
     } catch (err) {
       if (!isConflict(err)) throw err;
     }
     const record = await repos.links.getById(code);
     if (!record) continue;
-    if (!(await adoptable(project, record, repos, createdBy, alsoUrl))) return false;
+    if (!(await adoptable(project, record, repos, createdBy, alsoUrl))) return 'taken';
     try {
       const adopted = await repos.links.repoint(code, target,
         { etag: record._etag, claimedBy: String(project.id) });
       if (adopted) {
         logger.info('[short-links] link record adopted', { projectId: project.id, code, from: record.url, to: target });
-        return true;
+        return 'claimed';
       }
     } catch (err) {
       if (!isPreconditionFailed(err)) throw err;
     }
   }
-  return false;
+  logger.warn('[short-links] link record kept moving, claim not settled', { projectId: project.id, code });
+  return 'raced';
 }
 
 async function adoptable(project, record, repos, createdBy, alsoUrl) {
@@ -183,7 +185,7 @@ async function adoptable(project, record, repos, createdBy, alsoUrl) {
 /** The first code in order this project can claim, or null when every one is taken. */
 async function claimFirstFree(project, codes, repos, attempt) {
   for (const code of codes) {
-    if (await claimCode(project, code, repos, { attempt })) return code;
+    if (await claimCode(project, code, repos, { attempt }) === 'claimed') return code;
   }
   return null;
 }

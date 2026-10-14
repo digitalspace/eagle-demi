@@ -11,7 +11,6 @@ const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
 
-// First: the logger's uncaughtException handler would swallow a load failure here into a green run.
 const { cosmosKind, projectParentJoin, MAX_IDS, ANON_MAX_PAGE_DEPTH } = require('../../../src/helpers/native-query');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');

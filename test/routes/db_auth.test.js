@@ -1,55 +1,60 @@
 'use strict';
 
+process.env.NODE_ENV = 'test';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const apiRoutes = require('../../src/http/routes');
-const { routeChains } = require('../helpers/router-source');
+const jwt = require('jsonwebtoken');
 
-function routeTable() {
-  return apiRoutes.map(route => ({
-    path: route.path,
-    // The guards plus the handler — the same count the mounted Express stack used to report.
-    middlewareCount: route.guards.length + 1
-  }));
+const config = require('../../src/config');
+const apiRoutes = require('../../src/http/routes');
+const dbController = require('../../src/controllers/db');
+const { withServer } = require('../helpers/with-server');
+
+const routePaths = () => apiRoutes.map(route => route.path);
+
+const PROTECTED = [
+  ['/api/db/stats', 'getDbStats'],
+  ['/api/admin/index-progress', 'getIndexProgressHandler']
+];
+
+async function callProtected(t, headers) {
+  const reached = [];
+  for (const [, name] of PROTECTED) {
+    t.mock.method(dbController, name, (req, res) => { reached.push(name); res.json({}); });
+  }
+  const statuses = [];
+  await withServer(async (call) => {
+    for (const [path] of PROTECTED) statuses.push((await call(path, { headers })).status);
+  });
+  return { statuses, reached };
+}
+
+function bearer(t, roles) {
+  const keycloakEnabled = config.keycloakEnabled;
+  config.keycloakEnabled = false;
+  t.after(() => { config.keycloakEnabled = keycloakEnabled; });
+  const token = jwt.sign({ preferred_username: 'suite-user', realm_access: { roles } }, 'suite-only');
+  return { authorization: `Bearer ${token}` };
 }
 
 test('DB Management Routes Security Tests', async (t) => {
-  await t.test('admin DB routes exist and are behind authMiddleware', () => {
-    // TWO assertions per route, and they are complementary rather than redundant — each catches a
-    // downgrade the other misses, and only together do they cover every way the gate can go.
-    //
-    //   the NAME, from source: a guard count of 2 is equally satisfied by passiveAuthMiddleware,
-    //   which attaches an anonymous access object instead of rejecting. Swapping it in would make
-    //   /db/stats and /admin/index-progress anonymously readable under a green count.
-    //
-    //   the COUNT, at runtime: source text includes comments, so deleting the middleware and
-    //   leaving its name in a comment beside the handler satisfies the name check while the route
-    //   runs with one layer and no auth. routeChains() strips comments, which closes that on its
-    //   own; the count stays because a security assertion is worth two independent readings of the
-    //   same fact, and because the count is what fails if the stripper ever regresses.
-    const protectedPaths = ['/db/stats', '/admin/index-progress'];
-    const routes = routeTable();
-    const chains = routeChains();
+  await t.test('admin DB routes answer 401 to an anonymous caller', async (t) => {
+    const { statuses, reached } = await callProtected(t, {});
+    assert.deepStrictEqual(statuses, [401, 401]);
+    assert.deepStrictEqual(reached, []);
+  });
 
-    for (const p of protectedPaths) {
-      const match = routes.find(r => r.path === p);
-      assert.ok(match, `Route ${p} must exist on API router`);
-      // authMiddleware + controller handler = at least 2 layers
-      assert.ok(
-        match.middlewareCount >= 2,
-        `Route ${p} runs ${match.middlewareCount} layer(s) — no middleware stands in front of the ` +
-        'controller, whatever the source says'
-      );
+  await t.test('admin DB routes answer 403 to a login without a session role', async (t) => {
+    const { statuses, reached } = await callProtected(t, bearer(t, ['public']));
+    assert.deepStrictEqual(statuses, [403, 403]);
+    assert.deepStrictEqual(reached, []);
+  });
 
-      const declared = chains.find(r => r.path === p);
-      assert.ok(declared, `Route ${p} must be declared in src/http/routes.js`);
-      assert.ok(
-        /\bauthMiddleware\b/.test(declared.chain) &&
-        !/\bpassiveAuthMiddleware\b/.test(declared.chain),
-        `Route ${p} must be behind authMiddleware, not passiveAuthMiddleware — its chain is ` +
-        `"${declared.chain.trim()}"`
-      );
-    }
+  await t.test('admin DB routes reach the controller for a staff login', async (t) => {
+    const { statuses, reached } = await callProtected(t, bearer(t, ['staff']));
+    assert.deepStrictEqual(statuses, [200, 200]);
+    assert.deepStrictEqual(reached, ['getDbStats', 'getIndexProgressHandler']);
   });
 
   await t.test('generic query/import endpoints stay deleted', () => {
@@ -71,7 +76,7 @@ test('DB Management Routes Security Tests', async (t) => {
       '/admin/logs', '/wildfires',
       '/records', '/records/:id', '/admin/sync/nrpti'
     ];
-    const paths = routeTable().map(r => r.path);
+    const paths = routePaths();
 
     for (const path of removed) {
       assert.ok(!paths.includes(path), `Route ${path} must NOT be reintroduced`);
@@ -81,7 +86,7 @@ test('DB Management Routes Security Tests', async (t) => {
   await t.test('region routes stay deleted', () => {
     // The regions collection is empty and nothing consumed it; administrative geography is
     // served by /boundaries.
-    const paths = routeTable().map(r => r.path);
+    const paths = routePaths();
     assert.ok(!paths.some(p => p.startsWith('/regions')), 'No /regions route should exist');
   });
 });

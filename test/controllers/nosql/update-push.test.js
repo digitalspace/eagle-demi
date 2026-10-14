@@ -1053,8 +1053,6 @@ test('an update emails once however often it is withdrawn and re-published', asy
   t.afterEach(() => t.mock.restoreAll());
   atPushTime(t);
   // The real claim and marks run against the in-memory container; the mirror write lands there too.
-  // Required here, not at load: a load-time throw is swallowed by the logger's uncaughtException
-  // handler and node --test then reports the whole file as passing.
   const { updatesStore } = require('../../helpers/updates-store');
   const { store } = updatesStore(t, []);
   t.mock.method(updates, 'upsert', async (item) => { store.set(String(item.id), { ...item }); return item; });

@@ -57,6 +57,7 @@ function writeConflict(res, what, id) {
 
 const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 100;
+const LINK_RACE_ERROR = 'A short link was being written by another request. Try again.';
 
 const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/g;
 // ZWNJ and ZWJ shape some scripts and emoji, so only those joining nothing (an end or a space) go.
@@ -931,10 +932,11 @@ exports.setShortCode = async (req, res) => {
     const by = (req.user && req.user.preferred_username) || 'unknown';
     // Claimed before the row is written, at the new target: a write that fails leaves a record the
     // retry adopts. One still at the old target is the same project's; the claim moves it.
-    if (codeMoves && existing.shortCode !== code &&
-        !(await claimCode(next, code, { links, projects },
-          { createdBy: by, alsoUrl: projectTarget(existing) }))) {
-      return res.status(409).json({ error: 'Code already in use' });
+    if (codeMoves && existing.shortCode !== code) {
+      const claim = await claimCode(next, code, { links, projects },
+        { createdBy: by, alsoUrl: projectTarget(existing) });
+      if (claim === 'taken') return res.status(409).json({ error: 'Code already in use' });
+      if (claim === 'raced') return res.status(503).json({ error: LINK_RACE_ERROR });
     }
 
     let saved = existing;
@@ -982,7 +984,7 @@ exports.setShortCode = async (req, res) => {
     // Run on a no-op too: a retry after a 503 finishes the records the first call missed.
     const settled = await settleLinks(req.params.id, saved, access, by);
     if (!settled) {
-      return res.status(503).json({ error: 'A short link was being written by another request. Try again.' });
+      return res.status(503).json({ error: LINK_RACE_ERROR });
     }
 
     return res.json(shortCodeBody(redactForAccess('projects', settled, access), settled));

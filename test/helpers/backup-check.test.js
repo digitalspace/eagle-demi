@@ -11,7 +11,6 @@ const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
 
-// Before the logger: its handleExceptions would swallow a load failure here and the file would pass.
 const { assertBackedUp } = require('../../src/helpers/backup-check');
 const config = require('../../src/config');
 const { logger } = require('../../src/utils/logger');

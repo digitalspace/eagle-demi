@@ -236,8 +236,8 @@ test('ensureProjectShortLink', async (t) => {
 
     assert.strictEqual(await ensureProjectShortLink(project, repos), 'nicomen-wind-energy-2',
       'a shared link alice made at the page is hers, not a leftover of a project write');
-    assert.strictEqual(await claimCode(project, 'nicomen-wind-energy', repos, { createdBy: 'bob' }), false);
-    assert.strictEqual(await claimCode(project, 'nicomen-wind-energy', repos, { createdBy: 'alice' }), true,
+    assert.strictEqual(await claimCode(project, 'nicomen-wind-energy', repos, { createdBy: 'bob' }), 'taken');
+    assert.strictEqual(await claimCode(project, 'nicomen-wind-energy', repos, { createdBy: 'alice' }), 'claimed',
       'the staff member who wrote it may take it onto the project');
   });
 
@@ -248,7 +248,7 @@ test('ensureProjectShortLink', async (t) => {
       ids: { 'nicomen-wind-energy': { id: 'nicomen-wind-energy', url, createdBy: 'unknown' } }
     });
 
-    assert.strictEqual(await claimCode(project, 'nicomen-wind-energy', repos, { createdBy: 'unknown' }), false,
+    assert.strictEqual(await claimCode(project, 'nicomen-wind-energy', repos, { createdBy: 'unknown' }), 'taken',
       'every caller with no username is "unknown", so the name does not prove the same caller');
   });
 
@@ -259,8 +259,8 @@ test('ensureProjectShortLink', async (t) => {
       ids: { 'site-c': { id: 'site-c', url: page, createdBy: 'system', _etag: '"s1"' } }
     });
 
-    assert.strictEqual(await claimCode(project, 'site-c', repos), false, 'the premise: not at the target');
-    assert.strictEqual(await claimCode(project, 'site-c', repos, { alsoUrl: page }), true);
+    assert.strictEqual(await claimCode(project, 'site-c', repos), 'taken', 'the premise: not at the target');
+    assert.strictEqual(await claimCode(project, 'site-c', repos, { alsoUrl: page }), 'claimed');
     assert.strictEqual(repos.stored.get('site-c').url, project.shortLinkUrl);
   });
 
@@ -435,6 +435,18 @@ test('ensureProjectShortLink', async (t) => {
     assert.strictEqual(project.shortCode, undefined,
       'a project must never carry a code with no link behind it');
   });
+
+  await t.test('a record that moves under both tries is a race, not a taken code', async () => {
+    const project = PROJECT();
+    const repos = fakeRepos(null, {
+      ids: { 'nicomen-wind-energy': { id: 'nicomen-wind-energy', url: projectTarget(project), createdBy: 'system' } }
+    });
+    repos.links.repoint = async () => { throw preconditionFailed(); };
+
+    assert.strictEqual(await claimCode(project, 'nicomen-wind-energy', repos), 'raced');
+    assert.strictEqual(await ensureProjectShortLink(project, repos), 'nicomen-wind-energy-2',
+      'the sync heal moves on to the next free code, as before');
+  });
 });
 
 test('carryShortLink carries the custom target across a whole-item write', () => {
@@ -511,7 +523,7 @@ test('releaseCreatedCode', async (t) => {
   await t.test('keeps a record another claim adopted after it was written', async () => {
     const { repos, attempt } = await minted();
 
-    assert.strictEqual(await claimCode(PROJECT(), 'nicomen-wind-energy', repos), true);
+    assert.strictEqual(await claimCode(PROJECT(), 'nicomen-wind-energy', repos), 'claimed');
     assert.strictEqual(await releaseCreatedCode(attempt, repos), false, 'the adoption moved its etag');
     assert.ok(repos.stored.has('nicomen-wind-energy'));
   });
@@ -525,7 +537,7 @@ test('releaseCreatedCode', async (t) => {
       return record;
     };
 
-    assert.strictEqual(await claimCode(PROJECT(), 'nicomen-wind-energy', repos), true);
+    assert.strictEqual(await claimCode(PROJECT(), 'nicomen-wind-energy', repos), 'claimed');
     assert.deepStrictEqual(repos.removed.map(r => r.id), ['nicomen-wind-energy'], 'the premise: it was deleted');
     assert.ok(repos.stored.has('nicomen-wind-energy'), 'the claimed code still resolves');
   });
