@@ -19,10 +19,42 @@ const { recordEvents } = require('../../helpers/record-events');
 
 const ROWS = [{ id: 'p1', name: 'Mine One', read: ['public'] }, { id: 'p2', name: 'Mine Two', read: ['public'] }];
 
+/** Fakes both stores and records what each was asked. */
 function fakeStores(t) {
-  t.mock.method(aiSearch, 'searchProjects', async () => ({ count: 2, items: ROWS.map(row => ({ id: row.id })) }));
-  t.mock.method(cosmos, 'query', async (container, spec) =>
-    (spec.query.includes('COUNT(1)') ? { items: [ROWS.length] } : { items: structuredClone(ROWS) }));
+  const searches = [];
+  const queries = [];
+  t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+    searches.push(opts);
+    return { count: 2, items: ROWS.map(row => ({ id: row.id })) };
+  });
+  t.mock.method(cosmos, 'query', async (container, spec) => {
+    queries.push(spec);
+    return spec.query.includes('COUNT(1)') ? { items: [ROWS.length] } : { items: structuredClone(ROWS) };
+  });
+  return { searches, queries };
+}
+
+function param(spec, name) {
+  const found = spec.parameters.find(p => p.name === name);
+  return found && found.value;
+}
+
+// The three List-ref filters as the query names them, and the id each asks for.
+const REF_FILTERS = 'eacDecision=E1&currentPhaseName=P1&CEAAInvolvement=C1';
+const DECIDED_2020 = 'decisionDateStart=2020-01-01&decisionDateEnd=2020-12-31';
+const REF_FIELDS = { eacDecision: 'E1', currentPhaseName: 'P1', CEAAInvolvement: 'C1' };
+
+/** Every List-ref filter and both decision-date edges, each inside the anonymous dial on its top-level field. */
+function assertNarrowed(sql) {
+  Object.entries(REF_FIELDS).forEach(([field, value], i) => {
+    const clause = `((NOT IS_DEFINED(c.vis["${field}"]) OR c.vis["${field}"] >= 4) AND c.${field}._id = @nf${i})`;
+    assert.ok(sql.query.includes(clause), `no ${clause} in ${sql.query}`);
+    assert.strictEqual(param(sql, `@nf${i}`), value);
+  });
+  assert.ok(sql.query.includes('c.vis["decisionDate"]'), sql.query);
+  assert.ok(sql.query.includes('c.decisionDate >= @nr0') && sql.query.includes('c.decisionDate <= @nr1'), sql.query);
+  assert.strictEqual(param(sql, '@nr0'), '2020-01-01T00:00:00.000Z');
+  assert.strictEqual(param(sql, '@nr1'), '2020-12-31T23:59:59.999Z');
 }
 
 async function call(qs) {
@@ -59,5 +91,46 @@ test('GET /projects native list', async (t) => {
     fakeStores(t);
     assert.strictEqual((await call('projectState=Active&projectState=Closed')).status, 200);
     assert.strictEqual((await call('region=Peace&region=Cariboo')).status, 400);
+  });
+
+  await t.test('with no q, List-ref filters and decision-date edges narrow the Cosmos read', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call(`${REF_FILTERS}&${DECIDED_2020}&count=true`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 0);
+    assert.strictEqual(queries.length, 2);
+    for (const sql of queries) assertNarrowed(sql);
+  });
+
+  await t.test('with q, the index filters on its id and date columns and Cosmos re-checks each', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call(`q=mine&${REF_FILTERS}&${DECIDED_2020}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 1);
+    const { filter } = searches[0];
+    for (const clause of [
+      "(eacDecisionId eq 'E1')", "(currentPhaseNameId eq 'P1')", "(ceaaInvolvementId eq 'C1')",
+      '(decisionDate ge 2020-01-01T00:00:00.000Z)', '(decisionDate le 2020-12-31T23:59:59.999Z)'
+    ]) {
+      assert.ok(filter.includes(clause), `index filter lacks ${clause}: ${filter}`);
+    }
+    assert.strictEqual(queries.length, 1);
+    assertNarrowed(queries[0]);
+  });
+
+  await t.test('the stored path is not a query name; the field name is', async (t) => {
+    const { queries } = fakeStores(t);
+    const res = await call('eacDecision._id=E1');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'unknown parameter: eacDecision._id');
+    assert.strictEqual(queries.length, 0);
+  });
+
+  await t.test('a decision-date edge that is not a calendar day is refused', async (t) => {
+    const { queries } = fakeStores(t);
+    const res = await call('decisionDateEnd=2020-02-30');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'decisionDateEnd takes one day as YYYY-MM-DD');
+    assert.strictEqual(queries.length, 0);
   });
 });

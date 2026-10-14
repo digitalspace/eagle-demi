@@ -175,6 +175,18 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
           {
             path: '/electoralDistrict/?'
           }
+          {
+            path: '/eacDecision/_id/?'
+          }
+          {
+            path: '/currentPhaseName/_id/?'
+          }
+          {
+            path: '/CEAAInvolvement/_id/?'
+          }
+          {
+            path: '/decisionDate/?'
+          }
         ]
         excludedPaths: noIndex
       }

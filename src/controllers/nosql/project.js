@@ -292,9 +292,18 @@ const projectsKind = {
   }),
   sortKeys: ['name'],
   filters: [
-    'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict'
+    'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict',
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id'
   ],
+  // These three are stored as `{_id, name}` List refs; the query names the field, the filter matches its id.
+  aliases: {
+    eacDecision: 'eacDecision._id', currentPhaseName: 'currentPhaseName._id', CEAAInvolvement: 'CEAAInvolvement._id'
+  },
   multiValueFilters: ['projectState'],
+  ranges: {
+    decisionDateStart: { field: 'decisionDate', op: 'ge' },
+    decisionDateEnd: { field: 'decisionDate', op: 'le' }
+  },
   qFields: INDEX_MAPS.projects.searched
 };
 exports.projectsKind = projectsKind;

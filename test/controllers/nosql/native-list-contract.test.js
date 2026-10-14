@@ -403,6 +403,30 @@ test('a filter alias', async (t) => {
   });
 });
 
+test('a filter on a dotted path', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  // `author` is level 2 in the comments catalog; a record's dial is keyed by `author`, never `author._id`.
+  const dotted = listHandler({ ...SPEC, filters: ['author._id'], multiValueFilters: [], aliases: { by: 'author._id' } });
+
+  await t.test('matches the nested value inside the dial of its top-level field', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(dotted, 'by=a1', { user: STAFF })).status, 200);
+    const read = listQuery(specs);
+    assert.ok(read.query.includes(
+      '((NOT IS_DEFINED(c.vis["author"]) OR c.vis["author"] >= 2) AND c.author._id = @nf0)'), read.query);
+    assert.ok(!read.query.includes('c.vis["author._id"]'), read.query);
+    assert.strictEqual(param(read, '@nf0'), 'a1');
+  });
+
+  await t.test('is refused when the caller cannot see its top-level field', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(dotted, 'by=a1');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /cannot filter on a field this caller cannot see: author$/);
+    assert.strictEqual(specs.length, 0);
+  });
+});
+
 test('a day range', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const ranged = listHandler({
