@@ -39,7 +39,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | todo |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
-| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js` | 0 (8 if a catalog edit is needed) | M | todo |
+| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | todo |
 | T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | todo |
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | todo |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo |
@@ -67,7 +67,7 @@ Decided 2026-10-14.
 2. Materialized-view status: kept until DataBC moves to DEMI `/reports`, then a small eagle-demi-admin slice removes the call.
 3. Jobs: no port until a caller appears.
 4. Inspections: the mirror lines `routes.js:252-254` stay as a frozen import path, with no Dark slice.
-5. CAC member store: eagle-notify stays the member store. DEMI's remove-member and CAC delete (slice 11) call eagle-notify to drop the members. Members sign up in eagle-notify and DEMI holds no member store.
+5. CAC member store: eagle-notify stays the member store and never hard-deletes. Members sign up in eagle-notify and DEMI holds no member store. Slice 11 has two halves. Half A (eagle-notify, own PR, merges first): a staff or service-key route that unsubscribes one CAC member, and one that unsubscribes every member of a project's CAC. Both soft delete with the existing TTL and log through the existing logger. Half B (eagle-demi, after half A is live on test): `src/services/notify.js` gains those two calls; `domain/cac.js` remove-member calls the first and CAC delete calls the second. A failed eagle-notify call fails the DEMI write.
 
 ## Layering
 

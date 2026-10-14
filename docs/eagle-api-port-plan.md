@@ -204,8 +204,10 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - Publish sets `projectCACPublished` true (`:23`); unpublish sets it false (`:50`).
   - Delete removes the members and sets `projectCAC` false and `cacMembers` [] (`:221-225`).
   - Removing a member pulls it and deletes it (`:167-169`).
-  - Members sign up in eagle-notify (tracker line 222), and DEMI holds no member store. eagle-api's delete ran `CACUser.deleteMany` on its own Mongo (`b072e79^:cac.js:221`). Decided 2026-10-14: remove-member and CAC delete call eagle-notify to drop the members. eagle-notify stays the member store.
-- Owns: `domain/cac.js`, `controllers/native/cac.js`. Writes go through the existing projects repository functions.
+  - Members sign up in eagle-notify (tracker line 222), and DEMI holds no member store. eagle-api's delete ran `CACUser.deleteMany` on its own Mongo (`b072e79^:cac.js:221`). Decided 2026-10-14: eagle-notify stays the member store and never hard-deletes. It has no staff or service route to remove members today; its only removal routes are the anonymous code-authorised `subscriptions/unsubscribe*` routes (`api/functions/subscriptions.js:228,269,295`), which soft delete with a TTL. DEMI's client `src/services/notify.js` only POSTs `/api/events`.
+  - Half A (eagle-notify, own PR there, merges first): a staff or service-key route that unsubscribes one CAC member, and one that unsubscribes every member of a project's CAC. Both soft delete with the existing TTL and log through the existing logger.
+  - Half B (eagle-demi, after half A is live on test): `src/services/notify.js` gains those two calls. `domain/cac.js` remove-member calls the first; CAC delete calls the second. A failed eagle-notify call fails the DEMI write.
+- Owns: `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`. Writes go through the existing projects repository functions. Slice 11 also touches eagle-notify (half A, own PR there, merges first).
 
 **T. Parity-map tidy.** Size S. After 4 and 5.
 - Edits in `src/scripts/parity-map.js`: point group-members (`:316-320`) at `/groups/:id/members`, mark topic-vc (`:383`) dropped, and mark CACUser (`:426`) dropped (decided 2026-10-14).
