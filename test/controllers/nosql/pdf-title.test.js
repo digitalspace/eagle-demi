@@ -23,6 +23,7 @@ const storage = require('../../../src/storage');
 const backupCheck = require('../../../src/helpers/backup-check');
 const controller = require('../../../src/controllers/nosql/pdf-title');
 const { logger } = require('../../../src/utils/logger');
+const audit = require('../../../src/utils/audit');
 const { makeRes } = require('../../../src/http/router');
 const { readForLevel } = require('../../../src/helpers/access-sql');
 const { classicTail, classicPdf } = require('../../helpers/pdf-build');
@@ -1098,6 +1099,65 @@ test('pdf title lease API', async (t) => {
       assert.deepEqual(res.body.failed, [ID]);
       assert.equal(res.body.outcomes.released, 1);
       assert.equal(w.row(ID2).pdfTitle.lease, undefined);
+    });
+  });
+
+  await t.test('audit rows: one per lease, commit, report and non-empty sweep page', async (t) => {
+    const rows = [];
+    const saved = { endpoint: config.auditDcrEndpoint, immutableId: config.auditDcrImmutableId };
+    // Inert without both (utils/audit.js), so the rest of this file records nothing.
+    config.auditDcrEndpoint = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
+    config.auditDcrImmutableId = 'dcr-testimmutableid';
+    audit._setTransport(async (stream, batch) => { rows.push(...batch); });
+    t.after(() => {
+      config.auditDcrEndpoint = saved.endpoint;
+      config.auditDcrImmutableId = saved.immutableId;
+      audit._resetTransport();
+    });
+    const actions = async () => { await audit.flush(); return rows.splice(0).map(r => r.Action); };
+
+    await t.test('a full titling writes lease, commit and report, each naming the document', async (t) => {
+      const w = world(t);
+      const { leaseId } = await titleOnce(w, TITLED);
+      await audit.flush();
+      const written = rows.splice(0);
+      assert.equal(written.length, 2);
+      const [leased, committed] = written;
+      assert.equal(leased.Action, 'pdfTitle.lease');
+      assert.equal(leased.TargetId, ID);
+      assert.equal(leased.ProjectId, 'p1');
+      assert.equal(leased.Detail.leaseId, leaseId);
+      assert.equal(committed.Action, 'pdfTitle.commit');
+      assert.equal(committed.Detail.newSha256, sha256(TITLED));
+
+      assert.equal((await report({ leaseId })).status, 409, 'PUT window still open');
+      assert.deepEqual(await actions(), [], 'a report that settles nothing writes no row');
+      w.closePutWindow();
+      await report({ leaseId });
+      await audit.flush();
+      const [reported, ...extra] = rows.splice(0);
+      assert.equal(extra.length, 0);
+      assert.equal(reported.Action, 'pdfTitle.report');
+      assert.equal(reported.Detail.outcome, 'titled');
+    });
+
+    await t.test('a refused lease writes no row', async (t) => {
+      world(t, { gate: { ok: false, reason: 'not-backed-up' } });
+      assert.equal((await lease()).status, 409);
+      assert.deepEqual(await actions(), []);
+    });
+
+    await t.test('a sweep writes one row for the page, none when the page is empty', async (t) => {
+      const w = world(t, { rows: [DOC, { ...DOC, id: ID2, s3Key: 'etl/p1/other.pdf' }], objects: { [KEY]: ORIGINAL, 'etl/p1/other.pdf': ORIGINAL } });
+      await lease();
+      await lease({ id: ID2 });
+      w.expireLease();
+      w.expireLease(ID2);
+      await actions();
+      assert.equal((await call(controller.sweep)).body.outcomes.released, 2);
+      assert.deepEqual(await actions(), ['pdfTitle.sweep']);
+      await call(controller.sweep);
+      assert.deepEqual(await actions(), []);
     });
   });
 

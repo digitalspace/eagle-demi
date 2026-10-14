@@ -27,6 +27,7 @@ const { pdfTitleFor } = require('../../helpers/file-name');
 const { levelOfRead, isDemiSeal } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
+const { auditEvent } = require('../../utils/audit');
 
 const LEASE_MS = 10 * 60 * 1000;
 // A Mongo ObjectId as `String(_id)` writes it: 24 lowercase hex characters.
@@ -554,6 +555,15 @@ async function sweep(req, res) {
       }
     }
     logger.info('[pdf-title] sweep', { scanned: page.items.length, ...counts, failed: failed.length });
+    // One row per page, not per row settled; an empty page changed nothing, so it writes none.
+    if (page.items.length) {
+      auditEvent(req, {
+        action: 'pdfTitle.sweep',
+        targetType: 'system',
+        targetId: 'pdfTitle',
+        detail: { scanned: page.items.length, outcomes: counts, failed: failed.length }
+      });
+    }
     return res.json({ scanned: page.items.length, outcomes: counts, failed, before, continuation: page.continuationToken || null });
   } catch (err) {
     return serverError(res, err, '[pdf-title] sweep failed');
@@ -647,14 +657,14 @@ async function lease(req, res) {
       if (isPreconditionFailed(err)) return refuse(res, 412, 'lease-race');
       throw err;
     }
-    return await backupAndAnswer(res, row, leaseRecord, original, title);
+    return await backupAndAnswer(req, res, row, leaseRecord, original, title);
   } catch (err) {
     return serverError(res, err, '[pdf-title] lease failed');
   }
 }
 
 /** Step 3: frozen backup at the stat's etag, then the GET link. Any failure releases the lease. */
-async function backupAndAnswer(res, row, leaseRecord, original, title) {
+async function backupAndAnswer(req, res, row, leaseRecord, original, title) {
   const fields = { id: row.id, s3Key: row.s3Key, leaseId: leaseRecord.leaseId };
   const backupKey = storage.backupKeyFor(row.s3Key);
   const copy = () => storage.copyObject(row.s3Key, backupKey, { ifSourceEtag: leaseRecord.sourceEtag });
@@ -695,6 +705,13 @@ async function backupAndAnswer(res, row, leaseRecord, original, title) {
     row = await save(row, { ...record, lease: withBackup });
     const backupUrl = await storage.getDownloadUrl(backupKey, { expirySeconds: BACKUP_GET_SECONDS });
     logger.info('[pdf-title] lease issued', { ...fields, mode: leaseRecord.mode, size: leaseRecord.sourceSize });
+    auditEvent(req, {
+      action: 'pdfTitle.lease',
+      targetType: 'document',
+      targetId: row.id,
+      projectId: row.projectId,
+      detail: { leaseId: leaseRecord.leaseId, mode: leaseRecord.mode, s3Key: leaseRecord.key, sourceSize: leaseRecord.sourceSize }
+    });
     return res.status(201).json({
       leaseId: leaseRecord.leaseId,
       mode: leaseRecord.mode,
@@ -824,6 +841,13 @@ async function commit(req, res) {
     };
     row = await save(row, { ...recordOf(row), inFlight });
     logger.info('[pdf-title] write signed', { ...fields, newLength: body.newLength });
+    auditEvent(req, {
+      action: 'pdfTitle.commit',
+      targetType: 'document',
+      targetId: row.id,
+      projectId: row.projectId,
+      detail: { leaseId: held.leaseId, mode: held.mode, s3Key: row.s3Key, newLength: body.newLength, newSha256: body.newSha256 }
+    });
     return res.json({
       uploadUrl,
       expiresIn: PUT_SECONDS,
@@ -866,6 +890,13 @@ async function report(req, res) {
     const { row: stored, outcome } = await settle(row, why ? { reason: why } : null, failure);
     if (outcome === 'waiting') return refuse(res, 409, 'put-window-open', { putExpiresAt: recordOf(row).inFlight.putExpiresAt });
     const record = recordOf(stored) || {};
+    auditEvent(req, {
+      action: 'pdfTitle.report',
+      targetType: 'document',
+      targetId: row.id,
+      projectId: row.projectId,
+      detail: { leaseId: body.leaseId, outcome, status: record.status || null, reason: record.reason || null }
+    });
     return res.json({ outcome, status: record.status || null, reason: record.reason || null });
   } catch (err) {
     if (isPreconditionFailed(err)) return refuse(res, 412, 'lease-race');
