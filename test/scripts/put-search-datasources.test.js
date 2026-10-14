@@ -33,6 +33,7 @@ const ENV = {
 
 // Two committed data sources, in their own directory, so "which ones were written" is unambiguous.
 const DS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-datasources-'));
+test.after(() => fs.rmSync(DS_DIR, { recursive: true, force: true }));
 for (const name of ['demi-chunks-ds', 'demi-projects-ds']) {
   fs.writeFileSync(path.join(DS_DIR, `${name}.json`), JSON.stringify({
     name,
