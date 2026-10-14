@@ -37,6 +37,25 @@ test('settle rethrows any other Cosmos failure', async (t) => {
   await assert.rejects(store.settle(ROW, { scanStatus: 'clean' }), /throttled/);
 });
 
+test('scannedBytesBetween sums numeric sizes of rows scanned in the window', async (t) => {
+  let spec;
+  t.mock.method(cosmos, 'queryValue', async (_container, s) => { spec = s; return 1234; });
+
+  const total = await store.scannedBytesBetween('2026-10-01', '2026-11-01');
+
+  assert.strictEqual(total, 1234);
+  const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
+  assert.deepStrictEqual(params, { '@from': '2026-10-01', '@to': '2026-11-01' });
+  assert.match(spec.query, /SUM\(c\.scanSizeBytes\)/);
+  assert.match(spec.query, /c\.scannedAt >= @from AND c\.scannedAt < @to AND IS_NUMBER\(c\.scanSizeBytes\)/);
+});
+
+test('scannedBytesBetween reads an empty month as 0', async (t) => {
+  t.mock.method(cosmos, 'queryValue', async () => null);
+
+  assert.strictEqual(await store.scannedBytesBetween('2026-10-01', '2026-11-01'), 0);
+});
+
 test('listStalePending asks for pending rows created before the cutoff', async (t) => {
   let spec;
   t.mock.method(cosmos, 'query', async (_container, s) => { spec = s; return { items: [ROW] }; });

@@ -260,7 +260,7 @@ async function intakeScanResult(event) {
   }
 }
 
-/** Swallows the failure as reconcileEagle does: the next hour is the retry. */
+/** Swallows the failure as reconcileEagle does: the next run is the retry. */
 async function intakeScanSweep() {
   const { logger } = require('../src/utils/logger');
   try {

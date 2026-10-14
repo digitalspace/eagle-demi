@@ -72,6 +72,22 @@ test('No threats found: the row is clean, keyed, and takes its requested read li
   assert.strictEqual(row.isPublished, true);
 });
 
+test('No threats found stores the scanned size on the row', async (t) => {
+  const { store, deps } = setup(t);
+
+  await onScanResult(scanEvent('No threats found'), deps);
+
+  assert.strictEqual(store.rows.get(DOC).scanSizeBytes, BYTES.length);
+});
+
+test('Malicious stores the scanned size on the row', async (t) => {
+  const { store, deps } = setup(t);
+
+  await onScanResult(scanEvent('Malicious'), deps);
+
+  assert.strictEqual(store.rows.get(DOC).scanSizeBytes, BYTES.length);
+});
+
 test('No threats found with no requested read list leaves read as it was', async (t) => {
   const { store, deps } = setup(t);
 

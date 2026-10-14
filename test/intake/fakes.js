@@ -12,7 +12,8 @@ const { logger } = require('../../src/utils/logger');
 const ACCOUNT = 'demiintest';
 const INTAKE_VARS = [
   'INTAKE_STORAGE_ACCOUNT', 'INTAKE_INCOMING_CONTAINER', 'INTAKE_QUARANTINE_CONTAINER',
-  'INTAKE_QUARANTINE_CLIENT_ID', 'INTAKE_SWEEP_SCHEDULE', 'INTAKE_PENDING_TIMEOUT_HOURS'
+  'INTAKE_QUARANTINE_CLIENT_ID', 'INTAKE_SWEEP_SCHEDULE', 'INTAKE_PENDING_TIMEOUT_HOURS',
+  'INTAKE_CAP_GB_PER_MONTH'
 ];
 
 /** Set the INTAKE_* settings for one test; anything not named is cleared. Restored after. */
@@ -44,6 +45,11 @@ function fakeStore(rows) {
     },
     async listStalePending(cutoff) {
       return [...byId.values()].filter(r => r.scanStatus === 'pending' && r.createdAt < cutoff);
+    },
+    async scannedBytesBetween(from, to) {
+      return [...byId.values()]
+        .filter(r => r.scannedAt >= from && r.scannedAt < to && typeof r.scanSizeBytes === 'number')
+        .reduce((sum, r) => sum + r.scanSizeBytes, 0);
     }
   };
 }

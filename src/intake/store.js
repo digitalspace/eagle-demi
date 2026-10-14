@@ -37,4 +37,15 @@ async function listStalePending(cutoff) {
   return items;
 }
 
-module.exports = { findById, settle, listStalePending };
+/** Bytes scanned from `from` up to `to` (`YYYY-MM-DD`), summed over the rows' `scanSizeBytes`. */
+async function scannedBytesBetween(from, to) {
+  // IS_NUMBER: one null makes Cosmos return undefined for the whole SUM.
+  const total = await cosmos.queryValue(documents.CONTAINER, {
+    query: 'SELECT VALUE SUM(c.scanSizeBytes) FROM c ' +
+      'WHERE c.scannedAt >= @from AND c.scannedAt < @to AND IS_NUMBER(c.scanSizeBytes)',
+    parameters: [{ name: '@from', value: from }, { name: '@to', value: to }]
+  });
+  return Number(total) || 0;
+}
+
+module.exports = { findById, settle, listStalePending, scannedBytesBetween };

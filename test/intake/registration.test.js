@@ -30,12 +30,12 @@ test('INTAKE_STORAGE_ACCOUNT registers the scan result trigger', (t) => {
   assert.strictEqual(registered.eventGrids[0].options.handler, index.intakeScanResult);
 });
 
-test('INTAKE_STORAGE_ACCOUNT registers the sweep hourly by default, not on startup', (t) => {
+test('INTAKE_STORAGE_ACCOUNT registers the sweep every 30 minutes by default, not on startup', (t) => {
   setIntakeEnv(t, {});
   const { registered, index } = loadIndex(t, 'INTAKE_STORAGE_ACCOUNT', ACCOUNT);
 
   const sweep = registered.timers.find(r => r.name === 'intakeScanSweep');
-  assert.strictEqual(sweep.options.schedule, '0 0 * * * *');
+  assert.strictEqual(sweep.options.schedule, '0 */30 * * * *');
   assert.strictEqual(sweep.options.runOnStartup, false);
   assert.strictEqual(sweep.options.handler, index.intakeScanSweep);
 });

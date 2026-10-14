@@ -4,6 +4,7 @@
  * `intakeScanSweep`: rejects intake rows still pending after INTAKE_PENDING_TIMEOUT_HOURS. A file
  * that arrived but never got a result is moved to quarantine (`timeout`); a link never used is
  * `no-upload`. The timeout outlasts scan plus event delivery, so a later scan event is ignored.
+ * Each run also logs the month's scanned bytes against Defender's monthly cap, for the cap alerts.
  */
 
 const config = require('../config');
@@ -11,6 +12,20 @@ const { logger } = require('../utils/logger');
 const { moveToQuarantine } = require('./blobs');
 
 const HOUR_MS = 60 * 60 * 1000;
+const GIB = 1073741824;
+
+/** Log the current UTC calendar month's scanned bytes. Plain text: the alerts parse the message only. */
+async function logMonthToDate(store, now) {
+  const at = new Date(now);
+  // Date-only bounds: Defender writes 7 fraction digits, which sort below a `.000Z` bound.
+  const monthStart = (offset) =>
+    new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + offset, 1)).toISOString().slice(0, 10);
+  const from = monthStart(0);
+  const to = monthStart(1);
+  const scannedBytes = await store.scannedBytesBetween(from, to);
+  const capBytes = config.intake.capGBPerMonth * GIB;
+  logger.info(`[intake] month-to-date scannedBytes=${scannedBytes} capBytes=${capBytes}`);
+}
 
 function defaultDeps() {
   return { store: require('./store'), blobs: require('./blobs') };
@@ -47,6 +62,7 @@ async function sweep(deps, now = Date.now()) {
   const summary = { stale: rows.length, timedOut: 0, noUpload: 0, failed: 0 };
   for (const row of rows) await sweepRow(row, resolved, summary);
   logger.info('intake sweep', { cutoff, ...summary });
+  await logMonthToDate(resolved.store, now);
   return summary;
 }
 

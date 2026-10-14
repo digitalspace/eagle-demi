@@ -109,6 +109,36 @@ test('the sweep logs one summary line', async (t) => {
     { stale: 2, timedOut: 1, noUpload: 1, failed: 0 });
 });
 
+const monthLines = logs => logs.info.filter(l => l.message.startsWith('[intake] month-to-date'));
+
+test('the sweep logs this UTC month\'s scanned bytes against the cap, as plain text', async (t) => {
+  const scanned = (id, scannedAt, scanSizeBytes) =>
+    row(id, ago(30 * 24 * HOUR), { scanStatus: 'clean', scannedAt, scanSizeBytes });
+  const rows = [
+    scanned('lastMonth', '2026-09-30T23:59:59.9999999Z', 1000),
+    scanned('firstInstant', '2026-10-01T00:00:00.0000000Z', 100),
+    scanned('today', '2026-10-14T17:00:00.0000000Z', 200),
+    scanned('noSize', '2026-10-14T17:30:00.0000000Z', null),
+    scanned('nextMonth', '2026-11-01T00:00:00.0000000Z', 5000)
+  ];
+  const env = { INTAKE_STORAGE_ACCOUNT: 'demiintest', INTAKE_CAP_GB_PER_MONTH: '25' };
+  const { logs, deps } = setup(t, rows, {}, env);
+
+  await sweep(deps, NOW);
+
+  assert.deepStrictEqual(monthLines(logs).map(l => l.message),
+    ['[intake] month-to-date scannedBytes=300 capBytes=26843545600']);
+});
+
+test('the month line is logged when nothing is pending, with capBytes=0 when no cap is set', async (t) => {
+  const { logs, deps } = setup(t, [], {});
+
+  await sweep(deps, NOW);
+
+  assert.deepStrictEqual(monthLines(logs).map(l => l.message),
+    ['[intake] month-to-date scannedBytes=0 capBytes=0']);
+});
+
 test('with INTAKE_STORAGE_ACCOUNT empty the sweep logs one line and touches nothing', async (t) => {
   setIntakeEnv(t, {});
   const logs = recordLogs(t);

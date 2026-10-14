@@ -532,8 +532,10 @@ const config = {
     get quarantineContainer() { return envTrim('INTAKE_QUARANTINE_CONTAINER') || 'quarantine'; },
     // Client id of the second managed identity, the only one allowed to read a file not tagged clean.
     get quarantineClientId() { return envTrim('INTAKE_QUARANTINE_CLIENT_ID'); },
-    // NCRONTAB, six fields. Hourly when unset.
-    get sweepSchedule() { return envTrim('INTAKE_SWEEP_SCHEDULE') || '0 0 * * * *'; },
+    // NCRONTAB, six fields. Every 30 minutes when unset.
+    get sweepSchedule() { return envTrim('INTAKE_SWEEP_SCHEDULE') || '0 */30 * * * *'; },
+    // Defender's monthly scan cap in GB, logged beside the month's scanned bytes. 0 = unset.
+    get capGBPerMonth() { return intFromEnv('INTAKE_CAP_GB_PER_MONTH', 0); },
     // Scanning takes up to 3 hours and event delivery up to 1 more, so a timeout here is final.
     get pendingTimeoutHours() { return intFromEnv('INTAKE_PENDING_TIMEOUT_HOURS', 6); }
   },

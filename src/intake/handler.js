@@ -57,7 +57,8 @@ async function release(row, data, scannedAt, { store, blobs, nrs }) {
     ? { read: row.requestedRead, isPublished: row.requestedRead.includes('public') }
     : {};
   const settled = await store.settle(row, {
-    scanStatus: 'clean', scanResult: data.scanResultType, scannedAt, s3Key: key, ...read
+    scanStatus: 'clean', scanResult: data.scanResultType, scannedAt, scanSizeBytes: stat.size,
+    s3Key: key, ...read
   });
   if (!settled) {
     logger.warn('[intake] row settled by another writer while releasing', { documentId: row.id, key });
@@ -70,14 +71,15 @@ async function release(row, data, scannedAt, { store, blobs, nrs }) {
 async function reject(row, data, reason, scannedAt, { store, blobs }) {
   const stat = await moveToQuarantine(blobs.quarantine(), row.id);
   const malwareNames = (data.scanResultDetails && data.scanResultDetails.malwareNamesFound) || [];
+  const sizeBytes = stat ? stat.size : null;
   const settled = await store.settle(row, {
     scanStatus: 'rejected', scanResult: data.scanResultType || null, scanRejectReason: reason,
-    malwareNames, scannedAt, read: [], isPublished: false
+    malwareNames, scannedAt, scanSizeBytes: sizeBytes, read: [], isPublished: false
   });
   logger.warn('intake quarantined', {
     documentId: row.id, result: data.scanResultType, reason, malwareNames, moved: Boolean(stat)
   });
-  return { outcome: settled ? 'rejected' : 'raced', sizeBytes: stat ? stat.size : null };
+  return { outcome: settled ? 'rejected' : 'raced', sizeBytes };
 }
 
 /**
@@ -121,7 +123,6 @@ async function onScanResult(event, deps) {
   const { outcome, sizeBytes } = decision.status === 'clean'
     ? await release(row, data, scannedAt, resolved)
     : await reject(row, data, decision.reason, scannedAt, resolved);
-  // The monthly scan-cap alerts sum `sizeBytes` over this line.
   logger.info('intake scanned', { documentId, result, outcome, sizeBytes, durationMs: Date.now() - started });
 }
 
