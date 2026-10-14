@@ -28,6 +28,47 @@ function resourceBlock(source, symbol) {
 
 const DEFENDER = resourceBlock(MODULE, 'defenderForStorage');
 
+/** The string value of `var <name> = '...'` in the module. */
+function moduleString(name) {
+  const m = new RegExp(`^var ${name} = '([^']*)'$`, 'm').exec(MODULE);
+  assert.ok(m, `var ${name} is a string literal`);
+  return m[1];
+}
+
+/** A container var resolved through the exported intakeContainers object. */
+function containerName(name) {
+  const key = new RegExp(`^var ${name} = intakeContainers\\.(\\w+)$`, 'm').exec(MODULE);
+  assert.ok(key, `var ${name} reads intakeContainers`);
+  const value = new RegExp(`^ {2}${key[1]}: '([^']*)'$`, 'm').exec(MODULE);
+  assert.ok(value, `intakeContainers.${key[1]} is declared`);
+  return value[1];
+}
+
+/**
+ * The API identity's ABAC condition as Azure receives it, split into its top-level AND clauses,
+ * each with whitespace collapsed. Each `${var}` is resolved from the module, so a container swap shows up.
+ */
+function apiConditionClauses() {
+  const body = /^var apiCondition = join\(\[\n([\s\S]*?)\n\], '\\n'\)$/m.exec(MODULE);
+  assert.ok(body, 'apiCondition is a join() of string lines');
+  const vars = {
+    blobsAction: moduleString('blobsAction'),
+    containerNameAttr: moduleString('containerNameAttr'),
+    scanResultTag: moduleString('scanResultTag'),
+    incomingContainer: containerName('incomingContainer'),
+    quarantineContainer: containerName('quarantineContainer'),
+    deadletterContainer: containerName('deadletterContainer')
+  };
+  const text = body[1].split('\n')
+    .map((line) => line.trim().replace(/^'|'$/g, '').replace(/\\'/g, "'"))
+    .join('\n')
+    .replace(/\$\{(\w+)\}/g, (_, name) => {
+      assert.ok(name in vars, `condition var ${name} is resolved by the test`);
+      return vars[name];
+    });
+  return text.split('\nAND\n').map((clause) => clause.replace(/\s+/g, ' ').trim());
+}
+
 test('Defender settings match the intake plan table', async (t) => {
   await t.test('uses the stable 2025-06-01 API on the intake account', () => {
     assert.match(DEFENDER, /'Microsoft\.Security\/defenderForStorageSettings@2025-06-01'/);
@@ -125,6 +166,44 @@ test('the API identity cannot read an unscanned blob or mark one clean', () => {
   assert.match(resourceBlock(MODULE, 'apiBlobDelegator'), /principalId: apiPrincipalId/);
 });
 
+test('the API identity ABAC condition', async (t) => {
+  const BLOBS = 'Microsoft.Storage/storageAccounts/blobServices/containers/blobs';
+  const CONTAINER = '@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name]';
+  const clauses = apiConditionClauses();
+
+  await t.test('has exactly three AND clauses', () => {
+    assert.strictEqual(clauses.length, 3);
+  });
+
+  // Listing is excluded so the API can still enumerate incoming; the blob read itself stays gated.
+  await t.test('clause 1 gates blob reads but not Blob.List', () => {
+    assert.ok(clauses[0].startsWith(
+      `( ( !(ActionMatches{'${BLOBS}/read'} AND NOT SubOperationMatches{'Blob.List'}) ) OR (`), clauses[0]);
+  });
+
+  await t.test('clause 1 allows a read only in incoming and only once tagged clean', () => {
+    assert.ok(clauses[0].endsWith(
+      `OR ( ${CONTAINER} StringEquals 'incoming' AND ` +
+      `@Resource[${BLOBS}/tags:Malware Scanning scan result<$key_case_sensitive$>] StringEquals 'No threats found' ) )`),
+      clauses[0]);
+  });
+
+  await t.test('clause 2 gates writes, creates and deletes', () => {
+    assert.ok(clauses[1].startsWith(
+      `( ( !(ActionMatches{'${BLOBS}/write'}) AND !(ActionMatches{'${BLOBS}/add/action'}) ` +
+      `AND !(ActionMatches{'${BLOBS}/delete'}) ) OR (`), clauses[1]);
+  });
+
+  await t.test('clause 2 allows them only in incoming', () => {
+    assert.ok(clauses[1].endsWith(`OR ( ${CONTAINER} StringEquals 'incoming' ) )`), clauses[1]);
+  });
+
+  // The quarantine copy runs as demi-intake-<env>, which is the only identity that may touch these.
+  await t.test('names neither quarantine nor deadletter', () => {
+    assert.doesNotMatch(clauses.join(' '), /quarantine|deadletter/);
+  });
+});
+
 test('the API app carries every intake setting and the second identity', async (t) => {
   for (const name of [
     'INTAKE_STORAGE_ACCOUNT', 'INTAKE_INCOMING_CONTAINER', 'INTAKE_QUARANTINE_CONTAINER',
@@ -146,6 +225,20 @@ test('the API app carries every intake setting and the second identity', async (
   await t.test('passes the same cap Defender enforces', () => {
     assert.match(API_MODULE, /value: empty\(intakeStorageAccount\) \? '' : string\(intakeCapGBPerMonth\)/);
     assert.match(MAIN, /^\s+intakeCapGBPerMonth: intakeCapGBPerMonth$/m);
+  });
+
+  // The quarantine copy picks its credential by this client id; a resource id or '' leaves it on the API identity.
+  await t.test('sets INTAKE_QUARANTINE_CLIENT_ID to the intake identity client id', () => {
+    assert.match(API_MODULE, /name: 'INTAKE_QUARANTINE_CLIENT_ID'\n\s+value: intakeIdentityClientId\n/);
+    assert.match(MAIN, /^\s+intakeIdentityClientId: intakeIdentityClientId$/m);
+    assert.match(MODULE, /^output intakeIdentityClientId string = intakeIdentity\.properties\.clientId$/m);
+  });
+
+  // Application-only runs skip the module and read the same identity back as an existing resource.
+  await t.test('reads the client id, not the resource id, on runs that skip the module', () => {
+    assert.match(MAIN, /^var intakeIdentityClientId = !deployDocumentIntake \? '' : \(deployFoundation \? documentIntake!\.outputs\.intakeIdentityClientId : intakeIdentityExisting\.properties\.clientId\)$/m);
+    assert.match(resourceBlock(MAIN, 'intakeIdentityExisting'), /name: 'demi-intake-\$\{environmentName\}'/);
+    assert.match(resourceBlock(MODULE, 'intakeIdentity'), /name: 'demi-intake-\$\{environmentName\}'/);
   });
 
   await t.test('attaches demi-intake-<env> when intake is deployed', () => {
@@ -176,6 +269,14 @@ test('the scan cap alerts', async (t) => {
     assert.match(alert, /scopes: \[ logsWorkspaceId \]/);
     assert.match(MAIN, /^\s+logsWorkspaceId: observability!\.outputs\.workspaceId\n\s+actionGroupId: actionGroupId$/m);
   });
+});
+
+// Pass 1 of the rollout runs before intakeScanResult and intakeScanSweep exist: the subscription would
+// drop every event and the sweep alert would fire on its first evaluation.
+test('DEPLOY_INTAKE_SUBSCRIPTION=false skips both the subscription and the dead-sweep alert', () => {
+  assert.match(resourceBlock(MODULE, 'scanResultSubscription'), /^resource scanResultSubscription '[^']+' = if \(deploySubscription\) \{$/m);
+  assert.match(resourceBlock(MODULE, 'sweepSilentAlert'), /^resource sweepSilentAlert '[^']+' = if \(deploySubscription\) \{$/m);
+  assert.match(MODULE, /^param deploySubscription bool = true$/m);
 });
 
 test('a dead sweep alerts after 2 hours without a month-to-date line', () => {

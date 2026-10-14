@@ -13,8 +13,8 @@ param location = 'canadacentral'
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
 // ── Document intake ───────────────────────────────────────────────────────────────────────────
-// Off until the test rollout passes. Infra pass 1 runs with DEPLOY_INTAKE_SUBSCRIPTION=false, because the
-// subscription cannot be created before `intakeScanResult` is deployed; pass 2 takes the default.
+// Off until the test rollout passes. Infra pass 1 must export DEPLOY_INTAKE_SUBSCRIPTION=false: the scan-result
+// subscription and the dead-sweep alert need `intakeScanResult` and `intakeScanSweep` deployed. Pass 2 takes the default.
 param deployDocumentIntake = false
 param intakeCapGBPerMonth = 25
 param deployIntakeSubscription = bool(readEnvironmentVariable('DEPLOY_INTAKE_SUBSCRIPTION', 'true'))

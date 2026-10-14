@@ -223,8 +223,8 @@ param deployDocumentIntake bool = false
 @minValue(1)
 param intakeCapGBPerMonth int = 5
 
-// Rollout: pass 1 with DEPLOY_INTAKE_SUBSCRIPTION=false, code deploy, pass 2 with the default.
-@description('Create the scan-result Event Grid subscription. False until `intakeScanResult` exists in the API app.')
+// Rollout: pass 1 must export DEPLOY_INTAKE_SUBSCRIPTION=false, then code deploy, then pass 2 with the default.
+@description('Create the scan-result Event Grid subscription and the dead-sweep alert. False until `intakeScanResult` and `intakeScanSweep` exist in the API app.')
 param deployIntakeSubscription bool = true
 
 @description('Object id of the Defender for Storage principal that publishes scan results to the intake topic. Empty grants nothing.')

@@ -25,7 +25,7 @@ param apiPrincipalId string
 @description('Name of the Flex API app whose `intakeScanResult` function receives scan results')
 param apiAppName string
 
-@description('Create the Event Grid subscription. False on the first pass: the subscription cannot be created before the function exists.')
+@description('Create the Event Grid subscription and the dead-sweep alert. False on the first pass: both need the intake functions deployed first.')
 param deploySubscription bool = true
 
 @description('Malware scanning cap in GB per month. Scanning stops for the rest of the month when it is reached.')
@@ -67,7 +67,8 @@ var quarantineContainer = intakeContainers.quarantine
 var deadletterContainer = intakeContainers.deadletter
 var scanResultTag = 'Malware Scanning scan result'
 var privateEndpointName = 'demi-intake-pe-${environmentName}'
-// The Event Grid trigger in api/index.js. A subscription pointed at a missing function is accepted and drops every event.
+// The Event Grid trigger in api/index.js. A subscription pointed at a missing function is accepted and drops every event,
+// so infra pass 1 must export DEPLOY_INTAKE_SUBSCRIPTION=false (deploySubscription) until the code is deployed.
 var scanResultFunctionName = 'intakeScanResult'
 
 var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -372,8 +373,9 @@ resource capAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = [for a i
 }]
 
 // The sweep logs the month-to-date line every 30 minutes. None for 2 hours means the sweep is dead,
-// so pending uploads are never timed out and the cap alerts above go silent.
-resource sweepSilentAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+// so pending uploads are never timed out and the cap alerts above go silent. Gated with the subscription:
+// before intakeScanSweep is deployed it would fire on its first evaluation.
+resource sweepSilentAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deploySubscription) {
   name: 'demi-intake-sweep-silent-${environmentName}'
   location: location
   tags: tags
