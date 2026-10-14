@@ -21,7 +21,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 
 ## Work plan
 
-- Claim rule: a session sets its row to `in progress (feat-port-<slice>)` in its first push. A branch `feat-port-<slice>` that already exists locally or on origin means the slice is taken.
+- Claim rule: a developer sets their row to `in progress (feat-port-<slice>)` in its first push. A branch `feat-port-<slice>` that already exists locally or on origin means the slice is taken.
 - Each slice's brief, rules and file lists are in `docs/eagle-api-port-plan.md`.
 - Swagger rule: add methods inside the object's existing path block. Use anchors only for new paths.
 

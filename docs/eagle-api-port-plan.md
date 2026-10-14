@@ -6,7 +6,8 @@ Source of truth: `docs/eagle-api-port.md` on eagle-demi origin/main 1a2977a. Rul
 
 ## Corrections to the tracker
 
-- The CAC admin handlers are already gone from eagle-api (b072e79); `cac.js` on origin/develop has only public sign-up and remove-member. The CAC slice takes its rules from `b072e79^`.- No eagle-admin code reads or writes the CAC fields (git grep on origin/develop finds none), so the CAC Flip has no eagle-admin half.
+- The CAC admin handlers are already gone from eagle-api (b072e79); `cac.js` on origin/develop has only public sign-up and remove-member. The CAC slice takes its rules from `b072e79^`.
+- No eagle-admin code reads or writes the CAC fields (git grep on origin/develop finds none), so the CAC Flip has no eagle-admin half.
 - The inspection writes are also gone: `inspection.js` on origin/develop keeps only `protectedElementItemGet` (`:10`); `demiPush.inspection` (`demiPush.js:420-422`) is called only from a test.
 - Slice 1 does not own `merge/project.js`: pin resolution at `merge/project.js:146-153` already maps to `{_id, name, province}` and only lacks `province` from the label read in `lists.js`.
 - The pins policy goes in a new `src/domain/project-pins.js`, owned by Flip F1.
@@ -21,11 +22,11 @@ Source of truth: `docs/eagle-api-port.md` on eagle-demi origin/main 1a2977a. Rul
 
 ## 2. Slice 0: scaffold and work plan (eagle-demi, merges first)
 
-Who runs it: the live session in worktree `feat-port-organizations-pins`. Slice 0 is its first PR; organizations + pins is its second PR. Wave 2 starts when the slice 0 PR merges.
+Who runs it: the developer working on organizations, on branch `feat-port-organizations-pins`. Slice 0 is the first PR; organizations + pins is the second PR. Wave 2 starts when the slice 0 PR merges.
 
 - **Tracker "Work plan" section, the first commit.**
   - One row per slice: id, objects, owns, after, size, status.
-  - Claim rule: a session sets its row to `in progress (feat-port-<slice>)` in its **first push**, not at PR time. The tracker row is the claim; `eagle-demi/TODO.md` gets no lines.
+  - Claim rule: a developer sets their row to `in progress (feat-port-<slice>)` in its **first push**, not at PR time. The tracker row is the claim; `eagle-demi/TODO.md` gets no lines.
   - Fix the stale lines: the `require-roles.js` cite at tracker line 28 becomes `:51-61`; the CAC admin handlers and inspection POSTs in the retire list are already removed.
 - **New files:**
   - `src/domain/_schema.js` and `src/domain/_write.js`
@@ -70,7 +71,7 @@ Every slice also does all of the following:
 
 Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers marked `:N` refer to eagle-api `api/swagger/swagger.yaml`.
 
-**1. Organizations + pins.** PR 2 of the `feat-port-organizations-pins` session. Size M. After 0.
+**1. Organizations + pins.** PR 2 of the `feat-port-organizations-pins` branch. Size M. After 0.
 - Routes: `POST /organizations` [staff, sysadmin] (:4241); `PUT /organizations/:id` [project-system-admin] (:4361).
 - Rules:
   - Create sets read to public, staff and sysadmin (`organization.js:110-112`).
@@ -314,10 +315,6 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 - **Kept until DataBC moves:** `/reports`.
 - **eagle-api, one slice per object:** delete the handlers under "Callers to move", the pin routes and the extension routes. A retire PR may merge once that object's Flip is live on test. The retire **tag may reach prod only after that Flip is live on prod**. This is stricter than tracker line 20; record the change there.
 - **DEMI final retire:** delete the mirror lines and each kind's `upsertFromEagle`, only for kinds whose Flip is live on prod. Inspections (`routes.js:252-254`) stay until Daniel decides.
-
-## 7. Session prompt template
-
-> You are porting one eagle-api object to DEMI. Read `docs/eagle-api-port.md` on eagle-demi `origin/main` first; it is the source of truth for layering, rules, phases and the Work plan table. Your slice: <paste slice brief>. Work in worktree branch `feat-port-<slice>` off `main` (`git -C /root/repos/<repo> worktree add .claude/worktrees/feat-port-<slice> -b feat-port-<slice> origin/main`). If that branch already exists locally or on origin, the slice is taken: stop and pick another. In your first push, set your Work plan row to `in progress (feat-port-<slice>)`. Touch only the files your slice owns. Add swagger methods inside the object's existing path block, and use anchors only for new paths. Before you write a route, confirm every rule against eagle-api `origin/develop` and record it with its `file:line`. Put doubts under "Questioned" and ask before dropping any. Log new domain, write and refusal paths through `src/utils/logger.js`, never `console.*`. Update the matching tests (and the eagle-admin `.spec.ts` for any eagle-admin change) and the wiki page your slice owns. Run `yarn test` and `bash /root/repos/.claude/scripts/prepush.sh <repo>`. Write commit messages with the `commit-msg` skill. Product repo text never mentions AI-assisted work. Ask before commit and push. After push, run the `post-push-review` skill. One PR per slice; set your tracker status in that PR.
 
 Risks:
 - **Prod releases, each needs its own approval from Daniel, from a tag verified on test, never a branch:**
