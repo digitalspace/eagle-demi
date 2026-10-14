@@ -13,6 +13,15 @@ param location = 'canadacentral'
 // needs `./scripts/deploy-infra.sh test --foundation`, which is what sets DEPLOY_FOUNDATION.
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
+// ── Document intake ───────────────────────────────────────────────────────────────────────────
+// Staging for the intake rollout. Infra pass 1 runs with DEPLOY_INTAKE_SUBSCRIPTION=false, because the
+// subscription cannot be created before `intakeScanResult` is deployed; pass 2 takes the default.
+param deployDocumentIntake = true
+param intakeCapGBPerMonth = 5
+param deployIntakeSubscription = bool(readEnvironmentVariable('DEPLOY_INTAKE_SUBSCRIPTION', 'true'))
+// Unset until the Defender publisher principal is confirmed; Defender cannot publish scan results without it.
+param intakeDefenderPrincipalId = ''
+
 // Direct-to-NRS object store: the test bucket zdspnb, keys at the root, no prefix. eagle-api on
 // OpenShift TEST has written here through its nr-object-store-credential secret since the Helm
 // move on 2026-02-11, so both apps see the same objects. asnpnn/ozwdez/ is a prod copy in the dev

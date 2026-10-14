@@ -25,6 +25,8 @@
 
 targetScope = 'resourceGroup'
 
+import { intakeContainers } from './modules/document-intake.bicep'
+
 @description('Target Azure region')
 param location string = 'canadacentral'
 
@@ -213,6 +215,20 @@ param apiFlexSubnetId string = ''
 // `Storage Blob Data Contributor`. Off, so that this file keeps describing what exists.
 @description('Deploy the Phase 3b document storage account. Off: dev still reads MinIO.')
 param deployDocumentStorage bool = false
+
+@description('Deploy the document intake staging account, the only account Defender for Storage scans.')
+param deployDocumentIntake bool = false
+
+@description('Defender malware scanning cap on the intake account, GB per month')
+@minValue(1)
+param intakeCapGBPerMonth int = 5
+
+// Rollout: pass 1 with DEPLOY_INTAKE_SUBSCRIPTION=false, code deploy, pass 2 with the default.
+@description('Create the scan-result Event Grid subscription. False until `intakeScanResult` exists in the API app.')
+param deployIntakeSubscription bool = true
+
+@description('Object id of the Defender for Storage principal that publishes scan results to the intake topic. Empty grants nothing.')
+param intakeDefenderPrincipalId string = ''
 
 @description('Comma-separated `sources` keys a project may publish over HTTP. Empty publishes none.')
 param enrichmentSources string = ''
@@ -468,7 +484,7 @@ param devboxEntraSshPrincipalId string = ''
 // run — about 293 s of the 317 s a full deploy takes. False deploys only the application layer and
 // reads the rest by name; true deploys everything. Foundation edits need a run with it on, which
 // `scripts/deploy-infra.sh --foundation` sets through DEPLOY_FOUNDATION.
-@description('Deploy the foundation layer: identity, vault, Cosmos, observability, audit logs, Foundry, search, APIM, static site, document storage, budget.')
+@description('Deploy the foundation layer: identity, vault, Cosmos, observability, audit logs, Foundry, search, APIM, static site, document storage, document intake, budget.')
 param deployFoundation bool = false
 
 // Mandatory Cost Management Tags applied across ALL resources
@@ -527,6 +543,10 @@ resource auditDcrExisting 'Microsoft.Insights/dataCollectionRules@2023-03-11' ex
 
 resource foundryExisting 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: 'demi-foundry-${environmentName}'
+}
+
+resource intakeIdentityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: 'demi-intake-${environmentName}'
 }
 
 // One var per borrowed value. Everything below the foundation modules reads these and never a
@@ -597,6 +617,9 @@ var foundryModelName = 'gpt-4.1-mini'
 var foundryDeployment = deployFoundry ? foundryModelName : ''
 var searchEndpoint = deploySearch ? 'https://demi-search-${environmentName}.search.windows.net' : existingSearchEndpoint
 var budgetName = 'demi-budget-${environmentName}'
+var intakeStorageAccountName = take('demiin${environmentName}${uniqueString(resourceGroup().id)}', 24)
+var intakeIdentityId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityId : intakeIdentityExisting.id)
+var intakeIdentityClientId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityClientId : intakeIdentityExisting.properties.clientId)
 
 // 1. User-assigned managed identity — the principal for EVERY data plane.
 //
@@ -692,6 +715,24 @@ module documentStorage './modules/document-storage.bicep' = if (deployFoundation
     peSubnetId: privateEndpointSubnetId
     apiPrincipalId: identityPrincipalId
     readerPrincipalId: readerPrincipalId
+  }
+}
+
+// 4b. Document intake staging account, scanned by Defender for Storage on upload.
+module documentIntake './modules/document-intake.bicep' = if (deployFoundation && deployDocumentIntake) {
+  name: 'deploy-document-intake'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    storageAccountName: intakeStorageAccountName
+    apiPrincipalId: identityPrincipalId
+    apiAppName: 'demi-api-fc-${environmentName}'
+    deploySubscription: deployIntakeSubscription
+    capGBPerMonth: intakeCapGBPerMonth
+    defenderPrincipalId: intakeDefenderPrincipalId
+    allowedOrigins: frontendHostNames
+    peSubnetId: privateEndpointSubnetId
   }
 }
 
@@ -856,6 +897,11 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     budgetName: budgetName
     frontendHostNames: frontendHostNames
     linkBaseUrl: linkBaseUrl
+    intakeStorageAccount: deployDocumentIntake ? intakeStorageAccountName : ''
+    intakeIncomingContainer: deployDocumentIntake ? intakeContainers.incoming : ''
+    intakeQuarantineContainer: deployDocumentIntake ? intakeContainers.quarantine : ''
+    intakeIdentityId: intakeIdentityId
+    intakeIdentityClientId: intakeIdentityClientId
     // VaultName/SecretName rather than SecretUri: the secret is created out of band, so no module
     // outputs its versioned identifier. Empty until APIM is deployed, which disables the app's
     // gateway trust branch entirely.

@@ -12,6 +12,15 @@ param location = 'canadacentral'
 // needs `./scripts/deploy-infra.sh prod --foundation`, which is what sets DEPLOY_FOUNDATION.
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
+// ── Document intake ───────────────────────────────────────────────────────────────────────────
+// Off until the test rollout passes. Infra pass 1 runs with DEPLOY_INTAKE_SUBSCRIPTION=false, because the
+// subscription cannot be created before `intakeScanResult` is deployed; pass 2 takes the default.
+param deployDocumentIntake = false
+param intakeCapGBPerMonth = 25
+param deployIntakeSubscription = bool(readEnvironmentVariable('DEPLOY_INTAKE_SUBSCRIPTION', 'true'))
+// Unset until the Defender publisher principal is confirmed; Defender cannot publish scan results without it.
+param intakeDefenderPrincipalId = ''
+
 // ── Object store ──────────────────────────────────────────────────────────────────────────────
 // The NRS store, shared with eagle-api and outliving any Azure environment. Prod's objects sit at
 // the root of bucket `ozwdez` with no prefix. Test reads bucket `zdspnb` with no prefix, the
