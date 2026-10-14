@@ -43,6 +43,19 @@ function fakeStore(rows) {
       Object.assign(stored, fields);
       return true;
     },
+    /** Pages of pending rows, oldest first; the token is the next page's start index. */
+    async listPending({ pageSize, continuationToken = 0 }) {
+      const pending = [...byId.values()].filter(r => r.scanStatus === 'pending')
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const end = continuationToken + pageSize;
+      return {
+        items: pending.slice(continuationToken, end).map(r => ({ ...r })),
+        continuationToken: end < pending.length ? end : undefined
+      };
+    },
+    async countPendingAfter(createdAt) {
+      return [...byId.values()].filter(r => r.scanStatus === 'pending' && r.createdAt > createdAt).length;
+    },
     async listStalePending(cutoff) {
       return [...byId.values()].filter(r => r.scanStatus === 'pending' && r.createdAt < cutoff);
     },
@@ -54,13 +67,29 @@ function fakeStore(rows) {
   };
 }
 
-/** The intake account: `incoming` seeded with `{ id: { bytes, etag, contentType } }`. */
+/**
+ * The intake account: `incoming` seeded with `{ id: { bytes, etag, contentType, lastModified, tags } }`.
+ * Set `denyTags` to a set of ids, or true for all, to answer their tag reads with 403.
+ */
 function fakeAccount(incoming = {}) {
   const containers = { incoming: new Map(Object.entries(incoming)), quarantine: new Map() };
+  const account = { containers, denyTags: null };
   const client = {
     async statObject(key) {
       const blob = containers.incoming.get(key);
-      return blob ? { size: blob.bytes.length, etag: blob.etag, contentType: blob.contentType || null } : null;
+      return blob ? {
+        size: blob.bytes.length, etag: blob.etag, contentType: blob.contentType || null,
+        lastModified: blob.lastModified || null
+      } : null;
+    },
+    async getTags(key) {
+      if (account.denyTags === true || (account.denyTags && account.denyTags.has(key))) {
+        throw Object.assign(new Error('This request is not authorized'), {
+          statusCode: 403, code: 'AuthorizationPermissionMismatch'
+        });
+      }
+      const blob = containers.incoming.get(key);
+      return blob ? { ...blob.tags } : null;
     },
     async getObjectStream(key) { return Readable.from([containers.incoming.get(key).bytes]); },
     async copyObject(src, dest, { destContainer } = {}) {
@@ -69,7 +98,8 @@ function fakeAccount(incoming = {}) {
     },
     async removeObject(key) { containers.incoming.delete(key); }
   };
-  return { containers, blobs: { staging: () => client, quarantine: () => client } };
+  account.blobs = { staging: () => client, quarantine: () => client };
+  return account;
 }
 
 /** The object store: what was written, keyed by object key. */

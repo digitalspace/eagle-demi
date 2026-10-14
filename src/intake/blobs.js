@@ -2,8 +2,8 @@
 
 /**
  * Clients for the intake account. Two identities on purpose: the app identity can read a file in
- * `incoming` only once Defender tagged it clean (ABAC), and only the quarantine identity can read,
- * copy and delete a file that is not.
+ * `incoming` only once Defender tagged it clean (ABAC), and only the quarantine identity can read
+ * the tags of, copy and delete a file that is not. Neither can write a tag.
  */
 
 const config = require('../config');

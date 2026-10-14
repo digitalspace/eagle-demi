@@ -1015,6 +1015,30 @@ test('azure blob backend', async (t) => {
     }
   });
 
+  await t.test('getTags maps the blob index tags of the named blob', async () => {
+    let seen;
+    t.mock.method(BlockBlobClient.prototype, 'getTags', async function () {
+      seen = this.name;
+      return { tags: { 'Malware scanning scan result': 'No threats found' } };
+    });
+
+    assert.deepStrictEqual(await azure.getTags('etl/abc.pdf'),
+      { 'Malware scanning scan result': 'No threats found' });
+    assert.strictEqual(seen, 'etl/abc.pdf');
+  });
+
+  await t.test('getTags is null on BlobNotFound and reports every other failure', async () => {
+    t.mock.method(BlockBlobClient.prototype, 'getTags', async () => {
+      throw Object.assign(new Error('BlobNotFound'), { statusCode: 404, code: 'BlobNotFound' });
+    });
+    assert.strictEqual(await azure.getTags('etl/gone.pdf'), null);
+
+    for (const err of [headError(404, 'ContainerNotFound'), headError(403, 'AuthorizationPermissionMismatch')]) {
+      t.mock.method(BlockBlobClient.prototype, 'getTags', async () => { throw err; });
+      await assert.rejects(azure.getTags('etl/abc.pdf'), err, err.message);
+    }
+  });
+
   await t.test('the container is NEVER created on demand', async () => {
     // Auto-creating would turn a configuration typo into a working-but-empty store. A user
     // delegation SAS also requires the container to already exist.
