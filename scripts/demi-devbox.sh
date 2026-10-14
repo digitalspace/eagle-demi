@@ -394,7 +394,7 @@ managed_cleanup() {
 # instead of holding one ARM call open: DEVBOX_QUEUE_TIMEOUT until the script starts, then
 # DEVBOX_RUN_TIMEOUT (the VM's own limit) plus three polls. Prints stdout, then stderr to stderr.
 managed_run() {
-  local wrapped="$1" t0=$SECONDS started='' state='' grace out_sas err_sas out err reason dl_err secs epoch
+  local wrapped="$1" t0=$SECONDS started='' state='' grace out_sas err_sas poll out err reason dl_err secs epoch
   RUN_FILES=()
   RUN_NAME="demi-run-$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
   # Best effort in the handlers: a closed terminal must not stop the cleanup at its first echo.
@@ -427,11 +427,14 @@ managed_run() {
     return 1
   fi
   rm -f "$out_sas" "$err_sas"
+  poll="$(mktemp)"; RUN_FILES+=("$poll")
 
   while :; do
-    state="$("$AZ" vm run-command show --subscription "$SUBSCRIPTION" -g "$VM_RG" --vm-name "$VM" \
+    # Through a file, not $(): bash 5.2 can fail to parse a trap that fires while it expands a $().
+    "$AZ" vm run-command show --subscription "$SUBSCRIPTION" -g "$VM_RG" --vm-name "$VM" \
       --name "$RUN_NAME" --instance-view -o tsv \
-      --query "join(' ', [to_string(provisioningState), to_string(instanceView.executionState)])" || true)"
+      --query "join(' ', [to_string(provisioningState), to_string(instanceView.executionState)])" >"$poll" || true
+    IFS= read -r state <"$poll" || true
     state="${state,,}"
     case "$state" in
       *' succeeded'|*' failed'|*' timedout'|*' canceled'|'failed '*|'canceled '*) break ;;
