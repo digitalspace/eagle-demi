@@ -158,7 +158,7 @@ const routes = [
   // projects/counts: native list contract. `strict` answers a rejected Bearer with its 401, not the public view.
   { method: 'get', path: '/projects', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => projectController().getProjects },
   { method: 'get', path: '/counts', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/counts').counts },
-  { method: 'get', path: '/projects/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProject },
+  { method: 'get', path: '/projects/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => projectController().getProject },
   // The stored AI summary. Same guards as `/search/summary` and for the same reason — every AI
   // surface is privileged-only while cost, abuse and the review workflow are unsettled. A point
   // read of a record generated offline; nothing here calls a model.
@@ -187,13 +187,13 @@ const routes = [
   // so an anonymous caller cannot scrape the corpus past the native list's offset cap.
   { method: 'get', path: '/documents/scan', guards: [authMiddleware, credentialsMiddleware], load: () => documentController().scanDocuments },
   { method: 'get', path: '/documents/passages', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/passages').getPassages },
-  { method: 'get', path: '/documents/recent-uploads', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getRecentUploads },
+  { method: 'get', path: '/documents/recent-uploads', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getRecentUploads },
   // The PDF title worker's work list and lease sweep; before `/documents/:id` for the same reason.
   { method: 'get', path: '/documents/pdf-title/pending', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().listPending },
   { method: 'post', path: '/documents/pdf-title/sweep', guards: [authMiddleware, requireWrite, requirePdfTitleWorker], load: () => pdfTitleController().sweep },
-  { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getDocument },
+  { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().getDocument },
   // Presigned download link — ACL-gated inside the controller, same as the metadata read.
-  { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().downloadDocument },
+  { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().downloadDocument },
   { method: 'post', path: '/documents', guards: [authMiddleware, requireWrite], load: () => documentController().createDocument },
   // The multipart upload. The dispatcher writes the part to os.tmpdir() and hands the handler
   // `req.file`; the handler unlinks it, exactly as it did under multer.
@@ -271,8 +271,8 @@ const routes = [
   { method: 'get', path: '/users/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => userController().getUser },
   { method: 'get', path: '/groups', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => groupController().getGroups },
   { method: 'get', path: '/groups/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => groupController().getGroup },
-  { method: 'get', path: '/inspections', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspections },
-  { method: 'get', path: '/inspections/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspection },
+  { method: 'get', path: '/inspections', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspections },
+  { method: 'get', path: '/inspections/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => inspectionController().getInspection },
   { method: 'get', path: '/inspection-elements', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElements },
   { method: 'get', path: '/inspection-elements/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionElement },
   { method: 'get', path: '/inspection-items', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => inspectionController().getInspectionItems },

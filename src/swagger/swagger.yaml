@@ -937,6 +937,8 @@ paths:
             Project document. It carries `shortCode` and, composed from it, `shortUrl` — the
             `/s/<code>` link — plus `shortLinkUrl`, where that link lands, and `shortLinkCustom`,
             true when staff set that target. All four appear together or not at all.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
           description: Project not found.
     put:
@@ -1679,6 +1681,8 @@ paths:
             limit was not a plain whole number between 1 and 10. Carries
             `Cache-Control: private, no-store` and `Vary: Authorization, X-Api-Key` for every
             caller, anonymous included, so no shared cache stores it.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
         '500':
           description: >-
             `{ "success": false, "error": "Internal server error." }` — the ranking read failed.
@@ -1731,6 +1735,8 @@ paths:
       responses:
         '200':
           description: Document successfully retrieved.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
           description: Document not found.
     put:
@@ -2313,6 +2319,8 @@ paths:
                 entry may replay this response.
               schema:
                 type: string
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
           description: No document with this id the caller may read, or it has no stored file.
         '500':
@@ -3990,6 +3998,8 @@ paths:
                   type: object
         '400':
           description: pageSize above the caller's cap.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
 
   /api/inspections/{id}:
     get:
@@ -4017,6 +4027,8 @@ paths:
             application/json:
               schema:
                 type: object
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
           description: Inspection not found.
 
