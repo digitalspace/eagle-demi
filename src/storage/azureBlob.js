@@ -39,6 +39,14 @@ const { contentDisposition } = require('./content-disposition');
 const DELEGATION_KEY_TTL_MS = 30 * 60 * 1000;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
 
+/** ContainerNotFound is a config fault and must surface; only a missing blob reads as absent. */
+function isBlobNotFound(err) {
+  // A HEAD error has no body, so the SDK carries x-ms-error-code in `details`, as its own
+  // deleteIfExists reads it.
+  const code = err && (err.code || (err.details && err.details.errorCode));
+  return code === 'BlobNotFound';
+}
+
 function requireConfig() {
   if (!config.azureStorageAccount) {
     throw new Error(
@@ -197,10 +205,17 @@ function makeBlobStore({ account, container, credential, check }) {
         versionId: props.versionId || null, lastModified: props.lastModified || null
       };
     } catch (err) {
-      // A HEAD error has no body, so the SDK carries x-ms-error-code in `details`, as its own
-      // deleteIfExists reads it. ContainerNotFound is a config fault and must surface.
-      const code = err && (err.code || (err.details && err.details.errorCode));
-      if (code === 'BlobNotFound') return null;
+      if (isBlobNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  /** A blob's index tags as `{ key: value }`, or null when it is not there. Intake only. */
+  async function getTags(key) {
+    try {
+      return (await getBlobClient(key).getTags()).tags || {};
+    } catch (err) {
+      if (isBlobNotFound(err)) return null;
       throw err;
     }
   }
@@ -234,6 +249,7 @@ function makeBlobStore({ account, container, credential, check }) {
     getUploadUrl,
     copyObject,
     statObject,
+    getTags,
     putFile,
     putObjectStream,
     removeObject,

@@ -1,23 +1,27 @@
 'use strict';
 
 /**
- * What each Defender for Storage scan result does to an intake upload. Only a clean result releases
- * the file; anything else, including a result this table does not know, rejects it.
+ * What each Defender for Storage scan result does to an intake upload. Only the exact clean string
+ * releases the file, because the release read's ABAC condition matches that string exactly; any
+ * other result, including one this table does not know, rejects it.
  */
-const RESULTS = {
-  'No threats found': { status: 'clean', reason: null },
-  Malicious: { status: 'rejected', reason: 'malicious' },
-  Error: { status: 'rejected', reason: 'scan-error' },
-  'Not scanned': { status: 'rejected', reason: 'not-scanned' }
-};
 
-/** Reasons the sweep writes. An event arriving for a row rejected with one of these is late. */
-const SWEEP_REASONS = ['timeout', 'no-upload'];
+const CLEAN = 'No threats found';
+// Defender appends detail to some results ("Not scanned - blob size exceeded"), so these match by prefix.
+const REJECT_PREFIXES = [
+  ['Malicious', 'malicious'],
+  ['Not scanned', 'not-scanned'],
+  ['Scan failed', 'scan-error'],
+  ['Error', 'scan-error']
+];
 
-function decide(scanResultType) {
-  return Object.hasOwn(RESULTS, scanResultType)
-    ? RESULTS[scanResultType]
-    : { status: 'rejected', reason: 'unknown-result' };
+/** How long an upload link lives; the controller signs with it and the sweep waits it out. */
+const UPLOAD_LINK_SECONDS = 15 * 60;
+
+function decide(result) {
+  if (result === CLEAN) return { status: 'clean', reason: null };
+  const match = REJECT_PREFIXES.find(([prefix]) => String(result).startsWith(prefix));
+  return { status: 'rejected', reason: match ? match[1] : 'unknown-result' };
 }
 
-module.exports = { decide, SWEEP_REASONS };
+module.exports = { decide, UPLOAD_LINK_SECONDS };

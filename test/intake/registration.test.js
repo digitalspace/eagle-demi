@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * The intake functions register only when INTAKE_STORAGE_ACCOUNT is set, so a release that ships
+ * The intake sweep registers only when INTAKE_STORAGE_ACCOUNT is set, so a release that ships
  * before the intake infrastructure exists adds no trigger the host cannot bind.
  */
 
@@ -13,7 +13,7 @@ const assert = require('node:assert');
 const { loadIndex } = require('../helpers/load-index');
 const { ACCOUNT, setIntakeEnv } = require('./fakes');
 
-test('no INTAKE_STORAGE_ACCOUNT registers neither intake function', (t) => {
+test('no INTAKE_STORAGE_ACCOUNT registers no intake function', (t) => {
   setIntakeEnv(t, {});
   const { registered } = loadIndex(t, 'INTAKE_STORAGE_ACCOUNT', undefined);
 
@@ -22,20 +22,20 @@ test('no INTAKE_STORAGE_ACCOUNT registers neither intake function', (t) => {
   assert.strictEqual(registered.https.length, 2);
 });
 
-test('INTAKE_STORAGE_ACCOUNT registers the scan result trigger', (t) => {
+test('INTAKE_STORAGE_ACCOUNT registers no Event Grid trigger: the sweep reads scan results', (t) => {
   setIntakeEnv(t, {});
   const { registered, index } = loadIndex(t, 'INTAKE_STORAGE_ACCOUNT', ACCOUNT);
 
-  assert.deepStrictEqual(registered.eventGrids.map(e => e.name), ['intakeScanResult']);
-  assert.strictEqual(registered.eventGrids[0].options.handler, index.intakeScanResult);
+  assert.deepStrictEqual(registered.eventGrids, []);
+  assert.strictEqual(index.intakeScanResult, undefined);
 });
 
-test('INTAKE_STORAGE_ACCOUNT registers the sweep every 30 minutes by default, not on startup', (t) => {
+test('INTAKE_STORAGE_ACCOUNT registers the sweep every 5 minutes by default, not on startup', (t) => {
   setIntakeEnv(t, {});
   const { registered, index } = loadIndex(t, 'INTAKE_STORAGE_ACCOUNT', ACCOUNT);
 
   const sweep = registered.timers.find(r => r.name === 'intakeScanSweep');
-  assert.strictEqual(sweep.options.schedule, '0 */30 * * * *');
+  assert.strictEqual(sweep.options.schedule, '0 */5 * * * *');
   assert.strictEqual(sweep.options.runOnStartup, false);
   assert.strictEqual(sweep.options.handler, index.intakeScanSweep);
 });
