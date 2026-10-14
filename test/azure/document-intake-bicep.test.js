@@ -1,7 +1,7 @@
 'use strict';
 
 // The intake account is the only one Defender for Storage scans, and every value below is a choice
-// `az bicep build` cannot judge: a wrong cap, a dropped filter or a missing topic all compile. Same
+// `az bicep build` cannot judge: a wrong cap, a dropped filter or a lost tag-write deny all compile. Same
 // text-structural limits as main-bicep-wiring.test.js.
 
 const test = require('node:test');
@@ -17,6 +17,8 @@ const API_MODULE = read('azure', 'modules', 'api-function-flex.bicep');
 const TEST_PARAMS = read('azure', 'main.test.bicepparam');
 const PROD_PARAMS = read('azure', 'main.prod.bicepparam');
 const DEPLOY = read('scripts', 'deploy-infra.sh');
+const COSMOS_MODULE = read('azure', 'modules', 'cosmos-nosql.bicep');
+const BLOBS = 'Microsoft.Storage/storageAccounts/blobServices/containers/blobs';
 
 /** The body of a top-level resource declaration, up to its closing brace at column 0. */
 function resourceBlock(source, symbol) {
@@ -44,13 +46,23 @@ function containerName(name) {
   return value[1];
 }
 
+/** The lines of `var <name> = join([...], '\n')`, unquoted; a bare var name on a line expands to that var's lines. */
+function conditionLines(name) {
+  const body = new RegExp(`^var ${name} = join\\(\\[\\n([\\s\\S]*?)\\n\\], '\\\\n'\\)$`, 'm').exec(MODULE);
+  assert.ok(body, `${name} is a join() of string lines`);
+  return body[1].split('\n').flatMap((line) => {
+    const trimmed = line.trim();
+    return /^\w+$/.test(trimmed)
+      ? conditionLines(trimmed)
+      : [trimmed.replace(/^'|'$/g, '').replace(/\\'/g, "'")];
+  });
+}
+
 /**
- * The API identity's ABAC condition as Azure receives it, split into its top-level AND clauses,
- * each with whitespace collapsed. Each `${var}` is resolved from the module, so a container swap shows up.
+ * An ABAC condition var as Azure receives it, with top-level `AND` lines kept on their own line.
+ * Each `${var}` is resolved from the module, so a container swap shows up.
  */
-function apiConditionClauses() {
-  const body = /^var apiCondition = join\(\[\n([\s\S]*?)\n\], '\\n'\)$/m.exec(MODULE);
-  assert.ok(body, 'apiCondition is a join() of string lines');
+function conditionText(name) {
   const vars = {
     blobsAction: moduleString('blobsAction'),
     containerNameAttr: moduleString('containerNameAttr'),
@@ -59,14 +71,17 @@ function apiConditionClauses() {
     quarantineContainer: containerName('quarantineContainer'),
     deadletterContainer: containerName('deadletterContainer')
   };
-  const text = body[1].split('\n')
-    .map((line) => line.trim().replace(/^'|'$/g, '').replace(/\\'/g, "'"))
-    .join('\n')
-    .replace(/\$\{(\w+)\}/g, (_, name) => {
-      assert.ok(name in vars, `condition var ${name} is resolved by the test`);
-      return vars[name];
-    });
-  return text.split('\nAND\n').map((clause) => clause.replace(/\s+/g, ' ').trim());
+  return conditionLines(name).join('\n').replace(/\$\{(\w+)\}/g, (_, v) => {
+    assert.ok(v in vars, `condition var ${v} is resolved by the test`);
+    return vars[v];
+  });
+}
+
+const collapse = (text) => text.replace(/\s+/g, ' ').trim();
+
+/** The API identity's condition split into its top-level AND clauses, whitespace collapsed. */
+function apiConditionClauses() {
+  return conditionText('apiCondition').split('\nAND\n').map(collapse);
 }
 
 test('Defender settings match the intake plan table', async (t) => {
@@ -94,22 +109,21 @@ test('Defender settings match the intake plan table', async (t) => {
     assert.match(DEFENDER, /excludeBlobsLargerThan: 2147483648\n/);
   });
 
-  await t.test('writes the result as a blob index tag, which the ABAC condition reads', () => {
+  await t.test('writes the result as a blob index tag, which the sweep and the ABAC condition read', () => {
     assert.match(DEFENDER, /blobScanResultsOptions: 'blobIndexTags'/);
-    assert.match(MODULE, /var scanResultTag = 'Malware Scanning scan result'/);
+    assert.match(MODULE, /var scanResultTag = 'Malware scanning scan result'/);
     assert.match(MODULE, /tags:\$\{scanResultTag\}<\$key_case_sensitive\$>\] StringEquals \\'No threats found\\'/);
-  });
-
-  await t.test('publishes results to the intake topic', () => {
-    assert.match(DEFENDER, /scanResultsEventGridTopicResourceId: scanResultsTopic\.id/);
-    const topic = resourceBlock(MODULE, 'scanResultsTopic');
-    assert.match(topic, /publicNetworkAccess: 'Enabled'/, 'Defender cannot publish to a private-only topic');
-    assert.match(topic, /disableLocalAuth: true/);
   });
 
   await t.test('leaves sensitive data discovery off', () => {
     assert.match(DEFENDER, /sensitiveDataDiscovery: \{\n {6}isEnabled: false\n/);
   });
+});
+
+// Policy Deny-PublicPaaSEndpoints refuses a public custom topic, and Defender cannot deliver to a private one.
+test('the module declares no Event Grid resource; the sweep polls the tag instead', () => {
+  // Covers Microsoft.EventGrid/* and Defender's topic property.
+  assert.doesNotMatch(MODULE, /EventGrid/);
 });
 
 test('the cap is 5 GB on test and 25 GB on prod', () => {
@@ -123,30 +137,6 @@ test('intake is on in test and off in prod', () => {
   assert.match(PROD_PARAMS, /^param deployDocumentIntake = false$/m);
   assert.match(MAIN,
     /^module documentIntake '\.\/modules\/document-intake\.bicep' = if \(deployFoundation && deployDocumentIntake\) \{$/m);
-});
-
-test('the scan-result subscription', async (t) => {
-  const sub = resourceBlock(MODULE, 'scanResultSubscription');
-
-  await t.test('stops retrying after 5 attempts or 60 minutes', () => {
-    assert.match(sub, /retryPolicy: \{\n {6}maxDeliveryAttempts: 5\n {6}eventTimeToLiveInMinutes: 60\n/);
-  });
-
-  await t.test('delivers only scan results to intakeScanResult in the API app', () => {
-    assert.match(sub, /includedEventTypes: \[\n {8}'Microsoft\.Security\.MalwareScanningResult'\n {6}\]/);
-    assert.match(sub, /endpointType: 'AzureFunction'/);
-    assert.match(MODULE, /var scanResultFunctionName = 'intakeScanResult'/);
-    assert.match(MAIN, /^\s+apiAppName: 'demi-api-fc-\$\{environmentName\}'$/m);
-  });
-
-  // The function has to exist first, so the first infra pass must be able to skip the subscription.
-  await t.test('is skipped when DEPLOY_INTAKE_SUBSCRIPTION is false', () => {
-    assert.match(sub, /= if \(deploySubscription\) \{/);
-    assert.match(MAIN, /^\s+deploySubscription: deployIntakeSubscription$/m);
-    const wired = /^param deployIntakeSubscription = bool\(readEnvironmentVariable\('DEPLOY_INTAKE_SUBSCRIPTION', 'true'\)\)$/m;
-    assert.match(TEST_PARAMS, wired);
-    assert.match(PROD_PARAMS, wired);
-  });
 });
 
 test('the intake account is keyless and uploads stay private to the account', () => {
@@ -167,7 +157,6 @@ test('the API identity cannot read an unscanned blob or mark one clean', () => {
 });
 
 test('the API identity ABAC condition', async (t) => {
-  const BLOBS = 'Microsoft.Storage/storageAccounts/blobServices/containers/blobs';
   const CONTAINER = '@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name]';
   const clauses = apiConditionClauses();
 
@@ -184,7 +173,7 @@ test('the API identity ABAC condition', async (t) => {
   await t.test('clause 1 allows a read only in incoming and only once tagged clean', () => {
     assert.ok(clauses[0].endsWith(
       `OR ( ${CONTAINER} StringEquals 'incoming' AND ` +
-      `@Resource[${BLOBS}/tags:Malware Scanning scan result<$key_case_sensitive$>] StringEquals 'No threats found' ) )`),
+      `@Resource[${BLOBS}/tags:Malware scanning scan result<$key_case_sensitive$>] StringEquals 'No threats found' ) )`),
       clauses[0]);
   });
 
@@ -198,10 +187,60 @@ test('the API identity ABAC condition', async (t) => {
     assert.ok(clauses[1].endsWith(`OR ( ${CONTAINER} StringEquals 'incoming' ) )`), clauses[1]);
   });
 
+  await t.test('clause 3 denies tag writes unless none of them sets the scan-result tag', () => {
+    assert.strictEqual(clauses[2],
+      `( ${collapse(conditionText('tagWriteDeny'))} OR ` +
+      `( @Request[${BLOBS}/tags&$keys$&] ForAllOfAllValues:StringNotEquals {'Malware scanning scan result'} ) )`);
+  });
+
   // The quarantine copy runs as demi-intake-<env>, which is the only identity that may touch these.
   await t.test('names neither quarantine nor deadletter', () => {
     assert.doesNotMatch(clauses.join(' '), /quarantine|deadletter/);
   });
+});
+
+// demi-intake-<env> reads the tag the API identity's read gate trusts. If it could write one, a wrong
+// sweep decision could mark an unscanned file clean and the API would release it.
+test('demi-intake-<env> reads tags but can never write one', async (t) => {
+  const deny = collapse(conditionText('tagWriteDeny'));
+
+  await t.test('the deny covers Set Blob Tags and both tag-header writes, with no OR branch', () => {
+    assert.strictEqual(deny,
+      `( !(ActionMatches{'${BLOBS}/write'} AND SubOperationMatches{'Blob.Write.WithTagHeaders'}) ` +
+      `AND !(ActionMatches{'${BLOBS}/add/action'} AND SubOperationMatches{'Blob.Write.WithTagHeaders'}) ` +
+      `AND !(ActionMatches{'${BLOBS}/tags/write'}) )`);
+    assert.doesNotMatch(deny, /\bOR\b/);
+  });
+
+  for (const symbol of ['intakeBlobContributor', 'intakeTagReader']) {
+    await t.test(`${symbol} carries the deny`, () => {
+      const grant = resourceBlock(MODULE, symbol);
+      assert.match(grant, /principalId: intakeIdentity\.properties\.principalId\n/);
+      assert.match(grant, /condition: tagWriteDeny\n {4}conditionVersion: '2\.0'/);
+    });
+  }
+
+  // Data Contributor has no blobs/tags/read, so Owner is the grant that lets the sweep read the tag.
+  await t.test('Owner is granted on incoming only', () => {
+    const grant = resourceBlock(MODULE, 'intakeTagReader');
+    assert.match(grant, /scope: containers\[0\]\n/);
+    assert.match(MODULE, /^resource containers '[^']+' = \[for name in \[incomingContainer, /m);
+    assert.strictEqual(moduleString('blobDataOwnerRoleId'), 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b');
+    assert.match(grant, /roleDefinitions', blobDataOwnerRoleId\)/);
+  });
+});
+
+// listPending filters on scanStatus and orders by createdAt; the month-to-date sum filters on scannedAt.
+// The container excludes /* and Cosmos rejects an ORDER BY on a path with no range index.
+test('the documents container indexes the fields the intake sweep queries', async (t) => {
+  const docs = resourceBlock(COSMOS_MODULE, 'documentsContainer');
+  const included = docs.slice(docs.indexOf('includedPaths:'), docs.indexOf('excludedPaths:'));
+  assert.ok(included.length > 0, 'documents declares includedPaths before excludedPaths');
+  for (const field of ['scanStatus', 'createdAt', 'scannedAt']) {
+    await t.test(`includes /${field}/?`, () => {
+      assert.match(included, new RegExp(`path: '/${field}/\\?'\n`));
+    });
+  }
 });
 
 test('the API app carries every intake setting and the second identity', async (t) => {
@@ -216,8 +255,8 @@ test('the API app carries every intake setting and the second identity', async (
     });
   }
 
-  await t.test('sweeps every 30 minutes and times out after 6 hours', () => {
-    assert.match(API_MODULE, /value: empty\(intakeStorageAccount\) \? '' : '0 \*\/30 \* \* \* \*'/);
+  await t.test('sweeps every 5 minutes and times out after 6 hours', () => {
+    assert.match(API_MODULE, /name: 'INTAKE_SWEEP_SCHEDULE'\n\s+value: empty\(intakeStorageAccount\) \? '' : '0 \*\/5 \* \* \* \*'\n/);
     assert.match(API_MODULE, /value: empty\(intakeStorageAccount\) \? '' : '6'/);
   });
 
@@ -241,7 +280,7 @@ test('the API app carries every intake setting and the second identity', async (
     assert.match(resourceBlock(MODULE, 'intakeIdentity'), /name: 'demi-intake-\$\{environmentName\}'/);
   });
 
-  // Empty INTAKE_STORAGE_ACCOUNT leaves intakeScanResult and intakeScanSweep unregistered and uploads answer 503.
+  // Empty INTAKE_STORAGE_ACCOUNT leaves intakeScanSweep unregistered and uploads answer 503.
   await t.test('passes the intake account name only when intake is deployed', () => {
     assert.match(MAIN, /^\s+intakeStorageAccount: deployDocumentIntake \? intakeStorageAccountName : ''$/m);
     assert.match(MAIN, /^\s+storageAccountName: intakeStorageAccountName$/m);
@@ -277,31 +316,13 @@ test('the scan cap alerts', async (t) => {
   });
 });
 
-// Pass 1 of the rollout runs before intakeScanResult and intakeScanSweep exist: the subscription would
-// drop every event and the sweep alert would fire on its first evaluation.
-test('DEPLOY_INTAKE_SUBSCRIPTION=false skips both the subscription and the dead-sweep alert', () => {
-  assert.match(resourceBlock(MODULE, 'scanResultSubscription'), /^resource scanResultSubscription '[^']+' = if \(deploySubscription\) \{$/m);
-  assert.match(resourceBlock(MODULE, 'sweepSilentAlert'), /^resource sweepSilentAlert '[^']+' = if \(deploySubscription\) \{$/m);
-  assert.match(MODULE, /^param deploySubscription bool = true$/m);
-});
-
 test('a dead sweep alerts after 2 hours without a month-to-date line', () => {
   const alert = resourceBlock(MODULE, 'sweepSilentAlert');
+  assert.match(alert, /^resource sweepSilentAlert '[^']+' = \{$/m, 'not gated: no rollout pass skips it');
   assert.match(alert, /query: 'AppTraces \| where Message contains "\[intake\] month-to-date scannedBytes="'/);
   assert.match(alert, /windowSize: 'PT2H'/);
   assert.match(alert, /timeAggregation: 'Count'\n\s+operator: 'LessThan'\n\s+threshold: 1\n/);
   assert.match(alert, /actionGroups: \[ actionGroupId \]/);
-});
-
-test('each environment grants its own storageDataScanner identity the publish role', () => {
-  assert.match(TEST_PARAMS, /^param intakeDefenderPrincipalId = 'a7cb62f0-b243-4920-9536-61006340cc1d'$/m);
-  assert.match(PROD_PARAMS, /^param intakeDefenderPrincipalId = '9a4c3823-bb94-49fd-b662-adf11aa09116'$/m);
-  assert.match(MAIN, /^\s+defenderPrincipalId: intakeDefenderPrincipalId$/m);
-  const grant = resourceBlock(MODULE, 'defenderPublishes');
-  assert.match(grant, /principalId: defenderPrincipalId/);
-  // EventGrid Data Sender: any other role leaves Defender unable to publish, so every upload times out.
-  assert.strictEqual(moduleString('eventGridDataSenderRoleId'), 'd5a91429-5739-47e2-a06b-3470a27159e7');
-  assert.match(grant, /roleDefinitionId: subscriptionResourceId\('Microsoft\.Authorization\/roleDefinitions', eventGridDataSenderRoleId\)/);
 });
 
 test('a foundation-only edit to the module is caught by deploy-infra.sh', () => {

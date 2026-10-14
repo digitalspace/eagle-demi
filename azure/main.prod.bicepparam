@@ -13,13 +13,9 @@ param location = 'canadacentral'
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
 // ── Document intake ───────────────────────────────────────────────────────────────────────────
-// Off until the test rollout passes. Infra pass 1 must export DEPLOY_INTAKE_SUBSCRIPTION=false: the scan-result
-// subscription and the dead-sweep alert need `intakeScanResult` and `intakeScanSweep` deployed. Pass 2 takes the default.
+// Off until the test rollout passes.
 param deployDocumentIntake = false
 param intakeCapGBPerMonth = 25
-param deployIntakeSubscription = bool(readEnvironmentVariable('DEPLOY_INTAKE_SUBSCRIPTION', 'true'))
-// storageDataScanner identity of this subscription, still to be confirmed by the EICAR test on test; fallback is the Defender for Storage resource provider app 080765e3-9336-4461-b934-310acccb907d.
-param intakeDefenderPrincipalId = '9a4c3823-bb94-49fd-b662-adf11aa09116'
 
 // ── Object store ──────────────────────────────────────────────────────────────────────────────
 // The NRS store, shared with eagle-api and outliving any Azure environment. Prod's objects sit at

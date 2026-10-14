@@ -248,6 +248,18 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           {
             path: '/pdfTitle/lease/expiresAt/?'
           }
+          // Intake sweep: pending rows by scanStatus in createdAt order (an ORDER BY needs the range
+          // index), and the month-to-date scan total filtered on scannedAt. Adding them reindexes the
+          // container online, so the next prod foundation deploy reindexes prod even with intake off.
+          {
+            path: '/scanStatus/?'
+          }
+          {
+            path: '/createdAt/?'
+          }
+          {
+            path: '/scannedAt/?'
+          }
         ]
         excludedPaths: noIndex
       }
