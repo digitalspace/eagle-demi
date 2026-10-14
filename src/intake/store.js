@@ -11,7 +11,7 @@ const STILL_PENDING = "FROM c WHERE c.scanStatus = 'pending'";
 
 /** The row for an intake document id. Cross-partition: the scan event carries no project. */
 function findById(id) {
-  return documents.getById(systemAccess(), id);
+  return documents.getById(systemAccess(), id, undefined, { includeUnscanned: true });
 }
 
 /** Set fields on a row still pending. False when another writer settled it first. */

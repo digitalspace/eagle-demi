@@ -13,6 +13,7 @@ const queues = require('../jobs/queue-client');
 const commentPeriods = require('../repositories/comment-periods');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
+const { isScanCleared } = require('../repositories/documents');
 const settings = require('../config').syncOut;
 
 const consumers = [
@@ -200,6 +201,11 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
     if (!row) {
       logger.warn('[sync-out] row not found, message dropped', job);
       return { skipped: 'missing' };
+    }
+    // Re-checked here as well as in wants(): the row may have changed since the message was queued.
+    if (!isScanCleared(row)) {
+      logger.warn('[sync-out] row not released by the intake scan, message dropped', job);
+      return { skipped: 'unscanned' };
     }
     state.row = row;
     const version = state.version = versionOf(row);
