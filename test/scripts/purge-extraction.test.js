@@ -7,6 +7,7 @@ const assert = require('node:assert');
 
 const { parseArgs, purge, CLEARED_EXTRACTION } = require('../../src/scripts/purge-extraction');
 const { TIER } = require('../../src/helpers/access-sql');
+const { PATCH_MAX_OPERATIONS } = require('../../src/db/cosmos-nosql');
 
 /** Documents repository double. Pages through `docs` so the continuation-token loop is exercised. */
 function fakeDocuments(docs, opts = {}) {
@@ -126,6 +127,20 @@ test('clearing contentExtracted is what re-enters a document into the work list'
   assert.strictEqual(CLEARED_EXTRACTION.contentExtracted, false);
   assert.strictEqual(CLEARED_EXTRACTION.contentPageCount, 0);
   assert.strictEqual(CLEARED_EXTRACTION.contentExtractionError, null);
+});
+
+test('the provenance and ingest-failure fields a re-seed carries are cleared too', () => {
+  // A re-seed carries these forward, so a purge that left them would keep describing deleted chunks.
+  assert.strictEqual(CLEARED_EXTRACTION.extraction, null);
+  assert.strictEqual(CLEARED_EXTRACTION.extractionMethod, null);
+  assert.strictEqual(CLEARED_EXTRACTION.chunkIngestFailures, 0);
+  assert.strictEqual(CLEARED_EXTRACTION.chunkIngestFailedAt, null);
+});
+
+test('the cleared set fits in one Cosmos patch', () => {
+  // It is sent as one patch, and cosmos.patch throws past this many operations.
+  assert.ok(Object.keys(CLEARED_EXTRACTION).length <= PATCH_MAX_OPERATIONS,
+    `${Object.keys(CLEARED_EXTRACTION).length} fields; split the patch before adding one`);
 });
 
 test('a live run nulls the page provenance of the chunks it just deleted', async () => {

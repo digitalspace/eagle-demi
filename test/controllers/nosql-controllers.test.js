@@ -1280,6 +1280,24 @@ test('chunk ingest route', async (t) => {
     assert.ok(eachPatchFits(), 'cosmos.patch refuses more than ten operations');
   });
 
+  await t.test('a successful ingest clears a failed purge\'s stamp', async () => {
+    stubDoc(t, { ...DOC, chunkPurgeFailedAt: '2026-10-01T00:00:00.000Z' });
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = { ...patched, ...fields }; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(jsonReq(), res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok('chunkPurgeFailedAt' in patched, 'the stamp outlives the chunks it described');
+    assert.strictEqual(patched.chunkPurgeFailedAt, null);
+    assert.ok(eachPatchFits(), 'cosmos.patch refuses more than ten operations');
+  });
+
   await t.test('a host-reported error is still recorded while the guard is tripped', async () => {
     stubDoc(t, { ...DOC, chunkIngestFailures: 3, chunkIngestFailedAt: failedAgo(HOUR) });
 

@@ -108,6 +108,13 @@ async function push(body, { engagementId = ENGAGEMENT_ID } = {}) {
 
 const pushOf = (overrides, pushedAt = PUSHED_AT) => ({ engagement: engagement(overrides), pushedAt });
 
+/** Run the test in a zone west of UTC, where a local-time parse would shift the instant. */
+function pinVancouverTz(st) {
+  const before = process.env.TZ;
+  process.env.TZ = 'America/Vancouver';
+  st.after(() => { if (before === undefined) delete process.env.TZ; else process.env.TZ = before; });
+}
+
 test('PUT /engage/engagements/:engagementId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -338,9 +345,7 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
   });
 
   await t.test('zone-less ENGAGE time is UTC whatever zone the host runs in', async (st) => {
-    const before = process.env.TZ;
-    process.env.TZ = 'America/Vancouver';
-    st.after(() => { if (before === undefined) delete process.env.TZ; else process.env.TZ = before; });
+    pinVancouverTz(st);
     const { store } = stage(t);
 
     await push(pushOf());
@@ -369,7 +374,8 @@ test('PUT /engage/engagements/:engagementId', async (t) => {
     });
   }
 
-  await t.test('an ISO time with no zone is UTC, and a date alone is midnight UTC', async () => {
+  await t.test('an ISO time with no zone is UTC, and a date alone is midnight UTC', async (st) => {
+    pinVancouverTz(st);
     const { store } = stage(t);
 
     await push(pushOf({ start: '2026-10-01T07:00:00', end: '2026-10-31' }));

@@ -1752,6 +1752,12 @@ paths:
           description: Document successfully deleted.
         '401':
           description: Unauthorized.
+        '503':
+          description: >-
+            Some of the document's chunks could not be removed, so the document is kept. Its
+            search-index entries are already gone. Retry the delete after `Retry-After`
+            seconds; the body carries
+            `removedChunks`, `removedFromSearch` and `removedChunksFromSearch`.
 
   /api/documents/pdf-title/pending:
     get:

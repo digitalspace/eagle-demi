@@ -375,10 +375,10 @@ test('access gate coverage', async (t) => {
     // chunk ingest 409 refusing an Update image (error string only). +1 for the Eagle push ack of
     // a sealed row, `{ ok: true }`. +1 for the HEAD download 404 when the store reports the object
     // missing (error string only). +1 for its 500 on a store fault other than an outage (error
-    // string only).
+    // string only). +1 for the DELETE 503 when the purge kept the row (error string and counts).
     // `res.status(found.status).json(found.body)` in headDownload is outside the scan (the status is
     // not a literal), so the bodies it can send are pinned below with the download payload.
-    assert.strictEqual(emissions.length, 47,
+    assert.strictEqual(emissions.length, 48,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits

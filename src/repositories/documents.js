@@ -29,7 +29,10 @@ const EXTRACTION_FIELDS = [
   // Page provenance, carried forward for the same reason the four above are: a re-seed REPLACES
   // the row, and a document whose flag was dropped would render "Passage N" over chunks that know
   // their page.
-  'pageNumbered', 'pageCount'
+  'pageNumbered', 'pageCount',
+  // Extraction provenance and the ingest-failure count: dropping the count lets a document that
+  // keeps failing re-enter the GPU queue on every push.
+  'extraction', 'extractionMethod', 'chunkIngestFailures', 'chunkIngestFailedAt'
 ];
 
 /**
@@ -518,8 +521,8 @@ async function setAclForProject(access, projectId, read) {
  * read for the mirror-image reason: the seeder has to know whether a re-seed MOVED one, because
  * nothing else refreshes the copy each chunk carries and a chunk search would keep filtering on the
  * old value. The pending flag rides it so a re-seed can carry a raised flag forward instead of
- * clearing a re-stamp nothing has done yet. Short strings per row against a read the seeder
- * already makes once per project.
+ * clearing a re-stamp nothing has done yet. Small fields per row (the largest, the `extraction`
+ * provenance object, is under 1 KB) against a read the seeder already makes once per project.
  * Paged: the largest project holds 2,488 documents and a single page caps at 1,000.
  */
 async function extractionRowsForProject(access, projectId) {

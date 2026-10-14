@@ -508,6 +508,33 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.contentPageCount, 42);
   });
 
+  await t.test('extraction provenance and ingest failures are carried off the stored row', async () => {
+    // Named one by one: the carry list lives in the code under test, so a field dropped from it
+    // would drop out of a loop over it too.
+    const stored = {
+      extraction: { engine: 'docling', version: '2.1.0' },
+      extractionMethod: 'docling',
+      chunkIngestFailures: 2,
+      chunkIngestFailedAt: '2026-10-01T00:00:00.000Z'
+    };
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['public', 'sysadmin'], ...stored
+    }));
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ extractionMethod: 'eagle', chunkIngestFailures: 0 }) }, user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(written.extraction, stored.extraction);
+    assert.strictEqual(written.extractionMethod, 'docling');
+    assert.strictEqual(written.chunkIngestFailures, 2, 'a lost count re-queues a document known to fail');
+    assert.strictEqual(written.chunkIngestFailedAt, '2026-10-01T00:00:00.000Z');
+  });
+
   const PDF_TITLE = Object.freeze({
     sourceKey: 'etl/site-c/abc.pdf', originalLength: 2048, originalSha256: 'f'.repeat(64),
     title: 'Part A', titledLength: 2311, titledSha256: 'e'.repeat(64), status: 'titled',

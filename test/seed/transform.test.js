@@ -417,6 +417,20 @@ test('extraction state survives a re-seed', async (t) => {
       assert.strictEqual(out.pageCount, 12);
     });
 
+  await t.test('extraction provenance and the ingest-failure count are carried too', () => {
+    // Named for the same reason as the page provenance above.
+    const carried = {
+      extraction: { engine: 'docling', version: '2.1.0' }, extractionMethod: 'docling',
+      chunkIngestFailures: 2, chunkIngestFailedAt: '2026-10-01T00:00:00.000Z'
+    };
+    const out = transformDocument(EAGLE_DOC, '207', LIST, {
+      ...OPTS, existing: { ...existing, ...carried }
+    });
+    for (const [field, value] of Object.entries(carried)) {
+      assert.deepStrictEqual(out[field], value, field);
+    }
+  });
+
   await t.test('a failed extraction is carried too, error and all', () => {
     const failed = {
       contentExtracted: false, contentExtractedAt: '2026-08-02T00:00:00.000Z',

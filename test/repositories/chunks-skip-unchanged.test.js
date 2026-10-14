@@ -273,6 +273,48 @@ test('healing is capped', async (t) => {
     assert.deepStrictEqual(store.upserts().map(op => op.resourceBody.id), lost.slice(0, cap));
   });
 
+  await t.test('the healed ids are in the logged message', async (tt) => {
+    const store = await settledStore(tt);
+    const ids = [...store.rows.keys()];
+    tt.mock.method(aiSearch, 'indexedChunkIds', async () => new Set(ids.slice(2)));
+    const warned = tt.mock.method(logger, 'warn', () => {});
+
+    await postJson(MANY);
+
+    const call = warned.mock.calls.find(c => /healed=2 /.test(c.arguments[0]));
+    assert.ok(call, 'no heal warning');
+    // The message, not meta: the deployed log format prints the message alone.
+    assert.ok(call.arguments[0].endsWith(`: ${ids.slice(0, 2).join(',')}`), call.arguments[0]);
+  });
+
+  // Lag is more than the cap AND more than half of what was asked; both edges sit on that line.
+  // `extra` chunks past half of the settled ids are missing from the index.
+  async function healedWhenLost(tt, extra) {
+    const store = await settledStore(tt);
+    const ids = [...store.rows.keys()];
+    // An odd count has no exact half: a row with no _ts is not settled, so drop one from the lookup.
+    if (ids.length % 2) store.writtenAt.delete(ids.pop());
+    const half = ids.length / 2;
+    assert.ok(half > cap, `${ids.length} settled chunks; vacuous`);
+    const lookup = tt.mock.method(aiSearch, 'indexedChunkIds', async () => new Set(ids.slice(half + extra)));
+    tt.mock.method(logger, 'warn', () => {});
+
+    await postJson(MANY);
+
+    assert.strictEqual(lookup.mock.calls[0].arguments[0].length, ids.length);
+    return { ids, upserted: store.upserts().map(op => op.resourceBody.id) };
+  }
+
+  await t.test('exactly half missing, over the cap, still heals the cap', async (tt) => {
+    const { upserted, ids } = await healedWhenLost(tt, 0);
+    assert.deepStrictEqual(upserted, ids.slice(0, cap));
+  });
+
+  await t.test('one past half missing reads as lag and heals none', async (tt) => {
+    const { upserted } = await healedWhenLost(tt, 1);
+    assert.deepStrictEqual(upserted, []);
+  });
+
   // A streamed ingest writes in flushes of 200, and the cap is per ingest, not per flush.
   await t.test('a streamed ingest heals at most the cap across all its flushes', async (tt) => {
     const LONG = Array.from({ length: 600 }, (_, i) => `# Part ${i}\n\n${section(`p${i}`)}`)

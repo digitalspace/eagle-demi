@@ -81,6 +81,10 @@ const CLEARED_EXTRACTION = {
   contentPageCount: 0,
   contentExtractionError: null,
   extractionMethod: null,
+  extraction: null,
+  // A purge is a fresh start: old ingest failures would hold the rebuilt extraction back.
+  chunkIngestFailures: 0,
+  chunkIngestFailedAt: null,
   // Nulled rather than left alone: the chunks these described are being deleted, and a document
   // that still claims page numbers with no chunks behind them is a claim nothing can check.
   pageNumbered: null,

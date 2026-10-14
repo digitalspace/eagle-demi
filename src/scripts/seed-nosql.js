@@ -225,11 +225,13 @@ function reconcileLogPath(now) {
  * @param {Array}    rows      `{id, ...}` read out of Cosmos
  * @param {function} keyOf     row -> the key to test against `fetched`
  * @param {Set}      fetched   keys the upstream fetch produced
- * @param {function} remove    row -> Promise, called ONLY when live
+ * @param {function} remove    row -> Promise, called ONLY when live; `{ rowKept: true }` = not deleted
  * @param {string}   [opts.logPath] NDJSON sink for every surplus id, dry run included
- * @param {object}   [opts.audit]   `utils/audit`, called once per row actually deleted
+ * @param {object}   [opts.audit]   `utils/audit`, called once per row deleted or kept by a failed purge
+ * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run
  */
-async function reconcileContainer(label, rows, keyOf, fetched, remove, { live, logPath, audit }) {
+async function reconcileContainer(label, rows, keyOf, fetched, remove,
+  { live, logPath, audit, spare = () => false }) {
   const surplus = surplusOf(rows, keyOf, fetched);
   // Console preview only — capped because a refused run can carry tens of thousands of ids.
   const ids = surplus.slice(0, 20).map(r => r.id).join(', ');
@@ -244,32 +246,38 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove, { live, l
   const fd = logPath ? fs.openSync(logPath, 'a') : null;
 
   let deleted = 0;
+  const kept = [];
   try {
     for (const row of surplus) {
-      if (live) {
-        await remove(row);
-        deleted++;
-        // The DELETE controllers' own event, so a purge is traceable however it was issued.
-        if (audit) {
-          audit.auditEvent(null, {
-            action: `${singular}.delete`,
-            targetType: singular,
-            targetId: row.id,
-            projectId: partitionOf(row),
-            detail: { source: 'seed --reconcile' }
-          });
-        }
+      const spared = live && spare(row);
+      // A purge that could not clear a row's chunks keeps the row; the next reconcile retries it.
+      const failed = live && !spared && Boolean((await remove(row))?.rowKept);
+      const removed = live && !spared && !failed;
+      if (spared || failed) kept.push({ id: row.id, partitionKey: partitionOf(row) });
+      if (removed) deleted++;
+      // The DELETE controllers' own event, so a purge is traceable however it was issued. A failed
+      // one is recorded too: its search-index entries are already gone.
+      if (audit && (removed || failed)) {
+        audit.auditEvent(null, {
+          action: `${singular}.delete`,
+          ...(failed ? { outcome: 'failure' } : {}),
+          targetType: singular,
+          targetId: row.id,
+          projectId: partitionOf(row),
+          detail: { source: 'seed --reconcile', ...(failed ? { rowKept: true } : {}) }
+        });
       }
       // Written AFTER the delete lands, so a throw mid-run leaves a file naming exactly what went.
       if (fd !== null) {
         fs.writeSync(fd, JSON.stringify(
-          { label, id: row.id, partitionKey: partitionOf(row), deleted: live }) + '\n');
+          { label, id: row.id, partitionKey: partitionOf(row), deleted: removed,
+            ...(spared || failed ? { kept: true } : {}) }) + '\n');
       }
     }
   } finally {
     if (fd !== null) fs.closeSync(fd);
   }
-  return { inCosmos: rows.length, wouldDelete: surplus.length, deleted };
+  return { inCosmos: rows.length, wouldDelete: surplus.length, deleted, ...(kept.length ? { kept } : {}) };
 }
 
 /**
@@ -902,8 +910,21 @@ async function seed(argv = [], deps = {}) {
       if (!searchReady) summary.reconcile.search = 'unconfigured — live would refuse';
       summary.reconcile.documents = await reconcileContainer(...containers[0],
         { live, logPath, audit });
+      // A project still holding a kept document stays too, or that document is orphaned.
+      const keptDocs = summary.reconcile.documents.kept || [];
+      const holding = new Set(keptDocs.map(k => String(k.partitionKey)));
       summary.reconcile.projects = await reconcileContainer(...containers[1],
-        { live, logPath, audit });
+        { live, logPath, audit, spare: row => holding.has(String(row.id)) });
+      if (keptDocs.length) {
+        const keptProjects = summary.reconcile.projects.kept || [];
+        const idsOf = kept => kept.slice(0, 20).map(k => k.id).join(', ');
+        summary.failures.push(`--reconcile kept ${keptDocs.length} document row(s) whose chunks ` +
+          `could not all be removed (documents: ${idsOf(keptDocs)})` +
+          (keptProjects.length
+            ? ` and ${keptProjects.length} project row(s) holding them (projects: ${idsOf(keptProjects)})`
+            : '') +
+          '; re-run to retry');
+      }
       log(`  surplus ids: ${logPath}`);
     }
   }
