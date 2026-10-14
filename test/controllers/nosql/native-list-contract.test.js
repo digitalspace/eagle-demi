@@ -398,6 +398,11 @@ test('a filter alias', async (t) => {
     assert.throws(() => listHandler({ ...SPEC, aliases: { project: 'projectId' } }), /not a declared filter/);
   });
 
+  await t.test('value aliases for a field that is not a declared filter fail at route load', () => {
+    assert.throws(() => listHandler({ ...SPEC, valueAliases: { projectType: { a: 'b' } } }),
+      /value aliases for projectType, which is not a declared filter/);
+  });
+
   await t.test('an alias that shadows a control parameter fails at route load', () => {
     assert.throws(() => listHandler({ ...SPEC, aliases: { q: 'author' } }), /clashes/);
   });
