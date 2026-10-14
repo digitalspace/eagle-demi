@@ -241,6 +241,12 @@ test('the API app carries every intake setting and the second identity', async (
     assert.match(resourceBlock(MODULE, 'intakeIdentity'), /name: 'demi-intake-\$\{environmentName\}'/);
   });
 
+  // Empty INTAKE_STORAGE_ACCOUNT leaves intakeScanResult and intakeScanSweep unregistered and uploads answer 503.
+  await t.test('passes the intake account name only when intake is deployed', () => {
+    assert.match(MAIN, /^\s+intakeStorageAccount: deployDocumentIntake \? intakeStorageAccountName : ''$/m);
+    assert.match(MAIN, /^\s+storageAccountName: intakeStorageAccountName$/m);
+  });
+
   await t.test('attaches demi-intake-<env> when intake is deployed', () => {
     assert.match(API_MODULE, /empty\(intakeIdentityId\) \? \{\} : \{ '\$\{intakeIdentityId\}': \{\} \}/);
     assert.match(MAIN, /^\s+intakeIdentityId: intakeIdentityId$/m);
@@ -291,7 +297,11 @@ test('each environment grants its own storageDataScanner identity the publish ro
   assert.match(TEST_PARAMS, /^param intakeDefenderPrincipalId = 'a7cb62f0-b243-4920-9536-61006340cc1d'$/m);
   assert.match(PROD_PARAMS, /^param intakeDefenderPrincipalId = '9a4c3823-bb94-49fd-b662-adf11aa09116'$/m);
   assert.match(MAIN, /^\s+defenderPrincipalId: intakeDefenderPrincipalId$/m);
-  assert.match(resourceBlock(MODULE, 'defenderPublishes'), /principalId: defenderPrincipalId/);
+  const grant = resourceBlock(MODULE, 'defenderPublishes');
+  assert.match(grant, /principalId: defenderPrincipalId/);
+  // EventGrid Data Sender: any other role leaves Defender unable to publish, so every upload times out.
+  assert.strictEqual(moduleString('eventGridDataSenderRoleId'), 'd5a91429-5739-47e2-a06b-3470a27159e7');
+  assert.match(grant, /roleDefinitionId: subscriptionResourceId\('Microsoft\.Authorization\/roleDefinitions', eventGridDataSenderRoleId\)/);
 });
 
 test('a foundation-only edit to the module is caught by deploy-infra.sh', () => {
