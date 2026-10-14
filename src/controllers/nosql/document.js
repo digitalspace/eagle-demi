@@ -341,10 +341,11 @@ const documentsKind = Object.freeze({
     index: 'documents', container: 'documents', entity: 'documents', partitionField: 'projectId',
     defaultOrder: 'c.id ASC', baseCriteria: documents.buildCriteria({ withoutUpdateImages: true })
   }),
-  sortKeys: ['datePosted', 'displayName'],
-  filters: [...DOCUMENT_ID_FILTERS, 'isFeatured', 'legislation'],
+  sortKeys: ['datePosted', 'displayName', 'sortOrder'],
+  // `documentSource=PROJECT` is how a staff list leaves out files attached to public comments.
+  filters: [...DOCUMENT_ID_FILTERS, 'isFeatured', 'legislation', 'documentSource'],
   aliases: { project: 'projectId' },
-  multiValueFilters: [...DOCUMENT_ID_FILTERS, 'legislation'],
+  multiValueFilters: [...DOCUMENT_ID_FILTERS, 'legislation', 'documentSource'],
   ranges: {
     datePostedStart: { field: 'datePosted', op: 'ge' },
     datePostedEnd: { field: 'datePosted', op: 'le' }

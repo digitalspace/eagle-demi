@@ -54,12 +54,13 @@ const TRACK_PRECEDENCE = [
 /**
  * Eagle-only fields eagle-api's project GET returns (its `tagList`), staff-only here: catalog
  * level 2. Also what src/scripts/backfill-eagle-staff-fields.js copies onto stored rows.
+ * `dispute` and `disputeDate` are not in `tagList`; eagle-admin reads them off its search.
  */
 const EAGLE_STAFF_FIELDS = [
   'CELead', 'CELeadEmail', 'CELeadPhone', 'projectLeadId', 'responsibleEPDId', 'projLead',
   'addedBy', 'intake', 'dateCommentsOpen', 'dateCommentsClosed', 'duration', 'isTermsAgreed',
   'primaryContact', 'proMember', 'eaStatusDate', 'projectStatusDate', 'activeDate',
-  'substantially', 'substantiallyDate', 'hasMetCommentPeriods'
+  'substantially', 'substantiallyDate', 'hasMetCommentPeriods', 'dispute', 'disputeDate'
 ];
 
 /**

@@ -23,6 +23,7 @@ module.exports = {
   projectPhaseId: { defaultVis: 4, maxVis: 4 },
   documentAuthorTypeId: { defaultVis: 4, maxVis: 4 },
   datePosted: { defaultVis: 4, maxVis: 4 },
+  sortOrder: { defaultVis: 4, maxVis: 4 },
   milestone: { defaultVis: 4, maxVis: 4 },
   projectPhase: { defaultVis: 4, maxVis: 4 },
   documentAuthorType: { defaultVis: 4, maxVis: 4 },

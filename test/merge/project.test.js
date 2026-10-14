@@ -261,7 +261,8 @@ test('Eagle\'s dateUpdated', async (t) => {
 test('Eagle fields carried for staff', async (t) => {
   const STAFF_FIELDS = {
     CELead: 'Casey Federal', CELeadEmail: 'ce.lead@example.invalid', CELeadPhone: '250 555 0199',
-    dateCommentsOpen: '2019-01-01', hasMetCommentPeriods: true
+    dateCommentsOpen: '2019-01-01', hasMetCommentPeriods: true,
+    dispute: true, disputeDate: '2020-05-01T00:00:00.000Z'
   };
   const STAFF = { level: 2 };
   const ANONYMOUS = { level: 4 };
@@ -276,6 +277,20 @@ test('Eagle fields carried for staff', async (t) => {
 
     assert.strictEqual(merged.CELeadEmail, 'ce.lead@example.invalid');
     assert.strictEqual(merged.hasMetCommentPeriods, true);
+    assert.strictEqual(merged.dispute, true);
+    assert.strictEqual(merged.disputeDate, '2020-05-01T00:00:00.000Z');
+  });
+
+  await t.test('a dispute Eagle holds as false is stored as false, not dropped', () => {
+    const merged = mergeTrackProject(TRACK_207, {
+      _id: TRACK_207.epic_guid,
+      read: ['public'],
+      currentLegislationYear: 'legislation_2002',
+      legislation_2002: { name: 'Nested Name', dispute: false, disputeDate: '' }
+    }, OPTS);
+
+    assert.strictEqual(merged.dispute, false);
+    assert.ok(!('disputeDate' in merged), "Eagle's empty-string default is no date");
   });
 
   await t.test('they land on an Eagle-only project too', () => {
@@ -288,6 +303,8 @@ test('Eagle fields carried for staff', async (t) => {
     const out = redactForAccess('projects', merged, STAFF);
     assert.strictEqual(out.CELeadEmail, 'ce.lead@example.invalid');
     assert.strictEqual(out.dateCommentsOpen, '2019-01-01');
+    assert.strictEqual(out.dispute, true);
+    assert.strictEqual(out.disputeDate, '2020-05-01T00:00:00.000Z');
   });
 
   await t.test('an anonymous caller does not', () => {
@@ -295,6 +312,8 @@ test('Eagle fields carried for staff', async (t) => {
     const out = redactForAccess('projects', merged, ANONYMOUS);
     assert.ok(!('CELeadEmail' in out));
     assert.ok(!('hasMetCommentPeriods' in out));
+    assert.ok(!('dispute' in out));
+    assert.ok(!('disputeDate' in out));
   });
 
   await t.test('the anonymous response is the same as before they were carried', () => {

@@ -39,6 +39,8 @@ module.exports = {
   documentAuthorType: { defaultVis: 4, maxVis: 4 },
   documentAuthorTypeId: { defaultVis: 4, maxVis: 4 },
   datePosted: { defaultVis: 4, maxVis: 4 },
+  // Public in eagle-api too: its public document GET allows the field (ALLOWED_FIELDS).
+  sortOrder: { defaultVis: 4, maxVis: 4 },
   dateUploaded: { defaultVis: 4, maxVis: 4 },
   documentAuthor: { defaultVis: 4, maxVis: 4 },
   documentSource: { defaultVis: 4, maxVis: 4 },

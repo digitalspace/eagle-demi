@@ -150,6 +150,43 @@ test('native documents list', async (t) => {
     assert.match(searches[0].filter, /isFeatured eq true/);
   });
 
+  await t.test('sort=sortOrder pages in the index: staff order, then newest, then name', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await list('project=207&sort=sortOrder', STAFF);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches[0].orderby, 'sortOrder asc, datePosted desc, displayNameSort asc, id');
+    assert.ok(!documentReads(queries).some(spec => /ORDER BY c\.sortOrder/.test(spec.query)),
+      'Cosmos never sorts on it');
+  });
+
+  await t.test('sort=-sortOrder reverses only the staff order', async (t) => {
+    const { searches } = fakeStores(t);
+    await list('project=207&sort=-sortOrder', STAFF);
+
+    assert.strictEqual(searches[0].orderby, 'sortOrder desc, datePosted desc, displayNameSort asc, id');
+  });
+
+  await t.test('documentSource on one project reads Cosmos with the value bound', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await list('project=207&documentSource=PROJECT', STAFF);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 0);
+    const [cosmosList] = documentReads(queries);
+    assert.match(cosmosList.query, /c\.documentSource/);
+    assert.ok(cosmosList.parameters.some(p => p.value === 'PROJECT'), 'the source is bound');
+  });
+
+  await t.test('documentSource repeats, and the index path filters on it with q', async (t) => {
+    const { searches } = fakeStores(t);
+    const res = await list('q=report&documentSource=PROJECT&documentSource=COMMENT', STAFF);
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(searches[0].filter.includes("search.in(documentSource, 'PROJECT,COMMENT', ',')"),
+      searches[0].filter);
+  });
+
   await t.test('authenticated list with no pageSize defaults to 500, not 400', async (t) => {
     const { searches } = fakeStores(t);
     const res = await list('', STAFF);
