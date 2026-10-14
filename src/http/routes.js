@@ -354,7 +354,32 @@ const routes = [
   { method: 'delete', path: '/me/lassos/:slug', guards: [authMiddleware], load: () => userDataController().deleteLasso },
   { method: 'put', path: '/me/queries', guards: [authMiddleware], load: () => userDataController().saveQuery },
   { method: 'delete', path: '/me/queries/:slug', guards: [authMiddleware], load: () => userDataController().deleteQuery },
-  { method: 'put', path: '/me/prefs', guards: [authMiddleware], load: () => userDataController().putPrefs }
+  { method: 'put', path: '/me/prefs', guards: [authMiddleware], load: () => userDataController().putPrefs },
+
+  // Ported objects (docs/eagle-api-port-plan.md section 3). Each slice adds its routes only under
+  // its own anchor, guarded by `requireRole(<eagle-api x-security-scopes>)`.
+
+  // port: organizations
+
+  // port: comment-periods
+
+  // port: comments
+
+  // port: groups
+
+  // port: updates
+
+  // port: notifications
+
+  // port: users
+
+  // port: extensions
+
+  // port: project-legislation
+
+  // port: sitemap
+
+  // port: cac
 ];
 
 // NOT SERVED IN PROD. The spec names every route, parameter and role in the system, and this route

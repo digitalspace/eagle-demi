@@ -518,6 +518,33 @@ There is no search sync command. Azure AI Search indexers pull from Cosmos every
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
 exception — the high-water mark cannot see them, so the application removes index entries explicitly.
 
+#### Ported objects
+
+Routes moved from eagle-api, one line per ported object under its `port:` anchor, in the order of
+`docs/eagle-api-port-plan.md` section 3. `src/http/routes.js` has the same anchors.
+
+<!-- port: organizations -->
+
+<!-- port: comment-periods -->
+
+<!-- port: comments -->
+
+<!-- port: groups -->
+
+<!-- port: updates -->
+
+<!-- port: notifications -->
+
+<!-- port: users -->
+
+<!-- port: extensions -->
+
+<!-- port: project-legislation -->
+
+<!-- port: sitemap -->
+
+<!-- port: cac -->
+
 ### Track team sync
 
 Set `SYNC_TEAMS_SCHEDULE` to an NCRONTAB expression (six fields, seconds first) and the API app
