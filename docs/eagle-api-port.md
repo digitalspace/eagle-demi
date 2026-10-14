@@ -123,13 +123,14 @@ Ownership per phase:
 Open before build:
 - (a) `src/repositories/lists.js:77` `listByIds` selects only `c.id, c.name`. It has no `province`, and its key is `id`, not `_id`. The DEMI project read must return organization id, name and province for each pin. The slice must own `lists.js` and add an organization-label read that selects `c.id, c.name, c.province`, mapping `id` to `_id` in the domain.
 - (b) eagle-admin `pins-list.component.ts:128-136` reads the published flag from the eagle-api envelope, `read.includes('public')`. DEMI never returns `pinsRead` (maxVis 0). eagle-admin must read `pinsPublished` from `GET /projects/:id`, and the pins page must show the correct state after a change.
-- (c) The eagle-api staff-only guard on the publish flag (`staff, sysadmin`) is not kept: the flag rides on project PUT, which has the project guard. Confirm that is acceptable.
+- (c) The eagle-api pin publish and unpublish guard was `staff, sysadmin`. The flag now rides on project PUT, whose guard is `requireWrite` (`routes.js:170`), and that guard admits the `demi-service-write` service key; the earlier pin design deliberately kept that key out of pin edits. Rule to apply: the domain policy for project PUT rejects changes to `pins` or `pinsPublished` (403) unless the caller holds `sysadmin`, `staff` or `project-system-admin`, so a service key may update other project fields but never pins. Confirm this is acceptable.
 
 Guard note, checked against eagle-api `origin/develop` `swagger.yaml`: `PUT /project/{projId}` lists `project-system-admin` alone (`swagger.yaml:1309-1310`). Of the pin sub-routes, `POST /project/{projId}/pin` (`:1620-1623`) and `DELETE /project/{projId}/pin/{pinId}` (`:1779-1781`) list it; `pin/publish` (`:1675-1677`) and `pin/unpublish` (`:1724-1726`) do not. So the role is already on the project PUT and needs no pins-only rule.
 
 The `project-system-admin` role is kept. DEMI route guards accept it only on the routes where eagle-api's `x-security-scopes` lists it, copied per route into the route-inventory table. It never bypasses route scopes or record-level access the way `sysadmin` and `staff` do. `AUTHENTICATED_ROLES` is at `src/helpers/access-sql.js:214` (built from lines 181-183, 193, 207) and does not include it; `src/middleware/auth.js` only calls `isAuthenticatedRole` (`access-sql.js:276`). The role is held in prod (23 of 26 active users) and test (2 of 11), measured 2026-10-14 from eagle-api audit rows over 90 days. Every holder also has `sysadmin`, so the role admits no extra user. Revisit only if Keycloak is cleaned up.
 
 Callers to move: eagle-admin `project.service.ts` pins methods (add, delete, publish, unpublish) on `origin/develop`. They become one project PUT carrying `pins` and `pinsPublished`.
+
 ### Comment periods
 
 Status: todo
