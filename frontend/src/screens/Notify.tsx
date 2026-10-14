@@ -73,7 +73,7 @@ const HEADER = (
     <div className="screen-header__text">
       <h1>eagle-notify</h1>
       <p>
-        EPIC&apos;s subscription and notification service — consent, digests and campaigns — sending over Azure
+        EPIC&apos;s subscription and notification service — consent and campaigns — sending over Azure
         Communication Services Email.
       </p>
     </div>
