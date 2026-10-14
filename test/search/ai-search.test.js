@@ -1011,6 +1011,15 @@ test('ai-search request resilience', async (t) => {
     assert.strictEqual(calls.length, 1, 'no retry on a deterministic failure');
   });
 
+  await t.test('a service failure is marked, so handlers never forward its body', async (tt) => {
+    captureFetch(tt, () => ({ ok: false, status: 400, json: { error: 'bad field' } }));
+
+    await assert.rejects(
+      () => aiSearch.searchChunks({ keywords: 'peace', filter: null }),
+      (err) => err.searchService === true && err.status === 400
+    );
+  });
+
   await t.test('a timeout rejects rather than hanging, and is not retried', async (tt) => {
     const timeout = Object.assign(new Error('The operation was aborted'), { name: 'TimeoutError' });
     const calls = captureFetch(tt, () => ({ throws: timeout }));

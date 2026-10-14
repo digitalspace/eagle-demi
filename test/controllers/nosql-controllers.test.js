@@ -512,6 +512,28 @@ test('nosql project controller', async (t) => {
     assert.ok(!('pinsPublished' in saved), 'a derived value must not be stored');
   });
 
+  await t.test('PUT /api/projects/:id keeps the stored pins over the body', async () => {
+    // Eagle owns the pinned-proponent list; a PUT copy would reach anonymous reads unchecked.
+    const pins = [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }];
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', pins, pinsRead: ['public'],
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: WRITER_USER,
+      body: { name: 'P2', pins: [{ _id: 'x', name: '<script>' }] }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.name, 'P2');
+    assert.deepStrictEqual(saved.pins, pins);
+  });
+
   await t.test('PUT rejects vis for every caller', async () => {
     t.mock.method(projects, 'getById', async () => ({ id: '207', trackProjectId: 207, name: 'P' }));
     let upserted = false;

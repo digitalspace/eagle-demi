@@ -454,6 +454,8 @@ exports.updateProject = async (req, res) => {
       projectCACPublished: _ignoredCACPublished,
       // Derived from `pinsRead` on every read, so a GET-then-PUT must not store a copy.
       pinsPublished: _ignoredPinsPublished,
+      // Eagle owns the pinned-proponent list and pushes it; a PUT copy would reach anonymous reads.
+      pins: _ignoredPins,
       // Push bookkeeping. Catalogued at vis 2, so a staff caller CAN see them and would otherwise
       // be able to send them back: an old `eaglePushedAt` makes every later push read as stale, and
       // clearing `cascadePendingAt` loses a cascade the push recorded as still owed.

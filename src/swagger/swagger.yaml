@@ -743,7 +743,7 @@ paths:
       summary: Retrieve projects
       description: >-
         One page of the projects this caller may read. Unknown and repeated parameters are refused
-        with 400, except the filters that say they repeat, which match any of the values given. A
+        with 400, except the filters that say they repeat, which match any of up to 100 values. A
         filter, sort or `q` on a field the caller cannot see is refused with 400. A rejected Bearer token answers 401; an
         authenticated answer carries `Cache-Control: private, no-store`. A `q` search is logged as
         a `search` analytics event.
@@ -798,19 +798,30 @@ paths:
           required: false
           description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: region
           in: query
           required: false
           description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: projectState
           in: query
           required: false
           description: Repeat it to match any of several.
           schema:
             type: array
+            maxItems: 100
             items:
               type: string
           style: form
@@ -820,7 +831,12 @@ paths:
           required: false
           description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: regionalDistrict
           in: query
           required: false
@@ -842,21 +858,36 @@ paths:
           description: >-
             EAC decision List ObjectId, matched against `eacDecision._id`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: currentPhaseName
           in: query
           required: false
           description: >-
             Project phase List ObjectId, matched against `currentPhaseName._id`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: CEAAInvolvement
           in: query
           required: false
           description: >-
             CEAA involvement List ObjectId, matched against `CEAAInvolvement._id`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: decisionDateStart
           in: query
           required: false
@@ -887,8 +918,9 @@ paths:
                   $ref: '#/components/schemas/Project'
         '400':
           description: >-
-            Unknown or repeated parameter, a sort key off the list, pageSize above 100 on an
-            unauthenticated request, or a filter on a field the caller cannot see.
+            Unknown or repeated parameter, more than 100 values for one filter, a sort key off
+            the list, pageSize above 100 on an unauthenticated request, or a filter on a field the
+            caller cannot see.
         '401':
           description: The Bearer token was rejected.
     post:
@@ -4311,7 +4343,12 @@ paths:
           required: false
           description: Exact `companyType`, such as `Indigenous Group`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
       responses:
         '200':
           description: One page of rows.

@@ -8,9 +8,12 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
+const fs = require('node:fs');
+const path = require('node:path');
 
 require('../../../src/search/native-index');
 const projectController = require('../../../src/controllers/nosql/project');
+const organizations = require('../../../src/controllers/native/organizations');
 const aiSearch = require('../../../src/search/ai-search');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');
@@ -76,6 +79,13 @@ function assertEither(sql, field, values) {
   assert.deepStrictEqual([param(sql, '@nf0_0'), param(sql, '@nf0_1')], values);
 }
 
+/** A search-service failure whose body quotes the `$filter`, ACL clause included. */
+function serviceFailure(status) {
+  return Object.assign(
+    new Error(`HTTP ${status} Invalid expression: search.in(acl, 'public,staff', ',') [req-1]`),
+    { status, searchService: true });
+}
+
 async function call(qs) {
   const req = { query: querystring.parse(qs), params: {}, headers: {}, header: () => undefined };
   const res = makeRes('test');
@@ -112,6 +122,39 @@ test('GET /projects native list', async (t) => {
     assert.strictEqual(res.status, 400);
     assert.strictEqual(res.body.error, 'parameter given more than once: regionalDistrict');
     assert.strictEqual(searches.length + queries.length, 0);
+  });
+
+  await t.test('more than 100 values for one filter are refused before any read', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const many = Array.from({ length: 101 }, (_, i) => `region=r${i}`).join('&');
+    const res = await call(many);
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'region takes at most 100 values');
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+
+  await t.test('a value repeated past the cap counts once', async (t) => {
+    const { queries } = fakeStores(t);
+    const res = await call(Array.from({ length: 150 }, () => 'region=Peace').join('&'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(queries[0].query.includes('c.region = @nf0'), queries[0].query);
+    assert.strictEqual(param(queries[0], '@nf0'), 'Peace');
+  });
+
+  await t.test('a search-service 400 answers a fixed message, never the service body', async (t) => {
+    fakeStores(t);
+    t.mock.method(aiSearch, 'searchProjects', async () => { throw serviceFailure(400); });
+    const res = await call('q=mine');
+    assert.strictEqual(res.status, 400);
+    assert.deepStrictEqual(res.body, { error: 'The search service could not run this query.' });
+  });
+
+  await t.test('any other search-service failure is a 502 with a fixed message', async (t) => {
+    fakeStores(t);
+    t.mock.method(aiSearch, 'searchProjects', async () => { throw serviceFailure(403); });
+    const res = await call('q=mine');
+    assert.strictEqual(res.status, 502);
+    assert.deepStrictEqual(res.body, { error: 'The search service is unavailable.' });
   });
 
   for (const { name, field, column, values } of REPEATABLE) {
@@ -183,4 +226,32 @@ test('GET /projects native list', async (t) => {
     assert.strictEqual(res.body.error, 'decisionDateEnd takes one day as YYYY-MM-DD');
     assert.strictEqual(queries.length, 0);
   });
+});
+
+/**
+ * Query name -> its swagger parameter block, for the GET on `route`. Text-scanned like
+ * config-public.test.js: there is no YAML parser in this project's dependencies.
+ */
+function swaggerParams(route) {
+  const yaml = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'src', 'swagger', 'swagger.yaml'), 'utf8');
+  const start = yaml.indexOf(`\n  ${route}:\n`);
+  const block = yaml.slice(start, yaml.indexOf('      responses:', start));
+  return new Map(block.split('\n        - name: ').slice(1).map(param => [param.split('\n')[0], param]));
+}
+
+/** The query names a kind spec takes several values for: an alias where one renames the field. */
+function repeatableNames(spec) {
+  const renamedBy = new Map(Object.entries(spec.aliases || {}).map(([name, field]) => [field, name]));
+  return spec.multiValueFilters.map(field => renamedBy.get(field) || field);
+}
+
+test('swagger declares every repeatable filter as an exploded array', async (t) => {
+  for (const [route, spec] of [['/api/projects', projectController.projectsKind], ['/api/organizations', organizations.SPEC]]) {
+    await t.test(route, () => {
+      const params = swaggerParams(route);
+      const notArrays = repeatableNames(spec).filter(name =>
+        !/type: array/.test(params.get(name) || '') || !/explode: true/.test(params.get(name) || ''));
+      assert.deepStrictEqual(notArrays, []);
+    });
+  }
 });

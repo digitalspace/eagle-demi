@@ -24,6 +24,27 @@ function sendError(res, error, statusCode = 500) {
   });
 }
 
+const SEARCH_REFUSED = 'The search service could not run this query.';
+const SEARCH_FAILED = 'The search service is unavailable.';
+
+/**
+ * What the caller sees of a search-service failure, or null for any other error. The service's
+ * message can quote the `$filter`, the caller's ACL clause included, so it reaches the log only.
+ * Its 400 answers to a query built from the caller's input; anything else is the service's fault.
+ */
+function searchServiceReply(err) {
+  if (!err || !err.searchService) return null;
+  return err.status === 400 ? { status: 400, error: SEARCH_REFUSED } : { status: 502, error: SEARCH_FAILED };
+}
+
+/** Answers a search-service failure with a fixed message and logs its detail; null for any other error. */
+function searchServiceError(res, err, context) {
+  const reply = searchServiceReply(err);
+  if (!reply) return null;
+  logger.warn(`${context}: search service failed`, { status: err.status, error: err.message, stack: err.stack });
+  return res.status(reply.status).json({ error: reply.error });
+}
+
 /**
  * A 500 that logs the detail and tells the caller nothing.
  *
@@ -43,5 +64,7 @@ function serverError(res, err, context) {
 module.exports = {
   sendSuccess,
   sendError,
-  serverError
+  serverError,
+  searchServiceReply,
+  searchServiceError
 };

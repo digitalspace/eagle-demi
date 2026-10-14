@@ -10,7 +10,7 @@
 const { resolveAccess, pageSizeFor } = require('../../helpers/access-sql');
 const { assertKindSpec, parseNativeQuery, nativeCriteria, isEagleId } = require('../../helpers/native-query');
 const { redactForAccess, redactAllForAccess } = require('../../vis/redact');
-const { serverError } = require('../../helpers/response');
+const { serverError, searchServiceError } = require('../../helpers/response');
 const { analyticsEvent, auditEvent } = require('../../utils/audit');
 
 // The Front Door cache key ignores Authorization, so nothing a credential unlocked may be stored.
@@ -60,6 +60,8 @@ function nativeListHandler(spec) {
       }
       return res.json(body);
     } catch (err) {
+      const searchFailed = searchServiceError(res, err, `${spec.entity} list`);
+      if (searchFailed) return searchFailed;
       // `readPage` refuses a page past MAX_PAGE_DEPTH before reading anything.
       if (err && err.status === 400) return res.status(400).json({ error: err.message });
       // A store that cannot answer yet (passages over an unstamped scope) says why, not a bare 500.
