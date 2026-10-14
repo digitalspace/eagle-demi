@@ -132,8 +132,8 @@ test('the cap is 5 GB on test and 25 GB on prod', () => {
   assert.match(MAIN, /^\s+capGBPerMonth: intakeCapGBPerMonth$/m);
 });
 
-test('intake is on in test and off in prod', () => {
-  assert.match(TEST_PARAMS, /^param deployDocumentIntake = true$/m);
+test('intake is parked on both test and prod', () => {
+  assert.match(TEST_PARAMS, /^param deployDocumentIntake = false$/m);
   assert.match(PROD_PARAMS, /^param deployDocumentIntake = false$/m);
   assert.match(MAIN,
     /^module documentIntake '\.\/modules\/document-intake\.bicep' = if \(deployFoundation && deployDocumentIntake\) \{$/m);
