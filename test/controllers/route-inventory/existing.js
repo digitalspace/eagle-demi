@@ -16,6 +16,7 @@ module.exports = {
   'POST /documents/pdf-title/sweep': { exempt: 'TODO: no audit. PDF title worker bookkeeping writes no audit row yet' },
   'POST /documents': { action: 'document.create' },
   'POST /documents/extract': { action: 'document.create' },
+  'POST /intake/uploads': { action: 'document.create' },
   'PUT /documents/:id': { action: 'document.update' },
   'PUT /documents/:id/level': { action: ['record.widen', 'record.narrow', 'record.takedown'] },
   // Deprecated alias: rewrites the body and calls setLevel.

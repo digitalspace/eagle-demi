@@ -1770,6 +1770,98 @@ paths:
         '401':
           description: Unauthorized.
 
+  /api/intake/uploads:
+    post:
+      summary: Start a document upload through malware scanning
+      description: >-
+        Creates a document row with `scanStatus: pending` and an empty `read[]`, and answers a
+        15-minute write-only upload link for that document. PUT the file to `uploadUrl` with header
+        `x-ms-blob-type: BlockBlob`. The row stays hidden from every read until the scan marks it
+        `clean`; then the file moves to the object store and the row takes `requestedRead`. Any
+        other scan result, or no upload within 6 hours, marks it `rejected`.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, fileName]
+              additionalProperties: false
+              properties:
+                projectId:
+                  type: string
+                fileName:
+                  type: string
+                  maxLength: 255
+                  description: Shown as the document's name; its extension becomes `fileExt`.
+                requestedRead:
+                  type: array
+                  items:
+                    type: string
+                  description: >-
+                    The `read[]` the document takes once clean, capped at the project's level.
+                    Defaults to level 1 (team). Cannot seal (level 0) or publish (level 4).
+      responses:
+        '201':
+          description: Row created and upload link issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documentId: { type: string }
+                  uploadUrl: { type: string, description: Write-only link for this one file. }
+                  expiresAt: { type: string, format: date-time }
+        '400':
+          description: An unknown body parameter, a missing field, or a `requestedRead` that seals or publishes.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: The credential is read-only.
+        '404':
+          description: The project does not exist or is not visible to this caller.
+        '503':
+          description: Document intake is not enabled in this environment.
+
+  /api/intake/uploads/{id}:
+    get:
+      summary: Read the scan status of an intake upload
+      description: >-
+        Answers the scan status of a document started with `POST /api/intake/uploads`. Only rows
+        that went through intake are found here; any other document id is 404.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The `documentId` the upload answered.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The upload's scan status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documentId: { type: string }
+                  scanStatus: { type: string, enum: [pending, clean, rejected] }
+                  scanRejectReason: { type: string, nullable: true }
+                  scannedAt: { type: string, format: date-time, nullable: true }
+                  createdAt: { type: string, format: date-time }
+        '401':
+          description: Unauthorized.
+        '404':
+          description: No intake upload with this id, or its project is not visible to this caller.
+        '503':
+          description: Document intake is not enabled in this environment.
+
   /api/documents/{id}:
     get:
       summary: Get document by ID
