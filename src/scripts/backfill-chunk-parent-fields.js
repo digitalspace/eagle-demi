@@ -9,10 +9,13 @@
  * that cap on the live corpus. Ingest writes them on every new chunk; the ~1.1M older ones are
  * what this fills.
  *
- * THE ORDER OF THE STEPS AROUND IT IS NOT THE OBVIOUS ONE — List-id backfill, index PUT,
- * data-source PUT, app, then this. Out of order nothing reports an error and the values strand in
- * Cosmos, with `--force` as the repair. Wiki [[Bulk-Download-Operations]], "Chunk parent-field
- * rollout", holds the sequence, the checks and what the summary means.
+ * THE ORDER OF THE STEPS AROUND IT IS NOT THE OBVIOUS ONE — List-id backfill, index PUT and
+ * data-source PUT with an indexer reset (`demi-devbox.sh apply`), app deploy, `demi-devbox.sh watch`
+ * until the indexer run ends, then this. On test the PUTs go in before the merge, from the PR
+ * branch checked out on the devbox, because the merge is the staging deploy. Out of
+ * order nothing reports an error and the values strand in Cosmos, with `--force` as the repair.
+ * `azure/search/README.md` and wiki [[Bulk-Download-Operations]], "Chunk parent-field rollout",
+ * hold the sequence, the checks and what the summary means.
  *
  * **DRY RUN BY DEFAULT**. `--live` is the mutating flag.
  *

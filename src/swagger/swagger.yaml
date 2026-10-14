@@ -1196,7 +1196,8 @@ paths:
           description: Another link already uses the code. Body `{ error }`.
         '503':
           description: >-
-            Either the project row kept changing under the write, and nothing was saved; or the
+            Either the link record for the requested code kept changing while it was claimed, or
+            the project row kept changing under the write, and nothing was saved; or the
             row was saved, but one of its link records kept changing, a missing link record could
             not be written again, or another request moved the target twice during the repoint,
             so some records are not yet at the target. Either way, send the same body again to
@@ -6534,8 +6535,15 @@ components:
             The raw Eagle record, exactly as eagle-api stores it. `doc._id` must equal the
             `eagleId` path parameter. For a document, `doc.project` is the parent project's
             Eagle `_id` (or an object carrying it as `_id`). Every mirror drops `compliance`
-            from `doc.read`, and a read left with nothing else is stored as `['sysadmin']`,
-            readable by privileged callers only.
+            from `doc.read`, and a read left with nothing else becomes `['sysadmin']`, readable by
+            privileged callers only; a record other than an Update with no `read` at all lands at
+            level 2. An Update is the exception: a missing or empty read is stored as `[]`, and a
+            legacy open Update (no `read`, null `status`, `active: true`) takes its parent's
+            ceiling. A child record is then capped by its parent's level, so one under a parent
+            DEMI sealed is stored sealed. Under a parent sealed by an Eagle push (no `sealedAt`)
+            an Update is capped by that parent's Eagle read minus `compliance` instead, so it can
+            land at level 2 or 4. A comment period or document whose parent is a
+            `ProjectNotification` is not capped.
         pushedAt:
           type: integer
           format: int64

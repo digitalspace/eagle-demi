@@ -39,6 +39,27 @@ describe('resolveListLabel', () => {
     });
   });
 
+  it('shows the _id of a nameless {_id} pair as the label when it is not an ObjectId', () => {
+    expect(resolveListLabel({ _id: 'not-an-id' }, LISTS)).toEqual({
+      text: 'not-an-id',
+      unresolved: false,
+      pending: false,
+    });
+  });
+
+  it('resolves the ObjectId of a nameless {_id} pair through the lookup, or marks it unresolved', () => {
+    expect(resolveListLabel({ _id: '5d3f6c7eda7a384218296035' }, LISTS)).toEqual({
+      text: 'Post Decision - Construction',
+      unresolved: false,
+      pending: false,
+    });
+    expect(resolveListLabel({ _id: 'aaaaaaaaaaaaaaaaaaaaaaaa' }, LISTS)).toEqual({
+      text: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      unresolved: true,
+      pending: false,
+    });
+  });
+
   it('falls back to the id, marked unresolved, when no row matches', () => {
     const label = resolveListLabel('aaaaaaaaaaaaaaaaaaaaaaaa', LISTS);
     expect(label).toEqual({ text: 'aaaaaaaaaaaaaaaaaaaaaaaa', unresolved: true, pending: false });

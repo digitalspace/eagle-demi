@@ -91,11 +91,20 @@ there. The sealed routes (§1 Level 0) mount their own chain, `authenticate` the
 published) already contain `staff`, so they read as level 2 — today's meaning. Admin role names in
 `read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
 stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` minus the
-`compliance` token (`eagleBaseAcl`), so a pushed record lands at level 1, 2 or 4 and is never sealed
-by a push. A compliance-only record lands at `['sysadmin']`, the same as `['compliance','sysadmin']`,
-never at the project team. A row DEMI sealed (`POST /sealed` stamps `sealedAt`)
-stays sealed until released; a row sealed by an earlier push has no `sealedAt` and heals on its next
-push.
+`compliance` token (`eagleBaseAcl`), so a record's own read lands at level 1, 2 or 4, and at level 2
+when Eagle sent no `read[]`. A compliance-only or empty record lands at `['sysadmin']`, the same as
+`['compliance','sysadmin']`, never at the project team. Updates differ (`ownRead` in
+`src/helpers/update-parent.js`): a missing or empty `read` is stored as `[]`, except a legacy open
+row (no `read`, null `status`, `active: true`), which takes its parent's ceiling. A child is then
+capped by its parent's ceiling (`capRead`; for Updates `capIfLower`), so it lands no higher than
+that, and a child under a DEMI-sealed parent is stored sealed by its push. A parent sealed by an
+Eagle push (level 0, no `sealedAt`) is no ceiling for an Update: `ceilingRead` uses the parent's
+Eagle read minus compliance instead, so the Update can land at level 2 or 4 under a stored level-0
+parent. The exception is a comment period or
+document under a `ProjectNotification`: it keeps its own `eagleBaseAcl` read uncapped
+(`comment-period.js`, `document.js`). An Update under a notification is capped by it. A row DEMI
+sealed (`POST /sealed` stamps `sealedAt`) stays sealed until released; a row sealed by a push has
+no `sealedAt`, and its next push derives it again from Eagle's read and the parent as it is then.
 
 **Eagle-mirror staff rule: removed 2026-10-08.** From 2026-10-05 to 2026-10-08 the push added
 `staff` to any Eagle `read[]` with no ladder token, on the belief that Eagle's `staff` role skips

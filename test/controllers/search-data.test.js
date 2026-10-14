@@ -18,8 +18,6 @@ process.env.SEARCH_INDEX_DOCUMENTS = 'documents-live';
 const test = require('node:test');
 const assert = require('node:assert');
 
-// Before the app modules: they install an `uncaughtException` handler, which would turn a missing
-// committed check list into a clean exit instead of a failed run.
 const CHECKS = require('../../azure/search/data-checks.json');
 const searchSchema = require('../../src/controllers/search-schema');
 const aiSearch = require('../../src/search/ai-search');

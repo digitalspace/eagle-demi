@@ -5,8 +5,6 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-// First, before anything loads the logger: its uncaughtException handler turns a failed require
-// into a passing file.
 const controller = require('../../../src/controllers/nosql/comment-export');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const commentPeriods = require('../../../src/repositories/comment-periods');

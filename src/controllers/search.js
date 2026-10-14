@@ -833,7 +833,8 @@ const COSMOS_DATASETS = {
       return { searchResults, count: searchResults.length, applied: ['_id'] };
     }
 
-    // `filterQuery`, NOT `query`: `commentPeriods.projectId` holds the DEMI project id, so the
+    // `filterQuery`, NOT `query`: `commentPeriods.projectId` holds the DEMI project id (or, for a
+    // period parented by a ProjectNotification, the notification's own id; see `periodRows`), so the
     // Eagle ObjectId eagle-public sends has to be the one `resolveProjectFilter` already translated.
     const [projectId] = eagleQuery.projectIdsFrom(filterQuery);
 

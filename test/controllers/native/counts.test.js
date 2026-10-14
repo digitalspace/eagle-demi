@@ -9,7 +9,6 @@ const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
 
-// First: the logger's uncaughtException handler would swallow a load failure here into a green run.
 const { counts, KINDS } = require('../../../src/controllers/native/counts');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const aiSearch = require('../../../src/search/ai-search');

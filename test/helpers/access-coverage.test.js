@@ -321,12 +321,13 @@ test('access gate coverage', async (t) => {
     // 42: +1 for the PUT 400 on invalid `tags` (error string).
     // 43: +1 for the PUT 500 when the pair's other row could not take the tags (error string).
     // 41: -2, GET /projects moved to the native list handler, which redacts in mirror-reads.
-    assert.strictEqual(emissions.length, 41,
+    // 42: +1 for the short-code 503 when the claim raced (error string).
+    assert.strictEqual(emissions.length, 42,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
     for (const site of [
       "shortCodeBody(redactForAccess('projects', settled, access), settled)",
-      "{ error: 'A short link was being written by another request. Try again.' }",
+      '{ error: LINK_RACE_ERROR }',
       "{ error: 'Send shortCode, url, or both' }"
     ]) {
       assert.ok(emissions.includes(site), `missing short-link response site: ${site}`);

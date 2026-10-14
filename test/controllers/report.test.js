@@ -5,8 +5,6 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-// First, before anything loads the logger: its uncaughtException handler turns a failed require
-// into a passing file.
 const controller = require('../../src/controllers/report');
 const projects = require('../../src/repositories/projects');
 
