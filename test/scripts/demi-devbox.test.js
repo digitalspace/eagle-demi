@@ -266,7 +266,7 @@ const SIGNAL_DRIVER = `set -m
 signals="$1"; shift
 state="$(dirname "$AZ_LOG")"
 "$@" & pid=$!
-trap 'kill -TERM -- "-$pid" 2>/dev/null' EXIT
+trap 'kill -TERM -- "-$pid" 2>/dev/null; kill -KILL -- "-$pid" 2>/dev/null' EXIT
 trap 'exit 143' TERM
 for s in $signals; do
   until [[ -e "$state/\${s%%:*}" ]]; do kill -0 "$pid" 2>/dev/null || break 2; sleep 0.05; done
