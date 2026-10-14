@@ -129,16 +129,18 @@ async function update(ctx, id, changes) {
     audit: auditOf('organization.update', fields)
   });
 
-  if (written.status === 'ok' && fields.includes('name') && checked.value.name !== existing.name) {
-    await renameUsers(id, checked.value.name);
+  // A nameless organization gives no orgName to compare, so its users are left alone.
+  if (written.status === 'ok' && typeof written.value.name === 'string') {
+    await renameUsers(id, written.value.name);
   }
   return written;
 }
 
 /**
  * eagle-api renames `orgName` on every user of the organization (organization.js:163). The org row
- * is already saved, so a failed cascade is logged, not returned; it waits for the reconcile report
- * or a later name change, since a PUT with the same name skips this step.
+ * is already saved, so a failed cascade is logged, not returned. Any later PUT of the organization
+ * repairs it, because each user's orgName is compared with the organization name rather than
+ * checking whether the name changed.
  */
 async function renameUsers(orgId, orgName) {
   let updated = 0;
@@ -176,7 +178,7 @@ async function renameUsers(orgId, orgName) {
     }
   }
 
-  logger.info('[Organization] orgName renamed on users', { orgId, updated, failed });
+  if (updated || failed) logger.info('[Organization] orgName renamed on users', { orgId, updated, failed });
 }
 
 module.exports = { SCHEMA, create, update };

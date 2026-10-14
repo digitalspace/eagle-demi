@@ -207,11 +207,31 @@ test('organization domain', async (t) => {
     assert.strictEqual(users.listByOrg.mock.calls[0].arguments[1], ORG_ID);
   });
 
-  await t.test('an update that keeps the name touches no user', async (t) => {
+  await t.test('an update that keeps the name touches no user already carrying it', async (t) => {
     fakeLists(t);
-    fakeUsers(t, [{ id: 'u1', org: ORG_ID, orgName: 'Acme Mining' }]);
+    const written = fakeUsers(t, [{ id: 'u1', org: ORG_ID, orgName: 'Acme Mining' }]);
     await audited(() => organization.update(STAFF, ORG_ID, { name: 'Acme Mining', city: 'Nelson' }));
-    assert.strictEqual(users.listByOrg.mock.callCount(), 0);
+    assert.strictEqual(written.length, 0);
+  });
+
+  await t.test('an update that keeps the name repairs a user left with a stale orgName', async (t) => {
+    fakeLists(t);
+    const written = fakeUsers(t, [
+      { id: 'u1', org: ORG_ID, orgName: 'Acme Mining' },
+      { id: 'u2', org: ORG_ID, orgName: 'Acme Old Name' }
+    ]);
+
+    const { result } = await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
+
+    assert.strictEqual(result.status, 'ok');
+    assert.deepStrictEqual(written.map(u => [u.id, u.orgName]), [['u2', 'Acme Mining']]);
+  });
+
+  await t.test('an update of a nameless organization leaves its users alone', async (t) => {
+    fakeLists(t, { ...STORED, name: undefined });
+    const written = fakeUsers(t, [{ id: 'u1', org: ORG_ID, orgName: 'Acme Mining' }]);
+    await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
+    assert.strictEqual(written.length, 0);
   });
 
   await t.test('a user write that fails is logged and the update still succeeds', async (t) => {

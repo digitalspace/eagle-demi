@@ -259,7 +259,7 @@ Business rules (eagle-api `api/controllers/organization.js`):
 - Create answers 200 (`:119`). DEMI answers 201 with a UUID id, `sourceSystem: 'demi'` and `eagleId: null`.
 - Update with an id that is not an ObjectId is 400 (`:129-133`). DEMI also takes UUIDs, so any unknown id is 404.
 - Update of a missing organization answers 200 with `null` (`:161,167`). DEMI answers 404.
-- Update rewrites `orgName` on that organization's users (`:162-163`). eagle-api runs it on every update; DEMI runs it only when the name changes, skips deleted users, and logs a user write that fails without failing the update.
+- Update rewrites `orgName` on that organization's users (`:162-163`). eagle-api and DEMI both run it on every update; DEMI rewrites only users whose `orgName` differs from the organization name, so any later PUT repairs a failed cascade. It skips deleted users and logs a user write that fails without failing the update.
 - Each write records an action, `Post` or `Put` (`:117,165`). DEMI writes the audit actions `organization.create` and `organization.update`, with `detail.fields` holding field names only.
 - A body field outside the list is ignored by eagle-api. DEMI answers 400 naming it, and an empty update body is 400.
 
