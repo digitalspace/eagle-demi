@@ -4494,6 +4494,37 @@ paths:
           description: Unknown or repeated parameter, sort key not allowed, or page past the depth cap.
         '401':
           description: Bearer token rejected.
+    post:
+      summary: Create an organization
+      description: >-
+        Adds an `Organization` row readable by `public`, `staff` and `sysadmin`, with a new UUID
+        id. Needs the role `staff` or `sysadmin`. Every field is optional; one left out is stored
+        empty (`null` for `parentCompany`). A `parentCompany` that is not an id is stored as `null`.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrganizationInput'
+      responses:
+        '201':
+          description: The created row.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: A field is over its limit, of the wrong type, or not in the list below. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '503':
+          description: >-
+            Another request kept writing the same organization, and nothing was saved. Send the
+            same body again. Body `{ error: "The record is being written by another request. Try again." }`.
 
   /api/organizations/{id}:
     get:
@@ -4505,7 +4536,7 @@ paths:
         - name: id
           in: path
           required: true
-          description: The record id (the Eagle `_id`).
+          description: The record id (the Eagle `_id`, or the UUID of one created in DEMI).
           schema:
             type: string
       responses:
@@ -4521,6 +4552,48 @@ paths:
           description: Bearer token rejected.
         '404':
           description: Organization not found.
+    put:
+      summary: Update an organization
+      description: >-
+        Changes the listed fields of an organization and leaves the others as they are. Needs the
+        role `project-system-admin`, `sysadmin` or `staff`. An empty body, or a field outside the
+        list below, is a 400. Renaming an organization also sets `orgName` on its users.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`, or the UUID of one created in DEMI).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrganizationInput'
+      responses:
+        '200':
+          description: The updated row.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            Empty body, a field over its limit or of the wrong type, or a field the caller may not
+            write. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Organization not found.
+        '503':
+          description: >-
+            Another request kept writing the same organization, and nothing was saved. Send the
+            same body again. Body `{ error: "The record is being written by another request. Try again." }`.
 
   # Native reads: comment periods and comments.
   /api/comment-periods:
@@ -6659,7 +6732,49 @@ components:
           type: string
           format: date-time
           description: When dispute resolution started, mirrored from Eagle. Staff only.
-    
+
+    OrganizationInput:
+      type: object
+      description: Every field is optional. `website` and the ACL are not writable.
+      properties:
+        name:
+          type: string
+          maxLength: 1000
+        description:
+          type: string
+          maxLength: 10000
+        country:
+          type: string
+          maxLength: 1000
+        postal:
+          type: string
+          maxLength: 1000
+        province:
+          type: string
+          maxLength: 1000
+        city:
+          type: string
+          maxLength: 1000
+        address1:
+          type: string
+          maxLength: 1000
+        address2:
+          type: string
+          maxLength: 1000
+        companyType:
+          type: string
+          maxLength: 1000
+        companyLegal:
+          type: string
+          maxLength: 1000
+        company:
+          type: string
+          maxLength: 1000
+        parentCompany:
+          type: string
+          nullable: true
+          description: Id of the parent organization, or `null`.
+
     ProjectInput:
       type: object
       required:

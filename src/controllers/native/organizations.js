@@ -1,13 +1,15 @@
 'use strict';
 
 /**
- * Native reads of Eagle `Organization` rows (`kind: 'Organization'` in the `lists` container):
- * `GET /organizations` and `GET /organizations/:id`, on the contract in helpers/native-query.js.
- * The staff-side fields sit at level 2 in catalog/lists.js, so the shared redactor withholds them.
+ * `Organization` rows (`kind: 'Organization'` in the `lists` container): reads on the contract in
+ * helpers/native-query.js, writes through domain/organizations.js. The staff-side fields sit at
+ * level 2 in catalog/lists.js, so the shared redactor withholds them.
  */
 
 const lists = require('../../repositories/lists');
+const organization = require('../../domain/organizations');
 const { listHandler, getHandler } = require('../nosql/mirror-reads');
+const { writeHandler } = require('./write');
 
 const SPEC = Object.freeze({
   entity: lists.CONTAINER,
@@ -22,5 +24,7 @@ const SPEC = Object.freeze({
 module.exports = {
   SPEC,
   getOrganizations: listHandler(SPEC),
-  getOrganization: getHandler(SPEC)
+  getOrganization: getHandler(SPEC),
+  createOrganization: writeHandler(organization.create, { entity: lists.CONTAINER }),
+  updateOrganization: writeHandler(organization.update, { entity: lists.CONTAINER })
 };

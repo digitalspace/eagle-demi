@@ -256,6 +256,15 @@ function aclMismatch(rows, keyOf, eagleRead, parentReadOf = () => null, derive =
   }).map(keyOf);
 }
 
+/** The `lists` drift. A row created in DEMI has no Eagle copy until sync-out exists for it, so it is not drift. */
+function listsSummary(listRows, eagleListIds, eagleRead) {
+  return {
+    inDemi: listRows.length, inEagle: eagleListIds.size,
+    ...diff(listRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eagleListIds),
+    aclMismatch: aclMismatch(listRows, row => String(row.id), eagleRead)
+  };
+}
+
 /** What the document, period, list and notification mirrors write. */
 function mirroredRead(upstream, parent) {
   return parent ? eagleReadUnder(upstream, parent) : eagleBaseAcl(upstream);
@@ -617,11 +626,7 @@ async function reconcile(argv = [], deps = {}) {
       summary.failures.push(...summary.engageOrphans.failures);
     }
   }
-  summary.lists = {
-    inDemi: listRows.length, inEagle: eagleListIds.size,
-    ...diff(listRows, row => String(row.id), eagleListIds),
-    aclMismatch: aclMismatch(listRows, row => String(row.id), eagleRead)
-  };
+  summary.lists = listsSummary(listRows, eagleListIds, eagleRead);
   summary.notifications = {
     inDemi: notificationRows.length, inEagle: eagleNotificationIds.size,
     ...diff(notificationRows, row => String(row.id), eagleNotificationIds),
@@ -874,7 +879,7 @@ async function run({ json = false, comments: sweepComments = false, engage = fal
 }
 
 module.exports = {
-  parseArgs, diff, aclMismatch, summaryLine, classesLine, reconcile, report, run,
+  parseArgs, diff, aclMismatch, listsSummary, summaryLine, classesLine, reconcile, report, run,
   // Exported for the tests: the slug parse and the three-way ENGAGE answer are where a wrong call
   // turns into a deleted row, so both are asserted directly as well as through `reconcile`.
   slugOf, slugState, engageOrphans

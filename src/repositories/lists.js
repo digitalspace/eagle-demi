@@ -67,6 +67,15 @@ async function readForWrite(id, kind) {
  * to, like `notifications.proponent`, which stores an Organization id and renders as its name.
  */
 async function listByIds(access, ids, kind) {
+  return selectByIds(access, ids, kind, 'c.id, c.name');
+}
+
+/** Id, name and province of each organization in `ids`: the label a project pin renders. */
+async function listOrganizationLabels(access, ids) {
+  return selectByIds(access, ids, KINDS.ORGANIZATION, 'c.id, c.name, c.province');
+}
+
+async function selectByIds(access, ids, kind, select) {
   const unique = Array.from(new Set((ids || []).map(String)));
   if (unique.length === 0) return [];
 
@@ -74,7 +83,7 @@ async function listByIds(access, ids, kind) {
     access,
     partitionField: SCOPE_FIELD,
     criteria: [eq(PARTITION_FIELD, String(kind), '@kind'), inList('id', unique, '@lid')],
-    select: 'c.id, c.name'
+    select
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(kind) });
@@ -168,6 +177,7 @@ module.exports = {
   getById,
   readForWrite,
   listByIds,
+  listOrganizationLabels,
   listByKind,
   listEveryOfKind,
   countByKind,

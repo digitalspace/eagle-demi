@@ -15,7 +15,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const { cosmosKind } = require('../helpers/native-query');
 const {
-  selectWhere, selectFor, countWhere, readPage, upsertItem, readForWriteIn, fetchAll, NOT_DELETED, withCriteria
+  eq, selectWhere, selectFor, countWhere, readPage, upsertItem, readForWriteIn, fetchAll, NOT_DELETED, withCriteria
 } = require('./_sql');
 
 const CONTAINER = 'users';
@@ -58,6 +58,15 @@ async function upsert(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
 }
 
+/** The users of one organization, for its rename. `/org` is not indexed, so this scans the container. */
+async function listByOrg(access, orgId) {
+  return fetchAll(CONTAINER, selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [eq('org', String(orgId), '@org'), NOT_DELETED]
+  }));
+}
+
 /** Every row's ACL inputs, whole container — for the reconcile only. */
 async function listAclRows(access) {
   return fetchAll(CONTAINER, selectWhere({
@@ -76,5 +85,5 @@ const native = {
 };
 
 module.exports = {
-  CONTAINER, PARTITION_FIELD, getById, readForWrite, listPage, countVisible, upsert, listAclRows, native
+  CONTAINER, PARTITION_FIELD, getById, readForWrite, listPage, countVisible, upsert, listByOrg, listAclRows, native
 };

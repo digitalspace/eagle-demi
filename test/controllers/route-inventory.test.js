@@ -5,7 +5,9 @@
 // `{ 'METHOD /path': entry }`. An entry holds `action` (string or list) or `exempt` (reason), and:
 // `in`, the module under src/ holding the action when the handler delegates; `expr`, the source
 // that builds an action the handler does not spell out; `roles`, a ported route's eagle-api
-// x-security-scopes, copied as written, which must equal its `requireRole(...)` names.
+// x-security-scopes, copied as written, plus `sysadmin` and `staff` where eagle-api's auth admits
+// them on every route (api/helpers/auth.js:35-43), so a route whose scope list names another role
+// lists all three. The list must equal its `requireRole(...)` names.
 
 process.env.NODE_ENV = 'test';
 // Before src/config is first required: loading the handlers loads the audit writer.

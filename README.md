@@ -524,6 +524,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 `docs/eagle-api-port-plan.md` section 3. `src/http/routes.js` has the same anchors.
 
 <!-- port: organizations -->
+`POST /organizations` (staff, sysadmin) and `PUT /organizations/:id` (project-system-admin, sysadmin, staff) are served by DEMI; eagle-admin still calls eagle-api until the flip. Differences: create answers 201 with a UUID id; update writes only the listed fields, keeps `dateAdded`, and answers 404 for a missing row.
 
 <!-- port: comment-periods -->
 
