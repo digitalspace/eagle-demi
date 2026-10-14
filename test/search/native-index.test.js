@@ -77,6 +77,17 @@ test('OData builder', async (t) => {
     assert.strictEqual(filter, `(${filterFor(ANON, 'id').filter})`);
   });
 
+  await t.test('a List-ref filter and a decision-date edge land on their index columns', () => {
+    const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    const parsed = {
+      filters: { 'eacDecision._id': ['E1'], 'CEAAInvolvement._id': ['C1'] },
+      ranges: [{ field: 'decisionDate', op: 'ge', value: '2020-01-01' }],
+      q: 'mine'
+    };
+    assert.strictEqual(indexFilter(MAP, parsed, open).filter,
+      "(eacDecisionId eq 'E1') and (ceaaInvolvementId eq 'C1') and (decisionDate ge 2020-01-01T00:00:00.000Z)");
+  });
+
   await t.test('an unrestricted caller sends only its own filters, and none at all when it names none', () => {
     const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
     assert.deepStrictEqual(indexFilter(MAP, { filters: {} }, open), { filter: null, empty: false });

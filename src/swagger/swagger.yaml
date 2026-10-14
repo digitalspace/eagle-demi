@@ -833,6 +833,38 @@ paths:
           required: false
           schema:
             type: string
+        - name: eacDecision
+          in: query
+          required: false
+          description: EAC decision List ObjectId, matched against `eacDecision._id`.
+          schema:
+            type: string
+        - name: currentPhaseName
+          in: query
+          required: false
+          description: Project phase List ObjectId, matched against `currentPhaseName._id`.
+          schema:
+            type: string
+        - name: CEAAInvolvement
+          in: query
+          required: false
+          description: CEAA involvement List ObjectId, matched against `CEAAInvolvement._id`.
+          schema:
+            type: string
+        - name: decisionDateStart
+          in: query
+          required: false
+          description: Earliest `decisionDate`, one day as `YYYY-MM-DD`, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: decisionDateEnd
+          in: query
+          required: false
+          description: Latest `decisionDate`, one day as `YYYY-MM-DD`, inclusive.
+          schema:
+            type: string
+            format: date
       responses:
         '200':
           description: A list of projects.
@@ -4266,6 +4298,12 @@ paths:
           in: query
           required: false
           description: Rows whose `name` contains this text, case-insensitive.
+          schema:
+            type: string
+        - name: companyType
+          in: query
+          required: false
+          description: Exact `companyType`, such as `Indigenous Group`.
           schema:
             type: string
       responses:

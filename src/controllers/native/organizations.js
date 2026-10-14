@@ -13,7 +13,7 @@ const SPEC = Object.freeze({
   entity: lists.CONTAINER,
   repository: lists.nativeKind(lists.KINDS.ORGANIZATION),
   sortKeys: ['name'],
-  filters: [],
+  filters: ['companyType'],
   multiValueFilters: [],
   qFields: ['name'],
   notFound: 'Organization not found'

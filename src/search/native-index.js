@@ -89,8 +89,13 @@ const INDEX_MAPS = Object.freeze({
       projectType: 'type',
       region: 'region',
       projectState: 'status',
-      proponentName: 'proponent'
+      proponentName: 'proponent',
+      'eacDecision._id': 'eacDecisionId',
+      'currentPhaseName._id': 'currentPhaseNameId',
+      'CEAAInvolvement._id': 'ceaaInvolvementId',
+      decisionDate: 'decisionDate'
     },
+    types: { decisionDate: 'date' },
     searched: [...new Set(aiSearch.PROJECT_SEARCH_FIELDS.split(',')
       .flatMap(column => sourcesOf(PROJECT_TO_INDEX, column)))]
   },

@@ -55,14 +55,33 @@ test('native lists and organizations', async (t) => {
 
   await t.test('a parameter the kind does not declare is refused before any read', async (t) => {
     const specs = fakeCosmos(t);
-    // `legislation` and `companyType` are filters on the search compat path, not on these lists.
+    // `legislation` is a filter on the search compat path, not on these lists; `type` is a List field.
     const lists = await call(listsController.getLists, 'legislation=2002');
-    const orgs = await call(organizationsController.getOrganizations, 'companyType=Proponent');
+    const orgs = await call(organizationsController.getOrganizations, 'type=eaoStatus');
     assert.strictEqual(lists.status, 400);
     assert.match(lists.body.error, /unknown parameter: legislation/);
     assert.strictEqual(orgs.status, 400);
-    assert.match(orgs.body.error, /unknown parameter: companyType/);
+    assert.match(orgs.body.error, /unknown parameter: type/);
     assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('companyType narrows organizations, in the list read and the count', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(organizationsController.getOrganizations, 'companyType=Indigenous%20Group&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(specs.length, 2);
+    for (const spec of specs) {
+      assert.ok(spec.query.includes('c.companyType = @nf0'), spec.query);
+      assert.strictEqual(param(spec, '@nf0'), 'Indigenous Group');
+      assert.strictEqual(param(spec, '@kind'), 'Organization');
+    }
+  });
+
+  await t.test('companyType given twice is refused', async (t) => {
+    fakeCosmos(t);
+    const res = await call(organizationsController.getOrganizations, 'companyType=a&companyType=b');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: companyType');
   });
 
   await t.test('count=true sets x-total-count from a count of the same kind', async (t) => {

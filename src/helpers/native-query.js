@@ -78,10 +78,13 @@ function filterNames(spec) {
   ]);
 }
 
+// Catalog entries and per-record dials are keyed by the top-level field: `eacDecision._id` is `eacDecision`.
+const topField = field => field.split('.')[0];
+
 /** `assertFilterable` as a value: the refusal message, or null when the caller may see the field. */
 function refusal(entity, field, access) {
   try {
-    assertFilterable(entity, field, access);
+    assertFilterable(entity, topField(field), access);
     return null;
   } catch (err) {
     return err.message;
@@ -189,7 +192,7 @@ function parseNativeQuery(spec, query, access) {
 
 /** The record's own dial on `field` may hide it below the caller's level; such a record never matches. */
 function dialAllows(field, level) {
-  const dial = `c.vis[${JSON.stringify(field)}]`;
+  const dial = `c.vis[${JSON.stringify(topField(field))}]`;
   return `(NOT IS_DEFINED(${dial}) OR ${dial} >= ${level})`;
 }
 
