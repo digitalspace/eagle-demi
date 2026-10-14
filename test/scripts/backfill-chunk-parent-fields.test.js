@@ -23,9 +23,11 @@ const MOVED_PENDING_AT = '2026-09-09T12:05:00.000Z';
 /** The stamp a chunk carries once this backfill has visited it. */
 const V = chunks.CHUNK_PARENT_FIELDS_VERSION;
 
-function stateFile() {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'demi-backfill-')), 'state.json');
-}
+const STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-backfill-'));
+test.after(() => fs.rmSync(STATE_DIR, { recursive: true, force: true }));
+
+let stateSeq = 0;
+const stateFile = () => path.join(STATE_DIR, `state-${stateSeq++}.json`);
 
 /**
  * Documents repository double, partitioned by `projectId` the way Cosmos is.
