@@ -521,6 +521,10 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
       'not read, so every re-seed drops the record of the original PDF bytes');
     assert.match(spec.query, /c\.levelHeldAt\b/,
       'not read, so a re-seed republishes what DEMI took down');
+    for (const field of ['extraction', 'extractionMethod', 'chunkIngestFailures', 'chunkIngestFailedAt']) {
+      assert.match(spec.query, new RegExp(`c\\.${field}\\b`),
+        `${field} is not read, so every re-seed drops it`);
+    }
     for (const field of documents.PARENT_PENDING_FIELDS) {
       assert.match(spec.query, new RegExp(`c\\.${field}\\b`),
         `${field} is not read, so the seed cannot carry it and every re-seed clears it`);

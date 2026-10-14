@@ -18,7 +18,6 @@ const eagle = require('../sync-out/eagle');
 const config = require('../config');
 const { writeGuarded } = require('../helpers/etag-write');
 const { admitParent } = require('../helpers/parent-admit');
-const { clientCredentialsToken } = require('../services/keycloak-client-token');
 const { logger } = require('../utils/logger');
 
 const REPORT_ID = cache.RECONCILE_ENGAGE_REPORT_ID;
@@ -67,40 +66,6 @@ function driftFields(expected, actual) {
   return out;
 }
 
-/** Same test sync-out's send() applies before it deletes the Eagle copy. */
-const isDeletedRow = row => Boolean(row.isDeleted || (row.sources && row.sources.engage && row.sources.engage.isDeleted));
-
-/** GET against eagle-api with a client-credentials token, from the sync-out Eagle settings. */
-function eagleReader(get) {
-  const s = settings.eagle;
-  const missing = [
-    ['EAGLE_PROTECTED_API_BASE', s.apiBase], ['EAGLE_KC_CLIENT_ID', s.clientId],
-    ['EAGLE_KC_CLIENT_SECRET', s.clientSecret]
-  ].filter(([, value]) => !value).map(([name]) => name);
-  if (missing.length) return { missing };
-
-  let bearer = null;
-  const token = async () => {
-    bearer = bearer || (await clientCredentialsToken({
-      issuer: s.issuer, clientId: s.clientId, clientSecret: s.clientSecret, timeoutMs: TIMEOUT_MS, fetch: get
-    })).accessToken;
-    return bearer;
-  };
-  const request = async path => get(`${s.apiBase}${path}`, {
-    headers: { Authorization: `Bearer ${await token()}` }, signal: AbortSignal.timeout(TIMEOUT_MS)
-  });
-  return {
-    async getJson(path) {
-      let res = await request(path);
-      if (res.status === 401) {
-        bearer = null;
-        res = await request(path);
-      }
-      return { status: res.status, ok: res.ok, body: res.ok ? await res.json() : null };
-    }
-  };
-}
-
 const rowRef = row => ({ id: String(row.id), engagementId: row.engagementId ?? null, eagleId: row.eagleId || null });
 
 /** DEMI vs Eagle. Returns the rows `--repair` would re-queue. */
@@ -108,7 +73,7 @@ async function checkEagle(rows, reader, report) {
   const repairs = [];
   for (const row of rows) {
     report.checked++;
-    const deleted = isDeletedRow(row);
+    const deleted = eagle.isDeletedRow(row);
     const entry = (row.syncOut && row.syncOut[eagle.name]) || {};
     // Sync-out found the Eagle period on this URL already mirrored as an Eagle-owned row: a re-send meets the same refusal.
     if (!row.eagleId && entry.status === 'conflict') {
@@ -266,7 +231,7 @@ async function reconcileEngage({ repair: doRepair = false, limit = null, deps = 
   };
 
   const rows = await repo.listEveryEngage();
-  const reader = eagleReader(get);
+  const reader = eagle.eagleReader(get);
   if (reader.missing) {
     report.warnings.push(`${reader.missing.join(', ')} not set: Eagle side not checked`);
   } else {

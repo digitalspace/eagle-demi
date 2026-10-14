@@ -314,7 +314,9 @@ test('the documents catalog covers every field the seed and the controller write
       // The clock the eagle-api push orders pushes by.
       'eaglePushedAt',
       // The chunk ingest repeated-failure guard.
-      'chunkIngestFailures', 'chunkIngestFailedAt']) {
+      'chunkIngestFailures', 'chunkIngestFailedAt',
+      // Stamped on a row a DELETE kept because some chunks could not be removed.
+      'chunkPurgeFailedAt']) {
       assert.ok(key in documentCatalog, `${key} is not catalogued`);
     }
   });

@@ -836,6 +836,48 @@ test('reconcileContainer — the surplus set', async (t) => {
     assert.deepStrictEqual(removed, []);
   });
 
+  await t.test('a row the purge kept is not counted as deleted, and is named', async () => {
+    const logPath = path.join(LOG_DIR, 'kept.ndjson');
+    const events = [];
+    const out = await reconcileContainer('documents', rows, r => r.id, fetched,
+      async () => ({ rowKept: true }),
+      { live: true, logPath, audit: { auditEvent: (_req, e) => events.push(e) } });
+
+    assert.deepStrictEqual(out,
+      { inCosmos: 3, wouldDelete: 1, deleted: 0, kept: [{ id: 'b', partitionKey: 'b' }] });
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(logPath, 'utf8')),
+      { label: 'documents', id: 'b', partitionKey: 'b', deleted: false, kept: true });
+    // Audited as a failure: the purge already took the row out of the search index.
+    assert.deepStrictEqual(events, [{
+      action: 'document.delete', outcome: 'failure', targetType: 'document', targetId: 'b',
+      projectId: 'b', detail: { source: 'seed --reconcile', rowKept: true }
+    }]);
+  });
+
+  await t.test('a spared row is neither removed nor audited', async () => {
+    const logPath = path.join(LOG_DIR, 'spared.ndjson');
+    const removed = [];
+    const events = [];
+    const out = await reconcileContainer('projects', rows, r => r.id, fetched,
+      r => { removed.push(r.id); },
+      { live: true, logPath, spare: r => r.id === 'b', audit: { auditEvent: (_req, e) => events.push(e) } });
+
+    assert.deepStrictEqual(removed, []);
+    assert.deepStrictEqual(events, []);
+    assert.deepStrictEqual(out.kept, [{ id: 'b', partitionKey: 'b' }]);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(logPath, 'utf8')),
+      { label: 'projects', id: 'b', partitionKey: 'b', deleted: false, kept: true });
+  });
+
+  await t.test('a dry-run log line is not marked kept', async () => {
+    const logPath = path.join(LOG_DIR, 'dry.ndjson');
+    await reconcileContainer('documents', rows, r => r.id, fetched, () => {},
+      { live: false, logPath, spare: () => true });
+
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(logPath, 'utf8')),
+      { label: 'documents', id: 'b', partitionKey: 'b', deleted: false });
+  });
+
   await t.test('the key is composite where the container is partitioned', async () => {
     // A document id is unique per PARTITION only, so keying on id alone would call two documents
     // in different projects the same row and leave one of them behind.
@@ -1392,6 +1434,33 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
     assert.deepStrictEqual(summary.failures, []);
     assert.strictEqual(summary.reconcile.documents.deleted, 50);
     assert.strictEqual(purged.documents.length, 50);
+  });
+
+  await t.test('a kept document row fails the run so the next reconcile retries it', async () => {
+    const { deps } = makeDeps([...fetchedRows, ...staleRows(2)], []);
+    deps.purge.purgeDocument = async (row) => (row.id === 's1' ? { rowKept: true } : { rowKept: false });
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources(fetchedIds) });
+
+    assert.strictEqual(summary.reconcile.documents.deleted, 1);
+    assert.deepStrictEqual(summary.reconcile.documents.kept, [{ id: 's1', partitionKey: '207' }]);
+    const failure = summary.failures.find(f => /kept 1 document row/.test(f));
+    assert.ok(failure, summary.failures.join(' | '));
+    assert.match(failure, /\(documents: s1\); re-run to retry$/);
+    assert.ok(!/project row/.test(failure), 'no project clause when no project was kept');
+  });
+
+  await t.test('a project holding a kept document is left for the next run', async () => {
+    const { purged, deps } = makeDeps([...fetchedRows, ...staleRows(1)],
+      [{ id: '207', eagleId: 'e207' }, { id: 'eagle-x', eagleId: 'ex' }]);
+    deps.purge.purgeDocument = async () => ({ rowKept: true });
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources(fetchedIds) });
+
+    assert.deepStrictEqual(purged.projects, ['eagle-x'], 'purging 207 would orphan the kept s0');
+    assert.deepStrictEqual(summary.reconcile.projects.kept, [{ id: '207', partitionKey: '207' }]);
+    assert.match(summary.failures.join(' '),
+      /\(documents: s0\) and 1 project row\(s\) holding them \(projects: 207\); re-run to retry/);
   });
 
   await t.test('one row over the ceiling refuses', async () => {

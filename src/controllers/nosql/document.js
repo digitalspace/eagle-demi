@@ -1628,8 +1628,27 @@ exports.deleteDocument = async (req, res) => {
 
     // Chunks and both index entries go with the row — nothing sweeps them later.
     const {
-      removedChunks, removedFromSearch, removedChunksFromSearch, storedFileRetained
+      removedChunks, removedFromSearch, removedChunksFromSearch, storedFileRetained, rowKept
     } = await purgeDocument(existing);
+    if (rowKept) {
+      // Audited even though the row stays: its search-index entries are already gone.
+      auditEvent(req, {
+        action: 'document.delete',
+        outcome: 'failure',
+        targetType: 'document',
+        targetId: existing.id,
+        projectId: existing.projectId,
+        detail: { displayName: existing.displayName, removedChunks, removedFromSearch, removedChunksFromSearch, rowKept }
+      });
+      // The row stays as the handle a retried DELETE needs to find the chunks left behind.
+      res.setHeader('Retry-After', '30');
+      return res.status(503).json({
+        error: 'Document not deleted: some of its chunks could not be removed. Retry the delete.',
+        removedChunks,
+        removedFromSearch,
+        removedChunksFromSearch
+      });
+    }
 
     // Recorded after the cleanup calls so the row carries what actually happened to the search
     // index and the chunks, not what was intended. The stored file survives the record, and the
@@ -1732,7 +1751,8 @@ const REPEATED_REJECTED = 'chunk ingest rejected: repeated failures';
 
 const INDEX_DELETE_INCOMPLETE = 'chunk ingest incomplete: search index delete failed, retry';
 
-const INGEST_FAILURES_CLEARED = { chunkIngestFailures: 0, chunkIngestFailedAt: null };
+// A successful ingest also clears a failed purge's stamp: the chunks it described were replaced.
+const INGEST_FAILURES_CLEARED = { chunkIngestFailures: 0, chunkIngestFailedAt: null, chunkPurgeFailedAt: null };
 
 function capExceededMessage() {
   return `${CAP_REJECTED} (limit ${config.maxChunksPerDocument} chunks per document)`;

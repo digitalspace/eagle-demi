@@ -314,18 +314,23 @@ async function changedUpserts(documentId, chunkItems, stored, opts = {}) {
   const pk = String(documentId);
   const hashed = chunkItems.map(item => ({ item, id: String(item.id), hash: itemHashOf(item) }));
   const unchanged = hashed.filter(h => isUnchanged(stored.get(h.id), h.item, h.hash)).map(h => h.id);
-  const healed = new Set(await missingFromIndex(documentId, unchanged, stored, opts.indexed,
-    opts.healBudget || healBudget()));
+  const healedIds = await missingFromIndex(documentId, unchanged, stored, opts.indexed,
+    opts.healBudget || healBudget());
+  const healed = new Set(healedIds);
   const skip = new Set(unchanged.filter(id => !healed.has(id)));
   const operations = hashed.filter(h => !skip.has(h.id)).map(({ item, hash }) => (
     { operationType: 'Upsert', partitionKey: pk, resourceBody: { ...item, [HASH_FIELD]: hash } }));
-  logSkipped(documentId, chunkItems.length, operations.length, healed.size);
+  logSkipped(documentId, chunkItems.length, operations.length, healedIds);
   return operations;
 }
 
-function logSkipped(documentId, total, sent, healed) {
+function logSkipped(documentId, total, sent, healedIds) {
+  const healed = healedIds.length;
   if (healed > 0) {
-    logger.warn(`[chunks] doc=${documentId} healed=${healed} unchanged chunks the index lacked`);
+    // Ids in the message, not meta: the deployed format prints the message alone. At most
+    // MAX_HEALED_PER_INGEST of them, and they name what the index lost so its cause can be traced.
+    logger.warn(`[chunks] doc=${documentId} healed=${healed} unchanged chunks the index lacked: ` +
+      healedIds.join(','));
   }
   if (sent < total) {
     logger.info(`[chunks] doc=${documentId} unchanged=${total - sent} ` +

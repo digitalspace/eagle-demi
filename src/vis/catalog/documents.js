@@ -93,6 +93,8 @@ module.exports = {
   // see why an ingest 409s; they describe the pipeline, not the document, so never public.
   chunkIngestFailures: { defaultVis: 2, maxVis: 2 },
   chunkIngestFailedAt: { defaultVis: 2, maxVis: 2 },
+  // Stamped by a DELETE that could not remove every chunk and so kept the row (helpers/purge.js).
+  chunkPurgeFailedAt: { defaultVis: 2, maxVis: 2 },
 
   // Writers need it back for optimistic concurrency; every WRITE_ROLES holder is level 2 or lower.
   _etag: { defaultVis: 2, maxVis: 2 }

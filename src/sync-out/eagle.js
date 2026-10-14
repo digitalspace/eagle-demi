@@ -16,9 +16,9 @@ const { refId } = require('../controllers/nosql/eagle-mirror');
 const { logger } = require('../utils/logger');
 
 const NAME = 'eagle';
-const TIMEOUT_MS = 10000;
+const TIMEOUT_MS = 30000;
 const ERROR_BODY_CHARS = 300;
-/** A create claim older than this belongs to a delivery that died: past a token, a GET, a PUT and a POST at TIMEOUT_MS each. */
+/** A create claim older than this belongs to a delivery that died: past a token, a GET, a PUT and a POST at TIMEOUT_MS each (120s). */
 const CLAIM_LEASE_MS = 180000;
 /** Eagle ids a project move deleted that the row remembers, so their delete echo is not tombstoned. */
 const DROPPED_IDS_KEPT = 20;
@@ -255,14 +255,46 @@ async function create(s, row, body, update, logFields, goneId) {
   }
 }
 
+/** A row ENGAGE or DEMI deleted: send() removes its Eagle copy. */
+const isDeletedRow = row => Boolean(row.isDeleted || (row.sources && row.sources.engage && row.sources.engage.isDeleted));
+
+/** Read-only GET client for reconcile scripts: own token, injected fetch, no milestone needed. */
+function eagleReader(get) {
+  const s = settings.eagle;
+  const missing = [
+    ['EAGLE_PROTECTED_API_BASE', s.apiBase], ['EAGLE_KC_CLIENT_ID', s.clientId],
+    ['EAGLE_KC_CLIENT_SECRET', s.clientSecret]
+  ].filter(([, value]) => !value).map(([name]) => name);
+  if (missing.length) return { missing };
+
+  let bearer = null;
+  const token = async () => {
+    bearer = bearer || (await clientCredentialsToken({
+      issuer: s.issuer, clientId: s.clientId, clientSecret: s.clientSecret, timeoutMs: TIMEOUT_MS, fetch: get
+    })).accessToken;
+    return bearer;
+  };
+  const request = async path => get(`${s.apiBase}${path}`, {
+    headers: { Authorization: `Bearer ${await token()}` }, signal: AbortSignal.timeout(TIMEOUT_MS)
+  });
+  return {
+    async getJson(path) {
+      let res = await request(path);
+      if (res.status === 401) {
+        bearer = null;
+        res = await request(path);
+      }
+      return { status: res.status, ok: res.ok, body: res.ok ? await res.json() : null };
+    }
+  };
+}
+
 /** Write the row's current state to Eagle. `update` is the engine's etag-guarded write of this row. */
 async function send(row, { update }) {
   const s = requireSettings();
   if (!row.eagleProjectId) throw new Error(`row ${row.id} has no eagleProjectId`);
   const logFields = { rowId: row.id, engagementId: row.engagementId, eagleId: row.eagleId || null };
-  const deleted = Boolean(row.isDeleted || (row.sources && row.sources.engage && row.sources.engage.isDeleted));
-
-  if (deleted) {
+  if (isDeletedRow(row)) {
     if (!row.eagleId) return { status: 'skipped' };
     await remove(s, row.eagleId, logFields);
     return { status: 'sent', eagleId: row.eagleId };
@@ -296,5 +328,7 @@ module.exports = {
   inFlight: (entry) => Boolean(claimHeld(entry, Date.now())),
   send,
   bodyFor,
-  clearToken
+  clearToken,
+  isDeletedRow,
+  eagleReader
 };
