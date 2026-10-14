@@ -21,7 +21,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 
 ## Work plan
 
-- Claim rule: a developer sets their row to `in progress (feat-port-<slice>)` in its first push. A branch `feat-port-<slice>` that already exists locally or on origin means the slice is taken.
+- Claim rule: a developer sets their row to `in progress (feat-port-<slice>)` in its first push. A branch that already exists locally or on origin means the slice is taken, where the branch named in the slice's row in the table counts as the claim (default name `feat-port-<slice>`).
 - Each slice's brief, rules and file lists are in `docs/eagle-api-port-plan.md`.
 - Swagger rule: add methods inside the object's existing path block. Use anchors only for new paths.
 
@@ -43,7 +43,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | todo |
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | todo |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo |
-| FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `engage-comment-period.js` | 0 | M | todo |
+| FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | todo |
 | F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | todo |
 | F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | todo |
 | F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | todo |
@@ -102,7 +102,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 Sync-out is added to `_write.js` at the first object flip that needs it. That flip slice must:
 
 - raise `syncVersion` on every write (`src/sync-out/index.js:216`);
-- move `enqueueQuietly` from `engage-comment-period.js:141-149` into one exported function in `src/sync-out/index.js`, used by both callers (an extraction, not a refactor of that controller);
+- move `enqueueQuietly` from `src/controllers/nosql/engage-comment-period.js:141-149` into one exported function in `src/sync-out/index.js`, used by both callers (an extraction, not a refactor of that controller);
 - carry `kind` in the queue message and in resend (`index.js:227`), and re-read the row through a kind-to-repository registry;
 - give each kind its own consumer (path, `bodyFor`, claim) and its own reconcile path.
 

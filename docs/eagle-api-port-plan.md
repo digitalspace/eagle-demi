@@ -26,7 +26,7 @@ Who runs it: the developer working on organizations, on branch `feat-port-organi
 
 - **Tracker "Work plan" section, the first commit.**
   - One row per slice: id, objects, owns, after, size, status.
-  - Claim rule: a developer sets their row to `in progress (feat-port-<slice>)` in its **first push**, not at PR time. The tracker row is the claim; `eagle-demi/TODO.md` gets no lines.
+  - Claim rule: a developer sets their row to `in progress (feat-port-<slice>)` in its **first push**, not at PR time. The branch named in the slice's row in the table counts as the claim (default name `feat-port-<slice>`). The tracker row is the claim; `eagle-demi/TODO.md` gets no lines.
   - Fix the stale lines: the `require-roles.js` cite at tracker line 28 becomes `:51-61`; the CAC admin handlers and inspection POSTs in the retire list are already removed.
 - **New files:**
   - `src/domain/_schema.js` and `src/domain/_write.js`
@@ -255,12 +255,12 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 
 **FS. Sync-out generalization** (eagle-demi). Size M. After 0.
 - Raise `syncVersion` on every `writeRow` (`sync-out/index.js:8,72`).
-- Move `enqueueQuietly` out of `engage-comment-period.js:141-149` into one export in `sync-out/index.js`.
+- Move `enqueueQuietly` out of `src/controllers/nosql/engage-comment-period.js:141-149` into one export in `sync-out/index.js`.
 - Carry `kind` in the message and in the resend at `index.js:227`.
 - Re-read the row through a new `src/sync-out/kinds.js` registry. Today `run()` reads only `commentPeriods.readForWrite` (`:199`).
 - Give each kind its own consumer and reconcile hook. The consumers list is at `index.js:18-20`.
 - Also amends ADR-014.
-- Owns: `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `engage-comment-period.js`, `test/sync-out/sync-out.test.js`, `test/sync-out-triggers.test.js`.
+- Owns: `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js`, `test/sync-out/sync-out.test.js`, `test/sync-out-triggers.test.js`.
 - Each Flip later adds one line to `kinds.js` and one to the consumers list.
 
 **Every Flip** (one release window; after its Dark slice, FS and A0) does all of the following:
