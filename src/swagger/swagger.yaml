@@ -3817,7 +3817,8 @@ paths:
       summary: List mirrored users
       description: >-
         Eagle `User` rows from the `users` container. A project-scoped key reads none. Rows are the
-        ones the caller may read, with hidden fields left out. An anonymous caller gets the public
+        ones the caller may read, deleted ones left out, with hidden fields left out;
+        `x-total-count` counts the same rows. An anonymous caller gets the public
         tier, which is often empty. A parameter not listed here, or a repeated one, is a 400. An
         authenticated read is audited and answered with `Cache-Control: private, no-store`. A `q`
         term is never written to analytics.
@@ -3884,7 +3885,8 @@ paths:
       summary: Read one mirrored user
       description: >-
         One record the caller may read, with hidden fields left out. A record the caller cannot
-        read is a 404, the same as one that does not exist. An authenticated read is audited.
+        read, or one Eagle deleted, is a 404 to every caller, the same as one that does not exist.
+        An authenticated read is audited.
         Takes no query parameters.
       parameters:
         - name: id
@@ -3911,8 +3913,8 @@ paths:
     get:
       summary: List mirrored groups
       description: >-
-        Eagle `Group` rows from the `groups` container. Rows are the ones the caller may read, with
-        hidden fields left out, plus `projectName` and `projectEagleId` from the parent project as
+        Eagle `Group` rows from the `groups` container. Rows are the ones the caller may read,
+        deleted ones left out, with hidden fields left out (`x-total-count` counts the same rows), plus `projectName` and `projectEagleId` from the parent project as
         the caller may see it. An anonymous caller gets the public tier, which is often empty. A
         parameter not listed here, or a repeated one, is a 400.
       parameters:
@@ -3982,8 +3984,8 @@ paths:
       summary: Read one mirrored group
       description: >-
         One record the caller may read, with hidden fields left out, plus `projectName` and
-        `projectEagleId` from the parent project. A record the caller cannot read is a 404, the
-        same as one that does not exist. Takes no query parameters.
+        `projectEagleId` from the parent project. A record the caller cannot read, or one Eagle
+        deleted, is a 404 to every caller, the same as one that does not exist. Takes no query parameters.
       parameters:
         - name: id
           in: path

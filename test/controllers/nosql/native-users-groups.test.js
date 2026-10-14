@@ -15,29 +15,38 @@ const groupController = require('../../../src/controllers/nosql/group');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');
 const projects = require('../../../src/repositories/projects');
+const { NOT_DELETED } = require('../../../src/repositories/_sql');
 const { makeRes } = require('../../../src/http/router');
 const { recordEvents } = require('../../helpers/record-events');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
+const SYSADMIN = { realm_access: { roles: ['sysadmin'] } };
 
 const STAFF_READ = ['sysadmin', 'staff'];
 
 const USERS = [
   { id: 'u1', read: STAFF_READ, displayName: 'Robin Staff', email: 'robin@example.invalid' },
-  { id: 'u2', read: ['public'], displayName: 'Sam Public', email: 'sam@example.invalid' }
+  { id: 'u2', read: ['public'], displayName: 'Sam Public', email: 'sam@example.invalid' },
+  // Pushed by eagle-api with `isDeleted: true`: the mirror keeps it at staff, no read serves it.
+  { id: 'u3', read: STAFF_READ, displayName: 'Robin Gone', email: 'gone@example.invalid', isDeleted: true }
 ];
 const GROUPS = [
   { id: 'g1', projectId: 'p1', read: ['public'], name: 'Working group', members: ['u1'] },
-  { id: 'g2', projectId: 'p1', read: STAFF_READ, name: 'Staff group', members: ['u2'] }
+  { id: 'g2', projectId: 'p1', read: STAFF_READ, name: 'Staff group', members: ['u2'] },
+  { id: 'g3', projectId: 'p1', read: STAFF_READ, name: 'Working group (deleted)', members: [], isDeleted: true }
 ];
 const ROWS = { users: USERS, groups: GROUPS };
 
 const paramsOf = spec => spec.parameters || [];
 
-/** Rows whose `read[]` meets the query's `@roleN` parameters; no role parameter reads every row. */
+/**
+ * Rows whose `read[]` meets the query's `@roleN` parameters (none reads every row), less the
+ * deleted ones when the query carries `NOT_DELETED`.
+ */
 function readable(rows, spec) {
   const roles = paramsOf(spec).filter(p => /^@role\d+$/.test(p.name)).map(p => p.value);
-  return roles.length ? rows.filter(row => row.read.some(role => roles.includes(role))) : rows;
+  const live = spec.query.includes(NOT_DELETED.clause) ? rows.filter(row => row.isDeleted !== true) : rows;
+  return roles.length ? live.filter(row => row.read.some(role => roles.includes(role))) : live;
 }
 
 function fakeCosmos(t) {
@@ -159,6 +168,26 @@ test('native users read', async (t) => {
     assert.deepStrictEqual(await events(audit.EVENTS_STREAM), []);
   });
 
+  await t.test('a deleted user is in no list and no count, staff or sysadmin', async (t) => {
+    fakeCosmos(t);
+    for (const user of [STAFF, SYSADMIN]) {
+      const listed = await call(list, 'count=true', { user });
+      assert.deepStrictEqual(listed.body.map(row => row.id).sort(), ['u1', 'u2']);
+      assert.strictEqual(listed.headers['x-total-count'], '2');
+      // The fake does not apply CONTAINS, so q is checked for the deleted row and the count only.
+      const searched = await call(list, 'q=robin&count=true', { user });
+      assert.ok(!searched.body.some(row => row.id === 'u3'));
+      assert.strictEqual(searched.headers['x-total-count'], String(searched.body.length));
+    }
+  });
+
+  await t.test('by id: a deleted user is a 404 to every caller', async (t) => {
+    fakeCosmos(t);
+    for (const user of [undefined, STAFF, SYSADMIN]) {
+      assert.strictEqual((await call(get, '', { id: 'u3', user })).status, 404);
+    }
+  });
+
   await t.test('by id: a staff-only user is a 404 to an anonymous caller, whole to staff', async (t) => {
     fakeCosmos(t);
     assert.strictEqual((await call(get, '', { id: 'u1' })).status, 404);
@@ -225,6 +254,26 @@ test('native groups read', async (t) => {
   await t.test('by id takes no query parameter', async (t) => {
     fakeCosmos(t);
     assert.strictEqual((await call(get, 'project=p1', { id: 'g1' })).status, 400);
+  });
+
+  await t.test('a deleted group is in no list and no count, staff or sysadmin', async (t) => {
+    fakeCosmos(t);
+    for (const user of [STAFF, SYSADMIN]) {
+      const listed = await call(list, 'project=p1&count=true', { user });
+      assert.deepStrictEqual(listed.body.map(row => row.id).sort(), ['g1', 'g2']);
+      assert.strictEqual(listed.headers['x-total-count'], '2');
+      // The fake does not apply CONTAINS, so q is checked for the deleted row and the count only.
+      const searched = await call(list, 'q=working&count=true', { user });
+      assert.ok(!searched.body.some(row => row.id === 'g3'));
+      assert.strictEqual(searched.headers['x-total-count'], String(searched.body.length));
+    }
+  });
+
+  await t.test('by id: a deleted group is a 404 to every caller', async (t) => {
+    fakeCosmos(t);
+    for (const user of [undefined, STAFF, SYSADMIN]) {
+      assert.strictEqual((await call(get, '', { id: 'g3', user })).status, 404);
+    }
   });
 
   await t.test('group reads are not audited', async (t) => {

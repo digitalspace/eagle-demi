@@ -36,6 +36,22 @@ function isDefinedAndNotNull(field, alias = 'c') {
 }
 
 /**
+ * Leaves out a row Eagle deleted: the mirror keeps it, flagged, for the reconcile and the ACL
+ * cascade, but no read serves it. `IS_BOOL` first: a missing flag must read as "not deleted".
+ */
+const NOT_DELETED = { clause: 'NOT (IS_BOOL(c.isDeleted) AND c.isDeleted = true)', params: [] };
+
+/** A native repository (`cosmosKind` shape) whose list and count always carry `fixed` as well. */
+function withCriteria(kind, fixed) {
+  const where = criteria => [...fixed, ...(criteria || [])];
+  return {
+    ...kind,
+    list: (access, opts) => kind.list(access, { ...opts, criteria: where(opts.criteria) }),
+    count: (access, opts) => kind.count(access, { ...opts, criteria: where(opts.criteria) })
+  };
+}
+
+/**
  * Membership test against a bounded list of values.
  *
  * An EMPTY list renders as `false`, never as an omitted clause: `IN ()` is not valid SQL, and the
@@ -360,6 +376,8 @@ async function readPage(container, spec, { pageNum, pageSize, partitionKey } = {
 }
 
 module.exports = {
+  NOT_DELETED,
+  withCriteria,
   eq,
   inList,
   assertFilterable,

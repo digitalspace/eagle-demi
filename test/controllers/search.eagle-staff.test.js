@@ -176,6 +176,28 @@ test('_schemaName on any dataset but Item is a 400', async (t) => {
   assert.strictEqual(res.status, 400);
 });
 
+// eagle-api pushes a deleted user or group with `isDeleted: true`; the row stays stored, unserved.
+const DELETED = {
+  users: { ...PRIVATE_USER, id: 'u-gone', eagleId: 'u-gone', email: 'gone@example.invalid', isDeleted: true },
+  groups: { ...GROUP, id: 'g-gone', eagleId: 'g-gone', name: 'Deleted group', isDeleted: true }
+};
+const WITH_DELETED = { ...CORPUS, users: [...CORPUS.users, DELETED.users], groups: [...CORPUS.groups, DELETED.groups] };
+
+for (const [dataset, container, filter] of [['User', 'users', ''], ['Group', 'groups', `&and[project]=${PROJECT_EAGLE_ID}`]]) {
+  test(`dataset=${dataset}: a deleted row is in no sysadmin list or count`, async (t) => {
+    stubCosmos(t, WITH_DELETED, {}, { strict: true });
+    const res = await getAsStaff(t, `/api/search?dataset=${dataset}${filter}`, ['sysadmin']);
+    assert.ok(!idsOf(res).includes(DELETED[container].id));
+    assert.strictEqual(res.headers.get('x-total-count'), String(CORPUS[container].length));
+  });
+
+  test(`dataset=Item: a deleted ${dataset} by id answers nothing, even to a sysadmin`, async (t) => {
+    stubCosmos(t, WITH_DELETED, {}, { strict: true });
+    const res = await getAsStaff(t, `/api/search?dataset=Item&_id=${DELETED[container].id}&_schemaName=${dataset}`, ['sysadmin']);
+    assert.deepStrictEqual(res.body, []);
+  });
+}
+
 test('dataset=User: keywords are a 400, not every user', async (t) => {
   stub(t);
   const res = await getAsStaff(t, '/api/search?dataset=User&keywords=pat');
