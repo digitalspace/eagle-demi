@@ -62,7 +62,7 @@ function assertNarrowed(sql) {
 
 // Every filter eagle-admin's project list multi-selects: query name, stored field, index column.
 const REPEATABLE = [
-  { name: 'projectType', field: 'projectType', column: 'type', values: ['Mines', 'Energy-Electricity'] },
+  { name: 'projectType', field: 'projectType', column: 'type', values: ['Mines', 'Industrial'] },
   { name: 'region', field: 'region', column: 'region', values: ['Peace', 'Cariboo'] },
   { name: 'projectState', field: 'projectState', column: 'status', values: ['Active', 'Closed'] },
   { name: 'proponentName', field: 'proponentName', column: 'proponent', values: ['BC Hydro', 'Teck'] },
@@ -178,6 +178,41 @@ test('GET /projects native list', async (t) => {
       assertEither(queries[0], field, values);
     });
   }
+
+  // DEMI holds Track's spelling for Track-backed projects and Eagle's for Eagle-only ones, so a
+  // type in either spelling must reach both. Literals written out, not read from the alias table.
+  await t.test('a project type in either spelling matches both spellings in Cosmos', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call('projectType=Energy-Electricity&projectType=Tourist%20Destination%20Resort&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 0);
+    for (const sql of queries) {
+      assert.ok(sql.query.includes('c.projectType IN (@nf0_0, @nf0_1, @nf0_2, @nf0_3)'), sql.query);
+      assert.deepStrictEqual([0, 1, 2, 3].map(i => param(sql, `@nf0_${i}`)), [
+        'Energy-Electricity', 'Energy - Electricity', 'Tourist Destination Resort', 'Tourist Destination Resorts'
+      ]);
+    }
+  });
+
+  await t.test('a project type in either spelling matches both spellings in the index, and Cosmos re-checks', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call('q=mine&projectType=Energy%20-%20Petroleum%20%26%20Natural%20Gas');
+    assert.strictEqual(res.status, 200);
+    assert.ok(searches[0].filter.includes(
+      "search.in(type, 'Energy - Petroleum & Natural Gas,Energy-Petroleum & Natural Gas', ',')"), searches[0].filter);
+    assert.ok(queries[0].query.includes('c.projectType IN (@nf0_0, @nf0_1)'), queries[0].query);
+    assert.deepStrictEqual([param(queries[0], '@nf0_0'), param(queries[0], '@nf0_1')],
+      ['Energy - Petroleum & Natural Gas', 'Energy-Petroleum & Natural Gas']);
+  });
+
+  await t.test('the 100-value cap counts the values sent, not the spellings they expand to', async (t) => {
+    const { queries } = fakeStores(t);
+    const sent = ['Energy-Electricity', ...Array.from({ length: 99 }, (_, i) => `t${i}`)];
+    const res = await call(sent.map(v => `projectType=${encodeURIComponent(v)}`).join('&'));
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(param(queries[0], '@nf0_1'), 'Energy - Electricity');
+    assert.strictEqual(param(queries[0], '@nf0_100'), 't98');
+  });
 
   await t.test('a proponent name with a comma splits into eq terms, not a search.in list', async (t) => {
     const { searches } = fakeStores(t);

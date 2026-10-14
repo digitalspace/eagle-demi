@@ -229,6 +229,14 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("type eq 'Tourist Destination Resorts'"));
   });
 
+  await t.test("a project type sent in Track's spelling also matches Eagle's", () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[type]': 'Energy - Electricity' }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("(type eq 'Energy - Electricity' or type eq 'Energy-Electricity')"), filter);
+  });
+
   // The lost-value report counts WIRE values, not spellings. Before the two-spelling change one
   // value produced one term; now it can produce two, and a naive length comparison would report
   // every mapped filter as partially dropped.

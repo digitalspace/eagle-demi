@@ -19,6 +19,7 @@ const path = require('path');
 const { logger } = require('../utils/logger');
 const { buildContainsQuery } = require('./ai-search');
 const { subTypeSources } = require('./sub-type');
+const { PROJECT_TYPE_SPELLINGS, spellingsOf } = require('../helpers/spellings');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
 const { levelOf } = require('../vis/level');
@@ -160,18 +161,11 @@ function presenceTerm(field, values) {
 }
 
 /**
- * Wire VALUE -> the OTHER spelling the corpus may hold it under. Both are matched, never swapped,
- * because both are stored. An unlisted value is matched as sent: Track can add a type without
- * asking us. See wiki Search-Index-Reference#project-type-spellings.
+ * Wire key -> the spelling pairs the corpus may hold its values under, per dataset. Both are
+ * matched, never swapped, because both are stored (see `helpers/spellings.js`).
  */
 const VALUE_ALIASES = {
-  Project: {
-    type: {
-      'Energy-Electricity': 'Energy - Electricity',
-      'Energy-Petroleum & Natural Gas': 'Energy - Petroleum & Natural Gas',
-      'Tourist Destination Resorts': 'Tourist Destination Resort'
-    }
-  }
+  Project: { type: PROJECT_TYPE_SPELLINGS }
 };
 
 /**
@@ -620,7 +614,7 @@ function buildFilter(query, dataset, acl, access, opts = {}) {
     // ONE ENTRY PER WIRE VALUE, whatever it expands to, so the report below counts values that
     // produced no term rather than the spellings each was tried under.
     const terms = values.flatMap((v) => {
-      const spellings = valueMap[v] && valueMap[v] !== v ? [v, valueMap[v]] : [v];
+      const spellings = spellingsOf(valueMap, v);
       const built = spellings
         .map(spelling => (edge ? rangeTerm(field, meta, spelling, edge) : term(field, meta, spelling)))
         .filter(Boolean);
