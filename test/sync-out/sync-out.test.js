@@ -324,6 +324,17 @@ test('sync-out', async (t) => {
     assert.strictEqual(calls.length, 0);
   });
 
+  for (const scanStatus of ['pending', 'rejected']) {
+    await t.test(`a row the intake scan left ${scanStatus} drops the message, no call made`, async (tt) => {
+      wireStore(tt, engageRow({ eagleId: 'cp-9', scanStatus }));
+      wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      assert.deepStrictEqual(await run(message()), { skipped: 'unscanned' });
+      assert.strictEqual(calls.length, 0);
+    });
+  }
+
   await t.test('a missing EAGLE_* setting fails the attempt by name and retries', async (tt) => {
     const store = wireStore(tt, engageRow({ eagleId: 'cp-9' }));
     const sent = wireQueue(tt);
@@ -634,9 +645,11 @@ test('sync-out', async (t) => {
     assert.deepStrictEqual(sent.map(s => s.body), [{ ...message(), projectId: 'p-207' }]);
 
     assert.deepStrictEqual(await syncOut.enqueue(engageRow({ sourceSystem: 'eagle' })), []);
+    assert.deepStrictEqual(await syncOut.enqueue(engageRow({ scanStatus: 'pending' })), []);
+    assert.deepStrictEqual(await syncOut.enqueue(engageRow({ scanStatus: 'clean' })), ['eagle']);
     process.env.SYNC_OUT_EAGLE_ENABLED = 'false';
     assert.deepStrictEqual(await syncOut.enqueue(engageRow()), []);
-    assert.strictEqual(sent.length, 1, 'a disabled consumer queues nothing');
+    assert.strictEqual(sent.length, 2, 'a disabled consumer queues nothing');
   });
 
   await t.test('a 401 re-mints the token once and retries the call', async (tt) => {
