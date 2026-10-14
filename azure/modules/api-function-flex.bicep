@@ -330,6 +330,24 @@ param syncOutEagleClientSecretUri string = ''
 @description('Eagle milestone id the consumer sends on every comment period write; eagle-api replaces a missing one with a new ObjectId.')
 param eagleEngageMilestone string = ''
 
+// ── Document intake ──────────────────────────────────────────────────────────
+// All empty when intake is not deployed; the intake functions register only when these are set.
+@description('Intake staging account name. Empty leaves intake off.')
+param intakeStorageAccount string = ''
+
+param intakeIncomingContainer string = ''
+
+param intakeQuarantineContainer string = ''
+
+@description('Resource id of demi-intake-<env>, attached as a second identity for the quarantine copy')
+param intakeIdentityId string = ''
+
+@description('Client id of demi-intake-<env>')
+param intakeIdentityClientId string = ''
+
+@description('Defender scan cap in GB per month. The sweep reports usage against it.')
+param intakeCapGBPerMonth int = 0
+
 // eagle-notify wired means the announce on: eagle-api never pushes again when a scheduled Update
 // goes live, so without the timer it would never reach subscribers. An explicit schedule wins.
 var updatesAnnounceSchedule = empty(announceUpdatesSchedule) && !empty(notifyApiBase)
@@ -517,9 +535,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
   // a redeploy and can be made before the app exists.
   identity: {
     type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${identityId}': {}
-    }
+    userAssignedIdentities: union(
+      { '${identityId}': {} },
+      empty(intakeIdentityId) ? {} : { '${intakeIdentityId}': {} }
+    )
   }
   properties: {
     serverFarmId: appServicePlan.id
@@ -979,6 +998,34 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'BACKUP_CONTAINER'
           value: backupContainerName
+        }
+        {
+          name: 'INTAKE_STORAGE_ACCOUNT'
+          value: intakeStorageAccount
+        }
+        {
+          name: 'INTAKE_INCOMING_CONTAINER'
+          value: intakeIncomingContainer
+        }
+        {
+          name: 'INTAKE_QUARANTINE_CONTAINER'
+          value: intakeQuarantineContainer
+        }
+        {
+          name: 'INTAKE_QUARANTINE_CLIENT_ID'
+          value: intakeIdentityClientId
+        }
+        {
+          name: 'INTAKE_CAP_GB_PER_MONTH'
+          value: empty(intakeStorageAccount) ? '' : string(intakeCapGBPerMonth)
+        }
+        {
+          name: 'INTAKE_SWEEP_SCHEDULE'
+          value: empty(intakeStorageAccount) ? '' : '0 */30 * * * *'
+        }
+        {
+          name: 'INTAKE_PENDING_TIMEOUT_HOURS'
+          value: empty(intakeStorageAccount) ? '' : '6'
         }
         {
           name: 'SSO_ISSUER'
