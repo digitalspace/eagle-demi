@@ -522,6 +522,21 @@ const config = {
     get workspaceId() { return envTrim('EDGE_LOG_WORKSPACE_ID'); },
     get ruleId() { return envTrim('EDGE_BAN_RULE_ID'); }
   },
+
+  // Document intake (src/intake/): uploads land in the intake account, Defender for Storage scans
+  // them, and the scan event releases or quarantines each file. Empty storageAccount registers
+  // neither intake function. Getters: the trigger suites reload api/index.js per value.
+  intake: {
+    get storageAccount() { return envTrim('INTAKE_STORAGE_ACCOUNT'); },
+    get incomingContainer() { return envTrim('INTAKE_INCOMING_CONTAINER') || 'incoming'; },
+    get quarantineContainer() { return envTrim('INTAKE_QUARANTINE_CONTAINER') || 'quarantine'; },
+    // Client id of the second managed identity, the only one allowed to read a file not tagged clean.
+    get quarantineClientId() { return envTrim('INTAKE_QUARANTINE_CLIENT_ID'); },
+    // NCRONTAB, six fields. Hourly when unset.
+    get sweepSchedule() { return envTrim('INTAKE_SWEEP_SCHEDULE') || '0 0 * * * *'; },
+    // Scanning takes up to 3 hours and event delivery up to 1 more, so a timeout here is final.
+    get pendingTimeoutHours() { return intFromEnv('INTAKE_PENDING_TIMEOUT_HOURS', 6); }
+  },
 };
 
 // Optional second object-store credential, read by src/scripts/backfill-objects.js: the test

@@ -36,7 +36,8 @@ app.setup({ enableHttpStream: true });
 // host is the only other caller.
 module.exports = {
   reconcileEagle, reconcileEngage, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads,
-  restampChunksWorker, searchDefinitionsWorker, syncOutWorker, announceUpdates, edgeBan
+  restampChunksWorker, searchDefinitionsWorker, syncOutWorker, announceUpdates, edgeBan,
+  intakeScanResult, intakeScanSweep
 };
 
 // Drain buffered audit events before the worker goes away.
@@ -184,6 +185,18 @@ if (process.env.EDGE_BAN_MODE) {
 
 // Read from host.json rather than repeated here: the queue extension is what actually decides how
 // many deliveries a message gets, and a copy of the number drifts silently.
+// Document intake: Defender's scan results arrive through an Event Grid subscription, and the sweep
+// rejects uploads that never got one. Guarded on the account so a release that ships before the
+// intake infrastructure exists registers neither.
+if (require('../src/config').intake.storageAccount) {
+  app.eventGrid('intakeScanResult', { handler: intakeScanResult });
+  app.timer('intakeScanSweep', {
+    schedule: require('../src/config').intake.sweepSchedule,
+    runOnStartup: false,
+    handler: intakeScanSweep
+  });
+}
+
 const MAX_DEQUEUE_COUNT = require('../host.json').extensions.queues.maxDequeueCount;
 
 // Which delivery this is. Both workers log the string their poison alert matches only on the last
@@ -234,6 +247,27 @@ async function searchDefinitionsWorker(message, context) {
 async function syncOutWorker(message, context) {
   await require('../src/sync-out')
     .run(message, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
+}
+
+/** Logs and RETHROWS, so Event Grid redelivers; a repeated event for a settled row is a no-op. */
+async function intakeScanResult(event) {
+  try {
+    await require('../src/intake/handler').onScanResult(event);
+  } catch (err) {
+    const { logger } = require('../src/utils/logger');
+    logger.error('[intake] scan result failed', { error: err.message, stack: err.stack });
+    throw err;
+  }
+}
+
+/** Swallows the failure as reconcileEagle does: the next hour is the retry. */
+async function intakeScanSweep() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    await require('../src/intake/sweep').sweep();
+  } catch (err) {
+    logger.error('[intake] sweep run failed', { error: err.message, stack: err.stack });
+  }
 }
 
 /** Swallows the failure for the reason the reconcile does: the next run is the retry. */
