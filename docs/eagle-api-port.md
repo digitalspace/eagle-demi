@@ -14,10 +14,60 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 4. Every new route needs `node --test` tests, a catalog entry for any new field, a `src/swagger/swagger.yaml` entry, and a README line under "Parity with eagle-api".
 5. Field ownership runs in three phases for every object.
    - Dark: the DEMI routes are merged and have no caller. Eagle owns every field and mirror ingress keeps writing them. A DEMI write in this phase is overwritten by the next push, so the routes are staff-only and the row says so.
-   - Flip, one release window covering both repos: the eagle-admin caller moves to DEMI, and DEMI ingress stops taking that object's fields. Project-embedded fields such as pins and CAC move to `DEMI_ONLY_FIELDS` (`src/merge/project.js:182`) and out of `EAGLE_ONLY_FIELDS`. For a whole kind, `/eagle/<kind>/:eagleId` refuses or is removed. The sync-out consumer is turned on only if an Eagle reader still needs the data; decide and record that per object. Deploy the DEMI tag first, eagle-admin right after, then compare the nightly reconcile drift report for that object. Each flip ships a test that an Eagle push leaves DEMI-owned fields unchanged.
+   - Flip, one release window covering both repos: the eagle-admin caller moves to DEMI, and DEMI ingress stops taking that object's fields. Project-embedded fields such as pins and CAC move to `DEMI_ONLY_FIELDS` (`src/merge/project.js:182`) and out of `EAGLE_ONLY_FIELDS`. For a whole kind, `/eagle/<kind>/:eagleId` accepts the push and ignores the fields DEMI now owns, answering 2xx, so eagle-api's echo of a DEMI write does not fail. The sync-out consumer is turned on only if an Eagle reader still needs the data; decide and record that per object. Deploy the DEMI tag first, eagle-admin right after, then compare the nightly reconcile drift report for that object. Each flip ships a test that an Eagle push leaves DEMI-owned fields unchanged.
    - Retire: delete the eagle-api handler, `controllers/nosql/<kind>.js` and the mirror route.
 6. Set the row status in the same diff as the code: `todo`, `in progress (branch)`, `done (demi sha, admin sha)`. Record all shas on the row.
 7. Retire the eagle-api handler only after the eagle-admin cutover is live on test. Retirement rows are at the end.
+
+## Work plan
+
+- Claim rule: a developer sets their row to `in progress (feat-port-<slice>)` in its first push. A branch that already exists locally or on origin means the slice is taken, where the branch named in the slice's row in the table counts as the claim (default name `feat-port-<slice>`).
+- Each slice's brief, rules and file lists are in `docs/eagle-api-port-plan.md`.
+- Swagger rule: add methods inside the object's existing path block. Use anchors only for new paths.
+
+| id | objects | owns (main files) | after | size | status |
+|---|---|---|---|---|---|
+| 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | in progress (feat-port-organizations-pins) |
+| 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | in progress (feat-port-organizations-pins) |
+| 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods.js`, `repositories/comment-periods.js` | 0 | M | todo |
+| 3 | Comments | `domain/comments.js`, `controllers/native/comments.js`, `repositories/comments.js` | 2 | M | todo |
+| 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | todo |
+| 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | todo |
+| 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications.js`, `repositories/notifications.js` | 0 | S-M | todo |
+| 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
+| 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | todo |
+| 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
+| 10 | Sitemap | `controllers/sitemap.js` | 0 | S | todo |
+| 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
+| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js` | 0 (8 if a catalog edit is needed) | M | todo |
+| T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | todo |
+| A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | todo |
+| A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo |
+| FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | todo |
+| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | todo |
+| F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | todo |
+| F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | todo |
+| F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `project.service.ts` | 4, F8 | - | todo |
+| F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | todo |
+| F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | todo |
+| F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | todo |
+| F8 | Flip: extensions | `merge/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | todo |
+| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | todo |
+| F10 | Flip: documents | document mirror, eagle-admin `document.service.ts` and components | FS, A0 | - | todo |
+| F11 | Flip: CAC | `merge/project.js` (DEMI_ONLY) | 11, F8 | - | todo |
+| R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | todo |
+| R2 | Retire in eagle-api: per object | handlers under "Callers to move", pin routes, extension routes | the object's Flip live on test (retire tag: live on prod) | - | todo |
+| R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle` | the kind's Flip live on prod | - | todo |
+
+### Decisions pending
+
+Daniel decides these. Each has a recommendation.
+
+1. CACUser search dataset: drop. No caller, and members live in eagle-notify.
+2. Materialized-view status: keep until DataBC moves to DEMI `/reports`, then remove the call in a small eagle-demi-admin slice.
+3. Jobs: no port until a caller appears.
+4. Inspections: keep the mirror lines `routes.js:252-254` as a frozen import path, with no Dark slice. Retirement is decided separately.
+5. CAC member store: decide whether DEMI's remove-member and delete cascade call eagle-notify, or only eagle-notify removes members. Members sign up in eagle-notify and DEMI holds no member store.
 
 ## Layering
 
@@ -25,7 +75,7 @@ Import direction: `routes.js` -> `controllers/native/<kind>.js` -> `domain/<kind
 
 ### The four layers
 
-1. Route entry. Decides who may call, by role only. Guards per route come from the eagle-api `x-security-scopes`, using `requireRole` extended to accept several role names (it checks one role today, `src/middleware/require-roles.js:50-58`). No new staff guard. `requireAdmin` is not reused, because it admits `demi-admin` (`access-sql.js:193`).
+1. Route entry. Decides who may call, by role only. Guards per route come from the eagle-api `x-security-scopes`, using `requireRole` extended to accept several role names (it checks one role today, `src/middleware/require-roles.js:51-61`). No new staff guard. `requireAdmin` is not reused, because it admits `demi-admin` (`access-sql.js:193`).
 2. Controller, `src/controllers/native/<kind>.js`. An HTTP adapter. It builds the read `SPEC` and uses `listHandler` and `getHandler` (`controllers/native/organizations.js:12-26`). Each write is one line, `writeHandler(domainFn)`, from a new `src/controllers/native/write.js`. That helper calls `resolveAccess`, calls the domain function, maps `ok`, `invalid`, `forbidden`, `not-found` and `conflict` to 200 or 201, 400, 403, 404 and 409, then runs `redactForAccess` and `serverError`. A controller that imports `domain/` never writes `res.status` or `res.json`. It never imports `db/*`. It imports a repository only for the read `SPEC`.
 3. Domain, `src/domain/<kind>.js`. New directory. It is not `src/services/`, which holds outbound clients. It exports plain functions: `create(ctx, input)`, `update(ctx, id, changes)`, `remove(ctx, id)` and named actions such as `publish` and `setStatus`. `ctx` is `{ access, req }`; `req` is used only for the audit identity. Each function runs these steps in order: check the `SCHEMA` allowlist (unknown key gives 400); load the row through the repository with `access` (an unreadable row is not-found); call `refusedWriteKeys`; apply the named rules; write through `_write.js`. It may import repositories, `helpers/access-sql`, `helpers/etag-write`, `helpers/eagle-acl`, `vis/redact.refusedWriteKeys`, `domain/_schema` and `domain/_write`. It never imports `http/*` or `db/*`, and never touches `res`.
 4. Repository. Storage only. Reads go through `cosmosKind` (`helpers/native-query.js:255`) or `nativeKind` (`lists.js:136`). Writes go through `_sql`. It never imports the domain, controllers, `utils/audit` or `vis/redact`. Specs are `{query, parameters}` only.
@@ -45,14 +95,14 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 
 ### Audit
 
-`src/domain/_write.js` exports `writeRow({ ctx, repo, existing, reread, build, audit })`. It wraps `writeGuarded` and calls `auditEvent(ctx.req, audit(saved, from))` once on success. A call without `audit` throws. The backstop is a route-inventory table in `test/controllers/audit-cud-coverage.test.js`: every non-GET route in `routes.js` has an audit action or an exempt entry with a reason. Each ported route's entry also carries a role column: the roles from eagle-api's `x-security-scopes` for that route, copied as written, and the test checks they match the route's `requireRole` guard.
+`src/domain/_write.js` exports `writeRow({ ctx, repo, existing, reread, build, audit })`. It wraps `writeGuarded` and calls `auditEvent(ctx.req, audit(saved, from))` once on success. A call without `audit` throws. The backstop is a route inventory, one file per object under `test/controllers/route-inventory/`, checked by `test/controllers/route-inventory.test.js`: every non-GET route in `routes.js` has an audit action or an exempt entry with a reason. Each ported route's entry also carries a role column: the roles from eagle-api's `x-security-scopes` for that route, copied as written, and the test checks they match the route's `requireRole` guard.
 
 ### Sync-out
 
 Sync-out is added to `_write.js` at the first object flip that needs it. That flip slice must:
 
 - raise `syncVersion` on every write (`src/sync-out/index.js:216`);
-- move `enqueueQuietly` from `engage-comment-period.js:141-149` into one exported function in `src/sync-out/index.js`, used by both callers (an extraction, not a refactor of that controller);
+- move `enqueueQuietly` from `src/controllers/nosql/engage-comment-period.js:141-149` into one exported function in `src/sync-out/index.js`, used by both callers (an extraction, not a refactor of that controller);
 - carry `kind` in the queue message and in resend (`index.js:227`), and re-read the row through a kind-to-repository registry;
 - give each kind its own consumer (path, `bodyFor`, claim) and its own reconcile path.
 
@@ -219,11 +269,11 @@ Callers to move: eagle-admin `user.service.ts:13,19`.
 
 Status: todo
 
-Today: `projectCAC`, `projectCACPublished`, `cacEmail` are project fields (`src/merge/project.js:87`, `src/vis/catalog/projects.js:80-81,101`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers have no caller today.
+Today: `projectCAC`, `projectCACPublished`, `cacEmail` are project fields (`src/merge/project.js:87`, `src/vis/catalog/projects.js:80-81,101`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79).
 
 Target routes: `GET /projects/:id/cac`, create, delete, publish, unpublish, remove member. Member sign-up stays in eagle-notify.
 
-Business rules (eagle-api `api/controllers/cac.js`): to extract. Known: sign-up is anonymous and unconfirmed in eagle-api (workspace TODO 2026-10-14 asks for a confirm step; that belongs in eagle-notify, not here).
+Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`): to extract. Known: sign-up is anonymous and unconfirmed in eagle-api (workspace TODO 2026-10-14 asks for a confirm step; that belongs in eagle-notify, not here).
 
 ### Extensions
 
@@ -305,8 +355,8 @@ Status: todo
 
 Dead now, no caller found in any repo (external callers unverified where noted):
 - `topic` and `vc` routes and models
-- `cac` admin handlers (`protectedPublishCAC`, `protectedUnPublishCAC`, `protectedCreateCAC`, `protectedCACDelete`, `protectedCACRemoveMember`)
-- `inspection` POSTs (external mobile app named in `inspection.js:39`, unverified) and `protectedElementItemGet`
+- `cac` admin handlers (`protectedPublishCAC`, `protectedUnPublishCAC`, `protectedCreateCAC`, `protectedCACDelete`, `protectedCACRemoveMember`): already removed in eagle-api (b072e79)
+- `inspection` POSTs: already removed in eagle-api (b072e79). `protectedElementItemGet` remains.
 - `materialized-view` `protectedRefresh`
 - `POST /public/comment`, `POST /public/document`
 - `GET /audit` (no handler file, 404 on prod), `POST /task`
