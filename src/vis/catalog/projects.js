@@ -135,6 +135,8 @@ module.exports = {
   // project with `pinsRead[]` and ignores the organization's own `read` (controllers/pins.js), so
   // the project ACL that gates every other field here says nothing about this one.
   pins: { defaultVis: 2, maxVis: 4, when: 'pinsPublished' },
+  // Not stored: the redactor derives it from `pinsRead`, so staff see the publish state, not the ACL.
+  pinsPublished: { defaultVis: 2, maxVis: 2 },
   featuredDocuments: { defaultVis: 4, maxVis: 4 },
 
   // Written by the boundary and wildfire jobs, not by the merge.

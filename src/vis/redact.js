@@ -102,6 +102,9 @@ function redactForAccess(entity, doc, access) {
   if (catalog.isPublished && visible(level, effectiveVis(catalog.isPublished, dials.isPublished, doc))) {
     out.isPublished = derivePublished(doc);
   }
+  if (catalog.pinsPublished && visible(level, effectiveVis(catalog.pinsPublished, dials.pinsPublished, doc))) {
+    out.pinsPublished = PREDICATES.pinsPublished(doc);
+  }
 
   return out;
 }

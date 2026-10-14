@@ -8,9 +8,12 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
+const fs = require('node:fs');
+const path = require('node:path');
 
 require('../../../src/search/native-index');
 const projectController = require('../../../src/controllers/nosql/project');
+const organizations = require('../../../src/controllers/native/organizations');
 const aiSearch = require('../../../src/search/ai-search');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');
@@ -57,6 +60,32 @@ function assertNarrowed(sql) {
   assert.strictEqual(param(sql, '@nr1'), '2020-12-31T23:59:59.999Z');
 }
 
+// Every filter eagle-admin's project list multi-selects: query name, stored field, index column.
+const REPEATABLE = [
+  { name: 'projectType', field: 'projectType', column: 'type', values: ['Mines', 'Energy-Electricity'] },
+  { name: 'region', field: 'region', column: 'region', values: ['Peace', 'Cariboo'] },
+  { name: 'projectState', field: 'projectState', column: 'status', values: ['Active', 'Closed'] },
+  { name: 'proponentName', field: 'proponentName', column: 'proponent', values: ['BC Hydro', 'Teck'] },
+  { name: 'eacDecision', field: 'eacDecision._id', column: 'eacDecisionId', values: ['E1', 'E2'] },
+  { name: 'currentPhaseName', field: 'currentPhaseName._id', column: 'currentPhaseNameId', values: ['P1', 'P2'] },
+  { name: 'CEAAInvolvement', field: 'CEAAInvolvement._id', column: 'ceaaInvolvementId', values: ['C1', 'C2'] }
+];
+
+/** `field` matches either value, inside the anonymous dial on its top-level field. */
+function assertEither(sql, field, values) {
+  const top = field.split('.')[0];
+  const clause = `((NOT IS_DEFINED(c.vis["${top}"]) OR c.vis["${top}"] >= 4) AND c.${field} IN (@nf0_0, @nf0_1))`;
+  assert.ok(sql.query.includes(clause), `no ${clause} in ${sql.query}`);
+  assert.deepStrictEqual([param(sql, '@nf0_0'), param(sql, '@nf0_1')], values);
+}
+
+/** A search-service failure whose body quotes the `$filter`, ACL clause included. */
+function serviceFailure(status) {
+  return Object.assign(
+    new Error(`HTTP ${status} Invalid expression: search.in(acl, 'public,staff', ',') [req-1]`),
+    { status, searchService: true });
+}
+
 async function call(qs) {
   const req = { query: querystring.parse(qs), params: {}, headers: {}, header: () => undefined };
   const res = makeRes('test');
@@ -87,10 +116,74 @@ test('GET /projects native list', async (t) => {
     assert.match(res.body.error, /unknown parameter: continuationToken/);
   });
 
-  await t.test('projectState takes several values; another filter given twice is refused', async (t) => {
+  await t.test('a filter not marked repeatable given twice is refused before any read', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call('regionalDistrict=Peace%20River&regionalDistrict=Cariboo');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: regionalDistrict');
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+
+  await t.test('more than 100 values for one filter are refused before any read', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const many = Array.from({ length: 101 }, (_, i) => `region=r${i}`).join('&');
+    const res = await call(many);
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'region takes at most 100 values');
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+
+  await t.test('a value repeated past the cap counts once', async (t) => {
+    const { queries } = fakeStores(t);
+    const res = await call(Array.from({ length: 150 }, () => 'region=Peace').join('&'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(queries[0].query.includes('c.region = @nf0'), queries[0].query);
+    assert.strictEqual(param(queries[0], '@nf0'), 'Peace');
+  });
+
+  await t.test('a search-service 400 answers a fixed message, never the service body', async (t) => {
     fakeStores(t);
-    assert.strictEqual((await call('projectState=Active&projectState=Closed')).status, 200);
-    assert.strictEqual((await call('region=Peace&region=Cariboo')).status, 400);
+    t.mock.method(aiSearch, 'searchProjects', async () => { throw serviceFailure(400); });
+    const res = await call('q=mine');
+    assert.strictEqual(res.status, 400);
+    assert.deepStrictEqual(res.body, { error: 'The search service could not run this query.' });
+  });
+
+  await t.test('any other search-service failure is a 502 with a fixed message', async (t) => {
+    fakeStores(t);
+    t.mock.method(aiSearch, 'searchProjects', async () => { throw serviceFailure(403); });
+    const res = await call('q=mine');
+    assert.strictEqual(res.status, 502);
+    assert.deepStrictEqual(res.body, { error: 'The search service is unavailable.' });
+  });
+
+  for (const { name, field, column, values } of REPEATABLE) {
+    const qs = values.map(value => `${name}=${encodeURIComponent(value)}`).join('&');
+
+    await t.test(`${name} given twice matches either value in Cosmos`, async (t) => {
+      const { searches, queries } = fakeStores(t);
+      const res = await call(`${qs}&count=true`);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(searches.length, 0);
+      assert.strictEqual(queries.length, 2);
+      assertEither(queries[0], field, values);
+      assertEither(queries[1], field, values);
+    });
+
+    await t.test(`${name} given twice with q matches either value in the index, and Cosmos re-checks`, async (t) => {
+      const { searches, queries } = fakeStores(t);
+      const res = await call(`q=mine&${qs}`);
+      assert.strictEqual(res.status, 200);
+      assert.ok(searches[0].filter.includes(`search.in(${column}, '${values.join(',')}', ',')`), searches[0].filter);
+      assertEither(queries[0], field, values);
+    });
+  }
+
+  await t.test('a proponent name with a comma splits into eq terms, not a search.in list', async (t) => {
+    const { searches } = fakeStores(t);
+    const res = await call('q=mine&proponentName=Teck%2C%20Inc.&proponentName=BC%20Hydro');
+    assert.strictEqual(res.status, 200);
+    assert.ok(searches[0].filter.includes("(proponent eq 'Teck, Inc.' or proponent eq 'BC Hydro')"), searches[0].filter);
   });
 
   await t.test('with no q, List-ref filters and decision-date edges narrow the Cosmos read', async (t) => {
@@ -133,4 +226,32 @@ test('GET /projects native list', async (t) => {
     assert.strictEqual(res.body.error, 'decisionDateEnd takes one day as YYYY-MM-DD');
     assert.strictEqual(queries.length, 0);
   });
+});
+
+/**
+ * Query name -> its swagger parameter block, for the GET on `route`. Text-scanned like
+ * config-public.test.js: there is no YAML parser in this project's dependencies.
+ */
+function swaggerParams(route) {
+  const yaml = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'src', 'swagger', 'swagger.yaml'), 'utf8');
+  const start = yaml.indexOf(`\n  ${route}:\n`);
+  const block = yaml.slice(start, yaml.indexOf('      responses:', start));
+  return new Map(block.split('\n        - name: ').slice(1).map(param => [param.split('\n')[0], param]));
+}
+
+/** The query names a kind spec takes several values for: an alias where one renames the field. */
+function repeatableNames(spec) {
+  const renamedBy = new Map(Object.entries(spec.aliases || {}).map(([name, field]) => [field, name]));
+  return spec.multiValueFilters.map(field => renamedBy.get(field) || field);
+}
+
+test('swagger declares every repeatable filter as an exploded array', async (t) => {
+  for (const [route, spec] of [['/api/projects', projectController.projectsKind], ['/api/organizations', organizations.SPEC]]) {
+    await t.test(route, () => {
+      const params = swaggerParams(route);
+      const notArrays = repeatableNames(spec).filter(name =>
+        !/type: array/.test(params.get(name) || '') || !/explode: true/.test(params.get(name) || ''));
+      assert.deepStrictEqual(notArrays, []);
+    });
+  }
 });

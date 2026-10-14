@@ -134,6 +134,19 @@ test('a body over the 10 MB limit is refused before it is parsed', async (t) => 
   assert.strictEqual(reached, false);
 });
 
+test('a search-service failure thrown to the router answers a fixed message', async (t) => {
+  t.mock.method(logger, 'error', () => {});
+  t.mock.method(configController, 'getConfig', () => {
+    throw Object.assign(new Error("HTTP 400 Invalid expression: search.in(acl, 'public', ',')"),
+      { status: 400, searchService: true });
+  });
+
+  const res = await call('/api/config');
+
+  assert.strictEqual(res.status, 400);
+  assert.deepStrictEqual(JSON.parse(res.body), { error: 'The search service could not run this query.' });
+});
+
 test('a malformed JSON body is a 400, not a 500', async () => {
   const res = await call('/api/documents', {
     method: 'POST',

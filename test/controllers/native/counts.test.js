@@ -88,6 +88,17 @@ test('GET /counts', async (t) => {
     assert.strictEqual(asked.keywords, 'mine');
   });
 
+  await t.test('a search-service 400 on a keyword count answers a fixed message', async (t) => {
+    fakeCosmos(t);
+    t.mock.method(aiSearch, 'searchProjects', async () => {
+      throw Object.assign(new Error("HTTP 400 Invalid expression: search.in(acl, 'public', ',')"),
+        { status: 400, searchService: true });
+    });
+    const res = await call('kind=projects&q=mine');
+    assert.strictEqual(res.status, 400);
+    assert.deepStrictEqual(res.body, { error: 'The search service could not run this query.' });
+  });
+
   await t.test('an unknown kind, a repeated kind and a paging parameter are each refused', async (t) => {
     const specs = fakeCosmos(t);
     assert.strictEqual((await call('kind=nope')).status, 400);

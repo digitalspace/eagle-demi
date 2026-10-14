@@ -13,7 +13,7 @@
 
 const { resolveAccess } = require('../../helpers/access-sql');
 const { parseNativeQuery, nativeCriteria } = require('../../helpers/native-query');
-const { serverError } = require('../../helpers/response');
+const { serverError, searchServiceError } = require('../../helpers/response');
 const { NO_STORE } = require('../nosql/mirror-reads');
 
 /**
@@ -64,6 +64,8 @@ exports.counts = async (req, res) => {
       spec.repository.count(access, { criteria, parsed })));
     return res.json(Object.fromEntries(reads.map(({ name }, i) => [name, totals[i]])));
   } catch (err) {
+    const searchFailed = searchServiceError(res, err, 'counts');
+    if (searchFailed) return searchFailed;
     // An index store refuses a value its column cannot take (`legislation=x`) as the list does.
     if (err && err.status === 400) return res.status(400).json({ error: err.message });
     return serverError(res, err, 'counts failed');

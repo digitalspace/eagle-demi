@@ -77,11 +77,33 @@ test('native lists and organizations', async (t) => {
     }
   });
 
-  await t.test('companyType given twice is refused', async (t) => {
-    fakeCosmos(t);
-    const res = await call(organizationsController.getOrganizations, 'companyType=a&companyType=b');
+  await t.test('companyType given twice matches either value, in the list read and the count', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(organizationsController.getOrganizations,
+      'companyType=Indigenous%20Group&companyType=Proponent%2FCertificate%20Holder&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(specs.length, 2);
+    for (const spec of specs) {
+      assert.ok(spec.query.includes('c.companyType IN (@nf0_0, @nf0_1)'), spec.query);
+      assert.strictEqual(param(spec, '@nf0_0'), 'Indigenous Group');
+      assert.strictEqual(param(spec, '@nf0_1'), 'Proponent/Certificate Holder');
+    }
+  });
+
+  await t.test('companyType given twice still narrows a q read', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(organizationsController.getOrganizations, 'q=acme&companyType=a&companyType=b');
+    assert.strictEqual(res.status, 200);
+    assert.ok(specs[0].query.includes('c.companyType IN (@nf0_0, @nf0_1)'), specs[0].query);
+    assert.match(specs[0].query, /CONTAINS\(c\.name, @nq, true\)/);
+  });
+
+  await t.test('a filter not marked repeatable given twice is refused', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(listsController.getLists, 'type=a&type=b');
     assert.strictEqual(res.status, 400);
-    assert.strictEqual(res.body.error, 'parameter given more than once: companyType');
+    assert.strictEqual(res.body.error, 'parameter given more than once: type');
+    assert.strictEqual(specs.length, 0);
   });
 
   await t.test('count=true sets x-total-count from a count of the same kind', async (t) => {

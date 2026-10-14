@@ -51,6 +51,17 @@ test('selectFor projects by level', async (t) => {
     }
   });
 
+  await t.test('a projects projection carries pinsRead, which the pins predicate reads', () => {
+    // Unprojected, `pins` never publishes and staff read every project's pins as unpublished.
+    for (const level of [1, 2, 3, 4]) {
+      assert.ok(projects(selectFor('projects', { level }, 'id'), 'pinsRead'), `level ${level} must project pinsRead`);
+    }
+  });
+
+  await t.test('a kind with no pinsRead does not project one', () => {
+    assert.ok(!projects(selectFor('documents', { level: 4 }, 'projectId'), 'pinsRead'));
+  });
+
   await t.test('a missing level is treated as anonymous', () => {
     assert.strictEqual(selectFor('projects', {}, 'id'), selectFor('projects', { level: 4 }, 'id'));
   });

@@ -360,6 +360,8 @@ async function request(path, body, opts = {}) {
     // string-matching an error message to make a control-flow decision is how that breaks silently.
     const err = new Error(`HTTP ${res.status} ${detail.slice(0, 300)} [${clientRequestId}]`);
     err.status = res.status;
+    // The service body can quote the `$filter`, ACL clause included: handlers map it via `searchServiceReply`.
+    err.searchService = true;
     throw err;
   }
 

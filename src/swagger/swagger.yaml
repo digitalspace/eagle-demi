@@ -743,8 +743,8 @@ paths:
       summary: Retrieve projects
       description: >-
         One page of the projects this caller may read. Unknown and repeated parameters are refused
-        with 400, except `projectState`, which takes several values. A filter, sort or `q` on a
-        field the caller cannot see is refused with 400. A rejected Bearer token answers 401; an
+        with 400, except the filters that say they repeat, which match any of up to 100 values. A
+        filter, sort or `q` on a field the caller cannot see is refused with 400. A rejected Bearer token answers 401; an
         authenticated answer carries `Cache-Control: private, no-store`. A `q` search is logged as
         a `search` analytics event.
       parameters:
@@ -796,19 +796,32 @@ paths:
         - name: projectType
           in: query
           required: false
+          description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: region
           in: query
           required: false
+          description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: projectState
           in: query
           required: false
-          description: Repeat the parameter to match any of several states.
+          description: Repeat it to match any of several.
           schema:
             type: array
+            maxItems: 100
             items:
               type: string
           style: form
@@ -816,8 +829,14 @@ paths:
         - name: proponentName
           in: query
           required: false
+          description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: regionalDistrict
           in: query
           required: false
@@ -836,21 +855,39 @@ paths:
         - name: eacDecision
           in: query
           required: false
-          description: EAC decision List ObjectId, matched against `eacDecision._id`.
+          description: >-
+            EAC decision List ObjectId, matched against `eacDecision._id`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: currentPhaseName
           in: query
           required: false
-          description: Project phase List ObjectId, matched against `currentPhaseName._id`.
+          description: >-
+            Project phase List ObjectId, matched against `currentPhaseName._id`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: CEAAInvolvement
           in: query
           required: false
-          description: CEAA involvement List ObjectId, matched against `CEAAInvolvement._id`.
+          description: >-
+            CEAA involvement List ObjectId, matched against `CEAAInvolvement._id`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: decisionDateStart
           in: query
           required: false
@@ -881,8 +918,9 @@ paths:
                   $ref: '#/components/schemas/Project'
         '400':
           description: >-
-            Unknown or repeated parameter, a sort key off the list, pageSize above 100 on an
-            unauthenticated request, or a filter on a field the caller cannot see.
+            Unknown or repeated parameter, more than 100 values for one filter, a sort key off
+            the list, pageSize above 100 on an unauthenticated request, or a filter on a field the
+            caller cannot see.
         '401':
           description: The Bearer token was rejected.
     post:
@@ -4283,7 +4321,7 @@ paths:
         Eagle `Organization` rows (`kind: Organization` in the `lists` container) the caller may
         read, ordered by `name`. Staff-side fields such as `description` and `companyLegal` are
         left out below staff level. Any parameter not listed here, or a parameter given more than
-        once, is a 400. A rejected Bearer token is a 401, not the anonymous view. Responses to a
+        once (except `companyType`), is a 400. A rejected Bearer token is a 401, not the anonymous view. Responses to a
         signed-in caller carry `Cache-Control: private, no-store`.
       parameters:
         - name: page
@@ -4323,9 +4361,14 @@ paths:
         - name: companyType
           in: query
           required: false
-          description: Exact `companyType`, such as `Indigenous Group`.
+          description: Exact `companyType`, such as `Indigenous Group`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
       responses:
         '200':
           description: One page of rows.
@@ -6495,6 +6538,12 @@ components:
             Eagle push, the Track sync and a `POST` onto an existing id keep it. A `PUT` that sends
             it to a project or its `eagle-<eagleId>` copy then copies the stored list onto the other
             row, unless the same `PUT` changes `eagleId`. Project keyword search matches it.
+        pinsPublished:
+          type: boolean
+          description: >-
+            True when the project's pinned-proponent list (`pins`) is public. Staff only, and
+            response only: it is worked out from the stored pins access list on each read, and
+            `PUT /api/projects/{id}` ignores it.
     
     ProjectInput:
       type: object

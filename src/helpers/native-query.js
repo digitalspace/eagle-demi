@@ -16,7 +16,7 @@ const {
 const { levelOf } = require('../vis/level');
 const { redactForAccess } = require('../vis/redact');
 
-/** Most ids one `ids=` read may name. */
+/** Most ids one `ids=` read may name, and most values one repeated filter may take. */
 const MAX_IDS = 100;
 
 /**
@@ -175,7 +175,9 @@ function parseNativeQuery(spec, query, access) {
     if (q[name] === undefined) continue;
     const refused = refusal(spec.entity, field, access);
     if (refused) return { error: refused };
-    filterValues[field] = [].concat(q[name]);
+    const values = [...new Set([].concat(q[name]))];
+    if (values.length > MAX_IDS) return { error: `${name} takes at most ${MAX_IDS} values` };
+    filterValues[field] = values;
   }
 
   const ranges = [];
