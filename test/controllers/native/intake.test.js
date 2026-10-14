@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * POST /api/intake/uploads through the real route table: the stored row and the answer are the
- * observable surface. Cosmos and the intake account are stubbed.
+ * POST and GET /api/intake/uploads through the real route table: the stored row and the answer are
+ * the observable surface. Cosmos and the intake account are stubbed.
  */
 
 process.env.NODE_ENV = 'test';
@@ -15,6 +15,7 @@ const { withServer } = require('../../helpers/with-server');
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
 const blobs = require('../../../src/intake/blobs');
+const store = require('../../../src/intake/store');
 const routes = require('../../../src/http/routes');
 const authMiddleware = require('../../../src/middleware/auth');
 const { requireWrite } = require('../../../src/middleware/require-roles');
@@ -25,7 +26,7 @@ const PROJECT = { id: '207', read: ['staff', 'idir'], region: 'Peace' };
 const SAS_URL = 'https://demiintest.blob.core.windows.net/incoming/x?sig=stub';
 
 /** Intake enabled, the project found, the row and the link captured. */
-function wire(t, { account = 'demiintest', project = PROJECT } = {}) {
+function wire(t, { account = 'demiintest', project = PROJECT, stored = null } = {}) {
   const previous = process.env.INTAKE_STORAGE_ACCOUNT;
   process.env.INTAKE_STORAGE_ACCOUNT = account;
   t.after(() => {
@@ -39,6 +40,7 @@ function wire(t, { account = 'demiintest', project = PROJECT } = {}) {
     seen.rows.push({ row, opts });
     return row;
   });
+  t.mock.method(store, 'findById', async (id) => (stored && stored.id === id ? stored : null));
   t.mock.method(blobs, 'staging', () => ({
     getUploadUrl: async (key, opts) => {
       seen.links.push({ key, opts });
@@ -165,4 +167,59 @@ test('one log line per issued link', async (t) => {
   const lines = logger.info.mock.calls.filter(c => /upload link issued/.test(c.arguments[0]));
   assert.strictEqual(lines.length, 1);
   assert.ok(lines[0].arguments[1].documentId);
+});
+
+const PENDING = { id: 'u1', projectId: '207', scanStatus: 'pending', read: [], createdAt: '2026-10-14T17:00:00.000Z' };
+
+const getStatus = (call, id, headers = AUTHED) => call(`/api/intake/uploads/${id}`, { headers });
+
+test('status: an anonymous caller gets 401', async (t) => {
+  wire(t, { stored: PENDING });
+  await withServer(async (call) => {
+    assert.strictEqual((await getStatus(call, 'u1', {})).status, 401);
+  });
+});
+
+test('status: a pending upload answers 200 with null reason and scan time', async (t) => {
+  wire(t, { stored: PENDING });
+  await withServer(async (call) => {
+    const res = await getStatus(call, 'u1');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(await res.json(), {
+      documentId: 'u1', scanStatus: 'pending', scanRejectReason: null, scannedAt: null,
+      createdAt: '2026-10-14T17:00:00.000Z'
+    });
+  });
+});
+
+test('status: a rejected upload answers its reason and scan time', async (t) => {
+  wire(t, { stored: { ...PENDING, scanStatus: 'rejected', scanRejectReason: 'malicious', scannedAt: '2026-10-14T17:05:00.000Z' } });
+  await withServer(async (call) => {
+    const body = await (await getStatus(call, 'u1')).json();
+    assert.strictEqual(body.scanStatus, 'rejected');
+    assert.strictEqual(body.scanRejectReason, 'malicious');
+    assert.strictEqual(body.scannedAt, '2026-10-14T17:05:00.000Z');
+  });
+});
+
+test('status: a document that never went through intake is 404', async (t) => {
+  const { scanStatus: _scanStatus, ...ordinary } = PENDING;
+  wire(t, { stored: { ...ordinary, read: ['public'] } });
+  await withServer(async (call) => {
+    assert.strictEqual((await getStatus(call, 'u1')).status, 404);
+  });
+});
+
+test('status: an upload in a project the caller cannot see is 404', async (t) => {
+  wire(t, { stored: PENDING, project: null });
+  await withServer(async (call) => {
+    assert.strictEqual((await getStatus(call, 'u1')).status, 404);
+  });
+});
+
+test('status: 503 when INTAKE_STORAGE_ACCOUNT is empty', async (t) => {
+  wire(t, { stored: PENDING, account: '' });
+  await withServer(async (call) => {
+    assert.strictEqual((await getStatus(call, 'u1')).status, 503);
+  });
 });

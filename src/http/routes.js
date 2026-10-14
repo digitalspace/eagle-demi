@@ -200,6 +200,7 @@ const routes = [
   { method: 'post', path: '/documents/extract', guards: [authMiddleware, requireWrite], load: () => documentController().extractDocument },
   // Upload through the scanned intake account: answers a write-only link, the row stays hidden until clean.
   { method: 'post', path: '/intake/uploads', guards: [authMiddleware, requireWrite], load: () => require('../controllers/native/intake').createUpload },
+  { method: 'get', path: '/intake/uploads/:id', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/native/intake').getUpload },
   { method: 'put', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().updateDocument },
   { method: 'put', path: '/documents/:id/level', guards: [authMiddleware, requireWrite], load: () => documentController().setLevel },
   // Deprecated alias for the line above — eagle-admin-console still sends `{ isPublished }`.

@@ -1826,6 +1826,42 @@ paths:
         '503':
           description: Document intake is not enabled in this environment.
 
+  /api/intake/uploads/{id}:
+    get:
+      summary: Read the scan status of an intake upload
+      description: >-
+        Answers the scan status of a document started with `POST /api/intake/uploads`. Only rows
+        that went through intake are found here; any other document id is 404.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The `documentId` the upload answered.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The upload's scan status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documentId: { type: string }
+                  scanStatus: { type: string, enum: [pending, clean, rejected] }
+                  scanRejectReason: { type: string, nullable: true }
+                  scannedAt: { type: string, format: date-time, nullable: true }
+                  createdAt: { type: string, format: date-time }
+        '401':
+          description: Unauthorized.
+        '404':
+          description: No intake upload with this id, or its project is not visible to this caller.
+        '503':
+          description: Document intake is not enabled in this environment.
+
   /api/documents/{id}:
     get:
       summary: Get document by ID

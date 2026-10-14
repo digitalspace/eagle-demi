@@ -4,6 +4,7 @@
  * `POST /intake/uploads`: start one document upload through the intake account. Creates the
  * document row as `pending` with an empty `read[]`, and answers a 15-minute write-only link for
  * `incoming/<documentId>`. Defender scans the upload and src/intake/handler.js releases or rejects it.
+ * `GET /intake/uploads/:id`: that upload's scan status.
  */
 
 const crypto = require('crypto');
@@ -12,6 +13,7 @@ const config = require('../../config');
 const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const blobs = require('../../intake/blobs');
+const store = require('../../intake/store');
 const { resolveAccess, capRead, readForLevel, levelOfRead } = require('../../helpers/access-sql');
 const { naturalSortKey } = require('../../helpers/natural-sort');
 const { serverError } = require('../../helpers/response');
@@ -23,6 +25,7 @@ const MAX_FILE_NAME = 255;
 const BODY_KEYS = new Set(['projectId', 'fileName', 'requestedRead']);
 
 const isText = value => typeof value === 'string' && value.trim() !== '';
+const DISABLED = { error: 'Document intake is not enabled in this environment.' };
 
 /** The body's error, or null. */
 function refusal(body) {
@@ -55,7 +58,7 @@ function extensionOf(fileName) {
 exports.createUpload = async (req, res) => {
   try {
     if (!config.intake.storageAccount) {
-      return res.status(503).json({ error: 'Document intake is not enabled in this environment.' });
+      return res.status(503).json(DISABLED);
     }
     const body = req.body;
     const refused = refusal(body);
@@ -111,5 +114,29 @@ exports.createUpload = async (req, res) => {
     return res.status(201).json({ documentId: id, uploadUrl, expiresAt });
   } catch (err) {
     return serverError(res, err, 'intake upload failed');
+  }
+};
+
+exports.getUpload = async (req, res) => {
+  try {
+    if (!config.intake.storageAccount) return res.status(503).json(DISABLED);
+    const id = req.params.id;
+    const notFound = () => res.status(404).json({ error: `Upload with id ${id} not found.` });
+
+    // A pending or rejected row has an empty read[], so it is read past the ACL and gated on its project.
+    const row = await store.findById(id);
+    // No scanStatus = an ordinary document: this route must not become a second document read.
+    if (!row || typeof row.scanStatus !== 'string') return notFound();
+    if (!await projects.getById(resolveAccess(req), row.projectId)) return notFound();
+
+    return res.status(200).json({
+      documentId: row.id,
+      scanStatus: row.scanStatus,
+      scanRejectReason: row.scanRejectReason || null,
+      scannedAt: row.scannedAt || null,
+      createdAt: row.createdAt
+    });
+  } catch (err) {
+    return serverError(res, err, 'intake upload status failed');
   }
 };
