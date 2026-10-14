@@ -14,6 +14,7 @@ const commentPeriods = require('../repositories/comment-periods');
 const { clientCredentialsToken } = require('../services/keycloak-client-token');
 const { refId } = require('../controllers/nosql/eagle-mirror');
 const { logger } = require('../utils/logger');
+const { isScanCleared } = require('../repositories/documents');
 
 const NAME = 'eagle';
 const TIMEOUT_MS = 30000;
@@ -323,7 +324,7 @@ async function send(row, { update }) {
 module.exports = {
   name: NAME,
   enabled: () => settings.eagle.enabled,
-  wants: (row) => Boolean(row) && row.sourceSystem === 'engage',
+  wants: (row) => Boolean(row) && row.sourceSystem === 'engage' && isScanCleared(row),
   // Another delivery holds a live create claim: its outcome, not this one's failure, settles the row.
   inFlight: (entry) => Boolean(claimHeld(entry, Date.now())),
   send,

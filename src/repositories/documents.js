@@ -83,9 +83,26 @@ function notUpdateImage() {
   };
 }
 
+/**
+ * Leaves out uploads the document intake has not released (src/intake/): `pending` while Defender
+ * scans, `rejected` after. Rows that never went through intake carry no `scanStatus` and stay in.
+ * A literal, not a parameter, because the search datasource query (demi-documents-ds.json) repeats
+ * this exact text and takes no parameters.
+ */
+const SCAN_CLEARED_CLAUSE = "(NOT IS_STRING(c.scanStatus) OR c.scanStatus = 'clean')";
+
+function scanCleared() {
+  return { clause: SCAN_CLEARED_CLAUSE, params: [] };
+}
+
+/** The JS twin of SCAN_CLEARED_CLAUSE, for a row already read. */
+function isScanCleared(row) {
+  return Boolean(row) && (typeof row.scanStatus !== 'string' || row.scanStatus === 'clean');
+}
+
 function buildCriteria({ projectId, extracted, sourceSystem, extractionError, hasProjectId,
   parentFieldsPending, withoutUpdateImages }) {
-  const criteria = [];
+  const criteria = [scanCleared()];
   const projectIds = projectIdList(projectId);
   if (projectIds.length === 1) criteria.push(eq('projectId', projectIds[0], '@projectId'));
   else if (projectIds.length > 1) criteria.push(inList('projectId', projectIds, '@projectId'));
@@ -189,7 +206,7 @@ async function projectUploadMaxima(access) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [isDefinedAndNotNull('dateUploaded'), notUpdateImage()],
+    criteria: [isDefinedAndNotNull('dateUploaded'), notUpdateImage(), scanCleared()],
     select: 'c.projectId, MAX(c.dateUploaded) AS dateUploaded',
     groupBy: 'c.projectId'
   });
@@ -216,7 +233,8 @@ async function newestUploads(access, projectId) {
     criteria: [
       eq('projectId', String(projectId), '@projectId'),
       isDefinedAndNotNull('dateUploaded'),
-      notUpdateImage()
+      notUpdateImage(),
+      scanCleared()
     ],
     select: `TOP ${RECENT_UPLOAD_DOCUMENTS} ${selectFor('documents', access, PARTITION_FIELD)}`,
     orderBy: 'c.dateUploaded DESC'
@@ -271,8 +289,11 @@ async function countVisible(access, opts = {}) {
  * The visibility predicate is applied IN the query rather than fetched-then-filtered, so a
  * document the caller may not see is never returned to this process. When the project is
  * known, pass it to turn this into a single-partition read.
+ *
+ * An upload intake has not released is not returned. `includeUnscanned` is for intake paths only (the
+ * scan handler, the sweep, the intake status route, which returns scan fields only), never a general read.
  */
-async function getById(access, id, projectId) {
+async function getById(access, id, projectId, { includeUnscanned = false } = {}) {
   // PRESENCE, not truthiness, and through the same helper the reads use: `''` is a real partition,
   // and a falsy test sent it down the cross-partition branch below — whose single page can come
   // back empty, which the caller reads as "the document is gone".
@@ -280,14 +301,13 @@ async function getById(access, id, projectId) {
   if (partitionKey !== undefined) {
     const doc = await cosmos.readItem(CONTAINER, String(id), partitionKey);
     if (!doc) return null;
+    if (!includeUnscanned && !isScanCleared(doc)) return null;
     return canRead(doc, access, PARTITION_FIELD) ? doc : null;
   }
 
-  const spec = selectWhere({
-    access,
-    partitionField: PARTITION_FIELD,
-    criteria: [eq('id', String(id), '@id')]
-  });
+  const criteria = [eq('id', String(id), '@id')];
+  if (!includeUnscanned) criteria.push(scanCleared());
+  const spec = selectWhere({ access, partitionField: PARTITION_FIELD, criteria });
   // Pages are DRAINED, not sampled: one page of a cross-partition lookup comes back empty
   // whenever the partitions it reached first do not hold the id, and reading only that page
   // reports a document that exists as deleted.
@@ -352,7 +372,8 @@ async function listByIds(access, ids, projectIds) {
       inList('id', unique, '@did'),
       inList(PARTITION_FIELD, projects, '@dpid'),
       // This read is the chunk gate: an Update image's chunk, if one was ever made, stays out.
-      notUpdateImage()
+      notUpdateImage(),
+      scanCleared()
     ],
     select: 'c.id, c.displayName, c.documentFileName, c.type, c.milestone, c.milestoneId, c.datePosted'
   });
@@ -963,7 +984,7 @@ async function listByIdsUnscoped(access, ids, select) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [inList('id', unique, '@bid')],
+    criteria: [inList('id', unique, '@bid'), scanCleared()],
     select
   });
 
@@ -974,6 +995,8 @@ async function listByIdsUnscoped(access, ids, select) {
 module.exports = {
   CONTAINER,
   UPDATE_SOURCE,
+  SCAN_CLEARED_CLAUSE,
+  isScanCleared,
   PARTITION_FIELD,
   EXTRACTION_FIELDS,
   DEMI_OWNED_FIELDS,

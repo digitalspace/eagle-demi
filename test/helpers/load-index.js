@@ -15,7 +15,7 @@ const FUNCTIONS = require.resolve('@azure/functions');
 const SCHEDULE_VARS = [
   'RECONCILE_SCHEDULE', 'SYNC_TEAMS_SCHEDULE', 'BULK_CLEANUP_SCHEDULE', 'BULK_DOWNLOADS_QUEUE',
   'CHUNK_RESTAMP_QUEUE', 'SEARCH_DEFINITIONS_QUEUE', 'ANNOUNCE_UPDATES_SCHEDULE', 'SYNC_OUT_QUEUE',
-  'RECONCILE_ENGAGE_SCHEDULE', 'EDGE_BAN_MODE'
+  'RECONCILE_ENGAGE_SCHEDULE', 'EDGE_BAN_MODE', 'INTAKE_STORAGE_ACCOUNT'
 ];
 
 const setEnv = (name, value) => {
@@ -29,7 +29,7 @@ const setEnv = (name, value) => {
  * @param {string} [schedule] its value, or undefined for "the environment never set it"
  */
 function loadIndex(t, name, schedule) {
-  const registered = { timers: [], https: [], queues: [], setups: [] };
+  const registered = { timers: [], https: [], queues: [], eventGrids: [], setups: [] };
   const cachedFunctions = require.cache[FUNCTIONS];
   const cachedIndex = require.cache[INDEX];
   const cachedEnv = SCHEDULE_VARS.map(v => [v, process.env[v]]);
@@ -44,6 +44,7 @@ function loadIndex(t, name, schedule) {
         timer: (timerName, options) => registered.timers.push({ name: timerName, options }),
         http: (httpName, options) => registered.https.push({ name: httpName, options }),
         storageQueue: (queueName, options) => registered.queues.push({ name: queueName, options }),
+        eventGrid: (eventName, options) => registered.eventGrids.push({ name: eventName, options }),
         hook: { appTerminate: () => {} }
       }
     }

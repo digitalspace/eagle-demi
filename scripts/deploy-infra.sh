@@ -161,6 +161,7 @@ FOUNDATION_MODULES=(
   azure/modules/apim.bicep
   azure/modules/static-site.bicep
   azure/modules/document-storage.bicep
+  azure/modules/document-intake.bicep
   azure/modules/cost-budget.bicep
 )
 
