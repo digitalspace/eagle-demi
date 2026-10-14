@@ -19,8 +19,8 @@ param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'fals
 param deployDocumentIntake = true
 param intakeCapGBPerMonth = 5
 param deployIntakeSubscription = bool(readEnvironmentVariable('DEPLOY_INTAKE_SUBSCRIPTION', 'true'))
-// Unset until the Defender publisher principal is confirmed; Defender cannot publish scan results without it.
-param intakeDefenderPrincipalId = ''
+// storageDataScanner identity of this subscription, still to be confirmed by the EICAR test on test; fallback is the Defender for Storage resource provider app 080765e3-9336-4461-b934-310acccb907d.
+param intakeDefenderPrincipalId = 'a7cb62f0-b243-4920-9536-61006340cc1d'
 
 // Direct-to-NRS object store: the test bucket zdspnb, keys at the root, no prefix. eagle-api on
 // OpenShift TEST has written here through its nr-object-store-credential secret since the Helm

@@ -733,6 +733,8 @@ module documentIntake './modules/document-intake.bicep' = if (deployFoundation &
     defenderPrincipalId: intakeDefenderPrincipalId
     allowedOrigins: frontendHostNames
     peSubnetId: privateEndpointSubnetId
+    logsWorkspaceId: observability!.outputs.workspaceId
+    actionGroupId: actionGroupId
   }
 }
 
@@ -902,6 +904,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     intakeQuarantineContainer: deployDocumentIntake ? intakeContainers.quarantine : ''
     intakeIdentityId: intakeIdentityId
     intakeIdentityClientId: intakeIdentityClientId
+    intakeCapGBPerMonth: intakeCapGBPerMonth
     // VaultName/SecretName rather than SecretUri: the secret is created out of band, so no module
     // outputs its versioned identifier. Empty until APIM is deployed, which disables the app's
     // gateway trust branch entirely.

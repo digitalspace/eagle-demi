@@ -128,7 +128,8 @@ test('the API identity cannot read an unscanned blob or mark one clean', () => {
 test('the API app carries every intake setting and the second identity', async (t) => {
   for (const name of [
     'INTAKE_STORAGE_ACCOUNT', 'INTAKE_INCOMING_CONTAINER', 'INTAKE_QUARANTINE_CONTAINER',
-    'INTAKE_QUARANTINE_CLIENT_ID', 'INTAKE_SWEEP_SCHEDULE', 'INTAKE_PENDING_TIMEOUT_HOURS'
+    'INTAKE_QUARANTINE_CLIENT_ID', 'INTAKE_CAP_GB_PER_MONTH', 'INTAKE_SWEEP_SCHEDULE',
+    'INTAKE_PENDING_TIMEOUT_HOURS'
   ]) {
     // appSettings is a whole-collection PUT: an undeclared setting is deleted by the next deploy.
     await t.test(`declares ${name}`, () => {
@@ -141,10 +142,55 @@ test('the API app carries every intake setting and the second identity', async (
     assert.match(API_MODULE, /value: empty\(intakeStorageAccount\) \? '' : '6'/);
   });
 
+  // The sweep prints capBytes from this, and the cap alerts compare against that value.
+  await t.test('passes the same cap Defender enforces', () => {
+    assert.match(API_MODULE, /value: empty\(intakeStorageAccount\) \? '' : string\(intakeCapGBPerMonth\)/);
+    assert.match(MAIN, /^\s+intakeCapGBPerMonth: intakeCapGBPerMonth$/m);
+  });
+
   await t.test('attaches demi-intake-<env> when intake is deployed', () => {
     assert.match(API_MODULE, /empty\(intakeIdentityId\) \? \{\} : \{ '\$\{intakeIdentityId\}': \{\} \}/);
     assert.match(MAIN, /^\s+intakeIdentityId: intakeIdentityId$/m);
   });
+});
+
+test('the scan cap alerts', async (t) => {
+  const alert = resourceBlock(MODULE, 'capAlert');
+
+  await t.test('warn at 75% and error at 100% of the cap', () => {
+    assert.match(MODULE, /var capAlerts = \[\n {2}\{ percent: 75, severity: 2 \}\n {2}\{ percent: 100, severity: 1 \}\n\]/);
+    assert.match(alert, /severity: a\.severity/);
+  });
+
+  // The sweep logs the month-to-date total; a log alert cannot sum further back than two days.
+  await t.test('read the newest month-to-date line and compare it with the cap it carries', () => {
+    assert.match(alert, /Message contains "\[intake\] month-to-date" \| top 1 by TimeGenerated desc/);
+    assert.match(alert, /extract\("scannedBytes=\(\[0-9\]\+\)", 1, Message\)/);
+    assert.match(alert, /extract\("capBytes=\(\[0-9\]\+\)", 1, Message\)/);
+    assert.match(alert, /where capBytes > 0 and scannedBytes \* 100 >= capBytes \* \$\{a\.percent\}'/);
+    assert.match(alert, /windowSize: 'P1D'/);
+  });
+
+  await t.test('notify demi-alerts-<env> from the API log workspace', () => {
+    assert.match(alert, /actionGroups: \[ actionGroupId \]/);
+    assert.match(alert, /scopes: \[ logsWorkspaceId \]/);
+    assert.match(MAIN, /^\s+logsWorkspaceId: observability!\.outputs\.workspaceId\n\s+actionGroupId: actionGroupId$/m);
+  });
+});
+
+test('a dead sweep alerts after 2 hours without a month-to-date line', () => {
+  const alert = resourceBlock(MODULE, 'sweepSilentAlert');
+  assert.match(alert, /query: 'AppTraces \| where Message contains "\[intake\] month-to-date scannedBytes="'/);
+  assert.match(alert, /windowSize: 'PT2H'/);
+  assert.match(alert, /timeAggregation: 'Count'\n\s+operator: 'LessThan'\n\s+threshold: 1\n/);
+  assert.match(alert, /actionGroups: \[ actionGroupId \]/);
+});
+
+test('each environment grants its own storageDataScanner identity the publish role', () => {
+  assert.match(TEST_PARAMS, /^param intakeDefenderPrincipalId = 'a7cb62f0-b243-4920-9536-61006340cc1d'$/m);
+  assert.match(PROD_PARAMS, /^param intakeDefenderPrincipalId = '9a4c3823-bb94-49fd-b662-adf11aa09116'$/m);
+  assert.match(MAIN, /^\s+defenderPrincipalId: intakeDefenderPrincipalId$/m);
+  assert.match(resourceBlock(MODULE, 'defenderPublishes'), /principalId: defenderPrincipalId/);
 });
 
 test('a foundation-only edit to the module is caught by deploy-infra.sh', () => {

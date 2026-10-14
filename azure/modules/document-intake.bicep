@@ -44,6 +44,12 @@ param allowedOrigins array = []
 @description('Resource id of the subnet for the private endpoint. Empty disables it.')
 param peSubnetId string = ''
 
+@description('Resource id of the Log Analytics workspace the API logs to')
+param logsWorkspaceId string
+
+@description('Resource id of demi-alerts-<env>')
+param actionGroupId string
+
 @description('Days to retain soft-deleted blobs')
 @minValue(1)
 @maxValue(365)
@@ -320,6 +326,84 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!
         }
       }
     ]
+  }
+}
+
+// ── Scan cap alerts ─────────────────────────────────────────────────────────────────────────────
+// A log alert reads at most two days, so the sweep logs the month-to-date total from Cosmos and the
+// cap it applies; the rule reads the newest line. Warning at 75%, error at 100%: scanning has stopped.
+var capAlerts = [
+  { percent: 75, severity: 2 }
+  { percent: 100, severity: 1 }
+]
+
+resource capAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = [for a in capAlerts: {
+  name: 'demi-intake-scan-cap-${a.percent}-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI intake malware scanning at ${a.percent}% of the monthly cap'
+    description: 'Defender for Storage has scanned ${a.percent}% of the monthly cap on ${storageAccountName}. At 100% scanning stops until the month ends and the sweep rejects new uploads. Raise intakeCapGBPerMonth and rerun infra to recover.'
+    severity: a.severity
+    enabled: true
+    scopes: [ logsWorkspaceId ]
+    evaluationFrequency: 'PT1H'
+    windowSize: 'P1D'
+    criteria: {
+      allOf: [
+        {
+          query: 'AppTraces | where Message contains "[intake] month-to-date" | top 1 by TimeGenerated desc | extend scannedBytes = tolong(extract("scannedBytes=([0-9]+)", 1, Message)), capBytes = tolong(extract("capBytes=([0-9]+)", 1, Message)) | where capBytes > 0 and scannedBytes * 100 >= capBytes * ${a.percent}'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ actionGroupId ]
+    }
+  }
+}]
+
+// The sweep logs the month-to-date line every 30 minutes. None for 2 hours means the sweep is dead,
+// so pending uploads are never timed out and the cap alerts above go silent.
+resource sweepSilentAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'demi-intake-sweep-silent-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI intake sweep has not run for 2 hours'
+    description: 'No "[intake] month-to-date" line in 2 hours from intakeScanSweep in demi-api-fc-${environmentName}. Pending uploads are not being timed out and the scan cap alerts cannot fire. Check the function is registered and INTAKE_* settings are set.'
+    severity: 1
+    enabled: true
+    scopes: [ logsWorkspaceId ]
+    evaluationFrequency: 'PT30M'
+    windowSize: 'PT2H'
+    criteria: {
+      allOf: [
+        {
+          query: 'AppTraces | where Message contains "[intake] month-to-date scannedBytes="'
+          timeAggregation: 'Count'
+          operator: 'LessThan'
+          threshold: 1
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ actionGroupId ]
+    }
   }
 }
 

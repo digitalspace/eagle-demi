@@ -345,6 +345,9 @@ param intakeIdentityId string = ''
 @description('Client id of demi-intake-<env>')
 param intakeIdentityClientId string = ''
 
+@description('Defender scan cap in GB per month. The sweep reports usage against it.')
+param intakeCapGBPerMonth int = 0
+
 // eagle-notify wired means the announce on: eagle-api never pushes again when a scheduled Update
 // goes live, so without the timer it would never reach subscribers. An explicit schedule wins.
 var updatesAnnounceSchedule = empty(announceUpdatesSchedule) && !empty(notifyApiBase)
@@ -1011,6 +1014,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'INTAKE_QUARANTINE_CLIENT_ID'
           value: intakeIdentityClientId
+        }
+        {
+          name: 'INTAKE_CAP_GB_PER_MONTH'
+          value: empty(intakeStorageAccount) ? '' : string(intakeCapGBPerMonth)
         }
         {
           name: 'INTAKE_SWEEP_SCHEDULE'
