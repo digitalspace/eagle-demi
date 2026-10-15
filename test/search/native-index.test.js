@@ -122,6 +122,20 @@ test('OData builder', async (t) => {
       /cannot filter on documentUrl here/);
   });
 
+  await t.test('a paged index refuses a flag, even on a column it maps', () => {
+    const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    assert.throws(() => indexFilter(INDEX_MAPS.documents, { filters: {}, flags: { isFeatured: true } }, open),
+      /cannot filter on isFeatured here/);
+  });
+
+  await t.test('every paged sort column is sortable in its index definition', () => {
+    for (const [index, map] of Object.entries(INDEX_MAPS).filter(([, map]) => map.paged)) {
+      const file = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes', `${index}.json`);
+      const sortable = new Set(JSON.parse(fs.readFileSync(file, 'utf8')).fields.filter(f => f.sortable).map(f => f.name));
+      assert.deepStrictEqual(Object.values(map.sorts).filter(column => !sortable.has(column)), [], index);
+    }
+  });
+
   await t.test('every mapped column is filterable, and every contains column searchable, in its index definition', () => {
     for (const [index, map] of Object.entries(INDEX_MAPS)) {
       const file = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes', `${index}.json`);

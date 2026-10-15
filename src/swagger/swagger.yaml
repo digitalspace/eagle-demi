@@ -1433,10 +1433,14 @@ paths:
             or an `ids` read. `sortOrder` is the staff-set document order mirrored from Eagle;
             rows with the same value come newest `datePosted` first, then by `displayName`.
             `type`, `milestone`, `projectPhase` and `documentAuthorType` sort by the List label.
+            `documentAuthor` sorts without regard to case. `isPublished` and `isFeatured` sort false
+            before true.
           schema:
             type: string
             enum: [datePosted, -datePosted, displayName, -displayName, sortOrder, -sortOrder, type, -type,
-              milestone, -milestone, projectPhase, -projectPhase, documentAuthorType, -documentAuthorType]
+              milestone, -milestone, projectPhase, -projectPhase, documentAuthorType, -documentAuthorType,
+              isPublished, -isPublished, legislation, -legislation, isFeatured, -isFeatured,
+              documentAuthor, -documentAuthor]
         - name: q
           in: query
           required: false
