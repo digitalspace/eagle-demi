@@ -207,6 +207,9 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
           {
             path: '/currentPhaseName/name/?'
           }
+          {
+            path: '/eacDecisionSort/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -363,6 +366,9 @@ resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
           {
             path: '/notifyAttempts/?'
           }
+          {
+            path: '/complianceAndEnforcement/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -505,6 +511,9 @@ resource notificationsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
           {
             path: '/proponent/?'
           }
+          {
+            path: '/subType/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -556,6 +565,9 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
           {
             path: '/legislation/?'
           }
+          {
+            path: '/companyLegal/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -587,6 +599,15 @@ resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
           }
           {
             path: '/displayName/?'
+          }
+          {
+            path: '/orgName/?'
+          }
+          {
+            path: '/email/?'
+          }
+          {
+            path: '/phoneNumber/?'
           }
         ]
         excludedPaths: noIndex

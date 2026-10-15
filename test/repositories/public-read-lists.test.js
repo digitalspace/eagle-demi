@@ -480,6 +480,21 @@ test('documents container indexes the paths its repository filters and sorts on'
   }
 });
 
+// The sort foundation: each container excludes `/*`, so these keys are unservable without the path.
+test('containers index the admin sort keys', () => {
+  assert.ok(indexedFields('projects').includes('eacDecisionSort'),
+    '/eacDecisionSort/? is not an included path on projects');
+  assert.ok(indexedFields('updates').includes('complianceAndEnforcement'),
+    '/complianceAndEnforcement/? is not an included path on updates');
+  assert.ok(indexedFields('notifications').includes('subType'),
+    '/subType/? is not an included path on notifications');
+  assert.ok(indexedFields('lists').includes('companyLegal'),
+    '/companyLegal/? is not an included path on lists');
+  assert.ok(indexedFields('users').includes('orgName'), '/orgName/? is not an included path on users');
+  assert.ok(indexedFields('users').includes('email'), '/email/? is not an included path on users');
+  assert.ok(indexedFields('users').includes('phoneNumber'), '/phoneNumber/? is not an included path on users');
+});
+
 // Native kinds: every sort key and filter of the kind spec is an included path on its container.
 test('users and groups index every native sort key and filter', () => {
   const specs = {
