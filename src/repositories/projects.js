@@ -17,6 +17,8 @@ const { canRead } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const { duplicateIdError } = require('../helpers/duplicate-id');
 const { eagleOnlyProjectId } = require('../merge/project');
+const { dialAllows } = require('../helpers/native-query');
+const { levelOf } = require('../vis/level');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
   upsertWithEtag, createItem, assertFilterable, readPage
@@ -231,6 +233,26 @@ async function listByEagleIds(access, eagleIds) {
 
   const { items } = await cosmos.query(CONTAINER, spec, {});
   return items;
+}
+
+/**
+ * Projects carrying a decision dated no later than `now`, newest first, at most `limit`: the home
+ * feed's project decision rows. `/decisionDate/?` is an indexed path, so Cosmos sorts. A row whose
+ * own dial hides `decisionDate` from this caller is left out, so the order cannot reveal it.
+ */
+async function listDecisions(access, { limit, now }) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [
+      // A null or absent date fails the comparison in Cosmos, so it needs no IS_DEFINED term.
+      { clause: 'c.decisionDate <= @now', params: [{ name: '@now', value: now.toISOString() }] },
+      { clause: dialAllows('decisionDate', levelOf(access)), params: [] }
+    ],
+    select: selectFor(CONTAINER, access, PARTITION_FIELD),
+    orderBy: 'c.decisionDate DESC'
+  });
+  return readPage(CONTAINER, spec, { pageSize: limit });
 }
 
 /** The leaf, not the object: only scalar paths are indexed (Bicep includes /centroid/type/?). */
@@ -476,6 +498,7 @@ module.exports = {
   listIdsByName,
   NAME_MATCH_MAX_IDS,
   listByEagleIds,
+  listDecisions,
   listWithCentroid,
   countWithCentroid,
   listEagleOnlyIds,
