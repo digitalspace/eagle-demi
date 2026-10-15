@@ -23,6 +23,7 @@ const { resolveAccess, pageSizeFor } = require('../helpers/access-sql');
 const { SOURCE_ACCESS } = require('../ai/project-summary');
 const { serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
+const { auditEvent } = require('../utils/audit');
 const config = require('../config');
 
 /**
@@ -206,6 +207,13 @@ exports.putProjectSummary = async (req, res) => {
       projectId: String(project.id),
       model: record.model || null,
       estimatedCostCad: record.estimatedCostCad ?? null
+    });
+    auditEvent(req, {
+      action: 'projectSummary.save',
+      targetType: 'projectSummary',
+      targetId: record.id,
+      projectId: record.projectId,
+      detail: { generatedAt: record.generatedAt, model: record.model || null, citations: record.citations.length }
     });
     return res.json(saved);
   } catch (err) {
