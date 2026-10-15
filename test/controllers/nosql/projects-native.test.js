@@ -8,8 +8,6 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
-const fs = require('node:fs');
-const path = require('node:path');
 
 require('../../../src/search/native-index');
 const projectController = require('../../../src/controllers/nosql/project');
@@ -17,12 +15,12 @@ const organizations = require('../../../src/controllers/native/organizations');
 const documentController = require('../../../src/controllers/nosql/document');
 const updates = require('../../../src/controllers/native/updates');
 const notifications = require('../../../src/controllers/native/notifications');
-const { CONTROL_PARAMS } = require('../../../src/helpers/native-query');
 const aiSearch = require('../../../src/search/ai-search');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');
 const { makeRes } = require('../../../src/http/router');
 const { recordEvents } = require('../../helpers/record-events');
+const { swaggerParams, repeatableNames, queryNames } = require('../../helpers/swagger-params');
 
 const ROWS = [{ id: 'p1', name: 'Mine One', read: ['public'] }, { id: 'p2', name: 'Mine Two', read: ['public'] }];
 
@@ -365,44 +363,6 @@ test('GET /projects sector, last-updated and name filters', async (t) => {
     });
   }
 });
-
-/**
- * Query name -> its swagger parameter block, for the GET on `route`. A `$ref` entry is read from
- * `components.parameters`. Text-scanned like config-public.test.js: there is no YAML parser in
- * this project's dependencies.
- */
-function swaggerParams(route) {
-  const yaml = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'src', 'swagger', 'swagger.yaml'), 'utf8');
-  const start = yaml.indexOf(`\n  ${route}:\n`);
-  const block = yaml.slice(start, yaml.indexOf('      responses:', start));
-  return new Map(block.split('\n        - ').slice(1).map(entry => {
-    const ref = entry.match(/^\$ref: '#\/components\/parameters\/(\w+)'/);
-    const param = ref ? yaml.slice(yaml.indexOf(`\n    ${ref[1]}:\n`)).split(/\n {4}(?! )/)[1] : entry;
-    return [param.match(/name: (\S+)/)[1], param];
-  }));
-}
-
-/** The query names a kind spec takes several values for: an alias where one renames the field. */
-function repeatableNames(spec) {
-  const renamedBy = new Map(Object.entries(spec.aliases || {}).map(([name, field]) => [field, name]));
-  return spec.multiValueFilters.map(field => renamedBy.get(field) || field);
-}
-
-/**
- * Every query name a list on `spec` answers to; `parseNativeQuery` 400s any other. A filter an
- * alias renames answers to the alias only.
- */
-function queryNames(spec) {
-  const renamed = Object.values(spec.aliases || {});
-  return [
-    ...CONTROL_PARAMS,
-    ...spec.filters.filter(field => !renamed.includes(field)),
-    ...Object.keys(spec.aliases || {}),
-    ...Object.keys(spec.ranges || {}),
-    ...Object.keys(spec.contains || {}),
-    ...Object.keys(spec.presence || {})
-  ].sort();
-}
 
 const LIST_ROUTES = [
   ['/api/projects', projectController.projectsKind],

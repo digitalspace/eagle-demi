@@ -12,7 +12,8 @@ const assert = require('node:assert');
 const querystring = require('node:querystring');
 
 const {
-  cosmosKind, projectParentJoin, parseNativeQuery, nativeCriteria, presenceClause, MAX_IDS, MAX_CONTAINS, ANON_MAX_PAGE_DEPTH
+  cosmosKind, projectParentJoin, assertKindSpec, parseNativeQuery, nativeCriteria, presenceClause, flagClause,
+  MAX_IDS, MAX_CONTAINS, ANON_MAX_PAGE_DEPTH
 } = require('../../../src/helpers/native-query');
 const { evaluate } = require('../../helpers/updates-store');
 const cosmos = require('../../../src/db/cosmos-nosql');
@@ -581,6 +582,85 @@ test('a presence filter', async (t) => {
     const hidden = listHandler({ ...SPEC, presence: { hasNotes: 'eaoNotes' } });
     assert.match((await call(hidden, 'hasNotes=true')).body.error, /cannot see: eaoNotes$/);
   });
+});
+
+test('a flag filter', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const list = listHandler({ ...SPEC, flags: { anonymous: 'isAnonymous' } });
+  const rows = [
+    { id: 'true', isAnonymous: true },
+    { id: 'false', isAnonymous: false },
+    { id: 'absent' },
+    { id: 'null', isAnonymous: null },
+    { id: 'text', isAnonymous: 'true' }
+  ];
+  const matching = on => rows.filter(row => evaluate(flagClause('isAnonymous', on).clause, row, {})).map(row => row.id);
+
+  await t.test('true keeps only rows whose field is boolean true', () => {
+    assert.deepStrictEqual(matching(true), ['true']);
+  });
+
+  await t.test('false keeps every other row, one lacking the field included', () => {
+    assert.deepStrictEqual(matching(false), ['false', 'absent', 'null', 'text']);
+  });
+
+  await t.test('false guards with IS_BOOL, since Cosmos drops a row where NOT meets an undefined comparison', () => {
+    assert.strictEqual(flagClause('isAnonymous', false).clause, '(NOT (IS_BOOL(c.isAnonymous) AND c.isAnonymous = true))');
+  });
+
+  await t.test('the list read holds the flag clause inside the field\'s dial', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(list, 'anonymous=false')).status, 200);
+    const read = listQuery(specs);
+    assert.ok(read.query.includes(
+      `((NOT IS_DEFINED(c.vis["isAnonymous"]) OR c.vis["isAnonymous"] >= 4) AND ${flagClause('isAnonymous', false).clause})`), read.query);
+  });
+
+  await t.test('a value other than true or false is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'anonymous=maybe');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'anonymous takes only true or false');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('given twice is refused', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'anonymous=true&anonymous=true');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: anonymous');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('on a field the caller cannot see is refused', async (t) => {
+    fakeCosmos(t);
+    const hidden = listHandler({ ...SPEC, flags: { noted: 'eaoNotes' } });
+    assert.match((await call(hidden, 'noted=true')).body.error, /cannot see: eaoNotes$/);
+  });
+
+  await t.test('a flag name another kind of parameter already takes is refused at route load', () => {
+    const clashes = [
+      ['author', {}],
+      ['page', {}],
+      ['byName', { aliases: { byName: 'author' } }],
+      ['from', { ranges: { from: { field: 'dateAdded', op: 'ge' } } }],
+      ['has', { presence: { has: 'comment' } }],
+      ['says', { contains: { says: 'comment' } }]
+    ];
+    for (const [name, other] of clashes) {
+      assert.throws(() => assertKindSpec({ ...SPEC, ...other, flags: { [name]: 'isAnonymous' } }),
+        new RegExp(`flags ${name} clashes with a parameter of that name`));
+    }
+    assert.doesNotThrow(() => assertKindSpec({ ...SPEC, flags: { anonymous: 'isAnonymous' } }));
+  });
+});
+
+test('a flag renders from the parsed query alone, as the index re-reads call it', () => {
+  const parsed = parseNativeQuery({ ...SPEC, flags: { anonymous: 'isAnonymous' } }, { anonymous: 'true' }, null);
+  assert.deepStrictEqual(parsed.flags, { isAnonymous: true });
+
+  const clauses = nativeCriteria({}, parsed, null).criteria.map(c => c.clause).join(' AND ');
+  assert.ok(clauses.includes(flagClause('isAnonymous', true).clause), clauses);
 });
 
 test('contains and presence render from the parsed query alone, as the index re-reads call it', () => {

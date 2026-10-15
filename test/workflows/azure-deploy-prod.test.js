@@ -96,7 +96,7 @@ function runScript(stepLines) {
 }
 
 function bash(script, env) {
-  return spawnSync('bash', ['-e', '-c', script], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
+  return spawnSync('bash', ['-e', '-c', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: process.env.PATH, ...env } });
 }
 
 // `key=value` lines as GitHub reads $GITHUB_OUTPUT (single-line values only).
@@ -243,6 +243,7 @@ test('the release notes keep their body and gain the skip line', () => {
     ].join('\n'), { mode: 0o755 });
     const run = spawnSync('bash', ['-c', runScript(step(PUBLISH_JOB, RELEASE_NOTE))], {
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         PATH: `${dir}:${process.env.PATH}`,
         CAPTURE: capture,
@@ -295,6 +296,7 @@ test('the PDF title worker is packaged from the tag checkout, not the workflow r
     const run = spawnSync('bash', ['-e', '-c', runScript(step(PDF_TITLE_JOB, 'Deploy the PDF title worker'))], {
       cwd: dir,
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: { PATH: `${bin}:${process.env.PATH}`, AZURE_RESOURCE_GROUP: 'rg-demi-prod', PDF_TITLE_APP_NAME: 'demi-pdf-title-prod' },
     });
     assert.strictEqual(run.status, 0, run.stderr);
@@ -322,6 +324,7 @@ function probe({ tagHasWorker = true, azErr = null }) {
     const run = spawnSync('bash', ['-e', '-c', runScript(step(PDF_TITLE_JOB, PDF_TITLE_PROBE))], {
       cwd: dir,
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         PATH: `${bin}:${process.env.PATH}`,
         AZURE_RESOURCE_GROUP: 'rg-demi-prod',
