@@ -286,6 +286,20 @@ test('the 3.3 fields are declared and sourced as intended', () => {
     'the plain column must stay: dropping it would re-analyze documentFileName, which is a rebuild');
 });
 
+// Paged documents sort by author through this field. Lower-cased so capitalised names do not all
+// sort before lower-case ones, as `displayNameSort` is stored.
+test('documentAuthorSort is a sortable string fed by the lower-cased author', () => {
+  const field = index.fields.find(f => f.name === 'documentAuthorSort');
+  const projected = projectedColumns(datasource.container.query);
+
+  assert.ok(field, 'the documents index must declare documentAuthorSort');
+  assert.strictEqual(field.type, 'Edm.String');
+  assert.strictEqual(field.sortable, true);
+  assert.strictEqual(field.searchable, false,
+    'a sort key is not text anyone searches for, and searchable here would be a rebuild to undo');
+  assert.strictEqual(projected.get('documentAuthorSort'), 'LOWER(c.documentAuthor)');
+});
+
 // `nameTokens` exists because `en.microsoft` strips stopwords like "mine" from every other
 // searchable projects field, so a name search for one matched nothing. Same trade as
 // `fileNameTokens`: the text a second time under a stopword-free analyzer, plain column untouched.
