@@ -24,7 +24,7 @@ const { documentsAcl, NOT_UPDATE_IMAGE } = require('./document-query');
 const { filterFor, inClause, quote } = require('../helpers/access-odata');
 const { nativeCriteria, dialAllows, rangeBound, cosmosKind } = require('../helpers/native-query');
 const { inList, selectWhere, selectFor, fetchAll } = require('../repositories/_sql');
-const { NAME_CONTAINS_FIELDS, nameContainsClause } = require('./eagle-query');
+const { NAME_CONTAINS_FIELDS, nameContainsClause, presenceTerm } = require('./eagle-query');
 const { levelOf } = require('../vis/level');
 const { PROJECT_TO_INDEX } = require('../vis/catalog/index-projects-renames');
 const updates = require('../repositories/updates');
@@ -106,7 +106,7 @@ const INDEX_MAPS = Object.freeze({
     search: opts => aiSearch.searchActivities(opts),
     partitionField: 'projectId',
     acl: updatesIndexAcl,
-    columns: { projectId: 'projectId', type: 'type', dateAdded: 'dateAdded' },
+    columns: { projectId: 'projectId', type: 'type', dateAdded: 'dateAdded', documentUrl: 'documentUrl' },
     types: { dateAdded: 'date' },
     searched: keywordSearched('activities')
   },
@@ -210,15 +210,15 @@ function andOData(...clauses) {
 
 /**
  * The index `$filter` for this caller and parsed query: the ACL, the map's fixed clauses, `searchVis`
- * when there is a keyword, then the mapped filters, ranges and `ids=`. `{ filter: null, empty: true }`
+ * when there is a keyword, then the mapped filters, ranges, presence tests and `ids=`. `{ filter: null, empty: true }`
  * means the caller can match nothing and no request may be sent; `filter: null` with `empty: false`
  * is unrestricted. Throws a 400 for a typed value its column refuses, and in paged mode for a filter
- * with no column, before any clause is built.
+ * or presence test with no column, before any clause is built.
  */
 function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionField)) {
   const typed = typedLiterals(map, parsed);
   if (map.paged) {
-    const unmapped = Object.keys(parsed.filters || {}).find(field => !map.columns[field]);
+    const unmapped = Object.keys({ ...parsed.filters, ...parsed.presence }).find(field => !map.columns[field]);
     if (unmapped) throw badRequest(`cannot filter on ${unmapped} here`);
     // The page re-read drops CONTAINS, so a text filter the index cannot match would vanish.
     const unmatched = Object.keys(parsed.contains || {}).find(field => !(map.contains || {})[field]);
@@ -245,6 +245,10 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
     // Punctuation alone leaves no word, and a clause over no terms is a 400 from the service.
     const lucene = aiSearch.buildContainsQuery(text);
     if (lucene) clauses.push(nameContainsClause(columns, lucene));
+  }
+  // Cosmos re-reads presence as well, so a row the index lags on cannot slip through.
+  for (const [field, present] of Object.entries(parsed.presence || {})) {
+    if (map.columns[field]) clauses.push(presenceTerm(map.columns[field], [String(present)]));
   }
   if (parsed.ids) clauses.push(inClause('id', parsed.ids));
   return { filter: andOData(...clauses), empty: false };

@@ -9,6 +9,8 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { indexedKind, indexFilter, andOData, INDEX_MAPS, ID_PAGE } = require('../../src/search/native-index');
 const aiSearch = require('../../src/search/ai-search');
@@ -104,6 +106,27 @@ test('OData builder', async (t) => {
     const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
     const parsed = { filters: {}, ranges: [{ field: 'dateAdded', op: 'ge', value: '2026-02-01' }] };
     assert.strictEqual(indexFilter(INDEX_MAPS.activities, parsed, open).filter, '(dateAdded ge 2026-02-01T00:00:00.000Z)');
+  });
+
+  await t.test('hasDocumentUrl reaches the activities index, with null and \'\' both read as no document', () => {
+    const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    const filterWith = present => indexFilter(INDEX_MAPS.activities, { filters: {}, presence: { documentUrl: present } }, open).filter;
+    assert.strictEqual(filterWith(true), "((documentUrl ne null and documentUrl ne ''))");
+    assert.strictEqual(filterWith(false), "((documentUrl eq null or documentUrl eq ''))");
+  });
+
+  await t.test('a paged index refuses a presence test it has no column for', () => {
+    const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    assert.throws(() => indexFilter(INDEX_MAPS.documents, { filters: {}, presence: { documentUrl: true } }, open),
+      /cannot filter on documentUrl here/);
+  });
+
+  await t.test('every mapped column is a filterable field of its index definition', () => {
+    for (const [index, map] of Object.entries(INDEX_MAPS)) {
+      const file = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes', `${index}.json`);
+      const filterable = new Set(JSON.parse(fs.readFileSync(file, 'utf8')).fields.filter(f => f.filterable).map(f => f.name));
+      assert.deepStrictEqual(Object.values(map.columns).filter(column => !filterable.has(column)), [], index);
+    }
   });
 
   await t.test('an unrestricted caller sends only its own filters, and none at all when it names none', () => {
@@ -208,8 +231,6 @@ test('keyword list over the index', async (t) => {
 });
 
 // Paged mode: the documents index pages and counts; Cosmos re-reads the page's ids.
-const fs = require('node:fs');
-const path = require('node:path');
 const { documentsAcl } = require('../../src/search/document-query');
 const { logger } = require('../../src/utils/logger');
 const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../src/search/eagle-query');

@@ -908,6 +908,8 @@ module.exports = {
   nameContainsError,
   // The native documents list renders the same name match (search/native-index.js).
   nameContainsClause,
+  // The native updates list renders `hasDocumentUrl` with the same null-or-'' test.
+  presenceTerm,
   NAME_CONTAINS_FIELDS,
   MAX_NAME_CONTAINS,
   filterKeysIn,
