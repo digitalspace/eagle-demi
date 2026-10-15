@@ -351,7 +351,8 @@ const documentsKind = Object.freeze({
     list: (access, args) => repositoryFor(args).list(access, args),
     count: (access, args) => repositoryFor(args).count(access, args)
   },
-  sortKeys: ['datePosted', 'displayName', 'sortOrder', 'type', 'milestone', 'projectPhase', 'documentAuthorType'],
+  sortKeys: ['datePosted', 'displayName', 'sortOrder', 'type', 'milestone', 'projectPhase', 'documentAuthorType',
+    'isPublished', 'legislation', 'isFeatured', 'documentAuthor'],
   // `documentSource=PROJECT` is how a staff list leaves out files attached to public comments.
   filters: [...DOCUMENT_ID_FILTERS, 'isFeatured', 'legislation', 'documentSource'],
   aliases: { project: 'projectId' },

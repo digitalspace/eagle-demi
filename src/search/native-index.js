@@ -147,7 +147,11 @@ const INDEX_MAPS = Object.freeze({
       type: 'type',
       milestone: 'milestone',
       projectPhase: 'projectPhase',
-      documentAuthorType: 'documentAuthorType'
+      documentAuthorType: 'documentAuthorType',
+      isPublished: 'isPublished',
+      legislation: 'legislation',
+      isFeatured: 'isFeatured',
+      documentAuthor: 'documentAuthorSort'
     },
     contains: { displayName: NAME_CONTAINS_FIELDS.Document },
     // Most rows hold sortOrder 0, so the staff order falls back to newest first, then by name.
@@ -215,12 +219,14 @@ function andOData(...clauses) {
  * when there is a keyword, then the mapped filters, ranges, presence tests and `ids=`. `{ filter: null, empty: true }`
  * means the caller can match nothing and no request may be sent; `filter: null` with `empty: false`
  * is unrestricted. Throws a 400 for a typed value its column refuses, and in paged mode for a filter
- * or presence test with no column, before any clause is built.
+ * or presence test with no column or any flag, before any clause is built.
  */
 function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionField)) {
   const typed = typedLiterals(map, parsed);
   if (map.paged) {
-    const unmapped = Object.keys({ ...parsed.filters, ...parsed.presence }).find(field => !map.columns[field]);
+    // Every flag is refused: the index has no flag clause, so a page re-read would drop rows the count still holds.
+    const unmapped = Object.keys({ ...parsed.filters, ...parsed.presence }).find(field => !map.columns[field]) ||
+      Object.keys(parsed.flags || {})[0];
     if (unmapped) throw badRequest(`cannot filter on ${unmapped} here`);
     // The page re-read drops CONTAINS, so a text filter the index cannot match would vanish.
     const unmatched = Object.keys(parsed.contains || {}).find(field => !(map.contains || {})[field]);

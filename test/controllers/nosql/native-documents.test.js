@@ -171,7 +171,8 @@ test('native documents list', async (t) => {
   });
 
   for (const [key, column] of [['type', 'type'], ['milestone', 'milestone'], ['projectPhase', 'projectPhase'],
-    ['documentAuthorType', 'documentAuthorType']]) {
+    ['documentAuthorType', 'documentAuthorType'], ['isPublished', 'isPublished'], ['legislation', 'legislation'],
+    ['isFeatured', 'isFeatured'], ['documentAuthor', 'documentAuthorSort']]) {
     await t.test(`sort=${key} and sort=-${key} page in the index on ${column}`, async (t) => {
       const { searches } = fakeStores(t);
       assert.strictEqual((await list(`project=207&sort=${key}`)).status, 200);
