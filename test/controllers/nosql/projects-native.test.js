@@ -14,6 +14,10 @@ const path = require('node:path');
 require('../../../src/search/native-index');
 const projectController = require('../../../src/controllers/nosql/project');
 const organizations = require('../../../src/controllers/native/organizations');
+const documentController = require('../../../src/controllers/nosql/document');
+const updates = require('../../../src/controllers/native/updates');
+const notifications = require('../../../src/controllers/native/notifications');
+const { CONTROL_PARAMS } = require('../../../src/helpers/native-query');
 const aiSearch = require('../../../src/search/ai-search');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');
@@ -363,14 +367,19 @@ test('GET /projects sector, last-updated and name filters', async (t) => {
 });
 
 /**
- * Query name -> its swagger parameter block, for the GET on `route`. Text-scanned like
- * config-public.test.js: there is no YAML parser in this project's dependencies.
+ * Query name -> its swagger parameter block, for the GET on `route`. A `$ref` entry is read from
+ * `components.parameters`. Text-scanned like config-public.test.js: there is no YAML parser in
+ * this project's dependencies.
  */
 function swaggerParams(route) {
   const yaml = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'src', 'swagger', 'swagger.yaml'), 'utf8');
   const start = yaml.indexOf(`\n  ${route}:\n`);
   const block = yaml.slice(start, yaml.indexOf('      responses:', start));
-  return new Map(block.split('\n        - name: ').slice(1).map(param => [param.split('\n')[0], param]));
+  return new Map(block.split('\n        - ').slice(1).map(entry => {
+    const ref = entry.match(/^\$ref: '#\/components\/parameters\/(\w+)'/);
+    const param = ref ? yaml.slice(yaml.indexOf(`\n    ${ref[1]}:\n`)).split(/\n {4}(?! )/)[1] : entry;
+    return [param.match(/name: (\S+)/)[1], param];
+  }));
 }
 
 /** The query names a kind spec takes several values for: an alias where one renames the field. */
@@ -379,13 +388,54 @@ function repeatableNames(spec) {
   return spec.multiValueFilters.map(field => renamedBy.get(field) || field);
 }
 
+/**
+ * Every query name a list on `spec` answers to; `parseNativeQuery` 400s any other. A filter an
+ * alias renames answers to the alias only.
+ */
+function queryNames(spec) {
+  const renamed = Object.values(spec.aliases || {});
+  return [
+    ...CONTROL_PARAMS,
+    ...spec.filters.filter(field => !renamed.includes(field)),
+    ...Object.keys(spec.aliases || {}),
+    ...Object.keys(spec.ranges || {}),
+    ...Object.keys(spec.contains || {}),
+    ...Object.keys(spec.presence || {})
+  ].sort();
+}
+
+const LIST_ROUTES = [
+  ['/api/projects', projectController.projectsKind],
+  ['/api/organizations', organizations.SPEC],
+  ['/api/documents', documentController.documentsKind],
+  ['/api/updates', updates.SPEC],
+  ['/api/notifications', notifications.SPEC]
+];
+
+test('swagger lists exactly the query parameters each list route answers to', async (t) => {
+  for (const [route, spec] of LIST_ROUTES) {
+    await t.test(route, () => {
+      assert.deepStrictEqual([...swaggerParams(route).keys()].sort(), queryNames(spec));
+    });
+  }
+});
+
 test('swagger declares every repeatable filter as an exploded array', async (t) => {
-  for (const [route, spec] of [['/api/projects', projectController.projectsKind], ['/api/organizations', organizations.SPEC]]) {
+  for (const [route, spec] of LIST_ROUTES) {
     await t.test(route, () => {
       const params = swaggerParams(route);
       const notArrays = repeatableNames(spec).filter(name =>
         !/type: array/.test(params.get(name) || '') || !/explode: true/.test(params.get(name) || ''));
       assert.deepStrictEqual(notArrays, []);
+    });
+  }
+});
+
+test('swagger offers each sort key both ways, and no other', async (t) => {
+  for (const [route, spec] of LIST_ROUTES) {
+    await t.test(route, () => {
+      const offered = swaggerParams(route).get('sort').match(/enum: \[([^\]]*)\]/)[1].split(/,\s*/);
+      assert.deepStrictEqual(offered.sort(), spec.sortKeys.flatMap(key => [key, `-${key}`]).sort());
     });
   }
 });
