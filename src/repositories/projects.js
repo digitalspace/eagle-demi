@@ -339,8 +339,12 @@ async function countWithEagleId(access) {
 /**
  * Keys a native project list can sort on. Cosmos drops a row that lacks the ORDER BY field, so
  * `upsert` writes every one of them (`sortFieldFills`), as null when there is nothing to store.
+ * `eacDecisionSort` stands in for `eacDecision.name`: filling `eacDecision` itself would turn "no
+ * decision" into an object that readers render as a decision.
  */
-const SORTABLE = ['name', 'dateUpdated', 'proponentName', 'projectType', 'sector', 'region', 'currentPhaseName.name'];
+const SORTABLE = [
+  'name', 'dateUpdated', 'proponentName', 'projectType', 'sector', 'region', 'currentPhaseName.name', 'eacDecisionSort'
+];
 
 const NULL_WHEN_ABSENT = ['proponentName', 'projectType', 'sector', 'region'];
 
@@ -351,10 +355,19 @@ function isoOrNull(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+/** `currentPhaseName` as a ref that holds `name`, or undefined when it already does. A bare id is kept as `_id`. */
+function phaseRef(phase) {
+  if (phase !== null && typeof phase === 'object') {
+    return phase.name === undefined ? { ...phase, _id: phase._id ?? null, name: null } : undefined;
+  }
+  return { _id: phase ?? null, name: null };
+}
+
 /**
- * The value each SORTABLE field the row lacks should hold; fields the row already has, null
- * included, are left out. `dateUpdated` falls back to `dateAdded`, never `_ts`. Track sends no
- * phase, so `currentPhaseName` becomes an empty `{_id, name}` ref and `currentPhaseName.name` exists.
+ * The writes that give a row every SORTABLE field. A field the row holds, null included, is left
+ * alone, except two: `currentPhaseName` must be a ref holding `name` (Track sends no phase, Eagle
+ * may send null or a bare id), and `eacDecisionSort`, a copy, is rewritten when stale.
+ * `dateUpdated` falls back to `dateAdded`, never `_ts`.
  */
 function sortFieldFills(row) {
   const fills = {};
@@ -362,7 +375,10 @@ function sortFieldFills(row) {
   for (const field of NULL_WHEN_ABSENT) {
     if (row[field] === undefined) fills[field] = null;
   }
-  if (row.currentPhaseName === undefined) fills.currentPhaseName = { _id: null, name: null };
+  const phase = phaseRef(row.currentPhaseName);
+  if (phase) fills.currentPhaseName = phase;
+  const decision = row.eacDecision && typeof row.eacDecision.name === 'string' ? row.eacDecision.name : null;
+  if (row.eacDecisionSort !== decision) fills.eacDecisionSort = decision;
   return fills;
 }
 

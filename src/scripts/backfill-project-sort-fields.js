@@ -5,8 +5,8 @@
  *
  * A Cosmos ORDER BY drops a row that lacks the sort field, so `projects.upsert` writes each
  * `SORTABLE` field (`sortFieldFills` in `repositories/projects.js`). Rows written before that lack
- * some of them (66 lack `dateUpdated` on test). This sets only the absent fields, with the same
- * values the upsert writes; a field the row already holds, null included, is never touched.
+ * some of them (66 lack `dateUpdated` on test). This sets the fields `sortFieldFills` returns, with
+ * the same values the upsert writes: the absent ones, plus a stale `eacDecisionSort`.
  *
  *   node src/scripts/backfill-project-sort-fields.js [--live]
  *
