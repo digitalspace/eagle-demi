@@ -188,15 +188,27 @@ const STATUS_CLAUSES = {
   closed: `(c.dateCompleted < @now AND NOT ${CLOSING_DAY} AND IS_STRING(c.dateStarted))`
 };
 
-/** A status clause as a criterion, bound to one clock read; only the parameters it names. */
-function statusCriterion(status, now) {
+/**
+ * The project list's `pcp` statuses: `STATUS_CLAUSES` plus eagle-api's `pending`, starting within
+ * 7 days. Kept apart so `/comment-periods?status=` and compat `/search` do not take `pending`.
+ */
+const PCP_CLAUSES = {
+  ...STATUS_CLAUSES,
+  pending: '(c.dateStarted > @now AND c.dateStarted <= @in7Days)'
+};
+
+const WEEK_MS = 7 * 86400000;
+
+/** A clause of `clauses` as a criterion, bound to one clock read; only the parameters it names. */
+function statusCriterion(status, now, clauses = STATUS_CLAUSES) {
   const at = now instanceof Date ? now : new Date();
   const dayStart = startOfPacificDay(at);
-  const clause = STATUS_CLAUSES[status];
+  const clause = clauses[status];
   const params = [
     { name: '@now', value: at.toISOString() },
     { name: '@closingDayStart', value: dayStart.toISOString() },
-    { name: '@closingDayEnd', value: new Date(dayStart.getTime() + 1000).toISOString() }
+    { name: '@closingDayEnd', value: new Date(dayStart.getTime() + 1000).toISOString() },
+    { name: '@in7Days', value: new Date(at.getTime() + WEEK_MS).toISOString() }
   ];
   return { clause, params: params.filter(p => clause.includes(p.name)) };
 }
@@ -320,12 +332,26 @@ async function countByProject(projectId, access) {
   return countMatching(access, criteriaFor(projectId), { partitionKey: String(projectId) });
 }
 
-/** Any of `statuses` (`STATUSES` values), every clause bound to the same clock read. */
-function anyStatusCriterion(statuses, now) {
-  const parts = statuses.map(status => statusCriterion(status, now));
+/** Any of `statuses` (keys of `clauses`), every clause bound to the same clock read. */
+function anyStatusCriterion(statuses, now, clauses = STATUS_CLAUSES) {
+  const parts = statuses.map(status => statusCriterion(status, now, clauses));
   const params = new Map();
   parts.forEach(part => part.params.forEach(p => params.set(p.name, p)));
   return { clause: `(${parts.map(part => part.clause).join(' OR ')})`, params: [...params.values()] };
+}
+
+/**
+ * DEMI ids of the projects with a period in any of `statuses` (`PCP_STATUSES`) that this caller
+ * may read: the project list's `pcp` filter. NO ORDER BY: cross-partition DISTINCT rejects it.
+ */
+async function projectIdsWithStatus(access, statuses, now = new Date()) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [NOT_DELETED, anyStatusCriterion(statuses, now, PCP_CLAUSES)],
+    select: 'DISTINCT VALUE c.projectId'
+  });
+  return fetchAll(CONTAINER, spec);
 }
 
 const nativeBase = cosmosKind({
@@ -438,6 +464,7 @@ module.exports = {
   SORTABLE,
   DEFAULT_OPEN_ROWS,
   STATUSES: Object.keys(STATUS_CLAUSES),
+  PCP_STATUSES: Object.keys(PCP_CLAUSES),
   startOfPacificDay,
   getById,
   readForWrite,
@@ -454,6 +481,7 @@ module.exports = {
   countAll,
   countByProject,
   nativeRepository,
+  projectIdsWithStatus,
   aclRowsForProject,
   setAclForProject,
   upsert,
