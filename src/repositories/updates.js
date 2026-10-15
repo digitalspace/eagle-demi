@@ -17,10 +17,11 @@ const { levelOf, ROLE_LEVELS } = require('../vis/level');
 const projects = require('./projects');
 const notifications = require('./notifications');
 const { readParent } = require('../helpers/update-parent');
+const { presenceClause } = require('../helpers/native-query');
 const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
-  eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
+  eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
   readPage, fetchAll
 } = require('./_sql');
 
@@ -34,7 +35,7 @@ const PARTITION_FIELD = 'id';
  */
 const SCOPE_FIELD = 'projectId';
 
-const SORTABLE = ['dateAdded', 'dateUpdated', 'publishDate'];
+const SORTABLE = ['dateAdded', 'dateUpdated', 'publishDate', 'headline', 'type'];
 const DEFAULT_ORDER = 'c.dateAdded DESC';
 /**
  * eagle-public's news search asks for `-score`, the relevance rank its Mongo text search produced.
@@ -350,24 +351,13 @@ function typeCriteria(types) {
 
 /**
  * "Documents attached" — `and[documentUrl]`, which asks whether the field is FILLED rather than
- * what it holds.
- *
- * The mirror writes `documentUrl: null` when Eagle sent none and older rows carry `''`, so both
- * spellings of "no attachment" are named. The two clauses are exact complements by construction,
- * because the index path answers the same key with a complementary pair
- * (`eagle-query` PRESENCE_KEYS / `presenceTerm`) and one URL must not mean two different things
- * depending on whether keywords are on.
+ * what it holds. `presenceClause` names both spellings of "no attachment" (the mirror's null and
+ * older rows' ''), and its two answers are exact complements, because the index path answers the
+ * same key with a complementary pair (`eagle-query` PRESENCE_KEYS / `presenceTerm`) and one URL must
+ * not mean two different things depending on whether keywords are on.
  */
-const HAS_DOCUMENT = (() => {
-  const filled = isDefinedAndNotNull('documentUrl');
-  return { clause: `(${filled.clause} AND c.documentUrl != '')`, params: [] };
-})();
-const NO_DOCUMENT = { clause: `(NOT ${HAS_DOCUMENT.clause})`, params: [] };
-
 function documentCriteria(hasDocument) {
-  if (hasDocument === true) return [HAS_DOCUMENT];
-  if (hasDocument === false) return [NO_DOCUMENT];
-  return [];
+  return typeof hasDocument === 'boolean' ? [presenceClause('documentUrl', hasDocument)] : [];
 }
 
 /**

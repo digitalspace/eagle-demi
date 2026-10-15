@@ -494,15 +494,11 @@ test('users and groups index every native sort key and filter', () => {
   }
 });
 
-// Sort keys eagle-public's activity and notification tables send. The index path ships before the
-// repository accepts the key, because Cosmos refuses an ORDER BY on an unindexed path.
-const TABLE_SORTS = { updates: ['headline', 'type'], notifications: ['type', 'region', 'decision', 'proponent'] };
-
 test('projects, updates and notifications index every native sort key', async (t) => {
   const sortKeys = {
     projects: require('../../src/repositories/projects').SORTABLE,
-    updates: [...updates.SORTABLE, ...TABLE_SORTS.updates],
-    notifications: [...notifications.SORTABLE, ...TABLE_SORTS.notifications]
+    updates: updates.SORTABLE,
+    notifications: notifications.SORTABLE
   };
   for (const [container, keys] of Object.entries(sortKeys)) {
     await t.test(container, () => {

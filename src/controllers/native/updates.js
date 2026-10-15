@@ -49,6 +49,11 @@ const SPEC = Object.freeze({
   filters: ['projectId', 'type'],
   aliases: { project: 'projectId' },
   multiValueFilters: ['type'],
+  ranges: {
+    dateAddedStart: { field: 'dateAdded', op: 'ge' },
+    dateAddedEnd: { field: 'dateAdded', op: 'le' }
+  },
+  presence: { hasDocumentUrl: 'documentUrl' },
   qFields: INDEX_MAPS.activities.searched,
   parentJoin: updateParentJoin,
   notFound: 'Update not found'
