@@ -75,7 +75,7 @@ function assertKindSpec(spec) {
   const taken = [
     ...CONTROL_PARAMS, ...(spec.filters || []), ...Object.keys(spec.aliases || {}), ...Object.keys(spec.ranges || {})
   ];
-  for (const kind of ['contains', 'presence']) {
+  for (const kind of ['contains', 'presence', 'flags']) {
     for (const [name, field] of Object.entries(spec[kind] || {})) {
       if (!FIELD_PATH.test(name) || !FIELD_PATH.test(field)) throw new Error(`[native] ${spec.entity}: bad ${kind} ${name}`);
       if (taken.includes(name)) throw new Error(`[native] ${spec.entity}: ${kind} ${name} clashes with a parameter of that name`);
@@ -125,15 +125,29 @@ function isDay(value) {
   return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
 }
 
+/** `spec[kind]` (query name -> field) read as field -> boolean from `true`|`false`, or `{ error }`. */
+function booleansOf(spec, kind, q, access) {
+  const values = {};
+  for (const [name, field] of Object.entries(spec[kind] || {})) {
+    if (q[name] === undefined) continue;
+    if (q[name] !== 'true' && q[name] !== 'false') return { error: `${name} takes only true or false` };
+    const refused = refusal(spec.entity, field, access);
+    if (refused) return { error: refused };
+    values[field] = q[name] === 'true';
+  }
+  return { values };
+}
+
 /**
  * Parse and validate `query` for `spec`. Answers `{ error }` (a 400) or the parsed query:
  * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]},
- * ranges: [{name, field, op, value}], contains: {field: text}, presence: {field: bool} }`.
- * `filters`, `contains` and `presence` are keyed by row field, whatever name the query used, so
+ * ranges: [{name, field, op, value}], contains: {field: text}, presence: {field: bool}, flags: {field: bool} }`.
+ * `filters`, `contains`, `presence` and `flags` are keyed by row field, whatever name the query used, so
  * `nativeCriteria` renders them from `parsed` alone. `spec.ranges` is query name ->
  * `{ field, op: 'ge'|'le' }`, one day each, for a bound with no row field of its own
  * (`datePostedStart` -> `datePosted ge`). `spec.contains` is query name -> field, a case-blind
- * substring; `spec.presence` is query name -> field, `true` when it holds a value other than null or ''.
+ * substring; `spec.presence` is query name -> field, `true` when it holds a value other than null or '';
+ * `spec.flags` is query name -> boolean field, `true` when it is true, `false` otherwise (missing included).
  */
 function parseNativeQuery(spec, query, access) {
   const names = filterNames(spec);
@@ -141,7 +155,7 @@ function parseNativeQuery(spec, query, access) {
 
   for (const [key, value] of Object.entries(query || {})) {
     if (!CONTROL_PARAMS.includes(key) && !names.has(key) && !(spec.ranges || {})[key] &&
-        !(spec.contains || {})[key] && !(spec.presence || {})[key]) {
+        !(spec.contains || {})[key] && !(spec.presence || {})[key] && !(spec.flags || {})[key]) {
       return { error: `unknown parameter: ${key}` };
     }
     if (Array.isArray(value) && !multi.includes(names.get(key))) return { error: `parameter given more than once: ${key}` };
@@ -225,17 +239,14 @@ function parseNativeQuery(spec, query, access) {
     contains[field] = text;
   }
 
-  const presence = {};
-  for (const [name, field] of Object.entries(spec.presence || {})) {
-    if (q[name] === undefined) continue;
-    if (q[name] !== 'true' && q[name] !== 'false') return { error: `${name} takes only true or false` };
-    const refused = refusal(spec.entity, field, access);
-    if (refused) return { error: refused };
-    presence[field] = q[name] === 'true';
-  }
+  const presence = booleansOf(spec, 'presence', q, access);
+  if (presence.error) return presence;
+  const flags = booleansOf(spec, 'flags', q, access);
+  if (flags.error) return flags;
 
   return {
-    pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues, ranges, contains, presence
+    pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues, ranges, contains,
+    presence: presence.values, flags: flags.values
   };
 }
 
@@ -247,6 +258,15 @@ function presenceClause(field, present) {
   const filled = isDefinedAndNotNull(field);
   const clause = `(${filled.clause} AND c.${field} != '')`;
   return { clause: present ? clause : `(NOT ${clause})`, params: [] };
+}
+
+/**
+ * Whether boolean `field` is true; `on: false` is the exact complement. `IS_BOOL` first, as in
+ * `NOT_DELETED`: `c.f = true` is undefined on a row lacking `f`, and NOT of undefined drops the row.
+ */
+function flagClause(field, on) {
+  const isTrue = `(IS_BOOL(c.${field}) AND c.${field} = true)`;
+  return { clause: on ? isTrue : `(NOT ${isTrue})`, params: [] };
 }
 
 /** The record's own dial on `field` may hide it below the caller's level; such a record never matches. */
@@ -283,6 +303,11 @@ function nativeCriteria(spec, parsed, access) {
   Object.entries(parsed.presence || {}).forEach(([field, present]) => {
     const has = presenceClause(field, present);
     criteria.push({ clause: `(${dialAllows(field, level)} AND ${has.clause})`, params: has.params });
+  });
+
+  Object.entries(parsed.flags || {}).forEach(([field, on]) => {
+    const flag = flagClause(field, on);
+    criteria.push({ clause: `(${dialAllows(field, level)} AND ${flag.clause})`, params: flag.params });
   });
 
   if (parsed.q) {
@@ -361,6 +386,7 @@ module.exports = {
   parseNativeQuery,
   nativeCriteria,
   presenceClause,
+  flagClause,
   dialAllows,
   rangeBound,
   isEagleId,
