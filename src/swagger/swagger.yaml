@@ -4920,7 +4920,7 @@ paths:
           schema:
             type: string
             enum: [dateAdded, -dateAdded, dateUpdated, -dateUpdated, publishDate, -publishDate, headline,
-              -headline, type, -type]
+              -headline, type, -type, pinned, -pinned, status, -status]
         - name: page
           in: query
           required: false

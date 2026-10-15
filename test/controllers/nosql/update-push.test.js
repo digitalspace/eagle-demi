@@ -128,6 +128,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       content: '<p>The comment period opens on Monday.</p>',
       type: 'News',
       pinned: false,
+      complianceAndEnforcement: false,
       dateAdded: '2026-08-01T00:00:00.000Z',
       dateUpdated: '2026-08-02T00:00:00.000Z',
       notificationName: 'Nicomen Wind Energy',
@@ -177,6 +178,29 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(written.headline, null);
     assert.strictEqual(written.type, null);
+  });
+
+  await t.test('a record with no pinned flag stores false, not absent', async () => {
+    // A sort on pinned drops every row that lacks it.
+    t.mock.method(updates, 'readForWrite', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+    const { pinned: _pinned, ...doc } = eagleUpdate();
+
+    await push({ doc });
+
+    assert.strictEqual(written.pinned, false);
+  });
+
+  await t.test('a C&E update stores complianceAndEnforcement true', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ complianceAndEnforcement: true, pinned: true }) });
+
+    assert.strictEqual(written.complianceAndEnforcement, true);
+    assert.strictEqual(written.pinned, true);
   });
 
   await t.test('an update with no project is site-wide, not orphaned', async () => {

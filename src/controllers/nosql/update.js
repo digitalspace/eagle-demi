@@ -162,7 +162,9 @@ function mirrorItem(eagleId, doc, read, existing) {
     headline: doc.headline ?? null,
     content: doc.content,
     type: doc.type ?? null,
-    pinned: doc.pinned,
+    // Always a boolean: the pinned sort and the C&E filter drop or mismatch a row lacking the field.
+    pinned: doc.pinned === true,
+    complianceAndEnforcement: doc.complianceAndEnforcement === true,
     dateAdded: doc.dateAdded,
     dateUpdated: doc.dateUpdated,
     // The rest of what eagle-public's News model reads. `pcp` and `projectNotification` arrive as
