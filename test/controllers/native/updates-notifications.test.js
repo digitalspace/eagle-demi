@@ -22,6 +22,7 @@ const { filterFor } = require('../../../src/helpers/access-odata');
 const { resolveAccess } = require('../../../src/helpers/access-sql');
 const { makeRes } = require('../../../src/http/router');
 const { recordEvents } = require('../../helpers/record-events');
+const { logger } = require('../../../src/utils/logger');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 const ANON = resolveAccess({ query: {}, headers: {}, header: () => undefined });
@@ -42,13 +43,14 @@ const CONTAINERS = {
     { id: 'u5', projectId: HIDDEN_EAGLE_ID, type: 'News', headline: 'Quarry approved', documentUrl: '/doc/c.pdf', read: ['public'], status: 'published', publishDate: '2026-01-04T00:00:00.000Z', dateAdded: '2026-01-04T00:00:00.000Z' }
   ],
   notifications: [
-    { id: 'n1', name: 'Pipeline notice', type: 'Industrial', region: 'Peace', decision: 'Approved', proponent: 'Zed Pipelines', read: ['public'], notificationReceivedDate: '2026-02-01T00:00:00.000Z' },
-    { id: 'n2', name: 'Mine notice', type: 'Mines', region: 'Skeena', decision: null, proponent: 'Acme Mining', read: ['public'], notificationReceivedDate: '2026-03-01T00:00:00.000Z' },
-    { id: 'n-staff', name: 'Unreleased notice', type: 'Transport', region: 'Coast', decision: 'Declined', proponent: null, read: ['staff'], notificationReceivedDate: '2026-04-01T00:00:00.000Z' }
+    { id: 'n1', name: 'Pipeline notice', type: 'Industrial', region: 'Peace', decision: 'Approved', decisionDate: '2025-12-20T00:00:00.000Z', proponent: 'Zed Pipelines', read: ['public'], notificationReceivedDate: '2026-02-01T00:00:00.000Z' },
+    { id: 'n2', name: 'Mine notice', type: 'Mines', region: 'Skeena', decision: null, decisionDate: '13/45/2025', proponent: 'Acme Mining', read: ['public'], notificationReceivedDate: '2026-03-01T00:00:00.000Z' },
+    { id: 'n-staff', name: 'Unreleased notice', type: 'Transport', region: 'Coast', decision: 'Declined', decisionDate: '2026-01-06T00:00:00.000Z', proponent: null, read: ['staff'], notificationReceivedDate: '2026-04-01T00:00:00.000Z' }
   ],
   projects: [
-    { id: 'p1', eagleId: PROJECT_EAGLE_ID, name: 'Site C', read: ['public'] },
-    { id: 'p2', eagleId: HIDDEN_EAGLE_ID, name: 'Unreleased quarry', read: ['staff'] }
+    { id: 'p1', eagleId: PROJECT_EAGLE_ID, name: 'Site C', decisionDate: '2026-01-03T00:00:00.000Z', read: ['public'] },
+    { id: 'p2', eagleId: HIDDEN_EAGLE_ID, name: 'Unreleased quarry', decisionDate: '2026-01-05T00:00:00.000Z', read: ['staff'] },
+    { id: 'p3', name: 'Future decision', decisionDate: '2999-01-01T00:00:00.000Z', read: ['public'] }
   ]
 };
 
@@ -311,22 +313,52 @@ test('native updates feed', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const feed = updatesController.getFeed;
 
-  await t.test('pinned rows lead, then live rows; anonymous gets no draft', async (t) => {
+  await t.test('pinned rows lead; updates and decisions follow, newest feedDate first', async (t) => {
     fakeStores(t);
     const res = await call(feed, '');
     assert.strictEqual(res.status, 200);
-    assert.deepStrictEqual(ids(res.body), ['u4', 'u1']);
-    assert.strictEqual(res.body[1].projectName, 'Site C');
+    assert.deepStrictEqual(ids(res.body), ['u4', 'p1', 'u1', 'n1']);
+    assert.strictEqual(res.body[2].projectName, 'Site C');
   });
 
-  await t.test('limit caps the rows', async (t) => {
+  await t.test('every row carries its kind and feedDate', async (t) => {
+    fakeStores(t);
+    const { body } = await call(feed, '');
+    assert.deepStrictEqual(body.map(row => [row.kind, row.feedDate]), [
+      ['updates', '2025-12-01T00:00:00.000Z'],
+      ['projects', '2026-01-03T00:00:00.000Z'],
+      ['updates', '2026-01-02T00:00:00.000Z'],
+      ['notifications', '2025-12-20T00:00:00.000Z']
+    ]);
+  });
+
+  await t.test('limit counts rows of every kind', async (t) => {
     fakeStores(t);
     assert.deepStrictEqual(ids((await call(feed, 'limit=1')).body), ['u4']);
+    assert.deepStrictEqual(ids((await call(feed, 'limit=2')).body), ['u4', 'p1']);
   });
 
-  await t.test('type narrows the top-up, never the pinned rows', async (t) => {
+  await t.test('anonymous gets no decision from an unpublished project or notification; staff does', async (t) => {
     fakeStores(t);
-    assert.deepStrictEqual(ids((await call(feed, 'type=Notice')).body), ['u4']);
+    assert.ok(!ids((await call(feed, 'limit=20')).body).some(id => id === 'p2' || id === 'n-staff'));
+    assert.deepStrictEqual(ids((await call(feed, 'limit=20', { user: STAFF })).body).filter(id => id === 'p2' || id === 'n-staff'), ['n-staff', 'p2']);
+  });
+
+  await t.test('a decision dated after now is left out', async (t) => {
+    fakeStores(t);
+    assert.ok(!ids((await call(feed, 'limit=20')).body).includes('p3'));
+  });
+
+  await t.test('type narrows the unpinned updates only, never the pinned rows or the decisions', async (t) => {
+    fakeStores(t);
+    assert.deepStrictEqual(ids((await call(feed, 'type=Notice')).body), ['u4', 'p1', 'n1']);
+  });
+
+  await t.test('a decision with an unparseable date is dropped and logged', async (t) => {
+    fakeStores(t);
+    const warn = t.mock.method(logger, 'warn', () => {});
+    assert.ok(!ids((await call(feed, 'limit=20')).body).includes('n2'));
+    assert.deepStrictEqual(warn.mock.calls.map(c => c.arguments[1]), [{ kind: 'notifications', ids: ['n2'] }]);
   });
 
   await t.test(`limit past ${updatesController.FEED_MAX_ROWS} or given twice is refused`, async (t) => {
