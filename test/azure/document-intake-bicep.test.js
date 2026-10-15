@@ -132,8 +132,8 @@ test('the cap is 5 GB on test and 25 GB on prod', () => {
   assert.match(MAIN, /^\s+capGBPerMonth: intakeCapGBPerMonth$/m);
 });
 
-test('intake is on in test and off in prod', () => {
-  assert.match(TEST_PARAMS, /^param deployDocumentIntake = true$/m);
+test('intake is parked on both test and prod', () => {
+  assert.match(TEST_PARAMS, /^param deployDocumentIntake = false$/m);
   assert.match(PROD_PARAMS, /^param deployDocumentIntake = false$/m);
   assert.match(MAIN,
     /^module documentIntake '\.\/modules\/document-intake\.bicep' = if \(deployFoundation && deployDocumentIntake\) \{$/m);
@@ -189,7 +189,7 @@ test('the API identity ABAC condition', async (t) => {
 
   await t.test('clause 3 denies tag writes unless none of them sets the scan-result tag', () => {
     assert.strictEqual(clauses[2],
-      `( ${collapse(conditionText('tagWriteDeny'))} OR ` +
+      `( ${collapse(conditionText('tagHeaderDeny'))} OR ` +
       `( @Request[${BLOBS}/tags&$keys$&] ForAllOfAllValues:StringNotEquals {'Malware scanning scan result'} ) )`);
   });
 
@@ -202,21 +202,28 @@ test('the API identity ABAC condition', async (t) => {
 // demi-intake-<env> reads the tag the API identity's read gate trusts. If it could write one, a wrong
 // sweep decision could mark an unscanned file clean and the API would release it.
 test('demi-intake-<env> reads tags but can never write one', async (t) => {
-  const deny = collapse(conditionText('tagWriteDeny'));
+  const HEADER_DENY =
+    `( !(ActionMatches{'${BLOBS}/write'} AND SubOperationMatches{'Blob.Write.WithTagHeaders'}) ` +
+    `AND !(ActionMatches{'${BLOBS}/add/action'} AND SubOperationMatches{'Blob.Write.WithTagHeaders'}) )`;
 
-  await t.test('the deny covers Set Blob Tags and both tag-header writes, with no OR branch', () => {
-    assert.strictEqual(deny,
-      `( !(ActionMatches{'${BLOBS}/write'} AND SubOperationMatches{'Blob.Write.WithTagHeaders'}) ` +
-      `AND !(ActionMatches{'${BLOBS}/add/action'} AND SubOperationMatches{'Blob.Write.WithTagHeaders'}) ` +
-      `AND !(ActionMatches{'${BLOBS}/tags/write'}) )`);
+  await t.test('the Contributor deny covers both tag-header writes, with no OR branch', () => {
+    const deny = collapse(conditionText('tagHeaderDeny'));
+    assert.strictEqual(deny, HEADER_DENY);
     assert.doesNotMatch(deny, /\bOR\b/);
   });
 
-  for (const symbol of ['intakeBlobContributor', 'intakeTagReader']) {
-    await t.test(`${symbol} carries the deny`, () => {
+  await t.test('the Owner deny adds Set Blob Tags, with no OR branch', () => {
+    const deny = collapse(conditionText('tagWriteDeny'));
+    assert.strictEqual(deny, `( ${HEADER_DENY} AND !(ActionMatches{'${BLOBS}/tags/write'}) )`);
+    assert.doesNotMatch(deny, /\bOR\b/);
+  });
+
+  const grants = { intakeBlobContributor: 'tagHeaderDeny', intakeTagReader: 'tagWriteDeny' };
+  for (const [symbol, deny] of Object.entries(grants)) {
+    await t.test(`${symbol} carries ${deny}`, () => {
       const grant = resourceBlock(MODULE, symbol);
       assert.match(grant, /principalId: intakeIdentity\.properties\.principalId\n/);
-      assert.match(grant, /condition: tagWriteDeny\n {4}conditionVersion: '2\.0'/);
+      assert.match(grant, new RegExp(`condition: ${deny}\\n {4}conditionVersion: '2\\.0'`));
     });
   }
 
@@ -227,6 +234,37 @@ test('demi-intake-<env> reads tags but can never write one', async (t) => {
     assert.match(MODULE, /^resource containers '[^']+' = \[for name in \[incomingContainer, /m);
     assert.strictEqual(moduleString('blobDataOwnerRoleId'), 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b');
     assert.match(grant, /roleDefinitions', blobDataOwnerRoleId\)/);
+  });
+});
+
+/** Every role assignment in the module with the given role id var, as { symbol, condition text }. */
+function conditionsForRole(roleVar) {
+  const symbols = [...MODULE.matchAll(/^resource (\w+) 'Microsoft\.Authorization\/roleAssignments@/gm)].map((m) => m[1]);
+  return symbols
+    .map((symbol) => ({ symbol, block: resourceBlock(MODULE, symbol) }))
+    .filter(({ block }) => block.includes(`roleDefinitions', ${roleVar})`))
+    .map(({ symbol, block }) => {
+      const cond = /condition: (\w+)\n/.exec(block);
+      assert.ok(cond, `${symbol} carries a condition`);
+      return { symbol, text: conditionText(cond[1]) };
+    });
+}
+
+// Azure rejects a condition that names an action its role does not grant (InvalidRoleAssignmentCondition).
+test('each tag-write deny names only actions its role grants', async (t) => {
+  await t.test('no Data Contributor condition names blobs/tags/write', () => {
+    assert.strictEqual(moduleString('blobDataContributorRoleId'), 'ba92f5b4-2d11-453d-a403-e96b0029c9fe');
+    const grants = conditionsForRole('blobDataContributorRoleId');
+    assert.deepStrictEqual(grants.map((g) => g.symbol).sort(), ['apiBlobContributor', 'intakeBlobContributor']);
+    for (const { symbol, text } of grants) {
+      assert.doesNotMatch(text, /blobs\/tags\/write/, symbol);
+    }
+  });
+
+  await t.test('the Data Owner condition denies blobs/tags/write', () => {
+    const grants = conditionsForRole('blobDataOwnerRoleId');
+    assert.deepStrictEqual(grants.map((g) => g.symbol), ['intakeTagReader']);
+    assert.ok(grants[0].text.includes(`!(ActionMatches{'${BLOBS}/tags/write'})`), grants[0].text);
   });
 });
 

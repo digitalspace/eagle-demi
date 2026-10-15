@@ -14,8 +14,11 @@ param location = 'canadacentral'
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
 // ── Document intake ───────────────────────────────────────────────────────────────────────────
-// Staging for the intake rollout.
-param deployDocumentIntake = true
+// Parked on both environments. The test private endpoint subnet `c4b0a8-test-cond-ext-pe-subnet`
+// (10.46.52.32/28) was full on 2026-10-14, so `demi-intake-pe-test` could not be created. To resume,
+// free the subnet or change `privateEndpointSubnetId`, set this to true and run
+// `scripts/deploy-infra.sh test --foundation --live`.
+param deployDocumentIntake = false
 param intakeCapGBPerMonth = 5
 
 // Direct-to-NRS object store: the test bucket zdspnb, keys at the root, no prefix. eagle-api on

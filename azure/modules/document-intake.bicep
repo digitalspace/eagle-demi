@@ -153,12 +153,23 @@ resource defenderForStorage 'Microsoft.Security/defenderForStorageSettings@2025-
 var blobsAction = 'Microsoft.Storage/storageAccounts/blobServices/containers/blobs'
 var containerNameAttr = '@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name]'
 
-// Denies every way to set a blob index tag: Set Blob Tags, and a write or create carrying tag headers.
-var tagWriteDeny = join([
+// A condition may only name actions its role grants. Data Contributor has no blobs/tags/write, so naming it
+// fails the deploy ("Action pattern .../blobs/tags/write is not referenced in role ba92f5b4-..."). Keep two
+// vars: tagHeaderDeny for Contributor grants, tagWriteDeny (adds Set Blob Tags) for Owner grants.
+
+// Denies a write or create that carries tag headers. With Contributor this is every way to set a tag.
+var tagHeaderDeny = join([
   '('
   ' !(ActionMatches{\'${blobsAction}/write\'} AND SubOperationMatches{\'Blob.Write.WithTagHeaders\'})'
   ' AND'
   ' !(ActionMatches{\'${blobsAction}/add/action\'} AND SubOperationMatches{\'Blob.Write.WithTagHeaders\'})'
+  ')'
+], '\n')
+
+// Owner also grants Set Blob Tags (blobs/tags/write), so its deny adds that action.
+var tagWriteDeny = join([
+  '('
+  tagHeaderDeny
   ' AND'
   ' !(ActionMatches{\'${blobsAction}/tags/write\'})'
   ')'
@@ -180,13 +191,13 @@ resource intakeBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
     principalId: intakeIdentity.properties.principalId
     principalType: 'ServicePrincipal'
-    condition: tagWriteDeny
+    condition: tagHeaderDeny
     conditionVersion: '2.0'
   }
 }
 
 // Data Contributor lacks blobs/tags/read, which the sweep needs. Owner adds it, on `incoming` only
-// (containers[0]); the same condition takes back the tag writes Owner would also grant.
+// (containers[0]); tagWriteDeny takes back the tag writes Owner would also grant.
 resource intakeTagReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: containers[0]
   name: guid(containers[0].id, intakeIdentity.id, blobDataOwnerRoleId)
@@ -242,7 +253,7 @@ var apiCondition = join([
   ')'
   'AND'
   '('
-  tagWriteDeny
+  tagHeaderDeny
   ' OR'
   ' ('
   '  @Request[${blobsAction}/tags&$keys$&] ForAllOfAllValues:StringNotEquals {\'${scanResultTag}\'}'
