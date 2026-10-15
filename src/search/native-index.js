@@ -99,6 +99,8 @@ const INDEX_MAPS = Object.freeze({
       dateUpdated: 'dateUpdated'
     },
     types: { decisionDate: 'date', dateUpdated: 'date' },
+    // Matched in the index so a hit ranked past the id page is not lost; Cosmos still re-checks it.
+    contains: { name: NAME_CONTAINS_FIELDS.Project },
     searched: [...new Set(aiSearch.PROJECT_SEARCH_FIELDS.split(',')
       .flatMap(column => sourcesOf(PROJECT_TO_INDEX, column)))]
   },

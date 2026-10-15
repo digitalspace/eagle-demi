@@ -14,6 +14,7 @@ const path = require('node:path');
 
 const { indexedKind, indexFilter, andOData, INDEX_MAPS, ID_PAGE } = require('../../src/search/native-index');
 const aiSearch = require('../../src/search/ai-search');
+const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../src/search/eagle-query');
 const cosmos = require('../../src/db/cosmos-nosql');
 const { filterFor } = require('../../src/helpers/access-odata');
 const { resolveAccess, TIER, SEALED_TOKEN } = require('../../src/helpers/access-sql');
@@ -121,11 +122,14 @@ test('OData builder', async (t) => {
       /cannot filter on documentUrl here/);
   });
 
-  await t.test('every mapped column is a filterable field of its index definition', () => {
+  await t.test('every mapped column is filterable, and every contains column searchable, in its index definition', () => {
     for (const [index, map] of Object.entries(INDEX_MAPS)) {
       const file = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes', `${index}.json`);
-      const filterable = new Set(JSON.parse(fs.readFileSync(file, 'utf8')).fields.filter(f => f.filterable).map(f => f.name));
+      const fields = JSON.parse(fs.readFileSync(file, 'utf8')).fields;
+      const filterable = new Set(fields.filter(f => f.filterable).map(f => f.name));
+      const searchable = new Set(fields.filter(f => f.searchable).map(f => f.name));
       assert.deepStrictEqual(Object.values(map.columns).filter(column => !filterable.has(column)), [], index);
+      assert.deepStrictEqual(Object.values(map.contains || {}).flat().filter(column => !searchable.has(column)), [], index);
     }
   });
 
@@ -203,13 +207,37 @@ test('keyword list over the index', async (t) => {
     assert.match(queries[0].query, /c\.dateUpdated >= @nr0/);
   });
 
-  await t.test('q with nameContains leaves the name match to the Cosmos re-read', async (t) => {
+  await t.test('q with nameContains matches the name in the index and re-checks it in Cosmos', async (t) => {
     const { searches, queries } = fakeStores(t);
     const res = await call('q=mine&nameContains=lng');
     assert.strictEqual(res.status, 200);
-    assert.doesNotMatch(searches[0].filter || '', /search\.ismatch/);
+    const clause = nameContainsClause(NAME_CONTAINS_FIELDS.Project, aiSearch.buildContainsQuery('lng'));
+    assert.ok(searches[0].filter.endsWith(` and (${clause})`), searches[0].filter);
     assert.match(queries[0].query, /CONTAINS\(c\.name, @nc0, true\)/);
     assert.ok(queries[0].parameters.some(p => p.name === '@nc0' && p.value === 'lng'));
+  });
+
+  await t.test('q with nameContains finds a match the keyword ranks past the id page', async (t) => {
+    const all = Array.from({ length: 300 }, (_, i) => ({
+      id: `p${i + 1}`, name: i + 1 === 280 ? 'LNG Canada' : `Mine ${i + 1}`, read: ['public']
+    }));
+    const searches = [];
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      searches.push(opts);
+      const hits = /search\.ismatch/.test(opts.filter || '') ? all.filter(r => /\blng/i.test(r.name)) : all;
+      return { count: hits.length, items: hits.slice(0, opts.top).map(r => ({ id: r.id })) };
+    });
+    t.mock.method(cosmos, 'query', async (container, spec) => {
+      const ids = new Set(spec.parameters.filter(p => p.name.startsWith('@xid')).map(p => p.value));
+      const text = spec.parameters.find(p => p.name === '@nc0').value.toLowerCase();
+      return { items: all.filter(r => ids.has(r.id) && r.name.toLowerCase().includes(text)) };
+    });
+
+    const res = await call('q=mine&nameContains=lng&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.match(searches[0].filter, /search\.ismatch\('lng\*', 'name,nameTokens', 'full', 'any'\)/);
+    assert.deepStrictEqual(res.body.map(r => r.id), ['p280']);
+    assert.strictEqual(res.headers['x-total-count'], '1');
   });
 
   await t.test('no index hit reads nothing from Cosmos', async (t) => {
@@ -233,7 +261,6 @@ test('keyword list over the index', async (t) => {
 // Paged mode: the documents index pages and counts; Cosmos re-reads the page's ids.
 const { documentsAcl } = require('../../src/search/document-query');
 const { logger } = require('../../src/utils/logger');
-const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../src/search/eagle-query');
 
 const DOCS = Array.from({ length: 12 }, (_, i) => ({
   id: `d${i + 1}`, projectId: 'p1', read: ['public'], displayName: `Document ${i + 1}`

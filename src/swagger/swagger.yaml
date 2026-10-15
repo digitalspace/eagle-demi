@@ -939,7 +939,8 @@ paths:
           required: false
           description: >-
             Text the project name must contain, ignoring case, at most 200 characters after
-            trimming. A blank value is ignored.
+            trimming. With `q`, the projects index also matches it, so each word must also start a
+            word of the name. A blank value is ignored.
           schema:
             type: string
             maxLength: 200
