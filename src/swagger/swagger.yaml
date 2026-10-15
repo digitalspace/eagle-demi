@@ -4966,10 +4966,14 @@ paths:
 
   /api/updates/feed:
     get:
-      summary: Home page updates
+      summary: Home page feed
       description: >-
-        Pinned updates first, newest first, then other updates up to `limit` rows in total, under
-        the same rules as the list. Any parameter not listed here, or `limit` given twice, is a 400.
+        Pinned updates first, newest first. Then other updates, project decisions and notification
+        decisions, newest `feedDate` first, up to `limit` rows in total. Each row keeps the shape
+        its own list answers, plus `kind` and `feedDate`. Updates follow the same rules as the
+        list. A decision is in only when the caller may read its project or notification and its
+        `decisionDate` is no later than now. Any parameter not listed here, or `limit` given twice,
+        is a 400.
       parameters:
         - name: limit
           in: query
@@ -4982,7 +4986,9 @@ paths:
         - name: type
           in: query
           required: false
-          description: Narrows the rows after the pinned ones. Repeat it to match any of several.
+          description: >-
+            Narrows the updates after the pinned ones; decisions are never narrowed. Repeat it to
+            match any of several.
           schema:
             type: string
       responses:
@@ -4994,6 +5000,17 @@ paths:
                 type: array
                 items:
                   type: object
+                  required: [kind, feedDate]
+                  properties:
+                    kind:
+                      type: string
+                      enum: [updates, projects, notifications]
+                      description: Which list the row comes from.
+                    feedDate:
+                      type: string
+                      format: date-time
+                      description: >-
+                        An update's publish date, or a project or notification decision date.
         '400':
           description: Unknown or repeated parameter, or a bad `limit`.
         '401':
