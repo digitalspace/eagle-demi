@@ -699,6 +699,40 @@ async function fillPublishDate(id, value) {
   return patchIf(id, [{ op: 'set', path: '/publishDate', value }], `FROM c WHERE ${UNDATED_CLAUSE}`);
 }
 
+/** The sort fields a row written before mirrorItem filled them can lack. */
+const SORT_FIELDS = ['pinned', 'complianceAndEnforcement', 'status'];
+const missingClause = fields => fields.map(field => `NOT IS_DEFINED(c.${field})`);
+
+/** The values mirrorItem would have written for the sort fields `row` lacks; `{}` when it has all. */
+function sortFieldFills(row) {
+  const eagle = (row.sources && row.sources.eagle) || {};
+  const values = {
+    pinned: eagle.pinned === true,
+    complianceAndEnforcement: eagle.complianceAndEnforcement === true,
+    // null, not Eagle's value: an absent and a null status pass the publish gate alike.
+    status: null
+  };
+  return Object.fromEntries(SORT_FIELDS.filter(field => row[field] === undefined).map(field => [field, values[field]]));
+}
+
+/** One page of rows lacking a sort field, for src/scripts/backfill-update-sort-fields.js. */
+async function listMissingSortFields({ pageSize, continuationToken } = {}) {
+  const spec = selectWhere({
+    access: systemAccess(),
+    partitionField: SCOPE_FIELD,
+    criteria: [{ clause: `(${missingClause(SORT_FIELDS).join(' OR ')})`, params: [] }],
+    select: 'c.id, c.pinned, c.complianceAndEnforcement, c.status, c.sources'
+  });
+  return cosmos.query(CONTAINER, spec, pageOptions({ pageSize, continuationToken }));
+}
+
+/** Set `fills` on a row that still lacks every one of them: a push that wrote the row first wins. */
+async function fillSortFields(id, fills) {
+  const fields = Object.keys(fills);
+  return patchIf(id, fields.map(field => ({ op: 'set', path: `/${field}`, value: fills[field] })),
+    `FROM c WHERE ${missingClause(fields).join(' AND ')}`);
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
@@ -734,5 +768,8 @@ module.exports = {
   claimForBackfill,
   markNotify,
   listUndated,
+  sortFieldFills,
+  listMissingSortFields,
+  fillSortFields,
   fillPublishDate
 };
