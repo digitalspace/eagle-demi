@@ -315,6 +315,36 @@ async function countWithEagleId(access) {
 }
 
 /**
+ * Keys a native project list can sort on. Cosmos drops a row that lacks the ORDER BY field, so
+ * `upsert` writes every one of them (`sortFieldFills`), as null when there is nothing to store.
+ */
+const SORTABLE = ['name', 'dateUpdated', 'proponentName', 'projectType', 'sector', 'region', 'currentPhaseName.name'];
+
+const NULL_WHEN_ABSENT = ['proponentName', 'projectType', 'sector', 'region'];
+
+/** `dateAdded` (stored as a Date.toString() string) as ISO with Z, or null when absent or unparseable. */
+function isoOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/**
+ * The value each SORTABLE field the row lacks should hold; fields the row already has, null
+ * included, are left out. `dateUpdated` falls back to `dateAdded`, never `_ts`. Track sends no
+ * phase, so `currentPhaseName` becomes an empty `{_id, name}` ref and `currentPhaseName.name` exists.
+ */
+function sortFieldFills(row) {
+  const fills = {};
+  if (row.dateUpdated === undefined) fills.dateUpdated = isoOrNull(row.dateAdded);
+  for (const field of NULL_WHEN_ABSENT) {
+    if (row[field] === undefined) fills[field] = null;
+  }
+  if (row.currentPhaseName === undefined) fills.currentPhaseName = { _id: null, name: null };
+  return fills;
+}
+
+/**
  * Whole-item write. Safe only because nothing is folded into the project as an embedded array
  * any more — a replace from the Track sync would silently discard it. Use the patch helpers
  * below for partial updates.
@@ -334,8 +364,9 @@ async function upsert(project, { etag, create = false } = {}) {
   // A row the caller read as ABSENT has no revision to guard on, so the insert is the guard: an
   // unguarded upsert would replace a project another writer created in between, and Cosmos answers
   // a create with 409 instead — which callers re-read and re-judge exactly as they do a 412.
-  if (create) return createItem(CONTAINER, project, 'projects');
-  return upsertWithEtag(CONTAINER, project, { etag, label: 'projects' });
+  const row = { ...project, ...sortFieldFills(project) };
+  if (create) return createItem(CONTAINER, row, 'projects');
+  return upsertWithEtag(CONTAINER, row, { etag, label: 'projects' });
 }
 
 /**
@@ -451,6 +482,8 @@ module.exports = {
   countEagleOnlyIds,
   listWithEagleId,
   countWithEagleId,
+  SORTABLE,
+  sortFieldFills,
   upsert,
   patchCascadePending,
   patchWildfireStats,
