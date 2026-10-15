@@ -88,6 +88,21 @@ test('every retrievable index field is catalogued at maxVis 4', () => {
   }
 });
 
+// A field that is not retrievable still needs an entry: `fieldVisible` drops an uncatalogued
+// field, so a sort or filter key with no policy is silently missing from every query that uses it.
+test('every index field is catalogued, retrievable or not', () => {
+  for (const [index, entity] of INDEX_CATALOGS) {
+    const definition = require(`../../azure/search/indexes/${index}.json`);
+    const catalog = catalogFor(entity);
+    const hidden = definition.fields.filter(f => f.retrievable === false);
+    assert.ok(hidden.length > 0, `${index}.json carries no non-retrievable field, so this passes vacuously`);
+
+    for (const field of definition.fields) {
+      assert.ok(catalog[field.name], `${index}.${field.name} is an index field but absent from ${entity}`);
+    }
+  }
+});
+
 // `vis` is the classification itself. Retrievable, because the redactor reads the dials off the
 // hit; never searchable, because a searchable dial map lets a caller find records BY their
 // classification — a term query for a dialled field name would enumerate every dialled row.
