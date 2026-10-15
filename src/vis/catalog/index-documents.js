@@ -38,6 +38,8 @@ module.exports = {
   // The natural-sort key. Not retrievable either, but `buildOrderBy` gates a sort key on this
   // table, so an uncatalogued field would be dropped from every order it appears in.
   displayNameSort: { defaultVis: 4, maxVis: 4 },
+  // Lower-cased `documentAuthor`, the author sort key. Gated the same way, and no wider than its source.
+  documentAuthorSort: { defaultVis: 4, maxVis: 4 },
 
   // Not an index field: the marked-up copy of `displayName`/`description` that `searchDocuments`
   // attaches. It cannot outrank its sources, which are both 4.
