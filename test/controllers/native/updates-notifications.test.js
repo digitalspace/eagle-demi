@@ -36,7 +36,8 @@ const CONTAINERS = {
   // Live: u1 and u4. u2 is a draft and u3 is scheduled for later; only staff and narrower see them.
   // u5 is live and public itself, but its parent project p2 is staff-only, so it is hidden below staff.
   updates: [
-    { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', documentUrl: '/doc/a.pdf', read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
+    // u1 and u4 store `pinned` as the mirror now writes it; the rest are rows from before that.
+    { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', documentUrl: '/doc/a.pdf', pinned: false, read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
     { id: 'u2', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Draft', documentUrl: '/doc/b.pdf', read: ['public'], status: 'draft', publishDate: '2026-01-03T00:00:00.000Z', dateAdded: '2026-01-03T00:00:00.000Z' },
     { id: 'u3', type: 'News', headline: 'Scheduled', documentUrl: null, read: ['public'], status: 'published', publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },
     { id: 'u4', type: 'Notice', headline: 'Pinned notice', documentUrl: '', pinned: true, read: ['public'], status: 'published', publishDate: '2025-12-01T00:00:00.000Z', dateAdded: '2025-12-01T00:00:00.000Z' },
@@ -171,6 +172,29 @@ test('native updates list', async (t) => {
   await t.test('sort=type orders by type', async (t) => {
     fakeStores(t);
     assert.deepStrictEqual(ids((await call(list, 'sort=-type&count=true')).body), ['u4', 'u1']);
+  });
+
+  await t.test('sort=pinned orders by the pinned flag', async (t) => {
+    fakeStores(t);
+    const res = await call(list, 'sort=-pinned&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u4', 'u1']);
+    assert.deepStrictEqual(ids((await call(list, 'sort=pinned')).body), ['u1', 'u4']);
+  });
+
+  await t.test('sort=status orders by status', async (t) => {
+    fakeStores(t);
+    const res = await call(list, `project=${PROJECT_EAGLE_ID}&sort=status`, { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u2', 'u1']);
+    assert.deepStrictEqual(ids((await call(list, `project=${PROJECT_EAGLE_ID}&sort=-status`, { user: STAFF })).body), ['u1', 'u2']);
+  });
+
+  await t.test('the q path re-reads the ranked ids in pinned order', async (t) => {
+    fakeStores(t, { ranked: ['u5', 'u4', 'u2', 'u3', 'u1'] });
+    const res = await call(list, 'q=bridge&sort=-pinned', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u4', 'u1']);
   });
 
   await t.test('the q path sends the range to the index and re-reads with presence and sort', async (t) => {

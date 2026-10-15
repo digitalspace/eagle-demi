@@ -35,7 +35,7 @@ const PARTITION_FIELD = 'id';
  */
 const SCOPE_FIELD = 'projectId';
 
-const SORTABLE = ['dateAdded', 'dateUpdated', 'publishDate', 'headline', 'type'];
+const SORTABLE = ['dateAdded', 'dateUpdated', 'publishDate', 'headline', 'type', 'pinned', 'status'];
 const DEFAULT_ORDER = 'c.dateAdded DESC';
 /**
  * eagle-public's news search asks for `-score`, the relevance rank its Mongo text search produced.
@@ -53,9 +53,9 @@ function publishOrderField() {
 }
 
 /**
- * The three states `pinned` can be stored in — the mirror writes `doc.pinned` straight through, so
- * an Eagle record that never set it lands here undefined. Cosmos drops a row from `c.pinned != true`
- * when the property is absent, so "not pinned" is spelled out rather than negated.
+ * The three states `pinned` can be stored in. The mirror now writes a boolean, but a row written
+ * before that holds `doc.pinned` as sent, undefined when Eagle never set it. Cosmos drops a row from
+ * `c.pinned != true` when the property is absent, so "not pinned" is spelled out rather than negated.
  */
 const PINNED = { clause: '(IS_DEFINED(c.pinned) AND c.pinned = true)', params: [] };
 const UNPINNED = {

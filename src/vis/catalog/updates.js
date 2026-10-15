@@ -22,6 +22,8 @@ module.exports = {
   content: { defaultVis: 4, maxVis: 4 },
   type: { defaultVis: 4, maxVis: 4 },
   pinned: { defaultVis: 4, maxVis: 4 },
+  // Eagle's C&E flag; the admin Updates list filters on it.
+  complianceAndEnforcement: { defaultVis: 4, maxVis: 4 },
   dateAdded: { defaultVis: 4, maxVis: 4 },
   dateUpdated: { defaultVis: 4, maxVis: 4 },
   // Eagle's own active flag, and the four references the news card renders. All public in
