@@ -164,6 +164,21 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     });
   });
 
+  await t.test('a record with no headline or type stores both as null, not absent', async () => {
+    // A Cosmos ORDER BY on one field drops every row that lacks it, so a missing key would hide
+    // the update from a headline or type sort.
+    t.mock.method(updates, 'readForWrite', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+    const { headline: _headline, type: _type, ...doc } = eagleUpdate();
+
+    const res = await push({ doc });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written.headline, null);
+    assert.strictEqual(written.type, null);
+  });
+
   await t.test('an update with no project is site-wide, not orphaned', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);
     let written;
