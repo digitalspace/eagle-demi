@@ -92,10 +92,11 @@ function evaluate(text, row, params) {
   if (ands.length > 1) return ands.every(part => evaluate(part, row, params));
   if (expr.startsWith('NOT ')) return !evaluate(expr.slice(4), row, params);
 
-  let m = /^IS_(STRING|DEFINED|NULL|ARRAY)\(c\.([\w.]+)\)$/.exec(expr);
+  let m = /^IS_(STRING|BOOL|DEFINED|NULL|ARRAY)\(c\.([\w.]+)\)$/.exec(expr);
   if (m) {
     const value = pathOf(row, m[2]);
     if (m[1] === 'STRING') return typeof value === 'string';
+    if (m[1] === 'BOOL') return typeof value === 'boolean';
     if (m[1] === 'DEFINED') return value !== undefined;
     if (m[1] === 'ARRAY') return Array.isArray(value);
     return value === null;
