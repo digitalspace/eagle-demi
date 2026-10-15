@@ -218,7 +218,8 @@ const UPDATE_IMAGE = { id: 'd3', projectId: '207', read: ['public'], documentSou
 
 /**
  * A Cosmos fake that honours the two clauses these tests are about: the `@nid` ids an `ids=` read
- * binds, and the Update-image exclusion. Every spec sent is recorded.
+ * binds, and the Update-image exclusion. A COUNT spec gets the number of rows those clauses keep.
+ * Every spec sent is recorded.
  */
 function fakeIdsStore(t) {
   const queries = [];
@@ -228,6 +229,7 @@ function fakeIdsStore(t) {
     const rows = [...DOCS, UPDATE_IMAGE]
       .filter(row => asked.length === 0 || asked.includes(row.id))
       .filter(row => !spec.query.includes(EXCLUSION) || row.documentSource !== 'UPDATE');
+    if (spec.query.includes('COUNT(1)')) return { items: [rows.length] };
     return { items: structuredClone(rows) };
   });
   t.mock.method(projects, 'listRowsByIds', async () => []);
@@ -243,6 +245,15 @@ test('native documents ids= read', async (t) => {
 
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(res.body.map(doc => doc.id).sort(), ['d1', 'd3']);
+  });
+
+  await t.test('ids= x-total-count counts the Update-form image it returns', async (t) => {
+    fakeIdsStore(t);
+    const res = await list('ids=d3,d1&count=true', STAFF);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.length, 2);
+    assert.strictEqual(res.headers['x-total-count'], String(res.body.length));
   });
 
   await t.test('a project list without ids= still leaves the Update image out', async (t) => {
