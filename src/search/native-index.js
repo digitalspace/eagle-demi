@@ -24,6 +24,7 @@ const { documentsAcl, NOT_UPDATE_IMAGE } = require('./document-query');
 const { filterFor, inClause, quote } = require('../helpers/access-odata');
 const { nativeCriteria, dialAllows, rangeBound, cosmosKind } = require('../helpers/native-query');
 const { inList, selectWhere, selectFor, fetchAll } = require('../repositories/_sql');
+const { NAME_CONTAINS_FIELDS, nameContainsClause } = require('./eagle-query');
 const { levelOf } = require('../vis/level');
 const { PROJECT_TO_INDEX } = require('../vis/catalog/index-projects-renames');
 const updates = require('../repositories/updates');
@@ -93,9 +94,11 @@ const INDEX_MAPS = Object.freeze({
       'eacDecision._id': 'eacDecisionId',
       'currentPhaseName._id': 'currentPhaseNameId',
       'CEAAInvolvement._id': 'ceaaInvolvementId',
-      decisionDate: 'decisionDate'
+      decisionDate: 'decisionDate',
+      sector: 'sector',
+      dateUpdated: 'dateUpdated'
     },
-    types: { decisionDate: 'date' },
+    types: { decisionDate: 'date', dateUpdated: 'date' },
     searched: [...new Set(aiSearch.PROJECT_SEARCH_FIELDS.split(',')
       .flatMap(column => sourcesOf(PROJECT_TO_INDEX, column)))]
   },
@@ -103,7 +106,8 @@ const INDEX_MAPS = Object.freeze({
     search: opts => aiSearch.searchActivities(opts),
     partitionField: 'projectId',
     acl: updatesIndexAcl,
-    columns: { projectId: 'projectId', type: 'type' },
+    columns: { projectId: 'projectId', type: 'type', dateAdded: 'dateAdded' },
+    types: { dateAdded: 'date' },
     searched: keywordSearched('activities')
   },
   // No project axis, like `notifications.SCOPE_FIELD`: role ACL is the whole filter.
@@ -113,7 +117,8 @@ const INDEX_MAPS = Object.freeze({
     columns: { type: 'type', region: 'region', pcp: 'pcp', decision: 'decision' },
     searched: keywordSearched('notifications')
   },
-  // Paged mode. `types` names columns whose values go unquoted; `sorts` is sort key -> column.
+  // Paged mode. `types` names columns whose values go unquoted; `sorts` is sort key -> column;
+  // `contains` is a text filter's field -> the searchable columns its words must match in.
   documents: {
     paged: true,
     search: opts => aiSearch.searchDocumentIds(opts),
@@ -133,13 +138,24 @@ const INDEX_MAPS = Object.freeze({
       datePosted: 'datePosted'
     },
     types: { isFeatured: 'boolean', legislation: 'int', datePosted: 'date' },
-    sorts: { datePosted: 'datePosted', displayName: 'displayNameSort', sortOrder: 'sortOrder' },
+    sorts: {
+      datePosted: 'datePosted',
+      displayName: 'displayNameSort',
+      sortOrder: 'sortOrder',
+      type: 'type',
+      milestone: 'milestone',
+      projectPhase: 'projectPhase',
+      documentAuthorType: 'documentAuthorType'
+    },
+    contains: { displayName: NAME_CONTAINS_FIELDS.Document },
     // Most rows hold sortOrder 0, so the staff order falls back to newest first, then by name.
     tiebreaks: { sortOrder: 'datePosted desc, displayNameSort asc' },
     defaultOrderby: 'datePosted desc',
     // Cosmos indexes no `datePosted` or `displayName` and cannot compare typed values the query
-    // carries as strings, so it serves only one project's plain list and an `ids=` read.
+    // carries as strings, so it serves only one project's plain list and an `ids=` read. A name
+    // match goes to the index too, which matches word prefixes where Cosmos would match a substring.
     cosmosServes: parsed => !parsed.q && !parsed.sort && !typedFilter(INDEX_MAPS.documents, parsed) &&
+      !Object.keys(parsed.contains || {}).length &&
       Boolean(parsed.ids || (parsed.filters && parsed.filters.projectId)),
     searched: searchedOf(aiSearch.DOCUMENT_SEARCH_FIELDS)
   }
@@ -204,6 +220,9 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
   if (map.paged) {
     const unmapped = Object.keys(parsed.filters || {}).find(field => !map.columns[field]);
     if (unmapped) throw badRequest(`cannot filter on ${unmapped} here`);
+    // The page re-read drops CONTAINS, so a text filter the index cannot match would vanish.
+    const unmatched = Object.keys(parsed.contains || {}).find(field => !(map.contains || {})[field]);
+    if (unmatched) throw badRequest(`cannot match text in ${unmatched} here`);
   }
   if (acl.empty) return { filter: null, empty: true };
 
@@ -220,6 +239,13 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
     }
   }
   clauses.push(...typed.ranges);
+  for (const [field, text] of Object.entries(parsed.contains || {})) {
+    const columns = (map.contains || {})[field];
+    if (!columns) continue;
+    // Punctuation alone leaves no word, and a clause over no terms is a 400 from the service.
+    const lucene = aiSearch.buildContainsQuery(text);
+    if (lucene) clauses.push(nameContainsClause(columns, lucene));
+  }
   if (parsed.ids) clauses.push(inClause('id', parsed.ids));
   return { filter: andOData(...clauses), empty: false };
 }
@@ -297,10 +323,14 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     const types = map.types || {};
     const level = levelOf(access);
     const plain = Object.fromEntries(Object.entries(parsed.filters).filter(([field]) => !types[field]));
-    const { criteria } = nativeCriteria({}, { ...parsed, q: null, sort: null, filters: plain, ranges: [] }, access);
+    // `contains: {}` as `q: null`: the index matched the words, so Cosmos re-checks only their dials.
+    const { criteria } = nativeCriteria({}, {
+      ...parsed, q: null, sort: null, filters: plain, ranges: [], contains: {}
+    }, access);
     const dialOnly = [...new Set([
       ...Object.keys(parsed.filters).filter(field => types[field]),
-      ...(parsed.ranges || []).map(range => range.field)
+      ...(parsed.ranges || []).map(range => range.field),
+      ...Object.keys(parsed.contains || {}).flatMap(field => searchedOf(map.contains[field].join(',')))
     ])].map(field => ({ clause: dialAllows(field, level), params: [] }));
 
     const rows = await readAll(access, {

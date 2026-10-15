@@ -32,6 +32,8 @@ const SPEC = {
   sortKeys: ['name', 'dateUpdated'],
   filters: ['projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict'],
   multiValueFilters: ['projectState'],
+  ranges: { dateUpdatedStart: { field: 'dateUpdated', op: 'ge' } },
+  contains: { nameContains: 'name' },
   qFields: ['name', 'description']
 };
 const list = listHandler(SPEC);
@@ -86,6 +88,22 @@ test('OData builder', async (t) => {
     };
     assert.strictEqual(indexFilter(MAP, parsed, open).filter,
       "(eacDecisionId eq 'E1') and (ceaaInvolvementId eq 'C1') and (decisionDate ge 2020-01-01T00:00:00.000Z)");
+  });
+
+  await t.test('a project sector and dateUpdated range land on their index columns', () => {
+    const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    const parsed = {
+      filters: { sector: ['LNG', 'Mines'] },
+      ranges: [{ field: 'dateUpdated', op: 'ge', value: '2026-01-01' }, { field: 'dateUpdated', op: 'le', value: '2026-01-31' }]
+    };
+    assert.strictEqual(indexFilter(MAP, parsed, open).filter, "(search.in(sector, 'LNG,Mines', ',')) and " +
+      '(dateUpdated ge 2026-01-01T00:00:00.000Z) and (dateUpdated le 2026-01-31T23:59:59.999Z)');
+  });
+
+  await t.test('an activities dateAdded range lands on its index column', () => {
+    const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    const parsed = { filters: {}, ranges: [{ field: 'dateAdded', op: 'ge', value: '2026-02-01' }] };
+    assert.strictEqual(indexFilter(INDEX_MAPS.activities, parsed, open).filter, '(dateAdded ge 2026-02-01T00:00:00.000Z)');
   });
 
   await t.test('an unrestricted caller sends only its own filters, and none at all when it names none', () => {
@@ -154,6 +172,23 @@ test('keyword list over the index', async (t) => {
     assert.deepStrictEqual(res.body.map(r => r.id), ['p1', 'p2', 'p3']);
   });
 
+  await t.test('q with dateUpdatedStart sends an OData range and keeps it in the re-read', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call('q=mine&dateUpdatedStart=2026-01-01');
+    assert.strictEqual(res.status, 200);
+    assert.match(searches[0].filter, /\(dateUpdated ge 2026-01-01T00:00:00\.000Z\)$/);
+    assert.match(queries[0].query, /c\.dateUpdated >= @nr0/);
+  });
+
+  await t.test('q with nameContains leaves the name match to the Cosmos re-read', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call('q=mine&nameContains=lng');
+    assert.strictEqual(res.status, 200);
+    assert.doesNotMatch(searches[0].filter || '', /search\.ismatch/);
+    assert.match(queries[0].query, /CONTAINS\(c\.name, @nc0, true\)/);
+    assert.ok(queries[0].parameters.some(p => p.name === '@nc0' && p.value === 'lng'));
+  });
+
   await t.test('no index hit reads nothing from Cosmos', async (t) => {
     const { queries } = fakeStores(t, { ranked: [] });
     const res = await call('q=nothing&count=true');
@@ -177,6 +212,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { documentsAcl } = require('../../src/search/document-query');
 const { logger } = require('../../src/utils/logger');
+const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../src/search/eagle-query');
 
 const DOCS = Array.from({ length: 12 }, (_, i) => ({
   id: `d${i + 1}`, projectId: 'p1', read: ['public'], displayName: `Document ${i + 1}`
@@ -190,7 +226,9 @@ const DOC_SPEC = {
     index: 'documents', container: 'documents', entity: 'documents', partitionField: 'projectId',
     defaultOrder: 'c.id ASC', baseCriteria: [UPDATE_IMAGES_OUT]
   }),
-  sortKeys: ['datePosted', 'displayName'],
+  sortKeys: ['datePosted', 'displayName', 'milestone'],
+  // `description` has no index text match, so its contains filter cannot page in the index.
+  contains: { displayNameContains: 'displayName', descriptionContains: 'description' },
   // `documentFileName` is a declared filter with no index column.
   filters: [...ID_FILTERS, 'isFeatured', 'legislation', 'documentFileName'],
   aliases: { project: 'projectId' },
@@ -294,6 +332,34 @@ test('documents list over the paged index', async (t) => {
     assert.strictEqual(searches.length + queries.length, 0);
   });
 
+  await t.test('displayNameContains matches the name fields in the index, never with CONTAINS', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    const res = await callDocs('project=p1&displayNameContains=Part%20A');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 1, 'a name match goes to the index even with project=');
+    const clause = nameContainsClause(NAME_CONTAINS_FIELDS.Document, aiSearch.buildContainsQuery('Part A'));
+    assert.ok(searches[0].filter.endsWith(` and (${clause})`), searches[0].filter);
+    assert.doesNotMatch(queries[0].query, /(?<!ARRAY_)CONTAINS\(/);
+    for (const field of ['displayName', 'documentFileName']) {
+      assert.ok(queries[0].query.includes(`c.vis[${JSON.stringify(field)}]`), `no dial check on ${field}`);
+    }
+  });
+
+  await t.test('displayNameContains of punctuation alone sends no match clause', async (t) => {
+    const { searches } = fakeDocStores(t);
+    const res = await callDocs('displayNameContains=()');
+    assert.strictEqual(res.status, 200);
+    assert.doesNotMatch(searches[0].filter, /search\.ismatch/);
+  });
+
+  await t.test('a contains filter with no index text match 400', async (t) => {
+    const { searches, queries } = fakeDocStores(t);
+    const res = await callDocs('descriptionContains=report');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /description/);
+    assert.strictEqual(searches.length + queries.length, 0);
+  });
+
   await t.test('pageSize 600 on index path 400', async (t) => {
     const { searches } = fakeDocStores(t);
     const res = await callDocs('q=report&pageSize=600', { user: STAFF_USER });
@@ -376,6 +442,12 @@ test('documents list over the paged index', async (t) => {
     const { searches } = fakeDocStores(t);
     await callDocs('q=report&sort=-displayName');
     assert.strictEqual(searches[0].orderby, 'displayNameSort desc, id');
+  });
+
+  await t.test('sort=milestone orders by its label column, then id', async (t) => {
+    const { searches } = fakeDocStores(t);
+    await callDocs('project=p1&sort=milestone');
+    assert.strictEqual(searches[0].orderby, 'milestone asc, id');
   });
 
   await t.test('re-read checks only the dial for isFeatured', async (t) => {
