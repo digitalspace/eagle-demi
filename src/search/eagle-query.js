@@ -906,6 +906,10 @@ module.exports = {
   unsupportedParams,
   // Exported for the controller's 400 and for the tests that pin the two datasets it applies to.
   nameContainsError,
+  // The native documents list renders the same name match (search/native-index.js).
+  nameContainsClause,
+  // The native updates list renders `hasDocumentUrl` with the same null-or-'' test.
+  presenceTerm,
   NAME_CONTAINS_FIELDS,
   MAX_NAME_CONTAINS,
   filterKeysIn,

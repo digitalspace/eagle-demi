@@ -17,6 +17,7 @@ const { counts } = require('../../../src/controllers/native/counts');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const aiSearch = require('../../../src/search/ai-search');
 const projects = require('../../../src/repositories/projects');
+const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../../src/search/eagle-query');
 const { makeRes } = require('../../../src/http/router');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
@@ -167,6 +168,31 @@ test('native documents list', async (t) => {
     await list('project=207&sort=-sortOrder', STAFF);
 
     assert.strictEqual(searches[0].orderby, 'sortOrder desc, datePosted desc, displayNameSort asc, id');
+  });
+
+  for (const [key, column] of [['type', 'type'], ['milestone', 'milestone'], ['projectPhase', 'projectPhase'],
+    ['documentAuthorType', 'documentAuthorType']]) {
+    await t.test(`sort=${key} and sort=-${key} page in the index on ${column}`, async (t) => {
+      const { searches } = fakeStores(t);
+      assert.strictEqual((await list(`project=207&sort=${key}`)).status, 200);
+      assert.strictEqual((await list(`sort=-${key}`)).status, 200);
+      assert.deepStrictEqual(searches.map(s => s.orderby), [`${column} asc, id`, `${column} desc, id`]);
+    });
+  }
+
+  await t.test('displayNameContains with project= matches the name fields in the index', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await list('project=207&displayNameContains=Part%20A&count=true');
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 1);
+    const clause = nameContainsClause(NAME_CONTAINS_FIELDS.Document, aiSearch.buildContainsQuery('Part A'));
+    assert.ok(searches[0].filter.endsWith(` and (${clause})`), searches[0].filter);
+    const [reread] = documentReads(queries);
+    assert.doesNotMatch(reread.query, /(?<!ARRAY_)CONTAINS\(/, 'Cosmos must not re-match the words the index matched');
+    for (const field of ['displayName', 'documentFileName']) {
+      assert.ok(reread.query.includes(`c.vis[${JSON.stringify(field)}]`), `no dial check on ${field}`);
+    }
   });
 
   await t.test('documentSource on one project reads Cosmos with the value bound', async (t) => {

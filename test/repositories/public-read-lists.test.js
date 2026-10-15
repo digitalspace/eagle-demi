@@ -28,14 +28,16 @@ const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: 
 /**
  * The fields one container's indexing policy includes, as the bicep writes them.
  *
- * A path is reduced to its field name, so `/read/[]/?` and `/name/?` both read as one field — the
- * allow-lists these tests pair the policy with are field names.
+ * A path is reduced to its dotted field name, so `/read/[]/?` reads as `read` and
+ * `/currentPhaseName/name/?` as `currentPhaseName.name` — the allow-lists these tests pair the
+ * policy with are field names as the SQL writes them.
  */
 function indexedFields(container) {
   const bicep = readFileSync(
     join(__dirname, '..', '..', 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
   const policy = bicep.split(`id: '${container}'`)[1].split('excludedPaths')[0];
-  return [...policy.matchAll(/path: '\/([A-Za-z]+)(?:\/\[\])?\/\?'/g)].map(m => m[1]);
+  return [...policy.matchAll(/path: '\/([A-Za-z_]+(?:\/[A-Za-z_]+)*)(?:\/\[\])?\/\?'/g)]
+    .map(m => m[1].replace(/\//g, '.'));
 }
 
 /** Capture the spec and options of the next query, and answer with `items`. */
@@ -489,5 +491,19 @@ test('users and groups index every native sort key and filter', () => {
     for (const field of [...spec.sortKeys, ...spec.filters]) {
       assert.ok(indexed.includes(field), `${container} sorts or filters on ${field}, which is not an included path`);
     }
+  }
+});
+
+test('projects, updates and notifications index every native sort key', async (t) => {
+  const sortKeys = {
+    projects: require('../../src/repositories/projects').SORTABLE,
+    updates: updates.SORTABLE,
+    notifications: notifications.SORTABLE
+  };
+  for (const [container, keys] of Object.entries(sortKeys)) {
+    await t.test(container, () => {
+      const indexed = indexedFields(container);
+      assert.deepStrictEqual(keys.filter(key => !indexed.includes(key)), [], `${container} sort keys with no included path`);
+    });
   }
 });

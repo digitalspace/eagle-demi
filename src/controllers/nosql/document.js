@@ -351,7 +351,7 @@ const documentsKind = Object.freeze({
     list: (access, args) => repositoryFor(args).list(access, args),
     count: (access, args) => repositoryFor(args).count(access, args)
   },
-  sortKeys: ['datePosted', 'displayName', 'sortOrder'],
+  sortKeys: ['datePosted', 'displayName', 'sortOrder', 'type', 'milestone', 'projectPhase', 'documentAuthorType'],
   // `documentSource=PROJECT` is how a staff list leaves out files attached to public comments.
   filters: [...DOCUMENT_ID_FILTERS, 'isFeatured', 'legislation', 'documentSource'],
   aliases: { project: 'projectId' },
@@ -360,6 +360,8 @@ const documentsKind = Object.freeze({
     datePostedStart: { field: 'datePosted', op: 'ge' },
     datePostedEnd: { field: 'datePosted', op: 'le' }
   },
+  // Word prefixes over displayName and documentFileName in the index (INDEX_MAPS.documents.contains).
+  contains: { displayNameContains: 'displayName' },
   qFields: INDEX_MAPS.documents.searched,
   parentJoin: projectParentJoin
 });

@@ -2,7 +2,7 @@
 
 // Native update and notification reads, driven through the real handlers and repositories over a
 // fake Cosmos that applies the role arm, equality, IN, `<=`, pinned, parent gate and ORDER BY
-// clauses of each query, so what a caller may see is observed in the response. The indexes are faked at
+// clauses of each query, plus `>=` and the presence clause, so what a caller may see is observed in the response. The indexes are faked at
 // `searchActivities`/`searchNotifications`, so the OData filter they are asked with is observed too.
 
 process.env.NODE_ENV = 'test';
@@ -35,16 +35,16 @@ const CONTAINERS = {
   // Live: u1 and u4. u2 is a draft and u3 is scheduled for later; only staff and narrower see them.
   // u5 is live and public itself, but its parent project p2 is staff-only, so it is hidden below staff.
   updates: [
-    { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
-    { id: 'u2', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Draft', read: ['public'], status: 'draft', publishDate: '2026-01-03T00:00:00.000Z', dateAdded: '2026-01-03T00:00:00.000Z' },
-    { id: 'u3', type: 'News', headline: 'Scheduled', read: ['public'], status: 'published', publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },
-    { id: 'u4', type: 'Notice', headline: 'Pinned notice', pinned: true, read: ['public'], status: 'published', publishDate: '2025-12-01T00:00:00.000Z', dateAdded: '2025-12-01T00:00:00.000Z' },
-    { id: 'u5', projectId: HIDDEN_EAGLE_ID, type: 'News', headline: 'Quarry approved', read: ['public'], status: 'published', publishDate: '2026-01-04T00:00:00.000Z', dateAdded: '2026-01-04T00:00:00.000Z' }
+    { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', documentUrl: '/doc/a.pdf', read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
+    { id: 'u2', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Draft', documentUrl: '/doc/b.pdf', read: ['public'], status: 'draft', publishDate: '2026-01-03T00:00:00.000Z', dateAdded: '2026-01-03T00:00:00.000Z' },
+    { id: 'u3', type: 'News', headline: 'Scheduled', documentUrl: null, read: ['public'], status: 'published', publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },
+    { id: 'u4', type: 'Notice', headline: 'Pinned notice', documentUrl: '', pinned: true, read: ['public'], status: 'published', publishDate: '2025-12-01T00:00:00.000Z', dateAdded: '2025-12-01T00:00:00.000Z' },
+    { id: 'u5', projectId: HIDDEN_EAGLE_ID, type: 'News', headline: 'Quarry approved', documentUrl: '/doc/c.pdf', read: ['public'], status: 'published', publishDate: '2026-01-04T00:00:00.000Z', dateAdded: '2026-01-04T00:00:00.000Z' }
   ],
   notifications: [
-    { id: 'n1', name: 'Pipeline notice', type: 'Industrial', region: 'Peace', read: ['public'], notificationReceivedDate: '2026-02-01T00:00:00.000Z' },
-    { id: 'n2', name: 'Mine notice', type: 'Mines', region: 'Skeena', read: ['public'], notificationReceivedDate: '2026-03-01T00:00:00.000Z' },
-    { id: 'n-staff', name: 'Unreleased notice', type: 'Mines', read: ['staff'], notificationReceivedDate: '2026-04-01T00:00:00.000Z' }
+    { id: 'n1', name: 'Pipeline notice', type: 'Industrial', region: 'Peace', decision: 'Approved', proponent: 'Zed Pipelines', read: ['public'], notificationReceivedDate: '2026-02-01T00:00:00.000Z' },
+    { id: 'n2', name: 'Mine notice', type: 'Mines', region: 'Skeena', decision: null, proponent: 'Acme Mining', read: ['public'], notificationReceivedDate: '2026-03-01T00:00:00.000Z' },
+    { id: 'n-staff', name: 'Unreleased notice', type: 'Transport', region: 'Coast', decision: 'Declined', proponent: null, read: ['staff'], notificationReceivedDate: '2026-04-01T00:00:00.000Z' }
   ],
   projects: [
     { id: 'p1', eagleId: PROJECT_EAGLE_ID, name: 'Site C', read: ['public'] },
@@ -67,6 +67,13 @@ function admitted(container, spec) {
   for (const [, field, name] of spec.query.matchAll(/c\.(\w+) <= (@\w+)/g)) {
     tests.push(row => row[field] <= param(spec, name));
   }
+  for (const [, field, name] of spec.query.matchAll(/c\.(\w+) >= (@\w+)/g)) {
+    tests.push(row => row[field] >= param(spec, name));
+  }
+  for (const [, not, field] of spec.query.matchAll(/(\(NOT )?\(\(IS_DEFINED\(c\.(\w+)\) AND NOT IS_NULL\(c\.\w+\)\) AND c\.\w+ != ''\)/g)) {
+    const filled = row => row[field] !== undefined && row[field] !== null && row[field] !== '';
+    tests.push(row => filled(row) !== Boolean(not));
+  }
   for (const [, field, names] of spec.query.matchAll(/c\.(\w+) IN \(([@\w, ]+)\)/g)) {
     const values = names.split(', ').map(name => param(spec, name));
     tests.push(row => values.includes(row[field]));
@@ -83,7 +90,10 @@ function admitted(container, spec) {
   const order = spec.query.match(/ORDER BY c\.(\w+) (ASC|DESC)/);
   if (!order) return rows;
   const [, field, dir] = order;
-  return rows.sort((a, b) => String(a[field]).localeCompare(String(b[field])) * (dir === 'DESC' ? -1 : 1));
+  // As Cosmos: ORDER BY drops a row lacking the field, and null sorts before every string.
+  const key = row => (row[field] === null ? '' : `~${row[field]}`);
+  return rows.filter(row => row[field] !== undefined)
+    .sort((a, b) => key(a).localeCompare(key(b)) * (dir === 'DESC' ? -1 : 1));
 }
 
 function fakeStores(t, { ranked = [] } = {}) {
@@ -140,7 +150,40 @@ test('native updates list', async (t) => {
 
   await t.test('a sort key off the allow-list is refused', async (t) => {
     fakeStores(t);
-    assert.strictEqual((await call(list, 'sort=headline')).status, 400);
+    assert.strictEqual((await call(list, 'sort=projectName')).status, 400);
+  });
+
+  // In the window: u4 (Dec 1), u3, u1, u2 (Jan 3, the end day itself). u5 (Jan 4) is past it.
+  const WINDOW = 'dateAddedStart=2025-12-01&dateAddedEnd=2026-01-03';
+
+  await t.test('dateAdded range, hasDocumentUrl and sort=headline narrow and order the list', async (t) => {
+    fakeStores(t);
+    const filled = await call(list, `${WINDOW}&hasDocumentUrl=true&sort=headline`, { user: STAFF });
+    assert.strictEqual(filled.status, 200);
+    assert.deepStrictEqual(ids(filled.body), ['u1', 'u2']);
+    assert.deepStrictEqual(ids((await call(list, `${WINDOW}&hasDocumentUrl=true&sort=-headline`, { user: STAFF })).body), ['u2', 'u1']);
+    // null and '' both read as no document.
+    assert.deepStrictEqual(ids((await call(list, `${WINDOW}&hasDocumentUrl=false&sort=headline`, { user: STAFF })).body), ['u4', 'u3']);
+  });
+
+  await t.test('sort=type orders by type', async (t) => {
+    fakeStores(t);
+    assert.deepStrictEqual(ids((await call(list, 'sort=-type&count=true')).body), ['u4', 'u1']);
+  });
+
+  await t.test('the q path sends the range to the index and re-reads with presence and sort', async (t) => {
+    const { searches } = fakeStores(t, { ranked: ['u5', 'u4', 'u2', 'u3', 'u1'] });
+    const res = await call(list, `q=bridge&${WINDOW}&hasDocumentUrl=true&sort=headline`, { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u1', 'u2']);
+    assert.match(searches[0].filter, /\(dateAdded ge 2025-12-01T00:00:00\.000Z\) and \(dateAdded le 2026-01-03T23:59:59\.999Z\)/);
+  });
+
+  await t.test('a bad day, a bad presence value or a repeated range is refused', async (t) => {
+    fakeStores(t);
+    assert.match((await call(list, 'dateAddedStart=2026-02-30')).body.error, /dateAddedStart takes one day/);
+    assert.match((await call(list, 'hasDocumentUrl=yes')).body.error, /hasDocumentUrl takes only true or false/);
+    assert.match((await call(list, 'dateAddedEnd=2026-01-01&dateAddedEnd=2026-01-02')).body.error, /more than once: dateAddedEnd/);
   });
 
   await t.test('project= filters projectId and joins the project name', async (t) => {
@@ -322,6 +365,25 @@ test('native notifications', async (t) => {
     const res = await call(list, 'type=Mines&count=true');
     assert.deepStrictEqual(ids(res.body), ['n2']);
     assert.strictEqual(res.headers['x-total-count'], '1');
+  });
+
+  await t.test('type, region and decision take several values; sort=decision keeps a null decision', async (t) => {
+    fakeStores(t);
+    const res = await call(list, 'type=Industrial&type=Mines&sort=decision&count=true', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    // n2's decision is null, which sorts first; the staff-only Transport row is filtered out.
+    assert.deepStrictEqual(ids(res.body), ['n2', 'n1']);
+    assert.strictEqual(res.headers['x-total-count'], '2');
+    assert.deepStrictEqual(ids((await call(list, 'type=Industrial&type=Mines&sort=-decision')).body), ['n1', 'n2']);
+    assert.deepStrictEqual(ids((await call(list, 'region=Peace&region=Coast', { user: STAFF })).body), ['n-staff', 'n1']);
+    assert.deepStrictEqual(ids((await call(list, 'decision=Approved&decision=Declined', { user: STAFF })).body), ['n-staff', 'n1']);
+  });
+
+  await t.test('sort takes type, region and proponent', async (t) => {
+    fakeStores(t);
+    assert.deepStrictEqual(ids((await call(list, 'sort=-type', { user: STAFF })).body), ['n-staff', 'n2', 'n1']);
+    assert.deepStrictEqual(ids((await call(list, 'sort=region', { user: STAFF })).body), ['n-staff', 'n1', 'n2']);
+    assert.deepStrictEqual(ids((await call(list, 'sort=proponent', { user: STAFF })).body), ['n-staff', 'n2', 'n1']);
   });
 
   await t.test('project= is refused: a notification has no projectId', async (t) => {
