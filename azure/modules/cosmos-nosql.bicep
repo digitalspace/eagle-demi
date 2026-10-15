@@ -187,6 +187,26 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
           {
             path: '/decisionDate/?'
           }
+          // The native list's sort keys (repositories/projects.js SORTABLE). upsert writes each on
+          // every row, because an ORDER BY drops rows that lack its field.
+          {
+            path: '/dateUpdated/?'
+          }
+          {
+            path: '/sector/?'
+          }
+          {
+            path: '/proponentName/?'
+          }
+          {
+            path: '/projectType/?'
+          }
+          {
+            path: '/region/?'
+          }
+          {
+            path: '/currentPhaseName/name/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -313,6 +333,13 @@ resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
           }
           {
             path: '/publishDate/?'
+          }
+          // Native list sort keys; the mirror writes both as null when Eagle sends none.
+          {
+            path: '/headline/?'
+          }
+          {
+            path: '/type/?'
           }
           {
             path: '/notifiedAt/?'
@@ -473,6 +500,10 @@ resource notificationsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
           }
           {
             path: '/decision/?'
+          }
+          // Native list sort key; the mirror writes null when Eagle sends none.
+          {
+            path: '/proponent/?'
           }
         ]
         excludedPaths: noIndex

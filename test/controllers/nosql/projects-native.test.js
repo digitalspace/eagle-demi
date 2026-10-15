@@ -90,7 +90,7 @@ async function call(qs) {
   const req = { query: querystring.parse(qs), params: {}, headers: {}, header: () => undefined };
   const res = makeRes('test');
   await projectController.getProjects(req, res);
-  return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : undefined };
+  return { status: res.statusCode, headers: res.headers, body: res.body ? JSON.parse(res.body) : undefined };
 }
 
 test('GET /projects native list', async (t) => {
@@ -261,6 +261,105 @@ test('GET /projects native list', async (t) => {
     assert.strictEqual(res.body.error, 'decisionDateEnd takes one day as YYYY-MM-DD');
     assert.strictEqual(queries.length, 0);
   });
+});
+
+// A Track-only row: upsert writes its absent phase as `{_id: null, name: null}`, so the phase sort keeps it.
+const NO_PHASE = { id: 'p3', name: 'Lng Three', currentPhaseName: { _id: null, name: null }, read: ['public'] };
+
+/** `fakeStores` with `rows` in Cosmos, which honours a `CONTAINS(c.name, @nc0, true)` clause as Cosmos would. */
+function fakeNameMatch(t, rows) {
+  const searches = [];
+  const queries = [];
+  t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+    searches.push(opts);
+    return { count: rows.length, items: rows.map(row => ({ id: row.id })) };
+  });
+  t.mock.method(cosmos, 'query', async (container, spec) => {
+    queries.push(spec);
+    const text = spec.query.includes('CONTAINS(c.name, @nc0, true)') ? param(spec, '@nc0').toLowerCase() : '';
+    const matched = rows.filter(row => row.name.toLowerCase().includes(text));
+    return spec.query.includes('COUNT(1)') ? { items: [matched.length] } : { items: structuredClone(matched) };
+  });
+  return { searches, queries };
+}
+
+test('GET /projects sector, last-updated and name filters', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const QS = 'sector=a&sector=b&sort=-dateUpdated&dateUpdatedStart=2026-01-01&nameContains=lng&count=true';
+
+  await t.test('sector given twice, a last-updated edge and a name text narrow the Cosmos read and count', async (t) => {
+    const { searches, queries } = fakeNameMatch(t, [...ROWS, NO_PHASE]);
+    const res = await call(QS);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 0);
+    assert.deepStrictEqual(res.body.map(row => row.id), ['p3']);
+    assert.strictEqual(res.headers['x-total-count'], '1');
+    assert.strictEqual(queries.length, 2);
+    for (const sql of queries) {
+      assert.ok(sql.query.includes(
+        '((NOT IS_DEFINED(c.vis["sector"]) OR c.vis["sector"] >= 4) AND c.sector IN (@nf0_0, @nf0_1))'), sql.query);
+      assert.deepStrictEqual([param(sql, '@nf0_0'), param(sql, '@nf0_1')], ['a', 'b']);
+      assert.ok(sql.query.includes(
+        '((NOT IS_DEFINED(c.vis["dateUpdated"]) OR c.vis["dateUpdated"] >= 4) AND c.dateUpdated >= @nr0)'), sql.query);
+      assert.strictEqual(param(sql, '@nr0'), '2026-01-01T00:00:00.000Z');
+      assert.ok(sql.query.includes('((NOT IS_DEFINED(c.vis["name"]) OR c.vis["name"] >= 4) AND CONTAINS(c.name, @nc0, true))'),
+        sql.query);
+      assert.strictEqual(param(sql, '@nc0'), 'lng');
+    }
+    assert.match(queries.find(sql => !sql.query.includes('COUNT(1)')).query, /ORDER BY c\.dateUpdated DESC/);
+  });
+
+  await t.test('the last-updated end edge takes the whole day', async (t) => {
+    const { queries } = fakeStores(t);
+    const res = await call('dateUpdatedEnd=2026-03-31');
+    assert.strictEqual(res.status, 200);
+    assert.ok(queries[0].query.includes('c.dateUpdated <= @nr0'), queries[0].query);
+    assert.strictEqual(param(queries[0], '@nr0'), '2026-03-31T23:59:59.999Z');
+  });
+
+  await t.test('with q, the Cosmos re-read keeps only rows whose name holds the text', async (t) => {
+    const { searches, queries } = fakeNameMatch(t, ROWS);
+    const res = await call('q=mine&nameContains=TWO');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches[0].keywords, 'mine');
+    assert.deepStrictEqual(res.body.map(row => row.id), ['p2']);
+    assert.ok(!queries[0].query.includes('@nq'), `the keyword was re-matched in Cosmos: ${queries[0].query}`);
+  });
+
+  await t.test('sort=currentPhaseName.name orders on the phase name and keeps a row with no phase', async (t) => {
+    const { queries } = fakeNameMatch(t, [NO_PHASE, ...ROWS]);
+    const res = await call('sort=currentPhaseName.name');
+    assert.strictEqual(res.status, 200);
+    assert.match(queries[0].query, /ORDER BY c\.currentPhaseName\.name ASC$/);
+    assert.deepStrictEqual(res.body[0].currentPhaseName, { _id: null, name: null });
+  });
+
+  await t.test('sort=currentPhaseName.name with q orders the re-read on the phase name and keeps a row with no phase', async (t) => {
+    const { searches, queries } = fakeNameMatch(t, [NO_PHASE, ...ROWS]);
+    const res = await call('q=mine&sort=-currentPhaseName.name');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 1);
+    assert.match(queries[0].query, /ORDER BY c\.currentPhaseName\.name DESC$/);
+    assert.deepStrictEqual(res.body.map(row => row.id), ['p3', 'p1', 'p2']);
+  });
+
+  await t.test('the stored phase object is not a sort key; its name is', async (t) => {
+    const { queries } = fakeStores(t);
+    const res = await call('sort=currentPhaseName');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'cannot sort on: currentPhaseName');
+    assert.strictEqual(queries.length, 0);
+  });
+
+  for (const key of ['dateUpdated', 'proponentName', 'projectType', 'sector', 'region']) {
+    await t.test(`sort=${key} orders the Cosmos read on ${key}`, async (t) => {
+      const { queries } = fakeStores(t);
+      const res = await call(`sort=${key}`);
+      assert.strictEqual(res.status, 200);
+      assert.match(queries[0].query, new RegExp(`ORDER BY c\\.${key} ASC$`));
+    });
+  }
 });
 
 /**

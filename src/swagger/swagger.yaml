@@ -818,6 +818,17 @@ paths:
               type: string
           style: form
           explode: true
+        - name: sector
+          in: query
+          required: false
+          description: Project sub-type, an exact match on the stored value. Repeat it to match any of several.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: projectState
           in: query
           required: false
