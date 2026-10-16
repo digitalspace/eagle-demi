@@ -501,9 +501,10 @@ var defaultTags = {
 // name and apiVersion below is the one the owning module declares — a mismatch here reads a
 // different resource, or a different property shape, and the app settings drift silently.
 //
-// An `existing` resource compiles to a reference at its use site, so nothing is read in a run that
-// takes the module-output branch. A missing resource in application mode fails the deployment with
-// ResourceNotFound, which is the correct loud failure: the environment has no foundation yet.
+// ARM reads every unconditional `existing` resource a module uses, whichever ternary branch wins,
+// so a lookup for something only some environments have carries the same `if` as its use. A missing
+// resource in application mode fails the deployment with ResourceNotFound, which is the correct loud
+// failure: the environment has no foundation yet.
 
 resource identityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'demi-identity-${environmentName}'
@@ -537,11 +538,11 @@ resource auditDcrExisting 'Microsoft.Insights/dataCollectionRules@2023-03-11' ex
   name: 'demi-audit-dcr-${environmentName}'
 }
 
-resource foundryExisting 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
+resource foundryExisting 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = if (deployFoundry && !deployFoundation) {
   name: 'demi-foundry-${environmentName}'
 }
 
-resource intakeIdentityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+resource intakeIdentityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = if (deployDocumentIntake && !deployFoundation) {
   name: 'demi-intake-${environmentName}'
 }
 
@@ -602,7 +603,7 @@ var auditWorkspaceName = deployFoundation ? auditLogs!.outputs.workspaceName : a
 var auditWorkspaceCustomerId = deployFoundation ? auditLogs!.outputs.workspaceCustomerId : auditWorkspaceExisting.properties.customerId
 
 var foundryEndpoint = deployFoundry
-  ? (deployFoundation ? foundry!.outputs.foundryEndpoint : foundryExisting.properties.endpoint)
+  ? (deployFoundation ? foundry!.outputs.foundryEndpoint : foundryExisting!.properties.endpoint)
   : ''
 
 // Composed rather than borrowed, because the NAME is the value: each of these is built from
@@ -614,8 +615,8 @@ var foundryDeployment = deployFoundry ? foundryModelName : ''
 var searchEndpoint = deploySearch ? 'https://demi-search-${environmentName}.search.windows.net' : existingSearchEndpoint
 var budgetName = 'demi-budget-${environmentName}'
 var intakeStorageAccountName = take('demiin${environmentName}${uniqueString(resourceGroup().id)}', 24)
-var intakeIdentityId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityId : intakeIdentityExisting.id)
-var intakeIdentityClientId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityClientId : intakeIdentityExisting.properties.clientId)
+var intakeIdentityId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityId : intakeIdentityExisting!.id)
+var intakeIdentityClientId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityClientId : intakeIdentityExisting!.properties.clientId)
 
 // 1. User-assigned managed identity — the principal for EVERY data plane.
 //
