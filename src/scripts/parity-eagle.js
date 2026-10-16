@@ -9,13 +9,14 @@
  */
 
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const { fetchAllPages, unwrapSearchResponse, rateLimitWaitMs, PAGE_SIZE } = require('../seed/sources');
 const { diff } = require('./reconcile-eagle');
 const { eagleRef } = require('../helpers/parent-admit');
 const {
   PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, NATIVE_FIELDS, EAGLE_ID,
-  sameField, native, cappedFromStaff
+  sameField, native, search, cappedFromStaff
 } = require('./parity-map');
 const { ANON_MAX_PAGE_DEPTH } = require('../helpers/native-query');
 const { logger } = require('../utils/logger');
@@ -25,6 +26,10 @@ const MIN_GAP_MS = 500;
 const IDENTITIES = ['anonymous', 'staff', 'sysadmin'];
 const ID_NAMES = ['project', 'period', 'document', 'comment', 'organization', 'inspection', 'element', 'group'];
 const SAMPLE_CAP = 20;
+/** eagle-api's `MAX_LIMIT` (api/helpers/utils.js): an unpaged list route stops at this many rows. */
+const EAGLE_MAX_LIMIT = 1000;
+/** A --token-cmd token is minted again once it has this many seconds or fewer left. */
+const REMINT_MARGIN_S = 60;
 const REDIRECTS = [301, 302, 303, 307, 308];
 /** DEMI ids native filters take: placeholder -> the `--id` it comes from and the by-id read that holds it. */
 const DEMI_IDS = { demiProject: ['project', '/projects/:project'], demiPeriod: ['period', '/comment-periods/:period'] };
@@ -34,13 +39,13 @@ const CHILD_DATASETS = ['CommentPeriod', 'Document', 'Group', 'Inspection', 'Rec
 const LADDER_CHILD_DATASETS = ['CommentPeriod', 'Document'];
 
 const USAGE = `usage: node src/scripts/parity-eagle.js --eagle <eagle-api base> --demi <DEMI base>
-  [--identity anonymous|staff|sysadmin] [--token-env <VAR>] [--only <read|dataset>] [--max-pages <n>]
-  [--id <name>=<eagleId>]... [--known-ids <file>]... [--emit-ids <file>] [--report <file>]
-  [--download-sample <n>]
+  [--identity anonymous|staff|sysadmin] [--token-env <VAR> | --token-cmd '<command>']
+  [--only <read|dataset>] [--max-pages <n>] [--id <name>=<eagleId>]... [--known-ids <file>]...
+  [--emit-ids <file>] [--report <file>] [--download-sample <n>] [--max-samples <n, 0 = all>]
   --id names: ${ID_NAMES.join(', ')}`;
 
 function parseArgs(argv) {
-  const args = { identity: 'anonymous', ids: {}, knownIds: [], maxPages: Infinity, downloadSample: 0 };
+  const args = { identity: 'anonymous', ids: {}, knownIds: [], maxPages: Infinity, downloadSample: 0, maxSamples: SAMPLE_CAP };
   const count = (raw, min) => {
     const n = Number(raw);
     if (!Number.isInteger(n) || n < min) throw new Error(`a whole number of at least ${min} is needed, got ${raw}`);
@@ -58,12 +63,14 @@ function parseArgs(argv) {
       case '--demi': args.demi = value().replace(/\/+$/, ''); break;
       case '--identity': args.identity = value(); break;
       case '--token-env': args.tokenEnv = value(); break;
+      case '--token-cmd': args.tokenCmd = value(); break;
       case '--only': args.only = value(); break;
       case '--known-ids': args.knownIds.push(value()); break;
       case '--emit-ids': args.emitIds = value(); break;
       case '--report': args.report = value(); break;
       case '--max-pages': args.maxPages = count(value(), 1); break;
       case '--download-sample': args.downloadSample = count(value(), 0); break;
+      case '--max-samples': args.maxSamples = count(value(), 0) || Infinity; break;
       case '--id': {
         const m = value().match(/^([a-z]+)=([A-Za-z0-9_-]+)$/);
         if (!m || !ID_NAMES.includes(m[1])) throw new Error(`--id takes <${ID_NAMES.join('|')}>=<id>`);
@@ -81,16 +88,79 @@ function parseArgs(argv) {
     if (!/^https?:\/\//.test(args[name] || '')) throw new Error(`--${name} needs an http(s) base URL`);
   }
   if (!IDENTITIES.includes(args.identity)) throw new Error(`--identity is one of ${IDENTITIES.join(', ')}`);
-  if (args.identity === 'anonymous' && args.tokenEnv) throw new Error('anonymous runs send no token');
-  if (args.identity !== 'anonymous' && !args.tokenEnv) throw new Error(`--identity ${args.identity} needs --token-env`);
+  if (args.tokenEnv && args.tokenCmd) throw new Error('--token-env and --token-cmd are exclusive');
+  if (args.identity === 'anonymous' && (args.tokenEnv || args.tokenCmd)) throw new Error('anonymous runs send no token');
+  if (args.identity !== 'anonymous' && !args.tokenEnv && !args.tokenCmd) {
+    throw new Error(`--identity ${args.identity} needs --token-env or --token-cmd`);
+  }
   if (args.downloadSample && args.identity === 'anonymous') {
     throw new Error('--download-sample reads the protected download route: it needs a staff or sysadmin token');
   }
   return args;
 }
 
+/** The `exp` (seconds) of a JWT's payload, read without verifying; null when it has none. */
+function tokenExp(token) {
+  try {
+    const { exp } = JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'));
+    return Number.isFinite(exp) ? exp : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when a token with a readable `exp` has REMINT_MARGIN_S or less left at `nowMs`. */
+function needsRemint(token, nowMs) {
+  const exp = tokenExp(token);
+  return exp !== null && exp * 1000 - nowMs <= REMINT_MARGIN_S * 1000;
+}
+
+/** Runs the --token-cmd shell command; its trimmed stdout is the token. Output is never echoed. */
+function mintToken(command) {
+  let out;
+  try {
+    out = execFileSync('/bin/sh', ['-c', command], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  } catch (err) {
+    // No `cause`: the caught error carries the command's stdout, which may hold a token.
+    // eslint-disable-next-line preserve-caught-error
+    throw new Error(`--token-cmd failed${err.status != null ? ` with exit ${err.status}` : ''}`);
+  }
+  const token = out.trim();
+  if (!token) throw new Error('--token-cmd printed no token');
+  return token;
+}
+
+/**
+ * The bearer token: fixed from --token-env, or from --token-cmd, minted again when `exp` is near, or
+ * at each read when the token carries no readable `exp`.
+ */
+function tokenSource(args, d) {
+  if (!args.tokenCmd) {
+    const token = args.tokenEnv ? d.env[args.tokenEnv] : null;
+    if (args.tokenEnv && !token) throw new Error(`environment variable ${args.tokenEnv} is empty or unset`);
+    return { get: () => token, startRead: () => {} };
+  }
+  let token;
+  let used;
+  const mint = () => {
+    token = d.mintToken(args.tokenCmd);
+    used = false;
+  };
+  mint();
+  return {
+    get: () => {
+      if (needsRemint(token, d.now())) mint();
+      used = true;
+      return token;
+    },
+    startRead: () => {
+      if (used && tokenExp(token) === null) mint();
+    }
+  };
+}
+
 /** One API: GET only, at most one request per MIN_GAP_MS, one retry on 429 or 5xx. */
-function client(base, token, deps) {
+function client(base, tokenOf, deps) {
   let next = 0;
   const slot = async () => {
     const now = deps.now();
@@ -98,12 +168,13 @@ function client(base, token, deps) {
     next = Math.max(now, next) + MIN_GAP_MS;
     if (wait) await deps.sleep(wait);
   };
-  const headers = token ? { authorization: `Bearer ${token}` } : {};
   return {
     base,
     async get(url) {
       for (let attempt = 1; ; attempt++) {
         await slot();
+        const token = tokenOf();
+        const headers = token ? { authorization: `Bearer ${token}` } : {};
         const res = await deps.fetch(url, { method: 'GET', headers, redirect: 'manual' });
         if (attempt === 1 && (res.status === 429 || res.status >= 500)) {
           if (res.status === 429) await deps.sleep(rateLimitWaitMs(res.headers, 1));
@@ -214,11 +285,14 @@ async function tokenPages(api, spec, ids, maxPages) {
     rows.push(...arrayOf(await okJson(res, url), url));
     token = res.headers.get('x-continuation-token');
     if (!token) return { rows, truncated: false };
-    if (pages >= maxPages) return { rows, truncated: true };
+    if (pages >= maxPages) return { rows, truncated: true, truncatedReason: PAGING_STOPPED(pages) };
   }
 }
 
-/** The rows one side answers, and whether --max-pages cut the read short. */
+const PAGING_STOPPED = pages => `paging stopped after ${pages} page(s) with rows left (--max-pages or the anonymous page depth)`;
+const AT_MAX_LIMIT = `an unpaged read answered exactly ${EAGLE_MAX_LIMIT} rows, eagle-api's MAX_LIMIT: rows past it are cut`;
+
+/** The rows one side answers, and whether (`truncated`) and why (`truncatedReason`) the read was cut short. */
 async function rowsOf(api, spec, ids, maxPages) {
   if (spec.shape === 'object') {
     const url = urlOf(api.base, spec, ids);
@@ -237,7 +311,12 @@ async function rowsOf(api, spec, ids, maxPages) {
     const total = Number(res.headers.get('x-total-count'));
     return { items: arrayOf(body, url), total: res.headers.get('x-total-count') !== null && Number.isFinite(total) ? total : null };
   };
-  if (!spec.paged) return { rows: (await fetchPage(urlOf(api.base, spec, ids))).items, truncated: false };
+  if (!spec.paged) {
+    const { items } = await fetchPage(urlOf(api.base, spec, ids));
+    return items.length === EAGLE_MAX_LIMIT
+      ? { rows: items, truncated: true, truncatedReason: AT_MAX_LIMIT }
+      : { rows: items, truncated: false };
+  }
   if (spec.paging === 'token') return tokenPages(api, spec, ids, maxPages);
 
   // Native pages are 1-based and send their total only when asked; Eagle's are 0-based.
@@ -253,7 +332,7 @@ async function rowsOf(api, spec, ids, maxPages) {
   });
   const truncated = last.pages >= maxPages && last.size === PAGE_SIZE &&
     (last.total === null || last.count < last.total);
-  return { rows, truncated };
+  return truncated ? { rows, truncated, truncatedReason: PAGING_STOPPED(last.pages) } : { rows, truncated };
 }
 
 function fieldsFor(entry, identity) {
@@ -281,6 +360,7 @@ const keyOf = row => String(row.eagleId || row._id || row.id);
  */
 function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, identity), headerDiffs = []) {
   const out = { match: 0, missingInDemi: 0, extraInDemi: 0, fieldDiff: 0, unexplained: 0, classes: {}, samples: [] };
+  const sampleCap = known.sampleCap ?? SAMPLE_CAP;
   const tally = (ctx) => {
     const hit = classify({ ...ctx, identity, read: entry.read, dataset: entry.dataset,
       eaglePublicProjects: known.eaglePublicProjects, knownIds: known.ids });
@@ -289,7 +369,7 @@ function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, 
       return;
     }
     out.unexplained++;
-    if (out.samples.length < SAMPLE_CAP) {
+    if (out.samples.length < sampleCap) {
       out.samples.push({ kind: ctx.kind, id: ctx.id, ...(ctx.field ? { field: ctx.field } : {}) });
     }
   };
@@ -298,6 +378,10 @@ function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, 
   const sets = diff(demi.rows, keyOf, new Set(eagleById.keys()), row => EAGLE_ID.test(keyOf(row)));
   // A capped read sees an arbitrary slice of each side, so absence proves nothing.
   out.truncated = eagle.truncated || demi.truncated;
+  if (out.truncated) {
+    out.truncatedReason = [['eagle', eagle], ['demi', demi]].filter(([, side]) => side.truncated)
+      .map(([name, side]) => `${name}: ${side.truncatedReason}`).join('; ');
+  }
   out.extraIds = [];
   if (!out.truncated) {
     const missing = [...sets.eagleOnly, ...sets.unresolvedParent].map(id => eagleById.get(id));
@@ -330,8 +414,12 @@ function compare(entry, identity, eagle, demi, known, fields = fieldsFor(entry, 
     out.fieldDiff++;
     tally({ kind: 'fieldDiff', id: 'header', field });
   }
-  return out;
+  return withSampleCap(out, sampleCap);
 }
+
+const withSampleCap = (out, sampleCap) => ({
+  ...out, sampleCap: Number.isFinite(sampleCap) ? sampleCap : 0, samplesTruncated: out.unexplained > out.samples.length
+});
 
 /** A CSV read: rows on every shared column, and header differences under id `header`. */
 function compareCsv(entry, identity, eagle, demi, known) {
@@ -359,12 +447,12 @@ async function digest(res, url) {
 }
 
 /** The same file through Eagle's protected route and DEMI's, which may redirect to object storage. */
-async function compareDownloads(entry, ids, eagle, demi, store) {
+async function compareDownloads(entry, ids, eagle, demi, store, sampleCap) {
   const out = { sampled: ids.length, match: 0, missingInDemi: 0, extraInDemi: 0, fieldDiff: 0, unexplained: 0,
     classes: {}, samples: [] };
   const flag = (sample) => {
     out.unexplained++;
-    if (out.samples.length < SAMPLE_CAP) out.samples.push(sample);
+    if (out.samples.length < sampleCap) out.samples.push(sample);
   };
   for (const id of ids) {
     const eagleUrl = urlOf(eagle.base, entry.eagle, { document: id });
@@ -388,14 +476,14 @@ async function compareDownloads(entry, ids, eagle, demi, store) {
       flag({ kind: 'fieldDiff', id, field });
     }
   }
-  return out;
+  return withSampleCap(out, sampleCap);
 }
 
 function lineOf(read, identity, r) {
   const classes = Object.entries(r.classes).map(([k, v]) => `${k}:${v}`).join(',');
   return `[parity] ${read} identity=${identity} match=${r.match} missingInDemi=${r.missingInDemi} ` +
     `extraInDemi=${r.extraInDemi} fieldDiff=${r.fieldDiff} unexplained=${r.unexplained}` +
-    (classes ? ` known=${classes}` : '') + (r.truncated ? ' truncated' : '');
+    (classes ? ` known=${classes}` : '') + (r.truncated ? ` truncated (${r.truncatedReason})` : '');
 }
 
 // The one --emit-ids member that is not a class: candidates for a list, not a list.
@@ -442,22 +530,20 @@ async function run(argv, deps = {}) {
     error: msg => logger.error(msg),
     readFile: fs.readFileSync,
     writeFile: fs.writeFileSync,
+    mintToken,
     map: PARITY_MAP,
     ...deps
   };
   let args;
   let knownIds;
-  let token = null;
+  let tokens;
   try {
     args = parseArgs(argv);
     if (args.help) {
       d.log(USAGE);
       return 0;
     }
-    if (args.tokenEnv) {
-      token = d.env[args.tokenEnv];
-      if (!token) throw new Error(`environment variable ${args.tokenEnv} is empty or unset`);
-    }
+    tokens = tokenSource(args, d);
     knownIds = loadKnownIds(args.knownIds, d.readFile);
     for (const entry of d.map.filter(e => !e.skip)) {
       if (/^\/public\/.*download/i.test(entry.eagle.path)) {
@@ -470,10 +556,10 @@ async function run(argv, deps = {}) {
     return 1;
   }
 
-  const eagle = client(args.eagle, token, d);
-  const demi = client(args.demi, token, d);
+  const eagle = client(args.eagle, tokens.get, d);
+  const demi = client(args.demi, tokens.get, d);
   // The presigned URL DEMI redirects to carries its own signature; the bearer token never goes there.
-  const store = client(null, null, d);
+  const store = client(null, () => null, d);
   const { identity } = args;
   const results = [];
   // Anonymous native reads stop at ANON_MAX_PAGE_DEPTH rows; a read cut there reports as truncated.
@@ -563,6 +649,7 @@ async function run(argv, deps = {}) {
       continue;
     }
     try {
+      tokens.startRead();
       if (entry.pendingRoute && !await routeLive(entry.pendingRoute)) {
         record(entry, { status: 'skipped', pending: true, reason: `DEMI ${entry.pendingRoute} answers 404: its route has not shipped` });
         continue;
@@ -575,10 +662,13 @@ async function run(argv, deps = {}) {
           : await rowsOf(api, spec, ids, maxPagesFor(spec));
         return map ? { ...side, rows: map(side.rows) } : side;
       };
-      const eagleSide = await sideOf(eagle, eagleSpecFor(entry, identity), entry.mapEagle);
+      // The unpaged route stops at EAGLE_MAX_LIMIT; sysadmin search hides nothing, so an emit run pages it instead.
+      const emitting = args.emitIds && identity === 'sysadmin';
+      const viaSearch = emitting && entry.sysadminPaged;
+      const eagleSide = await sideOf(eagle, viaSearch || eagleSpecFor(entry, identity), entry.mapEagle);
       const demiSide = await sideOf(demi, entry.demi, entry.mapDemi);
       // Sysadmin sees every Eagle row, so its run lists what the staff run sees above public.
-      if (args.emitIds && identity === 'sysadmin') {
+      if (emitting) {
         for (const row of eagleSide.rows) {
           const id = keyOf(row);
           if (publicNotStaff(row.read)) ladder.add(id);
@@ -595,12 +685,14 @@ async function run(argv, deps = {}) {
       const known = {
         ids: knownIds,
         eaglePublicProjects: identity === 'anonymous' && entry.dataset === 'CommentPeriod' ? await loadEaglePublicProjects() : null,
-        // Anonymous lists hide non-public parents, so absence there proves no orphan.
-        parentStateOf: identity !== 'anonymous' && entry.dataset === 'CommentPeriod' ? orphanStateOf(await loadParentIds()) : null
+        // Anonymous lists hide non-public parents, so absence there proves no orphan. A mapped read's rows carry no project.
+        parentStateOf: identity !== 'anonymous' && CHILD_DATASETS.includes(entry.dataset) && !entry.mapEagle
+          ? orphanStateOf(await loadParentIds()) : null,
+        sampleCap: args.maxSamples
       };
       const { extraIds, ...counts } = compareRead(entry, identity, eagleSide, demiSide, known);
       if (extraIds.length) extraByRead[entry.read] = [...extraIds].sort();
-      record(entry, { status: 'compared', ...counts });
+      record(entry, { status: 'compared', ...(viaSearch ? { eagleRead: viaSearch.path } : {}), ...counts });
     } catch (err) {
       record(entry, { status: 'error', message: err.message });
     }
@@ -616,14 +708,29 @@ async function run(argv, deps = {}) {
       record(entry, { status: 'skipped', reason: 'no document paired on both sides' });
     } else {
       try {
-        record(entry, { status: 'compared', ...await compareDownloads(entry, ids, eagle, demi, store) });
+        tokens.startRead();
+        record(entry, { status: 'compared', ...await compareDownloads(entry, ids, eagle, demi, store, args.maxSamples) });
       } catch (err) {
         record(entry, { status: 'error', message: err.message });
       }
     }
   }
 
-  const failed = results.filter(r => r.status === 'error' || r.unexplained > 0).length;
+  // A child counts as ladder or capped only against its project's read[]: read the projects this run skipped.
+  let parentsFailed = false;
+  if (args.emitIds && identity === 'sysadmin' && [...childParents.values()].some(c => !projectReads.has(c.parent))) {
+    try {
+      tokens.startRead();
+      const side = await rowsOf(eagle, search('Project'), args.ids, args.maxPages);
+      for (const row of side.rows) if (!projectReads.has(keyOf(row))) projectReads.set(keyOf(row), row.read);
+      if (side.truncated) d.log(`[parity] --emit-ids parent projects truncated (${side.truncatedReason})`);
+    } catch (err) {
+      parentsFailed = true;
+      d.error(`[parity] --emit-ids parent projects error: ${err.message}`);
+    }
+  }
+
+  const failed = results.filter(r => r.status === 'error' || r.unexplained > 0).length + (parentsFailed ? 1 : 0);
   d.log(`[parity] identity=${identity} reads=${results.length} failed=${failed}`);
   if (args.report) {
     d.writeFile(args.report, JSON.stringify({ identity, eagle: args.eagle, demi: args.demi, results }, null, 2));
@@ -643,7 +750,7 @@ async function run(argv, deps = {}) {
   return failed ? 1 : 0;
 }
 
-module.exports = { parseArgs, parseCsv, run, MIN_GAP_MS };
+module.exports = { parseArgs, parseCsv, run, needsRemint, mintToken, MIN_GAP_MS, EAGLE_MAX_LIMIT, REMINT_MARGIN_S };
 
 if (require.main === module) {
   run(process.argv.slice(2)).then(code => { process.exitCode = code; }, err => {

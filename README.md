@@ -379,8 +379,12 @@ Each read in `src/scripts/parity-map.js` is sent to eagle-api and to the DEMI ki
 replaces it (`/projects`, `/documents`, `/comment-periods`, `/comments`, `/organizations`, `/lists`,
 `/users`, `/groups`, `/inspections`, `/updates`, `/notifications` and their by-id reads; never
 `/search?dataset=`), with the same identity (`anonymous`, the default, or `staff`/`sysadmin` with a
-bearer token read from the variable `--token-env` names; a token is never taken on the command
-line). Rows pair on Eagle `_id` against DEMI `eagleId` or `id`. `--id` takes `project`, `period`,
+bearer token; a token is never taken on the command line). `--token-env <VAR>` reads one fixed token
+from that variable. `--token-cmd '<shell command>'` runs the command and takes its trimmed stdout as
+the token; the run mints again before any request once the token's `exp` (read from the JWT payload,
+not verified) is 60 s or less away, and at the start of each read when the token has no `exp`.
+Keycloak test tokens live 300 s, so any run longer than that needs `--token-cmd`. Neither the token
+nor the command's output is ever printed. Rows pair on Eagle `_id` against DEMI `eagleId` or `id`. `--id` takes `project`, `period`,
 `document`, `comment`, `organization`, `inspection`, `element` and `group`; `--help` lists them.
 
 A native row has DEMI's field names, redacted for the caller. Each Eagle field is read on the DEMI
@@ -397,6 +401,13 @@ takes the DEMI id: the run reads `/projects/<--id project>` and `/comment-period
 and sends their `id` as `project` and `period`, and a parent the identity cannot read in DEMI fails
 the read. Anonymous native reads stop at 2000 rows, DEMI's anonymous page depth; a list cut there
 reports as truncated.
+
+eagle-api's unpaged list routes (`/document`, `/public/document`, `/organization`,
+`/public/organization`, `/commentperiod`, `/public/commentperiod` and the like) stop at its
+`MAX_LIMIT` of 1000 rows and say nothing. A read whose unpaged side answers exactly 1000 rows
+reports as truncated. Each truncated read has a `truncatedReason` in the report and on its line:
+which side, and whether paging stopped (`--max-pages`, the anonymous page depth) or the 1000-row
+limit cut it.
 
 Reads on `/updates` and `/notifications` wait for those routes (branch
 `feat-native-updates-notifications`). The run sends one GET to each first; a 404 skips its reads as
@@ -439,11 +450,15 @@ of class name to id list; the flag may repeat, and lists of one class merge. Tho
 never mirrored, DEMI takedowns and Eagle hard deletes, plus two that only explain a row extra in
 DEMI and one that only explains a row missing from it:
 
-- `seeded-from-prod`: a row from the 2026-08-25 prod seed that Eagle test does not hold.
+- `seeded-from-prod`: a row from the 2026-08-25 prod seed that Eagle test does not hold. This is a
+  hand-built list; no run emits it. For documents, take the project's DEMI rows that have no
+  `eaglePushedAt` and that Eagle's sysadmin `GET /document/:id` answers with `[]`.
 - `ladder-above-public` (staff runs only): an Eagle row whose `read[]` has `public` but not
-  `staff`, or a comment period or document under such a project. Eagle matches `read[]` tokens to
-  roles literally, so its staff routes hide these rows. DEMI ranks staff above public by design, so
-  DEMI staff sees them.
+  `staff`, or a comment period or document under such a project. Eagle's staff `/document` (and the
+  other staff REST routes) match `read[]` tokens to the caller's roles literally, and staff has no
+  `public` role, so they hide these rows. Eagle's own search adds `public` to an authenticated
+  caller's roles and shows them. DEMI ranks staff above public by design, so DEMI staff sees them,
+  like Eagle search.
 - `capped-under-parent` (staff runs only): a comment period, document, group, inspection or recent
   activity whose own `read[]` admits staff while its project's has no `staff`, `idir` or `public`
   token. DEMI caps a child's read under its parent's (`capRead`), so DEMI staff cannot see it, while
@@ -452,16 +467,44 @@ DEMI and one that only explains a row missing from it:
 
 `--emit-ids <file>` writes ids only, never values: `extraInDemi`, each read's extra DEMI ids, and on
 a sysadmin run `ladder-above-public` and `capped-under-parent`, the Eagle ids those rules cover. A
-child counts under either only when the same run read its project. The file is a valid
-`--known-ids` file (`extraInDemi` is skipped), so a sysadmin run's file feeds the staff run:
+child is placed against its project's `read[]`. When the run did not read a child's project itself
+(for example under `--only Group`), it reads Eagle's `/search?dataset=Project` once at the end to
+get it. A sysadmin emit run reads `document-list` through Eagle's paged
+`/search?dataset=Document&project=<id>` instead of `/document`, which stops at 1000 rows; the
+report marks such a read with `eagleRead: "/search"`. Sysadmin search hides nothing, so the swap
+changes no row set. The file is a valid `--known-ids` file (`extraInDemi` is skipped), so a sysadmin
+run's file feeds the staff run.
+
+Staff parity on TEST, one kind at a time, with tokens minted by the run. `--token-cmd` takes any
+shell command that prints a fresh Keycloak bearer token for the identity to stdout (for example a
+`curl` to the realm's token endpoint with the `eagle-admin-console` client and a password grant):
 
 ```bash
-node src/scripts/parity-eagle.js ... --identity sysadmin --token-env ADMIN_TOKEN --emit-ids sysadmin-ids.json
-node src/scripts/parity-eagle.js ... --identity staff --token-env STAFF_TOKEN \
-  --known-ids known.json --known-ids sysadmin-ids.json
+EAGLE=https://eagle-test.apps.silver.devops.gov.bc.ca/api
+DEMI=https://demi-apim-test.azure-api.net/api
+P=588511a0aaecd9001b82316d   # Eagle project id for the document reads
+ADMIN_CMD='mint-token sysadmin'
+STAFF_CMD='mint-token staff'
+run() { node src/scripts/parity-eagle.js --eagle "$EAGLE" --demi "$DEMI" "$@"; }
+
+# 1. Sysadmin, one ids file per kind.
+run --identity sysadmin --token-cmd "$ADMIN_CMD" --only Group --emit-ids ids-group.json
+run --identity sysadmin --token-cmd "$ADMIN_CMD" --only Document --id project=$P --max-pages 30 \
+  --emit-ids ids-document.json
+run --identity sysadmin --token-cmd "$ADMIN_CMD" --only RecentActivity --emit-ids ids-recentactivity.json
+
+# 2. Staff, per kind, with every ids file plus the hand-built seeded-from-prod list.
+KNOWN="--known-ids ids-group.json --known-ids ids-document.json --known-ids ids-recentactivity.json \
+  --known-ids seeded-from-prod.json"
+run --identity staff --token-cmd "$STAFF_CMD" --only Group $KNOWN --report staff-group.json
+run --identity staff --token-cmd "$STAFF_CMD" --only Document --id project=$P --max-pages 30 $KNOWN \
+  --report staff-document.json
+run --identity staff --token-cmd "$STAFF_CMD" --only RecentActivity $KNOWN --report staff-recentactivity.json
 ```
 
-Build the `seeded-from-prod` list from `extraInDemi` ids checked against the prod seed.
+`--max-pages 30` on the document runs keeps the global `search-Document` read short (it reports as
+truncated and compares fields only) while the project's document list, about 2100 rows, is read
+whole. Leave `--max-pages` off the other runs: a cut parent list turns the orphan check off.
 
 The run exits 1
 when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI target yet print
@@ -469,7 +512,9 @@ when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI
 one read, and `--only <dataset>` (`Project`, `CommentPeriod`, ...) every read of that kind, so its
 exit code is the parity of one kind; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
 extra rows cannot be told from a partial slice. The `--report` file lists ids and field names of
-unexplained differences, never values.
+unexplained differences, never values. It keeps 20 such samples per read; `--max-samples <n>`
+changes that, and `--max-samples 0` keeps all. Each read records `sampleCap` (0 for all) and
+`samplesTruncated`, true when it had more unexplained differences than samples.
 
 Values are compared after trimming strings; an empty string, an empty list and an absent field all count as null.
 Comment period `isVetted` counts the strings `'true'` and `'false'` as booleans, and `commentIdCount`
@@ -490,8 +535,8 @@ These classes explain differences that come from how DEMI builds its rows:
   off.
 - `display-name-from-file-name`: a document's Eagle `displayName` is empty and DEMI's equals the
   Eagle `documentFileName`, the fallback the seed writes (`src/seed/transform.js`).
-- `orphan-parent-missing-in-eagle`: on staff and sysadmin runs, a comment period is missing in DEMI
-  and its `project` ref is empty, malformed, or in none of Eagle's `/project` and
+- `orphan-parent-missing-in-eagle`: on staff and sysadmin runs, a comment period, document, group,
+  inspection or recent activity is missing in DEMI and its `project` ref is empty, malformed, or in none of Eagle's `/project` and
   `/projectNotification` lists and DEMI's `/projects` and `/notifications` lists. The lists are read
   once per run; a `--max-pages` cut, or `/notifications` answering 404, turns the list check off.
 

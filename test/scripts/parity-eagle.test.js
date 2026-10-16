@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { run, parseCsv, MIN_GAP_MS } = require('../../src/scripts/parity-eagle');
+const { run, parseCsv, needsRemint, mintToken, MIN_GAP_MS, EAGLE_MAX_LIMIT } = require('../../src/scripts/parity-eagle');
 const { PARITY_MAP, classify } = require('../../src/scripts/parity-map');
 const { CONTROL_PARAMS } = require('../../src/helpers/native-query');
 
@@ -288,7 +288,7 @@ test('--max-pages reads that many pages per side and reports the read as truncat
   const h = harness((host, url) => pageOf(host === 'eagle.test' ? ids : [...ids].reverse(), url));
   await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public', '--max-pages', '1'], h.deps);
   assert.strictEqual(h.calls.length, 2);
-  assert.match(h.out[0], /missingInDemi=0 extraInDemi=0 .* truncated$/);
+  assert.match(h.out[0], /missingInDemi=0 extraInDemi=0 .* truncated \(eagle: paging stopped after 1 page/);
 });
 
 test('a quoted CSV field keeps its comma', () => {
@@ -1022,9 +1022,11 @@ const groupEmit = async (rows = groupRows, reads = ['search-Project', 'search-Gr
     '--emit-ids', 'ids.json'], { ...h.deps, map });
   return h.written[0];
 };
-// DEMI holds none of the groups, as a staff caller sees it.
+// DEMI holds none of the groups, as a staff caller sees it; Eagle lists both projects.
 const missingGroupsRun = async (identity, emitted) => {
-  const h = harness(searchSides({ eagle: groupRows.Group, demi: [] }),
+  const sides = searchSides({ eagle: groupRows.Group, demi: [] });
+  const h = harness((host, url) => (host === 'eagle.test' && url.pathname === '/api/project'
+    ? json(facet(groupRows.Project)) : sides(host, url)),
     { env: { PARITY_TOKEN: TOKEN }, files: { 'ids.json': emitted } });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', identity, '--token-env', 'PARITY_TOKEN',
     '--only', 'search-Group', '--known-ids', 'ids.json'], h.deps);
@@ -1037,9 +1039,12 @@ test('a sysadmin --emit-ids run lists a staff group under a project with no ladd
   assert.deepStrictEqual(emitted['ladder-above-public'], []);
 });
 
-test('a sysadmin --emit-ids run that did not read the projects lists no group as capped-under-parent', async () => {
-  const emitted = JSON.parse(await groupEmit(groupRows, ['search-Group']));
-  assert.deepStrictEqual(emitted['capped-under-parent'], []);
+test('a sysadmin --emit-ids run under --only Group reads the projects itself and lists the capped groups', async () => {
+  const h = harness(eagleByDataset(groupRows), { env: { PARITY_TOKEN: TOKEN } });
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'sysadmin', '--token-env', 'PARITY_TOKEN',
+    '--only', 'Group', '--emit-ids', 'ids.json'], h.deps);
+  assert.ok(h.calls.some(c => c.url.pathname === '/api/search' && c.url.searchParams.get('dataset') === 'Project'));
+  assert.deepStrictEqual(JSON.parse(h.written[0])['capped-under-parent'], CAPPED_GROUPS);
 });
 
 test('a group under a public-only project stays out of ladder-above-public: only periods and documents follow their project', async () => {
@@ -1207,7 +1212,8 @@ test('a DEMI list paged by continuation token is read token by token to the end'
   const { code, line, calls } = await tokenRun();
   assert.strictEqual(code, 0);
   assert.match(line, /match=2 missingInDemi=0 extraInDemi=0/);
-  assert.deepStrictEqual(calls, ['/api/inspections?pageSize=100', '/api/inspections?pageSize=100&continuationToken=t1']);
+  assert.deepStrictEqual(calls.filter(u => u.startsWith('/api/inspections')),
+    ['/api/inspections?pageSize=100', '/api/inspections?pageSize=100&continuationToken=t1']);
 });
 
 /** One document on each side; DEMI answers its native list by page. Returns the DEMI `/documents` calls. */
@@ -1248,7 +1254,7 @@ test('featured reads are not pending', async () => {
 
 test('a --max-pages cut with a continuation token left reports the read as truncated, not as missing rows', async () => {
   const { line } = await tokenRun(['--max-pages', '1']);
-  assert.match(line, /missingInDemi=0 extraInDemi=0 .* truncated$/);
+  assert.match(line, /missingInDemi=0 extraInDemi=0 .* truncated \(demi: paging stopped after 1 page/);
 });
 
 test('an anonymous native list stops at the anonymous page depth and is reported truncated, not refused', async () => {
@@ -1259,7 +1265,169 @@ test('an anonymous native list stops at the anonymous page depth and is reported
     : nativeRows(ids.map(id => ({ ...orgRow(id), id, eagleId: id })), url)));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Organization-public'], h.deps);
   assert.strictEqual(code, 0);
-  assert.match(h.out[0], / truncated$/);
+  assert.match(h.out[0], / truncated \(demi: paging stopped after 20 page/);
   const pages = demiCalls(h).map(u => Number(new URL(u, DEMI).searchParams.get('page')));
   assert.strictEqual(Math.max(...pages), 20);
+});
+
+/**
+ * Staff or sysadmin `document-list` for project A. Eagle `/document` answers `listed` rows, its
+ * project search `searched` (paged), DEMI its native list `demi`; Eagle and DEMI both list project A.
+ */
+const documentListRun = async ({ identity = 'staff', listed = [], searched = [], demi = [], args = [] } = {}) => {
+  const h = harness((host, url) => {
+    if (host === 'demi.test') return demiParents(url) || nativeRows(url.pathname === '/api/documents' ? demi : [], url);
+    if (url.pathname === '/api/document') return json(listed);
+    if (url.pathname === '/api/project') return json(facet([{ _id: A }]));
+    if (url.pathname === '/api/search') return eaglePages(searched, url);
+    return json([]);
+  }, { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', identity, '--token-env', 'PARITY_TOKEN',
+    '--only', 'document-list', '--id', `project=${A}`, '--report', 'r.json', ...args], h.deps);
+  return { code, h, line: h.out.find(l => /document-list identity/.test(l)), result: JSON.parse(h.written[0]).results[0] };
+};
+const eagleDocs = (n, read = ['staff', 'sysadmin']) => hexIds(n).map(id => ({ _id: id, project: A, read }));
+
+test('an unpaged Eagle list that answers exactly MAX_LIMIT rows is truncated, with the reason, not missing rows', async () => {
+  const { code, line, result } = await documentListRun({ listed: eagleDocs(EAGLE_MAX_LIMIT), demi: [docRow(A)] });
+  assert.strictEqual(code, 0);
+  assert.match(line, /missingInDemi=0 extraInDemi=0 .* truncated \(eagle: an unpaged read answered exactly 1000 rows/);
+  assert.strictEqual(result.truncated, true);
+  assert.match(result.truncatedReason, /^eagle: .*MAX_LIMIT/);
+});
+
+test('an unpaged Eagle list one row under MAX_LIMIT is whole, so its missing rows count', async () => {
+  const { code, result } = await documentListRun({ listed: eagleDocs(EAGLE_MAX_LIMIT - 1), demi: [] });
+  assert.strictEqual(code, 1);
+  assert.strictEqual(result.truncated, false);
+  assert.strictEqual(result.missingInDemi, EAGLE_MAX_LIMIT - 1);
+});
+
+test('a sysadmin --emit-ids run pages the document list through project search and lists ladder ids past 1000', async () => {
+  const searched = eagleDocs(1100, ['public', 'sysadmin']);
+  const { h, result } = await documentListRun({ identity: 'sysadmin', listed: searched.slice(0, EAGLE_MAX_LIMIT), searched,
+    demi: searched.map(row => docRow(row._id)), args: ['--emit-ids', 'ids.json'] });
+  assert.ok(!eagleCall(h, '/document'), 'the capped /document route is not read');
+  assert.ok(h.calls.some(c => c.url.pathname === '/api/search' && c.url.searchParams.get('project') === A));
+  assert.strictEqual(result.eagleRead, '/search');
+  assert.strictEqual(result.truncated, false);
+  assert.strictEqual(JSON.parse(h.written[1])['ladder-above-public'].length, 1100);
+});
+
+test('a staff document list still reads the /document route, not project search', async () => {
+  const { h, result } = await documentListRun({ listed: eagleDocs(1), demi: [docRow(hexIds(1)[0])] });
+  assert.ok(eagleCall(h, '/document'));
+  assert.strictEqual(result.eagleRead, undefined);
+});
+
+// TEST rows: one with no project, one under 5b63321e..., which neither side holds, one under a held project.
+const RA_HELD_PROJECT = '58851197aaecd9001b8227cc';
+const raRun = async () => {
+  const update = (id, projectId) => ({ _id: id, project: projectId, headline: 'Update', active: true, status: 'draft' });
+  const updates = [update('59e12478de4c6b001968ae2a', null), update('5b6b5dacd496410024db1f3a', '5b63321e2400e50024428add'),
+    update('59dfd7ef301ca100198e7f9f', RA_HELD_PROJECT)];
+  const h = harness((host, url) => {
+    if (host === 'demi.test') return nativeRows([], url);
+    if (url.pathname === '/api/project') return json(facet([{ _id: RA_HELD_PROJECT }]));
+    return json(url.searchParams.get('dataset') === 'RecentActivity' ? searchBody(updates) : []);
+  }, { env: { PARITY_TOKEN: TOKEN } });
+  const code = await run([...staff, '--only', 'search-RecentActivity'], h.deps);
+  return { code, line: h.out.find(l => /search-RecentActivity identity/.test(l)) };
+};
+
+test('a missing recent activity with no project, or a project no side holds, is an orphan; one under a held project is not', async () => {
+  const { code, line } = await raRun();
+  assert.strictEqual(code, 1);
+  assert.match(line, /missingInDemi=3 .*unexplained=1 known=orphan-parent-missing-in-eagle:2/);
+});
+
+const jwt = exp => ['e30', Buffer.from(JSON.stringify({ exp })).toString('base64url'), 'sig'].join('.');
+
+test('a token is minted again once it has REMINT_MARGIN_S seconds or fewer left, never before', () => {
+  assert.strictEqual(needsRemint(jwt(1000), 1000 * 1000 - 61 * 1000), false);
+  assert.strictEqual(needsRemint(jwt(1000), 1000 * 1000 - 60 * 1000), true);
+  assert.strictEqual(needsRemint(jwt(1000), 2000 * 1000), true);
+});
+
+test('a token with no readable exp is never minted again on the clock', () => {
+  assert.strictEqual(needsRemint('opaque-token', 0), false);
+  assert.strictEqual(needsRemint(['e30', Buffer.from('{}').toString('base64url'), 'sig'].join('.'), 0), false);
+});
+
+/** Staff `--only <only>` with --token-cmd; `minted` are handed out in order. */
+const tokenCmdRun = async (minted, only = 'search-Project') => {
+  const mints = [];
+  // Two Eagle pages, so the second Eagle request waits MIN_GAP_MS on the fake clock.
+  const ids = hexIds(150);
+  const h = harness((host, url) => (host === 'eagle.test'
+    ? eaglePages(ids.map(id => project(id)), url) : nativeRows(ids.map(id => nativeProject(id)), url)));
+  const deps = { ...h.deps, mintToken: (cmd) => { mints.push(cmd); return minted[mints.length - 1]; } };
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-cmd', 'mint-staff',
+    '--only', only, '--report', 'r.json'], deps);
+  return { code, mints, h, bearers: h.calls.map(c => c.headers.authorization) };
+};
+
+test('--token-cmd mints a fresh token mid-read once the current one nears exp, and never prints either', async () => {
+  // Eagle's second page goes out at 0.5 s on the fake clock, when the first token has 59.9 s left.
+  const minted = [jwt(60.4), jwt(10000)];
+  const { code, mints, h, bearers } = await tokenCmdRun(minted);
+  assert.strictEqual(code, 0);
+  assert.deepStrictEqual(mints, ['mint-staff', 'mint-staff']);
+  assert.strictEqual(bearers[0], `Bearer ${minted[0]}`);
+  assert.deepStrictEqual([...new Set(bearers.slice(1))], [`Bearer ${minted[1]}`]);
+  assert.ok(minted.every(t => !h.out.join('\n').includes(t) && !h.written[0].includes(t)));
+});
+
+test('--token-cmd with a token that carries no exp mints again at each read', async () => {
+  const { mints, bearers } = await tokenCmdRun(['opaque-1', 'opaque-2', 'opaque-3'], 'Project');
+  // Project reads run here: project-list and search-Project; the by-id read needs --id.
+  assert.strictEqual(mints.length, 2);
+  assert.deepStrictEqual([...new Set(bearers)], ['Bearer opaque-1', 'Bearer opaque-2']);
+});
+
+test('--token-cmd that fails stops the run before any request', async () => {
+  const h = harness(() => json([]));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--identity', 'staff', '--token-cmd', 'mint'],
+    { ...h.deps, mintToken: () => { throw new Error('--token-cmd failed with exit 1'); } });
+  assert.strictEqual(code, 1);
+  assert.strictEqual(h.calls.length, 0);
+  assert.match(h.out[0], /--token-cmd failed with exit 1/);
+});
+
+test('--token-env and --token-cmd together are refused', async () => {
+  const h = harness(() => json([]));
+  const code = await run([...staff, '--token-cmd', 'mint'], h.deps);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], /exclusive/);
+});
+
+test("the --token-cmd shell command's trimmed stdout is the token", () => {
+  assert.strictEqual(mintToken("printf '  tok-abc \\n'"), 'tok-abc');
+});
+
+test('a failing --token-cmd reports its exit code, never what it printed', () => {
+  assert.throws(() => mintToken('printf leaked-value; exit 3'), (err) => /exit 3/.test(err.message) && !/leaked-value/.test(err.message));
+});
+
+/** Staff search-Project where Eagle holds `n` projects DEMI lacks, each unexplained. */
+const samplesRun = async (n, args = []) => {
+  const h = harness(searchSides({ eagle: hexIds(n).map(id => project(id)), demi: [] }), { env: { PARITY_TOKEN: TOKEN } });
+  await run([...staff, '--only', 'search-Project', '--report', 'r.json', ...args], h.deps);
+  return JSON.parse(h.written[0]).results[0];
+};
+
+test('the report keeps 20 samples by default and says it cut the rest', async () => {
+  const result = await samplesRun(25);
+  assert.strictEqual(result.unexplained, 25);
+  assert.strictEqual(result.samples.length, 20);
+  assert.strictEqual(result.sampleCap, 20);
+  assert.strictEqual(result.samplesTruncated, true);
+});
+
+test('--max-samples 0 keeps every sample, and --max-samples n keeps n', async () => {
+  const all = await samplesRun(25, ['--max-samples', '0']);
+  assert.strictEqual(all.samples.length, 25);
+  assert.strictEqual(all.sampleCap, 0);
+  assert.strictEqual(all.samplesTruncated, false);
+  assert.strictEqual((await samplesRun(25, ['--max-samples', '3'])).samples.length, 3);
 });

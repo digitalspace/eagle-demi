@@ -329,8 +329,10 @@ const REST_READS = [
     eagle: rows('/public/document/:document', undefined, FIELDED), demi: one('/documents/:document') },
   { read: 'document-download-public', plan: '17-18',
     skip: 'never called: the public download route increments publicHitCount' },
+  // `sysadminPaged`: the paged source a sysadmin --emit-ids run reads instead, since /document stops at 1000 rows.
   { read: 'document-list', plan: '19', identities: STAFF, dataset: 'Document',
     eagle: rows('/document', { isDeleted: 'false', project: ':project' }, FIELDED),
+    sysadminPaged: search('Document', { project: ':project' }),
     demi: native('/documents', { project: ':demiProject' }) },
   { read: 'document', plan: '20', identities: STAFF, dataset: 'Document', fields: DOCUMENT_ONE_FIELDS,
     eagle: rows('/document/:document', undefined, FIELDED), demi: one('/documents/:document') },
@@ -430,5 +432,5 @@ const PARITY_MAP = [...REST_READS, ...SEARCH_READS];
 
 module.exports = {
   PARITY_MAP, KNOWN_DIFFERENCES, classify, FIELDS, STAFF_FIELDS, PUBLIC_FIELDS, PREDICATE_FIELDS, NATIVE_FIELDS,
-  EAGLE_ID, same, sameField, native, cappedFromStaff
+  EAGLE_ID, same, sameField, native, search, cappedFromStaff
 };
