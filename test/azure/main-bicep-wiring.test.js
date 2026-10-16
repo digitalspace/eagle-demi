@@ -95,6 +95,9 @@ const WIRED = [
     'the API module call — without it DEMI_PDF_TITLE_WORKER_PRINCIPALS is always empty'],
   ['ssoAudience', /^\s+ssoAudience: ssoAudience$/m,
     'the API module call — without it SSO_AUDIENCE cannot be set once the aud claim is measured'],
+  ['syncProjectsSchedule', /^\s+syncProjectsSchedule: syncProjectsSchedule$/m,
+    'the API module call — without it SYNC_PROJECTS_SCHEDULE is empty, no timer is registered and ' +
+    'Track project edits wait for the nightly team sync'],
   ['syncTeamsSchedule', /^\s+syncTeamsSchedule: syncTeamsSchedule$/m,
     'the API module call — without it SYNC_TEAMS_SCHEDULE is empty, no timer is registered and the ' +
     'nightly Track team sync never fires'],
@@ -337,17 +340,29 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// The Track team sync's four plain settings. Every one is a whole-collection-PUT app setting, so a
+// The Track sync's five plain settings. Every one is a whole-collection-PUT app setting, so a
 // param file that omits one takes main.bicep's empty default and the live value is deleted on the
 // next deploy — `az bicep build` says nothing, because an empty default compiles.
 for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-  for (const name of ['trackApiBase', 'trackClientId', 'roleSyncClientId', 'syncTeamsSchedule']) {
+  for (const name of ['trackApiBase', 'trackClientId', 'roleSyncClientId', 'syncTeamsSchedule',
+    'syncProjectsSchedule']) {
     test(`the ${envName} param file declares ${name}`, () => {
       assert.match(params, new RegExp(`^param ${name} = '[^']*'$`, 'm'),
         `${envName} must state ${name} explicitly, empty or otherwise`);
     });
   }
 }
+
+// Drop either setting and bicep only warns `no-unused-params`; the host then registers no timer.
+test('the API app carries both Track sync schedules from their params', () => {
+  for (const [settingName, paramName] of [
+    ['SYNC_TEAMS_SCHEDULE', 'syncTeamsSchedule'],
+    ['SYNC_PROJECTS_SCHEDULE', 'syncProjectsSchedule'],
+  ]) {
+    assert.match(API_MODULE, new RegExp(`name: '${settingName}'\\n\\s+value: ${paramName}$`, 'm'),
+      `${settingName} must take ${paramName} as is, or that timer never registers`);
+  }
+});
 
 // The four plain eagle-analytics settings. Empty is the correct value until that estate exists, but
 // the LINE has to be there: these are whole-collection-PUT app settings, so a param file that stops
