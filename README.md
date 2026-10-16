@@ -577,8 +577,17 @@ Track reports closed, writing to the `credentials` container: a grant that names
 well loses only the closed id, and a grant left with no project is revoked. The listing is read once
 per run and matched to the closed set in memory, plus one further read per credential actually
 narrowed or revoked, so the cost does not grow with the number of closed projects that have no live
-grant. `--live` refuses until the P3-2 team-grant model lands. CLI:
-`yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
+grant. CLI: `yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
+
+### Track project poll
+
+Set `SYNC_PROJECTS_SCHEDULE` to an NCRONTAB expression (test and prod use `0 */5 * * * *`, every five
+minutes) and the API app registers a `syncTrackProjects` timer; unset, no timer is registered. It
+reads `GET /api/v1/projects` from Track with the same client credentials as the team sync and applies
+changed rows to the DEMI project rows, so a Track edit reaches DEMI within five minutes. The poll does
+not heal links or mint short codes for Eagle-only projects, and a run with no change writes nothing;
+the nightly `syncTrackTeams` run keeps those jobs and the team sync. One summary log line:
+`[track-projects-poll] mode=… trackProjects= created= updated= relinked= skippedApiRows= orphaned= shortLinks= failures=`.
 
 ### Update notifications
 

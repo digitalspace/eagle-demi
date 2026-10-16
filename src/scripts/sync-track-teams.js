@@ -15,10 +15,6 @@
  * SYNC_TEAMS_SCHEDULE app setting), reading Track over its HTTPS API — no CronJob, no database
  * credential.
  *
- * ORDERING: a live run needs P3-2's team-grant model, because until it lands a `project:<id>` role
- * NARROWS its holder to that project (`access-sql.projectScopeFor`) instead of granting a team —
- * so `run({ live: true })` refuses while `access-sql` exports no `teamsFor`.
- *
  * THE SYNC OWNS ONLY THE ROLES TRACK NAMES. The feed lists every non-deleted Track project, so
  * `project:<id>` for an id it lists is this script's to create, grant and revoke; any other role
  * is somebody else's. That covers `staff` and `demi-admin`, granted by hand, and also
@@ -399,13 +395,7 @@ function summaryLine(s) {
  * @param {object} [opts] {live} write, {deps} the same test seam `sync` takes
  */
 async function run({ live = false, deps } = {}) {
-  // See ORDERING at the top: `teamsFor` is the marker that a `project:<id>` role grants a team
-  // rather than narrowing its holder. Required here so the check reads the module as loaded now.
-  const refused = live && typeof require('../helpers/access-sql').teamsFor !== 'function';
-  if (refused) logger.error('[track-teams] live sync refused: P3-2 team-grant model not present');
-
-  const summary = await sync(live && !refused ? ['--live'] : [], deps);
-  if (refused) summary.mode = 'refused';
+  const summary = await sync(live ? ['--live'] : [], deps);
   logger.info(summaryLine(summary));
   return summary;
 }
