@@ -475,15 +475,16 @@ report marks such a read with `eagleRead: "/search"`. Sysadmin search hides noth
 changes no row set. The file is a valid `--known-ids` file (`extraInDemi` is skipped), so a sysadmin
 run's file feeds the staff run.
 
-Staff parity on TEST, one kind at a time, with tokens minted by the run (`kc-mint-token.sh` prints
-only the token; `--claims` prints its roles instead):
+Staff parity on TEST, one kind at a time, with tokens minted by the run. `--token-cmd` takes any
+shell command that prints a fresh Keycloak bearer token for the identity to stdout (for example a
+`curl` to the realm's token endpoint with the `eagle-admin-console` client and a password grant):
 
 ```bash
 EAGLE=https://eagle-test.apps.silver.devops.gov.bc.ca/api
 DEMI=https://demi-apim-test.azure-api.net/api
 P=588511a0aaecd9001b82316d   # Eagle project id for the document reads
-ADMIN_CMD='~/scripts/kc-mint-token.sh ~/.config/eagle-agent/test-admin.env'
-STAFF_CMD='~/scripts/kc-mint-token.sh ~/.config/eagle-agent/test-staff.env'
+ADMIN_CMD='mint-token sysadmin'
+STAFF_CMD='mint-token staff'
 run() { node src/scripts/parity-eagle.js --eagle "$EAGLE" --demi "$DEMI" "$@"; }
 
 # 1. Sysadmin, one ids file per kind.
