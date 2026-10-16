@@ -104,25 +104,28 @@ npm run db:seed-public-reads -- --live --only lists
 The state file will already hold a completed `lists` entry from the first backfill. `--only lists`
 runs it anyway.
 
-## Legacy Updates with no read
+## Legacy Updates with no or empty read
 
 Many old Eagle `RecentActivity` rows have no `read` field, no `status`, and `active: true`.
 eagle-api's public search shows them to anonymous callers: its `$redact` keeps a row whose `read`
 is missing or null. On prod (2026-10-02), the rows for project `58851197aaecd9001b8227cc` came back
 to an anonymous caller with no `read` field.
 
-A row with `read: []` is different. The same `$redact` prunes it: an empty array counts as true in
-`$cond` but fails `$anyElementTrue`. `/public/recentActivity` prunes both shapes.
+A row with `read: []` is different in that search. The same `$redact` prunes it: an empty array
+counts as true in `$cond` but fails `$anyElementTrue`. `/public/recentActivity` prunes both shapes.
+DEMI cannot keep the two apart, though. eagle-api's push sends a missing `read` as `[]`, because
+Mongoose fills a missing array when it loads the row. An eagle-api write that sets a status also
+sets a non-empty `read` (`updateRules.applyStatus`), so a row with `[]` and a status is a legacy row.
 
-The Update mirror gives a row with a missing `read` its parent's `read[]`, so it is public when its
-project (or `ProjectNotification`) is public and private when it is not. The rule is
+The Update mirror gives a row with no `read` or an empty one its parent's `read[]`, so it is public
+when its project (or `ProjectNotification`) is public and private when it is not. The rule is
 `helpers/update-parent.js:updateRead`. The push, this backfill and the project cascade all use it.
-A row with no `read` and no `status` takes it only when `active` is `true`. A row with no `read`
-and a `status` takes it whatever `active` says, unless the status is `archived`. Eagle staff do not
-see archived rows, so those stay `[]`. A row with any `read` (`[]` included) is mirrored as before:
-its own read minus compliance, capped by the parent, so `read: []` stays `[]` and unpublished.
-`sources.eagle.read` stores `null` when Eagle sent no read and `[]` when it sent an empty one, so the
-cascade applies the same rule when the project's visibility changes.
+A row with no or empty `read` and no `status` takes it only when `active` is `true`. A row with no
+or empty `read` and a `status` takes it whatever `active` says, unless the status is `archived`.
+Eagle staff do not see archived rows, so those stay `[]`. A row with a non-empty `read` is mirrored
+as before: its own read minus compliance, capped by the parent.
+`sources.eagle.read` stores `null` when Eagle sent no read or an empty one, so the cascade applies
+the same rule when the project's visibility changes.
 
 Rows written before this rule are stored as unpublished, with `sources.eagle.read: []` for both
 shapes. A plain rerun of the stage rewrites them.
@@ -141,10 +144,11 @@ its etag race to a live push shows up under `dropped`. That push already wrote i
 The backfill takes the notification claim on every live, published row it writes (see the
 `mirrorUpdate` comment in the script), so these old updates send no email.
 
-### Drafts with no read
+### Drafts with no or empty read
 
 eagle-api's migration `20260923000000-updates-status-backfill.js` gave every legacy row a status.
-A row with no `read` became `draft`. Before 2026-10-16 the mirror stored those drafts as `[]`, so
+A row with no `read` became `draft`. Its push carried `read: []`. Before 2026-10-16 the mirror
+stored those drafts as `[]`, so
 only sysadmin could see them, while Eagle shows them to staff. The publish gate still hides a
 draft from idir and public callers, whatever its `read[]` says.
 

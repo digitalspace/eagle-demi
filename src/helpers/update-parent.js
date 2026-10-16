@@ -82,16 +82,19 @@ function readUnder(eagleRead, parent) {
   return parent ? capIfLower(own, ceilingRead(parent)) : own;
 }
 
-/** Eagle sent no `read` at all: absent or null. `[]` is a read, and so is any non-list. */
+/**
+ * Eagle sent no `read` or an empty one: absent, null or `[]`. eagle-api's push turns a missing `read`
+ * into `[]` (Mongoose fills the array), so the two cannot be told apart. Any non-list is a read.
+ */
 function hasNoRead(doc) {
-  return doc.read === undefined || doc.read === null;
+  return doc.read === undefined || doc.read === null || (Array.isArray(doc.read) && doc.read.length === 0);
 }
 
 const ARCHIVED = 'archived';
 
 /**
- * Does an Update with no `read` (missing or null) take its parent's? eagle-api's search `$redact`
- * keeps such a row and prunes `read: []`. With a status: yes, except `archived`, which Eagle hides
+ * Does an Update with no `read` or an empty one (`hasNoRead`) take its parent's? eagle-api's search
+ * `$redact` keeps a row with a missing read. With a status: yes, except `archived`, which Eagle hides
  * from staff (`updateRules.visibilityAggr`); the publish gate still keeps drafts from idir and
  * public. With no status (pre-field rows): only when `active: true`.
  */
@@ -102,7 +105,7 @@ function inheritsParentRead(doc) {
 }
 
 /**
- * The `read[]` DEMI stores for an Eagle Update under `parent`: a row with no read that
+ * The `read[]` DEMI stores for an Eagle Update under `parent`: a row with no or empty read that
  * `inheritsParentRead` admits takes the parent's ceiling as is; every other row is `readUnder`. No
  * parent, nothing to inherit.
  *

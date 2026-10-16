@@ -35,7 +35,7 @@ async function setAclForProject(projectEagleId, projectRead) {
   if (await notifications.readForWrite(String(projectEagleId))) return NOTHING;
 
   const { items } = await cosmos.query(updates.CONTAINER, {
-    // `status` and `active` too: a row with no read (`update-parent:inheritsParentRead`) follows the project.
+    // `status` and `active` too: a row with no or empty read (`update-parent:inheritsParentRead`) follows the project.
     query: 'SELECT c.id, c.read, c.sealedAt, c.sources.eagle.read AS eagleRead, ' +
       'c.sources.eagle.status AS eagleStatus, c.sources.eagle.active AS eagleActive ' +
       'FROM c WHERE c.projectId = @projectId',

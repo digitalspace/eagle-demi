@@ -378,6 +378,24 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.strictEqual(readOf(writes, 'up-a'), undefined, 'an archived row stays []');
   });
 
+  // eagle-api's push sends a missing read as `[]`: the legacy drafts arrive that way.
+  await t.test('an Update pushed with read [] the old rule left at [] takes its parent\'s read', async (t) => {
+    const row = { projectId: 'e-pub', read: [], eagleRead: [], eagleActive: true, hasEagleSource: true, _etag: 'x' };
+    const writes = fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      updates: [{ ...row, id: 'up-d', eagleId: 'up-d', eagleStatus: 'draft' },
+        // No status: the old rule inherited only a missing or null read, so it left this one at [] too.
+        { ...row, id: 'up-n', eagleId: 'up-n' },
+        { ...row, id: 'up-a', eagleId: 'up-a', eagleStatus: 'archived' }]
+    });
+    const summaries = await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-d'), PUBLIC);
+    assert.deepStrictEqual(readOf(writes, 'up-n'), PUBLIC);
+    assert.strictEqual(readOf(writes, 'up-a'), undefined, 'an archived row stays []');
+    const s = summaryOf(summaries, 'updates');
+    assert.deepStrictEqual([s.planned, s.unchanged], [2, 1], 'the archived row: both rules give []');
+  });
+
   await t.test('a no-read, no-status Update takes its parent\'s reversed read only when active', async (t) => {
     // Stored at the parent's old read: the old rule wrote that only for an active row, and left an inactive one at [].
     const row = { projectId: 'e-w', read: WIDENED_PROJECT.read, eagleRead: null, hasEagleSource: true, _etag: 'x' };

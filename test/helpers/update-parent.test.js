@@ -2,8 +2,8 @@
 
 /**
  * `helpers/update-parent:updateRead`, the one rule for an Update's stored `read[]`: Eagle's own under
- * the parent's ceiling, except a row with no read (and a status other than archived, or no status and
- * active), which takes the parent's read. eagle-api's search keeps a missing read and prunes `read: []`.
+ * the parent's ceiling, except a row with no or empty read (and a status other than archived, or no
+ * status and active), which takes the parent's read. eagle-api's push sends a missing read as `[]`.
  */
 
 process.env.NODE_ENV = 'test';
@@ -67,7 +67,6 @@ test('updateRead — a missing read with a status takes its parent\'s read', asy
   await t.test('an explicit read with a status is its own, not the parent\'s', () => {
     assert.deepStrictEqual(updateRead(legacy({ status: 'draft', read: ['sysadmin', 'staff'] }), PUBLIC_PARENT),
       ['sysadmin', 'staff']);
-    assert.deepStrictEqual(updateRead(legacy({ status: 'draft', read: [] }), PUBLIC_PARENT), []);
   });
 
   await t.test('no parent, nothing to inherit', () => {
@@ -75,11 +74,41 @@ test('updateRead — a missing read with a status takes its parent\'s read', asy
   });
 });
 
-test('updateRead — every other update keeps today\'s rule', async (t) => {
-  await t.test('an empty read is a read, not a missing one: eagle-api prunes it, so it stays []', () => {
-    assert.strictEqual(inheritsParentRead(legacy({ read: [] })), false);
-    assert.deepStrictEqual(updateRead(legacy({ read: [] }), PUBLIC_PARENT), []);
+test('updateRead — an empty read counts as no read', async (t) => {
+  // eagle-api's push turns a missing `read` into `[]` (Mongoose fills the array on load).
+  await t.test('an active draft with read [] takes its parent\'s read', () => {
+    const draft = legacy({ status: 'draft', read: [] });
+    assert.strictEqual(inheritsParentRead(draft), true);
+    assert.deepStrictEqual(updateRead(draft, PUBLIC_PARENT), ['staff', 'idir', 'public']);
+    assert.deepStrictEqual(updateRead(draft, PRIVATE_PARENT), PRIVATE_ACL);
   });
+
+  await t.test('an inactive draft with read [] still takes it: a status needs no active flag', () => {
+    assert.deepStrictEqual(updateRead(legacy({ status: 'draft', active: false, read: [] }), PUBLIC_PARENT),
+      ['staff', 'idir', 'public']);
+  });
+
+  await t.test('a published row with read [] takes it, as a missing read does', () => {
+    assert.deepStrictEqual(updateRead(legacy({ status: 'published', read: [] }), PUBLIC_PARENT),
+      ['staff', 'idir', 'public']);
+  });
+
+  await t.test('with no status, only an active row with read [] takes it', () => {
+    assert.deepStrictEqual(updateRead(legacy({ read: [] }), PUBLIC_PARENT), ['staff', 'idir', 'public']);
+    assert.strictEqual(inheritsParentRead(legacy({ read: [], active: false })), false);
+    assert.deepStrictEqual(updateRead(legacy({ read: [], active: false }), PUBLIC_PARENT), []);
+  });
+
+  await t.test('an archived row with read [] stays []', () => {
+    assert.deepStrictEqual(updateRead(legacy({ status: 'archived', read: [] }), PUBLIC_PARENT), []);
+  });
+
+  await t.test('no parent, nothing to inherit', () => {
+    assert.deepStrictEqual(updateRead(legacy({ status: 'draft', read: [] }), null), []);
+  });
+});
+
+test('updateRead — every other update keeps today\'s rule', async (t) => {
 
   await t.test('missing read on an inactive row stays []', () => {
     assert.deepStrictEqual(updateRead(legacy({ active: false }), PUBLIC_PARENT), []);

@@ -170,13 +170,13 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.deepStrictEqual(patched(seen.ops[0]), { '/read': PUBLIC_PARENT, '/isPublished': true, ...CLEARED });
   });
 
-  await t.test('an update Eagle sent with read: [] stays [] under a public project', async () => {
-    // eagle-api prunes an empty read for an anonymous caller, so it is not legacy open.
+  await t.test('an update Eagle sent with read: [] follows the project too', async () => {
+    // eagle-api's push sends a missing read as `[]`, so an empty one is no read.
     const seen = stub(t, [{ id: 'u1', read: [], eagleRead: [], eagleStatus: null, eagleActive: true }]);
 
     await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
 
-    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': [], '/isPublished': false, ...CLEARED });
+    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': PUBLIC_PARENT, '/isPublished': true, ...CLEARED });
   });
 
   await t.test('an empty project ACL is refused rather than read as level 1', async () => {

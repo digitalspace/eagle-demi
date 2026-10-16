@@ -11,7 +11,7 @@ const {
   capRead, levelOfRead, readForLevel, isDemiSeal, LEVEL_TOKENS, SEALED_TOKEN, SECURE_ROLES
 } = require('../helpers/access-sql');
 const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
-const { hasNoRead, updateRead } = require('../helpers/update-parent');
+const { updateRead } = require('../helpers/update-parent');
 const { DELETED_CEILING } = require('../repositories/documents');
 const { logger } = require('../utils/logger');
 
@@ -74,9 +74,13 @@ const droppedRule = Object.freeze({
     // The dropped rule fell back to the plain cap where the widened read landed at `team`.
     return read.includes(TEAM) ? under(base, cap) : read;
   },
-  /** The old `update-parent:inheritsParentRead` (no read, no status, active): a no-read draft it left at `[]` is rewritten. */
+  /**
+   * The old `update-parent:inheritsParentRead` (read absent or null, no status, active): a no-read
+   * draft it left at `[]` is rewritten. Its own check, not today's `hasNoRead`, which also takes `[]`.
+   */
   inherits(src) {
-    return hasNoRead(src) && (src.status === undefined || src.status === null) && src.active === true;
+    const noRead = src.read === undefined || src.read === null;
+    return noRead && (src.status === undefined || src.status === null) && src.active === true;
   },
   /** The old `update-parent:updateRead`: capped only where the ceiling's level is lower. */
   update(row, parent, parentRead) {
@@ -272,9 +276,10 @@ function candidates(step, row, eagleRead, parent) {
 }
 
 /**
- * The read a row is patched to, or why not: `{read}`, `{skip: 'held'|'differs'|'noParent'}`, or
- * null when the dropped rule never touched it. A row whose step stores it uncapped when its parent
- * is not stored is planned as having no parent, flagged `parentMissing`.
+ * The read a row is patched to, or why not: `{read}`, `{skip: 'held'|'differs'|'noParent'|'unchanged'}`,
+ * or null when the row has no Eagle read or already holds Eagle's. `unchanged`: both rules give the
+ * same read. A row whose step stores it uncapped when its parent is not stored is planned as having no
+ * parent, flagged `parentMissing`.
  */
 function planReverse(step, row, parents) {
   const eagleRead = eagleReadOf(step, row);
@@ -287,7 +292,8 @@ function planReverse(step, row, parents) {
 
 function planAgainst(step, row, eagleRead, parent) {
   const pairs = candidates(step, row, eagleRead, parent).filter(p => !sameRead(p.dropped, p.target));
-  if (pairs.length === 0 || pairs.some(p => sameRead(row.read, p.target))) return null;
+  if (pairs.length === 0) return { skip: 'unchanged' };
+  if (pairs.some(p => sameRead(row.read, p.target))) return null;
   if (row.levelHeldAt || (levelOfRead(row.read) === 0 && isDemiSeal(row))) return { skip: 'held' };
   const match = pairs.find(p => sameRead(row.read, p.dropped));
   return match ? { read: match.target } : { skip: 'differs' };
@@ -355,6 +361,7 @@ async function runReverse(args, io) {
         if (plan && plan.skip === 'held') s.skippedHeld++;
         else if (plan && plan.skip === 'differs') s.skippedDiffers++;
         else if (plan && plan.skip === 'noParent') s.noParent++;
+        else if (plan && plan.skip === 'unchanged') s.unchanged++;
         if (plan && plan.parentMissing) s.parentMissing++;
         const read = plan && plan.read;
         // Children are capped by what the parent becomes, so a dry run counts what a live run writes.
@@ -382,7 +389,7 @@ async function runReverse(args, io) {
 function newSummary(container, args) {
   return {
     container, mode: args.live ? 'live' : 'dry-run', direction: args.reverse ? 'reverse' : 'forward',
-    scanned: 0, planned: 0, patched: 0, skippedHeld: 0, skippedDiffers: 0, noParent: 0, parentMissing: 0,
+    scanned: 0, planned: 0, patched: 0, skippedHeld: 0, skippedDiffers: 0, noParent: 0, parentMissing: 0, unchanged: 0,
     stale: 0, failed: 0
   };
 }
@@ -404,6 +411,7 @@ function summaryLine(s) {
   return `[eagle-ladder] container=${s.container} direction=${s.direction} mode=${s.mode} ` +
     `scanned=${s.scanned} planned=${s.planned} patched=${s.patched} skippedHeld=${s.skippedHeld} ` +
     `skippedDiffers=${s.skippedDiffers} noParent=${s.noParent} parentMissing=${s.parentMissing} ` +
+    (s.direction === 'reverse' ? `unchanged=${s.unchanged} ` : '') +
     `stale=${s.stale} failed=${s.failed}`;
 }
 
