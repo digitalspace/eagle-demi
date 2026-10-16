@@ -246,7 +246,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     ['[] on an inactive row stays []', eagleUpdate({ read: [], active: false }), []],
     // eagle-api prunes `read: []` for an anonymous caller; only a missing read is legacy open.
     ['[] with no status on an active row stays []', eagleUpdate({ read: [], status: null, active: true }), []],
-    ['a missing read with a status stays []', eagleUpdateWithoutRead({ status: 'draft' }), []],
+    ['a missing read on an archived row stays []', eagleUpdateWithoutRead({ status: 'archived' }), []],
     ['a missing read on an inactive row stays []', eagleUpdateWithoutRead({ active: false }), []],
     ['a read that is not a list is stored as []', eagleUpdate({ read: 'public' }), []]
   ]) {
@@ -294,6 +294,20 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       });
     }
   }
+
+  // eagle-api's status backfill made its legacy no-read rows drafts; Eagle staff still see them.
+  await t.test('a draft with no read takes its project\'s read and stays off the public gate', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdateWithoutRead({ status: 'draft', active: true }) });
+
+    assert.deepStrictEqual(written.read, PUBLIC);
+    assert.strictEqual(written.status, 'draft');
+    assert.strictEqual(updates.isLive(written, null), false, 'idir and public never see a draft');
+  });
 
   await t.test('a compliance-only update lands privileged-only, not sealed', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);

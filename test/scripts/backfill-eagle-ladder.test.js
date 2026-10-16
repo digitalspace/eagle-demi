@@ -366,6 +366,18 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.deepStrictEqual(readOf(writes, 'up-1'), ['sysadmin']);
   });
 
+  await t.test('a no-read draft Update the old rule left at [] takes its parent\'s read', async (t) => {
+    const draft = { projectId: 'e-pub', read: [], eagleRead: null, eagleActive: true, hasEagleSource: true, _etag: 'x' };
+    const writes = fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      updates: [{ ...draft, id: 'up-d', eagleId: 'up-d', eagleStatus: 'draft' },
+        { ...draft, id: 'up-a', eagleId: 'up-a', eagleStatus: 'archived' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-d'), PUBLIC);
+    assert.strictEqual(readOf(writes, 'up-a'), undefined, 'an archived row stays []');
+  });
+
   await t.test('a group under a notification is capped by its reversed read', async (t) => {
     const writes = fakeCosmos(t, {
       notifications: [NOTIFICATION],
