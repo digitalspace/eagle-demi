@@ -4,6 +4,7 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 const { SUITE_KEY } = require('../helpers/suite-key');
 const jwt = require('jsonwebtoken');
 const authMiddleware = require('../../src/middleware/auth');
@@ -266,6 +267,19 @@ test('JWT verification options', async (t) => {
   await t.test('no audience configured means no audience option', () => {
     // Not `audience: ''` — jsonwebtoken would read that as a claim to match and reject everything.
     assert.strictEqual('audience' in optionsFor(''), false);
+  });
+
+  await t.test('the audience option matches one element of an array aud', () => {
+    // Real jsonwebtoken, not the mock: Keycloak sends aud as an array, and the option must match
+    // any element of it. The test realm's tokens carry ["demi-api","epictrack-web","account"].
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const options = optionsFor('demi-api');
+    const sign = (aud) => jwt.sign({ aud }, privateKey, { algorithm: 'RS256', issuer: options.issuer });
+
+    const decoded = jwt.verify(sign(['demi-api', 'epictrack-web', 'account']), publicKey, options);
+    assert.deepStrictEqual(decoded.aud, ['demi-api', 'epictrack-web', 'account']);
+    assert.throws(() => jwt.verify(sign(['epictrack-web', 'account']), publicKey, options),
+      { name: 'JsonWebTokenError', message: /audience invalid/ });
   });
 
   await t.test('issuer and algorithms are still pinned', () => {

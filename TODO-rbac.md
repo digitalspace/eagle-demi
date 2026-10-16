@@ -23,9 +23,9 @@ residues are independent. P5b is optional and unscheduled.
    `api/index.js:58` requires `src/http/router` inside the request handler, so the Function App
    starts and answers 500 on every request instead. This is why the app setting deploys before the
    code that needs it.
-2. `aud` is verified only when `SSO_AUDIENCE` is non-empty (`src/helpers/auth.js:275-280`). Test
-   carries `account`; prod carries `''` (`azure/main.prod.bicepparam:76`), so prod verifies no
-   audience.
+2. `aud` is verified only when `SSO_AUDIENCE` is non-empty (`src/helpers/auth.js:299-305`). Test
+   carries `demi-api` (audience mapper on the test realm's `eagle-admin-console`, 2026-10-16); prod
+   carries `''` (`azure/main.prod.bicepparam:110`), so prod verifies no audience.
 
 ## External dependencies (owner and date before the unit that needs them)
 
@@ -83,12 +83,12 @@ Code and the `DEMI_ALLOWED_CLIENTS` app setting ship in two pipelines, so infra 
 
 ## U4 — prod audience
 
-- [ ] Measure `aud` on a live prod-realm token and record it in the PR. Test measured 2026-08-28: a
-      staff login through the DEMI frontend (`azp=eagle-admin-console`) carries
-      `["epictrack-web","realm-management","epic-search","epic-engage","account"]`, so `account`
-      verifies (jsonwebtoken matches any element).
-- [ ] `azure/main.prod.bicepparam:76`: `param ssoAudience = '<measured>'`. It stays `''` until then,
-      which means prod checks no audience.
+- [ ] Add the `demi-api` audience mapper to the prod realm's `eagle-admin-console` client, as on
+      test, and confirm a fresh prod token's `aud` contains `demi-api`. Test measured 2026-10-16:
+      `["demi-api","epictrack-web","account"]` (jsonwebtoken matches any element).
+- [ ] `azure/main.prod.bicepparam:110`: `param ssoAudience = 'demi-api'`, and the prod expectation in
+      `test/azure/main-bicep-wiring.test.js`. It stays `''` until the mapper exists, which means
+      prod checks no audience.
 
 ## P3-0 residue — prod team sync
 
@@ -213,7 +213,7 @@ Closing that means per-record envelope encryption under a Key Vault key in `demi
 | U1 (part) | Four `docs/rbac-architecture.md` §3 questions closed | | 2026-08-28 |
 | U2 | Merge/seed ACL constants read `access-sql.ADMIN_ROLES` | #199 | 2026-08-27 |
 | U3 (test) | `DEMI_ALLOWED_CLIENTS` required in test and prod, enforced in `auth.js` | #199 | 2026-08-27 |
-| U4 (test) | `SSO_AUDIENCE` verified when set; test pinned to `account` | #199 | 2026-08-28 |
+| U4 (test) | `SSO_AUDIENCE` verified when set; test pinned to `account`, then `demi-api` from 2026-10-16 | #199 | 2026-08-28 |
 | U5 | Admin API key in Key Vault | #207 | 2026-08-28 |
 | U6 | `vis` level plumbing | #200 | 2026-08-27 |
 | U7 | Projects field catalogue | #200 | 2026-08-27 |

@@ -171,8 +171,9 @@ param linkBaseUrl = 'https://eagle-public-next-test-gtaqa6dvexc6edhg.a02.azurefd
 // takes main.bicep's 'eagle-admin-console' default, and frontend/public/env.js names the same id.
 param allowedClients = 'eagle-admin-console'
 
-// Measured 2026-08-28 on a test-realm user token: aud contains 'account'. Prod not measured.
-param ssoAudience = 'account'
+// The test realm's eagle-admin-console client has an audience mapper for demi-api (measured
+// 2026-10-16: aud is ["demi-api","epictrack-web","account"]). Prod has no mapper yet.
+param ssoAudience = 'demi-api'
 
 // The rproxy egress addresses as APIM reports them (`callerIp` on the App Insights request row
 // for a request made through eagle-test.apps.silver.devops.gov.bc.ca/demi-search; measured
