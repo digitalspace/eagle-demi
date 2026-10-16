@@ -4534,8 +4534,9 @@ paths:
       summary: List organizations
       description: >-
         Eagle `Organization` rows (`kind: Organization` in the `lists` container) the caller may
-        read, ordered by `name`. Staff-side fields such as `description` and `companyLegal` are
-        left out below staff level. Any parameter not listed here, or a parameter given more than
+        read, ordered by `name` unless `sort` names another key. Staff-side fields such as
+        `description` and `companyLegal` are left out below staff level, and sorting on
+        `companyLegal` below staff level is a 400. Any parameter not listed here, or a parameter given more than
         once (except `companyType`), is a 400. A rejected Bearer token is a 401, not the anonymous view. Responses to a
         signed-in caller carry `Cache-Control: private, no-store`.
       parameters:
@@ -4557,10 +4558,10 @@ paths:
         - name: sort
           in: query
           required: false
-          description: Sort key, `-` prefix for descending.
+          description: Sort key, `-` prefix for descending. `companyLegal` is staff only.
           schema:
             type: string
-            enum: [name, -name]
+            enum: [name, -name, companyType, -companyType, companyLegal, -companyLegal]
         - name: ids
           in: query
           required: false
