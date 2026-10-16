@@ -333,13 +333,15 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// Declared, not non-empty: a guessed value rejects every caller, so a realm ships '' until its `aud`
-// is measured (test: 'account', 2026-08-28; prod: ''). The check only guards the line itself —
-// delete it and the environment silently takes the module default.
-for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-  test(`the ${envName} param file declares ssoAudience`, () => {
-    assert.match(params, /^param ssoAudience = '[^']*'$/m,
-      `${envName} must state the audience explicitly, empty or otherwise`);
+// Declared, not non-empty: a value the realm does not put in `aud` rejects every caller, so a realm
+// ships '' until its client carries the demi-api audience mapper. Test has it (2026-10-16); prod
+// does not, and setting prod before the mapper exists locks every staff user out.
+const EXPECTED_SSO_AUDIENCE = [['test', TEST_PARAMS, 'demi-api'], ['prod', PROD_PARAMS, '']];
+for (const [envName, params, expected] of EXPECTED_SSO_AUDIENCE) {
+  test(`the ${envName} param file sets ssoAudience to '${expected}'`, () => {
+    const match = /^param ssoAudience = '([^']*)'$/m.exec(params);
+    assert.ok(match, `${envName} must state the audience explicitly, empty or otherwise`);
+    assert.strictEqual(match[1], expected);
   });
 }
 
