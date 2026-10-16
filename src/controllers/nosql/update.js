@@ -197,7 +197,7 @@ function mirrorItem(eagleId, doc, read, existing) {
     // and `active` is Eagle's own flag, which the News model renders.
     active: doc.active === true,
     // read[] is authoritative and isPublished mirrors it (ADR-004). `read` is Eagle's own minus
-    // compliance under the parent's ceiling, or the parent's for a legacy open row
+    // compliance under the parent's ceiling, or the parent's for a row with no read
     // (`helpers/update-parent:updateRead`); `sources.eagle.read` keeps Eagle's own, uncapped and
     // still minus compliance (null when Eagle sent none), for the project cascade to re-derive from.
     isPublished: read.includes('public'),
@@ -236,7 +236,7 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
       const own = ownRead(doc.read);
       const read = updateRead(doc, parent);
       if (parent && inheritsParentRead(doc)) {
-        logger.debug('[Update Controller] legacy open update inherits parent read', {
+        logger.debug('[Update Controller] update with no read inherits parent read', {
           id: eagleId, parentId: parent.id, kind: parent.kind, to: read
         });
       } else if (levelOfRead(read) < levelOfRead(own)) {

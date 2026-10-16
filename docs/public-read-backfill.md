@@ -117,8 +117,10 @@ A row with `read: []` is different. The same `$redact` prunes it: an empty array
 The Update mirror gives a row with a missing `read` its parent's `read[]`, so it is public when its
 project (or `ProjectNotification`) is public and private when it is not. The rule is
 `helpers/update-parent.js:updateRead`. The push, this backfill and the project cascade all use it.
-A row with any `read` (`[]` included), a `status`, or `active` not `true` is mirrored as before: its
-own read minus compliance, capped by the parent, so `read: []` stays `[]` and unpublished.
+A row with no `read` and no `status` takes it only when `active` is `true`. A row with no `read`
+and a `status` takes it whatever `active` says, unless the status is `archived`. Eagle staff do not
+see archived rows, so those stay `[]`. A row with any `read` (`[]` included) is mirrored as before:
+its own read minus compliance, capped by the parent, so `read: []` stays `[]` and unpublished.
 `sources.eagle.read` stores `null` when Eagle sent no read and `[]` when it sent an empty one, so the
 cascade applies the same rule when the project's visibility changes.
 
@@ -138,6 +140,25 @@ its etag race to a live push shows up under `dropped`. That push already wrote i
 
 The backfill takes the notification claim on every live, published row it writes (see the
 `mirrorUpdate` comment in the script), so these old updates send no email.
+
+### Drafts with no read
+
+eagle-api's migration `20260923000000-updates-status-backfill.js` gave every legacy row a status.
+A row with no `read` became `draft`. Before 2026-10-16 the mirror stored those drafts as `[]`, so
+only sysadmin could see them, while Eagle shows them to staff. The publish gate still hides a
+draft from idir and public callers, whatever its `read[]` says.
+
+This backfill cannot repair them. It reads eagle-api's search with no token, and that search
+hides drafts. The ladder backfill re-derives them from the stored `sources.eagle` copy instead
+(README "Eagle read ladder backfill"):
+
+```bash
+scripts/demi-devbox.sh run --env test -- 'git pull && yarn install && node src/scripts/backfill-eagle-ladder.js --reverse'
+scripts/demi-devbox.sh run --env test -- 'git pull && yarn install && node src/scripts/backfill-eagle-ladder.js --reverse --live'
+```
+
+Deploy the API first, as above. The dry run should plan these rows under `updates` and nothing
+else in a container where the earlier reverse already ran.
 
 ## What the backfill cannot recover
 

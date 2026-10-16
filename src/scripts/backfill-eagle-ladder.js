@@ -11,7 +11,7 @@ const {
   capRead, levelOfRead, readForLevel, isDemiSeal, LEVEL_TOKENS, SEALED_TOKEN, SECURE_ROLES
 } = require('../helpers/access-sql');
 const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
-const { inheritsParentRead, updateRead } = require('../helpers/update-parent');
+const { hasNoRead, updateRead } = require('../helpers/update-parent');
 const { DELETED_CEILING } = require('../repositories/documents');
 const { logger } = require('../utils/logger');
 
@@ -74,12 +74,16 @@ const droppedRule = Object.freeze({
     // The dropped rule fell back to the plain cap where the widened read landed at `team`.
     return read.includes(TEAM) ? under(base, cap) : read;
   },
+  /** The old `update-parent:inheritsParentRead` (no read, no status, active): a no-read draft it left at `[]` is rewritten. */
+  inherits(src) {
+    return hasNoRead(src) && (src.status === undefined || src.status === null) && src.active === true;
+  },
   /** The old `update-parent:updateRead`: capped only where the ceiling's level is lower. */
   update(row, parent, parentRead) {
     const ceiling = () => (levelOfRead(parentRead) !== 0 || parent.sealedAt
       ? parentRead : droppedRule.own(parent.eagleRead));
     const capIfLower = (own, cap) => (levelOfRead(cap) < levelOfRead(own) ? droppedRule.cap(own, cap) : own);
-    if (parent && inheritsParentRead(updateSource(row))) return ceiling();
+    if (parent && droppedRule.inherits(updateSource(row))) return ceiling();
     const own = isNonEmpty(row.eagleRead) ? droppedRule.own(row.eagleRead) : [];
     if (!parent) return own;
     return own.length === 0 ? capIfLower(own, ceiling()) : droppedRule.under(row.eagleRead, ceiling(), capIfLower);

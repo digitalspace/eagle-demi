@@ -563,7 +563,9 @@ project cascade re-derives a document's read from `ownRead`. Run it once on a ne
 Eagle read with no ladder token (`team`, `staff`, `idir`, `public`). DEMI now stores Eagle's own
 read, minus blanks and `compliance`, capped by the parent's read through `capRead`. A read with no
 ladder token under a cap keeps only its privileged names and the names the cap also carries; it no
-longer lands at `team`.
+longer lands at `team`. The old rule also stored an Update with no `read` and a status as `[]`, so
+`--reverse` gives each such Update, archived ones aside, its parent's read
+(docs/public-read-backfill.md "Drafts with no read").
 
 Two checks go with a `--live` run:
 

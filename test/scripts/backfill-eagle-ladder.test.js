@@ -366,6 +366,32 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.deepStrictEqual(readOf(writes, 'up-1'), ['sysadmin']);
   });
 
+  await t.test('a no-read draft Update the old rule left at [] takes its parent\'s read', async (t) => {
+    const draft = { projectId: 'e-pub', read: [], eagleRead: null, eagleActive: true, hasEagleSource: true, _etag: 'x' };
+    const writes = fakeCosmos(t, {
+      projects: [PUBLIC_PROJECT],
+      updates: [{ ...draft, id: 'up-d', eagleId: 'up-d', eagleStatus: 'draft' },
+        { ...draft, id: 'up-a', eagleId: 'up-a', eagleStatus: 'archived' }]
+    });
+    await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-d'), PUBLIC);
+    assert.strictEqual(readOf(writes, 'up-a'), undefined, 'an archived row stays []');
+  });
+
+  await t.test('a no-read, no-status Update takes its parent\'s reversed read only when active', async (t) => {
+    // Stored at the parent's old read: the old rule wrote that only for an active row, and left an inactive one at [].
+    const row = { projectId: 'e-w', read: WIDENED_PROJECT.read, eagleRead: null, hasEagleSource: true, _etag: 'x' };
+    const writes = fakeCosmos(t, {
+      projects: [WIDENED_PROJECT],
+      updates: [{ ...row, id: 'up-on', eagleId: 'up-on', eagleActive: true },
+        { ...row, id: 'up-off', eagleId: 'up-off', eagleActive: false }]
+    });
+    const summaries = await reverse('--live');
+    assert.deepStrictEqual(readOf(writes, 'up-on'), ['sysadmin']);
+    assert.strictEqual(readOf(writes, 'up-off'), undefined, 'an inactive row is not one the old rule wrote');
+    assert.strictEqual(summaryOf(summaries, 'updates').planned, 1);
+  });
+
   await t.test('a group under a notification is capped by its reversed read', async (t) => {
     const writes = fakeCosmos(t, {
       notifications: [NOTIFICATION],

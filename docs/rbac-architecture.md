@@ -94,8 +94,9 @@ stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` mi
 `compliance` token (`eagleBaseAcl`), so a record's own read lands at level 1, 2 or 4, and at level 2
 when Eagle sent no `read[]`. A compliance-only or empty record lands at `['sysadmin']`, the same as
 `['compliance','sysadmin']`, never at the project team. Updates differ (`ownRead` in
-`src/helpers/update-parent.js`): a missing or empty `read` is stored as `[]`, except a legacy open
-row (no `read`, null `status`, `active: true`), which takes its parent's ceiling. A child is then
+`src/helpers/update-parent.js`): an empty `read` is stored as `[]`. A missing `read` takes its
+parent's ceiling when the row has a status other than `archived`, or no status and `active: true`
+(`inheritsParentRead`); otherwise it is stored as `[]` too. A child is then
 capped by its parent's ceiling (`capRead`; for Updates `capIfLower`), so it lands no higher than
 that, and a child under a DEMI-sealed parent is stored sealed by its push. A parent sealed by an
 Eagle push (level 0, no `sealedAt`) is no ceiling for an Update: `ceilingRead` uses the parent's

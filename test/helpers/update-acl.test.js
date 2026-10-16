@@ -140,10 +140,11 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.deepStrictEqual(patched(seen.ops[0]), { '/read': ['public'], '/isPublished': true, ...CLEARED });
   });
 
-  await t.test('a legacy open update (no read, no status, active) follows the project both ways', async () => {
+  await t.test('an update with no read follows the project both ways', async () => {
     // The mirror stores a missing Eagle read as null.
     const legacy = { id: 'u1', read: [], eagleRead: null, eagleActive: true };
-    const seen = stub(t, [legacy, { ...legacy, id: 'u2', eagleStatus: 'draft' }, { ...legacy, id: 'u3', eagleActive: false }]);
+    const seen = stub(t, [legacy, { ...legacy, id: 'u2', eagleStatus: 'draft' }, { ...legacy, id: 'u3', eagleActive: false },
+      { ...legacy, id: 'u4', eagleStatus: 'archived' }]);
 
     await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
 
@@ -151,8 +152,9 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.match(seen.queries[0].spec.query, /c\.sources\.eagle\.status AS eagleStatus/);
     assert.match(seen.queries[0].spec.query, /c\.sources\.eagle\.active AS eagleActive/);
     assert.deepStrictEqual(patched(seen.ops[0]), { '/read': PUBLIC_PARENT, '/isPublished': true, ...CLEARED });
-    assert.deepStrictEqual(patched(seen.ops[1])['/read'], [], 'a status is not legacy');
-    assert.deepStrictEqual(patched(seen.ops[2])['/read'], [], 'an inactive row is not legacy');
+    assert.deepStrictEqual(patched(seen.ops[1])['/read'], PUBLIC_PARENT, 'a draft follows too');
+    assert.deepStrictEqual(patched(seen.ops[2])['/read'], [], 'an inactive row with no status does not');
+    assert.deepStrictEqual(patched(seen.ops[3])['/read'], [], 'an archived row does not');
 
     t.mock.restoreAll();
     const again = stub(t, [legacy]);
