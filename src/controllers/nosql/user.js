@@ -107,7 +107,7 @@ exports.upsertFromEagle = async (req, res) => {
 const USERS = {
   entity: 'users',
   repository: users.native,
-  sortKeys: ['displayName'],
+  sortKeys: ['displayName', 'orgName', 'email', 'phoneNumber'],
   filters: [],
   qFields: ['displayName', 'email'],
   audited: true,
