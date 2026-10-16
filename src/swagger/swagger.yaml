@@ -4659,9 +4659,12 @@ paths:
         - name: sort
           in: query
           required: false
-          description: One of `dateStarted`, `dateCompleted`; a leading `-` sorts descending. Default `-dateStarted`.
+          description: >-
+            One of `dateStarted`, `dateCompleted`, `isPublished`; a leading `-` sorts descending.
+            Default `-dateStarted`.
           schema:
             type: string
+            enum: [dateStarted, -dateStarted, dateCompleted, -dateCompleted, isPublished, -isPublished]
         - name: page
           in: query
           required: false
