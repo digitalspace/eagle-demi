@@ -197,7 +197,7 @@ function mirrorItem(eagleId, doc, read, existing) {
     // and `active` is Eagle's own flag, which the News model renders.
     active: doc.active === true,
     // read[] is authoritative and isPublished mirrors it (ADR-004). `read` is Eagle's own minus
-    // compliance under the parent's ceiling, or the parent's for a row with no read
+    // compliance under the parent's ceiling, or the parent's for a row `inheritsParentRead` admits
     // (`helpers/update-parent:updateRead`); `sources.eagle.read` keeps Eagle's own, uncapped and
     // still minus compliance (null when Eagle sent none), for the project cascade to re-derive from.
     isPublished: read.includes('public'),
@@ -244,7 +244,7 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
           id: eagleId, parentId: parent.id, kind: parent.kind, from: own, to: read
         });
       }
-      // A missing read is stored as null, not `[]`: the cascade needs the two apart (`inheritsParentRead`).
+      // Missing is stored as null and `[]` as `[]`: with no status, only null inherits (`inheritsParentRead`).
       return mirrorItem(eagleId, { ...doc, read: hasNoRead(doc) ? null : own }, read, current);
     },
     // Unfiltered: a row with no `read` or a compartment token is still there to be replaced.

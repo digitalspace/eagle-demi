@@ -90,19 +90,21 @@ function hasNoRead(doc) {
 const ARCHIVED = 'archived';
 
 /**
- * Does an Update with no `read` (missing or null) take its parent's? eagle-api's search `$redact`
- * keeps such a row and prunes `read: []`. With a status: yes, except `archived`, which Eagle hides
- * from staff (`updateRules.visibilityAggr`); the publish gate still keeps drafts from idir and
- * public. With no status (pre-field rows): only when `active: true`.
+ * Does an Update with no `read` take its parent's? With a status: a missing or empty read does,
+ * except `archived`, which Eagle hides from staff (`updateRules.visibilityAggr`); eagle-api's
+ * `applyStatus` always sets a non-empty read, so `[]` beside a status is a legacy draft, and the
+ * publish gate still keeps drafts from idir and public. With no status (pre-field rows): only a
+ * missing read on an `active: true` row; Eagle's `$redact` pruned `read: []`, so it stays `[]`.
  */
 function inheritsParentRead(doc) {
-  if (!doc || !hasNoRead(doc)) return false;
-  const noStatus = doc.status === undefined || doc.status === null;
-  return noStatus ? doc.active === true : doc.status !== ARCHIVED;
+  if (!doc) return false;
+  if (doc.status === undefined || doc.status === null) return hasNoRead(doc) && doc.active === true;
+  const emptyRead = hasNoRead(doc) || (Array.isArray(doc.read) && doc.read.length === 0);
+  return emptyRead && doc.status !== ARCHIVED;
 }
 
 /**
- * The `read[]` DEMI stores for an Eagle Update under `parent`: a row with no read that
+ * The `read[]` DEMI stores for an Eagle Update under `parent`: a row
  * `inheritsParentRead` admits takes the parent's ceiling as is; every other row is `readUnder`. No
  * parent, nothing to inherit.
  *
