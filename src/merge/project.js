@@ -279,9 +279,10 @@ function flattenEagleProject(doc, orgs) {
 
 /**
  * Labels stored trimmed. The index filters on them by exact match, and some Eagle rows carry a
- * trailing space ("Groundwater Extraction ") that no filter value matches.
+ * trailing space ("Groundwater Extraction ") that no filter value matches. Track sends
+ * `proponentName` with one too ("SECURE Waste Infrastructure Corp. ").
  */
-const TRIMMED_FIELDS = ['sector', 'projectSubType'];
+const TRIMMED_FIELDS = ['sector', 'projectSubType', 'proponentName'];
 
 function trimLabels(merged) {
   for (const field of TRIMMED_FIELDS) {
