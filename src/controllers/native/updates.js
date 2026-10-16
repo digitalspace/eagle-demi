@@ -6,7 +6,7 @@
  * a caller below staff sees published rows only.
  *
  * `projectId` on an update holds the EAGLE project id (`repositories/updates.js` SCOPE_FIELD), and
- * `project=` filters on that value as stored.
+ * `project=` filters on that value as stored, any of several when repeated.
  */
 
 const updates = require('../../repositories/updates');
@@ -51,12 +51,13 @@ const SPEC = Object.freeze({
   sortKeys: updates.SORTABLE,
   filters: ['projectId', 'type'],
   aliases: { project: 'projectId' },
-  multiValueFilters: ['type'],
+  multiValueFilters: ['projectId', 'type'],
   ranges: {
     dateAddedStart: { field: 'dateAdded', op: 'ge' },
     dateAddedEnd: { field: 'dateAdded', op: 'le' }
   },
   presence: { hasDocumentUrl: 'documentUrl' },
+  flags: { complianceAndEnforcement: 'complianceAndEnforcement' },
   qFields: INDEX_MAPS.activities.searched,
   parentJoin: updateParentJoin,
   notFound: 'Update not found'

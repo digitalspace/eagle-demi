@@ -4886,14 +4886,20 @@ paths:
         published updates whose `publishDate` has passed are listed. `projectId` holds the Eagle
         project id. Each row also carries `projectName` and `projectEagleId` when the caller may
         read the project. Any parameter not listed here, or a parameter given twice (except
-        `type`), is a 400. A signed-in read is answered `Cache-Control: private, no-store`.
+        `project` and `type`), is a 400. A signed-in read is answered `Cache-Control: private, no-store`.
       parameters:
         - name: project
           in: query
           required: false
-          description: Eagle id of the project, as stored in `projectId`.
+          description: >-
+            Eagle id of the project, as stored in `projectId`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: type
           in: query
           required: false
@@ -4962,6 +4968,15 @@ paths:
           description: >-
             `true` keeps updates with an attached document, `false` those without one. A
             `documentUrl` that is null, empty or missing counts as no document.
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - name: complianceAndEnforcement
+          in: query
+          required: false
+          description: >-
+            `true` keeps compliance and enforcement updates, `false` all others. A row that does
+            not store the flag counts as `false`.
           schema:
             type: string
             enum: ['true', 'false']
