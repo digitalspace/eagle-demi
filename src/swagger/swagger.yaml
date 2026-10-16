@@ -5122,7 +5122,7 @@ paths:
           schema:
             type: string
             enum: [notificationReceivedDate, -notificationReceivedDate, name, -name, type, -type, region,
-              -region, decision, -decision, proponent, -proponent]
+              -region, decision, -decision, proponent, -proponent, subType, -subType]
         - name: page
           in: query
           required: false
