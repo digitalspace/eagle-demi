@@ -73,6 +73,9 @@ const WIRED = [
     'the API module call — without it no param file can turn ProjectNotification ranking on'],
   ['deployFoundry', /^module foundry '\.\/modules\/foundry\.bicep' = if \(deployFoundation && deployFoundry\) \{$/m,
     'the foundry module gate — without it prod creates a model account it never queries'],
+  ['deployFoundry',
+    /^resource foundryExisting '[^']+' existing = if \(deployFoundry && !deployFoundation\) \{$/m,
+    'the foundry lookup gate — without it an environment with no Foundry account 404s before the API deploys'],
   ['deployStaticSite', /^module staticSite '\.\/modules\/static-site\.bicep' = if \(deployFoundation && deployStaticSite\) \{$/m,
     'the static-site module gate — without it prod creates a $web nothing publishes to'],
   ['keycloakClientId', /^\s+keycloakClientId: keycloakClientId$/m,
@@ -1526,7 +1529,7 @@ test('every foundation lookup names what the owning module declares', () => {
   for (const [symbol, type, moduleFile] of LOOKUPS) {
     const moduleText = fs.readFileSync(path.join(ROOT, 'azure', 'modules', moduleFile), 'utf8');
 
-    const lookup = new RegExp(`^resource ${symbol} '([^']+)' existing = \\{\\n\\s+name: '([^']*)'`, 'm').exec(MAIN);
+    const lookup = new RegExp(`^resource ${symbol} '([^']+)' existing = (?:if \\([^)]*\\) )?\\{\\n\\s+name: '([^']*)'`, 'm').exec(MAIN);
     assert.ok(lookup, `main.bicep must declare the ${symbol} lookup`);
     assert.strictEqual(lookup[1], type,
       `${symbol} must read ${moduleFile}'s type and apiVersion — another version can hand back ` +

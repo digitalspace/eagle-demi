@@ -313,9 +313,14 @@ test('the API app carries every intake setting and the second identity', async (
 
   // Application-only runs skip the module and read the same identity back as an existing resource.
   await t.test('reads the client id, not the resource id, on runs that skip the module', () => {
-    assert.match(MAIN, /^var intakeIdentityClientId = !deployDocumentIntake \? '' : \(deployFoundation \? documentIntake!\.outputs\.intakeIdentityClientId : intakeIdentityExisting\.properties\.clientId\)$/m);
+    assert.match(MAIN, /^var intakeIdentityClientId = !deployDocumentIntake \? '' : \(deployFoundation \? documentIntake!\.outputs\.intakeIdentityClientId : intakeIdentityExisting!\.properties\.clientId\)$/m);
     assert.match(resourceBlock(MAIN, 'intakeIdentityExisting'), /name: 'demi-intake-\$\{environmentName\}'/);
     assert.match(resourceBlock(MODULE, 'intakeIdentity'), /name: 'demi-intake-\$\{environmentName\}'/);
+  });
+
+  // ARM reads an unconditional lookup even when the ternary skips it; test and prod have no intake identity.
+  await t.test('looks up the intake identity only on application runs with intake on', () => {
+    assert.match(resourceBlock(MAIN, 'intakeIdentityExisting'), /^resource intakeIdentityExisting '[^']+' existing = if \(deployDocumentIntake && !deployFoundation\) \{$/m);
   });
 
   // Empty INTAKE_STORAGE_ACCOUNT leaves intakeScanSweep unregistered and uploads answer 503.
