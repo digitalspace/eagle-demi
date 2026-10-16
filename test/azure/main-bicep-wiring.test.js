@@ -353,6 +353,17 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   }
 }
 
+// Drop either setting and bicep only warns `no-unused-params`; the host then registers no timer.
+test('the API app carries both Track sync schedules from their params', () => {
+  for (const [settingName, paramName] of [
+    ['SYNC_TEAMS_SCHEDULE', 'syncTeamsSchedule'],
+    ['SYNC_PROJECTS_SCHEDULE', 'syncProjectsSchedule'],
+  ]) {
+    assert.match(API_MODULE, new RegExp(`name: '${settingName}'\\n\\s+value: ${paramName}$`, 'm'),
+      `${settingName} must take ${paramName} as is, or that timer never registers`);
+  }
+});
+
 // The four plain eagle-analytics settings. Empty is the correct value until that estate exists, but
 // the LINE has to be there: these are whole-collection-PUT app settings, so a param file that stops
 // naming one takes main.bicep's empty default and a live value is deleted on the next deploy —
