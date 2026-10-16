@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
-const { backfillEagleLadder, parseArgs, exitCodeFor } = require('../../src/scripts/backfill-eagle-ladder');
+const { backfillEagleLadder, parseArgs, exitCodeFor, summaryLine } = require('../../src/scripts/backfill-eagle-ladder');
 const { evaluate } = require('../helpers/updates-store');
 
 const PUBLIC = ['staff', 'idir', 'public'];
@@ -378,22 +378,26 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.strictEqual(readOf(writes, 'up-a'), undefined, 'an archived row stays []');
   });
 
-  // eagle-api's push sends a missing read as `[]`: the legacy drafts arrive that way.
-  await t.test('an Update pushed with read [] the old rule left at [] takes its parent\'s read', async (t) => {
+  await t.test('a draft pushed with read [] the old rule left at [] takes its parent\'s read', async (t) => {
     const row = { projectId: 'e-pub', read: [], eagleRead: [], eagleActive: true, hasEagleSource: true, _etag: 'x' };
     const writes = fakeCosmos(t, {
       projects: [PUBLIC_PROJECT],
       updates: [{ ...row, id: 'up-d', eagleId: 'up-d', eagleStatus: 'draft' },
-        // No status: the old rule inherited only a missing or null read, so it left this one at [] too.
+        // No status: both rules inherit only a missing or null read, so this one stays [].
         { ...row, id: 'up-n', eagleId: 'up-n' },
         { ...row, id: 'up-a', eagleId: 'up-a', eagleStatus: 'archived' }]
     });
     const summaries = await reverse('--live');
     assert.deepStrictEqual(readOf(writes, 'up-d'), PUBLIC);
-    assert.deepStrictEqual(readOf(writes, 'up-n'), PUBLIC);
+    assert.strictEqual(readOf(writes, 'up-n'), undefined, 'a no-status row with read [] stays []');
     assert.strictEqual(readOf(writes, 'up-a'), undefined, 'an archived row stays []');
     const s = summaryOf(summaries, 'updates');
-    assert.deepStrictEqual([s.planned, s.unchanged], [2, 1], 'the archived row: both rules give []');
+    assert.deepStrictEqual([s.planned, s.unchanged], [1, 2], 'the no-status and archived rows: both rules give []');
+    assert.match(summaryLine(s), / unchanged=2 /);
+    const updateWrites = () => writes.filter(w => w.container === 'updates').length;
+    const before = updateWrites();
+    await reverse('--live');
+    assert.strictEqual(updateWrites(), before, 'a second run writes no update');
   });
 
   await t.test('a no-read, no-status Update takes its parent\'s reversed read only when active', async (t) => {
@@ -450,6 +454,7 @@ test('backfill-eagle-ladder forward', async (t) => {
     const summaries = await backfillEagleLadder([]);
     assert.strictEqual(writes.length, 0);
     assert.strictEqual(summaries[0].planned, 1);
+    assert.doesNotMatch(summaryLine(summaries[0]), /unchanged=/, 'only the reverse run counts unchanged rows');
   });
 });
 

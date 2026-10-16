@@ -170,9 +170,18 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.deepStrictEqual(patched(seen.ops[0]), { '/read': PUBLIC_PARENT, '/isPublished': true, ...CLEARED });
   });
 
-  await t.test('an update Eagle sent with read: [] follows the project too', async () => {
-    // eagle-api's push sends a missing read as `[]`, so an empty one is no read.
+  await t.test('an update Eagle sent with read: [] and no status stays [] under a public project', async () => {
+    // eagle-api's `$redact` pruned an empty read for an anonymous caller, so it is not legacy open.
     const seen = stub(t, [{ id: 'u1', read: [], eagleRead: [], eagleStatus: null, eagleActive: true }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.deepStrictEqual(patched(seen.ops[0]), { '/read': [], '/isPublished': false, ...CLEARED });
+  });
+
+  await t.test('a draft Eagle sent with read: [] follows the project', async () => {
+    // eagle-api's `applyStatus` always sets a non-empty read, so `[]` beside a status is a legacy draft.
+    const seen = stub(t, [{ id: 'u1', read: [], eagleRead: [], eagleStatus: 'draft', eagleActive: true }]);
 
     await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
 

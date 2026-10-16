@@ -76,7 +76,7 @@ const droppedRule = Object.freeze({
   },
   /**
    * The old `update-parent:inheritsParentRead` (read absent or null, no status, active): a no-read
-   * draft it left at `[]` is rewritten. Its own check, not today's `hasNoRead`, which also takes `[]`.
+   * draft it left at `[]` is rewritten. Frozen: today's rule also takes `[]` beside a status.
    */
   inherits(src) {
     const noRead = src.read === undefined || src.read === null;
