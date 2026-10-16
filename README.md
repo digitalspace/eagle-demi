@@ -809,9 +809,9 @@ for the full rationale.
 with `RS256` pinned and the issuer checked (`src/helpers/auth.js`). `KEYCLOAK_URL`, `KEYCLOAK_REALM`,
 `SSO_ISSUER` and `SSO_JWKSURI` must be set per environment — they are, in
 `azure/modules/api-function-flex.bicep`. Without them the API falls back to *dev* realm defaults.
-`SSO_AUDIENCE`, when set, must appear in the token's `aud`. Test sets `demi-api`, which the test
-realm's `eagle-admin-console` client adds through an audience mapper. Prod leaves it empty, so prod
-checks no audience, until the prod realm has the same mapper.
+`SSO_AUDIENCE`, when set, must appear in the token's `aud`. Test and prod both set `demi-api`. In
+each realm the `eagle-admin-console` client adds `demi-api` to `aud` through an audience mapper, so
+a token minted for another API in the realm is refused.
 
 **Service-to-service.** Applications authenticate with a **Keycloak service account** —
 `client_credentials` against realm `eao-epic`, then a normal `Authorization: Bearer`. Callers that

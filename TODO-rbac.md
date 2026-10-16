@@ -24,8 +24,9 @@ residues are independent. P5b is optional and unscheduled.
    starts and answers 500 on every request instead. This is why the app setting deploys before the
    code that needs it.
 2. `aud` is verified only when `SSO_AUDIENCE` is non-empty (`src/helpers/auth.js:299-305`). Test
-   carries `demi-api` (audience mapper on the test realm's `eagle-admin-console`, 2026-10-16); prod
-   carries `''` (`azure/main.prod.bicepparam:110`), so prod verifies no audience.
+   and prod both carry `demi-api` in their param files (audience mapper on each realm's
+   `eagle-admin-console`). The live prod app setting stays `''`, so prod verifies no audience, until
+   the next `deploy-infra.sh prod --live`.
 
 ## External dependencies (owner and date before the unit that needs them)
 
@@ -83,16 +84,19 @@ Code and the `DEMI_ALLOWED_CLIENTS` app setting ship in two pipelines, so infra 
 
 ## U4 — prod audience
 
-- [ ] Add the `demi-api` audience mapper to the prod realm's `eagle-admin-console` client, as on
-      test, and confirm a fresh prod token's `aud` contains `demi-api`. Test measured 2026-10-16:
-      `["demi-api","epictrack-web","account"]` (jsonwebtoken matches any element).
-- [ ] `azure/main.prod.bicepparam:110`: `param ssoAudience = 'demi-api'`, and the prod expectation in
-      `test/azure/main-bicep-wiring.test.js`. It stays `''` until the mapper exists, which means
-      prod checks no audience.
+The prod realm's `eagle-admin-console` client carries mapper `demi-api-audience`
+(`included.custom.audience=demi-api`), and `azure/main.prod.bicepparam` sets
+`ssoAudience = 'demi-api'`. The setting reaches the Function App with the U3 prod infra deploy.
+
+- [ ] Confirm a fresh prod staff token's `aud` contains `demi-api` before the deploy. Test measured
+      2026-10-16: `["demi-api","epictrack-web","account"]` (jsonwebtoken matches any element).
+- [ ] After `deploy-infra.sh prod --live`: `SSO_AUDIENCE` on `demi-api-fc-prod` reads `demi-api`.
+- [ ] Verify: a prod staff Bearer token gets 200 on an authenticated route, and a token whose `aud`
+      lacks `demi-api` gets 401. Rollback is `param ssoAudience = ''` and redeploy infra.
 
 ## P3-0 residue — prod team sync
 
-- [ ] `syncTeamsSchedule` is `'0 0 11 * * *'` in `azure/main.prod.bicepparam:159` as of 2026-09-05
+- [ ] `syncTeamsSchedule` is `'0 0 11 * * *'` in `azure/main.prod.bicepparam:264` as of 2026-09-05
       (#317), an hour after the reconcile timer. It starts firing after the next
       `deploy-infra.sh prod --live` (U3). The realm clients and roles already exist in prod. Read the
       first run the morning of 2026-09-06: the `[track-teams]` summary line in App Insights for

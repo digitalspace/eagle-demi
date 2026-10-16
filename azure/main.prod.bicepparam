@@ -106,8 +106,9 @@ param linkBaseUrl = 'https://projects.eao.gov.bc.ca'
 // the same id. Prod's other callers are eagle-api's push (API key) and eagle-public (anonymous).
 param allowedClients = 'eagle-admin-console'
 
-// set after measuring aud on a live token
-param ssoAudience = ''
+// The prod realm's eagle-admin-console client has the demi-api audience mapper (added 2026-10-16,
+// same as test), so every staff token carries demi-api in aud.
+param ssoAudience = 'demi-api'
 
 // The rproxy egress addresses as APIM reports them (`callerIp` on the App Insights request row
 // for a request made through projects.eao.gov.bc.ca/demi-search; measured 2026-09-07). With these
