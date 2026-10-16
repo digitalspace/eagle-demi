@@ -11,6 +11,9 @@ const querystring = require('node:querystring');
 
 const listsController = require('../../../src/controllers/native/lists');
 const organizationsController = require('../../../src/controllers/native/organizations');
+const organizationMirror = require('../../../src/controllers/nosql/organization');
+const listsRepo = require('../../../src/repositories/lists');
+const { TIER } = require('../../../src/helpers/access-sql');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const { makeRes } = require('../../../src/http/router');
 
@@ -125,10 +128,11 @@ test('native lists and organizations', async (t) => {
   await t.test('a sort key off the allow-list is refused', async (t) => {
     fakeCosmos(t);
     const lists = await call(listsController.getLists, 'sort=type');
-    const orgs = await call(organizationsController.getOrganizations, 'sort=-companyType');
+    const orgs = await call(organizationsController.getOrganizations, 'sort=-city');
     assert.strictEqual(lists.status, 400);
     assert.match(lists.body.error, /cannot sort on: type/);
     assert.strictEqual(orgs.status, 400);
+    assert.match(orgs.body.error, /cannot sort on: -city/);
   });
 
   await t.test('sort=-name orders by name descending', async (t) => {
@@ -191,5 +195,90 @@ test('native lists and organizations', async (t) => {
     fakeCosmos(t);
     const res = await call(listsController.getLists, '');
     assert.strictEqual(res.headers['cache-control'], undefined);
+  });
+});
+
+// Sorts over rows the real organization mirror wrote. Cosmos drops a row lacking the ORDER BY field,
+// so a row with no companyType or companyLegal stays in only because the mirror stores ''.
+
+const PUSHED = [
+  { _id: 'o-acme', name: 'Acme Mining', companyType: 'Proponent/Certificate Holder', companyLegal: 'Acme Mining Ltd.', read: ['public'] },
+  { _id: 'o-bare', name: 'Bare Org', read: ['public'] },
+  { _id: 'o-nation', name: 'Coast Nation', companyType: 'Indigenous Group', companyLegal: 'Coast Nation Society', read: ['public'] }
+];
+
+/** Rows the query admits, ordered as Cosmos orders them: a row lacking the ORDER BY field drops out. */
+function admitted(rows, spec) {
+  const roles = spec.parameters.filter(p => p.name.startsWith('@role')).map(p => p.value);
+  const kept = rows.filter(row => roles.length === 0 || row.read.some(r => roles.includes(r)));
+  const [, field, dir] = spec.query.match(/ORDER BY c\.(\w+) (ASC|DESC)/) || [];
+  if (!field) return kept;
+  return kept.filter(row => row[field] !== undefined)
+    .sort((a, b) => a[field].localeCompare(b[field]) * (dir === 'DESC' ? -1 : 1));
+}
+
+/** Mirrors `PUSHED` through the real write path into an in-memory container, then serves reads from it. */
+async function mirroredStore(t) {
+  const rows = [];
+  const queries = [];
+  t.mock.method(cosmos, 'readItem', async (container, id) => structuredClone(rows.find(row => row.id === id) || null));
+  t.mock.method(cosmos, 'create', async (container, item) => {
+    rows.push(structuredClone(item));
+    return item;
+  });
+  for (const doc of PUSHED) await organizationMirror.mirrorFromEagle(doc._id, doc);
+
+  t.mock.method(cosmos, 'query', async (container, spec) => {
+    queries.push(spec.query);
+    const found = admitted(rows, spec);
+    return { items: spec.query.includes('COUNT(1)') ? [found.length] : structuredClone(found) };
+  });
+  return { rows, queries };
+}
+
+const ids = body => body.map(row => row.id);
+
+test('organizations sort by companyType and companyLegal', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('the mirror stores a missing companyType and companyLegal as empty, not absent', async (t) => {
+    const { rows } = await mirroredStore(t);
+    const bare = rows.find(row => row.id === 'o-bare');
+    assert.strictEqual(bare.companyType, '');
+    assert.strictEqual(bare.companyLegal, '');
+  });
+
+  await t.test('anonymous sort=companyType keeps the row with no type, first', async (t) => {
+    const { queries } = await mirroredStore(t);
+    const res = await call(organizationsController.getOrganizations, 'sort=companyType&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.match(queries[0], /ORDER BY c\.companyType ASC$/);
+    assert.deepStrictEqual(ids(res.body), ['o-bare', 'o-nation', 'o-acme']);
+    assert.strictEqual(res.headers['x-total-count'], '3');
+  });
+
+  await t.test('anonymous sort=companyLegal is refused before any read', async (t) => {
+    const { queries } = await mirroredStore(t);
+    const res = await call(organizationsController.getOrganizations, 'sort=companyLegal');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /companyLegal/);
+    assert.strictEqual(queries.length, 0);
+  });
+
+  await t.test('staff sort=-companyLegal orders by legal name descending, no-name row last', async (t) => {
+    const { queries } = await mirroredStore(t);
+    const res = await call(organizationsController.getOrganizations, 'sort=-companyLegal&count=true', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.match(queries[0], /ORDER BY c\.companyLegal DESC$/);
+    assert.deepStrictEqual(ids(res.body), ['o-nation', 'o-acme', 'o-bare']);
+    assert.strictEqual(res.headers['x-total-count'], '3');
+  });
+
+  await t.test('the search compat read keeps name order for a companyLegal sort', async (t) => {
+    // listByKind has no per-field check, so a staff-only key must not reach its ORDER BY.
+    const { queries } = await mirroredStore(t);
+    const anon = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [], level: 4 };
+    await listsRepo.listByKind(listsRepo.KINDS.ORGANIZATION, anon, { sortBy: 'companyLegal' });
+    assert.match(queries[0], /ORDER BY c\.name ASC$/);
   });
 });
