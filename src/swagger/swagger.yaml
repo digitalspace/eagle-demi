@@ -4047,10 +4047,12 @@ paths:
         - name: sort
           in: query
           required: false
-          description: '`displayName`, or `-displayName` for descending. Default: by id.'
+          description: >-
+            Sort key, `-` prefix for descending. Default: by id. `email` and `phoneNumber` are
+            staff fields, so a caller with no credential is refused with 400.
           schema:
             type: string
-            enum: [displayName, -displayName]
+            enum: [displayName, -displayName, orgName, -orgName, email, -email, phoneNumber, -phoneNumber]
         - name: q
           in: query
           required: false
@@ -4089,7 +4091,7 @@ paths:
         '400':
           description: >-
             Unknown or repeated parameter, a sort key off the list, more than 100 ids, a page past
-            the depth cap, or `q` on a field the caller cannot see.
+            the depth cap, or `q` or `sort` on a field the caller cannot see.
         '401':
           description: A Bearer token was sent and rejected.
 
