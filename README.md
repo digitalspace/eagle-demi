@@ -577,8 +577,7 @@ Track reports closed, writing to the `credentials` container: a grant that names
 well loses only the closed id, and a grant left with no project is revoked. The listing is read once
 per run and matched to the closed set in memory, plus one further read per credential actually
 narrowed or revoked, so the cost does not grow with the number of closed projects that have no live
-grant. `--live` refuses until the P3-2 team-grant model lands. CLI:
-`yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
+grant. CLI: `yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
 
 ### Track project poll
 
