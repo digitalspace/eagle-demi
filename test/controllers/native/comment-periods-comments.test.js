@@ -1,8 +1,8 @@
 'use strict';
 
 // Native comment period and comment reads, driven through the real handlers and repositories over a
-// fake Cosmos that applies the role arm and the equality and IN clauses of each query, so what a
-// caller may see is observed in the response.
+// fake Cosmos that applies the role arm, the equality and IN clauses and the ORDER BY of each query,
+// so what a caller may see, and in what order, is observed in the response.
 
 process.env.NODE_ENV = 'test';
 
@@ -17,6 +17,7 @@ const audit = require('../../../src/utils/audit');
 const projects = require('../../../src/repositories/projects');
 const { makeRes } = require('../../../src/http/router');
 const { recordEvents } = require('../../helpers/record-events');
+const { swaggerParams } = require('../../helpers/swagger-params');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
@@ -24,16 +25,17 @@ const PERIOD_EAGLE_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
 const CONTAINERS = {
   commentPeriods: [
-    { id: 'cp1', eagleId: PERIOD_EAGLE_ID, projectId: 'p1', read: ['public'], instructions: 'Open period' },
-    { id: 'cp-staff', projectId: 'p1', read: ['staff'], instructions: 'Staff only' }
+    // Both open; the mirror writes isPublished on every row, from read[].
+    { id: 'cp1', eagleId: PERIOD_EAGLE_ID, projectId: 'p1', read: ['public'], isPublished: true, instructions: 'Open period', dateStarted: '2026-01-01T00:00:00.000Z', dateCompleted: '2099-01-01T00:00:00.000Z' },
+    { id: 'cp-staff', projectId: 'p1', read: ['staff'], isPublished: false, instructions: 'Staff only', dateStarted: '2026-02-01T00:00:00.000Z', dateCompleted: '2099-01-01T00:00:00.000Z' }
   ],
   // Two public comments, three staff-only; `author` on an unattributed comment is level 2.
   comments: [
-    { id: 'c1', periodId: 'cp1', projectId: 'p1', read: ['public'], eaoStatus: 'Published', comment: 'Fish', author: 'Pat Hidden', isAnonymous: true },
-    { id: 'c2', periodId: 'cp1', projectId: 'p1', read: ['public'], eaoStatus: 'Published', comment: 'Roads', author: 'Lee', isAnonymous: false },
-    { id: 'c3', periodId: 'cp1', projectId: 'p1', read: ['staff'], eaoStatus: 'Pending', comment: 'Noise' },
-    { id: 'c4', periodId: 'cp1', projectId: 'p1', read: ['staff'], eaoStatus: 'Rejected', comment: 'Spam' },
-    { id: 'c5', periodId: 'cp1', projectId: 'p1', read: ['staff'], eaoStatus: 'Deferred', comment: 'Later' }
+    { id: 'c1', commentId: 1, periodId: 'cp1', projectId: 'p1', read: ['public'], eaoStatus: 'Published', comment: 'Fish', author: 'Pat Hidden', isAnonymous: true },
+    { id: 'c2', commentId: 2, periodId: 'cp1', projectId: 'p1', read: ['public'], eaoStatus: 'Published', comment: 'Roads', author: 'Lee', isAnonymous: false },
+    { id: 'c3', commentId: 3, periodId: 'cp1', projectId: 'p1', read: ['staff'], eaoStatus: 'Pending', comment: 'Noise' },
+    { id: 'c4', commentId: 4, periodId: 'cp1', projectId: 'p1', read: ['staff'], eaoStatus: 'Rejected', comment: 'Spam' },
+    { id: 'c5', commentId: 5, periodId: 'cp1', projectId: 'p1', read: ['staff'], eaoStatus: 'Deferred', comment: 'Later' }
   ]
 };
 
@@ -42,6 +44,19 @@ const PROJECT = { id: 'p1', name: 'Site C', eagleId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
 function param(spec, name) {
   const found = spec.parameters.find(p => p.name === name);
   return found && found.value;
+}
+
+// Cosmos orders across types: null, then booleans (false first), then numbers, then strings.
+const TYPE_RANK = { object: 0, boolean: 1, number: 2, string: 3 };
+
+/** As Cosmos runs `ORDER BY c.<field>`: a row lacking the field drops out. */
+function ordered(rows, query) {
+  const [, field, dir] = query.match(/ORDER BY c\.(\w+) (ASC|DESC)/) || [];
+  if (!field) return rows;
+  const rank = value => TYPE_RANK[value === null ? 'object' : typeof value];
+  const compare = (a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0);
+  return rows.filter(row => row[field] !== undefined)
+    .sort((a, b) => compare(a[field], b[field]) * (dir === 'DESC' ? -1 : 1));
 }
 
 /** Rows of `container` the query admits: its role arm, `c.f = @p` and `c.f IN (@p, ...)` clauses. */
@@ -55,9 +70,9 @@ function admitted(container, spec) {
     const values = names.split(', ').map(name => param(spec, name));
     tests.push(row => values.includes(row[field]));
   }
-  return CONTAINERS[container]
+  return ordered(CONTAINERS[container]
     .filter(row => row.read.some(r => roles.includes(r)))
-    .filter(row => tests.every(match => match(row)));
+    .filter(row => tests.every(match => match(row))), spec.query);
 }
 
 function fakeCosmos(t) {
@@ -155,6 +170,35 @@ test('native comment periods', async (t) => {
     const res = await call(list, 'status=archived');
     assert.strictEqual(res.status, 400);
     assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('status=open&sort=-isPublished lists published periods first', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'status=open&sort=-isPublished', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.match(specs[0].query, /c\.dateStarted <= @now/);
+    assert.match(specs[0].query, /ORDER BY c\.isPublished DESC$/);
+    assert.deepStrictEqual(res.body.map(row => row.id), ['cp1', 'cp-staff']);
+  });
+
+  await t.test('sort=isPublished lists unpublished periods first', async (t) => {
+    fakeCosmos(t);
+    const res = await call(list, 'sort=isPublished', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.map(row => row.id), ['cp-staff', 'cp1']);
+  });
+
+  await t.test('a sort key outside the list is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'sort=instructions');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('swagger offers each sort key both ways, and no other', () => {
+    const offered = swaggerParams('/api/comment-periods').get('sort').match(/enum: \[([^\]]*)\]/)[1].split(/,\s*/);
+    const keys = periodsController.SPEC.sortKeys;
+    assert.deepStrictEqual(offered.sort(), keys.flatMap(key => [key, `-${key}`]).sort());
   });
 
   await t.test('a repeated project is refused', async (t) => {

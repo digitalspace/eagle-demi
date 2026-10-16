@@ -21,7 +21,7 @@ const NO_STORE = 'private, no-store';
 const BASE_SPEC = Object.freeze({
   entity: 'commentPeriods',
   repository: commentPeriods.nativeRepository(),
-  sortKeys: ['dateStarted', 'dateCompleted'],
+  sortKeys: ['dateStarted', 'dateCompleted', 'isPublished'],
   filters: ['projectId'],
   aliases: { project: 'projectId' },
   multiValueFilters: [],
@@ -49,6 +49,7 @@ exports.getCommentPeriods = (req, res) => {
   return listHandler({ ...BASE_SPEC, repository: commentPeriods.nativeRepository(statuses) })(req, res);
 };
 
+exports.SPEC = BASE_SPEC;
 exports.getCommentPeriod = getHandler(BASE_SPEC);
 
 /** Comments of `periodId` this caller may read, optionally of one `eaoStatus`, on the list's own predicate. */
