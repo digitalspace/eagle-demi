@@ -262,6 +262,10 @@ param notifyApiBase = ''
 // /api/v1/projects/team-members.
 param syncTeamsSchedule = '0 0 11 * * *'
 
+// Every 5 min. Polls Track /api/v1/projects so project edits reach the public site the same hour,
+// not the next day. Armed 2026-10-16.
+param syncProjectsSchedule = '0 */5 * * * *'
+
 // ── PDF title worker ──────────────────────────────────────────────────────────────────────────
 // Live since 2026-10-08. Set pdfTitleLive to false for a dry run that lists the work and writes
 // nothing. The key is the vault's `pdf-title-worker-api-key`, named in optionalSecretNames

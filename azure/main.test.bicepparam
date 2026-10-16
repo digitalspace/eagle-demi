@@ -218,6 +218,10 @@ param notifyUpdateReaderLinks = true
 // Nightly 10:00 UTC. Armed 2026-09-02 after the first live run against epictrack-api-c8b80a-test.
 param syncTeamsSchedule = '0 0 10 * * *'
 
+// Every 5 min. Polls Track /api/v1/projects so project edits reach the public site the same hour,
+// not the next day. Armed 2026-10-16.
+param syncProjectsSchedule = '0 */5 * * * *'
+
 // ── PDF title worker ──────────────────────────────────────────────────────────────────────────
 // Test only. pdfTitleLive true: the worker writes titles into test originals; set false to list work and write nothing.
 // The key is the vault's `pdf-title-worker-api-key`, named in optionalSecretNames above; the

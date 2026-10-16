@@ -315,6 +315,9 @@ param roleSyncClientId string = ''
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty runs it never.')
 param syncTeamsSchedule string = ''
 
+@description('NCRONTAB schedule for the Track project poll timer, e.g. `0 */5 * * * *`. Empty runs it never.')
+param syncProjectsSchedule string = ''
+
 // Bulk document download. Three switches and a set of caps; the switches default off, so an
 // environment gets the queue and the container without the feature running. The caps are the same
 // everywhere until measurement says otherwise — a .bicepparam sets one only to override it.
@@ -822,6 +825,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     updatesPublishDateFallback: updatesPublishDateFallback
     announceUpdatesSchedule: announceUpdatesSchedule
     syncTeamsSchedule: syncTeamsSchedule
+    syncProjectsSchedule: syncProjectsSchedule
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule
     chunkRestampQueue: chunkRestampQueue
