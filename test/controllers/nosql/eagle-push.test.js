@@ -170,6 +170,38 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
     assert.deepStrictEqual(written.legacyShortCodes, ['kq7bt2rm']);
   });
 
+  // A push carries no Track phases, so the rebuild has to keep the stored ones: prod lost a
+  // project's six-phase timeline to a push and only got it back on the next Track sync.
+  await t.test('a push onto a Track row keeps its stored phases byte-for-byte', async () => {
+    const phases = [
+      { name: 'Early Engagement', startDate: '2024-01-15', endDate: null, isCompleted: false },
+      { name: 'Readiness Decision', startDate: '2023-06-01', endDate: '2024-01-14', isCompleted: true }
+    ];
+    t.mock.method(projects, 'getByEagleId', async () => storedProject({ phases }));
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject() }, user: STAFF
+    }, mockRes());
+
+    assert.strictEqual(JSON.stringify(written.phases), JSON.stringify(phases));
+  });
+
+  await t.test('a push onto a Track row with no phases leaves it without', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject() }, user: STAFF
+    }, mockRes());
+
+    assert.strictEqual('phases' in written, false);
+  });
+
   await t.test('an unmatched project is keyed eagle-<eagleId>', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
     let written;
