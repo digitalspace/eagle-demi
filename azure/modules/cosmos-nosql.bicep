@@ -577,7 +577,8 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
 
 // Eagle `User`, mirrored by eagle-api (docs/rbac-architecture.md, "User, group and inspection
 // mirrors"). Lists order on c.id, which the system index serves, or on the `sort` key
-// /displayName; the mirror writes it on every row, so that ORDER BY drops none.
+// /displayName, /orgName, /email or /phoneNumber (email and phoneNumber are staff-only); the
+// mirror writes each on every row, so that ORDER BY drops none.
 resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'users'
