@@ -35,9 +35,9 @@ app.setup({ enableHttpStream: true });
 // Exported for the timer and trigger suites (test/*-timer.test.js, test/*-triggers.test.js) — the
 // host is the only other caller.
 module.exports = {
-  reconcileEagle, reconcileEngage, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads,
-  restampChunksWorker, searchDefinitionsWorker, syncOutWorker, announceUpdates, edgeBan,
-  intakeScanSweep
+  reconcileEagle, reconcileEngage, syncTrackTeams, syncTrackProjects, bulkDownloadWorker,
+  cleanupBulkDownloads, restampChunksWorker, searchDefinitionsWorker, syncOutWorker,
+  announceUpdates, edgeBan, intakeScanSweep
 };
 
 // Drain buffered audit events before the worker goes away.
@@ -108,6 +108,15 @@ if (process.env.SYNC_TEAMS_SCHEDULE) {
     schedule: '%SYNC_TEAMS_SCHEDULE%',
     runOnStartup: false,
     handler: syncTrackTeams
+  });
+}
+
+// The projects-only Track poll, guarded the same way. Empty = Track edits wait for the nightly run.
+if (process.env.SYNC_PROJECTS_SCHEDULE) {
+  app.timer('syncTrackProjects', {
+    schedule: '%SYNC_PROJECTS_SCHEDULE%',
+    runOnStartup: false,
+    handler: syncTrackProjects
   });
 }
 
@@ -312,6 +321,16 @@ async function syncTrackTeams() {
     await require('../src/scripts/sync-track-teams').run({ live: true });
   } catch (err) {
     logger.error('[track-teams] nightly run failed', { error: err.message, stack: err.stack });
+  }
+}
+
+/** `live: true` for the reason syncTrackTeams gives. Swallows the failure as reconcileEagle does. */
+async function syncTrackProjects() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    await require('../src/scripts/sync-track-projects').run({ live: true });
+  } catch (err) {
+    logger.error('[track-projects-poll] run failed', { error: err.message, stack: err.stack });
   }
 }
 
