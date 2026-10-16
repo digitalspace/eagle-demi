@@ -8,6 +8,10 @@
  * That run also hands over the work phases it pulled (`sources.fetchTrackWorkPhases`), so the
  * assessment rail eagle-public draws is written by the same pass that writes the names.
  *
+ * `run` is the projects-only poll the `syncTrackProjects` timer drives, so a Track edit reaches
+ * the public site within minutes. It reads the list alone and passes `poll`: phases, link heal
+ * and slug migration stay with the nightly run.
+ *
  * A RE-MERGE MUST NEVER MOVE A RECORD'S LEVEL. `mergeTrackProject` derives `read` from the Eagle
  * record every time it is called, so re-running it over a stored row would rewrite an ACL that
  * `PUT /api/projects/:id/level` set — the only route allowed to widen anything. The stored
@@ -25,7 +29,8 @@ const {
 } = require('../helpers/short-links');
 const { writeGuarded } = require('../helpers/etag-write');
 const { TRACK_PRECEDENCE, mergeTrackProject } = require('../merge/project');
-const { trackApiToExtract } = require('../seed/sources');
+const { clientToken, fetchTrackProjects, trackApiToExtract } = require('../seed/sources');
+const config = require('../config');
 const linksRepository = require('../repositories/links');
 const { logger } = require('../utils/logger');
 
@@ -99,11 +104,12 @@ function projectsRepository() {
 /**
  * @param {Array}  apiProjects  raw `GET /api/v1/projects` rows
  * @param {object} [opts]       {live} write, {deps} test seam {projects, links}, {now} fixed timestamp,
- *                              {phases} Map of Track project id -> work phases.
+ *                              {phases} Map of Track project id -> work phases,
+ *                              {poll} skip link heal, slug migration and the Eagle-only pass.
  *                              `deps.links` is the links repository, injected by the tests.
  */
 async function syncProjects(apiProjects, opts = {}) {
-  const { live = false, deps = {}, phases = new Map() } = opts;
+  const { live = false, deps = {}, phases = new Map(), poll = false } = opts;
   const rows = apiProjects || [];
   const summary = {
     trackProjects: rows.length,
@@ -153,7 +159,7 @@ async function syncProjects(apiProjects, opts = {}) {
    * row is read again before a record moves: a target staff set since the run started wins.
    */
   const heal = async (project) => {
-    if (!project.eagleId || project.shortLinkUrl) return;
+    if (poll || !project.eagleId || project.shortLinkUrl) return;
     let fresh;
     let reserved = 0;
     try {
@@ -212,6 +218,8 @@ async function syncProjects(apiProjects, opts = {}) {
     items.filter(p => p.sourceSystem === 'eagle' && p.eagleId).map(p => [String(p.eagleId), p])
   );
   const listed = new Set();
+  // A poll writes a stored row only when Track moved it; the migration-only write is the night's.
+  const owes = (row) => !poll && owesLink(row);
   // An Eagle-only row whose project now lives under a Track id is dead weight; its code moved too.
   const rekeyed = new Set(
     items.filter(p => p.sourceSystem !== 'eagle' && p.eagleId).map(p => String(p.eagleId))
@@ -277,7 +285,7 @@ async function syncProjects(apiProjects, opts = {}) {
       // A stored project with no code yet, or still on a pre-slug random one, is written even when
       // Track says nothing new: that is how the projects that predate slugs get one. The migration
       // stamps `shortCodeSource`, so the next night skips the row again.
-      if (!changed && !owesLink(existing)) continue;
+      if (!changed && !owes(existing)) continue;
       // A mint alone is not an update: it counts in `shortLinks` and leaves `updatedAt` alone.
       if (changed) summary.updated++;
       if (!live) {
@@ -292,7 +300,7 @@ async function syncProjects(apiProjects, opts = {}) {
         if (!current) return { status: 'missing' };
         const changes = trackChanges(current, mergeTrackProject(track, eagleOf(current), mergeOpts));
         const moved = Object.keys(changes).length > 0;
-        if (!moved && !owesLink(current)) return { status: 'unchanged' };
+        if (!moved && !owes(current)) return { status: 'unchanged' };
         const row = { ...current, ...changes, sources: { ...current.sources, track } };
         if (moved) row.updatedAt = now;
         const minted = await mintRow(row);
@@ -315,7 +323,7 @@ async function syncProjects(apiProjects, opts = {}) {
 
   // Eagle-only rows are in no Track row, so this is the only nightly pass that heals, mints or
   // migrates their codes.
-  for (const row of eagleOnly.values()) {
+  for (const row of poll ? [] : eagleOnly.values()) {
     if (rekeyed.has(String(row.eagleId))) continue;
     await heal(row);
     if (!owesLink(row)) continue;
@@ -348,4 +356,32 @@ async function syncProjects(apiProjects, opts = {}) {
   return summary;
 }
 
-module.exports = { HEAL_CAP, trackChanges, syncProjects };
+const POLL_FIELDS = ['trackProjects', 'created', 'updated', 'relinked', 'skippedApiRows', 'orphaned',
+  'shortLinks', 'failures'];
+
+/** The line a log alert matches. A run that failed before the mirror reports its counts as 0. */
+const pollLine = (s) => `[track-projects-poll] mode=${s.mode} ` +
+  POLL_FIELDS.map(field => `${field}=${s[field] || 0}`).join(' ');
+
+/**
+ * The projects-only poll: one Track token, one `GET /api/v1/projects`, then the mirror.
+ *
+ * @param {object} [opts] {live} write, {deps} test seam {kc, fetchJson, projects, links}
+ */
+async function run({ live = false, deps = {} } = {}) {
+  const kc = deps.kc || { clientToken };
+  let summary;
+  try {
+    const token = await kc.clientToken(config.trackClientId, config.trackClientSecret);
+    const projects = await fetchTrackProjects(token, deps.fetchJson);
+    summary = await syncProjects(projects, { live, deps, poll: true });
+  } catch (err) {
+    logger.error('[track-projects-poll] run failed', { error: err.message, stack: err.stack });
+    summary = { failures: 1 };
+  }
+  summary.mode = live ? 'live' : 'dry-run';
+  logger.info(pollLine(summary));
+  return summary;
+}
+
+module.exports = { HEAL_CAP, trackChanges, syncProjects, run };
