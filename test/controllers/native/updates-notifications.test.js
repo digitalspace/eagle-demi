@@ -33,16 +33,17 @@ const HIDDEN_EAGLE_ID = 'cccccccccccccccccccccccc';
 const SCOPED = { projectScope: ['p1', 'p2'] };
 
 const CONTAINERS = {
-  // Live: u1 and u4. u2 is a draft and u3 is scheduled for later; only staff and narrower see them.
+  // Live: u1, u4 and u6. u2 is a draft and u3 is scheduled for later; only staff and narrower see them.
   // u5 is live and public itself, but its parent project p2 is staff-only, so it is hidden below staff.
+  // u6 has a null status, as the backfill leaves a row whose Eagle source had none; the gate admits it.
   updates: [
-    // u1 and u4 store `pinned` and the C&E flag as the mirror now writes them; the rest are rows from
-    // before that. u3's status is null, as the backfill leaves a row whose Eagle source had none.
+    // u1 and u4 store `pinned` and the C&E flag as the mirror now writes them; the rest are rows from before that.
     { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', documentUrl: '/doc/a.pdf', pinned: false, complianceAndEnforcement: false, read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
     { id: 'u2', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Draft', documentUrl: '/doc/b.pdf', read: ['public'], status: 'draft', publishDate: '2026-01-03T00:00:00.000Z', dateAdded: '2026-01-03T00:00:00.000Z' },
-    { id: 'u3', type: 'News', headline: 'Scheduled', documentUrl: null, read: ['public'], status: null, publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },
+    { id: 'u3', type: 'News', headline: 'Scheduled', documentUrl: null, read: ['public'], status: 'published', publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },
     { id: 'u4', type: 'Notice', headline: 'Pinned notice', documentUrl: '', pinned: true, complianceAndEnforcement: true, read: ['public'], status: 'published', publishDate: '2025-12-01T00:00:00.000Z', dateAdded: '2025-12-01T00:00:00.000Z' },
-    { id: 'u5', projectId: HIDDEN_EAGLE_ID, type: 'News', headline: 'Quarry approved', documentUrl: '/doc/c.pdf', read: ['public'], status: 'published', publishDate: '2026-01-04T00:00:00.000Z', dateAdded: '2026-01-04T00:00:00.000Z' }
+    { id: 'u5', projectId: HIDDEN_EAGLE_ID, type: 'News', headline: 'Quarry approved', documentUrl: '/doc/c.pdf', read: ['public'], status: 'published', publishDate: '2026-01-04T00:00:00.000Z', dateAdded: '2026-01-04T00:00:00.000Z' },
+    { id: 'u6', type: 'Bulletin', headline: 'Old bulletin', documentUrl: null, read: ['public'], status: null, publishDate: '2025-06-01T00:00:00.000Z', dateAdded: '2025-06-01T00:00:00.000Z' }
   ],
   notifications: [
     { id: 'n1', name: 'Pipeline notice', type: 'Industrial', region: 'Peace', decision: 'Approved', decisionDate: '2025-12-20T00:00:00.000Z', proponent: 'Zed Pipelines', read: ['public'], notificationReceivedDate: '2026-02-01T00:00:00.000Z' },
@@ -61,10 +62,19 @@ function param(spec, name) {
   return found && found.value;
 }
 
+// The updates live gate, which admits a row with no status, as `liveClause` does.
+const LIVE_GATE = /\(NOT IS_DEFINED\(c\.status\) OR IS_NULL\(c\.status\) OR \(c\.status = (@\w+) AND c\.publishDate <= (@\w+)\)\)/;
+
 /** Rows of `container` the query admits. A query with no role arm (a system read) admits every role. */
-function admitted(container, spec) {
-  const roles = spec.parameters.filter(p => p.name.startsWith('@role')).map(p => p.value);
+function admitted(container, given) {
+  const roles = given.parameters.filter(p => p.name.startsWith('@role')).map(p => p.value);
   const tests = [];
+  const gate = given.query.match(LIVE_GATE);
+  if (gate) {
+    const [status, now] = gate.slice(1).map(name => param(given, name));
+    tests.push(row => row.status === undefined || row.status === null || (row.status === status && row.publishDate <= now));
+  }
+  const spec = { ...given, query: given.query.replace(LIVE_GATE, '') };
   for (const [, field, name] of spec.query.matchAll(/c\.(\w+) = (@\w+)/g)) {
     tests.push(row => row[field] === param(spec, name));
   }
@@ -138,21 +148,21 @@ test('native updates list', async (t) => {
 
   await t.test('anonymous sees only live rows; staff sees drafts and scheduled rows too', async (t) => {
     fakeStores(t);
-    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4']);
-    assert.deepStrictEqual(ids((await call(list, '', { user: STAFF })).body).sort(), ['u1', 'u2', 'u3', 'u4', 'u5']);
+    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4', 'u6']);
+    assert.deepStrictEqual(ids((await call(list, '', { user: STAFF })).body).sort(), ['u1', 'u2', 'u3', 'u4', 'u5', 'u6']);
   });
 
   await t.test('count=true counts the live rows only', async (t) => {
     fakeStores(t);
     const res = await call(list, 'count=true');
-    assert.strictEqual(res.headers['x-total-count'], '2');
+    assert.strictEqual(res.headers['x-total-count'], '3');
   });
 
   await t.test('page and pageSize page the sorted list', async (t) => {
     fakeStores(t);
     const res = await call(list, 'sort=dateAdded&pageSize=2&page=2', { user: STAFF });
     assert.strictEqual(res.status, 200);
-    assert.deepStrictEqual(ids(res.body), ['u1', 'u2']);
+    assert.deepStrictEqual(ids(res.body), ['u3', 'u1']);
   });
 
   await t.test('a sort key off the allow-list is refused', async (t) => {
@@ -175,7 +185,7 @@ test('native updates list', async (t) => {
 
   await t.test('sort=type orders by type', async (t) => {
     fakeStores(t);
-    assert.deepStrictEqual(ids((await call(list, 'sort=-type&count=true')).body), ['u4', 'u1']);
+    assert.deepStrictEqual(ids((await call(list, 'sort=-type&count=true')).body), ['u4', 'u1', 'u6']);
   });
 
   await t.test('sort=pinned orders by the pinned flag', async (t) => {
@@ -205,8 +215,8 @@ test('native updates list', async (t) => {
     fakeStores(t);
     const res = await call(list, 'sort=status&count=true', { user: STAFF });
     assert.strictEqual(res.status, 200);
-    assert.deepStrictEqual(ids(res.body).slice(0, 2), ['u3', 'u2']);
-    assert.strictEqual(res.body.length, 5);
+    assert.deepStrictEqual(ids(res.body).slice(0, 2), ['u6', 'u2']);
+    assert.strictEqual(res.body.length, 6);
   });
 
   await t.test('project= repeated matches any of the projects', async (t) => {
@@ -232,8 +242,8 @@ test('native updates list', async (t) => {
     assert.strictEqual(on.status, 200);
     assert.deepStrictEqual(ids(on.body), ['u4']);
     assert.strictEqual(on.headers['x-total-count'], '1');
-    // u1 stores false; u2, u3 and u5 have no flag at all.
-    assert.deepStrictEqual(ids((await call(list, 'complianceAndEnforcement=false&sort=dateAdded', { user: STAFF })).body), ['u3', 'u1', 'u2', 'u5']);
+    // u1 stores false; u2, u3, u5 and u6 have no flag at all.
+    assert.deepStrictEqual(ids((await call(list, 'complianceAndEnforcement=false&sort=dateAdded', { user: STAFF })).body), ['u6', 'u3', 'u1', 'u2', 'u5']);
   });
 
   await t.test('the q path re-reads complianceAndEnforcement in Cosmos; the index has no such column', async (t) => {
@@ -314,12 +324,12 @@ test('native updates under a parent the caller cannot read', async (t) => {
 
   await t.test('anonymous: the list leaves the row out', async (t) => {
     fakeStores(t);
-    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4']);
+    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4', 'u6']);
   });
 
   await t.test('anonymous: count=true does not count it', async (t) => {
     fakeStores(t);
-    assert.strictEqual((await call(list, 'count=true')).headers['x-total-count'], '2');
+    assert.strictEqual((await call(list, 'count=true')).headers['x-total-count'], '3');
   });
 
   await t.test('anonymous: the q read-back drops it though the index ranked it', async (t) => {
