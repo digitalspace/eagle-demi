@@ -12,7 +12,7 @@ changed endpoint, swagger in the same PR, `src/utils/logger.js` for logging, ask
 **Merging is deploying** on test, so every unit leaves anonymous responses byte-identical unless its
 line says otherwise. Line cites verified 2026-09-02 at `7215e11`; re-verify before editing.
 
-Order for what is left: U1, then the U3 and U4 prod steps, then P4-3 → P4-4 → P4-5. P3-2 and P3-6
+Order for what is left: U1, then the U3 prod steps, then P4-3 → P4-4 → P4-5. P3-2 and P3-6
 residues are independent. P5b is optional and unscheduled.
 
 ## Facts
@@ -25,8 +25,8 @@ residues are independent. P5b is optional and unscheduled.
    code that needs it.
 2. `aud` is verified only when `SSO_AUDIENCE` is non-empty (`src/helpers/auth.js:299-305`). Test
    and prod both carry `demi-api` in their param files (audience mapper on each realm's
-   `eagle-admin-console`). The live prod app setting stays `''`, so prod verifies no audience, until
-   the next `deploy-infra.sh prod --live`.
+   `eagle-admin-console`). Prod requires the `demi-api` audience and allows the clients
+   `eagle-admin-console` and `eagle-agent-prod`.
 
 ## External dependencies (owner and date before the unit that needs them)
 
@@ -81,18 +81,6 @@ Code and the `DEMI_ALLOWED_CLIENTS` app setting ship in two pipelines, so infra 
       a Bearer token from an unlisted client → 401.
 - [ ] Rollback is revert the code commit and redeploy the API. Leave the app setting in place; never
       revert the setting and keep the code.
-
-## U4 — prod audience
-
-The prod realm's `eagle-admin-console` client carries mapper `demi-api-audience`
-(`included.custom.audience=demi-api`), and `azure/main.prod.bicepparam` sets
-`ssoAudience = 'demi-api'`. The setting reaches the Function App with the U3 prod infra deploy.
-
-- [ ] Confirm a fresh prod staff token's `aud` contains `demi-api` before the deploy. Test measured
-      2026-10-16: `["demi-api","epictrack-web","account"]` (jsonwebtoken matches any element).
-- [ ] After `deploy-infra.sh prod --live`: `SSO_AUDIENCE` on `demi-api-fc-prod` reads `demi-api`.
-- [ ] Verify: a prod staff Bearer token gets 200 on an authenticated route, and a token whose `aud`
-      lacks `demi-api` gets 401. Rollback is `param ssoAudience = ''` and redeploy infra.
 
 ## P3-0 residue — prod team sync
 
@@ -218,6 +206,7 @@ Closing that means per-record envelope encryption under a Key Vault key in `demi
 | U2 | Merge/seed ACL constants read `access-sql.ADMIN_ROLES` | #199 | 2026-08-27 |
 | U3 (test) | `DEMI_ALLOWED_CLIENTS` required in test and prod, enforced in `auth.js` | #199 | 2026-08-27 |
 | U4 (test) | `SSO_AUDIENCE` verified when set; test pinned to `account`, then `demi-api` from 2026-10-16 | #199 | 2026-08-28 |
+| U4 (prod) | prod `ssoAudience = 'demi-api'`, `allowedClients = 'eagle-admin-console,eagle-agent-prod'`; infra deployment `infra-app-473c15ee-213448`; verified: `eagle-agent-prod` token has `demi-api` in aud, 200 on `/api/projects?pageSize=1000`, anonymous 400 | #634 | 2026-10-18 |
 | U5 | Admin API key in Key Vault | #207 | 2026-08-28 |
 | U6 | `vis` level plumbing | #200 | 2026-08-27 |
 | U7 | Projects field catalogue | #200 | 2026-08-27 |
