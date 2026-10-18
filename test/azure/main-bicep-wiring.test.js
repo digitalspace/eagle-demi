@@ -322,6 +322,15 @@ test('the gateway pins the legacy developer portal off', () => {
     'legacyPortalStatus must be set on the service, or the apply turns the legacy portal on');
 });
 
+// Parsed the way src/config.js reads DEMI_ALLOWED_CLIENTS. Without the admin console every staff
+// user gets 401; without eagle-agent-test the test agent's service account does.
+test('the test param file admits the admin console and the test agent, and no one else', () => {
+  const match = /^param allowedClients = '([^']*)'$/m.exec(TEST_PARAMS);
+  assert.ok(match, 'the test param file must set allowedClients');
+  const clients = match[1].split(',').map(s => s.trim()).filter(Boolean).sort();
+  assert.deepStrictEqual(clients, ['eagle-admin-console', 'eagle-agent-test']);
+});
+
 // src/config.js throws on an empty allowlist in test and prod, so a param file that omits this
 // deploys an app that boot-loops. `az bicep build` says nothing: main.bicep's param has no default,
 // but a `param allowedClients = ''` line satisfies the compiler and fails at runtime.

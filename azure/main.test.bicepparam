@@ -167,9 +167,10 @@ param contactEmails = [
 param linkBaseUrl = 'https://eagle-public-next-test-gtaqa6dvexc6edhg.a02.azurefd.net'
 
 // azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
-// One entry, because both are the same client — this file sets no keycloakClientId, so the API
+// The frontend and admin console are the same client — this file sets no keycloakClientId, so the API
 // takes main.bicep's 'eagle-admin-console' default, and frontend/public/env.js names the same id.
-param allowedClients = 'eagle-admin-console'
+// eagle-agent-test is the service-account client the test agent uses to call the API.
+param allowedClients = 'eagle-admin-console,eagle-agent-test'
 
 // The test realm's eagle-admin-console client has an audience mapper for demi-api (measured
 // 2026-10-16: aud is ["demi-api","epictrack-web","account"]). Prod has no mapper yet.
