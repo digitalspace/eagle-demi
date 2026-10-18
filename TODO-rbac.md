@@ -96,7 +96,7 @@ The prod realm's `eagle-admin-console` client carries mapper `demi-api-audience`
 
 ## P3-0 residue — prod team sync
 
-- [ ] `syncTeamsSchedule` is `'0 0 11 * * *'` in `azure/main.prod.bicepparam:264` as of 2026-09-05
+- [ ] `syncTeamsSchedule` is `'0 0 11 * * *'` in `azure/main.prod.bicepparam:266` as of 2026-09-05
       (#317), an hour after the reconcile timer. It starts firing after the next
       `deploy-infra.sh prod --live` (U3). The realm clients and roles already exist in prod. Read the
       first run the morning of 2026-09-06: the `[track-teams]` summary line in App Insights for
