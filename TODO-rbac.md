@@ -206,6 +206,7 @@ Closing that means per-record envelope encryption under a Key Vault key in `demi
 | U2 | Merge/seed ACL constants read `access-sql.ADMIN_ROLES` | #199 | 2026-08-27 |
 | U3 (test) | `DEMI_ALLOWED_CLIENTS` required in test and prod, enforced in `auth.js` | #199 | 2026-08-27 |
 | U4 (test) | `SSO_AUDIENCE` verified when set; test pinned to `account`, then `demi-api` from 2026-10-16 | #199 | 2026-08-28 |
+| U4 (prod) | prod `ssoAudience = 'demi-api'`, `allowedClients = 'eagle-admin-console,eagle-agent-prod'`; infra deployment `infra-app-473c15ee-213448`; verified: `eagle-agent-prod` token has `demi-api` in aud, 200 on `/api/projects?pageSize=1000`, anonymous 400 | #634 | 2026-10-18 |
 | U5 | Admin API key in Key Vault | #207 | 2026-08-28 |
 | U6 | `vis` level plumbing | #200 | 2026-08-27 |
 | U7 | Projects field catalogue | #200 | 2026-08-27 |
