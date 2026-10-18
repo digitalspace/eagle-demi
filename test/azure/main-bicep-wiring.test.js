@@ -342,10 +342,9 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// Declared, not non-empty: a value the realm does not put in `aud` rejects every caller, so a realm
-// ships '' until its client carries the demi-api audience mapper. Test has it (2026-10-16); prod
-// does not, and setting prod before the mapper exists locks every staff user out.
-const EXPECTED_SSO_AUDIENCE = [['test', TEST_PARAMS, 'demi-api'], ['prod', PROD_PARAMS, '']];
+// A value the realm does not put in `aud` rejects every caller, so a realm ships '' until its
+// client carries the demi-api audience mapper. Test and prod both have it (2026-10-16).
+const EXPECTED_SSO_AUDIENCE = [['test', TEST_PARAMS, 'demi-api'], ['prod', PROD_PARAMS, 'demi-api']];
 for (const [envName, params, expected] of EXPECTED_SSO_AUDIENCE) {
   test(`the ${envName} param file sets ssoAudience to '${expected}'`, () => {
     const match = /^param ssoAudience = '([^']*)'$/m.exec(params);
@@ -353,6 +352,15 @@ for (const [envName, params, expected] of EXPECTED_SSO_AUDIENCE) {
     assert.strictEqual(match[1], expected);
   });
 }
+
+// Parsed the way src/config.js reads DEMI_ALLOWED_CLIENTS. Without the admin console every staff
+// user gets 401; without eagle-agent-prod the prod agent's service account does.
+test('the prod param file admits the admin console and the prod agent, and no one else', () => {
+  const match = /^param allowedClients = '([^']*)'$/m.exec(PROD_PARAMS);
+  assert.ok(match, 'the prod param file must set allowedClients');
+  const clients = match[1].split(',').map(s => s.trim()).filter(Boolean).sort();
+  assert.deepStrictEqual(clients, ['eagle-admin-console', 'eagle-agent-prod']);
+});
 
 // The Track sync's five plain settings. Every one is a whole-collection-PUT app setting, so a
 // param file that omits one takes main.bicep's empty default and the live value is deleted on the
