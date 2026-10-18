@@ -344,6 +344,15 @@ for (const [envName, params, expected] of EXPECTED_SSO_AUDIENCE) {
   });
 }
 
+// Parsed the way src/config.js reads DEMI_ALLOWED_CLIENTS. Without the admin console every staff
+// user gets 401; without eagle-agent-prod the prod agent's service account does.
+test('the prod param file admits the admin console and the prod agent, and no one else', () => {
+  const match = /^param allowedClients = '([^']*)'$/m.exec(PROD_PARAMS);
+  assert.ok(match, 'the prod param file must set allowedClients');
+  const clients = match[1].split(',').map(s => s.trim()).filter(Boolean).sort();
+  assert.deepStrictEqual(clients, ['eagle-admin-console', 'eagle-agent-prod']);
+});
+
 // The Track sync's five plain settings. Every one is a whole-collection-PUT app setting, so a
 // param file that omits one takes main.bicep's empty default and the live value is deleted on the
 // next deploy — `az bicep build` says nothing, because an empty default compiles.

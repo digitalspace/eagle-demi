@@ -102,9 +102,11 @@ param deployStaticSite = false
 param linkBaseUrl = 'https://projects.eao.gov.bc.ca'
 
 // azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
-// One entry, because this file sets no keycloakClientId and takes main.bicep's default, which is
-// the same id. Prod's other callers are eagle-api's push (API key) and eagle-public (anonymous).
-param allowedClients = 'eagle-admin-console'
+// The admin console entry covers the frontend id too, because this file sets no keycloakClientId and
+// takes main.bicep's default, which is the same id. eagle-agent-prod is the service-account client
+// the agent uses to call the API. Prod's other callers are eagle-api's push (API key) and
+// eagle-public (anonymous).
+param allowedClients = 'eagle-admin-console,eagle-agent-prod'
 
 // The prod realm's eagle-admin-console client has the demi-api audience mapper (added 2026-10-16,
 // same as test), so every staff token carries demi-api in aud.
