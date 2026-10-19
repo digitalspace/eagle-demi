@@ -398,6 +398,8 @@ const routes = [
   { method: 'put', path: '/notifications/:id/unpublish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/notifications-write').unpublishNotification },
 
   // port: users
+  { method: 'post', path: '/users', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/users').createUser },
+  { method: 'put', path: '/users/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/users').updateUser },
 
   // port: extensions
   { method: 'get', path: '/projects/:id/extensions', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').getExtensions },

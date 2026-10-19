@@ -34,7 +34,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups-write.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | done (5ccd2bf3); Dark: staff-only, no caller |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | done (dda7c901); Dark: staff-only, no caller |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | done (251ab222); Dark: staff-only, no caller |
-| 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
+| 7 | Users | `domain/users.js`, `controllers/native/users.js`, `vis/catalog/users.js` | 1 | S-M | in progress (feat-port-users); Dark: staff-only, no caller |
 | 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | in progress (feat-port-extensions); Dark: staff-only, no caller |
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | todo |
@@ -357,15 +357,32 @@ Callers to move: eagle-admin `org.service.ts:19,29`.
 
 ### Users
 
-Status: todo
+Status: in progress (feat-port-users), Dark
 
-Today: `GET /users`, `/users/:id` (`routes.js:270-271`), `GET /me` (`routes.js:116`), mirror at `routes.js:250`.
+Today: `GET /users`, `/users/:id` (`routes.js:273-274`), `GET /me` (`routes.js:116`), mirror at `routes.js:253`. Dark: `POST /users` and `PUT /users/:id` are served under the `port: users` anchor in `routes.js`, rules in `src/domain/users.js`, write handlers in `src/controllers/native/users.js` (the reads stay with the mirror in `controllers/nosql/user.js`). eagle-admin still calls eagle-api.
 
 Target routes: `POST /users`, `PUT /users/:id`.
 
-Business rules (eagle-api `api/controllers/user.js`): to extract. Known: eagle-api users are Keycloak-backed; decide which fields DEMI owns versus Keycloak.
+Guards: both are `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]`: eagle-api's scope `project-system-admin` (`swagger.yaml:4613,4661`) plus `sysadmin` and `staff`, which its auth admits on every route (`api/helpers/auth.js:35-43`).
 
-Callers to move: eagle-admin `user.service.ts:13,19`.
+Business rules (eagle-api `api/controllers/user.js`):
+- POST and PUT copy the same 20 body fields: firstName, middleName, lastName, displayName, email, org, orgName, title, phoneNumber, salutation, department, faxNumber, cellPhoneNumber, address1, address2, city, province, country, postalCode, notes (`:18-38,69-90`). None is required. A key outside the list is ignored by eagle-api; DEMI answers 400 naming it. `org` must be an id (an ObjectId in the model); it is not checked against the organizations, as in eagle-api.
+- PUT replaces every field, `value ? value : ''` (`:69-90`). DEMI stores the defaults the Eagle push stores (`controllers/nosql/user.js`): `''`, and `null` for `middleName` and `org`. POST stores the same defaults for a field left out. A PUT body with no field besides `read` and `isPublished` is a 400; eagle-api would blank the row.
+- Read is staff and sysadmin, plus `public` when `orgName` is exactly 'Environmental Assessment Office' (`:39,92`), recomputed on every PUT. The row carries no `write` or `delete` list (`:40-41`); the route guards hold that rule.
+- Create answers 200 (`:51`). DEMI answers 201 with a UUID id, `sourceSystem: 'demi'`, `eagleId: null`, and `addedBy`/`updatedBy`/`dateAdded`/`dateUpdated`, catalogued at level 2.
+- Update with an id that is not an ObjectId is 400 (`:61-63`); a missing user answers 200 with `null` (`:97`). DEMI answers 404 for any id it does not hold, a deleted user included.
+- Each write records an action (`:49,98`). DEMI writes `user.create` and `user.update`, with field names only.
+
+Decisions:
+- Visibility (brief 2026-10-19: never default a ported object to public). `isPublished` replaces the orgName rule as the switch, and the orgName rule stays as a ceiling: create defaults to staff-only; `isPublished: true` is a 400 unless `orgName` is 'Environmental Assessment Office'; a PUT that leaves `isPublished` out keeps the current visibility, but drops `public` when `orgName` moves off that organization. eagle-api would make every such user public on save; at F7 eagle-admin sends `isPublished: true` for an EAO contact that should show. There are no publish and unpublish routes, so PUT carries `isPublished`. Other `read[]` entries are kept.
+- Not ported: `auth.setPassword` (`:45`). Keycloak holds sign-in, eagle-api's User model has no `password` or `salt` field so the hash is never saved, and the mirror drops `password` and `salt`. A `password` in the body is a 400.
+- Not copied: POST audits as 'Put' (`:49`). DEMI writes `user.create`.
+- Dark: a write to an Eagle-mirrored user is replaced by the next Eagle push, and the nightly reconcile reports a DEMI visibility change on such a row as `aclMismatch` until then. A DEMI-created user has no Eagle copy, so the reconcile skips it.
+
+Questioned, decide at F7:
+- Which fields DEMI owns versus Keycloak. Ported as eagle-api's full field set for parity. Name and email also live in Keycloak, and nothing syncs them either way; decide at F7 whether DEMI keeps writing them or reads them from the token.
+
+Callers to move: eagle-admin `user.service.ts:55-62`; its `toEagleUserBody` (`models/demi/user.ts:43`) sends `_id`, which DEMI refuses as an unknown key.
 
 ### CAC
 
