@@ -183,7 +183,8 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - Locked keys come from `helpers/constants.js:63-102`.
   - eagle-api PUT applies the same lock (`:628-631,743-754`); DEMI PUT lacks it (`controllers/nosql/project.js:108-129`).
 - A held level can be narrowed by Eagle but not widened (`merge/project.js:184-189`).
-- Owns: `src/domain/project-legislation.js` (new) and `src/controllers/nosql/project.js`.
+- Owns: `src/domain/project-legislation.js` (new), `src/controllers/nosql/project.js`, and `src/merge/project.js` (keeps every legislation block in `sources.eagle`; before F1).
+- Decided 2026-10-19: DEMI stores every block; the switch is an optional `legislationYear` on `PUT /projects/:id/level`.
 
 **10. Sitemap.** Size S. After 0. Read-only, so no domain module.
 - Route: `GET /sitemap.xml`, anonymous.
@@ -244,7 +245,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - `repositories/users.js`: 1, then 7.
   - `repositories/comment-periods.js`: 2, then 3 (which only calls it).
   - `controllers/nosql/project.js`: 9, then F1, then F9.
-  - `merge/project.js`: F1, then F8, then F11.
+  - `merge/project.js`: 9, then F1, then F8, then F11.
   - `parity-map.js`: 5, then T.
   - `vis/catalog/projects.js`: 8, then 11 if needed.
 - **Mirror lines** (`routes.js:243-254`) are adjacent. A Flip ignores Eagle fields inside its kind's `upsertFromEagle` and never edits those lines.

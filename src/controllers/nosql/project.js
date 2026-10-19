@@ -48,7 +48,7 @@ const { narrowTwin, mirrorTags, partnerRefusesTags, sameTags } = require('../../
 const { listHandler } = require('./mirror-reads');
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
-const { lockRefusal } = require('../../domain/project-legislation');
+const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -614,7 +614,7 @@ exports.updateProject = async (req, res) => {
 exports.setLevel = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    const { level, confirm, reason } = req.body || {};
+    const { level, confirm, reason, legislationYear } = req.body || {};
 
     if (!Number.isInteger(level) || level < 1 || level > 4) {
       return res.status(400).json({
@@ -626,6 +626,11 @@ exports.setLevel = async (req, res) => {
     }
     if (level === 4 && !String(reason || '').trim()) {
       return res.status(400).json({ error: 'Publishing to level 4 requires a non-empty "reason".' });
+    }
+    // eagle-api switches the year on publish only (`project.js:776-801`).
+    const year = legislationYear === undefined ? { value: null } : normalizeLegislationYear(legislationYear);
+    if (year.error || (year.value !== null && level !== 4)) {
+      return res.status(400).json({ error: year.error || 'legislationYear is taken only when publishing to level 4' });
     }
 
     const existing = await projects.getById(access, req.params.id);
@@ -648,14 +653,27 @@ exports.setLevel = async (req, res) => {
     const written = await writeGuarded({
       existing,
       reread: () => projects.getById(access, req.params.id),
-      attempt: async (current) => {
+      attempt: async (current, attempt) => {
         if (!current) return { status: 'missing' };
+        // Per try: a reread after a lost race can find the project moved under a locked Act.
+        const move = year.value === null ? { key: null } : yearSwitch(current, year.value);
+        if (move.error) {
+          logger.warn('[Project Controller] project level change refused: legislation year', {
+            id: req.params.id, attempt, legislationYear: year.value, status: move.status
+          });
+          return { status: 'refused', code: move.status, error: move.error };
+        }
         // Eagle's level from the payload the last push stored; `null` when Eagle never sent one.
         const eagle = current.sources && current.sources.eagle;
         const levelHeldAt = documents.levelHoldAfter(current, level,
           eagle ? levelOfRead(resolveProjectAcl(eagle)) : null);
+        // A switch rebuilds the row the way a push would, with the named block lifted to the top.
+        const base = move.key
+          ? keepSeal(stampPush(mergeEaglePush({ ...eagle, currentLegislationYear: move.key }, current),
+            undefined, current), current)
+          : current;
         const row = {
-          ...current,
+          ...base,
           ...acl,
           ...(levelHeldAt === undefined ? {} : { levelHeldAt }),
           id: current.id,
@@ -663,6 +681,7 @@ exports.setLevel = async (req, res) => {
         };
         return {
           status: 'saved',
+          switchedFrom: move.key ? eagle.currentLegislationYear || null : undefined,
           saved: await projects.upsert(row, { etag: current._etag })
         };
       },
@@ -673,7 +692,8 @@ exports.setLevel = async (req, res) => {
 
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project level change', req.params.id);
-    const { saved } = written;
+    if (written.status === 'refused') return res.status(written.code).json({ error: written.error });
+    const { saved, switchedFrom } = written;
 
     // Before the cascade, which can 500: the row someone comes looking for is the visibility
     // change, and it must not be the one path that records nothing.
@@ -682,7 +702,10 @@ exports.setLevel = async (req, res) => {
       targetType: 'project',
       targetId: existing.id,
       projectId: existing.id,
-      detail: { from, to: level, confirmed: confirm === true, reason: reason || '' }
+      detail: {
+        from, to: level, confirmed: confirm === true, reason: reason || '',
+        ...(switchedFrom === undefined ? {} : { legislationFrom: switchedFrom, legislationTo: saved.sources.eagle.currentLegislationYear })
+      }
     });
 
     if (level !== from) {

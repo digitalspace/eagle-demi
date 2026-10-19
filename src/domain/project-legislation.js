@@ -1,12 +1,13 @@
 'use strict';
 
 /**
- * The legislation registry and the locked-Act rule, ported from eagle-api
- * `api/helpers/constants.js:55-102` and `api/controllers/project.js:580-600` (rules in
+ * The legislation registry, the locked-Act rule and the publish year switch, ported from eagle-api
+ * `api/helpers/constants.js:55-102` and `api/controllers/project.js:580-600,776-801` (rules in
  * docs/eagle-api-port.md, Project).
  *
- * A DEMI project row is flat: it holds the current legislation block only, as `legislationYear`
- * and its `legislation` label (`merge/project.js`, `flattenEagleProject`).
+ * A DEMI project row is flat: its top level is the current block, as `legislationYear` and its
+ * `legislation` label. Every block, `currentLegislationYear` and `legislationYearList` are kept in
+ * `sources.eagle` (`merge/project.js`, `flattenEagleProject`).
  */
 
 /** `label` is the `legislation` string eagle-public matches on; a `locked` Act is never left. */
@@ -41,4 +42,23 @@ function lockRefusal(row, changes) {
   return movesYear || movesLabel ? `Project is under the ${label}` : null;
 }
 
-module.exports = { lockRefusal };
+/**
+ * Where publishing `row` under `year` leaves it: `{ key }` names the block to make current, `{ key:
+ * null }` keeps the current one, `{ status, error }` refuses.
+ */
+function yearSwitch(row, year) {
+  const locked = lockRefusal(row, { legislationYear: year });
+  if (locked) return { status: 409, error: locked };
+  if (!isRegistryYear(year)) return { status: 404, error: 'Unknown legislation year' };
+  const key = `legislation_${year}`;
+  const eagle = (row.sources && row.sources.eagle) || {};
+  const current = eagle.currentLegislationYear || (yearOf(row) && `legislation_${yearOf(row)}`);
+  if (key === current) return { key: null };
+  const listed = Array.isArray(eagle.legislationYearList) && eagle.legislationYearList.map(Number).includes(year);
+  if (!listed || !(eagle[key] && eagle[key].name)) {
+    return { status: 409, error: `Project has no content under legislation year ${year}` };
+  }
+  return { key };
+}
+
+module.exports = { lockRefusal, yearSwitch };

@@ -589,7 +589,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 <!-- port: extensions -->
 
 <!-- port: project-legislation -->
-`PUT /projects/:id` refuses with 409 a body that would move a project off a locked Act (the Building Canada Act), as eagle-api's PUT does. Differences: DEMI also refuses a null `legislationYear` and another `legislation` label on such a project, since its PUT stores both as sent. The publish-time year switch is not ported yet (docs/eagle-api-port.md, Project).
+`PUT /projects/:id` refuses with 409 a body that would move a project off a locked Act (the Building Canada Act), as eagle-api's PUT does. Differences: DEMI also refuses a null `legislationYear` and another `legislation` label on such a project, since its PUT stores both as sent. eagle-api's publish year switch is `legislationYear` on `PUT /projects/:id/level` at level 4 (same 404 and 409 rules), so that route stays the only one that widens.
 
 <!-- port: sitemap -->
 

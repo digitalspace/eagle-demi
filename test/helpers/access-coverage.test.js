@@ -319,7 +319,8 @@ test('access gate coverage', async (t) => {
     // 42: +1 for the short-code 503 when the claim raced (error string).
     // 43: +1 for the GET /projects 400 on an unknown `pcp` (error string).
     // 44: +1 for the PUT 409 when the project is under a locked Act (error string).
-    assert.strictEqual(emissions.length, 44,
+    // 45: +1 for the level 400 on a bad `legislationYear` (error string).
+    assert.strictEqual(emissions.length, 45,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
     for (const site of [
