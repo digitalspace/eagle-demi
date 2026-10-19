@@ -5393,7 +5393,8 @@ paths:
         project is public; `draft`, `archived` and no status make it staff-only, except that
         `active: true` with no status publishes, as in eagle-api. Publishing with no
         `publishDate` stamps now. A published update's featured image, images and attachments
-        must already be public documents. `pinned` starts false; `notificationName` is kept only
+        must be public documents, except images uploaded from the Update form to the same
+        project, which are published with it. `pinned` starts false; `notificationName` is kept only
         on the type `Project Notification Public Comment Period`. `_id`, `read`, `notifiedAt`,
         `pinned`, `dateAdded` and `dateUpdated` in the body are ignored; any other field outside
         the list is a 400.
@@ -5508,7 +5509,8 @@ paths:
         `project-system-admin`, `sysadmin` or `staff`. A body with neither `status` nor `active`
         keeps the status; `active` alone sets `published` or `draft`, except on an archived
         update. A null `publishDate` keeps the stored one. A published update's documents must be
-        public, unless the edit only flips `pinned`. `_etag`, when given, is the version the
+        public, as on create, unless the edit only flips `pinned`. Uploaded images no published
+        update shows any more go back to staff-only. `_etag`, when given, is the version the
         client read: an update that changed since is a 409. The server sets `dateUpdated` and
         `updatedBy`.
       security:
@@ -5557,7 +5559,8 @@ paths:
       summary: Archive an update
       description: >-
         Archives the update rather than deleting it, so its public URL keeps answering: status
-        `archived`, `active` false, and `public` removed from its read. Needs the role
+        `archived`, `active` false, and `public` removed from its read. Its uploaded images go
+        back to staff-only unless another published update shows them. Needs the role
         `project-system-admin`, `sysadmin` or `staff`.
       security:
         - BearerAuth: []

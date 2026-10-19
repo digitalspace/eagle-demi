@@ -15,6 +15,7 @@ const updateParent = require('../helpers/update-parent');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
+const images = require('./update-images');
 const { logger } = require('../utils/logger');
 
 /** updateRules.js:11. */
@@ -216,14 +217,52 @@ const isPinToggle = (existing, updated) => existing.status === PUBLISHED && upda
   Boolean(existing.pinned) !== Boolean(updated.pinned) &&
   idsShown(existing).sort().join() === idsShown(updated).sort().join();
 
-/** The shown documents an anonymous caller cannot read (updateRules.nonPublicDocumentIds). */
-async function nonPublicIds(row) {
+/**
+ * The shown documents an anonymous caller cannot read (updateRules.nonPublicDocumentIds), less the
+ * update's own uploads that publishing it publishes.
+ */
+async function nonPublicIds(row, parentId) {
   const ids = idsShown(row);
   if (!ids.length) return [];
   const visible = new Set();
   // listByIdsUnscoped takes at most 200 ids per call; a row shows at most 106.
   for (const doc of await documents.listByIdsUnscoped(resolveAccess({}), ids, 'c.id')) visible.add(String(doc.id));
-  return ids.filter(id => !visible.has(id));
+  const hidden = ids.filter(id => !visible.has(id));
+  if (!hidden.length) return [];
+  const own = new Set((await images.publishable(row, parentId)).map(doc => String(doc.id)));
+  return hidden.filter(id => !own.has(id));
+}
+
+/**
+ * Save through `write`, keeping image state in step (recentActivity.js:173-202,255-290): a
+ * published update's own uploads are published first and reverted when the save fails; after it,
+ * images no published update shows any more are released. `before` null is a create.
+ */
+async function writeWithImages(ctx, { before, after, parentId, write }) {
+  const publishing = after.status === PUBLISHED;
+  // Throws, having reverted what it published, when an image cannot be published.
+  const published = publishing ? await images.publishFor(ctx, after, parentId) : [];
+  let result;
+  try {
+    result = await write();
+  } catch (err) {
+    await images.revert(ctx, published, after.id);
+    throw err;
+  }
+  if (result.status !== 'ok') {
+    await images.revert(ctx, published, after.id);
+    return result;
+  }
+  if (before) {
+    const shownBefore = images.imageIds(before);
+    const shownAfter = images.imageIds(result.value);
+    // Live: only images it dropped may go private. Not live: none of its images need to stay public.
+    await images.release(ctx, publishing
+      ? shownBefore.filter(id => !shownAfter.includes(id))
+      : [...new Set([...shownBefore, ...shownAfter])], result.value.id);
+  }
+  if (publishing) await images.republish(ctx, result.value, parentId);
+  return result;
 }
 
 /** The parent of `projectId`, `null` for none, `undefined` when DEMI holds no such project or notification. */
@@ -244,11 +283,11 @@ function auditOf(action, fields) {
 const STALE = Symbol('stale edit');
 
 /** The row checked, its documents public when it will be published; null when it passes. */
-async function refusal(row, { checkDocuments = true } = {}) {
+async function refusal(row, parentId, { checkDocuments = true } = {}) {
   const errors = rowErrors(row);
   if (Object.keys(errors).length) return { status: 'invalid', fields: errors };
   if (checkDocuments && row.status === PUBLISHED) {
-    const hidden = await nonPublicIds(row);
+    const hidden = await nonPublicIds(row, parentId);
     if (hidden.length) {
       logger.info('[Update] publish refused, documents not public', { id: row.id, count: hidden.length });
       return { status: 'invalid', fields: { documents: `${NOT_PUBLIC}; not public: ${hidden.join(', ')}` } };
@@ -315,16 +354,22 @@ async function create(ctx, input) {
     notifyAttempts: 0,
     ...readFields({ sourceSystem: 'demi' }, own, status.status, parent)
   };
-  const refused = await refusal(row);
+  const parentId = parent && parent.id;
+  const refused = await refusal(row, parentId);
   if (refused) return refused;
 
-  return writeRow({
-    ctx,
-    repo: updates,
-    existing: null,
-    reread: () => updates.getById(ctx.access, id),
-    build: () => row,
-    audit: auditOf('update.create', Object.keys(given))
+  return writeWithImages(ctx, {
+    before: null,
+    after: row,
+    parentId,
+    write: () => writeRow({
+      ctx,
+      repo: updates,
+      existing: null,
+      reread: () => updates.getById(ctx.access, id),
+      build: () => row,
+      audit: auditOf('update.create', Object.keys(given))
+    })
   });
 }
 
@@ -376,22 +421,28 @@ async function update(ctx, id, changes) {
     };
   };
 
+  const parentId = parent && parent.id;
   const preview = rowFor(existing);
-  const invalid = await refusal(preview, { checkDocuments: !isPinToggle(existing, preview) });
+  const invalid = await refusal(preview, parentId, { checkDocuments: !isPinToggle(existing, preview) });
   if (invalid) return invalid;
 
   try {
-    return await writeRow({
-      ctx,
-      repo: updates,
-      existing,
-      reread: () => updates.getById(ctx.access, id),
-      build: (current) => {
-        if (!current) return null;
-        if (loaded !== undefined && current._etag !== loaded) throw STALE;
-        return rowFor(current);
-      },
-      audit: auditOf('update.update', fields)
+    return await writeWithImages(ctx, {
+      before: existing,
+      after: preview,
+      parentId,
+      write: () => writeRow({
+        ctx,
+        repo: updates,
+        existing,
+        reread: () => updates.getById(ctx.access, id),
+        build: (current) => {
+          if (!current) return null;
+          if (loaded !== undefined && current._etag !== loaded) throw STALE;
+          return rowFor(current);
+        },
+        audit: auditOf('update.update', fields)
+      })
     });
   } catch (err) {
     if (err !== STALE) throw err;
@@ -409,11 +460,20 @@ async function remove(ctx, id) {
   if (!existing) return { status: 'not-found' };
 
   const actor = actorOf(ctx);
+  return writeWithImages(ctx, {
+    before: existing,
+    after: { id: existing.id, status: ARCHIVED },
+    parentId: null,
+    write: () => archive(ctx, existing, actor)
+  });
+}
+
+function archive(ctx, existing, actor) {
   return writeRow({
     ctx,
     repo: updates,
     existing,
-    reread: () => updates.getById(ctx.access, id),
+    reread: () => updates.getById(ctx.access, existing.id),
     build: (current) => {
       if (!current) return null;
       const read = (current.read || []).filter(role => role !== 'public');

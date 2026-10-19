@@ -2,7 +2,7 @@
 
 /**
  * Re-derive a project's Updates' ACLs when its visibility changes, by the push's own rule
- * (`update-parent:updateRead`, which drops compliance) off `sources.eagle`. Not `acl-cascade.cascadeAcl`: that derives
+ * (`update-parent:updateRead`, which drops compliance) off `sources.eagle`, or `sources.demi` on a DEMI row. Not `acl-cascade.cascadeAcl`: that derives
  * through `constrainToProject`, whose ladder-token rewrite would widen an Update, and patches one partition while
  * `updates` partitions on `/id`.
  */
@@ -37,15 +37,19 @@ async function setAclForProject(projectEagleId, projectRead) {
   const { items } = await cosmos.query(updates.CONTAINER, {
     // `status` and `active` too: a row with no read (`update-parent:inheritsParentRead`) follows the project.
     query: 'SELECT c.id, c.read, c.sealedAt, c.sources.eagle.read AS eagleRead, ' +
-      'c.sources.eagle.status AS eagleStatus, c.sources.eagle.active AS eagleActive ' +
+      'c.sources.eagle.status AS eagleStatus, c.sources.eagle.active AS eagleActive, ' +
+      'c.sourceSystem, c.sources.demi.read AS demiRead, c.sources.demi.status AS demiStatus ' +
       'FROM c WHERE c.projectId = @projectId',
     parameters: [{ name: '@projectId', value: String(projectEagleId) }]
   }, {});
   // A row DEMI sealed keeps its seal, as a push does (`eagle-mirror:keepSeal`); one an Eagle push
   // sealed is re-derived like any other.
   const derived = items.filter(row => !heldSealed(row)).map(row => {
-    const eagle = { read: row.eagleRead, status: row.eagleStatus, active: row.eagleActive };
-    const read = updateRead(eagle, { read: projectRead });
+    // A row DEMI created has no Eagle copy; its own read and status are in `sources.demi` (domain/updates.js).
+    const source = row.sourceSystem === 'demi'
+      ? { read: row.demiRead, status: row.demiStatus }
+      : { read: row.eagleRead, status: row.eagleStatus, active: row.eagleActive };
+    const read = updateRead(source, { read: projectRead });
     return { id: String(row.id), read, isPublished: read.includes('public') };
   });
   if (derived.length === 0) return NOTHING;

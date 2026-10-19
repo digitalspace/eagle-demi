@@ -14,6 +14,7 @@ const updates = require('../../../src/repositories/updates');
 const documents = require('../../../src/repositories/documents');
 const updateParent = require('../../../src/helpers/update-parent');
 const { withServer } = require('../../helpers/with-server');
+const { fakeImages } = require('../../helpers/update-images-store');
 
 const PROJECT_ID = '5c1f7a3e9b1d2c0012340001';
 const UPDATE_ID = '5c1f7a3e9b1d2c0012350001';
@@ -70,6 +71,26 @@ test('update writes', async (t) => {
     assert.strictEqual(res.body.status, 'draft');
     assert.strictEqual(res.body.sourceSystem, 'demi');
     assert.strictEqual(res.body.read, undefined, 'read[] never leaves the service');
+  });
+
+  await t.test('publishing with its own private upload: 201 and the image is public', async (t) => {
+    fakeStore(t);
+    const image = '5c1f7a3e9b1d2c0012370001';
+    const images = fakeImages(t, [{ id: image, level: 2, documentSource: 'UPDATE', projectId: 'p-1' }]);
+    const res = await ROUTES.create(['staff'],
+      { projectId: PROJECT_ID, status: 'published', featuredImage: { document: image, alt: 'A creek' } });
+    assert.strictEqual(res.status, 201);
+    assert.strictEqual(images.level(image), 4);
+  });
+
+  await t.test('publishing with a private document of another kind is a 400 naming documents', async (t) => {
+    const store = fakeStore(t);
+    fakeImages(t, [{ id: '5c1f7a3e9b1d2c0012370002', level: 2, documentSource: 'PROJECT', projectId: 'p-1' }]);
+    const res = await ROUTES.create(['staff'],
+      { projectId: PROJECT_ID, status: 'published', attachments: ['5c1f7a3e9b1d2c0012370002'] });
+    assert.strictEqual(res.status, 400);
+    assert.ok(res.body.fields.documents);
+    assert.strictEqual(store.written.length, 0);
   });
 
   await t.test('a create with an unknown field is a 400 naming it', async (t) => {

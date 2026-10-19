@@ -699,6 +699,28 @@ async function fillPublishDate(id, value) {
   return patchIf(id, [{ op: 'set', path: '/publishDate', value }], `FROM c WHERE ${UNDATED_CLAUSE}`);
 }
 
+/**
+ * The image and attachment refs of every published update showing one of `docIds`, for
+ * domain/update-images.js. A row with no status goes by `active`, as eagle-api's `shownIds` does.
+ */
+async function listShowingDocuments(docIds) {
+  if (!docIds.length) return [];
+  const spec = selectWhere({
+    access: systemAccess(),
+    partitionField: SCOPE_FIELD,
+    criteria: [{
+      clause: '(c.status = @shownStatus OR ((NOT IS_DEFINED(c.status) OR IS_NULL(c.status)) AND c.active = true)) AND ' +
+        '(ARRAY_CONTAINS(@shownIds, c.featuredImage.document) ' +
+        'OR EXISTS(SELECT VALUE i FROM i IN c.images WHERE ARRAY_CONTAINS(@shownIds, i.document)) ' +
+        'OR EXISTS(SELECT VALUE a FROM a IN c.attachments WHERE ARRAY_CONTAINS(@shownIds, a)))',
+      params: [{ name: '@shownStatus', value: PUBLISHED }, { name: '@shownIds', value: docIds.map(String) }]
+    }],
+    select: 'c.id, c.featuredImage, c.images, c.attachments'
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
 /** The sort fields a row written before mirrorItem filled them can lack. */
 const SORT_FIELDS = ['pinned', 'complianceAndEnforcement', 'status'];
 const missingClause = fields => fields.map(field => `NOT IS_DEFINED(c.${field})`);
@@ -771,5 +793,6 @@ module.exports = {
   sortFieldFills,
   listMissingSortFields,
   fillSortFields,
+  listShowingDocuments,
   fillPublishDate
 };

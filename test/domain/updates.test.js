@@ -14,6 +14,7 @@ const documents = require('../../src/repositories/documents');
 const updateParent = require('../../src/helpers/update-parent');
 const { resolveAccess } = require('../../src/helpers/access-sql');
 const update = require('../../src/domain/updates');
+const { fakeImages } = require('../helpers/update-images-store');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -27,6 +28,9 @@ const PARENTS = {
   [PUBLIC_PROJECT]: { id: 'p-public', kind: 'project', read: ['public', 'staff', 'sysadmin'] },
   [PRIVATE_PROJECT]: { id: 'p-private', kind: 'project', read: ['staff', 'sysadmin'] }
 };
+const OWN_IMAGE = '5c1f7a3e9b1d2c0012370001';
+// An upload from the Update form under PUBLIC_PROJECT's DEMI id (PARENTS above).
+const UPLOAD = { documentSource: 'UPDATE', projectId: 'p-public' };
 const PAST = '2024-01-01T00:00:00.000Z';
 const STORED = Object.freeze({
   id: UPDATE_ID, eagleId: UPDATE_ID, projectId: PUBLIC_PROJECT, headline: 'Site work begins', type: 'News',
@@ -296,6 +300,40 @@ test('update domain', async (t) => {
     assert.deepStrictEqual(row.read, ['staff', 'sysadmin']);
     assert.strictEqual(row.isPublished, false);
     assert.strictEqual(rows[0].Action, 'update.archive');
+  });
+
+  await t.test('publishing with its own private upload passes and publishes the image', async (t) => {
+    fakeStore(t, null);
+    const images = fakeImages(t, [{ id: OWN_IMAGE, level: 2, ...UPLOAD }]);
+    const result = await update.create(STAFF, createBody({ status: 'published', featuredImage: { document: OWN_IMAGE, alt: 'A creek' } }));
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(images.level(OWN_IMAGE), 4);
+  });
+
+  await t.test('a save that fails puts the image it published back', async (t) => {
+    fakeStore(t, null);
+    t.mock.method(updates, 'upsert', async () => { throw new Error('cosmos down'); });
+    const images = fakeImages(t, [{ id: OWN_IMAGE, level: 2, ...UPLOAD }]);
+    await assert.rejects(update.create(STAFF, createBody({ status: 'published', images: [{ document: OWN_IMAGE, alt: 'A creek' }] })));
+    assert.strictEqual(images.level(OWN_IMAGE), 2);
+  });
+
+  await t.test('a live update that drops an image releases that one only', async (t) => {
+    const kept = '5c1f7a3e9b1d2c0012370009';
+    fakeStore(t, { ...STORED, attachments: [], images: [{ document: OWN_IMAGE, alt: 'a' }, { document: kept, alt: 'b' }] });
+    const images = fakeImages(t, [{ id: OWN_IMAGE, level: 4, ...UPLOAD }, { id: kept, level: 4, ...UPLOAD }]);
+    t.mock.method(documents, 'listByIdsUnscoped', async (access, ids) => ids.map(id => ({ id })));
+    const result = await update.update(STAFF, UPDATE_ID, { images: [{ document: kept, alt: 'b' }] });
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(images.level(OWN_IMAGE), 2);
+    assert.strictEqual(images.level(kept), 4);
+  });
+
+  await t.test('delete releases the archived update\'s image', async (t) => {
+    fakeStore(t, { ...STORED, attachments: [], featuredImage: { document: OWN_IMAGE, alt: 'a' } });
+    const images = fakeImages(t, [{ id: OWN_IMAGE, level: 4, ...UPLOAD }]);
+    await update.remove(STAFF, UPDATE_ID);
+    assert.strictEqual(images.level(OWN_IMAGE), 2);
   });
 
   await t.test('delete of a missing row is not found', async (t) => {

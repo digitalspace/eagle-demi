@@ -32,7 +32,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods-write.js`, `repositories/comment-periods.js` | 0 | M | done (ab0292ec); Dark: staff-only, no caller |
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | done (b3ebe499); Dark: staff-only, no caller |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | todo |
-| 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | in progress (feat-port-updates); image cascade split to 5b |
+| 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | in progress (feat-port-updates) |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications.js`, `repositories/notifications.js` | 0 | S-M | todo |
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
 | 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | todo |
@@ -266,15 +266,14 @@ Business rules (eagle-api `api/controllers/recentActivity.js`, `api/helpers/upda
 - The read follows the status alone: `published` is public plus staff and sysadmin, anything else staff and sysadmin, capped under the parent project or notification (`update-parent:readUnder`). With no status, `active: true` publishes, as `applyStatus` derives it; no status and no `active` is a draft.
 - Publishing with no `publishDate` stamps now, unless the row was already live; a null `publishDate` on PUT keeps the stored one.
 - Create starts unpinned and ignores `_id`, `read`, `notifiedAt` and `pinned`; `notificationName` is kept only on the type `Project Notification Public Comment Period`.
-- Field checks are `updateRules.validate`. A published update's documents must be public (anonymous `documents.listByIdsUnscoped`), except on a pin toggle.
+- Field checks are `updateRules.validate`. A published update's documents must be public (anonymous `documents.listByIdsUnscoped`), except its own uploads, and except on a pin toggle.
+- Image cascade (`src/domain/update-images.js`, eagle-api `updateImages.js`): publishing an update first publishes its own uploads (`documentSource: 'UPDATE'`, same parent), and a failed save reverts them. After a save, uploads no published update shows (`updates.listShowingDocuments`) go back to level 2: on a live update only the images it dropped, otherwise all of its images, and all of them on DELETE. Each move also corrects the search index and chunks, and is audited as `record.widen` or `record.narrow`. Dark: the next Eagle push of such a document carries Eagle's level, held below a DEMI narrow by `levelHeldAt`.
 - PUT `_etag` is the client's loaded version: a moved row is a 409. A body with neither `status` nor `active` keeps the status.
 - DELETE archives: status `archived`, `active` false, `public` pulled.
-- A DEMI row keeps its own read and status in `sources.demi`.
+- A DEMI row keeps its own read and status in `sources.demi`; the project cascade (`helpers/update-acl.js`) re-derives such a row from them, not from `sources.eagle`.
 - Dark: a write to an Eagle-mirrored row is replaced by the next Eagle push. A published DEMI row is announced by `announce-updates.js` once due, like a mirrored one.
 
 Open:
-- 5b, image cascade (`domain/update-images.js`): eagle-api publishes the update's own uploaded images (`documentSource: 'UPDATE'`, same project) before save, reverts them on failure, and releases images no published update shows (`updateImages.js`). Until then the public check has no exception for those images.
-- The project cascade (`helpers/update-acl.js:37-48`) re-derives every row from `sources.eagle`, so it reads a DEMI row as Eagle-less and stores `read: []`. It must take `sources.demi` for `sourceSystem: 'demi'` rows, as `comments.aclRowsForPeriod` does.
 - `parity-map.js` `recent-activity-top` now sorts on `publishDate`; Eagle's pinned-first order needs a second sort key `/updates` does not take.
 
 Callers to move: eagle-admin `recent-activity.ts`.

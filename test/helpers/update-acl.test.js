@@ -188,6 +188,28 @@ test('setAclForProject — updates follow their project', async (t) => {
     assert.deepStrictEqual(patched(seen.ops[0]), { '/read': PUBLIC_PARENT, '/isPublished': true, ...CLEARED });
   });
 
+  await t.test('a published update DEMI created reopens with its project, from sources.demi', async () => {
+    const seen = stub(t, [{
+      id: 'u1', read: ['staff', 'sysadmin'], sourceSystem: 'demi',
+      demiRead: ['public', 'staff', 'sysadmin'], demiStatus: 'published'
+    }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.strictEqual(patched(seen.ops[0])['/isPublished'], true);
+    assert.ok(patched(seen.ops[0])['/read'].includes('staff'), 'not reset to an empty read');
+  });
+
+  await t.test('a draft DEMI created stays staff-only under a public project', async () => {
+    const seen = stub(t, [{
+      id: 'u1', read: ['staff', 'sysadmin'], sourceSystem: 'demi', demiRead: ['staff', 'sysadmin'], demiStatus: 'draft'
+    }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.deepStrictEqual(patched(seen.ops[0])['/read'], ['staff', 'sysadmin']);
+  });
+
   await t.test('an empty project ACL is refused rather than read as level 1', async () => {
     stub(t, []);
     await assert.rejects(setAclForProject(PROJECT_EAGLE_ID, []), TypeError);
