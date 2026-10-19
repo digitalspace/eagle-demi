@@ -7784,7 +7784,8 @@ components:
       additionalProperties:
         description: >-
           `legislation_<year>` (1996, 2002, 2018, 2025): the project's content under that Act, as
-          Eagle sent it. Each field is shown at the level of the top-level field of the same name
+          Eagle sent it. Each field is shown at the level of the top-level field of the same name,
+          under the strictest of that field's dial, the block's and its own
           (`type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow
           `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`);
           a field with no top-level counterpart is withheld. `PUT` ignores these keys.

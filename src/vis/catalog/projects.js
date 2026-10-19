@@ -188,13 +188,15 @@ const EAGLE_BLOCK_NAMES = Object.freeze({
 });
 
 // Each `legislation_<year>` block is withheld whole and published field by field, each child at its
-// top-level field's level; a block field with no top-level counterpart never leaves the API.
+// top-level field's level and under its dial (`dialOf`, redact.js); a field with no counterpart never leaves the API.
 const topLevel = Object.entries(catalog).filter(([key]) => !key.includes('.'));
 for (const year of Object.keys(LEGISLATIONS)) {
   const block = `legislation_${year}`;
   catalog[block] = { defaultVis: 0, maxVis: 0 };
-  for (const [field, entry] of topLevel) catalog[`${block}.${field}`] = entry;
-  for (const [eagleName, field] of Object.entries(EAGLE_BLOCK_NAMES)) catalog[`${block}.${eagleName}`] = catalog[field];
+  for (const [field, entry] of topLevel) catalog[`${block}.${field}`] = { ...entry, dialOf: field };
+  for (const [eagleName, field] of Object.entries(EAGLE_BLOCK_NAMES)) {
+    catalog[`${block}.${eagleName}`] = { ...catalog[field], dialOf: field };
+  }
 }
 
 module.exports = catalog;
