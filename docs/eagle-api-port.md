@@ -30,7 +30,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | done (b9e4685f) |
 | 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); Dark: staff-only, no caller; publish/unpublish added (86c68044) |
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods-write.js`, `repositories/comment-periods.js` | 0 | M | done (ab0292ec); Dark: staff-only, no caller |
-| 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | in progress (feat-port-comments) |
+| 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | done (b3ebe499); Dark: staff-only, no caller |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | todo |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | todo |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications.js`, `repositories/notifications.js` | 0 | S-M | todo |
@@ -214,7 +214,7 @@ Callers to move: eagle-admin `commentperiod.service.ts:98,104,109,115,120`; DEMI
 
 ### Comments
 
-Status: Dark
+Status: done (b3ebe499), Dark
 
 Today: reads at `routes.js:296-297`, export at `routes.js:309`. Mirror writes at `routes.js:250` (Eagle). Dark: the three write routes are served under the `port: comments` anchor (`routes.js:376`), rules in `src/domain/comments.js`, handlers in `src/controllers/native/comments-write.js`. eagle-admin still calls eagle-api. `POST /public/comment` has no caller and is not ported.
 
