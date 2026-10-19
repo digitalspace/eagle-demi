@@ -289,8 +289,6 @@ const statusRows = counts => Object.entries(counts || {}).map(([status, count]) 
 const pending = (read, plan, reason) => ({ read, plan, pending: true, skip: reason });
 // DEMI sets x-total-count on GET and HEAD of /search; this script sends GET only.
 const HEAD_REASON = 'HEAD not sent by this script';
-// D2c (branch feat-native-updates-notifications) adds this; until DEMI answers it, the read is skipped.
-const NOTIFICATIONS = { pendingRoute: '/notifications' };
 
 const DOCUMENT_ONE_FIELDS = [...FIELDS.Document, 'type'];
 // Eagle answers every featured row; eagle-public asks the same filter and sort for its top five.
@@ -375,7 +373,7 @@ const REST_READS = [
     eagle: rows('/organization', undefined, ORGANIZATION_ROUTE), demi: native('/organizations') },
   { read: 'organization', plan: '40', identities: STAFF, dataset: 'Organization',
     eagle: rows('/organization/:organization', undefined, ORGANIZATION_ROUTE), demi: one('/organizations/:organization') },
-  { read: 'project-notification-list', plan: '41', identities: STAFF, dataset: 'ProjectNotification', ...NOTIFICATIONS,
+  { read: 'project-notification-list', plan: '41', identities: STAFF, dataset: 'ProjectNotification',
     eagle: pagedRows('/projectNotification', undefined, FIELDED), demi: native('/notifications') },
   { read: 'recent-activity-top', plan: '42', identities: ANON, dataset: 'RecentActivity',
     // Eagle's four sort on publishDate (recentActivity.js:48). Its pinned-first order needs a second
@@ -406,7 +404,7 @@ const NATIVE_LISTS = {
   CommentPeriod: { demi: native('/comment-periods') },
   Organization: { demi: native('/organizations') },
   RecentActivity: { demi: native('/updates') },
-  ProjectNotification: { demi: native('/notifications'), ...NOTIFICATIONS }
+  ProjectNotification: { demi: native('/notifications') }
 };
 const STAFF_LISTS = {
   User: { demi: native('/users') },

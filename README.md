@@ -409,9 +409,6 @@ reports as truncated. Each truncated read has a `truncatedReason` in the report 
 which side, and whether paging stopped (`--max-pages`, the anonymous page depth) or the 1000-row
 limit cut it.
 
-Reads on `/notifications` wait for that route (branch `feat-native-updates-notifications`). The
-run sends one GET to it first; a 404 skips its reads as `skipped (pending)`, and any other answer
-runs them, so a broken route fails rather than hides.
 `featured-public` and `featured` read native `/documents` with `isFeatured=true` and
 `sort=-datePosted`, the query eagle-public's featured list sends, and compare every featured row.
 
@@ -585,6 +582,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 `POST /updates`, `PUT /updates/:id` and `DELETE /updates/:id` (all project-system-admin, sysadmin, staff) are served by DEMI; eagle-admin still calls eagle-api until the flip. Differences: create takes `projectId` for `project`, answers 201 with a UUID id, and a `projectId` DEMI does not hold is a 400; PUT changes only the fields given, keeps the status when the body names neither `status` nor `active`, answers 404 for a missing row, and takes the client's `_etag` instead of `dateUpdated` for the 409; image `alt`, `caption` and `credit` with HTML tags are a 400 rather than stripped; a published update reads public only while its project does; DELETE answers the archived row. As in eagle-api, images uploaded from the Update form go public with their update, but only while its project is public, and back to staff-only (level 2) once no published update shows them.
 
 <!-- port: notifications -->
+`POST /notifications`, `PUT /notifications/:id`, and `PUT /notifications/:id/publish` and `/unpublish` (all staff, sysadmin) are served by DEMI; eagle-admin still calls eagle-api `/projectNotification` until the flip. Differences: publishing is the two action routes, not `?publish=`; create takes `isPublished` (default false) in its place and answers 201 with a UUID id; PUT, as in eagle-api, replaces every field and defaults the ones left out, but stores the defaults the Eagle push stores (`null` for text, `pcp` `none`), ignores `read` and `isPublished`, answers 400 for a body with no other field, and 404 for a missing row; a field not in the list, a non-number `notificationThresholdValue` or a `centroid` of more than two values is a 400.
 
 <!-- port: users -->
 

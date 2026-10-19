@@ -1,6 +1,7 @@
 'use strict';
 
 const { writeGuarded } = require('../helpers/etag-write');
+const { eagleBaseAcl } = require('../helpers/eagle-acl');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
 
@@ -51,4 +52,11 @@ async function writeRow({ ctx, repo, existing = null, reread, build, audit }) {
 const STAFF_READ = Object.freeze(['staff', 'sysadmin']);
 const PUBLIC_READ = Object.freeze(['public', ...STAFF_READ]);
 
-module.exports = { writeRow, STAFF_READ, PUBLIC_READ };
+/** `read` with `public` added or taken out; other entries are kept, and an emptied read falls back to staff. */
+function readWith(read, published) {
+  const rest = eagleBaseAcl(read).filter(r => r !== 'public');
+  const base = rest.length ? rest : [...STAFF_READ];
+  return published ? ['public', ...base] : base;
+}
+
+module.exports = { writeRow, readWith, STAFF_READ, PUBLIC_READ };

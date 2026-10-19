@@ -558,6 +558,22 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 5);
   });
 
+  // POST /notifications writes a DEMI row with no Eagle copy until sync-out covers notifications.
+  await t.test('a notification created in DEMI is not drift', async () => {
+    const summary = await reconcile([], makeDeps({
+      notifications: {
+        ...makeDeps().notifications,
+        listEvery: async (access) => {
+          assertSystem(access);
+          return [...NOTIFICATION_ROWS, { id: 'N-demi', sourceSystem: 'demi' }];
+        }
+      }
+    }));
+
+    assert.deepStrictEqual(summary.notifications.unpublishedOrDeleted, []);
+    assert.strictEqual(summary.drift, 5);
+  });
+
   // POST /comments writes a DEMI row with no Eagle copy until sync-out covers comments.
   await t.test('a comment created in DEMI is not drift', async () => {
     const summary = await reconcile(['--comments'], makeDeps({
