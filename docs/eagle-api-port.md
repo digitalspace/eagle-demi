@@ -541,9 +541,10 @@ Status: dead handlers done (eagle-api 681b483, slice R1); per-object retire todo
 Dead now, no caller found in any repo (external callers unverified where noted):
 - `cac` admin handlers (`protectedPublishCAC`, `protectedUnPublishCAC`, `protectedCreateCAC`, `protectedCACDelete`, `protectedCACRemoveMember`): already removed in eagle-api (b072e79)
 - `inspection` POSTs: already removed in eagle-api (b072e79). `protectedElementItemGet` remains.
-- `materialized-view` `protectedRefresh`
-- `POST /public/comment`, `POST /public/document`
-- `GET /audit` (no handler file, 404 on prod), `POST /task`
+- `materialized-view` `protectedRefresh`: already removed in eagle-api (b072e79)
+- `POST /public/comment`, `POST /public/document`: already removed in eagle-api (18dc425)
+- `GET /audit` (no handler file, 404 on prod)
+- `POST /task`: already removed in eagle-api (b072e79)
 - `login` (`POST /login/token`): not dead, kept in R1 (681b483) because eagle-admin uses it for local login when Keycloak is off
 - `pin` routes under `/project/:id/pin*` and `/public/project/:id/pin`, with the project flip
 
