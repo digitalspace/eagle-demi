@@ -379,6 +379,12 @@ const routes = [
   { method: 'put', path: '/comments/:id/status', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comments-write').setCommentStatus },
 
   // port: groups
+  { method: 'get', path: '/groups/:id/members', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/groups').getGroupMembers },
+  { method: 'post', path: '/groups', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/groups-write').createGroup },
+  { method: 'put', path: '/groups/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/groups-write').updateGroup },
+  { method: 'delete', path: '/groups/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/groups-write').deleteGroup },
+  { method: 'post', path: '/groups/:id/members', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/groups-write').addGroupMembers },
+  { method: 'delete', path: '/groups/:id/members/:userId', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/groups-write').removeGroupMember },
 
   // port: updates
   { method: 'post', path: '/updates', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/updates-write').createUpdate },

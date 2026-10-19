@@ -72,21 +72,26 @@ async function upsert(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
 }
 
-/** Removes the row a group moved to another project left in its old partition. */
-async function deleteById(id, projectId) {
-  return cosmos.remove(CONTAINER, String(id), String(projectId));
+/** Removes one row: a moved group's old copy, or a staff delete on the revision it read (`etag`). */
+async function deleteById(id, projectId, etag) {
+  return cosmos.remove(CONTAINER, String(id), String(projectId), { etag });
 }
 
-/** Re-derive every group of one project from the project's ACL. systemAccess skips a sealed row. */
+/**
+ * Re-derive every group of one project from the project's ACL. systemAccess skips a sealed row. A
+ * row DEMI created takes its own ACL from `sources.demi.read`, since `read` is already narrowed.
+ */
 async function setAclForProject(projectId, read) {
   const spec = selectWhere({
     access: systemAccess(),
     partitionField: PARTITION_FIELD,
     criteria: [eq(PARTITION_FIELD, String(projectId), '@projectId')],
-    select: 'c.id, c.read, c.isDeleted, c.sources.eagle.read AS eagleRead'
+    select: 'c.id, c.read, c.isDeleted, c.sourceSystem, c.sources.eagle.read AS eagleRead, c.sources.demi.read AS demiRead'
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
-  return cascadeAcl(CONTAINER, projectId, items, read);
+  const rows = items.map(({ sourceSystem, demiRead, eagleRead, ...row }) =>
+    ({ ...row, eagleRead: sourceSystem === 'demi' ? demiRead : eagleRead }));
+  return cascadeAcl(CONTAINER, projectId, rows, read);
 }
 
 /** Every row's ACL inputs, whole container — for the reconcile only. */

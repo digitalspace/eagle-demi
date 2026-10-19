@@ -118,7 +118,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 - Questioned:
   - PUT applies the whole body (`:48`). Allow `name` only.
   - Adding members allows duplicates (`:92-95`). De-duplicate.
-- Owns: `domain/groups.js`, `controllers/native/groups.js` (new; reads stay in `controllers/nosql/group.js`), `repositories/groups.js`, `vis/catalog/groups.js`.
+- Owns: `domain/groups.js`, `controllers/native/groups-write.js` and `controllers/native/groups.js` (the members read, which answers `res` itself; the other reads stay in `controllers/nosql/group.js`), `repositories/groups.js`, `vis/catalog/groups.js`.
 
 **5. Updates (recent activity).** Size L. After 0. If it overruns, split the image cascade into 5b (`domain/update-images.js`).
 - Routes, all [project-system-admin, sysadmin]: `POST /updates` (:3142), `PUT /updates/:id` (:3191), `DELETE /updates/:id` (:3222).
