@@ -33,7 +33,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | done (b3ebe499); Dark: staff-only, no caller |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups-write.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | done (5ccd2bf3); Dark: staff-only, no caller |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | done (dda7c901); Dark: staff-only, no caller |
-| 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | in progress (feat-port-notifications) |
+| 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | done (251ab222); Dark: staff-only, no caller |
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
 | 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | todo |
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
@@ -293,7 +293,7 @@ Callers to move: eagle-admin `recent-activity.ts`.
 
 ### Project notifications
 
-Status: Dark
+Status: done (251ab222), Dark
 
 Today: `GET /notifications`, `/notifications/:id` (`routes.js:304-305`), Eagle mirror at `routes.js:252`. Dark: the four write routes are served under the `port: notifications` anchor (`routes.js:394`), rules in `src/domain/notifications.js`, write handlers in `src/controllers/native/notifications-write.js`. eagle-admin still calls eagle-api.
 
