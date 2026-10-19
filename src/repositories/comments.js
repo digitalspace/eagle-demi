@@ -120,7 +120,10 @@ async function deleteById(id, periodId) {
   return cosmos.remove(CONTAINER, String(id), String(periodId));
 }
 
-/** The ACL inputs of every comment in one period — see `commentPeriods.aclRowsForProject`. */
+/**
+ * The ACL inputs of every comment in one period — see `commentPeriods.aclRowsForProject`. A row DEMI
+ * created takes its own ACL from `sources.demi.read`, since `read` is already narrowed to the period.
+ */
 async function aclRowsForPeriod(access, periodId) {
   // Callers pass systemAccess on purpose: a sealed child is skipped, and a `read`-less one heals on
   // its own next push, which reads it unfiltered (`readForWrite`).
@@ -128,10 +131,11 @@ async function aclRowsForPeriod(access, periodId) {
     access,
     partitionField: SCOPE_FIELD,
     criteria: criteriaFor(periodId),
-    select: 'c.id, c.read, c.sources.eagle.read AS eagleRead'
+    select: 'c.id, c.read, c.sourceSystem, c.sources.eagle.read AS eagleRead, c.sources.demi.read AS demiRead'
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(periodId) });
-  return items;
+  return items.map(({ sourceSystem, demiRead, eagleRead, ...row }) =>
+    ({ ...row, eagleRead: sourceSystem === 'demi' ? demiRead : eagleRead }));
 }
 
 /**

@@ -45,6 +45,9 @@ module.exports = {
   rejectedNotes: { defaultVis: 2, maxVis: 2 },
   rejectedReason: { defaultVis: 2, maxVis: 2 },
   valuedComponents: { defaultVis: 2, maxVis: 2 },
+  // Stamped by a DEMI write (domain/comments.js); the mirror does not carry them.
+  addedBy: { defaultVis: 2, maxVis: 2 },
+  updatedBy: { defaultVis: 2, maxVis: 2 },
 
   // Never public. Same entries, same reasons, as catalog/projects.js.
   read: { defaultVis: 0, maxVis: 0 },

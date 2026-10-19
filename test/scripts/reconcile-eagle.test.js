@@ -558,6 +558,21 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 5);
   });
 
+  // POST /comments writes a DEMI row with no Eagle copy until sync-out covers comments.
+  await t.test('a comment created in DEMI is not drift', async () => {
+    const summary = await reconcile(['--comments'], makeDeps({
+      comments: {
+        listEveryByPeriod: async (periodId, access) => {
+          assertSystem(access);
+          return [{ id: 'C-demi', sourceSystem: 'demi' }];
+        }
+      }
+    }));
+
+    assert.deepStrictEqual(summary.comments.unpublishedOrDeleted, []);
+    assert.strictEqual(summary.drift, 5);
+  });
+
   // The class the sweep could not see: Track 353's epic_guid is the ProjectNotification's own _id,
   // so the registry resolves that ref to project '353' and the old rule stored the period there,
   // under the Track project's ACL. Both containers hold it, so every id-set diff read it as clean.
