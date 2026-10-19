@@ -100,7 +100,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 ### Sync-out
 
 - `writeRow` raises `syncVersion` on every write, one past the stored row it rebuilt from (`nextSyncVersion` in `src/sync-out/kinds.js`, which the ENGAGE ingest uses too). It does not queue anything.
-- `src/sync-out/kinds.js` maps each kind to its repository, the names of the consumers that send it, and its reconcile hook. Only `commentPeriod` is registered; it reconciles through `src/scripts/reconcile-engage.js`.
+- `src/sync-out/kinds.js` maps each kind to its repository, the names of the consumers that send it, and its reconcile hook. Only `commentPeriod` is registered; it reconciles through `src/scripts/reconcile-engage.js`. The `reconcileEngage` timer in `api/index.js` runs every kind's hook on `RECONCILE_ENGAGE_SCHEDULE`.
 - Queue messages and resends carry `kind`. A message with no `kind`, queued before the field existed, is read as a comment period.
 - `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing; reconcile re-queues.
 - A Flip that needs sync-out adds its kind to `kinds.js`, its consumer to the list in `index.js`, and calls `enqueueQuietly` after its write.
