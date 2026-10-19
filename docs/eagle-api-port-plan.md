@@ -41,13 +41,13 @@ Who runs it: the developer working on organizations, on branch `feat-port-organi
   - Tracker: the Layering section, and the inventory text at line 48, now one file per object.
   - eagle-demi.wiki `Architecture.md`: a new layering section. The page has none today; its only "layer" heading is "Map boundary layers" at line 219.
 - **Swagger rule:** slice 0 adds no swagger anchors for objects that already have path blocks. A slice adds its methods inside the existing block, because a second path key is a duplicate YAML key and no test parses the spec. The existing blocks are:
-  - `/api/users` 3828 and `/api/users/{id}` 3896
-  - `/api/groups` 3925 and `/api/groups/{id}` 3995
+  - `/api/users` 4028 and `/api/users/{id}` 4098
+  - `/api/groups` 4127 and `/api/groups/{id}` 4197
   - `/api/organizations` 4534 and `/api/organizations/{id}` 4640
   - `/api/comment-periods` 4710 and `/api/comment-periods/{id}` 4784
-  - `/api/comments` 4574 and `/api/comments/{id}` 4654
-  - `/api/updates` 4681 and `/api/updates/{id}` 4790
-  - `/api/notifications` 4816 and `/api/notifications/{id}` 4897
+  - `/api/comments` 4853 and `/api/comments/{id}` 4933
+  - `/api/updates` 4960 and `/api/updates/{id}` 5133
+  - `/api/notifications` 5159 and `/api/notifications/{id}` 5260
   - `/api/projects/{id}` 958 and `/api/projects/{id}/level` 1132
 
   Anchors exist only for new paths: members, extensions, CAC, the publish and status action paths, and sitemap.
