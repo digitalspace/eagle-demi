@@ -160,6 +160,7 @@ test('extension domain', async (t) => {
     assert.strictEqual(result.status, 'ok');
     assert.deepStrictEqual(store.written[0].reviewSuspensions, [{ ...SUSPENSION, end: null }]);
     assert.strictEqual(rows[0].Action, 'extension.delete');
+    assert.deepStrictEqual(rows[0].Detail, { list: 'reviewSuspensions', extensionId: susId });
   });
 
   await t.test('a DEMI item is found by its stored id', async (t) => {
@@ -172,6 +173,14 @@ test('extension domain', async (t) => {
   await t.test('a list a project dial hides from the caller cannot be written', async (t) => {
     const store = fakeStore(t, { ...STORED, vis: { reviewSuspensions: 1 } });
     const result = await extension.remove(STAFF, PROJECT_ID, susId);
+    assert.strictEqual(result.status, 'invalid');
+    assert.ok(result.fields.reviewSuspensions);
+    assert.strictEqual(store.written.length, 0);
+  });
+
+  await t.test('update cannot move an item out of a list a project dial hides from the caller', async (t) => {
+    const store = fakeStore(t, { ...STORED, vis: { reviewSuspensions: 1 } });
+    const result = await extension.update(STAFF, PROJECT_ID, susId, { type: 'Extension', appliedTo: 'Moved' });
     assert.strictEqual(result.status, 'invalid');
     assert.ok(result.fields.reviewSuspensions);
     assert.strictEqual(store.written.length, 0);
