@@ -10,7 +10,8 @@
 const cosmos = require('../db/cosmos-nosql');
 const updates = require('../repositories/updates');
 const notifications = require('../repositories/notifications');
-const { updateRead } = require('./update-parent');
+const updateParent = require('./update-parent');
+const images = require('../domain/update-images');
 const { heldSealed } = require('./access-sql');
 const { logger } = require('../utils/logger');
 
@@ -38,7 +39,8 @@ async function setAclForProject(projectEagleId, projectRead) {
     // `status` and `active` too: a row with no read (`update-parent:inheritsParentRead`) follows the project.
     query: 'SELECT c.id, c.read, c.sealedAt, c.sources.eagle.read AS eagleRead, ' +
       'c.sources.eagle.status AS eagleStatus, c.sources.eagle.active AS eagleActive, ' +
-      'c.sourceSystem, c.sources.demi.read AS demiRead, c.sources.demi.status AS demiStatus ' +
+      'c.sourceSystem, c.sources.demi.read AS demiRead, c.sources.demi.status AS demiStatus, ' +
+      'c.featuredImage, c.images ' +
       'FROM c WHERE c.projectId = @projectId',
     parameters: [{ name: '@projectId', value: String(projectEagleId) }]
   }, {});
@@ -49,7 +51,7 @@ async function setAclForProject(projectEagleId, projectRead) {
     const source = row.sourceSystem === 'demi'
       ? { read: row.demiRead, status: row.demiStatus }
       : { read: row.eagleRead, status: row.eagleStatus, active: row.eagleActive };
-    const read = updateRead(source, { read: projectRead });
+    const read = updateParent.updateRead(source, { read: projectRead });
     return { id: String(row.id), read, isPublished: read.includes('public') };
   });
   if (derived.length === 0) return NOTHING;
@@ -72,7 +74,30 @@ async function setAclForProject(projectEagleId, projectRead) {
   logger.debug('[update-acl] updates re-derived under project', {
     projectEagleId, succeeded: result.succeeded, failed: result.failed
   });
+  await publishOpenedImages(projectEagleId, items, derived, result);
   return { ...result, ids: derived.map(r => r.id), rows: derived };
+}
+
+/**
+ * A DEMI update the cascade left public shows its own uploads, as publishing it would have
+ * (domain/update-images.js). The reverse needs nothing here: `documents.setAclForProject` caps them.
+ * Never throws: the visibility change already stands.
+ */
+async function publishOpenedImages(projectEagleId, items, derived, result) {
+  const unpatched = new Set([...(result.failedIds || []), ...(result.skippedIds || [])].map(String));
+  const readOf = new Map(derived.filter(row => row.isPublished && !unpatched.has(row.id)).map(row => [row.id, row.read]));
+  const opened = items.filter(item => item.sourceSystem === 'demi' && readOf.has(String(item.id)) &&
+    images.imageIds(item).length > 0);
+  if (opened.length === 0) return;
+  try {
+    const parent = await updateParent.readParent(String(projectEagleId));
+    for (const item of opened) {
+      await images.publishFor({ req: null }, { ...item, id: String(item.id), read: readOf.get(String(item.id)) },
+        parent && parent.id);
+    }
+  } catch (err) {
+    logger.error('[update-acl] images of an opened update not published', { projectEagleId, error: err.message, stack: err.stack });
+  }
 }
 
 module.exports = { setAclForProject };

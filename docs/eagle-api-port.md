@@ -270,7 +270,7 @@ Business rules (eagle-api `api/controllers/recentActivity.js`, `api/helpers/upda
 - Image cascade (`src/domain/update-images.js`, eagle-api `updateImages.js`): publishing an update first publishes its own uploads (`documentSource: 'UPDATE'`, same parent), and a failed save reverts them. Only when the update's parent-capped read is public: an image never rises above its project, the rule `setLevel` enforces with a 409, where eagle-api had no cap. After a save, uploads no published update shows (`updates.listShowingDocuments`) go back to level 2: on a live update only the images it dropped, otherwise all of its images, and all of them on DELETE. Each move also corrects the search index and chunks, and is audited as `record.widen` or `record.narrow`. Dark: the next Eagle push of such a document carries Eagle's level, held below a DEMI narrow by `levelHeldAt`.
 - PUT `_etag` is the client's loaded version: a moved row is a 409. A body with neither `status` nor `active` keeps the status.
 - DELETE archives: status `archived`, `active` false, `public` pulled.
-- A DEMI row keeps its own read and status in `sources.demi`; the project cascade (`helpers/update-acl.js`) re-derives such a row from them, not from `sources.eagle`.
+- A DEMI row keeps its own read and status in `sources.demi`; the project cascade (`helpers/update-acl.js`) re-derives such a row from them, not from `sources.eagle`, and publishes the own uploads of one it leaves public. Going private, `documents.setAclForProject` caps those images.
 - Dark: a write to an Eagle-mirrored row is replaced by the next Eagle push. A published DEMI row is announced by `announce-updates.js` once due, like a mirrored one.
 
 Open:

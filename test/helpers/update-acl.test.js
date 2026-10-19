@@ -12,7 +12,9 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const notifications = require('../../src/repositories/notifications');
+const updateParent = require('../../src/helpers/update-parent');
 const { setAclForProject } = require('../../src/helpers/update-acl');
+const { fakeImages } = require('./update-images-store');
 const { PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, SEALED_AT } = require('./eagle-mirror-fixtures');
 
 // Spelled out, not built from readForLevel, so the assertion cannot agree with any helper output.
@@ -198,6 +200,34 @@ test('setAclForProject — updates follow their project', async (t) => {
 
     assert.strictEqual(patched(seen.ops[0])['/isPublished'], true);
     assert.ok(patched(seen.ops[0])['/read'].includes('staff'), 'not reset to an empty read');
+  });
+
+  await t.test('a published DEMI update opened by its project publishes its own private upload', async () => {
+    const image = '5c1f7a3e9b1d2c0012370001';
+    stub(t, [{
+      id: 'u1', read: ['staff', 'sysadmin'], sourceSystem: 'demi', demiRead: ['public', 'staff', 'sysadmin'],
+      demiStatus: 'published', featuredImage: { document: image, alt: 'A creek' }
+    }]);
+    t.mock.method(updateParent, 'readParent', async () => ({ id: 'p-1', kind: 'project', read: PUBLIC_PARENT }));
+    const store = fakeImages(t, [{ id: image, level: 2, documentSource: 'UPDATE', projectId: 'p-1' }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PUBLIC_PARENT);
+
+    assert.strictEqual(store.level(image), 4);
+  });
+
+  await t.test('an update the project keeps private leaves its upload private', async () => {
+    const image = '5c1f7a3e9b1d2c0012370001';
+    stub(t, [{
+      id: 'u1', read: ['staff', 'sysadmin'], sourceSystem: 'demi', demiRead: ['public', 'staff', 'sysadmin'],
+      demiStatus: 'published', featuredImage: { document: image, alt: 'A creek' }
+    }]);
+    t.mock.method(updateParent, 'readParent', async () => ({ id: 'p-1', kind: 'project', read: PRIVATE_ACL }));
+    const store = fakeImages(t, [{ id: image, level: 2, documentSource: 'UPDATE', projectId: 'p-1' }]);
+
+    await setAclForProject(PROJECT_EAGLE_ID, PRIVATE_ACL);
+
+    assert.strictEqual(store.level(image), 2);
   });
 
   await t.test('a draft DEMI created stays staff-only under a public project', async () => {

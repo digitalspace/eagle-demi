@@ -322,6 +322,21 @@ test('update domain', async (t) => {
     assert.deepStrictEqual(images.copied, [], 'search index and chunks untouched');
   });
 
+  await t.test('an edit of a published update its project caps releases every image it shows', async (t) => {
+    const second = '5c1f7a3e9b1d2c0012370009';
+    const upload = { documentSource: 'UPDATE', projectId: 'p-private' };
+    fakeStore(t, {
+      ...STORED, projectId: PRIVATE_PROJECT, attachments: [], read: ['staff', 'sysadmin'], isPublished: false,
+      featuredImage: { document: OWN_IMAGE, alt: 'a' }, images: [{ document: second, alt: 'b' }]
+    });
+    const images = fakeImages(t, [{ id: OWN_IMAGE, level: 4, ...upload }, { id: second, level: 4, ...upload }]);
+    t.mock.method(documents, 'listByIdsUnscoped', async (access, ids) => ids.map(id => ({ id })));
+    const result = await update.update(STAFF, UPDATE_ID, { headline: 'Moved' });
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(images.level(OWN_IMAGE), 2);
+    assert.strictEqual(images.level(second), 2);
+  });
+
   await t.test('a save that fails puts the image it published back', async (t) => {
     fakeStore(t, null);
     t.mock.method(updates, 'upsert', async () => { throw new Error('cosmos down'); });
