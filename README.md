@@ -572,6 +572,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 `POST /organizations` (staff, sysadmin) and `PUT /organizations/:id` (project-system-admin, sysadmin, staff) are served by DEMI; eagle-admin still calls eagle-api until the flip. Differences: create answers 201 with a UUID id; update writes only the listed fields, keeps `dateAdded`, and answers 404 for a missing row.
 
 <!-- port: comment-periods -->
+`POST /comment-periods`, `PUT` and `DELETE /comment-periods/:id`, and `PUT /comment-periods/:id/publish` and `/unpublish` (all staff, sysadmin) are served by DEMI; eagle-admin still calls eagle-api until the flip. Differences: create takes `projectId` and answers 201 with a UUID id; PUT ignores `read` and `isPublished`, keeps `dateAdded`, and answers 404 for a missing row; publishing above the project's level, or any write to an ENGAGE period, is a 409; publish, unpublish and delete re-derive the period's comments' read.
 
 <!-- port: comments -->
 

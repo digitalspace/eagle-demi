@@ -4780,6 +4780,41 @@ paths:
           description: Unknown or repeated parameter, bad value, or a page past the caller's depth.
         '401':
           description: The Bearer token was rejected.
+    post:
+      summary: Create a comment period
+      description: >-
+        Adds a comment period under `projectId`, with a new UUID id, `commentIdCount` 0, and
+        `addedBy` and `dateAdded` set. Needs the role `staff` or `sysadmin`. It reads staff-only
+        unless `isPublished` is true; `read` in the body is ignored. Not yet called by eagle-admin.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentPeriodInput'
+      responses:
+        '201':
+          description: The created row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            A field is over its limit, of the wrong type, or not in the list; or `projectId`
+            names no project DEMI holds. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '409':
+          description: '`isPublished` is true but the project is not public.'
+        '503':
+          description: >-
+            Another request kept writing the same comment period, and nothing was saved. Send the
+            same body again. Body `{ error: "The record is being written by another request. Try again." }`.
 
   /api/comment-periods/{id}:
     get:
@@ -4806,6 +4841,124 @@ paths:
           description: The Bearer token was rejected.
         '404':
           description: Comment period not found.
+    put:
+      summary: Update a comment period
+      description: >-
+        Changes the listed fields and leaves the others as they are. Needs the role `staff` or
+        `sysadmin`. `read` and `isPublished` in the body are ignored: use publish and unpublish.
+        `projectId`, any other field outside the list, or a body with no listed field is a 400.
+        Keeps `dateAdded` and sets `updatedBy`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CommentPeriodId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentPeriodUpdate'
+      responses:
+        '200':
+          description: The updated row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: A field is invalid or not writable. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Comment period not found.
+        '409':
+          description: The period is run in ENGAGE and is changed there.
+        '503':
+          description: Another request kept writing the same comment period. Send it again.
+    delete:
+      summary: Delete a comment period
+      description: >-
+        Removes the comment period, as eagle-api does. Its comments are first narrowed to staff.
+        Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CommentPeriodId'
+      responses:
+        '200':
+          description: The removed row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Comment period not found.
+        '409':
+          description: The period is run in ENGAGE and is changed there.
+        '503':
+          description: Another request kept writing the same comment period. Send it again.
+
+  /api/comment-periods/{id}/publish:
+    put:
+      summary: Publish a comment period
+      description: >-
+        Adds `public` to the period's read and sets `isPublished`, then re-derives its comments'
+        read from it. Needs the role `staff` or `sysadmin`. Takes no body fields.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CommentPeriodId'
+      responses:
+        '200':
+          description: The published row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Comment period not found.
+        '409':
+          description: The period is run in ENGAGE, or its project is not public.
+        '503':
+          description: Another request kept writing the same comment period. Send it again.
+
+  /api/comment-periods/{id}/unpublish:
+    put:
+      summary: Unpublish a comment period
+      description: >-
+        Removes `public` from the period's read and clears `isPublished`, then narrows its
+        comments to match. Needs the role `staff` or `sysadmin`. Takes no body fields.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CommentPeriodId'
+      responses:
+        '200':
+          description: The unpublished row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Comment period not found.
+        '409':
+          description: The period is run in ENGAGE and is changed there.
+        '503':
+          description: Another request kept writing the same comment period. Send it again.
 
   /api/comment-periods/{id}/summary:
     get:
@@ -6501,6 +6654,13 @@ components:
       description: The `x-continuation-token` header of the previous page.
       schema:
         type: string
+    CommentPeriodId:
+      name: id
+      in: path
+      required: true
+      description: DEMI id, or the 24-hex Eagle id.
+      schema:
+        type: string
 
   responses:
     EagleMirrorForbidden:
@@ -6972,6 +7132,74 @@ components:
           type: string
           nullable: true
           description: Id of the parent organization, or `null`.
+
+    CommentPeriodUpdate:
+      type: object
+      description: Every field is optional. `read` and `isPublished` are ignored.
+      properties:
+        commentTip:
+          type: string
+          maxLength: 10000
+        dateStarted:
+          type: string
+          format: date-time
+          nullable: true
+        dateCompleted:
+          type: string
+          format: date-time
+          nullable: true
+        isMet:
+          type: boolean
+        instructions:
+          type: string
+          maxLength: 10000
+        informationLabel:
+          type: string
+          maxLength: 10000
+        metURL:
+          type: string
+          maxLength: 2000
+        metBannerImageUrl:
+          type: string
+          maxLength: 2000
+        milestone:
+          type: string
+          nullable: true
+          description: Id of the milestone, or `null`.
+        openHouses:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties:
+              type: string
+              nullable: true
+              maxLength: 10000
+        relatedDocuments:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            maxLength: 2000
+
+    CommentPeriodInput:
+      description: The update fields plus these. `read` is ignored.
+      allOf:
+        - $ref: '#/components/schemas/CommentPeriodUpdate'
+        - type: object
+          required:
+            - projectId
+          properties:
+            projectId:
+              type: string
+              maxLength: 200
+              description: The DEMI project id the period belongs to.
+            isPublished:
+              type: boolean
+              description: Open to the public from the start. The project must be public.
+            metURLAdmin:
+              type: string
+              maxLength: 2000
 
     ProjectInput:
       type: object

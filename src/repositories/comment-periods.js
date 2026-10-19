@@ -389,9 +389,45 @@ async function upsert(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
 }
 
-/** Removes a row left in a stale partition by a period that changed project. */
-async function deleteById(id, projectId) {
-  return cosmos.remove(CONTAINER, String(id), String(projectId));
+/** Removes a row: a stale-partition copy after a project move, or a staff delete with its `etag`. */
+async function deleteById(id, projectId, etag) {
+  return cosmos.remove(CONTAINER, String(id), String(projectId), { etag });
+}
+
+/** Tries before `nextCommentId` gives up: each lost round is another writer that just took a number. */
+const NEXT_ID_TRIES = 3;
+
+/**
+ * Take the period's next comment number, atomically: eagle-api's `$inc` on `commentIdCount`
+ * (comment.js:380), answered after the increment. A mirrored row may hold `null` there, so the
+ * first number is set by a patch conditioned on there being no number yet.
+ *
+ * @returns {Promise<number|null>} null when the period does not exist
+ */
+async function nextCommentId(periodId, projectId) {
+  let partition = projectId;
+  if (partition == null) {
+    const row = await readForWrite(periodId);
+    if (!row) return null;
+    partition = row[PARTITION_FIELD];
+  }
+  const steps = [
+    [[{ op: 'incr', path: '/commentIdCount', value: 1 }], 'FROM c WHERE IS_NUMBER(c.commentIdCount)'],
+    [[{ op: 'set', path: '/commentIdCount', value: 1 }], 'FROM c WHERE NOT IS_NUMBER(c.commentIdCount)']
+  ];
+  for (let tryNumber = 1; tryNumber <= NEXT_ID_TRIES; tryNumber++) {
+    for (const [operations, condition] of steps) {
+      try {
+        const saved = await cosmos.patch(CONTAINER, String(periodId), String(partition), operations, condition);
+        return saved ? saved.commentIdCount : null;
+      } catch (err) {
+        const code = err.code || err.statusCode;
+        if (code === 404) return null;
+        if (code !== 412) throw err;
+      }
+    }
+  }
+  throw new Error(`[commentPeriods] nextCommentId lost ${NEXT_ID_TRIES} rounds on ${periodId}`);
 }
 
 /**
@@ -405,7 +441,7 @@ async function deleteById(id, projectId) {
  * copy still says `public`, and `deriveAcls` needs the flag to refuse to act on it.
  *
  * An ENGAGE-owned row takes its upstream ACL from `sources.engage.read`, never from the Eagle echo,
- * which only reflects what DEMI last sent there.
+ * which only reflects what DEMI last sent there. A row DEMI created takes it from `sources.demi.read`.
  */
 async function aclRowsForProject(access, projectId) {
   // Callers pass systemAccess on purpose: a sealed child is skipped, and a `read`-less one heals on
@@ -415,11 +451,12 @@ async function aclRowsForProject(access, projectId) {
     partitionField: PARTITION_FIELD,
     criteria: criteriaFor(projectId),
     select: 'c.id, c.read, c.isDeleted, c.sourceSystem, c.sources.eagle.read AS eagleRead, '
-      + 'c.sources.engage.read AS engageRead'
+      + 'c.sources.engage.read AS engageRead, c.sources.demi.read AS demiRead'
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
-  return items.map(({ sourceSystem, engageRead, eagleRead, ...row }) =>
-    ({ ...row, eagleRead: sourceSystem === 'engage' ? engageRead : eagleRead }));
+  const upstreamOf = { engage: 'engageRead', demi: 'demiRead' };
+  return items.map(({ sourceSystem, engageRead, demiRead, eagleRead, ...row }) =>
+    ({ ...row, eagleRead: { engageRead, demiRead, eagleRead }[upstreamOf[sourceSystem] || 'eagleRead'] }));
 }
 
 /**
@@ -486,5 +523,6 @@ module.exports = {
   setAclForProject,
   upsert,
   deleteById,
+  nextCommentId,
   listEveryEngage
 };

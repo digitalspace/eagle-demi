@@ -2,7 +2,8 @@
 
 /**
  * Native comment period reads: `GET /comment-periods`, `/comment-periods/:id` and
- * `/comment-periods/:id/summary`, on the list contract in `helpers/native-query.js`.
+ * `/comment-periods/:id/summary`, on the list contract in `helpers/native-query.js`. Writes are in
+ * comment-periods-write.js.
  */
 
 const commentPeriods = require('../../repositories/comment-periods');
