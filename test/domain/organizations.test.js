@@ -185,6 +185,29 @@ test('organization domain', async (t) => {
     assert.strictEqual(written.length, 0);
   });
 
+  await t.test('update refuses a field above the caller level and writes nothing', async (t) => {
+    const written = fakeLists(t);
+    const idir = ctxFor(['idir'], 'idir-reader');
+
+    const { result, rows: logged } = await audited(() =>
+      organization.update(idir, ORG_ID, { city: 'Nelson', companyLegal: 'Acme Ltd.' }));
+
+    assert.strictEqual(result.status, 'invalid');
+    assert.deepStrictEqual(result.fields, { companyLegal: 'is not writable by this caller' });
+    assert.strictEqual(written.length, 0);
+    assert.strictEqual(logged.length, 0);
+  });
+
+  await t.test('update refuses a field a vis dial on the stored row restricts below the caller', async (t) => {
+    const written = fakeLists(t, { ...STORED, vis: { city: 1 } });
+
+    const { result } = await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
+
+    assert.strictEqual(result.status, 'invalid');
+    assert.deepStrictEqual(result.fields, { city: 'is not writable by this caller' });
+    assert.strictEqual(written.length, 0);
+  });
+
   await t.test('update of a row the caller cannot read is not-found and writes nothing', async (t) => {
     const written = fakeLists(t, null);
     const { result, rows: logged } = await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
