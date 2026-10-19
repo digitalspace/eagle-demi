@@ -49,6 +49,30 @@ test('the handler runs the reconcile and stores its report, without repair', asy
     'GET /admin/reconcile-engage serves the stored report; repair re-sends to Eagle and stays a hand run');
 });
 
+test('the handler runs every registered kind\'s reconcile hook, and one failing kind does not stop the rest',
+  async (t) => {
+    const { index } = loadIndex(t, 'RECONCILE_ENGAGE_SCHEDULE', '0 30 10 * * *');
+    const kinds = require.resolve('../src/sync-out/kinds');
+    const cached = require.cache[kinds];
+    const calls = [];
+    const hook = (name, fail) => async (opts) => {
+      calls.push([name, opts]);
+      if (fail) throw new Error(`${name} down`);
+    };
+    require.cache[kinds] = {
+      id: kinds, filename: kinds, loaded: true,
+      exports: { KINDS: { first: { reconcile: hook('first', true) }, second: { reconcile: hook('second') } } }
+    };
+    t.after(() => { require.cache[kinds] = cached; });
+    const errors = [];
+    t.mock.method(logger, 'error', (message, meta) => { errors.push(meta); });
+
+    await index.reconcileEngage();
+
+    assert.deepStrictEqual(calls, [['first', { store: true }], ['second', { store: true }]]);
+    assert.deepStrictEqual(errors.map(e => [e.kind, e.error]), [['first', 'first down']]);
+  });
+
 test('a failing reconcile is logged and does not throw at the host', async (t) => {
   const { index } = loadIndex(t, 'RECONCILE_ENGAGE_SCHEDULE', '0 30 10 * * *');
   stubScript(t, async () => { throw new Error('eagle-api unreachable'); });

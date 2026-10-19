@@ -13,9 +13,16 @@ const assert = require('node:assert');
 
 const queues = require('../../src/jobs/queue-client');
 const commentPeriods = require('../../src/repositories/comment-periods');
+const projects = require('../../src/repositories/projects');
+const notifications = require('../../src/repositories/notifications');
 const { logger } = require('../../src/utils/logger');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
+const { KINDS, COMMENT_PERIOD, kindOf } = require('../../src/sync-out/kinds');
+const reconcileEngage = require('../../src/scripts/reconcile-engage');
+const { writeRow } = require('../../src/domain/_write');
+const commentPeriodController = require('../../src/controllers/nosql/comment-period');
+const { mockRes, STAFF, PUBLIC_ACL } = require('../helpers/eagle-mirror-fixtures');
 const config = require('../../src/config');
 
 const API = 'https://eagle.example/api';
@@ -129,7 +136,7 @@ function wireEagle(t, routes) {
 }
 
 const message = (overrides = {}) =>
-  ({ consumer: 'eagle', id: 'engage-42', projectId: 'p-207', attempt: 1, ...overrides });
+  ({ kind: COMMENT_PERIOD, consumer: 'eagle', id: 'engage-42', projectId: 'p-207', attempt: 1, ...overrides });
 
 const eagleCalls = (calls) => calls.filter(c => c.path !== 'token').map(c => `${c.method} ${c.path}`);
 
@@ -651,6 +658,153 @@ test('sync-out', async (t) => {
     assert.deepStrictEqual(await syncOut.enqueue(engageRow()), []);
     assert.strictEqual(sent.length, 2, 'a disabled consumer queues nothing');
   });
+
+  await t.test('a message queued before kinds existed is read as a comment period, and its retry names the kind',
+    async (tt) => {
+      wireStore(tt, engageRow({ eagleId: 'cp-9' }));
+      const sent = wireQueue(tt);
+      const calls = wireEagle(tt, { 'PUT /commentperiod/cp-9': { status: 503 } });
+      const { kind: _none, ...legacy } = message();
+
+      assert.deepStrictEqual(await run(JSON.stringify(legacy)), { retryQueued: 2 });
+
+      assert.deepStrictEqual(eagleCalls(calls), ['PUT /commentperiod/cp-9']);
+      assert.deepStrictEqual(sent.map(s => s.body), [message({ attempt: 2 })]);
+    });
+
+  await t.test('a message naming an unknown kind sends nothing and is parked on its last attempt', async (tt) => {
+    wireStore(tt, engageRow({ eagleId: 'cp-9' }));
+    const sent = wireQueue(tt);
+    const calls = wireEagle(tt, {});
+
+    const result = await run(message({ kind: 'nothing', attempt: MAX_ATTEMPTS }), { attempt: MAX_ATTEMPTS });
+
+    assert.match(result.failed, /no kind named nothing/);
+    assert.deepStrictEqual(eagleCalls(calls), []);
+    assert.deepStrictEqual(sent.map(s => s.queue), ['sync-out-poison']);
+  });
+
+  await t.test('a consumer the message\'s kind does not name sends nothing and is parked on its last attempt',
+    async (tt) => {
+      // A fresh engine over a registry whose only kind lists no consumer; index.js reads kinds at load.
+      const kindsPath = require.resolve('../../src/sync-out/kinds');
+      const indexPath = require.resolve('../../src/sync-out');
+      const real = require.cache[kindsPath];
+      const engine = require.cache[indexPath];
+      const KINDS = { other: { repo: commentPeriods, consumers: [] } };
+      require.cache[kindsPath] = {
+        id: kindsPath, filename: kindsPath, loaded: true,
+        exports: { ...real.exports, KINDS, kindOf: name => KINDS[name] }
+      };
+      delete require.cache[indexPath];
+      tt.after(() => {
+        require.cache[kindsPath] = real;
+        require.cache[indexPath] = engine;
+      });
+      const isolated = require('../../src/sync-out');
+      wireStore(tt, engageRow({ eagleId: 'cp-9' }));
+      const sent = wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      const result = await isolated.run(message({ kind: 'other', attempt: MAX_ATTEMPTS }),
+        { attempt: MAX_ATTEMPTS, maxAttempts: MAX_ATTEMPTS });
+
+      assert.match(result.failed, /consumer eagle does not send kind other/);
+      assert.deepStrictEqual(eagleCalls(calls), []);
+      assert.deepStrictEqual(sent.map(s => s.queue), ['sync-out-poison']);
+    });
+
+  await t.test('enqueue refuses an unknown kind; enqueueQuietly logs a failure and answers no consumers',
+    async (tt) => {
+      wireQueue(tt, { fail: ['sync-out'] });
+      const errors = [];
+      tt.mock.method(logger, 'error', (msg, meta) => { errors.push({ msg, meta }); });
+
+      await assert.rejects(syncOut.enqueue(engageRow(), { kind: 'nothing' }), /no kind named nothing/);
+      assert.deepStrictEqual(await syncOut.enqueueQuietly(engageRow(), { kind: COMMENT_PERIOD }), []);
+
+      assert.deepStrictEqual(errors.map(e => [e.msg, e.meta.kind, e.meta.id, e.meta.error]),
+        [['[sync-out] enqueue failed', COMMENT_PERIOD, 'engage-42', 'queue sync-out down']]);
+    });
+
+  await t.test('every kind names only consumers the engine has, and comment periods reconcile through reconcile-engage',
+    async (tt) => {
+      const names = syncOut.consumers.map(c => c.name);
+      for (const [name, kind] of Object.entries(KINDS)) {
+        assert.ok(kind.consumers.length > 0, `${name} has a consumer`);
+        assert.deepStrictEqual(kind.consumers.filter(c => !names.includes(c)), [], `${name} names a missing consumer`);
+      }
+      tt.mock.method(reconcileEngage, 'run', async (options) => ({ ran: options }));
+
+      assert.deepStrictEqual(await kindOf(COMMENT_PERIOD).reconcile({ repair: true }), { ran: { repair: true } });
+    });
+
+  await t.test('a domain writeRow raises syncVersion from the stored row, so a sent row is sent again', async (tt) => {
+    const store = wireStore(tt, engageRow({
+      eagleId: 'cp-9', syncOut: { eagle: { sentVersion: VERSION, status: 'sent' } }
+    }));
+    wireQueue(tt);
+    assert.deepStrictEqual(await run(message()), { skipped: 'current' });
+
+    // A stale copy loses the etag race; the version comes from the row the retry re-read.
+    const stale = { ...structuredClone(store.row), syncVersion: VERSION - 1, _etag: 'stale' };
+    const written = await writeRow({
+      ctx: { req: { user: STAFF, headers: {} } },
+      repo: commentPeriods,
+      existing: stale,
+      reread: () => commentPeriods.readForWrite('engage-42', 'p-207'),
+      build: current => ({ ...current, instructions: 'Edited in DEMI.' }),
+      audit: saved => ({ action: 'commentPeriod.update', targetType: 'commentPeriod', targetId: saved.id })
+    });
+    assert.strictEqual(written.status, 'ok');
+    assert.strictEqual(store.row.syncVersion, VERSION + 1);
+
+    const calls = wireEagle(tt, { 'PUT /commentperiod/cp-9': { body: { matchedCount: 1 } } });
+    await run(message());
+    assert.deepStrictEqual(eagleCalls(calls), ['PUT /commentperiod/cp-9']);
+    assert.strictEqual(store.row.syncOut.eagle.sentVersion, VERSION + 1);
+  });
+
+  await t.test('the Eagle echo of a sync-out create answers 2xx and leaves the DEMI row and its version alone',
+    async (tt) => {
+      const store = wireStore(tt, engageRow({ read: PUBLIC_ACL, isPublished: true }));
+      const sent = wireQueue(tt);
+      const calls = wireEagle(tt, {
+        [`GET ${LIST_PATH}`]: { body: [] },
+        'POST /commentperiod': { body: { _id: 'cp-new' } }
+      });
+      await run(message());
+      const post = calls.find(c => c.method === 'POST' && c.path === '/commentperiod');
+      const afterSend = structuredClone(store.row);
+
+      tt.mock.method(projects, 'getByEagleId', async () =>
+        ({ id: 'p-207', eagleId: afterSend.eagleProjectId, read: PUBLIC_ACL }));
+      tt.mock.method(notifications, 'readForWrite', async () => null);
+      tt.mock.method(commentPeriods, 'readForWriteByEagleId', async (eagleId) =>
+        (store.row.eagleId === eagleId ? structuredClone(store.row) : null));
+      // eagle-api pushes back what it stored: the POSTed fields, its own id, and its own view of the rest.
+      const doc = {
+        ...post.body, _id: 'cp-new', read: ['staff', 'sysadmin'], isPublished: false,
+        informationLabel: 'Renamed in Eagle', dateUpdated: '2026-10-08T17:00:05.000Z'
+      };
+      const res = mockRes();
+      await commentPeriodController.upsertFromEagle({
+        params: { eagleId: 'cp-new' }, query: {}, body: { doc, pushedAt: PUSHED_AT + 5000 }, user: STAFF
+      }, res);
+
+      assert.ok(res.statusCode >= 200 && res.statusCode < 300, `echo answered ${res.statusCode}`);
+      const { _etag: _before, sources: sourcesBefore, ...demiOwned } = afterSend;
+      const { _etag: _after, sources: sourcesAfter, ...stored } = store.row;
+      for (const [field, value] of Object.entries(demiOwned)) {
+        assert.deepStrictEqual(stored[field], value, `${field} changed by the echo`);
+      }
+      assert.deepStrictEqual(sourcesAfter.engage, sourcesBefore.engage);
+      assert.deepStrictEqual(sent, [], 'the echo queues nothing');
+
+      const again = wireEagle(tt, {});
+      assert.deepStrictEqual(await run(message()), { skipped: 'current' });
+      assert.deepStrictEqual(eagleCalls(again), [], 'no second send: the echo did not loop');
+    });
 
   await t.test('a 401 re-mints the token once and retries the call', async (tt) => {
     wireStore(tt, engageRow({ eagleId: 'cp-9' }));
