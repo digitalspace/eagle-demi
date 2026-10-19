@@ -365,6 +365,11 @@ const routes = [
   { method: 'put', path: '/organizations/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/organizations').updateOrganization },
 
   // port: comment-periods
+  { method: 'post', path: '/comment-periods', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comment-periods-write').createCommentPeriod },
+  { method: 'put', path: '/comment-periods/:id', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comment-periods-write').updateCommentPeriod },
+  { method: 'delete', path: '/comment-periods/:id', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comment-periods-write').deleteCommentPeriod },
+  { method: 'put', path: '/comment-periods/:id/publish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comment-periods-write').publishCommentPeriod },
+  { method: 'put', path: '/comment-periods/:id/unpublish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comment-periods-write').unpublishCommentPeriod },
 
   // port: comments
 

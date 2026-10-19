@@ -29,7 +29,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 |---|---|---|---|---|---|
 | 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | done (b9e4685f) |
 | 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); Dark: staff-only, no caller |
-| 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods.js`, `repositories/comment-periods.js` | 0 | M | todo |
+| 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods-write.js`, `repositories/comment-periods.js` | 0 | M | done (ab0292ec); Dark: staff-only, no caller |
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments.js`, `repositories/comments.js` | 2 | M | todo |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | todo |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | todo |
@@ -183,13 +183,31 @@ Callers to move: eagle-admin `project.service.ts` pins methods (add, delete, pub
 
 ### Comment periods
 
-Status: todo
+Status: done (ab0292ec), Dark
 
-Today: reads at `routes.js:293-295`. Writes exist only as the Eagle mirror (`routes.js:249`) and the ENGAGE ingest (`routes.js:263`, ENGAGE-sourced periods only). DEMI's own `src/sync-out/eagle.js:190,199,206,245` calls eagle-api `GET`, `PUT`, `DELETE` and `POST /commentperiod` to write back into Eagle.
+Today: reads at `routes.js:293-295`. Mirror writes at `routes.js:249` (Eagle) and `routes.js:266` (ENGAGE ingest, ENGAGE-sourced periods only). Dark: the five write routes are served under the `port: comment-periods` anchor (`routes.js:367`), rules in `src/domain/comment-periods.js`, handlers in `src/controllers/native/comment-periods-write.js` (apart from the reads because the summary read answers `res` itself). eagle-admin still calls eagle-api. DEMI's own `src/sync-out/eagle.js:190,199,206,245` calls eagle-api `GET`, `PUT`, `DELETE` and `POST /commentperiod` to write back into Eagle.
 
-Target routes: `POST /comment-periods`, `PUT /comment-periods/:id`, `DELETE /comment-periods/:id`, publish and unpublish. Then rewire `src/sync-out/eagle.js` so DEMI is the writer and Eagle receives the mirror.
+Target routes: `POST /comment-periods`, `PUT /comment-periods/:id`, `DELETE /comment-periods/:id`, `PUT /comment-periods/:id/publish`, `PUT /comment-periods/:id/unpublish`. Then rewire `src/sync-out/eagle.js` so DEMI is the writer and Eagle receives the mirror (F2).
 
-Business rules (eagle-api `api/controllers/commentperiod.js`): to extract. Known from reads: a period belongs to one project; check whether publish cascades to the period's comments; ENGAGE-sourced periods keep their ENGAGE id and the ENGAGE direction rule (ENGAGE to DEMI to Eagle).
+Guards: every route is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eagle-api `swagger.yaml:5434,5697,5730,5781,5830`).
+
+Business rules (eagle-api `api/controllers/commentperiod.js`):
+- Create copies isMet, metURL, metURLAdmin, metBannerImageUrl, dateCompleted, dateStarted, instructions, informationLabel, commentTip, milestone, openHouses, relatedDocuments and project from the body (`:275-287`). DEMI takes `projectId` (required, a project DEMI holds, else 400) for `project`, and stores `''`, `null` or `[]` for an omitted field.
+- Create sets `commentIdCount` 0, `addedBy` and `dateAdded` (`:271-274`). DEMI also sets `updatedBy` and `dateUpdated`, `sourceSystem: 'demi'`, `eagleId: null` and a UUID id, and answers 201.
+- Create reads staff and sysadmin, plus `public` when `isPublished` is true (`:288-298`). DEMI caps that under the project's read like the mirror does, and answers 409 when `isPublished` is true under a project that is not public. `read` in the body is ignored. The uncapped read is kept in `sources.demi.read`, which the project ACL cascade reads for a DEMI row (`aclRowsForProject`).
+- PUT copies commentTip, dateCompleted, dateStarted, isMet, instructions, informationLabel, metURL, metBannerImageUrl, milestone, openHouses and relatedDocuments, and stamps `updatedBy` and `dateUpdated` (`:326-341`). It never moves `project` (`:353-355`); in DEMI a `projectId` key is a 400. DEMI keeps `dateAdded`, answers 404 for a missing row, and 400 for an empty body.
+- DELETE is a hard delete (`findOneAndDelete`, `:376`). DEMI removes the row on the revision it read, after narrowing the period's comments to staff (`DELETED_CEILING`).
+- Publish and unpublish act on the period's own `read` and `isPublished` only (`:400,421`, `actions.js:7,31`).
+- Each write records an action (`Post`, `Put`, `Delete`, `Publish`, `Unpublish`). DEMI writes `commentPeriod.create`, `.update`, `.delete`, `.publish` and `.unpublish`, with `detail.fields` holding field names only.
+- `openHouses` (objects of strings) and `relatedDocuments` (strings) are checked in the domain module, since `_schema.js` has no type for them.
+
+Decisions:
+- PUT ignores `read` and `isPublished` from the body (eagle-api recomputes `read` from them, `:338-347`). Visibility moves only through publish and unpublish, per "Where authorization lives" above.
+- A staff write to an ENGAGE period (`sourceSystem: 'engage'`, `sync-out/eagle.js:327`) is a 409, `conflict` in `controllers/native/write.js`, because the refusal comes from the row's state, not the caller's role (the document level change uses 409 the same way, `document.js:1300`).
+- Publish does not change the comments' own ACL, as in eagle-api. It does re-derive their stored `read` from the period's new one through `comments.setAclForPeriod`, which is what the Eagle mirror already does on every eagle-api publish (`controllers/nosql/comment-period.js`, `cascadeToComments`); without it, comments of an unpublished period stay readable through `/search?dataset=Comment`. A failed cascade answers 500 and the period stays written; a retry runs the cascade again.
+- Publishing above the project's level is a 409, as for documents (`document.js:1300`), rather than a silent cap.
+- Dark: a publish or update of an Eagle-mirrored row is replaced by the next Eagle push, and the project ACL cascade derives an Eagle row from `sources.eagle.read`, not from a DEMI publish.
+- `nextCommentId(periodId, projectId?)` in `repositories/comment-periods.js` is the atomic counter slice 3 calls: a Cosmos patch increment conditioned on `commentIdCount` being a number, else a set to 1 conditioned on it not being one, retried three times. It answers the count after the increment, as eagle-api's `$inc` does (`comment.js:380`).
 
 Callers to move: eagle-admin `commentperiod.service.ts:98,104,109,115,120`; DEMI sync-out lines above.
 

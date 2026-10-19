@@ -95,7 +95,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 - ENGAGE rows (`sync-out/eagle.js:327`): refuse staff writes. Confirm.
 - Check whether publish must cascade to comments (`setAclForPeriod` in `repositories/comments.js`).
 - Adds `nextCommentId(periodId)`, an atomic increment, for slice 3.
-- Owns: `domain/comment-periods.js`, `controllers/native/comment-periods.js`, `repositories/comment-periods.js`, `vis/catalog/comment-periods.js`.
+- Owns: `domain/comment-periods.js`, `controllers/native/comment-periods-write.js` (the reads in `comment-periods.js` answer `res` themselves), `repositories/comment-periods.js`, `vis/catalog/comment-periods.js`.
 
 **3. Comments.** Size M. After 2. It only calls the `nextCommentId` that slice 2 adds; it does not own `repositories/comment-periods.js`.
 - Routes, all [staff, sysadmin]: `POST /comments` (:5009), `PUT /comments/:id` (:5159), `PUT /comments/:id/status` (:5220).

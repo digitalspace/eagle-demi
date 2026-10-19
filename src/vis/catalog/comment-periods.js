@@ -45,6 +45,9 @@ module.exports = {
   dateCompletedEst: { defaultVis: 2, maxVis: 2 },
   dateStartedEst: { defaultVis: 2, maxVis: 2 },
   dateUpdated: { defaultVis: 2, maxVis: 2 },
+  // Stamped by a DEMI write (domain/comment-periods.js); the mirror does not carry them.
+  addedBy: { defaultVis: 2, maxVis: 2 },
+  updatedBy: { defaultVis: 2, maxVis: 2 },
   downloadRoles: { defaultVis: 2, maxVis: 2 },
   isClassified: { defaultVis: 2, maxVis: 2 },
   isResolved: { defaultVis: 2, maxVis: 2 },

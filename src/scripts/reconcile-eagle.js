@@ -607,7 +607,8 @@ async function reconcile(argv = [], deps = {}) {
 
   summary.commentPeriods = {
     inDemi: periodRows.length, inEagle: eaglePeriodIds.size,
-    ...diff(periodRows, row => String(row.id), eaglePeriodIds, undefined,
+    // A period created in DEMI has no Eagle copy until sync-out covers periods, so it is not drift.
+    ...diff(periodRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eaglePeriodIds, undefined,
       id => admit(eaglePeriodProject.get(id)) !== null),
     misfiledParent: misfiledPeriods,
     aclMismatch: aclMismatch(periodRows, row => String(row.id), eagleRead, projectReadOf),
