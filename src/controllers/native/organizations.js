@@ -23,10 +23,14 @@ const SPEC = Object.freeze({
   notFound: 'Organization not found'
 });
 
+const WRITES = { entity: lists.CONTAINER };
+
 module.exports = {
   SPEC,
   getOrganizations: listHandler(SPEC),
   getOrganization: getHandler(SPEC),
-  createOrganization: writeHandler(organization.create, { entity: lists.CONTAINER }),
-  updateOrganization: writeHandler(organization.update, { entity: lists.CONTAINER })
+  createOrganization: writeHandler(organization.create, WRITES),
+  updateOrganization: writeHandler(organization.update, WRITES),
+  publishOrganization: writeHandler(organization.publish, WRITES),
+  unpublishOrganization: writeHandler(organization.unpublish, WRITES)
 };

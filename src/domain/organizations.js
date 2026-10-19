@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Organization writes: `POST /organizations` and `PUT /organizations/:id`, ported from eagle-api
+ * Organization writes: `POST /organizations`, `PUT /organizations/:id`, and publish and unpublish
+ * on `/organizations/:id`, ported from eagle-api
  * `api/controllers/organization.js` (rules in docs/eagle-api-port.md, Organizations). Rows live in
  * the `lists` container as `kind: 'Organization'`, beside the ones the Eagle mirror writes.
  */
@@ -14,8 +15,8 @@ const { systemAccess } = require('../helpers/access-sql');
 const { eagleBaseAcl } = require('../helpers/eagle-acl');
 const { writeGuarded } = require('../helpers/etag-write');
 const { refusedWriteKeys } = require('../vis/redact');
-const { check } = require('./_schema');
-const { writeRow } = require('./_write');
+const { check, without } = require('./_schema');
+const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { logger } = require('../utils/logger');
 
 const SHORT = { type: 'string', max: 1000 };
@@ -36,8 +37,11 @@ const SCHEMA = Object.freeze({
   parentCompany: { type: 'id', nullable: true }
 });
 
-/** Every new organization reads like eagle-api's: public, staff, sysadmin (organization.js:110). */
-const NEW_READ = Object.freeze(['public', 'staff', 'sysadmin']);
+/** Create adds `isPublished`, which eagle-api did not take: it published every new organization. */
+const CREATE_SCHEMA = Object.freeze({ ...SCHEMA, isPublished: { type: 'boolean' } });
+
+/** Visibility moves only through publish and unpublish, so a body's `read` and `isPublished` are dropped. */
+const IGNORED_ON_UPDATE = ['read', 'isPublished'];
 
 const readOrg = (ctx, id) => lists.getById(ctx.access, id, lists.KINDS.ORGANIZATION);
 
@@ -57,29 +61,37 @@ function coerceParent(input) {
   return { ...input, parentCompany: null };
 }
 
+/** `read` with `public` added or taken out; other entries are kept, and an emptied read falls back to staff. */
+function readWith(read, published) {
+  const rest = eagleBaseAcl(read).filter(r => r !== 'public');
+  const base = rest.length ? rest : [...STAFF_READ];
+  return published ? ['public', ...base] : base;
+}
+
 function auditOf(action, fields) {
   return (saved) => ({ action, targetType: 'organization', targetId: saved.id, detail: { fields } });
 }
 
 /**
  * @param {{access: object, req: object}} ctx
- * @param {object} input the request body
+ * @param {object} input the request body; `read` is ignored, `isPublished` defaults to false
  */
 async function create(ctx, input) {
-  const checked = check(SCHEMA, coerceParent(input));
+  const checked = check(CREATE_SCHEMA, coerceParent(without(input, ['read'])));
   if (checked.status !== 'ok') return checked;
+  const { isPublished = false, ...fields } = checked.value;
 
   const id = crypto.randomUUID();
   const actor = actorOf(ctx);
   const now = new Date().toISOString();
-  const read = eagleBaseAcl(NEW_READ);
+  const read = [...(isPublished ? PUBLIC_READ : STAFF_READ)];
   const row = {
     id,
     eagleId: null,
     kind: lists.KINDS.ORGANIZATION,
     sourceSystem: 'demi',
     ...Object.fromEntries(Object.keys(SCHEMA).map(key => [key, key === 'parentCompany' ? null : ''])),
-    ...checked.value,
+    ...fields,
     addedBy: actor,
     updatedBy: actor,
     dateAdded: now,
@@ -101,10 +113,10 @@ async function create(ctx, input) {
 /**
  * @param {{access: object, req: object}} ctx
  * @param {string} id
- * @param {object} changes the request body, any subset of SCHEMA
+ * @param {object} changes the request body, any subset of SCHEMA; `read` and `isPublished` are ignored
  */
 async function update(ctx, id, changes) {
-  const checked = check(SCHEMA, changes, { partial: true });
+  const checked = check(SCHEMA, without(changes, IGNORED_ON_UPDATE), { partial: true });
   if (checked.status !== 'ok') return checked;
   const fields = Object.keys(checked.value);
   if (fields.length === 0) return { status: 'invalid', fields: { body: 'must name at least one field' } };
@@ -181,4 +193,36 @@ async function renameUsers(orgId, orgName) {
   if (updated || failed) logger.info('[Organization] orgName renamed on users', { orgId, updated, failed });
 }
 
-module.exports = { SCHEMA, create, update };
+/**
+ * eagle-api `Actions.publish` and `unPublish` (actions.js:7,31) on an organization. No ceiling: an
+ * organization is not project data, so nothing above it caps its read.
+ */
+function setPublished(published) {
+  const action = published ? 'organization.publish' : 'organization.unpublish';
+  return async function (ctx, id) {
+    const actor = actorOf(ctx);
+    // A missing row reaches `build` as null, which writeRow answers as not-found.
+    return writeRow({
+      ctx,
+      repo: lists,
+      existing: await readOrg(ctx, id),
+      reread: () => readOrg(ctx, id),
+      build: (current) => current && {
+        ...current,
+        isPublished: published,
+        read: readWith(current.read, published),
+        updatedBy: actor,
+        dateUpdated: new Date().toISOString()
+      },
+      audit: auditOf(action, ['isPublished'])
+    });
+  };
+}
+
+module.exports = {
+  SCHEMA,
+  create,
+  update,
+  publish: setPublished(true),
+  unpublish: setPublished(false)
+};

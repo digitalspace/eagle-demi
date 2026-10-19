@@ -82,4 +82,9 @@ function check(schema, input, { partial = false } = {}) {
   return Object.keys(fields).length ? { status: 'invalid', fields } : { status: 'ok', value };
 }
 
-module.exports = { check };
+/** `input` minus `keys`, so a body can carry fields a route ignores. Anything not an object passes through. */
+const without = (input, keys) => (input && typeof input === 'object' && !Array.isArray(input)
+  ? Object.fromEntries(Object.entries(input).filter(([key]) => !keys.includes(key)))
+  : input);
+
+module.exports = { check, without };

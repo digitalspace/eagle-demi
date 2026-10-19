@@ -1,6 +1,6 @@
 'use strict';
 
-// POST /organizations and PUT /organizations/:id end to end through the dispatcher: the route
+// POST /organizations, PUT /organizations/:id and its publish and unpublish end to end through the dispatcher: the route
 // guards, the write handler and the domain, over a fake `lists` repository.
 
 process.env.NODE_ENV = 'test';
@@ -43,6 +43,8 @@ async function send(method, path, roles, body) {
 
 const create = (roles, body = { name: 'New Co' }) => send('POST', '/organizations', roles, body);
 const update = (roles, body = { city: 'Nelson' }, id = ORG_ID) => send('PUT', `/organizations/${id}`, roles, body);
+const publish = (roles) => send('PUT', `/organizations/${ORG_ID}/publish`, roles, {});
+const unpublish = (roles) => send('PUT', `/organizations/${ORG_ID}/unpublish`, roles, {});
 
 test('organization writes', async (t) => {
   t.beforeEach((t) => {
@@ -131,11 +133,60 @@ test('organization writes', async (t) => {
     assert.strictEqual(res.status, 404);
   });
 
-  await t.test('an update body that sets read is 400 and writes nothing', async (t) => {
+  await t.test('an update ignores read and isPublished: 200 with the visibility unchanged', async (t) => {
     const written = fakeLists(t);
-    const res = await update(['sysadmin'], { read: ['public'] });
-    assert.strictEqual(res.status, 400);
-    assert.ok(res.body.fields.read);
+    const res = await update(['sysadmin'], { city: 'Nelson', read: ['sysadmin'], isPublished: false });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.isPublished, true);
+    assert.deepStrictEqual(written[0].read, STORED.read);
+  });
+
+  await t.test('create with isPublished true: 201 and published', async (t) => {
+    const written = fakeLists(t, null);
+    const res = await create(['staff'], { name: 'Open Co', isPublished: true });
+    assert.strictEqual(res.status, 201);
+    assert.strictEqual(res.body.isPublished, true);
+    assert.ok(written[0].read.includes('public'));
+  });
+
+  await t.test('staff publishes: 200 and isPublished true', async (t) => {
+    const written = fakeLists(t, { ...STORED, read: ['staff', 'sysadmin'], isPublished: false });
+    const res = await publish(['staff']);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.isPublished, true);
+    assert.ok(written[0].read.includes('public'));
+  });
+
+  await t.test('sysadmin unpublishes: 200 and isPublished false', async (t) => {
+    const written = fakeLists(t);
+    const res = await unpublish(['sysadmin']);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.isPublished, false);
+    assert.ok(!written[0].read.includes('public'));
+  });
+
+  await t.test('publish of a missing organization is 404', async (t) => {
+    const written = fakeLists(t, null);
+    const res = await publish(['staff']);
+    assert.strictEqual(res.status, 404);
     assert.strictEqual(written.length, 0);
   });
+
+  await t.test('project-system-admin with a session role that is not staff publishes: 200', async (t) => {
+    const written = fakeLists(t, { ...STORED, read: ['staff', 'sysadmin'], isPublished: false });
+    const res = await publish(['project-system-admin', 'demi-admin']);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(written.length, 1);
+  });
+
+  for (const roles of [['demi-service-write'], ['demi-admin'], ['project-system-admin']]) {
+    for (const [name, call] of [['publish', publish], ['unpublish', unpublish]]) {
+      await t.test(`${roles.join('+')} is refused on ${name}`, async (t) => {
+        const written = fakeLists(t);
+        const res = await call(roles);
+        assert.strictEqual(res.status, 403);
+        assert.strictEqual(written.length, 0);
+      });
+    }
+  }
 });

@@ -28,7 +28,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | id | objects | owns (main files) | after | size | status |
 |---|---|---|---|---|---|
 | 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | done (b9e4685f) |
-| 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); Dark: staff-only, no caller |
+| 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); Dark: staff-only, no caller; publish/unpublish added (86c68044) |
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods-write.js`, `repositories/comment-periods.js` | 0 | M | done (ab0292ec); Dark: staff-only, no caller |
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments.js`, `repositories/comments.js` | 2 | M | todo |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | todo |
@@ -164,6 +164,7 @@ Rules:
 - The stored value is the id list. The project read returns each pin as `{_id, name, province}`, resolved from the organizations table.
 - `pinsPublished` true adds `'public'` to `pinsRead`, false removes it, for the whole list (eagle-api `pins.js:167,194`). It applies to the whole list, not one pin.
 - When the list is unpublished, the public response is `[]`. This is a deliberate change from eagle-api `[{total_items: 0}]` (`pins.js:42`).
+- Publishing a pin requires its organization to be published, else 409 (Daniel, 2026-10-19). For `pinsPublished` true, every organization in `pins` must be published. Enforced in F1 in `domain/project-pins.js`; not built yet.
 
 Ownership per phase:
 - Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:489-492` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`). It has no caller until F1, which maps `id` to `_id`.
@@ -261,11 +262,13 @@ Callers to move: eagle-admin `notification-project.service.ts`.
 
 ### Organizations
 
-Status: done (b9e4685f), Dark
+Status: done (b9e4685f), Dark; publish/unpublish added (86c68044)
 
-Today: `GET /organizations`, `/organizations/:id` (`routes.js:288-289`), mirror at `routes.js:248`. Dark: `POST /organizations` and `PUT /organizations/:id` are served under the `port: organizations` anchor in `routes.js`, rules in `src/domain/organizations.js`; eagle-admin still calls eagle-api.
+Today: `GET /organizations`, `/organizations/:id` (`routes.js:288-289`), mirror at `routes.js:248`. Dark: `POST /organizations`, `PUT /organizations/:id`, and its publish and unpublish are served under the `port: organizations` anchor in `routes.js`, rules in `src/domain/organizations.js`; eagle-admin still calls eagle-api.
 
-Target routes: `POST /organizations`, `PUT /organizations/:id`. Pins are organizations, so these are also the only routes that create or edit a pin's organization (see Pins). eagle-api publish and unpublish have no caller; decide whether organizations keep a visibility level at all.
+Target routes: `POST /organizations`, `PUT /organizations/:id`, `PUT /organizations/:id/publish`, `PUT /organizations/:id/unpublish`. Pins are organizations, so these are also the only routes that create or edit a pin's organization (see Pins).
+
+Visibility (Daniel, 2026-10-19): organizations keep a row-level visibility choice. eagle-api's publish and unpublish have no caller, but the choice is kept. Create defaults to unpublished. eagle-admin gets the toggle in F1. Existing rows keep their current `read[]` and `isPublished`; there is no backfill. Until the flip, the Eagle mirror (`controllers/nosql/organization.js`) rewrites an Eagle-sourced row's `read[]` from Eagle on each push, so a DEMI publish or unpublish of that row lasts only until its next push.
 
 Guards: `POST` is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eagle-api `swagger.yaml:4241`); `PUT` is `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]` (scope `project-system-admin`, `swagger.yaml:4361`). eagle-api's auth admits `sysadmin` and `staff` on every route (`api/helpers/auth.js:35-43`), so each DEMI guard carries the route's `x-security-scopes` plus those two. The route-inventory `roles` entry lists the same names.
 
@@ -273,18 +276,21 @@ Business rules (eagle-api `api/controllers/organization.js`):
 - Create copies the body fields name, description, country, postal, province, city, address1, address2, companyType, parentCompany, companyLegal, company; none is required (`:95-109`). eagle-api leaves an omitted one unset; DEMI stores `''` (`null` for `parentCompany`). `website` is not writable.
 - Create stores a `parentCompany` that is not an id as `null`, without an error (`:107`). DEMI does the same on create; on update an invalid `parentCompany` is a 400, because eagle-api's update fails the cast there.
 - Create stamps `addedBy` and `updatedBy` with the caller's `preferred_username` and sets `dateAdded` and `dateUpdated` to now (`:94,97-99`).
-- Create sets read to `public`, `staff` and `sysadmin` (`:110-112`). DEMI stores that `read[]` and `isPublished: true`. The `write` and `delete` arrays have no DEMI field; the route guards cover them.
+- Create sets read to `public`, `staff` and `sysadmin` (`:110-112`). DEMI takes `isPublished` from the body, default false: `read[]` is `staff` and `sysadmin`, plus `public` when `isPublished` is true. A `read` in the body is ignored. The `write` and `delete` arrays have no DEMI field; the route guards cover them.
+- Publish and unpublish (eagle-api `Actions.publish` and `unPublish`, `actions.js:7,31`) add or remove `public` on `read[]` and set `isPublished` to match; other `read[]` entries are kept, and an unpublish that would leave `read[]` empty leaves `staff` and `sysadmin`. No project ceiling applies, so neither route has a 409. Organizations are never ENGAGE-owned (`sourceSystem` is `eagle` or `demi`), so there is no ENGAGE refusal. Audit actions `organization.publish` and `organization.unpublish`.
+- Guards on publish and unpublish match `PUT`: `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]`, from eagle-api's scope `project-system-admin` (`swagger.yaml:4414,4463`) plus `sysadmin` and `staff`, for the same reason as `PUT`.
+- `PUT /organizations/:id` ignores `read` and `isPublished`; only publish and unpublish change visibility.
 - Create answers 200 (`:119`). DEMI answers 201 with a UUID id, `sourceSystem: 'demi'` and `eagleId: null`.
 - Update with an id that is not an ObjectId is 400 (`:129-133`). DEMI also takes UUIDs, so any unknown id is 404.
 - Update of a missing organization answers 200 with `null` (`:161,167`). DEMI answers 404.
 - Update rewrites `orgName` on that organization's users (`:162-163`). eagle-api and DEMI both run it on every update; DEMI rewrites only users whose `orgName` differs from the organization name, so any later PUT repairs a failed cascade. It skips deleted users and logs a user write that fails without failing the update. The orgName cascade writes users through `users.upsert` and records no audit row per user; only the `organization.update` action is audited, matching eagle-api.
 - Each write records an action, `Post` or `Put` (`:117,165`). DEMI writes the audit actions `organization.create` and `organization.update`, with `detail.fields` holding field names only.
-- A body field outside the list is ignored by eagle-api. DEMI answers 400 naming it, and an empty update body is 400.
+- A body field outside the list is ignored by eagle-api. DEMI answers 400 naming it, except the ignored `read` and `isPublished` above, and an empty update body is 400.
 
 Questioned:
 - PUT writes the raw `obj` (`:161` against the cleaned map at `:140-156`), so any body key reaches the row and `updatedBy` is never set. Not dropped: DEMI writes only the allowlisted fields and stamps `updatedBy` and `dateUpdated`.
 - PUT resets `dateAdded` (`:144`). Not dropped: DEMI keeps the original `dateAdded`.
-- Publish and unpublish (`swagger.yaml:4414,4463`) have no caller. Not ported; decision pending.
+- Publish and unpublish (`swagger.yaml:4414,4463`) have no caller. Ported anyway as `PUT /organizations/:id/publish` and `PUT /organizations/:id/unpublish`, per the visibility decision above.
 
 Callers to move: eagle-admin `org.service.ts:19,29`.
 

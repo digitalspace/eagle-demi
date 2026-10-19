@@ -47,4 +47,8 @@ async function writeRow({ ctx, repo, existing = null, reread, build, audit }) {
   return { status: 'ok', value: written.saved, created: written.from === null };
 }
 
-module.exports = { writeRow };
+/** The two reads a publish toggle moves a row between: staff-only, or open to the public too. */
+const STAFF_READ = Object.freeze(['staff', 'sysadmin']);
+const PUBLIC_READ = Object.freeze(['public', ...STAFF_READ]);
+
+module.exports = { writeRow, STAFF_READ, PUBLIC_READ };

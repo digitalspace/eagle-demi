@@ -64,7 +64,7 @@ test('organization domain', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   t.after(() => audit._resetTransport());
 
-  await t.test('create stores a DEMI-owned row with public read and the caller stamped', async (t) => {
+  await t.test('create stores a DEMI-owned row, unpublished, with the caller stamped', async (t) => {
     const written = fakeLists(t, null);
 
     const { result } = await audited(() => organization.create(STAFF, { name: 'New Co', city: 'Nelson' }));
@@ -76,8 +76,8 @@ test('organization domain', async (t) => {
     assert.strictEqual(row.kind, 'Organization');
     assert.strictEqual(row.sourceSystem, 'demi');
     assert.strictEqual(row.eagleId, null);
-    assert.deepStrictEqual(row.read, ['public', 'staff', 'sysadmin']);
-    assert.strictEqual(row.isPublished, true);
+    assert.deepStrictEqual(row.read, ['staff', 'sysadmin']);
+    assert.strictEqual(row.isPublished, false);
     assert.strictEqual(row.addedBy, 'idir-staff');
     assert.strictEqual(row.updatedBy, 'idir-staff');
     assert.strictEqual(row.name, 'New Co');
@@ -114,12 +114,35 @@ test('organization domain', async (t) => {
     assert.strictEqual(written[0].parentCompany, PARENT);
   });
 
-  await t.test('create refuses an unknown key, such as read, and stores nothing', async (t) => {
+  await t.test('create with isPublished true adds public to the read', async (t) => {
+    const written = fakeLists(t, null);
+    const { result } = await audited(() => organization.create(STAFF, { name: 'Open Co', isPublished: true }));
+    assert.strictEqual(result.status, 'ok');
+    assert.deepStrictEqual(written[0].read, ['public', 'staff', 'sysadmin']);
+    assert.strictEqual(written[0].isPublished, true);
+  });
+
+  await t.test('create refuses an isPublished that is not a boolean', async (t) => {
+    const written = fakeLists(t, null);
+    const { result } = await audited(() => organization.create(STAFF, { isPublished: 'yes' }));
+    assert.strictEqual(result.status, 'invalid');
+    assert.ok(result.fields.isPublished);
+    assert.strictEqual(written.length, 0);
+  });
+
+  await t.test('create ignores a read in the body', async (t) => {
+    const written = fakeLists(t, null);
+    const { result } = await audited(() => organization.create(STAFF, { name: 'X', read: ['public'] }));
+    assert.strictEqual(result.status, 'ok');
+    assert.deepStrictEqual(written[0].read, ['staff', 'sysadmin']);
+  });
+
+  await t.test('create refuses an unknown key and stores nothing', async (t) => {
     const written = fakeLists(t, null);
     const { result, rows: logged } = await audited(() =>
-      organization.create(STAFF, { name: 'X', read: ['public'] }));
+      organization.create(STAFF, { name: 'X', write: ['public'] }));
     assert.strictEqual(result.status, 'invalid');
-    assert.ok(result.fields.read);
+    assert.ok(result.fields.write);
     assert.strictEqual(written.length, 0);
     assert.strictEqual(logged.length, 0);
   });
@@ -177,12 +200,64 @@ test('organization domain', async (t) => {
     assert.strictEqual(written.length, 0);
   });
 
-  await t.test('update refuses a body that sets read', async (t) => {
+  await t.test('update ignores read and isPublished and keeps the stored visibility', async (t) => {
     const written = fakeLists(t);
-    const { result } = await audited(() => organization.update(STAFF, ORG_ID, { read: ['sysadmin'] }));
+    const { result } = await audited(() =>
+      organization.update(STAFF, ORG_ID, { city: 'Nelson', read: ['sysadmin'], isPublished: false }));
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(written[0].city, 'Nelson');
+    assert.deepStrictEqual(written[0].read, STORED.read);
+    assert.strictEqual(written[0].isPublished, true);
+  });
+
+  await t.test('an update body holding only read and isPublished is invalid', async (t) => {
+    const written = fakeLists(t);
+    const { result } = await audited(() =>
+      organization.update(STAFF, ORG_ID, { read: ['sysadmin'], isPublished: false }));
     assert.strictEqual(result.status, 'invalid');
-    assert.ok(result.fields.read);
+    assert.ok(result.fields.body);
     assert.strictEqual(written.length, 0);
+  });
+
+  await t.test('publish adds public to the read, sets isPublished and audits it', async (t) => {
+    const written = fakeLists(t, { ...STORED, read: ['staff', 'sysadmin'], isPublished: false });
+    const { result, rows: logged } = await audited(() => organization.publish(STAFF, ORG_ID));
+    assert.strictEqual(result.status, 'ok');
+    assert.deepStrictEqual(written[0].read, ['public', 'staff', 'sysadmin']);
+    assert.strictEqual(written[0].isPublished, true);
+    assert.strictEqual(written[0].updatedBy, 'idir-staff');
+    assert.strictEqual(logged.length, 1);
+    assert.strictEqual(logged[0].Action, 'organization.publish');
+    assert.strictEqual(logged[0].TargetId, ORG_ID);
+  });
+
+  await t.test('publish of a published organization does not repeat public', async (t) => {
+    const written = fakeLists(t);
+    await audited(() => organization.publish(STAFF, ORG_ID));
+    assert.deepStrictEqual(written[0].read, ['public', 'staff', 'sysadmin']);
+  });
+
+  await t.test('unpublish takes public out of the read and clears isPublished', async (t) => {
+    const written = fakeLists(t);
+    const { result, rows: logged } = await audited(() => organization.unpublish(STAFF, ORG_ID));
+    assert.strictEqual(result.status, 'ok');
+    assert.deepStrictEqual(written[0].read, ['staff', 'sysadmin']);
+    assert.strictEqual(written[0].isPublished, false);
+    assert.strictEqual(logged[0].Action, 'organization.unpublish');
+  });
+
+  await t.test('unpublish of a public-only read leaves it readable by staff', async (t) => {
+    const written = fakeLists(t, { ...STORED, read: ['public'] });
+    await audited(() => organization.unpublish(STAFF, ORG_ID));
+    assert.deepStrictEqual(written[0].read, ['staff', 'sysadmin']);
+  });
+
+  await t.test('publish of a missing organization is not-found and writes nothing', async (t) => {
+    const written = fakeLists(t, null);
+    const { result, rows: logged } = await audited(() => organization.publish(STAFF, ORG_ID));
+    assert.strictEqual(result.status, 'not-found');
+    assert.strictEqual(written.length, 0);
+    assert.strictEqual(logged.length, 0);
   });
 
   await t.test('update refuses a field above the caller level and writes nothing', async (t) => {

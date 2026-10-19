@@ -363,6 +363,8 @@ const routes = [
   // eagle-api's auth admits sysadmin and staff on every route (api/helpers/auth.js:35-43), so both join the scopes.
   { method: 'post', path: '/organizations', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/organizations').createOrganization },
   { method: 'put', path: '/organizations/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/organizations').updateOrganization },
+  { method: 'put', path: '/organizations/:id/publish', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/organizations').publishOrganization },
+  { method: 'put', path: '/organizations/:id/unpublish', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/organizations').unpublishOrganization },
 
   // port: comment-periods
   { method: 'post', path: '/comment-periods', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comment-periods-write').createCommentPeriod },
