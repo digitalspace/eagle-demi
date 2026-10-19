@@ -32,6 +32,10 @@ test('lockRefusal', async (t) => {
     assert.ok(lockRefusal({ legislationYear: '2025' }, { legislationYear: 2002 }));
   });
 
+  await t.test('a year stored as a string matches the same year sent as a number', () => {
+    assert.strictEqual(lockRefusal({ legislationYear: '2025' }, { legislationYear: 2025 }), null);
+  });
+
   await t.test('a row with only the label still locks', () => {
     assert.ok(lockRefusal({ legislation: 'Building Canada Act' }, { legislationYear: 2002 }));
   });
