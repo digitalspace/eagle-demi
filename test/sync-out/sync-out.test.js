@@ -684,6 +684,36 @@ test('sync-out', async (t) => {
     assert.deepStrictEqual(sent.map(s => s.queue), ['sync-out-poison']);
   });
 
+  await t.test('a consumer the message\'s kind does not name sends nothing and is parked on its last attempt',
+    async (tt) => {
+      // A fresh engine over a registry whose only kind lists no consumer; index.js reads kinds at load.
+      const kindsPath = require.resolve('../../src/sync-out/kinds');
+      const indexPath = require.resolve('../../src/sync-out');
+      const real = require.cache[kindsPath];
+      const engine = require.cache[indexPath];
+      const KINDS = { other: { repo: commentPeriods, consumers: [] } };
+      require.cache[kindsPath] = {
+        id: kindsPath, filename: kindsPath, loaded: true,
+        exports: { ...real.exports, KINDS, kindOf: name => KINDS[name] }
+      };
+      delete require.cache[indexPath];
+      tt.after(() => {
+        require.cache[kindsPath] = real;
+        require.cache[indexPath] = engine;
+      });
+      const isolated = require('../../src/sync-out');
+      wireStore(tt, engageRow({ eagleId: 'cp-9' }));
+      const sent = wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      const result = await isolated.run(message({ kind: 'other', attempt: MAX_ATTEMPTS }),
+        { attempt: MAX_ATTEMPTS, maxAttempts: MAX_ATTEMPTS });
+
+      assert.match(result.failed, /consumer eagle does not send kind other/);
+      assert.deepStrictEqual(eagleCalls(calls), []);
+      assert.deepStrictEqual(sent.map(s => s.queue), ['sync-out-poison']);
+    });
+
   await t.test('enqueue refuses an unknown kind; enqueueQuietly logs a failure and answers no consumers',
     async (tt) => {
       wireQueue(tt, { fail: ['sync-out'] });
