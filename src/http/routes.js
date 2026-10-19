@@ -402,6 +402,10 @@ const routes = [
   { method: 'put', path: '/users/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/users').updateUser },
 
   // port: extensions
+  { method: 'get', path: '/projects/:id/extensions', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').getExtensions },
+  { method: 'post', path: '/projects/:id/extensions', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').createExtension },
+  { method: 'put', path: '/projects/:id/extensions/:extId', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').updateExtension },
+  { method: 'delete', path: '/projects/:id/extensions/:extId', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/extensions').deleteExtension },
 
   // port: project-legislation
 
