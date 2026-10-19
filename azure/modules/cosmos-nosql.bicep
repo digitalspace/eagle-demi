@@ -187,6 +187,29 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
           {
             path: '/decisionDate/?'
           }
+          // The native list's sort keys (repositories/projects.js SORTABLE). upsert writes each on
+          // every row, because an ORDER BY drops rows that lack its field.
+          {
+            path: '/dateUpdated/?'
+          }
+          {
+            path: '/sector/?'
+          }
+          {
+            path: '/proponentName/?'
+          }
+          {
+            path: '/projectType/?'
+          }
+          {
+            path: '/region/?'
+          }
+          {
+            path: '/currentPhaseName/name/?'
+          }
+          {
+            path: '/eacDecisionSort/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -248,6 +271,18 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           {
             path: '/pdfTitle/lease/expiresAt/?'
           }
+          // Intake sweep: pending rows by scanStatus in createdAt order (an ORDER BY needs the range
+          // index), and the month-to-date scan total filtered on scannedAt. Adding them reindexes the
+          // container online, so the next prod foundation deploy reindexes prod even with intake off.
+          {
+            path: '/scanStatus/?'
+          }
+          {
+            path: '/createdAt/?'
+          }
+          {
+            path: '/scannedAt/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -302,6 +337,13 @@ resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
           {
             path: '/publishDate/?'
           }
+          // Native list sort keys; the mirror writes both as null when Eagle sends none.
+          {
+            path: '/headline/?'
+          }
+          {
+            path: '/type/?'
+          }
           {
             path: '/notifiedAt/?'
           }
@@ -323,6 +365,9 @@ resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
           }
           {
             path: '/notifyAttempts/?'
+          }
+          {
+            path: '/complianceAndEnforcement/?'
           }
         ]
         excludedPaths: noIndex
@@ -462,6 +507,13 @@ resource notificationsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
           {
             path: '/decision/?'
           }
+          // Native list sort key; the mirror writes null when Eagle sends none.
+          {
+            path: '/proponent/?'
+          }
+          {
+            path: '/subType/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -513,6 +565,9 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
           {
             path: '/legislation/?'
           }
+          {
+            path: '/companyLegal/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -522,7 +577,8 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
 
 // Eagle `User`, mirrored by eagle-api (docs/rbac-architecture.md, "User, group and inspection
 // mirrors"). Lists order on c.id, which the system index serves, or on the `sort` key
-// /displayName; the mirror writes it on every row, so that ORDER BY drops none.
+// /displayName, /orgName, /email or /phoneNumber (email and phoneNumber are staff-only); the
+// mirror writes each on every row, so that ORDER BY drops none.
 resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'users'
@@ -544,6 +600,15 @@ resource usersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
           }
           {
             path: '/displayName/?'
+          }
+          {
+            path: '/orgName/?'
+          }
+          {
+            path: '/email/?'
+          }
+          {
+            path: '/phoneNumber/?'
           }
         ]
         excludedPaths: noIndex

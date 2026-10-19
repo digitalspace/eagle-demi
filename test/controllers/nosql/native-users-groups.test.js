@@ -18,6 +18,7 @@ const projects = require('../../../src/repositories/projects');
 const { NOT_DELETED } = require('../../../src/repositories/_sql');
 const { makeRes } = require('../../../src/http/router');
 const { recordEvents } = require('../../helpers/record-events');
+const { swaggerParams } = require('../../helpers/swagger-params');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 const SYSADMIN = { realm_access: { roles: ['sysadmin'] } };
@@ -49,24 +50,32 @@ function readable(rows, spec) {
   return roles.length ? live.filter(row => row.read.some(role => roles.includes(role))) : live;
 }
 
-function fakeCosmos(t) {
+/** Cosmos ORDER BY on one key: a row lacking the field drops out. */
+function ordered(rows, spec) {
+  const [, field, dir] = spec.query.match(/ORDER BY c\.(\w+) (ASC|DESC)$/) || [];
+  if (!field) return rows;
+  return rows.filter(row => row[field] !== undefined)
+    .sort((a, b) => a[field].localeCompare(b[field]) * (dir === 'DESC' ? -1 : 1));
+}
+
+function fakeCosmos(t, store = ROWS) {
   const specs = [];
   t.mock.method(cosmos, 'query', async (container, spec) => {
     // Any other container (the parent project join) holds nothing unless a test mocks it.
-    if (!ROWS[container]) return { items: [] };
+    if (!store[container]) return { items: [] };
     specs.push(spec);
-    const rows = readable(ROWS[container], spec);
+    const rows = readable(store[container], spec);
     if (spec.query.includes('COUNT(1)')) return { items: [rows.length] };
     const id = paramsOf(spec).find(p => p.name === '@id');
-    return { items: id ? rows.filter(row => row.id === id.value) : rows };
+    return { items: id ? rows.filter(row => row.id === id.value) : ordered(rows, spec) };
   });
   t.mock.method(cosmos, 'queryFirst', async (container, spec) => {
-    if (!ROWS[container]) return null;
+    if (!store[container]) return null;
     specs.push(spec);
     const id = paramsOf(spec).find(p => p.name === '@id');
-    return readable(ROWS[container], spec).find(row => row.id === id.value) || null;
+    return readable(store[container], spec).find(row => row.id === id.value) || null;
   });
-  t.mock.method(cosmos, 'readItem', async (container, id) => ROWS[container].find(row => row.id === id) || null);
+  t.mock.method(cosmos, 'readItem', async (container, id) => store[container].find(row => row.id === id) || null);
   return specs;
 }
 
@@ -127,13 +136,24 @@ test('native users read', async (t) => {
     assert.deepStrictEqual([param(read, '@nid0'), param(read, '@nid1')], ['u1', 'u2']);
   });
 
-  await t.test('sort takes displayName and nothing else', async (t) => {
+  await t.test('a sort key off the list is refused before any read', async (t) => {
     const specs = fakeCosmos(t);
-    const off = await call(list, 'sort=email', { user: STAFF });
+    const off = await call(list, 'sort=city', { user: STAFF });
     assert.strictEqual(off.status, 400);
-    assert.match(off.body.error, /cannot sort on: email/);
+    assert.match(off.body.error, /cannot sort on: city/);
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('sort=-displayName orders by displayName descending', async (t) => {
+    const specs = fakeCosmos(t);
     assert.strictEqual((await call(list, 'sort=-displayName', { user: STAFF })).status, 200);
     assert.ok(listQuery(specs).query.endsWith('ORDER BY c.displayName DESC'));
+  });
+
+  await t.test('swagger offers each sort key both ways, and no other', () => {
+    const offered = swaggerParams('/api/users').get('sort').match(/enum: \[([^\]]*)\]/)[1].split(/,\s*/);
+    const keys = userController.nativeSpec.sortKeys;
+    assert.deepStrictEqual(offered.sort(), keys.flatMap(key => [key, `-${key}`]).sort());
   });
 
   await t.test('count=true sets x-total-count from the same predicate', async (t) => {
@@ -240,6 +260,12 @@ test('native groups read', async (t) => {
     assert.strictEqual((await call(list, 'sort=name')).status, 200);
   });
 
+  await t.test('swagger offers each sort key both ways, and no other', () => {
+    const offered = swaggerParams('/api/groups').get('sort').match(/enum: \[([^\]]*)\]/)[1].split(/,\s*/);
+    const keys = groupController.nativeSpec.sortKeys;
+    assert.deepStrictEqual(offered.sort(), keys.flatMap(key => [key, `-${key}`]).sort());
+  });
+
   await t.test('rows carry the parent project name and Eagle id', async (t) => {
     fakeCosmos(t);
     t.mock.method(projects, 'listRowsByIds', async () => [
@@ -281,5 +307,76 @@ test('native groups read', async (t) => {
     const events = recordEvents(t);
     await call(list, '', { user: STAFF });
     assert.deepStrictEqual(await events(audit.AUDIT_STREAM), []);
+  });
+});
+
+// Sorts over rows the real user mirror wrote. Cosmos drops a row lacking the ORDER BY field, so a
+// user pushed with no orgName or phoneNumber stays in only because the mirror stores ''.
+
+const PUSHED = [
+  { _id: 'u-ann', read: ['public'], displayName: 'Ann', orgName: 'Zeta Corp', email: 'ann@example.invalid', phoneNumber: '250-555-0101' },
+  { _id: 'u-bo', read: ['public'], displayName: 'Bo', email: 'bo@example.invalid' },
+  { _id: 'u-cy', read: ['public'], displayName: 'Cy', orgName: 'Acme', email: 'cy@example.invalid', phoneNumber: '250-555-0199' }
+];
+
+/** Mirrors `PUSHED` through the real write path into an in-memory container; returns the read specs after. */
+async function mirroredUsers(t) {
+  const users = [];
+  t.mock.method(cosmos, 'create', async (container, item) => {
+    users.push(structuredClone(item));
+    return item;
+  });
+  const specs = fakeCosmos(t, { users });
+  for (const doc of PUSHED) await userController.mirrorFromEagle(doc._id, doc);
+  specs.length = 0;
+  return specs;
+}
+
+const ids = body => body.map(row => row.id);
+
+test('users sort by orgName, email and phoneNumber', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const { getUsers: list } = userController;
+
+  await t.test('anonymous sort=orgName keeps the user with no organization, first', async (t) => {
+    const specs = await mirroredUsers(t);
+    const res = await call(list, 'sort=orgName&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.ok(listQuery(specs).query.endsWith('ORDER BY c.orgName ASC'));
+    assert.deepStrictEqual(ids(res.body), ['u-bo', 'u-cy', 'u-ann']);
+    assert.strictEqual(res.headers['x-total-count'], '3');
+  });
+
+  await t.test('anonymous sort=email is refused before any read', async (t) => {
+    const specs = await mirroredUsers(t);
+    const res = await call(list, 'sort=email');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /cannot see: email$/);
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('anonymous sort=-phoneNumber is refused before any read', async (t) => {
+    const specs = await mirroredUsers(t);
+    const res = await call(list, 'sort=-phoneNumber');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /cannot see: phoneNumber$/);
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('staff sort=-email orders by email descending', async (t) => {
+    const specs = await mirroredUsers(t);
+    const res = await call(list, 'sort=-email', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.ok(listQuery(specs).query.endsWith('ORDER BY c.email DESC'));
+    assert.deepStrictEqual(ids(res.body), ['u-cy', 'u-bo', 'u-ann']);
+  });
+
+  await t.test('staff sort=phoneNumber keeps the user with no phone, first', async (t) => {
+    const specs = await mirroredUsers(t);
+    const res = await call(list, 'sort=phoneNumber&count=true', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.ok(listQuery(specs).query.endsWith('ORDER BY c.phoneNumber ASC'));
+    assert.deepStrictEqual(ids(res.body), ['u-bo', 'u-ann', 'u-cy']);
+    assert.strictEqual(res.headers['x-total-count'], '3');
   });
 });

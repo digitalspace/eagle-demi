@@ -1,13 +1,16 @@
 // Document intake staging account, scanned by Microsoft Defender for Storage on upload.
 //
-// The browser uploads to `incoming` with a user-delegation SAS. Defender scans each blob, writes the
-// result as a blob index tag and publishes it to the topic below; `intakeScanResult` in the API app
-// then moves the file on or copies it to `quarantine`. The ABAC condition on the API identity means a
-// blob in `incoming` cannot be read until Defender has tagged it clean.
+// The browser uploads to `incoming` with a user-delegation SAS. Defender scans each blob and writes the
+// result as a blob index tag. `intakeScanSweep` in the API app reads that tag every 5 minutes, then
+// moves the file on or copies it to `quarantine`. The ABAC condition on the API identity means a blob
+// in `incoming` cannot be read until Defender has tagged it clean.
+//
+// No Event Grid topic: policy Deny-PublicPaaSEndpoints refuses a public custom topic, and Defender
+// cannot deliver scan results to one without public network access.
 //
 // The only DEMI account with Defender on. Every other module opts out (see document-storage.bicep).
 
-@description('Location for the intake resources. The topic must share the storage account region.')
+@description('Location for the intake resources')
 param location string = resourceGroup().location
 
 @description('Environment name (e.g. dev, test, prod)')
@@ -22,21 +25,9 @@ param storageAccountName string
 @description('Principal id of demi-identity-<env>, the identity the API runs as')
 param apiPrincipalId string
 
-@description('Name of the Flex API app whose `intakeScanResult` function receives scan results')
-param apiAppName string
-
-@description('Create the Event Grid subscription and the dead-sweep alert. False on the first pass: both need the intake functions deployed first.')
-param deploySubscription bool = true
-
 @description('Malware scanning cap in GB per month. Scanning stops for the rest of the month when it is reached.')
 @minValue(1)
 param capGBPerMonth int
-
-// Tenant-specific object id, so it cannot be derived here. Candidate: the per-subscription managed
-// identity of `/subscriptions/<sub>/providers/Microsoft.Security/dataScanners/storageDataScanner`
-// (`az ad sp list --filter "startswith(displayName,'StorageDataScanner')"`, match alternativeNames).
-@description('Object id of the Defender for Storage principal that publishes scan results. Empty grants nothing: the topic has local auth off, so Defender cannot publish until this is set.')
-param defenderPrincipalId string = ''
 
 @description('Browser origins allowed to PUT to the blob endpoint, host names without scheme')
 param allowedOrigins array = []
@@ -65,15 +56,12 @@ var intakeContainers = {
 var incomingContainer = intakeContainers.incoming
 var quarantineContainer = intakeContainers.quarantine
 var deadletterContainer = intakeContainers.deadletter
-var scanResultTag = 'Malware Scanning scan result'
+var scanResultTag = 'Malware scanning scan result'
 var privateEndpointName = 'demi-intake-pe-${environmentName}'
-// The Event Grid trigger in api/index.js. A subscription pointed at a missing function is accepted and drops every event,
-// so infra pass 1 must export DEPLOY_INTAKE_SUBSCRIPTION=false (deploySubscription) until the code is deployed.
-var scanResultFunctionName = 'intakeScanResult'
 
 var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+var blobDataOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
 var blobDelegatorRoleId = 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a'
-var eventGridDataSenderRoleId = 'd5a91429-5739-47e2-a06b-3470a27159e7'
 
 resource intakeStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName
@@ -134,28 +122,6 @@ resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2
   }
 }]
 
-resource scanResultsTopic 'Microsoft.EventGrid/topics@2025-02-15' = {
-  name: 'demi-intake-${environmentName}'
-  location: location
-  tags: tags
-  properties: {
-    inputSchema: 'EventGridSchema'
-    // Defender publishes from outside the VNet and cannot reach a private-only topic.
-    publicNetworkAccess: 'Enabled'
-    disableLocalAuth: true
-  }
-}
-
-resource defenderPublishes 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(defenderPrincipalId)) {
-  scope: scanResultsTopic
-  name: guid(scanResultsTopic.id, defenderPrincipalId, eventGridDataSenderRoleId)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', eventGridDataSenderRoleId)
-    principalId: defenderPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 // Exactly the table in the intake plan. A container name with no `/` excludes the whole container.
 resource defenderForStorage 'Microsoft.Security/defenderForStorageSettings@2025-06-01' = {
   name: 'current'
@@ -173,9 +139,8 @@ resource defenderForStorage 'Microsoft.Security/defenderForStorageSettings@2025-
           excludeBlobsLargerThan: 2147483648
         }
       }
-      // The ABAC condition below reads this tag.
+      // The sweep and the ABAC condition below read this tag.
       blobScanResultsOptions: 'blobIndexTags'
-      scanResultsEventGridTopicResourceId: scanResultsTopic.id
     }
     sensitiveDataDiscovery: {
       isEnabled: false
@@ -183,32 +148,36 @@ resource defenderForStorage 'Microsoft.Security/defenderForStorageSettings@2025-
   }
 }
 
-resource scanResultSubscription 'Microsoft.EventGrid/topics/eventSubscriptions@2025-02-15' = if (deploySubscription) {
-  parent: scanResultsTopic
-  name: 'intake-scan-result'
-  properties: {
-    destination: {
-      endpointType: 'AzureFunction'
-      properties: {
-        resourceId: '${resourceId('Microsoft.Web/sites', apiAppName)}/functions/${scanResultFunctionName}'
-        maxEventsPerBatch: 1
-      }
-    }
-    filter: {
-      includedEventTypes: [
-        'Microsoft.Security.MalwareScanningResult'
-      ]
-    }
-    retryPolicy: {
-      maxDeliveryAttempts: 5
-      eventTimeToLiveInMinutes: 60
-    }
-  }
-}
-
 // ── Identities and data-plane RBAC ──────────────────────────────────────────────────────────────
 
-// Moves rejected files to quarantine. The API identity cannot write outside `incoming` or read an unscanned blob.
+var blobsAction = 'Microsoft.Storage/storageAccounts/blobServices/containers/blobs'
+var containerNameAttr = '@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name]'
+
+// A condition may only name actions its role grants. Data Contributor has no blobs/tags/write, so naming it
+// fails the deploy ("Action pattern .../blobs/tags/write is not referenced in role ba92f5b4-..."). Keep two
+// vars: tagHeaderDeny for Contributor grants, tagWriteDeny (adds Set Blob Tags) for Owner grants.
+
+// Denies a write or create that carries tag headers. With Contributor this is every way to set a tag.
+var tagHeaderDeny = join([
+  '('
+  ' !(ActionMatches{\'${blobsAction}/write\'} AND SubOperationMatches{\'Blob.Write.WithTagHeaders\'})'
+  ' AND'
+  ' !(ActionMatches{\'${blobsAction}/add/action\'} AND SubOperationMatches{\'Blob.Write.WithTagHeaders\'})'
+  ')'
+], '\n')
+
+// Owner also grants Set Blob Tags (blobs/tags/write), so its deny adds that action.
+var tagWriteDeny = join([
+  '('
+  tagHeaderDeny
+  ' AND'
+  ' !(ActionMatches{\'${blobsAction}/tags/write\'})'
+  ')'
+], '\n')
+
+// Reads scan-result tags and moves rejected files to quarantine. It can never write a tag, so a wrong
+// sweep decision cannot mark a file clean. The API identity cannot write outside `incoming` or read an
+// unscanned blob.
 resource intakeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'demi-intake-${environmentName}'
   location: location
@@ -222,6 +191,22 @@ resource intakeBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
     principalId: intakeIdentity.properties.principalId
     principalType: 'ServicePrincipal'
+    condition: tagHeaderDeny
+    conditionVersion: '2.0'
+  }
+}
+
+// Data Contributor lacks blobs/tags/read, which the sweep needs. Owner adds it, on `incoming` only
+// (containers[0]); tagWriteDeny takes back the tag writes Owner would also grant.
+resource intakeTagReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: containers[0]
+  name: guid(containers[0].id, intakeIdentity.id, blobDataOwnerRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataOwnerRoleId)
+    principalId: intakeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    condition: tagWriteDeny
+    conditionVersion: '2.0'
   }
 }
 
@@ -240,8 +225,6 @@ resource intakeBlobDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01
 // 1. a blob read (not a list) is allowed only in `incoming` and only once Defender tagged it clean;
 // 2. writes and deletes are allowed only in `incoming`;
 // 3. no write may set the scan-result tag, or an upload SAS with tag rights could pre-mark a file clean.
-var blobsAction = 'Microsoft.Storage/storageAccounts/blobServices/containers/blobs'
-var containerNameAttr = '@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name]'
 var apiCondition = join([
   '('
   ' ('
@@ -270,13 +253,7 @@ var apiCondition = join([
   ')'
   'AND'
   '('
-  ' ('
-  '  !(ActionMatches{\'${blobsAction}/write\'} AND SubOperationMatches{\'Blob.Write.WithTagHeaders\'})'
-  '  AND'
-  '  !(ActionMatches{\'${blobsAction}/add/action\'} AND SubOperationMatches{\'Blob.Write.WithTagHeaders\'})'
-  '  AND'
-  '  !(ActionMatches{\'${blobsAction}/tags/write\'})'
-  ' )'
+  tagHeaderDeny
   ' OR'
   ' ('
   '  @Request[${blobsAction}/tags&$keys$&] ForAllOfAllValues:StringNotEquals {\'${scanResultTag}\'}'
@@ -372,10 +349,10 @@ resource capAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = [for a i
   }
 }]
 
-// The sweep logs the month-to-date line every 30 minutes. None for 2 hours means the sweep is dead,
-// so pending uploads are never timed out and the cap alerts above go silent. Gated with the subscription:
-// before intakeScanSweep is deployed it would fire on its first evaluation.
-resource sweepSilentAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deploySubscription) {
+// The sweep logs the month-to-date line every 5 minutes. None for 2 hours means the sweep is dead,
+// so no scan result is read, pending uploads are never timed out and the cap alerts above go silent.
+// Not gated: it fires if the API code deploy lags this module by more than 2 hours.
+resource sweepSilentAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   name: 'demi-intake-sweep-silent-${environmentName}'
   location: location
   tags: tags
@@ -413,6 +390,5 @@ output storageAccountName string = intakeStorage.name
 output incomingContainer string = incomingContainer
 output quarantineContainer string = quarantineContainer
 output deadletterContainer string = deadletterContainer
-output topicId string = scanResultsTopic.id
 output intakeIdentityClientId string = intakeIdentity.properties.clientId
 output intakeIdentityId string = intakeIdentity.id

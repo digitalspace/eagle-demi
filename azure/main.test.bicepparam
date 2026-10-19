@@ -14,13 +14,12 @@ param location = 'canadacentral'
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
 // ── Document intake ───────────────────────────────────────────────────────────────────────────
-// Staging for the intake rollout. Infra pass 1 must export DEPLOY_INTAKE_SUBSCRIPTION=false: the scan-result
-// subscription and the dead-sweep alert need `intakeScanResult` and `intakeScanSweep` deployed. Pass 2 takes the default.
-param deployDocumentIntake = true
+// Parked on both environments. The test private endpoint subnet `c4b0a8-test-cond-ext-pe-subnet`
+// (10.46.52.32/28) was full on 2026-10-14, so `demi-intake-pe-test` could not be created. To resume,
+// free the subnet or change `privateEndpointSubnetId`, set this to true and run
+// `scripts/deploy-infra.sh test --foundation --live`.
+param deployDocumentIntake = false
 param intakeCapGBPerMonth = 5
-param deployIntakeSubscription = bool(readEnvironmentVariable('DEPLOY_INTAKE_SUBSCRIPTION', 'true'))
-// storageDataScanner identity of this subscription, still to be confirmed by the EICAR test on test; fallback is the Defender for Storage resource provider app 080765e3-9336-4461-b934-310acccb907d.
-param intakeDefenderPrincipalId = 'a7cb62f0-b243-4920-9536-61006340cc1d'
 
 // Direct-to-NRS object store: the test bucket zdspnb, keys at the root, no prefix. eagle-api on
 // OpenShift TEST has written here through its nr-object-store-credential secret since the Helm
@@ -168,12 +167,14 @@ param contactEmails = [
 param linkBaseUrl = 'https://eagle-public-next-test-gtaqa6dvexc6edhg.a02.azurefd.net'
 
 // azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
-// One entry, because both are the same client — this file sets no keycloakClientId, so the API
+// The frontend and admin console are the same client — this file sets no keycloakClientId, so the API
 // takes main.bicep's 'eagle-admin-console' default, and frontend/public/env.js names the same id.
-param allowedClients = 'eagle-admin-console'
+// eagle-agent-test is the service-account client the test agent uses to call the API.
+param allowedClients = 'eagle-admin-console,eagle-agent-test'
 
-// Measured 2026-08-28 on a test-realm user token: aud contains 'account'. Prod not measured.
-param ssoAudience = 'account'
+// The test realm's eagle-admin-console client has an audience mapper for demi-api (measured
+// 2026-10-16: aud is ["demi-api","epictrack-web","account"]). Prod has the same mapper.
+param ssoAudience = 'demi-api'
 
 // The rproxy egress addresses as APIM reports them (`callerIp` on the App Insights request row
 // for a request made through eagle-test.apps.silver.devops.gov.bc.ca/demi-search; measured
@@ -218,6 +219,10 @@ param notifyUpdateReaderLinks = true
 
 // Nightly 10:00 UTC. Armed 2026-09-02 after the first live run against epictrack-api-c8b80a-test.
 param syncTeamsSchedule = '0 0 10 * * *'
+
+// Every 5 min. Polls Track /api/v1/projects so project edits reach the public site the same hour,
+// not the next day. Armed 2026-10-16.
+param syncProjectsSchedule = '0 */5 * * * *'
 
 // ── PDF title worker ──────────────────────────────────────────────────────────────────────────
 // Test only. pdfTitleLive true: the worker writes titles into test originals; set false to list work and write nothing.

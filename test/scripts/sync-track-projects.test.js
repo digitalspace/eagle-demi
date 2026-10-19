@@ -17,7 +17,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const { HEAL_CAP, syncProjects, trackChanges } = require('../../src/scripts/sync-track-projects');
+const { HEAL_CAP, run, syncProjects, trackChanges } = require('../../src/scripts/sync-track-projects');
 const { needsClosing } = require('../../src/scripts/close-unpublished-track-projects');
 const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
@@ -955,5 +955,124 @@ test('wrong-host link records', async (t) => {
 
     assert.strictEqual(live.healed, 1);
     assert.strictEqual(dry.healed, 1);
+  });
+});
+
+/**
+ * The projects-only poll runs every few minutes, so what it must NOT do matters as much as what it
+ * writes: no phase calls, no Keycloak admin reads, no link housekeeping, no write on a quiet run.
+ */
+test('the projects poll', async (t) => {
+  const OTHER_HOST = 'https://other-host.gov.bc.ca';
+  const PHASES = [{ name: 'Application Review', sortOrder: 4, isCompleted: false }];
+  const RENAMED = { ...API_PROJECT, name: 'Nicomen Wind Energy Project' };
+
+  /** Track and Keycloak, recording every call. Only the project list answers. */
+  const upstream = (rows = [API_PROJECT]) => {
+    const urls = [];
+    const adminCalls = [];
+    const admin = (name) => async () => { adminCalls.push(name); return []; };
+    return {
+      urls, adminCalls,
+      kc: {
+        clientToken: async () => 'track-token',
+        listProjectRoles: admin('listProjectRoles'),
+        roleUsers: admin('roleUsers')
+      },
+      fetchJson: async (url) => {
+        urls.push(url);
+        if (url === `${config.trackApiBase}/api/v1/projects`) return rows;
+        throw new Error(`unexpected Track call ${url}`);
+      }
+    };
+  };
+  const quiet = (t) => {
+    t.mock.method(logger, 'warn', () => {});
+    return t.mock.method(logger, 'info', () => {});
+  };
+
+  await t.test('makes one Track list call and no phase or Keycloak admin calls', async (t) => {
+    quiet(t);
+    const track = upstream();
+
+    await run({ live: true, deps: { ...track, projects: fakeProjects([storedProject()]), links: fakeLinks() } });
+
+    assert.deepStrictEqual(track.urls, [`${config.trackApiBase}/api/v1/projects`]);
+    assert.deepStrictEqual(track.adminCalls, []);
+  });
+
+  await t.test('a changed proponent updates the row and its Track snapshot', async (t) => {
+    quiet(t);
+    const projects = fakeProjects([storedProject()]);
+    const moved = { ...API_PROJECT, proponent: { name: 'Wonowon Holdings' } };
+
+    const summary = await run({ live: true, deps: { ...upstream([moved]), projects, links: fakeLinks() } });
+
+    assert.strictEqual(summary.updated, 1);
+    assert.strictEqual(projects.writes[0].proponentName, 'Wonowon Holdings');
+    assert.strictEqual(projects.writes[0].sources.track.proponent_name, 'Wonowon Holdings');
+  });
+
+  await t.test('keeps the stored phases', async (t) => {
+    quiet(t);
+    const projects = fakeProjects([storedProject({ phases: PHASES })]);
+
+    await run({ live: true, deps: { ...upstream([RENAMED]), projects, links: fakeLinks() } });
+
+    assert.deepStrictEqual(projects.writes[0].phases, PHASES,
+      'the poll pulls no phases, and must not blank the rail the nightly run wrote');
+  });
+
+  await t.test('a changed row that already has a code is written with no link heal or mint', async (t) => {
+    quiet(t);
+    const links = fakeLinks([linkRecord('kq7bt2rm', `${OTHER_HOST}/p/${API_PROJECT.epic_guid}`)]);
+    const projects = fakeProjects([storedProject({ legacyShortCodes: ['kq7bt2rm'] })]);
+
+    const summary = await run({ live: true, deps: { ...upstream([RENAMED]), projects, links } });
+
+    assert.strictEqual(projects.writes.length, 1);
+    assert.strictEqual(projects.writes[0].shortCode, 'nicomen-wind-energy', 'a rename does not move the code');
+    assert.deepStrictEqual(links.created, []);
+    assert.strictEqual(links.byId.get('kq7bt2rm').url, `${OTHER_HOST}/p/${API_PROJECT.epic_guid}`,
+      'the wrong-host record waits for the nightly heal');
+    assert.strictEqual(summary.healed, 0);
+  });
+
+  await t.test('writes nothing when Track changed nothing, even on rows the nightly run would mint', async (t) => {
+    quiet(t);
+    const noCode = storedProject();
+    delete noCode.shortCode;
+    const projects = fakeProjects([noCode, eagleOnlyProject({ id: 'eagle-abc123', eagleId: 'abc123' })]);
+    const links = fakeLinks();
+
+    const summary = await run({ live: true, deps: { ...upstream(), projects, links } });
+
+    assert.deepStrictEqual(projects.writes, []);
+    assert.deepStrictEqual(projects.patches, []);
+    assert.deepStrictEqual(links.created, []);
+    assert.strictEqual(summary.shortLinks, 0);
+  });
+
+  await t.test('logs the summary line the alert matches', async (t) => {
+    const info = quiet(t);
+
+    await run({ live: true, deps: { ...upstream(), projects: fakeProjects([storedProject()]), links: fakeLinks() } });
+
+    assert.match(info.mock.calls.at(-1).arguments[0],
+      /^\[track-projects-poll\] mode=live trackProjects=1 .* failures=0$/);
+  });
+
+  await t.test('a Track list that fails is one failure on the summary line, not a throw', async (t) => {
+    const info = quiet(t);
+    const errors = t.mock.method(logger, 'error', () => {});
+    const projects = fakeProjects([storedProject()]);
+    const deps = { ...upstream(), fetchJson: async () => { throw new Error('HTTP 503'); }, projects };
+
+    const summary = await run({ live: true, deps: { ...deps, links: fakeLinks() } });
+
+    assert.strictEqual(summary.failures, 1);
+    assert.deepStrictEqual(projects.writes, []);
+    assert.strictEqual(errors.mock.calls[0].arguments[1].error, 'HTTP 503');
+    assert.match(info.mock.calls.at(-1).arguments[0], /failures=1$/);
   });
 });

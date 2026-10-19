@@ -17,6 +17,8 @@ const { canRead } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const { duplicateIdError } = require('../helpers/duplicate-id');
 const { eagleOnlyProjectId } = require('../merge/project');
+const { dialAllows } = require('../helpers/native-query');
+const { levelOf } = require('../vis/level');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
   upsertWithEtag, createItem, assertFilterable, readPage
@@ -233,6 +235,26 @@ async function listByEagleIds(access, eagleIds) {
   return items;
 }
 
+/**
+ * Projects carrying a decision dated no later than `now`, newest first, at most `limit`: the home
+ * feed's project decision rows. `/decisionDate/?` is an indexed path, so Cosmos sorts. A row whose
+ * own dial hides `decisionDate` from this caller is left out, so the order cannot reveal it.
+ */
+async function listDecisions(access, { limit, now }) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [
+      // A null or absent date fails the comparison in Cosmos, so it needs no IS_DEFINED term.
+      { clause: 'c.decisionDate <= @now', params: [{ name: '@now', value: now.toISOString() }] },
+      { clause: dialAllows('decisionDate', levelOf(access)), params: [] }
+    ],
+    select: selectFor(CONTAINER, access, PARTITION_FIELD),
+    orderBy: 'c.decisionDate DESC'
+  });
+  return readPage(CONTAINER, spec, { pageSize: limit });
+}
+
 /** The leaf, not the object: only scalar paths are indexed (Bicep includes /centroid/type/?). */
 const centroidCriteria = () => [isDefinedAndNotNull('centroid.type')];
 
@@ -315,6 +337,52 @@ async function countWithEagleId(access) {
 }
 
 /**
+ * Keys a native project list can sort on. Cosmos drops a row that lacks the ORDER BY field, so
+ * `upsert` writes every one of them (`sortFieldFills`), as null when there is nothing to store.
+ * `eacDecisionSort` stands in for `eacDecision.name`: filling `eacDecision` itself would turn "no
+ * decision" into an object that readers render as a decision.
+ */
+const SORTABLE = [
+  'name', 'dateUpdated', 'proponentName', 'projectType', 'sector', 'region', 'currentPhaseName.name', 'eacDecisionSort'
+];
+
+const NULL_WHEN_ABSENT = ['proponentName', 'projectType', 'sector', 'region'];
+
+/** `dateAdded` (stored as a Date.toString() string) as ISO with Z, or null when absent or unparseable. */
+function isoOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/** `currentPhaseName` as a ref that holds `name`, or undefined when it already does. A bare id is kept as `_id`. */
+function phaseRef(phase) {
+  if (phase !== null && typeof phase === 'object') {
+    return phase.name === undefined ? { ...phase, _id: phase._id ?? null, name: null } : undefined;
+  }
+  return { _id: phase ?? null, name: null };
+}
+
+/**
+ * The writes that give a row every SORTABLE field. A field the row holds, null included, is left
+ * alone, except two: `currentPhaseName` must be a ref holding `name` (Track sends no phase, Eagle
+ * may send null or a bare id), and `eacDecisionSort`, a copy, is rewritten when stale.
+ * `dateUpdated` falls back to `dateAdded`, never `_ts`.
+ */
+function sortFieldFills(row) {
+  const fills = {};
+  if (row.dateUpdated === undefined) fills.dateUpdated = isoOrNull(row.dateAdded);
+  for (const field of NULL_WHEN_ABSENT) {
+    if (row[field] === undefined) fills[field] = null;
+  }
+  const phase = phaseRef(row.currentPhaseName);
+  if (phase) fills.currentPhaseName = phase;
+  const decision = row.eacDecision && typeof row.eacDecision.name === 'string' ? row.eacDecision.name : null;
+  if (row.eacDecisionSort !== decision) fills.eacDecisionSort = decision;
+  return fills;
+}
+
+/**
  * Whole-item write. Safe only because nothing is folded into the project as an embedded array
  * any more — a replace from the Track sync would silently discard it. Use the patch helpers
  * below for partial updates.
@@ -334,8 +402,9 @@ async function upsert(project, { etag, create = false } = {}) {
   // A row the caller read as ABSENT has no revision to guard on, so the insert is the guard: an
   // unguarded upsert would replace a project another writer created in between, and Cosmos answers
   // a create with 409 instead — which callers re-read and re-judge exactly as they do a 412.
-  if (create) return createItem(CONTAINER, project, 'projects');
-  return upsertWithEtag(CONTAINER, project, { etag, label: 'projects' });
+  const row = { ...project, ...sortFieldFills(project) };
+  if (create) return createItem(CONTAINER, row, 'projects');
+  return upsertWithEtag(CONTAINER, row, { etag, label: 'projects' });
 }
 
 /**
@@ -445,12 +514,15 @@ module.exports = {
   listIdsByName,
   NAME_MATCH_MAX_IDS,
   listByEagleIds,
+  listDecisions,
   listWithCentroid,
   countWithCentroid,
   listEagleOnlyIds,
   countEagleOnlyIds,
   listWithEagleId,
   countWithEagleId,
+  SORTABLE,
+  sortFieldFills,
   upsert,
   patchCascadePending,
   patchWildfireStats,

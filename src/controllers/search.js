@@ -628,9 +628,7 @@ const isoDate = (value) => (value ? new Date(value).toISOString() : null);
 
 /**
  * The newest project decisions this caller may see, dated no later than today, as feed rows.
- *
- * From the `projects` INDEX, not Cosmos: `decisionDate` is filterable and sortable there and is not
- * an indexed path on the container, where an ORDER BY on it cannot run at all.
+ * From the `projects` index; the native feed reads Cosmos instead (`projects.listDecisions`).
  */
 async function projectDecisionRows(access, limit, now) {
   const acl = filterFor(access, 'id');

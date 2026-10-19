@@ -23,6 +23,7 @@ const {
 const { catalogFor } = require('../../vis/catalog');
 const { PATCH_MAX_OPERATIONS } = require('../../db/cosmos-nosql');
 const { serverError } = require('../../helpers/response');
+const { inList } = require('../../repositories/_sql');
 const aiSearch = require('../../search/ai-search');
 const { purgeProject } = require('../../helpers/purge');
 const updateAcl = require('../../helpers/update-acl');
@@ -283,38 +284,69 @@ async function cascadeDocumentVisibility(projectId, acl) {
  * The projects kind spec, shared by `GET /projects` and `GET /counts?kind=projects`. `q` ranks
  * through the projects index and matches every field the index searches.
  *
- * No `dateUpdated` sort: the container indexes only listed paths and Cosmos refuses ORDER BY on
- * an unindexed one.
+ * Sort keys are the repository's SORTABLE: each has an included path in the container's index
+ * policy, and upsert writes it on every row. `currentPhaseName.name` is taken as sent.
  */
+const PROJECTS_STORE = Object.freeze({
+  index: 'projects', container: 'projects', entity: 'projects', partitionField: 'id', defaultOrder: 'c.name ASC'
+});
+
 const projectsKind = {
   entity: 'projects',
-  repository: indexedKind({
-    index: 'projects', container: 'projects', entity: 'projects', partitionField: 'id', defaultOrder: 'c.name ASC'
-  }),
-  sortKeys: ['name'],
+  repository: indexedKind(PROJECTS_STORE),
+  sortKeys: projects.SORTABLE,
   filters: [
     'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict',
-    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id'
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector'
   ],
   // These three are stored as `{_id, name}` List refs; the query names the field, the filter matches its id.
   aliases: {
     eacDecision: 'eacDecision._id', currentPhaseName: 'currentPhaseName._id', CEAAInvolvement: 'CEAAInvolvement._id'
   },
-  // Every filter eagle-admin's project list offers as a multi-select (project-list.component.html).
+  // Every filter eagle-admin's project list offers as a multi-select (project-list.component.html), plus eagle-public's sector.
   multiValueFilters: [
     'projectType', 'region', 'projectState', 'proponentName',
-    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id'
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector'
   ],
   valueAliases: { projectType: PROJECT_TYPE_SPELLINGS },
   ranges: {
     decisionDateStart: { field: 'decisionDate', op: 'ge' },
-    decisionDateEnd: { field: 'decisionDate', op: 'le' }
+    decisionDateEnd: { field: 'decisionDate', op: 'le' },
+    dateUpdatedStart: { field: 'dateUpdated', op: 'ge' },
+    dateUpdatedEnd: { field: 'dateUpdated', op: 'le' }
   },
-  qFields: INDEX_MAPS.projects.searched
+  contains: { nameContains: 'name' },
+  qFields: INDEX_MAPS.projects.searched,
+  // Taken out by `getProjects` only; `/counts?kind=projects` refuses it as unknown.
+  wrapperParams: ['pcp']
 };
 exports.projectsKind = projectsKind;
 
-exports.getProjects = listHandler(projectsKind);
+const unfilteredProjects = listHandler(projectsKind);
+
+/**
+ * `GET /projects`. `pcp` (a `PCP_STATUSES` value; repeatable) is a property of the project's comment
+ * periods, not of the row, so it is taken out here and read as the ids of the projects that have
+ * such a period this caller may read. Those ids narrow the Cosmos read and the `q` re-read alike.
+ */
+exports.getProjects = async (req, res) => {
+  const { pcp, ...query } = req.query || {};
+  if (pcp === undefined) return unfilteredProjects(req, res);
+  req.query = query;
+
+  const statuses = [...new Set([].concat(pcp))];
+  if (statuses.some(value => !commentPeriods.PCP_STATUSES.includes(value))) {
+    return res.status(400).json({ error: `pcp takes ${commentPeriods.PCP_STATUSES.join(', ')}` });
+  }
+  let ids;
+  try {
+    ids = await commentPeriods.projectIdsWithStatus(resolveAccess(req), statuses);
+  } catch (err) {
+    return serverError(res, err, 'projects pcp read failed');
+  }
+  const repository = indexedKind({ ...PROJECTS_STORE, baseCriteria: [inList('id', ids, '@pcp')] });
+  return listHandler({ ...projectsKind, repository })(req, res);
+};
 
 exports.getProject = async (req, res) => {
   try {
@@ -751,8 +783,9 @@ exports.upsertFromEagle = async (req, res) => {
 
 /** The row a push writes, built from whatever revision is stored at the moment of the write. */
 function mergeEaglePush(doc, existing) {
+  // A push carries no Track phases, so the stored ones go back in (not DEMI-only: the sync rebuilds them).
   const merged = existing && existing.sources && existing.sources.track
-    ? mergeTrackProject(existing.sources.track, doc)
+    ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases })
     : mergeEagleOnlyProject(doc);
 
   // Every OTHER source block survives the push. A Cosmos upsert replaces the item, and the merge

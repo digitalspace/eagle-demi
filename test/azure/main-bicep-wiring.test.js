@@ -73,6 +73,9 @@ const WIRED = [
     'the API module call — without it no param file can turn ProjectNotification ranking on'],
   ['deployFoundry', /^module foundry '\.\/modules\/foundry\.bicep' = if \(deployFoundation && deployFoundry\) \{$/m,
     'the foundry module gate — without it prod creates a model account it never queries'],
+  ['deployFoundry',
+    /^resource foundryExisting '[^']+' existing = if \(deployFoundry && !deployFoundation\) \{$/m,
+    'the foundry lookup gate — without it an environment with no Foundry account 404s before the API deploys'],
   ['deployStaticSite', /^module staticSite '\.\/modules\/static-site\.bicep' = if \(deployFoundation && deployStaticSite\) \{$/m,
     'the static-site module gate — without it prod creates a $web nothing publishes to'],
   ['keycloakClientId', /^\s+keycloakClientId: keycloakClientId$/m,
@@ -95,6 +98,9 @@ const WIRED = [
     'the API module call — without it DEMI_PDF_TITLE_WORKER_PRINCIPALS is always empty'],
   ['ssoAudience', /^\s+ssoAudience: ssoAudience$/m,
     'the API module call — without it SSO_AUDIENCE cannot be set once the aud claim is measured'],
+  ['syncProjectsSchedule', /^\s+syncProjectsSchedule: syncProjectsSchedule$/m,
+    'the API module call — without it SYNC_PROJECTS_SCHEDULE is empty, no timer is registered and ' +
+    'Track project edits wait for the nightly team sync'],
   ['syncTeamsSchedule', /^\s+syncTeamsSchedule: syncTeamsSchedule$/m,
     'the API module call — without it SYNC_TEAMS_SCHEDULE is empty, no timer is registered and the ' +
     'nightly Track team sync never fires'],
@@ -316,6 +322,15 @@ test('the gateway pins the legacy developer portal off', () => {
     'legacyPortalStatus must be set on the service, or the apply turns the legacy portal on');
 });
 
+// Parsed the way src/config.js reads DEMI_ALLOWED_CLIENTS. Without the admin console every staff
+// user gets 401; without eagle-agent-test the test agent's service account does.
+test('the test param file admits the admin console and the test agent, and no one else', () => {
+  const match = /^param allowedClients = '([^']*)'$/m.exec(TEST_PARAMS);
+  assert.ok(match, 'the test param file must set allowedClients');
+  const clients = match[1].split(',').map(s => s.trim()).filter(Boolean).sort();
+  assert.deepStrictEqual(clients, ['eagle-admin-console', 'eagle-agent-test']);
+});
+
 // src/config.js throws on an empty allowlist in test and prod, so a param file that omits this
 // deploys an app that boot-loops. `az bicep build` says nothing: main.bicep's param has no default,
 // but a `param allowedClients = ''` line satisfies the compiler and fails at runtime.
@@ -327,27 +342,49 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// Declared, not non-empty: a guessed value rejects every caller, so a realm ships '' until its `aud`
-// is measured (test: 'account', 2026-08-28; prod: ''). The check only guards the line itself —
-// delete it and the environment silently takes the module default.
-for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-  test(`the ${envName} param file declares ssoAudience`, () => {
-    assert.match(params, /^param ssoAudience = '[^']*'$/m,
-      `${envName} must state the audience explicitly, empty or otherwise`);
+// A value the realm does not put in `aud` rejects every caller, so a realm ships '' until its
+// client carries the demi-api audience mapper. Test and prod both have it (2026-10-16).
+const EXPECTED_SSO_AUDIENCE = [['test', TEST_PARAMS, 'demi-api'], ['prod', PROD_PARAMS, 'demi-api']];
+for (const [envName, params, expected] of EXPECTED_SSO_AUDIENCE) {
+  test(`the ${envName} param file sets ssoAudience to '${expected}'`, () => {
+    const match = /^param ssoAudience = '([^']*)'$/m.exec(params);
+    assert.ok(match, `${envName} must state the audience explicitly, empty or otherwise`);
+    assert.strictEqual(match[1], expected);
   });
 }
 
-// The Track team sync's four plain settings. Every one is a whole-collection-PUT app setting, so a
+// Parsed the way src/config.js reads DEMI_ALLOWED_CLIENTS. Without the admin console every staff
+// user gets 401; without eagle-agent-prod the prod agent's service account does.
+test('the prod param file admits the admin console and the prod agent, and no one else', () => {
+  const match = /^param allowedClients = '([^']*)'$/m.exec(PROD_PARAMS);
+  assert.ok(match, 'the prod param file must set allowedClients');
+  const clients = match[1].split(',').map(s => s.trim()).filter(Boolean).sort();
+  assert.deepStrictEqual(clients, ['eagle-admin-console', 'eagle-agent-prod']);
+});
+
+// The Track sync's five plain settings. Every one is a whole-collection-PUT app setting, so a
 // param file that omits one takes main.bicep's empty default and the live value is deleted on the
 // next deploy — `az bicep build` says nothing, because an empty default compiles.
 for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-  for (const name of ['trackApiBase', 'trackClientId', 'roleSyncClientId', 'syncTeamsSchedule']) {
+  for (const name of ['trackApiBase', 'trackClientId', 'roleSyncClientId', 'syncTeamsSchedule',
+    'syncProjectsSchedule']) {
     test(`the ${envName} param file declares ${name}`, () => {
       assert.match(params, new RegExp(`^param ${name} = '[^']*'$`, 'm'),
         `${envName} must state ${name} explicitly, empty or otherwise`);
     });
   }
 }
+
+// Drop either setting and bicep only warns `no-unused-params`; the host then registers no timer.
+test('the API app carries both Track sync schedules from their params', () => {
+  for (const [settingName, paramName] of [
+    ['SYNC_TEAMS_SCHEDULE', 'syncTeamsSchedule'],
+    ['SYNC_PROJECTS_SCHEDULE', 'syncProjectsSchedule'],
+  ]) {
+    assert.match(API_MODULE, new RegExp(`name: '${settingName}'\\n\\s+value: ${paramName}$`, 'm'),
+      `${settingName} must take ${paramName} as is, or that timer never registers`);
+  }
+});
 
 // The four plain eagle-analytics settings. Empty is the correct value until that estate exists, but
 // the LINE has to be there: these are whole-collection-PUT app settings, so a param file that stops
@@ -1511,7 +1548,7 @@ test('every foundation lookup names what the owning module declares', () => {
   for (const [symbol, type, moduleFile] of LOOKUPS) {
     const moduleText = fs.readFileSync(path.join(ROOT, 'azure', 'modules', moduleFile), 'utf8');
 
-    const lookup = new RegExp(`^resource ${symbol} '([^']+)' existing = \\{\\n\\s+name: '([^']*)'`, 'm').exec(MAIN);
+    const lookup = new RegExp(`^resource ${symbol} '([^']+)' existing = (?:if \\([^)]*\\) )?\\{\\n\\s+name: '([^']*)'`, 'm').exec(MAIN);
     assert.ok(lookup, `main.bicep must declare the ${symbol} lookup`);
     assert.strictEqual(lookup[1], type,
       `${symbol} must read ${moduleFile}'s type and apiVersion — another version can hand back ` +

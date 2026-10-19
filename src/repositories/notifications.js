@@ -20,7 +20,7 @@ const PARTITION_FIELD = 'id';
 /** Null is load-bearing, not a placeholder — see the header. */
 const SCOPE_FIELD = null;
 
-const SORTABLE = ['notificationReceivedDate', 'name'];
+const SORTABLE = ['notificationReceivedDate', 'name', 'type', 'region', 'decision', 'proponent', 'subType'];
 const DEFAULT_ORDER = 'c.notificationReceivedDate DESC';
 /**
  * eagle-public's notifications page sorts by `-_id`, the Mongo id it used as an arrival proxy.

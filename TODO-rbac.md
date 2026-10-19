@@ -12,7 +12,7 @@ changed endpoint, swagger in the same PR, `src/utils/logger.js` for logging, ask
 **Merging is deploying** on test, so every unit leaves anonymous responses byte-identical unless its
 line says otherwise. Line cites verified 2026-09-02 at `7215e11`; re-verify before editing.
 
-Order for what is left: U1, then the U3 and U4 prod steps, then P4-3 → P4-4 → P4-5. P3-2 and P3-6
+Order for what is left: U1, then the U3 prod steps, then P4-3 → P4-4 → P4-5. P3-2 and P3-6
 residues are independent. P5b is optional and unscheduled.
 
 ## Facts
@@ -23,9 +23,10 @@ residues are independent. P5b is optional and unscheduled.
    `api/index.js:58` requires `src/http/router` inside the request handler, so the Function App
    starts and answers 500 on every request instead. This is why the app setting deploys before the
    code that needs it.
-2. `aud` is verified only when `SSO_AUDIENCE` is non-empty (`src/helpers/auth.js:275-280`). Test
-   carries `account`; prod carries `''` (`azure/main.prod.bicepparam:76`), so prod verifies no
-   audience.
+2. `aud` is verified only when `SSO_AUDIENCE` is non-empty (`src/helpers/auth.js:299-305`). Test
+   and prod both carry `demi-api` in their param files (audience mapper on each realm's
+   `eagle-admin-console`). Prod requires the `demi-api` audience and allows the clients
+   `eagle-admin-console` and `eagle-agent-prod`.
 
 ## External dependencies (owner and date before the unit that needs them)
 
@@ -81,18 +82,9 @@ Code and the `DEMI_ALLOWED_CLIENTS` app setting ship in two pipelines, so infra 
 - [ ] Rollback is revert the code commit and redeploy the API. Leave the app setting in place; never
       revert the setting and keep the code.
 
-## U4 — prod audience
-
-- [ ] Measure `aud` on a live prod-realm token and record it in the PR. Test measured 2026-08-28: a
-      staff login through the DEMI frontend (`azp=eagle-admin-console`) carries
-      `["epictrack-web","realm-management","epic-search","epic-engage","account"]`, so `account`
-      verifies (jsonwebtoken matches any element).
-- [ ] `azure/main.prod.bicepparam:76`: `param ssoAudience = '<measured>'`. It stays `''` until then,
-      which means prod checks no audience.
-
 ## P3-0 residue — prod team sync
 
-- [ ] `syncTeamsSchedule` is `'0 0 11 * * *'` in `azure/main.prod.bicepparam:159` as of 2026-09-05
+- [ ] `syncTeamsSchedule` is `'0 0 11 * * *'` in `azure/main.prod.bicepparam:266` as of 2026-09-05
       (#317), an hour after the reconcile timer. It starts firing after the next
       `deploy-infra.sh prod --live` (U3). The realm clients and roles already exist in prod. Read the
       first run the morning of 2026-09-06: the `[track-teams]` summary line in App Insights for
@@ -213,7 +205,8 @@ Closing that means per-record envelope encryption under a Key Vault key in `demi
 | U1 (part) | Four `docs/rbac-architecture.md` §3 questions closed | | 2026-08-28 |
 | U2 | Merge/seed ACL constants read `access-sql.ADMIN_ROLES` | #199 | 2026-08-27 |
 | U3 (test) | `DEMI_ALLOWED_CLIENTS` required in test and prod, enforced in `auth.js` | #199 | 2026-08-27 |
-| U4 (test) | `SSO_AUDIENCE` verified when set; test pinned to `account` | #199 | 2026-08-28 |
+| U4 (test) | `SSO_AUDIENCE` verified when set; test pinned to `account`, then `demi-api` from 2026-10-16 | #199 | 2026-08-28 |
+| U4 (prod) | prod `ssoAudience = 'demi-api'`, `allowedClients = 'eagle-admin-console,eagle-agent-prod'`; infra deployment `infra-app-473c15ee-213448`; verified: `eagle-agent-prod` token has `demi-api` in aud, 200 on `/api/projects?pageSize=1000`, anonymous 400 | #634 | 2026-10-18 |
 | U5 | Admin API key in Key Vault | #207 | 2026-08-28 |
 | U6 | `vis` level plumbing | #200 | 2026-08-27 |
 | U7 | Projects field catalogue | #200 | 2026-08-27 |

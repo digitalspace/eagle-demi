@@ -11,7 +11,11 @@ const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
 
-const { cosmosKind, projectParentJoin, MAX_IDS, ANON_MAX_PAGE_DEPTH } = require('../../../src/helpers/native-query');
+const {
+  cosmosKind, projectParentJoin, assertKindSpec, parseNativeQuery, nativeCriteria, presenceClause, flagClause,
+  MAX_IDS, MAX_CONTAINS, ANON_MAX_PAGE_DEPTH
+} = require('../../../src/helpers/native-query');
+const { evaluate } = require('../../helpers/updates-store');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');
 const { recordEvents } = require('../../helpers/record-events');
@@ -473,6 +477,203 @@ test('a day range', async (t) => {
     assert.throws(() => listHandler({ ...SPEC, ranges: { author: { field: 'dateAdded', op: 'ge' } } }), /clashes/);
     assert.throws(() => listHandler({ ...SPEC, ranges: { addedFrom: { field: 'dateAdded', op: 'gt' } } }), /ge or le/);
   });
+});
+
+test('a contains filter', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const texted = { ...SPEC, contains: { commentContains: 'comment', notesContains: 'eaoNotes' } };
+  const list = listHandler(texted);
+
+  await t.test('matches the trimmed text case-blind inside the field\'s dial, as a bound parameter', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(list, 'commentContains=%20Late%20')).status, 200);
+    const read = listQuery(specs);
+    assert.ok(read.query.includes(
+      '((NOT IS_DEFINED(c.vis["comment"]) OR c.vis["comment"] >= 4) AND CONTAINS(c.comment, @nc0, true))'), read.query);
+    assert.strictEqual(param(read, '@nc0'), 'Late');
+  });
+
+  await t.test('given twice is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'commentContains=a&commentContains=b');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: commentContains');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test(`over ${MAX_CONTAINS} characters is refused`, async (t) => {
+    fakeCosmos(t);
+    const res = await call(list, `commentContains=${'a'.repeat(MAX_CONTAINS + 1)}`);
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, `commentContains takes at most ${MAX_CONTAINS} characters`);
+  });
+
+  await t.test(`exactly ${MAX_CONTAINS} characters is taken`, async (t) => {
+    fakeCosmos(t);
+    assert.strictEqual((await call(list, `commentContains=${'a'.repeat(MAX_CONTAINS)}`)).status, 200);
+  });
+
+  await t.test('empty after trimming adds no clause, as an empty q does', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(list, 'commentContains=%20%20')).status, 200);
+    const read = listQuery(specs);
+    assert.ok(!read.query.includes('CONTAINS(c.comment'), read.query);
+    assert.strictEqual(param(read, '@nc0'), undefined);
+  });
+
+  await t.test('on a field the caller cannot see is refused', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'notesContains=staff');
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.error, /cannot filter on a field this caller cannot see: eaoNotes$/);
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('a name that shadows a filter fails at route load', () => {
+    assert.throws(() => listHandler({ ...SPEC, contains: { author: 'comment' } }), /contains author clashes/);
+  });
+});
+
+test('a presence filter', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const list = listHandler({ ...SPEC, presence: { hasComment: 'comment' } });
+
+  await t.test('true keeps only rows whose field holds a value other than null or empty', () => {
+    const { clause } = presenceClause('documentUrl', true);
+    const rows = [
+      { id: 'url', documentUrl: 'https://example.test/a.pdf' },
+      { id: 'null', documentUrl: null },
+      { id: 'empty', documentUrl: '' },
+      { id: 'absent' }
+    ];
+    assert.deepStrictEqual(rows.filter(row => evaluate(clause, row, {})).map(row => row.id), ['url']);
+  });
+
+  await t.test('false keeps exactly the rows true leaves out', () => {
+    const { clause } = presenceClause('documentUrl', false);
+    const rows = [{ id: 'url', documentUrl: 'x' }, { id: 'null', documentUrl: null }, { id: 'empty', documentUrl: '' }, { id: 'absent' }];
+    assert.deepStrictEqual(rows.filter(row => evaluate(clause, row, {})).map(row => row.id), ['null', 'empty', 'absent']);
+  });
+
+  await t.test('the list read holds the presence clause inside the field\'s dial', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(list, 'hasComment=true')).status, 200);
+    const read = listQuery(specs);
+    assert.ok(read.query.includes(
+      `((NOT IS_DEFINED(c.vis["comment"]) OR c.vis["comment"] >= 4) AND ${presenceClause('comment', true).clause})`), read.query);
+  });
+
+  await t.test('a value other than true or false is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'hasComment=maybe');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'hasComment takes only true or false');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('given twice is refused', async (t) => {
+    fakeCosmos(t);
+    const res = await call(list, 'hasComment=true&hasComment=false');
+    assert.strictEqual(res.body.error, 'parameter given more than once: hasComment');
+  });
+
+  await t.test('on a field the caller cannot see is refused', async (t) => {
+    fakeCosmos(t);
+    const hidden = listHandler({ ...SPEC, presence: { hasNotes: 'eaoNotes' } });
+    assert.match((await call(hidden, 'hasNotes=true')).body.error, /cannot see: eaoNotes$/);
+  });
+});
+
+test('a flag filter', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const list = listHandler({ ...SPEC, flags: { anonymous: 'isAnonymous' } });
+  const rows = [
+    { id: 'true', isAnonymous: true },
+    { id: 'false', isAnonymous: false },
+    { id: 'absent' },
+    { id: 'null', isAnonymous: null },
+    { id: 'text', isAnonymous: 'true' }
+  ];
+  const matching = on => rows.filter(row => evaluate(flagClause('isAnonymous', on).clause, row, {})).map(row => row.id);
+
+  await t.test('true keeps only rows whose field is boolean true', () => {
+    assert.deepStrictEqual(matching(true), ['true']);
+  });
+
+  await t.test('false keeps every other row, one lacking the field included', () => {
+    assert.deepStrictEqual(matching(false), ['false', 'absent', 'null', 'text']);
+  });
+
+  await t.test('false guards with IS_BOOL, since Cosmos drops a row where NOT meets an undefined comparison', () => {
+    assert.strictEqual(flagClause('isAnonymous', false).clause, '(NOT (IS_BOOL(c.isAnonymous) AND c.isAnonymous = true))');
+  });
+
+  await t.test('the list read holds the flag clause inside the field\'s dial', async (t) => {
+    const specs = fakeCosmos(t);
+    assert.strictEqual((await call(list, 'anonymous=false')).status, 200);
+    const read = listQuery(specs);
+    assert.ok(read.query.includes(
+      `((NOT IS_DEFINED(c.vis["isAnonymous"]) OR c.vis["isAnonymous"] >= 4) AND ${flagClause('isAnonymous', false).clause})`), read.query);
+  });
+
+  await t.test('a value other than true or false is refused before any read', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'anonymous=maybe');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'anonymous takes only true or false');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('given twice is refused', async (t) => {
+    const specs = fakeCosmos(t);
+    const res = await call(list, 'anonymous=true&anonymous=true');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'parameter given more than once: anonymous');
+    assert.strictEqual(specs.length, 0);
+  });
+
+  await t.test('on a field the caller cannot see is refused', async (t) => {
+    fakeCosmos(t);
+    const hidden = listHandler({ ...SPEC, flags: { noted: 'eaoNotes' } });
+    assert.match((await call(hidden, 'noted=true')).body.error, /cannot see: eaoNotes$/);
+  });
+
+  await t.test('a flag name another kind of parameter already takes is refused at route load', () => {
+    const clashes = [
+      ['author', {}],
+      ['page', {}],
+      ['byName', { aliases: { byName: 'author' } }],
+      ['from', { ranges: { from: { field: 'dateAdded', op: 'ge' } } }],
+      ['has', { presence: { has: 'comment' } }],
+      ['says', { contains: { says: 'comment' } }]
+    ];
+    for (const [name, other] of clashes) {
+      assert.throws(() => assertKindSpec({ ...SPEC, ...other, flags: { [name]: 'isAnonymous' } }),
+        new RegExp(`flags ${name} clashes with a parameter of that name`));
+    }
+    assert.doesNotThrow(() => assertKindSpec({ ...SPEC, flags: { anonymous: 'isAnonymous' } }));
+  });
+});
+
+test('a flag renders from the parsed query alone, as the index re-reads call it', () => {
+  const parsed = parseNativeQuery({ ...SPEC, flags: { anonymous: 'isAnonymous' } }, { anonymous: 'true' }, null);
+  assert.deepStrictEqual(parsed.flags, { isAnonymous: true });
+
+  const clauses = nativeCriteria({}, parsed, null).criteria.map(c => c.clause).join(' AND ');
+  assert.ok(clauses.includes(flagClause('isAnonymous', true).clause), clauses);
+});
+
+test('contains and presence render from the parsed query alone, as the index re-reads call it', () => {
+  const spec = { ...SPEC, contains: { commentContains: 'comment' }, presence: { hasComment: 'comment' } };
+  const parsed = parseNativeQuery(spec, { commentContains: 'late', hasComment: 'false' }, null);
+  assert.deepStrictEqual(parsed.contains, { comment: 'late' });
+  assert.deepStrictEqual(parsed.presence, { comment: false });
+
+  const { criteria } = nativeCriteria({}, parsed, null);
+  const clauses = criteria.map(c => c.clause).join(' AND ');
+  assert.ok(clauses.includes('CONTAINS(c.comment, @nc0, true)'), clauses);
+  assert.ok(clauses.includes(presenceClause('comment', false).clause), clauses);
+  assert.deepStrictEqual(criteria.flatMap(c => c.params), [{ name: '@nc0', value: 'late' }]);
 });
 
 test('a store that cannot take Cosmos SQL gets the parsed query, the same object in list and count', async () => {

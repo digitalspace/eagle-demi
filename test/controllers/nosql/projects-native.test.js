@@ -8,17 +8,19 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const querystring = require('node:querystring');
-const fs = require('node:fs');
-const path = require('node:path');
 
 require('../../../src/search/native-index');
 const projectController = require('../../../src/controllers/nosql/project');
 const organizations = require('../../../src/controllers/native/organizations');
+const documentController = require('../../../src/controllers/nosql/document');
+const updates = require('../../../src/controllers/native/updates');
+const notifications = require('../../../src/controllers/native/notifications');
 const aiSearch = require('../../../src/search/ai-search');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const audit = require('../../../src/utils/audit');
 const { makeRes } = require('../../../src/http/router');
 const { recordEvents } = require('../../helpers/record-events');
+const { swaggerParams, repeatableNames, queryNames } = require('../../helpers/swagger-params');
 
 const ROWS = [{ id: 'p1', name: 'Mine One', read: ['public'] }, { id: 'p2', name: 'Mine Two', read: ['public'] }];
 
@@ -90,7 +92,7 @@ async function call(qs) {
   const req = { query: querystring.parse(qs), params: {}, headers: {}, header: () => undefined };
   const res = makeRes('test');
   await projectController.getProjects(req, res);
-  return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : undefined };
+  return { status: res.statusCode, headers: res.headers, body: res.body ? JSON.parse(res.body) : undefined };
 }
 
 test('GET /projects native list', async (t) => {
@@ -263,30 +265,137 @@ test('GET /projects native list', async (t) => {
   });
 });
 
-/**
- * Query name -> its swagger parameter block, for the GET on `route`. Text-scanned like
- * config-public.test.js: there is no YAML parser in this project's dependencies.
- */
-function swaggerParams(route) {
-  const yaml = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'src', 'swagger', 'swagger.yaml'), 'utf8');
-  const start = yaml.indexOf(`\n  ${route}:\n`);
-  const block = yaml.slice(start, yaml.indexOf('      responses:', start));
-  return new Map(block.split('\n        - name: ').slice(1).map(param => [param.split('\n')[0], param]));
+// A Track-only row: upsert writes its absent phase as `{_id: null, name: null}`, so the phase sort keeps it.
+const NO_PHASE = { id: 'p3', name: 'Lng Three', currentPhaseName: { _id: null, name: null }, read: ['public'] };
+
+/** `fakeStores` with `rows` in Cosmos, which honours a `CONTAINS(c.name, @nc0, true)` clause as Cosmos would. */
+function fakeNameMatch(t, rows) {
+  const searches = [];
+  const queries = [];
+  t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+    searches.push(opts);
+    return { count: rows.length, items: rows.map(row => ({ id: row.id })) };
+  });
+  t.mock.method(cosmos, 'query', async (container, spec) => {
+    queries.push(spec);
+    const text = spec.query.includes('CONTAINS(c.name, @nc0, true)') ? param(spec, '@nc0').toLowerCase() : '';
+    const matched = rows.filter(row => row.name.toLowerCase().includes(text));
+    return spec.query.includes('COUNT(1)') ? { items: [matched.length] } : { items: structuredClone(matched) };
+  });
+  return { searches, queries };
 }
 
-/** The query names a kind spec takes several values for: an alias where one renames the field. */
-function repeatableNames(spec) {
-  const renamedBy = new Map(Object.entries(spec.aliases || {}).map(([name, field]) => [field, name]));
-  return spec.multiValueFilters.map(field => renamedBy.get(field) || field);
-}
+test('GET /projects sector, last-updated and name filters', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const QS = 'sector=a&sector=b&sort=-dateUpdated&dateUpdatedStart=2026-01-01&nameContains=lng&count=true';
+
+  await t.test('sector given twice, a last-updated edge and a name text narrow the Cosmos read and count', async (t) => {
+    const { searches, queries } = fakeNameMatch(t, [...ROWS, NO_PHASE]);
+    const res = await call(QS);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 0);
+    assert.deepStrictEqual(res.body.map(row => row.id), ['p3']);
+    assert.strictEqual(res.headers['x-total-count'], '1');
+    assert.strictEqual(queries.length, 2);
+    for (const sql of queries) {
+      assert.ok(sql.query.includes(
+        '((NOT IS_DEFINED(c.vis["sector"]) OR c.vis["sector"] >= 4) AND c.sector IN (@nf0_0, @nf0_1))'), sql.query);
+      assert.deepStrictEqual([param(sql, '@nf0_0'), param(sql, '@nf0_1')], ['a', 'b']);
+      assert.ok(sql.query.includes(
+        '((NOT IS_DEFINED(c.vis["dateUpdated"]) OR c.vis["dateUpdated"] >= 4) AND c.dateUpdated >= @nr0)'), sql.query);
+      assert.strictEqual(param(sql, '@nr0'), '2026-01-01T00:00:00.000Z');
+      assert.ok(sql.query.includes('((NOT IS_DEFINED(c.vis["name"]) OR c.vis["name"] >= 4) AND CONTAINS(c.name, @nc0, true))'),
+        sql.query);
+      assert.strictEqual(param(sql, '@nc0'), 'lng');
+    }
+    assert.match(queries.find(sql => !sql.query.includes('COUNT(1)')).query, /ORDER BY c\.dateUpdated DESC/);
+  });
+
+  await t.test('the last-updated end edge takes the whole day', async (t) => {
+    const { queries } = fakeStores(t);
+    const res = await call('dateUpdatedEnd=2026-03-31');
+    assert.strictEqual(res.status, 200);
+    assert.ok(queries[0].query.includes('c.dateUpdated <= @nr0'), queries[0].query);
+    assert.strictEqual(param(queries[0], '@nr0'), '2026-03-31T23:59:59.999Z');
+  });
+
+  await t.test('with q, the Cosmos re-read keeps only rows whose name holds the text', async (t) => {
+    const { searches, queries } = fakeNameMatch(t, ROWS);
+    const res = await call('q=mine&nameContains=TWO');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches[0].keywords, 'mine');
+    assert.deepStrictEqual(res.body.map(row => row.id), ['p2']);
+    assert.ok(!queries[0].query.includes('@nq'), `the keyword was re-matched in Cosmos: ${queries[0].query}`);
+  });
+
+  await t.test('sort=currentPhaseName.name orders on the phase name and keeps a row with no phase', async (t) => {
+    const { queries } = fakeNameMatch(t, [NO_PHASE, ...ROWS]);
+    const res = await call('sort=currentPhaseName.name');
+    assert.strictEqual(res.status, 200);
+    assert.match(queries[0].query, /ORDER BY c\.currentPhaseName\.name ASC$/);
+    assert.deepStrictEqual(res.body[0].currentPhaseName, { _id: null, name: null });
+  });
+
+  await t.test('sort=currentPhaseName.name with q orders the re-read on the phase name and keeps a row with no phase', async (t) => {
+    const { searches, queries } = fakeNameMatch(t, [NO_PHASE, ...ROWS]);
+    const res = await call('q=mine&sort=-currentPhaseName.name');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 1);
+    assert.match(queries[0].query, /ORDER BY c\.currentPhaseName\.name DESC$/);
+    assert.deepStrictEqual(res.body.map(row => row.id), ['p3', 'p1', 'p2']);
+  });
+
+  await t.test('the stored phase object is not a sort key; its name is', async (t) => {
+    const { queries } = fakeStores(t);
+    const res = await call('sort=currentPhaseName');
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'cannot sort on: currentPhaseName');
+    assert.strictEqual(queries.length, 0);
+  });
+
+  for (const key of ['dateUpdated', 'proponentName', 'projectType', 'sector', 'region']) {
+    await t.test(`sort=${key} orders the Cosmos read on ${key}`, async (t) => {
+      const { queries } = fakeStores(t);
+      const res = await call(`sort=${key}`);
+      assert.strictEqual(res.status, 200);
+      assert.match(queries[0].query, new RegExp(`ORDER BY c\\.${key} ASC$`));
+    });
+  }
+});
+
+const LIST_ROUTES = [
+  ['/api/projects', projectController.projectsKind],
+  ['/api/organizations', organizations.SPEC],
+  ['/api/documents', documentController.documentsKind],
+  ['/api/updates', updates.SPEC],
+  ['/api/notifications', notifications.SPEC]
+];
+
+test('swagger lists exactly the query parameters each list route answers to', async (t) => {
+  for (const [route, spec] of LIST_ROUTES) {
+    await t.test(route, () => {
+      assert.deepStrictEqual([...swaggerParams(route).keys()].sort(), queryNames(spec));
+    });
+  }
+});
 
 test('swagger declares every repeatable filter as an exploded array', async (t) => {
-  for (const [route, spec] of [['/api/projects', projectController.projectsKind], ['/api/organizations', organizations.SPEC]]) {
+  for (const [route, spec] of LIST_ROUTES) {
     await t.test(route, () => {
       const params = swaggerParams(route);
       const notArrays = repeatableNames(spec).filter(name =>
         !/type: array/.test(params.get(name) || '') || !/explode: true/.test(params.get(name) || ''));
       assert.deepStrictEqual(notArrays, []);
+    });
+  }
+});
+
+test('swagger offers each sort key both ways, and no other', async (t) => {
+  for (const [route, spec] of LIST_ROUTES) {
+    await t.test(route, () => {
+      const offered = swaggerParams(route).get('sort').match(/enum: \[([^\]]*)\]/)[1].split(/,\s*/);
+      assert.deepStrictEqual(offered.sort(), spec.sortKeys.flatMap(key => [key, `-${key}`]).sort());
     });
   }
 });

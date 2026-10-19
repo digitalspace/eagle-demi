@@ -331,6 +331,15 @@ that sends it ships. Rows stored before the transform kept `sortOrder` hold none
 stays null until eagle-api re-pushes them (`scripts/demi-repush.js --kind document` in eagle-api).
 The re-push bumps `_ts`, so the next indexer tick carries the values and no reset is needed.
 
+`documentAuthorSort` on `documents` is a plain widening as well: an `Edm.String` that is sortable
+and nothing else. It is the author in lower case, so names that differ only in capitals sort
+together. `demi-documents-ds` computes it in the SELECT (`LOWER(c.documentAuthor)`), and nothing
+writes it to Cosmos. No row changes when the data source does, so the indexer's high-water mark
+re-pulls nothing, and every existing row holds null until `documents-indexer` is reset. Apply it
+with `scripts/demi-devbox.sh apply --env <env> --only documents --yes`, which PUTs the index and
+`demi-documents-ds` and resets and runs `documents-indexer`. A row with no author stays null after
+the reset too. The catalog entry is `4/4`, the same as `documentAuthor`.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 

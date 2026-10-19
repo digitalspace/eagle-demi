@@ -330,18 +330,29 @@ const { listHandler } = require('./mirror-reads');
 
 const DOCUMENT_ID_FILTERS = ['projectId', ...chunks.CHUNK_PARENT_LIST_REFS];
 
+const documentsRepository = withoutUpdateImages => indexedKind({
+  index: 'documents', container: 'documents', entity: 'documents', partitionField: 'projectId',
+  defaultOrder: 'c.id ASC', baseCriteria: documents.buildCriteria({ withoutUpdateImages })
+});
+const listedDocuments = documentsRepository(true);
+const namedDocuments = documentsRepository(false);
+const repositoryFor = args => (args?.parsed?.ids ? namedDocuments : listedDocuments);
+
 /**
  * Native `GET /documents`, on the list contract in `helpers/native-query.js`. One project's plain
  * list and an `ids=` read come from Cosmos; every other list pages in the documents index
- * (`INDEX_MAPS.documents.cosmosServes`). Update-form images are left out on both paths.
+ * (`INDEX_MAPS.documents.cosmosServes`). Update-form images are left out of every list except a
+ * Cosmos `ids=` read, which names its rows as `GET /documents/:id` does and so returns them too.
  */
 const documentsKind = Object.freeze({
   entity: 'documents',
-  repository: indexedKind({
-    index: 'documents', container: 'documents', entity: 'documents', partitionField: 'projectId',
-    defaultOrder: 'c.id ASC', baseCriteria: documents.buildCriteria({ withoutUpdateImages: true })
-  }),
-  sortKeys: ['datePosted', 'displayName', 'sortOrder'],
+  repository: {
+    ...listedDocuments,
+    list: (access, args) => repositoryFor(args).list(access, args),
+    count: (access, args) => repositoryFor(args).count(access, args)
+  },
+  sortKeys: ['datePosted', 'displayName', 'sortOrder', 'type', 'milestone', 'projectPhase', 'documentAuthorType',
+    'isPublished', 'legislation', 'isFeatured', 'documentAuthor'],
   // `documentSource=PROJECT` is how a staff list leaves out files attached to public comments.
   filters: [...DOCUMENT_ID_FILTERS, 'isFeatured', 'legislation', 'documentSource'],
   aliases: { project: 'projectId' },
@@ -350,6 +361,8 @@ const documentsKind = Object.freeze({
     datePostedStart: { field: 'datePosted', op: 'ge' },
     datePostedEnd: { field: 'datePosted', op: 'le' }
   },
+  // Word prefixes over displayName and documentFileName in the index (INDEX_MAPS.documents.contains).
+  contains: { displayNameContains: 'displayName' },
   qFields: INDEX_MAPS.documents.searched,
   parentJoin: projectParentJoin
 });

@@ -249,6 +249,9 @@ param apimGatewaySecretRef string = ''
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty registers no timer.')
 param syncTeamsSchedule string = ''
 
+@description('NCRONTAB schedule for the Track project poll timer, e.g. `0 */5 * * * *`. Empty registers no timer.')
+param syncProjectsSchedule string = ''
+
 // ── Bulk download ────────────────────────────────────────────────────────────
 // Flex trap: an app setting deployed as '' is DROPPED, so `process.env.X` is undefined rather
 // than empty — off is the code's default, never a value it can read here.
@@ -339,7 +342,7 @@ param intakeIncomingContainer string = ''
 
 param intakeQuarantineContainer string = ''
 
-@description('Resource id of demi-intake-<env>, attached as a second identity for the quarantine copy')
+@description('Resource id of demi-intake-<env>, attached as a second identity for the scan-result tag reads and the quarantine copy')
 param intakeIdentityId string = ''
 
 @description('Client id of demi-intake-<env>')
@@ -733,6 +736,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'SYNC_TEAMS_SCHEDULE'
           value: syncTeamsSchedule
         }
+        {
+          name: 'SYNC_PROJECTS_SCHEDULE'
+          value: syncProjectsSchedule
+        }
         // Bulk download. api/index.js registers the queue worker only when the queue name is set,
         // and the host resolves it as `%BULK_DOWNLOADS_QUEUE%`. Empty is off — and Flex drops an
         // empty value entirely, so the code reads `undefined` here, not ''.
@@ -1021,7 +1028,7 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'INTAKE_SWEEP_SCHEDULE'
-          value: empty(intakeStorageAccount) ? '' : '0 */30 * * * *'
+          value: empty(intakeStorageAccount) ? '' : '0 */5 * * * *'
         }
         {
           name: 'INTAKE_PENDING_TIMEOUT_HOURS'

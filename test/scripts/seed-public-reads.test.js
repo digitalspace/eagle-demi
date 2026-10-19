@@ -656,8 +656,9 @@ test('a rerun of the updates stage rewrites a legacy open Update stored before t
   assert.deepStrictEqual(row('U-legacy').read, PUBLIC_ACL);
   assert.strictEqual(row('U-legacy').isPublished, true);
   assert.strictEqual(row('U-legacy').sources.eagle.read, null, 'a missing read is stored apart from []');
-  // eagle-api prunes `read: []` for an anonymous caller, so DEMI keeps it unpublished.
+  // eagle-api pruned `read: []` with no status for an anonymous caller, so DEMI keeps it unpublished.
   assert.deepStrictEqual(row('U-empty').read, []);
   assert.strictEqual(row('U-empty').isPublished, false);
+  assert.deepStrictEqual(row('U-empty').sources.eagle.read, []);
   assert.ok(lines.some(l => /updates \(this run\): fetched=2 written=2 skipped=0/.test(l)), lines.join('\n'));
 });

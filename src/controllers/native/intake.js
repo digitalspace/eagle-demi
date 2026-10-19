@@ -14,13 +14,13 @@ const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const blobs = require('../../intake/blobs');
 const store = require('../../intake/store');
+const { UPLOAD_LINK_SECONDS } = require('../../intake/decision');
 const { resolveAccess, canRead, capRead, readForLevel, levelOfRead } = require('../../helpers/access-sql');
 const { naturalSortKey } = require('../../helpers/natural-sort');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const { logger } = require('../../utils/logger');
 
-const UPLOAD_LINK_SECONDS = 15 * 60;
 const MAX_FILE_NAME = 255;
 const BODY_KEYS = new Set(['projectId', 'fileName', 'requestedRead']);
 

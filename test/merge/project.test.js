@@ -128,6 +128,12 @@ test('sector and sub-type are stored trimmed', async (t) => {
   });
 });
 
+test('a Track proponent name is stored trimmed', () => {
+  const merged = mergeTrackProject(
+    { ...TRACK_207, proponent_name: 'SECURE Waste Infrastructure Corp. ' }, eagleFor(TRACK_207), OPTS);
+  assert.strictEqual(merged.proponentName, 'SECURE Waste Infrastructure Corp.');
+});
+
 test('the pushed-enriched Eagle project record', async (t) => {
   const ENRICHED = {
     CEAALink: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80000',

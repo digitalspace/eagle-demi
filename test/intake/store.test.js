@@ -56,6 +56,31 @@ test('scannedBytesBetween reads an empty month as 0', async (t) => {
   assert.strictEqual(await store.scannedBytesBetween('2026-10-01', '2026-11-01'), 0);
 });
 
+test('listPending asks for one page of pending rows, oldest first, with the fields a release reads', async (t) => {
+  let call;
+  t.mock.method(cosmos, 'query', async (...args) => { call = args; return { items: [ROW], continuationToken: 'next' }; });
+
+  const page = await store.listPending({ pageSize: 100, continuationToken: 'this' });
+
+  assert.deepStrictEqual(page, { items: [ROW], continuationToken: 'next' });
+  const [container, spec, options] = call;
+  assert.strictEqual(container, 'documents');
+  assert.deepStrictEqual(options, { maxItemCount: 100, continuationToken: 'this' });
+  assert.deepStrictEqual(spec.parameters, [{ name: '@pending', value: 'pending' }]);
+  assert.match(spec.query, /^SELECT c\.id, c\.projectId, c\.createdAt, c\.requestedRead, c\.s3Key, c\.fileExt FROM c /);
+  assert.match(spec.query, /WHERE c\.scanStatus = @pending ORDER BY c\.createdAt ASC$/);
+});
+
+test('countPendingAfter counts pending rows created after the given time', async (t) => {
+  let spec;
+  t.mock.method(cosmos, 'queryValue', async (_container, s) => { spec = s; return 150; });
+
+  assert.strictEqual(await store.countPendingAfter('2026-10-14T12:00:00.000Z'), 150);
+  const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
+  assert.deepStrictEqual(params, { '@pending': 'pending', '@after': '2026-10-14T12:00:00.000Z' });
+  assert.match(spec.query, /COUNT\(1\) FROM c WHERE c\.scanStatus = @pending AND c\.createdAt > @after/);
+});
+
 test('listStalePending asks for pending rows created before the cutoff', async (t) => {
   let spec;
   t.mock.method(cosmos, 'query', async (_container, s) => { spec = s; return { items: [ROW] }; });

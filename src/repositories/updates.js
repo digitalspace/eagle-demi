@@ -17,10 +17,11 @@ const { levelOf, ROLE_LEVELS } = require('../vis/level');
 const projects = require('./projects');
 const notifications = require('./notifications');
 const { readParent } = require('../helpers/update-parent');
+const { presenceClause } = require('../helpers/native-query');
 const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
-  eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
+  eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
   readPage, fetchAll
 } = require('./_sql');
 
@@ -34,7 +35,7 @@ const PARTITION_FIELD = 'id';
  */
 const SCOPE_FIELD = 'projectId';
 
-const SORTABLE = ['dateAdded', 'dateUpdated', 'publishDate'];
+const SORTABLE = ['dateAdded', 'dateUpdated', 'publishDate', 'headline', 'type', 'pinned', 'status'];
 const DEFAULT_ORDER = 'c.dateAdded DESC';
 /**
  * eagle-public's news search asks for `-score`, the relevance rank its Mongo text search produced.
@@ -52,9 +53,9 @@ function publishOrderField() {
 }
 
 /**
- * The three states `pinned` can be stored in — the mirror writes `doc.pinned` straight through, so
- * an Eagle record that never set it lands here undefined. Cosmos drops a row from `c.pinned != true`
- * when the property is absent, so "not pinned" is spelled out rather than negated.
+ * The three states `pinned` can be stored in. The mirror now writes a boolean, but a row written
+ * before that holds `doc.pinned` as sent, undefined when Eagle never set it. Cosmos drops a row from
+ * `c.pinned != true` when the property is absent, so "not pinned" is spelled out rather than negated.
  */
 const PINNED = { clause: '(IS_DEFINED(c.pinned) AND c.pinned = true)', params: [] };
 const UNPINNED = {
@@ -350,24 +351,13 @@ function typeCriteria(types) {
 
 /**
  * "Documents attached" — `and[documentUrl]`, which asks whether the field is FILLED rather than
- * what it holds.
- *
- * The mirror writes `documentUrl: null` when Eagle sent none and older rows carry `''`, so both
- * spellings of "no attachment" are named. The two clauses are exact complements by construction,
- * because the index path answers the same key with a complementary pair
- * (`eagle-query` PRESENCE_KEYS / `presenceTerm`) and one URL must not mean two different things
- * depending on whether keywords are on.
+ * what it holds. `presenceClause` names both spellings of "no attachment" (the mirror's null and
+ * older rows' ''), and its two answers are exact complements, because the index path answers the
+ * same key with a complementary pair (`eagle-query` PRESENCE_KEYS / `presenceTerm`) and one URL must
+ * not mean two different things depending on whether keywords are on.
  */
-const HAS_DOCUMENT = (() => {
-  const filled = isDefinedAndNotNull('documentUrl');
-  return { clause: `(${filled.clause} AND c.documentUrl != '')`, params: [] };
-})();
-const NO_DOCUMENT = { clause: `(NOT ${HAS_DOCUMENT.clause})`, params: [] };
-
 function documentCriteria(hasDocument) {
-  if (hasDocument === true) return [HAS_DOCUMENT];
-  if (hasDocument === false) return [NO_DOCUMENT];
-  return [];
+  return typeof hasDocument === 'boolean' ? [presenceClause('documentUrl', hasDocument)] : [];
 }
 
 /**
@@ -709,6 +699,40 @@ async function fillPublishDate(id, value) {
   return patchIf(id, [{ op: 'set', path: '/publishDate', value }], `FROM c WHERE ${UNDATED_CLAUSE}`);
 }
 
+/** The sort fields a row written before mirrorItem filled them can lack. */
+const SORT_FIELDS = ['pinned', 'complianceAndEnforcement', 'status'];
+const missingClause = fields => fields.map(field => `NOT IS_DEFINED(c.${field})`);
+
+/** The values mirrorItem would have written for the sort fields `row` lacks; `{}` when it has all. */
+function sortFieldFills(row) {
+  const eagle = (row.sources && row.sources.eagle) || {};
+  const values = {
+    pinned: eagle.pinned === true,
+    complianceAndEnforcement: eagle.complianceAndEnforcement === true,
+    // null, not Eagle's value: an absent and a null status pass the publish gate alike.
+    status: null
+  };
+  return Object.fromEntries(SORT_FIELDS.filter(field => row[field] === undefined).map(field => [field, values[field]]));
+}
+
+/** One page of rows lacking a sort field, for src/scripts/backfill-update-sort-fields.js. */
+async function listMissingSortFields({ pageSize, continuationToken } = {}) {
+  const spec = selectWhere({
+    access: systemAccess(),
+    partitionField: SCOPE_FIELD,
+    criteria: [{ clause: `(${missingClause(SORT_FIELDS).join(' OR ')})`, params: [] }],
+    select: 'c.id, c.pinned, c.complianceAndEnforcement, c.status, c.sources'
+  });
+  return cosmos.query(CONTAINER, spec, pageOptions({ pageSize, continuationToken }));
+}
+
+/** Set `fills` on a row that still lacks every one of them: a push that wrote the row first wins. */
+async function fillSortFields(id, fills) {
+  const fields = Object.keys(fills);
+  return patchIf(id, fields.map(field => ({ op: 'set', path: `/${field}`, value: fills[field] })),
+    `FROM c WHERE ${missingClause(fields).join(' AND ')}`);
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
@@ -744,5 +768,8 @@ module.exports = {
   claimForBackfill,
   markNotify,
   listUndated,
+  sortFieldFills,
+  listMissingSortFields,
+  fillSortFields,
   fillPublishDate
 };

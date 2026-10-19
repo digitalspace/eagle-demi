@@ -159,10 +159,12 @@ function mirrorItem(eagleId, doc, read, existing) {
     id: eagleId,
     eagleId,
     projectId: doc.project ? String(doc.project) : null,
-    headline: doc.headline,
+    headline: doc.headline ?? null,
     content: doc.content,
-    type: doc.type,
-    pinned: doc.pinned,
+    type: doc.type ?? null,
+    // Always a boolean: the pinned sort and the C&E filter drop or mismatch a row lacking the field.
+    pinned: doc.pinned === true,
+    complianceAndEnforcement: doc.complianceAndEnforcement === true,
     dateAdded: doc.dateAdded,
     dateUpdated: doc.dateUpdated,
     // The rest of what eagle-public's News model reads. `pcp` and `projectNotification` arrive as
@@ -195,7 +197,7 @@ function mirrorItem(eagleId, doc, read, existing) {
     // and `active` is Eagle's own flag, which the News model renders.
     active: doc.active === true,
     // read[] is authoritative and isPublished mirrors it (ADR-004). `read` is Eagle's own minus
-    // compliance under the parent's ceiling, or the parent's for a legacy open row
+    // compliance under the parent's ceiling, or the parent's for a row `inheritsParentRead` admits
     // (`helpers/update-parent:updateRead`); `sources.eagle.read` keeps Eagle's own, uncapped and
     // still minus compliance (null when Eagle sent none), for the project cascade to re-derive from.
     isPublished: read.includes('public'),
@@ -234,7 +236,7 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
       const own = ownRead(doc.read);
       const read = updateRead(doc, parent);
       if (parent && inheritsParentRead(doc)) {
-        logger.debug('[Update Controller] legacy open update inherits parent read', {
+        logger.debug('[Update Controller] update with no read inherits parent read', {
           id: eagleId, parentId: parent.id, kind: parent.kind, to: read
         });
       } else if (levelOfRead(read) < levelOfRead(own)) {
@@ -242,7 +244,7 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
           id: eagleId, parentId: parent.id, kind: parent.kind, from: own, to: read
         });
       }
-      // A missing read is stored as null, not `[]`: the cascade needs the two apart (`inheritsParentRead`).
+      // Missing is stored as null and `[]` as `[]`: with no status, only null inherits (`inheritsParentRead`).
       return mirrorItem(eagleId, { ...doc, read: hasNoRead(doc) ? null : own }, read, current);
     },
     // Unfiltered: a row with no `read` or a compartment token is still there to be replaced.

@@ -48,6 +48,8 @@ const userdata = require('../../src/repositories/userdata');
 const userDataController = require('../../src/controllers/nosql/userdata');
 const wildfireController = require('../../src/controllers/wildfire');
 const configController = require('../../src/controllers/config');
+const projectSummaries = require('../../src/repositories/projectSummaries');
+const projectSummaryController = require('../../src/controllers/project-summary');
 
 function mockRes() {
   return {
@@ -295,6 +297,48 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].Action, 'project.delete');
     assert.strictEqual(written[0].TargetId, '207');
     assert.strictEqual(written[0].Detail.removedFromSearch, true);
+  });
+
+  await t.test('a project summary write writes one projectSummary.save under the resolved project', async () => {
+    // Stored prose that renders as EAO's account of a project; the row says who stored it and when
+    // it was generated. Keyed by the DEMI id the URL resolved to, like the record itself.
+    t.mock.method(projects, 'getByEagleId', async () => ({ id: '272' }));
+    t.mock.method(projectSummaries, 'upsert', async (doc) => doc);
+
+    const res = mockRes();
+    const written = await rowsFrom(() => projectSummaryController.putProjectSummary({
+      params: { id: '5f1d7a3c9b2e4d6f8a0b1c2d' },
+      query: {},
+      user: STAFF,
+      body: {
+        generatedAt: '2026-09-09T02:00:00Z',
+        sourceAccess: 'public',
+        model: 'gpt-4.1-mini',
+        facts: {},
+        sections: { status: { sentence: 'A sentence.', citations: [1] } },
+        citations: [{ n: 1, documentId: 'docB' }]
+      }
+    }, res));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written.length, 1);
+    assert.strictEqual(written[0].Action, 'projectSummary.save');
+    assert.strictEqual(written[0].TargetId, '272');
+    assert.strictEqual(written[0].ProjectId, '272');
+    assert.strictEqual(written[0].Detail.generatedAt, '2026-09-09T02:00:00Z');
+  });
+
+  await t.test('a refused project summary write writes no row', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '272' }));
+    t.mock.method(projectSummaries, 'upsert', async (doc) => doc);
+
+    const res = mockRes();
+    const written = await rowsFrom(() => projectSummaryController.putProjectSummary({
+      params: { id: '272' }, query: {}, user: STAFF, body: { sections: {}, citations: [] }
+    }, res));
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.deepStrictEqual(written, []);
   });
 
   await t.test('project reclassify writes one project.reclassify', async () => {

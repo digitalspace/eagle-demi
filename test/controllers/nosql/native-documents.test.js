@@ -17,12 +17,15 @@ const { counts } = require('../../../src/controllers/native/counts');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const aiSearch = require('../../../src/search/ai-search');
 const projects = require('../../../src/repositories/projects');
+const { nameContainsClause, NAME_CONTAINS_FIELDS } = require('../../../src/search/eagle-query');
 const { makeRes } = require('../../../src/http/router');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
 // Null-safe: a missing or null documentSource must keep the row, which `!=` alone would not.
 const EXCLUSION = '(NOT IS_STRING(c.documentSource) OR c.documentSource != @updateSource)';
+
+const SCAN_CLEARED = "(NOT IS_STRING(c.scanStatus) OR c.scanStatus = 'clean')";
 
 const DOCS = [
   {
@@ -167,6 +170,32 @@ test('native documents list', async (t) => {
     assert.strictEqual(searches[0].orderby, 'sortOrder desc, datePosted desc, displayNameSort asc, id');
   });
 
+  for (const [key, column] of [['type', 'type'], ['milestone', 'milestone'], ['projectPhase', 'projectPhase'],
+    ['documentAuthorType', 'documentAuthorType'], ['isPublished', 'isPublished'], ['legislation', 'legislation'],
+    ['isFeatured', 'isFeatured'], ['documentAuthor', 'documentAuthorSort']]) {
+    await t.test(`sort=${key} and sort=-${key} page in the index on ${column}`, async (t) => {
+      const { searches } = fakeStores(t);
+      assert.strictEqual((await list(`project=207&sort=${key}`)).status, 200);
+      assert.strictEqual((await list(`sort=-${key}`)).status, 200);
+      assert.deepStrictEqual(searches.map(s => s.orderby), [`${column} asc, id`, `${column} desc, id`]);
+    });
+  }
+
+  await t.test('displayNameContains with project= matches the name fields in the index', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await list('project=207&displayNameContains=Part%20A&count=true');
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(searches.length, 1);
+    const clause = nameContainsClause(NAME_CONTAINS_FIELDS.Document, aiSearch.buildContainsQuery('Part A'));
+    assert.ok(searches[0].filter.endsWith(` and (${clause})`), searches[0].filter);
+    const [reread] = documentReads(queries);
+    assert.doesNotMatch(reread.query, /(?<!ARRAY_)CONTAINS\(/, 'Cosmos must not re-match the words the index matched');
+    for (const field of ['displayName', 'documentFileName']) {
+      assert.ok(reread.query.includes(`c.vis[${JSON.stringify(field)}]`), `no dial check on ${field}`);
+    }
+  });
+
   await t.test('documentSource on one project reads Cosmos with the value bound', async (t) => {
     const { searches, queries } = fakeStores(t);
     const res = await list('project=207&documentSource=PROJECT', STAFF);
@@ -208,6 +237,68 @@ test('native documents list', async (t) => {
 
     assert.strictEqual(res.status, 400);
     assert.strictEqual(searches.length, 0);
+  });
+});
+
+// An image uploaded through the eagle-admin Update form: shown on its Update, fetched by id.
+const UPDATE_IMAGE = { id: 'd3', projectId: '207', read: ['public'], documentSource: 'UPDATE', s3Key: '207/photo.jpg' };
+
+/**
+ * A Cosmos fake that honours the two clauses these tests are about: the `@nid` ids an `ids=` read
+ * binds, and the Update-image exclusion. A COUNT spec gets the number of rows those clauses keep.
+ * Every spec sent is recorded.
+ */
+function fakeIdsStore(t) {
+  const queries = [];
+  t.mock.method(cosmos, 'query', async (container, spec) => {
+    queries.push({ container, ...spec });
+    const asked = spec.parameters.filter(p => p.name.startsWith('@nid')).map(p => p.value);
+    const rows = [...DOCS, UPDATE_IMAGE]
+      .filter(row => asked.length === 0 || asked.includes(row.id))
+      .filter(row => !spec.query.includes(EXCLUSION) || row.documentSource !== 'UPDATE');
+    if (spec.query.includes('COUNT(1)')) return { items: [rows.length] };
+    return { items: structuredClone(rows) };
+  });
+  t.mock.method(projects, 'listRowsByIds', async () => []);
+  return { queries };
+}
+
+test('native documents ids= read', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('ids= returns an Update-form image, as GET /documents/:id does', async (t) => {
+    fakeIdsStore(t);
+    const res = await list('ids=d3,d1', STAFF);
+
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.map(doc => doc.id).sort(), ['d1', 'd3']);
+  });
+
+  await t.test('ids= x-total-count counts the Update-form image it returns', async (t) => {
+    fakeIdsStore(t);
+    const res = await list('ids=d3,d1&count=true', STAFF);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.length, 2);
+    assert.strictEqual(res.headers['x-total-count'], String(res.body.length));
+  });
+
+  await t.test('a project list without ids= still leaves the Update image out', async (t) => {
+    fakeIdsStore(t);
+    const res = await list('project=207', STAFF);
+
+    assert.ok(!res.body.some(doc => doc.id === 'd3'), JSON.stringify(res.body.map(doc => doc.id)));
+  });
+
+  await t.test("ids= keeps the caller's read and scan gates and anonymous redaction", async (t) => {
+    const { queries } = fakeIdsStore(t);
+    const res = await list('ids=d3');
+
+    const [read] = documentReads(queries);
+    assert.match(read.query, /c\.read/, 'the visibility predicate is in the query');
+    assert.strictEqual(param(read, '@role0'), 'public');
+    assert.ok(read.query.includes(SCAN_CLEARED), 'an unreleased upload stays out');
+    assert.strictEqual(res.body[0].s3Key, undefined, 'the object key is never public');
   });
 });
 

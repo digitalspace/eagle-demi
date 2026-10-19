@@ -2,7 +2,7 @@
 
 // Native update and notification reads, driven through the real handlers and repositories over a
 // fake Cosmos that applies the role arm, equality, IN, `<=`, pinned, parent gate and ORDER BY
-// clauses of each query, so what a caller may see is observed in the response. The indexes are faked at
+// clauses of each query, plus `>=`, the presence clause and the flag clause, so what a caller may see is observed in the response. The indexes are faked at
 // `searchActivities`/`searchNotifications`, so the OData filter they are asked with is observed too.
 
 process.env.NODE_ENV = 'test';
@@ -22,6 +22,7 @@ const { filterFor } = require('../../../src/helpers/access-odata');
 const { resolveAccess } = require('../../../src/helpers/access-sql');
 const { makeRes } = require('../../../src/http/router');
 const { recordEvents } = require('../../helpers/record-events');
+const { logger } = require('../../../src/utils/logger');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 const ANON = resolveAccess({ query: {}, headers: {}, header: () => undefined });
@@ -32,23 +33,27 @@ const HIDDEN_EAGLE_ID = 'cccccccccccccccccccccccc';
 const SCOPED = { projectScope: ['p1', 'p2'] };
 
 const CONTAINERS = {
-  // Live: u1 and u4. u2 is a draft and u3 is scheduled for later; only staff and narrower see them.
+  // Live: u1, u4 and u6. u2 is a draft and u3 is scheduled for later; only staff and narrower see them.
   // u5 is live and public itself, but its parent project p2 is staff-only, so it is hidden below staff.
+  // u6 has a null status, as the backfill leaves a row whose Eagle source had none; the gate admits it.
   updates: [
-    { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
-    { id: 'u2', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Draft', read: ['public'], status: 'draft', publishDate: '2026-01-03T00:00:00.000Z', dateAdded: '2026-01-03T00:00:00.000Z' },
-    { id: 'u3', type: 'News', headline: 'Scheduled', read: ['public'], status: 'published', publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },
-    { id: 'u4', type: 'Notice', headline: 'Pinned notice', pinned: true, read: ['public'], status: 'published', publishDate: '2025-12-01T00:00:00.000Z', dateAdded: '2025-12-01T00:00:00.000Z' },
-    { id: 'u5', projectId: HIDDEN_EAGLE_ID, type: 'News', headline: 'Quarry approved', read: ['public'], status: 'published', publishDate: '2026-01-04T00:00:00.000Z', dateAdded: '2026-01-04T00:00:00.000Z' }
+    // u1 and u4 store `pinned` and the C&E flag as the mirror now writes them; the rest are rows from before that.
+    { id: 'u1', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Bridge opens', documentUrl: '/doc/a.pdf', pinned: false, complianceAndEnforcement: false, read: ['public'], status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z' },
+    { id: 'u2', projectId: PROJECT_EAGLE_ID, type: 'News', headline: 'Draft', documentUrl: '/doc/b.pdf', read: ['public'], status: 'draft', publishDate: '2026-01-03T00:00:00.000Z', dateAdded: '2026-01-03T00:00:00.000Z' },
+    { id: 'u3', type: 'News', headline: 'Scheduled', documentUrl: null, read: ['public'], status: 'published', publishDate: '2999-01-01T00:00:00.000Z', dateAdded: '2026-01-01T00:00:00.000Z' },
+    { id: 'u4', type: 'Notice', headline: 'Pinned notice', documentUrl: '', pinned: true, complianceAndEnforcement: true, read: ['public'], status: 'published', publishDate: '2025-12-01T00:00:00.000Z', dateAdded: '2025-12-01T00:00:00.000Z' },
+    { id: 'u5', projectId: HIDDEN_EAGLE_ID, type: 'News', headline: 'Quarry approved', documentUrl: '/doc/c.pdf', read: ['public'], status: 'published', publishDate: '2026-01-04T00:00:00.000Z', dateAdded: '2026-01-04T00:00:00.000Z' },
+    { id: 'u6', type: 'Bulletin', headline: 'Old bulletin', documentUrl: null, read: ['public'], status: null, publishDate: '2025-06-01T00:00:00.000Z', dateAdded: '2025-06-01T00:00:00.000Z' }
   ],
   notifications: [
-    { id: 'n1', name: 'Pipeline notice', type: 'Industrial', region: 'Peace', read: ['public'], notificationReceivedDate: '2026-02-01T00:00:00.000Z' },
-    { id: 'n2', name: 'Mine notice', type: 'Mines', region: 'Skeena', read: ['public'], notificationReceivedDate: '2026-03-01T00:00:00.000Z' },
-    { id: 'n-staff', name: 'Unreleased notice', type: 'Mines', read: ['staff'], notificationReceivedDate: '2026-04-01T00:00:00.000Z' }
+    { id: 'n1', name: 'Pipeline notice', type: 'Industrial', region: 'Peace', decision: 'Approved', decisionDate: '2025-12-20T00:00:00.000Z', proponent: 'Zed Pipelines', read: ['public'], notificationReceivedDate: '2026-02-01T00:00:00.000Z' },
+    { id: 'n2', name: 'Mine notice', type: 'Mines', region: 'Skeena', decision: null, decisionDate: '13/45/2025', proponent: 'Acme Mining', read: ['public'], notificationReceivedDate: '2026-03-01T00:00:00.000Z' },
+    { id: 'n-staff', name: 'Unreleased notice', type: 'Transport', region: 'Coast', decision: 'Declined', decisionDate: '2026-01-06T00:00:00.000Z', proponent: null, read: ['staff'], notificationReceivedDate: '2026-04-01T00:00:00.000Z' }
   ],
   projects: [
-    { id: 'p1', eagleId: PROJECT_EAGLE_ID, name: 'Site C', read: ['public'] },
-    { id: 'p2', eagleId: HIDDEN_EAGLE_ID, name: 'Unreleased quarry', read: ['staff'] }
+    { id: 'p1', eagleId: PROJECT_EAGLE_ID, name: 'Site C', decisionDate: '2026-01-03T00:00:00.000Z', read: ['public'] },
+    { id: 'p2', eagleId: HIDDEN_EAGLE_ID, name: 'Unreleased quarry', decisionDate: '2026-01-05T00:00:00.000Z', read: ['staff'] },
+    { id: 'p3', name: 'Future decision', decisionDate: '2999-01-01T00:00:00.000Z', read: ['public'] }
   ]
 };
 
@@ -57,19 +62,38 @@ function param(spec, name) {
   return found && found.value;
 }
 
+// The updates live gate, which admits a row with no status, as `liveClause` does.
+const LIVE_GATE = /\(NOT IS_DEFINED\(c\.status\) OR IS_NULL\(c\.status\) OR \(c\.status = (@\w+) AND c\.publishDate <= (@\w+)\)\)/;
+
 /** Rows of `container` the query admits. A query with no role arm (a system read) admits every role. */
-function admitted(container, spec) {
-  const roles = spec.parameters.filter(p => p.name.startsWith('@role')).map(p => p.value);
+function admitted(container, given) {
+  const roles = given.parameters.filter(p => p.name.startsWith('@role')).map(p => p.value);
   const tests = [];
+  const gate = given.query.match(LIVE_GATE);
+  if (gate) {
+    const [status, now] = gate.slice(1).map(name => param(given, name));
+    tests.push(row => row.status === undefined || row.status === null || (row.status === status && row.publishDate <= now));
+  }
+  const spec = { ...given, query: given.query.replace(LIVE_GATE, '') };
   for (const [, field, name] of spec.query.matchAll(/c\.(\w+) = (@\w+)/g)) {
     tests.push(row => row[field] === param(spec, name));
   }
   for (const [, field, name] of spec.query.matchAll(/c\.(\w+) <= (@\w+)/g)) {
     tests.push(row => row[field] <= param(spec, name));
   }
+  for (const [, field, name] of spec.query.matchAll(/c\.(\w+) >= (@\w+)/g)) {
+    tests.push(row => row[field] >= param(spec, name));
+  }
+  for (const [, not, field] of spec.query.matchAll(/(\(NOT )?\(\(IS_DEFINED\(c\.(\w+)\) AND NOT IS_NULL\(c\.\w+\)\) AND c\.\w+ != ''\)/g)) {
+    const filled = row => row[field] !== undefined && row[field] !== null && row[field] !== '';
+    tests.push(row => filled(row) !== Boolean(not));
+  }
   for (const [, field, names] of spec.query.matchAll(/c\.(\w+) IN \(([@\w, ]+)\)/g)) {
     const values = names.split(', ').map(name => param(spec, name));
     tests.push(row => values.includes(row[field]));
+  }
+  for (const [, not, field] of spec.query.matchAll(/(\(NOT )?\(IS_BOOL\(c\.(\w+)\) AND c\.\w+ = true\)/g)) {
+    tests.push(row => (row[field] === true) !== Boolean(not));
   }
   if (spec.query.includes('c.pinned = true')) tests.push(row => row.pinned === true);
   if (spec.query.includes('c.pinned = false')) tests.push(row => row.pinned !== true);
@@ -83,7 +107,10 @@ function admitted(container, spec) {
   const order = spec.query.match(/ORDER BY c\.(\w+) (ASC|DESC)/);
   if (!order) return rows;
   const [, field, dir] = order;
-  return rows.sort((a, b) => String(a[field]).localeCompare(String(b[field])) * (dir === 'DESC' ? -1 : 1));
+  // As Cosmos: ORDER BY drops a row lacking the field, and null sorts before every string.
+  const key = row => (row[field] === null ? '' : `~${row[field]}`);
+  return rows.filter(row => row[field] !== undefined)
+    .sort((a, b) => key(a).localeCompare(key(b)) * (dir === 'DESC' ? -1 : 1));
 }
 
 function fakeStores(t, { ranked = [] } = {}) {
@@ -121,26 +148,130 @@ test('native updates list', async (t) => {
 
   await t.test('anonymous sees only live rows; staff sees drafts and scheduled rows too', async (t) => {
     fakeStores(t);
-    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4']);
-    assert.deepStrictEqual(ids((await call(list, '', { user: STAFF })).body).sort(), ['u1', 'u2', 'u3', 'u4', 'u5']);
+    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4', 'u6']);
+    assert.deepStrictEqual(ids((await call(list, '', { user: STAFF })).body).sort(), ['u1', 'u2', 'u3', 'u4', 'u5', 'u6']);
   });
 
   await t.test('count=true counts the live rows only', async (t) => {
     fakeStores(t);
     const res = await call(list, 'count=true');
-    assert.strictEqual(res.headers['x-total-count'], '2');
+    assert.strictEqual(res.headers['x-total-count'], '3');
   });
 
   await t.test('page and pageSize page the sorted list', async (t) => {
     fakeStores(t);
     const res = await call(list, 'sort=dateAdded&pageSize=2&page=2', { user: STAFF });
     assert.strictEqual(res.status, 200);
-    assert.deepStrictEqual(ids(res.body), ['u1', 'u2']);
+    assert.deepStrictEqual(ids(res.body), ['u3', 'u1']);
   });
 
   await t.test('a sort key off the allow-list is refused', async (t) => {
     fakeStores(t);
-    assert.strictEqual((await call(list, 'sort=headline')).status, 400);
+    assert.strictEqual((await call(list, 'sort=projectName')).status, 400);
+  });
+
+  // In the window: u4 (Dec 1), u3, u1, u2 (Jan 3, the end day itself). u5 (Jan 4) is past it.
+  const WINDOW = 'dateAddedStart=2025-12-01&dateAddedEnd=2026-01-03';
+
+  await t.test('dateAdded range, hasDocumentUrl and sort=headline narrow and order the list', async (t) => {
+    fakeStores(t);
+    const filled = await call(list, `${WINDOW}&hasDocumentUrl=true&sort=headline`, { user: STAFF });
+    assert.strictEqual(filled.status, 200);
+    assert.deepStrictEqual(ids(filled.body), ['u1', 'u2']);
+    assert.deepStrictEqual(ids((await call(list, `${WINDOW}&hasDocumentUrl=true&sort=-headline`, { user: STAFF })).body), ['u2', 'u1']);
+    // null and '' both read as no document.
+    assert.deepStrictEqual(ids((await call(list, `${WINDOW}&hasDocumentUrl=false&sort=headline`, { user: STAFF })).body), ['u4', 'u3']);
+  });
+
+  await t.test('sort=type orders by type', async (t) => {
+    fakeStores(t);
+    assert.deepStrictEqual(ids((await call(list, 'sort=-type&count=true')).body), ['u4', 'u1', 'u6']);
+  });
+
+  await t.test('sort=pinned orders by the pinned flag', async (t) => {
+    fakeStores(t);
+    const res = await call(list, 'sort=-pinned&count=true');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u4', 'u1']);
+    assert.deepStrictEqual(ids((await call(list, 'sort=pinned')).body), ['u1', 'u4']);
+  });
+
+  await t.test('sort=status orders by status', async (t) => {
+    fakeStores(t);
+    const res = await call(list, `project=${PROJECT_EAGLE_ID}&sort=status`, { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u2', 'u1']);
+    assert.deepStrictEqual(ids((await call(list, `project=${PROJECT_EAGLE_ID}&sort=-status`, { user: STAFF })).body), ['u1', 'u2']);
+  });
+
+  await t.test('the q path re-reads the ranked ids in pinned order', async (t) => {
+    fakeStores(t, { ranked: ['u5', 'u4', 'u2', 'u3', 'u1'] });
+    const res = await call(list, 'q=bridge&sort=-pinned', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u4', 'u1']);
+  });
+
+  await t.test('sort=status keeps a row whose status is null, first', async (t) => {
+    fakeStores(t);
+    const res = await call(list, 'sort=status&count=true', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body).slice(0, 2), ['u6', 'u2']);
+    assert.strictEqual(res.body.length, 6);
+  });
+
+  await t.test('project= repeated matches any of the projects', async (t) => {
+    fakeStores(t);
+    const res = await call(list, `project=${PROJECT_EAGLE_ID}&project=${HIDDEN_EAGLE_ID}&sort=dateAdded&count=true`, { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u1', 'u2', 'u5']);
+    assert.strictEqual(res.headers['x-total-count'], '3');
+  });
+
+  await t.test('the q path sends repeated projects to the index and re-reads them', async (t) => {
+    const { searches } = fakeStores(t, { ranked: ['u5', 'u4', 'u2', 'u3', 'u1'] });
+    const res = await call(list, `q=bridge&project=${PROJECT_EAGLE_ID}&project=${HIDDEN_EAGLE_ID}`, { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    // u4 and u3 have no project; the Cosmos re-read drops them though the index ranked them.
+    assert.deepStrictEqual(ids(res.body), ['u5', 'u2', 'u1']);
+    assert.ok(searches[0].filter.includes(`search.in(projectId, '${PROJECT_EAGLE_ID},${HIDDEN_EAGLE_ID}', ',')`), searches[0].filter);
+  });
+
+  await t.test('complianceAndEnforcement=true keeps flagged rows; false keeps the rest, unflagged rows included', async (t) => {
+    fakeStores(t);
+    const on = await call(list, 'complianceAndEnforcement=true&count=true');
+    assert.strictEqual(on.status, 200);
+    assert.deepStrictEqual(ids(on.body), ['u4']);
+    assert.strictEqual(on.headers['x-total-count'], '1');
+    // u1 stores false; u2, u3, u5 and u6 have no flag at all.
+    assert.deepStrictEqual(ids((await call(list, 'complianceAndEnforcement=false&sort=dateAdded', { user: STAFF })).body), ['u6', 'u3', 'u1', 'u2', 'u5']);
+  });
+
+  await t.test('the q path re-reads complianceAndEnforcement in Cosmos; the index has no such column', async (t) => {
+    const { searches } = fakeStores(t, { ranked: ['u5', 'u4', 'u2', 'u3', 'u1'] });
+    assert.deepStrictEqual(ids((await call(list, 'q=bridge&complianceAndEnforcement=true', { user: STAFF })).body), ['u4']);
+    assert.deepStrictEqual(ids((await call(list, 'q=bridge&complianceAndEnforcement=false', { user: STAFF })).body), ['u5', 'u2', 'u3', 'u1']);
+    assert.doesNotMatch(searches[0].filter, /complianceAndEnforcement/);
+  });
+
+  await t.test('complianceAndEnforcement takes true or false, once', async (t) => {
+    fakeStores(t);
+    assert.match((await call(list, 'complianceAndEnforcement=yes')).body.error, /complianceAndEnforcement takes only true or false/);
+    assert.match((await call(list, 'complianceAndEnforcement=true&complianceAndEnforcement=false')).body.error, /more than once: complianceAndEnforcement/);
+  });
+
+  await t.test('the q path sends the range to the index and re-reads with presence and sort', async (t) => {
+    const { searches } = fakeStores(t, { ranked: ['u5', 'u4', 'u2', 'u3', 'u1'] });
+    const res = await call(list, `q=bridge&${WINDOW}&hasDocumentUrl=true&sort=headline`, { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res.body), ['u1', 'u2']);
+    assert.match(searches[0].filter, /\(dateAdded ge 2025-12-01T00:00:00\.000Z\) and \(dateAdded le 2026-01-03T23:59:59\.999Z\)/);
+  });
+
+  await t.test('a bad day, a bad presence value or a repeated range is refused', async (t) => {
+    fakeStores(t);
+    assert.match((await call(list, 'dateAddedStart=2026-02-30')).body.error, /dateAddedStart takes one day/);
+    assert.match((await call(list, 'hasDocumentUrl=yes')).body.error, /hasDocumentUrl takes only true or false/);
+    assert.match((await call(list, 'dateAddedEnd=2026-01-01&dateAddedEnd=2026-01-02')).body.error, /more than once: dateAddedEnd/);
   });
 
   await t.test('project= filters projectId and joins the project name', async (t) => {
@@ -193,12 +324,12 @@ test('native updates under a parent the caller cannot read', async (t) => {
 
   await t.test('anonymous: the list leaves the row out', async (t) => {
     fakeStores(t);
-    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4']);
+    assert.deepStrictEqual(ids((await call(list, '')).body).sort(), ['u1', 'u4', 'u6']);
   });
 
   await t.test('anonymous: count=true does not count it', async (t) => {
     fakeStores(t);
-    assert.strictEqual((await call(list, 'count=true')).headers['x-total-count'], '2');
+    assert.strictEqual((await call(list, 'count=true')).headers['x-total-count'], '3');
   });
 
   await t.test('anonymous: the q read-back drops it though the index ranked it', async (t) => {
@@ -268,22 +399,52 @@ test('native updates feed', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const feed = updatesController.getFeed;
 
-  await t.test('pinned rows lead, then live rows; anonymous gets no draft', async (t) => {
+  await t.test('pinned rows lead; updates and decisions follow, newest feedDate first', async (t) => {
     fakeStores(t);
     const res = await call(feed, '');
     assert.strictEqual(res.status, 200);
-    assert.deepStrictEqual(ids(res.body), ['u4', 'u1']);
-    assert.strictEqual(res.body[1].projectName, 'Site C');
+    assert.deepStrictEqual(ids(res.body), ['u4', 'p1', 'u1', 'n1']);
+    assert.strictEqual(res.body[2].projectName, 'Site C');
   });
 
-  await t.test('limit caps the rows', async (t) => {
+  await t.test('every row carries its kind and feedDate', async (t) => {
+    fakeStores(t);
+    const { body } = await call(feed, '');
+    assert.deepStrictEqual(body.map(row => [row.kind, row.feedDate]), [
+      ['updates', '2025-12-01T00:00:00.000Z'],
+      ['projects', '2026-01-03T00:00:00.000Z'],
+      ['updates', '2026-01-02T00:00:00.000Z'],
+      ['notifications', '2025-12-20T00:00:00.000Z']
+    ]);
+  });
+
+  await t.test('limit counts rows of every kind', async (t) => {
     fakeStores(t);
     assert.deepStrictEqual(ids((await call(feed, 'limit=1')).body), ['u4']);
+    assert.deepStrictEqual(ids((await call(feed, 'limit=2')).body), ['u4', 'p1']);
   });
 
-  await t.test('type narrows the top-up, never the pinned rows', async (t) => {
+  await t.test('anonymous gets no decision from an unpublished project or notification; staff does', async (t) => {
     fakeStores(t);
-    assert.deepStrictEqual(ids((await call(feed, 'type=Notice')).body), ['u4']);
+    assert.ok(!ids((await call(feed, 'limit=20')).body).some(id => id === 'p2' || id === 'n-staff'));
+    assert.deepStrictEqual(ids((await call(feed, 'limit=20', { user: STAFF })).body).filter(id => id === 'p2' || id === 'n-staff'), ['n-staff', 'p2']);
+  });
+
+  await t.test('a decision dated after now is left out', async (t) => {
+    fakeStores(t);
+    assert.ok(!ids((await call(feed, 'limit=20')).body).includes('p3'));
+  });
+
+  await t.test('type narrows the unpinned updates only, never the pinned rows or the decisions', async (t) => {
+    fakeStores(t);
+    assert.deepStrictEqual(ids((await call(feed, 'type=Notice')).body), ['u4', 'p1', 'n1']);
+  });
+
+  await t.test('a decision with an unparseable date is dropped and logged', async (t) => {
+    fakeStores(t);
+    const warn = t.mock.method(logger, 'warn', () => {});
+    assert.ok(!ids((await call(feed, 'limit=20')).body).includes('n2'));
+    assert.deepStrictEqual(warn.mock.calls.map(c => c.arguments[1]), [{ kind: 'notifications', ids: ['n2'] }]);
   });
 
   await t.test(`limit past ${updatesController.FEED_MAX_ROWS} or given twice is refused`, async (t) => {
@@ -322,6 +483,25 @@ test('native notifications', async (t) => {
     const res = await call(list, 'type=Mines&count=true');
     assert.deepStrictEqual(ids(res.body), ['n2']);
     assert.strictEqual(res.headers['x-total-count'], '1');
+  });
+
+  await t.test('type, region and decision take several values; sort=decision keeps a null decision', async (t) => {
+    fakeStores(t);
+    const res = await call(list, 'type=Industrial&type=Mines&sort=decision&count=true', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    // n2's decision is null, which sorts first; the staff-only Transport row is filtered out.
+    assert.deepStrictEqual(ids(res.body), ['n2', 'n1']);
+    assert.strictEqual(res.headers['x-total-count'], '2');
+    assert.deepStrictEqual(ids((await call(list, 'type=Industrial&type=Mines&sort=-decision')).body), ['n1', 'n2']);
+    assert.deepStrictEqual(ids((await call(list, 'region=Peace&region=Coast', { user: STAFF })).body), ['n-staff', 'n1']);
+    assert.deepStrictEqual(ids((await call(list, 'decision=Approved&decision=Declined', { user: STAFF })).body), ['n-staff', 'n1']);
+  });
+
+  await t.test('sort takes type, region and proponent', async (t) => {
+    fakeStores(t);
+    assert.deepStrictEqual(ids((await call(list, 'sort=-type', { user: STAFF })).body), ['n-staff', 'n2', 'n1']);
+    assert.deepStrictEqual(ids((await call(list, 'sort=region', { user: STAFF })).body), ['n-staff', 'n1', 'n2']);
+    assert.deepStrictEqual(ids((await call(list, 'sort=proponent', { user: STAFF })).body), ['n-staff', 'n2', 'n1']);
   });
 
   await t.test('project= is refused: a notification has no projectId', async (t) => {

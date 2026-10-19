@@ -223,13 +223,6 @@ param deployDocumentIntake bool = false
 @minValue(1)
 param intakeCapGBPerMonth int = 5
 
-// Rollout: pass 1 must export DEPLOY_INTAKE_SUBSCRIPTION=false, then code deploy, then pass 2 with the default.
-@description('Create the scan-result Event Grid subscription and the dead-sweep alert. False until `intakeScanResult` and `intakeScanSweep` exist in the API app.')
-param deployIntakeSubscription bool = true
-
-@description('Object id of the Defender for Storage principal that publishes scan results to the intake topic. Empty grants nothing.')
-param intakeDefenderPrincipalId string = ''
-
 @description('Comma-separated `sources` keys a project may publish over HTTP. Empty publishes none.')
 param enrichmentSources string = ''
 
@@ -321,6 +314,9 @@ param roleSyncClientId string = ''
 
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty runs it never.')
 param syncTeamsSchedule string = ''
+
+@description('NCRONTAB schedule for the Track project poll timer, e.g. `0 */5 * * * *`. Empty runs it never.')
+param syncProjectsSchedule string = ''
 
 // Bulk document download. Three switches and a set of caps; the switches default off, so an
 // environment gets the queue and the container without the feature running. The caps are the same
@@ -505,9 +501,10 @@ var defaultTags = {
 // name and apiVersion below is the one the owning module declares — a mismatch here reads a
 // different resource, or a different property shape, and the app settings drift silently.
 //
-// An `existing` resource compiles to a reference at its use site, so nothing is read in a run that
-// takes the module-output branch. A missing resource in application mode fails the deployment with
-// ResourceNotFound, which is the correct loud failure: the environment has no foundation yet.
+// ARM reads every unconditional `existing` resource a module uses, whichever ternary branch wins,
+// so a lookup for something only some environments have carries the same `if` as its use. A missing
+// resource in application mode fails the deployment with ResourceNotFound, which is the correct loud
+// failure: the environment has no foundation yet.
 
 resource identityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'demi-identity-${environmentName}'
@@ -541,11 +538,11 @@ resource auditDcrExisting 'Microsoft.Insights/dataCollectionRules@2023-03-11' ex
   name: 'demi-audit-dcr-${environmentName}'
 }
 
-resource foundryExisting 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
+resource foundryExisting 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = if (deployFoundry && !deployFoundation) {
   name: 'demi-foundry-${environmentName}'
 }
 
-resource intakeIdentityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+resource intakeIdentityExisting 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = if (deployDocumentIntake && !deployFoundation) {
   name: 'demi-intake-${environmentName}'
 }
 
@@ -606,7 +603,7 @@ var auditWorkspaceName = deployFoundation ? auditLogs!.outputs.workspaceName : a
 var auditWorkspaceCustomerId = deployFoundation ? auditLogs!.outputs.workspaceCustomerId : auditWorkspaceExisting.properties.customerId
 
 var foundryEndpoint = deployFoundry
-  ? (deployFoundation ? foundry!.outputs.foundryEndpoint : foundryExisting.properties.endpoint)
+  ? (deployFoundation ? foundry!.outputs.foundryEndpoint : foundryExisting!.properties.endpoint)
   : ''
 
 // Composed rather than borrowed, because the NAME is the value: each of these is built from
@@ -618,8 +615,8 @@ var foundryDeployment = deployFoundry ? foundryModelName : ''
 var searchEndpoint = deploySearch ? 'https://demi-search-${environmentName}.search.windows.net' : existingSearchEndpoint
 var budgetName = 'demi-budget-${environmentName}'
 var intakeStorageAccountName = take('demiin${environmentName}${uniqueString(resourceGroup().id)}', 24)
-var intakeIdentityId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityId : intakeIdentityExisting.id)
-var intakeIdentityClientId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityClientId : intakeIdentityExisting.properties.clientId)
+var intakeIdentityId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityId : intakeIdentityExisting!.id)
+var intakeIdentityClientId = !deployDocumentIntake ? '' : (deployFoundation ? documentIntake!.outputs.intakeIdentityClientId : intakeIdentityExisting!.properties.clientId)
 
 // 1. User-assigned managed identity — the principal for EVERY data plane.
 //
@@ -727,10 +724,7 @@ module documentIntake './modules/document-intake.bicep' = if (deployFoundation &
     tags: defaultTags
     storageAccountName: intakeStorageAccountName
     apiPrincipalId: identityPrincipalId
-    apiAppName: 'demi-api-fc-${environmentName}'
-    deploySubscription: deployIntakeSubscription
     capGBPerMonth: intakeCapGBPerMonth
-    defenderPrincipalId: intakeDefenderPrincipalId
     allowedOrigins: frontendHostNames
     peSubnetId: privateEndpointSubnetId
     logsWorkspaceId: observability!.outputs.workspaceId
@@ -832,6 +826,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     updatesPublishDateFallback: updatesPublishDateFallback
     announceUpdatesSchedule: announceUpdatesSchedule
     syncTeamsSchedule: syncTeamsSchedule
+    syncProjectsSchedule: syncProjectsSchedule
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule
     chunkRestampQueue: chunkRestampQueue

@@ -13,13 +13,9 @@ param location = 'canadacentral'
 param deployFoundation = bool(readEnvironmentVariable('DEPLOY_FOUNDATION', 'false'))
 
 // ── Document intake ───────────────────────────────────────────────────────────────────────────
-// Off until the test rollout passes. Infra pass 1 must export DEPLOY_INTAKE_SUBSCRIPTION=false: the scan-result
-// subscription and the dead-sweep alert need `intakeScanResult` and `intakeScanSweep` deployed. Pass 2 takes the default.
+// Off until the test rollout passes.
 param deployDocumentIntake = false
 param intakeCapGBPerMonth = 25
-param deployIntakeSubscription = bool(readEnvironmentVariable('DEPLOY_INTAKE_SUBSCRIPTION', 'true'))
-// storageDataScanner identity of this subscription, still to be confirmed by the EICAR test on test; fallback is the Defender for Storage resource provider app 080765e3-9336-4461-b934-310acccb907d.
-param intakeDefenderPrincipalId = '9a4c3823-bb94-49fd-b662-adf11aa09116'
 
 // ── Object store ──────────────────────────────────────────────────────────────────────────────
 // The NRS store, shared with eagle-api and outliving any Azure environment. Prod's objects sit at
@@ -106,12 +102,15 @@ param deployStaticSite = false
 param linkBaseUrl = 'https://projects.eao.gov.bc.ca'
 
 // azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
-// One entry, because this file sets no keycloakClientId and takes main.bicep's default, which is
-// the same id. Prod's other callers are eagle-api's push (API key) and eagle-public (anonymous).
-param allowedClients = 'eagle-admin-console'
+// The admin console entry covers the frontend id too, because this file sets no keycloakClientId and
+// takes main.bicep's default, which is the same id. eagle-agent-prod is the service-account client
+// the agent uses to call the API. Prod's other callers are eagle-api's push (API key) and
+// eagle-public (anonymous).
+param allowedClients = 'eagle-admin-console,eagle-agent-prod'
 
-// set after measuring aud on a live token
-param ssoAudience = ''
+// The prod realm's eagle-admin-console client has the demi-api audience mapper (added 2026-10-16,
+// same as test), so every staff token carries demi-api in aud.
+param ssoAudience = 'demi-api'
 
 // The rproxy egress addresses as APIM reports them (`callerIp` on the App Insights request row
 // for a request made through projects.eao.gov.bc.ca/demi-search; measured 2026-09-07). With these
@@ -265,6 +264,10 @@ param notifyApiBase = ''
 // Nightly 11:00 UTC, an hour after reconcile. Armed 2026-09-05 after Track prod shipped
 // /api/v1/projects/team-members.
 param syncTeamsSchedule = '0 0 11 * * *'
+
+// Every 5 min. Polls Track /api/v1/projects so project edits reach the public site the same hour,
+// not the next day. Armed 2026-10-16.
+param syncProjectsSchedule = '0 */5 * * * *'
 
 // ── PDF title worker ──────────────────────────────────────────────────────────────────────────
 // Live since 2026-10-08. Set pdfTitleLive to false for a dry run that lists the work and writes

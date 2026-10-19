@@ -322,7 +322,8 @@ test('access gate coverage', async (t) => {
     // 43: +1 for the PUT 500 when the pair's other row could not take the tags (error string).
     // 41: -2, GET /projects moved to the native list handler, which redacts in mirror-reads.
     // 42: +1 for the short-code 503 when the claim raced (error string).
-    assert.strictEqual(emissions.length, 42,
+    // 43: +1 for the GET /projects 400 on an unknown `pcp` (error string).
+    assert.strictEqual(emissions.length, 43,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
     for (const site of [

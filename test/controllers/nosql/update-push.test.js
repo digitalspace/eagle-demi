@@ -128,6 +128,7 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       content: '<p>The comment period opens on Monday.</p>',
       type: 'News',
       pinned: false,
+      complianceAndEnforcement: false,
       dateAdded: '2026-08-01T00:00:00.000Z',
       dateUpdated: '2026-08-02T00:00:00.000Z',
       notificationName: 'Nicomen Wind Energy',
@@ -162,6 +163,44 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       notifyAttempts: 0,
       sources: { eagle: eagleUpdate() }
     });
+  });
+
+  await t.test('a record with no headline or type stores both as null, not absent', async () => {
+    // A Cosmos ORDER BY on one field drops every row that lacks it, so a missing key would hide
+    // the update from a headline or type sort.
+    t.mock.method(updates, 'readForWrite', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+    const { headline: _headline, type: _type, ...doc } = eagleUpdate();
+
+    const res = await push({ doc });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written.headline, null);
+    assert.strictEqual(written.type, null);
+  });
+
+  await t.test('a record with no pinned flag stores false, not absent', async () => {
+    // A sort on pinned drops every row that lacks it.
+    t.mock.method(updates, 'readForWrite', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+    const { pinned: _pinned, ...doc } = eagleUpdate();
+
+    await push({ doc });
+
+    assert.strictEqual(written.pinned, false);
+  });
+
+  await t.test('a C&E update stores complianceAndEnforcement true', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ complianceAndEnforcement: true, pinned: true }) });
+
+    assert.strictEqual(written.complianceAndEnforcement, true);
+    assert.strictEqual(written.pinned, true);
   });
 
   await t.test('an update with no project is site-wide, not orphaned', async () => {
@@ -203,11 +242,11 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
 
   for (const [label, doc, expected] of [
     ['[\'sysadmin\'] stays [\'sysadmin\'], never [\'staff\'] or [\'team\']', eagleUpdate({ read: ['sysadmin'] }), ['sysadmin']],
-    ['[] with a status stays [], never [\'staff\']', eagleUpdate({ read: [], status: 'draft' }), []],
-    ['[] on an inactive row stays []', eagleUpdate({ read: [], active: false }), []],
-    // eagle-api prunes `read: []` for an anonymous caller; only a missing read is legacy open.
+    // eagle-api's `$redact` pruned `read: []` for an anonymous caller; only a missing read is legacy open.
     ['[] with no status on an active row stays []', eagleUpdate({ read: [], status: null, active: true }), []],
-    ['a missing read with a status stays []', eagleUpdateWithoutRead({ status: 'draft' }), []],
+    ['[] with no status on an inactive row stays []', eagleUpdate({ read: [], active: false }), []],
+    ['[] on an archived row stays []', eagleUpdate({ read: [], status: 'archived' }), []],
+    ['a missing read on an archived row stays []', eagleUpdateWithoutRead({ status: 'archived' }), []],
     ['a missing read on an inactive row stays []', eagleUpdateWithoutRead({ active: false }), []],
     ['a read that is not a list is stored as []', eagleUpdate({ read: 'public' }), []]
   ]) {
@@ -223,17 +262,6 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       assert.strictEqual(written.isPublished, false);
     });
   }
-
-  await t.test('an empty Eagle read is stored as [], apart from a missing one', async () => {
-    t.mock.method(updates, 'readForWrite', async () => null);
-    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
-    let written;
-    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
-
-    await push({ doc: eagleUpdate({ read: [], status: null, active: true }) });
-
-    assert.deepStrictEqual(written.sources.eagle.read, []);
-  });
 
   // Eagle serves its legacy rows (no read, no status, active) to anyone who can read the parent.
   for (const [shape, doc] of [
@@ -255,6 +283,44 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       });
     }
   }
+
+  // eagle-api's status backfill made its legacy no-read rows drafts; Eagle staff still see them.
+  await t.test('a draft with no read takes its project\'s read and stays off the public gate', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdateWithoutRead({ status: 'draft', active: true }) });
+
+    assert.deepStrictEqual(written.read, PUBLIC);
+    assert.strictEqual(written.status, 'draft');
+    assert.strictEqual(updates.isLive(written, null), false, 'idir and public never see a draft');
+  });
+
+  await t.test('an empty Eagle read with no status is stored as [], apart from a missing one', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PUBLIC }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: [], status: null, active: true }) });
+
+    assert.deepStrictEqual(written.sources.eagle.read, []);
+  });
+
+  // eagle-api's `applyStatus` always sets a non-empty read, so `[]` beside a status is a legacy draft.
+  await t.test('a draft pushed with read [] takes its project\'s read and keeps its empty read', async () => {
+    t.mock.method(updates, 'readForWrite', async () => null);
+    parentProject(t, async () => ({ id: '207', read: PRIVATE }));
+    let written;
+    t.mock.method(updates, 'upsert', async (item) => { written = item; return item; });
+
+    await push({ doc: eagleUpdate({ read: [], status: 'draft', active: true }) });
+
+    assert.deepStrictEqual(written.read, PRIVATE);
+    assert.deepStrictEqual(written.sources.eagle.read, []);
+  });
 
   await t.test('a compliance-only update lands privileged-only, not sealed', async () => {
     t.mock.method(updates, 'readForWrite', async () => null);

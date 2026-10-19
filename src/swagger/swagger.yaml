@@ -158,7 +158,8 @@ paths:
             than the search envelope.
           schema:
             type: string
-            enum: [User, Group, Inspection, InspectionElement, InspectionItem, Comment, CommentPeriod, ProjectNotification, RecentActivity]
+            enum: [User, Group, Inspection, InspectionElement, InspectionItem, Comment, CommentPeriod,
+              ProjectNotification, RecentActivity]
         - name: and[eaoStatus]
           in: query
           required: false
@@ -776,10 +777,15 @@ paths:
         - name: sort
           in: query
           required: false
-          description: Sort key, `-` prefix for descending. Default is by name.
+          description: >-
+            Sort key, `-` prefix for descending. Default is by name. `currentPhaseName.name` sorts
+            by the name of the project's current phase, `eacDecisionSort` by the name of its EAC
+            decision. Each row carries `eacDecisionSort`, null when there is no decision.
           schema:
             type: string
-            enum: [name, -name]
+            enum: [name, -name, dateUpdated, -dateUpdated, proponentName, -proponentName, projectType,
+              -projectType, sector, -sector, region, -region, currentPhaseName.name, -currentPhaseName.name,
+              eacDecisionSort, -eacDecisionSort]
         - name: q
           in: query
           required: false
@@ -811,6 +817,17 @@ paths:
           in: query
           required: false
           description: Repeat it to match any of several.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: sector
+          in: query
+          required: false
+          description: Project sub-type, an exact match on the stored value. Repeat it to match any of several.
           schema:
             type: array
             maxItems: 100
@@ -905,6 +922,44 @@ paths:
           schema:
             type: string
             format: date
+        - name: dateUpdatedStart
+          in: query
+          required: false
+          description: Earliest `dateUpdated`, one day as `YYYY-MM-DD`, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: dateUpdatedEnd
+          in: query
+          required: false
+          description: Latest `dateUpdated`, one day as `YYYY-MM-DD`, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: nameContains
+          in: query
+          required: false
+          description: >-
+            Text the project name must contain, ignoring case, at most 200 characters after
+            trimming. With `q`, the projects index also matches it, so each word must also start a
+            word of the name. A blank value is ignored.
+          schema:
+            type: string
+            maxLength: 200
+        - name: pcp
+          in: query
+          required: false
+          description: >-
+            Projects with a comment period in this state that the caller may read: `open`,
+            `upcoming`, `closed`, or `pending` (starts within the next 7 days), compared with the
+            current time. Repeat it to match any of several. Any other value is refused with 400.
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [open, upcoming, closed, pending]
+          style: form
+          explode: true
       responses:
         '200':
           description: A list of projects.
@@ -922,8 +977,8 @@ paths:
         '400':
           description: >-
             Unknown or repeated parameter, more than 100 values for one filter, a sort key off
-            the list, pageSize above 100 on an unauthenticated request, or a filter on a field the
-            caller cannot see.
+            the list, a date not in `YYYY-MM-DD` form, `nameContains` over 200 characters, pageSize
+            above 100 on an unauthenticated request, or a filter on a field the caller cannot see.
         '401':
           description: The Bearer token was rejected.
     post:
@@ -1333,7 +1388,8 @@ paths:
       summary: List documents
       description: >-
         One page of the documents this caller may read, with hidden fields left out. Images
-        uploaded through the Update form (`documentSource` `UPDATE`) are left out. One project's
+        uploaded through the Update form (`documentSource` `UPDATE`) are left out, except from an
+        `ids` read that the database serves, which returns them as `GET /api/documents/{id}` does. One project's
         plain list and an `ids` read come from the database; every other list, `q`, `sort` and the
         typed filters included, is paged in the documents search index, which serves at most 500
         rows per page. Each row also carries `projectName` and `projectEagleId` when the caller may
@@ -1376,9 +1432,15 @@ paths:
             `datePosted` first on another index-paged list, and by id on one project's plain list
             or an `ids` read. `sortOrder` is the staff-set document order mirrored from Eagle;
             rows with the same value come newest `datePosted` first, then by `displayName`.
+            `type`, `milestone`, `projectPhase` and `documentAuthorType` sort by the List label.
+            `documentAuthor` sorts without regard to case. `isPublished` and `isFeatured` sort false
+            before true.
           schema:
             type: string
-            enum: [datePosted, -datePosted, displayName, -displayName, sortOrder, -sortOrder]
+            enum: [datePosted, -datePosted, displayName, -displayName, sortOrder, -sortOrder, type, -type,
+              milestone, -milestone, projectPhase, -projectPhase, documentAuthorType, -documentAuthorType,
+              isPublished, -isPublished, legislation, -legislation, isFeatured, -isFeatured,
+              documentAuthor, -documentAuthor]
         - name: q
           in: query
           required: false
@@ -1398,31 +1460,56 @@ paths:
           required: false
           description: Project id, as stored in `projectId`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: typeId
           in: query
           required: false
           description: Document type List ObjectId. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: milestoneId
           in: query
           required: false
           description: Milestone List ObjectId. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: projectPhaseId
           in: query
           required: false
           description: Project phase List ObjectId. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: documentAuthorTypeId
           in: query
           required: false
           description: Author type List ObjectId. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: isFeatured
           in: query
           required: false
@@ -1434,7 +1521,12 @@ paths:
           required: false
           description: Legislation year, such as `2018`. Repeat it to match any of several.
           schema:
-            type: integer
+            type: array
+            maxItems: 100
+            items:
+              type: integer
+          style: form
+          explode: true
         - name: documentSource
           in: query
           required: false
@@ -1443,7 +1535,12 @@ paths:
             `COMMENT` for files attached to public comments. Repeat it to match any of several.
             Without it the list holds every source except Update images.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: datePostedStart
           in: query
           required: false
@@ -1458,6 +1555,16 @@ paths:
           schema:
             type: string
             format: date
+        - name: displayNameContains
+          in: query
+          required: false
+          description: >-
+            Words the document's display name or file name must hold, ignoring case, at most 200
+            characters after trimming. Each word matches a word that starts with it, and every word
+            must match. The documents index answers it. A blank value is ignored.
+          schema:
+            type: string
+            maxLength: 200
       responses:
         '200':
           description: One page of documents.
@@ -1475,8 +1582,9 @@ paths:
         '400':
           description: >-
             Unknown or repeated parameter (`continuationToken` included), a sort key off the list,
-            a bad value, pageSize above 100 unauthenticated or above 500 on an index-paged list, a
-            page past the caller's depth, or a filter on a field the caller cannot see.
+            a bad value, `displayNameContains` over 200 characters, pageSize above 100
+            unauthenticated or above 500 on an index-paged list, a page past the caller's depth, or a
+            filter on a field the caller cannot see.
         '401':
           description: The Bearer token was rejected.
     post:
@@ -3939,10 +4047,12 @@ paths:
         - name: sort
           in: query
           required: false
-          description: '`displayName`, or `-displayName` for descending. Default: by id.'
+          description: >-
+            Sort key, `-` prefix for descending. Default: by id. `email` and `phoneNumber` are
+            staff fields, so a caller with no credential is refused with 400.
           schema:
             type: string
-            enum: [displayName, -displayName]
+            enum: [displayName, -displayName, orgName, -orgName, email, -email, phoneNumber, -phoneNumber]
         - name: q
           in: query
           required: false
@@ -3981,7 +4091,7 @@ paths:
         '400':
           description: >-
             Unknown or repeated parameter, a sort key off the list, more than 100 ids, a page past
-            the depth cap, or `q` on a field the caller cannot see.
+            the depth cap, or `q` or `sort` on a field the caller cannot see.
         '401':
           description: A Bearer token was sent and rejected.
 
@@ -4426,8 +4536,9 @@ paths:
       summary: List organizations
       description: >-
         Eagle `Organization` rows (`kind: Organization` in the `lists` container) the caller may
-        read, ordered by `name`. Staff-side fields such as `description` and `companyLegal` are
-        left out below staff level. Any parameter not listed here, or a parameter given more than
+        read, ordered by `name` unless `sort` names another key. Staff-side fields such as
+        `description` and `companyLegal` are left out below staff level, and sorting on
+        `companyLegal` below staff level is a 400. Any parameter not listed here, or a parameter given more than
         once (except `companyType`), is a 400. A rejected Bearer token is a 401, not the anonymous view. Responses to a
         signed-in caller carry `Cache-Control: private, no-store`.
       parameters:
@@ -4449,10 +4560,10 @@ paths:
         - name: sort
           in: query
           required: false
-          description: Sort key, `-` prefix for descending.
+          description: Sort key, `-` prefix for descending. `companyLegal` is staff only.
           schema:
             type: string
-            enum: [name, -name]
+            enum: [name, -name, companyType, -companyType, companyLegal, -companyLegal]
         - name: ids
           in: query
           required: false
@@ -4624,9 +4735,12 @@ paths:
         - name: sort
           in: query
           required: false
-          description: One of `dateStarted`, `dateCompleted`; a leading `-` sorts descending. Default `-dateStarted`.
+          description: >-
+            One of `dateStarted`, `dateCompleted`, `isPublished`; a leading `-` sorts descending.
+            Default `-dateStarted`.
           schema:
             type: string
+            enum: [dateStarted, -dateStarted, dateCompleted, -dateCompleted, isPublished, -isPublished]
         - name: page
           in: query
           required: false
@@ -4851,32 +4965,47 @@ paths:
         published updates whose `publishDate` has passed are listed. `projectId` holds the Eagle
         project id. Each row also carries `projectName` and `projectEagleId` when the caller may
         read the project. Any parameter not listed here, or a parameter given twice (except
-        `type`), is a 400. A signed-in read is answered `Cache-Control: private, no-store`.
+        `project` and `type`), is a 400. A signed-in read is answered `Cache-Control: private, no-store`.
       parameters:
         - name: project
           in: query
           required: false
-          description: Eagle id of the project, as stored in `projectId`.
+          description: >-
+            Eagle id of the project, as stored in `projectId`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: type
           in: query
           required: false
           description: Update type, such as `News`. Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: q
           in: query
           required: false
-          description: Keywords ranked by the activities index over headline, short headline, summary, content and notification name.
+          description: >-
+            Keywords ranked by the activities index over headline, short headline, summary, content
+            and notification name. A keyword list holds at most 250 rows.
           schema:
             type: string
         - name: sort
           in: query
           required: false
-          description: One of `dateAdded`, `dateUpdated`, `publishDate`; a leading `-` sorts descending. Default `-dateAdded`, or index rank with `q`.
+          description: Sort key, `-` prefix for descending. Default `-dateAdded`, or index rank with `q`.
           schema:
             type: string
+            enum: [dateAdded, -dateAdded, dateUpdated, -dateUpdated, publishDate, -publishDate, headline,
+              -headline, type, -type, pinned, -pinned, status, -status]
         - name: page
           in: query
           required: false
@@ -4898,6 +5027,38 @@ paths:
           description: Comma-separated ids, at most 100.
           schema:
             type: string
+        - name: dateAddedStart
+          in: query
+          required: false
+          description: Earliest `dateAdded`, one day as `YYYY-MM-DD`, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: dateAddedEnd
+          in: query
+          required: false
+          description: Latest `dateAdded`, one day as `YYYY-MM-DD`, inclusive.
+          schema:
+            type: string
+            format: date
+        - name: hasDocumentUrl
+          in: query
+          required: false
+          description: >-
+            `true` keeps updates with an attached document, `false` those without one. A
+            `documentUrl` that is null, empty or missing counts as no document.
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - name: complianceAndEnforcement
+          in: query
+          required: false
+          description: >-
+            `true` keeps compliance and enforcement updates, `false` all others. A row that does
+            not store the flag counts as `false`.
+          schema:
+            type: string
+            enum: ['true', 'false']
       responses:
         '200':
           description: One page of rows.
@@ -4919,10 +5080,14 @@ paths:
 
   /api/updates/feed:
     get:
-      summary: Home page updates
+      summary: Home page feed
       description: >-
-        Pinned updates first, newest first, then other updates up to `limit` rows in total, under
-        the same rules as the list. Any parameter not listed here, or `limit` given twice, is a 400.
+        Pinned updates first, newest first. Then other updates, project decisions and notification
+        decisions, newest `feedDate` first, up to `limit` rows in total. Each row keeps the shape
+        its own list answers, plus `kind` and `feedDate`. Updates follow the same rules as the
+        list. A decision is in only when the caller may read its project or notification and its
+        `decisionDate` is no later than now. Any parameter not listed here, or `limit` given twice,
+        is a 400.
       parameters:
         - name: limit
           in: query
@@ -4935,7 +5100,9 @@ paths:
         - name: type
           in: query
           required: false
-          description: Narrows the rows after the pinned ones. Repeat it to match any of several.
+          description: >-
+            Narrows the updates after the pinned ones; decisions are never narrowed. Repeat it to
+            match any of several.
           schema:
             type: string
       responses:
@@ -4947,6 +5114,17 @@ paths:
                 type: array
                 items:
                   type: object
+                  required: [kind, feedDate]
+                  properties:
+                    kind:
+                      type: string
+                      enum: [updates, projects, notifications]
+                      description: Which list the row comes from.
+                    feedDate:
+                      type: string
+                      format: date-time
+                      description: >-
+                        An update's publish date, or a project or notification decision date.
         '400':
           description: Unknown or repeated parameter, or a bad `limit`.
         '401':
@@ -4983,19 +5161,31 @@ paths:
       summary: List project notifications
       description: >-
         Project notifications the caller may read, with hidden fields left out. Any parameter not
-        listed here, or a parameter given twice, is a 400. A signed-in read is answered
-        `Cache-Control: private, no-store`.
+        listed here, or a parameter given twice (except `type`, `region` and `decision`), is a 400.
+        A signed-in read is answered `Cache-Control: private, no-store`.
       parameters:
         - name: type
           in: query
           required: false
+          description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: region
           in: query
           required: false
+          description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: pcp
           in: query
           required: false
@@ -5005,20 +5195,28 @@ paths:
         - name: decision
           in: query
           required: false
+          description: Repeat it to match any of several.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: q
           in: query
           required: false
-          description: Keywords ranked by the project-notifications index.
+          description: Keywords ranked by the project-notifications index. A keyword list holds at most 250 rows.
           schema:
             type: string
         - name: sort
           in: query
           required: false
-          description: One of `notificationReceivedDate`, `name`; a leading `-` sorts descending. Default `-notificationReceivedDate`, or index rank with `q`.
+          description: Sort key, `-` prefix for descending. Default `-notificationReceivedDate`, or index rank with `q`.
           schema:
             type: string
+            enum: [notificationReceivedDate, -notificationReceivedDate, name, -name, type, -type, region,
+              -region, decision, -decision, proponent, -proponent, subType, -subType]
         - name: page
           in: query
           required: false
@@ -6282,7 +6480,7 @@ components:
         empty list is permissive and only reachable in local development.
 
         When `SSO_AUDIENCE` is set, a token whose `aud` does not match it fails verification with
-        401. Empty, which is what every environment ships today, means the claim is not checked.
+        401. Test and prod set it to `demi-api`. Empty means the claim is not checked.
 
   parameters:
     MirrorPageSize:

@@ -15,7 +15,7 @@ const SPEC = Object.freeze({
   repository: indexedKind({ index: 'project-notifications', store: notifications.nativeRepository }),
   sortKeys: notifications.SORTABLE,
   filters: Object.values(notifications.FILTERS),
-  multiValueFilters: [],
+  multiValueFilters: ['type', 'region', 'decision'],
   qFields: INDEX_MAPS['project-notifications'].searched,
   notFound: 'Notification not found'
 });
