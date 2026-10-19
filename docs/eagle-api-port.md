@@ -40,7 +40,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | in progress (feat-port-sitemap) |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
 | 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | todo |
-| T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | todo |
+| T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | in progress (feat-port-sitemap) |
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | todo |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | todo |
@@ -403,7 +403,7 @@ Business rules: legislation year switch on publish; extract the exact condition 
 
 Status: todo (one gap)
 
-Gap: no `CACUser` dataset on `GET /search` (`parity-map.js:426`). Dropped 2026-10-14, not ported. eagle-admin still calls eagle-api `/search?dataset=Project` (`full-project.resolver.ts:29-31`); move it.
+Gap: no `CACUser` dataset on `GET /search` (`parity-map.js:427`). Dropped 2026-10-14, not ported; slice T marks it dropped. eagle-admin still calls eagle-api `/search?dataset=Project` (`full-project.resolver.ts:29-31`); move it.
 
 ### Sitemap
 
@@ -433,7 +433,7 @@ Callers to move: eagle-public `robots.txt` on `develop` and `react` (slice 10b).
 
 Status: todo
 
-Today: eagle-demi-admin `src/api/eagle.ts:32` calls eagle-api `/materialized-views/status`. DEMI has nothing. `parity-map.js:395` marks it internal to Eagle.
+Today: eagle-demi-admin `src/api/eagle.ts:32` calls eagle-api `/materialized-views/status`. DEMI has nothing. `parity-map.js:396` marks it internal to Eagle.
 
 Target: decided 2026-10-14. Keep the eagle-api call until DataBC moves to DEMI `/reports`, then a small eagle-demi-admin slice removes it.
 

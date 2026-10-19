@@ -414,7 +414,7 @@ limit cut it.
 
 The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
 one column (`Comment_No`, `Project GUID`) across every column both files have. `Export_Date` is
-skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group.
+skipped. `group-members` pairs Eagle's member User rows with DEMI's `/groups/:id/members` page, on id.
 `commentperiod-summary` pairs Eagle's `{ Pending, Deferred, Published, Rejected }` counts with
 `eaoStatus` of DEMI's `/comment-periods/:id/summary`, one row per status. `inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element, each
 item carrying its element's `read[]`; it never calls Eagle's item route, which streams the file and
@@ -506,7 +506,8 @@ whole. Leave `--max-pages` off the other runs: a cut parent list turns the orpha
 
 The run exits 1
 when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI target yet print
-`skipped (pending)`; reads that need an id print `skipped: needs --id ...`. `--only <read>` runs
+`skipped (pending)`; reads never ported (`topic-vc`, `search-CACUser`) print `skipped: dropped: ...`;
+reads that need an id print `skipped: needs --id ...`. `--only <read>` runs
 one read, and `--only <dataset>` (`Project`, `CommentPeriod`, ...) every read of that kind, so its
 exit code is the parity of one kind; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
 extra rows cannot be told from a partial slice. The `--report` file lists ids and field names of
