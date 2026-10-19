@@ -1,6 +1,6 @@
 'use strict';
 
-/** Every legislation block an Eagle push sends is kept in `sources.eagle`, never on the row's top level. */
+/** Every legislation block an Eagle push sends is kept on the row and in `sources.eagle`. */
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -25,7 +25,12 @@ test('legislation blocks on an Eagle merge', async (t) => {
     assert.strictEqual(mergeEagleOnlyProject(RAW).sources.eagle.legislation_2002.name, 'Mine 2002');
   });
 
-  await t.test('no block reaches the top level of the row', () => {
-    assert.strictEqual(mergeEagleOnlyProject(RAW).legislation_2002, undefined);
+  await t.test('a block that is not current is on the row', () => {
+    assert.strictEqual(mergeEagleOnlyProject(RAW).legislation_2002.name, 'Mine 2002');
+  });
+
+  await t.test('the current year and the year list are on the row', () => {
+    const row = mergeEagleOnlyProject(RAW);
+    assert.deepStrictEqual([row.currentLegislationYear, row.legislationYearList], ['legislation_2018', [2002, 2018]]);
   });
 });

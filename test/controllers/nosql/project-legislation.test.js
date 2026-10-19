@@ -66,6 +66,16 @@ test('PUT /projects/:id locked Act', async (t) => {
     assert.strictEqual(writes[0].legislationYear, 2018);
   });
 
+  await t.test('a GET body sent back keeps the stored legislation blocks and current year', async () => {
+    const withBlocks = { ...UNDER_2002, currentLegislationYear: 'legislation_2002', legislation_2002: { name: 'Site C' } };
+    const writes = stage(t, [withBlocks]);
+
+    const res = await put({ name: 'Site C', currentLegislationYear: 'legislation_2018', legislation_2002: { name: 'Other' } });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual([writes[0].currentLegislationYear, writes[0].legislation_2002.name], ['legislation_2002', 'Site C']);
+  });
+
   await t.test('a project that moved under a locked Act before the write is a 409', async () => {
     const lost = Object.assign(new Error('etag moved'), { code: 412 });
     const writes = stage(t, [UNDER_2002, UNDER_BCA], async () => { throw lost; });

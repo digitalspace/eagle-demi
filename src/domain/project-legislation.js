@@ -5,9 +5,9 @@
  * `api/helpers/constants.js:55-102` and `api/controllers/project.js:580-600,776-801` (rules in
  * docs/eagle-api-port.md, Project).
  *
- * A DEMI project row is flat: its top level is the current block, as `legislationYear` and its
- * `legislation` label. Every block, `currentLegislationYear` and `legislationYearList` are kept in
- * `sources.eagle` (`merge/project.js`, `flattenEagleProject`).
+ * A DEMI project row's top level is the current block, as `legislationYear` and its `legislation`
+ * label. Every block, `currentLegislationYear` and `legislationYearList` sit beside it and in
+ * `sources.eagle`, which a switch merges again (`merge/project.js`).
  */
 
 /** `label` is the `legislation` string eagle-public matches on; a `locked` Act is never left. */
@@ -61,4 +61,4 @@ function yearSwitch(row, year) {
   return { key };
 }
 
-module.exports = { lockRefusal, yearSwitch };
+module.exports = { LEGISLATIONS, lockRefusal, yearSwitch };

@@ -36,7 +36,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | done (251ab222); Dark: staff-only, no caller |
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
 | 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | todo |
-| 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js`, `merge/project.js` | 0 | M | in progress (feat-port-legislation-switch) |
+| 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js`, `merge/project.js`, `vis/catalog/projects.js` | 0 | M | in progress (feat-port-legislation-switch) |
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | todo |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
 | 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | todo |
@@ -391,7 +391,7 @@ Callers to move: eagle-admin `project.service.ts` extension methods.
 
 ### Project
 
-Status: in progress (feat-port-legislation-switch). PUT lock and the publish year switch done; returning every block on reads is blocked (A2 prerequisites below).
+Status: in progress (feat-port-legislation-switch). PUT lock, publish year switch and every block on reads done.
 
 Today: create, update, delete and level exist (`routes.js:159-178`). Publish through `PUT /projects/:id/level`. Rules in `src/domain/project-legislation.js`, applied by `updateProject` and `setLevel` in `src/controllers/nosql/project.js`.
 
@@ -411,15 +411,17 @@ Business rules (eagle-api `api/controllers/project.js` and `api/helpers/constant
 Decisions:
 - DEMI's PUT stores `legislationYear` and `legislation` as sent, where eagle-api ignored a blank year and always derived the label from the year (`:642-650`). So on a locked project DEMI also refuses a null year and another label; both would move it off the Act.
 - The year switch lives in `setLevel` as an optional `legislationYear`, taken only with level 4 (eagle-api switches on publish only); with a lower level it is a 400 (Daniel 2026-10-19).
-- DEMI stores every legislation block (Daniel 2026-10-19). `flattenEagleProject` (`merge/project.js:242-280`) keeps every `legislation_<year>` block next to `currentLegislationYear` and `legislationYearList` in `sources.eagle`; the row's top level is still the current block. `sources.*` is unindexed and catalogued at maxVis 0, so nothing new reaches a caller.
+- DEMI stores every legislation block (Daniel 2026-10-19). Both merges put every `legislation_<year>` block, `currentLegislationYear` and `legislationYearList` on the row (`legislationFields`, `merge/project.js`), and `flattenEagleProject` keeps the same in `sources.eagle` for a switch to merge again. The row's top level is still the current block. Cosmos indexes none of them (the projects container indexes named paths only).
+- Reads return them redacted (`src/vis/catalog/projects.js`): a block is withheld whole (0/0) and published field by field, each `legislation_<year>.<field>` at the entry of the top-level field of the same name. `type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`. A block field with no top-level counterpart is withheld from every caller. `currentLegislationYear` and `legislationYearList` are public, like `legislationYear`.
+- PUT ignores `currentLegislationYear`, `legislationYearList` and every `legislation_<year>` key, so a GET body sent back is not refused and cannot rewrite Eagle's blocks.
 - Existing rows get their blocks on their next Eagle push, which sends every block (`demiPush.js:113-115`). To fill all at once, run eagle-api `scripts/demi-repush.js` for projects (dry run by default, `--live` to send; its README lists which ids to remove first). No DEMI backfill script: DEMI has no other source for the blocks, as the seed feed hoists only the current one. Until a row is re-pushed, a switch to another year is a 409 (no content), never a wrong write.
 
 Questioned:
 - eagle-api's PUT 404s a year outside the registry (`:646-655`); DEMI's PUT takes any four-digit year. Not ported: only the lock was in scope, and the machine writer also calls this PUT.
 
 A2 prerequisites (eagle-admin `full-project.resolver.ts` reading `GET /projects/:id`):
-- Return every block, `currentLegislationYear` and `legislationYearList` to callers allowed to see the project, redacted like the top-level fields. Needs entries in `src/vis/catalog/projects.js` (owned by slice 8 now): the redactor drops any key with no catalog entry, and `catalog-completeness.test.js` fails on an uncatalogued merge key, so the blocks stay in `sources.eagle` until then. Each block's children need the same `defaultVis`/`maxVis` as the top-level field of the same name, so staff-only fields stay staff-only.
 - `_id`: reads return `eagleId`, not `_id`.
+- Of the block fields in eagle-api's model (`api/helpers/models/project.js:7-97`), only `groups` has no top-level counterpart, so it is withheld from every caller.
 - Joined objects: inside each stored block the push already resolves `eacDecision`, `currentPhaseName` and `CEAAInvolvement` to `{_id, name, type, legislation}` and `applicableRegulation` to its List entry (`demiPush.js:136-149`). `proponent` stays an id with `proponentId` and `proponentName` beside it; the populated Organization eagle-admin reads is not on the row.
 
 Eagle push and a DEMI-set level (`merge/project.js:182-206`, `repositories/documents.js:432-437`):

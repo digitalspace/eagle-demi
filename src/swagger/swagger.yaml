@@ -7770,6 +7770,24 @@ components:
           type: string
           format: date-time
           description: When dispute resolution started, mirrored from Eagle. Staff only.
+        currentLegislationYear:
+          type: string
+          description: >-
+            The current block's key, such as `legislation_2018`. Its content is also the top level.
+            Mirrored from Eagle; `PUT /api/projects/{id}` ignores it, the year moves through
+            `PUT /api/projects/{id}/level`.
+        legislationYearList:
+          type: array
+          items:
+            type: integer
+          description: The years the project has a legislation block for. `PUT` ignores it.
+      additionalProperties:
+        description: >-
+          `legislation_<year>` (1996, 2002, 2018, 2025): the project's content under that Act, as
+          Eagle sent it. Each field is shown at the level of the top-level field of the same name
+          (`type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow
+          `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`);
+          a field with no top-level counterpart is withheld. `PUT` ignores these keys.
 
     OrganizationInput:
       type: object

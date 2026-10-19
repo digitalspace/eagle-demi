@@ -12,7 +12,10 @@
  * A `when` names a predicate in src/vis/predicates.js: true widens the field to `maxVis`, and a
  * dial beats it (§2 item 7). redact.js throws at load on a name predicates.js does not export.
  */
-module.exports = {
+
+const { LEGISLATIONS } = require('../../domain/project-legislation');
+
+const catalog = {
   // Structural / identity.
   id: { defaultVis: 4, maxVis: 4 },
   trackProjectId: { defaultVis: 4, maxVis: 4 },
@@ -58,6 +61,9 @@ module.exports = {
   phaseHistory: { defaultVis: 4, maxVis: 4 },
   legislation: { defaultVis: 4, maxVis: 4 },
   legislationYear: { defaultVis: 4, maxVis: 4 },
+  // Which `legislation_<year>` block is current, and the years the project has one for.
+  currentLegislationYear: { defaultVis: 4, maxVis: 4 },
+  legislationYearList: { defaultVis: 4, maxVis: 4 },
   review180Start: { defaultVis: 4, maxVis: 4 },
   review45Start: { defaultVis: 4, maxVis: 4 },
   reviewExtensions: { defaultVis: 4, maxVis: 4 },
@@ -174,3 +180,21 @@ module.exports = {
   // Writers need it back for optimistic concurrency; every WRITE_ROLES holder is level 2 or lower.
   _etag: { defaultVis: 2, maxVis: 2 }
 };
+
+/** Block fields Eagle names differently from the top-level field they fill (merge TRACK_PRECEDENCE). */
+const EAGLE_BLOCK_NAMES = Object.freeze({
+  type: 'projectType', status: 'projectState', location: 'address', shortName: 'abbreviation',
+  activeStatus: 'isActive', proponent: 'proponentId'
+});
+
+// Each `legislation_<year>` block is withheld whole and published field by field, each child at its
+// top-level field's level; a block field with no top-level counterpart never leaves the API.
+const topLevel = Object.entries(catalog).filter(([key]) => !key.includes('.'));
+for (const year of Object.keys(LEGISLATIONS)) {
+  const block = `legislation_${year}`;
+  catalog[block] = { defaultVis: 0, maxVis: 0 };
+  for (const [field, entry] of topLevel) catalog[`${block}.${field}`] = entry;
+  for (const [eagleName, field] of Object.entries(EAGLE_BLOCK_NAMES)) catalog[`${block}.${eagleName}`] = catalog[field];
+}
+
+module.exports = catalog;

@@ -30,7 +30,8 @@ const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS
+  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS,
+  LEGISLATION_KEY
 } = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
@@ -491,6 +492,8 @@ exports.updateProject = async (req, res) => {
       pinsPublished: _ignoredPinsPublished,
       // Eagle owns the pinned-proponent list and pushes it; a PUT copy would reach anonymous reads.
       pins: _ignoredPins,
+      // Eagle owns the legislation blocks too; the current year moves only through `/level`.
+      currentLegislationYear: _ignoredCurrentYear, legislationYearList: _ignoredYearList,
       // Push bookkeeping. Catalogued at vis 2, so a staff caller CAN see them and would otherwise
       // be able to send them back: an old `eaglePushedAt` makes every later push read as stale, and
       // clearing `cascadePendingAt` loses a cascade the push recorded as still owed.
@@ -509,6 +512,9 @@ exports.updateProject = async (req, res) => {
     // the stored name is the specific one, so honour it over the alias.
     if (wireStatus !== undefined && changes.projectState === undefined) {
       changes.projectState = wireStatus;
+    }
+    for (const key of Object.keys(changes)) {
+      if (LEGISLATION_KEY.test(key)) delete changes[key];
     }
 
     // A field the caller cannot SEE is a field they cannot set. The response is redacted, so a
