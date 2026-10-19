@@ -1383,6 +1383,148 @@ paths:
         '404':
           description: Project not found.
 
+  /api/projects/{id}/extensions:
+    get:
+      summary: List a project's extensions and suspensions
+      description: >-
+        The project's `reviewExtensions` and `reviewSuspensions`, each item with an `id`. An item
+        Eagle wrote has no stored id, so its id is a hash of its content: equal items share it. A
+        list a per-project dial hides from the caller is left out. Needs the role `staff` or
+        `sysadmin`. Answered `Cache-Control: private, no-store`. Not yet called by eagle-admin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: '`{ id, isPublished, reviewExtensions, reviewSuspensions }`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectExtensions'
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found, or not readable by the caller.
+    post:
+      summary: Add an extension or suspension
+      description: >-
+        Appends the item, with a new UUID `id`, to `reviewExtensions` when `type` is `Extension`
+        and to `reviewSuspensions` otherwise, as eagle-api did. Nothing on the review timeline is
+        recalculated. Needs the role `staff` or `sysadmin`. Not yet called by eagle-admin, which
+        still posts to eagle-api.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtensionInput'
+      responses:
+        '201':
+          description: Both lists after the write; the new item is last in its list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectExtensions'
+        '400':
+          description: >-
+            A field is of the wrong type or not in the list, the body names no field, or a
+            per-project dial hides the target list from the caller. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found.
+        '503':
+          description: Another request kept writing the same project, and nothing was saved. Send it again.
+
+  /api/projects/{id}/extensions/{extId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: DEMI project id.
+        schema:
+          type: string
+      - name: extId
+        in: path
+        required: true
+        description: The item `id` from `GET /api/projects/{id}/extensions`.
+        schema:
+          type: string
+    put:
+      summary: Replace an extension or suspension
+      description: >-
+        Replaces the item whole and keeps its `id`: a field the body leaves out is dropped. The
+        item is removed from its list and appended to the list the new `type` names, as eagle-api
+        did. Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtensionInput'
+      responses:
+        '200':
+          description: Both lists after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectExtensions'
+        '400':
+          description: As POST.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project or item not found.
+        '503':
+          description: Another request kept writing the same project. Send it again.
+    delete:
+      summary: Delete an extension or suspension
+      description: >-
+        Removes the item. Equal Eagle items share one id, so all of them go, as eagle-api's
+        whole-object match did. Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Both lists after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectExtensions'
+        '400':
+          description: A per-project dial hides the item's list from the caller.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project or item not found.
+        '503':
+          description: Another request kept writing the same project. Send it again.
+
   /api/documents:
     get:
       summary: List documents
@@ -8068,6 +8210,46 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    ExtensionInput:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: The item eagle-admin's extension form sends. Any other key, `id` included, is a 400.
+      properties:
+        type:
+          type: string
+          maxLength: 50
+          description: '`Extension` files the item under `reviewExtensions`; anything else, or none, under `reviewSuspensions`.'
+        appliedTo:
+          type: string
+          maxLength: 500
+        start:
+          type: string
+          description: ISO 8601 date or date-time.
+          nullable: true
+        end:
+          type: string
+          description: ISO 8601 date or date-time.
+          nullable: true
+
+    ProjectExtensions:
+      type: object
+      properties:
+        id:
+          type: string
+        isPublished:
+          type: boolean
+        reviewExtensions:
+          type: array
+          items:
+            type: object
+            description: The stored item plus its `id`.
+        reviewSuspensions:
+          type: array
+          items:
+            type: object
+            description: The stored item plus its `id`.
 
     NotificationInput:
       type: object

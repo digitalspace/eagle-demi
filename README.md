@@ -587,6 +587,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 <!-- port: users -->
 
 <!-- port: extensions -->
+`GET` and `POST /projects/:id/extensions`, and `PUT` and `DELETE /projects/:id/extensions/:extId` (all staff, sysadmin) are served by DEMI; eagle-admin still calls eagle-api `/project/:projId/extension` until the flip. Differences: each item has an `id` (a UUID for a DEMI item, a content hash for an Eagle one), and PUT and DELETE name it in the path instead of sending the old item; POST answers 201; a body key outside `type`, `appliedTo`, `start`, `end`, or an empty body, is a 400; an unknown project or item is 404. As in eagle-api, `type` `Extension` files under `reviewExtensions`, anything else under `reviewSuspensions`, and the review timeline is not recalculated.
 
 <!-- port: project-legislation -->
 
