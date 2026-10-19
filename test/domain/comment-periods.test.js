@@ -147,6 +147,16 @@ test('comment period domain', async (t) => {
     assert.ok(result.fields.commentTip);
   });
 
+  await t.test('an openHouses entry with a non-string value is a field error', async (t) => {
+    const store = fakeStore(t, null);
+    const result = await period.create(STAFF, {
+      projectId: PROJECT_ID, openHouses: [{ eventDate: '2026-11-03', attendees: 40 }]
+    });
+    assert.strictEqual(result.status, 'invalid');
+    assert.strictEqual(result.fields.openHouses, 'must be an array of at most 50 entries');
+    assert.strictEqual(store.written.length, 0);
+  });
+
   await t.test('update writes the listed fields, keeps project and dateAdded, stamps updatedBy', async (t) => {
     const store = fakeStore(t);
 
