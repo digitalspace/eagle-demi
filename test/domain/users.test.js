@@ -131,6 +131,12 @@ test('user domain', async (t) => {
     assert.deepStrictEqual(rows[0].Detail.fields, ['firstName', 'email', 'orgName']);
   });
 
+  await t.test('an empty string sent in the body is stored as the field default, as eagle-api does', async (t) => {
+    const written = fakeStore(t);
+    await audited(() => user.update(STAFF, USER_ID, { firstName: 'Ada', middleName: '' }));
+    assert.strictEqual(written[0].middleName, null);
+  });
+
   await t.test('update that moves a public user off EAO takes public away, as eagle-api does', async (t) => {
     const written = fakeStore(t);
     await audited(() => user.update(STAFF, USER_ID, { firstName: 'Ada', orgName: 'Teck' }));
