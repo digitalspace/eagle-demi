@@ -34,8 +34,8 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups-write.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | done (5ccd2bf3); Dark: staff-only, no caller |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | done (dda7c901); Dark: staff-only, no caller |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | done (251ab222); Dark: staff-only, no caller |
-| 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
-| 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | todo |
+| 7 | Users | `domain/users.js`, `controllers/native/users.js`, `vis/catalog/users.js` | 1 | S-M | in progress (feat-port-users); Dark: staff-only, no caller |
+| 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | in progress (feat-port-extensions); Dark: staff-only, no caller |
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | in progress (feat-port-sitemap) |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
@@ -357,15 +357,32 @@ Callers to move: eagle-admin `org.service.ts:19,29`.
 
 ### Users
 
-Status: todo
+Status: in progress (feat-port-users), Dark
 
-Today: `GET /users`, `/users/:id` (`routes.js:270-271`), `GET /me` (`routes.js:116`), mirror at `routes.js:250`.
+Today: `GET /users`, `/users/:id` (`routes.js:273-274`), `GET /me` (`routes.js:116`), mirror at `routes.js:253`. Dark: `POST /users` and `PUT /users/:id` are served under the `port: users` anchor in `routes.js`, rules in `src/domain/users.js`, write handlers in `src/controllers/native/users.js` (the reads stay with the mirror in `controllers/nosql/user.js`). eagle-admin still calls eagle-api.
 
 Target routes: `POST /users`, `PUT /users/:id`.
 
-Business rules (eagle-api `api/controllers/user.js`): to extract. Known: eagle-api users are Keycloak-backed; decide which fields DEMI owns versus Keycloak.
+Guards: both are `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]`: eagle-api's scope `project-system-admin` (`swagger.yaml:4613,4661`) plus `sysadmin` and `staff`, which its auth admits on every route (`api/helpers/auth.js:35-43`).
 
-Callers to move: eagle-admin `user.service.ts:13,19`.
+Business rules (eagle-api `api/controllers/user.js`):
+- POST and PUT copy the same 20 body fields: firstName, middleName, lastName, displayName, email, org, orgName, title, phoneNumber, salutation, department, faxNumber, cellPhoneNumber, address1, address2, city, province, country, postalCode, notes (`:18-38,69-90`). None is required. A key outside the list is ignored by eagle-api; DEMI answers 400 naming it. `org` must be an id (an ObjectId in the model); it is not checked against the organizations, as in eagle-api.
+- PUT replaces every field, `value ? value : ''` (`:69-90`). DEMI stores the defaults the Eagle push stores (`controllers/nosql/user.js`): `''`, and `null` for `middleName` and `org`. POST stores the same defaults for a field left out. A PUT body with no field besides `read` and `isPublished` is a 400; eagle-api would blank the row.
+- Read is staff and sysadmin, plus `public` when `orgName` is exactly 'Environmental Assessment Office' (`:39,92`), recomputed on every PUT. The row carries no `write` or `delete` list (`:40-41`); the route guards hold that rule.
+- Create answers 200 (`:51`). DEMI answers 201 with a UUID id, `sourceSystem: 'demi'`, `eagleId: null`, and `addedBy`/`updatedBy`/`dateAdded`/`dateUpdated`, catalogued at level 2.
+- Update with an id that is not an ObjectId is 400 (`:61-63`); a missing user answers 200 with `null` (`:97`). DEMI answers 404 for any id it does not hold, a deleted user included.
+- Each write records an action (`:49,98`). DEMI writes `user.create` and `user.update`, with field names only.
+
+Decisions:
+- Visibility (brief 2026-10-19: never default a ported object to public). `isPublished` replaces the orgName rule as the switch, and the orgName rule stays as a ceiling: create defaults to staff-only; `isPublished: true` is a 400 unless `orgName` is 'Environmental Assessment Office'; a PUT that leaves `isPublished` out keeps the current visibility, but drops `public` when `orgName` moves off that organization. eagle-api would make every such user public on save; at F7 eagle-admin sends `isPublished: true` for an EAO contact that should show. There are no publish and unpublish routes, so PUT carries `isPublished`. Other `read[]` entries are kept.
+- Not ported: `auth.setPassword` (`:45`). Keycloak holds sign-in, eagle-api's User model has no `password` or `salt` field so the hash is never saved, and the mirror drops `password` and `salt`. A `password` in the body is a 400.
+- Not copied: POST audits as 'Put' (`:49`). DEMI writes `user.create`.
+- Dark: a write to an Eagle-mirrored user is replaced by the next Eagle push, and the nightly reconcile reports a DEMI visibility change on such a row as `aclMismatch` until then. A DEMI-created user has no Eagle copy, so the reconcile skips it.
+
+Questioned, decide at F7:
+- Which fields DEMI owns versus Keycloak. Ported as eagle-api's full field set for parity. Name and email also live in Keycloak, and nothing syncs them either way; decide at F7 whether DEMI keeps writing them or reads them from the token.
+
+Callers to move: eagle-admin `user.service.ts:55-62`; its `toEagleUserBody` (`models/demi/user.ts:43`) sends `_id`, which DEMI refuses as an unknown key.
 
 ### CAC
 
@@ -379,15 +396,37 @@ Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`): to extract. K
 
 ### Extensions
 
-Status: todo
+Status: in progress (feat-port-extensions), Dark
 
-Today: `reviewExtensions` is an array on the project, replaced whole through `PUT /projects/:id`.
+Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project (`src/merge/project.js:81`), filled by the Eagle push. Dark: the four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
 
-Target routes: `GET /projects/:id/extensions`, `POST`, `PUT /:id`, `DELETE /:id`.
+Target routes: `GET` and `POST /projects/:id/extensions`, `PUT` and `DELETE /projects/:id/extensions/:extId`.
 
-Business rules (eagle-api `api/controllers/project.js` extension handlers): to extract. Known: an extension changes the project's review timeline; check what else eagle-api recalculates on add or delete.
+Guards: every route is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eagle-api `swagger.yaml:1933,1964,1995`; GET borrows them, eagle-api had no list route).
 
-Callers to move: eagle-admin `project.service.ts` extension methods.
+Business rules (eagle-api `api/controllers/project.js:486-575`):
+- `type` `Extension` goes to `reviewExtensions`; anything else, a missing `type` included, goes to `reviewSuspensions` (`:490,522,551-552`).
+- Add pushes the body onto the list (`:497-501`). Delete pulls every item equal to the `item` query parameter (`:521-528`). Update pulls `old`, then pushes `new` at the end of its list (`:556-570`).
+- Nothing on the review timeline is recalculated (`:486-575`); `review180Start` and the rest stay as stored.
+- A project id that is not an ObjectId is 400 (`:492-494,518-520,545-547`). DEMI takes its own project ids, so any unknown project is 404.
+- An unknown project, or an item not found, is 404 (`:502-503,529-531,559-561`); so is any thrown error, a bad `item` JSON included (`:509-511`).
+- Each write records an action (`Post`, `Delete`, `Put`, kind `Extension`; `:506,533,571`). DEMI writes `extension.create`, `.update` and `.delete`, with `detail` `{ list, extensionId }`, on the project.
+- The model is `Mixed` (`helpers/models/project.js:81-82`), so eagle-api stores any body. eagle-admin sends `type`, `appliedTo`, `start`, `end` (`extension.component.ts:105-110`).
+
+Decisions:
+- DEMI gives each item an `id`: a UUID for an item DEMI adds, kept across a PUT. An Eagle item carries none (eagle-api matched the whole object, `:525-528`), so its id is a hash of its content, the same on every read; equal items share an id, and a delete removes them all, as `$pull` did. DEMI never stamps an id onto an untouched Eagle item, so the nightly parity check sees no change it did not make.
+- PUT and DELETE name the item in the path; there is no `old` body or `item` query.
+- The body takes only `type`, `appliedTo`, `start` and `end` (dates ISO 8601, nullable); any other key, `id` included, is a 400, and so is an empty body (eagle-api would push `{}` into `reviewSuspensions`). PUT replaces the item whole, as eagle-api's pull-then-push did.
+- POST answers 201; every write answers `{ id, isPublished, reviewExtensions, reviewSuspensions }`, redacted as a project. A list a per-project dial hides from the caller is left out of the GET and is a 400 to write.
+- The write is one etag-guarded project upsert, so the remove and add of a PUT land together; eagle-api's two updates could drop the old item and then fail the push.
+- No `vis/catalog/projects.js` edit was needed: both lists are already catalogued, and the redactor does not descend into arrays. Slice 11 is free to edit it.
+- Dark: a DEMI write is replaced by the next Eagle push of that project, and by any merge that rebuilds the row from its stored Eagle copy.
+
+Questioned:
+- Delete removes every equal copy, not one (`:527`). Ported as is through the shared content id.
+- A `type` other than `Extension` lands in `reviewSuspensions` with that type (`:490`). Ported as is; eagle-admin only sends `Extension` and `Suspension`.
+
+Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `editExtension`, `deleteExtension`), from `extension.component.ts:87,115,122`. At the flip (F8) `reviewExtensions` and `reviewSuspensions` leave `EAGLE_ONLY_FIELDS`.
 
 ### Project
 
