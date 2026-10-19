@@ -287,6 +287,8 @@ const idRows = refs => refs.map(ref => ({ _id: String(ref && ref._id ? ref._id :
 /** `{ <eaoStatus>: n }` as one row per status, paired on the status name. */
 const statusRows = counts => Object.entries(counts || {}).map(([status, count]) => ({ _id: status, count }));
 const pending = (read, plan, reason) => ({ read, plan, pending: true, skip: reason });
+// Decided 2026-10-14 (docs/eagle-api-port.md, Decisions): never ported, so never pending.
+const dropped = (read, plan, reason) => ({ read, plan, skip: `dropped: ${reason}` });
 // DEMI sets x-total-count on GET and HEAD of /search; this script sends GET only.
 const HEAD_REASON = 'HEAD not sent by this script';
 
@@ -309,12 +311,11 @@ const REST_READS = [
     eagle: pagedRows('/public/project/:project/pin', undefined, FACET), demi: one('/projects/:project', 'pins') },
   { read: 'pins', plan: '9', identities: STAFF, dataset: 'Pin',
     eagle: pagedRows('/project/:project/pin', undefined, FACET), demi: one('/projects/:project', 'pins') },
-  // Eagle answers the member User rows in a count facet, DEMI the Group with member ids.
+  // Eagle answers the member User rows in a count facet, DEMI a native page of them; paired on id.
   { read: 'group-members', plan: '10', identities: STAFF, dataset: 'Group', fields: [],
     eagle: rows('/project/:project/group/:group/members', undefined, FACET),
-    demi: one('/groups/:group'),
-    mapEagle: idRows,
-    mapDemi: groups => idRows(groups.flatMap(g => g.members || [])) },
+    demi: native('/groups/:group/members'),
+    mapEagle: idRows },
   { read: 'featured-public', plan: '11', identities: ANON, dataset: 'Document',
     eagle: rows('/Public/project/:project/FeaturedDocuments'), demi: native('/documents', FEATURED) },
   { read: 'featured', plan: '13', identities: STAFF, dataset: 'Document',
@@ -380,7 +381,7 @@ const REST_READS = [
     // sort key, which `/updates` does not take, so a pinned row older than the newest four differs.
     eagle: rows('/public/recentActivity', { top: 'true' }),
     demi: { ...native('/updates', { sort: '-publishDate', pageSize: '4' }), paged: false } },
-  pending('topic-vc', '43-46', 'no DEMI Topic or Vc kind yet (S9)'),
+  dropped('topic-vc', '43-46', 'no caller, and Eagle holds no topic or vc data'),
   // Item ids of one element. Eagle's item route streams the file and records a download, so the
   // element row's `items` refs stand in for it.
   { read: 'inspection-item', plan: '47', identities: STAFF, dataset: 'InspectionItem', fields: [],
@@ -423,7 +424,7 @@ const SEARCH_READS = [
   ...Object.entries(STAFF_LISTS).map(([dataset, target]) =>
     ({ read: `search-${dataset}`, plan: '55', identities: STAFF, dataset, eagle: search(dataset), ...target })),
   pending('search-Item', '55-56', 'needs an id per _schemaName; not wired to --id yet'),
-  pending('search-CACUser', '55-56', 'no DEMI CACUser dataset yet (S9)')
+  dropped('search-CACUser', '55-56', 'no caller; CAC members live in eagle-notify')
 ];
 
 const PARITY_MAP = [...REST_READS, ...SEARCH_READS];

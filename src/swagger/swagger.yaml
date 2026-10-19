@@ -458,6 +458,26 @@ paths:
             A query parameter this endpoint does not read, including every filter parameter
             `/api/search` accepts, or an unknown record type in `datasets`.
 
+  /api/sitemap.xml:
+    get:
+      summary: Sitemap of every public project page, for search engines
+      description: >-
+        Unauthenticated. Replaces eagle-api `GET /api/public/sitemap.xml`. One `<url>` per project
+        an anonymous visitor can read that has an Eagle id: `loc` is `<LINK_BASE_URL>/p/<eagleId>`,
+        `lastmod` the project's `dateUpdated` (its current legislation block's) as `YYYY-MM-DD`,
+        left out when the project has none. A project with no Eagle id is not listed. Sorted by
+        Eagle id, at most 50,000 entries (the sitemap protocol limit; more are cut and logged).
+        Built at most once an hour per instance; every caller gets the same anonymous answer.
+      responses:
+        '200':
+          description: The sitemap. `Cache-Control` is `public, max-age=3600`.
+          content:
+            application/xml:
+              schema:
+                type: string
+        '500':
+          description: The project read failed. Not cached; the next request builds again.
+
   /api/health/search-schema:
     get:
       summary: Can the live search indexes answer what this app asks them?
@@ -1382,6 +1402,148 @@ paths:
           description: Forbidden. Requires role sysadmin.
         '404':
           description: Project not found.
+
+  /api/projects/{id}/extensions:
+    get:
+      summary: List a project's extensions and suspensions
+      description: >-
+        The project's `reviewExtensions` and `reviewSuspensions`, each item with an `id`. An item
+        Eagle wrote has no stored id, so its id is a hash of its content: equal items share it. A
+        list a per-project dial hides from the caller is left out. Needs the role `staff` or
+        `sysadmin`. Answered `Cache-Control: private, no-store`. Not yet called by eagle-admin.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: '`{ id, isPublished, reviewExtensions, reviewSuspensions }`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectExtensions'
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found, or not readable by the caller.
+    post:
+      summary: Add an extension or suspension
+      description: >-
+        Appends the item, with a new UUID `id`, to `reviewExtensions` when `type` is `Extension`
+        and to `reviewSuspensions` otherwise, as eagle-api did. Nothing on the review timeline is
+        recalculated. Needs the role `staff` or `sysadmin`. Not yet called by eagle-admin, which
+        still posts to eagle-api.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtensionInput'
+      responses:
+        '201':
+          description: Both lists after the write; the new item is last in its list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectExtensions'
+        '400':
+          description: >-
+            A field is of the wrong type or not in the list, the body names no field, or a
+            per-project dial hides the target list from the caller. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found.
+        '503':
+          description: Another request kept writing the same project, and nothing was saved. Send it again.
+
+  /api/projects/{id}/extensions/{extId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: DEMI project id.
+        schema:
+          type: string
+      - name: extId
+        in: path
+        required: true
+        description: The item `id` from `GET /api/projects/{id}/extensions`.
+        schema:
+          type: string
+    put:
+      summary: Replace an extension or suspension
+      description: >-
+        Replaces the item whole and keeps its `id`: a field the body leaves out is dropped. The
+        item is removed from its list and appended to the list the new `type` names, as eagle-api
+        did. Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtensionInput'
+      responses:
+        '200':
+          description: Both lists after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectExtensions'
+        '400':
+          description: As POST.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project or item not found.
+        '503':
+          description: Another request kept writing the same project. Send it again.
+    delete:
+      summary: Delete an extension or suspension
+      description: >-
+        Removes the item. Equal Eagle items share one id, so all of them go, as eagle-api's
+        whole-object match did. Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Both lists after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectExtensions'
+        '400':
+          description: A per-project dial hides the item's list from the caller.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project or item not found.
+        '503':
+          description: Another request kept writing the same project. Send it again.
 
   /api/documents:
     get:
@@ -4095,6 +4257,42 @@ paths:
         '401':
           description: A Bearer token was sent and rejected.
 
+    post:
+      summary: Create a user
+      description: >-
+        Adds a `User` row with a new UUID id. Needs the role `project-system-admin`, `sysadmin` or
+        `staff`. Every field is optional; one left out is stored empty (`null` for `middleName` and
+        `org`). It reads staff-only unless `isPublished` is true, which only a user whose `orgName`
+        is `Environmental Assessment Office` may be. `read` in the body is ignored. There is no
+        password: sign-in is Keycloak's.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserInput'
+      responses:
+        '201':
+          description: The created row.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            A field over its limit, of the wrong type or not in the list below, an `org` that is not
+            an id, or `isPublished` true outside the Environmental Assessment Office. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '503':
+          description: >-
+            Another request kept writing the same user, and nothing was saved. Send the same body
+            again. Body `{ error: "The record is being written by another request. Try again." }`.
+
   /api/users/{id}:
     get:
       summary: Read one mirrored user
@@ -4123,6 +4321,51 @@ paths:
           description: A Bearer token was sent and rejected.
         '404':
           description: User not found.
+    put:
+      summary: Replace a user
+      description: >-
+        Replaces every field of a user, as eagle-api did: a field left out, or sent empty, is
+        stored empty (`null` for `middleName` and `org`). Needs the role `project-system-admin`,
+        `sysadmin` or `staff`. `isPublished` left out keeps the current visibility, except that a
+        user whose `orgName` is no longer `Environmental Assessment Office` stops being public.
+        `read` is ignored. A body with no field besides `isPublished` and `read` is a 400.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`, or the UUID of a user DEMI created).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserInput'
+      responses:
+        '200':
+          description: The updated row.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            No field to write, a field over its limit, of the wrong type, not in the list or hidden
+            from the caller, or `isPublished` true outside the Environmental Assessment Office.
+            Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: User not found.
+        '503':
+          description: >-
+            Another request kept writing the same user, and nothing was saved. Send the same body
+            again. Body `{ error: "The record is being written by another request. Try again." }`.
 
   /api/groups:
     get:
@@ -7802,6 +8045,65 @@ components:
               default: false
               description: Readable by the public from the start.
 
+    UserInput:
+      type: object
+      description: >-
+        Every field is optional and nullable. `read` is ignored. Any other field is a 400.
+      properties:
+        firstName:
+          $ref: '#/components/schemas/UserText'
+        middleName:
+          $ref: '#/components/schemas/UserText'
+        lastName:
+          $ref: '#/components/schemas/UserText'
+        displayName:
+          $ref: '#/components/schemas/UserText'
+        email:
+          $ref: '#/components/schemas/UserText'
+        org:
+          type: string
+          nullable: true
+          description: The organization id (a 24-hex Eagle id or a UUID). Not checked against the organizations.
+        orgName:
+          $ref: '#/components/schemas/UserText'
+        title:
+          $ref: '#/components/schemas/UserText'
+        phoneNumber:
+          $ref: '#/components/schemas/UserText'
+        salutation:
+          $ref: '#/components/schemas/UserText'
+        department:
+          $ref: '#/components/schemas/UserText'
+        faxNumber:
+          $ref: '#/components/schemas/UserText'
+        cellPhoneNumber:
+          $ref: '#/components/schemas/UserText'
+        address1:
+          $ref: '#/components/schemas/UserText'
+        address2:
+          $ref: '#/components/schemas/UserText'
+        city:
+          $ref: '#/components/schemas/UserText'
+        province:
+          $ref: '#/components/schemas/UserText'
+        country:
+          $ref: '#/components/schemas/UserText'
+        postalCode:
+          $ref: '#/components/schemas/UserText'
+        notes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        isPublished:
+          type: boolean
+          description: >-
+            Readable by the public. Only for a user whose `orgName` is `Environmental Assessment
+            Office`. Create defaults to false; a PUT that leaves it out keeps the current value.
+    UserText:
+      type: string
+      maxLength: 1000
+      nullable: true
+
     CommentPeriodUpdate:
       type: object
       description: Every field is optional. `read` and `isPublished` are ignored.
@@ -8068,6 +8370,46 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    ExtensionInput:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: The item eagle-admin's extension form sends. Any other key, `id` included, is a 400.
+      properties:
+        type:
+          type: string
+          maxLength: 50
+          description: '`Extension` files the item under `reviewExtensions`; anything else, or none, under `reviewSuspensions`.'
+        appliedTo:
+          type: string
+          maxLength: 500
+        start:
+          type: string
+          description: ISO 8601 date or date-time.
+          nullable: true
+        end:
+          type: string
+          description: ISO 8601 date or date-time.
+          nullable: true
+
+    ProjectExtensions:
+      type: object
+      properties:
+        id:
+          type: string
+        isPublished:
+          type: boolean
+        reviewExtensions:
+          type: array
+          items:
+            type: object
+            description: The stored item plus its `id`.
+        reviewSuspensions:
+          type: array
+          items:
+            type: object
+            description: The stored item plus its `id`.
 
     NotificationInput:
       type: object
