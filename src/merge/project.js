@@ -274,6 +274,8 @@ function flattenEagleProject(doc, orgs) {
   for (const field of EAGLE_TOP_LEVEL_FIELDS) {
     if (doc[field] !== undefined) flat[field] = doc[field];
   }
+  // Every block rides along, so `sources.eagle` can be flattened again under another year.
+  for (const k of legislationKeys) flat[k] = doc[k];
   return normalizeEagleSlot(flat, orgs);
 }
 
