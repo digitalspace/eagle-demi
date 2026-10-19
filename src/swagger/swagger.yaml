@@ -4193,6 +4193,49 @@ paths:
             past the depth cap.
         '401':
           description: A Bearer token was sent and rejected.
+    post:
+      summary: Create a group
+      description: >-
+        Adds a contact group under `projectId`, with a new UUID id and no members. Needs the role
+        `project-system-admin`, `staff` or `sysadmin`. A group is never public: it reads
+        `project-system-admin`, `staff` and `sysadmin`, capped by its project. `name` defaults to
+        an empty string. Not yet called by eagle-admin.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - projectId
+              properties:
+                projectId:
+                  type: string
+                  description: A DEMI project id.
+                name:
+                  type: string
+                  maxLength: 500
+      responses:
+        '201':
+          description: The created row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            A field is over its limit, of the wrong type, or not in the list, or `projectId` names
+            no project DEMI holds. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '503':
+          description: >-
+            Another request kept writing the same group, and nothing was saved. Send the same body
+            again. Body `{ error: "The record is being written by another request. Try again." }`.
 
   /api/groups/{id}:
     get:
@@ -4202,12 +4245,7 @@ paths:
         `projectEagleId` from the parent project. A record the caller cannot read, or one Eagle
         deleted, is a 404 to every caller, the same as one that does not exist. Takes no query parameters.
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: The record id (the Eagle `_id`).
-          schema:
-            type: string
+        - $ref: '#/components/parameters/GroupId'
       responses:
         '200':
           description: The record.
@@ -4221,6 +4259,206 @@ paths:
           description: A Bearer token was sent and rejected.
         '404':
           description: Group not found.
+    put:
+      summary: Rename a group
+      description: >-
+        Sets `name`, `dateUpdated` and `updatedBy`. Needs the role `project-system-admin`, `staff`
+        or `sysadmin`. Any other field, or a body without `name`, is a 400: members change through
+        `/api/groups/{id}/members`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/GroupId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: The updated row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: A field is invalid or not writable. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Group not found.
+        '503':
+          description: Another request kept writing the same group. Send it again.
+    delete:
+      summary: Delete a group
+      description: >-
+        Removes the group for good, on the revision it read. Needs the role
+        `project-system-admin`, `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/GroupId'
+      responses:
+        '200':
+          description: The deleted row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Group not found.
+        '503':
+          description: Another request kept writing the same group. Send it again.
+
+  /api/groups/{id}/members:
+    get:
+      summary: List a group's members
+      description: >-
+        The group's members as `GET /api/users` answers them: same parameters, sort keys, paging,
+        `x-total-count` and audit, limited to the group's member ids. Needs the role
+        `project-system-admin`, `staff` or `sysadmin`. A group with no members answers an empty
+        list.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/GroupId'
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number.
+          schema:
+            type: integer
+            minimum: 1
+        - $ref: '#/components/parameters/MirrorPageSize'
+        - name: sort
+          in: query
+          required: false
+          description: '`displayName`, `orgName`, `email` or `phoneNumber`; a leading `-` sorts descending.'
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          description: Case-insensitive contains match on `displayName` and `email`.
+          schema:
+            type: string
+        - name: count
+          in: query
+          required: false
+          description: '`true` adds the `x-total-count` header.'
+          schema:
+            type: string
+            enum: ['true']
+      responses:
+        '200':
+          description: One page of users, with hidden fields left out.
+          headers:
+            x-total-count:
+              description: Members matching the query. Only with `count=true`.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '400':
+          description: Unknown or repeated parameter, a sort key off the list, or a page past the depth cap.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Group not found.
+    post:
+      summary: Add members to a group
+      description: >-
+        Appends the user ids in `members` that the group does not hold yet; an id it already holds
+        is skipped, and a body that adds nothing writes nothing. Needs the role
+        `project-system-admin`, `staff` or `sysadmin`. eagle-api takes a bare array; DEMI takes
+        `{ members }`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/GroupId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - members
+              properties:
+                members:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: string
+                    description: A user id (24-hex Eagle id or UUID).
+      responses:
+        '200':
+          description: The group, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: '`members` is missing, not an array of ids, or over 100. Body `{error, fields}`.'
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Group not found.
+        '503':
+          description: Another request kept writing the same group. Send it again.
+
+  /api/groups/{id}/members/{userId}:
+    delete:
+      summary: Remove a member from a group
+      description: >-
+        Removes `userId` from the group's members. An id the group does not hold writes nothing
+        and answers 200. Needs the role `project-system-admin`, `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/GroupId'
+        - name: userId
+          in: path
+          required: true
+          description: The user id (24-hex Eagle id or UUID).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The group, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: '`userId` is not an id. Body `{error, fields}`.'
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Group not found.
+        '503':
+          description: Another request kept writing the same group. Send it again.
 
   /api/inspections:
     get:
@@ -6828,6 +7066,13 @@ components:
       in: path
       required: true
       description: DEMI id, or the 24-hex Eagle id.
+      schema:
+        type: string
+    GroupId:
+      name: id
+      in: path
+      required: true
+      description: The record id (the Eagle `_id`, or the UUID of a group DEMI created).
       schema:
         type: string
 
