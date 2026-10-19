@@ -31,7 +31,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); Dark: staff-only, no caller; publish/unpublish added (86c68044) |
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods-write.js`, `repositories/comment-periods.js` | 0 | M | done (ab0292ec); Dark: staff-only, no caller |
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | done (b3ebe499); Dark: staff-only, no caller |
-| 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | todo |
+| 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups-write.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | in progress (feat-port-groups) |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | todo |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications.js`, `repositories/notifications.js` | 0 | S-M | todo |
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
@@ -244,15 +244,28 @@ Callers to move: eagle-admin `comment.service.ts:47,52,73,139`.
 
 ### Project groups
 
-Status: todo
+Status: Dark
 
-Today: `GET /groups`, `GET /groups/:id` (`routes.js:272-273`), Eagle mirror at `routes.js:251`. Members need `/groups/:id` then `/users?ids=`.
+Today: `GET /groups`, `GET /groups/:id` (`routes.js:275-276`), Eagle mirror at `routes.js:254`. Dark: the six routes are served under the `port: groups` anchor (`routes.js:381`), rules in `src/domain/groups.js`, write handlers in `src/controllers/native/groups-write.js`, the members read in `src/controllers/native/groups.js`. eagle-admin still calls eagle-api.
 
 Target routes: `GET /groups/:id/members`, `POST /groups`, `PUT /groups/:id`, `DELETE /groups/:id`, `POST /groups/:id/members`, `DELETE /groups/:id/members/:userId`.
 
-Business rules (eagle-api `api/controllers/projectGroup.js`): to extract. Known: a group belongs to one project; members are user ids.
+Guards: every route is `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]` (eagle-api `swagger.yaml:1878,2054,2086,2151,2188,2268`).
 
-Callers to move: eagle-admin `project.service.ts` group and member methods.
+Business rules (eagle-api `api/controllers/projectGroup.js`):
+- A group belongs to one project (`:21`) and reads `project-system-admin`, `sysadmin` and `staff` (`:22-24`). DEMI takes `projectId` (a project DEMI holds, else 400) in the body, caps that read under the project's (`eagleReadUnder`, as the mirror does), never opens it to `public`, and keeps the uncapped read in `sources.demi.read` for the project cascade (`groups.setAclForProject`). The row carries no `write` or `delete` list; the route guards hold that rule.
+- `name` defaults to an empty string (Group model). Create answers 201 with a UUID id, `sourceSystem: 'demi'`, no members, and `addedBy`/`updatedBy`/`dateAdded`/`dateUpdated`.
+- DELETE is a hard delete (`findOneAndDelete`, `:68`); DEMI removes the row on the revision it read.
+- Removing a member is a `$pull` (`:190-193`). An id the group does not hold answers 200 and writes nothing.
+- The members read returns the group's members through the users read (`:150-168`): DEMI runs `GET /users` limited to the member ids, so sort keys, paging, `count`, redaction and the `users.list` audit are the users read's. A missing group is a 404 where eagle-api answers `[{ total_items: 0 }]`.
+- Each write records an action (`Add`, `Put`, `Delete`, `Add GroupMember`, `Delete GroupMember`). DEMI writes `group.create`, `.update`, `.delete`, `.addMembers` and `.removeMember`; update carries field names only, the member writes the user ids.
+
+Decisions:
+- PUT applies the whole body in eagle-api (`:48`). DEMI takes `name` only; members move through the member routes, and any other key is a 400.
+- Adding members allows duplicates in eagle-api (`:92-95`). DEMI adds only ids the group does not hold, recomputed on the re-read row after a lost etag race; a body that adds nothing writes nothing. The body is `{ members }` (at most 100 ids), not a bare array.
+- Dark: a write to an Eagle-mirrored group is replaced by the next Eagle push.
+
+Callers to move: eagle-admin `project.service.ts:252,256,262,266,270` and the members read.
 
 ### Updates (recent activity)
 

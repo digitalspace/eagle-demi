@@ -578,6 +578,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 `POST /comments`, `PUT /comments/:id` and `PUT /comments/:id/status` (all staff, sysadmin) are served by DEMI; eagle-admin still calls eagle-api until the flip. Differences: create takes `periodId` for `period`, answers 201 with a UUID id, stamps `dateUpdated`, and reads staff-only when `eaoStatus` is absent; a malformed `documents` or `valuedComponents` id, or a period DEMI does not hold, is a 400; PUT writes only the listed fields, answers 400 for `documents` and 404 for a missing row, and, as in eagle-api, moves the read when `eaoStatus` is given; the status body is `{ status }`, not `{ status: { status } }`, and an unknown status is a 400; a published comment reads public only while its period does.
 
 <!-- port: groups -->
+`POST /groups`, `PUT` and `DELETE /groups/:id`, `GET` and `POST /groups/:id/members`, and `DELETE /groups/:id/members/:userId` (all project-system-admin, staff, sysadmin) are served by DEMI; eagle-admin still calls eagle-api `/project/:projId/group...` until the flip. Differences: the project is `projectId` in the create body, not the path, and create answers 201 with a UUID id; PUT writes `name` only and answers 404 for a missing row; the add body is `{ members }`, not a bare array, and an id the group already holds is skipped; the members read is `GET /users` limited to the group's members, with its parameters and fields, and a missing group is a 404, not `[{ total_items: 0 }]`.
 
 <!-- port: updates -->
 
