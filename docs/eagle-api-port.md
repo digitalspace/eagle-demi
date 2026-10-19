@@ -520,7 +520,7 @@ Status: Dropped (decided 2026-10-14). Not ported.
 
 Reason: no caller in eagle-admin or eagle-public, eagle-api removed their write handlers (commit b072e79), and they hold no data.
 
-Retire: delete the eagle-api topic and vc routes and models when eagle-api's remaining handlers retire.
+Retire: eagle-api topic and vc routes removed in R1 (681b483). The models stay because search and item reads use them.
 
 ## Consumer cutover
 
@@ -539,14 +539,12 @@ Document feature: DEMI has no `MAX_FEATURE_DOCS` cap (eagle-api `document.js:919
 Status: dead handlers done (eagle-api 681b483, slice R1); per-object retire todo
 
 Dead now, no caller found in any repo (external callers unverified where noted):
-- `topic` and `vc` routes and models
 - `cac` admin handlers (`protectedPublishCAC`, `protectedUnPublishCAC`, `protectedCreateCAC`, `protectedCACDelete`, `protectedCACRemoveMember`): already removed in eagle-api (b072e79)
 - `inspection` POSTs: already removed in eagle-api (b072e79). `protectedElementItemGet` remains.
 - `materialized-view` `protectedRefresh`
 - `POST /public/comment`, `POST /public/document`
 - `GET /audit` (no handler file, 404 on prod), `POST /task`
-- `job` `listJobs`
-- `login` (`POST /login/token`, replaced by Keycloak)
+- `login` (`POST /login/token`): not dead, kept in R1 (681b483) because eagle-admin uses it for local login when Keycloak is off
 - `pin` routes under `/project/:id/pin*` and `/public/project/:id/pin`, with the project flip
 
 Retire after their object above is done: every handler named under "Callers to move".
