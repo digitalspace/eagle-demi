@@ -540,19 +540,7 @@ test("recent activity compares Eagle's top 4 with DEMI's 4 latest by publishDate
   assert.deepStrictEqual(read, ['/api/updates?sort=-publishDate&pageSize=4']);
 });
 
-test('a read on a DEMI route not shipped yet is skipped as pending, asks Eagle nothing and exits 0', async () => {
-  const h = harness((host) => (host === 'demi.test' ? json({ error: 'Not found' }, 404) : assert.fail('Eagle not asked')),
-    { env: { PARITY_TOKEN: TOKEN } });
-  const code = await run([...staff, '--only', 'ProjectNotification'], h.deps);
-  assert.strictEqual(code, 0);
-  assert.deepStrictEqual(h.out.slice(0, 2).map(line => line.replace(/ identity=.*/, '')),
-    ['[parity] project-notification-list', '[parity] search-ProjectNotification']);
-  assert.match(h.out[0], /skipped \(pending\): DEMI \/notifications answers 404/);
-  // One probe per route, not one per read.
-  assert.deepStrictEqual(h.calls.map(c => c.url.pathname), ['/api/notifications']);
-});
-
-test('a pending route that answers anything but 404 is read, so a broken route fails rather than skips', async () => {
+test('a DEMI notifications read that answers an error fails the run rather than skips', async () => {
   const h = harness((host) => (host === 'demi.test' ? json({}, 403) : json(searchBody([]))), { env: { PARITY_TOKEN: TOKEN } });
   const code = await run([...staff, '--only', 'search-ProjectNotification'], h.deps);
   assert.strictEqual(code, 1);

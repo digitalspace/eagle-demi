@@ -650,10 +650,6 @@ async function run(argv, deps = {}) {
     }
     try {
       tokens.startRead();
-      if (entry.pendingRoute && !await routeLive(entry.pendingRoute)) {
-        record(entry, { status: 'skipped', pending: true, reason: `DEMI ${entry.pendingRoute} answers 404: its route has not shipped` });
-        continue;
-      }
       const ids = { ...args.ids };
       for (const name of needed.filter(n => DEMI_IDS[n])) ids[name] = await resolveDemiId(name);
       const sideOf = async (api, spec, map) => {

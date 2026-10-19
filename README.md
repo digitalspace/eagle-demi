@@ -409,9 +409,6 @@ reports as truncated. Each truncated read has a `truncatedReason` in the report 
 which side, and whether paging stopped (`--max-pages`, the anonymous page depth) or the 1000-row
 limit cut it.
 
-Reads on `/notifications` wait for that route (branch `feat-native-updates-notifications`). The
-run sends one GET to it first; a 404 skips its reads as `skipped (pending)`, and any other answer
-runs them, so a broken route fails rather than hides.
 `featured-public` and `featured` read native `/documents` with `isFeatured=true` and
 `sort=-datePosted`, the query eagle-public's featured list sends, and compare every featured row.
 
