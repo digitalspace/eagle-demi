@@ -409,9 +409,9 @@ reports as truncated. Each truncated read has a `truncatedReason` in the report 
 which side, and whether paging stopped (`--max-pages`, the anonymous page depth) or the 1000-row
 limit cut it.
 
-Reads on `/updates` and `/notifications` wait for those routes (branch
-`feat-native-updates-notifications`). The run sends one GET to each first; a 404 skips its reads as
-`skipped (pending)`, and any other answer runs them, so a broken route fails rather than hides.
+Reads on `/notifications` wait for that route (branch `feat-native-updates-notifications`). The
+run sends one GET to it first; a 404 skips its reads as `skipped (pending)`, and any other answer
+runs them, so a broken route fails rather than hides.
 `featured-public` and `featured` read native `/documents` with `isFeatured=true` and
 `sort=-datePosted`, the query eagle-public's featured list sends, and compare every featured row.
 
@@ -431,8 +431,9 @@ organization and comment period routes answer only the fields on their controlle
 `ALLOWED_FIELDS`, so those reads compare nothing else (no address fields or staff dates, no `commentIdCount`);
 Eagle's `dataset=Organization` and `dataset=CommentPeriod` search reads still compare them. Pins,
 comments and the staff project list come back as `[{ total_items, results }]`; each page is
-unwrapped to its `results`. `recent-activity-top` compares Eagle's newest four with
-`/updates?sort=-dateAdded&pageSize=4`.
+unwrapped to its `results`. `recent-activity-top` compares Eagle's top four with
+`/updates?sort=-publishDate&pageSize=4`; Eagle puts pinned updates first, so a pinned update older
+than the newest four shows as a difference.
 
 It only sends GET, at most two requests a second per API, and retries once on 429 or 5xx. It never
 calls Eagle's public download route, which counts hits. Keyword searches still send Eagle analytics
@@ -581,6 +582,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 `POST /groups`, `PUT` and `DELETE /groups/:id`, `GET` and `POST /groups/:id/members`, and `DELETE /groups/:id/members/:userId` (all project-system-admin, staff, sysadmin) are served by DEMI; eagle-admin still calls eagle-api `/project/:projId/group...` until the flip. Differences: the project is `projectId` in the create body, not the path, and create answers 201 with a UUID id; PUT writes `name` only and answers 404 for a missing row; the add body is `{ members }`, not a bare array, and an id the group already holds is skipped; the members read is `GET /users` limited to the group's members, with its parameters and fields, and a missing group is a 404, not `[{ total_items: 0 }]`.
 
 <!-- port: updates -->
+`POST /updates`, `PUT /updates/:id` and `DELETE /updates/:id` (all project-system-admin, sysadmin, staff) are served by DEMI; eagle-admin still calls eagle-api until the flip. Differences: create takes `projectId` for `project`, answers 201 with a UUID id, and a `projectId` DEMI does not hold is a 400; PUT changes only the fields given, keeps the status when the body names neither `status` nor `active`, answers 404 for a missing row, and takes the client's `_etag` instead of `dateUpdated` for the 409; image `alt`, `caption` and `credit` with HTML tags are a 400 rather than stripped; a published update reads public only while its project does; DELETE answers the archived row. As in eagle-api, images uploaded from the Update form go public with their update, but only while its project is public, and back to staff-only (level 2) once no published update shows them.
 
 <!-- port: notifications -->
 

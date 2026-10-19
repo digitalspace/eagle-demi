@@ -13,6 +13,7 @@ module.exports = {
   // Structural / identity.
   id: { defaultVis: 4, maxVis: 4 },
   eagleId: { defaultVis: 4, maxVis: 4 },
+  sourceSystem: { defaultVis: 4, maxVis: 4 },
   // The EAGLE project id, not the DEMI one — see repositories/updates.js SCOPE_FIELD.
   projectId: { defaultVis: 4, maxVis: 4 },
   isPublished: { defaultVis: 4, maxVis: 4 },
@@ -69,5 +70,8 @@ module.exports = {
   notifyCancelledAt: { defaultVis: 2, maxVis: 2 },
   notifyAttempts: { defaultVis: 2, maxVis: 2 },
   eaglePushedAt: { defaultVis: 2, maxVis: 2 },
+  // Stamped by a DEMI write (domain/updates.js); the mirror does not carry them.
+  addedBy: { defaultVis: 2, maxVis: 2 },
+  updatedBy: { defaultVis: 2, maxVis: 2 },
   _etag: { defaultVis: 2, maxVis: 2 }
 };

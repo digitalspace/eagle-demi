@@ -387,6 +387,9 @@ const routes = [
   { method: 'delete', path: '/groups/:id/members/:userId', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/groups-write').removeGroupMember },
 
   // port: updates
+  { method: 'post', path: '/updates', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/updates-write').createUpdate },
+  { method: 'put', path: '/updates/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/updates-write').updateUpdate },
+  { method: 'delete', path: '/updates/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/updates-write').archiveUpdate },
 
   // port: notifications
 

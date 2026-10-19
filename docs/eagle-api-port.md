@@ -32,7 +32,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods-write.js`, `repositories/comment-periods.js` | 0 | M | done (ab0292ec); Dark: staff-only, no caller |
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | done (b3ebe499); Dark: staff-only, no caller |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups-write.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | done (5ccd2bf3); Dark: staff-only, no caller |
-| 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | todo |
+| 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | in progress (feat-port-updates) |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications.js`, `repositories/notifications.js` | 0 | S-M | todo |
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
 | 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | todo |
@@ -269,13 +269,25 @@ Callers to move: eagle-admin `project.service.ts:252,256,262,266,270` and the me
 
 ### Updates (recent activity)
 
-Status: todo
+Status: in progress (feat-port-updates), Dark
 
-Today: `GET /updates`, `/updates/feed`, `/updates/:id` (`routes.js:298-300`), mirror at `routes.js:245`. `README.md:401-402` and `parity-map.js:292` still say `/updates` is pending; fix that doc line in this task.
+Today: reads at `routes.js:301-303`, Eagle mirror at `routes.js:245`. Dark: the three write routes are served under the `port: updates` anchor, rules in `src/domain/updates.js`, handlers in `src/controllers/native/updates-write.js`. Guards: `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]`, eagle-api's scope (`swagger.yaml:3142,3191,3222`) plus `sysadmin` and `staff`. eagle-admin still calls eagle-api.
 
 Target routes: `POST /updates`, `PUT /updates/:id`, `DELETE /updates/:id`.
 
-Business rules (eagle-api `api/controllers/recentActivity.js`): to extract. Known: pinned updates sort first and the public feed shows the top 4 (`parity-map.js:379-382` compares the wrong sort; fix with this object).
+Business rules (eagle-api `api/controllers/recentActivity.js`, `api/helpers/updateRules.js`):
+- The read follows the status alone: `published` is public plus staff and sysadmin, anything else staff and sysadmin, capped under the parent project or notification (`update-parent:readUnder`). With no status, `active: true` publishes, as `applyStatus` derives it; no status and no `active` is a draft.
+- Publishing with no `publishDate` stamps now, unless the row was already live; a null `publishDate` on PUT keeps the stored one.
+- Create starts unpinned and ignores `_id`, `read`, `notifiedAt` and `pinned`; `notificationName` is kept only on the type `Project Notification Public Comment Period`.
+- Field checks are `updateRules.validate`. A published update's documents must be public (anonymous `documents.listByIdsUnscoped`), except its own uploads, and except on a pin toggle.
+- Image cascade (`src/domain/update-images.js`, eagle-api `updateImages.js`): publishing an update first publishes its own uploads (`documentSource: 'UPDATE'`, same parent), and a failed save reverts them. Only when the update's parent-capped read is public: an image never rises above its project, the rule `setLevel` enforces with a 409, where eagle-api had no cap. After a save, uploads no published update shows (`updates.listShowingDocuments`) go back to level 2: on a live update only the images it dropped, otherwise all of its images, and all of them on DELETE. Each move also corrects the search index and chunks, and is audited as `record.widen` or `record.narrow`. Dark: the next Eagle push of such a document carries Eagle's level, held below a DEMI narrow by `levelHeldAt`.
+- PUT `_etag` is the client's loaded version: a moved row is a 409. A body with neither `status` nor `active` keeps the status.
+- DELETE archives: status `archived`, `active` false, `public` pulled.
+- A DEMI row keeps its own read and status in `sources.demi`; the project cascade (`helpers/update-acl.js`) re-derives such a row from them, not from `sources.eagle`, and publishes the own uploads of one it leaves public. Going private, `documents.setAclForProject` caps those images.
+- Dark: a write to an Eagle-mirrored row is replaced by the next Eagle push. A published DEMI row is announced by `announce-updates.js` once due, like a mirrored one.
+
+Open:
+- `parity-map.js` `recent-activity-top` now sorts on `publishDate`; Eagle's pinned-first order needs a second sort key `/updates` does not take.
 
 Callers to move: eagle-admin `recent-activity.ts`.
 

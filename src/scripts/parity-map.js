@@ -289,8 +289,7 @@ const statusRows = counts => Object.entries(counts || {}).map(([status, count]) 
 const pending = (read, plan, reason) => ({ read, plan, pending: true, skip: reason });
 // DEMI sets x-total-count on GET and HEAD of /search; this script sends GET only.
 const HEAD_REASON = 'HEAD not sent by this script';
-// D2c (branch feat-native-updates-notifications) adds these; until DEMI answers them, the read is skipped.
-const UPDATES = { pendingRoute: '/updates' };
+// D2c (branch feat-native-updates-notifications) adds this; until DEMI answers it, the read is skipped.
 const NOTIFICATIONS = { pendingRoute: '/notifications' };
 
 const DOCUMENT_ONE_FIELDS = [...FIELDS.Document, 'type'];
@@ -378,10 +377,11 @@ const REST_READS = [
     eagle: rows('/organization/:organization', undefined, ORGANIZATION_ROUTE), demi: one('/organizations/:organization') },
   { read: 'project-notification-list', plan: '41', identities: STAFF, dataset: 'ProjectNotification', ...NOTIFICATIONS,
     eagle: pagedRows('/projectNotification', undefined, FIELDED), demi: native('/notifications') },
-  { read: 'recent-activity-top', plan: '42', identities: ANON, dataset: 'RecentActivity', ...UPDATES,
-    // Eagle answers its newest 4 whatever `top` says, so DEMI is asked for its newest page of 4.
+  { read: 'recent-activity-top', plan: '42', identities: ANON, dataset: 'RecentActivity',
+    // Eagle's four sort on publishDate (recentActivity.js:48). Its pinned-first order needs a second
+    // sort key, which `/updates` does not take, so a pinned row older than the newest four differs.
     eagle: rows('/public/recentActivity', { top: 'true' }),
-    demi: { ...native('/updates', { sort: '-dateAdded', pageSize: '4' }), paged: false } },
+    demi: { ...native('/updates', { sort: '-publishDate', pageSize: '4' }), paged: false } },
   pending('topic-vc', '43-46', 'no DEMI Topic or Vc kind yet (S9)'),
   // Item ids of one element. Eagle's item route streams the file and records a download, so the
   // element row's `items` refs stand in for it.
@@ -405,7 +405,7 @@ const NATIVE_LISTS = {
   List: { demi: native('/lists') },
   CommentPeriod: { demi: native('/comment-periods') },
   Organization: { demi: native('/organizations') },
-  RecentActivity: { demi: native('/updates'), ...UPDATES },
+  RecentActivity: { demi: native('/updates') },
   ProjectNotification: { demi: native('/notifications'), ...NOTIFICATIONS }
 };
 const STAFF_LISTS = {

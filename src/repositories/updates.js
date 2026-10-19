@@ -4,8 +4,8 @@
  * Updates repository — Cosmos NoSQL.
  *
  * Container `updates` (Eagle `RecentActivity`), partitioned by `/id` (the Eagle `_id`). Rows are
- * small, read whole and written only by the Eagle mirror, so every access is a point read or a
- * point write.
+ * small, read whole and written whole, by the Eagle mirror or by domain/updates.js, so every write
+ * is a point write.
  *
  * `notifiedAt` is the publish-notify claim: it is set by a CONDITIONAL patch, so two concurrent
  * pushes of the same newly published update produce one notification, not two.
@@ -699,6 +699,30 @@ async function fillPublishDate(id, value) {
   return patchIf(id, [{ op: 'set', path: '/publishDate', value }], `FROM c WHERE ${UNDATED_CLAUSE}`);
 }
 
+/**
+ * The image and attachment refs of every published update the public may read that shows one of
+ * `docIds`, for domain/update-images.js. A row with no status goes by `active`, as eagle-api's
+ * `shownIds` does; one capped below public by its parent keeps no image public.
+ */
+async function listShowingDocuments(docIds) {
+  if (!docIds.length) return [];
+  const spec = selectWhere({
+    access: systemAccess(),
+    partitionField: SCOPE_FIELD,
+    criteria: [{
+      clause: '(c.status = @shownStatus OR ((NOT IS_DEFINED(c.status) OR IS_NULL(c.status)) AND c.active = true)) AND ' +
+        "ARRAY_CONTAINS(c.read, 'public') AND " +
+        '(ARRAY_CONTAINS(@shownIds, c.featuredImage.document) ' +
+        'OR EXISTS(SELECT VALUE i FROM i IN c.images WHERE ARRAY_CONTAINS(@shownIds, i.document)) ' +
+        'OR EXISTS(SELECT VALUE a FROM a IN c.attachments WHERE ARRAY_CONTAINS(@shownIds, a)))',
+      params: [{ name: '@shownStatus', value: PUBLISHED }, { name: '@shownIds', value: docIds.map(String) }]
+    }],
+    select: 'c.id, c.featuredImage, c.images, c.attachments'
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
 /** The sort fields a row written before mirrorItem filled them can lack. */
 const SORT_FIELDS = ['pinned', 'complianceAndEnforcement', 'status'];
 const missingClause = fields => fields.map(field => `NOT IS_DEFINED(c.${field})`);
@@ -771,5 +795,6 @@ module.exports = {
   sortFieldFills,
   listMissingSortFields,
   fillSortFields,
+  listShowingDocuments,
   fillPublishDate
 };

@@ -90,11 +90,6 @@ const UNGATED = {
     'read[] and is never listed. The unguessable job id is the capability, and the controller binds ' +
     'an authenticated job to its requester and answers 404 on a mismatch. Its DOCUMENT read is ' +
     'documents.listByIdsUnscoped, gated there with every other document read and asserted above.',
-  'updates.js':
-    'Write-and-point-read only: the Eagle mirror is the sole caller, it is route-gated behind ' +
-    'authMiddleware + requireWrite + requireEagleMirror on /eagle/ (asserted below) and it reads through ' +
-    'systemAccess(). There is no query read and no read route, so there is nothing for ' +
-    'visibilityFor to compose — the point read is still canRead-gated in getById.',
   'projectSummaries.js':
     'A summary row carries no read[] of its own, and needs none: the generator builds it from ' +
     'level-4 documents only (isPublicSource in src/ai/project-summary.js) and the row asserts that ' +
