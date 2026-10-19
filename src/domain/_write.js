@@ -4,10 +4,11 @@ const { writeGuarded } = require('../helpers/etag-write');
 const { eagleBaseAcl } = require('../helpers/eagle-acl');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
+const { nextSyncVersion } = require('../sync-out/kinds');
 
 /**
  * The one write path for domain modules: etag-guarded, rebuilt from the stored row on every lost
- * race, and audited once when it lands.
+ * race, and audited once when it lands. Every write raises `syncVersion`, so sync-out sends the row again.
  *
  * @param {object} options
  * @param {{req: object}} options.ctx `req` supplies the audit identity
@@ -33,7 +34,8 @@ async function writeRow({ ctx, repo, existing = null, reread, build, audit }) {
     attempt: async (current) => {
       const row = await build(current);
       if (!row) return { status: 'not-found' };
-      return { status: 'ok', from: current, saved: await repo.upsert(row, current) };
+      const versioned = { ...row, syncVersion: nextSyncVersion(current) };
+      return { status: 'ok', from: current, saved: await repo.upsert(versioned, current) };
     },
     onLost: (current, attempt) =>
       logger.warn('[Domain] write lost its etag race, rebuilding', { id: current && current.id, attempt })

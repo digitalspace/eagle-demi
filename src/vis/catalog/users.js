@@ -33,5 +33,11 @@ module.exports = {
   province: { defaultVis: 2, maxVis: 2 },
   country: { defaultVis: 2, maxVis: 2 },
   postalCode: { defaultVis: 2, maxVis: 2 },
-  notes: { defaultVis: 2, maxVis: 2 }
+  notes: { defaultVis: 2, maxVis: 2 },
+
+  // Stamped by a DEMI write (domain/users.js); the mirror does not carry them.
+  addedBy: { defaultVis: 2, maxVis: 2 },
+  updatedBy: { defaultVis: 2, maxVis: 2 },
+  dateAdded: { defaultVis: 2, maxVis: 2 },
+  dateUpdated: { defaultVis: 2, maxVis: 2 }
 };

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * User controller — the Eagle mirror for `User`, and the only writer of `users`.
+ * User controller — the Eagle mirror for `User`. DEMI's own writes are in domain/users.js.
  *
  * No parent: a user's own `read[]` through `eagleBaseAcl` is the whole ACL, so Eagle's default
  * `['sysadmin']` stays privileged-only. Contact fields are 2/2 in catalog/users.js. Eagle's `password`

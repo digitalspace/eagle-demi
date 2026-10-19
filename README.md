@@ -414,7 +414,7 @@ limit cut it.
 
 The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
 one column (`Comment_No`, `Project GUID`) across every column both files have. `Export_Date` is
-skipped. `group-members` pairs Eagle's member User rows with the member ids of DEMI's group.
+skipped. `group-members` pairs Eagle's member User rows with DEMI's `/groups/:id/members` page, on id.
 `commentperiod-summary` pairs Eagle's `{ Pending, Deferred, Published, Rejected }` counts with
 `eaoStatus` of DEMI's `/comment-periods/:id/summary`, one row per status. `inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element, each
 item carrying its element's `read[]`; it never calls Eagle's item route, which streams the file and
@@ -506,7 +506,8 @@ whole. Leave `--max-pages` off the other runs: a cut parent list turns the orpha
 
 The run exits 1
 when any read has `unexplained` over 0 or fails, 0 otherwise. Reads with no DEMI target yet print
-`skipped (pending)`; reads that need an id print `skipped: needs --id ...`. `--only <read>` runs
+`skipped (pending)`; reads never ported (`topic-vc`, `search-CACUser`) print `skipped: dropped: ...`;
+reads that need an id print `skipped: needs --id ...`. `--only <read>` runs
 one read, and `--only <dataset>` (`Project`, `CommentPeriod`, ...) every read of that kind, so its
 exit code is the parity of one kind; `--max-pages <n>` caps paging, and a capped read compares fields only, since missing and
 extra rows cannot be told from a partial slice. The `--report` file lists ids and field names of
@@ -585,13 +586,16 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 `POST /notifications`, `PUT /notifications/:id`, and `PUT /notifications/:id/publish` and `/unpublish` (all staff, sysadmin) are served by DEMI; eagle-admin still calls eagle-api `/projectNotification` until the flip. Differences: publishing is the two action routes, not `?publish=`; create takes `isPublished` (default false) in its place and answers 201 with a UUID id; PUT, as in eagle-api, replaces every field and defaults the ones left out, but stores the defaults the Eagle push stores (`null` for text, `pcp` `none`), ignores `read` and `isPublished`, answers 400 for a body with no other field, and 404 for a missing row; a field not in the list, a non-number `notificationThresholdValue` or a `centroid` of more than two values is a 400.
 
 <!-- port: users -->
+`POST /users` and `PUT /users/:id` (both project-system-admin, sysadmin, staff) are served by DEMI; eagle-admin still calls eagle-api `/user` until the flip. Differences: create answers 201 with a UUID id and stores no password (sign-in is Keycloak's); eagle-api made every Environmental Assessment Office user public, DEMI only when `isPublished` is true (default false), and `isPublished` true for any other user is a 400; PUT, as in eagle-api, replaces every field and defaults the ones left out (`null` for `middleName` and `org`, as the Eagle push stores them), keeps the visibility unless `isPublished` is sent, drops public when `orgName` leaves the Environmental Assessment Office, answers 400 for a body with no other field, and 404 for a missing row; a field not in the list, or an `org` that is not an id, is a 400.
 
 <!-- port: extensions -->
+`GET` and `POST /projects/:id/extensions`, and `PUT` and `DELETE /projects/:id/extensions/:extId` (all staff, sysadmin) are served by DEMI; eagle-admin still calls eagle-api `/project/:projId/extension` until the flip. Differences: each item has an `id` (a UUID for a DEMI item, a content hash for an Eagle one), and PUT and DELETE name it in the path instead of sending the old item; POST answers 201; a body key outside `type`, `appliedTo`, `start`, `end`, or an empty body, is a 400; an unknown project or item is 404. As in eagle-api, `type` `Extension` files under `reviewExtensions`, anything else under `reviewSuspensions`, and the review timeline is not recalculated.
 
 <!-- port: project-legislation -->
 `PUT /projects/:id` refuses with 409 a body that would move a project off a locked Act (the Building Canada Act), as eagle-api's PUT does. Differences: DEMI also refuses a null `legislationYear` and another `legislation` label on such a project, since its PUT stores both as sent. eagle-api's publish year switch is `legislationYear` on `PUT /projects/:id/level` at level 4 (same 404 and 409 rules), so that route stays the only one that widens. `GET /projects/:id` also returns every `legislation_<year>` block, `currentLegislationYear` and `legislationYearList`, each block field at the level of its top-level counterpart; PUT ignores them.
 
 <!-- port: sitemap -->
+`GET /sitemap.xml` (anonymous) is served by DEMI; eagle-public's `robots.txt` still names eagle-api `/api/public/sitemap.xml` until it is repointed. As in eagle-api, it lists `<LINK_BASE_URL>/p/<eagleId>` for each public project, sorted by Eagle id, with the current legislation block's `dateUpdated` as `lastmod`, at most 50,000 entries, built once an hour. Differences: the host is `LINK_BASE_URL` (eagle-api: `PUBLIC_SITE_URL`); a public project with no Eagle id is not listed, and a Track row and its `eagle-<id>` twin are one entry.
 
 <!-- port: cac -->
 

@@ -121,10 +121,20 @@ test('an id listed under a class in --known-ids is counted under that class and 
 
 test('a pending read is reported as skipped and makes no request', async () => {
   const h = harness(() => assert.fail('no request expected'));
-  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'topic-vc'], h.deps);
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'project-head-public'], h.deps);
   assert.strictEqual(code, 0);
-  assert.match(h.out[0], /topic-vc identity=anonymous skipped \(pending\)/);
+  assert.match(h.out[0], /project-head-public identity=anonymous skipped \(pending\)/);
   assert.strictEqual(h.calls.length, 0);
+});
+
+test('a dropped read is skipped as dropped, not pending, and makes no request', async () => {
+  for (const read of ['topic-vc', 'search-CACUser']) {
+    const h = harness(() => assert.fail('no request expected'), { env: { PARITY_TOKEN: TOKEN } });
+    const code = await run([...staff, '--only', read], h.deps);
+    assert.strictEqual(code, 0);
+    assert.match(h.out[0], new RegExp(`${read} identity=\\w+ skipped: dropped: `));
+    assert.strictEqual(h.calls.length, 0);
+  }
 });
 
 test('requests to each API are GET only and at least MIN_GAP_MS apart', async () => {
@@ -422,27 +432,26 @@ test('--id inspection, element and group fill the paths and queries of both APIs
     `eagle.test/api/search?dataset=Item&_id=${ELEMENT}&_schemaName=InspectionElement`,
     `demi.test/api/inspection-items?inspection=${INSPECTION}&element=${ELEMENT}`,
     `eagle.test/api/project/${A}/group/${GROUP}/members`,
-    // DEMI's `project` query is a Track id partition key; an Eagle id there answers 404.
-    `demi.test/api/groups/${GROUP}`
+    `demi.test/api/groups/${GROUP}/members?page=1&pageSize=100&count=true`
   ]);
 });
 
-/** Eagle's member read answers User rows in a count facet; DEMI's group read the Group itself. */
+/** Eagle's member read answers User rows in a count facet; DEMI's a native page of the member users. */
 const groupRun = async (users, members) => {
-  const h = harness((host) => (host === 'eagle.test'
+  const h = harness((host, url) => (host === 'eagle.test'
     ? json([{ total_items: users.length, results: users.map(id => ({ _id: id, displayName: 'Casey' })) }])
-    : json({ id: GROUP, eagleId: GROUP, name: 'Team', members })), { env: { PARITY_TOKEN: TOKEN } });
+    : nativeRows(members.map(id => ({ id, eagleId: id, displayName: 'Casey' })), url)), { env: { PARITY_TOKEN: TOKEN } });
   const code = await run([...staff, '--id', `project=${A}`, '--id', `group=${GROUP}`, '--only', 'group-members'], h.deps);
   return { code, line: h.out[0] };
 };
 
-test('group members pair Eagle User rows with the DEMI group member ids', async () => {
+test('group members pair Eagle User rows with the DEMI member users', async () => {
   const { code, line } = await groupRun([A, B], [B, A]);
   assert.strictEqual(code, 0);
   assert.match(line, /group-members identity=staff match=2 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
 });
 
-test('a member Eagle lists and the DEMI group lacks is unexplained and exits 1', async () => {
+test('a member Eagle lists and DEMI does not is unexplained and exits 1', async () => {
   const { code, line } = await groupRun([A, B], [A]);
   assert.strictEqual(code, 1);
   assert.match(line, /match=1 missingInDemi=1 extraInDemi=0 .*unexplained=1/);

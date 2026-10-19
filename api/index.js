@@ -301,13 +301,20 @@ async function reconcileEagle() {
   }
 }
 
-/** `store: true` is what GET /admin/reconcile-engage serves. Swallows the failure as reconcileEagle does. */
+/**
+ * Runs every sync-out kind's reconcile hook (`src/sync-out/kinds.js`) with `store: true`, which for
+ * comment periods is what GET /admin/reconcile-engage serves. Each failure is logged and swallowed, as
+ * reconcileEagle does, so one kind cannot stop the rest.
+ */
 async function reconcileEngage() {
   const { logger } = require('../src/utils/logger');
-  try {
-    await require('../src/scripts/reconcile-engage').run({ store: true });
-  } catch (err) {
-    logger.error('[reconcile-engage] nightly run failed', { error: err.message, stack: err.stack });
+  const { KINDS } = require('../src/sync-out/kinds');
+  for (const [kind, { reconcile }] of Object.entries(KINDS)) {
+    try {
+      await reconcile({ store: true });
+    } catch (err) {
+      logger.error('[reconcile-engage] nightly run failed', { kind, error: err.message, stack: err.stack });
+    }
   }
 }
 

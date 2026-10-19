@@ -335,6 +335,5 @@ Not checked:
 - Which eagle-api reads the Angular eagle-public prod line still makes. This decides whether each object needs sync-out.
 - Whether DEMI returns every legislation block (A2).
 - Whether TokenInterceptor attaches the bearer on write verbs (A0).
-- Whether sitemap URLs should carry the Eagle id or the DEMI id.
 - How `commentIdCount` is stored in DEMI.
 - Whether eagle-public reads the CAC fields.

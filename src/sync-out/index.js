@@ -3,14 +3,15 @@
 /**
  * Sync-out: DEMI-owned rows written to other systems, one queue message per consumer.
  *
- * A consumer is `{ name, enabled(), wants(row), send(row, { update }) }`. The message carries ids
- * only; the worker re-reads the row, so a redelivered or late message sends the current state.
- * `syncVersion` is the version, raised by every ENGAGE ingest write: a row whose
- * `syncOut[name].sentVersion` is at or past it is not sent again.
+ * A consumer is `{ name, enabled(), wants(row), send(row, { update }) }`. The message carries the
+ * row's kind (`./kinds.js`) and ids only; the worker re-reads the row through the kind's repository,
+ * so a redelivered or late message sends the current state. `syncVersion` is the version, raised by
+ * every ENGAGE ingest write and every domain `writeRow`: a row whose `syncOut[name].sentVersion` is
+ * at or past it is not sent again.
  */
 
 const queues = require('../jobs/queue-client');
-const commentPeriods = require('../repositories/comment-periods');
+const { kindOf, versionOf, DEFAULT_KIND } = require('./kinds');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
@@ -33,18 +34,31 @@ async function send(message, options = undefined) {
 }
 
 /**
- * Queue one message per enabled consumer that wants this row. `{ repair: true }` marks a reconcile
- * re-send, which a delivery never drops as an already-failed redelivery.
+ * Queue one message per enabled consumer of `kind` that wants this row. `{ repair: true }` marks a
+ * reconcile re-send, which a delivery never drops as an already-failed redelivery.
  */
-async function enqueue(row, { repair = false } = {}) {
-  const wanted = consumers.filter(c => c.enabled() && c.wants(row));
+async function enqueue(row, { repair = false, kind = DEFAULT_KIND } = {}) {
+  const names = kindOf(kind).consumers;
+  const wanted = consumers.filter(c => names.includes(c.name) && c.enabled() && c.wants(row));
   for (const consumer of wanted) {
     await send({
-      consumer: consumer.name, id: String(row.id), projectId: row.projectId ?? null, attempt: 1,
+      kind, consumer: consumer.name, id: String(row.id), projectId: row.projectId ?? null, attempt: 1,
       ...(repair ? { repair: true } : {})
     });
   }
   return wanted.map(c => c.name);
+}
+
+/** `enqueue` for a write that has already landed: a failure is logged, not thrown, and reconcile re-queues. */
+async function enqueueQuietly(row, { kind = DEFAULT_KIND } = {}) {
+  try {
+    // Through module.exports, so a test that stubs enqueue sees this call too.
+    return await module.exports.enqueue(row, { kind });
+  } catch (err) {
+    logger.error('[sync-out] enqueue failed',
+      { kind, id: row.id, projectId: row.projectId, error: err.message, stack: err.stack });
+    return [];
+  }
 }
 
 function parseMessage(message) {
@@ -61,6 +75,8 @@ function parseMessage(message) {
     throw new Error('sync-out message carries no consumer or id');
   }
   return {
+    // Messages queued before kinds existed name none; every one of them was a comment period.
+    kind: body.kind == null ? DEFAULT_KIND : String(body.kind),
     consumer: String(body.consumer),
     id: String(body.id),
     projectId: body.projectId ?? null,
@@ -69,8 +85,6 @@ function parseMessage(message) {
     ...(body.repair === true ? { repair: true } : {})
   };
 }
-
-const versionOf = (row) => (Number.isInteger(row.syncVersion) ? row.syncVersion : 0);
 
 /** True when `sentVersion` is at or past `version`; a cleared or missing sentVersion is never current. */
 function isCurrent(sentVersion, version) {
@@ -81,8 +95,8 @@ function isCurrent(sentVersion, version) {
  * Etag-guarded write of one row. `mutate(current)` returns the item to store, or null to leave it.
  * Rebuilds from the stored row after each lost race; throws once every try has lost.
  */
-async function updateRow(id, projectId, mutate) {
-  const reread = () => commentPeriods.readForWrite(id, projectId);
+async function updateRow(repo, id, projectId, mutate) {
+  const reread = () => repo.readForWrite(id, projectId);
   const result = await writeGuarded({
     existing: await reread(),
     reread,
@@ -90,7 +104,7 @@ async function updateRow(id, projectId, mutate) {
       if (!current) return { status: 'missing', row: null };
       const item = mutate(current);
       if (!item) return { status: 'unchanged', row: current };
-      return { status: 'saved', row: await commentPeriods.upsert(item, current) };
+      return { status: 'saved', row: await repo.upsert(item, current) };
     }
   });
   if (result.status === 'conflict') {
@@ -103,9 +117,9 @@ async function updateRow(id, projectId, mutate) {
  * Store the outcome on the row. Resolves to `{ row, superseded }`: the row as stored afterwards (null
  * when it is gone), and whether a failure was left unrecorded because the row has moved past it.
  */
-async function recordOutcome(consumer, row, outcome) {
+async function recordOutcome(repo, consumer, row, outcome) {
   let superseded = false;
-  const result = await updateRow(row.id, row.projectId, (current) => {
+  const result = await updateRow(repo, row.id, row.projectId, (current) => {
     const previous = (current.syncOut && current.syncOut[consumer.name]) || {};
     if (outcome.status === 'failed') {
       // A newer send already landed, or another delivery is mid-create: that settles the row, not this failure.
@@ -145,11 +159,11 @@ const messageText = (message) => (Buffer.isBuffer(message) ? message.toString('u
  * The last attempt failed: record it, park the message in the poison queue, write the alert line once.
  * `job`, `consumer` and `row` are null when the failure came before they were known.
  */
-async function giveUp({ message, job, consumer, row, version }, err) {
+async function giveUp({ message, job, repo, consumer, row, version }, err) {
   const fields = { ...(job || { message: messageText(message).slice(0, 500) }), error: err.message };
   if (consumer && row) {
     try {
-      const { superseded } = await recordOutcome(consumer, row, {
+      const { superseded } = await recordOutcome(repo, consumer, row, {
         status: 'failed', error: err.message, version, at: new Date().toISOString()
       });
       if (superseded) {
@@ -184,20 +198,25 @@ async function giveUp({ message, job, consumer, row, version }, err) {
  *   `maxDequeueCount`; api/index.js reads both.
  */
 async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {}) {
-  const state = { message, job: null, consumer: null, row: null, version: 0 };
+  const state = { message, job: null, repo: null, consumer: null, row: null, version: 0 };
   try {
     const parsed = parseMessage(message);
     const job = state.job = { ...parsed, attempt: Math.max(parsed.attempt, dequeueCount) };
 
+    const kind = kindOf(job.kind);
     const consumer = consumers.find(c => c.name === job.consumer);
     if (!consumer) throw new Error(`sync-out has no consumer named ${job.consumer}`);
+    if (!kind.consumers.includes(consumer.name)) {
+      throw new Error(`sync-out consumer ${job.consumer} does not send kind ${job.kind}`);
+    }
     if (!consumer.enabled()) {
       logger.info('[sync-out] consumer disabled, message dropped', job);
       return { skipped: 'disabled' };
     }
+    const repo = state.repo = kind.repo;
     state.consumer = consumer;
 
-    const row = await commentPeriods.readForWrite(job.id, job.projectId);
+    const row = await repo.readForWrite(job.id, job.projectId);
     if (!row) {
       logger.warn('[sync-out] row not found, message dropped', job);
       return { skipped: 'missing' };
@@ -222,15 +241,17 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
     if (!job.resend && isCurrent(entry.sentVersion, version)) return { skipped: 'current' };
 
     const result = await consumer.send(row, {
-      update: (mutate) => updateRow(row.id, row.projectId, mutate)
+      update: (mutate) => updateRow(repo, row.id, row.projectId, mutate)
     });
     const status = (result && result.status) || 'sent';
-    const { row: stored } = await recordOutcome(consumer, row,
+    const { row: stored } = await recordOutcome(repo, consumer, row,
       { status, version, record: result && result.record, at: new Date().toISOString() });
     // A write landed while this one was sending, so what reached the consumer may be older than the row.
     // Another delivery may already have recorded that newer version, so the follow-up sends regardless.
     if (stored && versionOf(stored) > version) {
-      await send({ consumer: job.consumer, id: job.id, projectId: stored.projectId ?? null, attempt: 1, resend: true });
+      await send({
+        kind: job.kind, consumer: job.consumer, id: job.id, projectId: stored.projectId ?? null, attempt: 1, resend: true
+      });
     }
     return { status, ...(result && result.eagleId ? { eagleId: result.eagleId } : {}) };
   } catch (err) {
@@ -243,4 +264,4 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
   }
 }
 
-module.exports = { enqueue, consumers, run, RETRY_VISIBILITY_SECONDS };
+module.exports = { enqueue, enqueueQuietly, consumers, run, RETRY_VISIBILITY_SECONDS };
