@@ -41,13 +41,13 @@ Who runs it: the developer working on organizations, on branch `feat-port-organi
   - Tracker: the Layering section, and the inventory text at line 48, now one file per object.
   - eagle-demi.wiki `Architecture.md`: a new layering section. The page has none today; its only "layer" heading is "Map boundary layers" at line 219.
 - **Swagger rule:** slice 0 adds no swagger anchors for objects that already have path blocks. A slice adds its methods inside the existing block, because a second path key is a duplicate YAML key and no test parses the spec. The existing blocks are:
-  - `/api/users` 3828 and `/api/users/{id}` 3896
-  - `/api/groups` 3925 and `/api/groups/{id}` 3995
-  - `/api/organizations` 4332 and `/api/organizations/{id}` 4406
-  - `/api/comment-periods` 4434 and `/api/comment-periods/{id}` 4505
-  - `/api/comments` 4574 and `/api/comments/{id}` 4654
-  - `/api/updates` 4681 and `/api/updates/{id}` 4790
-  - `/api/notifications` 4816 and `/api/notifications/{id}` 4897
+  - `/api/users` 4028 and `/api/users/{id}` 4098
+  - `/api/groups` 4127 and `/api/groups/{id}` 4197
+  - `/api/organizations` 4534 and `/api/organizations/{id}` 4640
+  - `/api/comment-periods` 4710 and `/api/comment-periods/{id}` 4784
+  - `/api/comments` 4853 and `/api/comments/{id}` 4933
+  - `/api/updates` 4960 and `/api/updates/{id}` 5133
+  - `/api/notifications` 5159 and `/api/notifications/{id}` 5260
   - `/api/projects/{id}` 958 and `/api/projects/{id}/level` 1132
 
   Anchors exist only for new paths: members, extensions, CAC, the publish and status action paths, and sitemap.
@@ -92,7 +92,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - DELETE is a hard delete (`:376`).
   - Publish acts on the period only (`:400,421`).
 - Questioned: PUT recomputes `read` from the body (`:338-347`), against tracker line 38. Proposal: PUT ignores it.
-- ENGAGE rows (`sync-out/eagle.js:326`): refuse staff writes. Confirm.
+- ENGAGE rows (`sync-out/eagle.js:327`): refuse staff writes. Confirm.
 - Check whether publish must cascade to comments (`setAclForPeriod` in `repositories/comments.js`).
 - Adds `nextCommentId(periodId)`, an atomic increment, for slice 3.
 - Owns: `domain/comment-periods.js`, `controllers/native/comment-periods.js`, `repositories/comment-periods.js`, `vis/catalog/comment-periods.js`.
@@ -299,7 +299,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 
 | Flip | After | eagle-admin change and spec | DEMI seam | Sync-out |
 |---|---|---|---|---|
-| F2 Comment periods | 2, FS | `commentperiod.service.ts:98-120`; `commentperiod.service.spec.ts` | ignore Eagle fields in `nosql/comment-period.js`; widen `wants()` (`sync-out/eagle.js:326`) | existing consumer |
+| F2 Comment periods | 2, FS | `commentperiod.service.ts:98-120`; `commentperiod.service.spec.ts` | ignore Eagle fields in `nosql/comment-period.js`; widen `wants()` (`sync-out/eagle.js:327`) | existing consumer |
 | F3 Comments | 3, F2 | `comment.service.ts:47,52,73,139`; `comment.service.spec.ts` | ignore Eagle fields in `nosql/comment.js` | new |
 | F4 Groups | 4, F8 | `project.service.ts:253-271`; `project.service.spec.ts` | ignore Eagle fields in `nosql/group.js` | if Eagle reads them |
 | F5 Updates | 5 | `recent-activity.ts:42,52,73`; `recent-activity.spec.ts` | ignore Eagle fields in `nosql/update.js` | yes |

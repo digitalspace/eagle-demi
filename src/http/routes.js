@@ -354,7 +354,35 @@ const routes = [
   { method: 'delete', path: '/me/lassos/:slug', guards: [authMiddleware], load: () => userDataController().deleteLasso },
   { method: 'put', path: '/me/queries', guards: [authMiddleware], load: () => userDataController().saveQuery },
   { method: 'delete', path: '/me/queries/:slug', guards: [authMiddleware], load: () => userDataController().deleteQuery },
-  { method: 'put', path: '/me/prefs', guards: [authMiddleware], load: () => userDataController().putPrefs }
+  { method: 'put', path: '/me/prefs', guards: [authMiddleware], load: () => userDataController().putPrefs },
+
+  // Ported objects (docs/eagle-api-port-plan.md section 3). Each slice adds its routes only under
+  // its own anchor, guarded by `requireRole(<eagle-api x-security-scopes>)`.
+
+  // port: organizations
+  // eagle-api's auth admits sysadmin and staff on every route (api/helpers/auth.js:35-43), so both join the scopes.
+  { method: 'post', path: '/organizations', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/organizations').createOrganization },
+  { method: 'put', path: '/organizations/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/organizations').updateOrganization },
+
+  // port: comment-periods
+
+  // port: comments
+
+  // port: groups
+
+  // port: updates
+
+  // port: notifications
+
+  // port: users
+
+  // port: extensions
+
+  // port: project-legislation
+
+  // port: sitemap
+
+  // port: cac
 ];
 
 // NOT SERVED IN PROD. The spec names every route, parameter and role in the system, and this route
