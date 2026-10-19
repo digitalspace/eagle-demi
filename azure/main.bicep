@@ -747,6 +747,9 @@ module observability './modules/observability.bicep' = if (deployFoundation) {
     deployBulkDownloadPoisonAlert: deployBulkDownloadPoisonAlert
     chunkRestampQueue: chunkRestampQueue
     syncOutQueue: syncOutQueue
+    // Same values the API timers get, so a timer that never runs has no alert expecting it.
+    syncProjectsSchedule: syncProjectsSchedule
+    syncTeamsSchedule: syncTeamsSchedule
   }
 }
 

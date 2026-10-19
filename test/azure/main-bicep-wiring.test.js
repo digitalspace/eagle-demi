@@ -787,6 +787,63 @@ test('the drift alert query matches the line the reconcile actually logs', () =>
   assert.match(query[1], /where drift > 0/, 'and 0 must not alert');
 });
 
+// Both Track rules read lines formatted in src/scripts, and a wording change there would leave the
+// rule finding nothing: the absence half would then fire forever, the failure half never.
+for (const { name, param, lineOf, fatal, span, why } of [
+  {
+    name: 'demi-track-projects-poll', param: 'syncProjectsSchedule',
+    // pollLine is private, so the real run writes it: a Track token that throws is one failure.
+    lineOf: async (t) => {
+      const { logger } = require('../../src/utils/logger');
+      const info = t.mock.method(logger, 'info', () => {});
+      const error = t.mock.method(logger, 'error', () => {});
+      const kc = { clientToken: async () => { throw new Error('token refused'); } };
+      await require('../../src/scripts/sync-track-projects').run({ live: true, deps: { kc } });
+      return { line: info.mock.calls.at(-1).arguments[0], fatalLine: error.mock.calls[0].arguments[0] };
+    },
+    fatal: 'run failed',
+    span: '20m', why: 'the timer runs every 5 minutes, so 20m is four missed polls',
+  },
+  {
+    name: 'demi-track-teams', param: 'syncTeamsSchedule',
+    lineOf: async () => ({
+      line: require('../../src/scripts/sync-track-teams').summaryLine({ mode: 'live', failures: 1 }),
+      fatalLine: /'(\[track-teams\] nightly run failed)'/.exec(
+        fs.readFileSync(path.join(ROOT, 'api', 'index.js'), 'utf8'))?.[1] || '',
+    }),
+    fatal: 'nightly run failed',
+    span: '26h', why: 'the sync runs once a day, so 26h is one run plus slack for a late one',
+  },
+]) {
+  test(`${name} matches the lines its sync writes and deploys only where the timer runs`, async (t) => {
+    const block = OBSERVABILITY.split(/^resource /m)
+      .find(b => b.includes(`name: '${name}-\${environmentName}'`));
+    assert.ok(block, `no ${name} rule in observability.bicep`);
+    assert.match(block, new RegExp(`= if \\(!empty\\(${param}\\)\\) \\{`),
+      `gated on ${param}: an env with no timer would get an absence alert that never clears`);
+    assert.match(MAIN, new RegExp(`^\\s+${param}: ${param}$`, 'm'), `main.bicep must pass ${param}`);
+
+    const query = /query: '''\n([\s\S]+?)'''/.exec(block)?.[1];
+    assert.ok(query, `${name} declares no query`);
+    assert.strictEqual(/^let span = (\S+);$/m.exec(query)?.[1], span,
+      `the span must stay ${span}, the window the description promises: ${why}`);
+    assert.match(query, /^union absent, failing$/m,
+      'the rule returns only what the final union names: drop absent and silence never alerts, drop failing and failures never do');
+    const { line, fatalLine } = await lineOf(t);
+
+    const prefix = /startswith "([^"]+)"/.exec(query)[1];
+    const live = /where Message contains "([^"]+)" \| summarize n = count\(\) \| where n == 0/.exec(query)?.[1];
+    assert.ok(line.startsWith(prefix) && fatalLine.startsWith(prefix), `both lines must start ${prefix}`);
+    assert.ok(live && line.includes(live), `the absence half looks for ${live}, not in ${line}`);
+    assert.strictEqual(new RegExp(/extract\("([^"]+)", 1, Message\)/.exec(query)[1]).exec(line)[1], '1',
+      'the extracted group must be the failures count');
+    assert.match(query, /where failures > 0 or Message contains "([^"]+)"/);
+    assert.ok(fatalLine.endsWith(fatal) && query.includes(`Message contains "${fatal}"`),
+      `the failure half must catch ${JSON.stringify(fatalLine)}`);
+    assert.match(block, /actionGroups: \[ alertGroup\.id \]/);
+  });
+}
+
 // ADMIN_API_KEY is the break-glass credential. As a plain app setting its value sat in the template
 // parameters and in ARM deployment history; a revert to that is invisible to `az bicep build` and to
 // a what-if diff, which masks @secure() values on both sides. Text-structural, same honest limits as
