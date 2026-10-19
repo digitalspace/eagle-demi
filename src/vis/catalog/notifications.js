@@ -40,6 +40,12 @@ module.exports = {
   dateStarted: { defaultVis: 4, maxVis: 4 },
   dateCompleted: { defaultVis: 4, maxVis: 4 },
 
+  // Stamped by a DEMI write (domain/notifications.js); the mirror does not carry them.
+  addedBy: { defaultVis: 2, maxVis: 2 },
+  updatedBy: { defaultVis: 2, maxVis: 2 },
+  dateAdded: { defaultVis: 2, maxVis: 2 },
+  dateUpdated: { defaultVis: 2, maxVis: 2 },
+
   // Never public. Same entries, same reasons, as catalog/projects.js. `read` is the ACL array, not
   // a read flag — the plan's field list names it beside the content fields and it is neither.
   read: { defaultVis: 0, maxVis: 0 },

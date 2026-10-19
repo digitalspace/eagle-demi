@@ -392,6 +392,10 @@ const routes = [
   { method: 'delete', path: '/updates/:id', guards: [authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')], load: () => require('../controllers/native/updates-write').archiveUpdate },
 
   // port: notifications
+  { method: 'post', path: '/notifications', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/notifications-write').createNotification },
+  { method: 'put', path: '/notifications/:id', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/notifications-write').updateNotification },
+  { method: 'put', path: '/notifications/:id/publish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/notifications-write').publishNotification },
+  { method: 'put', path: '/notifications/:id/unpublish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/notifications-write').unpublishNotification },
 
   // port: users
 

@@ -149,7 +149,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - ACL is SECURE_ROLES (`:79-81`).
   - PUT replaces every field with a default (`:114-135`).
   - Publish true adds public, false removes it, absent keeps the current value (`:137-144`).
-- Owns: `domain/notifications.js`, `controllers/native/notifications.js`, `repositories/notifications.js`, `vis/catalog/notifications.js`.
+- Owns: `domain/notifications.js`, `controllers/native/notifications-write.js` (the reads stay in `controllers/native/notifications.js`), `repositories/notifications.js`, `vis/catalog/notifications.js`.
 
 **7. Users.** Size S-M. After 1, because both write `repositories/users.js`.
 - Routes, both [project-system-admin]: `POST /users` (:4613), `PUT /users/:id` (:4661).

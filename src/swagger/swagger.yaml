@@ -5925,6 +5925,39 @@ paths:
           description: Unknown or repeated parameter, bad value, or a page past the caller's depth.
         '401':
           description: The Bearer token was rejected.
+    post:
+      summary: Create a project notification
+      description: >-
+        Adds a project notification with a new UUID id. Needs the role `staff` or `sysadmin`. It
+        reads `staff` and `sysadmin`, plus `public` when `isPublished` is true; `read` in the body
+        is ignored. A field left out gets the default a PUT gives it. Not yet called by
+        eagle-admin.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationCreate'
+      responses:
+        '201':
+          description: The created row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            A field is over its limit, of the wrong type, or not in the list. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '503':
+          description: >-
+            Another request kept writing the same notification, and nothing was saved. Send the
+            same body again. Body `{ error: "The record is being written by another request. Try again." }`.
 
   /api/notifications/{id}:
     get:
@@ -5933,12 +5966,7 @@ paths:
         One project notification the caller may read, with hidden fields left out. One the caller
         cannot read is a 404, the same as one that does not exist.
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: Notification id, which is also its Eagle id.
-          schema:
-            type: string
+        - $ref: '#/components/parameters/NotificationId'
       responses:
         '200':
           description: The record.
@@ -5950,6 +5978,93 @@ paths:
           description: The Bearer token was rejected.
         '404':
           description: Notification not found.
+    put:
+      summary: Replace a project notification
+      description: >-
+        Replaces every field, as eagle-api's PUT did: a field the body leaves out, or sends empty,
+        goes back to its default (`null`; `centroid` `[]`, `pcp` `none`, `isMet` false, `metURL`
+        empty). Sets `dateUpdated` and `updatedBy`. Needs the role `staff` or `sysadmin`. `read`
+        and `isPublished` are ignored: visibility moves through `/publish` and `/unpublish`. A body
+        with no other field is a 400.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationInput'
+      responses:
+        '200':
+          description: The updated row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: A field is invalid or not writable. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Notification not found.
+        '503':
+          description: Another request kept writing the same notification. Send it again.
+
+  /api/notifications/{id}/publish:
+    put:
+      summary: Publish a project notification
+      description: >-
+        Adds `public` to the notification's read and sets `isPublished`. Needs the role `staff` or
+        `sysadmin`. Takes no body fields. Replaces eagle-api's `?publish=true`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: The published row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Notification not found.
+        '503':
+          description: Another request kept writing the same notification. Send it again.
+
+  /api/notifications/{id}/unpublish:
+    put:
+      summary: Unpublish a project notification
+      description: >-
+        Removes `public` from the notification's read and clears `isPublished`. Needs the role
+        `staff` or `sysadmin`. Takes no body fields. Replaces eagle-api's `?publish=false`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: The unpublished row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Notification not found.
+        '503':
+          description: Another request kept writing the same notification. Send it again.
 
   /api/commentperiods/{periodId}/comments/export:
     get:
@@ -7198,6 +7313,13 @@ components:
       description: The record id (the Eagle `_id`, or the UUID of a group DEMI created).
       schema:
         type: string
+    NotificationId:
+      name: id
+      in: path
+      required: true
+      description: The record id (the Eagle `_id`, or the UUID of a notification DEMI created).
+      schema:
+        type: string
 
   responses:
     EagleMirrorForbidden:
@@ -7946,6 +8068,96 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    NotificationInput:
+      type: object
+      description: >-
+        Every field is optional and nullable. A field left out, or sent empty, gets its default.
+        `read` and `isPublished` are ignored on a PUT.
+      properties:
+        name:
+          $ref: '#/components/schemas/NotificationText'
+        type:
+          $ref: '#/components/schemas/NotificationText'
+        subType:
+          $ref: '#/components/schemas/NotificationText'
+        proponent:
+          $ref: '#/components/schemas/NotificationText'
+        nature:
+          $ref: '#/components/schemas/NotificationText'
+        region:
+          $ref: '#/components/schemas/NotificationText'
+        location:
+          $ref: '#/components/schemas/NotificationLongText'
+        trigger:
+          $ref: '#/components/schemas/NotificationLongText'
+        decision:
+          $ref: '#/components/schemas/NotificationText'
+        decisionDate:
+          $ref: '#/components/schemas/NotificationDate'
+        notificationReceivedDate:
+          $ref: '#/components/schemas/NotificationDate'
+        description:
+          $ref: '#/components/schemas/NotificationLongText'
+        notificationThresholdValue:
+          type: number
+          nullable: true
+        notificationThresholdUnits:
+          $ref: '#/components/schemas/NotificationText'
+        centroid:
+          type: array
+          nullable: true
+          maxItems: 2
+          description: '`[latitude, longitude]` as eagle-admin sends it, numbers or numeric strings.'
+          items:
+            oneOf:
+              - type: number
+              - type: string
+                maxLength: 50
+        associatedProjectId:
+          type: string
+          maxLength: 200
+          nullable: true
+        associatedProjectName:
+          $ref: '#/components/schemas/NotificationText'
+        dateStarted:
+          $ref: '#/components/schemas/NotificationDate'
+        dateCompleted:
+          $ref: '#/components/schemas/NotificationDate'
+        pcp:
+          type: string
+          maxLength: 200
+          nullable: true
+          description: Comment period status; defaults to `none`.
+        isMet:
+          type: boolean
+          nullable: true
+        metURL:
+          type: string
+          maxLength: 2000
+          nullable: true
+    NotificationText:
+      type: string
+      maxLength: 1000
+      nullable: true
+    NotificationLongText:
+      type: string
+      maxLength: 10000
+      nullable: true
+    NotificationDate:
+      type: string
+      format: date-time
+      nullable: true
+    NotificationCreate:
+      description: The update fields plus `isPublished`. `read` is ignored.
+      allOf:
+        - $ref: '#/components/schemas/NotificationInput'
+        - type: object
+          properties:
+            isPublished:
+              type: boolean
+              default: false
+              description: Readable by the public from the start.
 
     ProjectInput:
       type: object

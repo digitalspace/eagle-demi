@@ -33,7 +33,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | done (b3ebe499); Dark: staff-only, no caller |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups-write.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | done (5ccd2bf3); Dark: staff-only, no caller |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | done (dda7c901); Dark: staff-only, no caller |
-| 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications.js`, `repositories/notifications.js` | 0 | S-M | todo |
+| 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | in progress (feat-port-notifications) |
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
 | 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | todo |
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
@@ -293,15 +293,33 @@ Callers to move: eagle-admin `recent-activity.ts`.
 
 ### Project notifications
 
-Status: todo
+Status: Dark
 
-Today: `GET /notifications`, `/notifications/:id` (`routes.js:301-302`), mirror at `routes.js:249`.
+Today: `GET /notifications`, `/notifications/:id` (`routes.js:304-305`), Eagle mirror at `routes.js:252`. Dark: the four write routes are served under the `port: notifications` anchor (`routes.js:394`), rules in `src/domain/notifications.js`, write handlers in `src/controllers/native/notifications-write.js`. eagle-admin still calls eagle-api.
 
-Target routes: `POST /notifications`, `PUT /notifications/:id`.
+Target routes: `POST /notifications`, `PUT /notifications/:id`, `PUT /notifications/:id/publish`, `PUT /notifications/:id/unpublish`.
 
-Business rules (eagle-api `api/controllers/projectNotification.js`): to extract. Known: notification documents attach through the document routes; the eagle-admin screen builds eagle-api fetch URLs (`project-notification-documents.component.ts:463`), move those too.
+Guards: every route is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eagle-api `swagger.yaml:4763,4817`; publish and unpublish borrow the PUT's).
 
-Callers to move: eagle-admin `notification-project.service.ts`.
+Business rules (eagle-api `api/controllers/projectNotification.js`):
+- A notification reads, writes and deletes as SECURE_ROLES, `sysadmin` and `staff` (`:79-81`, `constants.js:21`). DEMI stores that read; the row carries no `write` or `delete` list, the route guards hold that rule. No project caps the read: `associatedProjectId` is a loose reference (`repositories/notifications.js`).
+- Create copies the body (`:77-78`) and answers 201. DEMI answers with a UUID id, `sourceSystem: 'demi'`, `eagleId: null`, and `addedBy`/`updatedBy`/`dateAdded`/`dateUpdated`.
+- PUT replaces every field, each defaulted when missing (`:114-135`): `value || default`, and `isMet ?? false` (`:134`). A missing row is a 404 (`:109-111`).
+- `?publish=true` on POST or PUT adds `public`, `false` on PUT removes it, absent keeps the read (`:84-86,137-144`).
+- Each write records an action (`Post`, `Put`; `:90,147`). DEMI writes `notification.create`, `.update`, `.publish` and `.unpublish`, with field names only.
+- A write that moves the read drops the Update parent cache (`updates.forgetParents`), as the mirror does, since an Update under a notification follows its read.
+
+Decisions:
+- Publish is two actions, `/publish` and `/unpublish`, in place of the `?publish=` flag, as organizations do. PUT ignores `read` and `isPublished`. Create takes `isPublished` (default false), so a ported notification is never public unless asked (Daniel 2026-10-19).
+- PUT stores the defaults the Eagle push stores for eagle-api's `''` (`controllers/nosql/notification.js`): `null` for text and dates, `centroid` `[]`, `pcp` `none`, `isMet` false, `metURL` `''`. A DEMI row and a mirrored one read the same.
+- A PUT body with no field besides `read` and `isPublished` is a 400; eagle-api would blank the row.
+- `notificationThresholdValue` must be a number and `centroid` at most two numbers or strings (Number and Mixed array in the model); any key not in the model is a 400.
+- Dark: a write to an Eagle-mirrored notification is replaced by the next Eagle push.
+
+Questioned:
+- PUT blanks `pcp`, `isMet`, `metURL`, `dateStarted` and `dateCompleted` when the body leaves them out (`:131-135`), though eagle-admin's edit form does not send them. Ported as is; decide at the flip whether those period fields move out of the PUT.
+
+Callers to move: eagle-admin `notification-project.service.ts:58-69`. Notification documents attach through the document routes; the eagle-admin screen builds eagle-api fetch URLs (`project-notification-documents.component.ts:463`), move those too.
 
 ### Organizations
 

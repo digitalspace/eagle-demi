@@ -12,11 +12,10 @@ const crypto = require('node:crypto');
 const lists = require('../repositories/lists');
 const users = require('../repositories/users');
 const { systemAccess } = require('../helpers/access-sql');
-const { eagleBaseAcl } = require('../helpers/eagle-acl');
 const { writeGuarded } = require('../helpers/etag-write');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { logger } = require('../utils/logger');
 
 const SHORT = { type: 'string', max: 1000 };
@@ -59,13 +58,6 @@ function coerceParent(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
   if (!Object.hasOwn(input, 'parentCompany') || validParent(input.parentCompany)) return input;
   return { ...input, parentCompany: null };
-}
-
-/** `read` with `public` added or taken out; other entries are kept, and an emptied read falls back to staff. */
-function readWith(read, published) {
-  const rest = eagleBaseAcl(read).filter(r => r !== 'public');
-  const base = rest.length ? rest : [...STAFF_READ];
-  return published ? ['public', ...base] : base;
 }
 
 function auditOf(action, fields) {
