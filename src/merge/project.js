@@ -90,6 +90,10 @@ const EAGLE_ONLY_FIELDS = [
   ...EAGLE_STAFF_FIELDS
 ];
 
+/** Which block is current, the years held, and every `legislation_<year>` block. */
+const legislationFields = (eagle) => ['currentLegislationYear', 'legislationYearList',
+  ...Object.keys(eagle).filter(k => LEGISLATION_KEY.test(k))];
+
 /** The `fields` an Eagle record holds a value for: how both merges fill the Eagle-only gaps. */
 function pickEagleFields(eagle, fields) {
   const picked = {};
@@ -274,6 +278,8 @@ function flattenEagleProject(doc, orgs) {
   for (const field of EAGLE_TOP_LEVEL_FIELDS) {
     if (doc[field] !== undefined) flat[field] = doc[field];
   }
+  // Every block rides along, so `sources.eagle` can be flattened again under another year.
+  for (const k of legislationKeys) flat[k] = doc[k];
   return normalizeEagleSlot(flat, orgs);
 }
 
@@ -435,7 +441,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   }
 
   // Eagle fills the gaps Track cannot.
-  if (eagle) Object.assign(merged, pickEagleFields(eagle, EAGLE_ONLY_FIELDS));
+  if (eagle) Object.assign(merged, pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
 
   // Track-only, and no contest with Eagle: `currentPhaseName` and `phaseHistory` are Eagle's own
   // EA-process record and stay exactly as they are. This is the dated assessment rail, and it is
@@ -495,7 +501,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   for (const [target, , eagleField] of TRACK_PRECEDENCE) {
     if (eagleField && hasValue(eagle[eagleField])) merged[target] = eagle[eagleField];
   }
-  Object.assign(merged, pickEagleFields(eagle, EAGLE_ONLY_FIELDS));
+  Object.assign(merged, pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
   trimLabels(merged);
 
   const centroid = normalizeCentroid(null, eagle);
@@ -618,6 +624,7 @@ function buildProjectIndex(projects) {
 
 module.exports = {
   TRACK_PRECEDENCE,
+  LEGISLATION_KEY,
   EAGLE_ONLY_FIELDS,
   EAGLE_STAFF_FIELDS,
   pickEagleFields,

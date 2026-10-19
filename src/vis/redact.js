@@ -44,6 +44,18 @@ function derivePublished(doc) {
   return doc.isPublished === true;
 }
 
+/**
+ * A child's level under every dial that reaches it, the strictest winning: its own, its parent's,
+ * and that of the top-level field it stands in for (`dialOf`).
+ */
+function childVis(catalog, dials, key, catalogKey, record) {
+  const entry = catalog[catalogKey];
+  const levels = [effectiveVis(entry, dials[catalogKey], record)];
+  if (LEVELS.includes(dials[key])) levels.push(dials[key]);
+  if (entry.dialOf) levels.push(effectiveVis(catalog[entry.dialOf], dials[entry.dialOf], record));
+  return Math.min(...levels);
+}
+
 /** The listed children of a dotted catalog key, for a parent the caller cannot see whole. */
 function visibleChildren(catalog, dials, level, key, value, record) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -57,7 +69,7 @@ function visibleChildren(catalog, dials, level, key, value, record) {
     // `sources.*` leaves the API only for the keys ENRICHMENT_SOURCES names (empty in prod) — the
     // allowlist publicView held before this replaced it.
     if (key === 'sources' && !config.enrichmentSources.includes(child)) continue;
-    if (visible(level, effectiveVis(catalog[catalogKey], dials[catalogKey], record))) out[child] = value[child];
+    if (visible(level, childVis(catalog, dials, key, catalogKey, record))) out[child] = value[child];
   }
 
   return Object.keys(out).length ? out : null;

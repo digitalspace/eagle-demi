@@ -1090,6 +1090,12 @@ paths:
           description: Unauthorized.
         '404':
           description: Project not found.
+        '409':
+          description: >-
+            The project is under a locked Act (today the Building Canada Act, 2025) and the body
+            sends another `legislationYear` (including null) or another `legislation` label,
+            including when the project moved under that Act after this request read it. Nothing is
+            written.
         '500':
           description: >-
             The project was saved, but its `eagle-<eagleId>` copy could not take the new `tags`.
@@ -1244,17 +1250,32 @@ paths:
                 reason:
                   type: string
                   description: Required and non-empty for level 4; optional on every other move.
+                legislationYear:
+                  type: integer
+                  description: >-
+                    Level 4 only. Makes that year's legislation block current and lifts its content
+                    to the top level; without it, or naming the current year, the current block is
+                    kept. One of 1996, 2002, 2018, 2025.
       responses:
         '200':
           description: Project moved to the requested level.
         '400':
-          description: level is outside 1-4, or level 4 was sent without `confirm` or a `reason`.
+          description: >-
+            level is outside 1-4, or level 4 was sent without `confirm` or a `reason`, or
+            `legislationYear` is not a year or was sent with a level below 4.
         '401':
           description: Unauthorized.
         '403':
           description: Only sysadmin may pull a record back from level 4.
         '404':
-          description: Project not found.
+          description: Project not found, or `legislationYear` is not 1996, 2002, 2018 or 2025.
+        '409':
+          description: >-
+            The project's current Act is locked (today the Building Canada Act, 2025) and
+            `legislationYear` names another year, including when it moved under that Act after
+            this request read it; or `legislationYear` is not the current year and the project has
+            no content under it (not in its `legislationYearList`, or that block has no name).
+            Nothing is written.
 
   /api/projects/{id}/short-code:
     put:
@@ -7992,6 +8013,25 @@ components:
           type: string
           format: date-time
           description: When dispute resolution started, mirrored from Eagle. Staff only.
+        currentLegislationYear:
+          type: string
+          description: >-
+            The current block's key, such as `legislation_2018`. Its content is also the top level.
+            Mirrored from Eagle; `PUT /api/projects/{id}` ignores it, the year moves through
+            `PUT /api/projects/{id}/level`.
+        legislationYearList:
+          type: array
+          items:
+            type: integer
+          description: The years the project has a legislation block for. `PUT` ignores it.
+      additionalProperties:
+        description: >-
+          `legislation_<year>` (1996, 2002, 2018, 2025): the project's content under that Act, as
+          Eagle sent it. Each field is shown at the level of the top-level field of the same name,
+          under the strictest of that field's dial, the block's and its own
+          (`type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow
+          `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`);
+          a field with no top-level counterpart is withheld. `PUT` ignores these keys.
 
     OrganizationInput:
       type: object
