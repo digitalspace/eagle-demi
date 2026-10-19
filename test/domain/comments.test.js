@@ -219,6 +219,13 @@ test('comment domain', async (t) => {
     assert.strictEqual(store.written.length, 0);
   });
 
+  await t.test('update with eaoStatus on a comment whose period is gone is a conflict', async (t) => {
+    const store = fakeStore(t, { ...STORED, periodId: '5c1f7a3e9b1d2c0012349999' });
+    const result = await comment.update(STAFF, COMMENT_ID, { eaoStatus: 'Published' });
+    assert.strictEqual(result.status, 'conflict');
+    assert.strictEqual(store.written.length, 0);
+  });
+
   await t.test('status Published opens the comment under its period and stamps the caller', async (t) => {
     const store = fakeStore(t);
     const { result, rows } = await audited(() => comment.setStatus(STAFF, COMMENT_ID, { status: 'Published' }));

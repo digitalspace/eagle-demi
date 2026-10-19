@@ -720,8 +720,9 @@ async function reconcile(argv = [], deps = {}) {
     }
     summary.comments = {
       inDemi: commentRows.length, inEagle: eagleCommentIds.size,
-      ...diff(commentRows, row => String(row.id), eagleCommentIds, undefined,
-        id => !unresolvedComments.has(id)),
+      // A comment created in DEMI has no Eagle copy until sync-out covers comments, so it is not drift.
+      ...diff(commentRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eagleCommentIds,
+        undefined, id => !unresolvedComments.has(id)),
       aclMismatch: aclMismatch(commentRows, row => String(row.id), eagleRead,
         row => periodReadOf.get(String(row.id)) || null)
     };
