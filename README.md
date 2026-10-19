@@ -591,6 +591,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 <!-- port: project-legislation -->
 
 <!-- port: sitemap -->
+`GET /sitemap.xml` (anonymous) is served by DEMI; eagle-public's `robots.txt` still names eagle-api `/api/public/sitemap.xml` until it is repointed. As in eagle-api, it lists `<LINK_BASE_URL>/p/<eagleId>` for each public project, sorted by Eagle id, with the current legislation block's `dateUpdated` as `lastmod`, at most 50,000 entries, built once an hour. Differences: the host is `LINK_BASE_URL` (eagle-api: `PUBLIC_SITE_URL`); a public project with no Eagle id is not listed, and a Track row and its `eagle-<id>` twin are one entry.
 
 <!-- port: cac -->
 
