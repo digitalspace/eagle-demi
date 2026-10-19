@@ -37,10 +37,10 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `vis/catalog/users.js` | 1 | S-M | in progress (feat-port-users); Dark: staff-only, no caller |
 | 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | in progress (feat-port-extensions); Dark: staff-only, no caller |
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
-| 10 | Sitemap | `controllers/sitemap.js` | 0 | S | todo |
+| 10 | Sitemap | `controllers/sitemap.js` | 0 | S | in progress (feat-port-sitemap) |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
 | 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | todo |
-| T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | todo |
+| T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | in progress (feat-port-sitemap) |
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | todo |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | todo |
@@ -442,23 +442,37 @@ Business rules: legislation year switch on publish; extract the exact condition 
 
 Status: todo (one gap)
 
-Gap: no `CACUser` dataset on `GET /search` (`parity-map.js:426`). Dropped 2026-10-14, not ported. eagle-admin still calls eagle-api `/search?dataset=Project` (`full-project.resolver.ts:29-31`); move it.
+Gap: no `CACUser` dataset on `GET /search` (`parity-map.js:427`). Dropped 2026-10-14, not ported; slice T marks it dropped. eagle-admin still calls eagle-api `/search?dataset=Project` (`full-project.resolver.ts:29-31`); move it.
 
 ### Sitemap
 
-Status: todo
+Status: Dark: served, no caller until slice 10b
 
-Today: nothing in eagle-demi, eagle-edge or eao-nginx. Prod Angular `robots.txt:6` points at `https://projects.eao.gov.bc.ca/api/public/sitemap.xml`.
+Today: `GET /sitemap.xml` (anonymous) is served under the `port: sitemap` anchor (`routes.js:406`) by `src/controllers/sitemap.js`. Prod Angular `robots.txt:6` still points at `https://projects.eao.gov.bc.ca/api/public/sitemap.xml`; slice 10b repoints it.
 
-Target: `GET /sitemap.xml` from DEMI public projects, then repoint `robots.txt` on the prod line and the react line.
+Business rules (eagle-api `api/controllers/sitemap.js`):
+- Public projects only: `read: 'public'` (`:20-29`). DEMI reads with `resolveAccess({})`, the anonymous `read[]` predicate, whoever asks, since one cached answer serves every caller.
+- `lastmod` is the current legislation block's `dateUpdated` as `YYYY-MM-DD`, left out when missing or unreadable (`:23-24,31-34`). DEMI's top-level `dateUpdated` is that block's, flattened on ingest (`merge/project.js` `flattenEagleProject`); a row whose dial hides it from anonymous readers gets no `lastmod`.
+- Host defaults to prod (`:9`). DEMI uses `LINK_BASE_URL`, per-environment and defaulting to prod, through `short-links.defaultProjectUrl`.
+- Built at most once an hour per instance, concurrent misses share one build, and a failed build is not kept (`:10,62-71`). `Cache-Control: public, max-age=3600` (`:75`).
+- At most 50,000 entries, cut with a warning (`:12,38-41`). Sorted by id (`:25`).
+- Each loc is `/p/<id>` (`:46`).
 
-Business rules (eagle-api `api/controllers/sitemap.js:62`): which objects and URLs appear; extract.
+Decisions:
+- Loc is `/p/<eagleId>`. Evidence: eagle-api emits the Mongo `_id` (`:46`). Both eagle-public lines route `p/:projId` (develop `app.routes.ts:115`, react `routes.tsx:118`) and read the project from DEMI `GET /projects/:id` (develop `api.ts:316-317`, react `api/project.ts:138-139`), which resolves a 24-hex id as an Eagle id and anything else as a DEMI id (`controllers/nosql/project.js:360`). The develop line also keys its comment period read on the route id (`api.ts:341`) and maps the project `_id` to `eagleId ?? id` (`api.ts:120`). DEMI short links already point at `/p/<eagleId>` (`short-links.js:81`). The Eagle id resolves on both lines and keeps every URL search engines hold.
+- A public project with no Eagle id (Track only) is not listed, as eagle-api never listed it.
+- A Track row and its `eagle-<id>` twin carry the same `eagleId` and are one entry, with the later `lastmod`.
+
+Questioned:
+- Track-only public projects have a page at `/p/<DEMI id>` through DEMI's project read, but whether the develop line's child reads (comment periods, documents) answer for a DEMI id is unverified. List them once a line serves them by DEMI id.
+
+Callers to move: eagle-public `robots.txt` on `develop` and `react` (slice 10b).
 
 ### Materialized view status
 
 Status: todo
 
-Today: eagle-demi-admin `src/api/eagle.ts:32` calls eagle-api `/materialized-views/status`. DEMI has nothing. `parity-map.js:395` marks it internal to Eagle.
+Today: eagle-demi-admin `src/api/eagle.ts:32` calls eagle-api `/materialized-views/status`. DEMI has nothing. `parity-map.js:396` marks it internal to Eagle.
 
 Target: decided 2026-10-14. Keep the eagle-api call until DataBC moves to DEMI `/reports`, then a small eagle-demi-admin slice removes it.
 

@@ -410,6 +410,7 @@ const routes = [
   // port: project-legislation
 
   // port: sitemap
+  { method: 'get', path: '/sitemap.xml', guards: [], load: () => require('../controllers/sitemap').getSitemap },
 
   // port: cac
 ];

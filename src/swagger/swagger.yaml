@@ -458,6 +458,26 @@ paths:
             A query parameter this endpoint does not read, including every filter parameter
             `/api/search` accepts, or an unknown record type in `datasets`.
 
+  /api/sitemap.xml:
+    get:
+      summary: Sitemap of every public project page, for search engines
+      description: >-
+        Unauthenticated. Replaces eagle-api `GET /api/public/sitemap.xml`. One `<url>` per project
+        an anonymous visitor can read that has an Eagle id: `loc` is `<LINK_BASE_URL>/p/<eagleId>`,
+        `lastmod` the project's `dateUpdated` (its current legislation block's) as `YYYY-MM-DD`,
+        left out when the project has none. A project with no Eagle id is not listed. Sorted by
+        Eagle id, at most 50,000 entries (the sitemap protocol limit; more are cut and logged).
+        Built at most once an hour per instance; every caller gets the same anonymous answer.
+      responses:
+        '200':
+          description: The sitemap. `Cache-Control` is `public, max-age=3600`.
+          content:
+            application/xml:
+              schema:
+                type: string
+        '500':
+          description: The project read failed. Not cached; the next request builds again.
+
   /api/health/search-schema:
     get:
       summary: Can the live search indexes answer what this app asks them?
