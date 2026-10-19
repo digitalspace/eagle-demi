@@ -4095,6 +4095,42 @@ paths:
         '401':
           description: A Bearer token was sent and rejected.
 
+    post:
+      summary: Create a user
+      description: >-
+        Adds a `User` row with a new UUID id. Needs the role `project-system-admin`, `sysadmin` or
+        `staff`. Every field is optional; one left out is stored empty (`null` for `middleName` and
+        `org`). It reads staff-only unless `isPublished` is true, which only a user whose `orgName`
+        is `Environmental Assessment Office` may be. `read` in the body is ignored. There is no
+        password: sign-in is Keycloak's.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserInput'
+      responses:
+        '201':
+          description: The created row.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            A field over its limit, of the wrong type or not in the list below, an `org` that is not
+            an id, or `isPublished` true outside the Environmental Assessment Office. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '503':
+          description: >-
+            Another request kept writing the same user, and nothing was saved. Send the same body
+            again. Body `{ error: "The record is being written by another request. Try again." }`.
+
   /api/users/{id}:
     get:
       summary: Read one mirrored user
@@ -4123,6 +4159,51 @@ paths:
           description: A Bearer token was sent and rejected.
         '404':
           description: User not found.
+    put:
+      summary: Replace a user
+      description: >-
+        Replaces every field of a user, as eagle-api did: a field left out, or sent empty, is
+        stored empty (`null` for `middleName` and `org`). Needs the role `project-system-admin`,
+        `sysadmin` or `staff`. `isPublished` left out keeps the current visibility, except that a
+        user whose `orgName` is no longer `Environmental Assessment Office` stops being public.
+        `read` is ignored. A body with no field besides `isPublished` and `read` is a 400.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The record id (the Eagle `_id`, or the UUID of a user DEMI created).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserInput'
+      responses:
+        '200':
+          description: The updated row.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            No field to write, a field over its limit, of the wrong type, not in the list or hidden
+            from the caller, or `isPublished` true outside the Environmental Assessment Office.
+            Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: User not found.
+        '503':
+          description: >-
+            Another request kept writing the same user, and nothing was saved. Send the same body
+            again. Body `{ error: "The record is being written by another request. Try again." }`.
 
   /api/groups:
     get:
@@ -7801,6 +7882,65 @@ components:
               type: boolean
               default: false
               description: Readable by the public from the start.
+
+    UserInput:
+      type: object
+      description: >-
+        Every field is optional and nullable. `read` is ignored. Any other field is a 400.
+      properties:
+        firstName:
+          $ref: '#/components/schemas/UserText'
+        middleName:
+          $ref: '#/components/schemas/UserText'
+        lastName:
+          $ref: '#/components/schemas/UserText'
+        displayName:
+          $ref: '#/components/schemas/UserText'
+        email:
+          $ref: '#/components/schemas/UserText'
+        org:
+          type: string
+          nullable: true
+          description: The organization id (a 24-hex Eagle id or a UUID). Not checked against the organizations.
+        orgName:
+          $ref: '#/components/schemas/UserText'
+        title:
+          $ref: '#/components/schemas/UserText'
+        phoneNumber:
+          $ref: '#/components/schemas/UserText'
+        salutation:
+          $ref: '#/components/schemas/UserText'
+        department:
+          $ref: '#/components/schemas/UserText'
+        faxNumber:
+          $ref: '#/components/schemas/UserText'
+        cellPhoneNumber:
+          $ref: '#/components/schemas/UserText'
+        address1:
+          $ref: '#/components/schemas/UserText'
+        address2:
+          $ref: '#/components/schemas/UserText'
+        city:
+          $ref: '#/components/schemas/UserText'
+        province:
+          $ref: '#/components/schemas/UserText'
+        country:
+          $ref: '#/components/schemas/UserText'
+        postalCode:
+          $ref: '#/components/schemas/UserText'
+        notes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        isPublished:
+          type: boolean
+          description: >-
+            Readable by the public. Only for a user whose `orgName` is `Environmental Assessment
+            Office`. Create defaults to false; a PUT that leaves it out keeps the current value.
+    UserText:
+      type: string
+      maxLength: 1000
+      nullable: true
 
     CommentPeriodUpdate:
       type: object
