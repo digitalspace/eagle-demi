@@ -30,7 +30,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | done (b9e4685f) |
 | 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); Dark: staff-only, no caller; publish/unpublish added (86c68044) |
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods-write.js`, `repositories/comment-periods.js` | 0 | M | done (ab0292ec); Dark: staff-only, no caller |
-| 3 | Comments | `domain/comments.js`, `controllers/native/comments.js`, `repositories/comments.js` | 2 | M | todo |
+| 3 | Comments | `domain/comments.js`, `controllers/native/comments-write.js`, `repositories/comments.js` | 2 | M | in progress (feat-port-comments) |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | todo |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | todo |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications.js`, `repositories/notifications.js` | 0 | S-M | todo |
@@ -214,13 +214,31 @@ Callers to move: eagle-admin `commentperiod.service.ts:98,104,109,115,120`; DEMI
 
 ### Comments
 
-Status: todo
+Status: Dark
 
-Today: reads at `routes.js:293-294`, export at `routes.js:306`. Writes only as the Eagle mirror (`routes.js:247`). `POST /public/comment` has no caller and is not ported.
+Today: reads at `routes.js:296-297`, export at `routes.js:309`. Mirror writes at `routes.js:250` (Eagle). Dark: the three write routes are served under the `port: comments` anchor (`routes.js:376`), rules in `src/domain/comments.js`, handlers in `src/controllers/native/comments-write.js`. eagle-admin still calls eagle-api. `POST /public/comment` has no caller and is not ported.
 
 Target routes: `POST /comments`, `PUT /comments/:id`, `PUT /comments/:id/status`.
 
-Business rules (eagle-api `api/controllers/comment.js:303,435,476`): to extract. Known: status transitions (pending, published, rejected, deferred) and who may set each; a comment belongs to one period; attachments used `POST /public/document` (dead).
+Guards: every route is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eagle-api `swagger.yaml:5009,5159,5220`).
+
+Business rules (eagle-api `api/controllers/comment.js`):
+- Status sets read (`:32-64`): `Published` adds `public`; `Pending`, `Deferred` and `Rejected` are staff only; `Reset` is stored as `Pending`, staff only. Any other status leaves `read` alone in eagle-api; DEMI answers 400 for it.
+- Create copies author, comment, dateAdded, dateUpdated, documents, eaoNotes, eaoStatus, isAnonymous, location, period, proponentNotes, proponentStatus, publishedNotes, rejectedNotes, rejectedReason and valuedComponents (`:344-360`), and sets `write` and `delete` to staff and sysadmin (`:362-363`). DEMI takes `periodId` (a period DEMI holds, else 400) for `period`, stamps `dateUpdated`, defaults `dateAdded` to now and `isAnonymous` to true, and answers 201 with a UUID id, `sourceSystem: 'demi'` and `addedBy`/`updatedBy`. DEMI rows carry no `write` or `delete` list; the route guards hold that rule.
+- With no `eaoStatus`, eagle-api leaves the model's `read` default (`project-system-admin`); DEMI stores `eaoStatus: null` and reads staff only.
+- `commentId` is the period's `commentIdCount` after an atomic increment (`:340,378-382`); DEMI calls `commentPeriods.nextCommentId` after the body and period check, so a refused body takes no number.
+- `datePosted` is kept only when the comment is created `Published` (`:361`).
+- `documents` and `valuedComponents` entries must be ids (`:323-337`). eagle-api's check returns from a `forEach` callback, so a bad id does not stop the save; DEMI answers 400 naming the field.
+- PUT copies isAnonymous, datePosted, eaoNotes, eaoStatus, submittedCAC, proponentNotes, proponentStatus, publishedNotes, rejectedNotes and rejectedReason, and stamps `dateUpdated` (`:395-406`). Documents are not updated (`:407-408`); in DEMI a `documents` key is a 400. DEMI also stamps `updatedBy` and answers 404 for a missing row and 400 for an empty body.
+- Status sets `eaoStatus`, read, `dateUpdated` and `updatedBy` (`:426-447`). The eagle-api body is `{status: {status}}`; DEMI's is `{status}`.
+- Each write records an action (`Post`, `Put`, `Status`). DEMI writes `comment.create`, `.update` and `.setStatus`, with `detail.fields` holding field names only.
+
+Questioned:
+- PUT moves read through `eaoStatus` (`:410`), so two routes set the status. Kept for parity.
+
+Decisions:
+- A comment's read is its status read capped under its period's (`eagleReadUnder`), as the mirror does: a `Published` comment under an unpublished period reads staff only, without a 409. A DEMI row keeps its own read in `sources.demi.read`, and `comments.aclRowsForPeriod` hands that to the period cascade, so publishing the period opens it.
+- Dark: a status or update of an Eagle-mirrored row is replaced by the next Eagle push, and the period cascade derives an Eagle row from `sources.eagle.read`, not from a DEMI status write.
 
 Callers to move: eagle-admin `comment.service.ts:47,52,73,139`.
 

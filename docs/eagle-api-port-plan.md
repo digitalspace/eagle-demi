@@ -106,7 +106,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - `documents` and `valuedComponents` ids are validated (`:323-337`).
   - PUT field set is `:395-406`; documents are not updated (`:407-408`).
 - Questioned: PUT moves read through `eaoStatus` (`:410`).
-- Owns: `domain/comments.js`, `controllers/native/comments.js`, `repositories/comments.js`, `vis/catalog/comments.js`.
+- Owns: `domain/comments.js`, `controllers/native/comments-write.js` (the reads in `comments.js` answer `res` themselves), `repositories/comments.js`, `vis/catalog/comments.js`.
 
 **4. Project groups + members.** Size M. After 0.
 - Routes, all [project-system-admin, staff, sysadmin]: `POST /groups` (:1878), `PUT /groups/:id` (:2086), `DELETE /groups/:id` (:2054), `GET /groups/:id/members` (:2188), `POST /groups/:id/members` (:2151), `DELETE /groups/:id/members/:userId` (:2268).

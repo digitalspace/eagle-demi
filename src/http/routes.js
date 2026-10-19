@@ -374,6 +374,9 @@ const routes = [
   { method: 'put', path: '/comment-periods/:id/unpublish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comment-periods-write').unpublishCommentPeriod },
 
   // port: comments
+  { method: 'post', path: '/comments', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comments-write').createComment },
+  { method: 'put', path: '/comments/:id', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comments-write').updateComment },
+  { method: 'put', path: '/comments/:id/status', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/comments-write').setCommentStatus },
 
   // port: groups
 

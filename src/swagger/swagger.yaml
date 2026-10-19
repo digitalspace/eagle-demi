@@ -5126,6 +5126,42 @@ paths:
           description: Unknown or repeated parameter, bad value, or a page past the caller's depth.
         '401':
           description: The Bearer token was rejected.
+    post:
+      summary: Create a comment
+      description: >-
+        Adds a comment under `periodId`, with a new UUID id and the period's next `commentId`.
+        Needs the role `staff` or `sysadmin`. It reads public only when `eaoStatus` is `Published`
+        and the period is public; no status, or any other status, reads staff-only. `Reset` is
+        stored as `Pending`. `datePosted` is kept only on a `Published` comment. `dateUpdated` in
+        the body is ignored. Not yet called by eagle-admin.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentInput'
+      responses:
+        '201':
+          description: The created row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            A field is over its limit, of the wrong type, or not in the list; an entry of
+            `documents` or `valuedComponents` is not an id; or `periodId` names no comment period
+            DEMI holds. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '503':
+          description: >-
+            Another request kept writing the same comment, and nothing was saved. Send the same
+            body again. Body `{ error: "The record is being written by another request. Try again." }`.
 
   /api/comments/{id}:
     get:
@@ -5135,12 +5171,7 @@ paths:
         `projectEagleId`. A comment the caller cannot read is a 404, the same as one that does not
         exist. A signed-in read is audited.
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: DEMI id, or the 24-hex Eagle id.
-          schema:
-            type: string
+        - $ref: '#/components/parameters/CommentId'
       responses:
         '200':
           description: The record.
@@ -5152,6 +5183,86 @@ paths:
           description: The Bearer token was rejected.
         '404':
           description: Comment not found.
+    put:
+      summary: Update a comment
+      description: >-
+        Changes the listed fields and leaves the others as they are. Needs the role `staff` or
+        `sysadmin`. `eaoStatus` moves the comment's read as the status route does. `documents`,
+        any other field outside the list, or a body with no listed field is a 400. `dateUpdated`
+        in the body is ignored; the server sets it and `updatedBy`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CommentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentUpdate'
+      responses:
+        '200':
+          description: The updated row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: A field is invalid or not writable. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Comment not found.
+        '409':
+          description: '`eaoStatus` was given but the comment''s period is not in DEMI.'
+        '503':
+          description: Another request kept writing the same comment. Send it again.
+
+  /api/comments/{id}/status:
+    put:
+      summary: Set a comment's moderation status
+      description: >-
+        Sets `eaoStatus` and the read that goes with it, plus `dateUpdated` and `updatedBy`.
+        `Published` opens the comment to the public when its period is public; `Pending`,
+        `Deferred` and `Rejected` make it staff-only; `Reset` is stored as `Pending`. Needs the
+        role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CommentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [Pending, Published, Deferred, Rejected, Reset]
+      responses:
+        '200':
+          description: The updated row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: '`status` is missing or not in the list. Body `{error, fields}`.'
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Comment not found.
+        '409':
+          description: The comment's period is not in DEMI.
+        '503':
+          description: Another request kept writing the same comment. Send it again.
 
   # Native reads: updates and project notifications.
   /api/updates:
@@ -6712,6 +6823,13 @@ components:
       description: DEMI id, or the 24-hex Eagle id.
       schema:
         type: string
+    CommentId:
+      name: id
+      in: path
+      required: true
+      description: DEMI id, or the 24-hex Eagle id.
+      schema:
+        type: string
 
   responses:
     EagleMirrorForbidden:
@@ -7261,6 +7379,123 @@ components:
             metURLAdmin:
               type: string
               maxLength: 2000
+
+    CommentUpdate:
+      type: object
+      description: Every field is optional. `dateUpdated` is ignored.
+      properties:
+        isAnonymous:
+          type: boolean
+        datePosted:
+          type: string
+          format: date-time
+          nullable: true
+        eaoStatus:
+          type: string
+          enum: [Pending, Published, Deferred, Rejected, Reset]
+        submittedCAC:
+          type: boolean
+        eaoNotes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        proponentNotes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        proponentStatus:
+          type: string
+          maxLength: 500
+          nullable: true
+        publishedNotes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        rejectedNotes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        rejectedReason:
+          type: string
+          maxLength: 10000
+          nullable: true
+
+    CommentInput:
+      type: object
+      description: >-
+        `dateUpdated` is ignored. `submittedCAC` is not taken on create, as in eagle-api; set it
+        with a PUT.
+      required:
+        - periodId
+      properties:
+        periodId:
+          type: string
+          maxLength: 200
+          description: DEMI id, or the 24-hex Eagle id, of the comment period.
+        author:
+          type: string
+          maxLength: 500
+          nullable: true
+        comment:
+          type: string
+          maxLength: 50000
+          nullable: true
+        dateAdded:
+          type: string
+          format: date-time
+          description: Defaults to now.
+        datePosted:
+          type: string
+          format: date-time
+          nullable: true
+          description: Kept only when `eaoStatus` is `Published`.
+        documents:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            description: A 24-hex Eagle id or a UUID.
+        eaoStatus:
+          type: string
+          enum: [Pending, Published, Deferred, Rejected, Reset]
+          description: Absent means no status and a staff-only read.
+        isAnonymous:
+          type: boolean
+          description: Defaults to true.
+        location:
+          type: string
+          maxLength: 1000
+          nullable: true
+        eaoNotes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        proponentNotes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        proponentStatus:
+          type: string
+          maxLength: 500
+          nullable: true
+        publishedNotes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        rejectedNotes:
+          type: string
+          maxLength: 10000
+          nullable: true
+        rejectedReason:
+          type: string
+          maxLength: 10000
+          nullable: true
+        valuedComponents:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            description: A 24-hex Eagle id or a UUID.
 
     ProjectInput:
       type: object
