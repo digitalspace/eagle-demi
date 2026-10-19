@@ -95,6 +95,20 @@ test('GET /sitemap.xml', async (t) => {
     assert.ok(!locs(res.body).some(loc => loc.endsWith('/p/5c1f7a3e9b1d2c0012390004')), 'unpublished project listed');
   });
 
+  await t.test('twins keep the later date in any read order; an undated twin keeps the date', async (t) => {
+    const later = { id: `eagle-${B}`, eagleId: B, dateUpdated: '2026-05-02T10:00:00.000Z', read: ['public'] };
+    const earlier = { id: '207', eagleId: B, dateUpdated: '2026-03-01T10:00:00.000Z', read: ['public'] };
+    const undated = { id: '208', eagleId: B, dateUpdated: null, read: ['public'] };
+    for (const order of [[later, earlier], [earlier, later], [later, undated], [undated, later]]) {
+      sitemap._resetCache();
+      t.mock.restoreAll();
+      fakeCosmos(t, order);
+      const res = await get();
+      assert.deepStrictEqual(locs(res.body), [`${HOST}/p/${B}`]);
+      assert.match(res.body, /<lastmod>2026-05-02<\/lastmod>/, order.map(row => row.id).join(', '));
+    }
+  });
+
   await t.test('a date the row hides from anonymous readers is left out', async (t) => {
     fakeCosmos(t, [{ id: `eagle-${A}`, eagleId: A, dateUpdated: '2026-01-15T00:00:00.000Z', vis: { dateUpdated: 2 }, read: ['public'] }]);
     const res = await get();
