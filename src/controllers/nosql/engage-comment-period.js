@@ -14,6 +14,7 @@ const { eagleReadUnder } = require('../../seed/transform');
 const { DUPLICATE_ID } = require('../../helpers/duplicate-id');
 const { serverError } = require('../../helpers/response');
 const syncOut = require('../../sync-out');
+const { COMMENT_PERIOD, nextSyncVersion } = require('../../sync-out/kinds');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { upsertWithRetry } = require('./eagle-mirror');
@@ -115,7 +116,7 @@ function engageItem({ engagementId, engagement, trackingId, start, end }, parent
     // Names the partition a move leaves behind, so a failed delete there reads as a move, not a duplicate.
     ...(moved ? { movedFromProjectId: String(current.projectId) } : {}),
     // Every write raises it, even one that changes nothing sync-out sends: sync-out sends what it has not sent.
-    syncVersion: (current && Number.isInteger(current.syncVersion) ? current.syncVersion : 0) + 1,
+    syncVersion: nextSyncVersion(current),
     dateAdded: (current && current.dateAdded) || new Date().toISOString(),
     sourceSystem: 'engage',
     engagementId,
@@ -135,17 +136,6 @@ function engageItem({ engagementId, engagement, trackingId, start, end }, parent
     read,
     sources: { ...(current && current.sources), engage: { ...engagement, read: [...own] } }
   };
-}
-
-/** Queue the row for every sync-out consumer. A failure is logged, not answered: reconcile re-queues. */
-async function enqueueQuietly(row) {
-  try {
-    return await syncOut.enqueue(row);
-  } catch (err) {
-    logger.error(`${LABEL} sync-out enqueue failed`,
-      { id: row.id, engagementId: row.engagementId, projectId: row.projectId, error: err.message, stack: err.stack });
-    return [];
-  }
 }
 
 function refuseStale(req, res, { engagementId, pushedAt, current }) {
@@ -215,7 +205,7 @@ async function upsertFromEngage(req, res) {
     if (written.ignored) return refuseStale(req, res, { engagementId, pushedAt, current: written.existing });
 
     const { saved, existing } = written;
-    const queued = await enqueueQuietly(saved);
+    const queued = await syncOut.enqueueQuietly(saved, { kind: COMMENT_PERIOD });
     // Same partition move as the Eagle mirror: Cosmos leaves the old row behind. The new row is marked,
     // so a copy this fails to remove reads as a half-finished move, not a duplicate.
     if (existing && String(existing.projectId) !== saved.projectId) {

@@ -43,7 +43,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | todo |
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | todo |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo |
-| FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | todo |
+| FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | in progress (feat-sync-out-kinds) |
 | F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | todo |
 | F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | todo |
 | F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | todo |
@@ -99,12 +99,12 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 
 ### Sync-out
 
-Sync-out is added to `_write.js` at the first object flip that needs it. That flip slice must:
-
-- raise `syncVersion` on every write (`src/sync-out/index.js:216`);
-- move `enqueueQuietly` from `src/controllers/nosql/engage-comment-period.js:141-149` into one exported function in `src/sync-out/index.js`, used by both callers (an extraction, not a refactor of that controller);
-- carry `kind` in the queue message and in resend (`index.js:227`), and re-read the row through a kind-to-repository registry;
-- give each kind its own consumer (path, `bodyFor`, claim) and its own reconcile path.
+- `writeRow` raises `syncVersion` on every write, one past the stored row it rebuilt from (`nextSyncVersion` in `src/sync-out/kinds.js`, which the ENGAGE ingest uses too). It does not queue anything.
+- `src/sync-out/kinds.js` maps each kind to its repository, the names of the consumers that send it, and its reconcile hook. Only `commentPeriod` is registered; it reconciles through `src/scripts/reconcile-engage.js`.
+- Queue messages and resends carry `kind`. A message with no `kind`, queued before the field existed, is read as a comment period.
+- `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing; reconcile re-queues.
+- A Flip that needs sync-out adds its kind to `kinds.js`, its consumer to the list in `index.js`, and calls `enqueueQuietly` after its write.
+- `test/sync-out/sync-out.test.js` holds the echo test: a sync-out create, eagle-api's echo through the mirror answered 2xx, the DEMI fields and `syncVersion` unchanged, and no second send.
 
 `test/sync-out-triggers.test.js` sits at the test root beside `test/sync-out/sync-out.test.js`.
 
