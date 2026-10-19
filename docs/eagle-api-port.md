@@ -27,8 +27,8 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 
 | id | objects | owns (main files) | after | size | status |
 |---|---|---|---|---|---|
-| 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | in progress (feat-port-scaffold) |
-| 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | in progress (feat-port-organizations-pins) |
+| 0 | Scaffold and work plan | `domain/_schema.js`, `domain/_write.js`, `controllers/native/write.js`, `middleware/require-roles.js`, route-inventory test | none | M | done (b9e4685f) |
+| 1 | Organizations + pins (Dark) | `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (orgName cascade) | 0 | M | done (b9e4685f); Dark: staff-only, no caller |
 | 2 | Comment periods | `domain/comment-periods.js`, `controllers/native/comment-periods.js`, `repositories/comment-periods.js` | 0 | M | todo |
 | 3 | Comments | `domain/comments.js`, `controllers/native/comments.js`, `repositories/comments.js` | 2 | M | todo |
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | todo |
@@ -95,7 +95,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 
 ### Audit
 
-`src/domain/_write.js` exports `writeRow({ ctx, repo, existing, reread, build, audit })`. It wraps `writeGuarded` and calls `auditEvent(ctx.req, audit(saved, from))` once on success, then logs the action and row id at info. A call without `audit` throws. When every etag retry loses, it returns `busy` and writes no audit row. The backstop is a route inventory, one file per object under `test/controllers/route-inventory/` (`existing.js` holds the routes from before the port), checked by `test/controllers/route-inventory.test.js`, which loads every file in that directory: every non-GET route in `routes.js` has an audit action or an exempt entry with a reason. Each ported route's entry also carries a role column: the roles from eagle-api's `x-security-scopes` for that route, copied as written, and the test checks they match the route's `requireRole` guard.
+`src/domain/_write.js` exports `writeRow({ ctx, repo, existing, reread, build, audit })`. It wraps `writeGuarded` and calls `auditEvent(ctx.req, audit(saved, from))` once on success, then logs the action and row id at info. A call without `audit` throws. When every etag retry loses, it returns `busy` and writes no audit row. The backstop is a route inventory, one file per object under `test/controllers/route-inventory/` (`existing.js` holds the routes from before the port), checked by `test/controllers/route-inventory.test.js`, which loads every file in that directory: every non-GET route in `routes.js` has an audit action or an exempt entry with a reason. Each ported route's entry also carries a role column: the roles from eagle-api's `x-security-scopes` for that route, plus `sysadmin` and `staff` where DEMI's guard grants them (see the Organizations section), and the test checks they match the route's `requireRole` guard.
 
 ### Sync-out
 
@@ -148,13 +148,13 @@ Shared code is the read `SPEC`, `writeHandler`, `_write.js` and `_schema.js`. Ea
 
 ### Pins
 
-Status: todo
+Status: done, Dark (b9e4685f). Label read only; pin writes land in F1.
 
-Today: `pins` is a field on the project document, resolved to `{_id, name, province}` in `src/merge/project.js:146-153`, shown when `pinsRead` includes `public` (`src/vis/predicates.js:18`). `PUT /projects/:id` strips `pins` and `pinsPublished` (`src/controllers/nosql/project.js:458-460`). `pinsRead` has maxVis 0 (`src/vis/catalog/projects.js:155`). eagle-public react reads pins through `GET /demi-projects/:id` (`src/app/api/api.ts:395-410`).
+Today: `pins` is a field on the project document, resolved to `{_id, name, province}` in `src/merge/project.js:146-153`, shown when `pinsRead` includes `public` (`src/vis/predicates.js:18`). `PUT /projects/:id` strips `pins` and `pinsPublished` (`src/controllers/nosql/project.js:489-492`). `pinsRead` has maxVis 0 (`src/vis/catalog/projects.js:155`). eagle-public react reads pins through `GET /demi-projects/:id` (`src/app/api/api.ts:395-410`).
 
 Design (Daniel, 2026-10-14): a pin is an organization, so DEMI has no pin routes. The organization is the object. A pin is only the link "organization X is pinned to project Y" plus a published flag, and that link lives on the project.
 - Organization create and update: the Organizations section below. This section adds no organization rules.
-- `PUT /projects/:id` accepts `pins` (a list of organization ids) and `pinsPublished` (boolean). It stops stripping both (`src/controllers/nosql/project.js:458-460`). The route keeps its existing project guard (`[authMiddleware, requireWrite]`, `routes.js:170`).
+- `PUT /projects/:id` accepts `pins` (a list of organization ids) and `pinsPublished` (boolean). It stops stripping both (`src/controllers/nosql/project.js:489-492`). The route keeps its existing project guard (`[authMiddleware, requireWrite]`, `routes.js:170`).
 - Every id in `pins` must exist in the organizations table. Otherwise the PUT returns 400 and lists the unknown ids. This is a foreign-key check.
 - DEMI has no `POST`, `DELETE` or `PUT` route under `/projects/:id/pins`. eagle-api's `/project/:id/pin` sub-routes edit an array; DEMI does not copy them.
 - Reads: eagle-public and eagle-admin get pins from the project read, `GET /projects/:id`. There is no `GET /projects/:id/pins`.
@@ -166,7 +166,7 @@ Rules:
 - When the list is unpublished, the public response is `[]`. This is a deliberate change from eagle-api `[{total_items: 0}]` (`pins.js:42`).
 
 Ownership per phase:
-- Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:458-460` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`). It has no caller until F1, which maps `id` to `_id`.
+- Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:489-492` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`). It has no caller until F1, which maps `id` to `_id`.
 - Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/merge/project.js:182`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `project.js:459-460`. Remove the dead pins-shape branch in `carryEagleOnlyFields` (`merge/project.js:220-232`) and its tests (`test/merge/project.test.js:899-913`).
 - Sync-out: DEMI pushes the project's organization id list and published flag into eagle-api's `pins` and `pinsRead`. eagle-api project PUT does not touch `pins` (`api/controllers/project.js` has no `pins` reference on `origin/develop`), so the push uses the eagle-api pin routes: `POST /project/:id/pin` for ids to add, `DELETE /project/:id/pin/:pinId` for ids to remove, `PUT /project/:id/pin/publish` or `/unpublish` for the flag. The consumer reads the eagle-api list first and sends the difference.
 
@@ -185,7 +185,7 @@ Callers to move: eagle-admin `project.service.ts` pins methods (add, delete, pub
 
 Status: todo
 
-Today: reads at `routes.js:290-292`. Writes exist only as the Eagle mirror (`routes.js:246`) and the ENGAGE ingest (`routes.js:263`, ENGAGE-sourced periods only). DEMI's own `src/sync-out/eagle.js:190,199,206,245` calls eagle-api `GET`, `PUT`, `DELETE` and `POST /commentperiod` to write back into Eagle.
+Today: reads at `routes.js:293-295`. Writes exist only as the Eagle mirror (`routes.js:249`) and the ENGAGE ingest (`routes.js:263`, ENGAGE-sourced periods only). DEMI's own `src/sync-out/eagle.js:190,199,206,245` calls eagle-api `GET`, `PUT`, `DELETE` and `POST /commentperiod` to write back into Eagle.
 
 Target routes: `POST /comment-periods`, `PUT /comment-periods/:id`, `DELETE /comment-periods/:id`, publish and unpublish. Then rewire `src/sync-out/eagle.js` so DEMI is the writer and Eagle receives the mirror.
 
@@ -243,9 +243,9 @@ Callers to move: eagle-admin `notification-project.service.ts`.
 
 ### Organizations
 
-Status: in progress (feat-port-organizations-pins)
+Status: done (b9e4685f), Dark
 
-Today: `GET /organizations`, `/organizations/:id` (`routes.js:285-286`), mirror at `routes.js:248`. Dark: `POST /organizations` and `PUT /organizations/:id` are served under the `port: organizations` anchor in `routes.js`, rules in `src/domain/organizations.js`; eagle-admin still calls eagle-api.
+Today: `GET /organizations`, `/organizations/:id` (`routes.js:288-289`), mirror at `routes.js:248`. Dark: `POST /organizations` and `PUT /organizations/:id` are served under the `port: organizations` anchor in `routes.js`, rules in `src/domain/organizations.js`; eagle-admin still calls eagle-api.
 
 Target routes: `POST /organizations`, `PUT /organizations/:id`. Pins are organizations, so these are also the only routes that create or edit a pin's organization (see Pins). eagle-api publish and unpublish have no caller; decide whether organizations keep a visibility level at all.
 
@@ -259,7 +259,7 @@ Business rules (eagle-api `api/controllers/organization.js`):
 - Create answers 200 (`:119`). DEMI answers 201 with a UUID id, `sourceSystem: 'demi'` and `eagleId: null`.
 - Update with an id that is not an ObjectId is 400 (`:129-133`). DEMI also takes UUIDs, so any unknown id is 404.
 - Update of a missing organization answers 200 with `null` (`:161,167`). DEMI answers 404.
-- Update rewrites `orgName` on that organization's users (`:162-163`). eagle-api and DEMI both run it on every update; DEMI rewrites only users whose `orgName` differs from the organization name, so any later PUT repairs a failed cascade. It skips deleted users and logs a user write that fails without failing the update.
+- Update rewrites `orgName` on that organization's users (`:162-163`). eagle-api and DEMI both run it on every update; DEMI rewrites only users whose `orgName` differs from the organization name, so any later PUT repairs a failed cascade. It skips deleted users and logs a user write that fails without failing the update. The orgName cascade writes users through `users.upsert` and records no audit row per user; only the `organization.update` action is audited, matching eagle-api.
 - Each write records an action, `Post` or `Put` (`:117,165`). DEMI writes the audit actions `organization.create` and `organization.update`, with `detail.fields` holding field names only.
 - A body field outside the list is ignored by eagle-api. DEMI answers 400 naming it, and an empty update body is 400.
 
