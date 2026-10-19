@@ -34,16 +34,16 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 4 | Project groups + members | `domain/groups.js`, `controllers/native/groups-write.js`, `controllers/native/groups.js`, `repositories/groups.js` | 0 | M | done (5ccd2bf3); Dark: staff-only, no caller |
 | 5 | Updates (recent activity) | `domain/updates.js`, `controllers/native/updates-write.js`, `repositories/updates.js`, `test/helpers/access-coverage.test.js` | 0 | L | done (dda7c901); Dark: staff-only, no caller |
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | done (251ab222); Dark: staff-only, no caller |
-| 7 | Users | `domain/users.js`, `controllers/native/users.js`, `vis/catalog/users.js` | 1 | S-M | in progress (feat-port-users); Dark: staff-only, no caller |
-| 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | in progress (feat-port-extensions); Dark: staff-only, no caller |
-| 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js`, `merge/project.js`, `vis/catalog/projects.js` | 0 | M | in progress (feat-port-legislation-switch) |
-| 10 | Sitemap | `controllers/sitemap.js` | 0 | S | in progress (feat-port-sitemap) |
+| 7 | Users | `domain/users.js`, `controllers/native/users.js`, `vis/catalog/users.js` | 1 | S-M | done (b506a134); Dark: staff-only, no caller |
+| 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | done (99c9045c); Dark: staff-only, no caller |
+| 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js`, `merge/project.js`, `vis/catalog/projects.js` | 0 | M | done (47412c65); Dark: `setLevel` year switch staff-guarded; blocks stored and returned on reads |
+| 10 | Sitemap | `controllers/sitemap.js` | 0 | S | done (591f9cf9); 10b (`robots.txt`) still todo |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
-| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | todo |
-| T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | in progress (feat-port-sitemap) |
-| A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | todo |
-| A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo |
-| FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | in progress (feat-sync-out-kinds) |
+| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | half A done (eagle-notify e1c389b); half B todo, after eagle-notify is deployed to test and DEMI's `notify-api-key` is confirmed to be the Function App host key |
+| T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | done (591f9cf9) |
+| A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af); no caller yet |
+| A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | todo; DEMI now returns every legislation block (47412c65); eagle-admin still has to map `_id` from `eagleId` and fetch the proponent organization |
+| FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | done (359611b4) |
 | F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | todo |
 | F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | todo |
 | F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | todo |
@@ -55,7 +55,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | todo |
 | F10 | Flip: documents | document mirror, eagle-admin `document.service.ts` and components | FS, A0 | - | todo |
 | F11 | Flip: CAC | `merge/project.js` (DEMI_ONLY) | 11, F8 | - | todo |
-| R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | todo |
+| R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | done (eagle-api 681b483): topic, vc, `GET /jobs` list removed; `protectedRefresh`, `/task`, `/public/comment`, `/public/document` were already gone; `login` kept (eagle-admin local login when Keycloak is off) |
 | R2 | Retire in eagle-api: per object | handlers under "Callers to move", pin routes, extension routes | the object's Flip live on test (retire tag: live on prod) | - | todo |
 | R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle` | the kind's Flip live on prod | - | todo |
 
@@ -357,7 +357,7 @@ Callers to move: eagle-admin `org.service.ts:19,29`.
 
 ### Users
 
-Status: in progress (feat-port-users), Dark
+Status: done (b506a134), Dark
 
 Today: `GET /users`, `/users/:id` (`routes.js:273-274`), `GET /me` (`routes.js:116`), mirror at `routes.js:253`. Dark: `POST /users` and `PUT /users/:id` are served under the `port: users` anchor in `routes.js`, rules in `src/domain/users.js`, write handlers in `src/controllers/native/users.js` (the reads stay with the mirror in `controllers/nosql/user.js`). eagle-admin still calls eagle-api.
 
@@ -386,7 +386,7 @@ Callers to move: eagle-admin `user.service.ts:55-62`; its `toEagleUserBody` (`mo
 
 ### CAC
 
-Status: todo
+Status: half A done (eagle-notify e1c389b); half B todo, after eagle-notify is deployed to test and DEMI's `notify-api-key` is confirmed to be the Function App host key
 
 Today: `projectCAC`, `projectCACPublished`, `cacEmail` are project fields (`src/merge/project.js:87`, `src/vis/catalog/projects.js:80-81,101`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79).
 
@@ -396,7 +396,7 @@ Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`): to extract. K
 
 ### Extensions
 
-Status: in progress (feat-port-extensions), Dark
+Status: done (99c9045c), Dark
 
 Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project (`src/merge/project.js:81`), filled by the Eagle push. Dark: the four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
 
@@ -430,7 +430,7 @@ Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `edit
 
 ### Project
 
-Status: in progress (feat-port-legislation-switch). PUT lock, publish year switch and every block on reads done.
+Status: done (47412c65), Dark. PUT lock, publish year switch and every block on reads done.
 
 Today: create, update, delete and level exist (`routes.js:159-178`). Publish through `PUT /projects/:id/level`. Rules in `src/domain/project-legislation.js`, applied by `updateProject` and `setLevel` in `src/controllers/nosql/project.js`.
 
@@ -476,7 +476,7 @@ Gap: no `CACUser` dataset on `GET /search` (`parity-map.js:427`). Dropped 2026-1
 
 ### Sitemap
 
-Status: Dark: served, no caller until slice 10b
+Status: done (591f9cf9); no caller until slice 10b (`robots.txt`), still todo
 
 Today: `GET /sitemap.xml` (anonymous) is served under the `port: sitemap` anchor (`routes.js:406`) by `src/controllers/sitemap.js`. Prod Angular `robots.txt:6` still points at `https://projects.eao.gov.bc.ca/api/public/sitemap.xml`; slice 10b repoints it.
 
@@ -536,7 +536,7 @@ Document feature: DEMI has no `MAX_FEATURE_DOCS` cap (eagle-api `document.js:919
 
 ## Retire in eagle-api (after cutover is live on test)
 
-Status: todo
+Status: dead handlers done (eagle-api 681b483, slice R1); per-object retire todo
 
 Dead now, no caller found in any repo (external callers unverified where noted):
 - `topic` and `vc` routes and models
