@@ -48,6 +48,7 @@ const { narrowTwin, mirrorTags, partnerRefusesTags, sameTags } = require('../../
 const { listHandler } = require('./mirror-reads');
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
+const { lockRefusal } = require('../../domain/project-legislation');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -538,8 +539,16 @@ exports.updateProject = async (req, res) => {
     const written = await writeGuarded({
       existing,
       reread: () => projects.getById(access, req.params.id),
-      attempt: async (current) => {
+      attempt: async (current, attempt) => {
         if (!current) return { status: 'missing' };
+        // Checked per try: a reread after a lost race can find the project moved under a locked Act.
+        const locked = lockRefusal(current, changes);
+        if (locked) {
+          logger.warn('[Project Controller] project update refused: locked Act', {
+            id: req.params.id, attempt, legislationYear: changes.legislationYear, legislation: changes.legislation
+          });
+          return { status: 'locked', error: locked };
+        }
         const row = {
           ...current,
           ...changes,
@@ -560,6 +569,7 @@ exports.updateProject = async (req, res) => {
 
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
+    if (written.status === 'locked') return res.status(409).json({ error: written.error });
     const { saved, replaced } = written;
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full

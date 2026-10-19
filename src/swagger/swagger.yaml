@@ -1070,6 +1070,12 @@ paths:
           description: Unauthorized.
         '404':
           description: Project not found.
+        '409':
+          description: >-
+            The project is under a locked Act (today the Building Canada Act, 2025) and the body
+            sends another `legislationYear` (including null) or another `legislation` label,
+            including when the project moved under that Act after this request read it. Nothing is
+            written.
         '500':
           description: >-
             The project was saved, but its `eagle-<eagleId>` copy could not take the new `tags`.

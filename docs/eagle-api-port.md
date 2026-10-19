@@ -36,7 +36,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 6 | Project notifications | `domain/notifications.js`, `controllers/native/notifications-write.js`, `repositories/notifications.js` | 0 | S-M | done (251ab222); Dark: staff-only, no caller |
 | 7 | Users | `domain/users.js`, `controllers/native/users.js`, `repositories/users.js` | 1 | S-M | todo |
 | 8 | Extensions | `domain/extensions.js`, `controllers/native/extensions.js`, `vis/catalog/projects.js` | 0 | M | todo |
-| 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | todo |
+| 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js` | 0 | M | in progress (feat-port-legislation-switch) |
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | todo |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | todo |
 | 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | todo |
@@ -391,13 +391,32 @@ Callers to move: eagle-admin `project.service.ts` extension methods.
 
 ### Project
 
-Status: todo (one gap)
+Status: in progress (feat-port-legislation-switch). PUT lock done; publish year switch blocked (below).
 
-Today: create, update, delete and level exist (`routes.js:159-178`). Publish through `PUT /projects/:id/level`.
+Today: create, update, delete and level exist (`routes.js:159-178`). Publish through `PUT /projects/:id/level`. The locked-Act rule is in `src/domain/project-legislation.js`, applied by `updateProject` in `src/controllers/nosql/project.js`.
 
-Gap: eagle-api publish also switches `currentLegislationYear` (`api/controllers/project.js:776-803`). Decide whether that belongs in `setLevel` or in a separate action. Unverified: whether a later Eagle push overwrites a level that DEMI `setLevel` wrote.
+Business rules (eagle-api `api/controllers/project.js` and `api/helpers/constants.js`, origin/develop 3723e8c):
+- The registry: 1996, 2002, 2018 and 2025, each with the `legislation` label eagle-public matches on; 2025, the Building Canada Act, is `locked` (`constants.js:63-68`).
+- PUT naming another year on a project under a locked Act is a 409 `Project is under the Building Canada Act` (`project.js:588-592,628-631`). Ported.
+- PUT re-checks the lock at write time, so a project that moved under a locked Act after the read is a 409 (`:743-754`). Ported: the check runs inside each `writeGuarded` try, so a reread after a lost etag race is checked again.
+- Publish with a `legislationYear`: a locked Act is a 409 (`:779-783`), a year outside the registry a 404 (`:784-788`), a year other than the current one that is not in `legislationYearList` or whose block has no `name` a 409 (`:790-795`), the same write-time guard (`:796-800,810-813`), then `currentLegislationYear` is set and the project published (`:801-808`). Naming the current year changes nothing. Not ported, see Blocked.
+- Publish is `[project-system-admin]` (eagle-api `swagger.yaml:1402`).
 
-Business rules: legislation year switch on publish; extract the exact condition from `project.js:776-803`.
+Decisions:
+- DEMI's PUT stores `legislationYear` and `legislation` as sent, where eagle-api ignored a blank year and always derived the label from the year (`:642-650`). So on a locked project DEMI also refuses a null year and another label; both would move it off the Act.
+
+Questioned:
+- eagle-api's PUT 404s a year outside the registry (`:646-655`); DEMI's PUT takes any four-digit year. Not ported: only the lock was in scope, and the machine writer also calls this PUT.
+
+Blocked, publish year switch:
+- A DEMI project row holds only the current legislation block. `flattenEagleProject` (`merge/project.js:242-277`) hoists the current `legislation_<year>` block to the top level and drops the others, and `sources.eagle` keeps the same flattened copy, though the push sends every block (`demiPush.js:113-115`). `currentLegislationYear` and `legislationYearList` live only in `sources.eagle`.
+- So DEMI cannot check whether another year has content (block `name`), and cannot switch the shown content to that year. Setting `currentLegislationYear` alone would leave the row naming one Act over another Act's content.
+- Needs a decision first: keep every block on the row (a `merge/project.js` change, owned in order by F1, F8, F11), or define publish-with-year in DEMI as allowed only for the current year (any other year is a 409, since DEMI holds no content under it). Also open: the publish switch as a `legislationYear` on `setLevel` (today `requireWrite`, and the only route that widens) or a separate `PUT /projects/:id/publish` [project-system-admin, staff, sysadmin], which would be a second widening route.
+
+Eagle push and a DEMI-set level (`merge/project.js:182-206`, `repositories/documents.js:432-437`):
+- `setLevel` sets `levelHeldAt` only on a narrow; a widen to level 4 clears it. A held row keeps the lower of Eagle's and its stored `read` on every push, so Eagle can narrow it but not widen it.
+- A DEMI publish holds nothing, so the next Eagle push for that project replaces `read` with Eagle's. A DEMI publish of a project Eagle still has private is undone by the next push.
+- A DEMI-set `legislationYear` on an Eagle-mirrored row is also replaced by the next push (`legislationYear` is in `EAGLE_ONLY_FIELDS`, `merge/project.js:80`).
 
 ### Search
 
