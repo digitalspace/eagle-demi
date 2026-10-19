@@ -789,7 +789,7 @@ test('the drift alert query matches the line the reconcile actually logs', () =>
 
 // Both Track rules read lines formatted in src/scripts, and a wording change there would leave the
 // rule finding nothing: the absence half would then fire forever, the failure half never.
-for (const { name, param, lineOf, fatal } of [
+for (const { name, param, lineOf, fatal, span, why } of [
   {
     name: 'demi-track-projects-poll', param: 'syncProjectsSchedule',
     // pollLine is private, so the real run writes it: a Track token that throws is one failure.
@@ -802,6 +802,7 @@ for (const { name, param, lineOf, fatal } of [
       return { line: info.mock.calls.at(-1).arguments[0], fatalLine: error.mock.calls[0].arguments[0] };
     },
     fatal: 'run failed',
+    span: '20m', why: 'the timer runs every 5 minutes, so 20m is four missed polls',
   },
   {
     name: 'demi-track-teams', param: 'syncTeamsSchedule',
@@ -811,6 +812,7 @@ for (const { name, param, lineOf, fatal } of [
         fs.readFileSync(path.join(ROOT, 'api', 'index.js'), 'utf8'))?.[1] || '',
     }),
     fatal: 'nightly run failed',
+    span: '26h', why: 'the sync runs once a day, so 26h is one run plus slack for a late one',
   },
 ]) {
   test(`${name} matches the lines its sync writes and deploys only where the timer runs`, async (t) => {
@@ -823,6 +825,10 @@ for (const { name, param, lineOf, fatal } of [
 
     const query = /query: '''\n([\s\S]+?)'''/.exec(block)?.[1];
     assert.ok(query, `${name} declares no query`);
+    assert.strictEqual(/^let span = (\S+);$/m.exec(query)?.[1], span,
+      `the span must stay ${span}, the window the description promises: ${why}`);
+    assert.match(query, /^union absent, failing$/m,
+      'the rule returns only what the final union names: drop absent and silence never alerts, drop failing and failures never do');
     const { line, fatalLine } = await lineOf(t);
 
     const prefix = /startswith "([^"]+)"/.exec(query)[1];
