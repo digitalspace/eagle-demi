@@ -5394,7 +5394,7 @@ paths:
         `active: true` with no status publishes, as in eagle-api. Publishing with no
         `publishDate` stamps now. A published update's featured image, images and attachments
         must be public documents, except images uploaded from the Update form to the same
-        project, which are published with it. `pinned` starts false; `notificationName` is kept only
+        project, which are published with it while the project is public. `pinned` starts false; `notificationName` is kept only
         on the type `Project Notification Public Comment Period`. `_id`, `read`, `notifiedAt`,
         `pinned`, `dateAdded` and `dateUpdated` in the body are ignored; any other field outside
         the list is a 400.

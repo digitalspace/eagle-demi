@@ -239,7 +239,8 @@ async function nonPublicIds(row, parentId) {
  * images no published update shows any more are released. `before` null is a create.
  */
 async function writeWithImages(ctx, { before, after, parentId, write }) {
-  const publishing = after.status === PUBLISHED;
+  // Live to the public: published and not capped below public by its parent.
+  const publishing = after.status === PUBLISHED && Array.isArray(after.read) && after.read.includes('public');
   // Throws, having reverted what it published, when an image cannot be published.
   const published = publishing ? await images.publishFor(ctx, after, parentId) : [];
   let result;

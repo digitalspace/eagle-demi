@@ -700,8 +700,9 @@ async function fillPublishDate(id, value) {
 }
 
 /**
- * The image and attachment refs of every published update showing one of `docIds`, for
- * domain/update-images.js. A row with no status goes by `active`, as eagle-api's `shownIds` does.
+ * The image and attachment refs of every published update the public may read that shows one of
+ * `docIds`, for domain/update-images.js. A row with no status goes by `active`, as eagle-api's
+ * `shownIds` does; one capped below public by its parent keeps no image public.
  */
 async function listShowingDocuments(docIds) {
   if (!docIds.length) return [];
@@ -710,6 +711,7 @@ async function listShowingDocuments(docIds) {
     partitionField: SCOPE_FIELD,
     criteria: [{
       clause: '(c.status = @shownStatus OR ((NOT IS_DEFINED(c.status) OR IS_NULL(c.status)) AND c.active = true)) AND ' +
+        "ARRAY_CONTAINS(c.read, 'public') AND " +
         '(ARRAY_CONTAINS(@shownIds, c.featuredImage.document) ' +
         'OR EXISTS(SELECT VALUE i FROM i IN c.images WHERE ARRAY_CONTAINS(@shownIds, i.document)) ' +
         'OR EXISTS(SELECT VALUE a FROM a IN c.attachments WHERE ARRAY_CONTAINS(@shownIds, a)))',

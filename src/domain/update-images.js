@@ -107,6 +107,12 @@ const revert = (ctx, docs, updateId) => release(ctx, docs.map(doc => String(doc.
  */
 async function publishFor(ctx, row, parentId) {
   const published = [];
+  // The update's read is already capped by its parent, so an image never rises above the parent's
+  // level, the rule setLevel enforces with its 409. eagle-api had no such cap.
+  if (levelOfRead(row.read || []) < PUBLIC_LEVEL) {
+    logger.info('[Update Images] update not public under its parent, images left as they are', { updateId: row.id });
+    return published;
+  }
   try {
     for (const doc of await publishable(row, parentId)) {
       published.push(await moveImage(ctx, doc, PUBLIC_LEVEL, row.id));

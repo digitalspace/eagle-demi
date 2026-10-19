@@ -18,7 +18,7 @@ const UPLOAD = { documentSource: 'UPDATE', projectId: PARENT };
 
 const req = { user: { sub: 'kc-1', preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, headers: {} };
 const CTX = { access: resolveAccess(req), req };
-const showingAll = (ids) => ({ images: ids.map(document => ({ document, alt: 'x' })) });
+const showingAll = (ids, read = ['public', 'staff', 'sysadmin']) => ({ read, images: ids.map(document => ({ document, alt: 'x' })) });
 
 test('update image cascade', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -34,6 +34,14 @@ test('update image cascade', async (t) => {
     assert.strictEqual(store.level(OWN), 4);
     assert.strictEqual(store.level(OTHER_PROJECT), 2);
     assert.strictEqual(store.level(NOT_UPLOADED), 2);
+  });
+
+  await t.test('publishFor leaves the images of an update its parent caps below public', async (t) => {
+    const store = fakeImages(t, [{ id: OWN, level: 2, ...UPLOAD }]);
+    const published = await images.publishFor(CTX, showingAll([OWN], ['staff', 'sysadmin']), PARENT);
+    assert.deepStrictEqual(published, []);
+    assert.strictEqual(store.level(OWN), 2);
+    assert.deepStrictEqual(store.copied, [], 'search index and chunks untouched');
   });
 
   await t.test('a failed publish reverts what it published and throws', async (t) => {

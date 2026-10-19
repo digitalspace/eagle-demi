@@ -310,6 +310,18 @@ test('update domain', async (t) => {
     assert.strictEqual(images.level(OWN_IMAGE), 4);
   });
 
+  await t.test('publishing under a private project leaves its own upload private', async (t) => {
+    const store = fakeStore(t, null);
+    const images = fakeImages(t, [{ id: OWN_IMAGE, level: 2, documentSource: 'UPDATE', projectId: 'p-private' }]);
+    const result = await update.create(STAFF, createBody({
+      projectId: PRIVATE_PROJECT, status: 'published', featuredImage: { document: OWN_IMAGE, alt: 'A creek' }
+    }));
+    assert.strictEqual(result.status, 'ok');
+    assert.ok(!store.written[0].read.includes('public'));
+    assert.strictEqual(images.level(OWN_IMAGE), 2);
+    assert.deepStrictEqual(images.copied, [], 'search index and chunks untouched');
+  });
+
   await t.test('a save that fails puts the image it published back', async (t) => {
     fakeStore(t, null);
     t.mock.method(updates, 'upsert', async () => { throw new Error('cosmos down'); });
