@@ -578,6 +578,8 @@ well loses only the closed id, and a grant left with no project is revoked. The 
 per run and matched to the closed set in memory, plus one further read per credential actually
 narrowed or revoked, so the cost does not grow with the number of closed projects that have no live
 grant. CLI: `yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
+Alert `demi-track-teams-<env>` fires when that line is missing for 26 hours or reports failures
+(see [Alerts](#alerts)).
 
 ### Track project poll
 
@@ -588,6 +590,8 @@ changed rows to the DEMI project rows, so a Track edit reaches DEMI within five 
 not heal links or mint short codes for Eagle-only projects, and a run with no change writes nothing;
 the nightly `syncTrackTeams` run keeps those jobs and the team sync. One summary log line:
 `[track-projects-poll] mode=… trackProjects= created= updated= relinked= skippedApiRows= orphaned= shortLinks= failures=`.
+Alert `demi-track-projects-poll-<env>` fires when that line is missing for 20 minutes or reports
+failures (see [Alerts](#alerts)).
 
 ### Update notifications
 
@@ -1550,6 +1554,8 @@ Everything below mails one action group, `demi-alerts-<env>`, created in
 | `demi-bulk-download-failed-<env>` | `AppTraces` | 2 | A bulk download job failed after its retries. Test only |
 | `demi-chunk-restamp-failed-<env>` | `AppTraces` | 2 | A chunk parent-field re-stamp job failed after its retries. Wherever `chunkRestampQueue` is set |
 | `demi-sync-out-failed-<env>` | `AppTraces` | 2 | A sync-out message to eagle-api failed after its retries. Wherever `syncOutQueue` is set: test only |
+| `demi-track-projects-poll-<env>` | `AppTraces` | 2 | No `[track-projects-poll] mode=live` line in 20 minutes, or one with `failures=` over 0, or `run failed`. Checked every 5 minutes, wherever `syncProjectsSchedule` is set |
+| `demi-track-teams-<env>` | `AppTraces` | 2 | No `[track-teams] mode=live` line in 26 hours, or one with `failures=` over 0, or `nightly run failed`. Checked hourly, wherever `syncTeamsSchedule` is set |
 | `demi-chunk-ingest-failures-<env>` | `AppTraces` | 2 | Five or more `chunk write incomplete`, `chunk ingest rejected` or `Chunk ingest failed` lines in an hour |
 | `demi-cosmos-ru-<env>` | Cosmos `TotalRequestUnits` metric | 2 | Cosmos used more than `cosmosRuPerHourAlert` RU in the last hour: 3M on test and prod |
 | `demi-search-failures-<env>` | `AppTraces` | 1 | Three or more search errors in five minutes: `[search] … failed`, `[search/summary] … failed`, or `[ai-search] … retried without it` |

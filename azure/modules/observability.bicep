@@ -34,6 +34,12 @@ param chunkRestampQueue string = ''
 @description('Storage queue the sync-out worker triggers on. Gates its poison alert the same way chunkRestampQueue gates its own.')
 param syncOutQueue string = ''
 
+@description('SYNC_PROJECTS_SCHEDULE of the API. Gates the Track projects poll alert: empty means the timer never runs, and an absence alert on it would fire forever.')
+param syncProjectsSchedule string = ''
+
+@description('SYNC_TEAMS_SCHEDULE of the API. Gates the Track teams alert the same way.')
+param syncTeamsSchedule string = ''
+
 @description('Who to tell when ingestion approaches the daily cap. Also reused by audit-logs.bicep, which cannot own the action group itself: main.bicep deploys this module first, so a shared group has to live on this side of the dependency.')
 param contactEmails array = [
   'Daniel.T.Truong@gov.bc.ca'
@@ -497,6 +503,97 @@ resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
           query: 'AppRequests | extend p = tostring(parse_url(Url).Path) | where p endswith "/search" or p endswith "/search/counts" or p endswith "/search/summary" | summarize total = count(), failed = countif(toint(ResultCode) >= 500) | where total >= 5 and todouble(failed) / total > 0.2'
           // The query answers with one row or none, so the rule counts rows: a row means the ratio
           // was already over the line.
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// The Track -> DEMI project poll stalled or failed, from the `[track-projects-poll] mode=live …
+// failures=N` line src/scripts/sync-track-projects.js writes every run. Unlike reconcileDriftAlert it
+// also fires on silence: no line means the timer, the app or its logging is down.
+// `absent` and `failing` each return a row or none; `summarize` without `by` yields one row on empty
+// input, which is how `absent` sees zero. `missing` and `failed` are KQL keywords, hence the names.
+// The span lives in the query and the window is the next size up, so the window never narrows it.
+resource trackProjectsPollAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(syncProjectsSchedule)) {
+  name: 'demi-track-projects-poll-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI Track project poll stalled or failing'
+    description: 'In the last 20 minutes the Track project poll wrote no `[track-projects-poll] mode=live` line, or a line with failures above 0, or `run failed`. Track project edits are not reaching DEMI. Check the demi-api function app, then run src/scripts/sync-track-projects.js by hand for the error.'
+    // Warning, like reconcileDriftAlert: DEMI keeps serving, its Track mirror falls behind.
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT30M'
+    criteria: {
+      allOf: [
+        {
+          query: '''
+let span = 20m;
+let poll = AppTraces | where TimeGenerated > ago(span) and Message startswith "[track-projects-poll]";
+let absent = poll | where Message contains "mode=live" | summarize n = count() | where n == 0 | project problem = "no live poll line";
+let failing = poll | extend failures = toint(extract("failures=([0-9]+)", 1, Message)) | where failures > 0 or Message contains "run failed" | summarize n = count() | where n > 0 | project problem = strcat(n, " failed poll line(s)");
+union absent, failing
+'''
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// The daily Track teams sync stalled or failed. Same shape as trackProjectsPollAlert, on the
+// `[track-teams] mode=live … failures=N` line src/scripts/sync-track-teams.js writes once a day.
+// 26 hours is one run plus slack for a slow or late one; the window is the next size up.
+resource trackTeamsAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(syncTeamsSchedule)) {
+  name: 'demi-track-teams-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI Track teams sync stalled or failing'
+    description: 'In the last 26 hours the Track teams sync wrote no `[track-teams] mode=live` line, or a line with failures above 0, or `nightly run failed`. Project team roles and the Track project mirror are not being updated. Check the demi-api function app, then run src/scripts/sync-track-teams.js (dry run) by hand for the error.'
+    // Warning, like trackProjectsPollAlert.
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT1H'
+    windowSize: 'P2D'
+    criteria: {
+      allOf: [
+        {
+          query: '''
+let span = 26h;
+let teams = AppTraces | where TimeGenerated > ago(span) and Message startswith "[track-teams]";
+let absent = teams | where Message contains "[track-teams] mode=live" | summarize n = count() | where n == 0 | project problem = "no live teams line";
+let failing = teams | extend failures = toint(extract("failures=([0-9]+)", 1, Message)) | where failures > 0 or Message contains "nightly run failed" | summarize n = count() | where n > 0 | project problem = strcat(n, " failed teams line(s)");
+union absent, failing
+'''
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0
