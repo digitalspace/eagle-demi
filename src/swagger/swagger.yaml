@@ -4608,9 +4608,10 @@ paths:
     post:
       summary: Create an organization
       description: >-
-        Adds an `Organization` row readable by `public`, `staff` and `sysadmin`, with a new UUID
-        id. Needs the role `staff` or `sysadmin`. Every field is optional; one left out is stored
-        empty (`null` for `parentCompany`). A `parentCompany` that is not an id is stored as `null`.
+        Adds an `Organization` row with a new UUID id. Needs the role `staff` or `sysadmin`. It
+        reads staff-only unless `isPublished` is true; `read` in the body is ignored. Every field
+        is optional; one left out is stored empty (`null` for `parentCompany`). A `parentCompany`
+        that is not an id is stored as `null`.
       security:
         - BearerAuth: []
       requestBody:
@@ -4618,7 +4619,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/OrganizationInput'
+              $ref: '#/components/schemas/OrganizationCreate'
       responses:
         '201':
           description: The created row.
@@ -4644,12 +4645,7 @@ paths:
         One `Organization` row the caller may read, with hidden fields left out. A row the caller
         cannot read is a 404, the same as one that does not exist. Takes no query parameters.
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: The record id (the Eagle `_id`, or the UUID of one created in DEMI).
-          schema:
-            type: string
+        - $ref: '#/components/parameters/OrganizationId'
       responses:
         '200':
           description: The record.
@@ -4667,17 +4663,13 @@ paths:
       summary: Update an organization
       description: >-
         Changes the listed fields of an organization and leaves the others as they are. Needs the
-        role `project-system-admin`, `sysadmin` or `staff`. An empty body, or a field outside the
-        list below, is a 400. Renaming an organization also sets `orgName` on its users.
+        role `project-system-admin`, `sysadmin` or `staff`. `read` and `isPublished` are ignored;
+        publish and unpublish change them. An empty body, or a field outside the list below, is a
+        400. Renaming an organization also sets `orgName` on its users.
       security:
         - BearerAuth: []
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: The record id (the Eagle `_id`, or the UUID of one created in DEMI).
-          schema:
-            type: string
+        - $ref: '#/components/parameters/OrganizationId'
       requestBody:
         required: true
         content:
@@ -4705,6 +4697,58 @@ paths:
           description: >-
             Another request kept writing the same organization, and nothing was saved. Send the
             same body again. Body `{ error: "The record is being written by another request. Try again." }`.
+
+  /api/organizations/{id}/publish:
+    put:
+      summary: Publish an organization
+      description: >-
+        Adds `public` to the organization's read and sets `isPublished`. Needs the role `staff`
+        or `sysadmin`. Takes no body fields.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
+      responses:
+        '200':
+          description: The published row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Organization not found.
+        '503':
+          description: Another request kept writing the same organization. Send it again.
+
+  /api/organizations/{id}/unpublish:
+    put:
+      summary: Unpublish an organization
+      description: >-
+        Removes `public` from the organization's read and clears `isPublished`. Needs the role
+        `staff` or `sysadmin`. Takes no body fields.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
+      responses:
+        '200':
+          description: The unpublished row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Organization not found.
+        '503':
+          description: Another request kept writing the same organization. Send it again.
 
   # Native reads: comment periods and comments.
   /api/comment-periods:
@@ -6654,6 +6698,13 @@ components:
       description: The `x-continuation-token` header of the previous page.
       schema:
         type: string
+    OrganizationId:
+      name: id
+      in: path
+      required: true
+      description: The record id (the Eagle `_id`, or the UUID of one created in DEMI).
+      schema:
+        type: string
     CommentPeriodId:
       name: id
       in: path
@@ -7093,7 +7144,7 @@ components:
 
     OrganizationInput:
       type: object
-      description: Every field is optional. `website` and the ACL are not writable.
+      description: Every field is optional. `website` is not writable; `read` and `isPublished` are ignored.
       properties:
         name:
           type: string
@@ -7132,6 +7183,16 @@ components:
           type: string
           nullable: true
           description: Id of the parent organization, or `null`.
+    OrganizationCreate:
+      description: The update fields plus `isPublished`. `read` is ignored.
+      allOf:
+        - $ref: '#/components/schemas/OrganizationInput'
+        - type: object
+          properties:
+            isPublished:
+              type: boolean
+              default: false
+              description: Readable by the public from the start.
 
     CommentPeriodUpdate:
       type: object

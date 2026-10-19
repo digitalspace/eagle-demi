@@ -16,8 +16,8 @@ const { DELETED_CEILING } = require('../repositories/documents');
 const { systemAccess } = require('../helpers/access-sql');
 const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
 const { refusedWriteKeys } = require('../vis/redact');
-const { check } = require('./_schema');
-const { writeRow } = require('./_write');
+const { check, without } = require('./_schema');
+const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { logger } = require('../utils/logger');
 
 const URL_FIELD = { type: 'string', max: 2000 };
@@ -55,9 +55,6 @@ const LISTS = Object.freeze({
 /** Visibility moves only through publish and unpublish, so a body's `read` and `isPublished` are dropped. */
 const IGNORED_ON_UPDATE = ['read', 'isPublished'];
 
-const STAFF_READ = Object.freeze(['staff', 'sysadmin']);
-const PUBLIC_READ = Object.freeze(['public', ...STAFF_READ]);
-
 const ENGAGE_OWNED = 'This comment period is run in ENGAGE. Change it there.';
 const ABOVE_PROJECT = 'Cannot publish a comment period above the level of its project.';
 
@@ -69,10 +66,6 @@ function auditOf(action, fields) {
     action, targetType: 'commentPeriod', targetId: saved.id, projectId: saved.projectId, ...(fields && { detail: { fields } })
   });
 }
-
-const without = (input, keys) => (input && typeof input === 'object' && !Array.isArray(input)
-  ? Object.fromEntries(Object.entries(input).filter(([key]) => !keys.includes(key)))
-  : input);
 
 /** `check` plus the two lists, every field error in one result. */
 function checkBody(schema, input, options) {

@@ -79,7 +79,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 - Questioned:
   - PUT writes the raw `obj` (`:161` against the cleaned map at `:140-156`).
   - PUT resets `dateAdded` (`:144`).
-  - Publish and unpublish (:4414, :4463) have no caller.
+  - Publish and unpublish (:4414, :4463) have no caller. Kept anyway (Daniel, 2026-10-19) as `PUT /organizations/:id/publish` and `/unpublish`, staff and sysadmin; create defaults to unpublished (tracker, Organizations).
 - Pins in Dark: add a label read selecting `c.id, c.name, c.province` (tracker open item a, `lists.js:77`). It has no caller until F1: `merge/project.js:146-153` resolves pins only on the seed path (`opts.orgs`, `merge/project.js:388`, built at `src/seed/sources.js:426`).
 - Owns: `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (the orgName cascade only), `vis/catalog/lists.js`.
 - Does it own `merge/project.js`? **No.**
@@ -282,6 +282,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
     - An organization id that does not exist returns 400 listing the unknown ids.
     - `pinsPublished` adds or removes `public` on `pinsRead` for the whole list.
     - The public response is `[]` when the list is unpublished.
+    - `pinsPublished` true returns 409 unless every organization in `pins` is published.
     - A change to `pins` or `pinsPublished` returns 403 unless the caller holds sysadmin, staff or project-system-admin. This keeps `demi-service-write` out of pins.
     - Read side: `getProject` and every project read that returns pins resolves the stored id list through slice 1's label read, maps `id` to `_id`, and drops unknown ids, so the response stays `{_id, name, province}` per pin (tracker line 114). Without this, reads after F1 would return bare ids, because the only resolver today is the seed path.
   - Remove the strip at `controllers/nosql/project.js:458-460` and fix its comment.
@@ -293,6 +294,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - `project.service.ts:231-247` becomes one project PUT.
   - `pins-list.component.ts:126-136` reads `pinsPublished` from DEMI.
   - `org.service.ts:38,48` moves to DEMI.
+  - The organization form gets a publish toggle on `PUT /organizations/:id/publish` and `/unpublish`.
   - Specs: `project.service.spec.ts`, `pins-list.component.spec.ts`, `pins-page.spec.ts`, `org.service.spec.ts`.
 
 **The other Flips:**
