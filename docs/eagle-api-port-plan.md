@@ -79,7 +79,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 - Questioned:
   - PUT writes the raw `obj` (`:161` against the cleaned map at `:140-156`).
   - PUT resets `dateAdded` (`:144`).
-  - Publish and unpublish (:4414, :4463) have no caller. Kept anyway (Daniel, 2026-10-19) as `PUT /organizations/:id/publish` and `/unpublish`, staff and sysadmin; create defaults to unpublished (tracker, Organizations).
+  - Publish and unpublish (:4414, :4463) have no caller. Kept anyway (Daniel, 2026-10-19) as `PUT /organizations/:id/publish` and `/unpublish`, guarded like the PUT; create defaults to unpublished (tracker, Organizations).
 - Pins in Dark: add a label read selecting `c.id, c.name, c.province` (tracker open item a, `lists.js:77`). It has no caller until F1: `merge/project.js:146-153` resolves pins only on the seed path (`opts.orgs`, `merge/project.js:388`, built at `src/seed/sources.js:426`).
 - Owns: `domain/organizations.js`, `controllers/native/organizations.js`, `repositories/lists.js`, `repositories/users.js` (the orgName cascade only), `vis/catalog/lists.js`.
 - Does it own `merge/project.js`? **No.**

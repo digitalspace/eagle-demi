@@ -4702,8 +4702,8 @@ paths:
     put:
       summary: Publish an organization
       description: >-
-        Adds `public` to the organization's read and sets `isPublished`. Needs the role `staff`
-        or `sysadmin`. Takes no body fields.
+        Adds `public` to the organization's read and sets `isPublished`. Needs the role
+        `project-system-admin`, `sysadmin` or `staff`. Takes no body fields.
       security:
         - BearerAuth: []
       parameters:
@@ -4729,7 +4729,7 @@ paths:
       summary: Unpublish an organization
       description: >-
         Removes `public` from the organization's read and clears `isPublished`. Needs the role
-        `staff` or `sysadmin`. Takes no body fields.
+        `project-system-admin`, `sysadmin` or `staff`. Takes no body fields.
       security:
         - BearerAuth: []
       parameters:

@@ -172,7 +172,14 @@ test('organization writes', async (t) => {
     assert.strictEqual(written.length, 0);
   });
 
-  for (const roles of [['demi-service-write'], ['demi-admin'], ['project-system-admin', 'demi-admin']]) {
+  await t.test('project-system-admin with a session role that is not staff publishes: 200', async (t) => {
+    const written = fakeLists(t, { ...STORED, read: ['staff', 'sysadmin'], isPublished: false });
+    const res = await publish(['project-system-admin', 'demi-admin']);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(written.length, 1);
+  });
+
+  for (const roles of [['demi-service-write'], ['demi-admin'], ['project-system-admin']]) {
     for (const [name, call] of [['publish', publish], ['unpublish', unpublish]]) {
       await t.test(`${roles.join('+')} is refused on ${name}`, async (t) => {
         const written = fakeLists(t);
