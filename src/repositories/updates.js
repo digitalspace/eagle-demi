@@ -4,8 +4,8 @@
  * Updates repository — Cosmos NoSQL.
  *
  * Container `updates` (Eagle `RecentActivity`), partitioned by `/id` (the Eagle `_id`). Rows are
- * small, read whole and written only by the Eagle mirror, so every access is a point read or a
- * point write.
+ * small, read whole and written whole, by the Eagle mirror or by domain/updates.js, so every write
+ * is a point write.
  *
  * `notifiedAt` is the publish-notify claim: it is set by a CONDITIONAL patch, so two concurrent
  * pushes of the same newly published update produce one notification, not two.

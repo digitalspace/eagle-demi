@@ -530,14 +530,14 @@ test('a comment list in count facets is read page by page to its total', async (
   assert.strictEqual(h.calls.filter(c => c.host === 'eagle.test').length, 3);
 });
 
-test("recent activity compares Eagle's top 4 with DEMI's newest page of 4 updates, once /updates answers", async () => {
+test("recent activity compares Eagle's top 4 with DEMI's 4 latest by publishDate", async () => {
   const activity = { _id: A, headline: 'News', dateAdded: '2026-10-01T00:00:00.000Z' };
   const h = harness(() => json([activity]));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'recent-activity-top'], h.deps);
   assert.strictEqual(code, 0);
   assert.match(h.out[0], /recent-activity-top identity=anonymous match=1 /);
   const read = h.calls.filter(c => c.host === 'demi.test').map(c => `${c.url.pathname}${c.url.search}`);
-  assert.deepStrictEqual(read, ['/api/updates', '/api/updates?sort=-dateAdded&pageSize=4']);
+  assert.deepStrictEqual(read, ['/api/updates?sort=-publishDate&pageSize=4']);
 });
 
 test('a read on a DEMI route not shipped yet is skipped as pending, asks Eagle nothing and exits 0', async () => {

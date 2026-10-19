@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Update controller — the Eagle mirror for `RecentActivity`, and the only writer of `updates`.
+ * Update controller — the Eagle mirror for `RecentActivity`. Staff writes go through domain/updates.js.
  *
  * DEMI owns Updates, so the publish transition is DEMI's to announce: eagle-notify is told once
  * per update, and told again when an update DEMI announced is withdrawn. `notifiedAt` is the claim

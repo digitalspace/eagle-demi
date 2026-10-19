@@ -5385,6 +5385,44 @@ paths:
           description: Unknown or repeated parameter, bad value, or a page past the caller's depth.
         '401':
           description: The Bearer token was rejected.
+    post:
+      summary: Create an update
+      description: >-
+        Creates an update with a new UUID id. Needs the role `project-system-admin`, `sysadmin`
+        or `staff`. The status sets the read: `published` opens the update to the public when its
+        project is public; `draft`, `archived` and no status make it staff-only, except that
+        `active: true` with no status publishes, as in eagle-api. Publishing with no
+        `publishDate` stamps now. A published update's featured image, images and attachments
+        must already be public documents. `pinned` starts false; `notificationName` is kept only
+        on the type `Project Notification Public Comment Period`. `_id`, `read`, `notifiedAt`,
+        `pinned`, `dateAdded` and `dateUpdated` in the body are ignored; any other field outside
+        the list is a 400.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWrite'
+      responses:
+        '201':
+          description: The new row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >-
+            A field is invalid or not writable, `projectId` names no project or notification
+            DEMI holds, or a published update shows a document that is not public. Body
+            `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '503':
+          description: Another request kept writing the same update. Send it again.
 
   /api/updates/feed:
     get:
@@ -5463,6 +5501,88 @@ paths:
           description: The Bearer token was rejected.
         '404':
           description: Update not found.
+    put:
+      summary: Update an update
+      description: >-
+        Changes the given fields and leaves the others as they are. Needs the role
+        `project-system-admin`, `sysadmin` or `staff`. A body with neither `status` nor `active`
+        keeps the status; `active` alone sets `published` or `draft`, except on an archived
+        update. A null `publishDate` keeps the stored one. A published update's documents must be
+        public, unless the edit only flips `pinned`. `_etag`, when given, is the version the
+        client read: an update that changed since is a 409. The server sets `dateUpdated` and
+        `updatedBy`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Update id.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/UpdateWrite'
+                - type: object
+                  properties:
+                    pinned:
+                      type: boolean
+                    _etag:
+                      type: string
+                      description: The `_etag` of the row the client read.
+      responses:
+        '200':
+          description: The updated row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: A field is invalid or not writable, or a document is not public. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Update not found.
+        '409':
+          description: The update changed since the client read it (`_etag`).
+        '503':
+          description: Another request kept writing the same update. Send it again.
+    delete:
+      summary: Archive an update
+      description: >-
+        Archives the update rather than deleting it, so its public URL keeps answering: status
+        `archived`, `active` false, and `public` removed from its read. Needs the role
+        `project-system-admin`, `sysadmin` or `staff`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Update id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The archived row, with hidden fields left out.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Update not found.
+        '503':
+          description: Another request kept writing the same update. Send it again.
 
   /api/notifications:
     get:
@@ -7496,6 +7616,88 @@ components:
           items:
             type: string
             description: A 24-hex Eagle id or a UUID.
+
+    UpdateImage:
+      type: object
+      description: Plain text only; `alt` is required when `document` is set.
+      properties:
+        document:
+          type: string
+          nullable: true
+          description: A document id.
+        alt:
+          type: string
+          maxLength: 500
+          nullable: true
+        caption:
+          type: string
+          maxLength: 300
+          nullable: true
+        credit:
+          type: string
+          maxLength: 150
+          nullable: true
+
+    UpdateWrite:
+      type: object
+      description: >-
+        Every field is optional. A Corporate update needs `subject`; any other category needs
+        `projectId`, `pcp`, or the comment period notification type. `shortHeadline` and
+        `summary` are plain text.
+      properties:
+        projectId:
+          type: string
+          nullable: true
+          description: The Eagle id of the project or project notification.
+        headline: { type: string, maxLength: 1000, nullable: true }
+        content: { type: string, maxLength: 100000, nullable: true }
+        type: { type: string, maxLength: 200, nullable: true }
+        active: { type: boolean }
+        complianceAndEnforcement: { type: boolean }
+        notificationName: { type: string, maxLength: 1000, nullable: true }
+        contentUrl: { type: string, maxLength: 2000, nullable: true }
+        documentUrl: { type: string, maxLength: 2000, nullable: true }
+        pcp: { type: string, nullable: true, description: A comment period id. }
+        projectNotification: { type: string, nullable: true, description: A project notification id. }
+        category: { type: string, maxLength: 200, nullable: true }
+        subject: { type: string, maxLength: 500, nullable: true }
+        shortHeadline: { type: string, maxLength: 70, nullable: true }
+        summary: { type: string, maxLength: 280, nullable: true }
+        featuredImage:
+          allOf:
+            - $ref: '#/components/schemas/UpdateImage'
+          nullable: true
+        images:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/UpdateImage'
+        attachments:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            description: A document id.
+        regions:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+            maxLength: 200
+        location: { type: string, maxLength: 1000, nullable: true }
+        engagementUrl:
+          type: string
+          maxLength: 2000
+          nullable: true
+          description: An http or https URL.
+        status:
+          type: string
+          enum: [draft, published, archived]
+          nullable: true
+        publishDate:
+          type: string
+          format: date-time
+          nullable: true
 
     ProjectInput:
       type: object
