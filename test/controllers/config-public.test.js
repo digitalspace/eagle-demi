@@ -27,6 +27,7 @@ const apiKeys = require('../../src/repositories/api-keys');
 const configRepository = require('../../src/repositories/config');
 const configController = require('../../src/controllers/config');
 const { generateKey } = require('../../src/helpers/api-key');
+const { environmentName } = require('../../src/config');
 const { forgetCachedKey } = require('../../src/helpers/auth');
 const { routeChains } = require('../helpers/router-source');
 const { withServer } = require('../helpers/with-server');
@@ -587,7 +588,7 @@ test('the config push route is behind authMiddleware + requireWrite + requireEag
 
 /** A registry key the push can authenticate with, stubbed at the repository. */
 function stubKey(t, roles) {
-  const { keyId, plaintext, hash } = generateKey('test');
+  const { keyId, plaintext, hash } = generateKey(environmentName);
   forgetCachedKey(keyId);
   t.mock.method(apiKeys, 'getById', async () => ({
     id: keyId, name: 'eagle-push', hash, roles,

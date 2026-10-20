@@ -18,6 +18,7 @@ const assert = require('node:assert');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const apiKeys = require('../../../src/repositories/api-keys');
 const { generateKey } = require('../../../src/helpers/api-key');
+const { environmentName } = require('../../../src/config');
 const { forgetCachedKey } = require('../../../src/helpers/auth');
 const { logger } = require('../../../src/utils/logger');
 const { withServer } = require('../../helpers/with-server');
@@ -473,7 +474,7 @@ test('GET /documents/recent-uploads', async (t) => {
     const { aggregates } = stubCosmos(t2, [doc('d1', '101', '2026-09-10T10:00:00.000Z')],
       { 101: project('101') });
 
-    const { keyId, plaintext, hash } = generateKey('test');
+    const { keyId, plaintext, hash } = generateKey(environmentName);
     forgetCachedKey(keyId);
     t2.mock.method(apiKeys, 'getById', async () => ({
       id: keyId, name: 'recent-uploads', hash, roles: ['compliance'],

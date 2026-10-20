@@ -9,6 +9,8 @@ const dbController = require('../../src/controllers/db');
 const projectsRepo = require('../../src/repositories/projects');
 const documentsRepo = require('../../src/repositories/documents');
 const boundariesRepo = require('../../src/repositories/boundaries');
+const cosmosNoSql = require('../../src/db/cosmos-nosql');
+const { logger } = require('../../src/utils/logger');
 
 function mockRes() {
   const res = {
@@ -117,4 +119,20 @@ test('GET /db/stats', async (t) => {
     assert.strictEqual(res.body.stats.documentsExtractionErrors, 12);
     assert.strictEqual(res.body.stats.documents, 60578, 'the total stays unfiltered');
   });
+});
+
+test('GET /admin/index-progress answers a fixed message for a failed container and logs the detail', async (t) => {
+  const detail = 'Request blocked by network firewall: 10.0.4.7 demi-cosmos-test';
+  t.mock.method(cosmosNoSql, 'indexProgress', async (name) => {
+    if (name === 'chunks') throw new Error(detail);
+    return 100;
+  });
+  const warn = t.mock.method(logger, 'warn', () => {});
+
+  const res = mockRes();
+  await dbController.getIndexProgressHandler({}, res);
+
+  assert.deepStrictEqual(res.body.indexProgress, { chunks: 'error: unavailable', documents: 100, projects: 100 });
+  assert.ok(!JSON.stringify(res.body).includes('firewall'), 'the Cosmos message must not reach the caller');
+  assert.ok(warn.mock.calls.some(c => String(c.arguments[0]).includes(detail)), 'the detail is logged');
 });

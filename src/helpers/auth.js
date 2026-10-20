@@ -17,6 +17,7 @@ const { parseKey, verify, isLive } = require('./api-key');
  * price of the cache and is written into the runbook rather than left to be discovered.
  */
 const KEY_CACHE_TTL_MS = 60_000;
+const KEY_CACHE_MAX = 10_000;
 const keyCache = new Map();
 
 function forgetCachedKey(keyId) {
@@ -34,6 +35,8 @@ async function loadKeyRecord(keyId, now = Date.now()) {
   }
 
   const record = await apiKeys.getById(keyId);
+  // Misses are cached too, so random key ids would otherwise grow the heap without bound.
+  if (keyCache.size >= KEY_CACHE_MAX) keyCache.clear();
   keyCache.set(keyId, { record, at: now });
   return { record, fresh: true };
 }
@@ -46,6 +49,9 @@ async function loadKeyRecord(keyId, now = Date.now()) {
  * `projectScope` rides along because `access-sql.projectScopeFor` already honours it.
  */
 async function resolveRegistryKey(parsed) {
+  // Keys carry the environment that minted them; any other one cannot exist here, so skip the read.
+  if (parsed.env !== config.environmentName) return null;
+
   const { record, fresh } = await loadKeyRecord(parsed.keyId);
 
   if (!verify(record, parsed.secret)) return null;
@@ -343,5 +349,6 @@ module.exports = {
   isAllowedClient,
   isRegistryIdentity,
   forgetCachedKey,
-  KEY_CACHE_TTL_MS
+  KEY_CACHE_TTL_MS,
+  KEY_CACHE_MAX
 };

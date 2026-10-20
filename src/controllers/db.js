@@ -6,6 +6,7 @@ const documentsRepo = require('../repositories/documents');
 const boundariesRepo = require('../repositories/boundaries');
 const aiSearch = require('../search/ai-search');
 const { serverError } = require('../helpers/response');
+const { logger } = require('../utils/logger');
 
 /**
  * Containers whose index-build state is worth reporting. A bulk load leaves the index lagging the
@@ -29,8 +30,10 @@ async function getIndexProgress() {
     try {
       return [name, await cosmosNoSql.indexProgress(name)];
     } catch (err) {
-      // One missing or unreadable container must not deny the whole reading.
-      return [name, `error: ${err.message}`];
+      // One missing or unreadable container must not deny the whole reading. Any signed-in
+      // caller reads this, so the Cosmos detail goes to the log only.
+      logger.warn(`[demi-api] index progress for ${name} failed: ${err.message}`);
+      return [name, 'error: unavailable'];
     }
   }));
   return Object.fromEntries(entries);
