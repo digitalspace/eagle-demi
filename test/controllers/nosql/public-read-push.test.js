@@ -875,6 +875,15 @@ test('PUT /eagle/notifications/:eagleId', async (t) => {
     assert.strictEqual(written().notificationThresholdValue, 0);
   });
 
+  await t.test('a null received date takes the time in the Eagle id, never null', async () => {
+    // The list sorts on it, and Cosmos fails to continue a page from a null sort value.
+    const { written } = await pushTo(notificationController, notifications, NOTIFICATION_EAGLE_ID,
+      eagleNotification({ notificationReceivedDate: null }), t);
+
+    const created = new Date(parseInt(NOTIFICATION_EAGLE_ID.slice(0, 8), 16) * 1000).toISOString();
+    assert.strictEqual(written().notificationReceivedDate, created);
+  });
+
   await t.test('the compliance token is dropped from a notification read', async () => {
     const { written } = await pushTo(notificationController, notifications, NOTIFICATION_EAGLE_ID,
       eagleNotification({ read: ['compliance', 'public'] }), t);

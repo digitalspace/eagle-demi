@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Project notification writes: `POST /notifications`, `PUT /notifications/:id`, and publish and
- * unpublish on `/notifications/:id`, ported from eagle-api `api/controllers/projectNotification.js`
- * (rules in docs/eagle-api-port.md, Project notifications).
+ * Project notification writes (create, PUT, publish, unpublish), ported from eagle-api
+ * `api/controllers/projectNotification.js`; rules in docs/eagle-api-port.md.
  */
 
 const crypto = require('node:crypto');
@@ -54,9 +53,8 @@ const NUMBER_FIELDS = Object.freeze({
 const FIELDS = [...Object.keys(SCHEMA), ...Object.keys(NUMBER_FIELDS)];
 
 /**
- * What a field missing from a PUT becomes. eagle-api writes '' (projectNotification.js:114-135),
- * which its push turns into these (controllers/nosql/notification.js), so a DEMI row reads the
- * same as a mirrored one.
+ * What a field missing from a PUT becomes, as the Eagle push maps it. create and update override
+ * the null `notificationReceivedDate`: Cosmos cannot continue a page sorted on a null value.
  */
 const DEFAULTS = Object.freeze({
   ...Object.fromEntries(FIELDS.map(key => [key, null])),
@@ -127,6 +125,7 @@ async function create(ctx, input) {
     eagleId: null,
     sourceSystem: 'demi',
     ...replaced(fields),
+    notificationReceivedDate: fields.notificationReceivedDate || now,
     addedBy: actor,
     updatedBy: actor,
     dateAdded: now,
@@ -163,6 +162,7 @@ async function update(ctx, id, changes) {
   if (!existing) return { status: 'not-found' };
 
   const next = replaced(checked.value);
+  next.notificationReceivedDate ||= existing.dateAdded || new Date().toISOString();
   const refused = refusedWriteKeys(notifications.CONTAINER, next, ctx.access, existing);
   if (refused.length) {
     return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };

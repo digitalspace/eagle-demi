@@ -8725,7 +8725,9 @@ components:
         decisionDate:
           $ref: '#/components/schemas/NotificationDate'
         notificationReceivedDate:
-          $ref: '#/components/schemas/NotificationDate'
+          allOf:
+            - $ref: '#/components/schemas/NotificationDate'
+          description: Left out or null, it is set to the row's dateAdded, so it is never stored null.
         description:
           $ref: '#/components/schemas/NotificationLongText'
         notificationThresholdValue:
