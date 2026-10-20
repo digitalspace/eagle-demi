@@ -10,7 +10,6 @@ const crypto = require('node:crypto');
 
 const groups = require('../repositories/groups');
 const projects = require('../repositories/projects');
-const { systemAccess } = require('../helpers/access-sql');
 const { eagleReadUnder } = require('../helpers/eagle-acl');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
@@ -60,7 +59,8 @@ async function create(ctx, input) {
   if (checked.status !== 'ok') return checked;
   const { projectId, name = '' } = checked.value;
 
-  const project = await projects.getById(systemAccess(), projectId);
+  // The caller's access: a project they cannot read answers as one DEMI does not hold.
+  const project = await projects.getById(ctx.access, projectId);
   if (!project) {
     logger.warn('[Group] create refused: unknown project', { projectId });
     return { status: 'invalid', fields: { projectId: 'must name a project' } };

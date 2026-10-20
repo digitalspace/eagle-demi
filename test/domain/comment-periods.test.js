@@ -14,7 +14,7 @@ const comments = require('../../src/repositories/comments');
 const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
 const { DELETED_CEILING } = require('../../src/repositories/documents');
-const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
+const { resolveAccess, levelOfRead, canRead } = require('../../src/helpers/access-sql');
 const period = require('../../src/domain/comment-periods');
 
 let rows = [];
@@ -31,7 +31,8 @@ const STORED = Object.freeze({
 });
 const PROJECTS = {
   [PROJECT_ID]: { id: PROJECT_ID, read: ['public', 'staff', 'sysadmin'] },
-  [PRIVATE_PROJECT_ID]: { id: PRIVATE_PROJECT_ID, read: ['staff', 'sysadmin'] }
+  [PRIVATE_PROJECT_ID]: { id: PRIVATE_PROJECT_ID, read: ['staff', 'sysadmin'] },
+  'p-sysadmin': { id: 'p-sysadmin', read: ['sysadmin'] }
 };
 
 function ctxFor(roles, username = 'idir-staff') {
@@ -46,7 +47,9 @@ function fakeStore(t, stored = STORED, { cascadeFails = 0 } = {}) {
   t.mock.method(commentPeriods, 'getById', async (access, id) => stored && id === stored.id ? { ...stored } : null);
   t.mock.method(commentPeriods, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
   t.mock.method(commentPeriods, 'deleteById', async (...args) => { store.deleted.push(args); return true; });
-  t.mock.method(projects, 'getById', async (access, id) => PROJECTS[id] || null);
+  // As the repository answers: null for a project the caller may not read.
+  t.mock.method(projects, 'getById', async (access, id) =>
+    (PROJECTS[id] && canRead(PROJECTS[id], access, projects.PARTITION_FIELD) ? PROJECTS[id] : null));
   t.mock.method(notifications, 'getById', async (access, id) => id === NOTIFICATION_ID ? { id, read: ['public'] } : null);
   t.mock.method(comments, 'setAclForPeriod', async (access, periodId, read) => {
     store.cascades.push({ periodId, read, deletedYet: store.deleted.length > 0 });
@@ -119,6 +122,19 @@ test('comment period domain', async (t) => {
     assert.strictEqual(result.status, 'invalid');
     assert.ok(result.fields.projectId);
     assert.strictEqual(store.written.length, 0);
+  });
+
+  await t.test('create under a project the caller cannot read answers as an unknown project', async (t) => {
+    const store = fakeStore(t, null);
+    const hidden = await period.create(STAFF, { projectId: 'p-sysadmin' });
+    const missing = await period.create(STAFF, { projectId: 'p-none' });
+    assert.deepStrictEqual(hidden, missing);
+    assert.strictEqual(hidden.status, 'invalid');
+    assert.strictEqual(store.written.length, 0);
+
+    const admin = await period.create(ctxFor(['sysadmin']), { projectId: 'p-sysadmin' });
+    assert.strictEqual(admin.status, 'ok');
+    assert.deepStrictEqual(store.written[0].read, ['sysadmin']);
   });
 
   await t.test('create without projectId is a 400', async (t) => {

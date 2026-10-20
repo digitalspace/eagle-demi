@@ -86,12 +86,12 @@ function checkBody(schema, input, options) {
 
 /**
  * The ceiling a period's read sits under: its project's read, or none for a period that hangs off
- * a `ProjectNotification` (see helpers/parent-admit). `undefined` when DEMI holds neither parent.
+ * a `ProjectNotification` (see helpers/parent-admit). `undefined` when `access` reads neither parent.
  */
-async function parentCap(projectId) {
-  const project = await projects.getById(systemAccess(), projectId);
+async function parentCap(projectId, access = systemAccess()) {
+  const project = await projects.getById(access, projectId);
   if (project) return project.read;
-  return await notifications.getById(systemAccess(), projectId) ? null : undefined;
+  return await notifications.getById(access, projectId) ? null : undefined;
 }
 
 const readUnder = (own, cap) => (cap === null ? eagleBaseAcl(own) : eagleReadUnder(own, cap));
@@ -131,7 +131,8 @@ async function create(ctx, input) {
   if (checked.status !== 'ok') return checked;
   const { projectId, isPublished = false, ...fields } = checked.value;
 
-  const cap = await parentCap(projectId);
+  // The caller's access, so a parent they cannot read answers as one DEMI does not hold.
+  const cap = await parentCap(projectId, ctx.access);
   if (cap === undefined) return { status: 'invalid', fields: { projectId: 'must name a project' } };
   const own = eagleBaseAcl(isPublished ? PUBLIC_READ : STAFF_READ);
   const read = readUnder(own, cap);
