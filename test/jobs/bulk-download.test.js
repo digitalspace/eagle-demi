@@ -855,6 +855,26 @@ test('the bulk download worker', async (t) => {
       'no caller wants a zip named after one of the projects it holds');
   });
 
+  await t.test('a project whose files all failed does not count toward the label', async (tt) => {
+    const docs = [doc('d1'), doc('d2', { projectId: '311' })];
+    const { patches } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => {
+        if (key === 'etl/d2.pdf') throw new Error('S3 NoSuchKey ozwdez/etl/d2.pdf');
+        return Readable.from([`bytes of ${key}`]);
+      }
+    });
+    tt.mock.method(projects, 'listByIds',
+      async () => [PROJECT, { id: '311', name: 'Coastal GasLink' }]);
+
+    await worker.run('job-1');
+
+    assert.strictEqual(readyPatch(patches).includedCount, 1);
+    assert.strictEqual(readyPatch(patches).label, 'Site C Clean Energy',
+      'the zip holds files from one project only');
+  });
+
   await t.test('a project the caller cannot name leaves the label empty', async (tt) => {
     const docs = [doc('d1', { projectId: '999' })];
     const { patches } = harness(tt, { row: job(docs), docs });

@@ -213,8 +213,8 @@ async function listIdsByName(access, text) {
 }
 
 /**
- * The same three fields as `listByIds`, keyed the other way round: by EAGLE project id, in one
- * query.
+ * `listByIds` keyed the other way round: by EAGLE project id, in one query. Adds `address` (the
+ * update hit's `project.location`) and `vis`, so a per-row dial still hides it.
  *
  * `updates.projectId` holds the Eagle id, so labelling a page of updates cannot go through
  * `listByIds`. One `IN` over `eagleId` rather than a `getByEagleId` per row — a page of 200 updates
@@ -228,7 +228,7 @@ async function listByEagleIds(access, eagleIds) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: [inList('eagleId', unique, '@eid')],
-    select: 'c.id, c.name, c.eagleId'
+    select: 'c.id, c.name, c.eagleId, c.address, c.vis'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});

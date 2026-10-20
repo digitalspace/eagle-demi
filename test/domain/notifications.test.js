@@ -138,6 +138,36 @@ test('notification domain', async (t) => {
     assert.strictEqual(store.forgotten, 0, 'the read did not move');
   });
 
+  // GET /notifications sorts on it, and Cosmos cannot continue a page from a null sort value.
+  await t.test('create without a received date stores the creation time, never null', async (t) => {
+    const store = fakeStore(t, null);
+
+    await notification.create(STAFF, { name: 'Quarry', notificationReceivedDate: null });
+
+    const row = store.written[0];
+    assert.strictEqual(row.notificationReceivedDate, row.dateAdded);
+  });
+
+  await t.test('create keeps a received date the body gives', async (t) => {
+    const store = fakeStore(t, null);
+
+    await notification.create(STAFF, { name: 'Quarry', notificationReceivedDate: '2026-05-01T00:00:00.000Z' });
+
+    assert.strictEqual(store.written[0].notificationReceivedDate, '2026-05-01T00:00:00.000Z');
+  });
+
+  await t.test('update that omits or nulls the received date falls back to dateAdded', async (t) => {
+    for (const body of [{ name: 'Mine' }, { name: 'Mine', notificationReceivedDate: null }]) {
+      const store = fakeStore(t, { ...STORED, notificationReceivedDate: '2021-03-01T00:00:00.000Z' });
+
+      const result = await notification.update(STAFF, NOTIFICATION_ID, body);
+
+      assert.strictEqual(result.status, 'ok');
+      assert.strictEqual(store.written[0].notificationReceivedDate, STORED.dateAdded, JSON.stringify(body));
+      t.mock.restoreAll();
+    }
+  });
+
   await t.test('update keeps an isMet of false, as eagle-api does with ??', async (t) => {
     const store = fakeStore(t);
     await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', isMet: true, pcp: 'closed' }));

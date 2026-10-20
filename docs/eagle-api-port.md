@@ -313,6 +313,7 @@ Business rules (eagle-api `api/controllers/projectNotification.js`):
 Decisions:
 - Publish is two actions, `/publish` and `/unpublish`, in place of the `?publish=` flag, as organizations do. PUT ignores `read` and `isPublished`. Create takes `isPublished` (default false), so a ported notification is never public unless asked (Daniel 2026-10-19).
 - PUT stores the defaults the Eagle push stores for eagle-api's `''` (`controllers/nosql/notification.js`): `null` for text and dates, `centroid` `[]`, `pcp` `none`, `isMet` false, `metURL` `''`. A DEMI row and a mirrored one read the same.
+- `notificationReceivedDate` is never stored null, because the list sorts on it and Cosmos cannot page past a null sort value. Create and PUT fall back to `dateAdded`; the push falls back to the time in the Eagle id.
 - A PUT body with no field besides `read` and `isPublished` is a 400; eagle-api would blank the row.
 - `notificationThresholdValue` must be a number and `centroid` at most two numbers or strings (Number and Mixed array in the model); any key not in the model is a 400.
 - Dark: a write to an Eagle-mirrored notification is replaced by the next Eagle push.

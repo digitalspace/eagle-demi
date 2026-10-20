@@ -296,7 +296,7 @@ test('GET /search?dataset=RecentActivity', async (t) => {
     // The two states are two queries; served in call order, pinned first.
     let call = 0;
     t.mock.method(cosmos, 'query', async (container, spec) => {
-      if (container === 'projects') return { items: [PROJECT_ROW] };
+      if (container === 'projects') return { items: [projected(spec, { ...PROJECT_ROW, address: 'Nicomen Island' })] };
       // The two references an update carries, as the repositories project them.
       if (container === 'commentPeriods') {
         return { items: [projected(spec, periodRow({ isMet: true, metURL: 'https://eao.gov.bc.ca/met' }))] };
@@ -336,7 +336,8 @@ test('GET /search?dataset=RecentActivity', async (t) => {
     });
     assert.deepStrictEqual(row.projectNotification,
       { _id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' });
-    assert.deepStrictEqual(row.project, { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy', location: null });
+    assert.deepStrictEqual(row.project,
+      { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy', location: 'Nicomen Island' });
     assert.strictEqual(row.notifiedAt, undefined, 'the notify claim is not public');
     assert.strictEqual(row.read, undefined);
   });
@@ -379,8 +380,23 @@ test('GET /search?dataset=RecentActivity', async (t) => {
     const projectSpecs = specsFor(seen, 'projects').filter(spec => !/c\.read FROM c WHERE IS_DEFINED/.test(spec.query));
     assert.strictEqual(projectSpecs.length, 1, 'one batched read, not one per row');
     assert.match(projectSpecs[0].query, /c\.eagleId IN \(@eid0, @eid1, @eid2\)/);
-    assert.match(projectSpecs[0].query, /SELECT c\.id, c\.name, c\.eagleId/,
+    assert.match(projectSpecs[0].query, /SELECT c\.id, c\.name, c\.eagleId, c\.address, c\.vis FROM/,
       'the label is projected, never the whole project record');
+  });
+
+  await t.test('a project whose own dial hides its address answers location null', async () => {
+    const row = { ...PROJECT_ROW, address: 'Nicomen Island', vis: { address: 1 } };
+    t.mock.method(cosmos, 'query', async (container, spec) => {
+      if (container === 'projects') return { items: [projected(spec, row)] };
+      if (/COUNT\(1\)/.test(spec.query)) return { items: [1] };
+      return { items: container === 'updates' ? [updateRow()] : [] };
+    });
+
+    const { status, body } = await get('/api/search?dataset=RecentActivity&pageSize=25');
+
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body[0].searchResults[0].project,
+      { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy', location: null });
   });
 
   await t.test('a reference this caller cannot resolve is DROPPED, not left as an id', async () => {

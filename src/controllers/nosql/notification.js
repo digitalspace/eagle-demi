@@ -1,11 +1,8 @@
 'use strict';
 
 /**
- * Project notification controller — the Eagle mirror for `ProjectNotification`, and the only writer
- * of `notifications`.
- *
- * No parent to constrain against: `associatedProjectId` points at a project that often does not
- * exist yet — that is the point of a notification — so the row keeps its own `read[]`.
+ * The Eagle mirror for `ProjectNotification`. No parent caps the read: `associatedProjectId` often
+ * names a project that does not exist yet, so the row keeps its own `read[]`.
  */
 
 const notifications = require('../../repositories/notifications');
@@ -16,6 +13,14 @@ const { auditEvent } = require('../../utils/audit');
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
+
+const OBJECT_ID = /^[0-9a-f]{24}$/i;
+
+/** When Eagle created the row, from its ObjectId; Eagle's model has no date-added field. */
+function createdAtOf(eagleId) {
+  const id = String(eagleId);
+  return OBJECT_ID.test(id) ? new Date(parseInt(id.slice(0, 8), 16) * 1000).toISOString() : null;
+}
 
 function mirrorItem(eagleId, doc, read, existing) {
   return {
@@ -32,7 +37,9 @@ function mirrorItem(eagleId, doc, read, existing) {
     location: doc.location || null,
     decision: doc.decision || null,
     decisionDate: doc.decisionDate || null,
-    notificationReceivedDate: doc.notificationReceivedDate || null,
+    // Never null: the list sorts on it, and Cosmos cannot continue a page from a null sort value.
+    notificationReceivedDate: doc.notificationReceivedDate ||
+      (existing && existing.notificationReceivedDate) || createdAtOf(eagleId) || new Date().toISOString(),
     trigger: doc.trigger || null,
     description: doc.description || null,
     centroid: Array.isArray(doc.centroid) ? doc.centroid : [],

@@ -235,7 +235,9 @@ async function isCancelled(jobId) {
  * the wrong files. Returns the index it stopped at, so the caller opens the next part there, and
  * whether a cancel is what stopped it.
  */
-async function buildPart({ jobId, n, docs, from, projectNames, access, errors, maxBytes, partMaxBytes }) {
+async function buildPart({
+  jobId, n, docs, from, projectNames, access, errors, includedProjects, maxBytes, partMaxBytes
+}) {
   const key = `zips/${jobId}-part${n}.zip`;
   const archive = new ZipStream({ store: true });
   const uploaded = storage.putObjectStream(key, archive, 'application/zip');
@@ -315,6 +317,7 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
         errors.push({ documentId: doc.id, name, reason: REASON.truncated });
       } else {
         included += 1;
+        includedProjects.add(String(doc.projectId));
       }
 
       // The whole job's budget, against real bytes — the estimate the caller was refused on could
@@ -379,12 +382,10 @@ async function projectNamesFor(access, docs) {
 }
 
 /**
- * What the zip parts are named after: the one project everything came from, or how many projects
- * there were. Empty when that project has no name this caller may see, which the status route
- * answers with a generic name rather than an id nobody can read.
+ * The zip name: the one project the included files came from, or how many. Empty when the caller
+ * may not see that name; the status route then uses a generic one rather than an id.
  */
-function labelFor(docs, projectNames) {
-  const ids = new Set(docs.map(doc => String(doc.projectId)));
+function labelFor(ids, projectNames) {
   if (ids.size > 1) return `${ids.size} projects`;
   const [id] = ids;
   return clean(projectNames.get(id)).slice(0, MAX_FOLDER_LENGTH).trim();
@@ -568,6 +569,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     const done = [];
     let bytes = 0;
     let includedCount = 0;
+    const includedProjects = new Set();
     let from = 0;
     // The second clause: everything went away between submit and now, so ship one part anyway —
     // it carries errors.txt, which is the only thing left to tell the caller.
@@ -580,6 +582,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
         projectNames,
         access,
         errors,
+        includedProjects,
         maxBytes: config.bulkMaxTotalBytes - bytes,
         partMaxBytes: config.bulkMaxBytes
       });
@@ -599,7 +602,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     await bulkDownloads.patch(id, {
       parts: done,
       partCount: done.length,
-      label: labelFor(docs, projectNames),
+      label: labelFor(includedProjects, projectNames),
       includedCount,
       bytes,
       errorCount: errors.length,
