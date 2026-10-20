@@ -311,14 +311,14 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 | F8 Extensions | 8, F1 | `project.service.ts:217-226`; `project.service.spec.ts` | `reviewExtensions` and `reviewSuspensions` into DEMI_ONLY | project consumer |
 | F9 Project writes | 9, F4 | `project.service.ts:188-213`; `project.service.spec.ts` | project-wide ownership | project consumer |
 | F10 Documents | FS, A0 | `document.service.ts:18-20,91-140`, `project-documents.component.ts:790`, `project-notification-documents.component.ts:463`, all to `/documents/:id/download` (`routes.js:196`); `document.service.spec.ts` | ignore Eagle fields in the document mirror; decide on MAX_FEATURE_DOCS (eagle-api `document.js:919-922`) | yes |
-| F11 CAC | 11, F8 | none: no eagle-admin caller | `projectCAC`, `projectCACPublished` and `cacEmail` into DEMI_ONLY | none. eagle-api has no write path for the CAC fields: `project.js:79-82` is the GET `fields=` allowlist (`tagList`, `:9`), `protectedPut` (`:602`, field map about `:662-690`) carries no CAC field, and b072e79 removed the CAC write routes. If an Eagle reader (eagle-public Angular line) needs the fields, Daniel decides on an eagle-api write path. |
+| F11 CAC | 11, F8 | none: no eagle-admin caller | `projectCAC`, `projectCACPublished` and `cacEmail` into DEMI_ONLY | none. eagle-api has no write path for the CAC fields: `project.js:79-82` is the GET `fields=` allowlist (`tagList`, `:9`), `protectedPut` (`:602`, field map about `:662-690`) carries no CAC field, and b072e79 removed the CAC write routes. Neither eagle-public line reads the CAC fields (0 hits on `develop` and `react`, 2026-10-19), so no eagle-api write path is added. |
 
 ## 6. Retire (last)
 
 - **eagle-api, dead now, one slice:** topic and vc; materialized-view `protectedRefresh`; `POST /public/comment` and `/public/document`; `POST /task`; `job listJobs`; `login`.
 - **Already removed in eagle-api:** the CAC admin handlers (b072e79) and the inspection writes.
 - **Kept until DataBC moves:** `/reports`.
-- **eagle-api, one slice per object:** delete the handlers under "Callers to move", the pin routes and the extension routes. A retire PR may merge once that object's Flip is live on test. The retire **tag may reach prod only after that Flip is live on prod**. This is stricter than tracker line 20; record the change there.
+- **eagle-api, one slice per object:** delete the handlers under "Callers to move", the pin routes and the extension routes. A retire PR may merge once that object's Flip is live on test. The retire **tag may reach prod only after that Flip is live on prod**.
 - **DEMI final retire:** delete the mirror lines and each kind's `upsertFromEagle`, only for kinds whose Flip is live on prod. Inspections (`routes.js:252-254`) stay as a frozen import path (decided 2026-10-14).
 
 Risks:
@@ -333,7 +333,5 @@ Risks:
 
 Not checked:
 - Which eagle-api reads the Angular eagle-public prod line still makes. This decides whether each object needs sync-out.
-- Whether DEMI returns every legislation block (A2).
 - Whether TokenInterceptor attaches the bearer on write verbs (A0).
 - How `commentIdCount` is stored in DEMI.
-- Whether eagle-public reads the CAC fields.
