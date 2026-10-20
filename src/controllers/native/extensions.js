@@ -10,8 +10,8 @@ const extension = require('../../domain/extensions');
 const { getHandler, NO_STORE } = require('../nosql/mirror-reads');
 const { writeHandler } = require('./write');
 
-const WRITES = { entity: projects.CONTAINER };
-const read = getHandler(projects.CONTAINER, 'Project not found', extension.list);
+const WRITES = { entity: projects.CONTAINER, shape: extension.bodyOf };
+const read = getHandler(projects.CONTAINER, 'Project not found', extension.list, extension.bodyOf);
 
 module.exports = {
   // Staff-only, and a project may be unpublished: no shared cache may keep the answer.

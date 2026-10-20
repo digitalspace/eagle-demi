@@ -58,13 +58,17 @@ const itemsOf = (row, list) => (Array.isArray(row[list]) ? row[list] : []);
 /** A list as the caller sees it: each object item with its id. Anything else passes through. */
 const withIds = (items) => items.map(item => (isItem(item) ? { ...item, id: idOf(item) } : item));
 
-/** The response body: the project id and both lists, redacted as a project by the controller. */
+/** What the controller redacts as a project: both lists and the row keys the dials read. */
 function viewOf(row) {
   const view = { id: row.id, read: row.read, isPublished: row.isPublished };
   if (row.vis) view.vis = row.vis;
   for (const list of LISTS) view[list] = withIds(itemsOf(row, list));
   return view;
 }
+
+// The redacted view also carries id and the publish flags (pinsPublished wrong without pinsRead).
+const bodyOf = (redacted) => Object.fromEntries(LISTS.filter(list => Object.hasOwn(redacted, list))
+  .map(list => [list, redacted[list]]));
 
 /** Where `extId` sits: its list and every index holding it (equal Eagle items share one id). */
 function locate(row, extId) {
@@ -216,4 +220,4 @@ async function remove(ctx, id, extId) {
   }, auditOf('extension.delete', found.list, extId));
 }
 
-module.exports = { ITEM_SCHEMA, idOf, list, create, update, remove };
+module.exports = { ITEM_SCHEMA, bodyOf, idOf, list, create, update, remove };

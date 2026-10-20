@@ -10,8 +10,8 @@ const cac = require('../../domain/cac');
 const { getHandler, NO_STORE } = require('../nosql/mirror-reads');
 const { writeHandler } = require('./write');
 
-const WRITES = { entity: projects.CONTAINER };
-const read = getHandler(projects.CONTAINER, 'Project not found', cac.get);
+const WRITES = { entity: projects.CONTAINER, shape: cac.bodyOf };
+const read = getHandler(projects.CONTAINER, 'Project not found', cac.get, cac.bodyOf);
 
 module.exports = {
   // Staff-only, and a project may be unpublished: no shared cache may keep the answer.

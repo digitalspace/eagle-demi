@@ -24,13 +24,18 @@ const EMAIL_SCHEMA = { type: 'string', max: 254, required: true };
 const CREATE_SCHEMA = Object.freeze({ cacEmail: EMAIL_SCHEMA });
 const REMOVE_MEMBER_SCHEMA = Object.freeze({ address: EMAIL_SCHEMA });
 
-/** The response body: the project id and the CAC fields, redacted as a project by the controller. */
+/** What the controller redacts as a project: the CAC fields and the row keys the dials read. */
 function viewOf(row) {
   const view = { id: row.id, read: row.read, isPublished: row.isPublished };
   if (row.vis) view.vis = row.vis;
   for (const field of FIELDS) view[field] = row[field] === undefined ? null : row[field];
   return view;
 }
+
+// The redacted view also carries id and the publish flags; pinsPublished there is computed without
+// pinsRead, so it would be wrong. The body is the CAC fields the dials left.
+const bodyOf = (redacted) => Object.fromEntries(FIELDS.filter(key => Object.hasOwn(redacted, key))
+  .map(key => [key, redacted[key]]));
 
 const readProject = (ctx, id) => projects.getById(ctx.access, id);
 
@@ -174,4 +179,4 @@ async function removeMember(ctx, id, input) {
   return { status: 'ok', value: viewOf(project) };
 }
 
-module.exports = { get, create, publish, unpublish, remove, removeMember };
+module.exports = { bodyOf, get, create, publish, unpublish, remove, removeMember };

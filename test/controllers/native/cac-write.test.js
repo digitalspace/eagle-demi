@@ -76,6 +76,15 @@ test('CAC routes', async (t) => {
     assert.strictEqual(res.body.read, undefined, 'read[] never leaves the service');
   });
 
+  await t.test('GET and writes answer exactly the three CAC fields, for staff and sysadmin', async (t) => {
+    fakeStore(t);
+    const keys = ['cacEmail', 'projectCAC', 'projectCACPublished'];
+    for (const roles of [['staff'], ['sysadmin']]) {
+      assert.deepStrictEqual(Object.keys((await ROUTES.get(roles)).body).sort(), keys, roles[0]);
+      assert.deepStrictEqual(Object.keys((await ROUTES.publish(roles)).body).sort(), keys, roles[0]);
+    }
+  });
+
   await t.test('sysadmin creates a CAC: 201', async (t) => {
     fakeStore(t);
     const res = await ROUTES.create(['sysadmin']);

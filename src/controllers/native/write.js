@@ -29,9 +29,10 @@ const REFUSALS = Object.freeze({
  *   `ctx` is `{ access, req }`. Resolves to `{status: 'ok', value, created?}`,
  *   `{status: 'invalid', fields}`, or
  *   `{status: 'forbidden'|'not-found'|'conflict'|'busy'|'unavailable'|'upstream-failed', error?}`.
- * @param {{entity: string}} options the catalog entity that redacts the saved row
+ * @param {{entity: string, shape?: Function}} options the catalog entity that redacts the saved row,
+ *   and `shape(redacted)` that trims it to the response body
  */
-function writeHandler(fn, { entity }) {
+function writeHandler(fn, { entity, shape = (body) => body }) {
   if (!entity) throw new TypeError('writeHandler needs the catalog entity');
 
   return async function (req, res) {
@@ -41,7 +42,7 @@ function writeHandler(fn, { entity }) {
       const result = id === undefined ? await fn(ctx, req.body) : await fn(ctx, id, req.body);
 
       if (result.status === 'ok') {
-        return res.status(result.created ? 201 : 200).json(redactForAccess(entity, result.value, ctx.access));
+        return res.status(result.created ? 201 : 200).json(shape(redactForAccess(entity, result.value, ctx.access)));
       }
       if (result.status === 'invalid') {
         // Field names only, and at most ten: the values and the key count are the caller's.

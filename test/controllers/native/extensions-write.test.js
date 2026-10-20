@@ -59,6 +59,15 @@ test('extension routes', async (t) => {
   });
   t.afterEach(() => t.mock.restoreAll());
 
+  await t.test('GET and writes answer exactly the two lists, for staff and sysadmin', async (t) => {
+    fakeStore(t);
+    const keys = ['reviewExtensions', 'reviewSuspensions'];
+    for (const roles of [['staff'], ['sysadmin']]) {
+      assert.deepStrictEqual(Object.keys((await ROUTES.list(roles)).body).sort(), keys, roles[0]);
+      assert.deepStrictEqual(Object.keys((await ROUTES.create(roles)).body).sort(), keys, roles[0]);
+    }
+  });
+
   await t.test('staff reads both lists, ids on items, nothing of the project beyond them', async (t) => {
     fakeStore(t);
     const res = await ROUTES.list(['staff']);
