@@ -31,6 +31,7 @@ test('extract reads the documents policy from the real cosmos-nosql.bicep', {
   const excluded = policy.excludedPaths.map((p) => p.path);
   assert.ok(included.includes('/parentFieldsPending/?'));
   assert.ok(included.includes('/dateUploaded/?'));
+  assert.ok(included.includes('/documentSource/?'));
   assert.ok(!included.includes('/*'));
   assert.ok(excluded.includes('/*'));
 });

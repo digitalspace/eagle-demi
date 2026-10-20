@@ -475,7 +475,7 @@ test('updates publishDate ordering', async (t) => {
 // The documents container excludes `/*`, so a filter or sort on a path missing here cannot be served.
 test('documents container indexes the paths its repository filters and sorts on', () => {
   const indexed = indexedFields('documents');
-  for (const field of ['parentFieldsPending', 'dateUploaded']) {
+  for (const field of ['parentFieldsPending', 'dateUploaded', 'documentSource']) {
     assert.ok(indexed.includes(field), `/${field}/? is not an included path on documents`);
   }
 });

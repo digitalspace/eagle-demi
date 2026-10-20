@@ -265,6 +265,11 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
             path: '/dateUploaded/?'
           }
           {
+            // The same query leaves out update images by documentSource; unindexed, that filter
+            // scans every partition.
+            path: '/documentSource/?'
+          }
+          {
             // documents.js listParentFieldsPending and countParentFieldsPending filter on it.
             path: '/parentFieldsPending/?'
           }
