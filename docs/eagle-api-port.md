@@ -150,11 +150,11 @@ Shared code is the read `SPEC`, `writeHandler`, `_write.js` and `_schema.js`. Ea
 
 Status: done, Dark (b9e4685f, rules 38950fd4). Pin rules built in `src/domain/project-pins.js`; no caller until F1.
 
-Today: `pins` is a field on the project document, resolved to `{_id, name, province}` in `src/merge/project.js:146-153`, shown when `pinsRead` includes `public` (`src/vis/predicates.js:18`). `PUT /projects/:id` strips `pins` and `pinsPublished` (`src/controllers/nosql/project.js:489-492`). `pinsRead` has maxVis 0 (`src/vis/catalog/projects.js:155`). eagle-public react reads pins through `GET /demi-projects/:id` (`src/app/api/api.ts:395-410`).
+Today: `pins` is a field on the project document, resolved to `{_id, name, province}` in `src/merge/project.js:151-158`, shown when `pinsRead` includes `public` (`src/vis/predicates.js:18`). `PUT /projects/:id` strips `pins` and `pinsPublished` (`src/controllers/nosql/project.js:491-494`). `pinsRead` has maxVis 0 (`src/vis/catalog/projects.js:163`). eagle-public react reads pins through `GET /demi-projects/:id` (`src/app/api/api.ts:395-410`).
 
 Design (Daniel, 2026-10-14): a pin is an organization, so DEMI has no pin routes. The organization is the object. A pin is only the link "organization X is pinned to project Y" plus a published flag, and that link lives on the project.
 - Organization create and update: the Organizations section below. This section adds no organization rules.
-- `PUT /projects/:id` accepts `pins` (a list of organization ids) and `pinsPublished` (boolean). It stops stripping both (`src/controllers/nosql/project.js:489-492`). The route keeps its existing project guard (`[authMiddleware, requireWrite]`, `routes.js:170`).
+- `PUT /projects/:id` accepts `pins` (a list of organization ids) and `pinsPublished` (boolean). It stops stripping both (`src/controllers/nosql/project.js:491-494`). The route keeps its existing project guard (`[authMiddleware, requireWrite]`, `routes.js:170`).
 - Every id in `pins` must exist in the organizations table. Otherwise the PUT returns 400 and lists the unknown ids. This is a foreign-key check.
 - DEMI has no `POST`, `DELETE` or `PUT` route under `/projects/:id/pins`. eagle-api's `/project/:id/pin` sub-routes edit an array; DEMI does not copy them.
 - Reads: eagle-public and eagle-admin get pins from the project read, `GET /projects/:id`. There is no `GET /projects/:id/pins`.
@@ -168,8 +168,8 @@ Rules:
 - The publish check covers only the ids being added, or the whole list when it goes from unpublished to published, so a list holding a since-unpublished organization can still shrink. The unknown-id 400 and the 403 role rule from (c) below are built in the same module.
 
 Ownership per phase:
-- Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:489-492` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`). It has no caller until F1, which maps `id` to `_id`.
-- Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/merge/project.js:182`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `project.js:459-460`. Remove the dead pins-shape branch in `carryEagleOnlyFields` (`merge/project.js:220-232`) and its tests (`test/merge/project.test.js:899-913`).
+- Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:491-494` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`), which has no caller until F1 maps `id` to `_id`.
+- Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/merge/project.js:186`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `controllers/nosql/project.js:493` and remove the dead pins-shape branch in `carryEagleOnlyFields` (`merge/project.js:225-236`) and its tests (`test/merge/project.test.js:871-887`).
 - Sync-out: DEMI pushes the project's organization id list and published flag into eagle-api's `pins` and `pinsRead`. eagle-api project PUT does not touch `pins` (`api/controllers/project.js` has no `pins` reference on `origin/develop`), so the push uses the eagle-api pin routes: `POST /project/:id/pin` for ids to add, `DELETE /project/:id/pin/:pinId` for ids to remove, `PUT /project/:id/pin/publish` or `/unpublish` for the flag. The consumer reads the eagle-api list first and sends the difference.
 
 Open before build:
@@ -398,7 +398,7 @@ Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`):
 - Delete removes the members and sets `projectCAC` false (`:221-225`). DEMI keeps no `cacMembers`, so the members are removed in eagle-notify (`POST /api/cac/{eagleId}/unsubscribe`).
 - Removing a member pulls it and deletes it (`:167-169`). In DEMI that is eagle-notify `POST /api/cac/{eagleId}/members/unsubscribe` only; no project field changes.
 - eagle-notify stays the member store and never hard-deletes (decision 5). Both calls run before the DEMI write, and a failed call fails it (502); unset `NOTIFY_API_BASE` or `NOTIFY_API_KEY` fails it closed (503). A 404 `not_found` on member removal counts as already removed.
-- `GET` returns the three CAC fields only: eagle-notify has no list route and DEMI holds no member store.
+- `GET` and every write answer `projectCAC`, `projectCACPublished` and `cacEmail` only (`bodyOf` in `src/domain/cac.js`). eagle-notify has no list route and DEMI holds no member store.
 - Sign-up is anonymous and unconfirmed in eagle-api (workspace TODO 2026-10-14 asks for a confirm step; that belongs in eagle-notify, not here).
 
 Deviations: delete also sets `projectCACPublished` false, so a deleted CAC's `cacEmail` stops showing to the public; publish refuses with 409 a project with no CAC; `cacEmail` and `address` must be email addresses; an unknown project is 404 (eagle-api: 400 on create).
@@ -432,7 +432,7 @@ Decisions:
 - DEMI gives each item an `id`: a UUID for an item DEMI adds, kept across a PUT. An Eagle item carries none (eagle-api matched the whole object, `:525-528`), so its id is a hash of its content, the same on every read; equal items share an id, and a delete removes them all, as `$pull` did. DEMI never stamps an id onto an untouched Eagle item, so the nightly parity check sees no change it did not make.
 - PUT and DELETE name the item in the path; there is no `old` body or `item` query.
 - The body takes only `type`, `appliedTo`, `start` and `end` (dates ISO 8601, nullable); any other key, `id` included, is a 400, and so is an empty body (eagle-api would push `{}` into `reviewSuspensions`). PUT replaces the item whole, as eagle-api's pull-then-push did.
-- POST answers 201; every write answers `{ id, isPublished, reviewExtensions, reviewSuspensions }`, redacted as a project. A list a per-project dial hides from the caller is left out of the GET and is a 400 to write.
+- POST answers 201; the GET and every write answer `{ reviewExtensions, reviewSuspensions }` only (`bodyOf` in `src/domain/extensions.js`), redacted as a project. A list a per-project dial hides from the caller is left out of the GET and is a 400 to write.
 - The write is one etag-guarded project upsert, so the remove and add of a PUT land together; eagle-api's two updates could drop the old item and then fail the push.
 - No `vis/catalog/projects.js` edit was needed: both lists are already catalogued, and the redactor does not descend into arrays. Slice 11 is free to edit it.
 - Dark: a DEMI write is replaced by the next Eagle push of that project, and by any merge that rebuilds the row from its stored Eagle copy.
@@ -557,7 +557,7 @@ eagle-admin still calls eagle-api for writes that DEMI already serves. Move thes
 - Document fetch URLs built from eagle-api (`document.service.ts:18-20`, used in `update-images.ts:42`, `update-image-picker.component.ts:29`, `project-documents.component.ts:790`, `project-notification-documents.component.ts:463`).
 - eagle-demi-admin `src/api/eagle.ts:22` shows the eagle-api report URL; DataBC pulls that CSV from prod (external, unverified), so keep eagle-api `/reports` until DataBC is repointed.
 
-Document feature: DEMI has no featured-document cap yet (eagle-api `constants.js:18` `MAX_FEATURE_DOCS = 5`, enforced in `document.js:843-849` with a 403). Decided 2026-10-19: the cap is a business rule; at F10 DEMI enforces it from config in the document PUT and returns 409 when a project already has 5 featured documents.
+Document feature: eagle-api caps featured documents at `MAX_FEATURE_DOCS = 5` (`constants.js:18`) and refuses with a 403 (`document.js:843-849`). The cap is a business rule, so DEMI enforces it from config in the document PUT and answers 409.
 
 Built (c1827211): `PUT /documents/:id` with `isFeatured: true` answers 409 when the project already holds the cap. The cap comes from `FEATURED_DOCUMENTS_MAX` (default 5, `src/config.js`); a document that is already featured is not counted, so a re-save never gets a 409. Eagle pushes and the seed stay uncapped; eagle-admin keeps calling eagle-api feature and unfeature until the flip.
 
