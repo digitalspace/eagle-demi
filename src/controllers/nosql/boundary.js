@@ -14,6 +14,7 @@
 
 const boundaries = require('../../repositories/boundaries');
 const { resolveAccess, readForLevel } = require('../../helpers/access-sql');
+const { INTERNAL_FIELDS } = require('../../db/cosmos-nosql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const { logger } = require('../../utils/logger');
@@ -31,6 +32,20 @@ function resolveBoundaryAcl(isPublished) {
     isPublished: published,
     read: readForLevel(published ? 4 : 2)
   };
+}
+
+// Never served: the ACL and the Cosmos system fields, `_etag` included.
+const UNSERVED_KEYS = Object.freeze(['read', '_etag', ...INTERNAL_FIELDS]);
+
+// A body key outside these is refused, so a typo cannot store a field every caller then reads.
+const UPDATABLE_KEYS = Object.freeze(['name', 'code', 'geometry', 'simplifiedGeometry', 'isPublished']);
+// Keys the update has always accepted and dropped, so a fetched row sent back still saves.
+const IGNORED_KEYS = Object.freeze(['id', 'type', 'read', 'updatedAt']);
+
+function served(row) {
+  const out = { ...row };
+  for (const key of UNSERVED_KEYS) delete out[key];
+  return out;
 }
 
 exports.getBoundaries = async (req, res) => {
@@ -111,7 +126,7 @@ exports.getBoundaries = async (req, res) => {
       );
     }
 
-    return res.json(items);
+    return res.json(items.map(served));
   } catch (err) {
     return serverError(res, err, 'getBoundaries failed');
   }
@@ -134,7 +149,7 @@ exports.getBoundary = async (req, res) => {
       // 404 for both "absent" and "not yours" — a 403 would confirm the boundary exists.
       return res.status(404).json({ error: 'Boundary not found' });
     }
-    return res.json(boundary);
+    return res.json(served(boundary));
   } catch (err) {
     return serverError(res, err, 'getBoundary failed');
   }
@@ -166,7 +181,7 @@ exports.createBoundary = async (req, res) => {
       detail: { type: saved.type, name: saved.name, isPublished: saved.isPublished }
     });
 
-    return res.status(201).json(saved);
+    return res.status(201).json(served(saved));
   } catch (err) {
     return serverError(res, err, 'createBoundary failed');
   }
@@ -178,6 +193,12 @@ exports.updateBoundary = async (req, res) => {
     const existing = await boundaries.getById(access, req.params.id, req.query.type);
     if (!existing) {
       return res.status(404).json({ error: 'Boundary not found' });
+    }
+
+    const unknown = Object.keys(req.body || {})
+      .filter(key => !UPDATABLE_KEYS.includes(key) && !IGNORED_KEYS.includes(key));
+    if (unknown.length > 0) {
+      return res.status(400).json({ error: `Unknown body parameter(s): ${unknown.join(', ')}` });
     }
 
     // type is the partition key — reassigning it is a delete-and-reinsert, not an update.
@@ -215,7 +236,7 @@ exports.updateBoundary = async (req, res) => {
       }
     });
 
-    return res.json(saved);
+    return res.json(served(saved));
   } catch (err) {
     return serverError(res, err, 'updateBoundary failed');
   }
