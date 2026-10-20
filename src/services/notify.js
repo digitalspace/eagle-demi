@@ -1,13 +1,12 @@
 'use strict';
 
 /**
- * eagle-notify push — "an Update was published", and its retraction.
+ * eagle-notify calls: "an Update was published" and its retraction, and CAC member removal.
  *
- * DEMI owns Updates, so DEMI is what tells the subscription service one went public. Nothing here
- * throws: every send resolves an OUTCOME, and the caller decides from it whether a later tick may
- * try again.
- *
- * Dark when either setting is missing, which is every environment not yet wired to eagle-notify.
+ * DEMI owns Updates, so DEMI is what tells the subscription service one went public. The Update
+ * sends never throw: each resolves an OUTCOME, and the caller decides from it whether a later tick
+ * may try again. They are dark when either setting is missing. The CAC calls throw instead, and
+ * throw when unconfigured too, because the DEMI write they guard must not land without them.
  */
 
 const config = require('../config');
@@ -141,6 +140,75 @@ async function updateCancelled(item) {
   return post({ ...eventFor(item), id: item.id, cancelled: true });
 }
 
+/** A CAC call that did not land. `status` is eagle-notify's HTTP status, null when none came. */
+class NotifyError extends Error {
+  constructor(message, { status = null, code = null, configured: isConfigured = true } = {}) {
+    super(message);
+    this.name = 'NotifyError';
+    this.status = status;
+    this.code = code;
+    this.configured = isConfigured;
+  }
+}
+
+/**
+ * POSTs to an eagle-notify CAC route and resolves its JSON body on a 2xx. Unlike `post`, this
+ * throws, and throws when unconfigured too: a CAC write must not land while members stay subscribed.
+ * Both routes are idempotent, so a 5xx or no answer is tried once more.
+ */
+async function cacPost(path, body) {
+  if (!configured()) throw new NotifyError('notify not configured', { configured: false });
+
+  let failure;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    let res;
+    try {
+      res = await fetch(`${config.notifyApiBase}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-functions-key': config.notifyApiKey },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(TIMEOUT_MS)
+      });
+    } catch (err) {
+      logger.warn('[notify] eagle-notify unreachable', { path, attempt, error: err.message });
+      failure = new NotifyError(`eagle-notify unreachable: ${err.message}`);
+      continue;
+    }
+    const answer = await res.json().catch(() => null);
+    if (res.ok) return answer || {};
+    const code = answer && typeof answer.error === 'string' ? answer.error : null;
+    failure = new NotifyError(`eagle-notify answered ${res.status}`, { status: res.status, code });
+    // A 4xx is an answer, not a blip: the same request is refused again.
+    if (res.status < 500) throw failure;
+    logger.warn('[notify] eagle-notify errored', { path, status: res.status, attempt });
+  }
+  throw failure;
+}
+
+/**
+ * Ends one CAC member's subscription (eagle-notify `POST /api/cac/{projectId}/members/unsubscribe`).
+ *
+ * @param {string} eagleProjectId the 24-hex Eagle id members signed up with
+ * @param {string} address the member's email
+ * @returns {Promise<{status: string, alreadyUnsubscribed: boolean}>}
+ * @throws {NotifyError} unconfigured, any non-2xx (a 404 carries `code: 'not_found'`), or no answer
+ */
+function unsubscribeCacMember(eagleProjectId, address) {
+  return cacPost(`/api/cac/${encodeURIComponent(eagleProjectId)}/members/unsubscribe`, { address });
+}
+
+/**
+ * Ends every member's subscription to a project's CAC (eagle-notify `POST /api/cac/{projectId}/unsubscribe`).
+ *
+ * @param {string} eagleProjectId the 24-hex Eagle id members signed up with
+ * @returns {Promise<{status: string, count: number}>}
+ * @throws {NotifyError} unconfigured, any non-2xx, or no answer
+ */
+function unsubscribeCac(eagleProjectId) {
+  return cacPost(`/api/cac/${encodeURIComponent(eagleProjectId)}/unsubscribe`);
+}
+
 module.exports = {
-  OUTCOME, configured, updatePublished, updateCancelled, excerptOf, summaryOf, urlFor
+  OUTCOME, NotifyError, configured, updatePublished, updateCancelled, unsubscribeCacMember, unsubscribeCac,
+  excerptOf, summaryOf, urlFor
 };
