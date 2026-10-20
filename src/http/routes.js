@@ -195,9 +195,9 @@ const routes = [
   // Presigned download link — ACL-gated inside the controller, same as the metadata read.
   { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => documentController().downloadDocument },
   { method: 'post', path: '/documents', guards: [authMiddleware, requireWrite], load: () => documentController().createDocument },
-  // The multipart upload. The dispatcher writes the part to os.tmpdir() and hands the handler
-  // `req.file`; the handler unlinks it, exactly as it did under multer.
-  { method: 'post', path: '/documents/extract', guards: [authMiddleware, requireWrite], load: () => documentController().extractDocument },
+  // The one multipart route. After the guards, the dispatcher writes the file part to os.tmpdir(),
+  // hands the handler `req.file`, and deletes it when the request ends.
+  { method: 'post', path: '/documents/extract', guards: [authMiddleware, requireWrite], multipart: true, load: () => documentController().extractDocument },
   // Upload through the scanned intake account: answers a write-only link, the row stays hidden until clean.
   { method: 'post', path: '/intake/uploads', guards: [authMiddleware, requireWrite], load: () => require('../controllers/native/intake').createUpload },
   { method: 'get', path: '/intake/uploads/:id', guards: [authMiddleware, credentialsMiddleware], load: () => require('../controllers/native/intake').getUpload },

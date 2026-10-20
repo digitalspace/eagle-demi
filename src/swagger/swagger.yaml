@@ -2257,10 +2257,20 @@ paths:
                 displayName:
                   type: string
       responses:
-        '200':
-          description: Document successfully uploaded and parsed.
+        '202':
+          description: File stored; text extraction runs on the next scheduled extraction pass.
+        '400':
+          description: >-
+            `No file uploaded.`, `A valid project id is required.`, `invalid multipart body`, or
+            `request body aborted` when the client drops mid-upload.
         '401':
           description: Unauthorized.
+        '403':
+          description: '`Forbidden. This credential is read-only.`'
+        '404':
+          description: No project with the `project` id.
+        '413':
+          description: '`request entity too large`: the body is over 100 MB. Nothing is stored.'
 
   /api/intake/uploads:
     post:
