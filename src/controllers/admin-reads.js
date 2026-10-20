@@ -17,7 +17,7 @@ const ANALYTICS_WINDOWS = { 7: 'P7D', 30: 'P30D' };
 // Everything else IS interpolated into KQL, so it is matched against a whitelist first and
 // rejected outright otherwise. Neither pattern admits a quote, so the single quotes below cannot
 // be closed early; there is no escaping step to get wrong because nothing needing one gets through.
-const ACTION_RE = /^[a-z][a-z.]{0,40}$/;
+const ACTION_RE = /^[a-z][a-zA-Z.]{0,40}$/;
 const ACTOR_RE = /^[\w.@-]{1,80}$/;
 
 const COST_TTL_MS = 60 * 60 * 1000;

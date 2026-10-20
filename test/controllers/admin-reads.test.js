@@ -81,6 +81,24 @@ test('GET /admin/audit', async (t) => {
     assert.deepStrictEqual(sent, []);
   });
 
+  await t.test('accepts camelCase action names the writers use, but not a leading capital', async (t) => {
+    configure(t, { auditWorkspaceCustomerId: 'ws-audit' });
+    const sent = spyLogs(t, () => []);
+
+    for (const action of ['projectSummary.save', 'pdfTitle.sweep', 'cac.member.remove']) {
+      const res = mockRes();
+      await controller.getAudit({ query: { action } }, res);
+      assert.strictEqual(res.statusCode, 200, `${action} must be accepted`);
+      assert.ok(sent.at(-1).query.includes(`where Action == '${action}'`));
+    }
+
+    const sentBefore = sent.length;
+    const res = mockRes();
+    await controller.getAudit({ query: { action: 'ProjectSummary.save' } }, res);
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(sent.length, sentBefore);
+  });
+
   await t.test('maps rows to objects and totals the window, not the page', async (t) => {
     // `limit` caps the rows; the total has to come off the summary or a filtered page understates
     // the window. Distinct numbers, so a total read from rows.length fails here.

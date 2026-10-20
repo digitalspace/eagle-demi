@@ -7164,10 +7164,10 @@ paths:
         - name: action
           in: query
           required: false
-          description: Exact Action value, lower case and dots only.
+          description: Exact Action value. Starts with a lower-case letter, then letters and dots only (camelCase such as projectSummary.save is allowed).
           schema:
             type: string
-            pattern: '^[a-z][a-z.]{0,40}$'
+            pattern: '^[a-z][a-zA-Z.]{0,40}$'
         - name: actor
           in: query
           required: false
