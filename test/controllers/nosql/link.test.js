@@ -625,6 +625,43 @@ test('short link controller', async (t) => {
     assert.strictEqual(stored.personal, false, 'omitted means shared, which is the old behaviour');
   });
 
+  await t.test('a personal link is repointed and deleted only by its creator or a sysadmin', async () => {
+    const row = { id: 'mine1234', url: DEST, note: null, personal: true, createdBy: 'staff.person' };
+    t.mock.method(links, 'getById', async () => row);
+    const repoint = t.mock.method(links, 'repoint', async (code, url) => ({ ...row, url }));
+    const remove = t.mock.method(links, 'remove', async () => true);
+    const other = { preferred_username: 'other.person' };
+
+    const put = mockRes();
+    await linkController.updateLink({ params: { code: row.id }, body: { url: DEST }, query: {}, user: other }, put);
+    const del = mockRes();
+    await linkController.deleteLink({ params: { code: row.id }, query: {}, user: other }, del);
+    // The same answer as a code that does not exist, as the list hides the row from them too.
+    assert.strictEqual(put.statusCode, 404);
+    assert.deepStrictEqual(put.body, { error: 'Short link not found' });
+    assert.strictEqual(del.statusCode, 404);
+    assert.strictEqual(repoint.mock.callCount(), 0);
+    assert.strictEqual(remove.mock.callCount(), 0);
+
+    for (const user of [STAFF, ADMIN]) {
+      const ok = mockRes();
+      await linkController.updateLink({ params: { code: row.id }, body: { url: DEST }, query: {}, user }, ok);
+      assert.strictEqual(ok.statusCode, 200, user.preferred_username);
+      const gone = mockRes();
+      await linkController.deleteLink({ params: { code: row.id }, query: {}, user }, gone);
+      assert.strictEqual(gone.statusCode, 200, user.preferred_username);
+    }
+  });
+
+  await t.test('a shared link stays editable by any writer', async () => {
+    t.mock.method(links, 'getById', async () => ({ id: 'shared12', url: DEST, personal: false, createdBy: 'staff.person' }));
+    t.mock.method(links, 'remove', async () => true);
+
+    const res = mockRes();
+    await linkController.deleteLink({ params: { code: 'shared12' }, query: {}, user: { preferred_username: 'other.person' } }, res);
+    assert.strictEqual(res.statusCode, 200);
+  });
+
   await t.test('a non-boolean personal is a 400', async () => {
     let created = false;
     t.mock.method(links, 'create', async () => { created = true; return {}; });

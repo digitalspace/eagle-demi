@@ -176,23 +176,26 @@ exports.listApiKeys = async (_req, res) => {
 
 exports.revokeApiKey = async (req, res) => {
   try {
-    const revoked = await apiKeys.revoke(req.params.id);
-    if (!revoked) {
+    const result = await apiKeys.revoke(req.params.id);
+    if (!result) {
       return res.status(404).json({ error: 'API key not found' });
     }
+    const { key } = result;
 
     // Immediate on this instance; other instances honour it within the lookup cache TTL.
     forgetCachedKey(req.params.id);
+    // A repeat is a no-op: the trail keeps the one revoke that happened.
+    if (!result.revoked) return res.json({ message: 'API key revoked', key });
     logger.info(`[demi-api] API key ${req.params.id} revoked by ${(req.user && req.user.preferred_username) || 'unknown'}`);
 
     auditEvent(req, {
       action: 'apikey.revoke',
       targetType: 'apikey',
       targetId: req.params.id,
-      detail: { name: revoked.name, roles: revoked.roles }
+      detail: { name: key.name, roles: key.roles }
     });
 
-    return res.json({ message: 'API key revoked', key: revoked });
+    return res.json({ message: 'API key revoked', key });
   } catch (err) {
     return serverError(res, err, 'api key revoke failed');
   }

@@ -142,6 +142,24 @@ test('document field redaction', async (t) => {
     assert.deepStrictEqual(saved.ownRead, STORED.ownRead, 'ownRead comes off the stored row');
   });
 
+  await t.test('an edit cannot stamp sealedAt or set fileSize', async () => {
+    // Both are server-set: dropped like the push bookkeeping, so a round-tripped GET still saves.
+    t.mock.method(documents, 'getById', async () => ({ ...structuredClone(STORED), fileSize: 52000 }));
+    let saved;
+    t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await documentController.updateDocument({
+      params: { id: 'd1' }, query: {}, user: { realm_access: { roles: ['staff'] } },
+      body: { displayName: 'Renamed', sealedAt: '2026-10-20T00:00:00.000Z', fileSize: 0 }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.displayName, 'Renamed');
+    assert.strictEqual(saved.sealedAt, undefined);
+    assert.strictEqual(saved.fileSize, 52000);
+  });
+
   await t.test('an ordinary edit cannot clear the Eagle tombstone', async () => {
     // `isDeleted` decides what `setAclForProject` may derive the row back to, so a body that
     // cleared it would hand a document Eagle deleted back to the public on the next project

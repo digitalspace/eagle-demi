@@ -1186,6 +1186,9 @@ exports.updateDocument = async (req, res) => {
       // Push bookkeeping: catalogued at vis 2, so a staff caller can see it and would otherwise be
       // able to send it back — an old stamp makes every later eagle-api push read as stale.
       eaglePushedAt: _ignoredPushedAt,
+      // Server-set, dropped for the same round-trip reason: a stamped `sealedAt` makes pdf-title
+      // skip the row, and a `fileSize` of 0 would slip past the bulk download byte cap.
+      sealedAt: _ignoredSealedAt, fileSize: _ignoredFileSize,
       _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
       _ts: _ignoredTs, _etag: _ignoredEtag,
       ...changes

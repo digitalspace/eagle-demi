@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const audit = require('../../src/utils/audit');
 const groups = require('../../src/repositories/groups');
 const projects = require('../../src/repositories/projects');
-const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
+const { resolveAccess, levelOfRead, canRead } = require('../../src/helpers/access-sql');
 const group = require('../../src/domain/groups');
 
 let rows = [];
@@ -44,7 +44,9 @@ function fakeStore(t, stored = STORED) {
   t.mock.method(groups, 'getById', async (access, id) => stored && id === stored.id ? { ...stored } : null);
   t.mock.method(groups, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
   t.mock.method(groups, 'deleteById', async (...args) => { store.deleted.push(args); return true; });
-  t.mock.method(projects, 'getById', async (access, id) => PROJECTS[id] ? { ...PROJECTS[id] } : null);
+  // As the repository answers: null for a project the caller may not read.
+  t.mock.method(projects, 'getById', async (access, id) =>
+    (PROJECTS[id] && canRead(PROJECTS[id], access, projects.PARTITION_FIELD) ? { ...PROJECTS[id] } : null));
   return store;
 }
 
@@ -84,9 +86,18 @@ test('group domain', async (t) => {
 
   await t.test('create under a private project is capped to the project', async (t) => {
     const store = fakeStore(t, null);
-    await group.create(STAFF, { projectId: PRIVATE_PROJECT_ID });
+    await group.create(ctxFor(['sysadmin']), { projectId: PRIVATE_PROJECT_ID });
     assert.deepStrictEqual(store.written[0].read, ['sysadmin']);
     assert.strictEqual(store.written[0].name, '');
+  });
+
+  await t.test('create under a project the caller cannot read answers as an unknown project', async (t) => {
+    const store = fakeStore(t, null);
+    const hidden = await group.create(STAFF, { projectId: PRIVATE_PROJECT_ID, name: 'x' });
+    const missing = await group.create(STAFF, { projectId: 'p-missing', name: 'x' });
+    assert.deepStrictEqual(hidden, missing);
+    assert.strictEqual(hidden.status, 'invalid');
+    assert.strictEqual(store.written.length, 0);
   });
 
   await t.test('create under a project DEMI does not hold is a 400 on projectId', async (t) => {

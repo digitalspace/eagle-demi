@@ -56,15 +56,16 @@ async function listRedacted() {
  *
  * The row is the only record that the key existed; deleting it would erase the audit trail and
  * make a leaked-key investigation impossible. `helpers/api-key.js:verify` treats any `revokedAt`
- * as fatal.
+ * as fatal. Returns null for an unknown key, else `{ key, revoked }`; `revoked` is false when the
+ * key was already revoked and nothing was written.
  */
 async function revoke(keyId, at = new Date().toISOString()) {
   const existing = await getById(keyId);
   if (!existing) return null;
-  if (existing.revokedAt) return redact(existing);
+  if (existing.revokedAt) return { key: redact(existing), revoked: false };
 
   const saved = await cosmos.upsert(CONTAINER, { ...existing, revokedAt: at });
-  return redact(saved);
+  return { key: redact(saved), revoked: true };
 }
 
 /**

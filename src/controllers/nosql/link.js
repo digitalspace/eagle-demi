@@ -20,6 +20,7 @@ const config = require('../../config');
 const MAX_NOTE_LENGTH = 200;
 /** Project codes are printed, current and legacy alike, so this route never moves or drops one. */
 const PROJECT_CODE_ERROR = 'This code belongs to a project. Edit it on the project instead.';
+const LINK_NOT_FOUND = Object.freeze({ error: 'Short link not found' });
 const RACED_ERROR = 'This short link changed while saving. Reload and try again.';
 
 /**
@@ -59,6 +60,13 @@ const NOT_FOUND_HTML = `<!doctype html>
 </body>
 </html>
 `;
+
+/** A personal link is its creator's: anyone else but a sysadmin gets the 404 the list implies. */
+function hiddenFrom(req, record) {
+  if (!record || record.personal !== true) return false;
+  const me = (req.user && req.user.preferred_username) || '';
+  return record.createdBy !== me && !resolveAccess(req).roles.includes('sysadmin');
+}
 
 /** The wire shape. Cosmos internals and anything added to the row later stay out of it. */
 function present(record) {
@@ -157,7 +165,7 @@ exports.updateLink = async (req, res) => {
   try {
     const code = String(req.params.code).toLowerCase();
     if (!CUSTOM_CODE.test(code)) {
-      return res.status(404).json({ error: 'Short link not found' });
+      return res.status(404).json(LINK_NOT_FOUND);
     }
     const held = await projectCodeConflict(req, res, code);
     if (held) return held;
@@ -169,6 +177,7 @@ exports.updateLink = async (req, res) => {
     // Read first for the old url: the audit row is what makes a repoint reconstructable, and
     // `patch` hands back only the new state.
     const before = await links.getById(code);
+    if (hiddenFrom(req, before)) return res.status(404).json(LINK_NOT_FOUND);
     let updated = null;
     try {
       updated = before ? await links.repoint(code, destination.url, { etag: before._etag }) : null;
@@ -177,7 +186,7 @@ exports.updateLink = async (req, res) => {
       return racedConflict(req, res, code);
     }
     if (!updated) {
-      return res.status(404).json({ error: 'Short link not found' });
+      return res.status(404).json(LINK_NOT_FOUND);
     }
 
     logger.info(`[demi-api] short link ${code} repointed by ${(req.user && req.user.preferred_username) || 'unknown'}`);
@@ -198,12 +207,13 @@ exports.deleteLink = async (req, res) => {
   try {
     const code = String(req.params.code).toLowerCase();
     if (!CUSTOM_CODE.test(code)) {
-      return res.status(404).json({ error: 'Short link not found' });
+      return res.status(404).json(LINK_NOT_FOUND);
     }
 
     const held = await projectCodeConflict(req, res, code);
     if (held) return held;
     const existing = await links.getById(code);
+    if (hiddenFrom(req, existing)) return res.status(404).json(LINK_NOT_FOUND);
     let removed = false;
     try {
       removed = existing ? await links.remove(code, { etag: existing._etag }) : false;
@@ -212,7 +222,7 @@ exports.deleteLink = async (req, res) => {
       return racedConflict(req, res, code);
     }
     if (!removed) {
-      return res.status(404).json({ error: 'Short link not found' });
+      return res.status(404).json(LINK_NOT_FOUND);
     }
 
     logger.info(`[demi-api] short link ${code} deleted by ${(req.user && req.user.preferred_username) || 'unknown'}`);

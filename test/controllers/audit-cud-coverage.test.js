@@ -489,7 +489,7 @@ test('authenticated CUD audit coverage', async (t) => {
     // An audit table kept for seven years is the wrong place for a credential.
     assert.ok(!('key' in created[0].Detail) && !('hash' in created[0].Detail));
 
-    t.mock.method(apiKeys, 'revoke', async () => ({ name: 'seeder', roles: ['public'] }));
+    t.mock.method(apiKeys, 'revoke', async () => ({ key: { name: 'seeder', roles: ['public'] }, revoked: true }));
     const revoked = await rowsFrom(() => apiKeyController.revokeApiKey({
       params: { id: res.body.id }, query: {}, user: STAFF
     }, mockRes()));
