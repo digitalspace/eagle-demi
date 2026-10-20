@@ -92,6 +92,7 @@ function principalsFromEnv(name, fallback = '') {
 const envTrim = (name) => (process.env[name] || '').trim();
 
 const EDGE_BAN_MODES = ['off', 'shadow', 'write'];
+const EDGE_GATE_MODES = ['', 'log', 'enforce'];
 
 const config = {
   minioHost:    process.env.MINIO_HOST       || 'localhost',
@@ -490,7 +491,7 @@ const config = {
 
   // Refuse requests that reached the Function or APIM without passing Front Door
   // (src/http/router.js, edgeGate). '' = off, 'log' = serve and write one warn line,
-  // 'enforce' = 403. Anything else counts as off.
+  // 'enforce' = 403. Anything else refuses to boot (checked below).
   edgeGate:              (process.env.EDGE_GATE || '').trim().toLowerCase(),
 
   // The edge ban detector (src/scripts/edge-ban.js), run by the `edgeBan` timer in api/index.js.
@@ -563,6 +564,16 @@ if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
   throw new Error(
     `DEMI_ALLOWED_CLIENTS must name at least one Keycloak client in ${config.environmentName}.`
   );
+}
+
+// A typo in EDGE_GATE would otherwise switch the gate off without a word.
+if (!EDGE_GATE_MODES.includes(config.edgeGate)) {
+  throw new Error(`EDGE_GATE must be empty, 'log' or 'enforce', got '${config.edgeGate}'.`);
+}
+
+// With Keycloak off every Bearer token is refused, so a deployed API would serve no signed-in user.
+if ((config.environmentName === 'test' || config.environmentName === 'prod') && !config.keycloakEnabled) {
+  throw new Error(`KEYCLOAK_ENABLED cannot be false in ${config.environmentName}.`);
 }
 
 // The adminApiKey getter is only read per request, so an unresolved ADMIN_API_KEY would miss the

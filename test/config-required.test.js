@@ -112,6 +112,35 @@ test('EDGE_GATE reaches config.edgeGate under that exact name', () => {
   assert.strictEqual(readConfig({}, c => c.edgeGate), '', 'unset must be off');
 });
 
+test('an unknown EDGE_GATE value refuses to boot instead of turning the gate off', () => {
+  assert.throws(() => readConfig({ EDGE_GATE: 'enforced' }, c => c.edgeGate), /EDGE_GATE.*'enforced'/);
+  assert.strictEqual(readConfig({ EDGE_GATE: 'LOG' }, c => c.edgeGate), 'log');
+});
+
+test('KEYCLOAK_ENABLED=false refuses to boot in test and prod only', async (t) => {
+  const load = (environment) => readConfig(
+    { ENVIRONMENT: environment, DEMI_ALLOWED_CLIENTS: 'eagle-admin-console', KEYCLOAK_ENABLED: 'false' },
+    c => c.keycloakEnabled);
+
+  for (const environment of ['test', 'prod']) {
+    await t.test(`ENVIRONMENT=${environment} throws`, () => {
+      assert.throws(() => load(environment), new RegExp(`KEYCLOAK_ENABLED.*${environment}`));
+    });
+  }
+
+  for (const environment of ['dev', 'local']) {
+    await t.test(`ENVIRONMENT=${environment} boots with it off`, () => {
+      assert.strictEqual(load(environment), false);
+    });
+  }
+
+  await t.test('ENVIRONMENT=prod boots with it on', () => {
+    assert.strictEqual(readConfig(
+      { ENVIRONMENT: 'prod', DEMI_ALLOWED_CLIENTS: 'eagle-admin-console', KEYCLOAK_ENABLED: 'true' },
+      c => c.keycloakEnabled), true);
+  });
+});
+
 // App Service substitutes the secret for `@Microsoft.KeyVault(SecretUri=...)`, and hands the app
 // the reference text itself when that fails — no RBAC, vault unreachable, secret deleted. Every
 // credential in azure/modules/api-function-flex.bicep is deployed as one of those references, so
