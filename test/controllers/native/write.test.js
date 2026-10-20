@@ -82,6 +82,12 @@ test('busy answers 503 with the body every staff write uses for a lost race', as
   assert.deepStrictEqual(r, { status: 503, body: { error: 'The record is being written by another request. Try again.' } });
 });
 
+test('a dependency not set up answers 503, a failing one 502, each with the domain message', async () => {
+  assert.deepStrictEqual(await call(answering({ status: 'unavailable', error: 'Not set up.' })),
+    { status: 503, body: { error: 'Not set up.' } });
+  assert.deepStrictEqual(await call(answering({ status: 'upstream-failed' })), { status: 502, body: { error: 'Bad gateway.' } });
+});
+
 test('a thrown error answers 500 without its message', async () => {
   const r = await call(async () => { throw new Error('cosmos endpoint https://secret.example'); });
   assert.strictEqual(r.status, 500);
