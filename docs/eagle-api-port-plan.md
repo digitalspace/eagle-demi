@@ -199,7 +199,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 - Follow-up slice 10b: repoint `robots.txt` on eagle-public `develop` and `react`, one slice per line.
 
 **11. CAC.** Size M. After 0. Fields are already catalogued (`vis/catalog/projects.js:80-81,101`). If a catalog edit turns out to be needed, run after 8.
-- Routes, all [staff, sysadmin], scopes taken from `b072e79^` swagger: `GET /projects/:id/cac`; `POST /projects/:id/cac` (:2998); `DELETE /projects/:id/cac` (:2972); `PUT /projects/:id/cac/publish` (:1795); `PUT /projects/:id/cac/unpublish` (:1844); `DELETE /projects/:id/cac/members/:memberId` (the PUT at :2941).
+- Routes, all [staff, sysadmin], scopes taken from `b072e79^` swagger: `GET /projects/:id/cac`; `POST /projects/:id/cac` (:2998); `DELETE /projects/:id/cac` (:2972); `PUT /projects/:id/cac/publish` (:1795); `PUT /projects/:id/cac/unpublish` (:1844); `POST /projects/:id/cac/members/remove` with `{ "address" }` (the PUT at :2941; decided 2026-10-19, eagle-notify keys members by email).
 - Rules, from `b072e79^:api/controllers/cac.js`:
   - Create sets `projectCAC` true, `cacEmail`, and `projectCACPublished` false (`:192`).
   - Publish sets `projectCACPublished` true (`:23`); unpublish sets it false (`:50`).

@@ -1566,6 +1566,207 @@ paths:
         '503':
           description: Another request kept writing the same project. Send it again.
 
+  /api/projects/{id}/cac:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: DEMI project id.
+        schema:
+          type: string
+    get:
+      summary: Read a project's CAC
+      description: >-
+        `projectCAC`, `projectCACPublished` and `cacEmail`. No member list: members live only in
+        eagle-notify, which has no route that lists them. Needs the role `staff` or `sysadmin`.
+        Answered `Cache-Control: private, no-store`. Not yet called by eagle-admin.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The CAC fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCac'
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found, or not readable by the caller.
+    post:
+      summary: Create a project's CAC
+      description: >-
+        Sets `projectCAC` true, `cacEmail`, and `projectCACPublished` false, as eagle-api did.
+        Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CacCreateInput'
+      responses:
+        '201':
+          description: The CAC fields after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCac'
+        '400':
+          description: >-
+            `cacEmail` is missing or not an email, the body has another key, or a per-project dial
+            hides a CAC field from the caller. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found.
+        '503':
+          description: Another request kept writing the same project. Send it again.
+    delete:
+      summary: Delete a project's CAC
+      description: >-
+        Ends every member's subscription in eagle-notify first (`POST /api/cac/{eagleId}/unsubscribe`,
+        a soft delete with a 30-day undo), then sets `projectCAC` and `projectCACPublished` false.
+        If eagle-notify fails, nothing is written. A project with no Eagle id has no members, so
+        eagle-notify is not called. `cacEmail` is kept. Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The CAC fields after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCac'
+        '400':
+          description: A per-project dial hides a CAC field from the caller.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found.
+        '502':
+          description: eagle-notify failed or did not answer. Nothing was changed; send it again.
+        '503':
+          description: >-
+            eagle-notify is not configured in this environment, or another request kept writing
+            the same project. Nothing was changed.
+
+  /api/projects/{id}/cac/publish:
+    put:
+      summary: Publish a project's CAC
+      description: Sets `projectCACPublished` true. Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The CAC fields after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCac'
+        '400':
+          description: A per-project dial hides a CAC field from the caller.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found.
+        '409':
+          description: The project has no CAC (`projectCAC` is not true).
+        '503':
+          description: Another request kept writing the same project. Send it again.
+
+  /api/projects/{id}/cac/unpublish:
+    put:
+      summary: Unpublish a project's CAC
+      description: Sets `projectCACPublished` false. Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The CAC fields after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCac'
+        '400':
+          description: A per-project dial hides a CAC field from the caller.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found.
+        '503':
+          description: Another request kept writing the same project. Send it again.
+
+  /api/projects/{id}/cac/members/remove:
+    post:
+      summary: Remove a CAC member
+      description: >-
+        Ends the member's subscription in eagle-notify (`POST /api/cac/{eagleId}/members/unsubscribe`,
+        a soft delete with a 30-day undo). DEMI stores no member, so no project field changes. An
+        address eagle-notify does not know counts as already removed and answers 200. The address
+        is not written to the audit log. Needs the role `staff` or `sysadmin`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: DEMI project id.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CacMemberRemoveInput'
+      responses:
+        '200':
+          description: The CAC fields, unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCac'
+        '400':
+          description: >-
+            `address` is missing or not an email, the body has another key, or a per-project dial
+            hides a CAC field from the caller. Body `{error, fields}`.
+        '401':
+          description: Bearer token rejected.
+        '403':
+          description: The caller lacks a required role.
+        '404':
+          description: Project not found.
+        '502':
+          description: eagle-notify failed or did not answer. Nothing was changed; send it again.
+        '503':
+          description: eagle-notify is not configured in this environment. Nothing was changed.
+
   /api/documents:
     get:
       summary: List documents
@@ -8450,6 +8651,46 @@ components:
           items:
             type: object
             description: The stored item plus its `id`.
+
+    ProjectCac:
+      type: object
+      description: >-
+        The project's CAC fields. No member list: members live only in eagle-notify, which has no
+        route that lists them, and DEMI holds no member store.
+      properties:
+        id:
+          type: string
+        isPublished:
+          type: boolean
+        projectCAC:
+          type: boolean
+          nullable: true
+        projectCACPublished:
+          type: boolean
+          nullable: true
+        cacEmail:
+          type: string
+          nullable: true
+
+    CacCreateInput:
+      type: object
+      additionalProperties: false
+      required: [cacEmail]
+      properties:
+        cacEmail:
+          type: string
+          maxLength: 254
+          description: The CAC's contact email. Surrounding spaces are trimmed.
+
+    CacMemberRemoveInput:
+      type: object
+      additionalProperties: false
+      required: [address]
+      properties:
+        address:
+          type: string
+          maxLength: 254
+          description: The email the member signed up with in eagle-notify. Surrounding spaces are trimmed.
 
     NotificationInput:
       type: object

@@ -258,3 +258,77 @@ test('dark until both settings are present', async (t) => {
     assert.strictEqual(calls.length, 0);
   });
 });
+
+test('CAC removal calls', async (t) => {
+  t.afterEach(restore);
+
+  const EAGLE_ID = '5c1f7a3e9b1d2c0012340001';
+  const answer = (status, body) => () => ({ ok: status >= 200 && status < 300, status, json: async () => body });
+
+  await t.test('member removal posts the address to the members route with the key', async () => {
+    configure();
+    const calls = wire(answer(200, { status: 'unsubscribed', alreadyUnsubscribed: false }));
+
+    assert.deepStrictEqual(await notify.unsubscribeCacMember(EAGLE_ID, 'member@example.com'),
+      { status: 'unsubscribed', alreadyUnsubscribed: false });
+    assert.strictEqual(calls[0].url, `https://notify-api-test.azurewebsites.net/api/cac/${EAGLE_ID}/members/unsubscribe`);
+    assert.strictEqual(calls[0].opts.method, 'POST');
+    assert.strictEqual(calls[0].opts.headers['x-functions-key'], 'test-function-key');
+    assert.deepStrictEqual(JSON.parse(calls[0].opts.body), { address: 'member@example.com' });
+  });
+
+  await t.test('CAC removal posts no body to the project route and resolves the count', async () => {
+    configure();
+    const calls = wire(answer(200, { status: 'unsubscribed', count: 3 }));
+
+    assert.deepStrictEqual(await notify.unsubscribeCac(EAGLE_ID), { status: 'unsubscribed', count: 3 });
+    assert.strictEqual(calls[0].url, `https://notify-api-test.azurewebsites.net/api/cac/${EAGLE_ID}/unsubscribe`);
+    assert.strictEqual(calls[0].opts.body, undefined);
+  });
+
+  await t.test('a 4xx throws once with the status and eagle-notify error code, no retry', async () => {
+    configure();
+    const calls = wire(answer(404, { error: 'not_found' }));
+
+    await assert.rejects(notify.unsubscribeCacMember(EAGLE_ID, 'gone@example.com'),
+      (err) => err instanceof notify.NotifyError && err.status === 404 && err.code === 'not_found' && err.configured);
+    assert.strictEqual(calls.length, 1);
+  });
+
+  await t.test('a 5xx is tried once more, then throws with the status', async () => {
+    configure();
+    const calls = wire(answer(500, null));
+
+    await assert.rejects(notify.unsubscribeCac(EAGLE_ID), (err) => err.status === 500 && err.code === null);
+    assert.strictEqual(calls.length, 2);
+  });
+
+  await t.test('a 5xx then a 2xx resolves', async () => {
+    configure();
+    const calls = wire((n) => answer(n === 1 ? 503 : 200, { status: 'unsubscribed', count: 0 })());
+
+    assert.deepStrictEqual(await notify.unsubscribeCac(EAGLE_ID), { status: 'unsubscribed', count: 0 });
+    assert.strictEqual(calls.length, 2);
+  });
+
+  await t.test('a timeout on both attempts throws with no status, and each call carries a deadline', async () => {
+    configure();
+    const calls = wire(() => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); });
+
+    await assert.rejects(notify.unsubscribeCacMember(EAGLE_ID, 'member@example.com'),
+      (err) => err instanceof notify.NotifyError && err.status === null && /timeout/.test(err.message));
+    assert.strictEqual(calls.length, 2);
+    assert.ok(calls.every(call => call.opts.signal instanceof AbortSignal));
+  });
+
+  await t.test('unconfigured throws without a call, unlike the Update sends', async () => {
+    config.notifyApiBase = '';
+    config.notifyApiKey = '';
+    const calls = wire(() => { throw new Error('must not fetch'); });
+
+    await assert.rejects(notify.unsubscribeCac(EAGLE_ID),
+      (err) => err.configured === false && err.message === 'notify not configured');
+    await assert.rejects(notify.unsubscribeCacMember(EAGLE_ID, 'member@example.com'), (err) => err.configured === false);
+    assert.strictEqual(calls.length, 0);
+  });
+});

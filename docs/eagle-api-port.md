@@ -388,11 +388,22 @@ Callers to move: eagle-admin `user.service.ts:55-62`; its `toEagleUserBody` (`mo
 
 Status: half A done (eagle-notify e1c389b); half B todo, after eagle-notify is deployed to test and DEMI's `notify-api-key` is confirmed to be the Function App host key
 
-Today: `projectCAC`, `projectCACPublished`, `cacEmail` are project fields (`src/merge/project.js:87`, `src/vis/catalog/projects.js:80-81,101`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79).
+Today: `projectCAC`, `projectCACPublished`, `cacEmail` are project fields (`src/merge/project.js:87`, `src/vis/catalog/projects.js:88-89,109`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79). DEMI serves the routes under the `port: cac` anchor in `routes.js`, rules in `src/domain/cac.js`, handlers in `src/controllers/native/cac.js`.
 
-Target routes: `GET /projects/:id/cac`, create, delete, publish, unpublish, remove member. Member sign-up stays in eagle-notify.
+Target routes: `GET`, `POST` and `DELETE /projects/:id/cac`, `PUT /projects/:id/cac/publish` and `/unpublish`, `POST /projects/:id/cac/members/remove` with `{ "address" }` (decided 2026-10-19: eagle-notify keys members by email, so no id route). All [staff, sysadmin]. Member sign-up stays in eagle-notify.
 
-Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`): to extract. Known: sign-up is anonymous and unconfirmed in eagle-api (workspace TODO 2026-10-14 asks for a confirm step; that belongs in eagle-notify, not here).
+Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`):
+- Create sets `projectCAC` true, `cacEmail`, and `projectCACPublished` false (`:192`).
+- Publish sets `projectCACPublished` true (`:23`); unpublish sets it false (`:50`).
+- Delete removes the members and sets `projectCAC` false (`:221-225`). DEMI keeps no `cacMembers`, so the members are removed in eagle-notify (`POST /api/cac/{eagleId}/unsubscribe`).
+- Removing a member pulls it and deletes it (`:167-169`). In DEMI that is eagle-notify `POST /api/cac/{eagleId}/members/unsubscribe` only; no project field changes.
+- eagle-notify stays the member store and never hard-deletes (decision 5). Both calls run before the DEMI write, and a failed call fails it (502); unset `NOTIFY_API_BASE` or `NOTIFY_API_KEY` fails it closed (503). A 404 `not_found` on member removal counts as already removed.
+- `GET` returns the three CAC fields only: eagle-notify has no list route and DEMI holds no member store.
+- Sign-up is anonymous and unconfirmed in eagle-api (workspace TODO 2026-10-14 asks for a confirm step; that belongs in eagle-notify, not here).
+
+Deviations: delete also sets `projectCACPublished` false, so a deleted CAC's `cacEmail` stops showing to the public; publish refuses with 409 a project with no CAC; `cacEmail` and `address` must be email addresses; an unknown project is 404 (eagle-api: 400 on create).
+
+Known Dark-phase limit: the CAC fields are copied from Eagle, so the next Eagle push replaces a DEMI write to them, while the eagle-notify removal stays. Accepted 2026-10-19: the routes have no caller until F11, and both eagle-notify routes are idempotent with a 30-day undo.
 
 ### Extensions
 

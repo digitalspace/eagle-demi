@@ -413,6 +413,12 @@ const routes = [
   { method: 'get', path: '/sitemap.xml', guards: [], load: () => require('../controllers/sitemap').getSitemap },
 
   // port: cac
+  { method: 'get', path: '/projects/:id/cac', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').getCac },
+  { method: 'post', path: '/projects/:id/cac', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').createCac },
+  { method: 'delete', path: '/projects/:id/cac', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').deleteCac },
+  { method: 'put', path: '/projects/:id/cac/publish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').publishCac },
+  { method: 'put', path: '/projects/:id/cac/unpublish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').unpublishCac },
+  { method: 'post', path: '/projects/:id/cac/members/remove', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').removeCacMember },
 ];
 
 // NOT SERVED IN PROD. The spec names every route, parameter and role in the system, and this route

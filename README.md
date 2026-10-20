@@ -598,6 +598,7 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 `GET /sitemap.xml` (anonymous) is served by DEMI; eagle-public's `robots.txt` still names eagle-api `/api/public/sitemap.xml` until it is repointed. As in eagle-api, it lists `<LINK_BASE_URL>/p/<eagleId>` for each public project, sorted by Eagle id, with the current legislation block's `dateUpdated` as `lastmod`, at most 50,000 entries, built once an hour. Differences: the host is `LINK_BASE_URL` (eagle-api: `PUBLIC_SITE_URL`); a public project with no Eagle id is not listed, and a Track row and its `eagle-<id>` twin are one entry.
 
 <!-- port: cac -->
+`GET`, `POST` and `DELETE /projects/:id/cac`, `PUT /projects/:id/cac/publish` and `/unpublish`, and `POST /projects/:id/cac/members/remove` (all staff, sysadmin) are served by DEMI; no caller yet (eagle-api's admin CAC handlers are gone, eagle-admin moves at the flip). Members live only in eagle-notify, so `GET` answers `projectCAC`, `projectCACPublished` and `cacEmail` with no member list. Delete and member removal end the subscriptions in eagle-notify first, keyed by the project's Eagle id, and write nothing if that fails: 502 when eagle-notify fails, 503 when `NOTIFY_API_BASE` or `NOTIFY_API_KEY` is unset (these calls fail closed, unlike Update notifications). Differences: a member is named by `{ "address" }`, not an id; an address eagle-notify does not know answers 200 as already removed; delete also sets `projectCACPublished` false; publish refuses with 409 a project with no CAC; `cacEmail` must be an email; an unknown project is 404.
 
 ### Track team sync
 
@@ -632,7 +633,8 @@ failures (see [Alerts](#alerts)).
 ### Update notifications
 
 When an Update is published, the API tells eagle-notify, which emails subscribers. It sends nothing
-until both `NOTIFY_API_BASE` and `NOTIFY_API_KEY` are set.
+until both `NOTIFY_API_BASE` and `NOTIFY_API_KEY` are set. The CAC delete and member removal routes
+need both too and answer 503 without them (see `port: cac` above).
 
 The email links to `LINK_BASE_URL` plus a path. By default the path is the project page
 (`/p/<projectId>/project-details`), or `/news` for an update with no project. Set

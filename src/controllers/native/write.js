@@ -18,13 +18,17 @@ const REFUSALS = Object.freeze({
   forbidden: { code: 403, error: 'Forbidden.' },
   'not-found': { code: 404, error: 'Not found.' },
   conflict: { code: 409, error: 'Conflict.' },
-  busy: { code: 503, error: WRITE_CONFLICT_ERROR }
+  busy: { code: 503, error: WRITE_CONFLICT_ERROR },
+  // A service the write depends on: not set up here (503), or set up and failing (502).
+  unavailable: { code: 503, error: 'Service unavailable.' },
+  'upstream-failed': { code: 502, error: 'Bad gateway.' }
 });
 
 /**
  * @param {Function} fn `fn(ctx, body)` on a route without `:id`, `fn(ctx, id, body)` with it;
  *   `ctx` is `{ access, req }`. Resolves to `{status: 'ok', value, created?}`,
- *   `{status: 'invalid', fields}`, or `{status: 'forbidden'|'not-found'|'conflict'|'busy', error?}`.
+ *   `{status: 'invalid', fields}`, or
+ *   `{status: 'forbidden'|'not-found'|'conflict'|'busy'|'unavailable'|'upstream-failed', error?}`.
  * @param {{entity: string}} options the catalog entity that redacts the saved row
  */
 function writeHandler(fn, { entity }) {
