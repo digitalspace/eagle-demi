@@ -61,9 +61,8 @@ test('field precedence — Track wins, Eagle fills gaps', async (t) => {
   });
 
   await t.test('an EMPTY Track field falls back to Eagle instead of blanking it', () => {
-    // The single highest-consequence rule here: a spread merge would write undefined over a
-    // populated Eagle value and silently destroy data. 12 real Track records have no
-    // abbreviation, so this path is exercised by the actual dataset, not just this test.
+    // A spread merge would write undefined over a populated Eagle value; 12 real Track records
+    // have no abbreviation, so the real dataset takes this path.
     const gapped = { ...TRACK_207, abbreviation: '', description: null, address: '   ' };
     const merged = mergeTrackProject(gapped, eagleFor(TRACK_207), OPTS);
 
@@ -107,11 +106,6 @@ test('field precedence — Track wins, Eagle fills gaps', async (t) => {
   });
 });
 
-/**
- * The project-record fields eagle-public reads off the page but DEMI had no home for. eagle-api
- * resolves the ObjectId-bearing ones before pushing — the merge has no Mongo to resolve them
- * against — so these cases pin the SHAPE that arrives as much as the fact that it lands.
- */
 // The index filters `sector` and `projectSubType` by exact match; "Groundwater Extraction " (9 rows)
 // matched no filter value.
 test('sector and sub-type are stored trimmed', async (t) => {
@@ -134,6 +128,8 @@ test('a Track proponent name is stored trimmed', () => {
   assert.strictEqual(merged.proponentName, 'SECURE Waste Infrastructure Corp.');
 });
 
+// Fields eagle-public reads that eagle-api resolves before pushing (the merge has no Mongo),
+// so these cases pin the shape that arrives as well as the fact that it lands.
 test('the pushed-enriched Eagle project record', async (t) => {
   const ENRICHED = {
     CEAALink: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80000',
@@ -221,11 +217,8 @@ test('the pushed-enriched Eagle project record', async (t) => {
   });
 });
 
-/**
- * `dateUpdated` is the stamp eagle-public prints as "Last updated". It is Eagle's own edit date and
- * lives inside the legislation block, so it has to survive the flatten AND stay clear of
- * `updatedAt`, which is DEMI's sync stamp and moves every time the merge runs.
- */
+// `dateUpdated` is Eagle's edit date ("Last updated"), inside the legislation block: it must survive
+// the flatten and stay apart from `updatedAt`, DEMI's sync stamp.
 test('Eagle\'s dateUpdated', async (t) => {
   const EDITED = '2021-06-02T00:00:00.000Z';
 
@@ -331,11 +324,8 @@ test('Eagle fields carried for staff', async (t) => {
   });
 });
 
-/**
- * Work phases are Track's alone — Eagle has no equivalent — so there is no precedence contest,
- * only the rule that an absent feed must not blank a stored value. That rule is what stops a Track
- * outage from erasing the assessment rail off every project on the next nightly run.
- */
+// Work phases are Track's alone; an absent feed must not blank the stored ones, or a Track outage
+// erases the assessment rail on the next nightly run.
 test('Track work phases', async (t) => {
   const PHASES = [
     { name: 'Early Engagement', eaActId: 3, eaActName: '2018 Act', workType: 'Assessment',
@@ -448,14 +438,7 @@ test('ACL — the merge never widens visibility', async (t) => {
   });
 
   await t.test('a Track project with no Eagle match is NOT public', () => {
-    // Reversed 2026-08-23 by the product owner: "if track has a project that eagle does not have,
-    // this project is NOT public." Eagle is what publishes; a project that has not reached it has
-    // not been published by anyone.
-    //
-    // The rule this replaced read the Track export as self-evidently public because the file is
-    // committed to a public repository — an argument about the FILE, not the projects in it. It
-    // made 28 projects anonymously readable in demi-test with no Eagle counterpart, 19 of which
-    // returned zero anonymous hits on prod eagle-search.
+    // Eagle is what publishes, so a Track project with no Eagle counterpart is not public.
     const acl = resolveProjectAcl(null);
     assert.ok(!acl.includes('public'), 'no Eagle counterpart means nobody published it');
   });
@@ -466,11 +449,8 @@ test('ACL — the merge never widens visibility', async (t) => {
   });
 
   await t.test('isPublished MIRRORS read[] — it is never an independent signal', () => {
-    // It used to be `track.is_active !== false`, conflating a Track-internal record flag with
-    // publication. 23 projects (Ajax Mine, Aurora LNG Digby Island) then read isPublished:false
-    // while Eagle's ACL correctly made them public. Nothing leaked, but the mirror lied — and
-    // setDocumentPublished 409s on an unpublished parent, so no document could be published
-    // under any of them.
+    // `isPublished` follows the ACL, not Track's `is_active`: a false mirror blocks every document
+    // publish under the project (setDocumentPublished 409s on an unpublished parent).
     const restricted = mergeTrackProject(TRACK_207, { _id: 'x', read: ['sysadmin'] }, OPTS);
     assert.strictEqual(restricted.isPublished, false);
     assert.ok(!restricted.read.includes('public'));
@@ -480,11 +460,8 @@ test('ACL — the merge never widens visibility', async (t) => {
   });
 
   await t.test('is_active does NOT affect visibility, and is still carried through', () => {
-    // Of the 40 Track projects it marks inactive, 17 are "Pre Work", 8 "Under Work" and 2
-    // "Operation" — it is orthogonal to both publication and lifecycle stage. Asserted against an
-    // Eagle counterpart that publishes, so the subject is is_active and not the missing-match rule
-    // above: with `null` for Eagle every project is unpublished now, which would pass whatever
-    // is_active did and prove nothing.
+    // A publishing Eagle counterpart, so the subject is `is_active`: with `null` for Eagle every
+    // project is unpublished and the test would prove nothing.
     const eagle = { _id: 'x', read: ['public', 'staff'] };
     const inactive = mergeTrackProject({ ...TRACK_207, is_active: false }, eagle, OPTS);
     const active = mergeTrackProject({ ...TRACK_207, is_active: true }, eagle, OPTS);
@@ -754,11 +731,8 @@ test('buildProjectIndex — the deterministic id join', async (t) => {
   });
 });
 
-/**
- * The same fields as the pushed record above, but arriving from the SEED. eagle-api resolves them
- * for the push only; `/api/public/search?dataset=Project` returns `proponent` populated and `pins`
- * as bare ObjectIds, which is why every seeded row held `proponentId: null`.
- */
+// The pushed fields above, arriving from the seed: `/api/public/search?dataset=Project` returns
+// `proponent` populated and `pins` as bare ObjectIds, not the push's resolved shape.
 test('the seed-shaped Eagle project record', async (t) => {
   const ORG = {
     _id: '58850f68aaecd9001b80857c',
@@ -853,15 +827,8 @@ test('the seed-shaped Eagle project record', async (t) => {
   });
 });
 
-/**
- * `carryEagleOnlyFields` — what a re-merge may take back off the stored row, and what it may not.
- *
- * A Cosmos upsert replaces the item, so a re-seed has to carry the push's enrichment forward or
- * blank it. Carrying the WHOLE `EAGLE_ONLY_FIELDS` list did that at a price nobody saw: `hasValue`
- * cannot tell a field the feed omitted from one the EAO cleared, so an upstream clear was
- * unappliable for the ~36 fields the feed does carry — the old value came straight back on every
- * run. Only the four the feed sends nothing for may be carried.
- */
+// A re-merge carries only the fields the feed never sends; `hasValue` cannot tell an omitted field
+// from one the EAO cleared, so carrying any other would make an upstream clear unappliable.
 test('carryEagleOnlyFields carries only what the feed cannot rebuild', async (t) => {
   const PIN = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
   const OTHER_PIN = { _id: '5cf00c03a266b7e187750002', name: 'Another Nation', province: 'BC' };
@@ -945,6 +912,18 @@ test('carryDemiOnlyFields', async (t) => {
     merged.tags.push('New Name');
 
     assert.deepStrictEqual(stored.tags, ['Old Name']);
+  });
+
+  // Dark (docs/eagle-api-port.md, Pins): until F1 moves pins to DEMI_ONLY_FIELDS, Eagle's list wins.
+  await t.test('an Eagle push overwrites the pins and pinsRead a DEMI write stored', () => {
+    const pin = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
+    const stored = { id: '207', pins: ['5cf00c03a266b7e187750002'], pinsRead: ['public', 'staff', 'sysadmin'] };
+    const pushed = eagleFor(TRACK_207, { pins: [pin], pinsRead: ['project-system-admin'] });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), stored);
+
+    assert.deepStrictEqual(merged.pins, [pin]);
+    assert.deepStrictEqual(merged.pinsRead, ['project-system-admin']);
   });
 
   await t.test('no stored row hands the rebuilt row back as it was', () => {
