@@ -190,6 +190,9 @@ const config = {
   // query strings can hold open. 0 = no limit.
   downloadStreamMaxConcurrent: intFromEnv('DOWNLOAD_STREAM_MAX_CONCURRENT', 8),
 
+  // Featured documents one project may hold; PUT /documents/:id answers 409 past it. 0 = none.
+  featuredDocumentsMax: intFromEnv('FEATURED_DOCUMENTS_MAX', 5),
+
   // Bulk document download (PUBLIC-148). Caps REFUSE rather than truncate: a job that silently
   // dropped documents would hand someone an incomplete download they had no way to notice.
   //

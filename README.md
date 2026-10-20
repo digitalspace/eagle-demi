@@ -600,6 +600,9 @@ Routes moved from eagle-api, one line per ported object under its `port:` anchor
 <!-- port: cac -->
 `GET`, `POST` and `DELETE /projects/:id/cac`, `PUT /projects/:id/cac/publish` and `/unpublish`, and `POST /projects/:id/cac/members/remove` (all staff, sysadmin) are served by DEMI; no caller yet (eagle-api's admin CAC handlers are gone, eagle-admin moves at the flip). Members live only in eagle-notify, so `GET` answers `projectCAC`, `projectCACPublished` and `cacEmail` with no member list. Delete and member removal end the subscriptions in eagle-notify first, keyed by the project's Eagle id, and write nothing if that fails: 502 when eagle-notify fails, 503 when `NOTIFY_API_BASE` or `NOTIFY_API_KEY` is unset (these calls fail closed, unlike Update notifications). Differences: a member is named by `{ "address" }`, not an id; an address eagle-notify does not know answers 200 as already removed; delete also sets `projectCACPublished` false; publish refuses with 409 a project with no CAC; `cacEmail` must be an email; an unknown project is 404.
 
+<!-- port: document-feature -->
+`PUT /documents/:id` with `isFeatured` (any write credential, as for every document write) features or unfeatures a document; eagle-admin still calls eagle-api `/document/:id/feature` and `/unfeature` until the flip, and an Eagle push still sets `isFeatured` as sent. As in eagle-api, a project holds at most 5 featured documents (`FEATURED_DOCUMENTS_MAX`). Differences: the cap is a 409 with `{ error, limit }`, not a 403; re-sending `isFeatured: true` on a featured document is not refused, and a document Eagle deleted does not count; `isFeatured` other than true or false is a 400.
+
 ### Track team sync
 
 Set `SYNC_TEAMS_SCHEDULE` to an NCRONTAB expression (six fields, seconds first) and the API app

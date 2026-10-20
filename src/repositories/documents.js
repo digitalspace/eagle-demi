@@ -14,7 +14,7 @@ const {
 } = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem, readForWriteIn
+  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED
 } = require('./_sql');
 // The fields the chunks carry a copy of, read from the one list that owns them.
 const { CHUNK_PARENT_FIELDS } = require('./chunks');
@@ -280,6 +280,17 @@ async function countVisible(access, opts = {}) {
   const value = await cosmos.queryValue(CONTAINER, spec, pageOptions({
     partitionKey: partitionKeyFor(opts.projectId)
   }));
+  return value || 0;
+}
+
+/** Featured documents in a project other than `exceptId`, at every level (domain/document-feature.js). */
+async function countFeatured(projectId, { exceptId } = {}) {
+  const criteria = [...buildCriteria({ projectId }), eq('isFeatured', true, '@featured'), NOT_DELETED];
+  if (exceptId !== undefined) {
+    criteria.push({ clause: 'c.id != @exceptId', params: [{ name: '@exceptId', value: String(exceptId) }] });
+  }
+  const spec = countWhere({ access: systemAccess(), partitionField: PARTITION_FIELD, criteria });
+  const value = await cosmos.queryValue(CONTAINER, spec, pageOptions({ partitionKey: partitionKeyFor(projectId) }));
   return value || 0;
 }
 
@@ -1010,6 +1021,7 @@ module.exports = {
   newestUploads,
   listSealed,
   countVisible,
+  countFeatured,
   getById,
   readForWrite,
   clearMovedFrom,

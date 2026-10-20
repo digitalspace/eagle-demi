@@ -2376,7 +2376,9 @@ paths:
           description: Document not found.
     put:
       summary: Update document
-      description: Modify document metadata, parent project reference, or publication state.
+      description: >-
+        Modify document metadata or parent project reference. Features or unfeatures the document
+        with `isFeatured`; visibility moves through `PUT /api/documents/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -2402,13 +2404,17 @@ paths:
             `projectPhaseId`, `documentAuthorTypeId` or `projectId` is sent as anything but a
             string or null — every chunk of the document carries a copy of those, written as a
             string, so a number here would leave the document row and its chunks disagreeing.
+            Also `isFeatured must be true or false` for any other `isFeatured` value.
         '401':
           description: Unauthorized.
         '404':
           description: Document deleted during the edit.
         '409':
           description: >-
-            The document changed three times while the write was retried. Send the edit again.
+            The document changed three times while the write was retried; send the edit again.
+            Or `isFeatured: true` on a document that is not featured, when its project already
+            has `FEATURED_DOCUMENTS_MAX` (default 5) featured documents; the body is `{ error,
+            limit }`. Re-sending `isFeatured: true` on a featured document is not refused.
     delete:
       summary: Delete document
       description: Delete a document and its parsed chunks.
@@ -8851,6 +8857,12 @@ components:
           type: string
           nullable: true
           description: Author type List ObjectId. String or null only, as for `typeId`.
+        isFeatured:
+          type: boolean
+          description: >-
+            PUT only; create ignores it. True features the document in its project, false
+            unfeatures it. Any other type is a 400. A project holds at most
+            `FEATURED_DOCUMENTS_MAX` featured documents (default 5).
 
     GeoPoint:
       type: object

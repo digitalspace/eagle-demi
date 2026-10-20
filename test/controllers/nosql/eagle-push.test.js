@@ -1,14 +1,8 @@
 'use strict';
 
 /**
- * The Eagle mirror routes for projects and documents. `PUT /eagle/updates/:eagleId` is the third
- * and has its own suite, update-push.test.js.
- *
- * eagle-api pushes fire-and-forget on every write it makes, so these handlers are the only thing
- * standing between a raw upstream record and the registry. What they are asserted on is what a
- * push must NOT destroy: the enrichment blocks under `sources`, a document's extraction state, and
- * the parent project's ceiling on a document's ACL. Each of those is silent when it breaks — the
- * push still returns 200 — which is why they are tested here rather than left to the merge suite.
+ * Eagle mirror routes for projects and documents (updates: update-push.test.js). Asserts what a
+ * push must NOT destroy, silent on failure (still 200): `sources`, extraction state, ACL ceiling.
  */
 
 process.env.NODE_ENV = 'test';
@@ -51,9 +45,8 @@ const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
 const DOC_EAGLE_ID = '58869abba4acd4014b81f55c';
 
 /**
- * An Act's block as eagle-api pushes it when the project never used that Act: the push body is a
- * hydrated Mongoose document's `toObject()`, and the schema defaults fill every block, so it is
- * non-empty but carries no `name`. A sample of the real defaults (api/helpers/models/project.js).
+ * An unused Act's block as eagle-api pushes it: schema defaults fill it, so it is non-empty but
+ * has no `name` (sample of api/helpers/models/project.js defaults).
  */
 const UNUSED_BLOCK = Object.freeze({
   CEAAInvolvement: null, CELead: '', centroid: [], description: '', eacDecision: null,
@@ -62,10 +55,8 @@ const UNUSED_BLOCK = Object.freeze({
 });
 
 /**
- * The same project as eagle-api's Mongo actually stores it: content nested under the legislation
- * block, with STALE top-level copies of `name` and `region` beside it, and every other Act's block
- * default-filled. This is what the push sends — the flattening the search endpoint does is not in
- * the push path.
+ * A project as eagle-api's Mongo stores it and the push sends it: content nested under the
+ * legislation block, STALE top-level `name` and `region`, other Acts' blocks default-filled.
  */
 function rawMongoProject(blockOverrides = {}, topOverrides = {}) {
   const { _id, read, ...content } = eagleProject();
@@ -108,9 +99,8 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('every other source block survives the push', async () => {
-    // The trap the seed hit: a Cosmos upsert replaces the item and the merge rebuilds only
-    // track/eagle, so anything else under `sources` is gone unless it is carried across. Nothing
-    // can rebuild the wildfire aggregate — the sync is on demand and the feed is not historical.
+    // A Cosmos upsert replaces the item and the merge rebuilds only track/eagle, so other `sources`
+    // are lost unless carried across; the wildfire aggregate cannot be rebuilt.
     const existing = storedProject();
     t.mock.method(projects, 'getByEagleId', async () => existing);
     let written;
@@ -170,8 +160,7 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
     assert.deepStrictEqual(written.legacyShortCodes, ['kq7bt2rm']);
   });
 
-  // A push carries no Track phases, so the rebuild has to keep the stored ones: prod lost a
-  // project's six-phase timeline to a push and only got it back on the next Track sync.
+  // A push carries no Track phases, so the rebuild has to keep the stored ones.
   await t.test('a push onto a Track row keeps its stored phases byte-for-byte', async () => {
     const phases = [
       { name: 'Early Engagement', startDate: '2024-01-15', endDate: null, isCompleted: false },
@@ -283,7 +272,7 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
       return { succeeded: 1, failed: 0, rows: [{ id: DOC_EAGLE_ID, read, isPublished: false }] };
     });
 
-    // Unpublished upstream: the pushed record no longer carries `public`.
+    // Unpublished upstream: the pushed record lacks `public`.
     const res = mockRes();
     await projectController.upsertFromEagle({
       params: { eagleId: PROJECT_EAGLE_ID }, query: {},
@@ -332,8 +321,8 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
       'only the rows Cosmos accepted reach the index');
   });
 
-  // The live defect, 2026-08-25: the push carries the RAW Mongo doc, whose content sits under
-  // `legislation_2018`, so `eagle-6a5920eaf0b65c54e12eb20a` landed on test with no name at all.
+  // The push carries the RAW Mongo doc, whose content sits under `legislation_2018`; unflattened,
+  // the row has no name.
   await t.test('the raw Mongo legislation block is flattened onto the row', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
     let written;
@@ -375,9 +364,8 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
   });
 
   await t.test('the Track-matched path flattens too', async () => {
-    // The push hits mergeTrackProject whenever the stored row has a Track payload, and that path
-    // does its own flatten. This Track record carries no name/description, so both can only come
-    // from the legislation block — drop the flatten and `name` is the stale top-level copy.
+    // mergeTrackProject does its own flatten. This Track record has no name/description, so both
+    // come from the legislation block; without the flatten `name` is the stale top-level copy.
     t.mock.method(projects, 'getByEagleId', async () => storedProject({
       sources: { track: { track_project_id: 207, epic_guid: PROJECT_EAGLE_ID } }
     }));
@@ -423,8 +411,7 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
     t.mock.method(projects, 'upsert', async () => { upserts++; });
 
     // Ambiguous (two blocks, nothing naming one) and empty (the key is there, the block is not).
-    // A nameless row is worse than a rejected push: it is invisible in search and indistinguishable
-    // from a real one.
+    // A nameless row is worse than a rejected push: invisible in search, indistinguishable from a real one.
     const ambiguous = rawMongoProject({}, {
       name: '', currentLegislationYear: undefined, legislation_2002: { name: 'Older' }
     });
@@ -516,9 +503,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('extraction state is carried off the stored row, never off the push', async () => {
-    // A Cosmos upsert replaces the item, so losing these orphans the chunks and re-queues the
-    // document through the GPU. Eagle's own `contentExtracted` is true on records with no chunks
-    // behind them, which is why it is not a fallback.
+    // Losing these orphans the chunks and re-queues the document through the GPU. Eagle's own
+    // `contentExtracted` is true on records with no chunks, so it is not a fallback.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     t.mock.method(documents, 'getById', async () => ({
       id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['public', 'sysadmin'],
@@ -538,6 +524,26 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.contentExtracted, true);
     assert.strictEqual(written.contentExtractedAt, '2026-08-01T00:00:00.000Z');
     assert.strictEqual(written.contentPageCount, 42);
+  });
+
+  await t.test('isFeatured is taken from the push, past the featured cap', async () => {
+    // Eagle stays the writer until the flip, so DEMI's cap (domain/document-feature.js) is not applied.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['public', 'sysadmin'], isFeatured: false
+    }));
+    t.mock.method(documents, 'countFeatured', async () => 5);
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    const res = mockRes();
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ isFeatured: true }) }, user: STAFF
+    }, res);
+
+    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, action: 'upsert' });
+    assert.strictEqual(written.isFeatured, true);
   });
 
   await t.test('extraction provenance and ingest failures are carried off the stored row', async () => {
@@ -657,9 +663,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
   });
 
   await t.test('an unpublished Eagle document still lands at level 2, not level 1', async () => {
-    // The level-1 admission default is for DEMI-NATIVE creates only. The mirror carries Eagle's
-    // own published/unpublished mapping, or a push would silently narrow the whole corpus to the
-    // team arm and hide it from every staff caller.
+    // The level-1 admission default is for DEMI-NATIVE creates only; applied to a push it would
+    // narrow the corpus to the team arm and hide it from staff.
     t.mock.method(projects, 'getByEagleId', async () => storedProject({
       isPublished: false, read: ['sysadmin', 'staff', 'demi-admin']
     }));
@@ -783,10 +788,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
   const NO_PARENT_BODY = { error: 'Parent project or notification not found', code: 'PARENT_NOT_FOUND' };
   const BAD_REF_BODY = { error: 'Parent project or notification not found', code: 'PARENT_REF_INVALID' };
 
-  /**
-   * Push a document whose parent admission refuses. `stored` is the unfiltered project row,
-   * `notification` the raw notification row.
-   */
+  /** Push a document whose parent admission refuses; `stored` is the unfiltered project row. */
   async function refusedDocument(t, stored, { notification = null, doc = eagleDocument() } = {}) {
     t.mock.method(projects, 'getByEagleId', async () => null);
     t.mock.method(notifications, 'readForWrite', async () => notification);
@@ -856,7 +858,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
   await t.test('a document under a project an Eagle push sealed is admitted at its Eagle read',
     async () => {
-      // Stored ['compliance'] by a push from before the strip, no `sealedAt`, not yet re-pushed.
+      // Legacy row: stored ['compliance'] with no `sealedAt`.
       t.mock.method(projects, 'getByEagleId', async () => null);
       t.mock.method(notifications, 'readForWrite', async () => null);
       t.mock.method(projects, 'readForWriteByEagleId', async () => ({
@@ -878,8 +880,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       assert.ok(!written.read.includes('compliance'));
     });
 
-  // Eagle's `project` reference holds either id, and prod publishes documents under 17
-  // notifications. Resolving through `projects` alone dropped every one of them.
+  // Eagle's `project` reference holds either id, so resolving through `projects` alone would
+  // drop every document published under a notification.
   await t.test('a document under a ProjectNotification is stored under it, ACL verbatim', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
     t.mock.method(notifications, 'readForWrite', async () => ({
@@ -905,10 +907,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.isPublished, true);
   });
 
-  // A Track `epic_guid` that is really a ProjectNotification _id lands on the project row's
-  // `eagleId`, so the project answers a lookup for the notification's own id (test 2026-09-08:
-  // Track 351 and 353). The documents under it were filed in the Track project's partition and
-  // narrowed to its ACL.
+  // A Track `epic_guid` that is really a notification _id lands on a project row's `eagleId`, so
+  // the project answers the notification's id and its documents get the wrong partition and ACL.
   await t.test('a project row carrying the notification id does not claim the document', async () => {
     t.mock.method(projects, 'getByEagleId', async () =>
       storedProject({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
@@ -987,11 +987,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 });
 
 /**
- * eagle-api hard-deletes a document and pushes the record it just removed with `isDeleted: true`,
- * the same convention the comment-period mirror already follows. What is asserted is what an
- * anonymous visitor is answered afterwards, and that nothing later widens the row back: the raw
- * Eagle copy beside it still says `public`, so the flag — not that copy — is what the project
- * cascade has to gate on (repositories/document-acl-cascade.test.js asserts that half).
+ * eagle-api pushes a hard-deleted document with `isDeleted: true`. The raw Eagle copy still says
+ * `public`, so the project cascade must gate on the flag (document-acl-cascade.test.js: that half).
  */
 test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
   t.beforeEach(() => documentReadForWriteFromGet(t));
@@ -1093,10 +1090,8 @@ test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
 });
 
 test('the mirror routes are behind authMiddleware + requireWrite', async (t) => {
-  // The handlers read and write through systemAccess(), so no ACL predicate protects them — the
-  // route chain is the whole gate. EVERY mirror route, not just this file's two.
-  // access-coverage.test.js asserts the chain from the router source; this runs the two
-  // middlewares to prove what the chain buys.
+  // The handlers use systemAccess(), so the route chain is the whole gate, for EVERY mirror route.
+  // access-coverage.test.js asserts the chain from source; this runs the middlewares.
   await t.test('every mirror route declares the chain', () => {
     const mirror = routeChains().filter(r => r.path.startsWith('/eagle/'));
     assert.deepStrictEqual(mirror.map(r => r.path).sort(), [
