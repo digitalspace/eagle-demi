@@ -13,7 +13,6 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('fs');
 
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
@@ -54,7 +53,6 @@ test('every document write site stamps the natural-sort key', async (t) => {
     // follow that fallback rather than the missing field.
     t.mock.method(projects, 'getById', async () => PARENT);
     t.mock.method(storage, 'putFile', async () => {});
-    t.mock.method(fs.promises, 'unlink', async () => {});
     let saved;
     t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
 
@@ -123,7 +121,6 @@ test('every caller-reachable document create mints its own id', async (t) => {
     await t.test(`${name} ignores an id in the body`, async () => {
       t.mock.method(projects, 'getById', async () => PARENT);
       t.mock.method(storage, 'putFile', async () => {});
-      t.mock.method(fs.promises, 'unlink', async () => {});
       let saved;
       t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
 

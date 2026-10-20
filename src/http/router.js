@@ -25,6 +25,8 @@ const routes = require('./routes');
 
 /** Matches `express.json({ limit: '10mb' })`, the ceiling the ingest routes were sized against. */
 const BODY_LIMIT = 10 * 1024 * 1024;
+/** The Functions host's own request cap; an upload past it never reaches the worker anyway. */
+const MULTIPART_LIMIT = 100 * 1024 * 1024;
 
 /**
  * The fetch spec's null-body statuses. The Functions worker feeds what dispatch() returns straight
@@ -226,7 +228,7 @@ function guardStream(readable, requestId) {
  * parsing its body still has something to log.
  */
 function baseReq(request, url, headers, requestId) {
-  const contentType = String(headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const contentType = mediaType(headers);
   return {
     id: requestId,
     method: request.method,
@@ -246,31 +248,70 @@ function baseReq(request, url, headers, requestId) {
   };
 }
 
+function tooLarge() {
+  return httpError(413, 'request entity too large');
+}
+
+/**
+ * The request body as a stream that errors once it passes `limit` bytes, so a chunked body with no
+ * content-length stops at the limit too. A client that drops mid-body is a 400, not a logged 500.
+ */
+function countedBody(request, headers, limit) {
+  if (Number(headers['content-length']) > limit) throw tooLarge();
+  const reader = request.body ? request.body.getReader() : null;
+  let size = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      let next;
+      try {
+        next = reader ? await reader.read() : { done: true };
+      } catch {
+        return controller.error(httpError(400, 'request body aborted'));
+      }
+      if (next.done) return controller.close();
+      size += next.value.byteLength;
+      if (size > limit) {
+        reader.cancel().catch(() => {});
+        return controller.error(tooLarge());
+      }
+      controller.enqueue(next.value);
+    },
+    cancel: (reason) => reader && reader.cancel(reason)
+  });
+}
+
 async function readBody(request, headers) {
-  if (Number(headers['content-length']) > BODY_LIMIT) throw httpError(413, 'request entity too large');
-  const bytes = Buffer.from(await request.arrayBuffer());
-  if (bytes.length > BODY_LIMIT) throw httpError(413, 'request entity too large');
-  return bytes.toString('utf8');
+  const chunks = [];
+  for await (const chunk of countedBody(request, headers, BODY_LIMIT)) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
 }
 
-/** One multipart route (POST /documents/extract). The handler unlinks the file it is handed. */
+function mediaType(headers) {
+  return String(headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+}
+
+/** The last file part lands in os.tmpdir() as `req.file`; dispatch() deletes it when the request ends. */
 async function readMultipart(req, request) {
+  const counted = countedBody(request, req.headers, MULTIPART_LIMIT);
+  // undici answers a malformed body with TypeError; anything else (413, abort, allocation) keeps its own status.
+  const form = await new Response(counted, { headers: { 'content-type': req.headers['content-type'] } }).formData()
+    .catch((err) => { throw err instanceof TypeError ? httpError(400, 'invalid multipart body') : err; });
   req.body = {};
-  for (const [name, value] of (await request.formData()).entries()) {
-    if (typeof value === 'string') {
-      req.body[name] = value;
-      continue;
-    }
-    const bytes = Buffer.from(await value.arrayBuffer());
-    const file = path.join(os.tmpdir(), crypto.randomUUID());
-    await fs.promises.writeFile(file, bytes);
-    req.file = { originalname: value.name, mimetype: value.type, size: bytes.length, path: file };
+  let upload = null;
+  for (const [name, value] of form.entries()) {
+    if (typeof value === 'string') req.body[name] = value;
+    else upload = value;
   }
+  if (!upload) return;
+  // Set before the write, so a write that fails halfway still leaves dispatch() a path to delete.
+  req.file = { originalname: upload.name, mimetype: upload.type, size: upload.size, path: path.join(os.tmpdir(), crypto.randomUUID()) };
+  await fs.promises.writeFile(req.file.path, upload.stream(), { mode: 0o600, flag: 'wx' });
 }
 
-async function attachBody(req, request) {
+/** Runs after the guards: none of them reads the body, so a refused caller never makes us buffer one. */
+async function attachBody(req, request, route) {
   if (req.method === 'GET' || req.method === 'HEAD') return;
-  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const type = mediaType(req.headers);
 
   if (type === 'application/json' || type.endsWith('+json')) {
     const text = await readBody(request, req.headers);
@@ -283,7 +324,10 @@ async function attachBody(req, request) {
     req.body = querystring.parse(await readBody(request, req.headers));
     return;
   }
-  if (type === 'multipart/form-data') return readMultipart(req, request);
+  if (type === 'multipart/form-data') {
+    if (!route.multipart) throw httpError(415, 'multipart bodies are only accepted on the upload route');
+    return readMultipart(req, request);
+  }
 
   // Everything else is left unread — the NDJSON chunk ingest consumes req.stream itself, which is
   // true streaming rather than the full buffer the old adapter forced on it.
@@ -321,6 +365,14 @@ async function edgeGateReason(req, pathname) {
   if (fromEdge(headers) || headers['x-apim-subscription']) return null;
   if (headers['x-api-key'] === undefined) return 'no-edge';
   return (await isValidApiKey(headers['x-api-key'])) ? null : 'bad-key';
+}
+
+async function removeUpload(file) {
+  try {
+    await fs.promises.unlink(file);
+  } catch (err) {
+    if (err.code !== 'ENOENT') logger.warn('upload temp file not removed', { evt: 'upload-cleanup', file, error: err.message });
+  }
 }
 
 /** Guards are the existing `(req, res, next)` middleware, run unchanged. */
@@ -378,9 +430,11 @@ async function dispatch(request, context) {
             logger.warn(EDGE_GATE_MESSAGE, { evt: 'edge-gate', path: url.pathname, reason: gateReason });
           }
           req.params = route.params;
-          await attachBody(req, request);
           await runGuards(route.guards, req, res);
-          if (!res.finished) await route.load()(req, res);
+          if (!res.finished) {
+            await attachBody(req, request, route);
+            await route.load()(req, res);
+          }
         }
       }
     } catch (err) {
@@ -394,6 +448,7 @@ async function dispatch(request, context) {
         res.status(status).json({ error: searchReply ? searchReply.error : status >= 500 ? 'Internal Server Error' : err.message });
       }
     } finally {
+      if (req.file) await removeUpload(req.file.path);
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
       // A logging failure must never turn a served response into an error.
       try {

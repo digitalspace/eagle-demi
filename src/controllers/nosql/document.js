@@ -11,7 +11,6 @@
 
 const crypto = require('crypto');
 const path = require('path');
-const fs = require('fs');
 const { finished } = require('stream/promises');
 const { once } = require('events');
 const storage = require('../../storage');
@@ -1090,13 +1089,11 @@ exports.extractDocument = async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded.' });
     }
     if (!project) {
-      if (file.path) fs.promises.unlink(file.path).catch(() => {});
       return res.status(400).json({ error: 'A valid project id is required.' });
     }
 
     const parentProject = await projects.getById(access, project);
     if (!parentProject) {
-      if (file.path) fs.promises.unlink(file.path).catch(() => {});
       return res.status(404).json({ error: `Parent Project with id ${project} not found.` });
     }
 
@@ -1108,7 +1105,6 @@ exports.extractDocument = async (req, res) => {
     // prefix, but the metadata must stay environment-independent or the record breaks when
     // copied between environments.
     await storage.putFile(objectPath, file.path, file.mimetype);
-    fs.promises.unlink(file.path).catch(() => {});
 
     const acl = resolveDocumentAcl(parentProject);
     const now = new Date().toISOString();
@@ -1152,7 +1148,6 @@ exports.extractDocument = async (req, res) => {
       docId: String(saved.id)
     });
   } catch (err) {
-    if (req.file && req.file.path) fs.promises.unlink(req.file.path).catch(() => {});
     return serverError(res, err, 'document controller failed');
   }
 };
