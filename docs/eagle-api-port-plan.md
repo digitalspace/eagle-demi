@@ -333,5 +333,5 @@ Risks:
 
 Not checked:
 - Which eagle-api reads the Angular eagle-public prod line still makes. This decides whether each object needs sync-out.
-- Whether TokenInterceptor attaches the bearer on write verbs (A0).
-- How `commentIdCount` is stored in DEMI.
+- TokenInterceptor attaches the bearer on every verb for both API paths (`token-interceptor.ts:20-43`), measured 2026-10-19.
+- `commentIdCount` lives as `nextCommentId` in `src/repositories/comment-periods.js:407`, used by `src/domain/comments.js:110`; see tracker Comments.

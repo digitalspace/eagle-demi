@@ -39,7 +39,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | 9 | Project publish legislation-year switch | `domain/project-legislation.js`, `controllers/nosql/project.js`, `merge/project.js`, `vis/catalog/projects.js` | 0 | M | done (47412c65); Dark: `setLevel` year switch staff-guarded; blocks stored and returned on reads |
 | 10 | Sitemap | `controllers/sitemap.js` | 0 | S | done (591f9cf9); 10b (`robots.txt`) code done, not merged |
 | 10b | `robots.txt` repoint (eagle-public `develop`, `react`) | eagle-public `robots.txt`, one slice per line | 10 | - | code done, not merged: eagle-public #985 (`develop`, e0ace912) and #986 (`react`, d3a06031), both draft; Front Door rewrite live on test; prod order under Sitemap |
-| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | done (eagle-notify e1c389b, eagle-demi 05ffdb67); Dark: staff-only, no caller; both deployed to test; live use on test needs `notify-api-key` rotated, see CAC |
+| 11 | CAC | `domain/cac.js`, `controllers/native/cac.js`, `src/services/notify.js`; eagle-notify route PR first | 0 (8 if a catalog edit is needed) | M | done (eagle-notify e1c389b, eagle-demi 05ffdb67); Dark: staff-only, no caller; both deployed to test; key rotated 2026-10-19, member-remove proven on test |
 | T | Parity-map tidy | `src/scripts/parity-map.js` | 4, 5 | S | done (591f9cf9) |
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af); no caller yet |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); v2.5.35 deployed to test; prod precondition under Project |
@@ -353,7 +353,7 @@ Questioned:
 - PUT resets `dateAdded` (`:144`). Not dropped: DEMI keeps the original `dateAdded`.
 - Publish and unpublish (`swagger.yaml:4414,4463`) have no caller. Ported anyway as `PUT /organizations/:id/publish` and `PUT /organizations/:id/unpublish`, per the visibility decision above.
 
-Callers to move: eagle-admin `org.service.ts:19,29`.
+Callers to move: eagle-admin `org.service.ts:38,48`.
 
 ### Users
 
@@ -401,7 +401,9 @@ Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`):
 
 Deviations: delete also sets `projectCACPublished` false, so a deleted CAC's `cacEmail` stops showing to the public; publish refuses with 409 a project with no CAC; `cacEmail` and `address` must be email addresses; an unknown project is 404 (eagle-api: 400 on create).
 
-Test use: eagle-notify answers 401 to the CAC routes until `demi-kv-test/notify-api-key` holds the `notify-api-test` host (`default`) function key. It holds a function-scoped key for `POST /api/events` only. Rotating it is Daniel's action.
+Test use: `demi-kv-test/notify-api-key` holds eagle-notify's host key named `demi`. A direct `POST /projects/145/cac/members/remove` on test returned 200 with a real notify round trip (measured 2026-10-19).
+
+After a rotation the Function App's floating Key Vault reference keeps the old value through a plain restart; re-save the `NOTIFY_API_KEY` app setting, then restart. Through Front Door, `/demi/api/*` refuses every method but GET, HEAD and OPTIONS (eagle-edge rule `demiapimethod`), so eagle-admin cannot call the CAC write routes until F11 adds an edge rule.
 
 Known Dark-phase limit: the CAC fields are copied from Eagle, so the next Eagle push replaces a DEMI write to them, while the eagle-notify removal stays. Accepted 2026-10-19: the routes have no caller until F11, and both eagle-notify routes are idempotent with a 30-day undo.
 
