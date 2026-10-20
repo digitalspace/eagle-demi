@@ -124,15 +124,18 @@ function listHandler(entity, list) {
   };
 }
 
-/** @param {(access, id, query) => Promise<object|null>} [get]  a read already gated on `canRead` */
-function getHandler(entity, notFound, get) {
+/**
+ * @param {(access, id, query) => Promise<object|null>} [get]  a read already gated on `canRead`
+ * @param {(redacted: object) => object} [shape]  trims the redacted row to the response body
+ */
+function getHandler(entity, notFound, get, shape = (body) => body) {
   if (typeof entity === 'object') return nativeGetHandler(entity);
   return async (req, res) => {
     try {
       const access = resolveAccess(req);
       const row = await get(access, req.params.id, req.query);
       if (!row) return res.status(404).json({ error: notFound });
-      return res.json(redactForAccess(entity, row, access));
+      return res.json(shape(redactForAccess(entity, row, access)));
     } catch (err) {
       return serverError(res, err, `${entity} read failed`);
     }
