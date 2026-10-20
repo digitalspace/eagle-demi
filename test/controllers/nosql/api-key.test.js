@@ -9,13 +9,21 @@
  */
 
 process.env.NODE_ENV = 'test';
+// Before src/config is first required: the audit writer is inert without a collection rule.
+process.env.AUDIT_DCR_ENDPOINT = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
+process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
 
 const test = require('node:test');
 const assert = require('node:assert');
 
+const cosmos = require('../../../src/db/cosmos-nosql');
+const audit = require('../../../src/utils/audit');
 const apiKeys = require('../../../src/repositories/api-keys');
 const controller = require('../../../src/controllers/nosql/api-key');
 const { GRANTABLE_ROLES } = require('../../../src/controllers/nosql/api-key');
+
+let rows = [];
+audit._setTransport(async (stream, batch) => { rows.push(...batch); });
 
 function mockRes() {
   return {
@@ -156,5 +164,33 @@ test('minting a privileged key', async (t) => {
 
     assert.strictEqual(res.statusCode, 201, JSON.stringify(res.body));
     assert.deepStrictEqual(stored[0].roles, ['demi-admin']);
+  });
+});
+
+test('revoking a key', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('a repeat revoke answers 200 with the row and writes no second audit row', async (t) => {
+    let stored = { id: 'k1', name: 'seeder', roles: ['public'], hash: 'h', revokedAt: null };
+    t.mock.method(cosmos, 'readItem', async () => ({ ...stored }));
+    const upsert = t.mock.method(cosmos, 'upsert', async (_c, row) => { stored = row; return { ...row }; });
+    // Drain the mints above, so rows hold only this test's events.
+    await audit.flush();
+    rows = [];
+    const req = { params: { id: 'k1' }, query: {}, user: { preferred_username: 'admin.person' } };
+
+    const first = mockRes();
+    await controller.revokeApiKey(req, first);
+    const again = mockRes();
+    await controller.revokeApiKey(req, again);
+    await audit.flush();
+
+    for (const res of [first, again]) {
+      assert.strictEqual(res.statusCode, 200);
+      assert.strictEqual(res.body.key.revokedAt, stored.revokedAt);
+      assert.strictEqual(res.body.key.hash, undefined, 'the row is still redacted');
+    }
+    assert.strictEqual(upsert.mock.callCount(), 1, 'the stored revokedAt is kept, not restamped');
+    assert.deepStrictEqual(rows.map(r => r.Action), ['apikey.revoke']);
   });
 });
