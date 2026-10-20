@@ -23,6 +23,7 @@ const { NOT_DELETED } = require('../../src/repositories/_sql');
 const updatesRepo = require('../../src/repositories/updates');
 const apiKeys = require('../../src/repositories/api-keys');
 const { generateKey } = require('../../src/helpers/api-key');
+const { environmentName } = require('../../src/config');
 const { forgetCachedKey } = require('../../src/helpers/auth');
 const { withServer } = require('./with-server');
 const {
@@ -166,7 +167,7 @@ async function get(path, init = {}) {
 
 /** The same call under a credential (staff unless `roles` says otherwise), to compare visibility levels. */
 async function getAsStaff(t, path, roles = ['staff'], init = {}) {
-  const { keyId, plaintext, hash } = generateKey('test');
+  const { keyId, plaintext, hash } = generateKey(environmentName);
   forgetCachedKey(keyId);
   t.mock.method(apiKeys, 'getById', async () => ({
     id: keyId, name: 'reader', hash, roles,

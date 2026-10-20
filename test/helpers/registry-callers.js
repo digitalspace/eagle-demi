@@ -10,6 +10,7 @@
 
 const apiKeys = require('../../src/repositories/api-keys');
 const { generateKey } = require('../../src/helpers/api-key');
+const { environmentName } = require('../../src/config');
 const { forgetCachedKey } = require('../../src/helpers/auth');
 
 const GATEWAY_SECRET = 'gateway-secret-for-the-suites';
@@ -33,7 +34,7 @@ function registryRow(fields) {
 
 /** A registry key presented as X-Api-Key: its row, and the headers that authenticate as it. */
 function presentedKey(name, roles, projectScope = null) {
-  const { keyId, plaintext, hash } = generateKey('test');
+  const { keyId, plaintext, hash } = generateKey(environmentName);
   return {
     row: registryRow({ id: keyId, name, hash, roles, projectScope }),
     headers: { 'x-api-key': plaintext }

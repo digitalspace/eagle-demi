@@ -14,7 +14,8 @@ const assert = require('node:assert');
 
 const apiKeys = require('../../src/repositories/api-keys');
 const { generateKey } = require('../../src/helpers/api-key');
-const { authenticate, forgetCachedKey } = require('../../src/helpers/auth');
+const { environmentName } = require('../../src/config');
+const { authenticate, isValidApiKey, forgetCachedKey, KEY_CACHE_MAX } = require('../../src/helpers/auth');
 
 function reqWith(apiKey) {
   return { header: (name) => (name === 'X-Api-Key' ? apiKey : null) };
@@ -39,7 +40,7 @@ function stub(t, record) {
 }
 
 function stored(overrides = {}) {
-  const { keyId, plaintext, hash } = generateKey('test');
+  const { keyId, plaintext, hash } = generateKey(environmentName);
   return {
     plaintext,
     record: {
@@ -103,4 +104,31 @@ test('a key that is not ours is not looked up at all', async (t) => {
   assert.strictEqual(status, 401);
   assert.strictEqual(apiKeys.getById.mock.callCount(), 0, 'no Cosmos read for a foreign key');
   assert.deepStrictEqual(touched, []);
+});
+
+test('a key minted for another environment is refused without a Cosmos read', async (t) => {
+  const touched = stub(t, null);
+  const other = environmentName === 'prod' ? 'test' : 'prod';
+  const presented = generateKey(other).plaintext;
+
+  const { status } = await run(presented);
+
+  assert.strictEqual(status, 401);
+  assert.strictEqual(await isValidApiKey(presented), false, 'the edge gate check refuses it too');
+  assert.strictEqual(apiKeys.getById.mock.callCount(), 0);
+  assert.deepStrictEqual(touched, []);
+});
+
+test('the lookup cache is flushed once it holds KEY_CACHE_MAX ids', async (t) => {
+  stub(t, null);
+  const key = (i) => `demi_${environmentName}_cap${i}_secret`;
+  const reads = () => apiKeys.getById.mock.callCount();
+
+  // KEY_CACHE_MAX more ids after key 0 must pass the cap whatever earlier tests left cached.
+  for (let i = 0; i <= KEY_CACHE_MAX; i++) await run(key(i));
+  await run(key(KEY_CACHE_MAX));
+  assert.strictEqual(reads(), KEY_CACHE_MAX + 1, 'the newest id is still cached');
+
+  await run(key(0));
+  assert.strictEqual(reads(), KEY_CACHE_MAX + 2, 'key 0 was flushed, so it is read again');
 });
