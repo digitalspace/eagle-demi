@@ -317,7 +317,7 @@ Decisions:
 - Dark: a write to an Eagle-mirrored notification is replaced by the next Eagle push.
 
 Questioned:
-- PUT blanks `pcp`, `isMet`, `metURL`, `dateStarted` and `dateCompleted` when the body leaves them out (`:131-135`), though eagle-admin's edit form does not send them. Ported as is; decide at the flip whether those period fields move out of the PUT.
+- PUT blanks `pcp`, `isMet`, `metURL`, `dateStarted` and `dateCompleted` when the body leaves them out (`:131-135`), though eagle-admin's edit form does not send them. Ported as is. Decided 2026-10-19: at F6 the PUT leaves omitted fields unchanged, so a save from eagle-admin never blanks the comment-period fields DEMI owns; no separate endpoint.
 
 Callers to move: eagle-admin `notification-project.service.ts:58-69`. Notification documents attach through the document routes; the eagle-admin screen builds eagle-api fetch URLs (`project-notification-documents.component.ts:463`), move those too.
 
@@ -553,7 +553,7 @@ eagle-admin still calls eagle-api for writes that DEMI already serves. Move thes
 - Document fetch URLs built from eagle-api (`document.service.ts:18-20`, used in `update-images.ts:42`, `update-image-picker.component.ts:29`, `project-documents.component.ts:790`, `project-notification-documents.component.ts:463`).
 - eagle-demi-admin `src/api/eagle.ts:22` shows the eagle-api report URL; DataBC pulls that CSV from prod (external, unverified), so keep eagle-api `/reports` until DataBC is repointed.
 
-Document feature: DEMI has no `MAX_FEATURE_DOCS` cap (eagle-api `document.js:919-922`). Decide whether the cap is a business rule; if so add it to the document PUT.
+Document feature: DEMI has no featured-document cap yet (eagle-api `constants.js:18` `MAX_FEATURE_DOCS = 5`, enforced in `document.js:843-849` with a 403). Decided 2026-10-19: the cap is a business rule; at F10 DEMI enforces it from config in the document PUT and returns 409 when a project already has 5 featured documents.
 
 ## Retire in eagle-api (after cutover is live on test)
 

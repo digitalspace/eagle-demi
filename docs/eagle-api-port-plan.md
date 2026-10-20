@@ -310,7 +310,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 | F7 Users | 7 | `user.service.ts:56,62`; `user.service.spec.ts` | ignore Eagle fields in `nosql/user.js` | if Eagle reads them |
 | F8 Extensions | 8, F1 | `project.service.ts:217-226`; `project.service.spec.ts` | `reviewExtensions` and `reviewSuspensions` into DEMI_ONLY | project consumer |
 | F9 Project writes | 9, F4 | `project.service.ts:188-213`; `project.service.spec.ts` | project-wide ownership | project consumer |
-| F10 Documents | FS, A0 | `document.service.ts:18-20,91-140`, `project-documents.component.ts:790`, `project-notification-documents.component.ts:463`, all to `/documents/:id/download` (`routes.js:196`); `document.service.spec.ts` | ignore Eagle fields in the document mirror; decide on MAX_FEATURE_DOCS (eagle-api `document.js:919-922`) | yes |
+| F10 Documents | FS, A0 | `document.service.ts:18-20,91-140`, `project-documents.component.ts:790`, `project-notification-documents.component.ts:463`, all to `/documents/:id/download` (`routes.js:196`); `document.service.spec.ts` | ignore Eagle fields in the document mirror; enforce the 5-doc featured cap from config, 409 (decided 2026-10-19; eagle-api `document.js:843-849`) | yes |
 | F11 CAC | 11, F8 | none: no eagle-admin caller | `projectCAC`, `projectCACPublished` and `cacEmail` into DEMI_ONLY | none. eagle-api has no write path for the CAC fields: `project.js:79-82` is the GET `fields=` allowlist (`tagList`, `:9`), `protectedPut` (`:602`, field map about `:662-690`) carries no CAC field, and b072e79 removed the CAC write routes. Neither eagle-public line reads the CAC fields (0 hits on `develop` and `react`, 2026-10-19), so no eagle-api write path is added. |
 
 ## 6. Retire (last)
