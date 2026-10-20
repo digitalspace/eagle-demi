@@ -1,27 +1,8 @@
 'use strict';
 
 /**
- * Every repository read is gated, and a new one fails this suite until somebody says which way.
- *
- * `access-sql.test.js` and `access-odata.test.js` test the gates themselves — that
- * `visibilityFor` emits the right predicate, that `filterFor` restricts an anonymous caller. What
- * neither of them can see is whether a read path *uses* one. That is the gap this file closes, and
- * the failure it guards against is silent: a repository that forgets its gate returns more rows,
- * not an error, and nothing DEMI logs is retained anywhere, so nobody would find out from a log.
- *
- * The invariant is checkable because the code already funnels reads through two choke points:
- *
- *  1. **Query reads** compose `visibilityFor` inside `_sql.js`'s `selectWhere`/`countWhere`. A
- *     repository routing through those is gated for free — and so are its counts, which is the
- *     "counts use the same predicate as reads" rule holding by construction rather than by memory.
- *  2. **Point reads** bypass the query predicate entirely. `cosmos.readItem` hands back the item
- *     whatever the caller's roles are, so each call site must follow it with `canRead`.
- *
- * **This scans source text; it does not parse an AST.** Someone determined to defeat it can — write
- * the call through a variable and the grep misses. That is deliberate and it is not the threat: the
- * failure mode that actually happens here is forgetting, and forgetting is exactly what a text scan
- * catches. A parser would cost a dependency and buy protection against an adversary who already has
- * commit access.
+ * A new repository read fails here until it routes through `_sql.js` or follows a point read with
+ * `canRead`. Scans source text, not an AST: it catches forgetting, not an adversary.
  */
 
 process.env.NODE_ENV = 'test';
@@ -37,17 +18,8 @@ const REPO_DIR = path.join(__dirname, '..', '..', 'src', 'repositories');
 const CONTROLLER_DIR = path.join(__dirname, '..', '..', 'src', 'controllers');
 
 /**
- * Repositories that legitimately hold no ACL gate, each with the reason it does not need one.
- *
- * A name earns a place here by being unreachable by an ungated caller, NOT by being inconvenient
- * to gate. The reason is prose; the ROUTER is the evidence, and it is asserted below rather than
- * cited — line-number citations rot. They already did: these entries pointed at routes/api.js:106
- * and :115 until a route removal shifted every line, and the suite kept passing while the
- * evidence silently stopped matching. `gatedPrefixes` is the executable replacement.
- *
- * `boundaries.js` used to be listed here as "public reference data, deliberately unrestricted".
- * That described the corpus, not the requirement — a staff-only shapefile could not be expressed
- * at all. It is gated now, so it is not an exception.
+ * Repositories with no ACL gate, each with the reason. Only for names no ungated caller can reach;
+ * the router is the evidence, asserted via `gatedPrefixes` below because line citations rot.
  */
 const UNGATED = {
   'api-keys.js':
@@ -105,21 +77,8 @@ const UNGATED = {
 };
 
 /**
- * Path prefixes that must carry the named guards on EVERY method, checked against the router.
- *
- * The `/admin/*` entries are what the allowlist reasons above assert, expressed as something that
- * can fail. They demand `requireAdmin`, the NARROWER gate: `requireWrite` there would let a
- * machine writer holding `demi-service-write` mint itself a `demi-admin` key, which is the one
- * escalation the two-gate split exists to prevent.
- *
- * `/eagle/` demands `requireWrite` because those handlers read and write through `systemAccess()`,
- * so the write gate is the only thing standing between a read-only credential and the mirror. It
- * is deliberately NOT `requireAdmin` — the Eagle push is exactly the consumer that should hold
- * `demi-service-write` and nothing more. `requireEagleMirror` then narrows it to eagle-api itself,
- * since the extractor and any minted writer hold the same role.
- *
- * Every guard of the chain is listed, auth included, because `/sealed` is the one prefix that does
- * not mount `authMiddleware` — see its entry.
+ * Prefixes that must carry the named guards on EVERY method. `/admin/*` demands requireAdmin: with
+ * requireWrite a `demi-service-write` holder could mint itself a `demi-admin` key.
  */
 const gatedPrefixes = {
   '/admin/api-keys': ['authMiddleware', 'requireAdmin'],
@@ -137,31 +96,21 @@ const gatedPrefixes = {
   // The executable half of the `credentials.js` reason above. `requireRole` is the narrow gate a
   // grant needs: requireWrite alone would let the machine writer mint one for itself.
   '/credentials': ['authMiddleware', 'requireRole'],
-  // The sealed compartment (docs/rbac-architecture.md §1). `authMiddleware` is ABSENT on purpose:
-  // it demands AUTHENTICATED_ROLES, which excludes `compliance`, so requiring it here would demand
-  // the gate that locks the compartment's only caller out. `sealedAuth` verifies the credential and
-  // the named role is the whole authorisation.
+  // `authMiddleware` is ABSENT on purpose: AUTHENTICATED_ROLES excludes `compliance`, so it would
+  // lock out the compartment's only caller. `sealedAuth` plus the named role is the authorisation.
   '/sealed': ['sealedAuth', "requireRole('compliance')"],
-  // Both bulk routes read as the caller: the POST filters the requested ids through the caller's
-  // access, and a grant can widen what it sees. passiveAuth rather than authMiddleware because an
-  // anonymous caller gets the public tier, exactly as on /documents/:id/download.
+  // passiveAuth, not authMiddleware: an anonymous caller gets the public tier, as on
+  // /documents/:id/download.
   '/bulk-downloads': ['passiveAuthMiddleware', 'credentialsMiddleware']
 };
 
-/**
- * Per-verb gates on /links: GET is authMiddleware only (every row is staff-visible), but the three
- * mutating verbs also need requireWrite — one gate per prefix (gatedPrefixes, above) cannot express
- * a route whose gate depends on its verb, so this is checked as an explicit list instead.
- */
+/** Per-verb gates: `gatedPrefixes` cannot express a gate that depends on the verb. */
 const gatedRoutes = [
   { method: 'get', path: '/links', gate: null },
   { method: 'post', path: '/links', gate: 'requireWrite' },
   { method: 'put', path: '/links/:code', gate: 'requireWrite' },
   { method: 'delete', path: '/links/:code', gate: 'requireWrite' },
-  // /me/* is the caller's own data, so authMiddleware is the whole gate — but it is also the ONLY
-  // thing that supplies the partition key, so an unauthenticated one would write to ''.
-  // The executable half of the `projectSummaries.js` reason above. GET is authMiddleware only
-  // (the project read inside the controller is the ACL); PUT adds requireWrite so a read-only
+  // GET's ACL is the project read in the controller; PUT adds requireWrite so a read-only
   // credential cannot store prose that renders as EAO's account of a project.
   { method: 'get', path: '/projects/:id/summary', gate: null },
   { method: 'put', path: '/projects/:id/summary', gate: 'requireWrite' },
@@ -169,6 +118,7 @@ const gatedRoutes = [
   { method: 'put', path: '/projects/:id/short-code', gate: 'requireAdmin' },
   // The only route that returns full chunk text. authMiddleware, never passiveAuth.
   { method: 'get', path: '/documents/:id/chunks', gate: null },
+  // /me/*: authMiddleware also supplies the partition key; unauthenticated would write to ''.
   { method: 'get', path: '/me/data', gate: null },
   { method: 'put', path: '/me/lassos', gate: null },
   { method: 'delete', path: '/me/lassos/:slug', gate: null },
@@ -246,12 +196,8 @@ test('access gate coverage', async (t) => {
   });
 
   await t.test('the allowlisted routes really are gate-guarded', () => {
-    // The executable half of the reasons above. An allowlist entry says "no ACL needed because
-    // nothing unprivileged can reach it" — this reads the router and checks that is still true,
-    // so moving a route out from behind requireWrite fails here instead of rotting a comment.
-    // routeChains() strips comments first. Without that, deleting `requireWrite` and leaving its
-    // name in a comment beside the handler satisfies the assertion below while the route runs
-    // ungated — the same hole the sibling db_auth suite was caught on.
+    // Checks the router still backs each allowlist reason. routeChains() strips comments, or a
+    // `requireWrite` left in a comment would satisfy the assertion while the route runs ungated.
     const routes = routeChains();
 
     assert.ok(routes.length >= 20, `expected the router, parsed ${routes.length} routes`);
@@ -272,9 +218,8 @@ test('access gate coverage', async (t) => {
       }
     }
 
-    // The escalation the split exists to block, asserted as an ABSENCE rather than left implied:
-    // requireAdmin is not a synonym for requireWrite, and a mount that swapped one for the other
-    // on the key routes would satisfy every other assertion in this file.
+    // Asserted as an ABSENCE: swapping requireAdmin for requireWrite on the key routes would
+    // satisfy every other assertion in this file.
     for (const r of routes.filter(route => route.path.startsWith('/admin/api-keys'))) {
       assert.ok(
         !/\brequireWrite\b/.test(r.chain),
@@ -303,23 +248,13 @@ test('access gate coverage', async (t) => {
   });
 
   /**
-   * The ROW gate says which records; the field catalog says which attributes of one. This is the
-   * second half, checked per CALL SITE rather than per file (docs/rbac-architecture.md §2 item 1):
-   * a response that emits a stored project without `redactForAccess` ships `read[]`, `vis`, the
-   * raw `sources` payloads and the Cosmos system fields to whoever asked.
+   * Field gate, per CALL SITE (docs/rbac-architecture.md §2 item 1): a project emitted without
+   * `redactForAccess` ships `read[]`, `vis`, raw `sources` and Cosmos system fields.
    */
   await t.test('every project response site redacts', () => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    // 41: +1 for the Eagle push 500 when the Eagle-only twin could not be narrowed (error string).
-    // 42: +1 for the PUT 400 on invalid `tags` (error string).
-    // 43: +1 for the PUT 500 when the pair's other row could not take the tags (error string).
-    // 41: -2, GET /projects moved to the native list handler, which redacts in mirror-reads.
-    // 42: +1 for the short-code 503 when the claim raced (error string).
-    // 43: +1 for the GET /projects 400 on an unknown `pcp` (error string).
-    // 44: +1 for the PUT 409 when the project is under a locked Act (error string).
-    // 45: +1 for the level 400 on a bad `legislationYear` (error string).
     assert.strictEqual(emissions.length, 45,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
@@ -331,19 +266,15 @@ test('access gate coverage', async (t) => {
       assert.ok(emissions.includes(site), `missing short-link response site: ${site}`);
     }
 
-    // A site emitting a stored row names it BARE (`redactForAccess('projects', saved, access)`) or
-    // maps over the page. The negative lookahead for a dot is what separates that from a literal
-    // that merely reads a scalar off one: `{ id: saved.id, action: 'upsert' }` carries no ACL, and
-    // counting it would fail this test against correct code — which is how a source invariant gets
-    // deleted by the next person instead of fixed.
+    // The dot lookahead separates a bare row from a literal reading one scalar off it
+    // (`{ id: saved.id }` carries no ACL); counting those would fail against correct code.
     const ROW_SOURCES = /\b(saved|existing|items|page|project)\b(?!\s*\.)|\b(items|page)\.map\(/;
     const unredacted = emissions.filter(e => ROW_SOURCES.test(e) && !/redactForAccess/.test(e));
     assert.deepStrictEqual(unredacted, [],
       'these emit a stored project row without redactForAccess — each ships read[], vis and sources');
 
-    // The search fallback redacts one step EARLIER, inside the mapper, because the mapper emits
-    // eagle-search wire names and the catalog must never run over its output (§2 item 9). Its
-    // `res.json` argument therefore says nothing, so the mapper body is what gets asserted.
+    // The fallback redacts inside the mapper (the catalog must never run over wire names, §2
+    // item 9), so its `res.json` argument says nothing; assert the mapper body.
     const search = fs.readFileSync(path.join(CONTROLLER_DIR, 'search.js'), 'utf8');
     const mappers = balancedArgs(search, /\bprojects\.map\(/g);
     assert.strictEqual(mappers.length, 1, 'expected one Cosmos project mapper in search.js');
@@ -353,12 +284,7 @@ test('access gate coverage', async (t) => {
       'the mapper reads fields off the redacted row, never off the raw repository row');
   });
 
-  /**
-   * The same ratchet over the document controller. Five of its `res.json` sites are hand-built
-   * payloads — the download URL, the Eagle push ack and the three ingest acks — and they read only
-   * scalars off a row, so the dotted-name lookahead is what tells them apart from a site that
-   * emits the row itself.
-   */
+  /** The same ratchet over the document controller. */
   await t.test('every document response site redacts', () => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'document.js'), 'utf8');
     const emissions = jsonEmissions(controller);
@@ -370,20 +296,16 @@ test('access gate coverage', async (t) => {
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits
     // either one BARE is caught the way a bare `items` is.
     const ROW_SOURCES = /\b(saved|updated|existing|doc|items|ranked|memoed)\b(?!\s*\.)|\b(items|page)\.map\(/;
-    // The recent-uploads rows are redacted one step EARLIER, inside `recentUploadRow`, because the
-    // row is a wire shape (`eagleProjectId`, `document: {...}`) the catalog must never run over —
-    // the same reason the search fallback redacts inside its mapper. Those two emissions therefore
-    // say nothing on their own, so the BUILDER is asserted below instead. Exact text, so an
-    // emission of anything else is back in the scan.
+    // Recent-uploads rows are redacted inside `recentUploadRow` (a wire shape the catalog must not
+    // run over), so these two emissions are exempt by exact text and the builder is asserted below.
     const BUILT_ELSEWHERE = /^\{ items: (ranked|memoed) \}$/;
     const unredacted = emissions.filter(e => ROW_SOURCES.test(e) &&
       !/redact(All)?ForAccess/.test(e) && !BUILT_ELSEWHERE.test(e.trim()));
     assert.deepStrictEqual(unredacted, [],
       'these emit a stored document row without redactForAccess — each ships read[], s3Key and _etag');
 
-    // What the exemption above rests on: the builder redacts BOTH rows and reads every field off
-    // the redacted copies. The negative test is the load-bearing half — `projectId: project.id`
-    // would ship a project id the redactor withheld.
+    // The builder must redact BOTH rows and read only off the copies: `projectId: project.id`
+    // would ship an id the redactor withheld.
     const builder = /function recentUploadRow\([^)]*\) \{([\s\S]*?)\n\}/.exec(code(controller));
     assert.ok(builder, 'recentUploadRow is gone — re-check what builds a recent-uploads row');
     assert.match(builder[1], /redactForAccess\('documents'/);
