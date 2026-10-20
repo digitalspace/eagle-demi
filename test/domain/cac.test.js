@@ -31,11 +31,15 @@ function ctxFor(roles) {
 }
 const STAFF = ctxFor(['staff']);
 
-/** Fake storage holding one project; returns the rows written. */
+/** Fake storage holding one project; returns the rows written and the options each write passed. */
 function fakeStore(t, stored = STORED) {
-  const store = { written: [] };
+  const store = { written: [], options: [] };
   t.mock.method(projects, 'getById', async (access, id) => (id === stored.id ? structuredClone(stored) : null));
-  t.mock.method(projects, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
+  t.mock.method(projects, 'upsert', async (row, options) => {
+    store.written.push(row);
+    store.options.push(options);
+    return { ...row, _etag: 'e2' };
+  });
   return store;
 }
 
@@ -76,12 +80,13 @@ test('CAC domain', async (t) => {
   });
 
   await t.test('create sets the CAC up unpublished with a trimmed email, audited', async (t) => {
-    const store = fakeStore(t, { ...STORED, projectCAC: false, projectCACPublished: true, cacEmail: null });
+    const store = fakeStore(t, { ...STORED, projectCAC: false, projectCACPublished: true, cacEmail: null, _etag: 'e5' });
     const { result, rows } = await audited(() => cac.create(STAFF, PROJECT_ID, { cacEmail: ' new@example.com ' }));
     assert.strictEqual(result.status, 'ok');
     assert.strictEqual(result.created, true);
     const saved = store.written[0];
     assert.deepStrictEqual([saved.projectCAC, saved.projectCACPublished, saved.cacEmail], [true, false, 'new@example.com']);
+    assert.deepStrictEqual(store.options, [{ etag: 'e5' }], 'the write is guarded by the etag of the row read');
     assert.strictEqual(rows[0].Action, 'cac.create');
   });
 
@@ -99,6 +104,7 @@ test('CAC domain', async (t) => {
     assert.strictEqual((await cac.publish(STAFF, PROJECT_ID)).value.projectCACPublished, true);
     assert.strictEqual((await cac.unpublish(STAFF, PROJECT_ID)).value.projectCACPublished, false);
     assert.deepStrictEqual(store.written.map(row => row.projectCACPublished), [true, false]);
+    assert.deepStrictEqual(store.options, [{ etag: 'e1' }, { etag: 'e1' }], 'each write is guarded by the etag of the row read');
   });
 
   await t.test('publish refuses a project with no CAC', async (t) => {
@@ -126,6 +132,7 @@ test('CAC domain', async (t) => {
     assert.deepStrictEqual(calls, [['cac', EAGLE_ID]]);
     assert.deepStrictEqual([store.written[0].projectCAC, store.written[0].projectCACPublished], [false, false]);
     assert.strictEqual(store.written[0].cacEmail, 'cac@example.com');
+    assert.deepStrictEqual(store.options, [{ etag: 'e1' }], 'the write is guarded by the etag of the row read');
     assert.strictEqual(rows[0].Action, 'cac.delete');
     assert.deepStrictEqual(rows[0].Detail, { membersRemoved: 4 });
   });
