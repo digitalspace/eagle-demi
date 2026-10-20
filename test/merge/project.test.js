@@ -947,6 +947,18 @@ test('carryDemiOnlyFields', async (t) => {
     assert.deepStrictEqual(stored.tags, ['Old Name']);
   });
 
+  // Dark (docs/eagle-api-port.md, Pins): until F1 moves pins to DEMI_ONLY_FIELDS, Eagle's list wins.
+  await t.test('an Eagle push overwrites the pins and pinsRead a DEMI write stored', () => {
+    const pin = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
+    const stored = { id: '207', pins: ['5cf00c03a266b7e187750002'], pinsRead: ['public', 'staff', 'sysadmin'] };
+    const pushed = eagleFor(TRACK_207, { pins: [pin], pinsRead: ['project-system-admin'] });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), stored);
+
+    assert.deepStrictEqual(merged.pins, [pin]);
+    assert.deepStrictEqual(merged.pinsRead, ['project-system-admin']);
+  });
+
   await t.test('no stored row hands the rebuilt row back as it was', () => {
     const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207), OPTS);
 
