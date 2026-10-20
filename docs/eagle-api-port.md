@@ -148,7 +148,7 @@ Shared code is the read `SPEC`, `writeHandler`, `_write.js` and `_schema.js`. Ea
 
 ### Pins
 
-Status: done, Dark (b9e4685f). Label read only; pin writes land in F1.
+Status: done, Dark (b9e4685f, rules 38950fd4). Pin rules built in `src/domain/project-pins.js`; no caller until F1.
 
 Today: `pins` is a field on the project document, resolved to `{_id, name, province}` in `src/merge/project.js:146-153`, shown when `pinsRead` includes `public` (`src/vis/predicates.js:18`). `PUT /projects/:id` strips `pins` and `pinsPublished` (`src/controllers/nosql/project.js:489-492`). `pinsRead` has maxVis 0 (`src/vis/catalog/projects.js:155`). eagle-public react reads pins through `GET /demi-projects/:id` (`src/app/api/api.ts:395-410`).
 
@@ -164,7 +164,8 @@ Rules:
 - The stored value is the id list. The project read returns each pin as `{_id, name, province}`, resolved from the organizations table.
 - `pinsPublished` true adds `'public'` to `pinsRead`, false removes it, for the whole list (eagle-api `pins.js:167,194`). It applies to the whole list, not one pin.
 - When the list is unpublished, the public response is `[]`. This is a deliberate change from eagle-api `[{total_items: 0}]` (`pins.js:42`).
-- Publishing a pin requires its organization to be published, else 409 (Daniel, 2026-10-19). For `pinsPublished` true, every organization in `pins` must be published. Enforced in F1 in `domain/project-pins.js`; not built yet.
+- Publishing a pin requires its organization to be published, else 409. For `pinsPublished` true, every organization in `pins` must be published. Built in `src/domain/project-pins.js` (38950fd4), wired into the project PUT in F1.
+- The publish check covers only the ids being added, or the whole list when it goes from unpublished to published, so a list holding a since-unpublished organization can still shrink. The unknown-id 400 and the 403 role rule from (c) below are built in the same module.
 
 Ownership per phase:
 - Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:489-492` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`). It has no caller until F1, which maps `id` to `_id`.
@@ -556,6 +557,8 @@ eagle-admin still calls eagle-api for writes that DEMI already serves. Move thes
 - eagle-demi-admin `src/api/eagle.ts:22` shows the eagle-api report URL; DataBC pulls that CSV from prod (external, unverified), so keep eagle-api `/reports` until DataBC is repointed.
 
 Document feature: DEMI has no featured-document cap yet (eagle-api `constants.js:18` `MAX_FEATURE_DOCS = 5`, enforced in `document.js:843-849` with a 403). Decided 2026-10-19: the cap is a business rule; at F10 DEMI enforces it from config in the document PUT and returns 409 when a project already has 5 featured documents.
+
+Built (c1827211): `PUT /documents/:id` with `isFeatured: true` answers 409 when the project already holds the cap. The cap comes from `FEATURED_DOCUMENTS_MAX` (default 5, `src/config.js`); a document that is already featured is not counted, so a re-save never gets a 409. Eagle pushes and the seed stay uncapped; eagle-admin keeps calling eagle-api feature and unfeature until the flip.
 
 ## Retire in eagle-api (after cutover is live on test)
 
