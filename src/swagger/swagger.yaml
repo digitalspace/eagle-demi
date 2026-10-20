@@ -5,8 +5,8 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 75 of the 86 paths in src/http/routes.js
-    (89 of its 104 operations), and has drifted from what the API actually serves. Undocumented here:
+    NOT THE CONTRACT. This file is hand-maintained, covers 113 of the 124 paths in src/http/routes.js
+    (149 of its 164 operations), and has drifted from what the API actually serves. Undocumented here:
     /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on
@@ -7164,10 +7164,10 @@ paths:
         - name: action
           in: query
           required: false
-          description: Exact Action value, lower case and dots only.
+          description: Exact Action value. Starts with a lower-case letter, then letters and dots only (camelCase such as projectSummary.save is allowed).
           schema:
             type: string
-            pattern: '^[a-z][a-z.]{0,40}$'
+            pattern: '^[a-z][a-zA-Z.]{0,40}$'
         - name: actor
           in: query
           required: false
