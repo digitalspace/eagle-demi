@@ -419,6 +419,8 @@ const routes = [
   { method: 'put', path: '/projects/:id/cac/publish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').publishCac },
   { method: 'put', path: '/projects/:id/cac/unpublish', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').unpublishCac },
   { method: 'post', path: '/projects/:id/cac/members/remove', guards: [authMiddleware, requireRole('staff', 'sysadmin')], load: () => require('../controllers/native/cac').removeCacMember },
+
+  // port: document-feature
 ];
 
 // NOT SERVED IN PROD. The spec names every route, parameter and role in the system, and this route

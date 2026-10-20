@@ -540,6 +540,26 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.contentPageCount, 42);
   });
 
+  await t.test('isFeatured is taken from the push, past the featured cap', async () => {
+    // Eagle stays the writer until the flip, so DEMI's cap (domain/document-feature.js) is not applied.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['public', 'sysadmin'], isFeatured: false
+    }));
+    t.mock.method(documents, 'countFeatured', async () => 5);
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    const res = mockRes();
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ isFeatured: true }) }, user: STAFF
+    }, res);
+
+    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, action: 'upsert' });
+    assert.strictEqual(written.isFeatured, true);
+  });
+
   await t.test('extraction provenance and ingest failures are carried off the stored row', async () => {
     // Named one by one: the carry list lives in the code under test, so a field dropped from it
     // would drop out of a loop over it too.

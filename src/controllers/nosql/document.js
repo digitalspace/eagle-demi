@@ -42,6 +42,7 @@ const { naturalSortKey } = require('../../helpers/natural-sort');
 const { fileNameFor } = require('../../helpers/file-name');
 const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
 const config = require('../../config');
+const { featuresDocument, capRefusal } = require('../../domain/document-feature');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -1208,6 +1209,20 @@ exports.updateDocument = async (req, res) => {
       });
     }
 
+    if (changes.isFeatured !== undefined && typeof changes.isFeatured !== 'boolean') {
+      return res.status(400).json({ error: 'isFeatured must be true or false' });
+    }
+    if (featuresDocument(existing, changes)) {
+      const max = config.featuredDocumentsMax;
+      const refusal = capRefusal(await documents.countFeatured(existing.projectId, { exceptId: existing.id }), max);
+      if (refusal) {
+        logger.warn('[Document Controller] feature refused: project at the featured cap', {
+          documentId: existing.id, projectId: existing.projectId, limit: max
+        });
+        return res.status(409).json(refusal);
+      }
+    }
+
     // Built per try, not once: a lost etag race means the stored row moved, and merging the same
     // changes onto the revision that landed is what keeps the other writer's values instead of
     // reverting them. The write itself is refused unless the row is still what this built from.
@@ -1257,6 +1272,11 @@ exports.updateDocument = async (req, res) => {
     });
 
     if (owed) await propagateParentFields(saved);
+    if (changes.isFeatured !== undefined && changes.isFeatured !== (from.isFeatured === true)) {
+      logger.info(`[Document Controller] document ${changes.isFeatured ? 'featured' : 'unfeatured'}`, {
+        documentId: from.id, projectId: from.projectId
+      });
+    }
 
     return res.json(redactForAccess('documents', saved, access));
   } catch (err) {

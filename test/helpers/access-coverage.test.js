@@ -362,22 +362,9 @@ test('access gate coverage', async (t) => {
   await t.test('every document response site redacts', () => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'document.js'), 'utf8');
     const emissions = jsonEmissions(controller);
-    // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    // 38: it was 38, then 34 when the presigned-download handler moved to returning
-    // `{ status, body }` from resolveDownload — POST /bulk-downloads answers a one-document request
-    // from the same helper — so its four sites left the scan. The payload is asserted directly
-    // below instead. +1 for the PUT /documents/:id refusal of a non-string parent field, then +3
-    // for the 404 (row deleted under edit), 409 (staff PUT write-race exhausted) and 503 (eagle
-    // push write-race exhausted) sites. +3 for GET /documents/recent-uploads: its 400, its memo
-    // hit and its ranked payload. +2 for the chunk ingest 409 guard and 413 cap. +1 for its
-    // uncounted 503 when the search index kept dropped chunks (error string only). +1 for the
-    // chunk ingest 409 refusing an Update image (error string only). +1 for the Eagle push ack of
-    // a sealed row, `{ ok: true }`. +1 for the HEAD download 404 when the store reports the object
-    // missing (error string only). +1 for its 500 on a store fault other than an outage (error
-    // string only). +1 for the DELETE 503 when the purge kept the row (error string and counts).
-    // `res.status(found.status).json(found.body)` in headDownload is outside the scan (the status is
-    // not a literal), so the bodies it can send are pinned below with the download payload.
-    assert.strictEqual(emissions.length, 48,
+    // Exact, not a floor: a floor passes when a site is deleted and replaced by a wider one.
+    // Non-literal statuses (resolveDownload, headDownload) are outside the scan; pinned below.
+    assert.strictEqual(emissions.length, 50,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits
