@@ -30,8 +30,8 @@ const OVERRIDABLE_KEYS = [
 // OVERRIDABLE_KEYS: the two documents answer different frontends, and a key added for the DEMI
 // admin console must not become public because the lists were shared.
 //
-// This is eagle-api's own PUBLIC_KEYS (api/controllers/config.js) minus KEYCLOAK_* — the public
-// site does not log in — and minus ANALYTICS_API_URL, a constant shim eagle-api keeps for an
+// This is eagle-api's PUBLIC_KEYS (api/controllers/config.js) minus KEYCLOAK_* and CENTRE_API_URL
+// (admin only; the public site does not log in) and minus ANALYTICS_API_URL, a constant shim for an
 // Angular version this endpoint has no reason to carry. EXTENDED_PROJECT_PAGES only arrives once
 // eagle-api's list and Config model carry it too: both the push and the seeder read its payload.
 //
