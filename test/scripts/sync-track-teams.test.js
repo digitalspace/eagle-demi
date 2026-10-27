@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The reconcile is the whole point of this script, so the realm is an in-memory fake and every
- * assertion is on what it was ASKED to write — literal role names, literal user ids, in order.
- * Nothing here reaches Track or Keycloak.
- */
+// The realm is an in-memory fake, and every assertion is on what it was ASKED to write:
+// literal role names and user ids, in order.
 
 process.env.NODE_ENV = 'test';
 process.env.TRACK_API_BASE = 'https://track.example';
@@ -73,12 +70,8 @@ function fakeKc({ roles = [], users = [] } = {}) {
   };
 }
 
-/**
- * Track answers three endpoints on the same bearer: the team feed, the project list and the work
- * list the phase pull starts from. `works` empty is the ordinary case here — with no assessment
- * work there is no `/works/<id>/phases` call to answer, and the phase pull's own behaviour is
- * covered in test/seed/sources-fetch.test.js.
- */
+// Team feed, project list and work list on one bearer. `works` is empty by default, so no phase
+// call needs answering; the pull itself is covered in test/seed/sources-fetch.test.js.
 const fakeFetch = (teams, seen = {}, projects = [], works = []) => async (url, headers) => {
   if (url.endsWith('/team-members')) { seen.url = url; seen.headers = headers; return teams; }
   if (url.endsWith('/api/v1/works')) { seen.worksUrl = url; return works; }

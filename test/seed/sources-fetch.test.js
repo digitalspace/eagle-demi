@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * `fetchJson` is stubbed by every other seed test, so its own contract is only covered here: the
- * caller's headers reach `fetch`. The Track team feed is unauthorised without them.
- *
- * `loadTrackProjects` is covered here for the same reason — every other test injects it, so the
- * choice between the live feed and the checked-in export is only made for real in this file.
- */
+// Every other seed test stubs `fetchJson` and injects `loadTrackProjects`, so their real
+// behaviour (caller headers reach `fetch`; live feed vs checked-in export) is only covered here.
 
 process.env.NODE_ENV = 'test';
 
@@ -71,13 +66,8 @@ test('loadTrackProjects prefers the live feed once TRACK_API_BASE and the client
   assert.ok(urls.some(u => u.endsWith('/api/v1/projects')), urls.join(', '));
 });
 
-/**
- * Track work phases. The fixtures are shaped like the real responses: `GET /works` is
- * `WorkResponseSchema` (`include_fk`, so `project_id` and `work_type_id` ride alongside the nested
- * objects) and `GET /works/<id>/phases` is `WorkPhaseAdditionalInfoResponseSchema` — a `work_phase`
- * wrapper with the phase code nested under it. Nothing here reaches Track; no credential for it
- * exists outside Azure.
- */
+// Fixtures follow Track's schemas: `/works` rows carry fk ids beside nested objects, and
+// `/works/<id>/phases` rows wrap the phase code in `work_phase`.
 const ASSESSMENT = 6;
 const AMENDMENT = 7;
 
@@ -411,11 +401,8 @@ test('with the flag off only the assessment phases are read and works stays empt
   assert.strictEqual(works.size, 0);
 });
 
-/**
- * Rate limiting. eagle-api answers 200 requests a minute, and a comment sweep spends that inside a
- * minute, so what the fetch helper does with a 429 decides whether the sweep finishes. Waits go
- * through the injected `sleep`, so none of these tests costs wall-clock time.
- */
+// eagle-api allows 200 requests a minute, so 429 handling decides whether a comment sweep
+// finishes. Waits go through the injected `sleep` and cost no wall-clock time.
 const throttled = (headers = {}) => ({ status: 429, ok: false, headers: new Headers(headers) });
 const served = (body) => ({ status: 200, ok: true, headers: new Headers(), json: async () => body });
 
