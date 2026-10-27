@@ -15,6 +15,7 @@ const { transformDocument } = require('../../src/seed/transform');
 const { chunkMarkdown } = require('../../src/chunker');
 const { catalogFor } = require('../../src/vis/catalog');
 const { MIRRORS, captureMirror } = require('../helpers/eagle-mirror-fixtures');
+const { trackWorks } = require('../fixtures/track-works-contract');
 
 const catalog = catalogFor('projects');
 const documentCatalog = catalogFor('documents');
@@ -49,7 +50,9 @@ const TRACK_FIXTURE = {
   abbreviation: 'TRK',
   address: '100 Track Road, Victoria BC',
   is_active: true,
-  ea_certificate: 'E05-01'
+  ea_certificate: 'E05-01',
+  eac_signed: '2005-06-01T00:00:00.000Z',
+  eac_expires: '2010-06-01T00:00:00.000Z'
 };
 
 const EAGLE_FIXTURE = {
@@ -110,6 +113,8 @@ const EAGLE_FIXTURE = {
   pins: [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }],
   pinsRead: ['public'],
   featuredDocuments: ['5cf00c03a266b7e187750002', '5cf00c03a266b7e187750003'],
+  substantially: false,
+  substantiallyDate: '2024-03-14T00:00:00.000Z',
   ...staffOnlyEagleFields()
 };
 
@@ -133,8 +138,6 @@ function staffOnlyEagleFields() {
     eaStatusDate: '2019-03-14T00:00:00.000Z',
     projectStatusDate: '2019-03-14T00:00:00.000Z',
     activeDate: '2019-03-14T00:00:00.000Z',
-    substantially: false,
-    substantiallyDate: '2024-03-14T00:00:00.000Z',
     hasMetCommentPeriods: true,
     dispute: true,
     disputeDate: '2020-05-01T00:00:00.000Z'
@@ -171,16 +174,27 @@ test('the projects catalog covers every field the merge emits', async (t) => {
   });
 
   await t.test('every key mergeTrackProject emits is catalogued', () => {
-    // With phases, because they are conditional: merged without them the emitted key set is
-    // smaller and an uncatalogued `phases` would sail through.
-    const out = mergeTrackProject(TRACK_FIXTURE, EAGLE_FIXTURE, { phases: TRACK_PHASES_FIXTURE });
-    assert.ok('phases' in out, 'the fixture must actually exercise the phase path');
+    // With phases and works, because they are conditional: merged without them the emitted key
+    // set is smaller and an uncatalogued `phases` or `works` would sail through.
+    const out = mergeTrackProject(TRACK_FIXTURE, EAGLE_FIXTURE,
+      { phases: TRACK_PHASES_FIXTURE, works: trackWorks() });
+    for (const key of ['phases', 'works', 'legislationTransitions']) {
+      assert.ok(key in out, `the fixture must actually exercise the ${key} path`);
+    }
     assert.deepStrictEqual(Object.keys(out).filter(k => !(k in catalog)), []);
   });
 
   await t.test('the whole phase list is public — it is dates, not staff', () => {
     assert.strictEqual(catalog.phases.defaultVis, 4);
     assert.strictEqual(catalog.phases.maxVis, 4);
+  });
+
+  // Parity with eagle-api's public project read, which returns `substantially` and its date.
+  await t.test('the Track works, certificate dates, transitions and substantial start are public', () => {
+    for (const field of ['works', 'eacSigned', 'eacExpires', 'legislationTransitions',
+      'substantially', 'substantiallyDate']) {
+      assert.deepStrictEqual(catalog[field], { defaultVis: 4, maxVis: 4 }, field);
+    }
   });
 
   await t.test('every key mergeEagleOnlyProject emits is catalogued', () => {

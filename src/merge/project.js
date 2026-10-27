@@ -48,12 +48,15 @@ const TRACK_PRECEDENCE = [
   ['isActive', 'is_active', 'activeStatus'],
   // Track-only, and stored VERBATIM: the column carries certificate state as well as numbers
   // ("E98-05", but also "Withdrawn", "In progress", "N/A"), so nothing here parses or normalises it.
-  ['eaCertificate', 'ea_certificate', null]
+  ['eaCertificate', 'ea_certificate', null],
+  // Track-only certificate dates; `eacExpires` is also the substantial-start deadline.
+  ['eacSigned', 'eac_signed', null],
+  ['eacExpires', 'eac_expires', null]
 ];
 
 /**
- * Eagle-only fields eagle-api's project GET returns (its `tagList`), staff-only here: catalog
- * level 2. Also what src/scripts/backfill-eagle-staff-fields.js copies onto stored rows.
+ * Eagle-only fields eagle-api's project GET returns (its `tagList`), catalog level 2 here except
+ * the public `substantially` pair. Also what src/scripts/backfill-eagle-staff-fields.js copies.
  * `dispute` and `disputeDate` are not in `tagList`; eagle-admin reads them off its search.
  */
 const EAGLE_STAFF_FIELDS = [
@@ -116,6 +119,68 @@ const EAGLE_TOP_LEVEL_FIELDS = [
 
 // Open pattern, not a list: a new Act needs no change here.
 const LEGISLATION_KEY = /^legislation_\d{4}$/;
+
+/** The fields eagle-api's project model types as `Date`. */
+const EAGLE_DATE_FIELDS = [
+  'dateUpdated', 'decisionDate', 'eaStatusDate', 'projectStatusDate', 'substantiallyDate',
+  'disputeDate', 'activeDate', 'review180Start', 'review45Start'
+];
+
+// Eagle stores a cleared date as epoch zero in Pacific time (1969-12-31T08:00Z); no EA record
+// is that old, so anything before this is junk, not history.
+const EAGLE_DATE_FLOOR = Date.UTC(1971, 0, 1);
+
+const beforeDateFloor = (v) =>
+  (typeof v === 'string' || v instanceof Date) && new Date(v).getTime() < EAGLE_DATE_FLOOR;
+
+function nullJunkDates(record) {
+  for (const field of EAGLE_DATE_FIELDS) {
+    if (beforeDateFloor(record[field])) record[field] = null;
+  }
+}
+
+/**
+ * Null the junk Eagle dates on a merged row, top level and every `legislation_<year>` block. A
+ * block is copied before it changes: it is shared with `sources.eagle`, which keeps what Eagle sent.
+ */
+function nullEagleJunkDates(merged) {
+  nullJunkDates(merged);
+  for (const key of Object.keys(merged)) {
+    const block = merged[key];
+    if (!LEGISLATION_KEY.test(key) || !block || typeof block !== 'object') continue;
+    if (!EAGLE_DATE_FIELDS.some(field => beforeDateFloor(block[field]))) continue;
+    merged[key] = { ...block };
+    nullJunkDates(merged[key]);
+  }
+  return merged;
+}
+
+const TRANSITION_MILESTONE = 'Project Transitioning FROM';
+const ASSESSMENT_WORK_TYPE = 6;
+
+/**
+ * One `{fromYear, toYear, date}` per change of Act. Eagle stores no date, so it comes from Track's
+ * optional "Project Transitioning FROM the EA Act (2002)" milestone, matched on the year it names.
+ */
+function legislationTransitions(yearList, works) {
+  const years = [...new Set((Array.isArray(yearList) ? yearList : []).map(Number))]
+    .filter(Number.isInteger)
+    .sort((a, b) => a - b);
+  const pairs = years.slice(1).map((toYear, i) => ({ fromYear: years[i], toYear }));
+
+  const dateByFromYear = new Map();
+  for (const work of works) {
+    if (!work || work.workTypeId !== ASSESSMENT_WORK_TYPE || !Array.isArray(work.milestones)) continue;
+    for (const milestone of work.milestones) {
+      if (!milestone || typeof milestone.name !== 'string' ||
+          !milestone.name.startsWith(TRANSITION_MILESTONE) || !hasValue(milestone.actualDate)) continue;
+      const year = Number((/\b(\d{4})\b/.exec(milestone.name) || [])[1]);
+      if (year && !dateByFromYear.has(year)) dateByFromYear.set(year, milestone.actualDate);
+    }
+  }
+
+  return pairs.map(pair => ({ ...pair, date: dateByFromYear.get(pair.fromYear) ?? null }));
+}
 
 /**
  * Put the Eagle slot in the shape `EAGLE_ONLY_FIELDS` names, whatever fed it.
@@ -392,6 +457,8 @@ function resolveProjectAcl(eagle) {
  * @param {object}      [opts]
  * @param {string}      [opts.now]     ISO timestamp, injected for deterministic tests
  * @param {Array}       [opts.phases]  this project's Track work phases (seed/sources.js)
+ * @param {Array}       [opts.works]   this project's Track works (seed/sources.js); absent when
+ *                                     not fetched, which also leaves `legislationTransitions` out
  * @param {Map}         [opts.orgs]    Organization lookup, for resolving seed-shaped `pins`
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
@@ -447,6 +514,13 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   // EA-process record and stay exactly as they are. This is the dated assessment rail, and it is
   // omitted rather than emptied when Track has none — an absent feed must not blank a stored one.
   if (Array.isArray(opts.phases) && opts.phases.length) merged.phases = opts.phases;
+  // Same rule for the works. The transitions are rebuilt whenever works were fetched, even none,
+  // since an empty list still says Track has no transition date.
+  if (Array.isArray(opts.works)) {
+    if (opts.works.length) merged.works = opts.works;
+    merged.legislationTransitions = legislationTransitions(merged.legislationYearList, opts.works);
+  }
+  nullEagleJunkDates(merged);
   trimLabels(merged);
 
   const centroid = normalizeCentroid(track, eagle);
@@ -502,6 +576,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
     if (eagleField && hasValue(eagle[eagleField])) merged[target] = eagle[eagleField];
   }
   Object.assign(merged, pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
+  nullEagleJunkDates(merged);
   trimLabels(merged);
 
   const centroid = normalizeCentroid(null, eagle);
