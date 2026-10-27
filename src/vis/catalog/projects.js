@@ -44,6 +44,13 @@ const catalog = {
   // Track's assessment phases, dates only — the progress rail eagle-public draws. No staff, no
   // notes: seed/sources.js maps the fields listed here and drops the rest of the Track row.
   phases: { defaultVis: 4, maxVis: 4 },
+  // Track works, the same way: seed/sources.js builds each row from an allow-list with no notes,
+  // staff refs or hidden events, and the redactor copies the array whole.
+  works: { defaultVis: 4, maxVis: 4 },
+  eacSigned: { defaultVis: 4, maxVis: 4 },
+  eacExpires: { defaultVis: 4, maxVis: 4 },
+  // Derived by the merge from `legislationYearList` and a Track milestone date.
+  legislationTransitions: { defaultVis: 4, maxVis: 4 },
   // The project's own short link code. The public page it points at is public, so the code is.
   shortCode: { defaultVis: 4, maxVis: 4 },
   // Earlier codes: printed somewhere, still resolving, so as public as the current one.
@@ -92,6 +99,9 @@ const catalog = {
   nameSearchTerms: { defaultVis: 4, maxVis: 4 },
   // Former and alternate names, set in DEMI only; the keyword search matches them.
   tags: { defaultVis: 4, maxVis: 4 },
+  // Substantial start. eagle-api's public project read returns both (its `tagList`).
+  substantially: { defaultVis: 4, maxVis: 4 },
+  substantiallyDate: { defaultVis: 4, maxVis: 4 },
 
   // Contacts. eagle-public shows these to anonymous visitors today, so they stay at 4.
   projectLead: { defaultVis: 4, maxVis: 4 },
@@ -131,8 +141,6 @@ const catalog = {
   eaStatusDate: { defaultVis: 2, maxVis: 2 },
   projectStatusDate: { defaultVis: 2, maxVis: 2 },
   activeDate: { defaultVis: 2, maxVis: 2 },
-  substantially: { defaultVis: 2, maxVis: 2 },
-  substantiallyDate: { defaultVis: 2, maxVis: 2 },
   hasMetCommentPeriods: { defaultVis: 2, maxVis: 2 },
   // Dispute resolution, from the legislation block like `substantially`.
   dispute: { defaultVis: 2, maxVis: 2 },

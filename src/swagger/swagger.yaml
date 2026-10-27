@@ -8241,6 +8241,121 @@ components:
           items:
             type: integer
           description: The years the project has a legislation block for. `PUT` ignores it.
+        legislationTransitions:
+          type: array
+          description: >-
+            One entry per change of Act in `legislationYearList`, oldest first. `date` is the
+            actual date of the Track milestone "Project Transitioning FROM ..." on the Assessment
+            work, or null when Track has none. Present only once the Track works sync has run for
+            the project.
+          items:
+            type: object
+            properties:
+              fromYear:
+                type: integer
+              toYear:
+                type: integer
+              date:
+                type: string
+                format: date-time
+                nullable: true
+        eaCertificate:
+          type: string
+          description: >-
+            The certificate number from Track, such as `E05-01`, stored as Track sends it. The same
+            column can hold a state instead, such as `Withdrawn` or `N/A`.
+        eacSigned:
+          type: string
+          format: date-time
+          description: When the certificate was signed, from Track.
+        eacExpires:
+          type: string
+          format: date-time
+          description: >-
+            When the certificate expires, from Track. It is also the deadline for the project to
+            be substantially started.
+        phases:
+          type: array
+          description: >-
+            The phases of the project's Track Assessment work, in order. Absent when Track has
+            none.
+          items:
+            $ref: '#/components/schemas/TrackWorkPhase'
+        works:
+          type: array
+          description: >-
+            The project's Track works of types 1, 2, 3, 5, 6, 7, 9, 10, 11, 15 and 16. Absent when
+            Track has none or the works sync has not run. Notes, staff and hidden events are left
+            out.
+          items:
+            type: object
+            properties:
+              trackWorkId:
+                type: integer
+              workTypeId:
+                type: integer
+              workType:
+                type: string
+              title:
+                type: string
+                nullable: true
+              eaAct:
+                type: string
+                nullable: true
+              startDate:
+                type: string
+                format: date-time
+                nullable: true
+              isActive:
+                type: boolean
+              workState:
+                type: string
+                nullable: true
+                enum: [IN_PROGRESS, SUSPENDED, WITHDRAWN, TERMINATED, CLOSED, COMPLETED, null]
+              decisionDate:
+                type: string
+                format: date-time
+                nullable: true
+              anticipatedDecisionDate:
+                type: string
+                format: date-time
+                nullable: true
+              outcome:
+                type: string
+                nullable: true
+                description: >-
+                  The Track outcome name of the END milestone in the work's last phase that has
+                  one.
+              phases:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TrackWorkPhase'
+              milestones:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    position:
+                      type: string
+                      enum: [START, INTERMEDIATE, END]
+                    eventType:
+                      type: string
+                    actualDate:
+                      type: string
+                      format: date-time
+                      nullable: true
+                    anticipatedDate:
+                      type: string
+                      format: date-time
+                      nullable: true
+                    outcome:
+                      type: string
+                      nullable: true
+                    numberOfDays:
+                      type: integer
+                      nullable: true
       additionalProperties:
         description: >-
           `legislation_<year>` (1996, 2002, 2018, 2025): the project's content under that Act, as
@@ -8249,6 +8364,43 @@ components:
           (`type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow
           `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`);
           a field with no top-level counterpart is withheld. `PUT` ignores these keys.
+
+    TrackWorkPhase:
+      type: object
+      description: One phase of a Track work, dates and names only.
+      properties:
+        name:
+          type: string
+          nullable: true
+        eaActId:
+          type: integer
+          nullable: true
+        eaActName:
+          type: string
+          nullable: true
+        workType:
+          type: string
+          nullable: true
+        startDate:
+          type: string
+          format: date-time
+          nullable: true
+        endDate:
+          type: string
+          format: date-time
+          nullable: true
+        numberOfDays:
+          type: integer
+          nullable: true
+          description: The day budget for the phase, not the days it took.
+        legislated:
+          type: boolean
+          nullable: true
+        sortOrder:
+          type: integer
+          nullable: true
+        isCompleted:
+          type: boolean
 
     OrganizationInput:
       type: object

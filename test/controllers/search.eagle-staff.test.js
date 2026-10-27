@@ -210,18 +210,20 @@ test('a parameter the endpoint does not read is still a 400', async (t) => {
   assert.strictEqual(res.status, 400);
 });
 
-/** The twenty level-2 project fields from catalog/projects.js, as stored. */
+/** The eighteen level-2 project fields from catalog/projects.js, as stored. */
 const STAFF_FIELDS = {
   CELead: 'Lee Officer', CELeadEmail: 'lee@example.invalid', CELeadPhone: '250-555-0101',
   projectLeadId: 'u-lead', responsibleEPDId: 'u-epd', projLead: 'Pat Lead', addedBy: 'u-added',
   intake: { investment: '1M' }, dateCommentsOpen: '2026-01-01', dateCommentsClosed: '2026-02-01',
   duration: '30 days', isTermsAgreed: true, primaryContact: 'Sam Contact', proMember: 'Member',
   eaStatusDate: '2026-03-01', projectStatusDate: '2026-03-02', activeDate: '2026-03-03',
-  substantially: false, substantiallyDate: '2026-03-04', hasMetCommentPeriods: true
+  hasMetCommentPeriods: true
 };
-const STAFF_PROJECT = { ...PROJECT_ROW, ...STAFF_FIELDS };
+// eagle-api's public project read returns these two, so DEMI does too.
+const SUBSTANTIAL_START = { substantially: true, substantiallyDate: '2026-03-04' };
+const STAFF_PROJECT = { ...PROJECT_ROW, ...STAFF_FIELDS, ...SUBSTANTIAL_START };
 
-test('dataset=Project: a staff caller gets all twenty staff project fields', async (t) => {
+test('dataset=Project: a staff caller gets all eighteen staff project fields', async (t) => {
   stub(t, { projects: [STAFF_PROJECT] });
   const row = resultsOf(await getAsStaff(t, '/api/search?dataset=Project'))[0];
   assert.deepStrictEqual(
@@ -232,6 +234,13 @@ test('dataset=Project: an anonymous caller (level 4) gets none of them', async (
   stub(t, { projects: [STAFF_PROJECT] });
   const row = resultsOf(await get('/api/search?dataset=Project'))[0];
   assert.deepStrictEqual(Object.keys(STAFF_FIELDS).filter(key => key in row), []);
+});
+
+test('dataset=Project: an anonymous caller gets the substantial start fields', async (t) => {
+  stub(t, { projects: [STAFF_PROJECT] });
+  const row = resultsOf(await get('/api/search?dataset=Project'))[0];
+  assert.strictEqual(row.substantially, true);
+  assert.strictEqual(row.substantiallyDate, '2026-03-04');
 });
 
 test('dataset=Project keyword search: a staff caller gets the staff fields the index lacks', async (t) => {

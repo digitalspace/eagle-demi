@@ -822,9 +822,10 @@ exports.upsertFromEagle = async (req, res) => {
 
 /** The row a push writes, built from whatever revision is stored at the moment of the write. */
 function mergeEaglePush(doc, existing) {
-  // A push carries no Track phases, so the stored ones go back in (not DEMI-only: the sync rebuilds them).
+  // A push carries no Track phases or works, so the stored ones go back in (not DEMI-only: the sync
+  // rebuilds them).
   const merged = existing && existing.sources && existing.sources.track
-    ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases })
+    ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases, works: existing.works })
     : mergeEagleOnlyProject(doc);
 
   // Every OTHER source block survives the push. A Cosmos upsert replaces the item, and the merge

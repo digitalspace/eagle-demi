@@ -18,6 +18,7 @@ const {
   BC_BBOX
 } = require('../../src/merge/project');
 const { redactForAccess } = require('../../src/vis/redact');
+const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
 
 const inBC = (lng, lat) =>
   lng >= BC_BBOX.minLng && lng <= BC_BBOX.maxLng &&
@@ -351,6 +352,103 @@ test('Track work phases', async (t) => {
     assert.ok(!('phases' in mergeTrackProject(TRACK_207, null, { ...OPTS, phases: [] })));
     assert.ok(!('phases' in mergeEagleOnlyProject(eagleFor(TRACK_207))),
       'an Eagle-only project has no Track work to draw a rail from');
+  });
+});
+
+test('Track works', async (t) => {
+  const twoActs = (overrides = {}) => eagleFor(TRACK_207, { legislationYearList: [2002, 2018], ...overrides });
+
+  await t.test('works pass through unchanged', () => {
+    const merged = mergeTrackProject(TRACK_207, twoActs(), { ...OPTS, works: trackWorks() });
+    assert.deepStrictEqual(merged.works, trackWorks());
+  });
+
+  await t.test('with no works passed, neither works nor legislationTransitions is written', () => {
+    const merged = mergeTrackProject(TRACK_207, twoActs(), OPTS);
+    assert.ok(!('works' in merged));
+    assert.ok(!('legislationTransitions' in merged));
+    assert.ok(!('legislationTransitions' in mergeEagleOnlyProject(twoActs(), OPTS)));
+  });
+
+  await t.test('an empty list writes no works, but still the undated transitions', () => {
+    const merged = mergeTrackProject(TRACK_207, twoActs(), { ...OPTS, works: [] });
+    assert.ok(!('works' in merged));
+    assert.deepStrictEqual(merged.legislationTransitions, [{ fromYear: 2002, toYear: 2018, date: null }]);
+  });
+
+  await t.test('a change of Act takes the date of the Track transition milestone', () => {
+    const merged = mergeTrackProject(TRACK_207, twoActs(), { ...OPTS, works: trackWorks() });
+    assert.deepStrictEqual(merged.legislationTransitions,
+      [{ fromYear: 2002, toYear: 2018, date: TRANSITION_DATE }]);
+  });
+
+  await t.test('the milestone dates only the change away from the Act it names', () => {
+    const merged = mergeTrackProject(TRACK_207, twoActs({ legislationYearList: [2025, 2002, 2018] }),
+      { ...OPTS, works: trackWorks() });
+    assert.deepStrictEqual(merged.legislationTransitions, [
+      { fromYear: 2002, toYear: 2018, date: TRANSITION_DATE },
+      { fromYear: 2018, toYear: 2025, date: null }
+    ]);
+  });
+
+  await t.test('the milestone counts only on an Assessment work, and only once it happened', () => {
+    const works = trackWorks();
+    const [assessment, amendment] = works;
+    amendment.milestones.push({ ...assessment.milestones[0] });
+    assessment.milestones[0].actualDate = null;
+    const merged = mergeTrackProject(TRACK_207, twoActs(), { ...OPTS, works });
+    assert.deepStrictEqual(merged.legislationTransitions, [{ fromYear: 2002, toYear: 2018, date: null }]);
+  });
+
+  await t.test('one Act is no transition', () => {
+    const merged = mergeTrackProject(TRACK_207, twoActs({ legislationYearList: [2018] }),
+      { ...OPTS, works: trackWorks() });
+    assert.deepStrictEqual(merged.legislationTransitions, []);
+  });
+
+  await t.test('the certificate dates are Track-only', () => {
+    const track = { ...TRACK_207, eac_signed: '2005-06-01T00:00:00.000Z', eac_expires: '2010-06-01T00:00:00.000Z' };
+    const merged = mergeTrackProject(track, twoActs(), OPTS);
+    assert.strictEqual(merged.eacSigned, '2005-06-01T00:00:00.000Z');
+    assert.strictEqual(merged.eacExpires, '2010-06-01T00:00:00.000Z');
+    assert.ok(!('eacSigned' in mergeTrackProject(TRACK_207, twoActs(), OPTS)));
+  });
+});
+
+// Eagle stores a cleared date as epoch zero in Pacific time.
+test('Eagle dates before 1971 are null', async (t) => {
+  const EPOCH_ZERO = '1969-12-31T08:00:00.000Z';
+  const raw = () => ({
+    _id: TRACK_207.epic_guid,
+    read: ['public'],
+    currentLegislationYear: 'legislation_2018',
+    legislationYearList: [2002, 2018],
+    legislation_2002: { name: 'Old Name', decisionDate: EPOCH_ZERO, review45Start: '2012-01-05T00:00:00.000Z' },
+    legislation_2018: { name: 'New Name', decisionDate: EPOCH_ZERO, activeDate: '1971-01-01T00:00:00.000Z' }
+  });
+
+  await t.test('at the top level and in every legislation block', () => {
+    const merged = mergeTrackProject(TRACK_207, raw(), OPTS);
+    assert.strictEqual(merged.decisionDate, null);
+    assert.strictEqual(merged.legislation_2002.decisionDate, null);
+    assert.strictEqual(merged.legislation_2018.decisionDate, null);
+  });
+
+  await t.test('a later date is kept, 1971-01-01 included', () => {
+    const merged = mergeTrackProject(TRACK_207, raw(), OPTS);
+    assert.strictEqual(merged.activeDate, '1971-01-01T00:00:00.000Z');
+    assert.strictEqual(merged.legislation_2002.review45Start, '2012-01-05T00:00:00.000Z');
+  });
+
+  await t.test('on an Eagle-only project too', () => {
+    const merged = mergeEagleOnlyProject(raw(), OPTS);
+    assert.strictEqual(merged.decisionDate, null);
+    assert.strictEqual(merged.legislation_2002.decisionDate, null);
+  });
+
+  await t.test('the raw payload keeps what Eagle sent', () => {
+    const merged = mergeTrackProject(TRACK_207, raw(), OPTS);
+    assert.strictEqual(merged.sources.eagle.legislation_2002.decisionDate, EPOCH_ZERO);
   });
 });
 
