@@ -400,6 +400,17 @@ test('Track works', async (t) => {
     assert.deepStrictEqual(merged.legislationTransitions, [{ fromYear: 2002, toYear: 2018, date: null }]);
   });
 
+  await t.test('when two Assessment works date the same change, the first one wins', () => {
+    const works = trackWorks();
+    const redone = structuredClone(works[0]);
+    redone.trackWorkId = 1103;
+    redone.milestones[0].actualDate = '2021-04-01T00:00:00.000Z';
+    works.push(redone);
+    const merged = mergeTrackProject(TRACK_207, twoActs(), { ...OPTS, works });
+    assert.deepStrictEqual(merged.legislationTransitions,
+      [{ fromYear: 2002, toYear: 2018, date: TRANSITION_DATE }]);
+  });
+
   await t.test('one Act is no transition', () => {
     const merged = mergeTrackProject(TRACK_207, twoActs({ legislationYearList: [2018] }),
       { ...OPTS, works: trackWorks() });
