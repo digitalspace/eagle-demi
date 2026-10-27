@@ -16,6 +16,7 @@ const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
 const config = require('../../src/config');
+const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
 const { logger } = require('../../src/utils/logger');
 
 const NOW = '2026-09-02T00:00:00.000Z';
@@ -487,6 +488,39 @@ test('a project the works pull reached is counted, one it skipped is not', async
 
   assert.strictEqual((await run(new Map([['207', [{ trackWorkId: 11 }]]]))).works, 1);
   assert.strictEqual((await run(new Map([['208', [{ trackWorkId: 12 }]]]))).works, 0);
+});
+
+test('Track works on a project that changed Act', async (t) => {
+  const certified = { ...API_PROJECT, eac_signed: '2023-10-10', eac_expires: '2028-10-10' };
+  const twoActs = () => fakeProjects([storedProject({
+    sources: { track: FLAT, eagle: { _id: API_PROJECT.epic_guid, name: API_PROJECT.name, legislationYearList: [2002, 2018] } }
+  })]);
+
+  await t.test('the written row carries the works, the dated change of Act and the EAC dates', async () => {
+    const projects = twoActs();
+
+    await syncProjects([certified], { live: true, deps: { projects, links: fakeLinks() }, now: NOW,
+      works: new Map([['207', trackWorks()]]) });
+
+    assert.strictEqual(projects.writes.length, 1);
+    const [written] = projects.writes;
+    assert.deepStrictEqual(written.works, trackWorks());
+    assert.deepStrictEqual(written.legislationTransitions,
+      [{ fromYear: 2002, toYear: 2018, date: TRANSITION_DATE }]);
+    assert.strictEqual(written.eacSigned, '2023-10-10');
+    assert.strictEqual(written.eacExpires, '2028-10-10');
+  });
+
+  await t.test('a poll, which fetches no works, writes no works key', async () => {
+    const projects = twoActs();
+
+    await syncProjects([certified], { live: true, deps: { projects, links: fakeLinks() }, now: NOW, poll: true });
+
+    assert.strictEqual(projects.writes.length, 1, 'the EAC dates still move the row');
+    assert.ok(!('works' in projects.writes[0]));
+    assert.ok(!('legislationTransitions' in projects.writes[0]),
+      'with no works there is no date to give the change of Act');
+  });
 });
 
 test('a project DEMI has never seen is created at level 1', async () => {
