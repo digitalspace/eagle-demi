@@ -377,12 +377,15 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   }
 }
 
-for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-  test(`the ${envName} param file keeps trackWorksSync off`, () => {
-    assert.match(params, /^param trackWorksSync = false$/m,
-      'works[] stays unsynced until its public read is merged and deployed');
-  });
-}
+test('the test param file turns trackWorksSync on', () => {
+  assert.match(TEST_PARAMS, /^param trackWorksSync = true$/m,
+    'test mirrors works[] so it is proven before prod');
+});
+
+test('the prod param file keeps trackWorksSync off', () => {
+  assert.match(PROD_PARAMS, /^param trackWorksSync = false$/m,
+    'prod stays unsynced until test has proven the works[] mirror');
+});
 
 test('the API app carries TRACK_WORKS_SYNC from trackWorksSync, default off', () => {
   assert.match(API_MODULE, /^param trackWorksSync bool = false$/m);

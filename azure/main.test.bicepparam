@@ -203,8 +203,8 @@ param edgeBanRuleId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resou
 // Both client secrets are vault-only (`track-client-secret`, `role-sync-client-secret`).
 param trackApiBase = 'https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.ca'
 param trackClientId = 'demi-track-reader'
-// Off until the works[] public read is merged and deployed.
-param trackWorksSync = false
+// On in test to prove the works[] mirror before prod turns it on.
+param trackWorksSync = true
 param roleSyncClientId = 'demi-role-sync'
 
 // ── eagle-notify ──────────────────────────────────────────────────────────────────────────────
