@@ -8341,7 +8341,9 @@ components:
                       type: string
                       enum: [START, INTERMEDIATE, END]
                     eventType:
-                      type: string
+                      type: integer
+                      nullable: true
+                      description: Track event type id
                     actualDate:
                       type: string
                       format: date-time

@@ -20,7 +20,7 @@ const phase = (overrides) => ({
 const milestone = (overrides) => ({
   name: 'Early Engagement Start',
   position: 'START',
-  eventType: 'Milestone',
+  eventType: 1,
   actualDate: '2019-02-01T00:00:00.000Z',
   anticipatedDate: '2019-02-01T00:00:00.000Z',
   outcome: null,
@@ -49,8 +49,8 @@ const ASSESSMENT_WORK = Object.freeze({
   ],
   milestones: [
     milestone({ name: 'Project Transitioning FROM the EA Act (2002)', position: 'INTERMEDIATE',
-      eventType: 'Decision', actualDate: TRANSITION_DATE, anticipatedDate: null }),
-    milestone({ name: 'EAC Decision', position: 'END', eventType: 'Decision',
+      eventType: 22, actualDate: TRANSITION_DATE, anticipatedDate: null }),
+    milestone({ name: 'EAC Decision', position: 'END', eventType: 22,
       actualDate: '2023-10-10T00:00:00.000Z', anticipatedDate: '2023-09-30T00:00:00.000Z',
       outcome: 'Certificate Issued', numberOfDays: 30 })
   ]
@@ -70,7 +70,7 @@ const AMENDMENT_WORK = Object.freeze({
   outcome: null,
   phases: [phase({ name: 'Amendment Review', workType: 'Amendment', startDate: '2025-03-03T00:00:00.000Z',
     endDate: null, isCompleted: false })],
-  milestones: [milestone({ name: 'Amendment Decision', position: 'END', eventType: 'Decision',
+  milestones: [milestone({ name: 'Amendment Decision', position: 'END', eventType: 22,
     actualDate: null, anticipatedDate: '2026-12-01T00:00:00.000Z' })]
 });
 
