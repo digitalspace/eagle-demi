@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * The reconcile is the whole point of this script, so the realm is an in-memory fake and every
- * assertion is on what it was ASKED to write — literal role names, literal user ids, in order.
- * Nothing here reaches Track or Keycloak.
- */
+// The realm is an in-memory fake, and every assertion is on what it was ASKED to write:
+// literal role names and user ids, in order.
 
 process.env.NODE_ENV = 'test';
 process.env.TRACK_API_BASE = 'https://track.example';
@@ -73,12 +70,8 @@ function fakeKc({ roles = [], users = [] } = {}) {
   };
 }
 
-/**
- * Track answers three endpoints on the same bearer: the team feed, the project list and the work
- * list the phase pull starts from. `works` empty is the ordinary case here — with no assessment
- * work there is no `/works/<id>/phases` call to answer, and the phase pull's own behaviour is
- * covered in test/seed/sources-fetch.test.js.
- */
+// Team feed, project list and work list on one bearer. `works` is empty by default, so no phase
+// call needs answering; the pull itself is covered in test/seed/sources-fetch.test.js.
 const fakeFetch = (teams, seen = {}, projects = [], works = []) => async (url, headers) => {
   if (url.endsWith('/team-members')) { seen.url = url; seen.headers = headers; return teams; }
   if (url.endsWith('/api/v1/works')) { seen.worksUrl = url; return works; }
@@ -151,7 +144,7 @@ test('a user on two projects is granted both roles, and the feed is read with a 
   assert.strictEqual(summaryLine(summary),
     '[track-teams] mode=live projects=2 users=2 grants=3 revokes=0 unmatched=0 ' +
     'closedProjects=0 credentialsRevoked=0 trackProjects=0 created=0 updated=0 orphaned=0 ' +
-    'relinked=0 skippedApiRows=0 trackPhases=0 failures=0');
+    'relinked=0 skippedApiRows=0 trackPhases=0 trackWorks=0 trackWorksFailed=0 failures=0');
 });
 
 test('a departed staff member loses every project role they held', async () => {
@@ -391,6 +384,47 @@ test('the work phases pulled in the run are written onto the project record', as
     'a project Track reports no assessment work for carries no phases at all');
   assert.strictEqual(summary.trackPhases, 1);
   assert.ok(summaryLine(summary).includes('trackPhases=1'), summaryLine(summary));
+});
+
+test('with TRACK_WORKS_SYNC on, the run pulls works and reports them', async (t) => {
+  const config = require('../../src/config');
+  const held = config.trackWorksSync;
+  config.trackWorksSync = true;
+  t.after(() => { config.trackWorksSync = held; });
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
+  const get = async (url) => {
+    if (url.endsWith('/team-members')) return TEAMS;
+    if (url.endsWith('/api/v1/works')) return [{ id: 12, project_id: 1, work_type_id: 7, is_active: true }];
+    if (url.endsWith('/works/12/phases')) return [];
+    return CLOSED_AND_OPEN;
+  };
+
+  const summary = await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
+
+  assert.strictEqual(summary.trackWorks, 1);
+  assert.ok(summaryLine(summary).includes('trackWorks=1 trackWorksFailed=0 failures=0'),
+    summaryLine(summary));
+});
+
+test('with TRACK_WORKS_SYNC off, a mirrored work costs Track no milestone or outcome read', async (t) => {
+  const config = require('../../src/config');
+  const held = config.trackWorksSync;
+  config.trackWorksSync = false;
+  t.after(() => { config.trackWorksSync = held; });
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
+  const seen = {};
+  const urls = [];
+  const fetchAll = fakeFetch(TEAMS, seen, CLOSED_AND_OPEN,
+    [{ id: 12, project_id: 1, work_type_id: 7, is_active: true }]);
+  const get = async (url, headers) => { urls.push(url); return fetchAll(url, headers); };
+
+  const summary = await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
+
+  assert.ok(seen.worksUrl, 'the work list is still read for the assessment phases');
+  assert.deepStrictEqual(urls.filter(u => /\/milestones\/|\/outcome-configurations\/|\/works\/12\//.test(u)), []);
+  assert.strictEqual(summary.trackWorks, 0);
 });
 
 test('a Track work feed that is down costs the phases and nothing else', async () => {

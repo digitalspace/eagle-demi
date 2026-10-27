@@ -86,9 +86,8 @@ test('TRUSTED_PROXY_IPS refuses anything that is not an IPv4 address or CIDR blo
   }
 });
 
-// No shape to validate — it is an opaque shared secret — so this only pins the NAME. Rename the
-// app setting in bicep or the variable here and utils/caller-ip.js reads an empty string, which is
-// the off switch: every Front Door visitor silently falls back to one shared anonymous quota key.
+// Pins the name only: a rename on either side makes utils/caller-ip.js read '', the off switch,
+// and every Front Door visitor falls back to one shared anonymous quota key.
 test('EDGE_SECRET reaches config.edgeSecret under that exact name', () => {
   const configPath = path.resolve(__dirname, '..', 'src', 'config.js');
   const previous = process.env.EDGE_SECRET;
@@ -141,17 +140,13 @@ test('KEYCLOAK_ENABLED=false refuses to boot in test and prod only', async (t) =
   });
 });
 
-// App Service substitutes the secret for `@Microsoft.KeyVault(SecretUri=...)`, and hands the app
-// the reference text itself when that fails — no RBAC, vault unreachable, secret deleted. Every
-// credential in azure/modules/api-function-flex.bicep is deployed as one of those references, so
-// every one of them can arrive as this string.
+// A Key Vault reference App Service failed to resolve reaches the app as this text, and every
+// credential in azure/modules/api-function-flex.bicep is deployed as one.
 const UNRESOLVED = '@Microsoft.KeyVault(SecretUri=https://x.vault.azure.net/secrets/y)';
 
 /**
- * Load a fresh config with `vars` in the environment and return `read(config)`.
- *
- * Read inside, not after: `adminApiKey` is a getter, so a value taken once the environment is back
- * would be the restored one.
+ * Fresh config with `vars` set, returning `read(config)`. Read inside: `adminApiKey` is a getter,
+ * so a value taken after the environment is restored would be the restored one.
  */
 function readConfig(vars, read) {
   const configPath = path.resolve(__dirname, '..', 'src', 'config.js');
@@ -212,11 +207,8 @@ test('an unresolved Key Vault reference reads as unset, never as the credential'
 });
 
 /**
- * Load `expr` in a child process with `vars` set, returning {status, output}.
- *
- * A child, because load ORDER is what is under test and this process already holds both modules:
- * evicting src/config.js from the require cache leaves the logger loaded, so config is always
- * second here and the order every entry point actually uses cannot be reproduced in process.
+ * Load `expr` in a child with `vars` set, returning {status, output}. A child, because load order
+ * is under test and this process already holds the logger, so config cannot load first here.
  */
 function loadInChild(vars, expr) {
   const env = { ...process.env, ...vars };
@@ -264,4 +256,10 @@ test('an unresolved reference is reported without crashing the app at load', asy
 test('the Updates publishDate sort fallback stays on unless set to the exact string false', () => {
   const read = (value) => readConfig({ UPDATES_PUBLISH_DATE_FALLBACK: value }, c => c.updatesPublishDateFallback);
   assert.deepStrictEqual(['true', '', 'FALSE', 'off', 'false'].map(read), [true, true, true, true, false]);
+});
+
+// Azure always sets TRACK_WORKS_SYNC, as the string 'false' until the works pull is turned on.
+test('the Track works pull runs only when TRACK_WORKS_SYNC is the exact string true', () => {
+  const read = (value) => readConfig({ TRACK_WORKS_SYNC: value }, c => c.trackWorksSync);
+  assert.deepStrictEqual(['false', '', 'TRUE', 'true'].map(read), [false, false, false, true]);
 });

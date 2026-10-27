@@ -139,10 +139,14 @@ function stubRun(args, { arm = armWith({ documents: DECLARED }), live = LIVE_MIS
         STUB_REPO: REPO_ROOT,
       },
     });
+    const gitCalls = fs.readFileSync(path.join(dir, 'git.log'), 'utf8');
+    const repoArg = `-C ${REPO_ROOT} `;
     return {
       ...run,
       azCalls: fs.readFileSync(path.join(dir, 'az.log'), 'utf8'),
-      gitCalls: fs.readFileSync(path.join(dir, 'git.log'), 'utf8'),
+      gitCalls,
+      // The repo path can hold any word (a worktree named after a branch), so assert on what follows it.
+      gitArgv: gitCalls.split('\n').filter(Boolean).map((c) => (c.startsWith(repoArg) ? c.slice(repoArg.length) : c)),
       liveAfter: JSON.parse(fs.readFileSync(path.join(dir, 'live.json'), 'utf8')),
     };
   } finally {
@@ -210,8 +214,7 @@ test('--live applies the declared policy to the named account and confirms it', 
   assert.deepStrictEqual(run.liveAfter.includedPaths.map((p) => p.path).sort(), ['/dateUploaded/?', '/projectId/?']);
   assert.match(run.stdout, /^applied/m);
   assert.doesNotMatch(run.stderr, /WARNING/);
-  assert.match(run.gitCalls, /status --porcelain -- azure\/modules\/cosmos-nosql\.bicep/);
-  assert.doesNotMatch(run.gitCalls, /fetch|diff/);
+  assert.deepStrictEqual(run.gitArgv, ['status --porcelain -- azure/modules/cosmos-nosql.bicep']);
 });
 
 const LIVE_WITH_OLD = { ...LIVE_SAME, includedPaths: [...LIVE_SAME.includedPaths, { path: '/old/?' }] };
@@ -287,8 +290,7 @@ test('prod --live with CONFIRM_PROD=yes and bicep equal to origin/main applies t
   assert.strictEqual(show.length, 2);
   assert.strictEqual(update.length, 1);
   for (const call of [...show, ...update]) assert.match(call, PROD_TARGET);
-  const gitArgv = run.gitCalls.trim().split('\n').map((c) => c.replace(/^-C \S+ /, ''));
-  assert.deepStrictEqual(gitArgv, [
+  assert.deepStrictEqual(run.gitArgv, [
     'status --porcelain -- azure/modules/cosmos-nosql.bicep',
     'fetch -q origin main',
     'diff --quiet origin/main -- azure/modules/cosmos-nosql.bicep',
@@ -314,7 +316,7 @@ test('prod --live refuses when git fetch origin main fails', () => {
   const run = stubRun(['prod', 'documents', '--live'], { env: { CONFIRM_PROD: 'yes', FAKE_GIT_FETCH_FAIL: '1' } });
   assert.strictEqual(run.status, 2);
   assert.match(run.stderr, /git fetch origin main failed/);
-  assert.doesNotMatch(run.gitCalls, /diff/);
+  assert.deepStrictEqual(run.gitArgv, ['status --porcelain -- azure/modules/cosmos-nosql.bicep', 'fetch -q origin main']);
   assert.strictEqual(run.azCalls, '');
 });
 

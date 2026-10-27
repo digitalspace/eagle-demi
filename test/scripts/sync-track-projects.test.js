@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * The registry is the thing being written, so the repository is an in-memory fake and every
- * assertion is on what it was ASKED to write — literal field values, literal ACL arrays.
- * Nothing here reaches Track or Cosmos.
- *
- * The load-bearing case is `'a changed name leaves the level where it was'`: the sync re-runs
- * `mergeTrackProject`, which derives `read` from the Eagle record, so without the carry every
- * night would silently reset a level `PUT /api/projects/:id/level` set.
- */
+// The repository is an in-memory fake; assertions are on what it was ASKED to write. Key case:
+// 'a changed name leaves the level where it was', since a re-merge re-derives `read` from Eagle.
 
 process.env.NODE_ENV = 'test';
 
@@ -23,11 +16,12 @@ const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
 const config = require('../../src/config');
+const { trackWorks, TRANSITION_DATE } = require('../fixtures/track-works-contract');
 const { logger } = require('../../src/utils/logger');
 
 const NOW = '2026-09-02T00:00:00.000Z';
 
-/** One row of `GET /api/v1/projects`, fields as measured on test 2026-09-02. */
+/** One row of `GET /api/v1/projects`, fields as Track test returns them. */
 const API_PROJECT = {
   id: 207,
   name: 'Nicomen Wind Energy',
@@ -76,10 +70,8 @@ function storedProject(overrides = {}) {
 const conflict = () => Object.assign(new Error('Conflict'), { code: 409 });
 const preconditionFailed = () => Object.assign(new Error('Precondition failed'), { code: 412 });
 
-/**
- * The links repository, in memory. A code is a Cosmos id, so a second create of one is a 409, and
- * a write carrying a revision no longer stored is a 412. `seed` records are already there.
- */
+// The links repository, in memory: a second create of a code is a 409, a write on a stale
+// revision is a 412. `seed` records are already there.
 function fakeLinks(seed = []) {
   let revision = 0;
   const stamp = (record) => ({ ...record, _etag: `"l${++revision}"` });
@@ -116,12 +108,8 @@ function fakeLinks(seed = []) {
 /** A shared link record, as `/links` or an older mint left it. */
 const linkRecord = (id, url) => ({ id, url, personal: false, createdBy: 'system' });
 
-/**
- * The projects repository, in memory, holding Cosmos's etag rule: a write carrying a revision
- * that is no longer stored gets a 412. `writes` and `patches` record only the writes that landed.
- * `midRun` runs once the sync has read its list, to land another writer's change behind it.
- * `deleteById` throws: this sync deletes nothing, ever.
- */
+// The projects repository, in memory, with Cosmos's etag rule (stale revision = 412). `midRun`
+// lands another writer's change after the list read; `deleteById` throws, as nothing is deleted.
 function fakeProjects(rows = [], { midRun } = {}) {
   let revision = 0;
   const stamp = (row) => ({ ...structuredClone(row), _etag: `"${++revision}"` });
@@ -182,15 +170,20 @@ test('the mapper flattens a live project into the shape the merge reads', () => 
     sub_type_name: 'Power Plants',
     type_name: 'Energy - Electricity',
     project_state_name: 'Closed',
-    ea_certificate: 'Withdrawn'
+    ea_certificate: 'Withdrawn',
+    eac_signed: null,
+    eac_expires: null
   });
 });
 
-test('the mapper produces exactly the keys the checked-in export carries', () => {
+test('the mapper carries every key of the checked-in export, plus the two EAC dates', () => {
   const file = path.join(__dirname, '../../src/data/track_projects_enriched.json');
   const [sample] = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const feed = Object.keys(trackApiToExtract(API_PROJECT));
 
-  assert.deepStrictEqual(Object.keys(trackApiToExtract(API_PROJECT)).sort(), Object.keys(sample).sort(),
+  assert.deepStrictEqual(feed.filter(k => !(k in sample)).sort(), ['eac_expires', 'eac_signed'],
+    'the export predates eac_signed/eac_expires; nothing else may be added unnoticed');
+  assert.deepStrictEqual(Object.keys(sample).filter(k => !feed.includes(k)), [],
     'the live feed replaces the file, so a key the file has and the feed lacks is data lost');
 });
 
@@ -234,11 +227,8 @@ test('a project Track has not changed is not written at all', async () => {
   assert.strictEqual(summary.shortLinks, 0, 'and the code it already carries is not re-minted');
 });
 
-/**
- * Every project with a public page carries one short link, so the nightly mirror is where the
- * projects that predate the feature get theirs — a quiet night still writes for that, and only
- * that. Minting a second code for a project would leave a printed link pointing at a dead one.
- */
+// The nightly mirror gives projects with a public page and no short link one, even on a quiet
+// night. A second code for a project would leave a printed link pointing at a dead one.
 test('project short links', async (t) => {
   await t.test('a stored project with no code yet is minted one on a quiet night', async () => {
     const stored = storedProject();
@@ -437,11 +427,8 @@ test('project short links', async (t) => {
   });
 });
 
-/**
- * Work phases are the one Track-owned field that is an array, so `trackChanges` compares them by
- * value. Compared by identity every run would rewrite all 384 rows every night; not compared at
- * all, a project whose assessment moved on would keep last year's rail forever.
- */
+// `trackChanges` compares phases by value: by identity every row is rewritten nightly, not at
+// all and a moved assessment keeps last year's rail.
 test('Track work phases', async (t) => {
   const PHASES = [{
     name: 'Application Review', eaActId: 3, eaActName: '2018 Act', workType: 'Assessment',
@@ -492,6 +479,47 @@ test('Track work phases', async (t) => {
     assert.deepStrictEqual(projects.writes, [],
       'a Track work feed that was down must not erase the rail off every project');
     assert.strictEqual(summary.phases, 0);
+  });
+});
+
+test('a project the works pull reached is counted, one it skipped is not', async () => {
+  const run = (works) => syncProjects([API_PROJECT],
+    { live: true, deps: { projects: fakeProjects([storedProject()]), links: fakeLinks() }, now: NOW, works });
+
+  assert.strictEqual((await run(new Map([['207', [{ trackWorkId: 11 }]]]))).works, 1);
+  assert.strictEqual((await run(new Map([['208', [{ trackWorkId: 12 }]]]))).works, 0);
+});
+
+test('Track works on a project that changed Act', async (t) => {
+  const certified = { ...API_PROJECT, eac_signed: '2023-10-10', eac_expires: '2028-10-10' };
+  const twoActs = () => fakeProjects([storedProject({
+    sources: { track: FLAT, eagle: { _id: API_PROJECT.epic_guid, name: API_PROJECT.name, legislationYearList: [2002, 2018] } }
+  })]);
+
+  await t.test('the written row carries the works, the dated change of Act and the EAC dates', async () => {
+    const projects = twoActs();
+
+    await syncProjects([certified], { live: true, deps: { projects, links: fakeLinks() }, now: NOW,
+      works: new Map([['207', trackWorks()]]) });
+
+    assert.strictEqual(projects.writes.length, 1);
+    const [written] = projects.writes;
+    assert.deepStrictEqual(written.works, trackWorks());
+    assert.deepStrictEqual(written.legislationTransitions,
+      [{ fromYear: 2002, toYear: 2018, date: TRANSITION_DATE }]);
+    assert.strictEqual(written.eacSigned, '2023-10-10');
+    assert.strictEqual(written.eacExpires, '2028-10-10');
+  });
+
+  await t.test('a poll, which fetches no works, writes no works key', async () => {
+    const projects = twoActs();
+
+    await syncProjects([certified], { live: true, deps: { projects, links: fakeLinks() }, now: NOW, poll: true });
+
+    assert.strictEqual(projects.writes.length, 1, 'the EAC dates still move the row');
+    assert.ok(!('works' in projects.writes[0]));
+    assert.ok(!('legislationTransitions' in projects.writes[0]),
+      'with no works there is no date to give the change of Act');
   });
 });
 
@@ -567,11 +595,8 @@ test('a dry run writes nothing and still counts what a live run would do', async
   assert.strictEqual(summary.trackProjects, 2);
 });
 
-/**
- * `POST /projects`, as `createProject` writes it: `sources: {}` and `eagleId: null`, then widened
- * to level 4 through `PUT /:id/level`. Under a Track id, because that is the collision that makes
- * it reachable from the feed at all.
- */
+// A `POST /projects` row (`sources: {}`, `eagleId: null`) widened to level 4, stored under a
+// Track id because only that collision makes it reachable from the feed.
 function apiProject(overrides = {}) {
   return {
     id: '207',
@@ -720,6 +745,30 @@ test('an empty Track column does not blank a populated row', () => {
     'the merge omits what Track no longer supplies, so there is nothing to write');
 });
 
+test('trackChanges writes legislationTransitions that differ from the stored row', () => {
+  const stored = { legislationTransitions: [{ fromYear: 2002, toYear: 2018, date: null }] };
+  const moved = [{ fromYear: 2002, toYear: 2018, date: '2020-01-15T00:00:00.000Z' }];
+
+  assert.deepStrictEqual(trackChanges(stored, { legislationTransitions: moved }),
+    { legislationTransitions: moved });
+});
+
+test('trackChanges leaves stored works alone when the merge carries none', () => {
+  const stored = { works: [{ trackWorkId: 11 }] };
+
+  assert.deepStrictEqual(trackChanges(stored, {}), {},
+    'a project the works pull skipped (budget, failed read) keeps what it has');
+});
+
+test('trackChanges writes a works list that differs by value', () => {
+  const stored = { works: [{ trackWorkId: 11, workState: 'IN_PROGRESS' }] };
+  const works = [{ trackWorkId: 11, workState: 'COMPLETED' }];
+
+  assert.deepStrictEqual(trackChanges(stored, { works }), { works });
+  assert.deepStrictEqual(trackChanges(stored, { works: structuredClone(stored.works) }), {},
+    'an equal copy is not a change');
+});
+
 test('one project that fails is counted and does not stop the next', async () => {
   const projects = fakeProjects([]);
   let first = true;
@@ -745,7 +794,7 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, shortLinks: 0, healed: 0, failures: 0 },
+      phases: 0, works: 0, shortLinks: 0, healed: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });
 

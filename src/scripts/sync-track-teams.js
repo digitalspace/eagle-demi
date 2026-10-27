@@ -1,44 +1,13 @@
 'use strict';
 
 /**
- * Hold the `project:<id>` realm roles in `eao-epic` in step with Track's project team feed.
- *
- * Track is the source of truth for who is on a project team: `GET /api/v1/projects/team-members`
- * returns, per project, the union of the staff on its works. This script turns that into realm
- * roles — create the missing `project:<id>`, grant what the feed says, revoke what it no longer
- * says — so a level-1 record is readable by its own team and nobody else.
- *
- *   node src/scripts/sync-track-teams.js [--live]
- *
- * DRY RUN BY DEFAULT, matching close-unpublished-track-projects.js and purge-extraction.js. In
- * Azure it is the `syncTrackTeams` Functions timer in this app (api/index.js, scheduled by the
- * SYNC_TEAMS_SCHEDULE app setting), reading Track over its HTTPS API — no CronJob, no database
- * credential.
- *
- * THE SYNC OWNS ONLY THE ROLES TRACK NAMES. The feed lists every non-deleted Track project, so
- * `project:<id>` for an id it lists is this script's to create, grant and revoke; any other role
- * is somebody else's. That covers `staff` and `demi-admin`, granted by hand, and also
- * `project:eagle-abc` — a hand-granted scope for an Eagle-only project (access-sql.js), which has
- * no Track team to sync it from and must survive every run. The `project:` prefix is re-checked
- * after the Keycloak search rather than trusted, since `search=` is a substring match.
- *
- * IT ALSO MIRRORS THE PROJECT LIST AND CLOSES CREDENTIALS. The same run reads
- * `GET /api/v1/projects` ONCE and hands that list to two steps. `sync-track-projects.js` creates
- * and updates the DEMI project records from it — Track is the live source of project identity, not
- * the checked-in export — along with the assessment work phases this run pulls separately
- * (`sources.fetchTrackWorkPhases`, one `/works` call plus one per assessment work). Then every
- * live Selected Credential over a project Track reports closed is
- * closed out (TODO-rbac.md P3-6) — narrowed if it names other projects, revoked if it does not.
- * "Work complete" is not in the feed, so `project-closed` is the only cause acted on here.
- *
- * Two client-credentials identities, both confidential clients in the same realm:
- * `TRACK_CLIENT_ID` reads Track, `KEYCLOAK_ADMIN_CLIENT_ID` (`demi-role-sync`) holds
- * `realm-management` on the realm. Neither secret lives here; both arrive as app settings.
+ * Track team feed -> `project:<id>` realm roles, then the project mirror and the closed-project
+ * credential sweep. Owns only `project:` roles for ids Track lists; `project:eagle-abc` stays.
  */
 
 const config = require('../config');
 const { PROJECT_ROLE_PREFIX } = require('../helpers/access-sql');
-const { clientToken, fetchJson, fetchTrackProjects, fetchTrackWorkPhases } = require('../seed/sources');
+const { clientToken, fetchJson, fetchTrackProjects, fetchTrackWorks } = require('../seed/sources');
 const { syncProjects } = require('./sync-track-projects');
 const { logger } = require('../utils/logger');
 
@@ -59,13 +28,13 @@ const emailKey = (staff) => (staff.email ? String(staff.email).trim().toLowerCas
 
 /** The Keycloak username for a Track staff row, or null when nothing identifies them. */
 function usernameFor(staff, usernameByEmail = new Map()) {
-  // Track stores the id either bare or already suffixed (`<guid>@idir`, measured on test 2026-09-02).
+  // Track stores the id either bare or already suffixed (`<guid>@idir`).
   if (staff.idir_user_id) return `${String(staff.idir_user_id).trim().toLowerCase().replace(/@idir$/, '')}@idir`;
   const email = emailKey(staff);
   return email ? usernameByEmail.get(email) || null : null;
 }
 
-/** Track reports a close both ways; either one closes the project (measured on test 2026-09-02). */
+/** Track reports a close both ways; either one closes the project. */
 const isClosed = (project) => project.is_project_closed === true || project.project_state === 'Closed';
 
 /** Cosmos is private-endpoint-only, so a CLI dry run off-platform has no repository to ask. */
@@ -80,11 +49,8 @@ const byUsername = (a, b) => a.username.localeCompare(b.username);
 
 /**
  * The whole decision, with no I/O in it.
- *
  * @param {Array}  trackTeams     [{ project_id, staff: [{ staff_id, idir_user_id, email, is_active }] }]
- * @param {object} keycloakState  {current: Map<username, Set<role>>, roles: Set<role>,
- *                                 usernameByEmail: Map<email, username>} — `current` holds only
- *                                 the `project:` roles, since only those were enumerated.
+ * @param {object} keycloakState  {current: Map<username, Set<project role>>, roles, usernameByEmail}
  */
 function plan(trackTeams, keycloakState = {}) {
   const current = keycloakState.current || new Map();
@@ -258,6 +224,8 @@ async function sync(argv = [], deps = {}) {
     relinked: 0,
     skippedApiRows: 0,
     trackPhases: 0,
+    trackWorks: 0,
+    trackWorksFailed: 0,
     failures: 0,
     plan: decided
   };
@@ -304,19 +272,20 @@ async function sync(argv = [], deps = {}) {
   await apply(decided.grants, kc.grant, 'grant');
   await apply(decided.revokes, kc.revoke, 'revoke');
 
-  // Project state, not team membership: a closed project keeps its `project:<id>` role, because
-  // that role follows Track staff. Only the credentials granted over the project end here.
-  // Guarded end to end: a throw here must not swallow the grants/revokes already applied above,
-  // or the summary line that reports them.
+  // A closed project keeps its `project:<id>` role (it follows Track staff); only its credentials
+  // end. Guarded so a throw cannot swallow the grants and revokes above or their summary line.
   try {
     const projects = await fetchTrackProjects(trackToken, get);
 
-    // Work phases on their own try, ahead of the mirror: they are ~400 requests to Track, and a
-    // feed that is down must cost the phases only. The mirror then writes none, and
-    // `mergeTrackProject` leaves the stored ones alone rather than blanking them.
+    // Phases and works on their own try, ahead of the mirror: a Track feed that is down must cost
+    // them only, and `mergeTrackProject` then leaves the stored ones alone rather than blanking them.
     let phases = new Map();
+    let works = new Map();
     try {
-      phases = await fetchTrackWorkPhases(trackToken, get);
+      const pulled = await fetchTrackWorks(trackToken, get, { works: config.trackWorksSync });
+      ({ phases, works } = pulled);
+      summary.trackWorks = pulled.stats.works;
+      summary.trackWorksFailed = pulled.stats.failures;
     } catch (err) {
       summary.failures++;
       logger.error('[track-teams] work phase pull failed', { error: err.message });
@@ -325,7 +294,7 @@ async function sync(argv = [], deps = {}) {
     // Its own try: a Cosmos outage in the mirror must not cost the credential sweep, which needs
     // no repository of its own.
     try {
-      const mirrored = await syncProjects(projects, { live: args.live, deps, phases });
+      const mirrored = await syncProjects(projects, { live: args.live, deps, phases, works });
       Object.assign(summary, {
         trackProjects: mirrored.trackProjects,
         created: mirrored.created,
@@ -385,7 +354,8 @@ function summaryLine(s) {
     `closedProjects=${s.closedProjects} credentialsRevoked=${s.credentialsRevoked} ` +
     `trackProjects=${s.trackProjects} created=${s.created} updated=${s.updated} ` +
     `orphaned=${s.orphaned} relinked=${s.relinked} skippedApiRows=${s.skippedApiRows} ` +
-    `trackPhases=${s.trackPhases} failures=${s.failures}`;
+    `trackPhases=${s.trackPhases} trackWorks=${s.trackWorks} trackWorksFailed=${s.trackWorksFailed} ` +
+    `failures=${s.failures}`;
 }
 
 /**
@@ -404,10 +374,8 @@ async function run({ live = false, deps } = {}) {
 const exitCodeFor = (summary) => (summary.failures > 0 ? 1 : 0);
 
 /**
- * credentials.revokeForProject audits through src/repositories/credentials.js; the audit buffer
- * flushes on an unref'd timer, so a CLI process.exit would drop rows still queued. Split out from
- * the exit call itself so a test can drive it without killing the test process.
- *
+ * The audit buffer flushes on an unref'd timer, so a CLI process.exit would drop queued rows.
+ * Apart from the exit call so a test can drive it.
  * @param {object} [auditModule] test seam, defaults to the real src/utils/audit
  */
 async function drainAudit(auditModule = require('../utils/audit')) {

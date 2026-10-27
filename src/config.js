@@ -469,6 +469,8 @@ const config = {
   trackApiBase:              process.env.TRACK_API_BASE || '',
   trackClientId:             process.env.TRACK_CLIENT_ID || '',
   trackClientSecret:         secretFromEnv('TRACK_CLIENT_SECRET'),
+  // The nightly sync also mirrors every public Track work type with its milestones (`works[]`).
+  trackWorksSync:            process.env.TRACK_WORKS_SYNC === 'true',
   keycloakAdminClientId:     process.env.KEYCLOAK_ADMIN_CLIENT_ID || '',
   keycloakAdminClientSecret: secretFromEnv('KEYCLOAK_ADMIN_CLIENT_SECRET'),
 

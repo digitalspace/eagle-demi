@@ -108,6 +108,8 @@ const WIRED = [
     'the API module call — without it the sync has no upstream to read team members from'],
   ['trackClientId', /^\s+trackClientId: trackClientId$/m,
     'the API module call — without it the sync cannot ask Keycloak for a Track token'],
+  ['trackWorksSync', /^\s+trackWorksSync: trackWorksSync$/m,
+    'the API module call — without it TRACK_WORKS_SYNC stays false whatever the param file says'],
   ['roleSyncClientId', /^\s+roleSyncClientId: roleSyncClientId$/m,
     'the API module call — without it the sync has no admin identity to grant roles with'],
   ['deployDevbox',
@@ -374,6 +376,20 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
     });
   }
 }
+
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  test(`the ${envName} param file keeps trackWorksSync off`, () => {
+    assert.match(params, /^param trackWorksSync = false$/m,
+      'works[] stays unsynced until its public read is merged and deployed');
+  });
+}
+
+test('the API app carries TRACK_WORKS_SYNC from trackWorksSync, default off', () => {
+  assert.match(API_MODULE, /^param trackWorksSync bool = false$/m);
+  assert.match(MAIN, /^param trackWorksSync bool = false$/m);
+  assert.match(API_MODULE, /name: 'TRACK_WORKS_SYNC'\n\s+value: trackWorksSync \? 'true' : 'false'$/m,
+    "src/config.js reads only the string 'true' as on");
+});
 
 // Drop either setting and bicep only warns `no-unused-params`; the host then registers no timer.
 test('the API app carries both Track sync schedules from their params', () => {
