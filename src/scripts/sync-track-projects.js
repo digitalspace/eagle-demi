@@ -1,26 +1,8 @@
 'use strict';
 
 /**
- * Hold DEMI's project records in step with Track's project list.
- *
- * Runs inside the nightly Track sync (`sync-track-teams.js`) on the list that run already fetched:
- * one `GET /api/v1/projects` per night feeds both this and the closed-project credential sweep.
- * That run also hands over the work phases and works it pulled (`sources.fetchTrackWorks`), so the
- * assessment rail eagle-public draws is written by the same pass that writes the names.
- *
- * `run` is the projects-only poll the `syncTrackProjects` timer drives, so a Track edit reaches
- * the public site within minutes. It reads the list alone and passes `poll`: phases, works, link
- * heal and slug migration stay with the nightly run.
- *
- * A RE-MERGE MUST NEVER MOVE A RECORD'S LEVEL. `mergeTrackProject` derives `read` from the Eagle
- * record every time it is called, so re-running it over a stored row would rewrite an ACL that
- * `PUT /api/projects/:id/level` set — the only route allowed to widen anything. The stored
- * `read`, `isPublished` and `vis` are therefore carried unconditionally and only the Track-owned
- * fields are written.
- *
- * NOTHING IS DELETED. A DEMI record Track no longer lists is counted as `orphaned` and left alone:
- * Eagle-only and hand-created projects are legitimate, and a feed that came back short would
- * otherwise take the registry with it.
+ * DEMI project records kept in step with Track's list. Stored `read`, `isPublished`, `vis` carry
+ * over, since a re-merge would undo a hand-set level; a record Track omits is never deleted.
  */
 
 const { readForLevel, systemAccess } = require('../helpers/access-sql');
@@ -40,17 +22,8 @@ const TRACK_FIELDS = TRACK_PRECEDENCE.map(([target]) => target);
 const HEAL_CAP = 500;
 
 /**
- * The Track-owned fields whose stored value the feed disagrees with — all scalars, so a plain
- * compare. A field the merge left undefined is one neither Track nor Eagle supplied, and is left
- * alone rather than written: that is the same rule TRACK_PRECEDENCE itself follows, so an emptied
- * upstream column cannot blank a populated row.
- *
- * Centroid, `epic_guid` and the Eagle match are NOT compared here: re-deriving them is the seed's
- * job, and this step exists to keep names, states and certificates current.
- *
- * `phases`, `works` and `legislationTransitions` are the Track-owned fields that are not scalars,
- * so they are compared by value. Both sides come out of the same mapper, so key order is stable
- * and a serialised compare holds.
+ * Track-owned fields the feed disagrees with. Undefined in the merge is left alone, so an emptied
+ * upstream column cannot blank a row; arrays share one mapper, so a serialised compare holds.
  */
 const TRACK_ARRAY_FIELDS = ['phases', 'works', 'legislationTransitions'];
 
@@ -108,11 +81,8 @@ function projectsRepository() {
 
 /**
  * @param {Array}  apiProjects  raw `GET /api/v1/projects` rows
- * @param {object} [opts]       {live} write, {deps} test seam {projects, links}, {now} fixed timestamp,
- *                              {phases} Map of Track project id -> work phases,
- *                              {works} Map of Track project id -> `works[]` rows,
- *                              {poll} skip link heal, slug migration and the Eagle-only pass.
- *                              `deps.links` is the links repository, injected by the tests.
+ * @param {object} [opts]       {live}, {deps} {projects, links}, {now}, {phases}/{works} Maps
+ *                              by Track project id, {poll} skip link heal, slugs, Eagle-only pass
  */
 async function syncProjects(apiProjects, opts = {}) {
   const { live = false, deps = {}, phases = new Map(), works = new Map(), poll = false } = opts;
@@ -217,9 +187,8 @@ async function syncProjects(apiProjects, opts = {}) {
   // second copy of every record it was not shown.
   const { items } = await repo.listVisible(systemAccess(), {});
   const stored = new Map(items.map(p => [String(p.id), p]));
-  // `buildRegistry` matches Track to Eagle on `epic_guid`, so a project DEMI holds as an Eagle-only
-  // row is this same project under its pre-Track key, not a record Track has never seen.
-  // `sourceSystem === 'eagle'` is the repository's own definition of that set (`listEagleOnlyIds`).
+  // An Eagle-only row (`sourceSystem === 'eagle'`, as in `listEagleOnlyIds`) whose guid Track lists
+  // is the same project under its pre-Track key, as `buildRegistry` matches on `epic_guid`.
   const eagleOnly = new Map(
     items.filter(p => p.sourceSystem === 'eagle' && p.eagleId).map(p => [String(p.eagleId), p])
   );
@@ -246,14 +215,8 @@ async function syncProjects(apiProjects, opts = {}) {
 
     try {
       if (relink) {
-        // A RE-KEY, NOT A NEW RECORD. `...twin` keeps the boundary stamps and `sources.wildfire`,
-        // the merge re-owns the identity and the Track fields, and `read`/`isPublished`/`vis` come
-        // back off the stored row: a re-key must not move a level either.
-        //
-        // The `eagle-<id>` row is left exactly as it stands, because that is what the seed does
-        // with it: `buildRegistry` simply stops producing it, and `--reconcile` keys Eagle-only
-        // rows on `eagleId` against the Eagle fetch, so a row whose Eagle project still exists is
-        // not surplus. Removing one is `purgeProject`'s job, and that cascades to its documents.
+        // A re-key, not a new record: it keeps the level and stamps; the `eagle-<id>` row stays,
+        // as in the seed, because removing one is `purgeProject`'s job and cascades to documents.
         summary.relinked++;
         rekeyed.add(String(relink.eagleId));
         await heal(relink);
@@ -268,8 +231,8 @@ async function syncProjects(apiProjects, opts = {}) {
 
       if (!existing) {
         const merged = mergeTrackProject(track, null, mergeOpts);
-        // Admission is level 1 (TODO-rbac.md P3-3). The merge's own default for an unmatched
-        // Track project is level 2, and no job may widen anything.
+        // Admission is level 1: the merge's default for an unmatched Track project is level 2,
+        // and no job may widen anything.
         merged.read = readForLevel(1);
         merged.isPublished = false;
         summary.created++;
@@ -277,10 +240,8 @@ async function syncProjects(apiProjects, opts = {}) {
         continue;
       }
 
-      // `POST /projects` writes `sources: {}`, and close-unpublished-track-projects.js reads that
-      // absence to tell a deliberately published API row from a merge-produced Track-only one.
-      // Mirroring onto it would stamp `sources.track` on and cost it `public` on the next close
-      // run. `sourceSystem` cannot stand in: the API route writes `'track'` too.
+      // An API row (`sources: {}`) is skipped: stamping `sources.track` would make
+      // close-unpublished-track-projects.js unpublish it; `sourceSystem` cannot tell them apart.
       if (!(existing.sources || {}).track) {
         summary.skippedApiRows++;
         continue;
@@ -290,9 +251,8 @@ async function syncProjects(apiProjects, opts = {}) {
       const changed = Object.keys(
         trackChanges(existing, mergeTrackProject(track, eagleOf(existing), mergeOpts))
       ).length > 0;
-      // A stored project with no code yet, or still on a pre-slug random one, is written even when
-      // Track says nothing new: that is how the projects that predate slugs get one. The migration
-      // stamps `shortCodeSource`, so the next night skips the row again.
+      // A row owing a slug code is written even when Track says nothing new; the migration stamps
+      // `shortCodeSource`, so the next night skips it.
       if (!changed && !owes(existing)) continue;
       // A mint alone is not an update: it counts in `shortLinks` and leaves `updatedAt` alone.
       if (changed) summary.updated++;

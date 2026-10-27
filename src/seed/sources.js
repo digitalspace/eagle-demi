@@ -1,19 +1,8 @@
 'use strict';
 
 /**
- * Upstream source loaders for the seed.
- *
- * All I/O lives here so `transform.js` and `merge/project.js` stay pure and testable. Nothing
- * here writes anywhere — these functions only read.
- *
- * Sources, verified 2026-07-30:
- *
- *   Track       ${TRACK_API_BASE}/api/v1/projects (live, bearer)          384 projects
- *               src/data/track_projects_enriched.json — offline fallback  382 projects
- *               ${TRACK_API_BASE}/api/v1/works + /works/<id>/phases       work phases, live only
- *               + /milestones/workphases/<id>/events, /outcome-configurations  works[], flag TRACK_WORKS_SYNC
- *   Eagle       eagle-api /api/public/search                           359 projects, 60,661 docs, 213 List items
- *   Boundaries  frontend/public/assets/geojson/*.geojson (checked in)   281 features
+ * Read-only upstream loaders for the seed: Track, eagle-api, checked-in boundaries.
+ * All I/O lives here so `transform.js` and `merge/project.js` stay pure and testable.
  */
 
 const fs = require('fs');
@@ -37,11 +26,8 @@ const FETCH_TIMEOUT_MS = parseInt(process.env.SEED_FETCH_TIMEOUT_MS || '120000',
 const FETCH_RETRIES = 3;
 
 /**
- * Being throttled gets its own, longer budget than an ordinary failure.
- *
- * eagle-api allows 200 requests a minute (`ratelimit-policy: 200;w=60`) and a comment sweep spends
- * that inside a minute, so the whole run used to die on `HTTP 429` a few minutes in. Waiting the
- * window out is the fix; three one-second retries are not, and they cost the run its budget.
+ * 429s get their own budget: eagle-api allows 200 requests a minute and a comment sweep spends that
+ * inside a minute, so the window must be waited out rather than retried three times a second apart.
  */
 const RATE_LIMIT_RETRIES = 5;
 
@@ -61,11 +47,8 @@ function headerSeconds(headers, name) {
 }
 
 /**
- * How long to wait out a 429.
- *
- * `retry-after` wins because it is the server's own instruction, then `ratelimit-reset` (seconds
- * left in the current window), then the window length off `ratelimit-policy` (`200;w=60`). A
- * response carrying none of them falls back to a 5/15/60 second ladder.
+ * How long to wait out a 429: `retry-after`, else `ratelimit-reset`, else the `ratelimit-policy`
+ * window (`200;w=60`), else the 5/15/60 second ladder.
  */
 function rateLimitWaitMs(headers, attempt) {
   const policy = headers && typeof headers.get === 'function' ? headers.get('ratelimit-policy') : null;
@@ -82,14 +65,8 @@ function rateLimitWaitMs(headers, attempt) {
 }
 
 /**
- * The body AND the response headers, retried.
- *
- * `/api/public/comment` reports its total in `x-total-count` rather than in the body, so the
- * comment backfill needs the header. Everything else wants the body alone — see `fetchJson`.
- *
- * A 429 is not counted as one of those attempts: it means the request was never served, so it is
- * waited out against its own budget and the ordinary retries stay for real failures.
- *
+ * Body and headers, retried; `/api/public/comment` puts its total in `x-total-count`.
+ * A 429 was never served, so it spends the rate-limit budget, not an ordinary retry.
  * @param {object} [headers]    request headers — the Track team feed needs a bearer token.
  * @param {function} [deps.sleep] test seam, so a backoff costs a test no wall-clock time.
  * @returns {Promise<{body: *, headers: Headers}>}
@@ -146,11 +123,8 @@ async function fetchJson(url, headers, deps) {
 }
 
 /**
- * One page of an EPIC-style search endpoint.
- *
- * The response shape is `[{ meta: [{searchResultsTotal}], searchResults: [...] }]` — an array
- * wrapping a single object. Guarded rather than assumed: an upstream shape change would
- * otherwise read as "zero results" and seed an empty database.
+ * One page of `[{ meta: [{searchResultsTotal}], searchResults: [...] }]`. Throws on another
+ * shape, which would otherwise read as zero results and seed an empty database.
  */
 function unwrapSearchResponse(body, url) {
   const envelope = Array.isArray(body) ? body[0] : body;
@@ -162,17 +136,8 @@ function unwrapSearchResponse(body, url) {
 }
 
 /**
- * Every page of a dataset.
- *
- * Stops on a short or empty page and then VERIFIES the count against the reported total. A
- * mismatch throws: seeding a silently truncated corpus is worse than not seeding at all, because
- * the result looks complete.
- *
- * `opts.accumulate: false` returns only the count and never builds the full array. The document
- * stage uses it to transform page by page: holding all 60,661 raw payloads AND their transformed
- * forms peaked at ~250 MB for 45,000 documents in a dry run, and the API runs on a Consumption
- * plan with 1.5 GB. Streaming keeps peak flat at one page.
- *
+ * Every page of a dataset. A count off the reported total throws: a truncated corpus looks whole.
+ * `accumulate: false` streams page by page; holding every document overran the 1.5 GB plan.
  * @param {function} [opts.onPage]           (items, fetchedSoFar, total) — progress or a handler
  * @param {boolean}  [opts.accumulate=true]  false returns {count, total} instead of the items
  * @param {function} [opts.pageUrl]   (pageNum, pageSize) -> url; default the dataset's `/search` page
@@ -222,10 +187,8 @@ async function fetchAllPages(base, dataset, opts = {}) {
 const nameOf = (v) => (v && typeof v === 'object' ? v.name : v);
 
 /**
- * One live Track project in the flat shape `merge/project.js` reads.
- *
- * The API nests what the checked-in export flattened and calls the id `id`; every other column
- * keeps its name. Kept as a plain literal so the two shapes can be diffed by eye.
+ * One live Track project in the flat shape of the checked-in export that `merge/project.js` reads.
+ * A plain literal, so the two shapes can be diffed by eye.
  */
 function trackApiToExtract(project) {
   return {
@@ -289,10 +252,8 @@ function isoOrNull(value) {
 }
 
 /**
- * One `GET /works/<id>/phases` row, in the public shape a project document carries.
- *
- * `work_phase.name` wins over the phase code's: Track lets a work rename its own phase, and the
- * renamed one is what its staff and its reports use.
+ * One `GET /works/<id>/phases` row in the public shape. `work_phase.name` wins over the phase
+ * code's: Track lets a work rename its phase, and staff and reports use the renamed one.
  */
 function trackPhaseToPublic(row) {
   const wp = (row && row.work_phase) || {};
@@ -313,10 +274,8 @@ function trackPhaseToPublic(row) {
 }
 
 /**
- * The one Assessment work per project whose phases DEMI mirrors, keyed by Track project id.
- *
- * A project also carries amendments, extensions and post-EAC reviews; only the assessment is the
- * progress rail. Between two assessment works the live one wins, then the most recent.
+ * The one Assessment work per Track project id whose phases are the progress rail.
+ * Between two assessment works the live one wins, then the most recent.
  */
 function assessmentWorkByProject(works) {
   const preferred = (candidate, held) =>
@@ -387,20 +346,8 @@ function trackWorkToPublic(work, phaseEvents) {
 const bySortOrder = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0);
 
 /**
- * Track work phases and, with `opts.works`, every mirrored work, both keyed by Track project id.
- *
- * CALL PLAN: one `GET /works` for the work list, then one `GET /works/<id>/phases` per assessment
- * work — about one request per project a night. `GET /work-phases` cannot replace the pair: its
- * rows carry no project id, and it filters to completed, legislated, over- or under-budget phases
- * (it is the insights report, api/services/work_phase.py). `GET /projects?with_works=true` only
- * FILTERS the project list — its response schema carries no works at all. With `opts.works`, each
- * mirrored work adds its phases and one events read per phase; outcome names are read once per
- * event configuration, as Track refuses `/outcome-configurations/` without `configuration_id`.
- *
- * One work's phases failing is logged and skipped rather than thrown: the other ~400 projects'
- * phases are worth more than an all-or-nothing run. A failed read or the budget leaves a project
- * out of `works`, so the sync keeps its stored works rather than writing a shorter list.
- *
+ * Assessment phases and, with `opts.works`, every mirrored work, keyed by Track project id.
+ * A failed read is logged and leaves only that project out, so the sync keeps its stored rows.
  * @param {function} [get] test seam, and the sync's own `deps.fetchJson`
  * @param {object} [opts] {works} pull works too, {now} clock seam, {budgetMs}
  */
@@ -408,6 +355,7 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
   const { works: withWorks = false, now = Date.now, budgetMs = worksBudgetMs } = opts;
   const base = `${config.trackApiBase}/api/v1`;
   const headers = { Authorization: `Bearer ${token}` };
+  // Not `GET /work-phases`: its rows carry no project id and it returns report-filtered phases.
   const workList = await get(`${base}/works`, headers);
 
   // Shared by both passes, so the assessment work's phases are read once.
@@ -436,6 +384,7 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
   if (!withWorks) return { phases, works, stats };
 
   const counted = (url) => { requests++; return get(url, headers); };
+  // Track refuses `/outcome-configurations/` without `configuration_id`: one read per config.
   const outcomeNames = new Map();
   const outcomeNamesFor = (configurationId) => {
     if (!outcomeNames.has(configurationId)) {
@@ -504,11 +453,8 @@ async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
 }
 
 /**
- * Track projects: the live API when a reader client is configured, the checked-in export
- * otherwise. Authoritative for project identity either way.
- *
- * NO FALLBACK BETWEEN THE TWO. A stale file standing in for a failed fetch would seed the
- * 2026-07-29 registry and report success; `fetchJson` already retries three times.
+ * Track projects from the live API when a reader client is configured, else the checked-in export.
+ * No fallback between the two: a stale file standing in for a failed fetch would report success.
  */
 async function loadTrackProjects() {
   if (trackFeedConfigured()) {
@@ -553,9 +499,8 @@ async function fetchListLookup() {
 }
 
 /**
- * Organization `_id` -> `{_id, name, province}` — the three fields eagle-api's push resolves
- * `pins` to. The public search returns `pins` as bare ObjectIds, so without this lookup the seed
- * would store a different pin shape than the push does. 733 organizations, so it loads once.
+ * Organization `_id` -> `{_id, name, province}`, the shape eagle-api's push resolves `pins` to;
+ * the public search returns bare ObjectIds, so without it the seed stores another pin shape.
  */
 async function fetchOrganizationLookup() {
   const orgs = await fetchAllPages(EAGLE_API_BASE, 'Organization');
@@ -565,10 +510,8 @@ async function fetchOrganizationLookup() {
 }
 
 /**
- * The checked-in boundary exports.
- *
- * Read from the frontend asset directory because that is where the export script already writes
- * them and where the frontend already reads them — a second copy would drift.
+ * The checked-in boundary exports, read from the frontend asset directory the export script
+ * writes and the frontend reads, because a second copy would drift.
  */
 function loadBoundaries() {
   const dir = path.join(__dirname, '../../frontend/public/assets/geojson');
