@@ -481,6 +481,14 @@ test('Track work phases', async (t) => {
   });
 });
 
+test('a project the works pull reached is counted, one it skipped is not', async () => {
+  const run = (works) => syncProjects([API_PROJECT],
+    { live: true, deps: { projects: fakeProjects([storedProject()]), links: fakeLinks() }, now: NOW, works });
+
+  assert.strictEqual((await run(new Map([['207', [{ trackWorkId: 11 }]]]))).works, 1);
+  assert.strictEqual((await run(new Map([['208', [{ trackWorkId: 12 }]]]))).works, 0);
+});
+
 test('a project DEMI has never seen is created at level 1', async () => {
   const projects = fakeProjects([]);
   const links = fakeLinks();

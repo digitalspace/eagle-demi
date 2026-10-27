@@ -265,3 +265,9 @@ test('the Updates publishDate sort fallback stays on unless set to the exact str
   const read = (value) => readConfig({ UPDATES_PUBLISH_DATE_FALLBACK: value }, c => c.updatesPublishDateFallback);
   assert.deepStrictEqual(['true', '', 'FALSE', 'off', 'false'].map(read), [true, true, true, true, false]);
 });
+
+// Azure always sets TRACK_WORKS_SYNC, as the string 'false' until the works pull is turned on.
+test('the Track works pull runs only when TRACK_WORKS_SYNC is the exact string true', () => {
+  const read = (value) => readConfig({ TRACK_WORKS_SYNC: value }, c => c.trackWorksSync);
+  assert.deepStrictEqual(['false', '', 'TRUE', 'true'].map(read), [false, false, false, true]);
+});

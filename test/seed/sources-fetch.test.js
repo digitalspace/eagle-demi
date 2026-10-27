@@ -227,6 +227,7 @@ test('one work whose phases fail does not cost the other projects theirs', async
 // is seeded on purpose, so the key-set test fails if any of it leaks through.
 const SUBSTANTIAL_START = 10;
 const STARTED = 'Project is Substantially Started';
+const NOT_STARTED = 'Project is Not Substantially Started';
 
 const event = (id, over = {}, configuration = {}) => ({
   id,
@@ -339,16 +340,19 @@ test('the work outcome is the END milestone with an outcome in the last phase', 
       901: [event(1, {}, { event_position: 'END' })],
       902: [
         event(2, { outcome_id: 31 }, { id: 600, event_position: 'END' }),
-        event(3, {}, { event_position: 'END' })
+        event(3, {}, { event_position: 'END' }),
+        event(4, { outcome_id: 30 }, { id: 600 })
       ]
     },
-    outcomesByConfiguration: { 600: [{ id: 30, name: 'Project is Not Substantially Started' }, { id: 31, name: STARTED }] }
+    outcomesByConfiguration: { 600: [{ id: 30, name: NOT_STARTED }, { id: 31, name: STARTED }] }
   });
 
   const [row] = (await pullWorks(track)).works.get('207');
 
-  assert.strictEqual(row.outcome, STARTED);
-  assert.deepStrictEqual(row.milestones.map(m => m.outcome), [null, STARTED, null]);
+  assert.strictEqual(row.outcome, STARTED, 'a later non-END milestone with an outcome is not the decision');
+  assert.deepStrictEqual(row.milestones.map(m => m.outcome), [null, STARTED, null, NOT_STARTED]);
+  assert.strictEqual(track.paths.filter(p => p.includes('/outcome-configurations/')).length, 1,
+    'two events on one configuration read its outcome names once');
 });
 
 test('one failed events read leaves that project out and the others intact', async () => {

@@ -407,6 +407,26 @@ test('with TRACK_WORKS_SYNC on, the run pulls works and reports them', async (t)
     summaryLine(summary));
 });
 
+test('with TRACK_WORKS_SYNC off, a mirrored work costs Track no milestone or outcome read', async (t) => {
+  const config = require('../../src/config');
+  const held = config.trackWorksSync;
+  config.trackWorksSync = false;
+  t.after(() => { config.trackWorksSync = held; });
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
+  const seen = {};
+  const urls = [];
+  const fetchAll = fakeFetch(TEAMS, seen, CLOSED_AND_OPEN,
+    [{ id: 12, project_id: 1, work_type_id: 7, is_active: true }]);
+  const get = async (url, headers) => { urls.push(url); return fetchAll(url, headers); };
+
+  const summary = await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
+
+  assert.ok(seen.worksUrl, 'the work list is still read for the assessment phases');
+  assert.deepStrictEqual(urls.filter(u => /\/milestones\/|\/outcome-configurations\/|\/works\/12\//.test(u)), []);
+  assert.strictEqual(summary.trackWorks, 0);
+});
+
 test('a Track work feed that is down costs the phases and nothing else', async () => {
   const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
   const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
