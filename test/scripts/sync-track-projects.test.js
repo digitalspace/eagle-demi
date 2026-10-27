@@ -182,15 +182,20 @@ test('the mapper flattens a live project into the shape the merge reads', () => 
     sub_type_name: 'Power Plants',
     type_name: 'Energy - Electricity',
     project_state_name: 'Closed',
-    ea_certificate: 'Withdrawn'
+    ea_certificate: 'Withdrawn',
+    eac_signed: null,
+    eac_expires: null
   });
 });
 
-test('the mapper produces exactly the keys the checked-in export carries', () => {
+test('the mapper carries every key of the checked-in export, plus the two EAC dates', () => {
   const file = path.join(__dirname, '../../src/data/track_projects_enriched.json');
   const [sample] = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const feed = Object.keys(trackApiToExtract(API_PROJECT));
 
-  assert.deepStrictEqual(Object.keys(trackApiToExtract(API_PROJECT)).sort(), Object.keys(sample).sort(),
+  assert.deepStrictEqual(feed.filter(k => !(k in sample)).sort(), ['eac_expires', 'eac_signed'],
+    'the export predates eac_signed/eac_expires; nothing else may be added unnoticed');
+  assert.deepStrictEqual(Object.keys(sample).filter(k => !feed.includes(k)), [],
     'the live feed replaces the file, so a key the file has and the feed lacks is data lost');
 });
 
@@ -720,6 +725,30 @@ test('an empty Track column does not blank a populated row', () => {
     'the merge omits what Track no longer supplies, so there is nothing to write');
 });
 
+test('trackChanges writes legislationTransitions that differ from the stored row', () => {
+  const stored = { legislationTransitions: [{ fromYear: 2002, toYear: 2018, date: null }] };
+  const moved = [{ fromYear: 2002, toYear: 2018, date: '2020-01-15T00:00:00.000Z' }];
+
+  assert.deepStrictEqual(trackChanges(stored, { legislationTransitions: moved }),
+    { legislationTransitions: moved });
+});
+
+test('trackChanges leaves stored works alone when the merge carries none', () => {
+  const stored = { works: [{ trackWorkId: 11 }] };
+
+  assert.deepStrictEqual(trackChanges(stored, {}), {},
+    'a project the works pull skipped (budget, failed read) keeps what it has');
+});
+
+test('trackChanges writes a works list that differs by value', () => {
+  const stored = { works: [{ trackWorkId: 11, workState: 'IN_PROGRESS' }] };
+  const works = [{ trackWorkId: 11, workState: 'COMPLETED' }];
+
+  assert.deepStrictEqual(trackChanges(stored, { works }), { works });
+  assert.deepStrictEqual(trackChanges(stored, { works: structuredClone(stored.works) }), {},
+    'an equal copy is not a change');
+});
+
 test('one project that fails is counted and does not stop the next', async () => {
   const projects = fakeProjects([]);
   let first = true;
@@ -745,7 +774,7 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, shortLinks: 0, healed: 0, failures: 0 },
+      phases: 0, works: 0, shortLinks: 0, healed: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });
 

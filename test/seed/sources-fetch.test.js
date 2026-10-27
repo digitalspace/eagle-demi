@@ -141,14 +141,14 @@ function fakeTrack({ works = [], phasesByWork = {}, fail = () => false } = {}) {
   return { get, paths };
 }
 
-test('fetchTrackWorkPhases reads one work list then one phase call per assessment work', async () => {
-  const { fetchTrackWorkPhases } = require('../../src/seed/sources');
+test('fetchTrackWorks reads one work list then one phase call per assessment work', async () => {
+  const { fetchTrackWorks } = require('../../src/seed/sources');
   const { get, paths } = fakeTrack({
     works: [work(11, 207, ASSESSMENT), work(12, 207, AMENDMENT), work(13, 354, ASSESSMENT)],
     phasesByWork: { 11: [phaseRow()], 13: [phaseRow()] }
   });
 
-  const byProject = await fetchTrackWorkPhases('track-token', get);
+  const { phases: byProject } = await fetchTrackWorks('track-token', get);
 
   assert.deepStrictEqual(paths,
     ['/api/v1/works', '/api/v1/works/11/phases', '/api/v1/works/13/phases'],
@@ -156,14 +156,14 @@ test('fetchTrackWorkPhases reads one work list then one phase call per assessmen
   assert.deepStrictEqual([...byProject.keys()], ['207', '354'], 'keyed by TRACK project id');
 });
 
-test('fetchTrackWorkPhases maps a phase to the public shape, dates as ISO', async () => {
-  const { fetchTrackWorkPhases } = require('../../src/seed/sources');
+test('fetchTrackWorks maps a phase to the public shape, dates as ISO', async () => {
+  const { fetchTrackWorks } = require('../../src/seed/sources');
   const { get } = fakeTrack({
     works: [work(11, 207, ASSESSMENT)],
     phasesByWork: { 11: [phaseRow()] }
   });
 
-  const [phase] = (await fetchTrackWorkPhases('track-token', get)).get('207');
+  const [phase] = (await fetchTrackWorks('track-token', get)).phases.get('207');
 
   assert.deepStrictEqual(phase, {
     // The work's own name wins over the phase code's: Track lets a work rename its phase.
@@ -180,8 +180,8 @@ test('fetchTrackWorkPhases maps a phase to the public shape, dates as ISO', asyn
   }, 'exactly the listed fields — internal notes, ids and day counts stay in Track');
 });
 
-test('fetchTrackWorkPhases sorts by sort order and keeps an unfinished phase open', async () => {
-  const { fetchTrackWorkPhases } = require('../../src/seed/sources');
+test('fetchTrackWorks sorts by sort order and keeps an unfinished phase open', async () => {
+  const { fetchTrackWorks } = require('../../src/seed/sources');
   const { get } = fakeTrack({
     works: [work(11, 207, ASSESSMENT)],
     phasesByWork: {
@@ -193,7 +193,7 @@ test('fetchTrackWorkPhases sorts by sort order and keeps an unfinished phase ope
     }
   });
 
-  const phases = (await fetchTrackWorkPhases('track-token', get)).get('207');
+  const phases = (await fetchTrackWorks('track-token', get)).phases.get('207');
 
   assert.deepStrictEqual(phases.map(p => p.name),
     ['Early Engagement', 'Process Planning', 'Application Review']);
@@ -201,8 +201,8 @@ test('fetchTrackWorkPhases sorts by sort order and keeps an unfinished phase ope
   assert.strictEqual(phases[2].isCompleted, false);
 });
 
-test('fetchTrackWorkPhases prefers the live assessment work, then the most recent', async () => {
-  const { fetchTrackWorkPhases } = require('../../src/seed/sources');
+test('fetchTrackWorks prefers the live assessment work, then the most recent', async () => {
+  const { fetchTrackWorks } = require('../../src/seed/sources');
   const { get, paths } = fakeTrack({
     works: [
       work(11, 207, ASSESSMENT, { is_active: false }),
@@ -213,7 +213,7 @@ test('fetchTrackWorkPhases prefers the live assessment work, then the most recen
     phasesByWork: { 21: [phaseRow()], 41: [phaseRow()] }
   });
 
-  await fetchTrackWorkPhases('track-token', get);
+  await fetchTrackWorks('track-token', get);
 
   assert.deepStrictEqual(paths.slice(1),
     ['/api/v1/works/21/phases', '/api/v1/works/41/phases'],
@@ -221,24 +221,194 @@ test('fetchTrackWorkPhases prefers the live assessment work, then the most recen
 });
 
 test('one work whose phases fail does not cost the other projects theirs', async () => {
-  const { fetchTrackWorkPhases } = require('../../src/seed/sources');
+  const { fetchTrackWorks } = require('../../src/seed/sources');
   const { get } = fakeTrack({
     works: [work(11, 207, ASSESSMENT), work(13, 354, ASSESSMENT)],
     phasesByWork: { 13: [phaseRow()] },
     fail: (workId) => workId === 11
   });
 
-  const byProject = await fetchTrackWorkPhases('track-token', get);
+  const { phases: byProject } = await fetchTrackWorks('track-token', get);
 
   assert.deepStrictEqual([...byProject.keys()], ['354']);
 });
 
-test('loadTrackWorkPhases yields an empty map with no reader client, and never throws', async () => {
-  const { loadTrackWorkPhases } = require('../../src/seed/sources');
-  const byProject = await loadTrackWorkPhases();
+// Events mirror `EventResponseSchema` (fk columns plus nested `event_configuration`). Staff text
+// is seeded on purpose, so the key-set test fails if any of it leaks through.
+const SUBSTANTIAL_START = 10;
+const STARTED = 'Project is Substantially Started';
 
-  assert.ok(byProject instanceof Map);
-  assert.strictEqual(byProject.size, 0, 'the checked-in export carries no phases');
+const event = (id, over = {}, configuration = {}) => ({
+  id,
+  name: `Milestone ${id}`,
+  description: 'staff description',
+  notes: 'staff note',
+  reason: 'staff reason',
+  decision_maker_id: 77,
+  anticipated_date: '2024-01-10T00:00:00+00:00',
+  actual_date: '2024-01-12T00:00:00+00:00',
+  number_of_days: 0,
+  outcome_id: null,
+  is_active: true,
+  event_configuration_id: configuration.id ?? 500,
+  event_configuration: {
+    id: 500, name: `Milestone ${id}`, event_position: 'INTERMEDIATE', visibility: 'MANDATORY',
+    event_type_id: 22, sort_order: id, ...configuration
+  },
+  ...over
+});
+
+const trackWork = (id, projectId, workTypeId, over = {}) => work(id, projectId, workTypeId, {
+  title: `Work ${id}`,
+  simple_title: 'Simple',
+  ea_act: { id: 3, name: '2018 Act' },
+  start_date: '2023-02-01T00:00:00+00:00',
+  work_state: 'IN_PROGRESS',
+  work_decision_date: null,
+  anticipated_decision_date: '2025-06-01T00:00:00+00:00',
+  status_notes: 'staff status note',
+  issue_notes: 'staff issue note',
+  epic_description: 'staff description',
+  work_lead: { id: 9, first_name: 'Staff', last_name: 'Lead' },
+  ...over
+});
+
+/** Answers every works-pull route by URL and records the path, like `fakeTrack`. */
+function fakeTrackWorks({
+  works = [], phasesByWork = {}, eventsByPhase = {}, outcomesByConfiguration = {}, failEvents = () => false
+} = {}) {
+  const paths = [];
+  const get = async (url) => {
+    const pathOnly = url.slice(url.indexOf('/api/v1'));
+    paths.push(pathOnly);
+    if (pathOnly === '/api/v1/works') return works;
+    const phases = pathOnly.match(/^\/api\/v1\/works\/(\d+)\/phases$/);
+    if (phases) return phasesByWork[phases[1]] || [];
+    const events = pathOnly.match(/^\/api\/v1\/milestones\/workphases\/(\d+)\/events$/);
+    if (events && failEvents(Number(events[1]))) throw new Error('HTTP 401 Unauthorized');
+    if (events) return eventsByPhase[events[1]] || [];
+    const outcomes = pathOnly.match(/^\/api\/v1\/outcome-configurations\/\?configuration_id=(\d+)$/);
+    if (outcomes) return outcomesByConfiguration[outcomes[1]] || [];
+    throw new Error(`unexpected call: ${url}`);
+  };
+  return { get, paths };
+}
+
+const pullWorks = (track, opts = {}) => {
+  const { fetchTrackWorks } = require('../../src/seed/sources');
+  return fetchTrackWorks('track-token', track.get, { works: true, ...opts });
+};
+
+test('a mirrored work carries the contract keys and no staff field', async () => {
+  const track = fakeTrackWorks({
+    works: [trackWork(11, 207, AMENDMENT)],
+    phasesByWork: { 11: [phaseRow({ id: 901 })] },
+    eventsByPhase: { 901: [event(1)] }
+  });
+
+  const [row] = (await pullWorks(track)).works.get('207');
+
+  assert.deepStrictEqual(Object.keys(row).sort(), [
+    'anticipatedDecisionDate', 'decisionDate', 'eaAct', 'isActive', 'milestones', 'outcome', 'phases',
+    'startDate', 'title', 'trackWorkId', 'workState', 'workType', 'workTypeId'
+  ]);
+  assert.deepStrictEqual(Object.keys(row.milestones[0]).sort(), [
+    'actualDate', 'anticipatedDate', 'eventType', 'name', 'numberOfDays', 'outcome', 'position'
+  ]);
+});
+
+test('types 4 and 14 are not mirrored and type 10 is', async () => {
+  const track = fakeTrackWorks({
+    works: [trackWork(11, 207, 4), trackWork(12, 207, 14), trackWork(13, 207, SUBSTANTIAL_START)]
+  });
+
+  const { works } = await pullWorks(track);
+
+  assert.deepStrictEqual(works.get('207').map(w => w.workTypeId), [SUBSTANTIAL_START]);
+  assert.deepStrictEqual(track.paths.filter(p => /\/works\/1[12]\//.test(p)), [],
+    'an excluded work costs Track no request');
+});
+
+test('an event whose configuration is HIDDEN is dropped', async () => {
+  const track = fakeTrackWorks({
+    works: [trackWork(11, 207, AMENDMENT)],
+    phasesByWork: { 11: [phaseRow({ id: 901 })] },
+    eventsByPhase: { 901: [event(1, { name: 'Shown' }), event(2, { name: 'Hidden' }, { visibility: 'HIDDEN' })] }
+  });
+
+  const [row] = (await pullWorks(track)).works.get('207');
+
+  assert.deepStrictEqual(row.milestones.map(m => m.name), ['Shown']);
+});
+
+test('the work outcome is the END milestone with an outcome in the last phase', async () => {
+  const track = fakeTrackWorks({
+    works: [trackWork(11, 207, SUBSTANTIAL_START)],
+    phasesByWork: { 11: [phaseRow({ id: 902, sort_order: 2 }), phaseRow({ id: 901, sort_order: 1 })] },
+    eventsByPhase: {
+      901: [event(1, {}, { event_position: 'END' })],
+      902: [
+        event(2, { outcome_id: 31 }, { id: 600, event_position: 'END' }),
+        event(3, {}, { event_position: 'END' })
+      ]
+    },
+    outcomesByConfiguration: { 600: [{ id: 30, name: 'Project is Not Substantially Started' }, { id: 31, name: STARTED }] }
+  });
+
+  const [row] = (await pullWorks(track)).works.get('207');
+
+  assert.strictEqual(row.outcome, STARTED);
+  assert.deepStrictEqual(row.milestones.map(m => m.outcome), [null, STARTED, null]);
+});
+
+test('one failed events read leaves that project out and the others intact', async () => {
+  const track = fakeTrackWorks({
+    works: [trackWork(11, 207, AMENDMENT), trackWork(13, 354, AMENDMENT)],
+    phasesByWork: { 11: [phaseRow({ id: 901 })], 13: [phaseRow({ id: 903 })] },
+    eventsByPhase: { 903: [event(1)] },
+    failEvents: (workPhaseId) => workPhaseId === 901
+  });
+
+  const { works, stats } = await pullWorks(track);
+
+  assert.deepStrictEqual([...works.keys()], ['354']);
+  assert.strictEqual(stats.failures, 1);
+});
+
+test('a project reached after the works budget is left out, so its stored works stay', async () => {
+  const track = fakeTrackWorks({
+    works: [trackWork(11, 207, AMENDMENT), trackWork(13, 354, AMENDMENT)]
+  });
+  // Each clock read is six minutes on: the start, 207's check at +6, 354's at +12.
+  let clock = 0;
+  const now = () => (clock += 6 * 60 * 1000);
+
+  const { works, stats } = await pullWorks(track, { now });
+
+  assert.deepStrictEqual([...works.keys()], ['207']);
+  assert.strictEqual(stats.budgetHit, true);
+});
+
+test('with the flag on the assessment phases are read once for both passes', async () => {
+  const track = fakeTrackWorks({ works: [trackWork(11, 207, ASSESSMENT)], phasesByWork: { 11: [phaseRow()] } });
+
+  const { phases, works } = await pullWorks(track);
+
+  assert.strictEqual(track.paths.filter(p => p === '/api/v1/works/11/phases').length, 1);
+  assert.strictEqual(phases.get('207').length, 1);
+  assert.strictEqual(works.get('207')[0].phases.length, 1);
+});
+
+test('with the flag off only the assessment phases are read and works stays empty', async () => {
+  const track = fakeTrackWorks({
+    works: [trackWork(11, 207, ASSESSMENT), trackWork(12, 207, AMENDMENT)],
+    phasesByWork: { 11: [phaseRow()] }
+  });
+
+  const { works } = await pullWorks(track, { works: false });
+
+  assert.deepStrictEqual(track.paths, ['/api/v1/works', '/api/v1/works/11/phases']);
+  assert.strictEqual(works.size, 0);
 });
 
 /**

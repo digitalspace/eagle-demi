@@ -249,6 +249,8 @@ param contactEmails = [
 // Same job as test. Secrets come from OpenShift `demi-app-secrets` through deploy-infra.sh.
 param trackApiBase = 'https://epictrack-api-c8b80a-prod.apps.gold.devops.gov.bc.ca'
 param trackClientId = 'demi-track-reader'
+// Off until the works[] public read is merged and deployed.
+param trackWorksSync = false
 param roleSyncClientId = 'demi-role-sync'
 
 // ── eagle-notify ──────────────────────────────────────────────────────────────────────────────

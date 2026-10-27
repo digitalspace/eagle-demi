@@ -5,12 +5,12 @@
  *
  * Runs inside the nightly Track sync (`sync-track-teams.js`) on the list that run already fetched:
  * one `GET /api/v1/projects` per night feeds both this and the closed-project credential sweep.
- * That run also hands over the work phases it pulled (`sources.fetchTrackWorkPhases`), so the
+ * That run also hands over the work phases and works it pulled (`sources.fetchTrackWorks`), so the
  * assessment rail eagle-public draws is written by the same pass that writes the names.
  *
  * `run` is the projects-only poll the `syncTrackProjects` timer drives, so a Track edit reaches
- * the public site within minutes. It reads the list alone and passes `poll`: phases, link heal
- * and slug migration stay with the nightly run.
+ * the public site within minutes. It reads the list alone and passes `poll`: phases, works, link
+ * heal and slug migration stay with the nightly run.
  *
  * A RE-MERGE MUST NEVER MOVE A RECORD'S LEVEL. `mergeTrackProject` derives `read` from the Eagle
  * record every time it is called, so re-running it over a stored row would rewrite an ACL that
@@ -48,9 +48,12 @@ const HEAL_CAP = 500;
  * Centroid, `epic_guid` and the Eagle match are NOT compared here: re-deriving them is the seed's
  * job, and this step exists to keep names, states and certificates current.
  *
- * `phases` is the one Track-owned field that is not a scalar, so it is compared by value. Both
- * sides come out of the same mapper, so key order is stable and a serialised compare holds.
+ * `phases`, `works` and `legislationTransitions` are the Track-owned fields that are not scalars,
+ * so they are compared by value. Both sides come out of the same mapper, so key order is stable
+ * and a serialised compare holds.
  */
+const TRACK_ARRAY_FIELDS = ['phases', 'works', 'legislationTransitions'];
+
 function trackChanges(existing, merged) {
   const changes = {};
   for (const field of TRACK_FIELDS) {
@@ -58,8 +61,10 @@ function trackChanges(existing, merged) {
       changes[field] = merged[field];
     }
   }
-  if (merged.phases && JSON.stringify(merged.phases) !== JSON.stringify(existing.phases)) {
-    changes.phases = merged.phases;
+  for (const field of TRACK_ARRAY_FIELDS) {
+    if (merged[field] && JSON.stringify(merged[field]) !== JSON.stringify(existing[field])) {
+      changes[field] = merged[field];
+    }
   }
   return changes;
 }
@@ -105,15 +110,16 @@ function projectsRepository() {
  * @param {Array}  apiProjects  raw `GET /api/v1/projects` rows
  * @param {object} [opts]       {live} write, {deps} test seam {projects, links}, {now} fixed timestamp,
  *                              {phases} Map of Track project id -> work phases,
+ *                              {works} Map of Track project id -> `works[]` rows,
  *                              {poll} skip link heal, slug migration and the Eagle-only pass.
  *                              `deps.links` is the links repository, injected by the tests.
  */
 async function syncProjects(apiProjects, opts = {}) {
-  const { live = false, deps = {}, phases = new Map(), poll = false } = opts;
+  const { live = false, deps = {}, phases = new Map(), works = new Map(), poll = false } = opts;
   const rows = apiProjects || [];
   const summary = {
     trackProjects: rows.length,
-    created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0,
+    created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, works: 0,
     shortLinks: 0, healed: 0, failures: 0
   };
 
@@ -232,9 +238,11 @@ async function syncProjects(apiProjects, opts = {}) {
     const existing = stored.get(id);
     const guid = track.epic_guid ? String(track.epic_guid) : null;
     const relink = !existing && guid ? eagleOnly.get(guid) : null;
-    // Every merge below takes the same options; the phase list is per project, so it is read once.
-    const mergeOpts = { now, phases: phases.get(id) };
+    // Every merge below takes the same options; the phase and work lists are per project, so they
+    // are read once.
+    const mergeOpts = { now, phases: phases.get(id), works: works.get(id) };
     if (mergeOpts.phases) summary.phases++;
+    if (mergeOpts.works) summary.works++;
 
     try {
       if (relink) {

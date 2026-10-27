@@ -11,6 +11,7 @@
  *   Track       ${TRACK_API_BASE}/api/v1/projects (live, bearer)          384 projects
  *               src/data/track_projects_enriched.json — offline fallback  382 projects
  *               ${TRACK_API_BASE}/api/v1/works + /works/<id>/phases       work phases, live only
+ *               + /milestones/workphases/<id>/events, /outcome-configurations  works[], flag TRACK_WORKS_SYNC
  *   Eagle       eagle-api /api/public/search                           359 projects, 60,661 docs, 213 List items
  *   Boundaries  frontend/public/assets/geojson/*.geojson (checked in)   281 features
  */
@@ -21,6 +22,7 @@ const path = require('path');
 const config = require('../config');
 const { logger } = require('../utils/logger');
 const { clientCredentialsToken } = require('../services/keycloak-client-token');
+const { mapLimit } = require('../utils/worker-pool');
 
 const EAGLE_API_BASE = process.env.EAGLE_API_BASE ||
   'https://eagle-dev.apps.silver.devops.gov.bc.ca/api/public';
@@ -240,7 +242,9 @@ function trackApiToExtract(project) {
     sub_type_name: nameOf(project.sub_type),
     type_name: nameOf(project.type),
     project_state_name: nameOf(project.project_state),
-    ea_certificate: project.ea_certificate
+    ea_certificate: project.ea_certificate,
+    eac_signed: project.eac_signed,
+    eac_expires: project.eac_expires
   };
 }
 
@@ -268,6 +272,14 @@ function fetchTrackProjects(token, get = fetchJson) {
 
 /** Track's `WorkTypeEnum.ASSESSMENT` (models/work_type.py). The EA work whose phases are the rail. */
 const ASSESSMENT_WORK_TYPE_ID = 6;
+
+const workTypeIdOf = (work) => Number(work.work_type_id ?? (work.work_type || {}).id);
+
+/** A work's Track project id as the string the Maps key on, or null when it names none. */
+function projectKeyOf(work) {
+  const projectId = work.project_id ?? (work.project || {}).id;
+  return projectId === undefined || projectId === null ? null : String(projectId);
+}
 
 /** Track sends timestamps with a zone; anything unparseable lands as null rather than a bad date. */
 function isoOrNull(value) {
@@ -314,57 +326,181 @@ function assessmentWorkByProject(works) {
 
   const byProject = new Map();
   for (const work of works || []) {
-    const workType = work.work_type_id ?? (work.work_type || {}).id;
-    if (Number(workType) !== ASSESSMENT_WORK_TYPE_ID) continue;
-    const projectId = work.project_id ?? (work.project || {}).id;
-    if (projectId === undefined || projectId === null) continue;
+    if (workTypeIdOf(work) !== ASSESSMENT_WORK_TYPE_ID) continue;
+    const key = projectKeyOf(work);
+    if (key === null) continue;
 
-    const key = String(projectId);
     const held = byProject.get(key);
     if (!held || preferred(work, held)) byProject.set(key, work);
   }
   return byProject;
 }
 
+/** Track `WorkTypeEnum` ids mirrored into `works[]`; 4, 8, 12, 13 and 14 stay out. */
+const MIRRORED_WORK_TYPE_IDS = new Set([1, 2, 3, 5, 6, 7, 9, 10, 11, 15, 16]);
+
+/** No new project's works are read once the works pull has run this long. */
+const worksBudgetMs = 10 * 60 * 1000;
+
+/** Projects whose works are read at once. */
+const WORKS_CONCURRENCY = 8;
+
+
+/** One milestone event in the public `works[].milestones[]` shape. Nothing else leaves Track. */
+function trackMilestoneToPublic(event, outcome) {
+  const conf = event.event_configuration || {};
+  return {
+    name: event.name || conf.name || null,
+    position: conf.event_position || null,
+    eventType: conf.event_type_id ?? null,
+    actualDate: isoOrNull(event.actual_date),
+    anticipatedDate: isoOrNull(event.anticipated_date),
+    outcome: outcome ?? null,
+    numberOfDays: event.number_of_days ?? null
+  };
+}
+
 /**
- * Track work phases, `trackProjectId -> phases[]` sorted by `sortOrder`.
+ * One Track work in the public `works[]` shape: a literal, so no staff note or reference rides along.
+ * Outcome = last phase's END milestone with an outcome; type-10 works end earlier phases with none.
+ */
+function trackWorkToPublic(work, phaseEvents) {
+  const last = phaseEvents.length ? phaseEvents[phaseEvents.length - 1].milestones : [];
+  const decided = last.filter(m => m.position === 'END' && m.outcome !== null);
+  return {
+    trackWorkId: work.id,
+    workTypeId: workTypeIdOf(work),
+    workType: nameOf(work.work_type) || null,
+    title: work.title || work.simple_title || null,
+    eaAct: nameOf(work.ea_act) || null,
+    startDate: isoOrNull(work.start_date),
+    isActive: work.is_active === true,
+    workState: work.work_state || null,
+    decisionDate: isoOrNull(work.work_decision_date),
+    anticipatedDecisionDate: isoOrNull(work.anticipated_decision_date),
+    outcome: decided.length ? decided[decided.length - 1].outcome : null,
+    phases: phaseEvents.map(p => p.phase),
+    milestones: phaseEvents.flatMap(p => p.milestones)
+  };
+}
+
+const bySortOrder = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0);
+
+/**
+ * Track work phases and, with `opts.works`, every mirrored work, both keyed by Track project id.
  *
  * CALL PLAN: one `GET /works` for the work list, then one `GET /works/<id>/phases` per assessment
  * work — about one request per project a night. `GET /work-phases` cannot replace the pair: its
  * rows carry no project id, and it filters to completed, legislated, over- or under-budget phases
  * (it is the insights report, api/services/work_phase.py). `GET /projects?with_works=true` only
- * FILTERS the project list — its response schema carries no works at all.
+ * FILTERS the project list — its response schema carries no works at all. With `opts.works`, each
+ * mirrored work adds its phases and one events read per phase; outcome names are read once per
+ * event configuration, as Track refuses `/outcome-configurations/` without `configuration_id`.
  *
  * One work's phases failing is logged and skipped rather than thrown: the other ~400 projects'
- * phases are worth more than an all-or-nothing run.
+ * phases are worth more than an all-or-nothing run. A failed read or the budget leaves a project
+ * out of `works`, so the sync keeps its stored works rather than writing a shorter list.
  *
  * @param {function} [get] test seam, and the sync's own `deps.fetchJson`
+ * @param {object} [opts] {works} pull works too, {now} clock seam, {budgetMs}
  */
-async function fetchTrackWorkPhases(token, get = fetchJson) {
+async function fetchTrackWorks(token, get = fetchJson, opts = {}) {
+  const { works: withWorks = false, now = Date.now, budgetMs = worksBudgetMs } = opts;
+  const base = `${config.trackApiBase}/api/v1`;
   const headers = { Authorization: `Bearer ${token}` };
-  const works = await get(`${config.trackApiBase}/api/v1/works`, headers);
+  const workList = await get(`${base}/works`, headers);
 
-  const byProject = new Map();
-  for (const [projectId, work] of assessmentWorkByProject(works)) {
+  // Shared by both passes, so the assessment work's phases are read once.
+  const phaseRows = new Map();
+  let requests = 0;
+  const phaseRowsOf = (workId) => {
+    if (!phaseRows.has(workId)) {
+      requests++;
+      phaseRows.set(workId, get(`${base}/works/${workId}/phases`, headers));
+    }
+    return phaseRows.get(workId);
+  };
+
+  const phases = new Map();
+  for (const [projectId, work] of assessmentWorkByProject(workList)) {
     try {
-      const rows = await get(`${config.trackApiBase}/api/v1/works/${work.id}/phases`, headers);
-      const phases = (rows || []).map(trackPhaseToPublic)
-        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
-      if (phases.length) byProject.set(projectId, phases);
+      const mapped = ((await phaseRowsOf(work.id)) || []).map(trackPhaseToPublic).sort(bySortOrder);
+      if (mapped.length) phases.set(projectId, mapped);
     } catch (err) {
       logger.error(`[seed] work ${work.id} phases`, { error: err.message });
     }
   }
-  return byProject;
-}
 
-/**
- * Track work phases when a reader client is configured, an EMPTY MAP otherwise — the checked-in
- * export carries none, and a caller that has no Track credentials must still finish its run.
- */
-async function loadTrackWorkPhases() {
-  if (!trackFeedConfigured()) return new Map();
-  return fetchTrackWorkPhases(await clientToken(config.trackClientId, config.trackClientSecret));
+  const works = new Map();
+  const stats = { projects: 0, works: 0, requests: 0, elapsedMs: 0, failures: 0, budgetHit: false };
+  if (!withWorks) return { phases, works, stats };
+
+  const counted = (url) => { requests++; return get(url, headers); };
+  const outcomeNames = new Map();
+  const outcomeNamesFor = (configurationId) => {
+    if (!outcomeNames.has(configurationId)) {
+      outcomeNames.set(configurationId,
+        counted(`${base}/outcome-configurations/?configuration_id=${configurationId}`)
+          .then(rows => new Map((rows || []).map(o => [o.id, o.name]))));
+    }
+    return outcomeNames.get(configurationId);
+  };
+
+  const milestonesOf = async (workPhaseId) => {
+    const events = (await counted(`${base}/milestones/workphases/${workPhaseId}/events`)) || [];
+    const shown = events.filter(e => (e.event_configuration || {}).visibility !== 'HIDDEN');
+    const order = (e) => (e.event_configuration || {}).sort_order || 0;
+    shown.sort((a, b) => order(a) - order(b) || a.id - b.id);
+    return Promise.all(shown.map(async (e) => {
+      const configurationId = e.event_configuration_id ?? (e.event_configuration || {}).id;
+      const outcome = e.outcome_id == null ? null
+        : (await outcomeNamesFor(configurationId)).get(e.outcome_id);
+      return trackMilestoneToPublic(e, outcome);
+    }));
+  };
+
+  const workOf = async (work) => {
+    const rows = ((await phaseRowsOf(work.id)) || [])
+      .map(row => ({ id: (row.work_phase || {}).id, phase: trackPhaseToPublic(row) }))
+      .sort((a, b) => bySortOrder(a.phase, b.phase));
+    const phaseEvents = [];
+    for (const { id, phase } of rows) phaseEvents.push({ phase, milestones: await milestonesOf(id) });
+    return trackWorkToPublic(work, phaseEvents);
+  };
+
+  const byProject = new Map();
+  for (const work of workList || []) {
+    const key = projectKeyOf(work);
+    if (!MIRRORED_WORK_TYPE_IDS.has(workTypeIdOf(work)) || key === null) continue;
+    if (!byProject.has(key)) byProject.set(key, []);
+    byProject.get(key).push(work);
+  }
+
+  const started = now();
+  const requestsBefore = requests;
+  let skipped = 0;
+  await mapLimit([...byProject], WORKS_CONCURRENCY, async ([projectId, projectWorks]) => {
+    if (now() - started > budgetMs) { stats.budgetHit = true; skipped++; return; }
+    try {
+      const rows = [];
+      for (const work of projectWorks.sort((a, b) => a.id - b.id)) rows.push(await workOf(work));
+      works.set(projectId, rows);
+      stats.works += rows.length;
+    } catch (err) {
+      stats.failures++;
+      logger.error(`[seed] project ${projectId} works`, { error: err.message });
+    }
+  });
+  stats.projects = works.size;
+  stats.requests = requests - requestsBefore;
+  stats.elapsedMs = now() - started;
+  if (stats.budgetHit) {
+    logger.warn(`[seed] works budget hit: projects=${works.size} skipped=${skipped} ` +
+      `requests=${stats.requests}`);
+  }
+  logger.info(`[seed] works pull: projects=${stats.projects} works=${stats.works} ` +
+    `requests=${stats.requests} elapsedMs=${stats.elapsedMs} failures=${stats.failures}`);
+  return { phases, works, stats };
 }
 
 /**
@@ -464,8 +600,10 @@ module.exports = {
   trackFeedConfigured,
   fetchTrackProjects,
   loadTrackProjects,
-  fetchTrackWorkPhases,
-  loadTrackWorkPhases,
+  MIRRORED_WORK_TYPE_IDS,
+  worksBudgetMs,
+  trackWorkToPublic,
+  fetchTrackWorks,
   fetchEagleProjects,
   streamEagleDocuments,
   fetchListLookup,
