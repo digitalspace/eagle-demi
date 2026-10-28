@@ -1,17 +1,7 @@
 'use strict';
 
-/**
- * Field visibility policy for a stored project. Security policy as data: reviewed in diffs, tested
- * by test/vis/catalog-completeness.test.js, never read from Cosmos.
- *
- * `defaultVis` is the baseline level a field is visible at; `maxVis` is the ceiling a per-record
- * dial may ever raise it to. A field absent from this table is removed from every response.
- *
- * Day-one defaults reproduce today's anonymous output (docs/rbac-architecture.md §2 item 3), so
- * almost everything is 4/4. Keys may be dotted one level; the redactor descends only for those.
- * A `when` names a predicate in src/vis/predicates.js: true widens the field to `maxVis`, and a
- * dial beats it (§2 item 7). redact.js throws at load on a name predicates.js does not export.
- */
+// Field visibility for a stored project: `defaultVis` is the base level, `maxVis` the most a dial
+// may raise it to; an uncatalogued field never leaves the API (docs/rbac-architecture.md §2).
 
 const { LEGISLATIONS } = require('../../domain/project-legislation');
 
@@ -51,6 +41,12 @@ const catalog = {
   eacExpires: { defaultVis: 4, maxVis: 4 },
   // Derived by the merge from `legislationYearList` and a Track milestone date.
   legislationTransitions: { defaultVis: 4, maxVis: 4 },
+  // Built from the anonymous view of this row (merge/assessments.js), so they hold only public data.
+  assessments: { defaultVis: 4, maxVis: 4 },
+  phaseIds: { defaultVis: 4, maxVis: 4 },
+  activeWork: { defaultVis: 4, maxVis: 4 },
+  // The dating pass's input to `assessments`; staff only, as the public sees it through them.
+  documentPhases: { defaultVis: 2, maxVis: 2 },
   // The project's own short link code. The public page it points at is public, so the code is.
   shortCode: { defaultVis: 4, maxVis: 4 },
   // Earlier codes: printed somewhere, still resolving, so as public as the current one.
@@ -81,9 +77,8 @@ const catalog = {
   // assessed under as `{_id, name, item}` — `item` is the public BC Laws URL the label links to.
   CEAALink: { defaultVis: 4, maxVis: 4 },
   applicableRegulation: { defaultVis: 4, maxVis: 4 },
-  // Eagle's own record dates and build tag. Already on the public project page — `dateUpdated` is
-  // the "Last updated" stamp there, and is Eagle's edit date, not `updatedAt`, which is DEMI's own
-  // sync stamp and moves on every re-merge.
+  // Already on the public project page. `dateUpdated` is Eagle's edit date ("Last updated"), not
+  // `updatedAt`, DEMI's sync stamp that moves on every re-merge.
   dateAdded: { defaultVis: 4, maxVis: 4 },
   dateUpdated: { defaultVis: 4, maxVis: 4 },
   build: { defaultVis: 4, maxVis: 4 },
@@ -108,8 +103,8 @@ const catalog = {
   responsibleEPD: { defaultVis: 4, maxVis: 4 },
   eaoMember: { defaultVis: 4, maxVis: 4 },
 
-  // Public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2).
-  // The phones are office lines on the same contact card as the emails, and carry the same policy.
+  // Public by EAO policy (docs/rbac-architecture.md §3 question 2). The phones are office lines on
+  // the same contact card as the emails.
   projectLeadEmail: { defaultVis: 4, maxVis: 4 },
   responsibleEPDEmail: { defaultVis: 4, maxVis: 4 },
   projectLeadPhone: { defaultVis: 4, maxVis: 4 },
@@ -146,13 +141,8 @@ const catalog = {
   dispute: { defaultVis: 2, maxVis: 2 },
   disputeDate: { defaultVis: 2, maxVis: 2 },
 
-  // Pinned documents and the pinned-proponent list, both stored top level in Mongo. They were only
-  // ever reachable under `sources.eagle`, which is maxVis 0 — these entries are what publishes them.
-  // `pins` rows are `{_id, name, province}`; `featuredDocuments` are Eagle document ids.
-  //
-  // `pins` is public only through its predicate: eagle-api publishes the pinned-proponent list per
-  // project with `pinsRead[]` and ignores the organization's own `read` (controllers/pins.js), so
-  // the project ACL that gates every other field here says nothing about this one.
+  // eagle-api publishes the pinned-proponent list by `pinsRead[]` alone (controllers/pins.js), so
+  // `pins` is public only through its predicate, never through the project ACL.
   pins: { defaultVis: 2, maxVis: 4, when: 'pinsPublished' },
   // Not stored: the redactor derives it from `pinsRead`, so staff see the publish state, not the ACL.
   pinsPublished: { defaultVis: 2, maxVis: 2 },

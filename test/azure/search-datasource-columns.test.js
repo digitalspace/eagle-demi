@@ -192,6 +192,44 @@ test('the projects tags columns only hand the indexer a list of strings', () => 
   }
 });
 
+// The assessment columns, guarded for the same `maxFailedItems: 0` reason as `legislationYear`.
+test('the projects assessment columns are guarded, filterable and public', () => {
+  const [idx, ds] = PAIRS[1];
+  const columns = projectedColumns(ds.container.query);
+  const catalog = require('../../src/vis/catalog/index-projects');
+  const { PROJECT_TO_INDEX } = require('../../src/vis/catalog/index-projects-renames');
+  const expected = {
+    phaseIds: ['Collection(Edm.String)',
+      '(IS_ARRAY(c.phaseIds) ? ARRAY(SELECT VALUE p FROM p IN c.phaseIds WHERE IS_STRING(p)) : null)'],
+    activeWorkId: ['Edm.Int32', '(IS_NUMBER(c.activeWork.trackWorkId) ? c.activeWork.trackWorkId : null)'],
+    activeWorkAct: ['Edm.String', '(IS_STRING(c.activeWork.eaAct) ? c.activeWork.eaAct : null)'],
+    activeWorkType: ['Edm.String', '(IS_STRING(c.activeWork.workType) ? c.activeWork.workType : null)'],
+    activeWorkPhase: ['Edm.String', '(IS_STRING(c.activeWork.currentPhase) ? c.activeWork.currentPhase : null)']
+  };
+
+  for (const [name, [type, expr]] of Object.entries(expected)) {
+    const field = idx.fields.find(f => f.name === name);
+    assert.ok(field, `the projects index must declare ${name}`);
+    assert.deepStrictEqual(
+      [field.type, field.filterable, field.retrievable, field.searchable, field.sortable, field.facetable],
+      [type, true, true, false, false, false], name);
+    assert.strictEqual(columns.get(name), expr);
+    assert.deepStrictEqual(catalog[name], { defaultVis: 4, maxVis: 4 }, name);
+  }
+  assert.deepStrictEqual(PROJECT_TO_INDEX.activeWork,
+    ['activeWorkId', 'activeWorkAct', 'activeWorkType', 'activeWorkPhase']);
+});
+
+// A projection reading a key the merge never stores indexes null forever and fails nothing.
+test('the projects activeWork columns read keys the merge stores', () => {
+  const { deriveAssessments } = require('../../src/merge/assessments');
+  const fx = require('../fixtures/act-assessments');
+  const stored = Object.keys(deriveAssessments(fx.only2018WithWorks()).activeWork);
+  const read = [...PAIRS[1][1].container.query.matchAll(/c\.activeWork\.(\w+)/g)].map(match => match[1]);
+  assert.ok(read.length, 'the projection must read activeWork');
+  assert.deepStrictEqual(read.filter(key => !stored.includes(key)), []);
+});
+
 // Searchable so an old name finds the project; never retrievable, like `nameTokens` and
 // `searchLabels` (see src/vis/catalog/index-projects.js).
 test('the projects tags field is a searchable, non-retrievable string list', () => {

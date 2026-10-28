@@ -577,7 +577,7 @@ resource trackTeamsAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = i
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI Track teams sync stalled or failing'
-    description: 'In the last 26 hours the Track teams sync wrote no `[track-teams] mode=live` line, or a line with failures above 0, or `nightly run failed`. Project team roles and the Track project mirror are not being updated. Check the demi-api function app, then run src/scripts/sync-track-teams.js (dry run) by hand for the error.'
+    description: 'In the last 26 hours the Track teams sync wrote no `[track-teams] mode=live` line, or a line with failures above 0, or `nightly run failed`. Project team roles, the Track project mirror or the assessment pass are not being updated. With ASSESSMENT_PASS on, a failed assessment pass adds to that failures count, and its own `[assessment-phases]` lines name the project. Check the demi-api function app, then run src/scripts/sync-track-teams.js (dry run) by hand for the error.'
     // Warning, like trackProjectsPollAlert.
     severity: 2
     enabled: true

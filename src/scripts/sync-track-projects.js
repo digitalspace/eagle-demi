@@ -11,6 +11,7 @@ const {
 } = require('../helpers/short-links');
 const { writeGuarded } = require('../helpers/etag-write');
 const { TRACK_PRECEDENCE, mergeTrackProject } = require('../merge/project');
+const { deriveAssessments } = require('../merge/assessments');
 const { clientToken, fetchTrackProjects, trackApiToExtract } = require('../seed/sources');
 const config = require('../config');
 const linksRepository = require('../repositories/links');
@@ -43,6 +44,10 @@ function trackChanges(existing, merged) {
 }
 
 const eagleOf = (row) => (row.sources || {}).eagle || null;
+
+/** `row` with `assessments`, `phaseIds` and `activeWork` derived again, keeping names off `stored`'s. */
+const withDerived = (row, stored) =>
+  Object.assign(row, deriveAssessments(row, { previous: stored && stored.assessments }));
 
 /** A row with a public page and no code yet, or still on a pre-slug random one. */
 const owesLink = (row) => Boolean(row.eagleId) && (!row.shortCode || needsSlugMigration(row));
@@ -224,7 +229,7 @@ async function syncProjects(apiProjects, opts = {}) {
         await insert(id, async () => {
           const twin = (live && await repo.getById(systemAccess(), relink.id)) || relink;
           const merged = mergeTrackProject(track, eagleOf(twin), mergeOpts);
-          return { ...twin, ...merged, read: twin.read, isPublished: twin.isPublished };
+          return withDerived({ ...twin, ...merged, read: twin.read, isPublished: twin.isPublished }, twin);
         });
         continue;
       }
@@ -235,6 +240,7 @@ async function syncProjects(apiProjects, opts = {}) {
         // and no job may widen anything.
         merged.read = readForLevel(1);
         merged.isPublished = false;
+        withDerived(merged, null);
         summary.created++;
         await insert(id, async () => merged);
         continue;
@@ -269,7 +275,7 @@ async function syncProjects(apiProjects, opts = {}) {
         const changes = trackChanges(current, mergeTrackProject(track, eagleOf(current), mergeOpts));
         const moved = Object.keys(changes).length > 0;
         if (!moved && !owes(current)) return { status: 'unchanged' };
-        const row = { ...current, ...changes, sources: { ...current.sources, track } };
+        const row = withDerived({ ...current, ...changes, sources: { ...current.sources, track } }, current);
         if (moved) row.updatedAt = now;
         const minted = await mintRow(row);
         await repo.upsert(row, { etag: current._etag });

@@ -246,6 +246,20 @@ names, the search drops both, retries once, marks the result `meta.degraded` and
 the Projects count is not retried and reads as unknown. An index that has `tags` but not
 `tagsTokens` loses both until it is widened. That is a fallback, not the deploy path.
 
+Five `projects` columns carry the DEMI-only assessment fields of a project row. Each is filterable,
+retrievable, not searchable, not sortable and not facetable. Each is guarded in `demi-projects-ds`,
+so a row that lacks the field or holds the wrong type indexes as null instead of failing the run.
+
+| Column | Type | Source |
+|---|---|---|
+| `phaseIds` | `Collection(Edm.String)` | `c.phaseIds`, string elements only |
+| `activeWorkId` | `Edm.Int32` | `c.activeWork.trackWorkId`, the Track work id |
+| `activeWorkAct` | `Edm.String` | `c.activeWork.eaAct` |
+| `activeWorkType` | `Edm.String` | `c.activeWork.workType` |
+| `activeWorkPhase` | `Edm.String` | `c.activeWork.currentPhase` |
+
+They are a plain widening: apply them with the same `demi-devbox.sh apply` step as `tags`.
+
 `proponentId` on `projects` was added on 2026-09-07, and it is a plain widening — no analyzer, no
 rebuild. The facet panel filters by Organization ObjectId while the `proponent` column holds the
 name the list renders and sorts on, so `src/search/eagle-query.js` maps `and[proponent]=<ObjectId>`
