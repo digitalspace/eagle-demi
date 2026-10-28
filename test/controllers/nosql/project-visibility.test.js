@@ -402,6 +402,19 @@ test('a project the caller cannot read is a 404, and writes nothing', async (t) 
   assert.strictEqual(patched.length, 0);
 });
 
+test('a project deleted between the read and the patch is a 404, and writes nothing', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  t.mock.method(projects, 'getById', async () => ({ ...STORED }));
+  const writes = fakeStore(t, [null]);
+
+  const res = mockRes();
+  await projectController.setVisibility(
+    { params: { id: '207' }, query: {}, body: { vis: { name: 2 } }, user: SYSADMIN }, res);
+
+  assert.strictEqual(res.statusCode, 404);
+  assert.deepStrictEqual(writes, [], 'a patch with no etag would answer Cosmos 404 as a 500');
+});
+
 test('a write that keeps losing its etag race', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const classifyFailing = async (err) => {

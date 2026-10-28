@@ -33,6 +33,7 @@ const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS,
   LEGISLATION_KEY
 } = require('../../merge/project');
+const { deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
 const {
@@ -61,6 +62,8 @@ function writeConflict(res, what, id) {
 
 const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 100;
+// Built by the merge and the dating pass from other fields, so no caller writes them.
+const DERIVED_KEYS = ['assessments', 'phaseIds', 'activeWork', 'documentPhases'];
 const LINK_RACE_ERROR = 'A short link was being written by another request. Try again.';
 
 const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/g;
@@ -523,6 +526,9 @@ exports.updateProject = async (req, res) => {
     // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level: the dial map is
     // policy rather than content, and no route sets it yet.
     const refused = refusedWriteKeys('projects', changes, access, existing);
+    for (const key of DERIVED_KEYS) {
+      if (Object.hasOwn(changes, key) && !refused.includes(key)) refused.push(key);
+    }
     // The tag copy below writes the other row of the pair, so its dial on `tags` must allow this
     // caller too. Same message as a refusal here: nothing about that row is told to a caller who may
     // not read it.
@@ -562,6 +568,7 @@ exports.updateProject = async (req, res) => {
           trackProjectId: current.trackProjectId,
           updatedAt: new Date().toISOString()
         };
+        Object.assign(row, deriveAssessments(row, { previous: current.assessments }));
         return {
           status: 'saved',
           replaced: current,
@@ -784,6 +791,8 @@ exports.setVisibility = async (req, res) => {
       if (raced(err)) return writeConflict(res, 'project classify', existing.id);
       throw err;
     }
+    // Deleted between the read above and the patch's own read.
+    if (!saved) return res.status(404).json({ error: 'Project not found' });
 
     // Field NAMES and LEVELS only, never values — same rule as project.update, and it matters more
     // here: the fields being classified are the ones somebody decided were sensitive.
