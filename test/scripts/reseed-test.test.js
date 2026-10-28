@@ -320,7 +320,8 @@ test('wait fails when a keep id is listed for delete', t => {
 test('wait prints the --max-surplus a refused reconcile needs', t => {
   const ctx = sandbox(t);
   const r = waitSeed(ctx, seedSummary({
-    failures: ['--reconcile refused before any delete: documents surplus 1300 exceeds the ceiling 1247'],
+    failures: ['--reconcile refused before any delete — nothing removed from either container: ' +
+      'documents surplus 1300 exceeds the ceiling 1247. Re-run with --max-surplus <n> if the deletion really is that large.'],
     reconcile: {
       documents: { wouldDelete: 1300, wouldKeep: 2, ceiling: 1247 },
       projects: { wouldDelete: 17, wouldKeep: ['x'], ceiling: 50 }
@@ -328,6 +329,16 @@ test('wait prints the --max-surplus a refused reconcile needs', t => {
   }));
   assert.strictEqual(r.status, 1);
   assert.match(r.out, /NEED --max-surplus 1302 /);
+});
+
+test('wait fails a refusal with no reconcile block and prints no --max-surplus hint', t => {
+  const ctx = sandbox(t);
+  const refusal = '--reconcile refused before any delete — nothing removed from either container: ' +
+    'the documents fetch was never verified complete against a searchResultsTotal';
+  const r = waitSeed(ctx, seedSummary({ failures: [refusal], reconcile: null }));
+  assert.strictEqual(r.status, 1);
+  assert.ok(r.out.includes(`FAIL seed failure: ${refusal}`), r.out);
+  assert.doesNotMatch(r.out, /NEED --max-surplus/);
 });
 
 test('wait never sends a remote timeout above 900 s', t => {

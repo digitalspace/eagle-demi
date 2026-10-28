@@ -327,7 +327,8 @@ def n: if type == "array" then length elif type == "number" then . else 0 end;
   | "FAIL keep id \(.id) matches Track project \(.trackProjectId): stop for A9"),
 (.keep // [] | .[] | select(.surplus == true and .kept != true) | "FAIL keep id \(.id) is listed for delete"),
 (.keep // [] | .[] | select(.rowId == null) | "NOTE keep id \(.id) has no row in test DEMI"),
-(if ([.failures // [] | .[] | tostring | select(test("refused"))] | length) > 0
+(if .reconcile != null and ([.failures // [] | .[] | tostring
+    | select(test("^--reconcile refused .* exceeds the ceiling "))] | length) > 0
   then "NEED --max-surplus \([.reconcile.documents, .reconcile.projects | select(. != null)
     | ((.wouldDelete | n) + (.wouldKeep | n))] | max) (wouldDelete + wouldKeep of the larger container; needs A2)"
   else empty end)'

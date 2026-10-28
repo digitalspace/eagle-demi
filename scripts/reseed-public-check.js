@@ -333,4 +333,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { PROD_API, TEST_ORIGIN, makeRequest, readKeepIds, snapshot, residue, residueLive, verify, main };
+module.exports = { PROD_API, TEST_ORIGIN, makeRequest, snapshot, residue, residueLive, verify, main };

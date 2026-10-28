@@ -103,7 +103,7 @@ async function main(argv, deps = {}) {
   return out.errors ? 1 : 0;
 }
 
-module.exports = { COUNTED, INDEXED, parseArgs, parseKeepIds, countContainers, main };
+module.exports = { COUNTED, INDEXED, parseArgs, countContainers, main };
 
 if (require.main === module) {
   // Unconfigured, every read answers empty and the line would look like an empty database.

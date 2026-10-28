@@ -17,11 +17,13 @@ function fakeFetch(world) {
     const u = new URL(url);
     const dataset = u.searchParams.get('dataset');
     if (dataset) {
-      const base = u.href.startsWith(PROD_API) ? 'prod' : 'test';
-      const rows = world.search[`${base}|${dataset}`] || [];
+      const key = `${u.href.startsWith(PROD_API) ? 'prod' : 'test'}|${dataset}`;
+      const rows = world.search[key] || [];
       const size = Math.min(Number(u.searchParams.get('pageSize')), world.pageCap ?? Infinity);
       const start = Number(u.searchParams.get('pageNum')) * size;
-      return Response.json([{ searchResults: rows.slice(start, start + size), meta: [{ searchResultsTotal: rows.length }] }]);
+      // `world.meta[key]` replaces the page's meta; undefined drops the field from the JSON.
+      const meta = world.meta && key in world.meta ? world.meta[key] : [{ searchResultsTotal: rows.length }];
+      return Response.json([{ searchResults: rows.slice(start, start + size), meta }]);
     }
     if (u.pathname.endsWith('/download')) return new Response('x', { status: 206 });
     const body = world.paths[u.pathname];
@@ -98,6 +100,27 @@ test('residue reads every page when the API caps the page size', async () => {
 
   assert.deepStrictEqual(result.datasets.RecentActivity.testOnly, []);
   assert.strictEqual(result.datasets.RecentActivity.prod, 3);
+});
+
+test('residue reads an empty dataset whose meta is [] as zero rows', async () => {
+  // eagle-api's $facet answers meta: [] when the dataset has no rows.
+  const world = passingWorld();
+  world.search['test|RecentActivity'] = [];
+  world.meta = { 'test|RecentActivity': [] };
+
+  const result = await residue({ request: makeRequest(fakeFetch(world)), keepIds: [KEEP] });
+
+  assert.strictEqual(result.datasets.RecentActivity.test, 0);
+});
+
+test('residue reads an empty dataset with no meta as zero rows', async () => {
+  const world = passingWorld();
+  world.search['test|RecentActivity'] = [];
+  world.meta = { 'test|RecentActivity': undefined };
+
+  const result = await residue({ request: makeRequest(fakeFetch(world)), keepIds: [KEEP] });
+
+  assert.strictEqual(result.datasets.RecentActivity.test, 0);
 });
 
 test('verify fails when a prod project id is missing on test', async () => {
