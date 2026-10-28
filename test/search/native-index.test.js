@@ -122,6 +122,19 @@ test('OData builder', async (t) => {
       /cannot filter on documentUrl here/);
   });
 
+  await t.test('an any-of filter lands on its collection column as any(), a value with a comma kept whole', () => {
+    const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    const filterWith = values => indexFilter(MAP, { filters: {}, anyOf: { phaseIds: values } }, open).filter;
+    assert.strictEqual(filterWith(['ph2002', 'ph2018']), "(phaseIds/any(p: search.in(p, 'ph2002,ph2018', ',')))");
+    assert.strictEqual(filterWith(["a,b", "it's"]), "(phaseIds/any(p: (p eq 'a,b' or p eq 'it''s')))");
+  });
+
+  await t.test('a paged index refuses an any-of filter it has no collection column for', () => {
+    const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    assert.throws(() => indexFilter(INDEX_MAPS.documents, { filters: {}, anyOf: { phaseIds: ['ph2002'] } }, open),
+      /cannot filter on phaseIds here/);
+  });
+
   await t.test('a paged index refuses a flag, even on a column it maps', () => {
     const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
     assert.throws(() => indexFilter(INDEX_MAPS.documents, { filters: {}, flags: { isFeatured: true } }, open),
