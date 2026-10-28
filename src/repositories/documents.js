@@ -1034,6 +1034,7 @@ module.exports = {
   setAclForProject,
   extractionRowsForProject,
   parentFieldRowsForProject,
+  projectedRowsForProject,
   parentFieldRowsWithNoProject,
   displayNameRowsWithNoProject,
   listSeededIds,

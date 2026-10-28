@@ -441,14 +441,15 @@ async function patchBoundaries(id, { regionalDistrict, municipality, electoralDi
   ]);
 }
 
-/** Set visibility dials (`null` removes one) and re-derive the fields built from the anonymous view. */
+/** Set visibility dials (`null` removes one) and re-derive the fields built from the anonymous view; null when the row is gone. */
 async function patchVis(id, vis) {
   // Never upsert. One whole-map `/vis` set is safe only under the etag; a set per dial plus the
   // derived fields would pass patch's op cap.
   const key = String(id);
 
   const write = async (row) => {
-    const dials = row && row.vis && typeof row.vis === 'object' ? row.vis : {};
+    if (!row) return null;
+    const dials = row.vis && typeof row.vis === 'object' ? row.vis : {};
     const unchanged = Object.entries(vis)
       .every(([field, level]) => (level === null ? !Object.hasOwn(dials, field) : dials[field] === level));
     if (unchanged) return row;
@@ -458,13 +459,13 @@ async function patchVis(id, vis) {
       if (level === null) delete nextVis[field];
       else nextVis[field] = level;
     }
-    const derived = deriveAssessments({ ...row, vis: nextVis }, { previous: row && row.assessments });
+    const derived = deriveAssessments({ ...row, vis: nextVis }, { previous: row.assessments });
     return cosmos.patch(CONTAINER, key, key, [
       { op: 'set', path: '/vis', value: nextVis },
       { op: 'set', path: '/assessments', value: derived.assessments },
       { op: 'set', path: '/phaseIds', value: derived.phaseIds },
       { op: 'set', path: '/activeWork', value: derived.activeWork }
-    ], undefined, row && row._etag);
+    ], undefined, row._etag);
   };
 
   try {

@@ -11,6 +11,8 @@ const audit = require('../../../src/utils/audit');
 const projects = require('../../../src/repositories/projects');
 const projectController = require('../../../src/controllers/nosql/project');
 const { mockRes } = require('../../helpers/eagle-mirror-fixtures');
+const { deriveAssessments } = require('../../../src/merge/assessments');
+const fx = require('../../fixtures/act-assessments');
 
 audit._setTransport(async () => {});
 
@@ -85,4 +87,37 @@ test('PUT /projects/:id locked Act', async (t) => {
     assert.strictEqual(res.statusCode, 409);
     assert.strictEqual(writes.length, 1, 'only the write that lost the race was sent');
   });
+});
+
+test('PUT /projects/:id derived fields', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const stored = () => {
+    const row = { ...fx.only2002(), _etag: '"0x1"' };
+    return Object.assign(row, deriveAssessments(row));
+  };
+
+  await t.test('the write carries assessments and phase ids derived from the changed row', async () => {
+    const writes = stage(t, [stored()]);
+    const referral = { _id: fx.PHASES.referral.id, name: fx.PHASES.referral.name };
+
+    const res = await put({ eaCertificate: 'E10-02', currentPhaseName: referral });
+
+    assert.strictEqual(res.statusCode, 200);
+    const [written] = writes;
+    assert.strictEqual(written.assessments[0].certificate.number, 'E10-02',
+      'the stored copy still named E10-01');
+    assert.ok(written.phaseIds.includes(fx.PHASES.referral.id));
+  });
+
+  for (const key of ['assessments', 'phaseIds', 'activeWork', 'documentPhases']) {
+    await t.test(`a body setting ${key} is refused and writes nothing`, async () => {
+      const writes = stage(t, [stored()]);
+
+      const res = await put({ name: 'Valley Mine', [key]: [] });
+
+      assert.strictEqual(res.statusCode, 400);
+      assert.match(res.body.error, new RegExp(key));
+      assert.strictEqual(writes.length, 0);
+    });
+  }
 });

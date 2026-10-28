@@ -7,6 +7,8 @@ const { LEGISLATIONS, EAGLE_DATE_FLOOR, isRegistryYear, yearOf } = require('../d
 const { redactForAccess } = require('../vis/redact');
 
 const ASSESSMENT_WORK_TYPE = 6;
+/** Built from other fields by `deriveAssessments` and the dating pass; no caller writes them. */
+const DERIVED_FIELDS = Object.freeze(['documentPhases', 'assessments', 'phaseIds', 'activeWork']);
 const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
 const POST_DECISION_ROW = 'Post Decision';
 const OFF_RAIL_PHASES = ['Other', 'Termination', 'Withdrawal'];
@@ -186,7 +188,7 @@ function datePhasesFromDocuments(documents, periods, phaseRows, acts) {
   const milestones = (periods || []).flatMap((period) => {
     const start = timeOf(period && period.dateStarted);
     const year = start === null ? null : actAt(allYears, start, startOf);
-    if (year === null) return [];
+    if (year === null || start < (inForceOf(year) ?? -Infinity)) return [];
     const end = timeOf(period.dateCompleted);
     return [{
       legislationYear: year,
@@ -226,16 +228,16 @@ function phaseIdsOf(view, assessments) {
   return [...new Set(ids.filter(id => typeof id === 'string' && id))];
 }
 
-/** The live work, an assessment first, then the newest; null when none is live. */
+/** The live work with a Track id, an assessment first, then the newest; null when there is none. */
 function activeWorkOf(view) {
   const [work] = worksOf(view)
-    .filter(one => one.isActive === true)
+    .filter(one => one.isActive === true && Number.isFinite(one.trackWorkId))
     .sort((a, b) => (b.workTypeId === ASSESSMENT_WORK_TYPE) - (a.workTypeId === ASSESSMENT_WORK_TYPE) ||
-      (Number(b.trackWorkId) || 0) - (Number(a.trackWorkId) || 0));
+      b.trackWorkId - a.trackWorkId);
   if (!work) return null;
   const open = (Array.isArray(work.phases) ? work.phases : []).find(phase => phase && phase.isCompleted !== true);
   return {
-    trackWorkId: work.trackWorkId ?? null,
+    trackWorkId: work.trackWorkId,
     eaAct: work.eaAct ?? null,
     workType: work.workType ?? null,
     currentPhase: (open && open.name) || null
@@ -307,7 +309,10 @@ function deriveAssessments(row, { lists, previous } = {}) {
 
   if (typeof view.eaCertificate === 'string' && CERTIFICATE_NUMBER.test(view.eaCertificate)) {
     const issued = assessments.filter(one => one.decision && one.decision.name === 'Certificate Issued');
-    const holder = issued[issued.length - 1] || assessments.find(one => one.legislationYear === currentYear);
+    // A decision known only by id may be the issuing one; its block is a better guess than the current Act.
+    const unnamed = assessments.filter(one => one.decision && one.decision.id && one.decision.name === null);
+    const holder = issued[issued.length - 1] || unnamed[unnamed.length - 1] ||
+      assessments.find(one => one.legislationYear === currentYear);
     if (holder) {
       holder.certificate = { number: view.eaCertificate, signedDate: isoOf(view.eacSigned),
         expiresDate: isoOf(view.eacExpires) };
@@ -330,4 +335,4 @@ function actBlocks(row) {
   });
 }
 
-module.exports = { ASSESSMENT_WORK_TYPE, STAGE_SETS, stageRowFor, actBlocks, datePhasesFromDocuments, deriveAssessments };
+module.exports = { ASSESSMENT_WORK_TYPE, DERIVED_FIELDS, STAGE_SETS, stageRowFor, actBlocks, datePhasesFromDocuments, deriveAssessments };
