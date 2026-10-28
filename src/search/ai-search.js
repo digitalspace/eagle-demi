@@ -89,7 +89,8 @@ const DOCUMENT_SELECT = 'id,displayName,documentFileName,description,type,projec
  */
 const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,projectSubType,' +
   'legislationYear,status,region,centroid,legacyEagleId,read,isPublished,type,currentPhaseName,' +
-  'currentPhaseNameId,eacDecision,eacDecisionId,decisionDate,dateUpdated,vis';
+  'currentPhaseNameId,eacDecision,eacDecisionId,decisionDate,dateUpdated,vis,phaseIds,activeWorkId,' +
+  'activeWorkAct,activeWorkType,activeWorkPhase';
 
 /**
  * The fields a CHUNK hit carries back. Same invariant as the two above: every name must exist in

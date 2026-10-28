@@ -389,6 +389,17 @@ function redactIndexProject(hit, access) {
   return redactForAccess('index-projects', { ...hit, vis: dialsForIndex(dials) }, access);
 }
 
+/** The stored `activeWork` object, rebuilt from the four flat columns the index keeps it in. */
+function indexActiveWork(doc) {
+  if (doc.activeWorkId == null) return null;
+  return {
+    trackWorkId: doc.activeWorkId,
+    eaAct: doc.activeWorkAct ?? null,
+    workType: doc.activeWorkType ?? null,
+    currentPhase: doc.activeWorkPhase ?? null
+  };
+}
+
 /**
  * The wire `sector`: Track's sub-type, named for the legislation year, when the STORED row has no
  * sector. Asked of the stored row, not the redacted one, or a sector a dial withholds would come
@@ -1489,6 +1500,9 @@ exports.search = async (req, res) => {
                 // Eagle's own edit date, the "Last updated" column. NOT `updatedAt`, which is
                 // DEMI's sync stamp and moves on every re-merge.
                 dateUpdated: doc.dateUpdated || null,
+                // `assessments` is too nested for the index, so it rides the Cosmos branch only.
+                phaseIds: doc.phaseIds ?? null,
+                activeWork: indexActiveWork(doc),
                 // Pre-escaped display markup from the analyzer, keyed by INDEX field. `name` falls
                 // back to `displayName` the same way the plain value above does.
                 highlighted: {
@@ -1589,6 +1603,9 @@ exports.search = async (req, res) => {
             decisionDate: row.decisionDate || null,
             // Same column as the index branch above, so both project shapes answer it.
             dateUpdated: row.dateUpdated || null,
+            assessments: row.assessments,
+            phaseIds: row.phaseIds ?? null,
+            activeWork: row.activeWork ?? null,
             // 'public' in the read ACL is what makes a record public; isPublished mirrors it, and
             // the redactor derives it. The frontend derives its staged/admitted badge from this.
             isPublished: row.isPublished,

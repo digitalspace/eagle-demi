@@ -232,6 +232,50 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual((await rowFor('no edits')).dateUpdated, null);
   });
 
+  // The index keeps `activeWork` as four flat columns and has no `assessments` column at all, so
+  // the two branches build these fields differently but must agree on the shape.
+  await t.test('both project branches carry phaseIds and activeWork in the stored shape', async () => {
+    const ACTIVE = { trackWorkId: 2201, eaAct: '2018 Act', workType: 'Assessment', currentPhase: 'Process Planning' };
+    const ASSESSMENTS = [{ legislationYear: 2018, phases: [] }];
+    t.mock.method(projectsRepo, 'listPage', async () => [{
+      id: '46', name: 'Caribou', read: ['public'], phaseIds: ['p1', 'p2'], activeWork: ACTIVE, assessments: ASSESSMENTS
+    }]);
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '46', name: 'Caribou', read: ['public'], phaseIds: ['p1', 'p2'], activeWorkId: 2201,
+        activeWorkAct: '2018 Act', activeWorkType: 'Assessment', activeWorkPhase: 'Process Planning'
+      }]
+    }));
+
+    const rowFor = async (keywords) => {
+      let jsonResponse;
+      const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+      await searchController.search(
+        { query: { dataset: 'Project', keywords, pageSize: '10' }, header: () => null }, res);
+      return jsonResponse[0].searchResults[0];
+    };
+
+    const cosmos = await rowFor('');
+    assert.deepStrictEqual([cosmos.phaseIds, cosmos.activeWork, cosmos.assessments],
+      [['p1', 'p2'], ACTIVE, ASSESSMENTS], 'Cosmos list branch');
+    const indexed = await rowFor('caribou');
+    assert.deepStrictEqual([indexed.phaseIds, indexed.activeWork, 'assessments' in indexed],
+      [['p1', 'p2'], ACTIVE, false], 'AI Search branch');
+  });
+
+  await t.test('the index branch answers activeWork null when activeWorkId is null', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{ id: '47', name: 'Idle', read: ['public'], activeWorkId: null, activeWorkAct: '2018 Act' }]
+    }));
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'idle', pageSize: '10' }, header: () => null }, res);
+    assert.strictEqual(jsonResponse[0].searchResults[0].activeWork, null);
+  });
+
   // eagle-public hard-codes `fuzzy=false` and eagle-search has always fuzzed anyway. Honouring the
   // parameter made demi answer a strictly smaller set than the service it replaces: measured live,
   // `keywords=caribou` returned 1 project from demi and 3 from prod eagle-search, and `caribuu`

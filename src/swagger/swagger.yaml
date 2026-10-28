@@ -385,6 +385,14 @@ paths:
             the lead's. `pageNumber` is null on an entry whose `pageNumbered` is false, where the
             only number available is a passage sequence. `snippets` is unchanged and holds the same
             texts in the same order.
+
+
+            A Project row carries `phaseIds`, the ids of every phase the project has passed
+            through, and `activeWork`, the live Track work as `{trackWorkId, eaAct, workType,
+            currentPhase}`, or null when no work is live. A row with no keywords, filter or sort
+            also carries `assessments`, one entry per Act the project was assessed under; it is
+            absent from keyword, filtered and sorted rows, because the search index does not hold
+            it.
         '400':
           description: >-
             Unknown dataset, unsupported query parameter, dataset=Comment with no period, an

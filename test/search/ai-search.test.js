@@ -1551,7 +1551,8 @@ test('the project search selects the columns the project list renders', () => {
   const selected = new Set(aiSearch.PROJECT_SELECT.split(','));
   for (const name of ['type', 'currentPhaseName', 'currentPhaseNameId',
     'eacDecision', 'eacDecisionId', 'decisionDate', 'dateUpdated',
-    'projectSubType', 'legislationYear']) {
+    'projectSubType', 'legislationYear', 'phaseIds', 'activeWorkId', 'activeWorkAct',
+    'activeWorkType', 'activeWorkPhase']) {
     assert.ok(selected.has(name),
       `${name} is not selected, so every hit returns it undefined and the column reads '-'`);
   }
