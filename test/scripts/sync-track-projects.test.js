@@ -544,6 +544,51 @@ test('a project DEMI has never seen is created at level 1', async () => {
   assert.strictEqual(written.shortCodeSource, 'name');
 });
 
+test('the Track mirror derives assessments and active work', async (t) => {
+  const PHASE = {
+    name: 'Application Review', eaActId: 3, eaActName: '2018 Act', workType: 'Assessment',
+    startDate: '2023-02-01T00:00:00.000Z', endDate: null, numberOfDays: 180,
+    legislated: true, sortOrder: 4, isCompleted: false
+  };
+  const sync = (projects, { phases, works }) => syncProjects([API_PROJECT], {
+    live: true, deps: { projects, links: fakeLinks() }, now: NOW,
+    phases: phases && new Map([['207', phases]]), works: works && new Map([['207', works]])
+  });
+  const phasesOf = (row, year) => row.assessments.find(one => one.legislationYear === year)
+    .phases.map(phase => phase.name);
+
+  await t.test('a project DEMI has never seen is created with them', async () => {
+    const projects = fakeProjects([]);
+
+    await sync(projects, { works: trackWorks() });
+
+    const [written] = projects.writes;
+    assert.strictEqual(written.activeWork.trackWorkId, 1102, 'the live work is the amendment');
+    assert.deepStrictEqual(written.assessments.map(one => one.legislationYear), [2018]);
+  });
+
+  await t.test('an Eagle-only row re-keyed to its Track id is derived from the Track merge', async () => {
+    const projects = fakeProjects([{ ...eagleOnlyProject(), activeWork: null }]);
+
+    await sync(projects, { works: trackWorks() });
+
+    const [written] = projects.writes;
+    assert.strictEqual(written.id, '207');
+    assert.strictEqual(written.activeWork.trackWorkId, 1102, 'not the twin\'s stored copy');
+  });
+
+  await t.test('a moved phase is derived again on the update', async () => {
+    const projects = fakeProjects([]);
+    await sync(projects, { phases: [PHASE] });
+
+    await sync(projects, { phases: [{ ...PHASE, name: 'Effects Assessment' }] });
+
+    assert.strictEqual(projects.writes.length, 2);
+    assert.deepStrictEqual(phasesOf(projects.writes[0], 2018), ['Application Review']);
+    assert.deepStrictEqual(phasesOf(projects.writes[1], 2018), ['Effects Assessment']);
+  });
+});
+
 test('a create retried after a lost try stores a code whose record is there', async () => {
   const projects = fakeProjects([]);
   const create = projects.upsert;
