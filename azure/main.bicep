@@ -310,6 +310,9 @@ param trackClientId string = ''
 @description('Mirror every public Track work type and its milestones (`works[]`) in the nightly sync. Off until the public read ships.')
 param trackWorksSync bool = false
 
+@description('Date the assessments of every project from its documents, comment periods and Track phases in the nightly sync. Off until test has proven it.')
+param assessmentPass bool = false
+
 // The Track and role-sync client secrets are vault-only: `track-client-secret` and
 // `role-sync-client-secret`, resolved by reference. Neither is a parameter any more.
 @description('Keycloak client id of the realm-management service account the sync grants roles with.')
@@ -824,6 +827,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     trackApiBase: trackApiBase
     trackClientId: trackClientId
     trackWorksSync: trackWorksSync
+    assessmentPass: assessmentPass
     trackClientSecretUri: trackClientSecretUri
     roleSyncClientId: roleSyncClientId
     roleSyncClientSecretUri: roleSyncClientSecretUri

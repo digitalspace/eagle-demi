@@ -263,3 +263,9 @@ test('the Track works pull runs only when TRACK_WORKS_SYNC is the exact string t
   const read = (value) => readConfig({ TRACK_WORKS_SYNC: value }, c => c.trackWorksSync);
   assert.deepStrictEqual(['false', '', 'TRUE', 'true'].map(read), [false, false, false, true]);
 });
+
+// Azure always sets ASSESSMENT_PASS too, as the string 'false' in prod.
+test('the nightly assessment pass runs only when ASSESSMENT_PASS is the exact string true', () => {
+  const read = (value) => readConfig({ ASSESSMENT_PASS: value }, c => c.assessmentPass);
+  assert.deepStrictEqual(['false', '', 'TRUE', 'true'].map(read), [false, false, false, true]);
+});

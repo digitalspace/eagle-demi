@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * Track team feed -> `project:<id>` realm roles, then the project mirror and the closed-project
- * credential sweep. Owns only `project:` roles for ids Track lists; `project:eagle-abc` stays.
+ * Track team feed -> `project:<id>` realm roles, then the project mirror, the closed-project
+ * credential sweep and the assessment dating pass. Owns only `project:` roles for ids Track
+ * lists; `project:eagle-abc` stays.
  */
 
 const config = require('../config');
@@ -169,7 +170,7 @@ function keycloakClient() {
 
 /**
  * @param {string[]} argv
- * @param {object} [deps] test seam: {fetchJson, kc, credentials}
+ * @param {object} [deps] test seam: {fetchJson, kc, credentials, assessmentPass}
  */
 async function sync(argv = [], deps = {}) {
   const args = parseArgs(argv);
@@ -336,6 +337,20 @@ async function sync(argv = [], deps = {}) {
   } catch (err) {
     summary.failures++;
     logger.error(`[track-teams] credential close-out failed`, { error: err.message });
+  }
+
+  // After the mirror, because the dating reads the Track phases and works it just wrote.
+  if (config.assessmentPass) {
+    try {
+      const pass = deps.assessmentPass || require('./date-assessment-phases').run;
+      const dated = await pass({ live: args.live });
+      summary.failures += dated.failures;
+    } catch (err) {
+      summary.failures++;
+      logger.error('[track-teams] assessment pass failed', { error: err.message });
+    }
+  } else {
+    logger.info('[track-teams] assessment pass skipped: ASSESSMENT_PASS is off');
   }
 
   // Without the names, `unmatched=N` is a number nobody can act on.

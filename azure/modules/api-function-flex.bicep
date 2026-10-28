@@ -219,6 +219,9 @@ param trackClientId string = ''
 @description('Mirror every public Track work type and its milestones in the nightly sync. Off until the public read ships.')
 param trackWorksSync bool = false
 
+@description('Date the assessments of every project from its documents, comment periods and Track phases in the nightly sync. Off until test has proven it.')
+param assessmentPass bool = false
+
 @description('Key Vault URI of the Track service account secret. Not the value: the app resolves it through a Key Vault reference.')
 param trackClientSecretUri string
 
@@ -697,6 +700,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'TRACK_WORKS_SYNC'
           value: trackWorksSync ? 'true' : 'false'
+        }
+        {
+          name: 'ASSESSMENT_PASS'
+          value: assessmentPass ? 'true' : 'false'
         }
         {
           name: 'TRACK_CLIENT_ID'
