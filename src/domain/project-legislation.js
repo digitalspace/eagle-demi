@@ -10,13 +10,23 @@
  * `sources.eagle`, which a switch merges again (`merge/project.js`).
  */
 
-/** `label` is the `legislation` string eagle-public matches on; a `locked` Act is never left. */
+/**
+ * `label` is the `legislation` string eagle-public matches on; a `locked` Act is never left. An Act
+ * with no phase List rows of its own files under those of `phaseRowsYear`.
+ */
 const LEGISLATIONS = Object.freeze({
-  1996: Object.freeze({ label: '1996 Environmental Assessment Act' }),
-  2002: Object.freeze({ label: '2002 Environmental Assessment Act' }),
-  2018: Object.freeze({ label: '2018 Environmental Assessment Act' }),
-  2025: Object.freeze({ label: 'Building Canada Act', locked: true })
+  1996: Object.freeze({ label: '1996 Environmental Assessment Act', inForce: '1995-06-30', phaseRowsYear: 2002 }),
+  2002: Object.freeze({ label: '2002 Environmental Assessment Act', inForce: '2002-12-30' }),
+  2018: Object.freeze({ label: '2018 Environmental Assessment Act', inForce: '2019-12-16' }),
+  2025: Object.freeze({ label: 'Building Canada Act', locked: true, inForce: null })
 });
+
+// Eagle stores a cleared date as epoch zero in Pacific time (1969-12-31T08:00Z); no EA record
+// is that old, so anything before this is junk, not history.
+const EAGLE_DATE_FLOOR = Date.UTC(1971, 0, 1);
+
+const beforeDateFloor = (v) =>
+  (typeof v === 'string' || v instanceof Date) && new Date(v).getTime() < EAGLE_DATE_FLOOR;
 
 const isRegistryYear = (year) => Object.prototype.hasOwnProperty.call(LEGISLATIONS, year);
 
@@ -61,4 +71,4 @@ function yearSwitch(row, year) {
   return { key };
 }
 
-module.exports = { LEGISLATIONS, lockRefusal, yearSwitch };
+module.exports = { LEGISLATIONS, EAGLE_DATE_FLOOR, beforeDateFloor, isRegistryYear, yearOf, lockRefusal, yearSwitch };

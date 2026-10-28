@@ -51,6 +51,12 @@ const catalog = {
   eacExpires: { defaultVis: 4, maxVis: 4 },
   // Derived by the merge from `legislationYearList` and a Track milestone date.
   legislationTransitions: { defaultVis: 4, maxVis: 4 },
+  // Built from the anonymous view of this row (merge/assessments.js), so they hold only public data.
+  assessments: { defaultVis: 4, maxVis: 4 },
+  phaseIds: { defaultVis: 4, maxVis: 4 },
+  activeWork: { defaultVis: 4, maxVis: 4 },
+  // The dating pass's input to `assessments`; staff only, as the public sees it through them.
+  documentPhases: { defaultVis: 2, maxVis: 2 },
   // The project's own short link code. The public page it points at is public, so the code is.
   shortCode: { defaultVis: 4, maxVis: 4 },
   // Earlier codes: printed somewhere, still resolving, so as public as the current one.

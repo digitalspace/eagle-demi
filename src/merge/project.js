@@ -21,6 +21,8 @@
 
 const { eagleBaseAcl } = require('../seed/transform');
 const { capRead } = require('../helpers/access-sql');
+const { beforeDateFloor } = require('../domain/project-legislation');
+const { ASSESSMENT_WORK_TYPE, deriveAssessments } = require('./assessments');
 
 /** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
 const eagleOnlyProjectId = (eagleId) => `eagle-${eagleId}`;
@@ -126,13 +128,6 @@ const EAGLE_DATE_FIELDS = [
   'disputeDate', 'activeDate', 'review180Start', 'review45Start'
 ];
 
-// Eagle stores a cleared date as epoch zero in Pacific time (1969-12-31T08:00Z); no EA record
-// is that old, so anything before this is junk, not history.
-const EAGLE_DATE_FLOOR = Date.UTC(1971, 0, 1);
-
-const beforeDateFloor = (v) =>
-  (typeof v === 'string' || v instanceof Date) && new Date(v).getTime() < EAGLE_DATE_FLOOR;
-
 function nullJunkDates(record) {
   for (const field of EAGLE_DATE_FIELDS) {
     if (beforeDateFloor(record[field])) record[field] = null;
@@ -156,7 +151,6 @@ function nullEagleJunkDates(merged) {
 }
 
 const TRANSITION_MILESTONE = 'Project Transitioning FROM';
-const ASSESSMENT_WORK_TYPE = 6;
 
 /**
  * One `{fromYear, toYear, date}` per change of Act. Eagle stores no date, so it comes from Track's
@@ -245,10 +239,10 @@ const PUSH_ONLY_FIELDS = [
 ];
 
 /**
- * Fields only DEMI writes (`PUT /projects/:id`, and `levelHeldAt` from `PUT /projects/:id/level`).
- * No feed sends them, so no re-merge can rebuild them.
+ * Fields only DEMI writes (`PUT /projects/:id`, `levelHeldAt` from `PUT /projects/:id/level`, and
+ * `documentPhases` from the dating pass). No feed sends them, so no re-merge can rebuild them.
  */
-const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt'];
+const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt', 'documentPhases'];
 
 /** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`). */
 function heldRead(read, existing) {
@@ -258,20 +252,22 @@ function heldRead(read, existing) {
 }
 
 /**
- * Carry the DEMI-only fields off the stored row onto a rebuilt one. A row DEMI holds keeps the
- * lower of the rebuilt and stored `read` (`heldRead`), so Eagle can narrow it, not widen it.
+ * Carry the DEMI-only fields off the stored row onto a rebuilt one, then derive its assessments. A
+ * held row keeps the lower of the rebuilt and stored `read` (`heldRead`): Eagle narrows, never widens.
  */
 function carryDemiOnlyFields(merged, existing) {
-  if (!merged || !existing) return merged;
-  for (const field of DEMI_ONLY_FIELDS) {
-    const value = existing[field];
-    if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
+  if (!merged) return merged;
+  if (existing) {
+    for (const field of DEMI_ONLY_FIELDS) {
+      const value = existing[field];
+      if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
+    }
+    if (existing.levelHeldAt) {
+      merged.read = heldRead(merged.read, existing);
+      merged.isPublished = merged.read.includes('public');
+    }
   }
-  if (existing.levelHeldAt) {
-    merged.read = heldRead(merged.read, existing);
-    merged.isPublished = merged.read.includes('public');
-  }
-  return merged;
+  return Object.assign(merged, deriveAssessments(merged));
 }
 
 /**
