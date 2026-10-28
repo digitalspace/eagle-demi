@@ -36,6 +36,16 @@ test('extract reads the documents policy from the real cosmos-nosql.bicep', {
   assert.ok(excluded.includes('/*'));
 });
 
+test('extract reads the projects policy, phaseIds elements included, from the real cosmos-nosql.bicep', {
+  skip: bicepReady ? false : 'no local Bicep CLI (az bicep version failed), cannot compile bicep',
+}, () => {
+  const run = spawnSync('bash', [SCRIPT, 'extract', 'projects'], { encoding: 'utf8' });
+  assert.strictEqual(run.status, 0, run.stderr);
+  const included = JSON.parse(run.stdout).includedPaths.map((p) => p.path);
+  assert.ok(included.includes('/phaseIds/[]/?'));
+  assert.ok(included.includes('/currentPhaseName/_id/?'));
+});
+
 // `bicep build` prints $STUB_ARM; `container show` prints a resource with $STUB_LIVE as its policy,
 // plus the $FAKE_AZ_SHOW_EXTRA fields, or fails with $FAKE_AZ_SHOW_ERR. `container update` copies its
 // @file over $STUB_LIVE unless FAKE_AZ_UPDATE_NOOP=1. Every call is logged with its full argv.
@@ -52,8 +62,7 @@ case "$1 $2 $4" in
 esac
 `;
 
-// Clean tree, fetch works, bicep same as origin/main by default. FAKE_GIT_DIRTY, FAKE_GIT_STATUS_FAIL,
-// FAKE_GIT_FETCH_FAIL, FAKE_GIT_BICEP_DIFFERS, FAKE_GIT_DIFF_FAIL (each =1) flip one. A call without
+// Clean tree, fetch works, bicep matches origin/main; each FAKE_GIT_* =1 flips one. A call without
 // -C $STUB_REPO exits 97, so the script cannot read the caller's working directory by mistake.
 const FAKE_GIT = `#!/usr/bin/env bash
 echo "$*" >> "$STUB_GIT_LOG"

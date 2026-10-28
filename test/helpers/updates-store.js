@@ -9,9 +9,10 @@
  * store stops enforcing it, so the test that relies on it goes red.
  *
  * Supported: AND, OR, parentheses, `c.f <op> value` (=, !=, <, <=, >, >=; value a @param, a
- * "string", a number, true or false), IS_STRING, IS_DEFINED, IS_NULL, IS_ARRAY (these four also on
- * a dotted `c.a.b`), NOT, ARRAY_CONTAINS on a dotted path with a 'string' or @param,
- * `ARRAY_LENGTH(c.a.b) <op> value`, and on queries ORDER BY one field, maxItemCount and a continuation.
+ * "string", a number, true or false), IS_STRING, IS_DEFINED, IS_NULL, IS_ARRAY (these four and the
+ * comparison also on a dotted `c.a.b` or a dial `c.vis["f"]`), NOT, ARRAY_CONTAINS on a dotted path with
+ * a 'string' or @param, `ARRAY_LENGTH(c.a.b) <op> value`, `EXISTS(SELECT VALUE p FROM p IN c.a WHERE p IN
+ * (@x, ...))`, and on queries ORDER BY one field, maxItemCount and a continuation.
  */
 
 const cosmos = require('../../src/db/cosmos-nosql');
@@ -74,8 +75,11 @@ const COMPARE = {
 
 const isNull = (value) => value === undefined || value === null;
 
-/** `a.b` read off `row`, undefined where any step is missing. */
-const pathOf = (row, path) => path.split('.').reduce((value, key) => (isNull(value) ? undefined : value[key]), row);
+/** `a.b` or `vis["f"]` read off `row`, undefined where any step is missing. */
+const pathOf = (row, path) => path.replace(/\["(\w+)"\]/g, '.$1').split('.')
+  .reduce((value, key) => (isNull(value) ? undefined : value[key]), row);
+
+const PATH = String.raw`c\.([\w.]+(?:\["\w+"\])?)`;
 
 /** `left <op> right` as Cosmos answers it: across types, or with an undefined side, not true. */
 function compare(left, op, right) {
@@ -92,7 +96,7 @@ function evaluate(text, row, params) {
   if (ands.length > 1) return ands.every(part => evaluate(part, row, params));
   if (expr.startsWith('NOT ')) return !evaluate(expr.slice(4), row, params);
 
-  let m = /^IS_(STRING|BOOL|DEFINED|NULL|ARRAY)\(c\.([\w.]+)\)$/.exec(expr);
+  let m = new RegExp(`^IS_(STRING|BOOL|DEFINED|NULL|ARRAY)\\(${PATH}\\)$`).exec(expr);
   if (m) {
     const value = pathOf(row, m[2]);
     if (m[1] === 'STRING') return typeof value === 'string';
@@ -111,8 +115,14 @@ function evaluate(text, row, params) {
     const array = pathOf(row, m[1]);
     return Array.isArray(array) && array.includes(valueOf(m[2], params));
   }
-  m = /^c\.(\w+) (=|!=|<=|>=|<|>) (\S+)$/.exec(expr);
-  if (m) return compare(row[m[1]], m[2], valueOf(m[3], params));
+  m = /^EXISTS\(SELECT VALUE (\w+) FROM \1 IN c\.([\w.]+) WHERE \1 IN \(([^)]*)\)\)$/.exec(expr);
+  if (m) {
+    const array = pathOf(row, m[2]);
+    const wanted = m[3].split(',').map(token => valueOf(token.trim(), params));
+    return Array.isArray(array) && array.some(item => wanted.includes(item));
+  }
+  m = new RegExp(`^${PATH} (=|!=|<=|>=|<|>) (\\S+)$`).exec(expr);
+  if (m) return compare(pathOf(row, m[1]), m[2], valueOf(m[3], params));
   throw new Error(`updates-store: cannot evaluate "${expr}"`);
 }
 

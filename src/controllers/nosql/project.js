@@ -300,17 +300,19 @@ const projectsKind = {
   sortKeys: projects.SORTABLE,
   filters: [
     'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict',
-    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector'
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds'
   ],
   // These three are stored as `{_id, name}` List refs; the query names the field, the filter matches its id.
   aliases: {
     eacDecision: 'eacDecision._id', currentPhaseName: 'currentPhaseName._id', CEAAInvolvement: 'CEAAInvolvement._id'
   },
-  // Every filter eagle-admin's project list offers as a multi-select (project-list.component.html), plus eagle-public's sector.
+  // eagle-admin's project list multi-selects these (project-list.component.html); eagle-public sends several sectors.
   multiValueFilters: [
     'projectType', 'region', 'projectState', 'proponentName',
-    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector'
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds'
   ],
+  // Every phase the project held under any Act, where `currentPhaseName` is the current block's only.
+  anyOf: ['phaseIds'],
   valueAliases: { projectType: PROJECT_TYPE_SPELLINGS },
   ranges: {
     decisionDateStart: { field: 'decisionDate', op: 'ge' },

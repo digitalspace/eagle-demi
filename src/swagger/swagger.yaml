@@ -916,6 +916,18 @@ paths:
               type: string
           style: form
           explode: true
+        - name: phaseIds
+          in: query
+          required: false
+          description: >-
+            Project phase List ObjectId, matched against every phase the project held under any Act (`phaseIds`). Repeat it to match any of several.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: CEAAInvolvement
           in: query
           required: false
