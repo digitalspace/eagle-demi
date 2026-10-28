@@ -243,6 +243,13 @@ test('an EXPECTED key delta passes; an unexpected one does not', () => {
   assert.deepStrictEqual(surprise.diffs.find(d => d.field === 'rowKeys').demiOnly, ['somethingNew']);
 });
 
+test('a demi Project row with the assessment fields is no row-key finding', () => {
+  const eagleRow = { _id: 'a', _schemaName: 'Project', name: 'Caribou' };
+  const demiRow = { ...eagleRow, phaseIds: ['p1'], activeWork: null, assessments: [] };
+  const verdict = compareCase(respond([demiRow], 1), respond([eagleRow], 1), { dataset: 'Project' });
+  assert.strictEqual(verdict.diffs.find(d => d.field === 'rowKeys'), undefined, JSON.stringify(verdict.diffs));
+});
+
 test('pagingReport names a row that appears on two pages', () => {
   // The invariant a pager depends on, graded within ONE service: a row on two pages is a row
   // reachable from none. Measured on demi for keywords=pattullo — 63 ids across 13 pages.
