@@ -26,6 +26,7 @@ const projects = require('../../../src/repositories/projects');
 const projectController = require('../../../src/controllers/nosql/project');
 const { requireRole } = require('../../../src/middleware/require-roles');
 const apiRoutes = require('../../../src/http/routes');
+const fx = require('../../fixtures/act-assessments');
 
 const SYSADMIN = {
   sub: 'kc-sub-1', preferred_username: 'sys.admin', realm_access: { roles: ['sysadmin'] }
@@ -66,6 +67,21 @@ async function classify(t, body, stored = STORED) {
   await projectController.setVisibility(
     { params: { id: '207' }, query: {}, body, user: SYSADMIN }, res);
   return { res, calls };
+}
+
+const opValue = (operations, path) => operations.find(op => op.path === path).value;
+
+/** Each read hands back the next revision; the first `losses` patches throw a 412. */
+function fakeStore(t, revisions, { losses = 0 } = {}) {
+  const writes = [];
+  let reads = 0;
+  t.mock.method(cosmos, 'readItem', async () => structuredClone(revisions[reads++]));
+  t.mock.method(cosmos, 'patch', async (container, id, pk, operations, condition, etag) => {
+    writes.push({ operations, etag });
+    if (writes.length <= losses) throw Object.assign(new Error('Precondition Failed'), { code: 412 });
+    return { id };
+  });
+  return writes;
 }
 
 test('403 without sysadmin', async (t) => {
@@ -205,7 +221,7 @@ test('patches, never upserts', async (t) => {
     assert.deepStrictEqual(calls.patchVis, [{ id: '207', vis: { name: 2 } }]);
   });
 
-  await t.test('the repository sets one operation per key and leaves the rest alone', async () => {
+  await t.test('the repository keeps the dials the body does not name', async () => {
     t.mock.method(cosmos, 'readItem', async () => ({ ...STORED, vis: { description: 2 } }));
     t.mock.method(cosmos, 'upsert', async () => assert.fail('patchVis must never upsert'));
     t.mock.method(cosmos, 'replace', async () => assert.fail('patchVis must never replace'));
@@ -220,13 +236,10 @@ test('patches, never upserts', async (t) => {
     assert.strictEqual(ops.length, 1);
     assert.strictEqual(ops[0].container, 'projects');
     assert.strictEqual(ops[0].pk, '207', 'partitioned by id');
-    assert.deepStrictEqual(ops[0].operations, [{ op: 'set', path: '/vis/name', value: 3 }],
-      'a dial the body does not name must not appear as an operation');
+    assert.deepStrictEqual(opValue(ops[0].operations, '/vis'), { description: 2, name: 3 });
   });
 
-  await t.test('an unclassified project gets its vis node created in one operation', async () => {
-    // Cosmos refuses `set /vis/name` when /vis does not exist, and no write site emits `vis`, so
-    // this is the ordinary case rather than an edge one.
+  await t.test('an unclassified project gets a vis map holding only the set dials', async () => {
     t.mock.method(cosmos, 'readItem', async () => ({ ...STORED }));
     const ops = [];
     t.mock.method(cosmos, 'patch', async (c, id, pk, operations) => {
@@ -236,8 +249,7 @@ test('patches, never upserts', async (t) => {
 
     await projects.patchVis('207', { name: 3, description: null });
 
-    assert.deepStrictEqual(ops, [[{ op: 'set', path: '/vis', value: { name: 3 } }]],
-      'one whole-map set: there are no dials to preserve, and a null asks to remove nothing');
+    assert.deepStrictEqual(opValue(ops[0], '/vis'), { name: 3 });
   });
 });
 
@@ -251,7 +263,7 @@ test('null removes a dial', async (t) => {
     assert.deepStrictEqual(calls.patchVis[0].vis, { complianceLead: null });
   });
 
-  await t.test('the repository turns it into a remove, not a set', async () => {
+  await t.test('the repository drops the dial from the stored map', async () => {
     t.mock.method(cosmos, 'readItem', async () => ({ ...STORED, vis: { name: 2, description: 3 } }));
     const ops = [];
     t.mock.method(cosmos, 'patch', async (c, id, pk, operations) => {
@@ -261,17 +273,70 @@ test('null removes a dial', async (t) => {
 
     await projects.patchVis('207', { name: null });
 
-    assert.deepStrictEqual(ops, [[{ op: 'remove', path: '/vis/name' }]]);
+    assert.deepStrictEqual(opValue(ops[0], '/vis'), { description: 3 });
   });
 
   await t.test('removing a dial the record never held writes nothing', async () => {
-    // Cosmos errors on `remove` of an absent path, and patch() throws on an empty array, so this
-    // is the one shape that has to short-circuit.
     t.mock.method(cosmos, 'readItem', async () => ({ ...STORED, vis: { description: 3 } }));
     t.mock.method(cosmos, 'patch', async () => assert.fail('nothing to remove, so no patch'));
 
     const out = await projects.patchVis('207', { name: null });
     assert.deepStrictEqual(out.vis, { description: 3 });
+  });
+});
+
+test('re-derives the fields built from the anonymous view', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const hiddenWorks = (etag) => ({ ...fx.only2018WithWorks(), vis: { works: 2 }, activeWork: null, _etag: etag });
+
+  await t.test('removing the works dial publishes the live work', async () => {
+    const writes = fakeStore(t, [hiddenWorks('e1')]);
+
+    await projects.patchVis('702', { works: null });
+
+    assert.strictEqual(opValue(writes[0].operations, '/activeWork').trackWorkId, 2201);
+  });
+
+  await t.test('removing the works dial files the works under their assessment', async () => {
+    const writes = fakeStore(t, [hiddenWorks('e1')]);
+
+    await projects.patchVis('702', { works: null });
+
+    assert.deepStrictEqual(opValue(writes[0].operations, '/assessments')[0].trackWorkIds, [2201, 2202]);
+  });
+
+  await t.test('a dial on currentPhaseName drops its id from phaseIds', async () => {
+    const writes = fakeStore(t, [fx.only2002()]);
+
+    await projects.patchVis('501', { currentPhaseName: 2 });
+
+    assert.deepStrictEqual(opValue(writes[0].operations, '/phaseIds'),
+      [fx.PHASES.preApplication.id, fx.PHASES.applicationReview.id]);
+  });
+
+  await t.test('the write is guarded on the revision read', async () => {
+    const writes = fakeStore(t, [hiddenWorks('e1')]);
+
+    await projects.patchVis('702', { works: null });
+
+    assert.strictEqual(writes[0].etag, 'e1');
+  });
+
+  await t.test('a lost race rebuilds from the re-read row', async () => {
+    const moved = { ...hiddenWorks('e2'), works: [] };
+    const writes = fakeStore(t, [hiddenWorks('e1'), moved], { losses: 1 });
+
+    await projects.patchVis('702', { works: null });
+
+    assert.deepStrictEqual([writes.length, writes[1].etag, opValue(writes[1].operations, '/activeWork')],
+      [2, 'e2', null]);
+  });
+
+  await t.test('a second lost race propagates the 412', async () => {
+    const writes = fakeStore(t, [hiddenWorks('e1'), hiddenWorks('e2')], { losses: 2 });
+
+    await assert.rejects(projects.patchVis('702', { works: null }), { code: 412 });
+    assert.strictEqual(writes.length, 2, 'one retry, no more');
   });
 });
 

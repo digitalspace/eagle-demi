@@ -19,6 +19,8 @@ const { duplicateIdError } = require('../helpers/duplicate-id');
 const { eagleOnlyProjectId } = require('../merge/project');
 const { dialAllows } = require('../helpers/native-query');
 const { levelOf } = require('../vis/level');
+const { deriveAssessments } = require('../merge/assessments');
+const { raced } = require('../helpers/etag-write');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
   upsertWithEtag, createItem, assertFilterable, readPage
@@ -439,34 +441,39 @@ async function patchBoundaries(id, { regionalDistrict, municipality, electoralDi
   ]);
 }
 
-/**
- * Set field visibility dials. `patch`, NEVER `upsert` — an upsert writes the whole record, so a
- * classify would clobber any content write that landed since this caller read it (the failure
- * api-keys.touchLastUsed documents). A dial the body does not name is left alone; a `null` level
- * REMOVES the dial, so the field falls back to its catalog `defaultVis`.
- */
+/** Set visibility dials (`null` removes one) and re-derive the fields built from the anonymous view. */
 async function patchVis(id, vis) {
-  // Cosmos refuses `set /vis/<field>` when the parent node is absent, and no write site emits
-  // `vis`, so an unclassified project takes one whole-map set — it has no dials to preserve.
-  const existing = await cosmos.readItem(CONTAINER, String(id), String(id));
-  const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : null;
+  // Never upsert. One whole-map `/vis` set is safe only under the etag; a set per dial plus the
+  // derived fields would pass patch's op cap.
+  const key = String(id);
 
-  const operations = dials
-    ? Object.entries(vis)
-      .filter(([field, level]) => level !== null || Object.hasOwn(dials, field))
-      .map(([field, level]) => (level === null
-        ? { op: 'remove', path: `/vis/${field}` }
-        : { op: 'set', path: `/vis/${field}`, value: level }))
-    : [{
-      op: 'set',
-      path: '/vis',
-      value: Object.fromEntries(Object.entries(vis).filter(([, level]) => level !== null))
-    }];
+  const write = async (row) => {
+    const dials = row && row.vis && typeof row.vis === 'object' ? row.vis : {};
+    const unchanged = Object.entries(vis)
+      .every(([field, level]) => (level === null ? !Object.hasOwn(dials, field) : dials[field] === level));
+    if (unchanged) return row;
 
-  // Every key asked to remove a dial the record never held. patch() throws on an empty array.
-  if (!operations.length) return existing;
+    const nextVis = { ...dials };
+    for (const [field, level] of Object.entries(vis)) {
+      if (level === null) delete nextVis[field];
+      else nextVis[field] = level;
+    }
+    const derived = deriveAssessments({ ...row, vis: nextVis }, { previous: row && row.assessments });
+    return cosmos.patch(CONTAINER, key, key, [
+      { op: 'set', path: '/vis', value: nextVis },
+      { op: 'set', path: '/assessments', value: derived.assessments },
+      { op: 'set', path: '/phaseIds', value: derived.phaseIds },
+      { op: 'set', path: '/activeWork', value: derived.activeWork }
+    ], undefined, row && row._etag);
+  };
 
-  return cosmos.patch(CONTAINER, String(id), String(id), operations);
+  try {
+    return await write(await cosmos.readItem(CONTAINER, key, key));
+  } catch (err) {
+    if (!raced(err)) throw err;
+    logger.warn('[projects] visibility patch lost its etag race, rebuilding once', { id: key });
+    return write(await cosmos.readItem(CONTAINER, key, key));
+  }
 }
 
 /**
