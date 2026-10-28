@@ -128,7 +128,19 @@ function only1996Documents() {
   ];
 }
 
+/** Moved from the 1996 Act to the 2002 Act on `transitionDate`; both file under the 2002 rows. */
+function movedFrom1996(transitionDate) {
+  return storedRow({
+    id: '805', years: [1996, 2002], current: 2002,
+    legislationTransitions: transitionDate ? [{ fromYear: 1996, toYear: 2002, date: transitionDate }] : [],
+    blocks: {
+      1996: { name: 'Ridge Mill', legislationYear: 1996 },
+      2002: { name: 'Ridge Mill', legislationYear: 2002 }
+    }
+  });
+}
+
 module.exports = {
-  PHASES, PHASE_ROWS, DECISIONS, TRANSITION_DATE,
-  only2002, only2002Documents, cariboo, only2018WithWorks, prod2018, only1996, only1996Documents
+  PHASES, PHASE_ROWS, DECISIONS, TRANSITION_DATE, document,
+  only2002, only2002Documents, cariboo, only2018WithWorks, prod2018, only1996, only1996Documents, movedFrom1996
 };

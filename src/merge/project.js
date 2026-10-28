@@ -267,7 +267,7 @@ function carryDemiOnlyFields(merged, existing) {
       merged.isPublished = merged.read.includes('public');
     }
   }
-  return Object.assign(merged, deriveAssessments(merged));
+  return Object.assign(merged, deriveAssessments(merged, { previous: existing && existing.assessments }));
 }
 
 /**

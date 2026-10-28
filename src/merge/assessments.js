@@ -70,10 +70,10 @@ const isoOf = (value) => {
 
 const inForceOf = (year) => timeOf(LEGISLATIONS[year] && LEGISLATIONS[year].inForce);
 
-/** The latest of `years` (ascending) in force at `time`, else the first. */
-function actAt(years, time) {
-  const inForce = years.filter(year => (inForceOf(year) ?? Infinity) <= time);
-  return inForce.length ? inForce[inForce.length - 1] : years.length ? years[0] : null;
+/** The latest of `years` (ascending) the project was under at `time` (`startOf` each), else the first. */
+function actAt(years, time, startOf) {
+  const begun = years.filter(year => (startOf(year) ?? Infinity) <= time);
+  return begun.length ? begun[begun.length - 1] : years.length ? years[0] : null;
 }
 
 /** The Act a label such as "2018 Act" names: the exact label, else the whole year in it. */
@@ -88,6 +88,9 @@ function actYearOf(label) {
 const ascending = (years) => [...new Set(years)].filter(isRegistryYear).sort((a, b) => a - b);
 
 const rowId = (row) => row.id ?? row._id ?? null;
+
+const transitionsOf = (view) =>
+  (Array.isArray(view.legislationTransitions) ? view.legislationTransitions : []).filter(Boolean);
 
 /** The registry years the row lists, else its current block's year. */
 function listedYears(view) {
@@ -140,10 +143,16 @@ function documentSpan(times) {
 
 /**
  * The stored `documentPhases`: one entry per Act and stage row the documents date, then one per
- * comment period (`commentPeriodId`). Callers pass public documents and periods, and the Act blocks.
+ * comment period (`commentPeriodId`). Callers pass public documents and periods, and `actBlocks`.
  */
-function datePhasesFromDocuments(documents, periods, phaseRows, years) {
-  const blocks = ascending(years || []);
+function datePhasesFromDocuments(documents, periods, phaseRows, acts) {
+  const blocks = ascending((acts || []).map(act => Number(act && act.year)));
+  const transitions = new Map((acts || []).filter(act => act && timeOf(act.start) !== null)
+    .map(act => [Number(act.year), timeOf(act.start)]));
+  // A transition dated before its Act was in force is bad data; the Act still begins no earlier.
+  const startOf = (year) => transitions.has(year)
+    ? Math.max(transitions.get(year), inForceOf(year) ?? -Infinity)
+    : inForceOf(year);
   const rows = new Map((phaseRows || []).filter(row => row && rowId(row) !== null)
     .map(row => [String(rowId(row)), row]));
   const groups = new Map();
@@ -155,7 +164,7 @@ function datePhasesFromDocuments(documents, periods, phaseRows, years) {
     if (time === null || !row || !row.name || !Number.isInteger(legislation) || isOffRail(row.name)) continue;
     // A 1996 block files its phases under the 2002 rows.
     const owners = blocks.filter(year => (LEGISLATIONS[year].phaseRowsYear ?? year) === legislation);
-    const year = owners.length ? actAt(owners, time) : isRegistryYear(legislation) ? legislation : null;
+    const year = owners.length ? actAt(owners, time, startOf) : isRegistryYear(legislation) ? legislation : null;
     if (year === null || time < (inForceOf(year) ?? -Infinity)) continue;
     const stage = stageRowFor(year, row.name);
     const name = stage || row.name;
@@ -176,7 +185,7 @@ function datePhasesFromDocuments(documents, periods, phaseRows, years) {
   const allYears = ascending([...blocks, ...phases.map(phase => phase.legislationYear)]);
   const milestones = (periods || []).flatMap((period) => {
     const start = timeOf(period && period.dateStarted);
-    const year = start === null ? null : actAt(allYears, start);
+    const year = start === null ? null : actAt(allYears, start, startOf);
     if (year === null) return [];
     const end = timeOf(period.dateCompleted);
     return [{
@@ -191,13 +200,14 @@ function datePhasesFromDocuments(documents, periods, phaseRows, years) {
   return [...phases, ...milestones];
 }
 
-/** A list ref as `{ id, name }`; a bare id takes its name from `lists`, else null. */
-function refOf(ref, lists) {
+/** A list ref as `{ id, name }`; a bare id takes its name from `lists`, else from `kept` of the same id. */
+function refOf(ref, lists, kept) {
   if (ref === null || ref === undefined || ref === '') return null;
   const id = typeof ref === 'object' ? ref._id ?? ref.id ?? null : String(ref);
   const named = typeof ref === 'object' && typeof ref.name === 'string' && ref.name ? ref.name : null;
   const listed = id === null ? null : (lists || []).find(row => row && String(rowId(row)) === String(id));
-  return { id: id === null ? null : String(id), name: named ?? (listed && listed.name) ?? null };
+  const known = kept && id !== null && kept.id === String(id) && typeof kept.name === 'string' ? kept.name : null;
+  return { id: id === null ? null : String(id), name: named ?? (listed && listed.name) ?? known };
 }
 
 const refId = (ref) => (ref && typeof ref === 'object' ? ref._id ?? ref.id : ref);
@@ -242,12 +252,13 @@ const BLOCK_MILESTONES = [
  * `assessments`, `phaseIds` and `activeWork` from the anonymous view, so a dial removes what it fed.
  * `documentPhases` comes off the raw row: the view drops it, and the pass built it from public rows.
  */
-function deriveAssessments(row, { lists } = {}) {
+function deriveAssessments(row, { lists, previous } = {}) {
   const view = redactForAccess('projects', row || {}, null);
   const stored = Array.isArray(row && row.documentPhases) ? row.documentPhases : [];
   const { currentYear, yearOfTrack, trackPhases, blocks } = actContext(view);
   const years = ascending([...blocks, ...stored.map(entry => Number(entry.legislationYear))]);
-  const transitions = Array.isArray(view.legislationTransitions) ? view.legislationTransitions : [];
+  const transitions = transitionsOf(view);
+  const kept = lists ? [] : (Array.isArray(previous) ? previous : []).filter(Boolean);
   const works = worksOf(view);
 
   const assessments = years.map((year) => {
@@ -276,15 +287,16 @@ function deriveAssessments(row, { lists } = {}) {
       }))
     ].sort((a, b) => timeOf(a.date) - timeOf(b.date));
 
-    const transition = transitions.find(one => one && Number(one.fromYear) === year);
+    const transition = transitions.find(one => Number(one.fromYear) === year);
+    const before = kept.find(one => Number(one.legislationYear) === year) || {};
     return {
       legislationYear: year,
       act: LEGISLATIONS[year].label,
       // Stable sort, Track listed first, so Track wins a tie in rank.
       phases: [...track, ...documents].sort((a, b) => a.stageRank - b.stageRank),
       milestones,
-      currentPhase: refOf(block.currentPhaseName, lists),
-      decision: refOf(block.eacDecision, lists),
+      currentPhase: refOf(block.currentPhaseName, lists, before.currentPhase),
+      decision: refOf(block.eacDecision, lists, before.decision),
       decisionDate: isoOf(block.decisionDate),
       certificate: null,
       trackWorkIds: works.filter(work => yearOfTrack(work.eaAct) === year)
@@ -305,7 +317,17 @@ function deriveAssessments(row, { lists } = {}) {
   return { assessments, phaseIds: phaseIdsOf(view, assessments), activeWork: activeWorkOf(view) };
 }
 
-/** The Act blocks `datePhasesFromDocuments` files documents under, from the row's anonymous view. */
-const actBlocks = (row) => actContext(redactForAccess('projects', row || {}, null)).blocks;
+/**
+ * The Act blocks `datePhasesFromDocuments` files documents under, from the row's anonymous view, each
+ * as `{ year, start }`: `start` is the date of the transition into it, else null for the in-force date.
+ */
+function actBlocks(row) {
+  const view = redactForAccess('projects', row || {}, null);
+  const transitions = transitionsOf(view);
+  return actContext(view).blocks.map((year) => {
+    const into = transitions.find(one => Number(one.toYear) === year);
+    return { year, start: (into && into.date) || null };
+  });
+}
 
 module.exports = { ASSESSMENT_WORK_TYPE, STAGE_SETS, stageRowFor, actBlocks, datePhasesFromDocuments, deriveAssessments };

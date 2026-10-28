@@ -18,7 +18,7 @@ function dated(row, documents, periods = []) {
 }
 
 test('datePhasesFromDocuments', async (t) => {
-  const phases = datePhasesFromDocuments(fx.only2002Documents(), [], fx.PHASE_ROWS, [2002]);
+  const phases = datePhasesFromDocuments(fx.only2002Documents(), [], fx.PHASE_ROWS, [{ year: 2002 }]);
   const review = phases.find(phase => phase.stage === 'Application Review');
 
   await t.test('a leading run over two years early is dropped', () => {
@@ -34,20 +34,40 @@ test('datePhasesFromDocuments', async (t) => {
   });
 
   await t.test('1996 Pre-EA and Pre-Application documents date one phase', () => {
-    const [phase, ...rest] = datePhasesFromDocuments(fx.only1996Documents(), [], fx.PHASE_ROWS, [1996]);
+    const [phase, ...rest] = datePhasesFromDocuments(fx.only1996Documents(), [], fx.PHASE_ROWS, [{ year: 1996 }]);
     assert.deepStrictEqual([phase.legislationYear, phase.stage, phase.phaseIds, phase.documentCount, rest.length],
       [1996, 'Pre-Application', [fx.PHASES.preEa.id, fx.PHASES.preApplication.id], 2, 0]);
   });
 
   await t.test('a comment period goes to the latest Act in force when it opened', () => {
     const [period] = datePhasesFromDocuments([], [{ id: 'cp1', dateStarted: '2020-02-01T00:00:00.000Z',
-      dateCompleted: '2020-03-01T00:00:00.000Z', informationLabel: 'Draft plan' }], fx.PHASE_ROWS, [2002, 2018]);
+      dateCompleted: '2020-03-01T00:00:00.000Z', informationLabel: 'Draft plan' }], fx.PHASE_ROWS, [{ year: 2002 }, { year: 2018 }]);
     assert.deepStrictEqual([period.legislationYear, period.commentPeriodId, period.label], [2018, 'cp1', 'Draft plan']);
+  });
+
+  await t.test('a document after the new Act was in force but before the recorded transition stays on the old Act', () => {
+    const row = dated(fx.movedFrom1996('2004-06-01T00:00:00.000Z'),
+      [fx.document(fx.PHASES.preApplication, '2003-05-01T00:00:00.000Z')]);
+    assert.deepStrictEqual(row.documentPhases.map(phase => phase.legislationYear), [1996]);
+  });
+
+  await t.test('a comment period before the recorded transition goes to the old Act', () => {
+    const row = dated({ ...fx.cariboo(),
+      legislationTransitions: [{ fromYear: 2002, toYear: 2018, date: '2021-03-01T00:00:00.000Z' }] },
+    [], [{ id: 'cp3', dateStarted: '2020-06-01T00:00:00.000Z' }]);
+    assert.deepStrictEqual(row.documentPhases.map(entry => [entry.commentPeriodId, entry.legislationYear]), [['cp3', 2002]]);
+  });
+
+  await t.test('without a transition record the new Act begins on its in-force date', () => {
+    const row = dated(fx.movedFrom1996(null),
+      [fx.document(fx.PHASES.preApplication, '2003-05-01T00:00:00.000Z')],
+      [{ id: 'cp4', dateStarted: '2003-05-01T00:00:00.000Z' }]);
+    assert.deepStrictEqual(row.documentPhases.map(entry => entry.legislationYear), [2002, 2002]);
   });
 
   await t.test('a comment period that ends before it starts has no end', () => {
     const [period] = datePhasesFromDocuments([], [{ id: 'cp2', dateStarted: '2020-02-01T00:00:00.000Z',
-      dateCompleted: '1969-12-31T08:00:00.000Z' }], fx.PHASE_ROWS, [2018]);
+      dateCompleted: '1969-12-31T08:00:00.000Z' }], fx.PHASE_ROWS, [{ year: 2018 }]);
     assert.strictEqual(period.endDate, null);
   });
 });
@@ -180,6 +200,27 @@ test('the merge derives assessments', async (t) => {
     const merged = carryDemiOnlyFields(mergeEagleOnlyProject(RAW), stored);
     assert.deepStrictEqual([merged.documentPhases, documentsPhases(merged.assessments[0]).length],
       [stored.documentPhases, 1]);
+  });
+
+  await t.test('a push rebuild keeps the stored names of a phase and decision whose ids still match', () => {
+    const rebuilt = () => {
+      const row = fx.cariboo();
+      row.legislation_2002.eacDecision = fx.DECISIONS.issued._id;
+      return row;
+    };
+    const lists = [...fx.PHASE_ROWS, { id: fx.DECISIONS.issued._id, name: fx.DECISIONS.issued.name }];
+    const stored = { ...rebuilt(), assessments: deriveAssessments(rebuilt(), { lists }).assessments };
+    const assessment = yearOf(carryDemiOnlyFields(rebuilt(), stored), 2002);
+    assert.deepStrictEqual([assessment.currentPhase.name, assessment.decision.name],
+      ['Application Review', 'Certificate Issued']);
+  });
+
+  await t.test('a push rebuild drops a stored name once the id moves', () => {
+    const stored = { ...fx.cariboo(), assessments: deriveAssessments(fx.cariboo(), { lists: fx.PHASE_ROWS }).assessments };
+    const moved = fx.cariboo();
+    moved.legislation_2002.currentPhaseName = fx.PHASES.referral.id;
+    assert.deepStrictEqual(yearOf(carryDemiOnlyFields(moved, stored), 2002).currentPhase,
+      { id: fx.PHASES.referral.id, name: null });
   });
 
   await t.test('the derived fields are rebuilt, not carried', () => {
