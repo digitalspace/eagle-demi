@@ -53,6 +53,7 @@ npm run db:seed-public-reads                      # dry run: fetches, counts, wr
 npm run db:seed-public-reads -- --live
 npm run db:seed-public-reads -- --live --only lists
 npm run db:seed-public-reads -- --live --since 2026-01-01
+npm run db:seed-public-reads -- --summary FILE    # write the stages and `unfinished` as JSON
 ```
 
 Each stage logs one line. The counts are that run's, not a running total:

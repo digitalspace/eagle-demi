@@ -210,6 +210,8 @@ A run is refused with 409 while another is `queued` or `running`, and `live` nee
 npm run db:seed-nosql            # dry run by default; --live to write
 npm run db:seed-nosql -- --only projects --live   # projects only
 npm run db:seed-nosql -- --reconcile   # also delete rows the fetch did not produce
+npm run db:seed-nosql -- --reconcile --keep-ids FILE   # spare the rows FILE lists, one id per line
+npm run db:seed-nosql -- --summary FILE   # write a compact JSON verdict for a wrapper to gate on
 npm run db:seed-public-reads     # lists, notifications, updates, comment periods, comments
 npm run db:purge-extraction      # dry run by default; --live to write
 ```
