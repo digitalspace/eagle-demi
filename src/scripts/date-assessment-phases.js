@@ -5,15 +5,13 @@
 
 const { systemAccess } = require('../helpers/access-sql');
 const { writeGuarded } = require('../helpers/etag-write');
-const { actBlocks, datePhasesFromDocuments, deriveAssessments } = require('../merge/assessments');
+const { DERIVED_FIELDS, actBlocks, datePhasesFromDocuments, deriveAssessments } = require('../merge/assessments');
 const { redactForAccess } = require('../vis/redact');
 const projectsRepository = require('../repositories/projects');
 const documentsRepository = require('../repositories/documents');
 const periodsRepository = require('../repositories/comment-periods');
 const listsRepository = require('../repositories/lists');
 const { logger } = require('../utils/logger');
-
-const DERIVED_FIELDS = ['documentPhases', 'assessments', 'phaseIds', 'activeWork'];
 
 /** The public rows as an anonymous caller sees them, so a dialled field dates nothing. */
 const publicViews = (entity, rows) => rows

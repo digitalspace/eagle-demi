@@ -190,7 +190,7 @@ test('400 on more than 10 keys', async (t) => {
     'projectState', 'abbreviation', 'address', 'eaStatus', 'eacDecision', 'decisionDate'];
   const visOf = (n) => Object.fromEntries(FIELDS.slice(0, n).map((f) => [f, 4]));
 
-  await t.test('eleven fields is one Cosmos patch operation too many', async () => {
+  await t.test('eleven fields is one over the cap', async () => {
     const { res, calls } = await classify(t, { vis: visOf(11) });
     assert.strictEqual(res.statusCode, 400);
     assert.match(res.body.error, /10/);
@@ -203,11 +203,11 @@ test('400 on more than 10 keys', async (t) => {
     assert.strictEqual(Object.keys(calls.patchVis[0].vis).length, 10);
   });
 
-  await t.test('and the cap is the one the data layer enforces', async () => {
-    assert.strictEqual(cosmos.PATCH_MAX_OPERATIONS, 10);
-    await assert.rejects(
-      cosmos.patch('projects', '207', '207', new Array(11).fill({ op: 'set', path: '/a', value: 1 })),
-      RangeError);
+  await t.test('the write is the same four operations whatever the dial count', async () => {
+    const writes = fakeStore(t, [{ ...STORED, _etag: '"e1"' }]);
+    await projects.patchVis('207', visOf(10));
+    assert.deepStrictEqual(writes[0].operations.map(op => op.path),
+      ['/vis', '/assessments', '/phaseIds', '/activeWork']);
   });
 });
 

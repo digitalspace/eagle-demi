@@ -7,6 +7,8 @@ const { LEGISLATIONS, EAGLE_DATE_FLOOR, isRegistryYear, yearOf } = require('../d
 const { redactForAccess } = require('../vis/redact');
 
 const ASSESSMENT_WORK_TYPE = 6;
+/** Built from other fields by `deriveAssessments` and the dating pass; no caller writes them. */
+const DERIVED_FIELDS = Object.freeze(['documentPhases', 'assessments', 'phaseIds', 'activeWork']);
 const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
 const POST_DECISION_ROW = 'Post Decision';
 const OFF_RAIL_PHASES = ['Other', 'Termination', 'Withdrawal'];
@@ -333,4 +335,4 @@ function actBlocks(row) {
   });
 }
 
-module.exports = { ASSESSMENT_WORK_TYPE, STAGE_SETS, stageRowFor, actBlocks, datePhasesFromDocuments, deriveAssessments };
+module.exports = { ASSESSMENT_WORK_TYPE, DERIVED_FIELDS, STAGE_SETS, stageRowFor, actBlocks, datePhasesFromDocuments, deriveAssessments };
