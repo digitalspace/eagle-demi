@@ -62,8 +62,7 @@ case "$1 $2 $4" in
 esac
 `;
 
-// Clean tree, fetch works, bicep same as origin/main by default. FAKE_GIT_DIRTY, FAKE_GIT_STATUS_FAIL,
-// FAKE_GIT_FETCH_FAIL, FAKE_GIT_BICEP_DIFFERS, FAKE_GIT_DIFF_FAIL (each =1) flip one. A call without
+// Clean tree, fetch works, bicep matches origin/main; each FAKE_GIT_* =1 flips one. A call without
 // -C $STUB_REPO exits 97, so the script cannot read the caller's working directory by mistake.
 const FAKE_GIT = `#!/usr/bin/env bash
 echo "$*" >> "$STUB_GIT_LOG"
