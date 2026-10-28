@@ -253,10 +253,10 @@ so a row that lacks the field or holds the wrong type indexes as null instead of
 | Column | Type | Source |
 |---|---|---|
 | `phaseIds` | `Collection(Edm.String)` | `c.phaseIds`, string elements only |
-| `activeWorkId` | `Edm.Int32` | `c.activeWork.id`, the Track work id |
-| `activeWorkAct` | `Edm.String` | `c.activeWork.act` |
-| `activeWorkType` | `Edm.String` | `c.activeWork.type` |
-| `activeWorkPhase` | `Edm.String` | `c.activeWork.phase` |
+| `activeWorkId` | `Edm.Int32` | `c.activeWork.trackWorkId`, the Track work id |
+| `activeWorkAct` | `Edm.String` | `c.activeWork.eaAct` |
+| `activeWorkType` | `Edm.String` | `c.activeWork.workType` |
+| `activeWorkPhase` | `Edm.String` | `c.activeWork.currentPhase` |
 
 They are a plain widening: apply them with the same `demi-devbox.sh apply` step as `tags`.
 

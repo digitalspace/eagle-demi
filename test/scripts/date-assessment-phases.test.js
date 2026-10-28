@@ -6,6 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { run } = require('../../src/scripts/date-assessment-phases');
+const projectsRepository = require('../../src/repositories/projects');
+const documentsRepository = require('../../src/repositories/documents');
+const periodsRepository = require('../../src/repositories/comment-periods');
+const listsRepository = require('../../src/repositories/lists');
 const { logger } = require('../../src/utils/logger');
 const fx = require('../fixtures/act-assessments');
 
@@ -15,17 +19,20 @@ const posted = (phase, datePosted, extra = {}) =>
 const PUBLIC_REVIEW = posted(fx.PHASES.applicationReview, '2010-03-02T00:00:00.000Z');
 const REFERRAL = '2011-01-10T00:00:00.000Z';
 
-/** Repositories over one stored project; `upsert` throws `failWith` on every call when given. */
-function fakeDeps(row, documents, { failWith } = {}) {
-  const store = { row, upserts: [], rereads: 0 };
+/**
+ * Repositories over one stored project. `upsert` throws `failWith` on the first `failTimes` calls;
+ * `listed` is the row the run starts from, when it differs from the stored one.
+ */
+function fakeDeps(row, documents, { failWith, failTimes = Infinity, listed, periods = [] } = {}) {
+  const store = { row, upserts: [], rereads: 0, failures: 0 };
   const assertSystem = (access) => assert.strictEqual(access && access.tier, 'privileged',
     'the pass must read as systemAccess(), or it misses rows');
   store.deps = {
     projects: {
-      async listVisible(access) { assertSystem(access); return { items: [store.row] }; },
+      async listVisible(access) { assertSystem(access); return { items: [listed || store.row] }; },
       async getById(access) { assertSystem(access); store.rereads++; return store.row; },
       async upsert(next, { etag }) {
-        if (failWith) throw Object.assign(new Error('etag moved'), { code: failWith });
+        if (failWith && store.failures++ < failTimes) throw Object.assign(new Error('etag moved'), { code: failWith });
         store.upserts.push({ next, etag });
         store.row = { ...next, _etag: `${etag}+` };
       }
@@ -34,7 +41,7 @@ function fakeDeps(row, documents, { failWith } = {}) {
       async projectedRowsForProject(access) { assertSystem(access); return documents; }
     },
     periods: {
-      async listEveryByProject(_id, access) { assertSystem(access); return []; }
+      async listEveryByProject(_id, access) { assertSystem(access); return periods; }
     },
     lists: {
       async listEveryOfKind(kind, access) { assertSystem(access); return kind === 'List' ? fx.PHASE_ROWS : []; }
@@ -67,6 +74,25 @@ test('date-assessment-phases run', async (t) => {
     await run({ live: true, deps: store.deps });
 
     assert.deepStrictEqual(stages(store.upserts[0].next), ['Application Review']);
+  });
+
+  await t.test('a comment period whose label is dialled below 4 dates without the label', async () => {
+    const period = { id: 'cp1', dateStarted: '2010-04-01T00:00:00.000Z', informationLabel: 'Draft',
+      read: ['public'], vis: { informationLabel: 2 } };
+    const store = fakeDeps({ ...fx.only2002(), _etag: 'e1' }, [], { periods: [period] });
+    await run({ live: true, deps: store.deps });
+
+    const [entry] = store.upserts[0].next.documentPhases;
+    assert.deepStrictEqual([entry.commentPeriodId, entry.label], ['cp1', null]);
+  });
+
+  await t.test('a write rebuilt after a lost race files documents by the reread row\'s Act blocks', async () => {
+    const document = posted(fx.PHASES.preApplication, '2003-05-01T00:00:00.000Z');
+    const store = fakeDeps({ ...fx.movedFrom1996('2004-06-01T00:00:00.000Z'), _etag: 'e2' }, [document],
+      { failWith: 412, failTimes: 1, listed: { ...fx.movedFrom1996(null), _etag: 'e1' } });
+    await run({ live: true, deps: store.deps });
+
+    assert.deepStrictEqual(store.upserts[0].next.documentPhases.map(phase => phase.legislationYear), [1996]);
   });
 
   await t.test('a written row carries the derived fields on its etag', async () => {
@@ -110,4 +136,15 @@ test('date-assessment-phases run', async (t) => {
 
     assert.match(info.mock.calls[0].arguments[0], /projects=1 written=1 unchanged=0 failures=0$/);
   });
+});
+
+// Every other test injects fakes, so only this one sees a method the real repositories lack.
+test('the repositories the pass reads by default have every method it calls', () => {
+  const calls = [[projectsRepository, ['listVisible', 'getById', 'upsert']],
+    [documentsRepository, ['projectedRowsForProject']],
+    [periodsRepository, ['listEveryByProject']],
+    [listsRepository, ['listEveryOfKind']]];
+  const missing = calls.flatMap(([repository, methods]) =>
+    methods.filter(method => typeof repository[method] !== 'function'));
+  assert.deepStrictEqual(missing, []);
 });

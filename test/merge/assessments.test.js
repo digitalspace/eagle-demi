@@ -65,6 +65,18 @@ test('datePhasesFromDocuments', async (t) => {
     assert.deepStrictEqual(row.documentPhases.map(entry => entry.legislationYear), [2002, 2002]);
   });
 
+  await t.test('a comment period opened before any listed Act was in force dates nothing', () => {
+    const periods = [{ id: 'cp5', dateStarted: '2017-06-01T00:00:00.000Z' }];
+    assert.deepStrictEqual(datePhasesFromDocuments([], periods, fx.PHASE_ROWS, [{ year: 2018 }]), []);
+  });
+
+  await t.test('a transition dated before its Act was in force starts the Act on its in-force date', () => {
+    const periods = [{ id: 'cp6', dateStarted: '2017-06-01T00:00:00.000Z' }];
+    const acts = [{ year: 2002 }, { year: 2018, start: '2015-01-01T00:00:00.000Z' }];
+    const [period] = datePhasesFromDocuments([], periods, fx.PHASE_ROWS, acts);
+    assert.strictEqual(period.legislationYear, 2002);
+  });
+
   await t.test('a comment period that ends before it starts has no end', () => {
     const [period] = datePhasesFromDocuments([], [{ id: 'cp2', dateStarted: '2020-02-01T00:00:00.000Z',
       dateCompleted: '1969-12-31T08:00:00.000Z' }], fx.PHASE_ROWS, [{ year: 2018 }]);
@@ -152,6 +164,12 @@ test('deriveAssessments', async (t) => {
       { trackWorkId: 2201, eaAct: '2018 Act', workType: 'Assessment', currentPhase: 'Readiness Decision' });
   });
 
+  await t.test('a live work with no Track id is not the active work', () => {
+    const row = fx.only2018WithWorks();
+    row.works = row.works.map(work => ({ ...work, trackWorkId: null }));
+    assert.strictEqual(deriveAssessments(row).activeWork, null);
+  });
+
   await t.test('no works falls back to phases', () => {
     const [phase] = yearOf(deriveAssessments(fx.prod2018()), 2018).phases;
     assert.deepStrictEqual([phase.stage, phase.source, phase.startDate], ['Early Engagement', 'track', '2021-05-03T00:00:00.000Z']);
@@ -172,6 +190,15 @@ test('deriveAssessments', async (t) => {
   await t.test('the certificate sits on the block that issued it', () => {
     assert.deepStrictEqual(yearOf(deriveAssessments(fx.only2002()), 2002).certificate,
       { number: 'E10-01', signedDate: '2011-06-01T00:00:00.000Z', expiresDate: null });
+  });
+
+  await t.test('a certificate whose decision is known only by id sits on that decision\'s block', () => {
+    const row = { ...fx.cariboo(), eaCertificate: 'E10-01' };
+    row.legislation_2002.eacDecision = fx.DECISIONS.issued._id;
+    delete row.legislation_2018.eacDecision;
+    const derived = deriveAssessments(row);
+    assert.deepStrictEqual(derived.assessments.map(one => [one.legislationYear, Boolean(one.certificate)]),
+      [[2002, true], [2018, false]]);
   });
 
   await t.test('a certificate field holding a state, not a number, gives no certificate', () => {

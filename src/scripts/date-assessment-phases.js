@@ -5,25 +5,18 @@
 
 const { systemAccess } = require('../helpers/access-sql');
 const { writeGuarded } = require('../helpers/etag-write');
-const { actBlocks, datePhasesFromDocuments, deriveAssessments } = require('../merge/assessments');
-const { LEVELS } = require('../vis/level');
+const { DERIVED_FIELDS, actBlocks, datePhasesFromDocuments, deriveAssessments } = require('../merge/assessments');
+const { redactForAccess } = require('../vis/redact');
 const projectsRepository = require('../repositories/projects');
 const documentsRepository = require('../repositories/documents');
 const periodsRepository = require('../repositories/comment-periods');
 const listsRepository = require('../repositories/lists');
 const { logger } = require('../utils/logger');
 
-const DERIVED_FIELDS = ['documentPhases', 'assessments', 'phaseIds', 'activeWork'];
-const DOCUMENT_FIELDS = ['projectPhaseId', 'projectPhase', 'datePosted'];
-const PERIOD_FIELDS = ['dateStarted', 'dateCompleted', 'informationLabel'];
-const ANONYMOUS_LEVEL = 4;
-
-/** Public, and no field the dating reads is dialled below the anonymous level. */
-function isPublicFor(row, fields) {
-  if (!row || !Array.isArray(row.read) || !row.read.includes('public')) return false;
-  const dials = row.vis && typeof row.vis === 'object' ? row.vis : {};
-  return fields.every(field => !(LEVELS.includes(dials[field]) && dials[field] < ANONYMOUS_LEVEL));
-}
+/** The public rows as an anonymous caller sees them, so a dialled field dates nothing. */
+const publicViews = (entity, rows) => rows
+  .filter(row => row && Array.isArray(row.read) && row.read.includes('public'))
+  .map(row => redactForAccess(entity, row, null));
 
 const derivedJson = (row) => JSON.stringify(DERIVED_FIELDS.map(field => row[field] ?? null));
 
@@ -62,11 +55,11 @@ async function run({ live = false, deps = {} } = {}) {
           documents.projectedRowsForProject(access, id, ['projectPhaseId', 'datePosted', 'read', 'vis']),
           periods.listEveryByProject(id, access)
         ]);
-        const documentPhases = datePhasesFromDocuments(
-          docs.filter(row => isPublicFor(row, DOCUMENT_FIELDS)),
-          cps.filter(row => isPublicFor(row, PERIOD_FIELDS)),
-          phaseRows, actBlocks(project));
+        const publicDocs = publicViews('documents', docs);
+        const publicPeriods = publicViews('commentPeriods', cps);
+        // Act blocks come from the row being written, so a reread after a lost race re-files them.
         const derive = (row) => {
+          const documentPhases = datePhasesFromDocuments(publicDocs, publicPeriods, phaseRows, actBlocks(row));
           const next = { ...row, documentPhases };
           return { ...next, ...deriveAssessments(next, { lists: listRows }) };
         };
@@ -110,7 +103,7 @@ async function run({ live = false, deps = {} } = {}) {
   return summary;
 }
 
-module.exports = { run, parseArgs, isPublicFor };
+module.exports = { run, parseArgs };
 
 if (require.main === module) {
   Promise.resolve()
