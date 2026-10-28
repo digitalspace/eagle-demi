@@ -201,10 +201,10 @@ test('the projects assessment columns are guarded, filterable and public', () =>
   const expected = {
     phaseIds: ['Collection(Edm.String)',
       '(IS_ARRAY(c.phaseIds) ? ARRAY(SELECT VALUE p FROM p IN c.phaseIds WHERE IS_STRING(p)) : null)'],
-    activeWorkId: ['Edm.Int32', '(IS_NUMBER(c.activeWork.id) ? c.activeWork.id : null)'],
-    activeWorkAct: ['Edm.String', '(IS_STRING(c.activeWork.act) ? c.activeWork.act : null)'],
-    activeWorkType: ['Edm.String', '(IS_STRING(c.activeWork.type) ? c.activeWork.type : null)'],
-    activeWorkPhase: ['Edm.String', '(IS_STRING(c.activeWork.phase) ? c.activeWork.phase : null)']
+    activeWorkId: ['Edm.Int32', '(IS_NUMBER(c.activeWork.trackWorkId) ? c.activeWork.trackWorkId : null)'],
+    activeWorkAct: ['Edm.String', '(IS_STRING(c.activeWork.eaAct) ? c.activeWork.eaAct : null)'],
+    activeWorkType: ['Edm.String', '(IS_STRING(c.activeWork.workType) ? c.activeWork.workType : null)'],
+    activeWorkPhase: ['Edm.String', '(IS_STRING(c.activeWork.currentPhase) ? c.activeWork.currentPhase : null)']
   };
 
   for (const [name, [type, expr]] of Object.entries(expected)) {
