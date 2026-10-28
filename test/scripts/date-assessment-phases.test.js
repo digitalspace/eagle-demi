@@ -6,6 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { run } = require('../../src/scripts/date-assessment-phases');
+const projectsRepository = require('../../src/repositories/projects');
+const documentsRepository = require('../../src/repositories/documents');
+const periodsRepository = require('../../src/repositories/comment-periods');
+const listsRepository = require('../../src/repositories/lists');
 const { logger } = require('../../src/utils/logger');
 const fx = require('../fixtures/act-assessments');
 
@@ -110,4 +114,15 @@ test('date-assessment-phases run', async (t) => {
 
     assert.match(info.mock.calls[0].arguments[0], /projects=1 written=1 unchanged=0 failures=0$/);
   });
+});
+
+// Every other test injects fakes, so only this one sees a method the real repositories lack.
+test('the repositories the pass reads by default have every method it calls', () => {
+  const calls = [[projectsRepository, ['listVisible', 'getById', 'upsert']],
+    [documentsRepository, ['projectedRowsForProject']],
+    [periodsRepository, ['listEveryByProject']],
+    [listsRepository, ['listEveryOfKind']]];
+  const missing = calls.flatMap(([repository, methods]) =>
+    methods.filter(method => typeof repository[method] !== 'function'));
+  assert.deepStrictEqual(missing, []);
 });
