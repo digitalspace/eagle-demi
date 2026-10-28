@@ -220,6 +220,16 @@ test('the projects assessment columns are guarded, filterable and public', () =>
     ['activeWorkId', 'activeWorkAct', 'activeWorkType', 'activeWorkPhase']);
 });
 
+// A projection reading a key the merge never stores indexes null forever and fails nothing.
+test('the projects activeWork columns read keys the merge stores', () => {
+  const { deriveAssessments } = require('../../src/merge/assessments');
+  const fx = require('../fixtures/act-assessments');
+  const stored = Object.keys(deriveAssessments(fx.only2018WithWorks()).activeWork);
+  const read = [...PAIRS[1][1].container.query.matchAll(/c\.activeWork\.(\w+)/g)].map(match => match[1]);
+  assert.ok(read.length, 'the projection must read activeWork');
+  assert.deepStrictEqual(read.filter(key => !stored.includes(key)), []);
+});
+
 // Searchable so an old name finds the project; never retrievable, like `nameTokens` and
 // `searchLabels` (see src/vis/catalog/index-projects.js).
 test('the projects tags field is a searchable, non-retrievable string list', () => {
