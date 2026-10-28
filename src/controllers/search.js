@@ -391,9 +391,11 @@ function redactIndexProject(hit, access) {
 
 /** The stored `activeWork` object, rebuilt from the four flat columns the index keeps it in. */
 function indexActiveWork(doc) {
-  if (doc.activeWorkId == null) return null;
+  const columns = [doc.activeWorkId, doc.activeWorkAct, doc.activeWorkType, doc.activeWorkPhase];
+  // Not keyed on the id alone: the index nulls a non-numeric id that Cosmos still holds.
+  if (columns.every(value => value == null)) return null;
   return {
-    trackWorkId: doc.activeWorkId,
+    trackWorkId: doc.activeWorkId ?? null,
     eaAct: doc.activeWorkAct ?? null,
     workType: doc.activeWorkType ?? null,
     currentPhase: doc.activeWorkPhase ?? null
@@ -1603,7 +1605,7 @@ exports.search = async (req, res) => {
             decisionDate: row.decisionDate || null,
             // Same column as the index branch above, so both project shapes answer it.
             dateUpdated: row.dateUpdated || null,
-            assessments: row.assessments,
+            assessments: row.assessments ?? null,
             phaseIds: row.phaseIds ?? null,
             activeWork: row.activeWork ?? null,
             // 'public' in the read ACL is what makes a record public; isPublished mirrors it, and

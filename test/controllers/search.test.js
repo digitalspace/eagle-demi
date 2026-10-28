@@ -264,16 +264,47 @@ test('Search Controller Tests', async (t) => {
       [['p1', 'p2'], ACTIVE, false], 'AI Search branch');
   });
 
-  await t.test('the index branch answers activeWork null when activeWorkId is null', async () => {
-    t.mock.method(aiSearch, 'searchProjects', async () => ({
-      count: 1,
-      items: [{ id: '47', name: 'Idle', read: ['public'], activeWorkId: null, activeWorkAct: '2018 Act' }]
-    }));
-    let jsonResponse;
-    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
-    await searchController.search(
-      { query: { dataset: 'Project', keywords: 'idle', pageSize: '10' }, header: () => null }, res);
-    assert.strictEqual(jsonResponse[0].searchResults[0].activeWork, null);
+  // The index nulls a non-numeric work id that Cosmos still holds, so only four empty columns mean
+  // "no live work".
+  await t.test('the index branch answers activeWork null only when all four columns are null', async (tt) => {
+    const rowFor = async (hit) => {
+      tt.mock.restoreAll();
+      tt.mock.method(aiSearch, 'searchProjects', async () => ({ count: 1, items: [{ id: '47', name: 'Idle', read: ['public'], ...hit }] }));
+      let jsonResponse;
+      const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+      await searchController.search(
+        { query: { dataset: 'Project', keywords: 'idle', pageSize: '10' }, header: () => null }, res);
+      return jsonResponse[0].searchResults[0];
+    };
+    const none = { activeWorkId: null, activeWorkAct: null, activeWorkType: null, activeWorkPhase: null };
+    assert.strictEqual((await rowFor(none)).activeWork, null);
+    assert.deepStrictEqual((await rowFor({ ...none, activeWorkAct: '2018 Act' })).activeWork,
+      { trackWorkId: null, eaAct: '2018 Act', workType: null, currentPhase: null });
+  });
+
+  // 2 is below the anonymous caller's level 4, so both fields must come back empty to the public.
+  await t.test('a dial on activeWork or phaseIds withholds them on both project branches', async (tt) => {
+    const ACTIVE = { trackWorkId: 2201, eaAct: '2018 Act', workType: 'Assessment', currentPhase: 'Process Planning' };
+    const FLAT = { activeWorkId: 2201, activeWorkAct: '2018 Act', activeWorkType: 'Assessment', activeWorkPhase: 'Process Planning' };
+    const rowFor = async (keywords) => {
+      let jsonResponse;
+      const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+      await searchController.search(
+        { query: { dataset: 'Project', keywords, pageSize: '10' }, header: () => null }, res);
+      return jsonResponse[0].searchResults[0];
+    };
+    for (const field of ['activeWork', 'phaseIds']) {
+      tt.mock.restoreAll();
+      tt.mock.method(projectsRepo, 'listPage', async () => [{
+        id: '46', name: 'Caribou', read: ['public'], phaseIds: ['p1'], activeWork: ACTIVE, vis: { [field]: 2 }
+      }]);
+      tt.mock.method(aiSearch, 'searchProjects', async () => ({
+        count: 1,
+        items: [{ id: '46', name: 'Caribou', read: ['public'], phaseIds: ['p1'], ...FLAT, vis: JSON.stringify({ [field]: 2 }) }]
+      }));
+      assert.strictEqual((await rowFor(''))[field], null, `${field} on the Cosmos list branch`);
+      assert.strictEqual((await rowFor('caribou'))[field], null, `${field} on the AI Search branch`);
+    }
   });
 
   // eagle-public hard-codes `fuzzy=false` and eagle-search has always fuzzed anyway. Honouring the
@@ -1877,7 +1908,9 @@ test('the eagle-public response contract', async (t) => {
       projectState: 'Completed',
       eagleId: '588511c4aaecd9001b826192',
       read: ['public'],
-      isPublished: true
+      isPublished: true,
+      phaseIds: ['p1', 'p2'],
+      activeWork: { trackWorkId: 2201, eaAct: '2018 Act', workType: 'Assessment', currentPhase: 'Process Planning' }
     };
     // The same row after the indexer's SELECT — the aliases applied, nothing else changed.
     const indexed = {
@@ -1887,7 +1920,12 @@ test('the eagle-public response contract', async (t) => {
       region: stored.region,
       status: stored.projectState,
       legacyEagleId: stored.eagleId,
-      read: stored.read
+      read: stored.read,
+      phaseIds: stored.phaseIds,
+      activeWorkId: stored.activeWork.trackWorkId,
+      activeWorkAct: stored.activeWork.eaAct,
+      activeWorkType: stored.activeWork.workType,
+      activeWorkPhase: stored.activeWork.currentPhase
     };
 
     t.mock.method(projectsRepo, 'listPage', async () => [stored]);
@@ -1916,6 +1954,7 @@ test('the eagle-public response contract', async (t) => {
         `${field} disagrees between the Cosmos and AI Search branches`);
     }
     assert.ok(common.includes('trackProjectId'), 'trackProjectId must be in the comparison');
+    assert.ok(common.includes('activeWork') && viaIndex.activeWork !== null, 'the populated activeWork is compared');
     // Pinned as well as compared: parity alone would also be satisfied by both branches being
     // wrong in the same direction, which is the failure mode this route already shipped once.
     assert.strictEqual(viaCosmos.status, 'Completed', 'the real project state, not the default');
