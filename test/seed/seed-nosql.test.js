@@ -52,6 +52,13 @@ const LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-reconcile-'));
 process.env.RECONCILE_LOG = path.join(LOG_DIR, 'default.ndjson');
 test.after(() => fs.rmSync(LOG_DIR, { recursive: true, force: true }));
 
+/** A `--keep-ids` file in the run's scratch directory. */
+function keepIdsFile(name, text) {
+  const file = path.join(LOG_DIR, name);
+  fs.writeFileSync(file, text);
+  return file;
+}
+
 test('parseArgs — writes require an explicit flag', async (t) => {
   await t.test('defaults to a dry run', () => {
     assert.strictEqual(parseArgs([]).live, false,
@@ -802,6 +809,20 @@ test('--reconcile refuses anything that narrows the fetch', async (t) => {
     assert.throws(() => parseArgs(['--reconcile', '--max-surplus']),
       /needs a positive integer/);
   });
+
+  await t.test('--keep-ids reads one id per line and skips blanks and comments', () => {
+    const file = keepIdsFile('parse.txt', '# rows to keep\nabc\n\n  def  # DEMI-only\r\n');
+    assert.deepStrictEqual([...parseArgs(['--reconcile', '--keep-ids', file]).keepIds], ['abc', 'def']);
+    assert.strictEqual(parseArgs(['--reconcile']).keepIds, null);
+  });
+
+  await t.test('--keep-ids needs --reconcile and a file', () => {
+    const file = keepIdsFile('needs.txt', 'abc\n');
+    assert.throws(() => parseArgs(['--keep-ids', file]), /needs --reconcile/);
+    assert.throws(() => parseArgs(['--reconcile', '--keep-ids']), /--keep-ids needs a file/);
+    assert.throws(() => parseArgs(['--reconcile', '--keep-ids', path.join(LOG_DIR, 'absent.txt')]),
+      /ENOENT/);
+  });
 });
 
 test('reconcileContainer — the surplus set', async (t) => {
@@ -864,18 +885,20 @@ test('reconcileContainer — the surplus set', async (t) => {
 
     assert.deepStrictEqual(removed, []);
     assert.deepStrictEqual(events, []);
-    assert.deepStrictEqual(out.kept, [{ id: 'b', partitionKey: 'b' }]);
+    assert.deepStrictEqual(out.wouldKeep, ['b']);
+    assert.strictEqual(out.kept, undefined, 'a spared row is not a failed purge');
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(logPath, 'utf8')),
       { label: 'projects', id: 'b', partitionKey: 'b', deleted: false, kept: true });
   });
 
-  await t.test('a dry-run log line is not marked kept', async () => {
+  await t.test('dry run reports a kept row in wouldKeep', async () => {
     const logPath = path.join(LOG_DIR, 'dry.ndjson');
-    await reconcileContainer('documents', rows, r => r.id, fetched, () => {},
-      { live: false, logPath, spare: () => true });
+    const out = await reconcileContainer('documents', rows, r => r.id, fetched, () => {},
+      { live: false, logPath, spare: r => r.id === 'b' });
 
+    assert.deepStrictEqual(out, { inCosmos: 3, wouldDelete: 0, deleted: 0, wouldKeep: ['b'] });
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(logPath, 'utf8')),
-      { label: 'documents', id: 'b', partitionKey: 'b', deleted: false });
+      { label: 'documents', id: 'b', partitionKey: 'b', deleted: false, kept: true });
   });
 
   await t.test('the key is composite where the container is partitioned', async () => {
@@ -976,6 +999,38 @@ test('seed --reconcile end to end', async (t) => {
     assert.strictEqual(summary.reconcile.documents.deleted, 0);
     assert.strictEqual(summary.reconcile.projects.wouldDelete, 1);
     assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('reconcile spares a project listed in --keep-ids', async () => {
+    const { purged, deps } = makeDeps();
+    const keep = keepIdsFile('project.txt', '# DEMI keeps this one\ngone\n');
+    const summary = await seed(
+      ['--live', '--reconcile', '--only', 'projects,documents', '--keep-ids', keep],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(purged.projects, []);
+    assert.deepStrictEqual(summary.reconcile.projects.wouldKeep, ['eagle-gone']);
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 0);
+  });
+
+  await t.test('a project listed by its row id is spared too', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents',
+      '--keep-ids', keepIdsFile('project-id.txt', 'eagle-gone\n')], { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(purged.projects, []);
+    assert.deepStrictEqual(summary.reconcile.projects.wouldKeep, ['eagle-gone']);
+  });
+
+  await t.test('reconcile spares a document listed in --keep-ids', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents',
+      '--keep-ids', keepIdsFile('document.txt', 'stale\n')], { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(purged.documents, []);
+    assert.deepStrictEqual(summary.reconcile.documents.wouldKeep, ['stale']);
+    assert.strictEqual(summary.reconcile.documents.kept, undefined);
+    assert.deepStrictEqual(summary.failures, [], 'a spared row is not a failed purge');
   });
 
   await t.test('a live run deletes the surplus through the DELETE helpers', async () => {
@@ -1458,9 +1513,19 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
       { ...deps, sources: stubSources(fetchedIds) });
 
     assert.deepStrictEqual(purged.projects, ['eagle-x'], 'purging 207 would orphan the kept s0');
-    assert.deepStrictEqual(summary.reconcile.projects.kept, [{ id: '207', partitionKey: '207' }]);
+    assert.deepStrictEqual(summary.reconcile.projects.wouldKeep, ['207']);
     assert.match(summary.failures.join(' '),
       /\(documents: s0\) and 1 project row\(s\) holding them \(projects: 207\); re-run to retry/);
+  });
+
+  await t.test('a project holding a document listed in --keep-ids stays, and nothing fails', async () => {
+    const { purged, deps } = makeDeps([...fetchedRows, ...staleRows(1)],
+      [{ id: '207', eagleId: 'e207' }, { id: 'eagle-x', eagleId: 'ex' }]);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents',
+      '--keep-ids', keepIdsFile('holding.txt', 's0\n')], { ...deps, sources: stubSources(fetchedIds) });
+
+    assert.deepStrictEqual(purged, { documents: [], projects: ['eagle-x'] });
+    assert.deepStrictEqual(summary.failures, []);
   });
 
   await t.test('one row over the ceiling refuses', async () => {

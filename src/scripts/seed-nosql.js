@@ -20,11 +20,14 @@
  * Usage:
  *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,boundaries]
  *                                 [--limit-documents N] [--reconcile] [--max-surplus N]
+ *                                 [--keep-ids FILE]
  *
  * Without --only, runs DEFAULT_STAGES: projects, documents, boundaries.
  *
  * `--reconcile` also DELETES the rows the fetch did not produce, through the same helpers the
  * DELETE controllers use. It needs Cosmos even in a dry run, where it only reports the count.
+ * `--keep-ids FILE` spares the rows it lists (one id per line, `#` comments): a project by its
+ * `eagleId` or `id`, a document by its `id`.
  *
  * Run it INSIDE the network via the Kudu command API, detached with a log file — Cosmos is behind
  * a private endpoint, and `/api/command` is synchronous and will time out on a 60k-document seed.
@@ -77,13 +80,16 @@ const FLUSH_THRESHOLD = 100;
 
 function parseArgs(argv) {
   const args = {
-    live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false, maxSurplus: null
+    live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false, maxSurplus: null,
+    keepIds: null
   };
+  let keepIdsFile = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
     else if (a === '--reconcile') args.reconcile = true;
     else if (a === '--max-surplus') args.maxSurplus = Number(argv[++i]);
+    else if (a === '--keep-ids') keepIdsFile = String(argv[++i] || '');
     else if (a === '--only') {
       args.only = String(argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
     } else if (a === '--limit-documents') args.limitDocuments = parseInt(argv[++i], 10);
@@ -117,7 +123,20 @@ function parseArgs(argv) {
       throw new Error('[seed] --max-surplus needs a positive integer');
     }
   }
+
+  if (keepIdsFile !== null) {
+    if (!args.reconcile) throw new Error('[seed] --keep-ids spares reconcile rows and needs --reconcile');
+    if (!keepIdsFile) throw new Error('[seed] --keep-ids needs a file');
+    args.keepIds = readKeepIds(keepIdsFile);
+  }
   return args;
+}
+
+/** One id per line; blank lines and `#` comments skipped. Cosmos ids cannot contain `#`. */
+function readKeepIds(file) {
+  return new Set(fs.readFileSync(file, 'utf8').split('\n')
+    .map(line => line.replace(/#.*/, '').trim())
+    .filter(Boolean));
 }
 
 /** Rows in `rows` that this fetch did not produce. Shared with `reconcile-eagle.js`. */
@@ -228,7 +247,9 @@ function reconcileLogPath(now) {
  * @param {function} remove    row -> Promise, called ONLY when live; `{ rowKept: true }` = not deleted
  * @param {string}   [opts.logPath] NDJSON sink for every surplus id, dry run included
  * @param {object}   [opts.audit]   `utils/audit`, called once per row deleted or kept by a failed purge
- * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run
+ * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs
+ *                                  ask too, so `wouldKeep` and `wouldDelete` match a live run
+ * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place
  */
 async function reconcileContainer(label, rows, keyOf, fetched, remove,
   { live, logPath, audit, spare = () => false }) {
@@ -247,13 +268,15 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
 
   let deleted = 0;
   const kept = [];
+  const wouldKeep = [];
   try {
     for (const row of surplus) {
-      const spared = live && spare(row);
+      const spared = Boolean(spare(row));
       // A purge that could not clear a row's chunks keeps the row; the next reconcile retries it.
       const failed = live && !spared && Boolean((await remove(row))?.rowKept);
       const removed = live && !spared && !failed;
-      if (spared || failed) kept.push({ id: row.id, partitionKey: partitionOf(row) });
+      if (spared) wouldKeep.push(row.id);
+      if (failed) kept.push({ id: row.id, partitionKey: partitionOf(row) });
       if (removed) deleted++;
       // The DELETE controllers' own event, so a purge is traceable however it was issued. A failed
       // one is recorded too: its search-index entries are already gone.
@@ -277,7 +300,10 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
   } finally {
     if (fd !== null) fs.closeSync(fd);
   }
-  return { inCosmos: rows.length, wouldDelete: surplus.length, deleted, ...(kept.length ? { kept } : {}) };
+  return {
+    inCosmos: rows.length, wouldDelete: surplus.length - wouldKeep.length, deleted,
+    ...(wouldKeep.length ? { wouldKeep } : {}), ...(kept.length ? { kept } : {})
+  };
 }
 
 /**
@@ -908,18 +934,24 @@ async function seed(argv = [], deps = {}) {
       const logPath = reconcileLogPath(now);
       summary.reconcile = { log: logPath };
       if (!searchReady) summary.reconcile.search = 'unconfigured — live would refuse';
+      const listed = id => Boolean(args.keepIds && args.keepIds.has(String(id)));
+      const spareDocument = row => listed(row.id);
       summary.reconcile.documents = await reconcileContainer(...containers[0],
-        { live, logPath, audit });
-      // A project still holding a kept document stays too, or that document is orphaned.
+        { live, logPath, audit, spare: spareDocument });
+      // A project still holding a kept or spared document stays too, or that document is orphaned.
       const keptDocs = summary.reconcile.documents.kept || [];
-      const holding = new Set(keptDocs.map(k => String(k.partitionKey)));
+      const failedHolding = new Set(keptDocs.map(k => String(k.partitionKey)));
+      const holding = new Set([...failedHolding,
+        ...documentRows.filter(spareDocument).map(row => String(row.projectId))]);
       summary.reconcile.projects = await reconcileContainer(...containers[1],
-        { live, logPath, audit, spare: row => holding.has(String(row.id)) });
+        { live, logPath, audit,
+          spare: row => listed(row.eagleId) || listed(row.id) || holding.has(String(row.id)) });
       if (keptDocs.length) {
-        const keptProjects = summary.reconcile.projects.kept || [];
-        const idsOf = kept => kept.slice(0, 20).map(k => k.id).join(', ');
+        const keptProjects = (summary.reconcile.projects.wouldKeep || [])
+          .filter(id => failedHolding.has(String(id)));
+        const idsOf = ids => ids.slice(0, 20).join(', ');
         summary.failures.push(`--reconcile kept ${keptDocs.length} document row(s) whose chunks ` +
-          `could not all be removed (documents: ${idsOf(keptDocs)})` +
+          `could not all be removed (documents: ${idsOf(keptDocs.map(k => k.id))})` +
           (keptProjects.length
             ? ` and ${keptProjects.length} project row(s) holding them (projects: ${idsOf(keptProjects)})`
             : '') +
