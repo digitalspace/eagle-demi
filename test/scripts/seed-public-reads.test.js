@@ -321,6 +321,92 @@ test('a stage that logged errors is NOT checkpointed', async (t) => {
     'checkpointing a stage that failed rows would leave them missing for good');
 });
 
+const readSummary = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+
+test('--summary needs a path', async () => {
+  // The reseed gate reads this file; a run that wrote it nowhere would read as a missing summary.
+  assert.throws(() => parseArgs(['--summary']), /--summary needs a path/);
+  assert.throws(() => parseArgs(['--summary', '']), /--summary needs a path/);
+  // Taking the next flag as the path would also swallow `--live` and run dry.
+  assert.throws(() => parseArgs(['--summary', '--live']), /--summary needs a path/);
+  assert.strictEqual(parseArgs(['--summary', 'out.json']).summary, 'out.json');
+});
+
+test('--summary lists a stage with drops as unfinished', async () => {
+  const summaryFile = statePath();
+  const sources = stubSources({
+    datasets: { Organization: [{ _id: 'O1' }], CommentPeriod: [{ _id: 'CP1' }, { _id: 'CP2' }] }
+  });
+
+  await backfill(['--live', '--only', 'organizations,commentPeriods', '--state', statePath(),
+    '--summary', summaryFile], {
+    sources,
+    organizationMirror: recordingMirror('organizations', []),
+    commentPeriodMirror: {
+      mirrorFromEagle: async (eagleId) =>
+        (eagleId === 'CP1' ? null : { saved: { id: eagleId }, existing: null })
+    }
+  });
+
+  const written = readSummary(summaryFile);
+  assert.deepStrictEqual(written.unfinished, ['commentPeriods'],
+    'the clean stage is finished, the one owing a row is not');
+  assert.strictEqual(written.stages.commentPeriods.dropped, 1);
+});
+
+test('--summary lists a stage with errors as unfinished', async (t) => {
+  t.mock.method(logger, 'error', () => {});
+  const summaryFile = statePath();
+  const sources = stubSources({ datasets: { Organization: [{ _id: 'O1' }] } });
+
+  await backfill(['--live', '--only', 'organizations', '--state', statePath(),
+    '--summary', summaryFile], {
+    sources,
+    organizationMirror: { mirrorFromEagle: async () => { throw new Error('cosmos said no'); } }
+  });
+
+  assert.deepStrictEqual(readSummary(summaryFile).unfinished, ['organizations']);
+});
+
+test('--summary records the target, mode, counts and resumed stages of a clean run', async () => {
+  const state = statePath();
+  const summaryFile = statePath();
+  fs.writeFileSync(state, JSON.stringify({ lists: { completedAt: '2026-09-01T00:00:00.000Z' } }));
+  const sources = stubSources({
+    datasets: { Organization: [{ _id: 'O1' }, { _id: 'O2' }], ProjectNotification: [], RecentActivity: [], CommentPeriod: [] }
+  });
+
+  await backfill(['--live', '--state', state, '--summary', summaryFile], {
+    sources,
+    organizationMirror: recordingMirror('organizations', []),
+    notificationMirror: recordingMirror('notifications', [])
+  });
+
+  const written = readSummary(summaryFile);
+  assert.strictEqual(written.eagle, BASE);
+  assert.strictEqual(written.live, true);
+  assert.deepStrictEqual(written.skipped, ['lists']);
+  assert.deepStrictEqual(written.unfinished, []);
+  assert.strictEqual(written.stages.organizations.written, 2);
+});
+
+test('--summary is written when a stage throws, naming that stage unfinished', async () => {
+  // A short read throws out of the run; the gate must still find a summary that says why.
+  const summaryFile = statePath();
+  const sources = {
+    ...stubSources(),
+    fetchAllPages: async () => { throw new Error('fetched 3 of 5 rows'); }
+  };
+
+  await assert.rejects(
+    backfill(['--only', 'organizations', '--state', statePath(), '--summary', summaryFile], { sources }),
+    /fetched 3 of 5 rows/);
+
+  const written = readSummary(summaryFile);
+  assert.strictEqual(written.live, false);
+  assert.deepStrictEqual(written.unfinished, ['organizations']);
+});
+
 test('comments', async (t) => {
   const period = { _id: PERIOD_EAGLE_ID };
 
