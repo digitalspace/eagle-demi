@@ -27,7 +27,8 @@ const PROJECT_TO_INDEX = {
   projectType: ['type', 'searchLabels'],
   CEAAInvolvement: ['ceaaInvolvementId'],
   currentPhaseName: ['currentPhaseName', 'currentPhaseNameId', 'searchLabels'],
-  eacDecision: ['eacDecision', 'eacDecisionId', 'searchLabels']
+  eacDecision: ['eacDecision', 'eacDecisionId', 'searchLabels'],
+  activeWork: ['activeWorkId', 'activeWorkAct', 'activeWorkType', 'activeWorkPhase']
 };
 
 /**

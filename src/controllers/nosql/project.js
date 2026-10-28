@@ -40,7 +40,7 @@ const {
 } = require('../../helpers/short-links');
 const { validateDestination } = require('../../helpers/link-url');
 const config = require('../../config');
-const { writeGuarded } = require('../../helpers/etag-write');
+const { writeGuarded, raced } = require('../../helpers/etag-write');
 const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
@@ -754,8 +754,7 @@ exports.setVisibility = async (req, res) => {
     }
 
     const fields = Object.keys(vis);
-    // One dial is one Cosmos patch operation, and patch() refuses more than its cap. Refused here
-    // so the caller gets a 400 naming the limit rather than a 500 from the data layer.
+    // A bound on one classify request; patchVis writes all dials as one whole-map `/vis` set.
     if (fields.length > PATCH_MAX_OPERATIONS) {
       return res.status(400).json({
         error: `At most ${PATCH_MAX_OPERATIONS} fields may be classified in one request, got ${fields.length}.`
@@ -780,7 +779,13 @@ exports.setVisibility = async (req, res) => {
       }
     }
 
-    const saved = await projects.patchVis(existing.id, vis);
+    let saved;
+    try {
+      saved = await projects.patchVis(existing.id, vis);
+    } catch (err) {
+      if (raced(err)) return writeConflict(res, 'project classify', existing.id);
+      throw err;
+    }
 
     // Field NAMES and LEVELS only, never values — same rule as project.update, and it matters more
     // here: the fields being classified are the ones somebody decided were sensitive.

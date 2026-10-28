@@ -47,6 +47,12 @@ module.exports = {
   // The stored `tags`, searchable and never retrievable; `tagsTokens` is them under `filename`.
   tags: { defaultVis: 4, maxVis: 4 },
   tagsTokens: { defaultVis: 4, maxVis: 4 },
+  // Copied from the stored `phaseIds` and `activeWork`, both public (catalog/projects.js).
+  phaseIds: { defaultVis: 4, maxVis: 4 },
+  activeWorkId: { defaultVis: 4, maxVis: 4 },
+  activeWorkAct: { defaultVis: 4, maxVis: 4 },
+  activeWorkType: { defaultVis: 4, maxVis: 4 },
+  activeWorkPhase: { defaultVis: 4, maxVis: 4 },
 
   // Not an index field: the marked-up copy of `name`/`displayName`/`description` that
   // `searchProjects` attaches. It cannot outrank its sources, which are all 4.

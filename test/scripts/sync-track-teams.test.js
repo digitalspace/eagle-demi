@@ -456,6 +456,98 @@ test('a Cosmos outage in the mirror still leaves the credential sweep to run', a
   assert.strictEqual(summary.credentialsRevoked, 2);
 });
 
+/** Flips ASSESSMENT_PASS for one test; the flag is read per run, not at load. */
+function assessmentFlag(t, on) {
+  const config = require('../../src/config');
+  const held = config.assessmentPass;
+  config.assessmentPass = on;
+  t.after(() => { config.assessmentPass = held; });
+}
+
+test('with ASSESSMENT_PASS on, the pass runs after the mirror and is handed the run mode', async (t) => {
+  assessmentFlag(t, true);
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const written = [];
+  const projects = { listVisible: async () => ({ items: [] }), upsert: async (p) => written.push(p) };
+  const calls = [];
+  const assessmentPass = async (opts) => {
+    calls.push({ ...opts, mirrored: written.length });
+    return { failures: 0 };
+  };
+
+  const summary = await sync(['--live'], {
+    fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc, credentials: fakeCredentials(), projects,
+    assessmentPass
+  });
+
+  assert.deepStrictEqual(calls, [{ live: true, mirrored: 2 }],
+    'the dating reads the Track phases the mirror writes, so it has to run after it');
+  assert.strictEqual(summary.failures, 0);
+});
+
+test('a dry-run night hands the pass a dry run', async (t) => {
+  assessmentFlag(t, true);
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const calls = [];
+
+  await sync([], {
+    fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc, credentials: fakeCredentials(),
+    projects: { listVisible: async () => ({ items: [] }) },
+    assessmentPass: async (opts) => { calls.push(opts); return { failures: 0 }; }
+  });
+
+  assert.deepStrictEqual(calls, [{ live: false }], 'a dry run must not write dated projects');
+});
+
+test('with ASSESSMENT_PASS off, the pass is skipped and the skip is logged', async (t) => {
+  assessmentFlag(t, false);
+  const { logger } = require('../../src/utils/logger');
+  const infos = [];
+  t.mock.method(logger, 'info', (message) => { infos.push(message); });
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const calls = [];
+
+  const summary = await sync(['--live'], {
+    fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc, credentials: fakeCredentials(),
+    projects: { listVisible: async () => ({ items: [] }), upsert: async () => {} },
+    assessmentPass: async (opts) => { calls.push(opts); return { failures: 0 }; }
+  });
+
+  assert.deepStrictEqual(calls, []);
+  assert.ok(infos.includes('[track-teams] assessment pass skipped: ASSESSMENT_PASS is off'), infos);
+  assert.strictEqual(summary.failures, 0);
+});
+
+test('a thrown assessment pass is counted, and the run still reports and exits 1', async (t) => {
+  assessmentFlag(t, true);
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+
+  const summary = await sync(['--live'], {
+    fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc, credentials: fakeCredentials(TWO_AND_ONE),
+    projects: { listVisible: async () => ({ items: [] }), upsert: async () => {} },
+    assessmentPass: async () => { throw new Error('cosmos said no'); }
+  });
+
+  assert.strictEqual(summary.failures, 1);
+  assert.strictEqual(summary.trackProjects, 2, 'the mirror before it still counts');
+  assert.strictEqual(summary.credentialsRevoked, 2, 'the sweep before it still counts');
+  assert.strictEqual(exitCodeFor(summary), 1, 'the nightly alert has to see the failed pass');
+});
+
+test('failed project writes inside the pass count as failures of the night', async (t) => {
+  assessmentFlag(t, true);
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+
+  const summary = await sync(['--live'], {
+    fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc, credentials: fakeCredentials(),
+    projects: { listVisible: async () => ({ items: [] }), upsert: async () => {} },
+    assessmentPass: async () => ({ failures: 3 })
+  });
+
+  assert.strictEqual(summary.failures, 3);
+  assert.ok(summaryLine(summary).endsWith('failures=3'), summaryLine(summary));
+});
+
 test('a dry run revokes no credential and still counts them', async () => {
   const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
   const credentials = fakeCredentials(TWO_AND_ONE);
