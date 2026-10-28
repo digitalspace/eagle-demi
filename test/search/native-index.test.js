@@ -124,6 +124,7 @@ test('OData builder', async (t) => {
 
   await t.test('an any-of filter lands on its collection column as any(), a value with a comma kept whole', () => {
     const open = { tier: TIER.PRIVILEGED, roles: ['sysadmin', SEALED_TOKEN], compartment: true };
+    assert.deepStrictEqual(MAP.collections, { phaseIds: 'phaseIds' });
     const filterWith = values => indexFilter(MAP, { filters: {}, anyOf: { phaseIds: values } }, open).filter;
     assert.strictEqual(filterWith(['ph2002', 'ph2018']), "(phaseIds/any(p: search.in(p, 'ph2002,ph2018', ',')))");
     assert.strictEqual(filterWith(["a,b", "it's"]), "(phaseIds/any(p: (p eq 'a,b' or p eq 'it''s')))");
@@ -157,6 +158,16 @@ test('OData builder', async (t) => {
       const searchable = new Set(fields.filter(f => f.searchable).map(f => f.name));
       assert.deepStrictEqual(Object.values(map.columns).filter(column => !filterable.has(column)), [], index);
       assert.deepStrictEqual(Object.values(map.contains || {}).flat().filter(column => !searchable.has(column)), [], index);
+    }
+  });
+
+  await t.test('every collection column is a filterable string collection in its index definition', () => {
+    for (const [index, map] of Object.entries(INDEX_MAPS)) {
+      const file = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes', `${index}.json`);
+      const fields = new Map(JSON.parse(fs.readFileSync(file, 'utf8')).fields.map(f => [f.name, f]));
+      const unfit = Object.values(map.collections || {}).filter(column =>
+        !(fields.get(column) || {}).filterable || fields.get(column).type !== 'Collection(Edm.String)');
+      assert.deepStrictEqual(unfit, [], index);
     }
   });
 

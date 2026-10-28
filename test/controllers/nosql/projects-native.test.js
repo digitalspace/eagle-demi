@@ -23,7 +23,6 @@ const { recordEvents } = require('../../helpers/record-events');
 const { swaggerParams, repeatableNames, queryNames } = require('../../helpers/swagger-params');
 const { evaluate } = require('../../helpers/updates-store');
 const { parseNativeQuery, nativeCriteria } = require('../../../src/helpers/native-query');
-const projectsCatalog = require('../../../src/vis/catalog/projects');
 
 const ROWS = [{ id: 'p1', name: 'Mine One', read: ['public'] }, { id: 'p2', name: 'Mine Two', read: ['public'] }];
 
@@ -385,11 +384,6 @@ function phaseMatches(query) {
 }
 
 test('phaseIds filter matches a project whose 2002 block held the phase', async (t) => {
-  // The catalog entry the assessment builder declares, for a tree that lacks it.
-  if (!projectsCatalog.phaseIds) {
-    projectsCatalog.phaseIds = { defaultVis: 4, maxVis: 4 };
-    t.after(() => { delete projectsCatalog.phaseIds; });
-  }
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('one phase id keeps the row whose older block held it, not one that never did', () => {
