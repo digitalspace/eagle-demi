@@ -20,20 +20,24 @@
  * Usage:
  *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,boundaries]
  *                                 [--limit-documents N] [--reconcile] [--max-surplus N]
- *                                 [--keep-ids FILE]
+ *                                 [--keep-ids FILE] [--summary FILE]
  *
  * Without --only, runs DEFAULT_STAGES: projects, documents, boundaries.
  *
  * `--reconcile` also DELETES the rows the fetch did not produce, through the same helpers the
  * DELETE controllers use. It needs Cosmos even in a dry run, where it only reports the count.
  * `--keep-ids FILE` spares the rows it lists (one id per line, `#` comments): a project by its
- * `eagleId` or `id`, a document by its `id`.
+ * `eagleId` or `id`, a document by its `id`. A listed project's documents are spared with it.
  *
- * Run it INSIDE the network via the Kudu command API, detached with a log file — Cosmos is behind
- * a private endpoint, and `/api/command` is synchronous and will time out on a 60k-document seed.
+ * `--summary FILE` writes a compact JSON verdict (failures, Track source, reconcile counts, keep
+ * report) on every exit path, for a wrapper to gate on instead of grepping the log.
+ *
+ * Run it INSIDE the network (the devbox, `scripts/demi-devbox.sh run`), detached with a log file:
+ * Cosmos is behind a private endpoint, and a 60k-document seed outlasts a synchronous call.
  */
 
 const fs = require('fs');
+const path = require('path');
 
 const sources = require('../seed/sources');
 const transform = require('../seed/transform');
@@ -47,6 +51,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { pickParent } = require('../helpers/parent-admit');
 const { refId } = require('../controllers/nosql/eagle-mirror');
 const { logger } = require('../utils/logger');
+const { readKeepIds } = require('../utils/keep-ids');
 const purgeHelpers = require('../helpers/purge');
 const auditHelpers = require('../utils/audit');
 const aiSearch = require('../search/ai-search');
@@ -81,7 +86,7 @@ const FLUSH_THRESHOLD = 100;
 function parseArgs(argv) {
   const args = {
     live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false, maxSurplus: null,
-    keepIds: null
+    keepIds: null, summary: null
   };
   let keepIdsFile = null;
   for (let i = 0; i < argv.length; i++) {
@@ -90,6 +95,7 @@ function parseArgs(argv) {
     else if (a === '--reconcile') args.reconcile = true;
     else if (a === '--max-surplus') args.maxSurplus = Number(argv[++i]);
     else if (a === '--keep-ids') keepIdsFile = String(argv[++i] || '');
+    else if (a === '--summary') args.summary = String(argv[++i] || '');
     else if (a === '--only') {
       args.only = String(argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
     } else if (a === '--limit-documents') args.limitDocuments = parseInt(argv[++i], 10);
@@ -127,16 +133,10 @@ function parseArgs(argv) {
   if (keepIdsFile !== null) {
     if (!args.reconcile) throw new Error('[seed] --keep-ids spares reconcile rows and needs --reconcile');
     if (!keepIdsFile) throw new Error('[seed] --keep-ids needs a file');
-    args.keepIds = readKeepIds(keepIdsFile);
+    args.keepIds = new Set(readKeepIds(keepIdsFile));
   }
+  if (args.summary === '') throw new Error('[seed] --summary needs a file');
   return args;
-}
-
-/** One id per line; blank lines and `#` comments skipped. Cosmos ids cannot contain `#`. */
-function readKeepIds(file) {
-  return new Set(fs.readFileSync(file, 'utf8').split('\n')
-    .map(line => line.replace(/#.*/, '').trim())
-    .filter(Boolean));
 }
 
 /** Rows in `rows` that this fetch did not produce. Shared with `reconcile-eagle.js`. */
@@ -226,11 +226,16 @@ const surplusCeiling = (rowCount, maxSurplus) =>
  * Where every surplus id goes. The console preview is capped at 20 — this file is not, because a
  * real reconcile can carry tens of thousands and "which rows went" has to outlive the run.
  */
-function reconcileLogPath(now) {
+function reconcileLogPath(now, dir = '/home') {
   if (process.env.RECONCILE_LOG) return process.env.RECONCILE_LOG;
   const name = `reconcile-${now}.ndjson`;
-  // `/home` is the only mount that survives a restart on the App Service plan the seed runs from.
-  return fs.existsSync('/home') ? `/home/${name}` : `./${name}`;
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    return path.join(dir, name);
+  } catch {
+    // The devbox user cannot write `/home`, so the log lands in the working directory instead.
+    return path.resolve(name);
+  }
 }
 
 /**
@@ -386,8 +391,76 @@ function log(...parts) {
   console.log(...parts);
 }
 
+const SUMMARY_MAX_BYTES = 3072;
+const SUMMARY_LIST_CAP = 20;
+
+const countsOf = obj => Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => typeof v === 'number'));
+
+const reconcileCounts = r => r && {
+  inCosmos: r.inCosmos, wouldDelete: r.wouldDelete, deleted: r.deleted,
+  ...(r.wouldKeep ? { wouldKeep: r.wouldKeep.length } : {}), ceiling: r.ceiling
+};
+
+/** The `--summary` file: counts only, failures capped, so a wrapper can fetch and parse it whole. */
+function compactSummary(summary) {
+  const { projects, ...otherStages } = summary.stages;
+  const compact = {
+    mode: summary.mode,
+    failureCount: summary.failures.length,
+    failures: summary.failures.slice(0, SUMMARY_LIST_CAP).map(f => f.slice(0, 200)),
+    track: summary.track || null,
+    reconcile: summary.reconcile ? {
+      log: summary.reconcile.log,
+      documents: reconcileCounts(summary.reconcile.documents),
+      projects: reconcileCounts(summary.reconcile.projects)
+    } : null,
+    keep: (summary.keep || []).slice(0, SUMMARY_LIST_CAP),
+    stages: {
+      ...(projects ? { projects: { ...countsOf(projects), report: countsOf(projects.report) } } : {}),
+      ...Object.fromEntries(Object.entries(otherStages).map(([name, stage]) => [name, countsOf(stage)]))
+    }
+  };
+  // One failure always survives, so a trimmed summary can never read as a pass.
+  while (JSON.stringify(compact).length > SUMMARY_MAX_BYTES && compact.failures.length > 1) {
+    compact.failures.pop();
+  }
+  return compact;
+}
+
+/**
+ * Per `--keep-ids` entry: the Cosmos row it names, whether the reconcile computed that row as
+ * surplus and spared it, and the Track project the registry matched it to (a match needs review).
+ */
+async function keepReport(keepIds, { projects, projectRows, documentRows, surplusIds, sparedIds, getProject }) {
+  const report = [];
+  for (const id of keepIds) {
+    const names = row => String(row.id) === id || String(row.eagleId) === id;
+    const built = projects.find(names);
+    const row = projectRows.find(names) || documentRows.find(r => String(r.id) === id) ||
+      await getProject(built ? built.id : id);
+    const rowId = row ? String(row.id) : null;
+    report.push({
+      id, rowId, trackProjectId: built?.trackProjectId ?? null,
+      surplus: surplusIds.has(rowId), kept: sparedIds.has(rowId)
+    });
+  }
+  return report;
+}
+
 async function seed(argv = [], deps = {}) {
   const args = parseArgs(argv);
+  const summary = { mode: args.live ? 'live' : 'dry-run', stages: {}, failures: [] };
+  try {
+    return await runSeed(args, deps, summary);
+  } catch (err) {
+    summary.failures.push(`fatal: ${err.message}`);
+    throw err;
+  } finally {
+    if (args.summary) fs.writeFileSync(args.summary, JSON.stringify(compactSummary(summary)) + '\n');
+  }
+}
+
+async function runSeed(args, deps, summary) {
   const now = deps.now || new Date().toISOString();
   const src = deps.sources || sources;
   const repos = deps.repos || {
@@ -411,7 +484,7 @@ async function seed(argv = [], deps = {}) {
     ? deps.searchReady
     : aiSearch.config().configured;
 
-  const summary = { mode: args.live ? 'live' : 'dry-run', stages: {}, failures: [] };
+  summary.track = { source: src.trackFeedConfigured() ? 'api' : 'file', count: null };
   if (args.reconcile && !cosmosReady) {
     summary.failures.push('--reconcile needs COSMOS_ENDPOINT: the surplus set cannot be computed ' +
       'without enumerating the containers');
@@ -427,7 +500,8 @@ async function seed(argv = [], deps = {}) {
   // its partition key, and a stale index would misfile documents.
   log('Loading Track projects...');
   const trackProjects = await src.loadTrackProjects();
-  log(`  ${trackProjects.length} Track projects`);
+  log(`  ${trackProjects.length} Track projects from ${summary.track.source === 'api' ? 'the Track API' : 'the checked-in export'}`);
+  summary.track.count = trackProjects.length;
 
   log('Fetching Eagle projects...');
   // The upstream total, captured because `--reconcile` refuses to delete unless the fetch passed
@@ -885,6 +959,9 @@ async function seed(argv = [], deps = {}) {
     const dropped = (documentFetch || {}).droppedIds || [];
     const droppedInCosmos = dropped.filter(id => inCosmos.has(id));
 
+    const surplusIds = new Set();
+    const sparedIds = new Set();
+
     const truncated = await truncatedReads(access, unverified.length ? [] : [
       ['documents', documentRows, repos.documents.countSeededIds],
       ['projects', projectRows, repos.projects.countEagleOnlyIds]
@@ -917,15 +994,15 @@ async function seed(argv = [], deps = {}) {
           row => purge.purgeProject(row)]
       ];
       // Both containers sized BEFORE either delete, so a breach in one stops the other too.
-      const breached = containers
-        .map(([label, rows, keyOf, fetched]) => [label, surplusOf(rows, keyOf, fetched).length,
-          surplusCeiling(rows.length, args.maxSurplus)])
-        .filter(([, surplus, ceiling]) => surplus > ceiling);
+      const sized = containers.map(([label, rows, keyOf, fetched]) => ({
+        label, surplus: surplusOf(rows, keyOf, fetched), ceiling: surplusCeiling(rows.length, args.maxSurplus)
+      }));
+      const breached = sized.filter(c => c.surplus.length > c.ceiling);
 
       if (breached.length) {
         summary.failures.push('--reconcile refused before any delete — nothing removed from ' +
-          'either container: ' + breached.map(([label, surplus, ceiling]) =>
-            `${label} surplus ${surplus} exceeds the ceiling ${ceiling}`).join('; ') +
+          'either container: ' + breached.map(c =>
+            `${c.label} surplus ${c.surplus.length} exceeds the ceiling ${c.ceiling}`).join('; ') +
           '. Re-run with --max-surplus <n> if the deletion really is that large.');
       }
 
@@ -934,8 +1011,13 @@ async function seed(argv = [], deps = {}) {
       const logPath = reconcileLogPath(now);
       summary.reconcile = { log: logPath };
       if (!searchReady) summary.reconcile.search = 'unconfigured — live would refuse';
-      const listed = id => Boolean(args.keepIds && args.keepIds.has(String(id)));
-      const spareDocument = row => listed(row.id);
+      const keepIds = args.keepIds || new Set();
+      const listed = id => keepIds.has(String(id));
+      const listedProject = row => listed(row.id) || listed(row.eagleId);
+      // A listed project spares its documents too, so the keep file can name projects only.
+      const keptProjects = new Set([...keepIds,
+        ...[...projectRows, ...projects].filter(listedProject).map(p => String(p.id))]);
+      const spareDocument = row => listed(row.id) || keptProjects.has(String(row.projectId));
       summary.reconcile.documents = await reconcileContainer(...containers[0],
         { live, logPath, audit, spare: spareDocument });
       // A project still holding a kept or spared document stays too, or that document is orphaned.
@@ -944,20 +1026,32 @@ async function seed(argv = [], deps = {}) {
       const holding = new Set([...failedHolding,
         ...documentRows.filter(spareDocument).map(row => String(row.projectId))]);
       summary.reconcile.projects = await reconcileContainer(...containers[1],
-        { live, logPath, audit,
-          spare: row => listed(row.eagleId) || listed(row.id) || holding.has(String(row.id)) });
+        { live, logPath, audit, spare: row => listedProject(row) || holding.has(String(row.id)) });
+      for (const { label, surplus, ceiling } of sized) {
+        summary.reconcile[label].ceiling = ceiling;
+        for (const row of surplus) surplusIds.add(String(row.id));
+        for (const id of summary.reconcile[label].wouldKeep || []) sparedIds.add(String(id));
+      }
       if (keptDocs.length) {
-        const keptProjects = (summary.reconcile.projects.wouldKeep || [])
+        const heldProjects = (summary.reconcile.projects.wouldKeep || [])
           .filter(id => failedHolding.has(String(id)));
         const idsOf = ids => ids.slice(0, 20).join(', ');
         summary.failures.push(`--reconcile kept ${keptDocs.length} document row(s) whose chunks ` +
           `could not all be removed (documents: ${idsOf(keptDocs.map(k => k.id))})` +
-          (keptProjects.length
-            ? ` and ${keptProjects.length} project row(s) holding them (projects: ${idsOf(keptProjects)})`
+          (heldProjects.length
+            ? ` and ${heldProjects.length} project row(s) holding them (projects: ${idsOf(heldProjects)})`
             : '') +
           '; re-run to retry');
       }
       log(`  surplus ids: ${logPath}`);
+    }
+
+    if (args.keepIds) {
+      summary.keep = await keepReport(args.keepIds, {
+        projects, projectRows, documentRows, surplusIds, sparedIds,
+        getProject: id => repos.projects.getById(access, id)
+      });
+      log(`  keep report: ${JSON.stringify(summary.keep)}`);
     }
   }
 
@@ -984,6 +1078,8 @@ module.exports = {
   truncatedReads,
   documentAdmission,
   reconcileContainer,
+  reconcileLogPath,
+  compactSummary,
   verifyProjects,
   verifyItems,
   seed
@@ -1012,7 +1108,7 @@ if (require.main === module) {
     .then(async summary => {
       // Audit rows buffer behind an unref'd timer, so process.exit would drop the purge trail.
       await auditHelpers.flush().catch(err => logger.error(`[seed] audit flush: ${err.message}`));
-      // A failed gate must not exit 0 — a wrapper script or a Kudu run would read that as success.
+      // A failed gate must not exit 0 — a wrapper script would read that as success.
       process.exit(summary.failures.length ? 1 : 0);
     })
     .catch(err => {

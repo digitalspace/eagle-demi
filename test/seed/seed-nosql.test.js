@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 
 const {
-  parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, DEFAULT_STAGES
+  parseArgs, verifyProjects, verifyItems, seed, compactSummary, reconcileLogPath, ALL_STAGES, DEFAULT_STAGES
 } = require('../../src/scripts/seed-nosql');
 const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE, EAGLE_API_BASE } = require('../../src/seed/sources');
 const chunksRepo = require('../../src/repositories/chunks');
@@ -316,6 +316,7 @@ test('seed() end to end with stubbed sources', async (t) => {
     // sources object, so a stub that omits it makes every test pass `undefined` to `fetchAllPages`
     // — which is exactly what the base-URL assertion below found on its first run.
     EAGLE_API_BASE,
+    trackFeedConfigured: () => false,
     loadTrackProjects: () => track,
     fetchEagleProjects: async () => [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')],
     // Streaming: the seeder never holds the whole corpus. Delivered as two pages to exercise
@@ -931,6 +932,7 @@ test('seed --reconcile end to end', async (t) => {
   // it, because a null total means sources.js never verified the fetch was complete.
   const stubSources = (over = {}) => ({
     EAGLE_API_BASE,
+    trackFeedConfigured: () => false,
     loadTrackProjects: () => track,
     fetchEagleProjects: async (onPage) => {
       const items = [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')];
@@ -1031,6 +1033,76 @@ test('seed --reconcile end to end', async (t) => {
     assert.deepStrictEqual(summary.reconcile.documents.wouldKeep, ['stale']);
     assert.strictEqual(summary.reconcile.documents.kept, undefined);
     assert.deepStrictEqual(summary.failures, [], 'a spared row is not a failed purge');
+  });
+
+  await t.test('reconcile spares documents of a project listed in --keep-ids', async () => {
+    const { purged, deps } = makeDeps({}, [...SEEDED_DOCS, { id: 'held', projectId: 'eagle-gone' }]);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents',
+      '--keep-ids', keepIdsFile('project-docs.txt', 'gone\n')], { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(purged.documents, ['207|stale'], 'only the unlisted project loses its row');
+    assert.deepStrictEqual(summary.reconcile.documents.wouldKeep, ['held']);
+  });
+
+  await t.test('keep report names the row, and that it was surplus and spared', async () => {
+    const { deps } = makeDeps();
+    const summary = await seed(['--reconcile', '--only', 'projects,documents',
+      '--keep-ids', keepIdsFile('report.txt', 'gone\n')], { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(summary.keep,
+      [{ id: 'gone', rowId: 'eagle-gone', trackProjectId: null, surplus: true, kept: true }]);
+  });
+
+  await t.test('keep report flags a listed id the registry matched to a Track project', async () => {
+    const { deps } = makeDeps();
+    const summary = await seed(['--reconcile', '--only', 'projects,documents',
+      '--keep-ids', keepIdsFile('track-match.txt', `${matchedGuid}\n`)], { ...deps, sources: stubSources() });
+
+    assert.strictEqual(summary.keep[0].trackProjectId, 207);
+  });
+
+  await t.test('--summary records track source api when the Track feed is configured', async () => {
+    const { deps } = makeDeps();
+    const file = path.join(LOG_DIR, 'summary-api.json');
+    await seed(['--only', 'projects,documents', '--summary', file],
+      { ...deps, sources: stubSources({ trackFeedConfigured: () => true }) });
+
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).track, { source: 'api', count: 2 });
+  });
+
+  await t.test('--summary records track source file without TRACK_* env', async () => {
+    const { deps } = makeDeps();
+    const file = path.join(LOG_DIR, 'summary-file.json');
+    await seed(['--only', 'projects,documents', '--summary', file], { ...deps, sources: stubSources() });
+
+    assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).track.source, 'file');
+  });
+
+  await t.test('--summary is written when a gate fails', async () => {
+    const { deps } = makeDeps({ cosmosReady: false });
+    const file = path.join(LOG_DIR, 'summary-gate.json');
+    await seed(['--reconcile', '--summary', file], { ...deps, sources: stubSources() });
+
+    assert.match(JSON.parse(fs.readFileSync(file, 'utf8')).failures[0], /--reconcile needs COSMOS_ENDPOINT/);
+  });
+
+  await t.test('--summary carries the reconcile counts and ceiling', async () => {
+    const { deps } = makeDeps();
+    const file = path.join(LOG_DIR, 'summary-reconcile.json');
+    await seed(['--reconcile', '--only', 'projects,documents', '--summary', file,
+      '--keep-ids', keepIdsFile('summary-keep.txt', 'stale\n')], { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).reconcile.documents,
+      { inCosmos: 2, wouldDelete: 0, deleted: 0, wouldKeep: 1, ceiling: 50 });
+  });
+
+  await t.test('--summary is written when the seed throws', async () => {
+    const { deps } = makeDeps();
+    const file = path.join(LOG_DIR, 'summary-fatal.json');
+    const sources = stubSources({ fetchListLookup: async () => { throw new Error('List fetch down'); } });
+    await assert.rejects(seed(['--summary', file], { ...deps, sources }), /List fetch down/);
+
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).failures, ['fatal: List fetch down']);
   });
 
   await t.test('a live run deletes the surplus through the DELETE helpers', async () => {
@@ -1391,6 +1463,7 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
   // searchResultsTotal — so the verification gate passes and only the ceiling can stop a delete.
   const stubSources = (docs) => ({
     EAGLE_API_BASE,
+    trackFeedConfigured: () => false,
     loadTrackProjects: () => track,
     fetchEagleProjects: async (onPage) => { await onPage([], 0, 0); return []; },
     streamEagleDocuments: async (onPage) => {
@@ -1528,6 +1601,16 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
     assert.deepStrictEqual(summary.failures, []);
   });
 
+  await t.test('a failed purge names only the projects holding its rows, not ones --keep-ids spared', async () => {
+    const { deps } = makeDeps([...fetchedRows, ...staleRows(1)],
+      [{ id: '207', eagleId: 'e207' }, { id: 'eagle-x', eagleId: 'ex' }]);
+    deps.purge.purgeDocument = async () => ({ rowKept: true });
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents',
+      '--keep-ids', keepIdsFile('failed-and-kept.txt', 'ex\n')], { ...deps, sources: stubSources(fetchedIds) });
+
+    assert.match(summary.failures.join(' '), /1 project row\(s\) holding them \(projects: 207\);/);
+  });
+
   await t.test('one row over the ceiling refuses', async () => {
     const { purged, deps } = makeDeps([...fetchedRows, ...staleRows(51)], []);
     const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
@@ -1555,6 +1638,7 @@ test('a re-seed carries extraction state forward', async (t) => {
 
   const sources = (corpus = DEFAULT_CORPUS) => ({
     EAGLE_API_BASE,
+    trackFeedConfigured: () => false,
     loadTrackProjects: () => track,
     fetchEagleProjects: async () => [eagleProject(matchedGuid, 'Nicomen Wind')],
     streamEagleDocuments: async (onPage) => {
@@ -1849,4 +1933,37 @@ test('a re-seed carries extraction state forward', async (t) => {
     assert.strictEqual(summary.stages.documents.preserved, 0);
     assert.strictEqual(written.find(d => d.id === 'known').contentExtracted, false);
   });
+});
+
+test('--summary stays compact', async (t) => {
+  const summary = {
+    mode: 'live', failures: Array.from({ length: 30 }, (_, i) => `failure ${i} `.repeat(40)),
+    stages: { projects: { built: 2, report: { matched: 1, danglingGuids: ['g'] } } }
+  };
+
+  await t.test('at most 20 failures, under 3 KB', () => {
+    const compact = compactSummary(summary);
+    assert.ok(compact.failures.length <= 20);
+    assert.ok(JSON.stringify(compact).length <= 3072);
+  });
+
+  await t.test('the total failure count survives the cap', () => {
+    assert.strictEqual(compactSummary(summary).failureCount, 30);
+  });
+
+  await t.test('the projects report keeps its counts and drops its id lists', () => {
+    assert.deepStrictEqual(compactSummary(summary).stages.projects, { built: 2, report: { matched: 1 } });
+  });
+});
+
+test('reconcile log falls back to cwd when /home is not writable', {
+  skip: process.getuid && process.getuid() === 0 && 'root ignores directory permissions'
+}, (t) => {
+  const readOnly = fs.mkdtempSync(path.join(LOG_DIR, 'ro-'));
+  fs.chmodSync(readOnly, 0o500);
+  const saved = process.env.RECONCILE_LOG;
+  delete process.env.RECONCILE_LOG;
+  t.after(() => { process.env.RECONCILE_LOG = saved; fs.chmodSync(readOnly, 0o700); });
+
+  assert.strictEqual(reconcileLogPath(NOW, readOnly), path.join(process.cwd(), `reconcile-${NOW}.ndjson`));
 });
