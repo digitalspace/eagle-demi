@@ -401,3 +401,25 @@ test('a project the caller cannot read is a 404, and writes nothing', async (t) 
   assert.strictEqual(res.statusCode, 404);
   assert.strictEqual(patched.length, 0);
 });
+
+test('a write that keeps losing its etag race', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const classifyFailing = async (err) => {
+    t.mock.method(projects, 'getById', async () => ({ ...STORED }));
+    t.mock.method(projects, 'patchVis', async () => { throw err; });
+    const res = mockRes();
+    await projectController.setVisibility(
+      { params: { id: '207' }, query: {}, body: { vis: { name: 2 } }, user: SYSADMIN }, res);
+    return res;
+  };
+
+  await t.test('is a 503 asking for a retry, not a 500', async () => {
+    const res = await classifyFailing(Object.assign(new Error('Precondition Failed'), { code: 412 }));
+    assert.strictEqual(res.statusCode, 503);
+  });
+
+  await t.test('other write errors stay a 500', async () => {
+    const res = await classifyFailing(Object.assign(new Error('Service Unavailable'), { code: 500 }));
+    assert.strictEqual(res.statusCode, 500);
+  });
+});
