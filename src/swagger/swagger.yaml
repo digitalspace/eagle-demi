@@ -5520,9 +5520,12 @@ paths:
           required: false
           description: >-
             Keyword, case-insensitive. Matches a period whose `informationLabel` contains it, or
-            whose project's name contains it. A keyword of one character matches labels only.
-            Double quotes are dropped and runs of spaces read as one. Empty is ignored. Combines
-            with `status` and `project`; `count=true` counts the same rows.
+            whose project's name contains it. Only projects the caller may read count, and at most
+            500 of them, so a broad keyword can miss periods and undercount. A label, project name
+            or project link that the row's own visibility setting hides from the caller does not
+            match. A keyword of one character matches labels only. Double quotes are dropped and
+            runs of spaces read as one. Empty is ignored. Combines with `status` and `project`;
+            `count=true` counts the same rows.
           schema:
             type: string
         - name: sort

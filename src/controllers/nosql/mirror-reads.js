@@ -48,10 +48,12 @@ function nativeListHandler(spec) {
       let body = redactAllForAccess(spec.entity, rows, access);
       if (spec.parentJoin) body = await spec.parentJoin(access, body);
 
-      if (parsed.q && !UNLOGGED_SEARCH_KINDS.includes(spec.entity)) {
+      // `spec.searchTerm`: a keyword the caller took out of the query and applied itself.
+      const searchTerm = parsed.q || spec.searchTerm;
+      if (searchTerm && !UNLOGGED_SEARCH_KINDS.includes(spec.entity)) {
         analyticsEvent(req, {
           eventName: 'search',
-          searchTerm: parsed.q,
+          searchTerm,
           resultCount: total,
           detail: { kind: spec.entity, pageSize: parsed.pageSize }
         });

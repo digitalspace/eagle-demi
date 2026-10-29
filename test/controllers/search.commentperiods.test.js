@@ -66,14 +66,17 @@ function applyStatusPredicate(spec, rows) {
   throw new Error(`no status clause in: ${spec.query}`);
 }
 
-/** Runs the emitted keyword clause over the fixtures: label substring, or a name-matched project. */
-function applyKeywordPredicate(spec, rows) {
-  assert.match(spec.query,
-    /\(\(\(NOT IS_DEFINED\(c\.vis\["informationLabel"\]\) OR c\.vis\["informationLabel"\] >= \d\) AND CONTAINS\(c\.informationLabel, @keywords, true\)\) OR ARRAY_CONTAINS\(@keywordProjects, c\.projectId\)\)/);
+/** Runs the emitted keyword clause over the fixtures, its dials at the caller's `level` (4 anonymous). */
+function applyKeywordPredicate(spec, rows, level = 4) {
+  const dial = field => `\\(NOT IS_DEFINED\\(c\\.vis\\["${field}"\\]\\) OR c\\.vis\\["${field}"\\] >= ${level}\\)`;
+  assert.match(spec.query, new RegExp(
+    `\\(\\(${dial('informationLabel')} AND CONTAINS\\(c\\.informationLabel, @keywords, true\\)\\) OR ` +
+    `\\(${dial('projectId')} AND ARRAY_CONTAINS\\(@keywordProjects, c\\.projectId\\)\\)\\)`));
   const params = bound(spec);
   const text = params['@keywords'].toLowerCase();
-  return rows.filter(r => r.informationLabel.toLowerCase().includes(text) ||
-    params['@keywordProjects'].includes(r.projectId));
+  const shows = (row, field) => !(row.vis && field in row.vis) || row.vis[field] >= level;
+  return rows.filter(r => (shows(r, 'informationLabel') && r.informationLabel.toLowerCase().includes(text)) ||
+    (shows(r, 'projectId') && params['@keywordProjects'].includes(r.projectId)));
 }
 
 test('GET /search?dataset=CommentPeriod&and[status]=open', async (t) => {
@@ -337,6 +340,31 @@ test('GET /search?dataset=CommentPeriod with no project lists every period', asy
       'OPEN_NOW via its project name, CP-label via its own label, CP-other by neither');
     assert.deepStrictEqual(applyKeywordPredicate(count, rows).map(r => r.id),
       [PERIOD_EAGLE_ID, 'CP-label']);
+  });
+
+  await t.test('a label or project link its row dials below the caller does not match', async () => {
+    const hiddenLabel = periodRow({ id: 'CP-hidden-label', eagleId: 'CP-hidden-label', projectId: '208',
+      informationLabel: 'Wind survey', vis: { informationLabel: 2 } });
+    const hiddenLink = periodRow({ id: 'CP-hidden-link', eagleId: 'CP-hidden-link', projectId: '207',
+      informationLabel: 'Draft terms', vis: { projectId: 2 } });
+    const rows = [hiddenLabel, hiddenLink];
+
+    let seen = stubCosmos(t, { projects: [PROJECT_ROW], commentPeriods: rows });
+    await get(`${LIST}&keywords=wind`);
+    assert.strictEqual(specsFor(seen, 'commentPeriods').length, 2, 'the page and its count');
+    for (const spec of specsFor(seen, 'commentPeriods')) {
+      assert.deepStrictEqual(bound(spec)['@keywordProjects'], ['207']);
+      assert.deepStrictEqual(applyKeywordPredicate(spec, rows).map(r => r.id), [], 'anonymous, level 4');
+    }
+
+    t.mock.restoreAll();
+    seen = stubCosmos(t, { projects: [PROJECT_ROW], commentPeriods: rows });
+    await getAsStaff(t, `${LIST}&keywords=wind`);
+    assert.strictEqual(specsFor(seen, 'commentPeriods').length, 2, 'the page and its count');
+    for (const spec of specsFor(seen, 'commentPeriods')) {
+      assert.deepStrictEqual(applyKeywordPredicate(spec, rows, 2).map(r => r.id), ['CP-hidden-label', 'CP-hidden-link'],
+        'staff, level 2');
+    }
   });
 
   await t.test('the project-name lookup runs under the caller ACL', async () => {

@@ -229,14 +229,16 @@ async function keywordProjectIds(access, keywords) {
 }
 
 /**
- * A case-blind substring of `informationLabel`, or a period of one of `projectIds`. A row whose
- * own dial hides its label does not match on it, so a count cannot reveal the hidden label.
+ * A case-blind substring of `informationLabel`, or a period of one of `projectIds`. Each arm skips a
+ * row whose own dial hides that field, so a count cannot reveal the hidden value.
  */
 function keywordCriterion(access, keywords, projectIds) {
   assertFilterable(CONTAINER, 'informationLabel', access);
-  const label = `(${dialAllows('informationLabel', levelOf(access))} AND CONTAINS(c.informationLabel, @keywords, true))`;
+  const level = levelOf(access);
+  const label = `(${dialAllows('informationLabel', level)} AND CONTAINS(c.informationLabel, @keywords, true))`;
+  const project = `(${dialAllows('projectId', level)} AND ARRAY_CONTAINS(@keywordProjects, c.projectId))`;
   return {
-    clause: `(${label} OR ARRAY_CONTAINS(@keywordProjects, c.projectId))`,
+    clause: `(${label} OR ${project})`,
     params: [
       { name: '@keywords', value: String(keywords) },
       { name: '@keywordProjects', value: projectIds || [] }
@@ -381,14 +383,8 @@ const nativeBase = cosmosKind({
 });
 
 /**
- * The repository `GET /comment-periods` reads through (`helpers/native-query.js`), deleted periods
- * left out as in `listCriteria`. `status` is a clock comparison and `q` also matches the project
- * name, so the contract's generic filters cannot build them; the caller passes validated values.
- * List and count share one name lookup, so build one repository per request when `keywords` is set.
- *
- * @param {string[]} [statuses]  `STATUSES` values, ORed; empty narrows nothing
- * @param {string}   [keywords]  `keywordsOf` text for `keywordCriterion`; empty narrows nothing
- * @param {Date}     [now]       one clock read for every status clause
+ * `GET /comment-periods`' repository, deleted periods left out. Generic filters cannot build `status`
+ * (a clock comparison) or `q` (also the project name), so the caller passes validated values.
  */
 function nativeRepository({ statuses = [], keywords = '', now = new Date() } = {}) {
   const fixed = [NOT_DELETED, ...(statuses.length ? [anyStatusCriterion(statuses, now)] : [])];
@@ -400,10 +396,13 @@ function nativeRepository({ statuses = [], keywords = '', now = new Date() } = {
     select: selectFor(CONTAINER, access, PARTITION_FIELD)
   }), {});
   const { list, count } = withCriteria(nativeBase, fixed);
-  let keyword = null;
+  // Keyed on the caller's access, so a lookup made under one caller is never reused for another.
+  const lookups = new WeakMap();
   const keyed = read => async (access, opts) => {
-    keyword ||= keywordProjectIds(access, keywords).then(ids => keywordCriterion(access, keywords, ids));
-    return read(access, { ...opts, criteria: [...(opts.criteria || []), await keyword] });
+    if (!lookups.has(access)) {
+      lookups.set(access, keywordProjectIds(access, keywords).then(ids => keywordCriterion(access, keywords, ids)));
+    }
+    return read(access, { ...opts, criteria: [...(opts.criteria || []), await lookups.get(access)] });
   };
   return {
     list: keywords ? keyed(list) : list,
@@ -529,7 +528,6 @@ module.exports = {
   PARTITION_FIELD,
   SORTABLE,
   DEFAULT_OPEN_ROWS,
-  NAME_MATCH_MIN_CHARS,
   STATUSES: Object.keys(STATUS_CLAUSES),
   PCP_STATUSES: Object.keys(PCP_CLAUSES),
   startOfPacificDay,
@@ -549,7 +547,6 @@ module.exports = {
   countByProject,
   keywordsOf,
   keywordProjectIds,
-  keywordCriterion,
   nativeRepository,
   projectIdsWithStatus,
   aclRowsForProject,

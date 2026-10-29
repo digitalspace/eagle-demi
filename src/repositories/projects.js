@@ -196,14 +196,17 @@ const NAME_MATCH_MAX_IDS = 500;
 
 /**
  * Ids of the projects this caller may see whose name contains `text`, case-insensitive — eagle-api's
- * CommentPeriod keyword search matched `project.name` the same way.
+ * CommentPeriod keyword search matched `project.name` the same way. A name its row's dial hides never matches.
  */
 async function listIdsByName(access, text) {
   assertFilterable(CONTAINER, 'name', access);
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [{ clause: 'CONTAINS(c.name, @name, true)', params: [{ name: '@name', value: String(text) }] }],
+    criteria: [{
+      clause: `(${dialAllows('name', levelOf(access))} AND CONTAINS(c.name, @name, true))`,
+      params: [{ name: '@name', value: String(text) }]
+    }],
     select: 'VALUE c.id'
   });
   // One past the cap, so "cut" is measured rather than guessed from a full page.
