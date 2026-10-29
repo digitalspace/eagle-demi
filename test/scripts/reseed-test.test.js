@@ -149,13 +149,17 @@ const seedSummary = (over = {}) => ({
 const finished = (summary, rc = 0) =>
   `RESEED_RC=${rc}\nRESEED_SUMMARY_BEGIN\n${JSON.stringify(summary)}\nRESEED_SUMMARY_END\nDEMI_EXIT=0\n`;
 
-/** Starts a dry seed and answers its wait with `summary`. Returns the wait result. */
-function waitSeed(ctx, summary, args = []) {
-  const started = ctx.run(['seed', '--run', 'r1']);
+/** Starts a dry `step` and answers its wait with `summary`. Returns the wait result. */
+function waitStep(ctx, step, summary, args = []) {
+  const started = ctx.run([step, '--run', 'r1']);
   assert.strictEqual(started.status, 0, started.out);
   ctx.reply(finished(summary));
-  return ctx.run(['wait', 'seed', '--run', 'r1', ...args]);
+  return ctx.run(['wait', step, '--run', 'r1', ...args]);
 }
+const waitSeed = (ctx, summary, args) => waitStep(ctx, 'seed', summary, args);
+
+const readsCounts = (over = {}) => ({ fetched: 144, written: 144, skipped: 0, dropped: 0, errors: 0, ...over });
+const readsSummary = (stages, unfinished) => ({ live: false, stages, skipped: [], unfinished });
 
 function passDrySeed(ctx, env = {}) {
   const started = ctx.run(['seed', '--run', 'r1'], env);
@@ -459,6 +463,34 @@ test('public-reads --live refuses without a passing seed --live', t => {
   assert.strictEqual(r.status, 2);
   assert.match(r.out, /needs a passing seed --live/);
   assert.deepStrictEqual(ctx.calls(), []);
+});
+
+test('public-reads wait passes dropped-only stages with a NOTE', t => {
+  const ctx = sandbox(t);
+  const r = waitStep(ctx, 'public-reads', readsSummary({
+    organizations: readsCounts(),
+    comments: readsCounts({ written: 99, skipped: 45, dropped: 45 })
+  }, ['comments']));
+  assert.strictEqual(r.status, 0, r.out);
+  assert.match(r.out, /NOTE comments dropped=45 \(rows whose parent is not in DEMI\)/);
+  assert.doesNotMatch(r.out, /FAIL/);
+});
+
+test('public-reads wait fails a stage with errors', t => {
+  const ctx = sandbox(t);
+  const r = waitStep(ctx, 'public-reads', readsSummary({
+    comments: readsCounts({ dropped: 45, errors: 2 })
+  }, ['comments']));
+  assert.strictEqual(r.status, 1);
+  assert.match(r.out, /FAIL stage comments errors=2/);
+  assert.doesNotMatch(r.out, /NOTE comments/);
+});
+
+test('public-reads wait fails an unfinished stage that has no counts', t => {
+  const ctx = sandbox(t);
+  const r = waitStep(ctx, 'public-reads', readsSummary({ organizations: readsCounts() }, ['notifications']));
+  assert.strictEqual(r.status, 1);
+  assert.match(r.out, /FAIL stage unfinished: notifications \(it threw before reporting counts\)/);
 });
 
 test('residue --live refuses without STAFF_TOKEN and runs no public check', t => {

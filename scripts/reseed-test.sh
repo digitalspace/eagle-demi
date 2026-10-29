@@ -333,7 +333,15 @@ def n: if type == "array" then length elif type == "number" then . else 0 end;
     | ((.wouldDelete | n) + (.wouldKeep | n))] | max) (wouldDelete + wouldKeep of the larger container; needs A2)"
   else empty end)'
 
-PUBLIC_READS_GATE='(.unfinished // [] | .[] | "FAIL stage unfinished: \(.)")'
+# Dropped rows wait on a parent not yet in DEMI; a dry run drops every comment of an unmirrored period.
+PUBLIC_READS_GATE='
+. as $sum
+| ($sum.stages // {} | to_entries[] | select((.value.errors // 0) > 0)
+  | "FAIL stage \(.key) errors=\(.value.errors)"),
+  ($sum.unfinished // [] | .[] | select(. as $s | ($sum.stages // {}) | has($s) | not)
+  | "FAIL stage unfinished: \(.) (it threw before reporting counts)"),
+  ($sum.stages // {} | to_entries[] | select((.value.errors // 0) == 0 and (.value.dropped // 0) > 0)
+  | "NOTE \(.key) dropped=\(.value.dropped) (rows whose parent is not in DEMI)")'
 
 # `$1` step; reads the saved summary, prints verdict lines, returns 1 on any FAIL.
 gate() {
