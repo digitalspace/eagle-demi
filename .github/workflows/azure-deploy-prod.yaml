@@ -234,8 +234,10 @@ jobs:
             echo "tick (PT5M) and re-run this workflow:"
             echo ""
             echo '```'
-            echo "LOG_LEVEL=info node scripts/demi-repush.js --kind project --live --concurrency 1"
+            echo "LOG_LEVEL=info node scripts/demi-repush.js --kinds project --concurrency 1 --ids-file <file> --live"
             echo '```'
+            echo ""
+            echo "\`<file>\` holds the project \`_id\`s to re-push, one per line."
             echo ""
             echo "The failing checks are named in the step log above."
             echo ""
