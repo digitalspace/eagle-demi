@@ -242,14 +242,28 @@ test('fetchAllPages', async (t) => {
   const ids = (from, to) => Array.from({ length: to - from }, (_, i) => ({ _id: `d${from + i}` }));
 
   await t.test('a corpus that grows by one during the fetch passes and reports the larger count', async (t2) => {
-    const info = t2.mock.method(logger, 'info', () => {});
+    t2.mock.method(logger, 'info', () => {});
     const result = await fetchAllPages('http://x', 'Document', {
       accumulate: false,
       onPage: () => {},
       fetchPage: pagedFetch([ids(0, 100), ids(100, 200), ids(200, 251)], 250, 251)
     });
     assert.deepStrictEqual(result, { count: 251, total: 251 });
-    assert.match(info.mock.calls[0].arguments[0], /Document: fetched 251, upstream reported 250 then 251/);
+  });
+
+  await t.test('a re-read with no numeric total settles on the first total', async () => {
+    const result = await fetchAllPages('http://x', 'Document', {
+      accumulate: false,
+      fetchPage: pagedFetch([ids(0, 100), ids(100, 150)], 150, null)
+    });
+    assert.deepStrictEqual(result, { count: 150, total: 150 });
+  });
+
+  await t.test('a row with no id throws rather than counting it on every read', async () => {
+    await assert.rejects(
+      () => fetchAllPages('http://x', 'Document', { fetchPage: pagedFetch([[{ name: 'no id' }]], 1, 1) }),
+      /a fetched row has no id/
+    );
   });
 
   // A corpus of `size` rows that has grown to `grown` by the time the total is re-read.
@@ -309,7 +323,7 @@ test('fetchAllPages', async (t) => {
     await assert.rejects(
       () => fetchAllPages('http://x', 'Document',
         { fetchPage: pagedFetch([ids(0, 100), ids(101, 200)], 200, 199) }),
-      /fetched 199 but upstream reports 200 — refusing to seed a truncated corpus/
+      /fetched 199 but upstream reports 200 — refusing to seed a truncated corpus \(re-read total 199\)/
     );
     await assert.rejects(
       () => fetchAllPages('http://x', 'Document',

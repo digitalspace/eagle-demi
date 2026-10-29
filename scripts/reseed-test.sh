@@ -167,7 +167,7 @@ payload() { printf '(\n%s\n)' "$1"; }
 
 # Ends in `;`, not a newline: `$(env_exports)` strips the newline and glues on the next statement.
 env_exports() {
-  printf 'export KEYCLOAK_URL=%s KEYCLOAK_REALM=%s EAGLE_API_BASE=%s TRACK_API_BASE=%s TRACK_CLIENT_ID=%s MINIO_HOST=%s MINIO_PORT=%s MINIO_USE_SSL=%s MINIO_BUCKET_NAME=%s MINIO_KEY_PREFIX=%s;' \
+  printf 'export KEYCLOAK_URL=%q KEYCLOAK_REALM=%q EAGLE_API_BASE=%q TRACK_API_BASE=%q TRACK_CLIENT_ID=%q MINIO_HOST=%q MINIO_PORT=%q MINIO_USE_SSL=%q MINIO_BUCKET_NAME=%q MINIO_KEY_PREFIX=%q;' \
     "$KEYCLOAK_URL" "$KEYCLOAK_REALM" "$EAGLE_API_BASE" "$TRACK_API_BASE" "$TRACK_CLIENT_ID" \
     "$MINIO_HOST" "$MINIO_PORT" "$MINIO_USE_SSL" "$MINIO_BUCKET_NAME" "$MINIO_KEY_PREFIX"
 }

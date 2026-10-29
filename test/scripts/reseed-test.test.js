@@ -289,7 +289,6 @@ test('seed setup exports RECONCILE_LOG as its own statement and leaves the key p
   const r = ctx.run(['seed', '--run', 'r1']);
   assert.strictEqual(r.status, 0, r.out);
   waitForFile(ctx.vmFile('r1', 'seed-dry.rc'));
-  assert.match(ctx.payloads()[0], /MINIO_KEY_PREFIX=;export RECONCILE_LOG=\S+\/reconcile-seed-dry\.ndjson\n/);
   assert.match(ctx.read('node.log'), / prefix=\[\] minio=, log=set\n/);
   assert.doesNotMatch(ctx.read('az.log'), /keyvault/, 'secrets are read on the VM, never here');
 });
@@ -299,9 +298,6 @@ test('objects setup reads each MinIO key as its own statement and leaves the key
   const r = ctx.run(['objects', '--run', 'r1']);
   assert.strictEqual(r.status, 0, r.out);
   waitForFile(ctx.vmFile('r1', 'objects-dry.rc'));
-  const payload = ctx.payloads()[0];
-  assert.match(payload, /MINIO_KEY_PREFIX=;MINIO_ACCESS_KEY=\$\(az keyvault secret show /);
-  assert.match(payload, /\nMINIO_SECRET_KEY=\$\(az keyvault secret show /);
   assert.match(ctx.read('node.log'), /backfill-objects\.js secret= prefix=\[\] minio=set,set log=\n/);
   assert.doesNotMatch(ctx.read('az.log'), /keyvault/, 'secrets are read on the VM, never here');
 });

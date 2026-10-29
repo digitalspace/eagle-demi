@@ -138,11 +138,14 @@ function unwrapSearchResponse(body, url) {
 /** One page of an eagle-api `/search` dataset, unauthenticated. */
 const searchPage = async (url) => unwrapSearchResponse(await fetchJson(url), url);
 
-/** Rows of `items` whose key is not yet in `seen`, which they are added to. A row without one counts. */
+/**
+ * Rows of `items` whose key is not yet in `seen`, which they are added to. A row with no key throws:
+ * every caller's rows carry one, so a missing key is a projection bug, not a row to count.
+ */
 function freshById(items, seen, keyOf = row => row._id ?? row.id) {
   return items.filter((item) => {
     const raw = item == null ? null : keyOf(item);
-    if (raw == null) return true;
+    if (raw == null) throw new Error('[seed] a fetched row has no id, so a repeat cannot be told apart');
     const key = String(raw);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -227,7 +230,7 @@ async function fetchAllPages(base, dataset, opts = {}) {
       if (settled === null) {
         throw new Error(
           `[seed] ${dataset}: fetched ${count} but upstream reports ${total} — refusing to ` +
-          'seed a truncated corpus'
+          `seed a truncated corpus (re-read total ${final})`
         );
       }
       total = settled;
