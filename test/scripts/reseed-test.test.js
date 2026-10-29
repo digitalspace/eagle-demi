@@ -233,6 +233,17 @@ test('seed --live refuses a passing dry run older than 24 hours', t => {
   assert.strictEqual(ctx.calls().length, before);
 });
 
+test('--live refuses a RESEED_KEYCLOAK_URL override and never calls the devbox', t => {
+  const ctx = sandbox(t);
+  passDrySeed(ctx);
+  const before = ctx.calls().length;
+  const r = ctx.run(['seed', '--run', 'r1', '--live', '--approved', ALL_SEED],
+    { RESEED_KEYCLOAK_URL: 'https://elsewhere/auth' });
+  assert.strictEqual(r.status, 2);
+  assert.match(r.out, /unset RESEED_KEYCLOAK_URL/);
+  assert.strictEqual(ctx.calls().length, before);
+});
+
 test('seed --live with --max-surplus also needs A2', t => {
   const ctx = sandbox(t);
   passDrySeed(ctx);
