@@ -84,7 +84,7 @@ function applyStatusPredicate(spec, rows) {
 /** Runs the emitted keyword clause over the fixtures: label substring, or a name-matched project. */
 function applyKeywordPredicate(spec, rows) {
   assert.match(spec.query,
-    /\(CONTAINS\(c\.informationLabel, @keywords, true\) OR ARRAY_CONTAINS\(@keywordProjects, c\.projectId\)\)/);
+    /\(\(\(NOT IS_DEFINED\(c\.vis\["informationLabel"\]\) OR c\.vis\["informationLabel"\] >= \d\) AND CONTAINS\(c\.informationLabel, @keywords, true\)\) OR ARRAY_CONTAINS\(@keywordProjects, c\.projectId\)\)/);
   const params = bound(spec);
   const text = params['@keywords'].toLowerCase();
   return rows.filter(r => r.informationLabel.toLowerCase().includes(text) ||

@@ -10,10 +10,10 @@ const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
 const { listHandler, getHandler } = require('../nosql/mirror-reads');
 const { projectParentJoin, nativeCriteria, isEagleId } = require('../../helpers/native-query');
-const { resolveAccess } = require('../../helpers/access-sql');
+const { resolveAccess, pageSizeFor } = require('../../helpers/access-sql');
 const { assertFilterable } = require('../../repositories/_sql');
 const { serverError } = require('../../helpers/response');
-const { auditEvent } = require('../../utils/audit');
+const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const COMMENTS = require('./comments').SPEC;
 
 // Same as mirror-reads: the Front Door cache key ignores Authorization.
@@ -35,19 +35,43 @@ const unfiltered = listHandler(BASE_SPEC);
 
 /**
  * `GET /comment-periods`. `status` (open, upcoming, closed; repeatable) is compared against the
- * clock rather than read from a field, so it is taken out here and handed to the repository.
+ * clock, and `q` matches the label or the project name (`keywordCriterion`), so both are taken out
+ * here and handed to the repository. An empty `q` is ignored, as on every native list.
  */
-exports.getCommentPeriods = (req, res) => {
-  const { status, ...query } = req.query || {};
+exports.getCommentPeriods = async (req, res) => {
+  const { status, q, ...query } = req.query || {};
   req.query = query;
-  if (status === undefined) return unfiltered(req, res);
 
-  const statuses = [...new Set([].concat(status))];
+  const statuses = status === undefined ? [] : [...new Set([].concat(status))];
   const bad = statuses.find(value => !commentPeriods.STATUSES.includes(value));
   if (bad !== undefined) {
     return res.status(400).json({ error: `status takes ${commentPeriods.STATUSES.join(', ')}` });
   }
-  return listHandler({ ...BASE_SPEC, repository: commentPeriods.nativeRepository(statuses) })(req, res);
+  if (Array.isArray(q)) return res.status(400).json({ error: 'parameter given more than once: q' });
+  const keywords = commentPeriods.keywordsOf(q);
+  if (!statuses.length && !keywords) return unfiltered(req, res);
+
+  const access = resolveAccess(req);
+  if (keywords) {
+    try {
+      assertFilterable(BASE_SPEC.entity, 'informationLabel', access);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
+  await listHandler({ ...BASE_SPEC, repository: commentPeriods.nativeRepository({ statuses, keywords }) })(req, res);
+
+  // The generic list records `q` itself; this one took `q` out, so it records the search here.
+  if (keywords && res.statusCode === 200) {
+    const total = res.get('x-total-count');
+    analyticsEvent(req, {
+      eventName: 'search',
+      searchTerm: keywords,
+      resultCount: total === undefined ? undefined : Number(total),
+      detail: { kind: BASE_SPEC.entity, pageSize: pageSizeFor(access, query.pageSize).pageSize }
+    });
+  }
+  return res;
 };
 
 exports.SPEC = BASE_SPEC;

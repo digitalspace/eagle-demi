@@ -571,20 +571,15 @@ async function openPeriods({ access, pageSize }) {
  */
 const keywordText = (raw) => String(firstValue(raw) || '').replace(/\s+/g, ' ').trim();
 
-/** `keywordText` without double quotes: eagle-api took quoted keywords, and CONTAINS has no phrases. */
-const periodKeywords = (raw) => keywordText(String(firstValue(raw) || '').replace(/"/g, ''));
-
-/** Shorter keywords match most project names, so they match period labels only. */
-const PERIOD_NAME_MATCH_MIN_CHARS = 2;
+/** eagle-api took quoted keywords; `keywordsOf` drops the quotes. */
+const periodKeywords = (raw) => commentPeriodsRepo.keywordsOf(firstValue(raw));
 
 /** Substring match on the label, or on the parent project's name resolved under the caller's access. */
 async function periodListFilters(access, keywords, status) {
   return {
     status,
     keywords,
-    keywordProjectIds: keywords.length >= PERIOD_NAME_MATCH_MIN_CHARS
-      ? await projectsRepo.listIdsByName(access, keywords)
-      : [],
+    keywordProjectIds: await commentPeriodsRepo.keywordProjectIds(access, keywords),
     now: new Date()
   };
 }

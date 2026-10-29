@@ -15,7 +15,9 @@ const {
   assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
-const { cosmosKind } = require('../helpers/native-query');
+const { cosmosKind, dialAllows } = require('../helpers/native-query');
+const { levelOf } = require('../vis/level');
+const projects = require('./projects');
 
 const CONTAINER = 'commentPeriods';
 const PARTITION_FIELD = 'projectId';
@@ -213,6 +215,35 @@ function statusCriterion(status, now, clauses = STATUS_CLAUSES) {
   return { clause, params: params.filter(p => clause.includes(p.name)) };
 }
 
+/** Shorter keywords match most project names, so they match period labels only. */
+const NAME_MATCH_MIN_CHARS = 2;
+
+/** Keyword text as every period list matches it: quotes dropped (CONTAINS has no phrases), spaces collapsed. */
+function keywordsOf(text) {
+  return String(text || '').replace(/"/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** DEMI ids of the projects this caller may see whose name contains `keywords`: the other arm of `keywordCriterion`. */
+async function keywordProjectIds(access, keywords) {
+  return keywords.length >= NAME_MATCH_MIN_CHARS ? projects.listIdsByName(access, keywords) : [];
+}
+
+/**
+ * A case-blind substring of `informationLabel`, or a period of one of `projectIds`. A row whose
+ * own dial hides its label does not match on it, so a count cannot reveal the hidden label.
+ */
+function keywordCriterion(access, keywords, projectIds) {
+  assertFilterable(CONTAINER, 'informationLabel', access);
+  const label = `(${dialAllows('informationLabel', levelOf(access))} AND CONTAINS(c.informationLabel, @keywords, true))`;
+  return {
+    clause: `(${label} OR ARRAY_CONTAINS(@keywordProjects, c.projectId))`,
+    params: [
+      { name: '@keywords', value: String(keywords) },
+      { name: '@keywordProjects', value: projectIds || [] }
+    ]
+  };
+}
+
 // A deleted period keeps its upstream `public` ACL (see `aclRowsForProject`), so `NOT_DELETED` is
 // what leaves it out of every read below, not the ACL.
 
@@ -223,16 +254,7 @@ function listCriteria(access, { status, keywords, keywordProjectIds, now } = {})
     if (!STATUS_CLAUSES[status]) throw new Error(`[commentPeriods] no list clause for status '${status}'`);
     criteria.push(statusCriterion(status, now));
   }
-  if (keywords) {
-    assertFilterable(CONTAINER, 'informationLabel', access);
-    criteria.push({
-      clause: '(CONTAINS(c.informationLabel, @keywords, true) OR ARRAY_CONTAINS(@keywordProjects, c.projectId))',
-      params: [
-        { name: '@keywords', value: String(keywords) },
-        { name: '@keywordProjects', value: keywordProjectIds || [] }
-      ]
-    });
-  }
+  if (keywords) criteria.push(keywordCriterion(access, keywords, keywordProjectIds));
   return criteria;
 }
 
@@ -360,13 +382,15 @@ const nativeBase = cosmosKind({
 
 /**
  * The repository `GET /comment-periods` reads through (`helpers/native-query.js`), deleted periods
- * left out as in `listCriteria`. `status` is a clock comparison, not a stored field, so the
- * contract's generic filter cannot build it; the caller passes the validated values here instead.
+ * left out as in `listCriteria`. `status` is a clock comparison and `q` also matches the project
+ * name, so the contract's generic filters cannot build them; the caller passes validated values.
+ * List and count share one name lookup, so build one repository per request when `keywords` is set.
  *
  * @param {string[]} [statuses]  `STATUSES` values, ORed; empty narrows nothing
+ * @param {string}   [keywords]  `keywordsOf` text for `keywordCriterion`; empty narrows nothing
  * @param {Date}     [now]       one clock read for every status clause
  */
-function nativeRepository(statuses = [], now = new Date()) {
+function nativeRepository({ statuses = [], keywords = '', now = new Date() } = {}) {
   const fixed = [NOT_DELETED, ...(statuses.length ? [anyStatusCriterion(statuses, now)] : [])];
   // queryFirst drains the cross-partition iterator: a single fetched page can be empty while the row exists.
   const first = (access, field, value) => cosmos.queryFirst(CONTAINER, selectWhere({
@@ -376,9 +400,14 @@ function nativeRepository(statuses = [], now = new Date()) {
     select: selectFor(CONTAINER, access, PARTITION_FIELD)
   }), {});
   const { list, count } = withCriteria(nativeBase, fixed);
+  let keyword = null;
+  const keyed = read => async (access, opts) => {
+    keyword ||= keywordProjectIds(access, keywords).then(ids => keywordCriterion(access, keywords, ids));
+    return read(access, { ...opts, criteria: [...(opts.criteria || []), await keyword] });
+  };
   return {
-    list,
-    count,
+    list: keywords ? keyed(list) : list,
+    count: keywords ? keyed(count) : count,
     getById: (access, id) => first(access, 'id', id),
     getByEagleId: (access, eagleId) => first(access, 'eagleId', eagleId)
   };
@@ -500,6 +529,7 @@ module.exports = {
   PARTITION_FIELD,
   SORTABLE,
   DEFAULT_OPEN_ROWS,
+  NAME_MATCH_MIN_CHARS,
   STATUSES: Object.keys(STATUS_CLAUSES),
   PCP_STATUSES: Object.keys(PCP_CLAUSES),
   startOfPacificDay,
@@ -517,6 +547,9 @@ module.exports = {
   listAll,
   countAll,
   countByProject,
+  keywordsOf,
+  keywordProjectIds,
+  keywordCriterion,
   nativeRepository,
   projectIdsWithStatus,
   aclRowsForProject,

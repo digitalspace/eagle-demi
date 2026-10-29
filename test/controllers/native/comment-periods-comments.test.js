@@ -26,8 +26,8 @@ const PERIOD_EAGLE_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const CONTAINERS = {
   commentPeriods: [
     // Both open; the mirror writes isPublished on every row, from read[].
-    { id: 'cp1', eagleId: PERIOD_EAGLE_ID, projectId: 'p1', read: ['public'], isPublished: true, instructions: 'Open period', dateStarted: '2026-01-01T00:00:00.000Z', dateCompleted: '2099-01-01T00:00:00.000Z' },
-    { id: 'cp-staff', projectId: 'p1', read: ['staff'], isPublished: false, instructions: 'Staff only', dateStarted: '2026-02-01T00:00:00.000Z', dateCompleted: '2099-01-01T00:00:00.000Z' }
+    { id: 'cp1', eagleId: PERIOD_EAGLE_ID, projectId: 'p1', read: ['public'], isPublished: true, instructions: 'Open period', informationLabel: 'Wind farm open house', dateStarted: '2026-01-01T00:00:00.000Z', dateCompleted: '2099-01-01T00:00:00.000Z' },
+    { id: 'cp-staff', projectId: 'p1', read: ['staff'], isPublished: false, instructions: 'Staff only', informationLabel: 'Draft terms', dateStarted: '2026-02-01T00:00:00.000Z', dateCompleted: '2099-01-01T00:00:00.000Z' }
   ],
   // Two public comments, three staff-only; `author` on an unattributed comment is level 2.
   comments: [
@@ -59,7 +59,10 @@ function ordered(rows, query) {
     .sort((a, b) => compare(a[field], b[field]) * (dir === 'DESC' ? -1 : 1));
 }
 
-/** Rows of `container` the query admits: its role arm, `c.f = @p` and `c.f IN (@p, ...)` clauses. */
+/**
+ * Rows of `container` the query admits: its role arm, `c.f = @p` and `c.f IN (@p, ...)` clauses, and
+ * the period keyword clause (label substring or listed project).
+ */
 function admitted(container, spec) {
   const roles = spec.parameters.filter(p => p.name.startsWith('@role')).map(p => p.value);
   const tests = [];
@@ -69,6 +72,11 @@ function admitted(container, spec) {
   for (const [, field, names] of spec.query.matchAll(/c\.(\w+) IN \(([@\w, ]+)\)/g)) {
     const values = names.split(', ').map(name => param(spec, name));
     tests.push(row => values.includes(row[field]));
+  }
+  if (spec.query.includes('CONTAINS(c.informationLabel, @keywords, true)')) {
+    const text = param(spec, '@keywords').toLowerCase();
+    const ids = param(spec, '@keywordProjects');
+    tests.push(row => row.informationLabel.toLowerCase().includes(text) || ids.includes(row.projectId));
   }
   return ordered(CONTAINERS[container]
     .filter(row => row.read.some(r => roles.includes(r)))
@@ -206,6 +214,116 @@ test('native comment periods', async (t) => {
     const res = await call(list, 'project=p1&project=p2');
     assert.strictEqual(res.status, 400);
     assert.strictEqual(res.body.error, 'parameter given more than once: project');
+  });
+});
+
+test('native comment periods: q', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const list = periodsController.getCommentPeriods;
+  const ids = res => res.body.map(row => row.id);
+
+  /** Project-name lookups, answered from `byName` (lowercased text -> DEMI project ids). */
+  function nameLookups(t, byName = {}) {
+    const asked = [];
+    t.mock.method(projects, 'listIdsByName', async (access, text) => {
+      asked.push(text);
+      return byName[text.toLowerCase()] || [];
+    });
+    return asked;
+  }
+
+  await t.test('q matches the period label, case-insensitive', async (t) => {
+    const specs = fakeCosmos(t);
+    nameLookups(t);
+    const res = await call(list, 'q=WIND', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res), ['cp1']);
+    assert.strictEqual(param(specs[0], '@keywords'), 'WIND');
+    assert.doesNotMatch(specs[0].query, /WIND/, 'the keyword is bound, never written into the SQL');
+  });
+
+  await t.test('q matches the project name, looked up under the caller', async (t) => {
+    fakeCosmos(t);
+    const asked = nameLookups(t, { 'site c': ['p1'] });
+    const res = await call(list, 'q=Site%20C', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res).sort(), ['cp-staff', 'cp1']);
+    assert.deepStrictEqual(asked, ['Site C']);
+  });
+
+  await t.test('a one-character q matches labels only, with no name lookup', async (t) => {
+    const specs = fakeCosmos(t);
+    const asked = nameLookups(t, { w: ['p1'] });
+    const res = await call(list, 'q=w', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(asked, []);
+    assert.deepStrictEqual(param(specs[0], '@keywordProjects'), []);
+  });
+
+  await t.test('q with status keeps both clauses, on the rows and on the count', async (t) => {
+    const specs = fakeCosmos(t);
+    nameLookups(t);
+    const res = await call(list, 'q=wind&status=closed&count=true');
+    assert.strictEqual(res.status, 200);
+    const [read, count] = [specs.find(s => !s.query.includes('COUNT(1)')), specs.find(s => s.query.includes('COUNT(1)'))];
+    for (const spec of [read, count]) {
+      assert.match(spec.query, /c\.dateCompleted < @now/);
+      assert.match(spec.query, /CONTAINS\(c\.informationLabel, @keywords, true\)/);
+    }
+    assert.strictEqual(read.query.split(' WHERE ')[1].replace(/ ORDER BY .*$/, ''), count.query.split(' WHERE ')[1]);
+  });
+
+  await t.test('an empty q is ignored, as if absent', async (t) => {
+    for (const qs of ['q=', 'q=%20%20', 'q=%22%22']) {
+      const specs = fakeCosmos(t);
+      const asked = nameLookups(t);
+      const res = await call(list, qs, { user: STAFF });
+      assert.strictEqual(res.status, 200, qs);
+      assert.deepStrictEqual(ids(res).sort(), ['cp-staff', 'cp1'], qs);
+      assert.doesNotMatch(specs[0].query, /@keywords/, qs);
+      assert.deepStrictEqual(asked, [], qs);
+      t.mock.restoreAll();
+    }
+  });
+
+  await t.test('count=true with q counts the matching rows, one name lookup for both', async (t) => {
+    fakeCosmos(t);
+    const asked = nameLookups(t);
+    const res = await call(list, 'q=terms&count=true', { user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(ids(res), ['cp-staff']);
+    assert.strictEqual(res.headers['x-total-count'], '1');
+    assert.deepStrictEqual(asked, ['terms']);
+  });
+
+  await t.test('anonymous q does not reach a period it cannot read', async (t) => {
+    fakeCosmos(t);
+    nameLookups(t);
+    const res = await call(list, 'q=terms&count=true');
+    assert.deepStrictEqual(ids(res), []);
+    assert.strictEqual(res.headers['x-total-count'], '0');
+  });
+
+  await t.test('a repeated q, or q with an unknown parameter, is refused before any read', async (t) => {
+    for (const [qs, error] of [['q=a&q=b', 'parameter given more than once: q'], ['q=wind&name=x', 'unknown parameter: name']]) {
+      const specs = fakeCosmos(t);
+      const asked = nameLookups(t);
+      const res = await call(list, qs);
+      assert.strictEqual(res.status, 400, qs);
+      assert.strictEqual(res.body.error, error);
+      assert.deepStrictEqual([specs.length, asked.length], [0, 0], qs);
+      t.mock.restoreAll();
+    }
+  });
+
+  await t.test('q is recorded as one search event with its total', async (t) => {
+    fakeCosmos(t);
+    nameLookups(t);
+    const events = recordEvents(t);
+    await call(list, 'q=wind&count=true');
+    const rows = await events(audit.EVENTS_STREAM);
+    assert.deepStrictEqual(rows.map(row => [row.EventName, row.SearchTerm, row.ResultCount, row.Detail.kind]),
+      [['search', 'wind', 1, 'commentPeriods']]);
   });
 });
 
