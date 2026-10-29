@@ -31,6 +31,39 @@ test('access log', async (t) => {
     assert.strictEqual(meta.path, '/api/bulk-downloads/<id>');
   });
 
+  await t.test('the request line for suggest carries the path only, not the typed prefix', () => {
+    // Suggest runs per keystroke; its query would log every half-typed word beside the caller's IP.
+    // The router strips trailing slashes, so `/api/suggest//` reaches the same handler; bare `/suggest` too.
+    for (const path of ['/api/suggest', '/api/suggest/', '/api/suggest//', '/suggest', '/suggest/']) {
+      const info = t.mock.method(logger, 'info', () => {});
+
+      logRequest({ method: 'GET', originalUrl: `${path}?kind=projects&q=site%20c&limit=8`, headers: {} }, res(), 4);
+
+      const [message, meta] = info.mock.calls[0].arguments;
+      assert.ok(message.startsWith(`GET ${path} 200 `), message);
+      assert.ok(!/[?]|site|kind=/.test(message), `the query survived into the line: ${message}`);
+      assert.strictEqual(meta.path, path);
+      assert.ok(!JSON.stringify(meta).includes('site'), 'the query survived into the metadata');
+      info.mock.restore();
+    }
+  });
+
+  await t.test('a path that ends in suggest under another route keeps its query in the line', () => {
+    const info = t.mock.method(logger, 'info', () => {});
+
+    logRequest({ method: 'GET', originalUrl: '/api/projects/suggest?q=site', headers: {} }, res(), 4);
+
+    assert.ok(info.mock.calls[0].arguments[0].startsWith('GET /api/projects/suggest?q=site 200 '));
+  });
+
+  await t.test('a path that only starts with suggest keeps its query in the line', () => {
+    const info = t.mock.method(logger, 'info', () => {});
+
+    logRequest({ method: 'GET', originalUrl: '/api/suggestions?q=site', headers: {} }, res(), 4);
+
+    assert.ok(info.mock.calls[0].arguments[0].startsWith('GET /api/suggestions?q=site 200 '));
+  });
+
   await t.test('every other path is logged as it was requested', () => {
     const info = t.mock.method(logger, 'info', () => {});
 

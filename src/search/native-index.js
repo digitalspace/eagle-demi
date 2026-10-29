@@ -306,7 +306,10 @@ function indexedKind({ index, container, entity, partitionField, defaultOrder, s
     const { filter, empty } = indexFilter(map, parsed, access, map.acl ? await map.acl(access) : undefined);
     if (empty) return [];
 
-    const { items } = await map.search({ keywords: parsed.q, filter, top: ID_PAGE });
+    const top = Number.isInteger(parsed.idPage) && parsed.idPage > 0
+      ? Math.min(parsed.idPage, ID_PAGE)
+      : ID_PAGE;
+    const { items } = await map.search({ keywords: parsed.q, filter, top });
     const ranked = [...new Set(items.map(hit => String(hit.id)))];
     if (ranked.length === 0) return [];
 

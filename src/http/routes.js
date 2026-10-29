@@ -303,6 +303,7 @@ const routes = [
   { method: 'get', path: '/updates/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/updates').getUpdate },
   { method: 'get', path: '/notifications', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/notifications').getNotifications },
   { method: 'get', path: '/notifications/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/notifications').getNotification },
+  { method: 'get', path: '/suggest', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/suggest').getSuggestions },
 
   // CSV reports (README "CSV reports"). The comment export is signed in only, as eagle-api's was;
   // the caller's level then picks the columns. The BCGW feed reads as anonymous whoever asks.

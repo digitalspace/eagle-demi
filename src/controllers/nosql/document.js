@@ -23,7 +23,7 @@ const { chunkMarkdown, createChunkAccumulator, hasPageMarkers, pageCountOf } =
   require('../../chunker');
 const restampChunks = require('../../jobs/restamp-chunks');
 const {
-  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, capRead, heldSealed, TIER
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead, capRead, heldSealed, isAnonymous
 } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
@@ -404,11 +404,6 @@ const recentUploadsMemo = new Map();
 
 /** Test seam: module state outlives one request, so a suite must be able to start from empty. */
 exports._resetRecentUploadsMemo = () => recentUploadsMemo.clear();
-
-/** Anonymous: no credential was presented at all, so every such caller sees the same rows. */
-function isAnonymous(access) {
-  return access.authenticated === false && access.tier === TIER.PUBLIC;
-}
 
 function memoRead(key, now) {
   const hit = recentUploadsMemo.get(key);
