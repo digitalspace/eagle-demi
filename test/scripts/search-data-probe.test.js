@@ -66,7 +66,7 @@ test('search-data-probe.sh', async (t) => {
     assert.match(run.stderr.replace(/\s+/g, ' '),
       /eagle-api pushed before its List refs were resolved/);
     assert.match(run.stderr,
-      /node scripts\/demi-repush\.js --kind project --live --concurrency 1/);
+      /node scripts\/demi-repush\.js --kinds project --concurrency 1 --ids-file <file> --live/);
     assert.match(run.stderr, /PT5M/);
   });
 

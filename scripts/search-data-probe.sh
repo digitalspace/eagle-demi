@@ -113,8 +113,9 @@ case "$STATUS" in
       echo "  Rows with unresolved fields usually mean eagle-api pushed before its List refs were"
       echo "  resolved. Re-push from the eagle-api pod:"
       echo ""
-      echo "    LOG_LEVEL=info node scripts/demi-repush.js --kind project --live --concurrency 1"
+      echo "    LOG_LEVEL=info node scripts/demi-repush.js --kinds project --concurrency 1 --ids-file <file> --live"
       echo ""
+      echo "  <file> holds the project _ids to re-push, one per line."
       echo "  then wait one indexer tick (PT5M)."
       echo "  Runbook: $RUNBOOK"
     } >&2
