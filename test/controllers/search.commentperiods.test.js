@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * `GET /search?dataset=CommentPeriod` with no project — the home page's `open` rail and the search
- * page's paged list.
- *
- * Both sweep every partition, so the caller's visibility predicate is the whole defence and the
- * cases below check it by looking at the SQL the request actually emitted.
- *
- * Harness, stub points and row fixtures: `test/helpers/search-reads.js`.
- */
+// Unscoped CommentPeriod reads sweep every partition, so the visibility predicate is the whole
+// defence: cases check the emitted SQL. Harness and fixtures: `test/helpers/search-reads.js`.
 
 process.env.NODE_ENV = 'test';
 
@@ -27,12 +20,8 @@ const LIST = '/api/search?dataset=CommentPeriod';
 /** `days` from now, as the mirror stores a date. */
 const daysOut = (days) => new Date(Date.now() + days * 86400000).toISOString();
 
-/**
- * Three periods on the same project, one in each state — the whole point of the filter.
- *
- * The dates are relative to the run, not fixed strings: a fixture pinned to 2026 stops testing
- * anything the day the window moves past it, and "open" is a question about now.
- */
+// One period per state, dated relative to the run: "open" is a question about now, and a fixed
+// date stops testing anything once the window passes it.
 const NOT_STARTED = periodRow({
   id: 'CP-future', eagleId: 'CP-future',
   dateStarted: daysOut(3), dateCompleted: daysOut(30)
@@ -50,12 +39,8 @@ const STATE_ROWS = [NOT_STARTED, OPEN_NOW, CLOSED];
 /** A period with no start date: eagle-public's `getStatusCode` gives it no status at all. */
 const UNDATED = periodRow({ id: 'CP-undated', eagleId: 'CP-undated', dateStarted: null });
 
-/**
- * The stub honours a `partitionKey` but not a WHERE clause, so a date predicate has to be read out
- * of the emitted SQL rather than out of the rows served. This runs the real criterion over the
- * fixtures the way Cosmos would, which is what makes "excludes the closed one" an assertion about
- * the query instead of about the stub.
- */
+// The stub ignores WHERE, so this runs the emitted date criterion over the fixtures as Cosmos
+// would: "excludes the closed one" then asserts the query, not the stub.
 function applyOpenPredicate(spec, rows) {
   const { '@now': now, '@closingDayStart': dayStart, '@closingDayEnd': dayEnd } = bound(spec);
   assert.ok(now && dayStart && dayEnd, 'the open read must bind @now and the closing day, not interpolate them');
@@ -182,9 +167,8 @@ test('GET /search?dataset=CommentPeriod&and[status]=open', async (t) => {
     const openBound = bound(openRead);
     const since = Date.parse(countBound['@since']);
     const now = Date.parse(countBound['@now']);
-    // BOTH EDGES, EXACT. `since` and `now` both derive from the ONE `new Date()` `openPeriods`
-    // captures, so the window is exactly 30 days — not "close to" 30 days, which is what a second
-    // `new Date()` call milliseconds later would have allowed.
+    // Exact, not "close to" 30 days: both edges come from the one `new Date()` `openPeriods`
+    // captures; a second clock read would drift by milliseconds.
     assert.strictEqual(now - since, 30 * 86400000, `window was ${(now - since) / 86400000} days`);
     // ...and the count's `@now` and closing day are the LITERAL SAME as the open read's: one shared
     // capture, not two `new Date()` calls a moment apart — the invariant `countClosedSince`'s doc claims.
@@ -630,7 +614,7 @@ test('the closing day follows the Pacific calendar, as eagle-public does', async
 
   const closing = (id, dateCompleted) =>
     periodRow({ id, eagleId: id, dateStarted: '2026-09-01T07:00:00.000Z', dateCompleted });
-  // 11:00 PDT on 2026-09-22, whose Pacific midnight is 07:00Z.
+  // 11:00 PDT; that day's Pacific midnight is 07:00Z.
   const NOW = '2026-09-22T18:00:00.000Z';
   const ROWS = [
     closing('today', '2026-09-22T07:00:00.000Z'),
@@ -670,8 +654,8 @@ test('the closing day follows the Pacific calendar, as eagle-public does', async
     assert.deepStrictEqual(applyStatusPredicate(count, ROWS).map(r => r.id), ['this-morning', 'yesterday']);
   });
 
-  // 2025-11-02 fell back at 09:00Z: midnight that day was 00:00 PDT (07:00Z); 08:00Z was 01:00 PDT.
-  // 2025, not 2026: tz 2026c keeps Vancouver on PDT past 2026-11-01, so that day has no switch.
+  // DST ended at 09:00Z that day: midnight was 00:00 PDT (07:00Z), 08:00Z was 01:00 PDT. Year 2025
+  // because tz 2026c keeps Vancouver on PDT through November 2026, so 2026 has no fall-back day.
   await t.test('on the day DST ends, only the PDT midnight counts as the closing day', async (tt) => {
     at(tt, '2025-11-02T20:00:00.000Z');
     const fallBack = (id, dateCompleted) =>
