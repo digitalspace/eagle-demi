@@ -88,8 +88,12 @@ const DOCUMENT_ROWS = [
  * @param {object} datasets  the `/search` id sets, when a case needs a different one
  */
 function stubSources(over = {}, datasets = EAGLE_BY_DATASET) {
+  // Pure helpers only: a real network helper left un-stubbed would read the prod public API.
+  const { PAGE_SIZE, freshById, settledTotal } = sources;
   return {
-    ...sources,
+    PAGE_SIZE,
+    freshById,
+    settledTotal,
     EAGLE_API_BASE,
     loadTrackProjects: () => TRACK_PROJECTS,
     fetchEagleProjects: async () => EAGLE_PROJECTS,
