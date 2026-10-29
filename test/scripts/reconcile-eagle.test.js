@@ -21,39 +21,17 @@ const commentsRepo = require('../../src/repositories/comments');
 const sources = require('../../src/seed/sources');
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
-/**
- * Eagle publishes projects P1/P2, one ProjectNotification N1, and documents D1-D4.
- *
- * DEMI mirrors: P1 under a Track-sourced row (the shape that made a naive diff report every
- * matched project as missing), P2 Eagle-sourced, plus `gone` — Eagle-sourced and absent from
- * Eagle's public search. `track-dangling` is the same absence on a Track row.
- *
- * D3 is the document-side counterpart of `gone`: Eagle publishes it, DEMI never mirrored it, and
- * its own project ('gone') is not in EAGLE_PROJECTS — seed-nosql would drop it as unresolvable, so
- * the reconcile must report it as `unresolvedParent`, not `eagleOnly`.
- *
- * D4 hangs off N1, a ProjectNotification rather than a project — seed-nosql admits these (~80 in
- * prod, see seed-nosql.js). Eagle publishes it, DEMI never mirrored it: real push drift, so it
- * must be `eagleOnly`, not `unresolvedParent`.
- *
- * D5 is the plainest miss the flip gate exists to catch: published project P2, published document,
- * never mirrored. D6 is the class the old hand-copied rule got wrong — its parent is the Track row
- * 354, whose epic_guid no longer resolves to a published Eagle project, but the registry still
- * indexes that guid, so seed-nosql seeds the document and this is drift too.
- */
+// P1 is Track-sourced (a naive diff called it missing). D3's parent 'gone' is unpublished, so
+// unresolvedParent; D4 (under N1), D5 and D6 (dangling Track 354, still indexed) are eagleOnly.
 const EAGLE_PROJECTS = [{ _id: 'P1' }, { _id: 'P2' }];
 const NOTIFICATIONS = [{ _id: 'N1' }];
 
-/**
- * The public-read containers, in step on purpose: the fixtures above carry the project and document
- * drift this suite has always asserted, so the four newer containers are clean here and their own
- * drift is driven by the subtest that overrides them.
- */
+// Clean on purpose: the fixtures above carry the project and document drift, and each newer
+// container's drift comes from the subtest that overrides it.
 const EAGLE_BY_DATASET = {
   ProjectNotification: NOTIFICATIONS,
-  // The period's own `project` ref rides along, because `dataset=CommentPeriod` gates on the
-  // period's `read[]` alone and joins no parent — it is the only thing that says whether the
-  // mirror could have resolved a parent for it. CP1 hangs off published P1, so it is clean here.
+  // `dataset=CommentPeriod` gates on the period's own read[] and joins no parent, so `project` is
+  // the only clue whether the mirror could resolve one.
   CommentPeriod: [{ _id: 'CP1', project: 'P1' }],
   List: [{ _id: 'L1' }],
   Organization: [{ _id: 'O1' }],
@@ -104,9 +82,8 @@ function stubSources(over = {}, datasets = EAGLE_BY_DATASET) {
       assert.ok(datasets[dataset], `unexpected dataset: ${dataset}`);
       return datasets[dataset];
     },
-    // The comment sweep reads its total from the header, not the body — eagle-api's
-    // `/api/public/comment` reports it nowhere else. Empty here, so DEMI's one mirrored comment
-    // is drift the sweep must find.
+    // eagle-api reports the comment total only in the header. Empty here, so DEMI's one mirrored
+    // comment is drift the sweep must find.
     fetchJsonWithHeaders: async () => ({
       body: [], headers: new Headers({ 'x-total-count': '0' })
     }),
@@ -118,13 +95,8 @@ function stubSources(over = {}, datasets = EAGLE_BY_DATASET) {
   };
 }
 
-/**
- * Repository doubles. Both ASSERT the access tier: a scoped context lists only what it can see, so
- * every row it cannot read would report as Eagle-only drift and every unpublished row as gone from
- * Eagle. Without this assertion, dropping systemAccess() left the suite green.
- *
- * `counts` overrides what a container reports it holds — the truncation guard's input.
- */
+// Both doubles assert the access tier: a scoped context hides rows, which would read as drift.
+// `counts` overrides what a container reports it holds (the truncation guard's input).
 const assertSystem = (access) => assert.strictEqual(access && access.tier, 'privileged',
   'the reconcile must read as systemAccess(), or it diffs against a partial view');
 
@@ -193,11 +165,7 @@ function makeDeps(over = {}, counts = {}) {
   return deps;
 }
 
-/**
- * The `updates` container out of step in BOTH directions: Eagle publishes U1 and U2, DEMI holds U1
- * and `U-gone`. Same shape as the notifications fixture — the two containers are compared the same
- * way, and `updates` was the one the nightly sweep never covered.
- */
+// `updates` out of step both ways: Eagle publishes U1 and U2, DEMI holds U1 and `U-gone`.
 function updatesDrift() {
   return {
     sources: stubSources({}, { ...EAGLE_BY_DATASET, RecentActivity: [{ _id: 'U1' }, { _id: 'U2' }] }),
@@ -451,17 +419,14 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 6);
   });
 
-  // eagle-api's `dataset=CommentPeriod` gates on the period's OWN read[] and joins no parent, so a
-  // period Eagle publishes under a project it does not publish is still in the id set — while the
-  // mirror drops it, because there is no parent project row in DEMI to hang it off. Measured on
-  // test 2026-09-07: 29 such periods under 20 unpublished projects, all reported as push drift.
+  // `dataset=CommentPeriod` gates on the period's own read[], so a period under an unpublished
+  // project is in Eagle's id set while the mirror drops it for want of a parent.
   await t.test('a period whose project is unpublished is unresolvedParent, not push drift',
     async () => {
       const summary = await reconcile([], makeDeps({
         sources: stubSources({}, {
           ...EAGLE_BY_DATASET,
-          // 'gone' is an Eagle project DEMI mirrored but Eagle no longer publishes, so it is not in
-          // the published set — exactly the parent the mirror could not resolve.
+          // 'gone' is mirrored but unpublished in Eagle: the parent the mirror cannot resolve.
           CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-orphan', project: 'gone' }]
         })
       }));
@@ -488,11 +453,8 @@ test('reconcile', async (t) => {
       assert.strictEqual(summary.drift, 6);
     });
 
-  // The gate is the seed REGISTRY, not the published-Eagle set, and the two disagree on exactly
-  // this row — the same distinction D6 pins on the document side. Track row 354's epic_guid no
-  // longer resolves to a published Eagle project, but the registry still indexes it, so DEMI holds
-  // a project row the mirror would have found. Gating on `eagleProjectIds` alone would file this
-  // under `unresolvedParent` and lose it from the alert.
+  // The gate is the seed registry, not the published-Eagle set (D6 pins the same for documents):
+  // Track 354's dangling epic_guid is still indexed, so this is drift, not unresolvedParent.
   await t.test('a period under a Track row\'s dangling epic_guid is drift, not unresolvable',
     async () => {
       const summary = await reconcile([], makeDeps({
@@ -508,9 +470,8 @@ test('reconcile', async (t) => {
       assert.strictEqual(summary.drift, 6);
     });
 
-  // Eagle hangs periods off a ProjectNotification too, exactly as it does documents (D4 above).
-  // The old gate tested `projectIndex` alone, so every one of those read as unresolvable and its
-  // absence from DEMI never reached the alert.
+  // Eagle hangs periods off a ProjectNotification too (as D4 for documents); a gate on
+  // `projectIndex` alone would call them unresolvable and hide them from the alert.
   await t.test('a period under a ProjectNotification DEMI never mirrored is drift', async () => {
     const summary = await reconcile([], makeDeps({
       sources: stubSources({}, {
@@ -524,9 +485,8 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 6);
   });
 
-  // And the DEMI side of the same row. `commentPeriods` partitions on the parent, so a period
-  // under a notification lives in the notification's partition and a sweep of the project
-  // partitions alone never sees it — it would report as missing on every run.
+  // `commentPeriods` partitions on the parent, so a sweep of project partitions alone never sees
+  // a period under a notification and reports it missing on every run.
   await t.test('a period DEMI holds under a ProjectNotification partition is clean', async () => {
     const summary = await reconcile([], makeDeps({
       sources: stubSources({}, {
@@ -594,9 +554,8 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 5);
   });
 
-  // The class the sweep could not see: Track 353's epic_guid is the ProjectNotification's own _id,
-  // so the registry resolves that ref to project '353' and the old rule stored the period there,
-  // under the Track project's ACL. Both containers hold it, so every id-set diff read it as clean.
+  // Track 353's epic_guid is the notification's own _id, so a project-first lookup files the
+  // period under Track project '353'. Both containers hold it, so an id-set diff calls it clean.
   await t.test('a period stored under a Track project that shadows its notification is misfiled',
     async () => {
       const summary = await reconcile([], makeDeps({
@@ -759,7 +718,6 @@ test('reconcile', async (t) => {
       /documents enumerated 3 rows but the container holds 503 — .*truncated read/);
   });
 
-  // Prod, 2026-10-03: a one-page read of 2,543 updates printed `updates eagleOnly=1543`.
   await t.test('updates past one page are read whole, so matching sides report eagleOnly=0',
     async (tt) => {
       const rows = ids('U', 2500);
@@ -819,10 +777,8 @@ test('reconcile', async (t) => {
   });
 
   await t.test('nothing it reports is a delete list', async () => {
-    // eagle-api answers `200 []` both for a deleted row and for one that merely lost `public`
-    // from its read[], so `unpublishedOrDeleted` cannot be purged. Verified 2026-08-26 against
-    // prod: `/api/public/document/000000000000000000000000` -> `200 []`, a published id -> the
-    // row. If a purge ever lands it needs a probe that separates the two, not this set.
+    // eagle-api answers `200 []` for a deleted row and for one that lost `public`, so
+    // `unpublishedOrDeleted` must not be purged without a probe that tells the two apart.
     const summary = await reconcile([], makeDeps());
     const rendered = report(summary, { json: true });
     assert.match(rendered, /NOT purged/);
@@ -857,9 +813,8 @@ test('the admission rule is seed-nosql\'s own', async (t) => {
     }
   });
 
-  // A Track `epic_guid` is sometimes a ProjectNotification _id (test 2026-09-08: Track 351 and
-  // 353), and the merge puts it in the project row's `eagleId`, so the registry resolves it. The
-  // seed must still file that notification's children under the notification.
+  // A Track `epic_guid` can be a ProjectNotification _id that the registry resolves through the
+  // project row's `eagleId`; the notification's children must still file under it.
   await t.test('a Track project holding a notification id does not claim its children', async () => {
     const shadowTrack = [{ track_project_id: 353, name: 'Shadow', epic_guid: 'N1' }];
     const index = buildProjectIndex(buildRegistry(shadowTrack, EAGLE_PROJECTS).projects);
@@ -929,10 +884,8 @@ test('summaryLine is the alert contract', async (t) => {
   });
 });
 
-// `run` is what BOTH callers go through — the CLI entry below `require.main` and the nightly
-// timer trigger in api/index.js. The alert reads one line out of the application log, so a
-// run that reported to its caller and logged nothing would leave the alarm permanently silent with
-// every test still green.
+// The CLI and the nightly timer both go through `run`, and the alert reads its log line: a run
+// that logged nothing would leave the alarm silent.
 test('run reports to its caller and to the log', async (t) => {
   const lines = [];
   t.mock.method(logger, 'info', (message) => { lines.push(message); });
@@ -961,13 +914,8 @@ test('run passes --json through to the report', async (t) => {
     '--json is the only way to get the full id sets, and the CLI still passes it');
 });
 
-/**
- * The drift classes. Fixture ids here are real ObjectIds, because a parent ref that is not one is
- * a malformed ref the push refuses, and so classes as an orphan.
- *
- * Eagle publishes PUB and PUB_UNMIRRORED. DEMI holds PUB and HIDDEN (Eagle no longer publishes
- * it) plus a Track row Eagle never had. Track holds nothing, so no ref resolves through it.
- */
+// Real ObjectIds: a parent ref that is not one is malformed, refused by the push, and classes
+// as an orphan.
 const oid = n => n.toString(16).padStart(24, '0');
 const PUB = oid(1);
 const HIDDEN = oid(2);
@@ -1059,12 +1007,8 @@ test('run logs the classes on their own line, which the alert cannot match', asy
     'the alert matches "[reconcile] projects" and reads drift=; this line must trip neither');
 });
 
-/**
- * Comment classes under `--comments`. DEMI mirrors one period, under PUB, and one of its two
- * comments. Eagle also publishes a period under ABSENT (in no system) and one under HIDDEN (DEMI
- * holds the project, Eagle does not publish it): the mirror resolves neither period, so their
- * comments class by the period's own project ref.
- */
+// The mirror resolves neither the ABSENT nor the HIDDEN period, so their comments class by the
+// period's own project ref.
 const CP = { pub: oid(20), underGone: oid(21), underHidden: oid(22) };
 const COMMENT = { mirrored: oid(30), missed: oid(31), underGone: oid(32), underHidden: oid(33) };
 
@@ -1180,18 +1124,8 @@ test('run --store', async (t) => {
   });
 });
 
-/**
- * The ENGAGE dead-slug guard.
- *
- * ENGAGE deletes an engagement without telling DEMI when its `delete_from_epic` returns early on an
- * unset `project_tracking_id`, so the mirror keeps a period whose `metURL` 404s for every visitor.
- * The id-set diffs cannot see it — the row is in Eagle AND in DEMI — so this is the only thing that
- * looks, and it is also the only thing in this script that can delete.
- *
- * `fetch` is the stub point rather than the repository, because what decides whether a row lives or
- * dies is how an ENGAGE RESPONSE is read: the production hazard is a 200 of SPA HTML from
- * `engage.eao.gov.bc.ca`, which is not the API and answers every path that way.
- */
+// ENGAGE can delete an engagement without telling DEMI, leaving a period whose metURL 404s. Stub
+// `fetch`, not the repo: how an ENGAGE response is read decides whether a row is deleted.
 const ENGAGE_BASE = 'https://engage-api.example/api';
 
 const GONE = (slug) => ({
@@ -1253,9 +1187,8 @@ test('the ENGAGE dead-slug guard', async (t) => {
       assert.deepStrictEqual(summary.engageOrphans.dropped, ['CP-dead']);
     });
 
-  // THE PRODUCTION HAZARD. `engage.eao.gov.bc.ca` is the single-page app, and its nginx answers 200
-  // with index.html for every unknown path — so a check pointed there calls every slug alive, and
-  // one pointed at the test host gets 401 for all of them. Neither may ever delete anything.
+  // engage.eao.gov.bc.ca is the SPA: it answers 200 index.html for every path, and the test host
+  // answers 401. Neither may ever delete anything.
   await t.test('an answer that is not ENGAGE saying "gone" is UNKNOWN, never an orphan',
     async () => {
       for (const [label, response] of [
@@ -1289,9 +1222,7 @@ test('the ENGAGE dead-slug guard', async (t) => {
     assert.strictEqual(summary.engageOrphans.unknown.length, 2);
   });
 
-  // A SLOW ENGAGE IS NOT AN UNREACHABLE ONE. Both are unresolved and both stay untouched, but the
-  // report has to tell them apart or a run that is merely slow reads identically to one where the
-  // host is down.
+  // Both stay untouched, but the report must tell a slow host from a down one.
   await t.test('a timeout and a network failure are both unknown, for different reasons', async () => {
     const timedOut = await reconcile(['--engage'], engageDeps({
       respond: async () => { const e = new Error('aborted'); e.name = 'AbortError'; throw e; }
@@ -1388,11 +1319,8 @@ test('a malformed metURL escape is unknown, and does not fail the sibling period
   assert.deepStrictEqual(summary.engageOrphans.dead, []);
 });
 
-/**
- * Users, groups and inspections: eagle-api publishes none of them, so each row is checked against
- * the rule applied to its own stored Eagle read and its stored parent. Every fixture row below is
- * what the mirror writes, except the ones named as planted drift.
- */
+// eagle-api publishes none of these, so each row is checked against its own stored Eagle read
+// and parent. Fixture rows match what the mirror writes unless named as planted drift.
 test('the user, group and inspection mirrors are checked against their stored Eagle copy', async (t) => {
   const projectsWithRead = {
     listWithEagleId: async () => [{ id: '207', eagleId: 'P1', sourceSystem: 'track', read: ['staff', 'idir', 'public'] }],
