@@ -1312,8 +1312,10 @@ test('seed --reconcile end to end', async (t) => {
         assert.strictEqual(summary.reconcile.projects.surplusHeld, 1);
         assert.ok(summary.failures.includes(
           'reconcile: 1 surplus ids still live upstream, fetch skipped rows — nothing removed from either container'));
-        assert.deepStrictEqual(fs.readFileSync(logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l))[0],
-          { label: 'documents', id: 'stale', partitionKey: '207', deleted: false, kept: true, keptLive: true });
+        assert.deepStrictEqual(fs.readFileSync(logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l)), [
+          { label: 'documents', id: 'stale', partitionKey: '207', deleted: false, kept: true, keptLive: true },
+          { label: 'projects', id: 'eagle-gone', partitionKey: 'eagle-gone', deleted: false, held: true }
+        ], 'the row counted in surplusHeld says so in the log');
       } finally {
         process.env.RECONCILE_LOG = previous;
         fs.rmSync(logFile, { force: true });
