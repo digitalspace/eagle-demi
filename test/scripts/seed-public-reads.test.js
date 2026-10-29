@@ -436,13 +436,27 @@ test('comments', async (t) => {
 
     assert.strictEqual(written.length, 5, 'every comment on the period, across three pages');
     assert.strictEqual(summary.stages.comments.written, 5);
-    assert.strictEqual(urls.length, 3, 'pages of 2, 2 and 1 — not one page read as the whole set');
+    assert.strictEqual(urls.length, 4,
+      'pages of 2, 2 and 1, then the total re-read — not one page read as the whole set');
+    assert.ok(urls[3].includes('pageNum=0&pageSize=1'), 'the re-read asks for one row');
     assert.ok(urls[0].includes('count=true'),
       'without count=true the body is not the comment array and the header is absent');
     // Unnamed fields come back as nulls, so the mirror would store a row of them.
     for (const field of COMMENT_FIELDS) assert.ok(urls[0].includes(encodeURIComponent(field)));
     t2.mock.restoreAll();
   });
+
+  await t.test('a comment repeated across a page boundary is written once and the period passes',
+    async (t2) => {
+      // Raw rows 5, header 4: offset paging repeated C1 when a comment landed before the cursor.
+      const items = ['C0', 'C1', 'C1', 'C2', 'C3'].map(_id => eagleComment({ _id }));
+      const { written, summary } = await captureComments(t2, {
+        items, total: 4, periodRow: storedPeriod()
+      });
+      assert.deepStrictEqual(written.map(c => c.id).sort(), ['C0', 'C1', 'C2', 'C3']);
+      assert.strictEqual(summary.stages.comments.errors, 0);
+      t2.mock.restoreAll();
+    });
 
   await t.test('a period that returns fewer comments than it promised is an error, not a success',
     async (t2) => {

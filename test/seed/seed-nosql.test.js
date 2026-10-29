@@ -16,6 +16,7 @@ const chunksRepo = require('../../src/repositories/chunks');
 const documentsRepo = require('../../src/repositories/documents');
 const trackProjects = require('../../src/data/track_projects_enriched.json');
 const config = require('../../src/config');
+const { logger } = require('../../src/utils/logger');
 
 /**
  * Chunks repository double. `parentFieldsChanged` and `reStampAfterWrite` are the REAL ones, so the
@@ -216,6 +217,63 @@ test('fetchAllPages', async (t) => {
       }
     }));
     assert.deepStrictEqual(order, ['start', 'end', 'start', 'end']);
+  });
+
+  // Pages served from `pages[pageNum]` with the total each request reports; the pageSize=1 re-read
+  // after the last page answers `reread`.
+  const pagedFetch = (pages, first, reread, calls = []) => async (url) => {
+    const params = new URL(url, 'http://x').searchParams;
+    calls.push(`${params.get('pageNum')}/${params.get('pageSize')}`);
+    if (params.get('pageSize') === '1') return { items: pages[0].slice(0, 1), total: reread };
+    return { items: pages[Number(params.get('pageNum'))] || [], total: first };
+  };
+  const ids = (from, to) => Array.from({ length: to - from }, (_, i) => ({ _id: `d${from + i}` }));
+
+  await t.test('a corpus that grows by one during the fetch passes and reports the larger count', async (t2) => {
+    const info = t2.mock.method(logger, 'info', () => {});
+    const result = await fetchAllPages('http://x', 'Document', {
+      accumulate: false,
+      onPage: () => {},
+      fetchPage: pagedFetch([ids(0, 100), ids(100, 200), ids(200, 251)], 250, 251)
+    });
+    assert.deepStrictEqual(result, { count: 251, total: 251 });
+    assert.match(info.mock.calls[0].arguments[0], /Document: fetched 251, upstream reported 250 then 251/);
+  });
+
+  await t.test('a row repeated across a page boundary is counted and handed on once', async () => {
+    const handed = [];
+    const items = await fetchAllPages('http://x', 'Document', {
+      onPage: (page, count) => handed.push([page.length, count]),
+      fetchPage: pagedFetch([ids(0, 100), ids(99, 199), ids(199, 200)], 200, 200)
+    });
+    assert.strictEqual(items.length, 200);
+    assert.strictEqual(new Set(items.map(d => d._id)).size, 200);
+    assert.deepStrictEqual(handed, [[100, 100], [99, 199], [1, 200]]);
+  });
+
+  await t.test('a short read throws even when the re-read total dropped to match it', async () => {
+    // A delete before the offset cursor skips the row that shifted past it, and lowers the
+    // re-read total by the same one: only the first total exposes the gap.
+    await assert.rejects(
+      () => fetchAllPages('http://x', 'Document',
+        { fetchPage: pagedFetch([ids(0, 100), ids(101, 200)], 200, 199) }),
+      /fetched 199 but upstream reports 200 — refusing to seed a truncated corpus/
+    );
+    await assert.rejects(
+      () => fetchAllPages('http://x', 'Document',
+        { fetchPage: pagedFetch([ids(0, 100), ids(100, 150)], 200, 200) }),
+      /fetched 150 but upstream reports 200/
+    );
+  });
+
+  await t.test('a capped fetch skips the re-read and the count check', async () => {
+    const calls = [];
+    const items = await fetchAllPages('http://x', 'Document', {
+      maxPages: 1,
+      fetchPage: pagedFetch([ids(0, 100), ids(100, 200)], 500, 500, calls)
+    });
+    assert.strictEqual(items.length, 100);
+    assert.deepStrictEqual(calls, [`0/${PAGE_SIZE}`]);
   });
 });
 

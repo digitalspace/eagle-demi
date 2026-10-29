@@ -314,9 +314,9 @@ async function backfillDataset(stage, args, deps) {
  * reads as `Number(null)` = 0, which satisfies the truncation check, and an envelope body carries
  * no `_id` to survive the filter. Either way the period records zero comments and is checkpointed.
  */
-async function fetchCommentPage(base, periodId, pageNum, deps) {
+async function fetchCommentPage(base, periodId, pageNum, deps, pageSize = deps.sources.PAGE_SIZE) {
   const url = `${base}/comment?period=${encodeURIComponent(periodId)}&count=true` +
-    `&pageNum=${pageNum}&pageSize=${deps.sources.PAGE_SIZE}` +
+    `&pageNum=${pageNum}&pageSize=${pageSize}` +
     `&fields=${encodeURIComponent(COMMENT_FIELDS.join('|'))}`;
   const { body, headers } = await deps.sources.fetchJsonWithHeaders(url);
 
@@ -347,25 +347,29 @@ async function fetchCommentPage(base, periodId, pageNum, deps) {
 async function eachCommentPage(periodId, deps, onPage) {
   const base = deps.sources.EAGLE_API_BASE;
   const pageSize = deps.sources.PAGE_SIZE;
+  const seen = new Set();
   let fetched = 0;
   let total = null;
 
   for (let pageNum = 0; ; pageNum++) {
     const page = await fetchCommentPage(base, periodId, pageNum, deps);
     if (total === null) total = page.total;
-    fetched += page.items.length;
+    const fresh = sources.freshById(page.items, seen);
+    fetched += fresh.length;
 
-    await onPage(page.items);
+    await onPage(fresh);
 
     if (page.items.length < pageSize) break;
-    if (total !== null && fetched >= total) break;
+    if (fetched >= total) break;
   }
 
-  if (total !== null && fetched !== total) {
+  const reread = (await fetchCommentPage(base, periodId, 0, deps, 1)).total;
+  const settled = sources.settledTotal(fetched, total, reread, `period ${periodId} comments`);
+  if (settled === null) {
     throw new Error(`period ${periodId}: fetched ${fetched} comments but eagle-api reports ` +
       `${total} — refusing to treat a truncated read as the whole period`);
   }
-  return { count: fetched, total };
+  return { count: fetched, total: settled };
 }
 
 /**

@@ -941,7 +941,8 @@ async function runSeed(args, deps, summary) {
   // ── Reconcile ──────────────────────────────────────────────────────────────
   // ONE phase after every fetch, never per container: an unverified Project fetch used to leave
   // the documents reconcile free to delete, and vice versa. A fetch is verified only when
-  // eagle-api reported a searchResultsTotal AND it matches what arrived; either upstream falling
+  // eagle-api reported a searchResultsTotal AND it equals the unique ids that arrived (documents:
+  // the total re-read after the fetch, so growth mid-fetch is not verified); either upstream falling
   // short refuses BOTH deletions, since the surplus set is only meaningful off a complete fetch.
   if (args.reconcile) {
     const unverified = [

@@ -138,7 +138,7 @@ test('a dropped read is skipped as dropped, not pending, and makes no request', 
 });
 
 test('requests to each API are GET only and at least MIN_GAP_MS apart', async () => {
-  // 250 rows: three pages a side.
+  // 250 rows: three pages and a total re-read a side.
   const rows = Array.from({ length: 250 }, (_, i) => project(i.toString(16).padStart(24, '0')));
   const h = harness((host, url) => {
     if (host === 'demi.test') return nativeRows(rows.map(row => nativeProject(row._id)), url);
@@ -152,7 +152,7 @@ test('requests to each API are GET only and at least MIN_GAP_MS apart', async ()
     const at = h.calls.filter(c => c.host === host).map(c => c.at);
     return at.slice(1).map((t, i) => t - at[i]);
   });
-  assert.strictEqual(gaps.length, 4);
+  assert.strictEqual(gaps.length, 6);
   assert.ok(gaps.every(g => g >= MIN_GAP_MS), `gaps ${gaps}`);
 });
 
@@ -536,7 +536,7 @@ test('a comment list in count facets is read page by page to its total', async (
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'comment-list-public', '--id', `period=${A}`], h.deps);
   assert.strictEqual(code, 0);
   assert.match(h.out[0], /match=250 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
-  assert.strictEqual(h.calls.filter(c => c.host === 'eagle.test').length, 3);
+  assert.strictEqual(h.calls.filter(c => c.host === 'eagle.test').length, 4, 'three pages, then the total re-read');
 });
 
 test("recent activity compares Eagle's top 4 with DEMI's 4 latest by publishDate", async () => {
@@ -1101,8 +1101,10 @@ test('a native list read sends the DEMI id of its parent, page, pageSize and cou
   assert.deepStrictEqual(demiCalls(h).filter(u => !/^\/api\/(projects|notifications)(\?|$)/.test(u)), [
     `/api/projects/${A}`,
     `/api/comment-periods?project=eagle-${A}&page=1&pageSize=100&count=true`,
+    `/api/comment-periods?project=eagle-${A}&page=1&pageSize=1&count=true`,
     `/api/comment-periods/${B}`,
-    '/api/comments?period=engage-7&page=1&pageSize=100&count=true'
+    '/api/comments?period=engage-7&page=1&pageSize=100&count=true',
+    '/api/comments?period=engage-7&page=1&pageSize=1&count=true'
   ]);
 });
 
@@ -1129,7 +1131,7 @@ test('a native list is paged to the x-total-count total, and a total the pages d
   const whole = await listRun(250);
   assert.strictEqual(whole.code, 0);
   assert.match(whole.line, /match=250 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
-  assert.deepStrictEqual(whole.pages, ['1', '2', '3']);
+  assert.deepStrictEqual(whole.pages, ['1', '2', '3', '1'], 'three pages, then the total re-read');
 
   const short = await listRun(300);
   assert.strictEqual(short.code, 1);
@@ -1231,7 +1233,8 @@ test('document reads use page paging', async () => {
     const { code, line, documents } = await documentRun(read, identityArgs);
     assert.strictEqual(code, 0, line);
     assert.match(line, /match=1 missingInDemi=0 extraInDemi=0/);
-    assert.deepStrictEqual(documents, [`/api/documents?project=eagle-${A}&page=1&pageSize=100&count=true`]);
+    assert.deepStrictEqual(documents, [`/api/documents?project=eagle-${A}&page=1&pageSize=100&count=true`,
+      `/api/documents?project=eagle-${A}&page=1&pageSize=1&count=true`]);
   }
 });
 
@@ -1245,7 +1248,8 @@ test('featured reads are not pending', async () => {
     assert.match(line, /match=1 missingInDemi=0 extraInDemi=0/);
     assert.ok(eagleCall(h, eaglePath), `${read} asks Eagle ${eaglePath}`);
     assert.deepStrictEqual(documents,
-      [`/api/documents?project=eagle-${A}&isFeatured=true&sort=-datePosted&page=1&pageSize=100&count=true`]);
+      [`/api/documents?project=eagle-${A}&isFeatured=true&sort=-datePosted&page=1&pageSize=100&count=true`,
+        `/api/documents?project=eagle-${A}&isFeatured=true&sort=-datePosted&page=1&pageSize=1&count=true`]);
   }
 });
 

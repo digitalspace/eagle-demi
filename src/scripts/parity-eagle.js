@@ -324,11 +324,13 @@ async function rowsOf(api, spec, ids, maxPages) {
     ? (pageNum, pageSize) => ({ page: pageNum + 1, pageSize, count: 'true' })
     : (pageNum, pageSize) => ({ pageNum, pageSize });
   let last = { pages: 0, size: 0, count: 0, total: null };
+  // `onPage` gets the page minus repeated ids, so the raw size is taken here.
+  let rawSize = 0;
   const rows = await fetchAllPages(api.base, (spec.query && spec.query.dataset) || spec.path, {
     maxPages,
-    fetchPage,
+    fetchPage: async (url) => { const page = await fetchPage(url); rawSize = page.items.length; return page; },
     pageUrl: (pageNum, pageSize) => urlOf(api.base, spec, ids, pageParams(pageNum, pageSize)),
-    onPage: (items, count, total) => { last = { pages: last.pages + 1, size: items.length, count, total }; }
+    onPage: (_items, count, total) => { last = { pages: last.pages + 1, size: rawSize, count, total }; }
   });
   const truncated = last.pages >= maxPages && last.size === PAGE_SIZE &&
     (last.total === null || last.count < last.total);
