@@ -135,52 +135,125 @@ function unwrapSearchResponse(body, url) {
   return { items: envelope.searchResults, total: typeof total === 'number' ? total : null };
 }
 
+/** One page of an eagle-api `/search` dataset, unauthenticated. */
+const searchPage = async (url) => unwrapSearchResponse(await fetchJson(url), url);
+
 /**
- * Every page of a dataset. A count off the reported total throws: a truncated corpus looks whole.
- * `accumulate: false` streams page by page; holding every document overran the 1.5 GB plan.
- * @param {function} [opts.onPage]           (items, fetchedSoFar, total) — progress or a handler
+ * Rows of `items` whose key is not yet in `seen`, which they are added to. A row with no key throws:
+ * every caller's rows carry one, so a missing key is a projection bug, not a row to count.
+ */
+function freshById(items, seen, keyOf = row => row._id ?? row.id) {
+  return items.filter((item) => {
+    const raw = item == null ? null : keyOf(item);
+    if (raw == null) throw new Error('[seed] a fetched row has no id, so a repeat cannot be told apart');
+    const key = String(raw);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * The re-read total, or null when `count` unique rows fall short of the first page's total. Not
+ * the lower total: a delete before the offset cursor skips a row and lowers both alike.
+ */
+function settledTotal(count, first, reread, label) {
+  const final = typeof reread === 'number' ? reread : first;
+  if (count < first) return null;
+  if (count !== first || final !== first) {
+    logger.info(`[seed] ${label}: fetched ${count}, upstream reported ${first} then ${final} — ` +
+      'the corpus changed during the fetch');
+  }
+  return final;
+}
+
+/**
+ * Every page of a dataset, each row once; fewer unique rows than the first total throws, more is
+ * growth, its total re-read after the last page. `accumulate: false` streams: all docs overran 1.5 GB.
+ * @param {function} [opts.onPage]           (newItems, uniqueSoFar, total) — progress or a handler
+ * @param {function} [opts.onTotal]          (total) once at the end: the settled total; the first total on a capped read
  * @param {boolean}  [opts.accumulate=true]  false returns {count, total} instead of the items
  * @param {function} [opts.pageUrl]   (pageNum, pageSize) -> url; default the dataset's `/search` page
  * @param {function} [opts.fetchPage] url -> {items, total}; default an unauthenticated search fetch
+ * @param {function} [opts.keyOf]     row -> its id, for the repeat check; default `_id`, else `id`
  * @param {number}   [opts.maxPages]  stop after this many pages; the total is then not verified
  */
 async function fetchAllPages(base, dataset, opts = {}) {
-  // Historically this took a bare callback as the third argument.
+  // A bare function is the onPage handler.
   const options = typeof opts === 'function' ? { onPage: opts } : opts;
   const {
-    onPage, accumulate = true, maxPages = Infinity,
+    onPage, onTotal, keyOf, accumulate = true, maxPages = Infinity,
     pageUrl = (pageNum, pageSize) => `${base}/search?dataset=${encodeURIComponent(dataset)}` +
       `&pageSize=${pageSize}&pageNum=${pageNum}`,
-    fetchPage = async (url) => unwrapSearchResponse(await fetchJson(url), url)
+    fetchPage = searchPage
   } = options;
 
   const items = [];
+  const seen = new Set();
   let count = 0;
   let total = null;
-  let capped = false;
 
-  for (let pageNum = 0; ; pageNum++) {
-    const page = await fetchPage(pageUrl(pageNum, PAGE_SIZE));
-    if (total === null) total = page.total;
+  // Pages from `start` until a short page, `goal` unique rows (default the first total) or the cap.
+  const readFrom = async (start, goal) => {
+    for (let pageNum = start; ; pageNum++) {
+      const page = await fetchPage(pageUrl(pageNum, PAGE_SIZE));
+      if (total === null) total = page.total;
+      const target = goal ?? total;
 
-    count += page.items.length;
-    if (accumulate) items.push(...page.items);
-    if (onPage) await onPage(page.items, count, total);
+      // Offset paging repeats a row across a page boundary when one is inserted before the cursor.
+      const fresh = freshById(page.items, seen, keyOf);
+      count += fresh.length;
+      if (accumulate) items.push(...fresh);
+      if (onPage) await onPage(fresh, count, target);
 
-    if (page.items.length < PAGE_SIZE) break;
-    // A total of exactly N*PAGE_SIZE would otherwise cost one extra empty request.
-    if (total !== null && count >= total) break;
-    if (pageNum + 1 >= maxPages) { capped = true; break; }
+      if (page.items.length < PAGE_SIZE) return { last: pageNum, capped: false };
+      // A total of exactly N*PAGE_SIZE would otherwise cost one extra empty request.
+      if (target !== null && count >= target) return { last: pageNum, capped: false };
+      if (pageNum + 1 >= maxPages) return { last: pageNum, capped: true };
+    }
+  };
+  // Re-read, so a caller that verifies the count (seed reconcile) compares it with the corpus as it
+  // stood after the last page, not before the first.
+  const reread = async () => (await fetchPage(pageUrl(0, 1))).total;
+
+  let { last, capped } = await readFrom(0, null);
+  if (!capped && total !== null) {
+    let final = await reread();
+    if (typeof final === 'number' && final > count && last + 1 < maxPages) {
+      // Rows published mid-fetch sort last by _id, past where the cursor stopped. Restarted on the
+      // last page read, since a short page grows in place. One pass only.
+      ({ capped } = await readFrom(last, final));
+      if (!capped) final = await reread();
+    }
+    // A pass the cap cut short leaves the total unverified, but still never below the first one.
+    const settled = capped ? (count < total ? null : total) : settledTotal(count, total, final, dataset);
+    if (settled === null) {
+      throw new Error(
+        `[seed] ${dataset}: fetched ${count} but upstream reports ${total} — refusing to ` +
+        `seed a truncated corpus (re-read total ${final})`
+      );
+    }
+    total = settled;
   }
 
-  if (!capped && total !== null && count !== total) {
-    throw new Error(
-      `[seed] ${dataset}: fetched ${count} but upstream reports ${total} — refusing to ` +
-      'seed a truncated corpus'
-    );
-  }
-
+  if (onTotal) onTotal(total);
   return accumulate ? items : { count, total };
+}
+
+/**
+ * Whether the public search still serves row `id` of `dataset`, through the paged fetch's own
+ * endpoint and filters: a surplus row it serves was skipped by the paging, not removed upstream.
+ */
+async function eagleRowLive(dataset, id, fetchPage = searchPage) {
+  const url = `${EAGLE_API_BASE}/search?dataset=${encodeURIComponent(dataset)}&pageSize=1&pageNum=0` +
+    `&and[_id]=${encodeURIComponent(id)}`;
+  const { items, total } = await fetchPage(url);
+  const found = items.some(row => row && String(row._id) === String(id));
+  // A dropped filter answers with page 0 of the whole dataset: every surplus row would read as gone.
+  if ((items.length && !found) || (typeof total === 'number' && total > (found ? 1 : 0))) {
+    throw new Error(`eagle-api ignored the id filter for ${dataset} ${id}`);
+  }
+  return found;
 }
 
 /** Track sends these either nested (`{name}`) or as a bare string, depending on the endpoint. */
@@ -474,9 +547,12 @@ async function loadTrackProjects() {
   return projects;
 }
 
-/** Already flat: the search endpoint hoists the current `legislation_*` block to the root. */
-function fetchEagleProjects(onPage) {
-  return fetchAllPages(EAGLE_API_BASE, 'Project', { onPage });
+/**
+ * Already flat: the search endpoint hoists the current `legislation_*` block to the root.
+ * @param {object|function} [opts] `fetchAllPages` options
+ */
+function fetchEagleProjects(opts) {
+  return fetchAllPages(EAGLE_API_BASE, 'Project', opts);
 }
 
 /**
@@ -538,6 +614,9 @@ module.exports = {
   fetchJsonWithHeaders,
   unwrapSearchResponse,
   fetchAllPages,
+  eagleRowLive,
+  freshById,
+  settledTotal,
   clientToken,
   trackApiToExtract,
   trackFeedConfigured,

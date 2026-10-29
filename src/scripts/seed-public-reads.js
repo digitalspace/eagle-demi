@@ -31,6 +31,7 @@
  *   node src/scripts/seed-public-reads.js [--live | --dry-run]
  *                                         [--only lists,comments] [--since 2026-01-01]
  *                                         [--state ./seed-public-reads.state.json]
+ *                                         [--summary ./summary.json]
  *
  * The environment is chosen the way every other database script chooses it — by the settings the
  * process starts with, never by a flag: `EAGLE_API_BASE` for the source and `COSMOS_ENDPOINT` /
@@ -50,6 +51,9 @@
  * `--only <stage>` RE-RUNS the stages it names, checkpoint or no checkpoint — it is how a repair is
  * asked for, and `--only comments` ignores the per-period checkpoint for the same reason. Delete
  * the state file to force a full rerun of everything.
+ *
+ * `--summary FILE` writes the run's summary as JSON, even when a stage throws, so a caller can gate
+ * on `unfinished` (stages that errored or dropped rows) instead of reading the log.
  */
 
 const fs = require('fs');
@@ -88,7 +92,8 @@ const MAX_LOGGED_ERRORS = 20;
 
 function parseArgs(argv) {
   const args = {
-    live: false, only: ALL_STAGES, onlyExplicit: false, since: null, state: DEFAULT_STATE
+    live: false, only: ALL_STAGES, onlyExplicit: false, since: null, state: DEFAULT_STATE,
+    summary: null
   };
   let explicitDryRun = false;
 
@@ -98,6 +103,13 @@ function parseArgs(argv) {
     else if (a === '--dry-run') explicitDryRun = true;
     else if (a === '--state') args.state = String(argv[++i] || '');
     else if (a === '--since') args.since = String(argv[++i] || '');
+    else if (a === '--summary') {
+      args.summary = String(argv[++i] || '');
+      // `--summary --live` would otherwise write the summary to a file named `--live` and run dry.
+      if (!args.summary || args.summary.startsWith('--')) {
+        throw new Error('[backfill] --summary needs a path');
+      }
+    }
     else if (a === '--only') {
       args.onlyExplicit = true;
       args.only = String(argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -245,6 +257,9 @@ function saveState(path, state) {
  */
 const newCounts = () => ({ fetched: 0, written: 0, skipped: 0, dropped: 0, errors: 0 });
 
+/** The checkpoint rule, and what `--summary` reports as unfinished. */
+const stageFinished = (counts) => counts.errors === 0 && counts.dropped === 0;
+
 function stageLine(stage, counts, live) {
   return `[backfill] ${stage} (this run): fetched=${counts.fetched} ` +
     `${live ? 'written' : 'would-write'}=${counts.written} ` +
@@ -299,9 +314,9 @@ async function backfillDataset(stage, args, deps) {
  * reads as `Number(null)` = 0, which satisfies the truncation check, and an envelope body carries
  * no `_id` to survive the filter. Either way the period records zero comments and is checkpointed.
  */
-async function fetchCommentPage(base, periodId, pageNum, deps) {
+async function fetchCommentPage(base, periodId, pageNum, deps, pageSize = deps.sources.PAGE_SIZE) {
   const url = `${base}/comment?period=${encodeURIComponent(periodId)}&count=true` +
-    `&pageNum=${pageNum}&pageSize=${deps.sources.PAGE_SIZE}` +
+    `&pageNum=${pageNum}&pageSize=${pageSize}` +
     `&fields=${encodeURIComponent(COMMENT_FIELDS.join('|'))}`;
   const { body, headers } = await deps.sources.fetchJsonWithHeaders(url);
 
@@ -332,25 +347,31 @@ async function fetchCommentPage(base, periodId, pageNum, deps) {
 async function eachCommentPage(periodId, deps, onPage) {
   const base = deps.sources.EAGLE_API_BASE;
   const pageSize = deps.sources.PAGE_SIZE;
+  const seen = new Set();
   let fetched = 0;
   let total = null;
+  let lastPage;
 
   for (let pageNum = 0; ; pageNum++) {
+    lastPage = pageNum;
     const page = await fetchCommentPage(base, periodId, pageNum, deps);
     if (total === null) total = page.total;
-    fetched += page.items.length;
+    const fresh = deps.sources.freshById(page.items, seen);
+    fetched += fresh.length;
 
-    await onPage(page.items);
+    await onPage(fresh);
 
     if (page.items.length < pageSize) break;
-    if (total !== null && fetched >= total) break;
+    if (fetched >= total) break;
   }
 
-  if (total !== null && fetched !== total) {
+  if (fetched < total) {
     throw new Error(`period ${periodId}: fetched ${fetched} comments but eagle-api reports ` +
       `${total} — refusing to treat a truncated read as the whole period`);
   }
-  return { count: fetched, total };
+  // A one-page read had no page boundary for the period to change across.
+  const reread = lastPage === 0 ? total : (await fetchCommentPage(base, periodId, 0, deps, 1)).total;
+  return { count: fetched, total: deps.sources.settledTotal(fetched, total, reread, `period ${periodId} comments`) };
 }
 
 /**
@@ -430,8 +451,18 @@ async function backfill(argv = [], overrides = {}) {
   };
 
   const state = loadState(args.state);
-  const summary = { eagle: deps.sources.EAGLE_API_BASE, live: args.live, stages: {}, skipped: [] };
+  const summary = {
+    eagle: deps.sources.EAGLE_API_BASE, live: args.live, stages: {}, skipped: [], unfinished: []
+  };
+  try {
+    await runStages(args, deps, state, summary);
+  } finally {
+    if (args.summary) fs.writeFileSync(args.summary, `${JSON.stringify(summary, null, 2)}\n`);
+  }
+  return summary;
+}
 
+async function runStages(args, deps, state, summary) {
   for (const stage of args.only) {
     // A finished dataset is skipped whole, so an interrupted run resumes where it stopped. NOT
     // when the operator named the stage: `--only` is the repair tool, and a stage that has
@@ -442,25 +473,30 @@ async function backfill(argv = [], overrides = {}) {
       continue;
     }
 
-    const counts = stage === 'comments'
-      ? await backfillComments(args, deps, state)
-      : await backfillDataset(stage, args, deps);
+    let counts;
+    try {
+      counts = stage === 'comments'
+        ? await backfillComments(args, deps, state)
+        : await backfillDataset(stage, args, deps);
+    } catch (err) {
+      summary.unfinished.push(stage);
+      throw err;
+    }
 
     summary.stages[stage] = counts;
+    if (!stageFinished(counts)) summary.unfinished.push(stage);
     logger.info(stageLine(stage, counts, args.live));
 
     // Only a clean stage is checkpointed: a run that logged errors has rows it did not write, and
     // skipping it next time would leave them missing for good. A stage that DROPPED rows is in the
     // same position: the parent it waited on can be published after this run.
-    if (args.live && counts.errors === 0 && counts.dropped === 0) {
+    if (args.live && stageFinished(counts)) {
       // Spread the stage's own entry back in: the comment stage keeps its per-period checkpoint
       // there, and overwriting it would make the next run walk every period again.
       state[stage] = { ...state[stage], completedAt: new Date().toISOString(), ...counts };
       saveState(args.state, state);
     }
   }
-
-  return summary;
 }
 
 module.exports = {

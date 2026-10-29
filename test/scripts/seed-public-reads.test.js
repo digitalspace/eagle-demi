@@ -18,7 +18,7 @@ const os = require('os');
 const path = require('path');
 
 const {
-  ALL_STAGES, COMMENT_FIELDS, parseArgs, mirrorListItem, mirrorList, withinSince, stageLine, backfill
+  ALL_STAGES, COMMENT_FIELDS, parseArgs, mirrorListItem, mirrorList, withinSince, stageLine, backfill, eachCommentPage
 } = require('../../src/scripts/seed-public-reads');
 const cosmos = require('../../src/db/cosmos-nosql');
 const comments = require('../../src/repositories/comments');
@@ -28,6 +28,7 @@ const updateController = require('../../src/controllers/nosql/update');
 const { updatesStore } = require('../helpers/updates-store');
 const { parentProject, parentNotification } = require('../helpers/update-parents');
 const { logger } = require('../../src/utils/logger');
+const sources = require('../../src/seed/sources');
 const {
   PERIOD_EAGLE_ID, PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, SEALED_AT, eagleComment, eagleUpdate, eagleUpdateWithoutRead,
   storedPeriod
@@ -49,16 +50,16 @@ function checkpointedPeriods(state) {
 }
 
 /**
- * `src/seed/sources.js`, stubbed at the two functions the backfill reads through it.
- *
- * `fetchAllPages` is driven page by page, because the dataset stages hand it an `onPage` and never
- * accumulate; `fetchJsonWithHeaders` serves the comment endpoint, whose total lives in the header.
+ * `src/seed/sources.js` with real count helpers and stubbed fetches: `fetchAllPages` page by page,
+ * `fetchJsonWithHeaders` for the comment endpoint, whose total lives in the header.
  */
 function stubSources({ datasets = {}, commentItems = [], commentTotal = null } = {}) {
   const urls = [];
   return {
     EAGLE_API_BASE: BASE,
     PAGE_SIZE,
+    freshById: sources.freshById,
+    settledTotal: sources.settledTotal,
     urls,
     fetchAllPages: async (base, dataset, opts = {}) => {
       assert.strictEqual(base, BASE);
@@ -321,6 +322,92 @@ test('a stage that logged errors is NOT checkpointed', async (t) => {
     'checkpointing a stage that failed rows would leave them missing for good');
 });
 
+const readSummary = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+
+test('--summary needs a path', async () => {
+  // The reseed gate reads this file; a run that wrote it nowhere would read as a missing summary.
+  assert.throws(() => parseArgs(['--summary']), /--summary needs a path/);
+  assert.throws(() => parseArgs(['--summary', '']), /--summary needs a path/);
+  // Taking the next flag as the path would also swallow `--live` and run dry.
+  assert.throws(() => parseArgs(['--summary', '--live']), /--summary needs a path/);
+  assert.strictEqual(parseArgs(['--summary', 'out.json']).summary, 'out.json');
+});
+
+test('--summary lists a stage with drops as unfinished', async () => {
+  const summaryFile = statePath();
+  const sources = stubSources({
+    datasets: { Organization: [{ _id: 'O1' }], CommentPeriod: [{ _id: 'CP1' }, { _id: 'CP2' }] }
+  });
+
+  await backfill(['--live', '--only', 'organizations,commentPeriods', '--state', statePath(),
+    '--summary', summaryFile], {
+    sources,
+    organizationMirror: recordingMirror('organizations', []),
+    commentPeriodMirror: {
+      mirrorFromEagle: async (eagleId) =>
+        (eagleId === 'CP1' ? null : { saved: { id: eagleId }, existing: null })
+    }
+  });
+
+  const written = readSummary(summaryFile);
+  assert.deepStrictEqual(written.unfinished, ['commentPeriods'],
+    'the clean stage is finished, the one owing a row is not');
+  assert.strictEqual(written.stages.commentPeriods.dropped, 1);
+});
+
+test('--summary lists a stage with errors as unfinished', async (t) => {
+  t.mock.method(logger, 'error', () => {});
+  const summaryFile = statePath();
+  const sources = stubSources({ datasets: { Organization: [{ _id: 'O1' }] } });
+
+  await backfill(['--live', '--only', 'organizations', '--state', statePath(),
+    '--summary', summaryFile], {
+    sources,
+    organizationMirror: { mirrorFromEagle: async () => { throw new Error('cosmos said no'); } }
+  });
+
+  assert.deepStrictEqual(readSummary(summaryFile).unfinished, ['organizations']);
+});
+
+test('--summary records the target, mode, counts and resumed stages of a clean run', async () => {
+  const state = statePath();
+  const summaryFile = statePath();
+  fs.writeFileSync(state, JSON.stringify({ lists: { completedAt: '2026-09-01T00:00:00.000Z' } }));
+  const sources = stubSources({
+    datasets: { Organization: [{ _id: 'O1' }, { _id: 'O2' }], ProjectNotification: [], RecentActivity: [], CommentPeriod: [] }
+  });
+
+  await backfill(['--live', '--state', state, '--summary', summaryFile], {
+    sources,
+    organizationMirror: recordingMirror('organizations', []),
+    notificationMirror: recordingMirror('notifications', [])
+  });
+
+  const written = readSummary(summaryFile);
+  assert.strictEqual(written.eagle, BASE);
+  assert.strictEqual(written.live, true);
+  assert.deepStrictEqual(written.skipped, ['lists']);
+  assert.deepStrictEqual(written.unfinished, []);
+  assert.strictEqual(written.stages.organizations.written, 2);
+});
+
+test('--summary is written when a stage throws, naming that stage unfinished', async () => {
+  // A short read throws out of the run; the gate must still find a summary that says why.
+  const summaryFile = statePath();
+  const sources = {
+    ...stubSources(),
+    fetchAllPages: async () => { throw new Error('fetched 3 of 5 rows'); }
+  };
+
+  await assert.rejects(
+    backfill(['--only', 'organizations', '--state', statePath(), '--summary', summaryFile], { sources }),
+    /fetched 3 of 5 rows/);
+
+  const written = readSummary(summaryFile);
+  assert.strictEqual(written.live, false);
+  assert.deepStrictEqual(written.unfinished, ['organizations']);
+});
+
 test('comments', async (t) => {
   const period = { _id: PERIOD_EAGLE_ID };
 
@@ -350,13 +437,27 @@ test('comments', async (t) => {
 
     assert.strictEqual(written.length, 5, 'every comment on the period, across three pages');
     assert.strictEqual(summary.stages.comments.written, 5);
-    assert.strictEqual(urls.length, 3, 'pages of 2, 2 and 1 — not one page read as the whole set');
+    assert.strictEqual(urls.length, 4,
+      'pages of 2, 2 and 1, then the total re-read — not one page read as the whole set');
+    assert.ok(urls[3].includes('pageNum=0&pageSize=1'), 'the re-read asks for one row');
     assert.ok(urls[0].includes('count=true'),
       'without count=true the body is not the comment array and the header is absent');
     // Unnamed fields come back as nulls, so the mirror would store a row of them.
     for (const field of COMMENT_FIELDS) assert.ok(urls[0].includes(encodeURIComponent(field)));
     t2.mock.restoreAll();
   });
+
+  await t.test('a comment repeated across a page boundary is written once and the period passes',
+    async (t2) => {
+      // Raw rows 5, header 4: offset paging repeated C1 when a comment landed before the cursor.
+      const items = ['C0', 'C1', 'C1', 'C2', 'C3'].map(_id => eagleComment({ _id }));
+      const { written, summary } = await captureComments(t2, {
+        items, total: 4, periodRow: storedPeriod()
+      });
+      assert.deepStrictEqual(written.map(c => c.id).sort(), ['C0', 'C1', 'C2', 'C3']);
+      assert.strictEqual(summary.stages.comments.errors, 0);
+      t2.mock.restoreAll();
+    });
 
   await t.test('a period that returns fewer comments than it promised is an error, not a success',
     async (t2) => {
@@ -378,6 +479,44 @@ test('comments', async (t) => {
         'the period must stay off the checkpoint so the next run retries it');
       t2.mock.restoreAll();
     });
+
+  // Pages answer `first` in x-total-count, the pageSize=1 re-read answers `reread`.
+  const pagedComments = (count, first, reread) => {
+    const items = Array.from({ length: count }, (_, i) => eagleComment({ _id: `C${i}` }));
+    const urls = [];
+    const deps = { sources: { ...stubSources(), fetchJsonWithHeaders: async (url) => {
+      urls.push(url);
+      const params = new URL(url).searchParams;
+      const size = Number(params.get('pageSize'));
+      const pageNum = Number(params.get('pageNum'));
+      return {
+        body: items.slice(pageNum * size, (pageNum + 1) * size),
+        headers: new Headers({ 'x-total-count': String(size === 1 ? reread : first) })
+      };
+    } } };
+    return { deps, urls };
+  };
+
+  await t.test('a period that grew during the read passes with the re-read total', async (t2) => {
+    t2.mock.method(logger, 'info', () => {});
+    const { deps, urls } = pagedComments(4, 3, 4);
+    assert.deepStrictEqual(await eachCommentPage('CP1', deps, async () => {}), { count: 4, total: 4 });
+    assert.strictEqual(urls.length, 3, 'two pages, then the re-read');
+    t2.mock.restoreAll();
+  });
+
+  await t.test('a short period throws without spending a request on the re-read', async () => {
+    const { deps, urls } = pagedComments(3, 5, 3);
+    await assert.rejects(eachCommentPage('CP1', deps, async () => {}),
+      /fetched 3 comments but eagle-api reports 5/);
+    assert.strictEqual(urls.length, 2);
+  });
+
+  await t.test('a one-page period skips the re-read', async () => {
+    const { deps, urls } = pagedComments(1, 1, 9);
+    assert.deepStrictEqual(await eachCommentPage('CP1', deps, async () => {}), { count: 1, total: 1 });
+    assert.strictEqual(urls.length, 1);
+  });
 
   await t.test('a comment never out-ranks its period, whichever way it arrived', async (t2) => {
     // The comment says public; the period the public cannot see says otherwise, and the period

@@ -20,17 +20,24 @@
  * Usage:
  *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,boundaries]
  *                                 [--limit-documents N] [--reconcile] [--max-surplus N]
+ *                                 [--keep-ids FILE] [--summary FILE]
  *
  * Without --only, runs DEFAULT_STAGES: projects, documents, boundaries.
  *
  * `--reconcile` also DELETES the rows the fetch did not produce, through the same helpers the
  * DELETE controllers use. It needs Cosmos even in a dry run, where it only reports the count.
+ * `--keep-ids FILE` spares the rows it lists (one id per line, `#` comments): a project by its
+ * `eagleId` or `id`, a document by its `id`. A listed project's documents are spared with it.
  *
- * Run it INSIDE the network via the Kudu command API, detached with a log file — Cosmos is behind
- * a private endpoint, and `/api/command` is synchronous and will time out on a 60k-document seed.
+ * `--summary FILE` writes a compact JSON verdict (failures, Track source, reconcile counts, keep
+ * report) on every exit path, for a wrapper to gate on instead of grepping the log.
+ *
+ * Run it INSIDE the network (the devbox, `scripts/demi-devbox.sh run`), detached with a log file:
+ * Cosmos is behind a private endpoint, and a 60k-document seed outlasts a synchronous call.
  */
 
 const fs = require('fs');
+const path = require('path');
 
 const sources = require('../seed/sources');
 const transform = require('../seed/transform');
@@ -44,6 +51,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { pickParent } = require('../helpers/parent-admit');
 const { refId } = require('../controllers/nosql/eagle-mirror');
 const { logger } = require('../utils/logger');
+const { readKeepIds } = require('../utils/keep-ids');
 const purgeHelpers = require('../helpers/purge');
 const auditHelpers = require('../utils/audit');
 const aiSearch = require('../search/ai-search');
@@ -77,13 +85,17 @@ const FLUSH_THRESHOLD = 100;
 
 function parseArgs(argv) {
   const args = {
-    live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false, maxSurplus: null
+    live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false, maxSurplus: null,
+    keepIds: null, summary: null
   };
+  let keepIdsFile = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
     else if (a === '--reconcile') args.reconcile = true;
     else if (a === '--max-surplus') args.maxSurplus = Number(argv[++i]);
+    else if (a === '--keep-ids') keepIdsFile = String(argv[++i] || '');
+    else if (a === '--summary') args.summary = String(argv[++i] || '');
     else if (a === '--only') {
       args.only = String(argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
     } else if (a === '--limit-documents') args.limitDocuments = parseInt(argv[++i], 10);
@@ -117,6 +129,13 @@ function parseArgs(argv) {
       throw new Error('[seed] --max-surplus needs a positive integer');
     }
   }
+
+  if (keepIdsFile !== null) {
+    if (!args.reconcile) throw new Error('[seed] --keep-ids spares reconcile rows and needs --reconcile');
+    if (!keepIdsFile) throw new Error('[seed] --keep-ids needs a file');
+    args.keepIds = new Set(readKeepIds(keepIdsFile));
+  }
+  if (args.summary === '') throw new Error('[seed] --summary needs a file');
   return args;
 }
 
@@ -165,8 +184,8 @@ async function truncatedReads(access, pairs) {
  * dangling epic_guid — which the registry resolves and this admits — read as unresolvable there.
  *
  * The notification list is read through the generic pager because sources.js has no named loader,
- * and its total is captured for the same reason the Project fetch captures one: an unverified read
- * leaves every notification-parented document unresolvable and computed as surplus.
+ * and its settled total is captured for the same reason the Project fetch captures one: an
+ * unverified read leaves every notification-parented document unresolvable and computed as surplus.
  *
  * @returns {Promise<{admit: function, notificationIds: Set, fetch: object}>} `admit(ref)` gives the
  *   canonical parent id, or null when the document has no home
@@ -174,7 +193,7 @@ async function truncatedReads(access, pairs) {
 async function documentAdmission(src, projectIndex) {
   let total = null;
   const notifications = await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification',
-    { onPage: (_items, _count, t) => { total = t; } });
+    { onTotal: (t) => { total = t; } });
   const notificationIds = new Set(notifications.map(n => String(n._id)));
   return {
     notificationIds,
@@ -207,11 +226,16 @@ const surplusCeiling = (rowCount, maxSurplus) =>
  * Where every surplus id goes. The console preview is capped at 20 — this file is not, because a
  * real reconcile can carry tens of thousands and "which rows went" has to outlive the run.
  */
-function reconcileLogPath(now) {
+function reconcileLogPath(now, dir = '/home') {
   if (process.env.RECONCILE_LOG) return process.env.RECONCILE_LOG;
   const name = `reconcile-${now}.ndjson`;
-  // `/home` is the only mount that survives a restart on the App Service plan the seed runs from.
-  return fs.existsSync('/home') ? `/home/${name}` : `./${name}`;
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    return path.join(dir, name);
+  } catch {
+    // The devbox user cannot write `/home`, so the log lands in the working directory instead.
+    return path.resolve(name);
+  }
 }
 
 /**
@@ -228,10 +252,14 @@ function reconcileLogPath(now) {
  * @param {function} remove    row -> Promise, called ONLY when live; `{ rowKept: true }` = not deleted
  * @param {string}   [opts.logPath] NDJSON sink for every surplus id, dry run included
  * @param {object}   [opts.audit]   `utils/audit`, called once per row deleted or kept by a failed purge
- * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run
+ * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs
+ *                                  ask too, so `wouldKeep` and `wouldDelete` match a live run
+ * @param {function} [opts.servedUpstream] row -> true when eagle-api still serves it, so never deleted
+ * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place,
+ *   `keptLive` = ids eagle-api still serves
  */
 async function reconcileContainer(label, rows, keyOf, fetched, remove,
-  { live, logPath, audit, spare = () => false }) {
+  { live, logPath, audit, spare = () => false, servedUpstream = () => false }) {
   const surplus = surplusOf(rows, keyOf, fetched);
   // Console preview only — capped because a refused run can carry tens of thousands of ids.
   const ids = surplus.slice(0, 20).map(r => r.id).join(', ');
@@ -247,13 +275,18 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
 
   let deleted = 0;
   const kept = [];
+  const wouldKeep = [];
+  const keptLive = [];
   try {
     for (const row of surplus) {
-      const spared = live && spare(row);
+      const upstream = Boolean(servedUpstream(row));
+      const spared = !upstream && Boolean(spare(row));
       // A purge that could not clear a row's chunks keeps the row; the next reconcile retries it.
-      const failed = live && !spared && Boolean((await remove(row))?.rowKept);
-      const removed = live && !spared && !failed;
-      if (spared || failed) kept.push({ id: row.id, partitionKey: partitionOf(row) });
+      const failed = live && !spared && !upstream && Boolean((await remove(row))?.rowKept);
+      const removed = live && !spared && !upstream && !failed;
+      if (spared) wouldKeep.push(row.id);
+      if (upstream) keptLive.push(row.id);
+      if (failed) kept.push({ id: row.id, partitionKey: partitionOf(row) });
       if (removed) deleted++;
       // The DELETE controllers' own event, so a purge is traceable however it was issued. A failed
       // one is recorded too: its search-index entries are already gone.
@@ -271,13 +304,17 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
       if (fd !== null) {
         fs.writeSync(fd, JSON.stringify(
           { label, id: row.id, partitionKey: partitionOf(row), deleted: removed,
-            ...(spared || failed ? { kept: true } : {}) }) + '\n');
+            ...(spared || failed || upstream ? { kept: true } : {}), ...(upstream ? { keptLive: true } : {}) }) + '\n');
       }
     }
   } finally {
     if (fd !== null) fs.closeSync(fd);
   }
-  return { inCosmos: rows.length, wouldDelete: surplus.length, deleted, ...(kept.length ? { kept } : {}) };
+  return {
+    inCosmos: rows.length, wouldDelete: surplus.length - wouldKeep.length - keptLive.length, deleted,
+    ...(wouldKeep.length ? { wouldKeep } : {}), ...(keptLive.length ? { keptLive } : {}),
+    ...(kept.length ? { kept } : {})
+  };
 }
 
 /**
@@ -360,8 +397,78 @@ function log(...parts) {
   console.log(...parts);
 }
 
+const SUMMARY_MAX_BYTES = 3072;
+const SUMMARY_LIST_CAP = 20;
+
+const countsOf = obj => Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => typeof v === 'number'));
+
+const reconcileCounts = r => r && {
+  inCosmos: r.inCosmos, wouldDelete: r.wouldDelete, deleted: r.deleted,
+  ...(r.wouldKeep ? { wouldKeep: r.wouldKeep.length } : {}),
+  ...(r.keptLive ? { keptLive: r.keptLive.length } : {}),
+  ...(r.surplusHeld !== undefined ? { surplusHeld: r.surplusHeld } : {}), ceiling: r.ceiling
+};
+
+/** The `--summary` file: counts only, failures capped, so a wrapper can fetch and parse it whole. */
+function compactSummary(summary) {
+  const { projects, ...otherStages } = summary.stages;
+  const compact = {
+    mode: summary.mode,
+    failureCount: summary.failures.length,
+    failures: summary.failures.slice(0, SUMMARY_LIST_CAP).map(f => f.slice(0, 200)),
+    track: summary.track || null,
+    reconcile: summary.reconcile ? {
+      log: summary.reconcile.log,
+      documents: reconcileCounts(summary.reconcile.documents),
+      projects: reconcileCounts(summary.reconcile.projects)
+    } : null,
+    keep: (summary.keep || []).slice(0, SUMMARY_LIST_CAP),
+    stages: {
+      ...(projects ? { projects: { ...countsOf(projects), report: countsOf(projects.report) } } : {}),
+      ...Object.fromEntries(Object.entries(otherStages).map(([name, stage]) => [name, countsOf(stage)]))
+    }
+  };
+  // One failure always survives, so a trimmed summary can never read as a pass.
+  while (JSON.stringify(compact).length > SUMMARY_MAX_BYTES && compact.failures.length > 1) {
+    compact.failures.pop();
+  }
+  return compact;
+}
+
+/**
+ * Per `--keep-ids` entry: the Cosmos row it names, whether the reconcile computed that row as
+ * surplus and spared it, and the Track project the registry matched it to (a match needs review).
+ */
+async function keepReport(keepIds, { projects, projectRows, documentRows, surplusIds, sparedIds, getProject }) {
+  const report = [];
+  for (const id of keepIds) {
+    const names = row => String(row.id) === id || String(row.eagleId) === id;
+    const built = projects.find(names);
+    const row = projectRows.find(names) || documentRows.find(r => String(r.id) === id) ||
+      await getProject(built ? built.id : id);
+    const rowId = row ? String(row.id) : null;
+    report.push({
+      id, rowId, trackProjectId: built?.trackProjectId ?? null,
+      surplus: surplusIds.has(rowId), kept: sparedIds.has(rowId)
+    });
+  }
+  return report;
+}
+
 async function seed(argv = [], deps = {}) {
   const args = parseArgs(argv);
+  const summary = { mode: args.live ? 'live' : 'dry-run', stages: {}, failures: [] };
+  try {
+    return await runSeed(args, deps, summary);
+  } catch (err) {
+    summary.failures.push(`fatal: ${err.message}`);
+    throw err;
+  } finally {
+    if (args.summary) fs.writeFileSync(args.summary, JSON.stringify(compactSummary(summary)) + '\n');
+  }
+}
+
+async function runSeed(args, deps, summary) {
   const now = deps.now || new Date().toISOString();
   const src = deps.sources || sources;
   const repos = deps.repos || {
@@ -385,7 +492,7 @@ async function seed(argv = [], deps = {}) {
     ? deps.searchReady
     : aiSearch.config().configured;
 
-  const summary = { mode: args.live ? 'live' : 'dry-run', stages: {}, failures: [] };
+  summary.track = { source: src.trackFeedConfigured() ? 'api' : 'file', count: null };
   if (args.reconcile && !cosmosReady) {
     summary.failures.push('--reconcile needs COSMOS_ENDPOINT: the surplus set cannot be computed ' +
       'without enumerating the containers');
@@ -401,15 +508,14 @@ async function seed(argv = [], deps = {}) {
   // its partition key, and a stale index would misfile documents.
   log('Loading Track projects...');
   const trackProjects = await src.loadTrackProjects();
-  log(`  ${trackProjects.length} Track projects`);
+  log(`  ${trackProjects.length} Track projects from ${summary.track.source === 'api' ? 'the Track API' : 'the checked-in export'}`);
+  summary.track.count = trackProjects.length;
 
   log('Fetching Eagle projects...');
-  // The upstream total, captured because `--reconcile` refuses to delete unless the fetch passed
-  // the searchResultsTotal gate in sources.js — a null total means that gate never ran.
+  // The settled upstream total, captured because `--reconcile` refuses to delete unless the fetch
+  // passed the searchResultsTotal gate in sources.js — a null total means that gate never ran.
   let projectsTotal = null;
-  const eagleProjects = await src.fetchEagleProjects((_items, _count, total) => {
-    projectsTotal = total;
-  });
+  const eagleProjects = await src.fetchEagleProjects({ onTotal: (total) => { projectsTotal = total; } });
   log(`  ${eagleProjects.length} from eagle-api`);
 
   // The search returns `pins` as bare ObjectIds; the push sends `{_id, name, province}`. The
@@ -839,10 +945,9 @@ async function seed(argv = [], deps = {}) {
   }
 
   // ── Reconcile ──────────────────────────────────────────────────────────────
-  // ONE phase after every fetch, never per container: an unverified Project fetch used to leave
-  // the documents reconcile free to delete, and vice versa. A fetch is verified only when
-  // eagle-api reported a searchResultsTotal AND it matches what arrived; either upstream falling
-  // short refuses BOTH deletions, since the surplus set is only meaningful off a complete fetch.
+
+  // Runs after every fetch: a Project, ProjectNotification or Document fetch whose re-read total
+  // differs from the unique ids that arrived refuses BOTH deletions, surplus needing a full fetch.
   if (args.reconcile) {
     const unverified = [
       ['Project', projectsTotal, eagleProjects.length],
@@ -858,6 +963,9 @@ async function seed(argv = [], deps = {}) {
     const inCosmos = new Set(documentRows.map(row => String(row.id)));
     const dropped = (documentFetch || {}).droppedIds || [];
     const droppedInCosmos = dropped.filter(id => inCosmos.has(id));
+
+    const surplusIds = new Set();
+    const sparedIds = new Set();
 
     const truncated = await truncatedReads(access, unverified.length ? [] : [
       ['documents', documentRows, repos.documents.countSeededIds],
@@ -891,41 +999,92 @@ async function seed(argv = [], deps = {}) {
           row => purge.purgeProject(row)]
       ];
       // Both containers sized BEFORE either delete, so a breach in one stops the other too.
-      const breached = containers
-        .map(([label, rows, keyOf, fetched]) => [label, surplusOf(rows, keyOf, fetched).length,
-          surplusCeiling(rows.length, args.maxSurplus)])
-        .filter(([, surplus, ceiling]) => surplus > ceiling);
+      const sized = containers.map(([label, rows, keyOf, fetched]) => ({
+        label, surplus: surplusOf(rows, keyOf, fetched), ceiling: surplusCeiling(rows.length, args.maxSurplus)
+      }));
+      const breached = sized.filter(c => c.surplus.length > c.ceiling);
 
       if (breached.length) {
         summary.failures.push('--reconcile refused before any delete — nothing removed from ' +
-          'either container: ' + breached.map(([label, surplus, ceiling]) =>
-            `${label} surplus ${surplus} exceeds the ceiling ${ceiling}`).join('; ') +
+          'either container: ' + breached.map(c =>
+            `${c.label} surplus ${c.surplus.length} exceeds the ceiling ${c.ceiling}`).join('; ') +
           '. Re-run with --max-surplus <n> if the deletion really is that large.');
       }
 
+      // Skipped on a breach: nothing is deleted then, and an empty upstream would cost one GET per row.
+      const servedIds = { documents: new Set(), projects: new Set() };
+      if (!breached.length) {
+        const fetchedDocIds = new Set([...documentFetch.keys].map(key => key.slice(key.indexOf('|') + 1)));
+        for (const { label, surplus } of sized) {
+          for (const row of surplus) {
+            // A document fetched under another parent moved: its old row is surplus, not skipped.
+            if (label === 'documents' && fetchedDocIds.has(String(row.id))) continue;
+            const served = label === 'documents'
+              ? await src.eagleRowLive('Document', String(row.id))
+              : await src.eagleRowLive('Project', String(row.eagleId));
+            if (served) servedIds[label].add(String(row.id));
+          }
+        }
+      }
+      const keptLive = servedIds.documents.size + servedIds.projects.size;
+      if (keptLive) {
+        summary.failures.push(`reconcile: ${keptLive} surplus ids still live upstream, fetch skipped ` +
+          'rows — nothing removed from either container');
+      }
+      const servedUpstream = label => row => servedIds[label].has(String(row.id));
+
       // Reported either way: a dry run must still show wouldDelete and that it would refuse.
-      const live = args.live && !breached.length;
+      const live = args.live && !breached.length && !keptLive;
       const logPath = reconcileLogPath(now);
       summary.reconcile = { log: logPath };
       if (!searchReady) summary.reconcile.search = 'unconfigured — live would refuse';
+      const keepIds = args.keepIds || new Set();
+      const listed = id => keepIds.has(String(id));
+      const listedProject = row => listed(row.id) || listed(row.eagleId);
+      // A listed project spares its documents too, so the keep file can name projects only.
+      const keptProjects = new Set([...keepIds,
+        ...[...projectRows, ...projects].filter(listedProject).map(p => String(p.id))]);
+      const spareDocument = row => listed(row.id) || keptProjects.has(String(row.projectId));
       summary.reconcile.documents = await reconcileContainer(...containers[0],
-        { live, logPath, audit });
-      // A project still holding a kept document stays too, or that document is orphaned.
+        { live, logPath, audit, spare: spareDocument, servedUpstream: servedUpstream('documents') });
+      // A project still holding a kept or spared document stays too, or that document is orphaned.
       const keptDocs = summary.reconcile.documents.kept || [];
-      const holding = new Set(keptDocs.map(k => String(k.partitionKey)));
+      const failedHolding = new Set(keptDocs.map(k => String(k.partitionKey)));
+      const holding = new Set([...failedHolding,
+        ...documentRows.filter(spareDocument).map(row => String(row.projectId))]);
       summary.reconcile.projects = await reconcileContainer(...containers[1],
-        { live, logPath, audit, spare: row => holding.has(String(row.id)) });
+        { live, logPath, audit, spare: row => listedProject(row) || holding.has(String(row.id)),
+          servedUpstream: servedUpstream('projects') });
+      for (const { label, surplus, ceiling } of sized) {
+        summary.reconcile[label].ceiling = ceiling;
+        // A live row held both containers back, so a dry run must report the 0 a live run deletes.
+        if (keptLive) {
+          summary.reconcile[label].surplusHeld = summary.reconcile[label].wouldDelete;
+          summary.reconcile[label].wouldDelete = 0;
+        }
+        for (const row of surplus) surplusIds.add(String(row.id));
+        for (const id of summary.reconcile[label].wouldKeep || []) sparedIds.add(String(id));
+      }
       if (keptDocs.length) {
-        const keptProjects = summary.reconcile.projects.kept || [];
-        const idsOf = kept => kept.slice(0, 20).map(k => k.id).join(', ');
+        const heldProjects = (summary.reconcile.projects.wouldKeep || [])
+          .filter(id => failedHolding.has(String(id)));
+        const idsOf = ids => ids.slice(0, 20).join(', ');
         summary.failures.push(`--reconcile kept ${keptDocs.length} document row(s) whose chunks ` +
-          `could not all be removed (documents: ${idsOf(keptDocs)})` +
-          (keptProjects.length
-            ? ` and ${keptProjects.length} project row(s) holding them (projects: ${idsOf(keptProjects)})`
+          `could not all be removed (documents: ${idsOf(keptDocs.map(k => k.id))})` +
+          (heldProjects.length
+            ? ` and ${heldProjects.length} project row(s) holding them (projects: ${idsOf(heldProjects)})`
             : '') +
           '; re-run to retry');
       }
       log(`  surplus ids: ${logPath}`);
+    }
+
+    if (args.keepIds) {
+      summary.keep = await keepReport(args.keepIds, {
+        projects, projectRows, documentRows, surplusIds, sparedIds,
+        getProject: id => repos.projects.getById(access, id)
+      });
+      log(`  keep report: ${JSON.stringify(summary.keep)}`);
     }
   }
 
@@ -952,6 +1111,8 @@ module.exports = {
   truncatedReads,
   documentAdmission,
   reconcileContainer,
+  reconcileLogPath,
+  compactSummary,
   verifyProjects,
   verifyItems,
   seed
@@ -980,7 +1141,7 @@ if (require.main === module) {
     .then(async summary => {
       // Audit rows buffer behind an unref'd timer, so process.exit would drop the purge trail.
       await auditHelpers.flush().catch(err => logger.error(`[seed] audit flush: ${err.message}`));
-      // A failed gate must not exit 0 — a wrapper script or a Kudu run would read that as success.
+      // A failed gate must not exit 0 — a wrapper script would read that as success.
       process.exit(summary.failures.length ? 1 : 0);
     })
     .catch(err => {

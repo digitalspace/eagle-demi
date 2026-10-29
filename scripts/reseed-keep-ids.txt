@@ -1,0 +1,3 @@
+# Test projects the re-seed must keep: one Eagle project id per line (seed-nosql.js --keep-ids).
+# Pacific Link, test Mongo project, DEMI row eagle-6abf251529e23409d1307085
+6abf251529e23409d1307085
