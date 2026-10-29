@@ -44,7 +44,9 @@ exit 0
 `;
 
 const FAKE_NODE = `#!/usr/bin/env bash
-{ printf 'NODE'; printf ' %s' "$@"; printf ' secret=%s\\n' "\${TRACK_CLIENT_SECRET:+set}"; } >> "$FAKE_DIR/node.log"
+{ printf 'NODE'; printf ' %s' "$@"; printf ' secret=%s' "\${TRACK_CLIENT_SECRET:+set}"
+  printf ' prefix=[%s] minio=%s,%s log=%s\\n' "\${MINIO_KEY_PREFIX-unset}" "\${MINIO_ACCESS_KEY:+set}" \\
+    "\${MINIO_SECRET_KEY:+set}" "\${RECONCILE_LOG:+set}"; } >> "$FAKE_DIR/node.log"
 prev=""
 for a in "$@"; do [[ "$prev" == --summary ]] && printf '{}' > "$a"; prev="$a"; done
 exit 0
@@ -280,6 +282,28 @@ test('payload reads secrets from demi-kv-test inside the command and prints none
   const files = fs.readdirSync(ctx.dir, { recursive: true })
     .map(f => path.join(ctx.dir, f)).filter(f => fs.statSync(f).isFile());
   assert.deepStrictEqual(files.filter(f => fs.readFileSync(f, 'utf8').includes(SECRET)), []);
+});
+
+test('seed setup exports RECONCILE_LOG as its own statement and leaves the key prefix empty', t => {
+  const ctx = sandbox(t);
+  const r = ctx.run(['seed', '--run', 'r1']);
+  assert.strictEqual(r.status, 0, r.out);
+  waitForFile(ctx.vmFile('r1', 'seed-dry.rc'));
+  assert.match(ctx.payloads()[0], /MINIO_KEY_PREFIX=;export RECONCILE_LOG=\S+\/reconcile-seed-dry\.ndjson\n/);
+  assert.match(ctx.read('node.log'), / prefix=\[\] minio=, log=set\n/);
+  assert.doesNotMatch(ctx.read('az.log'), /keyvault/, 'secrets are read on the VM, never here');
+});
+
+test('objects setup reads each MinIO key as its own statement and leaves the key prefix empty', t => {
+  const ctx = sandbox(t);
+  const r = ctx.run(['objects', '--run', 'r1']);
+  assert.strictEqual(r.status, 0, r.out);
+  waitForFile(ctx.vmFile('r1', 'objects-dry.rc'));
+  const payload = ctx.payloads()[0];
+  assert.match(payload, /MINIO_KEY_PREFIX=;MINIO_ACCESS_KEY=\$\(az keyvault secret show /);
+  assert.match(payload, /\nMINIO_SECRET_KEY=\$\(az keyvault secret show /);
+  assert.match(ctx.read('node.log'), /backfill-objects\.js secret= prefix=\[\] minio=set,set log=\n/);
+  assert.doesNotMatch(ctx.read('az.log'), /keyvault/, 'secrets are read on the VM, never here');
 });
 
 test('seed stops on the VM when the secret reads empty', t => {
