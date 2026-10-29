@@ -945,9 +945,9 @@ async function runSeed(args, deps, summary) {
   }
 
   // ── Reconcile ──────────────────────────────────────────────────────────────
-  // One phase after every fetch: Project, ProjectNotification and Document are each verified when
-  // the total re-read after the last page equals the unique ids that arrived, and any one falling
-  // short refuses BOTH deletions, since the surplus set is only meaningful off a complete fetch.
+
+  // Runs after every fetch: a Project, ProjectNotification or Document fetch whose re-read total
+  // differs from the unique ids that arrived refuses BOTH deletions, surplus needing a full fetch.
   if (args.reconcile) {
     const unverified = [
       ['Project', projectsTotal, eagleProjects.length],

@@ -89,6 +89,7 @@ const DOCUMENT_ROWS = [
  */
 function stubSources(over = {}, datasets = EAGLE_BY_DATASET) {
   return {
+    ...sources,
     EAGLE_API_BASE,
     loadTrackProjects: () => TRACK_PROJECTS,
     fetchEagleProjects: async () => EAGLE_PROJECTS,
@@ -99,9 +100,6 @@ function stubSources(over = {}, datasets = EAGLE_BY_DATASET) {
       assert.ok(datasets[dataset], `unexpected dataset: ${dataset}`);
       return datasets[dataset];
     },
-    PAGE_SIZE: 100,
-    freshById: sources.freshById,
-    settledTotal: sources.settledTotal,
     // The comment sweep reads its total from the header, not the body — eagle-api's
     // `/api/public/comment` reports it nowhere else. Empty here, so DEMI's one mirrored comment
     // is drift the sweep must find.

@@ -171,7 +171,7 @@ function settledTotal(count, first, reread, label) {
  * Every page of a dataset, each row once; fewer unique rows than the first total throws, more is
  * growth, its total re-read after the last page. `accumulate: false` streams: all docs overran 1.5 GB.
  * @param {function} [opts.onPage]           (newItems, uniqueSoFar, total) — progress or a handler
- * @param {function} [opts.onTotal]          (total) once at the end: the settled total, as streamed
+ * @param {function} [opts.onTotal]          (total) once at the end: the settled total; the first total on a capped read
  * @param {boolean}  [opts.accumulate=true]  false returns {count, total} instead of the items
  * @param {function} [opts.pageUrl]   (pageNum, pageSize) -> url; default the dataset's `/search` page
  * @param {function} [opts.fetchPage] url -> {items, total}; default an unauthenticated search fetch
@@ -179,7 +179,7 @@ function settledTotal(count, first, reread, label) {
  * @param {number}   [opts.maxPages]  stop after this many pages; the total is then not verified
  */
 async function fetchAllPages(base, dataset, opts = {}) {
-  // Historically this took a bare callback as the third argument.
+  // A bare function is the onPage handler.
   const options = typeof opts === 'function' ? { onPage: opts } : opts;
   const {
     onPage, onTotal, keyOf, accumulate = true, maxPages = Infinity,

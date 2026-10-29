@@ -166,6 +166,7 @@ remote() {
 payload() { printf '(\n%s\n)' "$1"; }
 
 # Ends in `;`, not a newline: `$(env_exports)` strips the newline and glues on the next statement.
+# %q output needs bash: demi-run on the VM runs the payload with `bash -lc`.
 env_exports() {
   printf 'export KEYCLOAK_URL=%q KEYCLOAK_REALM=%q EAGLE_API_BASE=%q TRACK_API_BASE=%q TRACK_CLIENT_ID=%q MINIO_HOST=%q MINIO_PORT=%q MINIO_USE_SSL=%q MINIO_BUCKET_NAME=%q MINIO_KEY_PREFIX=%q;' \
     "$KEYCLOAK_URL" "$KEYCLOAK_REALM" "$EAGLE_API_BASE" "$TRACK_API_BASE" "$TRACK_CLIENT_ID" \
