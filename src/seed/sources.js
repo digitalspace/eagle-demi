@@ -138,11 +138,12 @@ function unwrapSearchResponse(body, url) {
 /** One page of an eagle-api `/search` dataset, unauthenticated. */
 const searchPage = async (url) => unwrapSearchResponse(await fetchJson(url), url);
 
-/** Rows of `items` whose `_id` is not yet in `seen`, which they are added to. A row without one counts. */
-function freshById(items, seen) {
+/** Rows of `items` whose key is not yet in `seen`, which they are added to. A row without one counts. */
+function freshById(items, seen, keyOf = row => row._id ?? row.id) {
   return items.filter((item) => {
-    if (!item || item._id == null) return true;
-    const key = String(item._id);
+    const raw = item == null ? null : keyOf(item);
+    if (raw == null) return true;
+    const key = String(raw);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -164,20 +165,20 @@ function settledTotal(count, first, reread, label) {
 }
 
 /**
- * Every page of a dataset, each `_id` once. Fewer unique rows than the first total throws: a
- * truncated corpus looks whole. More is growth; the returned total is re-read after the last page.
- * `accumulate: false` streams page by page; holding every document overran the 1.5 GB plan.
+ * Every page of a dataset, each row once; fewer unique rows than the first total throws, more is
+ * growth, its total re-read after the last page. `accumulate: false` streams: all docs overran 1.5 GB.
  * @param {function} [opts.onPage]           (newItems, uniqueSoFar, total) — progress or a handler
  * @param {boolean}  [opts.accumulate=true]  false returns {count, total} instead of the items
  * @param {function} [opts.pageUrl]   (pageNum, pageSize) -> url; default the dataset's `/search` page
  * @param {function} [opts.fetchPage] url -> {items, total}; default an unauthenticated search fetch
+ * @param {function} [opts.keyOf]     row -> its id, for the repeat check; default `_id`, else `id`
  * @param {number}   [opts.maxPages]  stop after this many pages; the total is then not verified
  */
 async function fetchAllPages(base, dataset, opts = {}) {
   // Historically this took a bare callback as the third argument.
   const options = typeof opts === 'function' ? { onPage: opts } : opts;
   const {
-    onPage, accumulate = true, maxPages = Infinity,
+    onPage, keyOf, accumulate = true, maxPages = Infinity,
     pageUrl = (pageNum, pageSize) => `${base}/search?dataset=${encodeURIComponent(dataset)}` +
       `&pageSize=${pageSize}&pageNum=${pageNum}`,
     fetchPage = searchPage
@@ -194,7 +195,7 @@ async function fetchAllPages(base, dataset, opts = {}) {
     if (total === null) total = page.total;
 
     // Offset paging repeats a row across a page boundary when one is inserted before the cursor.
-    const fresh = freshById(page.items, seen);
+    const fresh = freshById(page.items, seen, keyOf);
     count += fresh.length;
     if (accumulate) items.push(...fresh);
     if (onPage) await onPage(fresh, count, total);

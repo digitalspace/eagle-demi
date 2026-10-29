@@ -1138,6 +1138,27 @@ test('a native list is paged to the x-total-count total, and a total the pages d
   assert.match(short.line, /error: .*fetched 250 but upstream reports 300/);
 });
 
+test('a native row repeated across a page boundary counts once, so the row it pushed out fails the read', async () => {
+  const ids = hexIds(250);
+  const demiIds = [...ids.slice(0, 100), ids[99], ...ids.slice(101)];
+  const h = harness((host, url) => (host === 'eagle.test'
+    ? eaglePages(ids.map(id => project(id)), url)
+    : nativeRows(demiIds.map(id => nativeProject(id)), url, 250)));
+  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public'], h.deps);
+  assert.strictEqual(code, 1);
+  assert.match(h.out[0], /error: .*fetched 249 but upstream reports 250/);
+});
+
+test('a --max-pages cut whose last page repeats a row of the page before is still truncated', async () => {
+  const ids = hexIds(250);
+  const eagleIds = [...ids.slice(0, 100), ...ids.slice(99)];
+  const h = harness((host, url) => (host === 'eagle.test'
+    ? json(searchBody(eagleIds.slice(Number(url.searchParams.get('pageNum')) * 100).slice(0, 100).map(id => project(id)), 250))
+    : nativeRows(ids.map(id => nativeProject(id)), url)));
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public', '--max-pages', '2'], h.deps);
+  assert.match(h.out[0], /truncated \(eagle: paging stopped after 2 page/);
+});
+
 test('an Eagle field is compared under its native name: projectType and address, not type and location', async () => {
   const renamed = await staffSearch('Project', project(A), nativeProject(A));
   assert.match(renamed.line, /match=1 .*fieldDiff=0 unexplained=0/);

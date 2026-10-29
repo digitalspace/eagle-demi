@@ -328,6 +328,8 @@ async function rowsOf(api, spec, ids, maxPages) {
   let rawSize = 0;
   const rows = await fetchAllPages(api.base, (spec.query && spec.query.dataset) || spec.path, {
     maxPages,
+    // DEMI's native rows carry `id`; Eagle's `_id`.
+    keyOf: spec.paging === 'page' ? row => row.id : row => row._id,
     fetchPage: async (url) => { const page = await fetchPage(url); rawSize = page.items.length; return page; },
     pageUrl: (pageNum, pageSize) => urlOf(api.base, spec, ids, pageParams(pageNum, pageSize)),
     onPage: (_items, count, total) => { last = { pages: last.pages + 1, size: rawSize, count, total }; }
