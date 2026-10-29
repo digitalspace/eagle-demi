@@ -384,9 +384,9 @@ test('the test param file turns trackWorksSync on', () => {
     'test mirrors works[] so it is proven before prod');
 });
 
-test('the prod param file keeps trackWorksSync off', () => {
-  assert.match(PROD_PARAMS, /^param trackWorksSync = false$/m,
-    'prod stays unsynced until test has proven the works[] mirror');
+test('the prod param file turns trackWorksSync on', () => {
+  assert.match(PROD_PARAMS, /^param trackWorksSync = true$/m,
+    'prod mirrors Track works nightly now that test has proven the milestone names');
 });
 
 test('the API app carries TRACK_WORKS_SYNC from trackWorksSync, default off', () => {
