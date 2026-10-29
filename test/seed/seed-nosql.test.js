@@ -11,7 +11,7 @@ const path = require('path');
 const {
   parseArgs, verifyProjects, verifyItems, seed, compactSummary, reconcileLogPath, ALL_STAGES, DEFAULT_STAGES
 } = require('../../src/scripts/seed-nosql');
-const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE, EAGLE_API_BASE } = require('../../src/seed/sources');
+const { unwrapSearchResponse, fetchAllPages, eagleRowLive, PAGE_SIZE, EAGLE_API_BASE } = require('../../src/seed/sources');
 const chunksRepo = require('../../src/repositories/chunks');
 const documentsRepo = require('../../src/repositories/documents');
 const trackProjects = require('../../src/data/track_projects_enriched.json');
@@ -102,6 +102,18 @@ test('search-response unwrapping', async (t) => {
   await t.test('a missing total is null, not zero', () => {
     assert.strictEqual(unwrapSearchResponse([{ searchResults: [] }], 'u').total, null);
   });
+});
+
+test('eagleRowLive reads one id through the dataset search', async () => {
+  const urls = [];
+  const page = items => async (url) => { urls.push(url); return { items, total: items.length }; };
+
+  assert.strictEqual(await eagleRowLive('Document', 'abc', page([{ _id: 'abc' }])), true);
+  assert.strictEqual(urls[0],
+    `${EAGLE_API_BASE}/search?dataset=Document&pageSize=1&pageNum=0&and[_id]=abc`);
+  assert.strictEqual(await eagleRowLive('Document', 'abc', page([])), false);
+  assert.strictEqual(await eagleRowLive('Document', 'abc', page([{ _id: 'other' }])), false,
+    'a filter the search ignored must not read as the row');
 });
 
 test('fetchAllPages', async (t) => {
@@ -1009,6 +1021,7 @@ test('seed --reconcile end to end', async (t) => {
       if (opts && opts.onPage) await opts.onPage([], 0, 0);
       return [];
     },
+    eagleRowLive: async () => false,
     loadBoundaries: () => [],
     ...over
   });
@@ -1173,6 +1186,68 @@ test('seed --reconcile end to end', async (t) => {
     assert.deepStrictEqual(purged.projects, ['eagle-gone']);
     assert.strictEqual(summary.reconcile.documents.deleted, 1);
     assert.strictEqual(summary.reconcile.projects.deleted, 1);
+  });
+
+  await t.test('a surplus row eagle-api still serves was skipped by the fetch: nothing is deleted',
+    async () => {
+      const logFile = path.join(LOG_DIR, 'kept-live.ndjson');
+      const previous = process.env.RECONCILE_LOG;
+      process.env.RECONCILE_LOG = logFile;
+      try {
+        const asked = [];
+        const { purged, deps } = makeDeps();
+        const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+          ...deps,
+          sources: stubSources({
+            eagleRowLive: async (dataset, id) => { asked.push(`${dataset}:${id}`); return id === 'stale'; }
+          })
+        });
+
+        assert.deepStrictEqual(asked, ['Document:stale', 'Project:gone']);
+        assert.deepStrictEqual(purged, { documents: [], projects: [] },
+          'a skip means the fetched set is incomplete, so no row of either container goes');
+        assert.deepStrictEqual(summary.reconcile.documents.keptLive, ['stale']);
+        assert.strictEqual(summary.reconcile.documents.wouldDelete, 0);
+        assert.strictEqual(summary.reconcile.projects.wouldDelete, 1);
+        assert.ok(summary.failures.includes(
+          'reconcile: 1 surplus ids still live upstream, fetch skipped rows — nothing removed from either container'));
+        assert.deepStrictEqual(fs.readFileSync(logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l))[0],
+          { label: 'documents', id: 'stale', partitionKey: '207', deleted: false, kept: true, keptLive: true });
+      } finally {
+        process.env.RECONCILE_LOG = previous;
+        fs.rmSync(logFile, { force: true });
+      }
+    });
+
+  await t.test('a surplus row eagle-api no longer serves is deleted as before', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources({ eagleRowLive: async () => false }) });
+
+    assert.deepStrictEqual(purged, { documents: ['207|stale'], projects: ['eagle-gone'] });
+    assert.strictEqual(summary.reconcile.documents.keptLive, undefined);
+    assert.deepStrictEqual(summary.failures, []);
+  });
+
+  await t.test('a dry run looks surplus rows up too, so wouldDelete matches a live run', async () => {
+    const { deps } = makeDeps();
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources({ eagleRowLive: async (dataset) => dataset === 'Project' }) });
+
+    assert.deepStrictEqual(summary.reconcile.projects.keptLive, ['eagle-gone']);
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 0);
+    assert.match(summary.failures.join(' '), /^reconcile: 1 surplus ids still live upstream/);
+  });
+
+  await t.test('a surplus document fetched under another parent moved: no lookup, deleted', async () => {
+    const asked = [];
+    const { purged, deps } = makeDeps({}, [...SEEDED_DOCS, { id: 'doc1', projectId: 'old-parent' }]);
+    await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps, sources: stubSources({ eagleRowLive: async (_dataset, id) => { asked.push(id); return false; } })
+    });
+
+    assert.deepStrictEqual(asked, ['stale', 'gone']);
+    assert.deepStrictEqual(purged.documents, ['207|stale', 'old-parent|doc1']);
   });
 
   await t.test('an enumeration shorter than the container COUNT refuses BOTH containers',
@@ -1534,6 +1609,7 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
       if (opts && opts.onPage) await opts.onPage([], 0, 0);
       return [];
     },
+    eagleRowLive: async () => false,
     loadBoundaries: () => []
   });
 

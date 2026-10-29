@@ -135,6 +135,9 @@ function unwrapSearchResponse(body, url) {
   return { items: envelope.searchResults, total: typeof total === 'number' ? total : null };
 }
 
+/** One page of an eagle-api `/search` dataset, unauthenticated. */
+const searchPage = async (url) => unwrapSearchResponse(await fetchJson(url), url);
+
 /** Rows of `items` whose `_id` is not yet in `seen`, which they are added to. A row without one counts. */
 function freshById(items, seen) {
   return items.filter((item) => {
@@ -177,7 +180,7 @@ async function fetchAllPages(base, dataset, opts = {}) {
     onPage, accumulate = true, maxPages = Infinity,
     pageUrl = (pageNum, pageSize) => `${base}/search?dataset=${encodeURIComponent(dataset)}` +
       `&pageSize=${pageSize}&pageNum=${pageNum}`,
-    fetchPage = async (url) => unwrapSearchResponse(await fetchJson(url), url)
+    fetchPage = searchPage
   } = options;
 
   const items = [];
@@ -217,6 +220,17 @@ async function fetchAllPages(base, dataset, opts = {}) {
   }
 
   return accumulate ? items : { count, total };
+}
+
+/**
+ * Whether the public search still serves row `id` of `dataset`, through the paged fetch's own
+ * endpoint and filters: a surplus row it serves was skipped by the paging, not removed upstream.
+ */
+async function eagleRowLive(dataset, id, fetchPage = searchPage) {
+  const url = `${EAGLE_API_BASE}/search?dataset=${encodeURIComponent(dataset)}&pageSize=1&pageNum=0` +
+    `&and[_id]=${encodeURIComponent(id)}`;
+  const { items } = await fetchPage(url);
+  return items.some(row => row && String(row._id) === String(id));
 }
 
 /** Track sends these either nested (`{name}`) or as a bare string, depending on the endpoint. */
@@ -574,6 +588,7 @@ module.exports = {
   fetchJsonWithHeaders,
   unwrapSearchResponse,
   fetchAllPages,
+  eagleRowLive,
   freshById,
   settledTotal,
   clientToken,

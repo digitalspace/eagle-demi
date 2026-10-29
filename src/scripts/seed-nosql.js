@@ -254,10 +254,12 @@ function reconcileLogPath(now, dir = '/home') {
  * @param {object}   [opts.audit]   `utils/audit`, called once per row deleted or kept by a failed purge
  * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs
  *                                  ask too, so `wouldKeep` and `wouldDelete` match a live run
- * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place
+ * @param {function} [opts.servedUpstream] row -> true when eagle-api still serves it, so never deleted
+ * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place,
+ *   `keptLive` = ids eagle-api still serves
  */
 async function reconcileContainer(label, rows, keyOf, fetched, remove,
-  { live, logPath, audit, spare = () => false }) {
+  { live, logPath, audit, spare = () => false, servedUpstream = () => false }) {
   const surplus = surplusOf(rows, keyOf, fetched);
   // Console preview only — capped because a refused run can carry tens of thousands of ids.
   const ids = surplus.slice(0, 20).map(r => r.id).join(', ');
@@ -274,13 +276,16 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
   let deleted = 0;
   const kept = [];
   const wouldKeep = [];
+  const keptLive = [];
   try {
     for (const row of surplus) {
-      const spared = Boolean(spare(row));
+      const upstream = Boolean(servedUpstream(row));
+      const spared = !upstream && Boolean(spare(row));
       // A purge that could not clear a row's chunks keeps the row; the next reconcile retries it.
-      const failed = live && !spared && Boolean((await remove(row))?.rowKept);
-      const removed = live && !spared && !failed;
+      const failed = live && !spared && !upstream && Boolean((await remove(row))?.rowKept);
+      const removed = live && !spared && !upstream && !failed;
       if (spared) wouldKeep.push(row.id);
+      if (upstream) keptLive.push(row.id);
       if (failed) kept.push({ id: row.id, partitionKey: partitionOf(row) });
       if (removed) deleted++;
       // The DELETE controllers' own event, so a purge is traceable however it was issued. A failed
@@ -299,15 +304,16 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
       if (fd !== null) {
         fs.writeSync(fd, JSON.stringify(
           { label, id: row.id, partitionKey: partitionOf(row), deleted: removed,
-            ...(spared || failed ? { kept: true } : {}) }) + '\n');
+            ...(spared || failed || upstream ? { kept: true } : {}), ...(upstream ? { keptLive: true } : {}) }) + '\n');
       }
     }
   } finally {
     if (fd !== null) fs.closeSync(fd);
   }
   return {
-    inCosmos: rows.length, wouldDelete: surplus.length - wouldKeep.length, deleted,
-    ...(wouldKeep.length ? { wouldKeep } : {}), ...(kept.length ? { kept } : {})
+    inCosmos: rows.length, wouldDelete: surplus.length - wouldKeep.length - keptLive.length, deleted,
+    ...(wouldKeep.length ? { wouldKeep } : {}), ...(keptLive.length ? { keptLive } : {}),
+    ...(kept.length ? { kept } : {})
   };
 }
 
@@ -398,7 +404,8 @@ const countsOf = obj => Object.fromEntries(Object.entries(obj || {}).filter(([, 
 
 const reconcileCounts = r => r && {
   inCosmos: r.inCosmos, wouldDelete: r.wouldDelete, deleted: r.deleted,
-  ...(r.wouldKeep ? { wouldKeep: r.wouldKeep.length } : {}), ceiling: r.ceiling
+  ...(r.wouldKeep ? { wouldKeep: r.wouldKeep.length } : {}),
+  ...(r.keptLive ? { keptLive: r.keptLive.length } : {}), ceiling: r.ceiling
 };
 
 /** The `--summary` file: counts only, failures capped, so a wrapper can fetch and parse it whole. */
@@ -1007,8 +1014,30 @@ async function runSeed(args, deps, summary) {
           '. Re-run with --max-surplus <n> if the deletion really is that large.');
       }
 
+      // Skipped on a breach: nothing is deleted then, and an empty upstream would cost one GET per row.
+      const servedIds = { documents: new Set(), projects: new Set() };
+      if (!breached.length) {
+        const fetchedDocIds = new Set([...documentFetch.keys].map(key => key.slice(key.indexOf('|') + 1)));
+        for (const { label, surplus } of sized) {
+          for (const row of surplus) {
+            // A document fetched under another parent moved: its old row is surplus, not skipped.
+            if (label === 'documents' && fetchedDocIds.has(String(row.id))) continue;
+            const served = label === 'documents'
+              ? await src.eagleRowLive('Document', String(row.id))
+              : await src.eagleRowLive('Project', String(row.eagleId));
+            if (served) servedIds[label].add(String(row.id));
+          }
+        }
+      }
+      const keptLive = servedIds.documents.size + servedIds.projects.size;
+      if (keptLive) {
+        summary.failures.push(`reconcile: ${keptLive} surplus ids still live upstream, fetch skipped ` +
+          'rows — nothing removed from either container');
+      }
+      const servedUpstream = label => row => servedIds[label].has(String(row.id));
+
       // Reported either way: a dry run must still show wouldDelete and that it would refuse.
-      const live = args.live && !breached.length;
+      const live = args.live && !breached.length && !keptLive;
       const logPath = reconcileLogPath(now);
       summary.reconcile = { log: logPath };
       if (!searchReady) summary.reconcile.search = 'unconfigured — live would refuse';
@@ -1020,14 +1049,15 @@ async function runSeed(args, deps, summary) {
         ...[...projectRows, ...projects].filter(listedProject).map(p => String(p.id))]);
       const spareDocument = row => listed(row.id) || keptProjects.has(String(row.projectId));
       summary.reconcile.documents = await reconcileContainer(...containers[0],
-        { live, logPath, audit, spare: spareDocument });
+        { live, logPath, audit, spare: spareDocument, servedUpstream: servedUpstream('documents') });
       // A project still holding a kept or spared document stays too, or that document is orphaned.
       const keptDocs = summary.reconcile.documents.kept || [];
       const failedHolding = new Set(keptDocs.map(k => String(k.partitionKey)));
       const holding = new Set([...failedHolding,
         ...documentRows.filter(spareDocument).map(row => String(row.projectId))]);
       summary.reconcile.projects = await reconcileContainer(...containers[1],
-        { live, logPath, audit, spare: row => listedProject(row) || holding.has(String(row.id)) });
+        { live, logPath, audit, spare: row => listedProject(row) || holding.has(String(row.id)),
+          servedUpstream: servedUpstream('projects') });
       for (const { label, surplus, ceiling } of sized) {
         summary.reconcile[label].ceiling = ceiling;
         for (const row of surplus) surplusIds.add(String(row.id));
