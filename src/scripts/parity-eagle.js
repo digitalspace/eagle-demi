@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * Read-only parity check: replays each eagle-api read in `parity-map.js` against eagle-api and
- * DEMI's native kind routes with the same identity, pairs rows by Eagle id and diffs row sets and
- * field values, read on the DEMI row under its native name (`NATIVE_FIELDS`). Every
- * difference not on the known list counts as unexplained, and any unexplained one exits 1.
- * Usage: README "Parity with eagle-api".
- */
+// Read-only; any difference not on the known list counts as unexplained and exits 1.
+// Usage: README "Parity with eagle-api".
 
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
@@ -511,11 +506,8 @@ function loadKnownIds(files, readFile) {
   return out;
 }
 
-/**
- * `missing-in-eagle` when the row's project ref is empty or malformed, or names an id in none of
- * `parentIds`; undefined otherwise, since any other parentState would let classify fall back to
- * push-missed.
- */
+// `missing-in-eagle` for an empty, malformed or unknown project ref; undefined otherwise, since any
+// other parentState would let classify fall back to push-missed.
 const orphanStateOf = parentIds => (row) => {
   const id = eagleRef(row.project);
   if (!id) return 'missing-in-eagle';
