@@ -52,7 +52,7 @@ Run dirs: /home/demi/reseed/<run>/ on the VM, ${RESEED_STATE:-$XDG_STATE_HOME/de
 here. Exit codes: 0 ok, 1 failed step or gate, 2 usage error or a refused --live.
 
 Test seams: DEMI_DEVBOX, PUBLIC_CHECK, AZ, RESEED_STATE, RESEED_NOW (epoch), RESEED_PAUSE
-(seconds between remote calls, default 120), RESEED_VM_ROOT, RESEED_KEYCLOAK_URL.
+(seconds between remote calls, default 120), RESEED_VM_ROOT, RESEED_KEYCLOAK_URL (dry runs only).
 EOF
 }
 
@@ -666,6 +666,7 @@ done
 [[ "$PAUSE" =~ ^[0-9]+$ ]] || usage_error "RESEED_PAUSE takes seconds"
 [[ -z "$MAX_SURPLUS" || "$STEP" == 'seed' ]] || usage_error "--max-surplus belongs to seed"
 ((LIVE == 0)) || [[ "$STEP" =~ ^(seed|public-reads|objects|residue)$ ]] || usage_error "--live belongs to seed, public-reads or residue"
+((LIVE == 0)) || [[ -z "${RESEED_KEYCLOAK_URL:-}" ]] || refuse "--live posts the Track secret to Keycloak; unset RESEED_KEYCLOAK_URL"
 command -v jq >/dev/null || die "needs jq"
 
 case "$STEP" in

@@ -233,6 +233,17 @@ test('seed --live refuses a passing dry run older than 24 hours', t => {
   assert.strictEqual(ctx.calls().length, before);
 });
 
+test('--live refuses a RESEED_KEYCLOAK_URL override and never calls the devbox', t => {
+  const ctx = sandbox(t);
+  passDrySeed(ctx);
+  const before = ctx.calls().length;
+  const r = ctx.run(['seed', '--run', 'r1', '--live', '--approved', ALL_SEED],
+    { RESEED_KEYCLOAK_URL: 'https://elsewhere/auth' });
+  assert.strictEqual(r.status, 2);
+  assert.match(r.out, /unset RESEED_KEYCLOAK_URL/);
+  assert.strictEqual(ctx.calls().length, before);
+});
+
 test('seed --live with --max-surplus also needs A2', t => {
   const ctx = sandbox(t);
   passDrySeed(ctx);
@@ -294,14 +305,13 @@ test('seed setup exports RECONCILE_LOG as its own statement and leaves the key p
   assert.doesNotMatch(ctx.read('az.log'), /keyvault/, 'secrets are read on the VM, never here');
 });
 
-test('payload env values reach the VM byte for byte, an empty one stays empty', t => {
+test('payload quoting keeps env values byte for byte when run under bash -c', t => {
   const ctx = sandbox(t);
   const url = 'https://h/a b?x=1&y=$z';
   const r = ctx.run(['seed', '--run', 'r1'], { RESEED_KEYCLOAK_URL: url });
   assert.strictEqual(r.status, 0, r.out);
   waitForFile(ctx.vmFile('r1', 'seed-dry.rc'));
   assert.strictEqual(ctx.read('keycloak-url'), url);
-  assert.match(ctx.read('node.log'), / prefix=\[\] /, 'MINIO_KEY_PREFIX is set and empty');
 });
 
 test('objects setup reads each MinIO key as its own statement and leaves the key prefix empty', t => {

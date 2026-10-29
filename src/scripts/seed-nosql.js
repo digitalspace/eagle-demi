@@ -255,11 +255,12 @@ function reconcileLogPath(now, dir = '/home') {
  * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs
  *                                  ask too, so `wouldKeep` and `wouldDelete` match a live run
  * @param {function} [opts.servedUpstream] row -> true when eagle-api still serves it, so never deleted
+ * @param {boolean}  [opts.held]    a surplus row still live upstream holds every delete: the rest log held
  * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place,
  *   `keptLive` = ids eagle-api still serves
  */
 async function reconcileContainer(label, rows, keyOf, fetched, remove,
-  { live, logPath, audit, spare = () => false, servedUpstream = () => false }) {
+  { live, logPath, audit, spare = () => false, servedUpstream = () => false, held = false }) {
   const surplus = surplusOf(rows, keyOf, fetched);
   // Console preview only — capped because a refused run can carry tens of thousands of ids.
   const ids = surplus.slice(0, 20).map(r => r.id).join(', ');
@@ -304,7 +305,8 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
       if (fd !== null) {
         fs.writeSync(fd, JSON.stringify(
           { label, id: row.id, partitionKey: partitionOf(row), deleted: removed,
-            ...(spared || failed || upstream ? { kept: true } : {}), ...(upstream ? { keptLive: true } : {}) }) + '\n');
+            ...(spared || failed || upstream ? { kept: true } : {}), ...(upstream ? { keptLive: true } : {}),
+            ...(held && !spared && !upstream ? { held: true } : {}) }) + '\n');
       }
     }
   } finally {
@@ -945,7 +947,6 @@ async function runSeed(args, deps, summary) {
   }
 
   // ── Reconcile ──────────────────────────────────────────────────────────────
-
   // Runs after every fetch: a Project, ProjectNotification or Document fetch whose re-read total
   // differs from the unique ids that arrived refuses BOTH deletions, surplus needing a full fetch.
   if (args.reconcile) {
@@ -1046,7 +1047,7 @@ async function runSeed(args, deps, summary) {
         ...[...projectRows, ...projects].filter(listedProject).map(p => String(p.id))]);
       const spareDocument = row => listed(row.id) || keptProjects.has(String(row.projectId));
       summary.reconcile.documents = await reconcileContainer(...containers[0],
-        { live, logPath, audit, spare: spareDocument, servedUpstream: servedUpstream('documents') });
+        { live, logPath, audit, spare: spareDocument, servedUpstream: servedUpstream('documents'), held: keptLive > 0 });
       // A project still holding a kept or spared document stays too, or that document is orphaned.
       const keptDocs = summary.reconcile.documents.kept || [];
       const failedHolding = new Set(keptDocs.map(k => String(k.partitionKey)));
@@ -1054,7 +1055,7 @@ async function runSeed(args, deps, summary) {
         ...documentRows.filter(spareDocument).map(row => String(row.projectId))]);
       summary.reconcile.projects = await reconcileContainer(...containers[1],
         { live, logPath, audit, spare: row => listedProject(row) || holding.has(String(row.id)),
-          servedUpstream: servedUpstream('projects') });
+          servedUpstream: servedUpstream('projects'), held: keptLive > 0 });
       for (const { label, surplus, ceiling } of sized) {
         summary.reconcile[label].ceiling = ceiling;
         // A live row held both containers back, so a dry run must report the 0 a live run deletes.
