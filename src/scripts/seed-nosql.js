@@ -1,40 +1,7 @@
 'use strict';
 
-/**
- * Seed the Cosmos NoSQL account from the upstream sources.
- *
- * This does NOT migrate the existing database. That database is a stale partial import carrying
- * Mongoose legacy (`__v`, ObjectId `_id`s), 3,382 synthetic project rows, and `contentExtracted`
- * flags with no chunks behind them. There is nothing there the sources cannot reproduce better.
- *
- * Order matters: projects first, because every other container partitions by a canonical project
- * id that only the merged registry can supply.
- *
- *   1. Track (382) merged with Eagle (359)   -> projects       393
- *   2. Eagle documents                       -> documents      61,587
- *   3. Static boundary exports               -> boundaries     281
- *
- * **DRY RUN BY DEFAULT.** `--live` is required to write anything. Verification gates run in both
- * modes, so a dry run is a genuine pre-flight check and not just a preview.
- *
- * Usage:
- *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,boundaries]
- *                                 [--limit-documents N] [--reconcile] [--max-surplus N]
- *                                 [--keep-ids FILE] [--summary FILE]
- *
- * Without --only, runs DEFAULT_STAGES: projects, documents, boundaries.
- *
- * `--reconcile` also DELETES the rows the fetch did not produce, through the same helpers the
- * DELETE controllers use. It needs Cosmos even in a dry run, where it only reports the count.
- * `--keep-ids FILE` spares the rows it lists (one id per line, `#` comments): a project by its
- * `eagleId` or `id`, a document by its `id`. A listed project's documents are spared with it.
- *
- * `--summary FILE` writes a compact JSON verdict (failures, Track source, reconcile counts, keep
- * report) on every exit path, for a wrapper to gate on instead of grepping the log.
- *
- * Run it INSIDE the network (the devbox, `scripts/demi-devbox.sh run`), detached with a log file:
- * Cosmos is behind a private endpoint, and a 60k-document seed outlasts a synchronous call.
- */
+// Projects go first: other containers partition by a project id only the merged registry supplies.
+// Run inside the network (`scripts/demi-devbox.sh run`): Cosmos is behind a private endpoint.
 
 const fs = require('fs');
 const path = require('path');
@@ -72,15 +39,8 @@ const RECONCILED_STAGES = ['projects', 'documents'];
 /** What runs when `--only` is not given — every stage there is. */
 const DEFAULT_STAGES = ['projects', 'documents', 'boundaries'];
 
-/**
- * Buffered items per project before a bulk write is issued.
- *
- * Documents are STREAMED, not accumulated: a dry run holding all 60,661 raw payloads plus
- * their transformed forms peaked at ~250 MB by document 45,000, and the API runs on a
- * Consumption plan with 1.5 GB. Buffering per project keeps peak flat.
- *
- * Matches the Cosmos bulk limit so a full buffer is exactly one request.
- */
+// Streamed per project, never accumulated: holding every raw payload peaked near 250 MB on a
+// 1.5 GB plan. 100 is the Cosmos bulk limit, so a full buffer is one request.
 const FLUSH_THRESHOLD = 100;
 
 function parseArgs(argv) {
@@ -107,9 +67,8 @@ function parseArgs(argv) {
   }
 
   if (args.reconcile) {
-    // Reconcile deletes whatever the fetch did not produce, so anything that narrows the fetch
-    // turns the untouched remainder into surplus. Refused rather than intersected: a partial
-    // reconcile that looks like a full one is how a corpus disappears.
+    // Refused rather than intersected: a narrowed fetch turns the untouched rest into surplus, and a
+    // partial reconcile that looks like a full one deletes the corpus.
     const missing = RECONCILED_STAGES.filter(stage => !args.only.includes(stage));
     if (missing.length) {
       throw new Error(`[seed] --reconcile needs the ${RECONCILED_STAGES.join(' and ')} stages; ` +
@@ -143,12 +102,7 @@ function parseArgs(argv) {
 const surplusOf = (rows, keyOf, fetched) => rows.filter(row => !fetched.has(keyOf(row)));
 
 /**
- * The containers whose enumeration stopped short of a COUNT of the same predicate.
- *
- * A truncated read is indistinguishable from a container that shrank: every row it missed
- * computes as surplus. Shared with `reconcile-eagle.js`, which diffs the same two containers and
- * would otherwise carry a second copy of the guard.
- *
+ * A truncated read looks like a container that shrank: every row it missed computes as surplus.
  * @param {Array} pairs  `[label, rows, countOf]`, `countOf` being the COUNT of the same predicate
  */
 async function truncatedReads(access, pairs) {
@@ -163,32 +117,9 @@ async function truncatedReads(access, pairs) {
 }
 
 /**
- * The one rule deciding whether an Eagle document has a home, and under which parent.
- *
- * A parent is USUALLY a project, but ~80 documents hang off a ProjectNotification instead — a
- * different entity type in the same Eagle collection, with its own _id space, resolving to nothing
- * in the project registry. Measured 2026-08-24: all 17 notifications and all 80 documents carry
- * `public` in read[], and prod serves 2-13 documents under each one. They are carried under the
- * NOTIFICATION's own _id as the partition key, because eagle-public sends that _id as its
- * `project` filter and `associatedProjectId` is "" on all 17 — the source data holds no link to a
- * real project. Admitted by KNOWN notification id, never by "the ref resolved to nothing": a
- * parent in neither list is a document with no home, and its caller drops it.
- *
- * A NOTIFICATION WINS OVER A REGISTRY HIT, and `helpers/parent-admit.js:pickParent` is where that
- * rule lives — the same one the push mirrors apply, against Cosmos rows rather than these ids.
- * A Track project's `epic_guid` is sometimes a notification `_id`, and the registry resolves it,
- * so project-first filed those children under the Track project instead.
- *
- * Shared with `reconcile-eagle.js`, which decides the same question. Its own copy tested the
- * currently-published Eagle project set instead of the registry, so a document under a Track row's
- * dangling epic_guid — which the registry resolves and this admits — read as unresolvable there.
- *
- * The notification list is read through the generic pager because sources.js has no named loader,
- * and its settled total is captured for the same reason the Project fetch captures one: an
- * unverified read leaves every notification-parented document unresolvable and computed as surplus.
- *
- * @returns {Promise<{admit: function, notificationIds: Set, fetch: object}>} `admit(ref)` gives the
- *   canonical parent id, or null when the document has no home
+ * Notification-parented documents partition under the notification's own _id: eagle-public sends
+ * it as `project`, and no source field links it to a project. Precedence: `parent-admit.js:pickParent`.
+ * @returns {Promise<{admit: function, notificationIds: Set, fetch: object}>} `admit(ref)` gives the canonical parent id, or null when the document has no home
  */
 async function documentAdmission(src, projectIndex) {
   let total = null;
@@ -212,13 +143,8 @@ async function documentAdmission(src, projectIndex) {
   };
 }
 
-/**
- * Most surplus one container may lose before `--reconcile` refuses.
- *
- * An upstream answering `searchResults: [], searchResultsTotal: 0` is internally consistent and
- * passes every completeness gate, so verifying the fetch against itself would still compute the
- * whole corpus as surplus. `--max-surplus` is the operator saying the loss really is that big.
- */
+// An empty upstream (`searchResults: []`, total 0) passes every completeness gate, so only this cap
+// stops it computing the whole corpus as surplus; `--max-surplus` lifts it.
 const surplusCeiling = (rowCount, maxSurplus) =>
   Math.max(50, Math.ceil(rowCount * 0.02), maxSurplus || 0);
 
@@ -239,25 +165,18 @@ function reconcileLogPath(now, dir = '/home') {
 }
 
 /**
- * Rows in Cosmos that this fetch did not produce.
- *
- * Generic over the container because the two differ only in how a row is keyed: documents by
- * `projectId|id`, Eagle-sourced projects by `eagleId`. Deletion goes through `remove`, which is
- * the same helper the DELETE controllers use — a second delete path would eventually forget the
- * search index, which no indexer ever cleans up.
- *
+ * Deletes through `remove`, the DELETE controllers' helper: a second delete path would forget the
+ * search index, which no indexer cleans up.
  * @param {Array}    rows      `{id, ...}` read out of Cosmos
  * @param {function} keyOf     row -> the key to test against `fetched`
  * @param {Set}      fetched   keys the upstream fetch produced
  * @param {function} remove    row -> Promise, called ONLY when live; `{ rowKept: true }` = not deleted
  * @param {string}   [opts.logPath] NDJSON sink for every surplus id, dry run included
  * @param {object}   [opts.audit]   `utils/audit`, called once per row deleted or kept by a failed purge
- * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs
- *                                  ask too, so `wouldKeep` and `wouldDelete` match a live run
+ * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs ask too, so `wouldKeep` and `wouldDelete` match a live run
  * @param {function} [opts.servedUpstream] row -> true when eagle-api still serves it, so never deleted
  * @param {boolean}  [opts.held]    a surplus row still live upstream holds every delete: the rest log held
- * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place,
- *   `keptLive` = ids eagle-api still serves
+ * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place, `keptLive` = ids eagle-api still serves
  */
 async function reconcileContainer(label, rows, keyOf, fetched, remove,
   { live, logPath, audit, spare = () => false, servedUpstream = () => false, held = false }) {
@@ -319,15 +238,8 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
   };
 }
 
-/**
- * Assertions that must hold for the seed to be correct.
- *
- * These are the two symptoms of the removed compliance auto-seeder — synthetic ids and mass duplicate
- * names — plus the ACL invariant that licenses deleting the legacy no-read[] tier. Checked
- * against the built data BEFORE writing, so a dry run catches a regression.
- *
- * Returns a list of failures rather than throwing per-check, so one run reports everything wrong.
- */
+// Checked against the built data before writing, so a dry run catches a regression; failures are
+// collected, not thrown, so one run reports every one.
 function verifyProjects(projects) {
   const failures = [];
 
@@ -506,8 +418,7 @@ async function runSeed(args, deps, summary) {
   log(`Stages: ${args.only.join(', ')}\n`);
 
   // ── 1. Projects ────────────────────────────────────────────────────────────
-  // Always built, even when not in --only: every other stage needs the project index to resolve
-  // its partition key, and a stale index would misfile documents.
+  // Always built, even outside --only: every other stage resolves its partition key from this index.
   log('Loading Track projects...');
   const trackProjects = await src.loadTrackProjects();
   log(`  ${trackProjects.length} Track projects from ${summary.track.source === 'api' ? 'the Track API' : 'the checked-in export'}`);
@@ -558,11 +469,8 @@ async function runSeed(args, deps, summary) {
           // nor drop the legacy codes that still resolve to it.
           carryShortLink(project, existing);
           project.sources = { ...existing.sources, ...project.sources };
-          // The public search carries no applicableRegulation or featuredDocuments, so a re-merge
-          // would blank whatever eagle-api's push had already resolved onto the row. It also
-          // carries the push bookkeeping across (`eaglePushedAt`, `cascadePendingAt`) — a re-seed
-          // that blanked those would let an already-applied push land again, or lose a cascade the
-          // row is still owed.
+          // The public search lacks applicableRegulation, featuredDocuments and the push bookkeeping; carried
+          // over so a re-seed neither blanks them nor lets an applied push land again.
           carryEagleOnlyFields(project, existing);
           carryDemiOnlyFields(project, existing);
         } else if (project.eagleId && !isEagleOnlyProjectId(project.id)) {
@@ -616,14 +524,10 @@ async function runSeed(args, deps, summary) {
     const stats = {
       fetched: 0, built: 0, unresolved: 0, notificationParented: 0,
       noKey: 0, preserved: 0, written: 0, writeFailed: 0,
-      // Documents whose four List refs moved in this re-seed, and whose chunks were re-stamped
-      // to match — see `flush`. Documents, then chunk OPERATIONS: one document is ~19 of them, so
-      // the two cannot share a counter and still be read.
+      // Documents and chunk operations (~19 per document) are counted apart so both stay readable.
       reStamped: 0, reStampFailedDocuments: 0, reStampFailedChunks: 0, reStampSkipped: 0,
-      // The outbox half. `pendingRaised` counts the rows written with the flag — in a dry run,
-      // the rows that would be. The other three are what became of those flags: cleared on a
-      // re-stamp that landed whole, `conflict` where a newer write owns the flag now, `missing`
-      // where the row was gone by the time the clear ran.
+      // `pendingRaised` counts flags written (would be, in a dry run); the other three are their fates:
+      // cleared, `conflict` (a newer write owns it), `missing` (row gone before the clear).
       pendingRaised: 0, pendingCleared: 0, pendingConflicts: 0, pendingMissed: 0,
       // Documents left flagged because their re-stamp did not land. Capped in the summary, as
       // the dropped ids beside it are.
@@ -659,21 +563,16 @@ async function runSeed(args, deps, summary) {
     };
 
     const flush = async (projectId, rawDocs) => {
-      // Transformed HERE rather than on the way into the buffer, because the extraction state a
-      // re-seed must carry forward is read one partition at a time and this is where the
-      // partition is known. A Cosmos upsert replaces the item, so without it every re-seed marks
-      // the whole corpus unextracted while its chunks stay behind.
+      // Transformed here, where the partition is known: the extraction state a re-seed carries forward is
+      // read per partition, and an upsert without it marks the corpus unextracted.
       const existingRows = await existingFor(projectId);
       await holdParentRead(projectId);
       const docs = [];
-      // Documents whose four List refs MOVED in this re-seed. Their chunks each carry a copy taken
-      // at ingest, and nothing else refreshes it — see `chunks.CHUNK_PARENT_FIELDS`. Collected here
-      // and patched after the write lands, so a document is never re-stamped on the strength of a
-      // row that failed to save.
+      // Chunks keep their own copy of these refs (`chunks.CHUNK_PARENT_FIELDS`); patched only after the
+      // write lands, so a row that failed to save never triggers a re-stamp.
       const reStamp = [];
-      // The newest flag token this flush minted, and the instant its chunk patches are guarded on.
-      // The newest, because a chunk stamped with it is at least as current as every flag in the
-      // batch, so a later repair walking any of those flags cannot undo work this flush landed.
+      // Newest token this flush minted: a chunk stamped with it is current for every flag in the batch,
+      // so a later repair cannot undo this flush.
       let stampedAt = null;
       for (const raw of rawDocs) {
         const existing = existingRows && existingRows.get(String(raw._id));
@@ -684,14 +583,8 @@ async function runSeed(args, deps, summary) {
         // chunks yet, and the ingest that creates them stamps the fields itself.
         let row = transformed;
         if (existing && repos.chunks.parentFieldsChanged(existing, transformed)) {
-          // THE OUTBOX STAMP, riding the same upsert as the change, exactly as the API write path
-          // does it (`controllers/nosql/document.js stampParentFieldsPending`): re-stamping
-          // best-effort and flagging nothing left a run killed between the two writes invisible to
-          // the reconcile, which reads the row and not this run's output. The token is minted past
-          // whatever the row held, so the clear below can only take down THIS run's flag.
-          // No etag guard on the upsert, which `pendingRaiseOps` asks of its callers: this is
-          // offline maintenance against a corpus nothing else writes, and the reconcile line
-          // raises again what it missed.
+          // Flag rides the same upsert as the change (`document.js stampParentFieldsPending`), so a killed
+          // run stays visible to the reconcile. No etag: offline, nothing else writes this corpus.
           row = { ...transformed, ...repos.documents.pendingRaiseOps(existing.parentFieldsPendingAt) };
           if (!stampedAt || row.parentFieldsPendingAt > stampedAt) {
             stampedAt = row.parentFieldsPendingAt;
@@ -713,9 +606,7 @@ async function runSeed(args, deps, summary) {
       // 60,661 documents just to check them is what streaming exists to avoid.
       gateFailures.push(...verifyItems(docs, 'documents', 'projectId', projectRead));
       if (args.live) {
-        // Count what LANDED, never what was sent. Cosmos bulk returns a per-operation status and
-        // does not throw on partial failure; counting sent operations reported 60,578 written
-        // when only 56,317 existed.
+        // Count what landed, not what was sent: Cosmos bulk reports per-operation status and never throws.
         const r = await repos.documents.bulkUpsertForProject(projectId, docs);
         stats.written += r.succeeded;
         stats.writeFailed += r.failed;
@@ -723,22 +614,8 @@ async function runSeed(args, deps, summary) {
           writeStatus[code] = (writeStatus[code] || 0) + n;
         }
 
-        // The chunk half of the same write. A re-seed that re-types a document and stops here
-        // leaves every chunk of it answering the OLD type filter for the life of the chunk — the
-        // docblock on `controllers/nosql/document.js propagateParentFields` says every write path
-        // that moves these four re-stamps the chunks, and this is one of them.
-        //
-        // Best-effort but no longer silent, exactly as on the API write path: the document rows
-        // are authoritative and have landed, a stale copy makes a chunk filter MISS rather than
-        // expose anything, and a re-seed must not abort over it — so the failure is left on the
-        // row as `parentFieldsPending` (raised above, cleared below) rather than only in this
-        // run's output. `backfill-chunk-parent-fields.js --pending` is the repair.
-        // `r.failedIds` are the ids Cosmos rejected. Without them the helper would re-stamp the
-        // chunks of documents whose row never landed, so those chunks would answer a filter no
-        // document in the corpus matches. The loop itself is `chunks.reStampAfterWrite` — both
-        // backfills re-stamp through the same one.
-        // Guarded, because a first seed moves nothing at all: most batches would otherwise pay a
-        // call to count four zeros.
+        // Best-effort like the API path: a failure stays on the row as `parentFieldsPending` for
+        // `backfill-chunk-parent-fields.js --pending`; `failedIds` keeps unlanded rows' chunks untouched.
         if (reStamp.length) {
           const restamp = await repos.chunks.reStampAfterWrite(access, reStamp, r.failedIds || [], {
             // Newer-only: a chunk a later walk already stamped keeps what it has and comes back as
@@ -757,11 +634,8 @@ async function runSeed(args, deps, summary) {
           stats.reStampFailedChunks += restamp.failedChunks;
           stats.reStampSkipped += restamp.skipped;
 
-          // THE CLEAR, and only for the documents whose chunks all landed. Guarded on the token
-          // this flush minted rather than written unconditionally: an Eagle push or an API edit
-          // that landed while the patch ran raised the flag for chunks this run never saw, and
-          // clearing that one would hide the drift from the reconcile for good. A mismatch comes
-          // back as `conflict`, and the newer write's own re-stamp owns the flag from then on.
+          // Cleared only against this flush's token: a push or edit that landed meanwhile raised a newer
+          // flag, and clearing it would hide that drift; a mismatch comes back as `conflict`.
           const stamped = new Map(reStamp.map(d => [String(d.id), d]));
           for (const id of restamp.stampedDocumentIds) {
             // The row's own projectId, never the loop's — `setParentFieldsPending` partitions on
@@ -791,10 +665,8 @@ async function runSeed(args, deps, summary) {
         if (projectId && notificationIds.has(projectId)) stats.notificationParented++;
 
         if (!projectId) {
-          // Neither a project nor a notification. Dropped rather than filed under an invented
-          // parent, and COUNTED — with the distinct refs carried into the summary, not just the
-          // log, so the NEXT class of dropped rows shows up in the run output instead of being
-          // discovered months later from a user-facing zero.
+          // Dropped, not filed under an invented parent; refs go into the summary so a new class of drops
+          // shows in the run output.
           stats.unresolved++;
           unresolvedRefs.add(String(doc.project));
           droppedIds.push(String(doc._id));
@@ -808,9 +680,8 @@ async function runSeed(args, deps, summary) {
         buffers.get(projectId).push(doc);
       }
 
-      // Pagination is _id-ordered and documents cluster by project, so a project's docs arrive
-      // mostly contiguously and a full buffer is usually its last. Upsert is idempotent, so
-      // splitting one project across batches is safe.
+      // _id-ordered pages cluster by project, so a full buffer is usually its last; upserts are
+      // idempotent, so splitting a project across batches is safe.
       for (const [projectId, docs] of buffers) {
         if (docs.length >= FLUSH_THRESHOLD) {
           await flush(projectId, docs);
@@ -872,9 +743,7 @@ async function runSeed(args, deps, summary) {
       // children before `pickParent` gave the notification precedence.
       notificationShadowedProjects: shadowedProjects,
       droppedUnresolvable: stats.unresolved,
-      // The refs themselves, not just the count: a drop is only visible in the output if the run
-      // says WHAT it dropped. Capped — an upstream fault could produce thousands of distinct refs
-      // and the summary is printed in full.
+      // Capped: an upstream fault could yield thousands of refs, and the summary prints in full.
       distinctUnresolvedRefs: unresolvedRefs.size,
       unresolvedRefs: [...unresolvedRefs].slice(0, 20),
       droppedIds: droppedIds.slice(0, 20),
@@ -947,8 +816,7 @@ async function runSeed(args, deps, summary) {
   }
 
   // ── Reconcile ──────────────────────────────────────────────────────────────
-  // Runs after every fetch: a Project, ProjectNotification or Document fetch whose re-read total
-  // differs from the unique ids that arrived refuses BOTH deletions, surplus needing a full fetch.
+  // A fetch whose re-read total differs from the unique ids that arrived refuses both deletions.
   if (args.reconcile) {
     const unverified = [
       ['Project', projectsTotal, eagleProjects.length],
@@ -1132,10 +1000,8 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  // A dry run is a pure pre-flight check and must work without database access — that is the only
-  // way to run it from outside the private endpoint. Inside it, COSMOS_ENDPOINT turns on the reads
-  // that report `preserved` and `wouldDelete`; `--reconcile` without it refuses rather than
-  // reporting an empty surplus set.
+  // A dry run needs no database, so it runs outside the private endpoint; COSMOS_ENDPOINT enables
+  // the `preserved`/`wouldDelete` reads, and `--reconcile` without it refuses.
   if (args.live || process.env.COSMOS_ENDPOINT) initCosmosClient();
 
   seed(process.argv.slice(2))
