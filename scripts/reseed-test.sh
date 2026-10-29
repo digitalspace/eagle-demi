@@ -334,15 +334,21 @@ def n: if type == "array" then length elif type == "number" then . else 0 end;
     | ((.wouldDelete | n) + (.wouldKeep | n))] | max) (wouldDelete + wouldKeep of the larger container; needs A2)"
   else empty end)'
 
-# Dropped rows wait on a parent not yet in DEMI; a dry run drops every comment of an unmirrored period.
+# A dry run drops every comment of a period not mirrored yet, so a drop is a NOTE there; in --live
+# the parents were mirrored first, so a drop means a parent is missing from DEMI and FAILs.
 PUBLIC_READS_GATE='
 . as $sum
 | ($sum.stages // {} | to_entries[] | select((.value.errors // 0) > 0)
   | "FAIL stage \(.key) errors=\(.value.errors)"),
   ($sum.unfinished // [] | .[] | select(. as $s | ($sum.stages // {}) | has($s) | not)
   | "FAIL stage unfinished: \(.) (it threw before reporting counts)"),
+  ($sum.unfinished // [] | .[] | . as $s | select(($sum.stages // {}) | has($s))
+  | select(($sum.stages[$s].errors // 0) == 0 and ($sum.stages[$s].dropped // 0) == 0)
+  | "FAIL stage \(.) unfinished, reason unknown"),
   ($sum.stages // {} | to_entries[] | select((.value.errors // 0) == 0 and (.value.dropped // 0) > 0)
-  | "NOTE \(.key) dropped=\(.value.dropped) (rows whose parent is not in DEMI)")'
+  | if $sum.live == true
+    then "FAIL \(.key) dropped=\(.value.dropped) in --live (rows whose parent is missing from DEMI)"
+    else "NOTE \(.key) dropped=\(.value.dropped) (rows whose parent is not in DEMI)" end)'
 
 # `$1` step; reads the saved summary, prints verdict lines, returns 1 on any FAIL.
 gate() {
