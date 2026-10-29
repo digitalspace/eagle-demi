@@ -184,8 +184,8 @@ async function truncatedReads(access, pairs) {
  * dangling epic_guid — which the registry resolves and this admits — read as unresolvable there.
  *
  * The notification list is read through the generic pager because sources.js has no named loader,
- * and its total is captured for the same reason the Project fetch captures one: an unverified read
- * leaves every notification-parented document unresolvable and computed as surplus.
+ * and its settled total is captured for the same reason the Project fetch captures one: an
+ * unverified read leaves every notification-parented document unresolvable and computed as surplus.
  *
  * @returns {Promise<{admit: function, notificationIds: Set, fetch: object}>} `admit(ref)` gives the
  *   canonical parent id, or null when the document has no home
@@ -193,7 +193,7 @@ async function truncatedReads(access, pairs) {
 async function documentAdmission(src, projectIndex) {
   let total = null;
   const notifications = await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification',
-    { onPage: (_items, _count, t) => { total = t; } });
+    { onTotal: (t) => { total = t; } });
   const notificationIds = new Set(notifications.map(n => String(n._id)));
   return {
     notificationIds,
@@ -511,12 +511,10 @@ async function runSeed(args, deps, summary) {
   summary.track.count = trackProjects.length;
 
   log('Fetching Eagle projects...');
-  // The upstream total, captured because `--reconcile` refuses to delete unless the fetch passed
-  // the searchResultsTotal gate in sources.js — a null total means that gate never ran.
+  // The settled upstream total, captured because `--reconcile` refuses to delete unless the fetch
+  // passed the searchResultsTotal gate in sources.js — a null total means that gate never ran.
   let projectsTotal = null;
-  const eagleProjects = await src.fetchEagleProjects((_items, _count, total) => {
-    projectsTotal = total;
-  });
+  const eagleProjects = await src.fetchEagleProjects({ onTotal: (total) => { projectsTotal = total; } });
   log(`  ${eagleProjects.length} from eagle-api`);
 
   // The search returns `pins` as bare ObjectIds; the push sends `{_id, name, province}`. The
@@ -946,10 +944,8 @@ async function runSeed(args, deps, summary) {
   }
 
   // ── Reconcile ──────────────────────────────────────────────────────────────
-  // ONE phase after every fetch, never per container: an unverified Project fetch used to leave
-  // the documents reconcile free to delete, and vice versa. A fetch is verified only when
-  // eagle-api reported a searchResultsTotal AND it equals the unique ids that arrived (documents:
-  // the total re-read after the fetch, so growth mid-fetch is not verified); either upstream falling
+  // One phase after every fetch: Project, ProjectNotification and Document are each verified when
+  // the total re-read after the last page equals the unique ids that arrived, and any one falling
   // short refuses BOTH deletions, since the surplus set is only meaningful off a complete fetch.
   if (args.reconcile) {
     const unverified = [

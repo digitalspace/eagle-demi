@@ -252,6 +252,46 @@ test('fetchAllPages', async (t) => {
     assert.match(info.mock.calls[0].arguments[0], /Document: fetched 251, upstream reported 250 then 251/);
   });
 
+  // A corpus of `size` rows that has grown to `grown` by the time the total is re-read.
+  const growingFetch = (size, grown, calls = []) => {
+    let rows = size;
+    return async (url) => {
+      const params = new URL(url, 'http://x').searchParams;
+      const pageNum = Number(params.get('pageNum'));
+      calls.push(`${pageNum}/${params.get('pageSize')}`);
+      if (params.get('pageSize') === '1') {
+        rows = grown;
+        return { items: ids(0, 1), total: rows };
+      }
+      return { items: ids(pageNum * PAGE_SIZE, Math.min(rows, (pageNum + 1) * PAGE_SIZE)), total: rows };
+    };
+  };
+
+  await t.test('a row published at the end during the fetch is fetched by one more pass', async () => {
+    for (const [size, extension] of [[200, ['1/100', '2/100']], [250, ['2/100']]]) {
+      const calls = [];
+      let settled = null;
+      const items = await fetchAllPages('http://x', 'Document', {
+        fetchPage: growingFetch(size, size + 1, calls), onTotal: (total) => { settled = total; }
+      });
+      assert.strictEqual(items.length, size + 1, `${size}: the new row arrived`);
+      assert.strictEqual(new Set(items.map(d => d._id)).size, size + 1);
+      assert.strictEqual(settled, size + 1, 'onTotal hands on the settled total');
+      const first = size === 200 ? ['0/100', '1/100'] : ['0/100', '1/100', '2/100'];
+      assert.deepStrictEqual(calls, [...first, '0/1', ...extension, '0/1'],
+        'pages, re-read, the pass from the last page read, re-read');
+    }
+  });
+
+  await t.test('an extension pass that still comes back short returns the larger total unverified', async () => {
+    // Rows keep landing: the caller (seed reconcile) sees total above count and refuses.
+    const result = await fetchAllPages('http://x', 'Document', {
+      accumulate: false,
+      fetchPage: pagedFetch([ids(0, 100), ids(100, 200), ids(200, 200)], 200, 202)
+    });
+    assert.deepStrictEqual(result, { count: 200, total: 202 });
+  });
+
   await t.test('a row repeated across a page boundary is counted and handed on once', async () => {
     const handed = [];
     const items = await fetchAllPages('http://x', 'Document', {
@@ -1004,9 +1044,9 @@ test('seed --reconcile end to end', async (t) => {
     EAGLE_API_BASE,
     trackFeedConfigured: () => false,
     loadTrackProjects: () => track,
-    fetchEagleProjects: async (onPage) => {
+    fetchEagleProjects: async (opts) => {
       const items = [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')];
-      if (onPage) await onPage(items, items.length, items.length);
+      if (opts && opts.onTotal) opts.onTotal(items.length);
       return items;
     },
     streamEagleDocuments: async (onPage) => {
@@ -1018,7 +1058,7 @@ test('seed --reconcile end to end', async (t) => {
     // The notification list is gated like the other two fetches, so the stub reports its total the
     // same way. Empty AND consistent — the shape that used to pass every gate.
     fetchAllPages: async (_base, _dataset, opts) => {
-      if (opts && opts.onPage) await opts.onPage([], 0, 0);
+      if (opts && opts.onTotal) opts.onTotal(0);
       return [];
     },
     eagleRowLive: async () => false,
@@ -1325,9 +1365,9 @@ test('seed --reconcile end to end', async (t) => {
     const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
       ...deps,
       sources: stubSources({
-        fetchEagleProjects: async (onPage) => {
+        fetchEagleProjects: async (opts) => {
           const items = [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')];
-          if (onPage) await onPage(items, items.length, null);
+          if (opts && opts.onTotal) opts.onTotal(null);
           return items;
         }
       })
@@ -1363,7 +1403,7 @@ test('seed --reconcile end to end', async (t) => {
   const withNotifications = (list) => stubSources({
     fetchAllPages: async (_base, dataset, opts) => {
       const items = dataset === 'ProjectNotification' ? list : [];
-      if (opts && opts.onPage) await opts.onPage(items, items.length, items.length);
+      if (opts && opts.onTotal) opts.onTotal(items.length);
       return items;
     },
     streamEagleDocuments: async (onPage) => {
@@ -1598,7 +1638,7 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
     EAGLE_API_BASE,
     trackFeedConfigured: () => false,
     loadTrackProjects: () => track,
-    fetchEagleProjects: async (onPage) => { await onPage([], 0, 0); return []; },
+    fetchEagleProjects: async (opts) => { opts.onTotal(0); return []; },
     streamEagleDocuments: async (onPage) => {
       await onPage(docs.map(eagleDoc), docs.length, docs.length);
       return { count: docs.length, total: docs.length };
@@ -1606,7 +1646,7 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
     fetchListLookup: async () => new Map(),
     fetchOrganizationLookup: async () => new Map(),
     fetchAllPages: async (_base, _dataset, opts) => {
-      if (opts && opts.onPage) await opts.onPage([], 0, 0);
+      if (opts && opts.onTotal) opts.onTotal(0);
       return [];
     },
     eagleRowLive: async () => false,
