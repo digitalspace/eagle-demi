@@ -1599,6 +1599,27 @@ test('seed --reconcile end to end', async (t) => {
     assert.deepStrictEqual(purged, { documents: [], projects: [] });
   });
 
+  await t.test('a Document re-read still above the count after the extension pass refuses', async (t2) => {
+    // Through the real pager: one document arrives, the re-read says 3 before and after the pass.
+    t2.mock.method(logger, 'info', () => {});
+    const fetchPage = async (url) => ({
+      items: [eagleDoc('doc1', matchedGuid)],
+      total: new URL(url, 'http://x').searchParams.get('pageSize') === '1' ? 3 : 1
+    });
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      sources: stubSources({
+        streamEagleDocuments: (onPage) =>
+          fetchAllPages(EAGLE_API_BASE, 'Document', { onPage, accumulate: false, fetchPage })
+      })
+    });
+
+    assert.match(summary.failures.join(' '), /--reconcile refused .*the Document fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
   await t.test('documents are deleted before projects', async () => {
     const order = [];
     const { deps } = makeDeps();
