@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * Native comment period reads: `GET /comment-periods`, `/comment-periods/:id` and
- * `/comment-periods/:id/summary`, on the list contract in `helpers/native-query.js`. Writes are in
- * comment-periods-write.js.
- */
+// Native comment period reads on the `helpers/native-query.js` list contract. Writes live in
+// comment-periods-write.js, apart because the summary read answers `res` itself.
 
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');

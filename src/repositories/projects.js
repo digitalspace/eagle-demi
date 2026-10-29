@@ -1,16 +1,7 @@
 'use strict';
 
-/**
- * Projects repository — Cosmos NoSQL.
- *
- * Container `projects`, partitioned by `/id` (the Track project id). Every query is either a
- * point read or a full list; no query filters on a grouping dimension, so /id gives perfect
- * distribution and 1 RU point reads.
- *
- * Named methods rather than a generic find(filter): the filter-object interface is what let a
- * broken translator disable access control. Each method owns its SQL and cannot emit an
- * unfiltered read.
- */
+// Container `projects`, partitioned by `/id` (the Track id). Named methods, never a generic find(filter):
+// that interface let a broken translator disable access control; each method owns SQL that cannot read unfiltered.
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
@@ -37,11 +28,8 @@ const CRITERIA_FIELDS = {
 };
 
 /**
- * Criteria shared by list and count so the two can never diverge — a count built from a
- * different predicate would leak the size of a set the caller cannot read.
- *
- * REJECTED, NOT DROPPED, for a field this caller cannot see: a narrowed count answers what the
- * hidden value is. All three are `defaultVis: 4` today, so nothing reaches the throw.
+ * Criteria shared by list and count, so a count cannot leak the size of a set the caller cannot read. A hidden
+ * field is rejected, not dropped: a narrowed count would reveal the hidden value.
  */
 function buildCriteria(opts, access) {
   return Object.entries(CRITERIA_FIELDS)
@@ -52,11 +40,7 @@ function buildCriteria(opts, access) {
     });
 }
 
-/**
- * Projects visible to this caller, by name.
- * ORDER BY c.name requires /name to be indexed — it is, in the container's indexing policy.
- * Without the index Cosmos rejects the sort outright rather than degrading.
- */
+/** Projects visible to this caller, by name. ORDER BY c.name needs /name indexed, or Cosmos rejects the sort. */
 function visibleSpec(access, opts) {
   return selectWhere({
     access,
@@ -91,10 +75,8 @@ async function countVisible(access, opts = {}) {
 }
 
 /**
- * Point read by Track id. The partition key IS the id here, so this is a true 1 RU read.
- *
- * Gated with canRead(): a point read bypasses the query predicate entirely, so without this a
- * by-id fetch would return what a list would not.
+ * Point read by Track id (the partition key, so 1 RU). Gated with canRead(): a point read skips the query
+ * predicate, so without it a by-id fetch would return what a list would not.
  */
 async function getById(access, id) {
   const doc = await cosmos.readItem(CONTAINER, String(id), String(id));
@@ -108,13 +90,7 @@ async function getById(access, id) {
  */
 const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
 
-/**
- * Look up by an alternate identity. Used by the seeders, which hold an Eagle ObjectId rather
- * than a Track id.
- *
- * Cross-partition by necessity — eagleId is not the partition key — but it returns at most
- * one item, so the cost is a few RU, not a scan.
- */
+/** By Eagle ObjectId, for the seeders. Cross-partition, but at most one row, so a few RU, not a scan. */
 async function getByEagleId(access, eagleId) {
   const spec = selectWhere({
     access,
@@ -122,21 +98,14 @@ async function getByEagleId(access, eagleId) {
     criteria: [eq('eagleId', String(eagleId), '@eagleId')]
   });
 
-  // `queryFirst`, not a single page: one page of a cross-partition lookup legitimately comes back
-  // empty while the row exists, because Cosmos answers with whatever the partitions it reached
-  // within the page budget held. Reading only that page reports a live project as absent, and the
-  // seeder then creates a duplicate.
+  // `queryFirst`, not one page: a cross-partition page can come back empty while the row exists, and the
+  // seeder would then create a duplicate.
   return await cosmos.queryFirst(CONTAINER, spec, {});
 }
 
 /**
- * The stored row for an Eagle id, unfiltered: a mirror asks whether it exists, not who may read
- * it. Write side only, like every `readForWrite`.
- *
- * A Track row beside its `eagle-<id>` twin is expected (the Track relink keeps the twin), so the
- * Track row wins; any other pair is refused.
- *
- * @throws an error with `code === DUPLICATE_ID` when two rows of the same kind share the eagleId
+ * The stored row for an Eagle id, unfiltered, write side only. A Track row beside its `eagle-<id>` twin wins (the
+ * relink keeps the twin); any other pair throws with `code === DUPLICATE_ID`.
  */
 async function readForWriteByEagleId(eagleId) {
   const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
@@ -154,13 +123,8 @@ async function readForWrite(id) {
 }
 
 /**
- * Names and Eagle ids for a bounded set of project ids, in one query.
- *
- * Chunk and document search hits carry a projectId and no name, so the results have to be labelled.
- * Only the name and the alternate identifier are projected — the caller is entitled to the label,
- * not to the project record. `eagleId` is what the search response puts in `project._id`, because
- * that is the id eagle-api's routes accept; it rides along here rather than in a second lookup,
- * since this read already runs once per result page and is already ACL-gated.
+ * Names and Eagle ids for a bounded id set, to label search hits; only the label is projected, not the record.
+ * `eagleId` is what the response puts in `project._id`, the id eagle-api's routes accept.
  */
 async function listByIds(access, ids) {
   const unique = Array.from(new Set((ids || []).map(String)));
@@ -218,12 +182,8 @@ async function listIdsByName(access, text) {
 }
 
 /**
- * `listByIds` keyed the other way round: by EAGLE project id, in one query. Adds `address` (the
- * update hit's `project.location`) and `vis`, so a per-row dial still hides it.
- *
- * `updates.projectId` holds the Eagle id, so labelling a page of updates cannot go through
- * `listByIds`. One `IN` over `eagleId` rather than a `getByEagleId` per row — a page of 200 updates
- * about 200 projects was 200 cross-partition reads.
+ * `listByIds` by EAGLE id (`updates.projectId` holds one), in one `IN` rather than a read per row. Adds
+ * `address` (an update hit's `project.location`) and `vis`, so a per-row dial still hides it.
  */
 async function listByEagleIds(access, eagleIds) {
   const unique = Array.from(new Set((eagleIds || []).map(String)));
@@ -241,9 +201,8 @@ async function listByEagleIds(access, eagleIds) {
 }
 
 /**
- * Projects carrying a decision dated no later than `now`, newest first, at most `limit`: the home
- * feed's project decision rows. `/decisionDate/?` is an indexed path, so Cosmos sorts. A row whose
- * own dial hides `decisionDate` from this caller is left out, so the order cannot reveal it.
+ * Projects with a decision dated no later than `now`, newest first: the home feed's decision rows. A row whose
+ * dial hides `decisionDate` from this caller is left out, so the order cannot reveal it.
  */
 async function listDecisions(access, { limit, now }) {
   const spec = selectWhere({
@@ -285,13 +244,8 @@ async function countWithCentroid(access) {
 const eagleOnlyCriteria = () => [eq('sourceSystem', 'eagle', '@sourceSystem')];
 
 /**
- * `{id, eagleId}` for every Eagle-only project row — the seeder's reconcile set.
- *
- * Track-sourced rows are excluded by the `sourceSystem` filter: they exist whether or not Eagle
- * still carries a counterpart, so computing them as surplus would delete the master registry.
- *
- * NO ORDER BY: a cross-partition sort takes the SDK's query-plan path, whose mergeHeaders never
- * copies `x-ms-continuation`, so fetchAll saw no token and stopped at the first 1,000 rows.
+ * `{id, eagleId}` of every Eagle-only project: the seeder's reconcile set; Track rows stay out or they would read as surplus.
+ * NO ORDER BY: a cross-partition sort's plan path drops `x-ms-continuation`, so fetchAll stopped at 1,000 rows.
  */
 async function listEagleOnlyIds(access) {
   const spec = selectWhere({
@@ -314,15 +268,8 @@ async function countEagleOnlyIds(access) {
 const eagleIdCriteria = () => [isDefinedAndNotNull('eagleId')];
 
 /**
- * `{id, eagleId, sourceSystem, read, isPublished}` for every project mirroring an Eagle record — the reconcile's
- * membership set.
- *
- * WIDER than `listEagleOnlyIds` on purpose. A Track-sourced row also carries an `eagleId` when the
- * merge matched one, so a diff computed off the Eagle-sourced rows alone reads every matched
- * project as missing from DEMI. `sourceSystem` rides along because only the Eagle-sourced rows may
- * be purged when Eagle drops one.
- *
- * NO ORDER BY, for the reason `listEagleOnlyIds` gives.
+ * Every project mirroring an Eagle record, Track-sourced included (a matched Track row carries `eagleId` too, else it
+ * reads as missing); `sourceSystem` because only Eagle-sourced rows may be purged. NO ORDER BY, as `listEagleOnlyIds`.
  */
 async function listWithEagleId(access) {
   const spec = selectWhere({
@@ -342,10 +289,8 @@ async function countWithEagleId(access) {
 }
 
 /**
- * Keys a native project list can sort on. Cosmos drops a row that lacks the ORDER BY field, so
- * `upsert` writes every one of them (`sortFieldFills`), as null when there is nothing to store.
- * `eacDecisionSort` stands in for `eacDecision.name`: filling `eacDecision` itself would turn "no
- * decision" into an object that readers render as a decision.
+ * Native list sort keys. Cosmos drops a row lacking the ORDER BY field, so `upsert` writes each (`sortFieldFills`);
+ * `eacDecisionSort` stands in for `eacDecision.name`, since filling `eacDecision` would render as a decision.
  */
 const SORTABLE = [
   'name', 'dateUpdated', 'proponentName', 'projectType', 'sector', 'region', 'currentPhaseName.name', 'eacDecisionSort'
@@ -369,10 +314,8 @@ function phaseRef(phase) {
 }
 
 /**
- * The writes that give a row every SORTABLE field. A field the row holds, null included, is left
- * alone, except two: `currentPhaseName` must be a ref holding `name` (Track sends no phase, Eagle
- * may send null or a bare id), and `eacDecisionSort`, a copy, is rewritten when stale.
- * `dateUpdated` falls back to `dateAdded`, never `_ts`.
+ * Writes giving a row every SORTABLE field, leaving held ones alone except `currentPhaseName` (must be a ref with
+ * `name`) and a stale `eacDecisionSort`. `dateUpdated` falls back to `dateAdded`, never `_ts`.
  */
 function sortFieldFills(row) {
   const fills = {};
@@ -388,40 +331,20 @@ function sortFieldFills(row) {
 }
 
 /**
- * Whole-item write. Safe only because nothing is folded into the project as an embedded array
- * any more — a replace from the Track sync would silently discard it. Use the patch helpers
- * below for partial updates.
- *
- * `etag` makes it optimistic: the write lands only while the row is still the revision the caller
- * read, and a loser gets a 412 instead of replacing the winner. Two eagle-api pushes for one
- * project 34 ms apart both read `isPublished: false` and the stale one landed last, leaving a
- * published project private in DEMI with no cascade — that is what the guard is for.
- *
- * @param {object} project
- * @param {{etag?: string, create?: boolean}} [options] `etag` is the `_etag` the caller read off
- *   the row; `create` inserts a row the caller read as absent
- * @throws an error with `code === 412` when the row moved, or `409` when it was created behind
- *   this caller
+ * Whole-item write, guarded by `etag` (412 when the row moved) or `create` (409 when created behind the caller):
+ * otherwise two pushes 34 ms apart can leave a published project private. Safe only while no embedded array is folded in.
  */
 async function upsert(project, { etag, create = false } = {}) {
-  // A row the caller read as ABSENT has no revision to guard on, so the insert is the guard: an
-  // unguarded upsert would replace a project another writer created in between, and Cosmos answers
-  // a create with 409 instead — which callers re-read and re-judge exactly as they do a 412.
+  // A row read as ABSENT has no revision to guard on, so the insert is the guard: Cosmos answers 409, which
+  // callers re-read and re-judge as they do a 412.
   const row = { ...project, ...sortFieldFills(project) };
   if (create) return createItem(CONTAINER, row, 'projects');
   return upsertWithEtag(CONTAINER, row, { etag, label: 'projects' });
 }
 
 /**
- * Record, or clear, that a visibility cascade this project owes has not run.
- *
- * `patch`, never `upsert`: the row has already been written by the time a cascade fails, and a
- * whole-item write here would replace whatever landed since. Guarded on the revision the caller
- * read, so it cannot stamp a row a later push has already moved past.
- *
- * @param {string} id
- * @param {string|null} pendingAt an ISO timestamp, or null to clear the marker
- * @param {string} [etag] the `_etag` the caller read off the row
+ * Record or clear (`pendingAt` null) that this project owes a visibility cascade. `patch` guarded on the caller's
+ * `etag`, never `upsert`: a whole-item write would replace whatever landed since.
  */
 async function patchCascadePending(id, pendingAt, etag) {
   const op = pendingAt
@@ -481,10 +404,8 @@ async function patchVis(id, vis) {
 }
 
 /**
- * Ids of every project holding `code`, current or legacy. Unfiltered, not systemAccess: that still
- * hides sealed (`compliance`) rows and rows with no `read[]`, and both hold their codes all the same.
- * Ids only; the link controller answers 409 without an id for a holder the caller cannot read;
- * other callers use the ids internally.
+ * Ids of every project holding `code`, current or legacy. Unfiltered, not systemAccess: that still hides sealed
+ * (`compliance`) rows and rows with no `read[]`, which hold codes all the same.
  */
 async function listShortCodeOwners(code) {
   const spec = {

@@ -1,11 +1,7 @@
 'use strict';
 
-/**
- * GET handlers for Cosmos kinds, and the one place their fields are withheld (`redactForAccess`).
- *
- * Called with an entity name: the mirror kinds' continuation-token lists (users, groups,
- * inspections). Called with a kind spec: the native list contract (`helpers/native-query.js`).
- */
+// GET handlers for Cosmos kinds, and the one place their fields are withheld (`redactForAccess`). An
+// entity name gives a continuation-token list (users, groups, inspections); a kind spec, the native contract.
 
 const { resolveAccess, pageSizeFor } = require('../../helpers/access-sql');
 const { assertKindSpec, parseNativeQuery, nativeCriteria, isEagleId } = require('../../helpers/native-query');
@@ -19,15 +15,8 @@ const NO_STORE = 'private, no-store';
 // Searches on these carry names and emails; their terms stay out of the 13-month events table.
 const UNLOGGED_SEARCH_KINDS = Object.freeze(['users', 'comments']);
 
-/**
- * A kind spec: `{ entity, repository, sortKeys, filters, multiValueFilters, aliases?, qFields?,
- * valueAliases?, parentJoin?, audited?, notFound? }`. `valueAliases` is filter field -> spelling pairs
- * (`helpers/spellings.js`); a value matches every spelling it pairs with. `aliases` is query name -> filter field (`{ project: 'projectId' }`). `repository` is `{ list(access, {criteria, orderBy, pageNum, pageSize, parsed}),
- * count(access, {criteria, parsed}), getById(access, id), getByEagleId?(access, id) }`, each bound to
- * the caller's visibility predicate (`cosmosKind` builds one). `parsed` is the `parseNativeQuery`
- * result, for a store that cannot take Cosmos SQL (`search/native-index.js`); list and count get the
- * same object. `parentJoin(access, rows)` runs on redacted rows.
- */
+// Spec fields: `assertKindSpec`, `parseNativeQuery`. Repository reads must apply the caller's visibility
+// predicate (`cosmosKind` does); `parsed` reaches them for stores without Cosmos SQL; `parentJoin` gets redacted rows.
 function nativeListHandler(spec) {
   assertKindSpec(spec);
   return async (req, res) => {
