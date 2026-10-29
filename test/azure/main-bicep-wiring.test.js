@@ -401,9 +401,9 @@ test('the test param file turns assessmentPass on', () => {
     'test dates assessments nightly so it is proven before prod');
 });
 
-test('the prod param file keeps assessmentPass off', () => {
-  assert.match(PROD_PARAMS, /^param assessmentPass = false$/m,
-    'prod stays undated until test has proven the assessment pass');
+test('the prod param file turns assessmentPass on', () => {
+  assert.match(PROD_PARAMS, /^param assessmentPass = true$/m,
+    'prod dates assessments nightly now that test has proven the pass');
 });
 
 test('the API app carries ASSESSMENT_PASS from assessmentPass, default off', () => {
