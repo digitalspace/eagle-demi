@@ -17,6 +17,7 @@ on:
       - 'package.json'
       - 'yarn.lock'
       - 'frontend/public/assets/geojson/**'
+      - 'azure/search/data-checks.json'
       - '.github/workflows/azure-deploy-staging-api.yaml'
   workflow_dispatch:
 
