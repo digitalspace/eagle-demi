@@ -294,7 +294,9 @@ test('a mirrored work carries the contract keys and no staff field', async () =>
   const track = fakeTrackWorks({
     works: [trackWork(11, 207, AMENDMENT)],
     phasesByWork: { 11: [phaseRow({ id: 901 })] },
-    eventsByPhase: { 901: [event(1)] }
+    eventsByPhase: {
+      901: [event(1, { name: 'staff typed name' }, { name: 'Template Name' }), event(2, { name: 'Event Name' }, { name: null })]
+    }
   });
 
   const [row] = (await pullWorks(track)).works.get('207');
@@ -306,6 +308,8 @@ test('a mirrored work carries the contract keys and no staff field', async () =>
   assert.deepStrictEqual(Object.keys(row.milestones[0]).sort(), [
     'actualDate', 'anticipatedDate', 'eventType', 'name', 'numberOfDays', 'outcome', 'position'
   ]);
+  assert.deepStrictEqual(row.milestones.map(m => m.name), ['Template Name', 'Event Name'],
+    'the template name wins; the event name is only the fallback');
 });
 
 test('types 4 and 14 are not mirrored and type 10 is', async () => {
@@ -324,7 +328,7 @@ test('an event whose configuration is HIDDEN is dropped', async () => {
   const track = fakeTrackWorks({
     works: [trackWork(11, 207, AMENDMENT)],
     phasesByWork: { 11: [phaseRow({ id: 901 })] },
-    eventsByPhase: { 901: [event(1, { name: 'Shown' }), event(2, { name: 'Hidden' }, { visibility: 'HIDDEN' })] }
+    eventsByPhase: { 901: [event(1, {}, { name: 'Shown' }), event(2, {}, { name: 'Hidden', visibility: 'HIDDEN' })] }
   });
 
   const [row] = (await pullWorks(track)).works.get('207');
