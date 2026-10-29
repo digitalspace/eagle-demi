@@ -1159,6 +1159,16 @@ test('a --max-pages cut whose last page repeats a row of the page before is stil
   assert.match(h.out[0], /truncated \(eagle: paging stopped after 2 page/);
 });
 
+test('a --max-pages cut that reaches the first total but re-reads a higher one is truncated', async () => {
+  const ids = hexIds(100);
+  const h = harness((host, url) => {
+    const grown = host === 'eagle.test' && url.searchParams.get('pageSize') === '1';
+    return json(searchBody(ids.slice(0, grown ? 1 : 100).map(id => project(id)), grown ? 150 : 100));
+  });
+  await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'search-Project-public', '--max-pages', '1'], h.deps);
+  assert.match(h.out[0], /truncated \(eagle: paging stopped after 1 page/);
+});
+
 test('an Eagle field is compared under its native name: projectType and address, not type and location', async () => {
   const renamed = await staffSearch('Project', project(A), nativeProject(A));
   assert.match(renamed.line, /match=1 .*fieldDiff=0 unexplained=0/);
