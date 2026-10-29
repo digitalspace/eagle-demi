@@ -378,11 +378,12 @@ const worksBudgetMs = 10 * 60 * 1000;
 const WORKS_CONCURRENCY = 8;
 
 
-/** One milestone event in the public `works[].milestones[]` shape. Nothing else leaves Track. */
+/** One milestone event in the public `works[].milestones[]` shape. Nothing else leaves Track.
+ *  The template name wins over the event name because staff rename events freely. */
 function trackMilestoneToPublic(event, outcome) {
   const conf = event.event_configuration || {};
   return {
-    name: event.name || conf.name || null,
+    name: conf.name || event.name || null,
     position: conf.event_position || null,
     eventType: conf.event_type_id ?? null,
     actualDate: isoOrNull(event.actual_date),
