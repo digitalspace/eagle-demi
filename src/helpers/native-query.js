@@ -52,6 +52,11 @@ function assertKindSpec(spec) {
       throw new Error(`[native] ${spec.entity}: multi-value filter ${field} is not a declared filter`);
     }
   }
+  for (const field of spec.anyOf || []) {
+    if (!(spec.filters || []).includes(field)) {
+      throw new Error(`[native] ${spec.entity}: any-of filter ${field} is not a declared filter`);
+    }
+  }
   for (const field of Object.keys(spec.valueAliases || {})) {
     if (!(spec.filters || []).includes(field)) {
       throw new Error(`[native] ${spec.entity}: value aliases for ${field}, which is not a declared filter`);
@@ -140,10 +145,11 @@ function booleansOf(spec, kind, q, access) {
 
 /**
  * Parse and validate `query` for `spec`. Answers `{ error }` (a 400) or the parsed query:
- * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]},
+ * `{ pageNum, pageSize, count, sort: {field, desc}|null, ids, q, filters: {field: [values]}, anyOf: {field: [values]},
  * ranges: [{name, field, op, value}], contains: {field: text}, presence: {field: bool}, flags: {field: bool} }`.
- * `filters`, `contains`, `presence` and `flags` are keyed by row field, whatever name the query used, so
- * `nativeCriteria` renders them from `parsed` alone. `spec.ranges` is query name ->
+ * `filters`, `anyOf`, `contains`, `presence` and `flags` are keyed by row field, whatever name the query used, so
+ * `nativeCriteria` renders them from `parsed` alone. `spec.anyOf` names filters on an array field: they
+ * leave `filters` for `anyOf`, and match a row whose array holds any of the values. `spec.ranges` is query name ->
  * `{ field, op: 'ge'|'le' }`, one day each, for a bound with no row field of its own
  * (`datePostedStart` -> `datePosted ge`). `spec.contains` is query name -> field, a case-blind
  * substring; `spec.presence` is query name -> field, `true` when it holds a value other than null or '';
@@ -218,6 +224,12 @@ function parseNativeQuery(spec, query, access) {
     const pairs = (spec.valueAliases || {})[field];
     filterValues[field] = pairs ? [...new Set(values.flatMap(v => spellingsOf(pairs, v)))] : values;
   }
+  const anyOf = {};
+  for (const field of spec.anyOf || []) {
+    if (filterValues[field] === undefined) continue;
+    anyOf[field] = filterValues[field];
+    delete filterValues[field];
+  }
 
   const ranges = [];
   for (const [name, { field, op }] of Object.entries(spec.ranges || {})) {
@@ -245,7 +257,7 @@ function parseNativeQuery(spec, query, access) {
   if (flags.error) return flags;
 
   return {
-    pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues, ranges, contains,
+    pageNum, pageSize, count: q.count === 'true', sort, ids, q: keyword, filters: filterValues, anyOf, ranges, contains,
     presence: presence.values, flags: flags.values
   };
 }
@@ -288,6 +300,13 @@ function nativeCriteria(spec, parsed, access) {
   Object.entries(parsed.filters).forEach(([field, values], i) => {
     const match = values.length === 1 ? eq(field, values[0], `@nf${i}`) : inList(field, values, `@nf${i}_`);
     criteria.push({ clause: `(${dialAllows(field, level)} AND ${match.clause})`, params: match.params });
+  });
+
+  // EXISTS, not ARRAY_CONTAINS_ANY: only EXISTS uses the field's `/[]/?` index, as the read ACL does (access-sql.js).
+  Object.entries(parsed.anyOf || {}).forEach(([field, values], i) => {
+    const params = values.map((value, j) => ({ name: `@na${i}_${j}`, value }));
+    const held = `EXISTS(SELECT VALUE p FROM p IN c.${field} WHERE p IN (${params.map(p => p.name).join(', ')}))`;
+    criteria.push({ clause: `(${dialAllows(field, level)} AND ${held})`, params });
   });
 
   (parsed.ranges || []).forEach(({ field, op, value }, i) => {

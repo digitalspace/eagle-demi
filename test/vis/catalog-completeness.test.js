@@ -9,7 +9,8 @@ const {
   TRACK_PRECEDENCE,
   EAGLE_ONLY_FIELDS,
   mergeTrackProject,
-  mergeEagleOnlyProject
+  mergeEagleOnlyProject,
+  carryDemiOnlyFields
 } = require('../../src/merge/project');
 const { transformDocument } = require('../../src/seed/transform');
 const { chunkMarkdown } = require('../../src/chunker');
@@ -195,6 +196,22 @@ test('the projects catalog covers every field the merge emits', async (t) => {
       'substantially', 'substantiallyDate']) {
       assert.deepStrictEqual(catalog[field], { defaultVis: 4, maxVis: 4 }, field);
     }
+  });
+
+  await t.test('every key the derive step adds is catalogued', () => {
+    const out = carryDemiOnlyFields(mergeTrackProject(TRACK_FIXTURE, EAGLE_FIXTURE,
+      { phases: TRACK_PHASES_FIXTURE, works: trackWorks() }), { documentPhases: [] });
+    for (const key of ['assessments', 'phaseIds', 'activeWork', 'documentPhases']) {
+      assert.ok(key in out, `the fixture must actually exercise the ${key} path`);
+    }
+    assert.deepStrictEqual(Object.keys(out).filter(k => !(k in catalog)), []);
+  });
+
+  await t.test('the derived assessment fields are public and the dating pass input is staff only', () => {
+    for (const field of ['assessments', 'phaseIds', 'activeWork']) {
+      assert.deepStrictEqual(catalog[field], { defaultVis: 4, maxVis: 4 }, field);
+    }
+    assert.deepStrictEqual(catalog.documentPhases, { defaultVis: 2, maxVis: 2 });
   });
 
   await t.test('every key mergeEagleOnlyProject emits is catalogued', () => {

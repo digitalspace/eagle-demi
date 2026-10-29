@@ -21,6 +21,8 @@ const audit = require('../../../src/utils/audit');
 const { makeRes } = require('../../../src/http/router');
 const { recordEvents } = require('../../helpers/record-events');
 const { swaggerParams, repeatableNames, queryNames } = require('../../helpers/swagger-params');
+const { evaluate } = require('../../helpers/updates-store');
+const { parseNativeQuery, nativeCriteria } = require('../../../src/helpers/native-query');
 
 const ROWS = [{ id: 'p1', name: 'Mine One', read: ['public'] }, { id: 'p2', name: 'Mine Two', read: ['public'] }];
 
@@ -362,6 +364,49 @@ test('GET /projects sector, last-updated and name filters', async (t) => {
       assert.match(queries[0].query, new RegExp(`ORDER BY c\\.${key} ASC$`));
     });
   }
+});
+
+// Cariboo's shape: the current block is 2018, and `phaseIds` also holds the phase its 2002 block reached.
+const PHASED = [
+  { id: 'cariboo', currentPhaseName: { _id: 'ph2018' }, phaseIds: ['ph2002', 'ph2018'] },
+  { id: 'new', currentPhaseName: { _id: 'ph2018' }, phaseIds: ['ph2018'] },
+  { id: 'dialled', currentPhaseName: { _id: 'ph2018' }, phaseIds: ['ph2002', 'ph2018'], vis: { phaseIds: 2 } },
+  { id: 'unbuilt', currentPhaseName: { _id: 'ph2002' } }
+];
+
+/** The PHASED rows the projects kind's criteria for `query` keep, for an anonymous caller. */
+function phaseMatches(query) {
+  const parsed = parseNativeQuery(projectController.projectsKind, query, null);
+  assert.ok(!parsed.error, parsed.error);
+  const { criteria } = nativeCriteria(projectController.projectsKind, parsed, null);
+  const params = Object.fromEntries(criteria.flatMap(c => c.params).map(p => [p.name, p.value]));
+  return PHASED.filter(row => criteria.every(c => evaluate(c.clause, row, params))).map(row => row.id);
+}
+
+test('phaseIds filter matches a project whose 2002 block held the phase', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('one phase id keeps the row whose older block held it, not one that never did', () => {
+    assert.deepStrictEqual(phaseMatches({ phaseIds: 'ph2002' }), ['cariboo']);
+  });
+
+  await t.test('several phase ids keep a row holding any of them', () => {
+    assert.deepStrictEqual(phaseMatches({ phaseIds: ['ph1996', 'ph2002'] }), ['cariboo']);
+  });
+
+  await t.test('currentPhaseName still matches the current block only', () => {
+    assert.deepStrictEqual(phaseMatches({ currentPhaseName: 'ph2002' }), ['unbuilt']);
+  });
+
+  await t.test('with q, the index filter and the Cosmos re-read both ask for any of the phases', async (t) => {
+    const { searches, queries } = fakeStores(t);
+    const res = await call('q=mine&phaseIds=a&phaseIds=b');
+    assert.strictEqual(res.status, 200);
+    assert.ok(searches[0].filter.includes("(phaseIds/any(p: search.in(p, 'a,b', ',')))"), searches[0].filter);
+    assert.ok(queries[0].query.includes('((NOT IS_DEFINED(c.vis["phaseIds"]) OR c.vis["phaseIds"] >= 4) AND ' +
+      'EXISTS(SELECT VALUE p FROM p IN c.phaseIds WHERE p IN (@na0_0, @na0_1)))'), queries[0].query);
+    assert.deepStrictEqual([param(queries[0], '@na0_0'), param(queries[0], '@na0_1')], ['a', 'b']);
+  });
 });
 
 const LIST_ROUTES = [

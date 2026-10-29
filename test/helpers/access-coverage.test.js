@@ -255,7 +255,7 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 45,
+    assert.strictEqual(emissions.length, 46,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
     for (const site of [

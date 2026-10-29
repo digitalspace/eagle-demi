@@ -185,6 +185,9 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
             path: '/CEAAInvolvement/_id/?'
           }
           {
+            path: '/phaseIds/[]/?'
+          }
+          {
             path: '/decisionDate/?'
           }
           // The native list's sort keys (repositories/projects.js SORTABLE). upsert writes each on

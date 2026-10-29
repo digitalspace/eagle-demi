@@ -471,6 +471,8 @@ const config = {
   trackClientSecret:         secretFromEnv('TRACK_CLIENT_SECRET'),
   // The nightly sync also mirrors every public Track work type with its milestones (`works[]`).
   trackWorksSync:            process.env.TRACK_WORKS_SYNC === 'true',
+  // Then dates each project's assessments (src/scripts/date-assessment-phases.js).
+  assessmentPass:            process.env.ASSESSMENT_PASS === 'true',
   keycloakAdminClientId:     process.env.KEYCLOAK_ADMIN_CLIENT_ID || '',
   keycloakAdminClientSecret: secretFromEnv('KEYCLOAK_ADMIN_CLIENT_SECRET'),
 

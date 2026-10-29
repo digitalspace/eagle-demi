@@ -110,6 +110,8 @@ const WIRED = [
     'the API module call — without it the sync cannot ask Keycloak for a Track token'],
   ['trackWorksSync', /^\s+trackWorksSync: trackWorksSync$/m,
     'the API module call — without it TRACK_WORKS_SYNC stays false whatever the param file says'],
+  ['assessmentPass', /^\s+assessmentPass: assessmentPass$/m,
+    'the API module call — without it ASSESSMENT_PASS stays false whatever the param file says'],
   ['roleSyncClientId', /^\s+roleSyncClientId: roleSyncClientId$/m,
     'the API module call — without it the sync has no admin identity to grant roles with'],
   ['deployDevbox',
@@ -391,6 +393,23 @@ test('the API app carries TRACK_WORKS_SYNC from trackWorksSync, default off', ()
   assert.match(API_MODULE, /^param trackWorksSync bool = false$/m);
   assert.match(MAIN, /^param trackWorksSync bool = false$/m);
   assert.match(API_MODULE, /name: 'TRACK_WORKS_SYNC'\n\s+value: trackWorksSync \? 'true' : 'false'$/m,
+    "src/config.js reads only the string 'true' as on");
+});
+
+test('the test param file turns assessmentPass on', () => {
+  assert.match(TEST_PARAMS, /^param assessmentPass = true$/m,
+    'test dates assessments nightly so it is proven before prod');
+});
+
+test('the prod param file turns assessmentPass on', () => {
+  assert.match(PROD_PARAMS, /^param assessmentPass = true$/m,
+    'prod dates assessments nightly now that test has proven the pass');
+});
+
+test('the API app carries ASSESSMENT_PASS from assessmentPass, default off', () => {
+  assert.match(API_MODULE, /^param assessmentPass bool = false$/m);
+  assert.match(MAIN, /^param assessmentPass bool = false$/m);
+  assert.match(API_MODULE, /name: 'ASSESSMENT_PASS'\n\s+value: assessmentPass \? 'true' : 'false'$/m,
     "src/config.js reads only the string 'true' as on");
 });
 

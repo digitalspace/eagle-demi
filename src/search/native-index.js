@@ -78,6 +78,7 @@ async function updatesIndexAcl(access) {
  * Per index: how its search runs, which column carries project identity for the ACL (or an `acl`
  * that builds it), and the native filter field -> filterable index column. A filter with no column
  * here still narrows in Cosmos; mapping it only spends the id page on rows that can match.
+ * `collections` is the same for an `anyOf` filter, onto a Collection(Edm.String) column.
  *
  * `searched` is every native field the keyword matches against. A row is a keyword hit only when
  * the caller may see all of them, because which field matched is not reported back.
@@ -98,6 +99,7 @@ const INDEX_MAPS = Object.freeze({
       sector: 'sector',
       dateUpdated: 'dateUpdated'
     },
+    collections: { phaseIds: 'phaseIds' },
     types: { decisionDate: 'date', dateUpdated: 'date' },
     // Matched in the index so a hit ranked past the id page is not lost; Cosmos still re-checks it.
     contains: { name: NAME_CONTAINS_FIELDS.Project },
@@ -216,16 +218,17 @@ function andOData(...clauses) {
 
 /**
  * The index `$filter` for this caller and parsed query: the ACL, the map's fixed clauses, `searchVis`
- * when there is a keyword, then the mapped filters, ranges, presence tests and `ids=`. `{ filter: null, empty: true }`
+ * when there is a keyword, then the mapped filters, any-of filters, ranges, presence tests and `ids=`. `{ filter: null, empty: true }`
  * means the caller can match nothing and no request may be sent; `filter: null` with `empty: false`
- * is unrestricted. Throws a 400 for a typed value its column refuses, and in paged mode for a filter
- * or presence test with no column or any flag, before any clause is built.
+ * is unrestricted. Throws a 400 for a typed value its column refuses, and in paged mode for a filter,
+ * any-of filter or presence test with no column or any flag, before any clause is built.
  */
 function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionField)) {
   const typed = typedLiterals(map, parsed);
   if (map.paged) {
     // Every flag is refused: the index has no flag clause, so a page re-read would drop rows the count still holds.
     const unmapped = Object.keys({ ...parsed.filters, ...parsed.presence }).find(field => !map.columns[field]) ||
+      Object.keys(parsed.anyOf || {}).find(field => !(map.collections || {})[field]) ||
       Object.keys(parsed.flags || {})[0];
     if (unmapped) throw badRequest(`cannot filter on ${unmapped} here`);
     // The page re-read drops CONTAINS, so a text filter the index cannot match would vanish.
@@ -245,6 +248,10 @@ function indexFilter(map, parsed, access, acl = filterFor(access, map.partitionF
     } else {
       clauses.push(values.length === 1 ? `${column} eq ${quote(values[0])}` : inClause(column, values));
     }
+  }
+  for (const [field, values] of Object.entries(parsed.anyOf || {})) {
+    const column = (map.collections || {})[field];
+    if (column) clauses.push(`${column}/any(p: ${inClause('p', values)})`);
   }
   clauses.push(...typed.ranges);
   for (const [field, text] of Object.entries(parsed.contains || {})) {

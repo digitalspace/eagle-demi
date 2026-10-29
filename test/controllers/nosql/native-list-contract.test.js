@@ -676,6 +676,27 @@ test('contains and presence render from the parsed query alone, as the index re-
   assert.deepStrictEqual(criteria.flatMap(c => c.params), [{ name: '@nc0', value: 'late' }]);
 });
 
+test('a kind without anyOf emits no EXISTS clause', async (t) => {
+  await t.test('its filters stay plain filters, so an array-shaped value is matched as a value', () => {
+    const parsed = parseNativeQuery(SPEC, { eaoStatus: ['Pending', 'Published'] }, null);
+    assert.deepStrictEqual(parsed.anyOf, {});
+    assert.deepStrictEqual(parsed.filters, { eaoStatus: ['Pending', 'Published'] });
+    const clauses = nativeCriteria(SPEC, parsed, null).criteria.map(c => c.clause).join(' AND ');
+    assert.ok(!clauses.includes('EXISTS'), clauses);
+    assert.ok(clauses.includes('c.eaoStatus IN (@nf0_0, @nf0_1)'), clauses);
+  });
+
+  await t.test('a parsed query with no anyOf key renders, as an older caller builds one', () => {
+    const { criteria } = nativeCriteria({}, { filters: { eaoStatus: ['Pending'] } }, null);
+    assert.ok(!criteria.some(c => c.clause.includes('EXISTS')));
+  });
+
+  await t.test('an anyOf field that is not a declared filter is refused at route load', () => {
+    assert.throws(() => assertKindSpec({ ...SPEC, anyOf: ['tags'] }), /any-of filter tags is not a declared filter/);
+    assert.doesNotThrow(() => assertKindSpec({ ...SPEC, anyOf: ['eaoStatus'] }));
+  });
+});
+
 test('a store that cannot take Cosmos SQL gets the parsed query, the same object in list and count', async () => {
   const seen = {};
   const repository = {

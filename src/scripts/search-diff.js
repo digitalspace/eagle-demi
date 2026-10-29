@@ -412,7 +412,8 @@ const EXPECTED_KEY_DELTA = {
     // It was missing from this list on the first pass because the delta was measured from a BARE
     // request, which takes the other branch — and 12 of 45 cases then failed on a key that was
     // always expected. Measure a constant like this from a request that exercises both branches.
-    demiOnly: ['highlighted', 'isPublished', 'legacyEagleId', 'sources', 'trackProjectId'],
+    demiOnly: ['activeWork', 'assessments', 'highlighted', 'isPublished', 'legacyEagleId', 'phaseIds',
+      'sources', 'trackProjectId'],
     eagleOnly: ['@search.score', 'ceaaInvolvementId', 'currentPhaseNameId', 'displayName',
       'eacDecisionId', 'electoralDistrict', 'location', 'municipality', 'pcpStatus', 'popularity',
       'proponentId', 'read', 'regionalDistrict', 'updatedDate']

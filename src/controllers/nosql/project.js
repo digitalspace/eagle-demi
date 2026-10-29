@@ -21,7 +21,6 @@ const {
   resolveAccess, systemAccess, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
 const { catalogFor } = require('../../vis/catalog');
-const { PATCH_MAX_OPERATIONS } = require('../../db/cosmos-nosql');
 const { serverError } = require('../../helpers/response');
 const { inList } = require('../../repositories/_sql');
 const aiSearch = require('../../search/ai-search');
@@ -33,6 +32,7 @@ const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS,
   LEGISLATION_KEY
 } = require('../../merge/project');
+const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
 const {
@@ -40,7 +40,7 @@ const {
 } = require('../../helpers/short-links');
 const { validateDestination } = require('../../helpers/link-url');
 const config = require('../../config');
-const { writeGuarded } = require('../../helpers/etag-write');
+const { writeGuarded, raced } = require('../../helpers/etag-write');
 const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
@@ -61,6 +61,7 @@ function writeConflict(res, what, id) {
 
 const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 100;
+const MAX_CLASSIFY_FIELDS = 10;
 const LINK_RACE_ERROR = 'A short link was being written by another request. Try again.';
 
 const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/g;
@@ -299,17 +300,19 @@ const projectsKind = {
   sortKeys: projects.SORTABLE,
   filters: [
     'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict',
-    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector'
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds'
   ],
   // These three are stored as `{_id, name}` List refs; the query names the field, the filter matches its id.
   aliases: {
     eacDecision: 'eacDecision._id', currentPhaseName: 'currentPhaseName._id', CEAAInvolvement: 'CEAAInvolvement._id'
   },
-  // Every filter eagle-admin's project list offers as a multi-select (project-list.component.html), plus eagle-public's sector.
+  // eagle-admin's project list multi-selects these (project-list.component.html); eagle-public sends several sectors.
   multiValueFilters: [
     'projectType', 'region', 'projectState', 'proponentName',
-    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector'
+    'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds'
   ],
+  // Every phase the project held under any Act, where `currentPhaseName` is the current block's only.
+  anyOf: ['phaseIds'],
   valueAliases: { projectType: PROJECT_TYPE_SPELLINGS },
   ranges: {
     decisionDateStart: { field: 'decisionDate', op: 'ge' },
@@ -523,6 +526,9 @@ exports.updateProject = async (req, res) => {
     // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level: the dial map is
     // policy rather than content, and no route sets it yet.
     const refused = refusedWriteKeys('projects', changes, access, existing);
+    for (const key of DERIVED_FIELDS) {
+      if (Object.hasOwn(changes, key) && !refused.includes(key)) refused.push(key);
+    }
     // The tag copy below writes the other row of the pair, so its dial on `tags` must allow this
     // caller too. Same message as a refusal here: nothing about that row is told to a caller who may
     // not read it.
@@ -562,6 +568,7 @@ exports.updateProject = async (req, res) => {
           trackProjectId: current.trackProjectId,
           updatedAt: new Date().toISOString()
         };
+        Object.assign(row, deriveAssessments(row, { previous: current.assessments }));
         return {
           status: 'saved',
           replaced: current,
@@ -752,11 +759,10 @@ exports.setVisibility = async (req, res) => {
     }
 
     const fields = Object.keys(vis);
-    // One dial is one Cosmos patch operation, and patch() refuses more than its cap. Refused here
-    // so the caller gets a 400 naming the limit rather than a 500 from the data layer.
-    if (fields.length > PATCH_MAX_OPERATIONS) {
+    // A bound on one classify request; patchVis writes all dials as one whole-map `/vis` set.
+    if (fields.length > MAX_CLASSIFY_FIELDS) {
       return res.status(400).json({
-        error: `At most ${PATCH_MAX_OPERATIONS} fields may be classified in one request, got ${fields.length}.`
+        error: `At most ${MAX_CLASSIFY_FIELDS} fields may be classified in one request, got ${fields.length}.`
       });
     }
 
@@ -778,7 +784,15 @@ exports.setVisibility = async (req, res) => {
       }
     }
 
-    const saved = await projects.patchVis(existing.id, vis);
+    let saved;
+    try {
+      saved = await projects.patchVis(existing.id, vis);
+    } catch (err) {
+      if (raced(err)) return writeConflict(res, 'project classify', existing.id);
+      throw err;
+    }
+    // Deleted between the read above and the patch's own read.
+    if (!saved) return res.status(404).json({ error: 'Project not found' });
 
     // Field NAMES and LEVELS only, never values — same rule as project.update, and it matters more
     // here: the fields being classified are the ones somebody decided were sensitive.
