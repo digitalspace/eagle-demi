@@ -140,8 +140,8 @@ jobs:
           # 0 so the base branch is fetched as well: the diff below is against origin/<base>.
           fetch-depth: 0
 
-      # Two shapes count. `azure/search/**` is the index definition itself; the `*_SELECT` constants
-      # in ai-search.js are the code asking for fields. Either one alone breaks the pair.
+      # Two shapes count. `azure/search/**` is the index definition, not `data-checks.json` (a runtime
+      # health check the API loads); the `*_SELECT` constants in ai-search.js are the code asking for fields.
       - name: Does this PR change what search selects?
         id: touched
         env:
@@ -151,7 +151,7 @@ jobs:
           CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD")
           echo "$CHANGED"
           TOUCHED=false
-          if grep '^azure/search/' <<<"$CHANGED" | grep -qvE '\.md$'; then
+          if grep '^azure/search/' <<<"$CHANGED" | grep -qvE '\.md$|/data-checks\.json$'; then
             TOUCHED=true
           fi
           # Values, not diff lines: the constants are multi-line concatenations, so a widening
