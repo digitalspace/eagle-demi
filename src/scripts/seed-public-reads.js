@@ -1,60 +1,7 @@
 'use strict';
 
-/**
- * Backfill the public-read containers from eagle-api.
- *
- * The `PUT /eagle/*` mirrors only ever see a row eagle-api WRITES. Everything written before the
- * mirrors existed — every list item, organization, notification, comment period and comment in the
- * corpus — has to be walked in once. This is that walk, and it is also the repair tool: a `List`
- * migration in eagle-api touches Mongo directly and fires no push, so `--only lists` after one is
- * the only way DEMI hears about it.
- *
- * NOTHING IS MAPPED HERE except the `kind: 'List'` row. Every other dataset goes through its own
- * mirror's `mirrorFromEagle`, the same function the push handler calls, so a backfilled row and a
- * pushed row are byte-for-byte the same — including the ACL ceiling a comment period takes from
- * its project and a comment takes from its period. `List` has no mirror because eagle-api has no
- * List write controller to push from (see src/http/routes.js), so this script is its only writer.
- *
- * Order matters, and `--only` does not reorder it: a comment period needs its project mirrored
- * (seed-nosql.js), and a comment needs its period.
- *
- *   1. lists           Eagle `List`                 -> lists (kind: List)
- *   2. organizations   Eagle `Organization`         -> lists (kind: Organization)
- *   3. notifications   Eagle `ProjectNotification`  -> notifications
- *   4. updates         Eagle `RecentActivity`       -> updates
- *   5. commentPeriods  Eagle `CommentPeriod`        -> commentPeriods
- *   6. comments        /api/public/comment          -> comments
- *
- * **DRY RUN BY DEFAULT**, as seed-nosql.js is. `--live` is required to write anything.
- *
- * Usage:
- *   node src/scripts/seed-public-reads.js [--live | --dry-run]
- *                                         [--only lists,comments] [--since 2026-01-01]
- *                                         [--state ./seed-public-reads.state.json]
- *                                         [--summary ./summary.json]
- *
- * The environment is chosen the way every other database script chooses it — by the settings the
- * process starts with, never by a flag: `EAGLE_API_BASE` for the source and `COSMOS_ENDPOINT` /
- * `COSMOS_NOSQL_DATABASE` for the target, which `demi-run` supplies on the devbox. See
- * docs/public-read-backfill.md.
- *
- * Resumable. Each finished dataset is written to the state file, and a rerun skips it; the comment
- * stage checkpoints per comment period, so a killed run resumes at the period it died in rather
- * than at the first one. Writes are upserts, so a replay is harmless either way.
- *
- * A stage is only FINISHED when it neither errored nor dropped a row for want of a parent. A drop
- * is not a failure — the parent is another stage's to supply, and may be published tomorrow — but
- * it does mean rows are still owed, so the stage stays off the checkpoint and a plain rerun walks
- * it again. The comment stage's per-period checkpoint survives that rerun, so it only re-walks the
- * periods it owes. The counters in the state file and in the log line are one run's, not a total.
- *
- * `--only <stage>` RE-RUNS the stages it names, checkpoint or no checkpoint — it is how a repair is
- * asked for, and `--only comments` ignores the per-period checkpoint for the same reason. Delete
- * the state file to force a full rerun of everything.
- *
- * `--summary FILE` writes the run's summary as JSON, even when a stage throws, so a caller can gate
- * on `unfinished` (stages that errored or dropped rows) instead of reading the log.
- */
+// Backfill for rows written before the PUT /eagle/* mirrors existed, and the repair path for List
+// migrations, which fire no push. Order, resume and --only rules: docs/public-read-backfill.md.
 
 const fs = require('fs');
 
@@ -72,18 +19,14 @@ const { eagleBaseAcl } = require('../seed/transform');
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 
-/** Every stage `--only` accepts, IN RUN ORDER — see the header. */
+// Run order: a comment period needs its project mirrored, and a comment needs its period.
 const ALL_STAGES = ['lists', 'organizations', 'notifications', 'updates', 'commentPeriods',
   'comments'];
 
 const DEFAULT_STATE = './seed-public-reads.state.json';
 
-/**
- * `/api/public/comment` returns `_id`, `read` and little else unless the fields are named, so the
- * mirror would store a row of nulls. Every field `controllers/nosql/comment.js` reads is listed.
- * `author` is asked for and usually withheld: eagle-api deletes it from an anonymous comment
- * before it answers, which is why a backfilled anonymous comment carries no author.
- */
+// eagle-api returns little more than _id unless fields are named. It strips `author` from
+// anonymous comments, so a backfilled anonymous comment has none.
 const COMMENT_FIELDS = ['author', 'comment', 'commentId', 'dateAdded', 'documents', 'eaoStatus',
   'isAnonymous', 'period'];
 
@@ -144,12 +87,8 @@ function parseArgs(argv) {
   return args;
 }
 
-/**
- * The `kind: 'List'` row. The only mapping this script owns — see the header.
- *
- * A List item is a lookup label with no parent, so its own `read[]` is the whole ACL, exactly as
- * the Organization mirror treats an organization.
- */
+// The only mapping this script owns: eagle-api has no List write controller, so no mirror exists.
+// A List item has no parent, so its own read[] is the whole ACL.
 function mirrorListItem(eagleId, doc, read, existing) {
   return {
     id: eagleId,
@@ -179,15 +118,8 @@ function mirrorList(eagleId, doc, repo = listsRepo) {
   );
 }
 
-/**
- * Mirror one `RecentActivity` and CONSUME its notification claim.
- *
- * `controllers/nosql/update.js` announces a publication to eagle-notify once per update, guarded by
- * `notifiedAt`. A backfill carries years of already-published updates, and none of them is news, so
- * the claim is taken here rather than left for the next push to spend on a five-year-old headline.
- * Live rows only: a scheduled update is still news, and the announce timer takes it when it is due.
- * The claim is marked 'backfill', so a later withdrawal sends no cancellation either.
- */
+// Consumes the eagle-notify claim: old updates are not news. Live rows only, since a scheduled one
+// still is; the 'backfill' mark also stops a later withdrawal sending a cancellation.
 async function mirrorUpdate(eagleId, doc, deps) {
   const result = await deps.updateMirror.mirrorFromEagle(eagleId, doc);
   // No row was written — a newer push won, or this one never found the row standing still — so
@@ -225,13 +157,8 @@ const DATASETS = {
   }
 };
 
-/**
- * Is this row inside `--since`?
- *
- * Client-side: eagle-api's `/search` takes no date filter, so `--since` narrows what is WRITTEN and
- * never what is fetched. A row carrying neither timestamp is admitted — a row rewritten without a
- * date is worth one wasted upsert, a row skipped for want of one is drift.
- */
+// Client-side: eagle-api's /search takes no date filter. A row with no timestamp is admitted,
+// since a wasted upsert is cheaper than drift.
 function withinSince(doc, since) {
   if (!since) return true;
   const stamp = doc.dateUpdated || doc.dateAdded;
@@ -248,13 +175,8 @@ function saveState(path, state) {
   fs.writeFileSync(path, JSON.stringify(state, null, 2));
 }
 
-/**
- * Counters every stage reports, and the line the run is read off.
- *
- * `dropped` is the subset of `skipped` whose parent was not in DEMI. It is counted apart because
- * the two skips mean opposite things about completeness: a row outside `--since` was never wanted,
- * a dropped row is still owed and lands as soon as its parent does.
- */
+// `dropped` (parent not in DEMI) is split out of `skipped`: an out-of-range row was never wanted,
+// a dropped row is still owed.
 const newCounts = () => ({ fetched: 0, written: 0, skipped: 0, dropped: 0, errors: 0 });
 
 /** The checkpoint rule, and what `--summary` reports as unfinished. */
@@ -273,12 +195,8 @@ async function writeRow(doc, write, args, deps, counts) {
   if (!args.live) { counts.written++; return; }
 
   try {
-    // A mirror answers null when the row's parent is not in DEMI — an unpublished project's
-    // comment period, say. That is a skip, not an error: the parent is seed-nosql's to supply.
-    // It is also counted as a drop, so the stage is not checkpointed complete over rows it owes.
-    //
-    // `ignored` and `conflict` are the same kind of answer: nothing was written, so counting the
-    // row as written would checkpoint the stage over a row it never wrote.
+    // null (parent not in DEMI), `ignored` and `conflict` all mean nothing was written; counting
+    // them as drops keeps the stage off the checkpoint.
     const result = await write(doc, deps);
     const wrote = Boolean(result) && !result.ignored && result.status !== 'conflict';
     if (wrote) counts.written++; else { counts.skipped++; counts.dropped++; }
@@ -303,17 +221,8 @@ async function backfillDataset(stage, args, deps) {
   return counts;
 }
 
-/**
- * One page of a period's public comments.
- *
- * `/search` has no Comment dataset, so this is the per-period endpoint instead. `count=true` makes
- * the body a bare array of comments and puts the total in `x-total-count` — it is the only place
- * the total is reported, so the truncation check below has nowhere else to read it.
- *
- * BOTH HALVES OF THAT CONTRACT ARE CHECKED, because breaking either is silent: a missing header
- * reads as `Number(null)` = 0, which satisfies the truncation check, and an envelope body carries
- * no `_id` to survive the filter. Either way the period records zero comments and is checkpointed.
- */
+// `count=true` makes the body a bare array with the total in x-total-count. Both are checked: a
+// missing header or envelope body would silently record zero comments and checkpoint the period.
 async function fetchCommentPage(base, periodId, pageNum, deps, pageSize = deps.sources.PAGE_SIZE) {
   const url = `${base}/comment?period=${encodeURIComponent(periodId)}&count=true` +
     `&pageNum=${pageNum}&pageSize=${pageSize}` +
@@ -336,14 +245,8 @@ async function fetchCommentPage(base, periodId, pageNum, deps, pageSize = deps.s
   return { items: rows.filter(row => row && row._id), total };
 }
 
-/**
- * Every published comment of one period, page by page. Shared with reconcile-eagle.js, which reads
- * the same pages for their ids.
- *
- * Throws on a short read rather than returning what arrived, for the reason `fetchAllPages` does:
- * a truncated period looks exactly like a period whose comments were withdrawn. The backfill counts
- * the throw as an error and leaves the period out of the checkpoint, so the next run retries it.
- */
+// Throws on a short read: a truncated period looks exactly like one whose comments were withdrawn.
+// Shared with reconcile-eagle.js.
 async function eachCommentPage(periodId, deps, onPage) {
   const base = deps.sources.EAGLE_API_BASE;
   const pageSize = deps.sources.PAGE_SIZE;
@@ -374,19 +277,13 @@ async function eachCommentPage(periodId, deps, onPage) {
   return { count: fetched, total: deps.sources.settledTotal(fetched, total, reread, `period ${periodId} comments`) };
 }
 
-/**
- * The comment stage: every comment period Eagle publishes, then that period's comments.
- *
- * The period rows come from DEMI rather than from the fetch, because the comment mirror needs the
- * stored period for its ACL ceiling and its `projectId`. A period Eagle publishes that DEMI has
- * not mirrored is skipped whole — run the `commentPeriods` stage first.
- */
+// Periods are read from DEMI, not the fetch: the comment mirror needs the stored period's ACL
+// ceiling and projectId. An unmirrored period is skipped whole.
 async function backfillComments(args, deps, state) {
   const counts = newCounts();
   const periods = await deps.sources.fetchAllPages(deps.sources.EAGLE_API_BASE, 'CommentPeriod');
-  // `--only comments` is the repair, and the per-period checkpoint is what it must ignore — the
-  // same reason `backfill` ignores the stage checkpoint for a stage the operator named. Honouring
-  // it made `--only comments` a no-op that exits 0 and reads like a completed repair.
+  // `--only comments` is the repair, so it ignores the per-period checkpoint; honouring it would
+  // make the repair a no-op that exits 0.
   const done = new Set(args.onlyExplicit ? [] : ((state.comments && state.comments.periods) || []));
 
   for (const row of periods) {
@@ -408,10 +305,8 @@ async function backfillComments(args, deps, state) {
             d.commentMirror.mirrorFromEagle(String(row._id), row, period), args, deps, counts);
         }
       });
-      // Only a period whose every comment landed is checkpointed. `writeRow` swallows a row failure
-      // into `counts.errors` rather than throwing, so without this the period would be recorded
-      // done, the next run would skip it, and the failed comments would be missing for good. A
-      // comment cannot be dropped here: its period is this loop's, and a missing one skips above.
+      // writeRow swallows row failures into counts.errors, so only a period with no new errors is
+      // checkpointed; otherwise its failed comments are lost for good.
       if (counts.errors === errorsBefore) {
         done.add(periodId);
         if (args.live) {
@@ -464,9 +359,7 @@ async function backfill(argv = [], overrides = {}) {
 
 async function runStages(args, deps, state, summary) {
   for (const stage of args.only) {
-    // A finished dataset is skipped whole, so an interrupted run resumes where it stopped. NOT
-    // when the operator named the stage: `--only` is the repair tool, and a stage that has
-    // already completed once is exactly the one a repair is asked for.
+    // Skip a finished stage on resume, but not one named by --only: that is the repair request.
     if (!args.onlyExplicit && state[stage] && state[stage].completedAt && stage !== 'comments') {
       summary.skipped.push(stage);
       logger.info(`[backfill] ${stage}: already done at ${state[stage].completedAt}, skipping`);
@@ -487,9 +380,7 @@ async function runStages(args, deps, state, summary) {
     if (!stageFinished(counts)) summary.unfinished.push(stage);
     logger.info(stageLine(stage, counts, args.live));
 
-    // Only a clean stage is checkpointed: a run that logged errors has rows it did not write, and
-    // skipping it next time would leave them missing for good. A stage that DROPPED rows is in the
-    // same position: the parent it waited on can be published after this run.
+    // Checkpoint only clean stages: errors or drops mean rows are still owed.
     if (args.live && stageFinished(counts)) {
       // Spread the stage's own entry back in: the comment stage keeps its per-period checkpoint
       // there, and overwriting it would make the next run walk every period again.
