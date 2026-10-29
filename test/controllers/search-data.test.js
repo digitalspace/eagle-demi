@@ -83,10 +83,27 @@ test('search data health', async (t) => {
     await searchSchema.searchData(request(), res);
 
     assert.deepStrictEqual(calls, [
-      { indexName: 'projects-live', filter: 'currentPhaseNameId eq null and isPublished eq true' },
-      { indexName: 'projects-live', filter: 'eacDecisionId eq null and isPublished eq true' },
+      { indexName: 'projects-live',
+        filter: 'currentPhaseNameId eq null and isPublished eq true and legislationYear ne 2025' },
+      { indexName: 'projects-live',
+        filter: 'eacDecisionId eq null and isPublished eq true and legislationYear ne 2025' },
       { indexName: 'documents-live', filter: 'searchVis eq null' }
     ]);
+  });
+
+  // A Building Canada Act project has no EAO phase or decision, so counting it fails the gate on
+  // correct data.
+  await t.test('the project checks skip Building Canada Act rows', async (tt) => {
+    const calls = stubCount(tt);
+
+    const { res } = capture();
+    await searchSchema.searchData(request(), res);
+
+    const projectFilters = calls.filter((c) => c.indexName === 'projects-live').map((c) => c.filter);
+    assert.strictEqual(projectFilters.length, 2);
+    for (const filter of projectFilters) {
+      assert.ok(filter.endsWith(' and legislationYear ne 2025'), `not excluded: ${filter}`);
+    }
   });
 
   await t.test('a count over its maximum is a 503 naming the field and the number', async (tt) => {

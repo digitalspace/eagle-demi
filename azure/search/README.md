@@ -125,7 +125,8 @@ OData `$filter` describing the rows that must not be there, and how many are tol
 
 ```json
 { "index": "projects", "field": "currentPhaseNameId",
-  "filter": "currentPhaseNameId eq null and isPublished eq true", "max": 0 }
+  "filter": "currentPhaseNameId eq null and isPublished eq true and legislationYear ne 2025",
+  "max": 0 }
 ```
 
 **The checks count the `Id` twins, not the two fields the site renders.** `currentPhaseName` and
@@ -137,6 +138,10 @@ so a bare id string in Cosmos leaves both undefined. Counting the twin needs no 
 **Scoped to published rows.** An unpublished draft legitimately has no phase and no decision yet,
 and an unscoped count would fail the gate on every new project. `isPublished` is what the site
 reads, so it is what the checks count.
+
+**Building Canada Act rows are left out.** A `legislationYear` 2025 project is under the federal
+Act, so it has no EAO phase or decision and the checks skip it. A row with no year still counts,
+since OData `null ne 2025` is true.
 
 `GET /health/search-data` runs them. Per entry it sends one `top: 0, count: true` query to the live
 index the app settings point at, and answers 200 when every count is within its maximum, 503 when
