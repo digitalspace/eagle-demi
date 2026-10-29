@@ -251,8 +251,7 @@ param trackApiBase = 'https://epictrack-api-c8b80a-prod.apps.gold.devops.gov.bc.
 param trackClientId = 'demi-track-reader'
 // Off until the works[] public read is merged and deployed.
 param trackWorksSync = false
-// Off until test has proven the assessment dating.
-param assessmentPass = false
+param assessmentPass = true
 param roleSyncClientId = 'demi-role-sync'
 
 // ── eagle-notify ──────────────────────────────────────────────────────────────────────────────
