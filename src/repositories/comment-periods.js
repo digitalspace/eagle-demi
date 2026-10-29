@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * Comment periods repository — Cosmos NoSQL.
- *
- * Container `commentPeriods` (Eagle `CommentPeriod`), partitioned by `/projectId`. "The periods of
- * this project" is a single-partition query; the open rail and the unscoped search list fan out
- * across partitions, as does the point read with no project context.
- */
+// Container `commentPeriods`, partitioned by `/projectId`: one project's periods read one partition;
+// the open rail, the search list and a point read with no project fan out.
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
@@ -15,7 +10,9 @@ const {
   assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
-const { cosmosKind } = require('../helpers/native-query');
+const { cosmosKind, dialAllows } = require('../helpers/native-query');
+const { levelOf } = require('../vis/level');
+const projects = require('./projects');
 
 const CONTAINER = 'commentPeriods';
 const PARTITION_FIELD = 'projectId';
@@ -98,14 +95,8 @@ async function readForWriteEngageByMetUrl(metURL, projectId) {
 }
 
 /**
- * The periods of one parent, as this caller may see them.
- *
- * @param {string} projectId  the DEMI id of the parent the periods hang off. Usually a project,
- *   but `helpers/parent-admit.js` also admits a `ProjectNotification`, and the mirror partitions a
- *   period under whichever parent it picked — so `reconcile-eagle.js` walks both id spaces through
- *   `listEveryByProject`.
- *   Always the parent's `id`, never its `eagleId`, so a caller scoped to a project passes the same
- *   value the projects container answers on.
+ * The periods of one parent as this caller may see them. `projectId` is the parent's DEMI `id`; a period may
+ * hang off a `ProjectNotification` too (`helpers/parent-admit.js`), so reconcile walks both id spaces.
  */
 async function listByProject(projectId, access, { pageNum, pageSize, sortBy } = {}) {
   const spec = byProjectSpec(projectId, access, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER));
@@ -129,11 +120,8 @@ async function listEveryByProject(projectId, access) {
 }
 
 /**
- * The fields a period is REFERRED to by, its dates among them so a reader can tell open from
- * closed, for a bounded set of period ids, in one query.
- *
- * Cross-partition — the ids arrive off `updates.pcp` and `notifications.pcp`, which carry no
- * project — but the set is one page of rows and only the reference is projected.
+ * Reference fields (dates included, to tell open from closed) of a bounded id set, in one query.
+ * Cross-partition: the ids come off `updates.pcp` and `notifications.pcp`, which carry no project.
  */
 async function listByIds(access, ids) {
   const unique = Array.from(new Set((ids || []).map(String)));
@@ -170,18 +158,12 @@ function startOfPacificDay(now) {
   return new Date(midnightWall - (pacificWallMs(probe) - probe.getTime()));
 }
 
-/**
- * eagle-public keeps a period whose `dateCompleted` is exactly Pacific midnight open to the end of
- * that day (`closesAt`). A one-second range, not equality, so any stored ISO spelling of that
- * instant matches, as the client's second-resolution check does.
- */
+// eagle-public keeps a period closing at exactly Pacific midnight open that whole day (`closesAt`). A
+// one-second range, not equality, so any stored ISO spelling of that instant matches.
 const CLOSING_DAY = '(c.dateCompleted >= @closingDayStart AND c.dateCompleted < @closingDayEnd)';
 
-/**
- * `and[status]`, against ONE `@now`. `open` is `listOpen`'s clause; the other two are its complements,
- * and the date a clause does not compare must still be set, because eagle-public's `getStatusCode`
- * gives a period missing either date no status at all.
- */
+// `and[status]` against one `@now`; `upcoming` and `closed` complement `open`. The uncompared date must be
+// set too: eagle-public's `getStatusCode` gives a period missing either date no status.
 const STATUS_CLAUSES = {
   open: `(c.dateStarted <= @now AND (c.dateCompleted >= @now OR ${CLOSING_DAY}))`,
   upcoming: '(c.dateStarted > @now AND IS_STRING(c.dateCompleted))',
@@ -213,6 +195,37 @@ function statusCriterion(status, now, clauses = STATUS_CLAUSES) {
   return { clause, params: params.filter(p => clause.includes(p.name)) };
 }
 
+/** Shorter keywords match most project names, so they match period labels only. */
+const NAME_MATCH_MIN_CHARS = 2;
+
+/** Keyword text as every period list matches it: quotes dropped (CONTAINS has no phrases), spaces collapsed. */
+function keywordsOf(text) {
+  return String(text || '').replace(/"/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** DEMI ids of the projects this caller may see whose name contains `keywords`: the other arm of `keywordCriterion`. */
+async function keywordProjectIds(access, keywords) {
+  return keywords.length >= NAME_MATCH_MIN_CHARS ? projects.listIdsByName(access, keywords) : [];
+}
+
+/**
+ * A case-blind substring of `informationLabel`, or a period of one of `projectIds`. Each arm skips a
+ * row whose own dial hides that field, so a count cannot reveal the hidden value.
+ */
+function keywordCriterion(access, keywords, projectIds) {
+  assertFilterable(CONTAINER, 'informationLabel', access);
+  const level = levelOf(access);
+  const label = `(${dialAllows('informationLabel', level)} AND CONTAINS(c.informationLabel, @keywords, true))`;
+  const project = `(${dialAllows('projectId', level)} AND ARRAY_CONTAINS(@keywordProjects, c.projectId))`;
+  return {
+    clause: `(${label} OR ${project})`,
+    params: [
+      { name: '@keywords', value: String(keywords) },
+      { name: '@keywordProjects', value: projectIds || [] }
+    ]
+  };
+}
+
 // A deleted period keeps its upstream `public` ACL (see `aclRowsForProject`), so `NOT_DELETED` is
 // what leaves it out of every read below, not the ACL.
 
@@ -223,16 +236,7 @@ function listCriteria(access, { status, keywords, keywordProjectIds, now } = {})
     if (!STATUS_CLAUSES[status]) throw new Error(`[commentPeriods] no list clause for status '${status}'`);
     criteria.push(statusCriterion(status, now));
   }
-  if (keywords) {
-    assertFilterable(CONTAINER, 'informationLabel', access);
-    criteria.push({
-      clause: '(CONTAINS(c.informationLabel, @keywords, true) OR ARRAY_CONTAINS(@keywordProjects, c.projectId))',
-      params: [
-        { name: '@keywords', value: String(keywords) },
-        { name: '@keywordProjects', value: keywordProjectIds || [] }
-      ]
-    });
-  }
+  if (keywords) criteria.push(keywordCriterion(access, keywords, keywordProjectIds));
   return criteria;
 }
 
@@ -243,22 +247,8 @@ async function countMatching(access, criteria, options = {}) {
 }
 
 /**
- * The periods that are open RIGHT NOW, across every project — the home page's engagement rail.
- *
- * Cross-partition, because "open" is not a property of any single project, and capped rather than
- * paged: a continuation token over every partition is not a page anybody asks for twice.
- *
- * Measured on `demi-cosmos-test`, 2026-09-17: 3.27 RU and 29-49 ms warm for the open page, against
- * 2.89 RU for a single-partition read of the same container. The fan-out is nearly free because
- * this container is small — that is the assumption to re-check if it ever stops being one.
- *
- * `dateStarted <= now <= dateCompleted` (or closing today, see CLOSING_DAY), against ONE `@now` so
- * the window cannot straddle two clock reads. `dateCompleted` is also the order — soonest to close
- * first, which is the order the rail renders and the reason a period is worth showing at all.
- *
- * @param {number} [opts.limit]  rows, clamped by `pageOptions` to MAX_PAGE_SIZE
- * @param {Date}   [opts.now]    shared clock read — pass the SAME value `countClosedSince` gets,
- *   so the two reads agree on "now" instead of each capturing its own a moment apart
+ * Open periods across every project, soonest to close first, capped not paged. Pass `countClosedSince` the
+ * same `now` so the two agree; the fan-out stays cheap only while this container is small.
  */
 async function listOpen(access, { limit, now } = {}) {
   const spec = selectWhere({
@@ -279,16 +269,8 @@ async function listOpen(access, { limit, now } = {}) {
 }
 
 /**
- * How many periods closed since `since` — the "and N closed recently" line beside the open rail.
- *
- * The `closed` clause is the exact complement of `listOpen`'s `open` ONLY because both reads are
- * given the same `now` — see `openPeriods` in `controllers/search.js`, which captures it once and
- * passes it to both. A period cannot be counted as both open and recently closed on the same
- * request. Cross-partition, like `listOpen`, and a COUNT rather than a page because nothing renders
- * these rows.
- *
- * @param {string|Date} since  the start of the window, inclusive
- * @param {Date}        now    the SAME clock read passed to `listOpen` for this request
+ * Periods closed since `since`. `closed` complements `listOpen`'s `open` only when both get the same `now`
+ * (`openPeriods` in `controllers/search.js`), so no period counts as both.
  */
 async function countClosedSince(access, since, now) {
   return countMatching(access, [
@@ -298,15 +280,8 @@ async function countClosedSince(access, since, now) {
 }
 
 /**
- * Every period this caller may see, across all projects, paged — the search page's list.
- *
- * `OFFSET @skip LIMIT @size` in the query, so any page of the whole filtered set is reachable; the
- * offset is still read and discarded server-side, which is cheap only while this container is small.
- *
- * @param {string}   [opts.status]             a `STATUSES` value; absent is every status
- * @param {string}   [opts.keywords]           matched on `informationLabel`, or via `keywordProjectIds`
- * @param {string[]} [opts.keywordProjectIds]  DEMI ids of the projects whose name matched
- * @param {Date}     [opts.now]                one clock read, shared with `countAll`
+ * Every period this caller may see, paged by `OFFSET` so any page is reachable; skipped rows are still read
+ * server-side, cheap only while this container is small. Filters: `listCriteria`.
  */
 async function listAll(access, { pageNum, pageSize, sortBy, ...filters } = {}) {
   const { skip, size } = pageSlice({ pageNum, pageSize });
@@ -359,14 +334,10 @@ const nativeBase = cosmosKind({
 });
 
 /**
- * The repository `GET /comment-periods` reads through (`helpers/native-query.js`), deleted periods
- * left out as in `listCriteria`. `status` is a clock comparison, not a stored field, so the
- * contract's generic filter cannot build it; the caller passes the validated values here instead.
- *
- * @param {string[]} [statuses]  `STATUSES` values, ORed; empty narrows nothing
- * @param {Date}     [now]       one clock read for every status clause
+ * `GET /comment-periods`' repository, deleted periods left out. Generic filters cannot build `status`
+ * (a clock comparison) or `q` (also the project name), so the caller passes validated values.
  */
-function nativeRepository(statuses = [], now = new Date()) {
+function nativeRepository({ statuses = [], keywords = '', now = new Date() } = {}) {
   const fixed = [NOT_DELETED, ...(statuses.length ? [anyStatusCriterion(statuses, now)] : [])];
   // queryFirst drains the cross-partition iterator: a single fetched page can be empty while the row exists.
   const first = (access, field, value) => cosmos.queryFirst(CONTAINER, selectWhere({
@@ -376,9 +347,17 @@ function nativeRepository(statuses = [], now = new Date()) {
     select: selectFor(CONTAINER, access, PARTITION_FIELD)
   }), {});
   const { list, count } = withCriteria(nativeBase, fixed);
+  // Keyed on the caller's access, so a lookup made under one caller is never reused for another.
+  const lookups = new WeakMap();
+  const keyed = read => async (access, opts) => {
+    if (!lookups.has(access)) {
+      lookups.set(access, keywordProjectIds(access, keywords).then(ids => keywordCriterion(access, keywords, ids)));
+    }
+    return read(access, { ...opts, criteria: [...(opts.criteria || []), await lookups.get(access)] });
+  };
   return {
-    list,
-    count,
+    list: keywords ? keyed(list) : list,
+    count: keywords ? keyed(count) : count,
     getById: (access, id) => first(access, 'id', id),
     getByEagleId: (access, eagleId) => first(access, 'eagleId', eagleId)
   };
@@ -398,11 +377,8 @@ async function deleteById(id, projectId, etag) {
 const NEXT_ID_TRIES = 3;
 
 /**
- * Take the period's next comment number, atomically: eagle-api's `$inc` on `commentIdCount`
- * (comment.js:380), answered after the increment. A mirrored row may hold `null` there, so the
- * first number is set by a patch conditioned on there being no number yet.
- *
- * @returns {Promise<number|null>} null when the period does not exist
+ * Atomic next comment number, as eagle-api's `$inc` on `commentIdCount` (comment.js:380); null with no period.
+ * A mirrored row may hold `null`, so the first number is a patch conditioned on there being none yet.
  */
 async function nextCommentId(periodId, projectId) {
   let partition = projectId;
@@ -431,17 +407,8 @@ async function nextCommentId(periodId, projectId) {
 }
 
 /**
- * The ACL inputs of every period in one project.
- *
- * `sources.eagle.read` is the period's own upstream ACL. `read` cannot stand in for it: the mirror
- * has already narrowed that to the project (`constrainToProject`), so a period pushed under a
- * private project reads private whatever Eagle published it as.
- *
- * `isDeleted` rides along because that upstream ACL outlives the record: a deleted period's raw
- * copy still says `public`, and `deriveAcls` needs the flag to refuse to act on it.
- *
- * An ENGAGE-owned row takes its upstream ACL from `sources.engage.read`, never from the Eagle echo,
- * which only reflects what DEMI last sent there. A row DEMI created takes it from `sources.demi.read`.
+ * ACL inputs per period of a project. The upstream ACL is `sources.<owner>.read`, never `read`, which the mirror
+ * already narrowed to the project; `isDeleted` rides along because a deleted row's upstream copy still says public.
  */
 async function aclRowsForProject(access, projectId) {
   // Callers pass systemAccess on purpose: a sealed child is skipped, and a `read`-less one heals on
@@ -460,11 +427,8 @@ async function aclRowsForProject(access, projectId) {
 }
 
 /**
- * Re-derive every period's ACL from its own and its project's — the project-publish transition.
- *
- * Both directions: the mirror can only apply `constrainToProject` at push time, so without this a
- * period pushed while its project was private stayed private after the project published, and one
- * pushed while it was public stayed public after a takedown.
+ * Re-derive each period's ACL from its own and its project's on publish or takedown: the mirror applies
+ * `constrainToProject` only at push time, so a period would keep its project's old state.
  */
 async function setAclForProject(access, projectId, read) {
   return cascadeAcl(CONTAINER, projectId, await aclRowsForProject(access, projectId), read);
@@ -517,6 +481,8 @@ module.exports = {
   listAll,
   countAll,
   countByProject,
+  keywordsOf,
+  keywordProjectIds,
   nativeRepository,
   projectIdsWithStatus,
   aclRowsForProject,

@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * Native comment period reads: `GET /comment-periods`, `/comment-periods/:id` and
- * `/comment-periods/:id/summary`, on the list contract in `helpers/native-query.js`. Writes are in
- * comment-periods-write.js.
- */
+// Native comment period reads: `GET /comment-periods`, `/:id` and `/:id/summary`.
+// Writes live in comment-periods-write.js.
 
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
@@ -34,20 +31,24 @@ const BASE_SPEC = Object.freeze({
 const unfiltered = listHandler(BASE_SPEC);
 
 /**
- * `GET /comment-periods`. `status` (open, upcoming, closed; repeatable) is compared against the
- * clock rather than read from a field, so it is taken out here and handed to the repository.
+ * `GET /comment-periods`. `status` is a clock comparison and `q` also matches the project name, so
+ * both leave the query here for the repository; an empty `q` is ignored, as on every native list.
  */
 exports.getCommentPeriods = (req, res) => {
-  const { status, ...query } = req.query || {};
+  const { status, q, ...query } = req.query || {};
   req.query = query;
-  if (status === undefined) return unfiltered(req, res);
 
-  const statuses = [...new Set([].concat(status))];
+  const statuses = status === undefined ? [] : [...new Set([].concat(status))];
   const bad = statuses.find(value => !commentPeriods.STATUSES.includes(value));
   if (bad !== undefined) {
     return res.status(400).json({ error: `status takes ${commentPeriods.STATUSES.join(', ')}` });
   }
-  return listHandler({ ...BASE_SPEC, repository: commentPeriods.nativeRepository(statuses) })(req, res);
+  if (Array.isArray(q)) return res.status(400).json({ error: 'parameter given more than once: q' });
+  const keywords = commentPeriods.keywordsOf(q);
+  if (!statuses.length && !keywords) return unfiltered(req, res);
+
+  const repository = commentPeriods.nativeRepository({ statuses, keywords });
+  return listHandler({ ...BASE_SPEC, repository, searchTerm: keywords })(req, res);
 };
 
 exports.SPEC = BASE_SPEC;

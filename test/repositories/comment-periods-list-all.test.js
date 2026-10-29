@@ -139,7 +139,7 @@ test('projects.listIdsByName', async (t) => {
 
     assert.deepStrictEqual(ids, ['207', '208']);
     const [{ spec, options }] = seen.pages;
-    assert.match(spec.query, /CONTAINS\(c\.name, @name, true\)/);
+    assert.match(spec.query, /c\.vis\["name"\] >= 4\) AND CONTAINS\(c\.name, @name, true\)/, 'the name dial, at the caller level');
     assert.strictEqual(bound(spec)['@name'], 'wind');
     assert.deepStrictEqual(options, { size: projects.NAME_MATCH_MAX_IDS + 1 });
   });
