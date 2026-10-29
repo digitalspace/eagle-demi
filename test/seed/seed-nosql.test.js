@@ -112,6 +112,8 @@ test('eagleRowLive reads one id through the dataset search', async (t) => {
     assert.strictEqual(await eagleRowLive('Document', 'abc', page([{ _id: 'abc' }])), true);
     assert.strictEqual(urls[0],
       `${EAGLE_API_BASE}/search?dataset=Document&pageSize=1&pageNum=0&and[_id]=abc`);
+    assert.strictEqual(await eagleRowLive('Document', 'abc', page([{ _id: 'abc' }], 0)), true,
+      'a served row with a total of 0 still holds the delete');
   });
 
   await t.test('an empty answer reads as not live', async () => {
@@ -126,11 +128,13 @@ test('eagleRowLive reads one id through the dataset search', async (t) => {
     }
   });
 
-  await t.test('a total above one means the filter was ignored, even when the row is on the page', async () => {
+  await t.test('a total the page does not explain means the filter was ignored', async () => {
     await assert.rejects(eagleRowLive('Document', 'abc', page([{ _id: 'abc' }], 4210)),
       /eagle-api ignored the id filter for Document abc/);
-    await assert.rejects(eagleRowLive('Document', 'abc', page([], 4210)),
-      /eagle-api ignored the id filter for Document abc/);
+    for (const total of [1, 4210]) {
+      await assert.rejects(eagleRowLive('Document', 'abc', page([], total)),
+        /eagle-api ignored the id filter for Document abc/, `empty page, total ${total}`);
+    }
   });
 });
 
