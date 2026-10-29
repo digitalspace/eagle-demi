@@ -219,22 +219,21 @@ async function fetchAllPages(base, dataset, opts = {}) {
   let { last, capped } = await readFrom(0, null);
   if (!capped && total !== null) {
     let final = await reread();
-    if (typeof final === 'number' && final > count) {
+    if (typeof final === 'number' && final > count && last + 1 < maxPages) {
       // Rows published mid-fetch sort last by _id, past where the cursor stopped. Restarted on the
       // last page read, since a short page grows in place. One pass only.
       ({ capped } = await readFrom(last, final));
       if (!capped) final = await reread();
     }
-    if (!capped) {
-      const settled = settledTotal(count, total, final, dataset);
-      if (settled === null) {
-        throw new Error(
-          `[seed] ${dataset}: fetched ${count} but upstream reports ${total} — refusing to ` +
-          `seed a truncated corpus (re-read total ${final})`
-        );
-      }
-      total = settled;
+    // A pass the cap cut short leaves the total unverified, but still never below the first one.
+    const settled = capped ? (count < total ? null : total) : settledTotal(count, total, final, dataset);
+    if (settled === null) {
+      throw new Error(
+        `[seed] ${dataset}: fetched ${count} but upstream reports ${total} — refusing to ` +
+        `seed a truncated corpus (re-read total ${final})`
+      );
     }
+    total = settled;
   }
 
   if (onTotal) onTotal(total);

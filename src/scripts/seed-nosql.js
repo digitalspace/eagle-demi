@@ -405,7 +405,8 @@ const countsOf = obj => Object.fromEntries(Object.entries(obj || {}).filter(([, 
 const reconcileCounts = r => r && {
   inCosmos: r.inCosmos, wouldDelete: r.wouldDelete, deleted: r.deleted,
   ...(r.wouldKeep ? { wouldKeep: r.wouldKeep.length } : {}),
-  ...(r.keptLive ? { keptLive: r.keptLive.length } : {}), ceiling: r.ceiling
+  ...(r.keptLive ? { keptLive: r.keptLive.length } : {}),
+  ...(r.surplusHeld !== undefined ? { surplusHeld: r.surplusHeld } : {}), ceiling: r.ceiling
 };
 
 /** The `--summary` file: counts only, failures capped, so a wrapper can fetch and parse it whole. */
@@ -1056,6 +1057,11 @@ async function runSeed(args, deps, summary) {
           servedUpstream: servedUpstream('projects') });
       for (const { label, surplus, ceiling } of sized) {
         summary.reconcile[label].ceiling = ceiling;
+        // A live row held both containers back, so a dry run must report the 0 a live run deletes.
+        if (keptLive) {
+          summary.reconcile[label].surplusHeld = summary.reconcile[label].wouldDelete;
+          summary.reconcile[label].wouldDelete = 0;
+        }
         for (const row of surplus) surplusIds.add(String(row.id));
         for (const id of summary.reconcile[label].wouldKeep || []) sparedIds.add(String(id));
       }

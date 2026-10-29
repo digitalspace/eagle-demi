@@ -350,6 +350,34 @@ test('fetchAllPages', async (t) => {
     );
   });
 
+  await t.test('no extension pass starts at the page cap: the larger total stays unverified', async () => {
+    const calls = [];
+    let settled = null;
+    const result = await fetchAllPages('http://x', 'Document', {
+      accumulate: false, maxPages: 2, onTotal: (total) => { settled = total; },
+      fetchPage: pagedFetch([ids(0, 100), ids(100, 200)], 200, 300, calls)
+    });
+    assert.deepStrictEqual(result, { count: 200, total: 300 });
+    assert.strictEqual(settled, 300);
+    assert.deepStrictEqual(calls, ['0/100', '1/100', '0/1']);
+  });
+
+  await t.test('an extension pass cut short by the cap below the first total throws', async () => {
+    let page1Reads = 0;
+    const fetchPage = async (url) => {
+      const params = new URL(url, 'http://x').searchParams;
+      const pageNum = Number(params.get('pageNum'));
+      if (params.get('pageSize') === '1') return { items: ids(0, 1), total: 1001 };
+      // Page 1 comes back short on the first pass and full on the extension.
+      if (pageNum === 1 && page1Reads++ === 0) return { items: ids(100, 150), total: 1000 };
+      return { items: ids(pageNum * PAGE_SIZE, (pageNum + 1) * PAGE_SIZE), total: 1000 };
+    };
+    await assert.rejects(
+      () => fetchAllPages('http://x', 'Document', { maxPages: 3, fetchPage }),
+      /fetched 300 but upstream reports 1000 — refusing to seed a truncated corpus/
+    );
+  });
+
   await t.test('a capped fetch skips the re-read and the count check', async () => {
     const calls = [];
     const items = await fetchAllPages('http://x', 'Document', {
@@ -1280,7 +1308,8 @@ test('seed --reconcile end to end', async (t) => {
           'a skip means the fetched set is incomplete, so no row of either container goes');
         assert.deepStrictEqual(summary.reconcile.documents.keptLive, ['stale']);
         assert.strictEqual(summary.reconcile.documents.wouldDelete, 0);
-        assert.strictEqual(summary.reconcile.projects.wouldDelete, 1);
+        assert.strictEqual(summary.reconcile.projects.wouldDelete, 0);
+        assert.strictEqual(summary.reconcile.projects.surplusHeld, 1);
         assert.ok(summary.failures.includes(
           'reconcile: 1 surplus ids still live upstream, fetch skipped rows — nothing removed from either container'));
         assert.deepStrictEqual(fs.readFileSync(logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l))[0],
@@ -1317,11 +1346,16 @@ test('seed --reconcile end to end', async (t) => {
 
   await t.test('a dry run looks surplus rows up too, so wouldDelete matches a live run', async () => {
     const { deps } = makeDeps();
-    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+    const file = path.join(LOG_DIR, 'summary-held.json');
+    const summary = await seed(['--reconcile', '--only', 'projects,documents', '--summary', file],
       { ...deps, sources: stubSources({ eagleRowLive: async (dataset) => dataset === 'Project' }) });
 
     assert.deepStrictEqual(summary.reconcile.projects.keptLive, ['eagle-gone']);
     assert.strictEqual(summary.reconcile.projects.wouldDelete, 0);
+    assert.strictEqual(summary.reconcile.documents.wouldDelete, 0,
+      'a live run deletes no document either, so the dry run must not promise one');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).reconcile.documents,
+      { inCosmos: 2, wouldDelete: 0, deleted: 0, surplusHeld: 1, ceiling: 50 });
     assert.match(summary.failures.join(' '), /^reconcile: 1 surplus ids still live upstream/);
   });
 
