@@ -18,14 +18,8 @@ const trackProjects = require('../../src/data/track_projects_enriched.json');
 const config = require('../../src/config');
 const { logger } = require('../../src/utils/logger');
 
-/**
- * Chunks repository double. `parentFieldsChanged` and `reStampAfterWrite` are the REAL ones, so the
- * seed's re-stamp decision and its two failure counters are tested against the repository's own
- * rules; `stamp` is the helper's documented seam and is the only call Cosmos would serve.
- *
- * `rejectChunksOf` names documents whose patch comes back with a chunk operation REJECTED — a
- * document that landed in part, which is a different unit from a document that threw.
- */
+// Real `parentFieldsChanged` and `reStampAfterWrite`, so counters follow the repository rules; only
+// `stamp` is faked. `rejectChunksOf` = documents that land with a chunk operation rejected.
 function fakeChunks(onStamp, rejectChunksOf = [], onStampedAt = () => {}) {
   const rejected = new Set(rejectChunksOf);
   return {
@@ -486,9 +480,7 @@ test('seed() end to end with stubbed sources', async (t) => {
   });
 
   const stubSources = {
-    // The real module's value, not a placeholder. The seeder reads the base off the INJECTED
-    // sources object, so a stub that omits it makes every test pass `undefined` to `fetchAllPages`
-    // — which is exactly what the base-URL assertion below found on its first run.
+    // The real base: the seeder reads it off the injected sources, so a stub omitting it passes undefined.
     EAGLE_API_BASE,
     trackFeedConfigured: () => false,
     loadTrackProjects: () => track,
@@ -504,9 +496,7 @@ test('seed() end to end with stubbed sources', async (t) => {
     fetchOrganizationLookup: async () => new Map([
       ['org1', { _id: 'org1', name: 'Some Nation', province: 'BC' }]
     ]),
-    // The seeder reads Project Notifications through the generic pager, since sources.js exposes
-    // no named loader for them. Empty here so the default fixtures still describe a corpus in
-    // which the only non-project parent is genuinely unknown.
+    // Empty, so the default fixtures hold no notification parents and an unknown parent stays unknown.
     fetchAllPages: async () => [],
     loadBoundaries: () => [
       {
@@ -522,9 +512,7 @@ test('seed() end to end with stubbed sources', async (t) => {
     return {
       written,
       repos: {
-        // The REAL `parentFieldsChanged` and `reStampAfterWrite`: the seeder's decision to
-        // re-stamp, and the counters it reports, are only meaningful against what the repository
-        // actually does. Only the Cosmos write is faked, through the helper's `stamp` seam.
+        // Real repository rules; only the Cosmos write is faked, through the `stamp` seam.
         chunks: fakeChunks((id, doc) => {
           written.reStamped.push({ id: String(id), doc });
         }),
@@ -585,10 +573,8 @@ test('seed() end to end with stubbed sources', async (t) => {
   });
 
   await t.test('the project stage carries vis forward', async () => {
-    // Same replace-the-whole-item trap as the Eagle push: a re-seed with no existing-row read
-    // would wipe classification and any source block this run does not itself rebuild. Two
-    // existing rows here, not one: 373 has no vis at all, so visCarried must NOT count it, and
-    // 207 carries a stale sources.track to prove the freshly rebuilt block wins the merge.
+    // An upsert replaces the item, so classification must be carried. 373 has no vis (not counted);
+    // 207 has a stale sources.track that the rebuilt block must replace.
     const { written, repos } = makeRepos();
     const track207 = track.find(p => p.track_project_id === 207);
     repos.projects.getById = async (_access, id) => {
@@ -744,16 +730,13 @@ test('seed() end to end with stubbed sources', async (t) => {
   });
 
   await t.test('a document parented by a Project Notification is seeded under it', async () => {
-    // A ProjectNotification is a different ENTITY TYPE, not a missing project: all 17 are public
-    // and prod serves 2-13 documents under each. Dropping them returned an empty documents tab
-    // for every notification. The notification _id IS the partition key — eagle-public sends it
-    // as the `project` filter and there is nothing to translate it into.
+    // A notification is its own entity, not a missing project; its _id is the partition key because
+    // eagle-public sends it as the `project` filter.
     const notificationId = '5efe366b3a147c00223be181';
     const withNotifications = {
       ...stubSources,
-      // `base` is asserted, not ignored. Every other stub in this file reads only `dataset`, so
-      // `src.EAGLE_API_BASE` -> any typo shipped green while the seeder asked an UNDEFINED host for
-      // the notification list — a run that then drops all 80 documents again, for a new reason.
+      // `base` asserted: a typo in `src.EAGLE_API_BASE` would otherwise ask an undefined host and drop
+      // every notification document.
       fetchAllPages: async (base, dataset) => {
         assert.strictEqual(base, EAGLE_API_BASE,
           'the seeder must pass the real Eagle base, not undefined');
@@ -786,10 +769,8 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.deepStrictEqual(summary.failures, []);
   });
 
-  // Track 351 and 353 carry a ProjectNotification _id in `epic_guid` (test, 2026-09-08). The merge
-  // copies the guid onto the project row's `eagleId`, so the registry resolves that id to the
-  // project and the seed filed the notification's documents under it — in its partition, and under
-  // its level-2 ACL, because a Track project with no Eagle counterpart is not public.
+  // Track rows can carry a notification _id in `epic_guid`, which the registry resolves to the project;
+  // the notification must still win, or its documents land in that project's partition and ACL.
   await t.test('a Track project holding a notification id does not claim its documents', async () => {
     const notificationId = '5efe366b3a147c00223be181';
     const shadowing = {
@@ -823,12 +804,8 @@ test('seed() end to end with stubbed sources', async (t) => {
   });
 
   await t.test('the dropped-ref report separates the true count from the capped sample', async () => {
-    // Two fields that look redundant and are not: `distinctUnresolvedRefs` is a COUNT and
-    // `unresolvedRefs` a SAMPLE capped at 20, because an upstream fault could produce thousands of
-    // distinct refs and this summary is printed in full. Every existing fixture has exactly ONE
-    // unresolved ref, so the two were indistinguishable — `.slice(0, 20)` -> `.slice(0, 1)` passed,
-    // and so did deriving the count from the capped array, which would under-report a real fault by
-    // orders of magnitude at the moment it matters most.
+    // Many distinct refs, because one ref cannot tell the count from the capped sample: `.slice(0, 1)`
+    // or counting the capped array would pass with a single-ref fixture.
     const many = {
       ...stubSources,
       streamEagleDocuments: async (onPage) => {
@@ -874,9 +851,8 @@ test('seed() end to end with stubbed sources', async (t) => {
   });
 
   await t.test('a project split across flush batches has every item written', async () => {
-    // FLUSH_THRESHOLD is 100 and Cosmos rejects a larger bulk request, so a project with more
-    // documents than that MUST be written in several batches. Upsert is idempotent, so splitting
-    // is safe — but losing the tail would not be.
+    // Over FLUSH_THRESHOLD (the Cosmos bulk limit), so the project splits across batches and the tail
+    // must still land.
     const { FLUSH_THRESHOLD } = require('../../src/scripts/seed-nosql');
     const many = Array.from({ length: 250 }, (_, i) => eagleDoc(`bulk${i}`, matchedGuid));
     const paged = {
@@ -905,9 +881,7 @@ test('seed() end to end with stubbed sources', async (t) => {
   });
 
   await t.test('a partial bulk failure is REPORTED, not counted as written', async () => {
-    // Cosmos bulk returns a per-operation status and does not throw on partial failure. The first
-    // real seed reported 60,578 documents written when only 56,317 existed, because the seeder
-    // counted operations it had SENT.
+    // Cosmos bulk reports per-operation status and does not throw, so written must count what landed.
     const { repos, written } = makeRepos();
     repos.documents.bulkUpsertForProject = async (pid, docs) => {
       written.documents.push([pid, docs]);
@@ -1119,8 +1093,8 @@ test('seed --reconcile end to end', async (t) => {
     },
     fetchListLookup: async () => new Map(),
     fetchOrganizationLookup: async () => new Map(),
-    // The notification list is gated like the other two fetches, so the stub reports its total the
-    // same way. Empty AND consistent — the shape that used to pass every gate.
+    // Empty and consistent, the shape that passes every completeness gate; the total is reported as
+    // for the other fetches.
     fetchAllPages: async (_base, _dataset, opts) => {
       if (opts && opts.onTotal) opts.onTotal(0);
       return [];
@@ -1378,9 +1352,8 @@ test('seed --reconcile end to end', async (t) => {
 
   await t.test('an enumeration shorter than the container COUNT refuses BOTH containers',
     async () => {
-      // The live 2026-08-25 run: listSeededIds returned 1,000 of 60,578 rows because the SDK drops
-      // `x-ms-continuation` on a cross-partition ORDER BY, so 59,578 live documents computed as
-      // surplus. The fetch itself verifies clean, so only the COUNT can catch this.
+      // The SDK drops `x-ms-continuation` on a cross-partition ORDER BY, so the listing came back short;
+      // the fetch verifies clean, so only the COUNT catches it.
       const { purged, deps } = makeDeps({}, SEEDED_DOCS, { documents: 60578 });
       const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
         { ...deps, sources: stubSources() });
@@ -1445,8 +1418,7 @@ test('seed --reconcile end to end', async (t) => {
   });
 
   await t.test('an unverified Project fetch refuses BOTH containers', async () => {
-    // The reviewer's probe: the projects gate used to be per container, so a null Project total
-    // left the documents reconcile free to delete.
+    // A null Project total must stop the documents reconcile too, not only the projects one.
     const { purged, deps } = makeDeps();
     const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
       ...deps,
@@ -1465,9 +1437,7 @@ test('seed --reconcile end to end', async (t) => {
   });
 
   await t.test('an unverified ProjectNotification fetch refuses BOTH containers', async () => {
-    // Gated like Project and Document: the notification list decides whether a document has a
-    // parent, so an unverified one makes "not in the fetch" prove nothing here either. NOTHING is
-    // dropped in this run, so only the gate itself can produce the refusal.
+    // Nothing is dropped here, so the refusal can only come from the notification gate itself.
     const { purged, deps } = makeDeps();
     const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
       ...deps,
@@ -1481,10 +1451,8 @@ test('seed --reconcile end to end', async (t) => {
     assert.strictEqual(summary.reconcile, undefined);
   });
 
-  // The reviewer's probe. An eagle-api answering `searchResults: [], searchResultsTotal: 0` for
-  // ProjectNotification is internally consistent and clears every completeness gate, but every
-  // notification-parented document then resolves to nothing, is absent from `fetchedKeys`, and
-  // reads as surplus — under the ceiling, so it would purge quietly and exit 0.
+  // An empty but consistent ProjectNotification answer clears every gate, yet turns each notification
+  // document into surplus under the ceiling: a quiet purge with exit 0.
   const notificationId = '5efe366b3a147c00223be181';
   const withNotifications = (list) => stubSources({
     fetchAllPages: async (_base, dataset, opts) => {
@@ -1529,9 +1497,8 @@ test('seed --reconcile end to end', async (t) => {
     });
 
   await t.test('a dropped document absent from Cosmos is reported, not refused', async () => {
-    // The prod case, 2026-08-25: 24 documents whose parent project the anonymous fetch does not
-    // return. None of them are in Cosmos, so there is no row a reconcile could delete and the
-    // refusal was pure over-strictness. SEEDED_DOCS holds no pn1.
+    // Dropped documents not in Cosmos leave nothing to delete, so refusing would be over-strict.
+    // SEEDED_DOCS holds no pn1.
     const { purged, deps } = makeDeps();
     const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
       { ...deps, sources: withNotifications([]) });
@@ -1569,8 +1536,7 @@ test('seed --reconcile end to end', async (t) => {
   });
 
   await t.test('a live reconcile refuses when AI Search is not configured', async () => {
-    // The live 2026-08-25 run: the tunnel recipe exported the COSMOS_* settings only, so every
-    // index delete inside purgeDocument/purgeProject returned 0 and 11 rows stayed searchable.
+    // Without AI Search settings every index delete returns 0, so purged rows would stay searchable.
     const { purged, deps } = makeDeps({ searchReady: false });
     const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
       { ...deps, sources: stubSources() });
@@ -1582,9 +1548,8 @@ test('seed --reconcile end to end', async (t) => {
     assert.strictEqual(summary.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
   });
 
-  // The `deps.searchReady` override above is a test seam. What a real `yarn db:seed-nosql` run
-  // takes is the DEFAULT beside it, and that is the branch that decides whether a live reconcile
-  // is allowed to delete — so it needs its own cover, in both directions.
+  // `deps.searchReady` above is a seam; a real run uses the default, which gates live deletes, so it
+  // gets its own cover both ways.
   await t.test('searchReady defaults to whether AI Search is configured', async (tt) => {
     const aiSearch = require('../../src/search/ai-search');
 
@@ -1939,9 +1904,8 @@ test('a re-seed carries extraction state forward', async (t) => {
     const written = [];
     const partitions = [];
     const reStamped = [];
-    // Every clear the seed attempted, in order — the argument list is the contract: a clear
-    // guarded on the wrong token, or on nothing, is what would take a flag down over chunks this
-    // run never wrote.
+    // The argument list is the contract: a clear guarded on the wrong token, or none, could drop a
+    // flag over chunks this run never wrote.
     const cleared = [];
     // The instant each flush guarded its chunk patches on — what keeps a slow flush from putting
     // stale values back over a re-stamp that landed while it ran.
@@ -2031,10 +1995,8 @@ test('a re-seed carries extraction state forward', async (t) => {
   });
 
   await t.test('a raised pending re-stamp flag survives a re-seed', async () => {
-    // The flag says "this document's chunks never got their new parent fields". The re-seed
-    // rebuilds the row and a Cosmos upsert REPLACES it, so dropping the flag here would retire the
-    // only record of a re-stamp nothing has done — the reconcile counts it and
-    // `backfill-chunk-parent-fields.js --pending` walks it.
+    // An upsert replaces the row, so dropping the flag would retire the only record of a pending
+    // re-stamp, which the reconcile counts and `backfill-chunk-parent-fields.js --pending` walks.
     const { written } = await run(true,
       { parentFieldsPending: true, parentFieldsPendingAt: '2026-09-01T00:00:00.000Z' });
 
@@ -2064,10 +2026,8 @@ test('a re-seed carries extraction state forward', async (t) => {
   });
 
   await t.test('a re-seed that moves a List ref re-stamps that document\'s chunks', async () => {
-    // A chunk carries a COPY of its document's four List refs so a chunk search can filter on them
-    // without a join, and NOTHING else refreshes it. A re-seed that re-types a document and stops
-    // at the document row leaves every chunk of it answering the OLD type filter for the life of
-    // the chunk — under a 200 and a green indexer run.
+    // Chunks hold a copy of the four List refs that nothing else refreshes, so a re-typed document
+    // would leave its chunks answering the old type filter.
     const { reStamped, summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
 
     assert.deepStrictEqual(reStamped.map(r => r.id), ['known'],
@@ -2107,9 +2067,8 @@ test('a re-seed carries extraction state forward', async (t) => {
   });
 
   await t.test('a part-stamped document is one document and one chunk operation', async () => {
-    // The units the stage summary used to add together. `known`'s row landed and one of its chunk
-    // operations was rejected — one document to repair, and the operator reads both numbers to
-    // decide whether to run backfill-chunk-parent-fields.js over 1.1M rows.
+    // One document to repair and one rejected chunk operation, kept as separate counts: the operator
+    // reads both before running backfill-chunk-parent-fields.js over 1.1M rows.
     const { summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
       { rejectChunksOf: ['known'] });
 
@@ -2120,9 +2079,8 @@ test('a re-seed carries extraction state forward', async (t) => {
   });
 
   await t.test('a re-seed that moves a List ref writes the row already flagged', async () => {
-    // The flag rides the SAME upsert as the change. Re-stamping best-effort and flagging nothing
-    // made every loss on this path invisible — a run killed between the upsert and the patch, a
-    // patch that threw — because the reconcile reads the row, not this run's output.
+    // The flag rides the same upsert as the change, so a run killed between upsert and patch stays
+    // visible to the reconcile, which reads the row.
     const { written, summary } = await run(true, {
       typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
       parentFieldsPending: true,
@@ -2159,9 +2117,8 @@ test('a re-seed carries extraction state forward', async (t) => {
   });
 
   await t.test('the chunk patches are guarded on the token the flag was raised with', async () => {
-    // Unguarded, a re-seed is last-writer-wins: a flush that took minutes would put the values it
-    // read at the start back over a re-stamp that landed in between, with the flag already
-    // cleared, so nothing would report the drift.
+    // Unguarded, a slow flush would write stale values over a re-stamp that landed meanwhile, with the
+    // flag already cleared.
     const { written, stampedAt } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
 
     const known = written.find(d => d.id === 'known');
