@@ -18,7 +18,7 @@ const os = require('os');
 const path = require('path');
 
 const {
-  ALL_STAGES, COMMENT_FIELDS, parseArgs, mirrorListItem, mirrorList, withinSince, stageLine, backfill
+  ALL_STAGES, COMMENT_FIELDS, parseArgs, mirrorListItem, mirrorList, withinSince, stageLine, backfill, eachCommentPage
 } = require('../../src/scripts/seed-public-reads');
 const cosmos = require('../../src/db/cosmos-nosql');
 const comments = require('../../src/repositories/comments');
@@ -28,6 +28,7 @@ const updateController = require('../../src/controllers/nosql/update');
 const { updatesStore } = require('../helpers/updates-store');
 const { parentProject, parentNotification } = require('../helpers/update-parents');
 const { logger } = require('../../src/utils/logger');
+const sources = require('../../src/seed/sources');
 const {
   PERIOD_EAGLE_ID, PROJECT_EAGLE_ID, PUBLIC_ACL, PRIVATE_ACL, SEALED_AT, eagleComment, eagleUpdate, eagleUpdateWithoutRead,
   storedPeriod
@@ -49,16 +50,16 @@ function checkpointedPeriods(state) {
 }
 
 /**
- * `src/seed/sources.js`, stubbed at the two functions the backfill reads through it.
- *
- * `fetchAllPages` is driven page by page, because the dataset stages hand it an `onPage` and never
- * accumulate; `fetchJsonWithHeaders` serves the comment endpoint, whose total lives in the header.
+ * `src/seed/sources.js` with real count helpers and stubbed fetches: `fetchAllPages` page by page,
+ * `fetchJsonWithHeaders` for the comment endpoint, whose total lives in the header.
  */
 function stubSources({ datasets = {}, commentItems = [], commentTotal = null } = {}) {
   const urls = [];
   return {
     EAGLE_API_BASE: BASE,
     PAGE_SIZE,
+    freshById: sources.freshById,
+    settledTotal: sources.settledTotal,
     urls,
     fetchAllPages: async (base, dataset, opts = {}) => {
       assert.strictEqual(base, BASE);
@@ -478,6 +479,44 @@ test('comments', async (t) => {
         'the period must stay off the checkpoint so the next run retries it');
       t2.mock.restoreAll();
     });
+
+  // Pages answer `first` in x-total-count, the pageSize=1 re-read answers `reread`.
+  const pagedComments = (count, first, reread) => {
+    const items = Array.from({ length: count }, (_, i) => eagleComment({ _id: `C${i}` }));
+    const urls = [];
+    const deps = { sources: { ...stubSources(), fetchJsonWithHeaders: async (url) => {
+      urls.push(url);
+      const params = new URL(url).searchParams;
+      const size = Number(params.get('pageSize'));
+      const pageNum = Number(params.get('pageNum'));
+      return {
+        body: items.slice(pageNum * size, (pageNum + 1) * size),
+        headers: new Headers({ 'x-total-count': String(size === 1 ? reread : first) })
+      };
+    } } };
+    return { deps, urls };
+  };
+
+  await t.test('a period that grew during the read passes with the re-read total', async (t2) => {
+    t2.mock.method(logger, 'info', () => {});
+    const { deps, urls } = pagedComments(4, 3, 4);
+    assert.deepStrictEqual(await eachCommentPage('CP1', deps, async () => {}), { count: 4, total: 4 });
+    assert.strictEqual(urls.length, 3, 'two pages, then the re-read');
+    t2.mock.restoreAll();
+  });
+
+  await t.test('a short period throws without spending a request on the re-read', async () => {
+    const { deps, urls } = pagedComments(3, 5, 3);
+    await assert.rejects(eachCommentPage('CP1', deps, async () => {}),
+      /fetched 3 comments but eagle-api reports 5/);
+    assert.strictEqual(urls.length, 2);
+  });
+
+  await t.test('a one-page period skips the re-read', async () => {
+    const { deps, urls } = pagedComments(1, 1, 9);
+    assert.deepStrictEqual(await eachCommentPage('CP1', deps, async () => {}), { count: 1, total: 1 });
+    assert.strictEqual(urls.length, 1);
+  });
 
   await t.test('a comment never out-ranks its period, whichever way it arrived', async (t2) => {
     // The comment says public; the period the public cannot see says otherwise, and the period

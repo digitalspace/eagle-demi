@@ -18,6 +18,7 @@ const notificationsRepo = require('../../src/repositories/notifications');
 const listsRepo = require('../../src/repositories/lists');
 const periodsRepo = require('../../src/repositories/comment-periods');
 const commentsRepo = require('../../src/repositories/comments');
+const sources = require('../../src/seed/sources');
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
 /**
@@ -99,6 +100,8 @@ function stubSources(over = {}, datasets = EAGLE_BY_DATASET) {
       return datasets[dataset];
     },
     PAGE_SIZE: 100,
+    freshById: sources.freshById,
+    settledTotal: sources.settledTotal,
     // The comment sweep reads its total from the header, not the body — eagle-api's
     // `/api/public/comment` reports it nowhere else. Empty here, so DEMI's one mirrored comment
     // is drift the sweep must find.

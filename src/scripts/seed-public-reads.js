@@ -350,11 +350,13 @@ async function eachCommentPage(periodId, deps, onPage) {
   const seen = new Set();
   let fetched = 0;
   let total = null;
+  let lastPage;
 
   for (let pageNum = 0; ; pageNum++) {
+    lastPage = pageNum;
     const page = await fetchCommentPage(base, periodId, pageNum, deps);
     if (total === null) total = page.total;
-    const fresh = sources.freshById(page.items, seen);
+    const fresh = deps.sources.freshById(page.items, seen);
     fetched += fresh.length;
 
     await onPage(fresh);
@@ -363,13 +365,13 @@ async function eachCommentPage(periodId, deps, onPage) {
     if (fetched >= total) break;
   }
 
-  const reread = (await fetchCommentPage(base, periodId, 0, deps, 1)).total;
-  const settled = sources.settledTotal(fetched, total, reread, `period ${periodId} comments`);
-  if (settled === null) {
+  if (fetched < total) {
     throw new Error(`period ${periodId}: fetched ${fetched} comments but eagle-api reports ` +
       `${total} — refusing to treat a truncated read as the whole period`);
   }
-  return { count: fetched, total: settled };
+  // A one-page read had no page boundary for the period to change across.
+  const reread = lastPage === 0 ? total : (await fetchCommentPage(base, periodId, 0, deps, 1)).total;
+  return { count: fetched, total: deps.sources.settledTotal(fetched, total, reread, `period ${periodId} comments`) };
 }
 
 /**
