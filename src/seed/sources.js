@@ -248,8 +248,13 @@ async function fetchAllPages(base, dataset, opts = {}) {
 async function eagleRowLive(dataset, id, fetchPage = searchPage) {
   const url = `${EAGLE_API_BASE}/search?dataset=${encodeURIComponent(dataset)}&pageSize=1&pageNum=0` +
     `&and[_id]=${encodeURIComponent(id)}`;
-  const { items } = await fetchPage(url);
-  return items.some(row => row && String(row._id) === String(id));
+  const { items, total } = await fetchPage(url);
+  const found = items.some(row => row && String(row._id) === String(id));
+  // A dropped filter answers with page 0 of the whole dataset: every surplus row would read as gone.
+  if ((items.length && !found) || (typeof total === 'number' && total > (found ? 1 : 0))) {
+    throw new Error(`eagle-api ignored the id filter for ${dataset} ${id}`);
+  }
+  return found;
 }
 
 /** Track sends these either nested (`{name}`) or as a bare string, depending on the endpoint. */

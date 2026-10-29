@@ -104,16 +104,34 @@ test('search-response unwrapping', async (t) => {
   });
 });
 
-test('eagleRowLive reads one id through the dataset search', async () => {
+test('eagleRowLive reads one id through the dataset search', async (t) => {
   const urls = [];
-  const page = items => async (url) => { urls.push(url); return { items, total: items.length }; };
+  const page = (items, total = items.length) => async (url) => { urls.push(url); return { items, total }; };
 
-  assert.strictEqual(await eagleRowLive('Document', 'abc', page([{ _id: 'abc' }])), true);
-  assert.strictEqual(urls[0],
-    `${EAGLE_API_BASE}/search?dataset=Document&pageSize=1&pageNum=0&and[_id]=abc`);
-  assert.strictEqual(await eagleRowLive('Document', 'abc', page([])), false);
-  assert.strictEqual(await eagleRowLive('Document', 'abc', page([{ _id: 'other' }])), false,
-    'a filter the search ignored must not read as the row');
+  await t.test('the row itself reads as live', async () => {
+    assert.strictEqual(await eagleRowLive('Document', 'abc', page([{ _id: 'abc' }])), true);
+    assert.strictEqual(urls[0],
+      `${EAGLE_API_BASE}/search?dataset=Document&pageSize=1&pageNum=0&and[_id]=abc`);
+  });
+
+  await t.test('an empty answer reads as not live', async () => {
+    assert.strictEqual(await eagleRowLive('Document', 'abc', page([])), false);
+    assert.strictEqual(await eagleRowLive('Document', 'abc', page([], null)), false);
+  });
+
+  await t.test('a filter the search ignored must not read as the row', async () => {
+    for (const total of [1, null]) {
+      await assert.rejects(eagleRowLive('Document', 'abc', page([{ _id: 'other' }], total)),
+        /eagle-api ignored the id filter for Document abc/, `total ${total}`);
+    }
+  });
+
+  await t.test('a total above one means the filter was ignored, even when the row is on the page', async () => {
+    await assert.rejects(eagleRowLive('Document', 'abc', page([{ _id: 'abc' }], 4210)),
+      /eagle-api ignored the id filter for Document abc/);
+    await assert.rejects(eagleRowLive('Document', 'abc', page([], 4210)),
+      /eagle-api ignored the id filter for Document abc/);
+  });
 });
 
 test('fetchAllPages', async (t) => {
@@ -1272,6 +1290,20 @@ test('seed --reconcile end to end', async (t) => {
         fs.rmSync(logFile, { force: true });
       }
     });
+
+  await t.test('a lookup that throws fails the run before any delete', async () => {
+    const { purged, deps } = makeDeps();
+    const file = path.join(LOG_DIR, 'summary-lookup.json');
+    const sources = stubSources({
+      eagleRowLive: async (dataset, id) => { throw new Error(`eagle-api ignored the id filter for ${dataset} ${id}`); }
+    });
+    await assert.rejects(seed(['--live', '--reconcile', '--only', 'projects,documents', '--summary', file],
+      { ...deps, sources }), /ignored the id filter/);
+
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).failures,
+      ['fatal: eagle-api ignored the id filter for Document stale']);
+  });
 
   await t.test('a surplus row eagle-api no longer serves is deleted as before', async () => {
     const { purged, deps } = makeDeps();
