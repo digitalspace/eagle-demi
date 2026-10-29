@@ -11,6 +11,7 @@ const { makeRes } = require('../../src/http/router');
 const { resolveAccess, TIER } = require('../../src/helpers/access-sql');
 const { filterFor } = require('../../src/helpers/access-odata');
 const config = require('../../src/config');
+const { logger } = require('../../src/utils/logger');
 
 test('Passive Auth Middleware Tests', async (t) => {
 
@@ -192,6 +193,24 @@ test('Passive Auth Middleware Tests', async (t) => {
     assert.strictEqual(nextCalled, false);
     assert.strictEqual(res.statusCode, 401);
     assert.match(JSON.parse(res.body).error, /JWT verification failed/);
+  });
+
+  await t.test('a rejected credential on suggest logs the path, not the typed prefix', () => {
+    config.keycloakEnabled = true;
+    t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
+    t.mock.method(jwt, 'verify', (token, getKey, options, callback) => callback(new Error('jwt expired')));
+    const warn = t.mock.method(logger, 'warn', () => {});
+
+    const req = {
+      method: 'GET',
+      originalUrl: '/api/suggest?kind=projects&q=secret',
+      header: (name) => (name === 'Authorization' ? 'Bearer expired-token' : null)
+    };
+    passiveAuthMiddleware.strict(req, makeRes('req-3'), () => {});
+
+    const lines = warn.mock.calls.map(call => JSON.stringify(call.arguments));
+    assert.ok(lines.some(line => line.includes('Rejected credential on GET /api/suggest (')), lines.join('\n'));
+    assert.ok(!lines.some(line => /q=|secret/.test(line)), lines.join('\n'));
   });
 
   await t.test('strict: no credential still continues as anonymous', () => {

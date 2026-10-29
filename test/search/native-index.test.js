@@ -20,6 +20,7 @@ const { filterFor } = require('../../src/helpers/access-odata');
 const { resolveAccess, TIER, SEALED_TOKEN } = require('../../src/helpers/access-sql');
 const { makeRes } = require('../../src/http/router');
 const { listHandler } = require('../../src/controllers/nosql/mirror-reads');
+const { parseNativeQuery, nativeCriteria } = require('../../src/helpers/native-query');
 
 const ANON = resolveAccess({ query: {}, headers: {}, header: () => undefined });
 const MAP = INDEX_MAPS.projects;
@@ -235,6 +236,27 @@ test('keyword list over the index', async (t) => {
     const res = await call('q=mine&sort=-name');
     assert.match(queries[0].query, /ORDER BY c\.name DESC$/);
     assert.deepStrictEqual(res.body.map(r => r.id), ['p1', 'p2', 'p3']);
+  });
+
+  await t.test('readMatches asks the index for parsed.idPage ids when set, bounded by ID_PAGE, ID_PAGE otherwise', async (t) => {
+    const { searches } = fakeStores(t);
+    const read = idPage => {
+      const parsed = { ...parseNativeQuery(SPEC, { q: 'mine' }, ANON), idPage };
+      return SPEC.repository.list(ANON, { parsed, pageNum: 0, pageSize: 8, criteria: [] });
+    };
+
+    assert.deepStrictEqual((await read(24)).map(r => r.id), ['p3', 'p1', 'p2']);
+    await read(ID_PAGE + 1);
+    await read(undefined);
+    await read(0);
+    await read(2.5);
+    assert.deepStrictEqual(searches.map(s => s.top), [24, ID_PAGE, ID_PAGE, ID_PAGE, ID_PAGE]);
+  });
+
+  await t.test('q without a sort carries no ORDER BY, so rows keep index rank', () => {
+    const parsed = parseNativeQuery(SPEC, { q: 'mine' }, ANON);
+    assert.ok(!nativeCriteria(SPEC, parsed, ANON).orderBy);
+    assert.ok(!nativeCriteria({}, { ...parsed, q: null }, ANON).orderBy);
   });
 
   await t.test('q with dateUpdatedStart sends an OData range and keeps it in the re-read', async (t) => {

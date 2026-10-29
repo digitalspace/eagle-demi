@@ -330,6 +330,11 @@ function resolveAccess(req) {
   return { tier: TIER.PUBLIC, roles, projectScope: null, teams, credentials, authenticated, level };
 }
 
+/** Anonymous: no credential was presented at all, so every such caller sees the same rows. */
+function isAnonymous(access) {
+  return access.authenticated === false && access.tier === TIER.PUBLIC;
+}
+
 /**
  * Prefix marking a Keycloak role as a project scope rather than a role type.
  *
@@ -728,6 +733,7 @@ module.exports = {
   canWrite,
   canAdmin,
   resolveAccess,
+  isAnonymous,
   systemAccess,
   teamsFor,
   projectScopeFor,

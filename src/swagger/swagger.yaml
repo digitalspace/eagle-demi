@@ -2252,6 +2252,135 @@ paths:
             Carries `Cache-Control: private, no-store` and `Vary: Authorization, X-Api-Key` for
             every caller.
 
+  /api/suggest:
+    get:
+      summary: Search suggestions for one kind
+      description: >-
+        Up to `limit` rows of one kind that match a typed keyword, for a search box that suggests
+        as the user types. Rows come from the same keyword search, access filter and redaction as
+        the kind's list route (`GET /api/projects?q=` and the like), cut down to the few fields a
+        suggestion shows. A row whose label the caller may not see is left out, so FEWER than
+        `limit` rows is a normal answer. No `search` analytics event is logged.
+
+        A 200 to an anonymous request carries `Cache-Control: public, max-age=60`. A 200 to a
+        request that presented a credential carries `private, no-store`, because the rows differ
+        per caller, and so does every error the endpoint itself answers. All of
+        them carry `Vary: Origin, Authorization, X-Api-Key`. The 401 for a rejected Bearer token is
+        answered before the endpoint runs, so it carries no `Cache-Control` and only `Vary: Origin`.
+      parameters:
+        - name: kind
+          in: query
+          required: true
+          description: >-
+            What to suggest. `comment-periods` has no keyword search and is refused with 400.
+          schema:
+            type: string
+            enum: [projects, documents, updates, notifications]
+        - name: q
+          in: query
+          required: true
+          description: >-
+            The typed keyword: 2 to 100 characters, counted in code points after trimming and NFC
+            normalisation.
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Most rows to return, written plainly: `1`-`8`. Padded, signed, decimal, exponent and
+            hex spellings are refused rather than normalised, so one answer has one cache key.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 8
+            default: 8
+      responses:
+        '200':
+          description: >-
+            The best matches, at most `limit` of them, in search rank order. The fields depend on
+            `kind`; `projectName` and `projectEagleId` come from the parent project and are left
+            out when the caller cannot read it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    maxItems: 8
+                    items:
+                      oneOf:
+                        - title: projects
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            eagleId:
+                              type: string
+                              nullable: true
+                            name:
+                              type: string
+                        - title: documents
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            displayName:
+                              type: string
+                            projectId:
+                              type: string
+                              nullable: true
+                            projectEagleId:
+                              type: string
+                              nullable: true
+                            projectName:
+                              type: string
+                              nullable: true
+                        - title: updates
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            headline:
+                              type: string
+                            projectId:
+                              type: string
+                              nullable: true
+                            projectEagleId:
+                              type: string
+                              nullable: true
+                            projectName:
+                              type: string
+                              nullable: true
+                            notificationName:
+                              type: string
+                              nullable: true
+                        - title: notifications
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            associatedProjectId:
+                              type: string
+                              nullable: true
+        '400':
+          description: >-
+            An unknown parameter, a parameter given more than once, a `kind` off the list
+            (`comment-periods` included), `q` missing or outside 2 to 100 characters, `limit` not a
+            plain whole number between 1 and 8, or a keyword the search service could not run.
+        '401':
+          description: A Bearer token was presented and rejected. No token gets the public view.
+        '500':
+          description: >-
+            `{ "success": false, "error": "Internal server error." }` — the read failed.
+        '502':
+          description: '`{ "error": "The search service is unavailable." }`'
+
   /api/documents/extract:
     post:
       summary: Upload and extract document
