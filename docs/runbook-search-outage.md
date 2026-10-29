@@ -57,8 +57,11 @@ at the source — re-push from the eagle-api pod, then wait one `PT5M` indexer t
 again:
 
 ```bash
-LOG_LEVEL=info node scripts/demi-repush.js --kind project --live --concurrency 1
+LOG_LEVEL=info node scripts/demi-repush.js --kinds project --concurrency 1 --ids-file <file> --live
 ```
+
+`<file>` holds the project `_id`s to re-push, one per line. A live project run refuses to start
+without it.
 
 Do not reset the indexer for this. The rows in Cosmos are wrong; re-indexing them changes nothing.
 The checks and how to add one: `azure/search/README.md`, "Data checks".
