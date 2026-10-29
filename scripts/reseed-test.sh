@@ -52,7 +52,7 @@ Run dirs: /home/demi/reseed/<run>/ on the VM, ${RESEED_STATE:-$XDG_STATE_HOME/de
 here. Exit codes: 0 ok, 1 failed step or gate, 2 usage error or a refused --live.
 
 Test seams: DEMI_DEVBOX, PUBLIC_CHECK, AZ, RESEED_STATE, RESEED_NOW (epoch), RESEED_PAUSE
-(seconds between remote calls, default 120), RESEED_VM_ROOT.
+(seconds between remote calls, default 120), RESEED_VM_ROOT, RESEED_KEYCLOAK_URL.
 EOF
 }
 
@@ -72,7 +72,7 @@ DEFAULT_CHECKOUT='/opt/eagle-demi'
 REMOTE_WAIT=900
 
 # Payload env, one source each.
-KEYCLOAK_URL='https://test.loginproxy.gov.bc.ca/auth'           # azure/modules/api-function-flex.bicep keycloakUrl
+KEYCLOAK_URL="${RESEED_KEYCLOAK_URL:-https://test.loginproxy.gov.bc.ca/auth}" # azure/modules/api-function-flex.bicep keycloakUrl
 KEYCLOAK_REALM='eao-epic'                                       # azure/modules/api-function-flex.bicep keycloakRealm
 EAGLE_API_BASE='https://projects.eao.gov.bc.ca/api/public'      # azure/main.prod.bicepparam eagleApiBase (read only)
 TRACK_API_BASE='https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.ca' # azure/main.test.bicepparam trackApiBase

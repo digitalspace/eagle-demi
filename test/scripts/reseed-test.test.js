@@ -47,6 +47,7 @@ const FAKE_NODE = `#!/usr/bin/env bash
 { printf 'NODE'; printf ' %s' "$@"; printf ' secret=%s' "\${TRACK_CLIENT_SECRET:+set}"
   printf ' prefix=[%s] minio=%s,%s log=%s\\n' "\${MINIO_KEY_PREFIX-unset}" "\${MINIO_ACCESS_KEY:+set}" \\
     "\${MINIO_SECRET_KEY:+set}" "\${RECONCILE_LOG:+set}"; } >> "$FAKE_DIR/node.log"
+printf '%s' "\${KEYCLOAK_URL-unset}" > "$FAKE_DIR/keycloak-url"
 prev=""
 for a in "$@"; do [[ "$prev" == --summary ]] && printf '{}' > "$a"; prev="$a"; done
 exit 0
@@ -291,6 +292,16 @@ test('seed setup exports RECONCILE_LOG as its own statement and leaves the key p
   waitForFile(ctx.vmFile('r1', 'seed-dry.rc'));
   assert.match(ctx.read('node.log'), / prefix=\[\] minio=, log=set\n/);
   assert.doesNotMatch(ctx.read('az.log'), /keyvault/, 'secrets are read on the VM, never here');
+});
+
+test('payload env values reach the VM byte for byte, an empty one stays empty', t => {
+  const ctx = sandbox(t);
+  const url = 'https://h/a b?x=1&y=$z';
+  const r = ctx.run(['seed', '--run', 'r1'], { RESEED_KEYCLOAK_URL: url });
+  assert.strictEqual(r.status, 0, r.out);
+  waitForFile(ctx.vmFile('r1', 'seed-dry.rc'));
+  assert.strictEqual(ctx.read('keycloak-url'), url);
+  assert.match(ctx.read('node.log'), / prefix=\[\] /, 'MINIO_KEY_PREFIX is set and empty');
 });
 
 test('objects setup reads each MinIO key as its own statement and leaves the key prefix empty', t => {
