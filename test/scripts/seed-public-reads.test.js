@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * The public-read backfill.
- *
- * What is asserted is what is SILENT when it breaks: a dry run that writes, a resume that reruns a
- * dataset it already finished, a comment page loop that stops early and calls a truncated period
- * complete, and the ACL a backfilled comment lands with — a comment under a period the public
- * cannot see must not become readable because it arrived through the backfill instead of a push.
- */
+// Pins what breaks silently: a dry run that writes, a resume that reruns, a truncated comment
+// read, and a backfilled comment more readable than a pushed one.
 
 process.env.NODE_ENV = 'test';
 
@@ -229,9 +223,8 @@ test('a rerun skips a dataset the state file already calls done', async () => {
 });
 
 test('--only re-runs a stage the state file calls done', async () => {
-  // This script is the repair tool — a List migration in eagle-api writes to Mongo and fires no
-  // push — and the stage needing repair has always completed before. Skipping it made
-  // `--only lists` a no-op that exits 0 and reads like a successful backfill.
+  // `--only lists` is the List-migration repair and that stage has always completed before;
+  // skipping it would make the repair a no-op that exits 0.
   const wrote = [];
   const state = statePath();
   fs.writeFileSync(state, JSON.stringify({
@@ -268,10 +261,8 @@ test('a mirror that answers null is a skip, not a write', async () => {
 });
 
 test('a stage that dropped a row for want of a parent is not checkpointed complete', async () => {
-  // On test this stage dropped 19 comment periods, recorded itself complete because errors was 0,
-  // and every plain rerun after that skipped it — the periods, and the 88 comments hanging off
-  // them, were unreachable until the state file was deleted by hand. A drop is not a failure, but
-  // it is a row still owed: the parent project can be published after this run.
+  // A drop is a row still owed (its parent can be published later), so it must not checkpoint
+  // the stage, or every plain rerun skips it.
   const state = statePath();
   fs.writeFileSync(state, JSON.stringify({
     organizations: { completedAt: '2026-09-01T00:00:00.000Z' }
@@ -561,9 +552,8 @@ test('comments', async (t) => {
 
   await t.test('a period holding a comment that failed is retried, not checkpointed',
     async (t2) => {
-      // The row failure is swallowed into counts.errors rather than thrown, so the period looked
-      // finished: the next run skipped it, reported a clean zero-row stage, and the comment was
-      // gone for good.
+      // writeRow swallows the row failure, so without this guard the period is checkpointed and
+      // the comment lost for good.
       t2.mock.method(logger, 'error', () => {});
       const state = statePath();
       const attempts = [];
@@ -598,9 +588,7 @@ test('comments', async (t) => {
 
   await t.test('--only comments ignores the per-period checkpoint, so a repair can reach a period',
     async () => {
-      // The header promises `--only <stage>` re-runs the stages it names, checkpoint or no
-      // checkpoint. The stage checkpoint was honoured; the per-period one was not, so the repair
-      // walked every period, skipped all of them, and exited 0 looking like a completed backfill.
+      // `--only` re-runs a named stage whatever its checkpoints say, the per-period one included.
       const state = statePath();
       fs.writeFileSync(state, JSON.stringify({
         comments: { completedAt: '2026-09-01T00:00:00.000Z', periods: [PERIOD_EAGLE_ID] }
@@ -624,10 +612,8 @@ test('comments', async (t) => {
 
   await t.test('a comment page that lost its total or its shape is an error, not a zero',
     async (t2) => {
-      // `Number(null)` is 0, which satisfies the truncation check, and without `count=true` the
-      // body is the `[{ total_items, results }]` envelope whose rows carry no `_id` and filter
-      // away to nothing. Either one alone records the period as holding zero comments, errors 0,
-      // and checkpoints it — the period looks swept and its comments are gone from DEMI for good.
+      // `Number(null)` is 0 and an envelope body filters to nothing; either alone would record zero
+      // comments and checkpoint the period.
       const logged = [];
       t2.mock.method(logger, 'error', (msg, meta) => logged.push(meta && meta.error));
 
@@ -652,9 +638,8 @@ test('comments', async (t) => {
       assert.match(noHeader.logged[0], /x-total-count/, 'and it says which contract broke');
       assert.deepStrictEqual(noHeader.periods, [], 'so the period is not checkpointed');
 
-      // The envelope the endpoint answers without `count=true`: its one row has no `_id`, so the
-      // filter empties the page. Reported as a truncated read, which sends the operator hunting a
-      // withdrawn comment instead of the query that lost its flag.
+      // Envelope body (no `count=true`): its row has no `_id`. It must be named as the wrong shape;
+      // a short-read message sends the operator hunting a withdrawn comment.
       const envelope = await runWith(async () => ({
         body: [{ total_items: 88, results: [eagleComment({ _id: 'C1' })] }],
         headers: new Headers({ 'x-total-count': '88' })
