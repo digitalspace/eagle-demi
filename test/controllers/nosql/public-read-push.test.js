@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * The four Eagle mirrors that feed eagle-public's remaining reads — comment periods, comments,
- * organizations and project notifications.
- *
- * What is asserted here is what is SILENT when it breaks, because the push answers 200 either way:
- * the stored ACL, which decides whether an anonymous visitor sees the row at all, and the derived
- * `isPublished` beside it. A comment may never out-rank its period and a period may never out-rank
- * its project, so both of those ceilings are driven from the real `constrainToProject`.
- */
+// Period, comment, organization and notification mirrors. Asserts the stored ACL and `isPublished`,
+// which break silently (the push answers 200 either way), through the real `constrainToProject`.
 
 process.env.NODE_ENV = 'test';
 
@@ -40,15 +33,9 @@ const {
 } = require('../../helpers/eagle-mirror-fixtures');
 
 /**
- * A partition-aware Cosmos, keyed `partitionKey::id` the way the service addresses an item.
- *
- * `replace` is addressed at (id, partitionKey) and throws 404 when that key holds nothing, exactly
- * as the real container does. That is what makes a row moved to another partition observable here:
- * a write aimed at the wrong partition either throws or shows up under the wrong key. `create` over a
- * held key is a 409, and a cross-partition lookup evaluates the SQL it is sent.
- *
- * @returns {{ store: Map, replaced: Array, created: Array }} the stored rows, the etags `replace`
- *   was guarded by, and the ids `create` was asked for
+ * Partition-aware Cosmos keyed `partitionKey::id`: `replace` on an empty key is 404, `create` on a
+ * held one 409, and lookups evaluate their SQL, so a write to the wrong partition shows.
+ * @returns {{ store: Map, replaced: Array, created: Array }} rows, `replace` etags, `create` ids
  */
 function partitionedCosmos(t, partitionField, seed = []) {
   const key = (pk, id) => `${pk}::${id}`;
@@ -246,8 +233,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       ]);
     });
 
-  // Eagle's `project` reference holds either id. Resolving it through `projects` alone dropped 10
-  // periods and the 232 comments under them on test, measured 2026-09-07.
+  // Eagle's `project` reference holds either a project or a notification id.
   await t.test('a period under a ProjectNotification is stored under it, ACL verbatim', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
     t.mock.method(notifications, 'readForWrite', async () => ({
@@ -261,17 +247,14 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
     assert.strictEqual(written().projectId, NOTIFICATION_EAGLE_ID,
       'partitioned under the notification, which is what eagle-public filters on');
-    // The notification's own ACL is not a ceiling — it is not the period's parent project, and it
-    // says nothing about who may read the period. So the Eagle list is stored as it arrived, which
-    // is what `seed/transform.js` already does for a notification-parented document.
+    // A notification's ACL is no ceiling: the Eagle list is stored as it arrived, as
+    // `seed/transform.js` does for a notification-parented document.
     assert.deepStrictEqual(written().read, PUBLIC_ACL);
     assert.strictEqual(written().isPublished, true);
   });
 
-  // Track 351 and 353 carry a ProjectNotification _id in `epic_guid`, which the merge copies onto
-  // the project row's `eagleId`, so `getByEagleId` answers with the Track project for a ref that
-  // names the notification. Measured on test 2026-09-08: the periods under those two were stored
-  // in partition '353' at read ['staff'], and 88 comments cascaded to staff behind them.
+  // Some Track projects carry a ProjectNotification _id in `epic_guid`, copied onto `eagleId`, so
+  // `getByEagleId` answers with the Track project for a ref that names the notification.
   await t.test('a project row carrying the notification id does not claim the period', async () => {
     t.mock.method(projects, 'getByEagleId', async () =>
       ({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
@@ -356,16 +339,8 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
   });
 });
 
-/**
- * eagle-api hard-deletes a comment period and pushes the record it just removed with
- * `isDeleted: true` — the one push that carries a fact the stored document cannot say. What is
- * asserted is what an anonymous visitor would then be answered, on the period AND on the comments
- * under it: the period row alone is not what hides a comment, because a comment is gated by its
- * own ACL.
- *
- * `comments.setAclForPeriod`, `deriveAcls` and the SQL are all real here; only Cosmos is doubled,
- * so the assertions are about the patch the container would receive.
- */
+// An Eagle delete push: asserts what an anonymous visitor gets on the period and its comments.
+// Only Cosmos is doubled; `setAclForPeriod`, `deriveAcls` and the SQL are real.
 test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -428,9 +403,8 @@ test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
     });
 
   await t.test('only eagle-api sending the record again brings it back', async () => {
-    // The rule the controller header states. Nothing inside DEMI clears the flag — see
-    // acl-cascade.test.js for the cascade that used to — but a push carrying the record means
-    // Eagle holds one again, and Mongo does not reuse an ObjectId.
+    // Nothing inside DEMI clears the flag (acl-cascade.test.js), but Mongo never reuses an
+    // ObjectId, so a push of the record means Eagle holds it again.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     stubCommentCascade(t, []);
     const deleted = { id: PERIOD_EAGLE_ID, projectId: '207', read: ['staff'], isDeleted: true };
@@ -444,14 +418,8 @@ test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
   });
 });
 
-/**
- * A period Eagle published or unpublished, and the comments under it.
- *
- * The comment's OWN stored `read[]` is the only gate on `/search?dataset=Comment` — that branch
- * never re-reads the period, unlike the chunk branch, which reads its parent document. So a period
- * that moves level and leaves its comments where they were is a period whose comments are still
- * readable by anyone who knows the period id.
- */
+// A period that changed level, and its comments: `/search?dataset=Comment` gates on each comment's
+// own `read[]`, never the period's, so comments left behind stay readable.
 test('PUT /eagle/commentperiods/:eagleId — a period that changed level', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
