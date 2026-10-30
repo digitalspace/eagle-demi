@@ -508,8 +508,25 @@ test('DMS coordinates convert to decimal degrees', () => {
 
   assert.deepStrictEqual(validCoordinates('-122.9', '49.1').coordinates, [-122.9, 49.1]);
 
-  // parseFloat would have read the leading 53 and plotted the project ~100 km off
-  assert.strictEqual(validCoordinates('-122.9', '53 degrees-ish'), null);
+  const near = (c, want) => c !== null && c.coordinates.every((v, i) => Math.abs(v - want[i]) < 1e-9);
+  assert.ok(near(validCoordinates('-122.9', '+49.1'), [-122.9, 49.1]), 'explicit plus sign');
+  assert.ok(near(validCoordinates('-1.229e2', '4.91e1'), [-122.9, 49.1]), 'exponent notation');
+  assert.ok(near(validCoordinates('-122.9°', '49.1 °'), [-122.9, 49.1]),
+    'decimal with a trailing degree mark, with or without a space');
+
+  // trailing text after a number gives null instead of the number alone
+  assert.strictEqual(validCoordinates('-122.9', '53 degrees-ish'), null, 'trailing text is not ignored');
+
+  // adjacent \s* groups backtrack polynomially: ~8 s on this input, under 1 ms when linear
+  const gap = ' '.repeat(200);
+  const started = performance.now();
+  assert.strictEqual(validCoordinates(`1${gap}1${gap}1${gap}x`, '49.1'), null, 'long whitespace runs are rejected');
+  assert.ok(performance.now() - started < 500, 'long whitespace runs do not backtrack');
+
+  // an optional dot between two digit runs splits them quadratically: ~3.5 s here
+  const digitsStarted = performance.now();
+  assert.strictEqual(validCoordinates(`${'1'.repeat(50000)}x`, '49.1'), null, 'long digit run is rejected');
+  assert.ok(performance.now() - digitsStarted < 500, 'long digit runs do not backtrack');
 });
 
 test('centroid normalisation', async (t) => {

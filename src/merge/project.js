@@ -380,18 +380,19 @@ function inBC(lng, lat) {
 // Two Eagle projects store DMS text (53°49'42.9"N); parseFloat would read only the degrees.
 const DMS_NUM = String.raw`(\d+(?:\.\d+)?)(?![\d.])`;
 const DMS = new RegExp(
-  String.raw`^${DMS_NUM}\s*[°º˚d]?` +
-  String.raw`(?:\s*${DMS_NUM}\s*['′’m]?` +
-  String.raw`(?:\s*${DMS_NUM}\s*(?:''|["″”s])?)?)?` +
-  String.raw`\s*([NSEW])$`, 'i');
-const DECIMAL = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+  String.raw`^${DMS_NUM}\s*(?:[°º˚d]\s*)?` +
+  String.raw`(?:${DMS_NUM}\s*(?:['′’m]\s*)?` +
+  String.raw`(?:${DMS_NUM}\s*(?:(?:''|["″”s])\s*)?)?)?` +
+  String.raw`([NSEW])$`, 'i');
+const DECIMAL = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*[°º˚]?$/;
 const HEMISPHERES = { lat: 'NS', lng: 'EW' };
 
 function toDegrees(raw, axis) {
   if (typeof raw === 'number') return raw;
   if (typeof raw !== 'string') return NaN;
   const s = raw.trim();
-  if (DECIMAL.test(s)) return Number(s);
+  const d = DECIMAL.exec(s);
+  if (d) return Number(d[1]);
   const m = DMS.exec(s);
   if (!m) return NaN;
   const hemisphere = m[4].toUpperCase();
