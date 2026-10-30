@@ -71,7 +71,8 @@ async function readTarget(eagleId) {
 }
 
 /**
- * No parent, so nothing it can fail to resolve; throws `DUPLICATE_ID` when two rows hold the Eagle id.
+ * Mirror one raw Eagle `Organization`; also used by the backfill in src/scripts/seed-public-reads.js.
+ * Throws `DUPLICATE_ID` only when two rows other than the one stored under the id name it.
  * @returns {Promise<{saved, existing}|{ignored, existing}|{status: 'conflict'}>}
  */
 async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {

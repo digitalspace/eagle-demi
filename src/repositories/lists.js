@@ -50,7 +50,10 @@ async function readForWrite(id, kind) {
   return cosmos.readItem(CONTAINER, String(id), String(kind));
 }
 
-/** The row of one kind naming this Eagle id without being stored under it: one DEMI created. */
+/**
+ * Rows of one kind whose `eagleId` field names the id, including one stored under it;
+ * callers read by id first.
+ */
 async function readForWriteByEagleId(eagleId, kind) {
   const criteria = [eq(PARTITION_FIELD, String(kind), '@kind'), eq('eagleId', String(eagleId), '@eagleId')];
   const { items } = await cosmos.query(CONTAINER, {
