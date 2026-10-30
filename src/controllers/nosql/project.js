@@ -28,8 +28,8 @@ const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS,
-  hasValue
+  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted,
+  TRIMMED_FIELDS, hasValue
 } = require('../../merge/project');
 const { LEGISLATION_KEY, PUT_IGNORED_FIELDS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
@@ -626,6 +626,7 @@ exports.setLevel = async (req, res) => {
       reread: () => projects.getById(access, req.params.id),
       attempt: async (current, attempt) => {
         if (!current) return { status: 'missing' };
+        if (current.isDeleted === true) return { status: 'refused', code: 409, error: 'Project is deleted' };
         // Per try: a reread after a lost race can find the project moved under a locked Act.
         const move = year.value === null ? { key: null } : yearSwitch(current, year.value);
         if (move.error) {
@@ -792,12 +793,21 @@ exports.upsertFromEagle = async (req, res) => {
   return applyEaglePush(req, res, push);
 };
 
+/**
+ * Whether a push leaves the row deleted. eagle-api never sends `isDeleted: false`, so an unflagged
+ * push restores only a delete Eagle made (`sources.eagle.isDeleted`); a DEMI delete stands.
+ */
+function pushDeleted(doc, existing) {
+  if (typeof doc.isDeleted === 'boolean') return doc.isDeleted;
+  if (!existing || existing.isDeleted !== true) return false;
+  return !(existing.sources && existing.sources.eagle && existing.sources.eagle.isDeleted === true);
+}
+
 /** The row a push writes, built from whatever revision is stored at the moment of the write. */
 function mergeEaglePush(doc, existing) {
+  const deleted = pushDeleted(doc, existing);
   // A push carries no Track phases or works, so the stored ones go back in (not DEMI-only: the sync
   // rebuilds them).
-  // A push that says nothing about the delete leaves a DEMI one standing; `isDeleted: false` restores.
-  const deleted = typeof doc.isDeleted === 'boolean' ? doc.isDeleted : Boolean(existing && existing.isDeleted);
   const merged = existing && existing.sources && existing.sources.track
     ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases, works: existing.works, deleted })
     : mergeEagleOnlyProject(doc, { deleted });
@@ -1109,10 +1119,8 @@ exports.deleteProject = async (req, res) => {
       reread,
       attempt: async (current) => {
         if (!current) return { status: 'missing' };
-        const read = documents.constrainToProject(current.read, documents.DELETED_CEILING);
-        const row = {
-          ...current, isDeleted: true, read, isPublished: read.includes('public'), updatedAt: new Date().toISOString()
-        };
+        if (current.isDeleted === true) return { status: 'already', saved: current };
+        const row = markDeleted({ ...current, updatedAt: new Date().toISOString() });
         return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), existing: current };
       },
       onLost: (_current, attempt) =>
@@ -1121,6 +1129,19 @@ exports.deleteProject = async (req, res) => {
     });
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project delete', req.params.id);
+    const deleted = () => res.json({
+      message: 'Project deleted successfully',
+      deleted: redactForAccess('projects', written.saved, access)
+    });
+    // A repeat writes nothing and audits nothing; it only retries a cascade the first call left owed.
+    if (written.status === 'already') {
+      const { saved } = written;
+      if (!saved.cascadePendingAt) return deleted();
+      const failure = await runCascade(saved, saved.eagleId);
+      if (failure) return res.status(500).json({ success: false, error: failure });
+      await clearCascadePending(saved, saved.eagleId);
+      return deleted();
+    }
     const { saved, existing: from } = written;
 
     auditEvent(req, {
@@ -1134,10 +1155,12 @@ exports.deleteProject = async (req, res) => {
     const failure = visibilityMoved(from, saved) ? await runCascade(saved, saved.eagleId) : null;
     if (failure) return res.status(500).json({ success: false, error: failure });
 
-    return res.json({
-      message: 'Project deleted successfully',
-      deleted: redactForAccess('projects', saved, access)
-    });
+    const twinFailure = saved.eagleId
+      ? await narrowTwin(saved, saved.eagleId, (twin, id) => runCascade(twin, id, { updates: false }))
+      : null;
+    if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
+
+    return deleted();
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }

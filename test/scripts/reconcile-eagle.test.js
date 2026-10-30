@@ -332,6 +332,24 @@ test('aclMismatch', async (t) => {
 });
 
 test('reconcile', async (t) => {
+  await t.test('a DEMI-deleted project Eagle still publishes is demiDeleted, not ACL drift', async () => {
+    const PUBLIC = readForLevel(4);
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({
+        fetchEagleProjects: async () => EAGLE_PROJECTS.map(p => ({ ...p, read: PUBLIC }))
+      }),
+      projects: {
+        listWithEagleId: async () => PROJECT_ROWS.map(row => (row.id === '207'
+          ? { ...row, read: readForLevel(2), isPublished: false, isDeleted: true }
+          : { ...row, read: PUBLIC, isPublished: true })),
+        countWithEagleId: async () => PROJECT_ROWS.length
+      }
+    }));
+
+    assert.deepStrictEqual(summary.projects.demiDeleted, ['P1']);
+    assert.ok(!summary.projects.aclMismatch.includes('P1'));
+  });
+
   // Every id here is in both Eagle and DEMI, so each id-set diff reads them as clean.
   await t.test('reports ACL drift on ids both sides hold', async () => {
     const PUBLIC = readForLevel(4);

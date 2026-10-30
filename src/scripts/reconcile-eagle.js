@@ -553,8 +553,12 @@ async function reconcile(argv = [], deps = {}) {
   const projectRead = new Map(projectRows.map(row => [String(row.id), row.read]));
   const projectReadOf = row => projectRead.get(String(row.projectId)) || null;
 
+  // A DEMI delete caps a row Eagle still publishes; reported on its own, never as ACL drift.
+  const deleted = row => row.isDeleted === true;
   summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff,
-    aclMismatch: aclMismatch(projectRows, row => String(row.eagleId), eagleRead) };
+    aclMismatch: aclMismatch(projectRows.filter(row => !deleted(row)), row => String(row.eagleId), eagleRead),
+    demiDeleted: projectRows.filter(row => deleted(row) && eagleRead.has(String(row.eagleId)))
+      .map(row => String(row.eagleId)) };
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff,
     aclMismatch: aclMismatch(documentRows, row => String(row.id), eagleRead, projectReadOf) };
 
@@ -801,6 +805,9 @@ function report(summary, { json } = {}) {
       line('aclMismatch (in both, but DEMI read[] lets in different callers than the read[] the ' +
         'mirror would write from Eagle\'s, or isPublished disagrees with read[]; check each row, ' +
         'a full re-push would overwrite DEMI-side changes)', s.aclMismatch);
+    }
+    if (s.demiDeleted && s.demiDeleted.length) {
+      line('demiDeleted (deleted in DEMI, still published in Eagle; not counted as drift)', s.demiDeleted);
     }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +

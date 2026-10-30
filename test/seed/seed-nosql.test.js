@@ -604,6 +604,20 @@ test('seed() end to end with stubbed sources', async (t) => {
       'only the row that actually had vis counts, not every existing row read');
   });
 
+  await t.test('a re-seed keeps a deleted project deleted and off public', async () => {
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) =>
+      (id === '207' ? { id: '207', isDeleted: true, read: ['staff'], isPublished: false } : null);
+
+    await seed(['--live', '--only', 'projects'], { sources: stubSources, repos, now: NOW });
+
+    const row = written.projects.find(p => p.id === '207');
+    assert.strictEqual(row.isDeleted, true);
+    assert.ok(!row.read.includes('public'), 'Eagle\'s feed still says public');
+    assert.strictEqual(row.isPublished, false);
+    assert.ok(!('isDeleted' in written.projects.find(p => p.id === '373')));
+  });
+
   // Why a re-seed is the fix for 396 rows holding `proponentId: null`: the search shape the seed
   // reads carries none of what eagle-api's push resolves, and nothing re-pushes existing rows.
   await t.test('re-seeding an existing row fills proponentId without blanking the push', async () => {
@@ -1145,11 +1159,11 @@ test('seed --reconcile end to end', async (t) => {
       links: { create: async (record) => record }
     };
     const purge = {
-      purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
-      purgeProject: async (row) => { purged.projects.push(row.id); }
+      purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); }
     };
+    const retireProject = async (row) => { purged.projects.push(row.id); };
     return {
-      purged, deps: { repos, purge, cosmosReady: true, searchReady: true, now: NOW, ...over }
+      purged, deps: { repos, purge, retireProject, cosmosReady: true, searchReady: true, now: NOW, ...over }
     };
   };
 
@@ -1687,15 +1701,45 @@ test('seed --reconcile end to end', async (t) => {
   await t.test('documents are deleted before projects', async () => {
     const order = [];
     const { deps } = makeDeps();
-    deps.purge = {
-      purgeDocument: async () => { order.push('document'); },
-      purgeProject: async () => { order.push('project'); }
-    };
+    deps.purge = { purgeDocument: async () => { order.push('document'); } };
+    deps.retireProject = async () => { order.push('project'); };
     await seed(['--live', '--reconcile', '--only', 'projects,documents'],
       { ...deps, sources: stubSources() });
 
     assert.deepStrictEqual(order, ['document', 'project'],
       'a project purged first would orphan its remaining documents');
+  });
+
+  await t.test('a surplus project is flagged and capped, never removed', async () => {
+    const { deps } = makeDeps();
+    delete deps.retireProject;
+    const upserts = [];
+    deps.repos.projects.getById = async (_access, id) =>
+      (id === 'eagle-gone' ? { id: 'eagle-gone', eagleId: 'gone', read: ['public', 'staff'], isPublished: true } : null);
+    deps.repos.projects.upsert = async (p) => { upserts.push(p); return p; };
+
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    const retired = upserts.find(p => p.id === 'eagle-gone');
+    assert.strictEqual(retired.isDeleted, true);
+    assert.deepStrictEqual(retired.read, ['staff']);
+    assert.strictEqual(retired.isPublished, false);
+    assert.strictEqual(summary.reconcile.projects.deleted, 1);
+  });
+
+  await t.test('a project already flagged is not surplus again', async () => {
+    const { purged, deps } = makeDeps();
+    deps.repos.projects.listEagleOnlyIds = async () => [
+      { id: 'eagle-gone', eagleId: 'gone', isDeleted: true },
+      { id: `eagle-${matchedGuid}`, eagleId: matchedGuid }
+    ];
+
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(purged.projects, []);
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 0);
   });
 
   await t.test('a dry run with no Cosmos refuses instead of reporting an empty surplus', async () => {
@@ -1758,10 +1802,10 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
       links: { create: async (record) => record }
     };
     const purge = {
-      purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
-      purgeProject: async (row) => { purged.projects.push(row.id); }
+      purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); }
     };
-    return { purged, deps: { purge, repos, cosmosReady: true, searchReady: true, now: NOW } };
+    const retireProject = async (row) => { purged.projects.push(row.id); };
+    return { purged, deps: { purge, retireProject, repos, cosmosReady: true, searchReady: true, now: NOW } };
   };
 
   // The reviewer's probe: eagle-api answers empty for both datasets and every gate above it
@@ -1970,6 +2014,16 @@ test('a re-seed carries extraction state forward', async (t) => {
     const summary = await seed(argv, { sources: sources(corpus), repos, now: NOW, cosmosReady });
     return { summary, written, partitions, reStamped, cleared, stampedAt };
   };
+
+  await t.test('documents under a deleted project stay at staff', async () => {
+    const { levelOfRead } = require('../../src/helpers/access-sql');
+    const { written } = await run(true, { read: ['staff'], ownRead: ['public'] }, {
+      storedProject: { id: '207', read: ['staff'], isPublished: false, isDeleted: true }
+    });
+
+    assert.strictEqual(written.length, 2);
+    for (const doc of written) assert.strictEqual(levelOfRead(doc.read), 2, doc.id);
+  });
 
   for (const only of ['projects,documents', 'documents']) {
     await t.test(`--only ${only} keeps documents under a project DEMI took down`, async () => {

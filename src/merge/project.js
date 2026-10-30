@@ -143,9 +143,9 @@ function normalizeEagleSlot(flat, orgs) {
   return flat;
 }
 
-/** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`). */
+/** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`) or it is deleted. */
 function heldRead(read, existing) {
-  return existing && existing.levelHeldAt && Array.isArray(existing.read)
+  return existing && (existing.levelHeldAt || existing.isDeleted === true) && Array.isArray(existing.read)
     ? capRead(read, existing.read)
     : read;
 }
@@ -240,8 +240,6 @@ function flattenEagleProject(doc, orgs) {
   }
   // Every block rides along, so `sources.eagle` can be flattened again under another year.
   for (const k of legislationKeys) flat[k] = doc[k];
-  // eagle-api flags a delete on the top level only (`helpers/actions.js`), never in a block.
-  if (doc.isDeleted !== undefined) flat.isDeleted = doc.isDeleted;
   return normalizeEagleSlot(flat, orgs);
 }
 
@@ -382,6 +380,13 @@ function resolveProjectAcl(eagle, deleted = isDeletedInEagle(eagle)) {
   return deleted ? capRead(read, DELETED_CEILING) : read;
 }
 
+/** Flag a stored project deleted and cap its `read` at staff, in place: the row stays for staff and reconcile. */
+function markDeleted(row) {
+  row.isDeleted = true;
+  row.read = capRead(row.read, DELETED_CEILING);
+  row.isPublished = row.read.includes('public');
+  return row;
+}
 
 /**
  * Merge one Track project with its optional Eagle counterpart.
@@ -652,6 +657,7 @@ module.exports = {
   validCoordinates,
   normalizeCentroid,
   resolveProjectAcl,
+  markDeleted,
   mergeTrackProject,
   mergeEagleOnlyProject,
   eagleOnlyProjectId,

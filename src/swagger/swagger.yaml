@@ -1125,7 +1125,8 @@ paths:
       description: >-
         Flag the project `isDeleted` and drop its `read[]` to staff. The row stays for staff and
         reconcile; anonymous reads answer 404, and the index row, documents and engagement narrow
-        with it. Repeating the call is a no-op.
+        with it. Repeating the call on a deleted project writes nothing and records no second audit
+        row; it only retries a cascade the first call left owed.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1142,12 +1143,15 @@ paths:
             redacted for the caller.
         '401':
           description: Unauthorized.
+        '403':
+          description: The caller lacks a write role.
         '404':
           description: Project not found.
         '500':
           description: >-
             The row was flagged, but its documents, engagement or updates were not narrowed. The
-            next Eagle push for the project retries the cascade.
+            row keeps `cascadePendingAt`; sending the DELETE again retries the cascade, as does the
+            next Eagle push when the project has an Eagle record.
         '503':
           description: The row kept changing under the write; send the request again.
 
@@ -1306,7 +1310,8 @@ paths:
             `legislationYear` names another year, including when it moved under that Act after
             this request read it; or `legislationYear` is not the current year and the project has
             no content under it (not in its `legislationYearList`, or that block has no name).
-            Nothing is written.
+            Also `Project is deleted` for a project flagged `isDeleted`, at any level. Nothing is
+            written.
 
   /api/projects/{id}/short-code:
     put:

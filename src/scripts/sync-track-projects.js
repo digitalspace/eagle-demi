@@ -222,7 +222,7 @@ async function syncProjects(apiProjects, opts = {}) {
     try {
       if (relink) {
         // A re-key, not a new record: it keeps the level and stamps; the `eagle-<id>` row stays,
-        // as in the seed, because removing one is `purgeProject`'s job and cascades to documents.
+        // as in the seed; only the seed's `--reconcile` retires one.
         summary.relinked++;
         rekeyed.add(String(relink.eagleId));
         await heal(relink);

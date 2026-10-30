@@ -1,21 +1,9 @@
 'use strict';
 
-/**
- * Hard removal of a record and everything that outlives it.
- *
- * One implementation, two callers: `DELETE /documents/:id` and `DELETE /projects/:id`, plus the
- * seeder's `--reconcile`. AI Search indexers run on a `_ts` high-water mark and never see a
- * delete, so removing the index entry here is the ONLY thing that stops a deleted record staying
- * findable — a second implementation would eventually forget one of these calls. A DELETE that
- * overlaps an indexer run can still leave an index entry for a deleted row; the kept-row stamp
- * below makes that window reachable on a retried DELETE too.
- *
- * The stored blob is deliberately left in place: no caller may destroy a source file. A titled
- * PDF's original length and hash live only on the row, so they are logged before it goes.
- */
+// Hard removal of a document for `DELETE /documents/:id` and the seed's `--reconcile`. Indexers never
+// see a delete, so the index entries go here too; the stored blob stays, its PDF facts are logged.
 
 const documents = require('../repositories/documents');
-const projects = require('../repositories/projects');
 const chunks = require('../repositories/chunks');
 const { systemAccess } = require('./access-sql');
 const aiSearch = require('../search/ai-search');
@@ -63,10 +51,4 @@ async function purgeDocument({ id, projectId, s3Key, pdfTitle } = {}) {
   return { ...report, rowKept: false };
 }
 
-async function purgeProject({ id } = {}) {
-  await projects.deleteById(id);
-  const removedFromSearch = await aiSearch.deleteFromIndex(aiSearch.indexes().projects, id);
-  return { removedFromSearch };
-}
-
-module.exports = { purgeDocument, purgeProject };
+module.exports = { purgeDocument };

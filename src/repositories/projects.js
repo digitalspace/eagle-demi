@@ -252,7 +252,7 @@ async function listEagleOnlyIds(access) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: eagleOnlyCriteria(),
-    select: 'c.id, c.eagleId'
+    select: 'c.id, c.eagleId, c.isDeleted'
   });
   return fetchAll(CONTAINER, spec);
 }
@@ -276,7 +276,7 @@ async function listWithEagleId(access) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: eagleIdCriteria(),
-    select: 'c.id, c.eagleId, c.sourceSystem, c.read, c.isPublished'
+    select: 'c.id, c.eagleId, c.sourceSystem, c.read, c.isPublished, c.isDeleted'
   });
   return fetchAll(CONTAINER, spec);
 }

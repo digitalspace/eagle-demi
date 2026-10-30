@@ -270,8 +270,11 @@ test('authenticated CUD audit coverage', async (t) => {
   });
 
   await t.test('project delete writes one project.delete', async () => {
-    t.mock.method(projects, 'getById', async () => ({ id: '207', name: 'Skeena LNG', read: ['staff'] }));
+    t.mock.method(projects, 'getById', async () =>
+      ({ id: '207', name: 'Skeena LNG', read: ['public', 'staff'], isPublished: true }));
     t.mock.method(projects, 'upsert', async (item) => item);
+    t.mock.method(aiSearch, 'writeAcls', async () => 1);
+    t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
 
     const written = await rowsFrom(() => projectController.deleteProject({
       params: { id: '207' }, query: {}, user: STAFF
@@ -281,6 +284,19 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].Action, 'project.delete');
     assert.strictEqual(written[0].TargetId, '207');
     assert.strictEqual(written[0].Detail.name, 'Skeena LNG');
+    assert.strictEqual(written[0].Detail.isPublishedFrom, true);
+    assert.strictEqual(written[0].Detail.isPublishedTo, false);
+  });
+
+  await t.test('a repeated project delete writes no second row', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '207', isDeleted: true, read: ['staff'] }));
+    t.mock.method(projects, 'upsert', async (item) => item);
+
+    const written = await rowsFrom(() => projectController.deleteProject({
+      params: { id: '207' }, query: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 0);
   });
 
   await t.test('a project summary write writes one projectSummary.save under the resolved project', async () => {

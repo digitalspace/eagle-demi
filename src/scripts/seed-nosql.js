@@ -10,7 +10,7 @@ const sources = require('../seed/sources');
 const transform = require('../seed/transform');
 const {
   buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
-  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead
+  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted
 } = require('../merge/project');
 const { DEMI_ONLY_FIELDS } = require('../ownership/project');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
@@ -168,8 +168,8 @@ function reconcileLogPath(now, dir = '/home') {
 }
 
 /**
- * Deletes through `remove`, the DELETE controllers' helper: a second delete path would forget the
- * search index, which no indexer cleans up.
+ * Removes through `remove`: `purgeDocument`, which also clears the search index no indexer cleans
+ * up, or the project retire, which flags and caps the row.
  * @param {Array}    rows      `{id, ...}` read out of Cosmos
  * @param {function} keyOf     row -> the key to test against `fetched`
  * @param {Set}      fetched   keys the upstream fetch produced
@@ -398,6 +398,11 @@ async function runSeed(args, deps, summary) {
   const purge = deps.purge || purgeHelpers;
   const audit = deps.audit || auditHelpers;
   const access = systemAccess();
+  // A surplus project is flagged and capped as a delete push would, never removed.
+  const retireProject = deps.retireProject || (async ({ id }) => {
+    const current = await repos.projects.getById(access, id);
+    if (current) await repos.projects.upsert(markDeleted({ ...current, updatedAt: new Date().toISOString() }));
+  });
   // Reading what is already there needs Cosmos. A live run always has it; a dry run only when the
   // operator is inside the private endpoint and set COSMOS_ENDPOINT.
   const cosmosReady = deps.cosmosReady !== undefined
@@ -476,6 +481,8 @@ async function runSeed(args, deps, summary) {
           // over so a re-seed neither blanks them nor lets an applied push land again.
           carryEagleOnlyFields(project, existing);
           carryDemiOnlyFields(project, existing);
+          // The public feed never says a project was deleted, so a rebuilt row would republish it.
+          if (existing.isDeleted === true) markDeleted(project);
         } else if (project.eagleId && !isEagleOnlyProjectId(project.id)) {
           // A Track row built for the first time beside its `eagle-<id>` twin takes the twin's
           // tags, the same as the Track relink. Not its sync-out state: that row was never sent.
@@ -866,9 +873,9 @@ async function runSeed(args, deps, summary) {
         ['documents', documentRows,
           row => `${row.projectId}|${row.id}`, documentFetch.keys,
           row => purge.purgeDocument(row)],
-        ['projects', projectRows,
+        ['projects', projectRows.filter(row => row.isDeleted !== true),
           row => String(row.eagleId), new Set(eagleProjects.map(p => String(p._id))),
-          row => purge.purgeProject(row)]
+          retireProject]
       ];
       // Both containers sized BEFORE either delete, so a breach in one stops the other too.
       const sized = containers.map(([label, rows, keyOf, fetched]) => ({
