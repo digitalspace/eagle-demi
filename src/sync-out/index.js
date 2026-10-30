@@ -12,15 +12,19 @@ const settings = require('../config').syncOut;
 
 // Keyed by kind: the comment period and document consumers are both named eagle.
 const CONSUMERS_BY_KIND = Object.freeze({
-  [COMMENT_PERIOD]: [require('./eagle')],
-  [DOCUMENT]: [require('./eagle-document')]
+  [COMMENT_PERIOD]: Object.freeze([require('./eagle')]),
+  [DOCUMENT]: Object.freeze([require('./eagle-document')])
 });
-const consumers = Object.values(CONSUMERS_BY_KIND).flat();
+const consumers = Object.freeze(Object.values(CONSUMERS_BY_KIND).flat());
 
-/** The consumers that send `kind`: its own, limited to the names its registry entry lists. */
+/** The consumers that send `kind`, one per name its registry entry lists; throws for a name with none here. */
 function consumersOf(kind) {
-  const names = kindOf(kind).consumers;
-  return (CONSUMERS_BY_KIND[kind] || []).filter(c => names.includes(c.name));
+  const own = CONSUMERS_BY_KIND[kind] || [];
+  return kindOf(kind).consumers.map((name) => {
+    const consumer = own.find(c => c.name === name);
+    if (!consumer) throw new Error(`sync-out kind ${kind} names consumer ${name}, which has no entry for that kind`);
+    return consumer;
+  });
 }
 
 /** First retry hides this long, doubling per attempt. host.json's hour-long default is the zip worker's. */

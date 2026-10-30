@@ -10,11 +10,13 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
+const queues = require('../../src/jobs/queue-client');
 const commentPeriods = require('../../src/repositories/comment-periods');
+const documents = require('../../src/repositories/documents');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const eagleDocument = require('../../src/sync-out/eagle-document');
-const { DOCUMENT } = require('../../src/sync-out/kinds');
+const { DOCUMENT, kindOf } = require('../../src/sync-out/kinds');
 const { logger } = require('../../src/utils/logger');
 const { depsFor, reconcile } = require('../../src/sync-out/pending');
 const { parseArgs, run } = require('../../src/scripts/sync-out-pending');
@@ -39,7 +41,7 @@ function harness(rows, { wants = () => true, enabled = () => true, answer = asyn
   const deps = {
     kind: KIND,
     repo: { listSyncPending: async () => rows },
-    consumers: [{ name: eagle.name, enabled, wants, inFlight: eagle.inFlight }],
+    consumers: [{ name: eagle.name, enabled, enableSettings: eagle.enableSettings, wants, inFlight: eagle.inFlight }],
     enqueue: async (row, options) => {
       queued.push({ id: row.id, options });
       return answer(row);
@@ -142,7 +144,7 @@ test('repair with every consumer disabled fails the rows and names the setting',
   const h = harness([lapsedCreate()], { enabled: () => false });
   const report = await reconcile({ repair: true, log: h.log }, h.deps);
   assert.deepStrictEqual(report.failed, ['cp-native-1']);
-  assert.match(h.lines[0], /SYNC_OUT_EAGLE_ENABLED not true/);
+  assert.match(h.lines[0], /needs SYNC_OUT_EAGLE_ENABLED true/);
 });
 
 test('depsFor wires a kind to its repository, its consumers and the sync-out enqueue', () => {
@@ -151,6 +153,37 @@ test('depsFor wires a kind to its repository, its consumers and the sync-out enq
   assert.deepStrictEqual(deps.consumers, [eagle]);
   assert.strictEqual(deps.enqueue, syncOut.enqueue);
   assert.deepStrictEqual(depsFor(DOCUMENT).consumers, [eagleDocument], 'not the comment period consumer of the same name');
+});
+
+test('the document hook re-queues only rows owed a send, and names both flags when the document one is off', async (t) => {
+  const env = { SYNC_OUT_EAGLE_ENABLED: 'true', SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true' };
+  const previous = Object.fromEntries(Object.keys(env).map(k => [k, process.env[k]]));
+  Object.assign(process.env, env);
+  t.after(() => {
+    for (const [k, v] of Object.entries(previous)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  });
+  const docRow = (id, sentVersion) => ({
+    id, projectId: '1234', sourceSystem: 'demi', eagleId: `eagle-${id}`, syncVersion: 3,
+    syncOut: { eagle: { status: 'sent', sentVersion } }
+  });
+  t.mock.method(documents, 'listSyncPending', async () => [docRow('owed', 2), docRow('current', 3)]);
+  const sent = [];
+  t.mock.method(queues, 'queueClientFor', () => ({ sendMessage: async (body) => { sent.push(JSON.parse(body)); } }));
+  const lines = [];
+  const log = { info: () => {}, warn: (line) => { lines.push(line); } };
+
+  const report = await kindOf(DOCUMENT).reconcile({ repair: true, log });
+
+  assert.deepStrictEqual(sent, [{ kind: DOCUMENT, consumer: 'eagle', id: 'owed', projectId: '1234', attempt: 1, repair: true }]);
+  assert.deepStrictEqual({ listed: report.listed, queued: report.queued, failed: report.failed },
+    { listed: ['owed'], queued: 1, failed: [] });
+
+  delete process.env.SYNC_OUT_EAGLE_DOCUMENT_ENABLED;
+  await kindOf(DOCUMENT).reconcile({ repair: true, log });
+  assert.match(lines[0], /needs SYNC_OUT_EAGLE_ENABLED and SYNC_OUT_EAGLE_DOCUMENT_ENABLED true/);
+  assert.strictEqual(sent.length, 1);
 });
 
 test('the CLI run fails when a row was not re-queued', async (t) => {

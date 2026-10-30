@@ -18,9 +18,6 @@ function depsFor(kind) {
   return { kind, repo: kinds().kindOf(kind).repo, consumers: syncOut.consumersOf(kind), enqueue: syncOut.enqueue };
 }
 
-/** The app setting that turns a consumer on, e.g. SYNC_OUT_EAGLE_ENABLED. */
-const enableSetting = (consumer) => `SYNC_OUT_${consumer.name.toUpperCase()}_ENABLED`;
-
 const entryOf = (consumer, row) => (row.syncOut && row.syncOut[consumer.name]) || {};
 
 // A stray row is one the consumer refuses; re-queuing it would fail into poison and re-alert every run.
@@ -47,7 +44,8 @@ async function reconcile({ repair = false, log = logger } = {}, { kind, repo, co
   if (repair && !consumers.some(c => c.enabled())) {
     // enqueue skips disabled consumers, so a repair run would queue nothing and still look clean.
     report.failed = [...report.listed];
-    log.warn(`${TAG} ${kind}: ${consumers.map(enableSetting).join(', ')} not true: --repair queued nothing`,
+    const needed = consumers.map(c => c.enableSettings.join(' and ')).join(' or ');
+    log.warn(`${TAG} ${kind}: needs ${needed} true: --repair queued nothing`,
       { kind, listed: report.listed.length });
   } else if (repair) {
     for (const row of rows) {

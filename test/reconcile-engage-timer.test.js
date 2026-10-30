@@ -43,6 +43,7 @@ test('the handler runs the reconcile and stores its report, without repair', asy
   const { index } = loadIndex(t, 'RECONCILE_ENGAGE_SCHEDULE', '0 30 10 * * *');
   const calls = [];
   stubScript(t, async (opts) => { calls.push(opts); });
+  t.mock.method(documents, 'listSyncPending', async () => []);
 
   await index.reconcileEngage();
 
@@ -77,7 +78,7 @@ test('the handler runs every registered kind\'s reconcile hook, and one failing 
 test('a failing reconcile is logged and does not throw at the host', async (t) => {
   const { index } = loadIndex(t, 'RECONCILE_ENGAGE_SCHEDULE', '0 30 10 * * *');
   stubScript(t, async () => { throw new Error('eagle-api unreachable'); });
-  // The document kind's hook runs too; with no Cosmos here it would log a second failure.
+  // The document kind's hook runs too; unstubbed it would reach Cosmos.
   t.mock.method(documents, 'listSyncPending', async () => []);
   const errors = [];
   t.mock.method(logger, 'error', (message, meta) => { errors.push({ message, meta }); });

@@ -494,6 +494,7 @@ async function send(row, { update }) {
 module.exports = {
   name: NAME,
   enabled: () => settings.eagle.enabled,
+  enableSettings: Object.freeze(['SYNC_OUT_EAGLE_ENABLED']),
   wants,
   // Another delivery holds a live create claim: its outcome, not this one's failure, settles the row.
   inFlight: (entry) => Boolean(claimHeld(entry, Date.now())),

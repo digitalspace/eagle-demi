@@ -104,7 +104,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - `commentPeriod` reconciles through `src/scripts/reconcile-engage.js`.
 - `document` reconciles through the pending hook in `src/sync-out/pending.js`. The hook lists the kind's rows holding a version a consumer has not sent. With `{ repair: true }` it queues each again as a repair message of that kind (`node src/scripts/sync-out-pending.js --kind document --repair`). The timer only lists them.
 - Both kinds have a consumer named `eagle`, so `index.js` keeps a consumer list per kind and a message finds its consumer through its `kind`.
-- The document consumer (`src/sync-out/eagle-document.js`) sends updates only, to rows that hold an `eagleId`. It PUTs the row's fields, then calls publish or unpublish only when the public level changed. It runs only when `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` is `true`; the default is off.
+- The document consumer (`src/sync-out/eagle-document.js`) sends updates only, to rows that hold an `eagleId`. It PUTs the row's fields, then calls publish or unpublish only when the public level changed. It runs only when both `SYNC_OUT_EAGLE_ENABLED` and `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` are `true`; the document flag is off by default.
 - A send that answers `held` records nothing on the row, so its version stays owed and a later delivery or the pending hook sends it.
 - Queue messages and resends carry `kind`. A message with no `kind`, queued before the field existed, is read as a comment period.
 - `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing; reconcile re-queues.
