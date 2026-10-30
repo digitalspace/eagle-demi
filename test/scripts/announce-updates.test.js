@@ -14,7 +14,7 @@ const { logger } = require('../../src/utils/logger');
 const { updatesStore } = require('../helpers/updates-store');
 const { parentProject, parentNotification } = require('../helpers/update-parents');
 const updateDomain = require('../../src/domain/updates');
-const { resolveAccess } = require('../../src/helpers/access-sql');
+const { ctxFor } = require('../helpers/domain-ctx');
 const script = () => require('../../src/scripts/announce-updates');
 const run = (opts) => script().run(opts);
 
@@ -151,23 +151,28 @@ test('scheduled announce', async (t) => {
     assert.deepStrictEqual(sent.map(s => s.id), ['soon']);
   });
 
-  await t.test('an Update written in DEMI and then published is emailed once its publishDate passes', async () => {
-    // The native write path, not a pushed row: the due list must not ask which system wrote it.
+  await t.test('an Update written in DEMI and then published is emailed once its publishDate passes', async (t) => {
+    // The row the domain writes (isPublished, status, its publishDate, notify fields null) must
+    // pass the due list and the claim as a pushed row does.
     const sent = wire();
     parentProject(t, { id: 'demi-p', name: 'Open', read: ['public', 'staff', 'sysadmin'] });
     parentNotification(t, null);
     const { row } = updatesStore(t, []);
-    const req = { user: { sub: 'kc-1', preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, headers: {} };
-    const staff = { access: resolveAccess(req), req };
+    const staff = ctxFor(['staff']);
 
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse(NOW) });
     const created = await updateDomain.create(staff, { projectId: '5c1f7a3e9b1d2c0012340001', headline: 'Open house' });
+    assert.strictEqual(created.status, 'ok', JSON.stringify(created));
     const id = created.value.id;
     const published = await updateDomain.update(staff, id, { status: 'published', publishDate: at(30) });
-    assert.strictEqual(published.status, 'ok');
+    t.mock.timers.reset();
+    assert.strictEqual(published.status, 'ok', JSON.stringify(published));
     assert.strictEqual(row(id).sourceSystem, 'demi');
+    assert.strictEqual(row(id).publishDate, at(30), 'scheduled, not stamped with the write time');
 
     await run({ now: NOW });
     assert.deepStrictEqual(sent, [], 'not due before its publishDate');
+    assert.strictEqual(row(id).notifiedAt, null);
 
     await run({ now: at(31) });
     assert.deepStrictEqual(sent.map(s => s.id), [id]);
