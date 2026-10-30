@@ -5,7 +5,8 @@
 
 const lists = require('../../repositories/lists');
 const { eagleBaseAcl } = require('../../seed/transform');
-const { serverError } = require('../../helpers/response');
+const { mirrorError } = require('../../helpers/duplicate-id');
+const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { DEMI_OWNED_FIELDS } = require('../../ownership/organization');
 const {
@@ -53,21 +54,41 @@ function mirrorItem(eagleId, doc, read, existing) {
   };
 }
 
+const demiOwned = (row) => Boolean(row) && row.sourceSystem === 'demi';
+
+/** The Eagle echo applied to a row DEMI owns: DEMI's organization write sets every field Eagle has. */
+function eagleOwnedOnto(current, eagleId, doc) {
+  return { ...current, eagleId, sources: { ...current.sources, eagle: doc } };
+}
+
+/** Row for this push: by Eagle id, else a DEMI row sync-out sent under that id. */
+async function readTarget(eagleId) {
+  return await lists.readForWrite(eagleId, lists.KINDS.ORGANIZATION)
+    || await lists.readForWriteByEagleId(eagleId, lists.KINDS.ORGANIZATION);
+}
+
 /**
  * Mirror one raw Eagle `Organization`, whoever asked — the push handler below or the backfill
  * (src/scripts/seed-public-reads.js). No parent, so there is nothing it can fail to resolve.
  *
  * @returns {Promise<{saved: object, existing: object|null}>}
  */
-function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
+async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   const read = eagleBaseAcl(doc.read);
 
-  return upsertWithRetry(
+  const written = await upsertWithRetry(
     lists,
-    (current) => mirrorItem(eagleId, doc, read, current),
-    () => lists.readForWrite(eagleId, lists.KINDS.ORGANIZATION),
+    (current) => (demiOwned(current)
+      ? eagleOwnedOnto(current, eagleId, doc)
+      : mirrorItem(eagleId, doc, read, current)),
+    () => readTarget(eagleId),
     { pushedAt }
   );
+  if (written.saved && demiOwned(written.existing)) {
+    logger.info('[Organization Controller] eagle push kept to the raw copy on a row it does not own',
+      { eagleId, id: written.saved.id, sourceSystem: written.existing.sourceSystem });
+  }
+  return written;
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
@@ -106,6 +127,6 @@ exports.upsertFromEagle = async (req, res) => {
 
     return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {
-    return serverError(res, err, 'organization controller failed');
+    return mirrorError(res, err, 'organization controller failed');
   }
 };

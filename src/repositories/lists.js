@@ -14,7 +14,9 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll } = require('./_sql');
+const {
+  eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll, oneRowOf
+} = require('./_sql');
 
 const CONTAINER = 'lists';
 const PARTITION_FIELD = 'kind';
@@ -60,6 +62,27 @@ async function getById(access, id, kind) {
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
 async function readForWrite(id, kind) {
   return cosmos.readItem(CONTAINER, String(id), String(kind));
+}
+
+/** The row of one kind naming this Eagle id without being stored under it: one DEMI created. */
+async function readForWriteByEagleId(eagleId, kind) {
+  const criteria = [eq(PARTITION_FIELD, String(kind), '@kind'), eq('eagleId', String(eagleId), '@eagleId')];
+  const { items } = await cosmos.query(CONTAINER, {
+    query: `SELECT * FROM c WHERE ${criteria.map(c => c.clause).join(' AND ')}`,
+    parameters: criteria.flatMap(c => c.params)
+  }, { partitionKey: String(kind) });
+  return oneRowOf(CONTAINER, eagleId, items);
+}
+
+/** Rows of one kind holding a version not yet sent to Eagle: the sync-out pending hook's list. */
+async function listSyncPending(kind) {
+  const { clause, params } = eq(PARTITION_FIELD, String(kind), '@kind');
+  return fetchAll(CONTAINER, {
+    // Eagle is the only consumer; a second one needs its own sentVersion path here.
+    query: `SELECT * FROM c WHERE ${clause} AND c.syncVersion > 0 AND ` +
+      '(NOT IS_NUMBER(c.syncOut.eagle.sentVersion) OR c.syncVersion > c.syncOut.eagle.sentVersion)',
+    parameters: params
+  }, { partitionKey: String(kind) });
 }
 
 /**
@@ -176,11 +199,13 @@ module.exports = {
   SORTABLE,
   getById,
   readForWrite,
+  readForWriteByEagleId,
   listByIds,
   listOrganizationLabels,
   listByKind,
   listEveryOfKind,
   countByKind,
   nativeKind,
+  listSyncPending,
   upsert
 };
