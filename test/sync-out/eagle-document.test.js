@@ -42,7 +42,6 @@ function demiRow(overrides = {}) {
     description: 'The draft plan for comment.',
     typeId: '5cf00c03a266b7e18775aa01',
     milestoneId: '5cf00c03a266b7e18775aa02',
-    projectPhaseId: null,
     documentAuthorTypeId: '5cf00c03a266b7e18775aa04',
     datePosted: '2026-11-01T07:00:00.000Z',
     dateUploaded: '2026-10-30T07:00:00.000Z',
@@ -57,6 +56,10 @@ function demiRow(overrides = {}) {
     ...overrides
   };
 }
+
+/** A row sent before, whose last send left Eagle's copy at `published`. */
+const sentRow = (published, overrides = {}) =>
+  demiRow({ syncOut: { eagle: { status: 'sent', sentVersion: 1, published } }, ...overrides });
 
 /** The document repository as sync-out reads and writes it. */
 const SYNC_REPO = { readForWrite: documents.readForWrite, upsert: documents.upsertForSync };
@@ -80,23 +83,27 @@ function wireStore(t, row) {
   return store;
 }
 
-/** Fake eagle-api and Keycloak; `routes` maps `METHOD path` to a reply. */
+/** Fake eagle-api and Keycloak; `routes` maps `METHOD path` to a reply, or a function returning one. */
 function wireEagle(t, routes) {
   const calls = [];
   t.mock.method(globalThis, 'fetch', async (url, opts = {}) => {
     if (url === `${ISSUER}/protocol/openid-connect/token`) return Response.json({ access_token: 'token', expires_in: 300 });
     const key = `${opts.method || 'GET'} ${url.slice(API.length)}`;
     calls.push({ key, body: opts.body ? JSON.parse(opts.body) : undefined });
-    const reply = routes[key];
-    assert.ok(reply, `unexpected eagle-api call ${key}`);
+    const route = routes[key];
+    assert.ok(route, `unexpected eagle-api call ${key}`);
+    const reply = typeof route === 'function' ? await route() : route;
     return Response.json(reply.body ?? {}, { status: reply.status || 200 });
   });
   return calls;
 }
 
+const GET = `GET /document/${EAGLE_ID}`;
 const PUT = `PUT /document/${EAGLE_ID}`;
 const PUBLISH = `PUT /document/${EAGLE_ID}/publish`;
 const UNPUBLISH = `PUT /document/${EAGLE_ID}/unpublish`;
+/** eagle-api's GET answers a list, `read` always projected. */
+const eagleCopy = read => ({ body: [{ _id: EAGLE_ID, read }] });
 const keys = calls => calls.map(c => c.key);
 const logged = (level, text) => logger[level].mock.calls.filter(c => String(c.arguments[0]).includes(text));
 
@@ -113,14 +120,14 @@ test('sync-out of documents to Eagle', async (t) => {
     for (const level of ['info', 'warn', 'error']) tt.mock.method(logger, level, () => {});
   });
 
-  await t.test('a public row PUTs the DEMI fields, then publishes', async (tt) => {
+  await t.test('a first send PUTs the DEMI fields and publishes when Eagle\'s copy is not public', async (tt) => {
     const store = wireStore(tt, demiRow());
-    const calls = wireEagle(tt, { [PUT]: {}, [PUBLISH]: {} });
+    const calls = wireEagle(tt, { [GET]: eagleCopy(STAFF_ACL), [PUT]: {}, [PUBLISH]: {} });
 
     const result = await consumer.send(store.row, { update: store.update });
 
-    assert.deepStrictEqual(keys(calls), [PUT, PUBLISH]);
-    assert.deepStrictEqual(calls[0].body, {
+    assert.deepStrictEqual(keys(calls), [GET, PUT, PUBLISH]);
+    assert.deepStrictEqual(calls[1].body, {
       displayName: 'Draft plan',
       description: 'The draft plan for comment.',
       type: '5cf00c03a266b7e18775aa01',
@@ -132,17 +139,37 @@ test('sync-out of documents to Eagle', async (t) => {
       sortOrder: 3
     }, 'no read, eaoStatus, file or extraction fields');
     assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
-    assert.deepStrictEqual(store.row.syncOut.eagle, { status: 'sent' }, 'the claim is released');
+    assert.deepStrictEqual(store.row.syncOut.eagle, { status: 'sent', published: true }, 'claim released, level kept');
     assert.strictEqual(logged('info', `document ${ROW_ID} sent to Eagle`).length, 1);
   });
 
-  await t.test('a row without public in read unpublishes', async (tt) => {
+  await t.test('a first send leaves Eagle\'s level alone when it already matches', async (tt) => {
     const store = wireStore(tt, demiRow({ read: STAFF_ACL, isPublished: false }));
+    const calls = wireEagle(tt, { [GET]: eagleCopy(STAFF_ACL), [PUT]: {} });
+
+    await consumer.send(store.row, { update: store.update });
+
+    assert.deepStrictEqual(keys(calls), [GET, PUT], 'no unpublish, which would mark it Rejected');
+    assert.strictEqual(store.row.syncOut.eagle.published, false);
+  });
+
+  await t.test('a level unchanged since the last send PUTs only', async (tt) => {
+    const store = wireStore(tt, sentRow(false, { read: STAFF_ACL, isPublished: false }));
+    const calls = wireEagle(tt, { [PUT]: {} });
+
+    await consumer.send(store.row, { update: store.update });
+
+    assert.deepStrictEqual(keys(calls), [PUT]);
+  });
+
+  await t.test('a level that moved since the last send unpublishes', async (tt) => {
+    const store = wireStore(tt, sentRow(true, { read: STAFF_ACL, isPublished: false }));
     const calls = wireEagle(tt, { [PUT]: {}, [UNPUBLISH]: {} });
 
     await consumer.send(store.row, { update: store.update });
 
     assert.deepStrictEqual(keys(calls), [PUT, UNPUBLISH]);
+    assert.strictEqual(store.row.syncOut.eagle.published, false);
   });
 
   await t.test('a row without an eagleId, or one Eagle owns, is not wanted and sends nothing', async (tt) => {
@@ -158,7 +185,7 @@ test('sync-out of documents to Eagle', async (t) => {
   });
 
   await t.test('two concurrent deliveries make one PUT', async (tt) => {
-    const store = wireStore(tt, demiRow());
+    const store = wireStore(tt, sentRow(false));
     const calls = wireEagle(tt, { [PUT]: {}, [PUBLISH]: {} });
     const row = structuredClone(store.row);
 
@@ -174,14 +201,31 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.strictEqual(store.etags[0], 'e1', 'the claim write is guarded on the revision it read');
   });
 
+  await t.test('a claim lost during the PUT stops the send before publish and leaves the new claim', async (tt) => {
+    const store = wireStore(tt, sentRow(false));
+    const foreign = { status: 'creating', claim: 'another-delivery', claimedAt: new Date().toISOString() };
+    const calls = wireEagle(tt, {
+      [PUT]: () => {
+        store.row = { ...store.row, syncOut: { eagle: { ...store.row.syncOut.eagle, ...foreign } }, _etag: 'e-foreign' };
+        return {};
+      }
+    });
+
+    await assert.rejects(consumer.send(store.row, { update: store.update }), /taken by another delivery/);
+
+    assert.deepStrictEqual(keys(calls), [PUT]);
+    const entry = store.row.syncOut.eagle;
+    assert.deepStrictEqual({ status: entry.status, claim: entry.claim, claimedAt: entry.claimedAt }, foreign);
+  });
+
   await t.test('a failed PUT logs one error, releases the claim and publishes nothing', async (tt) => {
-    const store = wireStore(tt, demiRow());
+    const store = wireStore(tt, sentRow(false));
     const calls = wireEagle(tt, { [PUT]: { status: 500, body: { message: 'down' } } });
 
     await assert.rejects(consumer.send(store.row, { update: store.update }), /HTTP 500/);
 
     assert.deepStrictEqual(keys(calls), [PUT]);
-    assert.deepStrictEqual(store.row.syncOut.eagle, { status: 'failed' });
+    assert.deepStrictEqual(store.row.syncOut.eagle, { status: 'failed', sentVersion: 1, published: false });
     assert.strictEqual(logged('error', `document ${ROW_ID} not sent`).length, 1);
   });
 });

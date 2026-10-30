@@ -39,14 +39,19 @@ function bodyFor(row) {
 /** Rows that came from Eagle are Eagle's own; only a row DEMI or ENGAGE owns, tied to an Eagle id, is sent. */
 const wants = row => Boolean(row && row.eagleId && row.sourceSystem !== 'eagle' && isScanCleared(row));
 
-/** Take the row's send claim; `{ claim }`, `{ missing: true }`, or throws while another delivery holds one. */
+/**
+ * Take the row's send claim: `{ claim, published }` with the level last sent, `{ missing: true }`,
+ * or throws while another delivery holds one.
+ */
 async function claimSend(row, update) {
   const claim = crypto.randomUUID();
   let held = false;
+  let published;
   const result = await update((current) => {
     const entry = current.syncOut && current.syncOut[NAME];
     held = claimHeld(entry, Date.now());
     if (held) return null;
+    published = entry && entry.published;
     // `creating` is the only status claimHeld and the engine's inFlight treat as a live claim.
     return {
       ...current,
@@ -55,13 +60,25 @@ async function claimSend(row, update) {
   });
   if (result.status === 'missing') return { missing: true };
   if (held) throw new Error(`another delivery is sending document ${row.id} to Eagle`);
-  return { claim };
+  return { claim, published };
+}
+
+const noDocument = row => new Error(`Eagle has no document ${row.eagleId} stored on row ${row.id}`);
+
+/** Whether Eagle's copy is public now; asked only before a row's first send records the level. */
+async function eaglePublished(s, row, logFields) {
+  const path = `/document/${encodeURIComponent(row.eagleId)}`;
+  const res = await call(s, 'GET', path, null, logFields);
+  if (!res.ok) throw failure('GET', path, res);
+  const [doc] = Array.isArray(res.body) ? res.body : [];
+  if (!doc) throw noDocument(row);
+  return Array.isArray(doc.read) && doc.read.includes('public');
 }
 
 async function put(s, row, logFields) {
   const path = `/document/${encodeURIComponent(row.eagleId)}`;
   const res = await call(s, 'PUT', path, bodyFor(row), logFields);
-  if (res.status === 404) throw new Error(`Eagle has no document ${row.eagleId} stored on row ${row.id}`);
+  if (res.status === 404) throw noDocument(row);
   if (!res.ok) throw failure('PUT', path, res);
 }
 
@@ -82,12 +99,16 @@ async function send(row, { update }) {
   const claimed = await claimSend(row, update);
   if (claimed.missing) return { status: 'skipped' };
   const { claim } = claimed;
+  let changed;
   try {
+    const before = typeof claimed.published === 'boolean' ? claimed.published : await eaglePublished(s, row, logFields);
+    changed = published !== before;
     await put(s, row, logFields);
     // A PUT slower than the lease may have lost the claim; the new holder sends the newer state.
     await refreshClaim(row, update, claim);
-    await setPublished(s, row, published, logFields);
-    await endClaim(update, claim, 'sent');
+    // eagle-api's unpublish marks the document Rejected, so it is called only when the level moved.
+    if (changed) await setPublished(s, row, published, logFields);
+    await endClaim(update, claim, 'sent', null, { published });
   } catch (err) {
     logger.error(`[sync-out eagle] document ${row.id} not sent to Eagle ${eagleId}: ${err.message}`,
       { ...logFields, error: err.message });
@@ -95,8 +116,8 @@ async function send(row, { update }) {
       { ...logFields, error: releaseErr.message }));
     throw err;
   }
-  logger.info(`[sync-out eagle] document ${row.id} sent to Eagle ${eagleId}, ${published ? 'published' : 'unpublished'}`,
-    { ...logFields, published });
+  const level = changed ? (published ? 'published' : 'unpublished') : 'level unchanged';
+  logger.info(`[sync-out eagle] document ${row.id} sent to Eagle ${eagleId}, ${level}`, { ...logFields, published, changed });
   return { status: 'sent', eagleId };
 }
 
