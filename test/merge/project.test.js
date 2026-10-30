@@ -466,8 +466,41 @@ test('Eagle dates before 1971 are null', async (t) => {
 
 test('DMS coordinates convert to decimal degrees', () => {
   const [lng, lat] = validCoordinates('122°43\'20.8"W', '53°49\'42.9"N').coordinates;
-  assert.ok(Math.abs(lng - -122.72244) < 1e-5);
-  assert.ok(Math.abs(lat - 53.82858) < 1e-5);
+  assert.ok(Math.abs(lng - -122.72244) < 1e-5, `lng ${lng}`);
+  assert.ok(Math.abs(lat - 53.82858) < 1e-5, `lat ${lat}`);
+
+  const [altLng, altLat] = validCoordinates('122º43\'20.8\'\'W', '53°49\'42.9"N').coordinates;
+  assert.ok(Math.abs(altLng - -122.72244) < 1e-5, `º and '' marks lng ${altLng}`);
+  assert.ok(Math.abs(altLat - 53.82858) < 1e-5, `º and '' marks lat ${altLat}`);
+
+  const [primeLng, primeLat] = validCoordinates('122d43m20.8sW', '53˚49′42.9″N').coordinates;
+  assert.ok(Math.abs(primeLng - -122.72244) < 1e-5, `d m s letter marks lng ${primeLng}`);
+  assert.ok(Math.abs(primeLat - 53.82858) < 1e-5, `˚ ′ ″ marks lat ${primeLat}`);
+  // 53°43' would sit inside BC, so a split shows up as a non-null result
+  assert.strictEqual(validCoordinates('-122.9', '5343N'), null, 'unmarked digits are not split into degrees and minutes');
+  assert.strictEqual(validCoordinates('1225\'W', '53°N'), null, 'a minute mark does not split a run of digits');
+
+  assert.deepStrictEqual(validCoordinates('122.9W', '53.8°N').coordinates, [-122.9, 53.8],
+    'decimal degrees with a hemisphere letter');
+  assert.deepStrictEqual(validCoordinates('122.9 W', '53 N').coordinates, [-122.9, 53],
+    'space instead of a degree mark');
+  assert.deepStrictEqual(validCoordinates('122°W', '53°N').coordinates, [-122, 53],
+    'degrees only');
+  assert.deepStrictEqual(validCoordinates('122°43\'20.8"w', '53°49\'42.9"n').coordinates.map(Math.sign),
+    [-1, 1], 'lowercase hemisphere letters');
+  // a positive latitude would be inside BC; S must flip it south, out of the box
+  assert.strictEqual(validCoordinates('-122.9', '53°49\'42.9"S'), null, 'S gives a negative latitude');
+  assert.deepStrictEqual(validCoordinates(' -122.9 ', ' 49.1 ').coordinates, [-122.9, 49.1],
+    'surrounding whitespace is trimmed');
+
+  // the other value is a plain decimal so only the side under test can make the pair null
+  assert.strictEqual(validCoordinates('-122.9', '53°60\'0"N'), null, 'minutes of 60 are rejected');
+  assert.strictEqual(validCoordinates('-122.9', '53°59\'60"N'), null, 'seconds of 60 are rejected');
+  assert.strictEqual(validCoordinates('122°43\'20.8"N', '49.1'), null, 'N on a longitude');
+  assert.strictEqual(validCoordinates('-122.9', '53°49\'42.9"E'), null, 'E on a latitude');
+  assert.strictEqual(validCoordinates('-122.9W', '49.1'), null, 'minus plus a hemisphere letter');
+  assert.strictEqual(validCoordinates('0x7A', '49.1'), null, 'hex string is not a number');
+  assert.strictEqual(validCoordinates('-122.9', '0b110001'), null, 'binary string is not a number');
 
   // E reads as +122.72; the positive-longitude flip must still land it in BC
   const [eastLng] = validCoordinates('122°43\'20.8"E', '53°49\'42.9"N').coordinates;
@@ -493,6 +526,12 @@ test('centroid normalisation', async (t) => {
     assert.deepStrictEqual(
       normalizeCentroid(null, { centroid: { coordinates: [-122.9, 49.1] } }).coordinates,
       [-122.9, 49.1]);
+  });
+
+  await t.test('an Eagle centroid of DMS strings converts to decimal degrees', () => {
+    const c = normalizeCentroid(null, { centroid: ['122°43\'20.8"W', '53°49\'42.9"N'] });
+    assert.ok(Math.abs(c.coordinates[0] - -122.72244) < 1e-5, `lng ${c.coordinates[0]}`);
+    assert.ok(Math.abs(c.coordinates[1] - 53.82858) < 1e-5, `lat ${c.coordinates[1]}`);
   });
 
   await t.test('unparseable coordinates yield null, not NaN', () => {
