@@ -104,6 +104,56 @@ test('an eagle-api echo keeps the sync-out state', async (t) => {
   });
 });
 
+test('a document echo and the row sync-out sent it from', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const DEMI_ROW_ID = '7d1e2f40-0000-4000-8000-0000000000d1';
+  const echo = { _id: DOC_EAGLE_ID, project: PROJECT_EAGLE_ID, displayName: 'Eagle title', internalURL: 'eagle/key.pdf', read: ['public', 'sysadmin'] };
+
+  /** Mirror `echo` over the stored `rows`, returning the response and every write. */
+  async function mirror(rows) {
+    t.mock.method(projects, 'getByEagleId', async () => storedEagleProject());
+    t.mock.method(documents, 'readForWrite', async (id) => structuredClone(rows.find(r => r.id === id) || null));
+    t.mock.method(documents, 'readForWriteByEagleId', async (eagleId) =>
+      structuredClone(rows.find(r => r.eagleId === eagleId) || null));
+    const writes = [];
+    t.mock.method(documents, 'upsert', async (item, options) => { writes.push({ item, options }); return item; });
+    t.mock.method(aiSearch, 'writeAcls', async (_index, list) => list.length);
+    const res = mockRes();
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {}, user: STAFF, body: { doc: echo, pushedAt: 1000 }
+    }, res);
+    return { res, writes };
+  }
+
+  await t.test('onto a DEMI row takes only the Eagle id, raw copy and push stamp', async () => {
+    const stored = {
+      id: DEMI_ROW_ID, eagleId: DOC_EAGLE_ID, projectId: '207', sourceSystem: 'demi', displayName: 'DEMI title',
+      s3Key: 'demi/key.pdf', read: ['staff', 'sysadmin'], isPublished: false, _etag: 'e1', ...structuredClone(SYNC_STATE)
+    };
+
+    const { res, writes } = await mirror([stored]);
+
+    assert.deepStrictEqual(res.body, { id: DEMI_ROW_ID, action: 'upsert' });
+    assert.strictEqual(writes.length, 1, 'no second row');
+    const { item, options } = writes[0];
+    assert.deepStrictEqual(options, { etag: 'e1' });
+    const { sources, eaglePushedAt, ...rest } = item;
+    assert.deepStrictEqual(rest, stored, 'sourceSystem, s3Key, read and metadata as stored');
+    assert.deepStrictEqual(sources.eagle, echo);
+    assert.strictEqual(eaglePushedAt, 1000);
+  });
+
+  await t.test('for an Eagle id no row holds still creates the Eagle row', async () => {
+    const { res, writes } = await mirror([]);
+
+    assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, action: 'upsert' });
+    assert.strictEqual(writes.length, 1);
+    assert.deepStrictEqual(writes[0].options, { create: true });
+    assert.strictEqual(writes[0].item.sourceSystem, 'eagle');
+    assert.strictEqual(writes[0].item.s3Key, 'eagle/key.pdf');
+  });
+});
+
 test('a project echo takes the Track epic_guid over an Eagle id stored by sync-out', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   const stored = storedEagleProject({ eagleId: '5f1e0c3a9b2d4e0017a6c001' });

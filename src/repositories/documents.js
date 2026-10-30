@@ -14,7 +14,7 @@ const {
 } = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED, EAGLE_SYNC_PENDING, upsertItem
+  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED, EAGLE_SYNC_PENDING, upsertItem, oneRowOf
 } = require('./_sql');
 // The fields the chunks carry a copy of, read from the one list that owns them.
 const { CHUNK_PARENT_FIELDS } = require('./chunks');
@@ -312,6 +312,21 @@ async function getById(access, id, projectId, { includeUnscanned = false } = {})
  */
 async function readForWrite(id, projectId) {
   return readForWriteIn(CONTAINER, id, projectId, PARTITION_FIELD);
+}
+
+/**
+ * The stored row whose `eagleId` names this id, unfiltered like `readForWrite`: in the partition first,
+ * then across partitions. Throws `DUPLICATE_ID` when two rows name it.
+ */
+async function readForWriteByEagleId(eagleId, projectId) {
+  const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
+  const spec = { query: `SELECT * FROM c WHERE ${clause}`, parameters: params };
+  if (projectId != null) {
+    const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
+    if (items.length) return oneRowOf(CONTAINER, eagleId, items, PARTITION_FIELD);
+  }
+  const { items } = await cosmos.query(CONTAINER, spec);
+  return oneRowOf(CONTAINER, eagleId, items, PARTITION_FIELD);
 }
 
 /** Drop a moved row's owed-delete marker once the old partition's copy is gone. */
@@ -1019,6 +1034,7 @@ module.exports = {
   countFeatured,
   getById,
   readForWrite,
+  readForWriteByEagleId,
   clearMovedFrom,
   readStored,
   listByIds,

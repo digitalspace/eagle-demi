@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const settings = require('../config').syncOut;
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
+const { ownedOutsideEagle } = require('../ownership/document');
 const {
   requireSettings, call, failure, claimHeld, refreshClaim, endClaim
 } = require('./eagle');
@@ -52,7 +53,7 @@ function unsendable(row) {
  * Eagle id. send() asks too: queued messages and retries reach it without wants().
  */
 const wants = row => Boolean(settings.eagle.documentEnabled &&
-  row && row.eagleId && row.sourceSystem !== 'eagle' && isScanCleared(row));
+  row && row.eagleId && ownedOutsideEagle(row) && isScanCleared(row));
 
 /**
  * Take the row's send claim: `{ claim, published }` with the level last sent, `{ missing: true }`,
