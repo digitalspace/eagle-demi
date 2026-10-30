@@ -11,8 +11,8 @@ const cosmos = require('../../src/db/cosmos-nosql');
 const documents = require('../../src/repositories/documents');
 const { evaluate } = require('../helpers/updates-store');
 
-const doc = (id, syncVersion, sentVersion) => ({
-  id, projectId: `project-${id}`, syncVersion,
+const doc = (id, syncVersion, sentVersion, eagleId = `eagle-${id}`) => ({
+  id, projectId: `project-${id}`, syncVersion, eagleId,
   ...(sentVersion === undefined ? {} : { syncOut: { eagle: { sentVersion } } })
 });
 
@@ -20,7 +20,9 @@ const ROWS = [
   doc('behind', 2, 1),
   doc('sent', 1, 1),
   doc('never-sent', 1),
-  doc('never-changed', 0)
+  doc('never-changed', 0),
+  doc('no-eagle-id', 2, 1, null),
+  { ...doc('eagle-id-absent', 2, 1), eagleId: undefined }
 ];
 
 /** Answer each query from ROWS by evaluating its SQL, one row per page so paging shows. */
@@ -41,7 +43,7 @@ function store(t) {
 test('documents.listSyncPending', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('lists rows past their sent version across partitions, every page', async () => {
+  await t.test('lists rows tied to an Eagle id past their sent version, across partitions, every page', async () => {
     const calls = store(t);
 
     const rows = await documents.listSyncPending();

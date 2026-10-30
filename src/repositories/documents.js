@@ -984,9 +984,13 @@ async function listByIdsUnscoped(access, ids, select) {
   return items;
 }
 
-/** Rows, across partitions, holding a version not yet sent to Eagle: the sync-out pending hook's list. */
+/**
+ * Rows, across partitions, tied to an Eagle id and holding a version not yet sent to Eagle: the
+ * sync-out pending hook's list. A row with no Eagle id is never sent, so it is never pending.
+ */
 async function listSyncPending() {
-  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${EAGLE_SYNC_PENDING}` });
+  const tied = isDefinedAndNotNull('eagleId').clause;
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${tied} AND ${EAGLE_SYNC_PENDING}` });
 }
 
 /** Sync-out's `repo.upsert(item, existing)`: guarded on the stored row's `_etag`, which `upsert` above never reads. */
