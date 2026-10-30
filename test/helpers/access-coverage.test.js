@@ -318,8 +318,8 @@ test('access gate coverage', async (t) => {
     assert.ok(emissions.some(e => /'upsert'/.test(e)), 'the Eagle push ack is in the scan');
     assert.ok(emissions.some(e => /chunks:/.test(e)), 'a chunk ingest ack is in the scan');
 
-    // The download payload is no longer a res.json site, so the scan cannot see it. It is the one
-    // response built from a document row outside the emission set — assert it stays hand-built.
+    // The download payload is not a res.json site, so the scan cannot see it; it is the one
+    // document-row response outside the emission set, so assert it stays hand-built.
     const download = /return \{\s*status: 200,\s*body: \{([^}]*)\}/.exec(code(controller));
     assert.ok(download, 'resolveDownload no longer returns a literal body — re-check what it emits');
     assert.ok(!/\bdoc\b(?!\s*\.)/.test(download[1]),
