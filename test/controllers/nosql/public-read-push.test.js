@@ -1,14 +1,7 @@
 'use strict';
 
-/**
- * The four Eagle mirrors that feed eagle-public's remaining reads — comment periods, comments,
- * organizations and project notifications.
- *
- * What is asserted here is what is SILENT when it breaks, because the push answers 200 either way:
- * the stored ACL, which decides whether an anonymous visitor sees the row at all, and the derived
- * `isPublished` beside it. A comment may never out-rank its period and a period may never out-rank
- * its project, so both of those ceilings are driven from the real `constrainToProject`.
- */
+// Period, comment, organization and notification mirrors. Asserts the stored ACL and `isPublished`,
+// which break silently (the push answers 200 either way), through the real `constrainToProject`.
 
 process.env.NODE_ENV = 'test';
 
@@ -40,15 +33,9 @@ const {
 } = require('../../helpers/eagle-mirror-fixtures');
 
 /**
- * A partition-aware Cosmos, keyed `partitionKey::id` the way the service addresses an item.
- *
- * `replace` is addressed at (id, partitionKey) and throws 404 when that key holds nothing, exactly
- * as the real container does. That is what makes a row moved to another partition observable here:
- * a write aimed at the wrong partition either throws or shows up under the wrong key. `create` over a
- * held key is a 409, and a cross-partition lookup evaluates the SQL it is sent.
- *
- * @returns {{ store: Map, replaced: Array, created: Array }} the stored rows, the etags `replace`
- *   was guarded by, and the ids `create` was asked for
+ * Partition-aware Cosmos keyed `partitionKey::id`: `replace` on an empty key is 404, `create` on a
+ * held one 409, and lookups evaluate their SQL, so a write to the wrong partition shows.
+ * @returns {{ store: Map, replaced: Array, created: Array }} rows, `replace` etags, `create` ids
  */
 function partitionedCosmos(t, partitionField, seed = []) {
   const key = (pk, id) => `${pk}::${id}`;
@@ -246,8 +233,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       ]);
     });
 
-  // Eagle's `project` reference holds either id. Resolving it through `projects` alone dropped 10
-  // periods and the 232 comments under them on test, measured 2026-09-07.
+  // Eagle's `project` reference holds either a project or a notification id.
   await t.test('a period under a ProjectNotification is stored under it, ACL verbatim', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
     t.mock.method(notifications, 'readForWrite', async () => ({
@@ -261,17 +247,14 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
     assert.strictEqual(written().projectId, NOTIFICATION_EAGLE_ID,
       'partitioned under the notification, which is what eagle-public filters on');
-    // The notification's own ACL is not a ceiling — it is not the period's parent project, and it
-    // says nothing about who may read the period. So the Eagle list is stored as it arrived, which
-    // is what `seed/transform.js` already does for a notification-parented document.
+    // A notification's ACL is no ceiling: the Eagle list is stored as it arrived, as
+    // `seed/transform.js` does for a notification-parented document.
     assert.deepStrictEqual(written().read, PUBLIC_ACL);
     assert.strictEqual(written().isPublished, true);
   });
 
-  // Track 351 and 353 carry a ProjectNotification _id in `epic_guid`, which the merge copies onto
-  // the project row's `eagleId`, so `getByEagleId` answers with the Track project for a ref that
-  // names the notification. Measured on test 2026-09-08: the periods under those two were stored
-  // in partition '353' at read ['staff'], and 88 comments cascaded to staff behind them.
+  // Some Track projects carry a ProjectNotification _id in `epic_guid`, copied onto `eagleId`, so
+  // `getByEagleId` answers with the Track project for a ref that names the notification.
   await t.test('a project row carrying the notification id does not claim the period', async () => {
     t.mock.method(projects, 'getByEagleId', async () =>
       ({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
@@ -356,16 +339,8 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
   });
 });
 
-/**
- * eagle-api hard-deletes a comment period and pushes the record it just removed with
- * `isDeleted: true` — the one push that carries a fact the stored document cannot say. What is
- * asserted is what an anonymous visitor would then be answered, on the period AND on the comments
- * under it: the period row alone is not what hides a comment, because a comment is gated by its
- * own ACL.
- *
- * `comments.setAclForPeriod`, `deriveAcls` and the SQL are all real here; only Cosmos is doubled,
- * so the assertions are about the patch the container would receive.
- */
+// An Eagle delete push: asserts what an anonymous visitor gets on the period and its comments.
+// Only Cosmos is doubled; `setAclForPeriod`, `deriveAcls` and the SQL are real.
 test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -428,9 +403,8 @@ test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
     });
 
   await t.test('only eagle-api sending the record again brings it back', async () => {
-    // The rule the controller header states. Nothing inside DEMI clears the flag — see
-    // acl-cascade.test.js for the cascade that used to — but a push carrying the record means
-    // Eagle holds one again, and Mongo does not reuse an ObjectId.
+    // Nothing inside DEMI clears the flag (acl-cascade.test.js), but Mongo never reuses an
+    // ObjectId, so a push of the record means Eagle holds it again.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
     stubCommentCascade(t, []);
     const deleted = { id: PERIOD_EAGLE_ID, projectId: '207', read: ['staff'], isDeleted: true };
@@ -444,14 +418,8 @@ test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
   });
 });
 
-/**
- * A period Eagle published or unpublished, and the comments under it.
- *
- * The comment's OWN stored `read[]` is the only gate on `/search?dataset=Comment` — that branch
- * never re-reads the period, unlike the chunk branch, which reads its parent document. So a period
- * that moves level and leaves its comments where they were is a period whose comments are still
- * readable by anyone who knows the period id.
- */
+// A period that changed level, and its comments: `/search?dataset=Comment` gates on each comment's
+// own `read[]`, never the period's, so comments left behind stay readable.
 test('PUT /eagle/commentperiods/:eagleId — a period that changed level', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -1106,6 +1074,16 @@ test('the four mirror routes reject anonymous and admit eagle-api', async (t) =>
   });
 });
 
+/** An Eagle period push under the project `storedProject` holds. */
+async function pushPeriod(t, doc, pushedAt) {
+  t.mock.method(projects, 'getByEagleId', async () => storedProject());
+  const res = mockRes();
+  await commentPeriodController.upsertFromEagle({
+    params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc, pushedAt }, user: STAFF
+  }, res);
+  return res;
+}
+
 test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -1147,14 +1125,7 @@ test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => 
     return { ...row, ...staff, eagleId: PERIOD_EAGLE_ID, sources: { ...row.sources, eagle: doc }, eaglePushedAt: PUSHED_AT };
   }
 
-  async function push(doc) {
-    t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    const res = mockRes();
-    await commentPeriodController.upsertFromEagle({
-      params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc, pushedAt: PUSHED_AT }, user: STAFF
-    }, res);
-    return res;
-  }
+  const push = (doc) => pushPeriod(t, doc, PUSHED_AT);
 
   // The echo eagle-api sends after DEMI wrote the period there, carrying Eagle's own view of it.
   const echo = (overrides) => eaglePeriod({ metURL: ENGAGE_URL, read: ['staff'], ...overrides });
@@ -1279,5 +1250,98 @@ test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => 
     assert.strictEqual(tombstone.isDeleted, true);
     assert.deepStrictEqual(tombstone.read, ['staff']);
     assert.deepStrictEqual(store.get('207::engage-42'), movedRow('5b8bcf0d0f5e9c0019a7a1ff'), 'the ENGAGE row is untouched');
+  });
+});
+
+test('PUT /eagle/commentperiods/:eagleId on a period DEMI created', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const NATIVE_ID = '3f2b8c1e-7a4d-4e9b-9c61-2d5e8f0a1b37';
+  const NATIVE_KEY = `207::${NATIVE_ID}`;
+  const SYNC_OUT = { eagle: { status: 'sent', sentVersion: 1, claim: null } };
+
+  /** A staff-created period sync-out sent to Eagle; every field DEMI writes differs from `eaglePeriod`. */
+  function demiRow() {
+    return {
+      id: NATIVE_ID,
+      eagleId: PERIOD_EAGLE_ID,
+      projectId: '207',
+      sourceSystem: 'demi',
+      dateStarted: '2026-11-01T00:00:00.000Z',
+      dateCompleted: '2026-11-30T00:00:00.000Z',
+      dateAdded: '2026-10-28T18:00:00.000Z',
+      isMet: true,
+      metURL: 'https://engage.gov.bc.ca/demi-period',
+      metBannerImageUrl: 'https://engage.gov.bc.ca/demi-banner.jpg',
+      informationLabel: 'DEMI label',
+      instructions: 'DEMI instructions',
+      additionalText: 'DEMI blurb',
+      openHouses: [{ eventDate: '2026-11-10T00:00:00.000Z', description: 'DEMI hall' }],
+      relatedDocuments: ['demi-doc-1'],
+      commentTip: 'DEMI tip',
+      metURLAdmin: 'https://engage.gov.bc.ca/admin/demi',
+      milestone: '5cf00c03a266b7e1877500aa',
+      commentIdCount: 3,
+      addedBy: 'staff-1',
+      updatedBy: 'staff-1',
+      dateUpdated: '2026-10-29T18:00:00.000Z',
+      isDeleted: false,
+      isPublished: false,
+      read: ['staff', 'idir'],
+      syncOut: SYNC_OUT,
+      syncVersion: 1,
+      sources: { demi: { read: ['staff', 'idir'] } }
+    };
+  }
+
+  const PUSHED_AT = 1757980005000;
+  const push = (doc) => pushPeriod(t, doc, PUSHED_AT);
+
+  await t.test('the echo lands on the native row: 2xx, no second row', async () => {
+    const { store, created } = partitionedCosmos(t, 'projectId', [demiRow()]);
+
+    const res = await push(eaglePeriod());
+
+    assert.deepStrictEqual(res.body, { id: NATIVE_ID, action: 'upsert' });
+    assert.deepStrictEqual(created, []);
+    assert.deepStrictEqual([...store.keys()], [NATIVE_KEY]);
+  });
+
+  await t.test('the echo changes only the Eagle-owned fields of the native row', async () => {
+    const stored = demiRow();
+    const { store } = partitionedCosmos(t, 'projectId', [stored]);
+    const doc = eaglePeriod();
+
+    await push(doc);
+
+    const { metURLAdmin: _a, commentIdCount: _c, milestone: _m, dateUpdated: _d, ...eagleStaff } =
+      STAFF_PERIOD_FIELDS;
+    assert.deepStrictEqual(store.get(NATIVE_KEY), {
+      ...stored, ...eagleStaff, sources: { ...stored.sources, eagle: doc }, eaglePushedAt: PUSHED_AT
+    });
+  });
+
+  await t.test('the echo keeps the comment counter, milestone and edit date DEMI staff write', async () => {
+    const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);
+
+    await push(eaglePeriod());
+
+    const row = store.get(NATIVE_KEY);
+    assert.strictEqual(row.commentIdCount, 3);
+    assert.strictEqual(row.milestone, '5cf00c03a266b7e1877500aa');
+    assert.strictEqual(row.dateUpdated, '2026-10-29T18:00:00.000Z');
+    assert.strictEqual(row.metURLAdmin, 'https://engage.gov.bc.ca/admin/demi');
+  });
+
+  await t.test('an Eagle delete leaves the native row live and only lands in the raw copy', async () => {
+    const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);
+
+    const res = await push(eaglePeriod({ isDeleted: true }));
+
+    assert.deepStrictEqual(res.body, { id: NATIVE_ID, action: 'upsert' });
+    const row = store.get(NATIVE_KEY);
+    assert.strictEqual(row.isDeleted, false);
+    assert.deepStrictEqual(row.read, ['staff', 'idir']);
+    assert.strictEqual(row.sources.eagle.isDeleted, true);
   });
 });

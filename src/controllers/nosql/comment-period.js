@@ -1,41 +1,19 @@
 'use strict';
 
-/**
- * Comment period controller — the Eagle mirror for `CommentPeriod`, and the only writer of
- * `commentPeriods`.
- *
- * A period may never out-rank its project: `constrainToProject` takes the LOWER of the two levels,
- * so a period Eagle published under a project Eagle has taken down is stored private here. That is
- * the same rule `seed/transform.js` applies to documents, and it is what stops an unpublished
- * project's engagement tab from being readable through this container.
- *
- * A PERIOD MAY ALSO HANG OFF A `ProjectNotification`. Eagle's `project` reference holds either id,
- * and a notification is not a project: it carries no ACL a child could out-rank, so such a period
- * keeps its own `read[]` minus compliance and is partitioned under the notification's own id — the same
- * two rules `seed/transform.js` and the document mirror apply to a notification-parented document.
- * `helpers/parent-admit` is the one place that tells the two parents apart.
- *
- * A COMMENT FOLLOWS ITS PERIOD ONLY BECAUSE THIS WRITES IT DOWN. `/search?dataset=Comment` filters
- * on the comment's own stored `read[]` and never re-reads the period, so every level change here
- * is re-derived onto the comments below it. That is the opposite of a chunk, which is gated by a
- * live read of its parent document.
- *
- * A DELETE is a push like any other. eagle-api hard-deletes a period (`findOneAndDelete`), which
- * leaves nothing to re-read, so it pushes the record it just removed with `isDeleted: true`. DEMI
- * never hard-deletes it in return — the takedown convention is narrow and flag, so staff and the
- * reconcile still see what Eagle no longer holds. The row goes to level 2 with `isDeleted: true`,
- * and its comments follow.
- *
- * WHAT MAY UNDO THAT: only another eagle-api push of the same record. Nothing inside DEMI clears
- * the flag, and the project ACL cascade cannot republish the row past it — the raw Eagle copy
- * beside it still says `public`, so `helpers/acl-cascade` gates on the flag rather than on the
- * copy. Mongo does not reuse an ObjectId, so a later push under this id is Eagle holding a record
- * again, which is the one thing that should bring it back.
- *
- * A ROW ENGAGE OWNS (`sourceSystem: 'engage'`) takes only Eagle's own fields from a push: the Eagle
- * id, the raw copy and the staff fields. Dates, URLs, labels, ACL and the delete flag are ENGAGE's,
- * and an Eagle push is often just the echo of what DEMI sent there, so it must not write them back.
- */
+// The Eagle echo path for `CommentPeriod`. A period never out-ranks its project
+// (`constrainToProject` keeps the lower level), so an unpublished project hides its periods.
+
+// A `ProjectNotification` parent has no ACL to out-rank: the period keeps its own `read[]` minus
+// compliance, partitioned under the notification id. `helpers/parent-admit` tells the parents apart.
+
+// Comments are gated on their own stored `read[]`, never on the period's, so every level change
+// here is re-derived onto them.
+
+// Eagle sends a hard delete as a push with `isDeleted: true`; DEMI flags it and narrows to level 2.
+// Only a later push of the same id clears the flag: Mongo never reuses an ObjectId.
+
+// A row ENGAGE or DEMI owns takes only the Eagle id, raw copy and staff fields its owner does not
+// write (`KEPT_FROM_ECHO`): an Eagle push is often the echo of what DEMI sent.
 
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
@@ -51,6 +29,13 @@ const { auditEvent } = require('../../utils/audit');
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
+
+/** Staff fields an Eagle echo leaves alone, by the `sourceSystem` that writes them. */
+const KEPT_FROM_ECHO = Object.freeze({
+  engage: ['metURLAdmin'],
+  demi: ['metURLAdmin', 'commentIdCount', 'milestone', 'dateUpdated']
+});
+const ownedElsewhere = (row) => Boolean(row) && Object.hasOwn(KEPT_FROM_ECHO, row.sourceSystem);
 
 /** Eagle's staff-side period fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
 function staffFields(doc) {
@@ -90,10 +75,8 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
   return {
     id: eagleId,
     eagleId,
-    // The DEMI project id, as `documents` stores it — not the Eagle one, so both project-partitioned
-    // containers answer a scoped caller on the same value. On a notification-parented period this
-    // is the notification's OWN id, which is what `documents` partitions those under and what
-    // eagle-public already sends as its `project` filter.
+    // DEMI project id (or a notification parent's own id), as `documents` partitions, so both
+    // containers answer a scoped caller on the value eagle-public sends as `project`.
     projectId: String(projectId),
     sourceSystem: 'eagle',
 
@@ -114,8 +97,8 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
     commentTip: doc.commentTip || '',
     ...staffFields(doc),
 
-    // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` above is
-    // what hides it, this is what says why, and it is what stops a cascade widening it again.
+    // Flag, never remove: staff and reconcile still see what Eagle dropped. `helpers/acl-cascade`
+    // checks this flag, not the raw copy, because the Eagle copy still says public.
     isDeleted: doc.isDeleted === true,
 
     // read[] is authoritative and isPublished mirrors it (ADR-004), as every other mirror does.
@@ -125,20 +108,19 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
   };
 }
 
-/** The Eagle echo applied to a row ENGAGE owns. */
+/** The Eagle echo applied to a row ENGAGE or DEMI owns. */
 function eagleOwnedOnto(current, eagleId, doc) {
-  // The delete of an Eagle period the row no longer names: sync-out removed it to recreate the period
-  // under a new project. It must not tie the row back to the old id.
+  // Delete of an old Eagle id that sync-out dropped to recreate the period under a new project:
+  // the row stays tied to its new id.
   if (doc.isDeleted === true && current.eagleId !== eagleId) return current;
-  // `metURLAdmin` is an ENGAGE link that Eagle also carries: ENGAGE keeps it.
-  const { metURLAdmin: _engageOwned, ...staff } = staffFields(doc);
+  const staff = staffFields(doc);
+  for (const field of KEPT_FROM_ECHO[current.sourceSystem]) delete staff[field];
   return { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
 }
 
 /**
- * The row this push writes to: the one stored under the Eagle id, else an ENGAGE-created row already
- * tied to it (in any partition, so a project move in ENGAGE does not fork a second row), else one on
- * the same engagement URL that the echo got to first. A delete never claims a row by URL.
+ * Row for this push: by Eagle id, else an ENGAGE or DEMI row tied to it in any partition, else an
+ * unclaimed ENGAGE row on the same URL. A delete never claims a row by URL.
  */
 async function readTarget(eagleId, doc, projectId) {
   return await commentPeriods.readForWrite(eagleId, projectId)
@@ -148,15 +130,10 @@ async function readTarget(eagleId, doc, projectId) {
 }
 
 /**
- * Mirror one raw Eagle `CommentPeriod`, whoever asked — the push handler below or the backfill
- * (src/scripts/seed-public-reads.js). NULL when the parent is in neither container: a push answers
- * that with a 404, a backfill counts it and moves on.
- *
- * @param {object} [parentRow] the admitted parent, when the caller already holds it — the shape
- *   `helpers/parent-admit` returns. A row without `kind` is read as a project, which is what every
- *   stored project row is.
- * @returns {Promise<{saved: object, existing: object|null, cascadeError: string|null}
- *   |{ignored: string, existing: object|null}|null>} `ignored: 'dropped-by-sync-out'` wrote nothing
+ * Mirror one raw Eagle `CommentPeriod` for the push handler or src/scripts/seed-public-reads.js; null
+ * when the parent is missing (push answers 404, backfill counts it). `ignored` (stale, dropped-by-sync-out) wrote nothing.
+ * @param {object} [parentRow] the admitted parent from `helpers/parent-admit`; no `kind` = project
+ * @returns {Promise<{saved, existing, cascadeError}|{ignored, existing}|null>}
  */
 async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}) {
   const parent = parentRow || await admitParent(doc.project, { childId: eagleId });
@@ -185,7 +162,7 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
 
   const written = await upsertWithRetry(
     commentPeriods,
-    (current) => (current && current.sourceSystem === 'engage'
+    (current) => (ownedElsewhere(current)
       ? eagleOwnedOnto(current, eagleId, doc)
       : mirrorItem(eagleId, doc, parent.id, read, current)),
     () => readTarget(eagleId, doc, parent.id),
@@ -195,9 +172,9 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
   // answer for — the newer push settled both, or no write landed at all.
   if (written.status === 'conflict' || written.ignored) return written;
   const { saved, existing } = written;
-  if (existing && existing.sourceSystem === 'engage') {
-    logger.info('[Comment Period Controller] eagle push kept to Eagle fields on an ENGAGE row',
-      { eagleId, id: saved.id, projectId: saved.projectId });
+  if (ownedElsewhere(existing)) {
+    logger.info('[Comment Period Controller] eagle push kept to Eagle fields on a row it does not own',
+      { eagleId, id: saved.id, projectId: saved.projectId, sourceSystem: existing.sourceSystem });
   }
 
   // A period whose parent changed lands in a NEW partition, and Cosmos leaves the old row
@@ -206,10 +183,8 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
     await commentPeriods.deleteById(existing.id, existing.projectId);
   }
 
-  // WHENEVER THE READ MOVED, not only on a delete. A comment is gated by its own stored `read[]`
-  // and nothing re-reads its period at query time — unlike a chunk, which derives from its parent
-  // document in the search branch — so a period Eagle unpublished leaves every comment under it
-  // readable until they are re-derived here.
+  // Any read change, not only a delete: nothing re-reads the period at query time, so its
+  // comments stay readable until re-derived here.
   const moved = !existing || !sameAccess(existing.read, saved.read);
   const cascadeError = moved ? await cascadeToComments(saved) : null;
 
@@ -217,12 +192,8 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
 }
 
 /**
- * Re-derive the comments of one period from the period's new ACL.
- *
- * The same derivation a project publish runs, one level down: `deriveAcls` takes the lower of each
- * comment's own upstream ACL and the ceiling passed in, so it narrows on an unpublish and restores
- * on a re-publish without ever widening a comment Eagle itself kept private.
- *
+ * Re-derive one period's comments from its new ACL: the lower of each comment's own ACL and the
+ * period's, so it narrows and restores but never widens a comment Eagle kept private.
  * @returns {Promise<string|null>} an error message the caller must 500 with, or null
  */
 async function cascadeToComments(period) {
