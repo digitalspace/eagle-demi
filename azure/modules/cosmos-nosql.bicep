@@ -263,6 +263,9 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
             path: '/sourceSystem/?'
           }
           {
+            path: '/eagleId/?'
+          }
+          {
             // GET /documents/recent-uploads sorts on it. A single-property ORDER BY needs a range
             // index on that exact path; without this the query is rejected outright.
             path: '/dateUploaded/?'

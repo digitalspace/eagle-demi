@@ -320,7 +320,8 @@ async function readForWrite(id, projectId) {
  */
 async function readForWriteByEagleId(eagleId, projectId) {
   const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
-  const spec = { query: `SELECT * FROM c WHERE ${clause}`, parameters: params };
+  // Only DEMI-owned rows carry a foreign eagleId; the filter lets the indexed path narrow the scan.
+  const spec = { query: `SELECT * FROM c WHERE ${clause} AND c.sourceSystem = 'demi'`, parameters: params };
   if (projectId != null) {
     const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
     if (items.length) return oneRowOf(CONTAINER, eagleId, items, PARTITION_FIELD);
@@ -1005,7 +1006,9 @@ async function listByIdsUnscoped(access, ids, select) {
  */
 async function listSyncPending() {
   const tied = isDefinedAndNotNull('eagleId').clause;
-  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${tied} AND ${EAGLE_SYNC_PENDING}` });
+  return fetchAll(CONTAINER, {
+    query: `SELECT * FROM c WHERE c.sourceSystem = 'demi' AND ${tied} AND ${EAGLE_SYNC_PENDING}`
+  });
 }
 
 /** Sync-out's `repo.upsert(item, existing)`: guarded on the stored row's `_etag`, which `upsert` above never reads. */
