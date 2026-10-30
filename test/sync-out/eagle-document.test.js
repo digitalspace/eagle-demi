@@ -9,12 +9,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
-const documents = require('../../src/repositories/documents');
 const { logger } = require('../../src/utils/logger');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const consumer = require('../../src/sync-out/eagle-document');
 const config = require('../../src/config');
+const { DOCUMENT, kindOf } = require('../../src/sync-out/kinds');
 
 const API = 'https://eagle.example/api';
 const ISSUER = config.keycloakIssuer;
@@ -62,8 +62,7 @@ function demiRow(overrides = {}) {
 const sentRow = (published, overrides = {}) =>
   demiRow({ syncOut: { eagle: { status: 'sent', sentVersion: 1, published } }, ...overrides });
 
-/** The document repository as sync-out reads and writes it. */
-const SYNC_REPO = { readForWrite: documents.readForWrite, upsert: documents.upsertForSync };
+const SYNC_REPO = kindOf(DOCUMENT).repo;
 
 /**
  * One row in Cosmos, whose replace honours IfMatch as Cosmos does: no etag, no check. `update` is the
@@ -142,6 +141,17 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
     assert.deepStrictEqual(store.row.syncOut.eagle, { status: 'sent', published: true }, 'claim released, level kept');
     assert.strictEqual(logged('info', `document ${ROW_ID} sent to Eagle`).length, 1);
+  });
+
+  await t.test('a document message runs through the document consumer and records the sent version', async (tt) => {
+    const store = wireStore(tt, sentRow(true));
+    const calls = wireEagle(tt, { [PUT]: {} });
+
+    const result = await syncOut.run({ kind: DOCUMENT, consumer: 'eagle', id: ROW_ID, projectId: '1234', attempt: 1 });
+
+    assert.deepStrictEqual(keys(calls), [PUT], 'not the comment period consumer, which shares the name');
+    assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
+    assert.strictEqual(store.row.syncOut.eagle.sentVersion, 2);
   });
 
   await t.test('a first send leaves Eagle\'s level alone when it already matches', async (tt) => {
