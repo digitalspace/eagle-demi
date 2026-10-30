@@ -14,7 +14,7 @@ const {
 } = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED
+  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED, EAGLE_SYNC_PENDING
 } = require('./_sql');
 // The fields the chunks carry a copy of, read from the one list that owns them.
 const { CHUNK_PARENT_FIELDS } = require('./chunks');
@@ -984,6 +984,11 @@ async function listByIdsUnscoped(access, ids, select) {
   return items;
 }
 
+/** Rows, across partitions, holding a version not yet sent to Eagle: the sync-out pending hook's list. */
+async function listSyncPending() {
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${EAGLE_SYNC_PENDING}` });
+}
+
 module.exports = {
   CONTAINER,
   UPDATE_SOURCE,
@@ -1031,5 +1036,6 @@ module.exports = {
   bulkUpsertForProject,
   patchExtraction,
   setPublished,
+  listSyncPending,
   deleteById
 };
