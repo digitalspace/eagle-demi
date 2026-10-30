@@ -33,6 +33,7 @@ const lapsedCreate = () => nativeRow({ status: 'creating', claim: 'c-1', claimed
 function harness(rows, { wants = () => true, enabled = () => true, answer = async () => [eagle.name] } = {}) {
   const queued = [];
   const lines = [];
+  const metas = [];
   const deps = {
     kind: KIND,
     repo: { listSyncPending: async () => rows },
@@ -42,8 +43,9 @@ function harness(rows, { wants = () => true, enabled = () => true, answer = asyn
       return answer(row);
     }
   };
-  const log = { info: (line) => lines.push(line), warn: (line) => lines.push(line) };
-  return { deps, queued, lines, log };
+  const record = (line, meta) => { lines.push(line); metas.push(meta); };
+  const log = { info: record, warn: record };
+  return { deps, queued, lines, metas, log };
 }
 
 test('a create whose lease lapsed is listed and, on repair, queued once as a repair', async () => {
@@ -52,7 +54,7 @@ test('a create whose lease lapsed is listed and, on repair, queued once as a rep
   assert.deepStrictEqual(report.listed, ['cp-native-1']);
   assert.deepStrictEqual(h.queued, [{ id: 'cp-native-1', options: { repair: true, kind: KIND } }]);
   assert.strictEqual(report.queued, 1);
-  assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 1 queued`]);
+  assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 1 queued, 0 stray`]);
 });
 
 test('a create claim still inside its lease is not queued', async () => {
@@ -80,10 +82,36 @@ test('without repair the row is listed and nothing is queued', async () => {
   assert.strictEqual(h.queued.length, 0);
 });
 
+test('rows holding a stray Eagle id, even a null one, are counted as stray and never listed or queued', async () => {
+  const h = harness([
+    lapsedCreate(),
+    { ...nativeRow({ status: 'failed', strayEagleId: null }), id: 'cp-stray-null' },
+    { ...nativeRow({ status: 'failed', strayEagleId: '6720b3c0a1b2c3d4e5f6ffff' }), id: 'cp-stray-id' }
+  ]);
+  const report = await reconcile({ repair: true, log: h.log }, h.deps);
+  assert.deepStrictEqual(report.listed, ['cp-native-1']);
+  assert.deepStrictEqual(h.queued.map(q => q.id), ['cp-native-1']);
+  assert.deepStrictEqual(report.failed, []);
+  assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 1 queued, 2 stray`]);
+  assert.strictEqual(h.metas[0].stray, 2);
+});
+
+test('a stray row whose version was already sent is not counted as stray', async () => {
+  const h = harness([nativeRow({ status: 'sent', sentVersion: 2, strayEagleId: null })]);
+  await reconcile({ log: h.log }, h.deps);
+  assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 0 pending, 0 queued, 0 stray`]);
+});
+
+test('repair with every consumer disabled leaves stray rows out of failed', async () => {
+  const h = harness([lapsedCreate(), { ...nativeRow({ strayEagleId: null }), id: 'cp-stray' }], { enabled: () => false });
+  const report = await reconcile({ repair: true, log: h.log }, h.deps);
+  assert.deepStrictEqual(report.failed, ['cp-native-1']);
+});
+
 test('a store run logs only the count line', async () => {
   const h = harness([lapsedCreate()]);
   await reconcile({ store: true, log: h.log }, h.deps);
-  assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 0 queued`]);
+  assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 0 queued, 0 stray`]);
 });
 
 test('a row whose enqueue throws lands in failed, logs a warning, and the next row is still queued', async () => {
@@ -104,7 +132,7 @@ test('a row enqueue sends to no consumer lands in failed, is not counted as queu
   assert.strictEqual(report.queued, 0);
   assert.deepStrictEqual(h.lines, [
     `[sync-out pending] ${KIND}: row cp-native-1 not re-queued: no enabled consumer took it`,
-    `[sync-out pending] ${KIND}: 1 pending, 0 queued`
+    `[sync-out pending] ${KIND}: 1 pending, 0 queued, 0 stray`
   ]);
 });
 

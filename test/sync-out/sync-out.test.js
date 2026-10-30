@@ -633,6 +633,20 @@ test('sync-out', async (t) => {
     assert.strictEqual(store.row.syncOut.eagle.sentVersion, VERSION);
   });
 
+  await t.test('a send the consumer holds writes nothing, so the version stays owed', async (tt) => {
+    const store = wireStore(tt, engageRow({
+      eagleId: 'cp-9', syncOut: { eagle: { sentVersion: VERSION - 1, status: 'sent' } }
+    }));
+    const queued = wireQueue(tt);
+    tt.mock.method(eagle, 'send', async () => ({ status: 'held' }));
+
+    assert.deepStrictEqual(await run(message()), { status: 'held' });
+
+    assert.strictEqual(store.writes, 0);
+    assert.strictEqual(store.row.syncOut.eagle.sentVersion, VERSION - 1);
+    assert.deepStrictEqual(queued, [], 'no resend queued');
+  });
+
   await t.test('a slug-only edit, same engagePushedAt but a new syncVersion, is sent', async (tt) => {
     wireStore(tt, engageRow({
       eagleId: 'cp-9', syncOut: { eagle: { sentVersion: VERSION - 1, status: 'sent' } }
