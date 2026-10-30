@@ -1122,7 +1122,10 @@ paths:
             Sending the same body again finishes it.
     delete:
       summary: Delete project
-      description: Permanently remove a project from the master directory.
+      description: >-
+        Flag the project `isDeleted` and drop its `read[]` to staff. The row stays for staff and
+        reconcile; anonymous reads answer 404, and the index row, documents and engagement narrow
+        with it. Repeating the call is a no-op.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1134,11 +1137,19 @@ paths:
             type: string
       responses:
         '200':
-          description: Project successfully deleted.
+          description: >-
+            Project flagged deleted. Body `{ message, deleted }`, where `deleted` is the stored row
+            redacted for the caller.
         '401':
           description: Unauthorized.
         '404':
           description: Project not found.
+        '500':
+          description: >-
+            The row was flagged, but its documents, engagement or updates were not narrowed. The
+            next Eagle push for the project retries the cascade.
+        '503':
+          description: The row kept changing under the write; send the request again.
 
   /api/projects/{id}/summary:
     get:
