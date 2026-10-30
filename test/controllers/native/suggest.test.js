@@ -50,7 +50,9 @@ const CONTAINERS = {
     { id: 'd1', projectId: 'p1', displayName: 'Site C report', documentFileName: 'a.pdf', read: ['public'], vis: {}, sources },
     { id: 'd2', projectId: 'p1', displayName: 'Site C letter', documentFileName: 'b.pdf', read: ['public'], vis: {}, sources },
     { id: 'd3', projectId: 'p1', displayName: 'Site C memo', documentFileName: 'c.pdf', read: ['public'], vis: {}, sources },
-    { id: 'd4', projectId: 'p2', displayName: 'Site D report', documentFileName: 'd.pdf', read: ['public'], vis: {}, sources }
+    { id: 'd4', projectId: 'p2', displayName: 'Site D report', documentFileName: 'd.pdf', read: ['public'], vis: {}, sources },
+    { id: 'd-hidden', projectId: 'p1', displayName: 'Site C secret', documentFileName: 'e.pdf', read: ['public'], vis: { displayName: 2 }, sources },
+    { id: 'd-blank', projectId: 'p1', displayName: '', documentFileName: 'f.pdf', read: ['public'], vis: {}, sources }
   ],
   updates: [
     { id: 'u1', projectId: EAGLE_ID, type: 'News', headline: 'Site C opens', notificationName: null, read: ['public'], vis: {}, status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z', sources }
@@ -187,6 +189,13 @@ test('GET /suggest', async (t) => {
     const ids = async user => (await call('kind=projects&q=site', user)).body.items.map(item => item.id);
     assert.deepStrictEqual(await ids(), ['p1', 'p2']);
     assert.deepStrictEqual(await ids(STAFF), ['p1', 'p2', 'p-hidden-name']);
+  });
+
+  await t.test('documents: a withheld or empty label drops the row; the parent project is no fallback', async (t) => {
+    fakeStores(t, { ranked: { documents: ['d-hidden', 'd-blank', 'd1'] } });
+    const ids = async user => (await call('kind=documents&q=site', user)).body.items.map(item => item.id);
+    assert.deepStrictEqual(await ids(), ['d1']);
+    assert.deepStrictEqual(await ids(STAFF), ['d-hidden', 'd1']);
   });
 
   await t.test('comment periods: q reaches the repository as keywords, and limit * 3 rows are read', async (t) => {
