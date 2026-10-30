@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * Organization controller — the Eagle mirror for `Organization`, written into `lists` as
- * `kind: 'Organization'`.
- *
- * No parent to constrain against: an organization is not project data, so its own `read[]` is the
- * whole ACL. The pinned-proponent list is governed separately, by each project's `pinsRead[]` —
- * see the `pinsPublished` predicate.
- */
+// An organization has no parent project, so its own `read[]` is the whole ACL. Pinned proponents
+// are gated by each project's `pinsRead[]` instead (`pinsPublished`).
 
 const lists = require('../../repositories/lists');
 const { eagleBaseAcl } = require('../../seed/transform');
