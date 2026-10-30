@@ -32,9 +32,10 @@
  * copy. Mongo does not reuse an ObjectId, so a later push under this id is Eagle holding a record
  * again, which is the one thing that should bring it back.
  *
- * A ROW ENGAGE OWNS (`sourceSystem: 'engage'`) takes only Eagle's own fields from a push: the Eagle
- * id, the raw copy and the staff fields. Dates, URLs, labels, ACL and the delete flag are ENGAGE's,
- * and an Eagle push is often just the echo of what DEMI sent there, so it must not write them back.
+ * A ROW ENGAGE OR DEMI OWNS (`sourceSystem` `engage` or `demi`) takes only Eagle's own fields from a
+ * push: the Eagle id, the raw copy and the staff fields. Its id, dates, URLs, labels, ACL, delete flag
+ * and sync-out state stay its owner's, and an Eagle push is often just the echo of what DEMI sent
+ * there, so it must not write them back.
  */
 
 const commentPeriods = require('../../repositories/comment-periods');
@@ -51,6 +52,9 @@ const { auditEvent } = require('../../utils/audit');
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
+
+const OWNED_ELSEWHERE = new Set(['engage', 'demi']);
+const ownedElsewhere = (row) => Boolean(row) && OWNED_ELSEWHERE.has(row.sourceSystem);
 
 /** Eagle's staff-side period fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
 function staffFields(doc) {
@@ -125,20 +129,20 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
   };
 }
 
-/** The Eagle echo applied to a row ENGAGE owns. */
+/** The Eagle echo applied to a row ENGAGE or DEMI owns. */
 function eagleOwnedOnto(current, eagleId, doc) {
   // The delete of an Eagle period the row no longer names: sync-out removed it to recreate the period
   // under a new project. It must not tie the row back to the old id.
   if (doc.isDeleted === true && current.eagleId !== eagleId) return current;
-  // `metURLAdmin` is an ENGAGE link that Eagle also carries: ENGAGE keeps it.
+  // `metURLAdmin` is an ENGAGE link that Eagle also carries: the row keeps its own.
   const { metURLAdmin: _engageOwned, ...staff } = staffFields(doc);
   return { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
 }
 
 /**
- * The row this push writes to: the one stored under the Eagle id, else an ENGAGE-created row already
- * tied to it (in any partition, so a project move in ENGAGE does not fork a second row), else one on
- * the same engagement URL that the echo got to first. A delete never claims a row by URL.
+ * The row this push writes to: the one stored under the Eagle id, else an ENGAGE- or DEMI-created row
+ * already tied to it (in any partition, so a project move in ENGAGE does not fork a second row), else
+ * one on the same engagement URL that the echo got to first. A delete never claims a row by URL.
  */
 async function readTarget(eagleId, doc, projectId) {
   return await commentPeriods.readForWrite(eagleId, projectId)
@@ -185,7 +189,7 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
 
   const written = await upsertWithRetry(
     commentPeriods,
-    (current) => (current && current.sourceSystem === 'engage'
+    (current) => (ownedElsewhere(current)
       ? eagleOwnedOnto(current, eagleId, doc)
       : mirrorItem(eagleId, doc, parent.id, read, current)),
     () => readTarget(eagleId, doc, parent.id),
@@ -195,9 +199,9 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
   // answer for — the newer push settled both, or no write landed at all.
   if (written.status === 'conflict' || written.ignored) return written;
   const { saved, existing } = written;
-  if (existing && existing.sourceSystem === 'engage') {
-    logger.info('[Comment Period Controller] eagle push kept to Eagle fields on an ENGAGE row',
-      { eagleId, id: saved.id, projectId: saved.projectId });
+  if (ownedElsewhere(existing)) {
+    logger.info('[Comment Period Controller] eagle push kept to Eagle fields on a row it does not own',
+      { eagleId, id: saved.id, projectId: saved.projectId, sourceSystem: existing.sourceSystem });
   }
 
   // A period whose parent changed lands in a NEW partition, and Cosmos leaves the old row
