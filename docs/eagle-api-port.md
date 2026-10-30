@@ -100,12 +100,17 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 ### Sync-out
 
 - `writeRow` raises `syncVersion` on every write, one past the stored row it rebuilt from (`nextSyncVersion` in `src/sync-out/kinds.js`, which the ENGAGE ingest uses too). It does not queue anything.
-- `src/sync-out/kinds.js` maps each kind to its repository, the names of the consumers that send it, and its reconcile hook. Only `commentPeriod` is registered; it reconciles through `src/scripts/reconcile-engage.js`. The `reconcileEngage` timer in `api/index.js` runs every kind's hook on `RECONCILE_ENGAGE_SCHEDULE`.
+- `src/sync-out/kinds.js` maps each kind to its repository, the names of the consumers that send it, and its reconcile hook. Two kinds are registered: `commentPeriod` and `document`. The `reconcileEngage` timer in `api/index.js` runs every kind's hook on `RECONCILE_ENGAGE_SCHEDULE`.
+- `commentPeriod` reconciles through `src/scripts/reconcile-engage.js`.
+- `document` reconciles through the pending hook in `src/sync-out/pending.js`. The hook lists the kind's rows holding a version a consumer has not sent. With `{ repair: true }` it queues each again as a repair message of that kind (`node src/scripts/sync-out-pending.js --kind document --repair`). The timer only lists them.
+- Both kinds have a consumer named `eagle`, so `index.js` keeps a consumer list per kind and a message finds its consumer through its `kind`.
+- The document consumer (`src/sync-out/eagle-document.js`) sends updates only, to rows that hold an `eagleId`. It PUTs the row's fields, then calls publish or unpublish only when the public level changed. It runs only when `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` is `true`; the default is off.
+- A send that answers `held` records nothing on the row, so its version stays owed and a later delivery or the pending hook sends it.
 - Queue messages and resends carry `kind`. A message with no `kind`, queued before the field existed, is read as a comment period.
 - `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing; reconcile re-queues.
-- A Flip that needs sync-out adds its kind to `kinds.js`, its consumer to the list in `index.js`, and calls `enqueueQuietly` after its write.
+- A Flip that needs sync-out adds its kind to `kinds.js`, its consumers to that kind's list in `index.js`, and calls `enqueueQuietly` after its write.
 - `test/sync-out/sync-out.test.js` holds the echo test: a sync-out create, eagle-api's echo through the mirror answered 2xx, the DEMI fields and `syncVersion` unchanged, and no second send.
-- Comment periods created in DEMI are sent only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. The switch also stops queued and retried sends. Turn it on only when eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409.
+- Comment periods created in DEMI are sent only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Sync-out POSTs them under an id it mints and stores as `eagleId`. A 409 means an earlier POST landed, so it PUTs instead. The switch also stops queued and retried sends. Turn it on only when eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409.
 - If eagle-api stores a native period under another id, the row gets `syncOut.eagle.strayEagleId` and the error line `not re-keyed`. Sync-out then sends nothing for that row. To clear it:
   1. Delete the Eagle period `strayEagleId` through eagle-api.
   2. Delete the DEMI comment period whose `id` is `strayEagleId`. Its echo created that row.

@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { logger } = require('../src/utils/logger');
+const documents = require('../src/repositories/documents');
 const { loadIndex } = require('./helpers/load-index');
 
 /** Replace the script with a recorder; the handler `require`s it lazily. */
@@ -76,6 +77,8 @@ test('the handler runs every registered kind\'s reconcile hook, and one failing 
 test('a failing reconcile is logged and does not throw at the host', async (t) => {
   const { index } = loadIndex(t, 'RECONCILE_ENGAGE_SCHEDULE', '0 30 10 * * *');
   stubScript(t, async () => { throw new Error('eagle-api unreachable'); });
+  // The document kind's hook runs too; with no Cosmos here it would log a second failure.
+  t.mock.method(documents, 'listSyncPending', async () => []);
   const errors = [];
   t.mock.method(logger, 'error', (message, meta) => { errors.push({ message, meta }); });
 

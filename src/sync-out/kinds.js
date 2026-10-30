@@ -6,16 +6,19 @@
  *
  * A kind is `{ repo, consumers, reconcile }`:
  * - `repo`: the kind's repository; sync-out re-reads the row through it and writes back etag-guarded.
- * - `consumers`: names of the consumers in `./index.js` that send this kind.
+ * - `consumers`: names of the consumers in `./index.js` that send this kind; names repeat across kinds.
  * - `reconcile(options)`: checks the kind's rows against what the consumers wrote; `{ repair: true }`
  *   re-queues the ones that drifted.
  *
- * A Flip adds its kind here and its consumer to the list in `./index.js`.
+ * A Flip adds its kind here and its consumers to that kind's list in `./index.js`.
  */
 
 const commentPeriods = require('../repositories/comment-periods');
+const documents = require('../repositories/documents');
+const pending = require('./pending');
 
 const COMMENT_PERIOD = 'commentPeriod';
+const DOCUMENT = 'document';
 
 const KINDS = Object.freeze({
   [COMMENT_PERIOD]: Object.freeze({
@@ -23,6 +26,16 @@ const KINDS = Object.freeze({
     consumers: Object.freeze(['eagle']),
     // Required on call: the script requires sync-out itself.
     reconcile: (options) => require('../scripts/reconcile-engage').run(options)
+  }),
+  [DOCUMENT]: Object.freeze({
+    // Called through the module, so a stub on the repository reaches the engine. The plain upsert never reads `_etag`.
+    repo: Object.freeze({
+      readForWrite: (id, projectId) => documents.readForWrite(id, projectId),
+      listSyncPending: () => documents.listSyncPending(),
+      upsert: (item, existing) => documents.upsertForSync(item, existing)
+    }),
+    consumers: Object.freeze(['eagle']),
+    reconcile: (options) => pending.reconcile(options, pending.depsFor(DOCUMENT))
   })
 });
 
@@ -41,4 +54,4 @@ function kindOf(name) {
   return KINDS[name];
 }
 
-module.exports = { KINDS, COMMENT_PERIOD, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion };
+module.exports = { KINDS, COMMENT_PERIOD, DOCUMENT, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion };

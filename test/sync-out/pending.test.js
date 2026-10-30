@@ -13,6 +13,8 @@ const assert = require('node:assert');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
+const eagleDocument = require('../../src/sync-out/eagle-document');
+const { DOCUMENT } = require('../../src/sync-out/kinds');
 const { logger } = require('../../src/utils/logger');
 const { depsFor, reconcile } = require('../../src/sync-out/pending');
 const { parseArgs, run } = require('../../src/scripts/sync-out-pending');
@@ -148,6 +150,7 @@ test('depsFor wires a kind to its repository, its consumers and the sync-out enq
   assert.strictEqual(deps.repo, commentPeriods);
   assert.deepStrictEqual(deps.consumers, [eagle]);
   assert.strictEqual(deps.enqueue, syncOut.enqueue);
+  assert.deepStrictEqual(depsFor(DOCUMENT).consumers, [eagleDocument], 'not the comment period consumer of the same name');
 });
 
 test('the CLI run fails when a row was not re-queued', async (t) => {
