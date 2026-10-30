@@ -734,6 +734,17 @@ test('a relink carries a staff code, its legacy codes and a custom target to the
   assert.deepStrictEqual(links.created, []);
 });
 
+test('a relink does not carry the Eagle-only row sync-out state to the Track row', async () => {
+  const projects = fakeProjects([eagleOnlyProject({ syncOut: { eagle: { status: 'sent' } }, syncVersion: 3 })]);
+
+  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  const [written] = projects.writes;
+  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
+  assert.strictEqual(Object.hasOwn(written, 'syncOut'), false);
+  assert.strictEqual(Object.hasOwn(written, 'syncVersion'), false);
+});
+
 // `tags` is DEMI's own and Track never sends it, so neither the nightly update nor a re-key may
 // rebuild the row without it.
 test('the Track sync keeps the tags DEMI set', async (t) => {

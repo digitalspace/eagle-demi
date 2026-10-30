@@ -30,8 +30,9 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS,
-  LEGISLATION_KEY
+  hasValue
 } = require('../../merge/project');
+const { LEGISLATION_KEY, PUT_IGNORED_FIELDS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
@@ -411,19 +412,8 @@ exports.createProject = async (req, res) => {
       description: description || '',
       sector: sector || '',
       region: region || '',
-      // `status` ON THE WIRE, `projectState` AT REST — one stored name, chosen by the writer that
-      // owns the 389 synced rows (`merge/project.js:38` via TRACK_PRECEDENCE). This used to store
-      // the wire name verbatim, so an API-created project was the only row in the container whose
-      // state lived under a different key, and the projects data source aliases
-      // `c.projectState AS status`: the alias resolved to nothing and the row indexed as though it
-      // had no state at all. Measured 2026-08-24 before this change: 0 rows carried `status`, 389
-      // carried `projectState` — nothing to migrate, because nothing had been created through this
-      // route since the drift appeared.
-      //
-      // BOTH INPUT NAMES, and the same precedence PUT uses. Accepting only the wire name made a
-      // GET-then-POST round trip lose the state silently: a GET returns the stored name, so
-      // the body a caller sends back carries `projectState`, which this route dropped on the floor
-      // while its sibling honoured it.
+      // Stored as `projectState` (TRACK_PRECEDENCE in src/ownership/project.js); the search alias reads
+      // that name. Both input names, as PUT, so a GET-then-POST keeps the state.
       projectState: projectState || status || '',
       centroid,
       read,
@@ -475,39 +465,8 @@ exports.updateProject = async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // The partition key is the id, so it must not be reassigned by a request body — in Cosmos
-    // that is a delete-and-reinsert, not an update.
-    //
-    // `read` and its `isPublished` mirror are carried from `existing`, never taken from the body:
-    // PUT does not move a level. Widening is an act — `PUT /api/projects/:id/level`.
-    //
-    // The Cosmos bookkeeping keys are dropped for a different reason: a caller who GETs a project
-    // and PUTs the response back sends them, and they are catalogued at maxVis 0 (or 2 for
-    // `_etag`), so the guard below would 400 an otherwise ordinary edit. `...existing` supplies
-    // the real values.
-    const {
-      id: _ignoredId, trackProjectId: _ignoredTrackId,
-      read: _ignoredRead, isPublished: _ignoredPublished,
-      status: wireStatus,
-      // The cacPublished predicate reads this, so PUT must not set it (doc §2 item 7).
-      projectCACPublished: _ignoredCACPublished,
-      // Derived from `pinsRead` on every read, so a GET-then-PUT must not store a copy.
-      pinsPublished: _ignoredPinsPublished,
-      // Eagle owns the pinned-proponent list and pushes it; a PUT copy would reach anonymous reads.
-      pins: _ignoredPins,
-      // Eagle owns the legislation blocks too; the current year moves only through `/level`.
-      currentLegislationYear: _ignoredCurrentYear, legislationYearList: _ignoredYearList,
-      // Push bookkeeping. Catalogued at vis 2, so a staff caller CAN see them and would otherwise
-      // be able to send them back: an old `eaglePushedAt` makes every later push read as stale, and
-      // clearing `cascadePendingAt` loses a cascade the push recorded as still owed.
-      eaglePushedAt: _ignoredPushedAt, cascadePendingAt: _ignoredCascadePending,
-      // The code has a link record behind it, so only `PUT /projects/:id/short-code` moves it.
-      shortCode: _ignoredShortCode, shortCodeSource: _ignoredShortCodeSource,
-      legacyShortCodes: _ignoredLegacyShortCodes, shortLinkUrl: _ignoredShortLinkUrl,
-      _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
-      _ts: _ignoredTs, _etag: _ignoredEtag, sources: _ignoredSources,
-      ...changes
-    } = req.body;
+    const { status: wireStatus, ...changes } = req.body;
+    for (const key of PUT_IGNORED_FIELDS) delete changes[key];
 
     // Same rename as createProject, and it has to be here too: this route spreads the body in
     // verbatim, so a caller sending `status` wrote a second field beside `projectState` and the
@@ -855,6 +814,8 @@ function mergeEaglePush(doc, existing) {
   // failed would clear the marker saying that cascade is still owed.
   if (existing && existing.cascadePendingAt) merged.cascadePendingAt = existing.cascadePendingAt;
   carryDemiOnlyFields(merged, existing);
+  // A Track row with no `epic_guid` holds the Eagle id sync-out gave it; the echo must keep it.
+  if (existing && !hasValue(merged.eagleId) && hasValue(existing.eagleId)) merged.eagleId = existing.eagleId;
   return merged;
 }
 

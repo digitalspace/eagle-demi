@@ -23,26 +23,7 @@ const { eagleReadUnder } = require('../helpers/eagle-acl');
 const CONTAINER = 'documents';
 const PARTITION_FIELD = 'projectId';
 
-/** Extraction state, which belongs to DEMI and has no upstream counterpart. */
-const EXTRACTION_FIELDS = [
-  'contentExtracted', 'contentExtractedAt', 'contentPageCount', 'contentExtractionError',
-  // Page provenance, carried forward for the same reason the four above are: a re-seed REPLACES
-  // the row, and a document whose flag was dropped would render "Passage N" over chunks that know
-  // their page.
-  'pageNumbered', 'pageCount',
-  // Extraction provenance and the ingest-failure count: dropping the count lets a document that
-  // keeps failing re-enter the GPU queue on every push.
-  'extraction', 'extractionMethod', 'chunkIngestFailures', 'chunkIngestFailedAt'
-];
-
-/**
- * DEMI-owned state a write that rebuilds the row from upstream must carry forward: the extraction
- * state plus `pdfTitle`, the record of the title written into the stored PDF and of its original
- * length and hash. Dropping `pdfTitle` loses the only way to check or restore the original.
- * `levelHeldAt` marks a DEMI narrow or takedown (`levelHoldAfter`); dropping it would let the next
- * Eagle push republish what an operator took down.
- */
-const DEMI_OWNED_FIELDS = [...EXTRACTION_FIELDS, 'pdfTitle', 'levelHeldAt'];
+const { EXTRACTION_FIELDS, DEMI_OWNED_FIELDS } = require('../ownership/document');
 
 /**
  * The "this document's chunks did not get the new parent fields" flag and when it was raised

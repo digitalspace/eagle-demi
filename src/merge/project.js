@@ -23,80 +23,17 @@ const { eagleBaseAcl } = require('../seed/transform');
 const { capRead } = require('../helpers/access-sql');
 const { beforeDateFloor } = require('../domain/project-legislation');
 const { ASSESSMENT_WORK_TYPE, deriveAssessments } = require('./assessments');
+const {
+  TRACK_PRECEDENCE, EAGLE_STAFF_FIELDS, EAGLE_ONLY_FIELDS, LEGISLATION_INDEX_FIELDS, LEGISLATION_KEY,
+  EAGLE_TOP_LEVEL_FIELDS, PUSH_ONLY_FIELDS, DEMI_ONLY_FIELDS
+} = require('../ownership/project');
 
 /** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
 const eagleOnlyProjectId = (eagleId) => `eagle-${eagleId}`;
 const isEagleOnlyProjectId = (id) => String(id).startsWith(eagleOnlyProjectId(''));
 
-/**
- * Fields Track owns. Track wins for these, but ONLY when it actually supplies a value:
- * an empty Track field must never blank a populated Eagle one. That is the whole reason this
- * is an explicit map rather than `{...eagle, ...track}` — a spread would overwrite with
- * undefined and silently erase data.
- *
- * `[targetField, trackField, eagleField]` — eagleField null means Eagle has no equivalent.
- */
-const TRACK_PRECEDENCE = [
-  ['name', 'name', 'name'],
-  ['description', 'description', 'description'],
-  ['projectType', 'type_name', 'type'],
-  ['projectSubType', 'sub_type_name', null],
-  // Eagle slot is what keeps an Eagle-only project from rendering a blank proponent: it has no
-  // Track row to take `proponent_name` from.
-  ['proponentName', 'proponent_name', 'proponentName'],
-  ['projectState', 'project_state_name', 'status'],
-  ['abbreviation', 'abbreviation', 'shortName'],
-  ['address', 'address', 'location'],
-  ['isActive', 'is_active', 'activeStatus'],
-  // Track-only, and stored VERBATIM: the column carries certificate state as well as numbers
-  // ("E98-05", but also "Withdrawn", "In progress", "N/A"), so nothing here parses or normalises it.
-  ['eaCertificate', 'ea_certificate', null],
-  // Track-only certificate dates; `eacExpires` is also the substantial-start deadline.
-  ['eacSigned', 'eac_signed', null],
-  ['eacExpires', 'eac_expires', null]
-];
-
-/**
- * Eagle-only fields eagle-api's project GET returns (its `tagList`), catalog level 2 here except
- * the public `substantially` pair. Also what src/scripts/backfill-eagle-staff-fields.js copies.
- * `dispute` and `disputeDate` are not in `tagList`; eagle-admin reads them off its search.
- */
-const EAGLE_STAFF_FIELDS = [
-  'CELead', 'CELeadEmail', 'CELeadPhone', 'projectLeadId', 'responsibleEPDId', 'projLead',
-  'addedBy', 'intake', 'dateCommentsOpen', 'dateCommentsClosed', 'duration', 'isTermsAgreed',
-  'primaryContact', 'proMember', 'eaStatusDate', 'projectStatusDate', 'activeDate',
-  'substantially', 'substantiallyDate', 'hasMetCommentPeriods', 'dispute', 'disputeDate'
-];
-
-/**
- * Fields only Eagle has. Copied straight across — the EA process record, contacts and CAC
- * data that make DEMI more than a Track mirror.
- *
- * Four of these are ObjectIds in Mongo and mean nothing outside Eagle, so they have to reach DEMI
- * already resolved: `applicableRegulation` as `{_id, name, item}`, `pins` as
- * `[{_id, name, province}]`, `featuredDocuments` as Eagle document ids, and `proponentId` off the
- * Organization (`proponentName` is a TRACK_PRECEDENCE slot, not one of these). The push sends all
- * four that way. The seed's feed does not,
- * so `normalizeEagleSlot` below fills what it can from the feed and from the Organization lookup
- * the seed hands it. Nothing here reads Mongo.
- */
-const EAGLE_ONLY_FIELDS = [
-  'eaStatus', 'eacDecision', 'decisionDate', 'currentPhaseName', 'phaseHistory',
-  'legislation', 'legislationYear', 'review180Start', 'review45Start',
-  'reviewExtensions', 'reviewSuspensions', 'substitution', 'CEAAInvolvement',
-  'CEAALink', 'applicableRegulation', 'build', 'dateAdded', 'dateUpdated',
-  'projectLead', 'projectLeadEmail', 'projectLeadPhone',
-  'responsibleEPD', 'responsibleEPDEmail', 'responsibleEPDPhone',
-  'complianceLead', 'execProjectDirector', 'eaoMember',
-  'sector', 'commodity', 'region', 'fedElecDist', 'provElecDist',
-  'projectCAC', 'projectCACPublished', 'cacEmail',
-  'proponentId', 'pins', 'pinsRead', 'featuredDocuments',
-  'overallProgress', 'code', 'nameSearchTerms',
-  ...EAGLE_STAFF_FIELDS
-];
-
 /** Which block is current, the years held, and every `legislation_<year>` block. */
-const legislationFields = (eagle) => ['currentLegislationYear', 'legislationYearList',
+const legislationFields = (eagle) => [...LEGISLATION_INDEX_FIELDS,
   ...Object.keys(eagle).filter(k => LEGISLATION_KEY.test(k))];
 
 /** The `fields` an Eagle record holds a value for: how both merges fill the Eagle-only gaps. */
@@ -107,20 +44,6 @@ function pickEagleFields(eagle, fields) {
   }
   return picked;
 }
-
-/**
- * Fields that live ONLY at the top level of a Mongo project — identity, ACL, pins, CAC, featured
- * documents. Everything else is content and belongs to the legislation block.
- */
-const EAGLE_TOP_LEVEL_FIELDS = [
-  '_id', 'read', 'write', 'delete', 'pins', 'pinsRead', 'pinsHistory', 'links',
-  'featuredDocuments', 'projectCAC', 'cacMembers', 'cacEmail', 'projectCACPublished',
-  '_schemaName', 'currentLegislationYear', 'legislationYearList',
-  '_updatedBy', '_addedBy', '_deletedBy', '__v'
-];
-
-// Open pattern, not a list: a new Act needs no change here.
-const LEGISLATION_KEY = /^legislation_\d{4}$/;
 
 /** The fields eagle-api's project model types as `Date`. */
 const EAGLE_DATE_FIELDS = [
@@ -219,31 +142,6 @@ function normalizeEagleSlot(flat, orgs) {
   return flat;
 }
 
-/**
- * What a re-merge must take back off the stored row rather than rebuild.
- *
- * `/api/public/search?dataset=Project` sends none of these four: the push resolves `proponentId`
- * and `proponentName` out of the Organization it was handed, and the search omits
- * `applicableRegulation` and `featuredDocuments` entirely. Every OTHER `EAGLE_ONLY_FIELDS` entry
- * IS in the feed, and `hasValue` cannot tell a field the feed omitted from one the EAO cleared —
- * so carrying the whole list forward made an upstream clear unappliable for ~36 fields, `pinsRead`
- * among them.
- */
-const PUSH_ONLY_FIELDS = [
-  'proponentId', 'proponentName', 'applicableRegulation', 'featuredDocuments',
-  // Not content at all: the stamp a later eagle-api push is ordered against, and the marker saying
-  // the project still owes a visibility cascade. Only the push writes them, and a re-seed or a
-  // Track re-merge that blanked them would let an already-applied push land again, or lose the
-  // cascade the row is still waiting for.
-  'eaglePushedAt', 'cascadePendingAt'
-];
-
-/**
- * Fields only DEMI writes (`PUT /projects/:id`, `levelHeldAt` from `PUT /projects/:id/level`, and
- * `documentPhases` from the dating pass). No feed sends them, so no re-merge can rebuild them.
- */
-const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt', 'documentPhases'];
-
 /** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`). */
 function heldRead(read, existing) {
   return existing && existing.levelHeldAt && Array.isArray(existing.read)
@@ -255,10 +153,10 @@ function heldRead(read, existing) {
  * Carry the DEMI-only fields off the stored row onto a rebuilt one, then derive its assessments. A
  * held row keeps the lower of the rebuilt and stored `read` (`heldRead`): Eagle narrows, never widens.
  */
-function carryDemiOnlyFields(merged, existing) {
+function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS) {
   if (!merged) return merged;
   if (existing) {
-    for (const field of DEMI_ONLY_FIELDS) {
+    for (const field of fields) {
       const value = existing[field];
       if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
     }
@@ -695,7 +593,6 @@ function buildProjectIndex(projects) {
 
 module.exports = {
   TRACK_PRECEDENCE,
-  LEGISLATION_KEY,
   EAGLE_ONLY_FIELDS,
   EAGLE_STAFF_FIELDS,
   pickEagleFields,

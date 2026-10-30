@@ -705,6 +705,19 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.deepStrictEqual(matched.tags, ['Nicomen Wind']);
   });
 
+  await t.test('a Track row seeded beside its eagle-<id> twin starts with no sync-out state', async () => {
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) => (id === `eagle-${matchedGuid}`
+      ? { id: `eagle-${matchedGuid}`, eagleId: matchedGuid, syncVersion: 4, syncOut: { eagle: { sentVersion: 4 } } }
+      : null);
+
+    await seed(['--live', '--only', 'projects'], { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.strictEqual(matched.syncVersion, undefined);
+    assert.strictEqual(matched.syncOut, undefined);
+  });
+
   await t.test('documents are grouped by project — the partition key', async () => {
     const { written, repos } = makeRepos();
     await seed(['--live', '--only', 'documents'], { sources: stubSources, repos, now: NOW });

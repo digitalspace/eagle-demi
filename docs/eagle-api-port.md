@@ -14,7 +14,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 4. Every new route needs `node --test` tests, a catalog entry for any new field, a `src/swagger/swagger.yaml` entry, and a README line under "Parity with eagle-api".
 5. Field ownership runs in three phases for every object.
    - Dark: the DEMI routes are merged and have no caller. Eagle owns every field and mirror ingress keeps writing them. A DEMI write in this phase is overwritten by the next push, so the routes are staff-only and the row says so.
-   - Flip, one release window covering both repos: the eagle-admin caller moves to DEMI, and DEMI ingress stops taking that object's fields. Project-embedded fields such as pins and CAC move to `DEMI_ONLY_FIELDS` (`src/merge/project.js:182`) and out of `EAGLE_ONLY_FIELDS`. For a whole kind, `/eagle/<kind>/:eagleId` accepts the push and ignores the fields DEMI now owns, answering 2xx, so eagle-api's echo of a DEMI write does not fail. The sync-out consumer is turned on only if an Eagle reader still needs the data; decide and record that per object. Deploy the DEMI tag first, eagle-admin right after, then compare the nightly reconcile drift report for that object. Each flip ships a test that an Eagle push leaves DEMI-owned fields unchanged.
+   - Flip, one release window covering both repos: the eagle-admin caller moves to DEMI, and DEMI ingress stops taking that object's fields. Project-embedded fields such as pins and CAC move to `DEMI_ONLY_FIELDS` (`src/ownership/project.js`) and out of `EAGLE_ONLY_FIELDS`. For a whole kind, `/eagle/<kind>/:eagleId` accepts the push and ignores the fields DEMI now owns, answering 2xx, so eagle-api's echo of a DEMI write does not fail. The sync-out consumer is turned on only if an Eagle reader still needs the data; decide and record that per object. Deploy the DEMI tag first, eagle-admin right after, then compare the nightly reconcile drift report for that object. Each flip ships a test that an Eagle push leaves DEMI-owned fields unchanged.
    - Retire: delete the eagle-api handler, `controllers/nosql/<kind>.js` and the mirror route.
 6. Set the row status in the same diff as the code: `todo`, `in progress (branch)`, `done (demi sha, admin sha)`. Record all shas on the row.
 7. A retire PR for an eagle-api handler may merge once that object's Flip is live on test. The retire tag reaches prod only after that Flip is live on prod. Retirement rows are at the end.
@@ -44,17 +44,17 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af); no caller yet |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); v2.5.35 deployed to test; prod precondition under Project |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | done (359611b4) |
-| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | todo |
+| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | todo |
 | F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | todo |
 | F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | todo |
 | F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `project.service.ts` | 4, F8 | - | todo |
 | F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | todo |
 | F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | todo |
 | F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | todo |
-| F8 | Flip: extensions | `merge/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | todo |
+| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | todo |
 | F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | todo |
 | F10 | Flip: documents | document mirror, eagle-admin `document.service.ts` and components | FS, A0 | - | todo |
-| F11 | Flip: CAC | `merge/project.js` (DEMI_ONLY) | 11, F8 | - | todo; no sync-out: neither eagle-public line reads the CAC fields, so no eagle-api write path |
+| F11 | Flip: CAC | `ownership/project.js` (`DEMI_ONLY_FIELDS`) | 11, F8 | - | todo; no sync-out: neither eagle-public line reads the CAC fields, so no eagle-api write path |
 | R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | done (eagle-api 681b483): topic, vc, `GET /jobs` list removed; `protectedRefresh`, `/task`, `/public/comment`, `/public/document` were already gone; `login` kept (eagle-admin local login when Keycloak is off) |
 | R2 | Retire in eagle-api: per object | handlers under "Callers to move", pin routes, extension routes | the object's Flip live on test (retire tag: live on prod) | - | todo |
 | R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle` | the kind's Flip live on prod | - | todo |
@@ -169,7 +169,7 @@ Rules:
 
 Ownership per phase:
 - Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:491-494` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`), which has no caller until F1 maps `id` to `_id`.
-- Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/merge/project.js:186`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `controllers/nosql/project.js:493` and remove the dead pins-shape branch in `carryEagleOnlyFields` (`merge/project.js:225-236`) and its tests (`test/merge/project.test.js:871-887`).
+- Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/ownership/project.js`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `src/ownership/project.js:111-114` (the `PUT_IGNORED_FIELDS` block) and remove the dead pins-shape branch in `carryEagleOnlyFields` (`src/merge/project.js`) and its tests (`test/merge/project.test.js`).
 - Sync-out: DEMI pushes the project's organization id list and published flag into eagle-api's `pins` and `pinsRead`. eagle-api project PUT does not touch `pins` (`api/controllers/project.js` has no `pins` reference on `origin/develop`), so the push uses the eagle-api pin routes: `POST /project/:id/pin` for ids to add, `DELETE /project/:id/pin/:pinId` for ids to remove, `PUT /project/:id/pin/publish` or `/unpublish` for the flag. The consumer reads the eagle-api list first and sends the difference.
 
 Open before build:
@@ -388,7 +388,7 @@ Callers to move: eagle-admin `user.service.ts:55-62`; its `toEagleUserBody` (`mo
 
 Status: done (eagle-notify e1c389b, eagle-demi 05ffdb67), Dark. Both deployed to test.
 
-Today: `projectCAC`, `projectCACPublished`, `cacEmail` are project fields (`src/merge/project.js:87`, `src/vis/catalog/projects.js:88-89,109`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79). DEMI serves the routes under the `port: cac` anchor in `routes.js`, rules in `src/domain/cac.js`, handlers in `src/controllers/native/cac.js`.
+Today: `projectCAC`, `projectCACPublished`, `cacEmail` are project fields (`EAGLE_ONLY_FIELDS` in `src/ownership/project.js`, `src/vis/catalog/projects.js:88-89,109`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79). DEMI serves the routes under the `port: cac` anchor in `routes.js`, rules in `src/domain/cac.js`, handlers in `src/controllers/native/cac.js`.
 
 Routes (all six served): `GET`, `POST` and `DELETE /projects/:id/cac`, `PUT /projects/:id/cac/publish` and `/unpublish`, `POST /projects/:id/cac/members/remove` with `{ "address" }` (decided 2026-10-19: eagle-notify keys members by email, so no id route). All [staff, sysadmin]. Member sign-up stays in eagle-notify.
 
@@ -413,7 +413,7 @@ Known Dark-phase limit: the CAC fields are copied from Eagle, so the next Eagle 
 
 Status: done (99c9045c), Dark
 
-Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project (`src/merge/project.js:81`), filled by the Eagle push. Dark: the four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
+Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project (`EAGLE_ONLY_FIELDS` in `src/ownership/project.js`), filled by the Eagle push. Dark: the four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
 
 Target routes: `GET` and `POST /projects/:id/extensions`, `PUT` and `DELETE /projects/:id/extensions/:extId`.
 
@@ -482,10 +482,10 @@ A2 (done, eagle-admin #984, 13305c76; `full-project.resolver.ts` reads `GET /pro
 - Of the block fields in eagle-api's model (`api/helpers/models/project.js:7-97`), only `groups` has no top-level counterpart, so it is withheld from every caller.
 - Joined objects: inside each stored block the push already resolves `eacDecision`, `currentPhaseName` and `CEAAInvolvement` to `{_id, name, type, legislation}` and `applicableRegulation` to its List entry (`demiPush.js:136-149`). `proponent` stays an id with `proponentId` and `proponentName` beside it; the populated Organization is not on the row, and eagle-admin fetches the proponent organization from DEMI.
 
-Eagle push and a DEMI-set level (`merge/project.js:182-206`, `repositories/documents.js:432-437`):
+Eagle push and a DEMI-set level (`merge/project.js:145-170`, `repositories/documents.js:432-437`):
 - `setLevel` sets `levelHeldAt` only on a narrow; a widen to level 4 clears it. A held row keeps the lower of Eagle's and its stored `read` on every push, so Eagle can narrow it but not widen it.
 - A DEMI publish holds nothing, so the next Eagle push for that project replaces `read` with Eagle's. A DEMI publish of a project Eagle still has private is undone by the next push.
-- A DEMI-set `legislationYear`, or a DEMI year switch, on an Eagle-mirrored row is also replaced by the next push (`legislationYear` is in `EAGLE_ONLY_FIELDS`, `merge/project.js:80`; the push sends its own `currentLegislationYear`).
+- A DEMI-set `legislationYear`, or a DEMI year switch, on an Eagle-mirrored row is also replaced by the next push (`legislationYear` is in `EAGLE_ONLY_FIELDS` in `ownership/project.js`; the push sends its own `currentLegislationYear`).
 
 ### Search
 

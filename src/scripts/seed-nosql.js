@@ -12,7 +12,8 @@ const {
   buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
   eagleOnlyProjectId, isEagleOnlyProjectId, heldRead
 } = require('../merge/project');
-
+const { DEMI_ONLY_FIELDS } = require('../ownership/project');
+const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
 const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
 const { pickParent } = require('../helpers/parent-admit');
@@ -29,6 +30,8 @@ const boundariesRepo = require('../repositories/boundaries');
 const linksRepo = require('../repositories/links');
 const chunksRepo = require('../repositories/chunks');
 const { ensureProjectShortLink, carryShortLink } = require('../helpers/short-links');
+
+const TWIN_CARRY_FIELDS = DEMI_ONLY_FIELDS.filter(f => !SYNC_STATE_FIELDS.includes(f));
 
 /** Every stage `--only` accepts. */
 const ALL_STAGES = ['projects', 'documents', 'boundaries'];
@@ -475,9 +478,9 @@ async function runSeed(args, deps, summary) {
           carryDemiOnlyFields(project, existing);
         } else if (project.eagleId && !isEagleOnlyProjectId(project.id)) {
           // A Track row built for the first time beside its `eagle-<id>` twin takes the twin's
-          // tags, the same as the Track relink.
+          // tags, the same as the Track relink. Not its sync-out state: that row was never sent.
           const twinId = eagleOnlyProjectId(String(project.eagleId));
-          carryDemiOnlyFields(project, await repos.projects.getById(access, twinId));
+          carryDemiOnlyFields(project, await repos.projects.getById(access, twinId), TWIN_CARRY_FIELDS);
         }
         // Counted as minted, not as held: the carry above already answered for the rest.
         const heldCode = project.shortCode;
