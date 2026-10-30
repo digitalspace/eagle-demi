@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * The scheduled announce: which rows it lists, and that each goes through the claim so a scheduled
- * Update is emailed once, only once it is due, and never from a stale read.
- *
- * The container is in memory (helpers/updates-store) and enforces the claim's own condition, so the
- * race between listing a row and claiming it is played out rather than asserted.
- */
+// Each due Update goes through the claim: emailed once, only once due, never from a stale read. The
+// in-memory store (helpers/updates-store) enforces the claim's condition, so the race is played out.
 
 process.env.NODE_ENV = 'test';
 
