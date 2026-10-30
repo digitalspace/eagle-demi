@@ -14,6 +14,7 @@ const {
   buildRegistry,
   buildProjectIndex,
   normalizeCentroid,
+  validCoordinates,
   resolveProjectAcl,
   BC_BBOX
 } = require('../../src/merge/project');
@@ -461,6 +462,21 @@ test('Eagle dates before 1971 are null', async (t) => {
     const merged = mergeTrackProject(TRACK_207, raw(), OPTS);
     assert.strictEqual(merged.sources.eagle.legislation_2002.decisionDate, EPOCH_ZERO);
   });
+});
+
+test('DMS coordinates convert to decimal degrees', () => {
+  const [lng, lat] = validCoordinates('122°43\'20.8"W', '53°49\'42.9"N').coordinates;
+  assert.ok(Math.abs(lng - -122.72244) < 1e-5);
+  assert.ok(Math.abs(lat - 53.82858) < 1e-5);
+
+  // E reads as +122.72; the positive-longitude flip must still land it in BC
+  const [eastLng] = validCoordinates('122°43\'20.8"E', '53°49\'42.9"N').coordinates;
+  assert.ok(Math.abs(eastLng - -122.72244) < 1e-5, `east lng ${eastLng}`);
+
+  assert.deepStrictEqual(validCoordinates('-122.9', '49.1').coordinates, [-122.9, 49.1]);
+
+  // parseFloat would have read the leading 53 and plotted the project ~100 km off
+  assert.strictEqual(validCoordinates('-122.9', '53 degrees-ish'), null);
 });
 
 test('centroid normalisation', async (t) => {

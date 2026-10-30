@@ -377,6 +377,20 @@ function inBC(lng, lat) {
          lat >= BC_BBOX.minLat && lat <= BC_BBOX.maxLat;
 }
 
+// Two Eagle projects store DMS text (53°49'42.9"N); parseFloat would read only the degrees.
+const DMS = /^(\d+(?:\.\d+)?)\s*[°\s]\s*(\d+(?:\.\d+)?)\s*['′\s]\s*(?:(\d+(?:\.\d+)?)\s*["″]?\s*)?([NSEW])$/i;
+
+function toDegrees(raw) {
+  if (typeof raw === 'number') return raw;
+  if (typeof raw !== 'string') return NaN;
+  const s = raw.trim();
+  if (s !== '' && Number.isFinite(Number(s))) return Number(s);
+  const m = DMS.exec(s);
+  if (!m) return NaN;
+  const deg = Number(m[1]) + Number(m[2]) / 60 + Number(m[3] || 0) / 3600;
+  return /[SW]/i.test(m[4]) ? -deg : deg;
+}
+
 /**
  * Validate a coordinate pair, repairing the one error that is unambiguous.
  *
@@ -387,8 +401,8 @@ function inBC(lng, lat) {
  * rather than an invented one.
  */
 function validCoordinates(lngRaw, latRaw) {
-  let lng = parseFloat(lngRaw);
-  const lat = parseFloat(latRaw);
+  let lng = toDegrees(lngRaw);
+  const lat = toDegrees(latRaw);
   if (isNaN(lng) || isNaN(lat)) return null;
 
   if (lng > 0 && inBC(-lng, lat)) lng = -lng;
