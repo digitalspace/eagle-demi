@@ -268,7 +268,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
 
 **Every Flip** (one release window; after its Dark slice, FS and A0) does all of the following:
 1. eagle-admin: moves its service calls to the `demi-api.service.ts` methods and updates the matching `.spec.ts`.
-2. DEMI: stops taking the object's fields from Eagle. Embedded fields move into `DEMI_ONLY_FIELDS` (`merge/project.js:182`). A whole kind makes its `upsertFromEagle` accept the push and ignore DEMI-owned fields, answering 2xx, the same way ENGAGE-sourced comment periods treat the echo today. It never refuses with an error: eagle-api echoes every write it receives back through the mirror routes, and a rejected echo would surface as a failure of DEMI's own sync-out push. FS adds the echo test (push, echo, row unchanged, 2xx) before the first Flip.
+2. DEMI: stops taking the object's fields from Eagle. Embedded fields move into `DEMI_ONLY_FIELDS` (`ownership/project.js`). A whole kind makes its `upsertFromEagle` accept the push and ignore DEMI-owned fields, answering 2xx, the same way ENGAGE-sourced comment periods treat the echo today. It never refuses with an error: eagle-api echoes every write it receives back through the mirror routes, and a rejected echo would surface as a failure of DEMI's own sync-out push. FS adds the echo test (push, echo, row unchanged, 2xx) before the first Flip.
 3. Adds a consumer `src/sync-out/<kind>.js` if an Eagle reader remains.
 4. Adds a reconcile check for the kind.
 5. Adds a test that an Eagle push leaves the DEMI-owned fields unchanged.

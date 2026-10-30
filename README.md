@@ -523,7 +523,7 @@ counts null as 0. Comment period `userCan` is not compared: Eagle computes it fo
 These classes explain differences that come from how DEMI builds its rows:
 
 - `track-mastered`: a project field DEMI takes from Track (`TRACK_PRECEDENCE` in
-  `src/merge/project.js`: name, type, location, description and the rest) differs, DEMI's value is
+  `src/ownership/project.js`: name, type, location, description and the rest) differs, DEMI's value is
   not empty, and the DEMI row has a `trackProjectId`. In the BCGW file it covers `Project name`,
   `Proponent`, `Type`, `Description`, `Latitude` and `Longitude`; in the comment export, `Project`
   (Eagle writes the raw project name, blank on legislation-keyed projects).

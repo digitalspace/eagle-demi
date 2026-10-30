@@ -427,7 +427,7 @@ Each item below overrides the corresponding section of the source document.
 
 ## 4. Source-document claims that were wrong at `aea2a0c`
 
-- `EAGLE_ONLY_FIELDS` has 31 entries, not 29 (`src/merge/project.js:48-57`).
+- The source document's count of `EAGLE_ONLY_FIELDS` was wrong. The list is in `src/ownership/project.js`; read the entries there, since a count goes stale.
 - `src/helpers/response.js` is not dead: `serverError` is imported by six controllers.
 - `res.json` sites: 108 total, 62 non-error, not about 45.
 - No email-intake upload route exists; the only upload route is `POST /documents/extract`.
