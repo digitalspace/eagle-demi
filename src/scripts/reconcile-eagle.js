@@ -256,11 +256,22 @@ function aclMismatch(rows, keyOf, eagleRead, parentReadOf = () => null, derive =
   }).map(keyOf);
 }
 
-/** The `lists` drift. A row created in DEMI has no Eagle copy until sync-out exists for it, so it is not drift. */
+/**
+ * `diff` for rows keyed by their own id. A row created in DEMI is not the push's to keep in step; once
+ * sync-out creates it in Eagle, its `eagleId` names that copy, so the copy is not eagleOnly either.
+ */
+function diffById(rows, eagleIds, parentPublished) {
+  const created = row => row.sourceSystem === 'demi';
+  const copies = new Set(rows.filter(row => created(row) && row.eagleId).map(row => String(row.eagleId)));
+  return diff(rows.filter(row => !created(row)), row => String(row.id),
+    new Set([...eagleIds].filter(id => !copies.has(id))), undefined, parentPublished);
+}
+
+/** The `lists` drift. */
 function listsSummary(listRows, eagleListIds, eagleRead) {
   return {
     inDemi: listRows.length, inEagle: eagleListIds.size,
-    ...diff(listRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eagleListIds),
+    ...diffById(listRows, eagleListIds),
     aclMismatch: aclMismatch(listRows, row => String(row.id), eagleRead)
   };
 }
@@ -607,9 +618,7 @@ async function reconcile(argv = [], deps = {}) {
 
   summary.commentPeriods = {
     inDemi: periodRows.length, inEagle: eaglePeriodIds.size,
-    // A period created in DEMI has no Eagle copy until sync-out covers periods, so it is not drift.
-    ...diff(periodRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eaglePeriodIds, undefined,
-      id => admit(eaglePeriodProject.get(id)) !== null),
+    ...diffById(periodRows, eaglePeriodIds, id => admit(eaglePeriodProject.get(id)) !== null),
     misfiledParent: misfiledPeriods,
     aclMismatch: aclMismatch(periodRows, row => String(row.id), eagleRead, projectReadOf),
     engageOwned: engagePeriodRows.length
