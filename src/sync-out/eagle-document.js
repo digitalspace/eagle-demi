@@ -1,6 +1,6 @@
 'use strict';
 
-// Sync-out consumer: DEMI and ENGAGE document rows that already hold an Eagle id, written back through
+// Sync-out consumer: DEMI document rows that already hold an Eagle id, written back through
 // eagle-api's document PUT and publish/unpublish. It never creates an Eagle document.
 
 const crypto = require('node:crypto');
@@ -39,21 +39,22 @@ function bodyFor(row) {
 
 /**
  * Fields cleared in DEMI that eagle-api's PUT skips, as it skips every falsy value, so Eagle keeps
- * its old one. Against Eagle's raw copy when the row holds one, so a field Eagle never had is not named.
+ * its old one. Named only against Eagle's raw copy: without one, a never-set field is not a dropped clear.
  */
 function unsendable(row) {
   const copy = row.sources && row.sources.eagle;
+  if (!copy) return [];
   return Object.entries(PUT_FIELDS)
-    .filter(([field, eagleField]) => Object.hasOwn(row, field) && !row[field] && (!copy || Boolean(copy[eagleField])))
+    .filter(([field, eagleField]) => Object.hasOwn(row, field) && !row[field] && Boolean(copy[eagleField]))
     .map(([field]) => field);
 }
 
 /**
- * Only with SYNC_OUT_EAGLE_DOCUMENT_ENABLED on, and only a row DEMI or ENGAGE owns that is tied to an
- * Eagle id. send() asks too: queued messages and retries reach it without wants().
+ * Only a row DEMI owns that is tied to an Eagle id Eagle has not deleted. send() asks too:
+ * queued messages and retries reach it without wants().
  */
-const wants = row => Boolean(settings.eagle.documentEnabled &&
-  row && row.eagleId && ownedOutsideEagle(row) && isScanCleared(row));
+const wants = row => Boolean(row && row.eagleId && ownedOutsideEagle(row) && isScanCleared(row) &&
+  row.syncOut?.eagle?.eagleDeleted !== true);
 
 /**
  * Take the row's send claim: `{ claim, published }` with the level last sent, `{ missing: true }`,
@@ -117,7 +118,11 @@ async function send(row, { update }) {
   const { claim } = claimed;
   let changed;
   try {
-    const before = typeof claimed.published === 'boolean' ? claimed.published : await eaglePublished(s, row, logFields);
+    const eagleRead = row.sources?.eagle?.read;
+    let before;
+    if (Array.isArray(eagleRead)) before = eagleRead.includes('public');
+    else if (typeof claimed.published === 'boolean') before = claimed.published;
+    else before = await eaglePublished(s, row, logFields);
     changed = published !== before;
     await put(s, row, logFields);
     // A PUT slower than the lease may have lost the claim; the new holder sends the newer state.
@@ -144,7 +149,8 @@ async function send(row, { update }) {
 
 module.exports = {
   name: NAME,
-  enabled: () => settings.eagle.enabled,
+  // The flag lives here, not in wants(): a message queued while it is off must stay queued, not be recorded as sent.
+  enabled: () => settings.eagle.enabled && settings.eagle.documentEnabled,
   wants,
   inFlight: entry => Boolean(claimHeld(entry, Date.now())),
   send,

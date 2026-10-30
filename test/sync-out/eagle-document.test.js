@@ -154,6 +154,39 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.strictEqual(store.row.syncOut.eagle.published, false);
   });
 
+  await t.test('Eagle\'s raw copy at public with DEMI at staff unpublishes without asking Eagle first', async (tt) => {
+    const store = wireStore(tt, demiRow({
+      read: STAFF_ACL, isPublished: false, sources: { eagle: { _id: EAGLE_ID, read: PUBLIC_ACL } }
+    }));
+    const calls = wireEagle(tt, { [PUT]: {}, [UNPUBLISH]: {} });
+
+    await consumer.send(store.row, { update: store.update });
+
+    assert.deepStrictEqual(keys(calls), [PUT, UNPUBLISH]);
+    assert.strictEqual(store.row.syncOut.eagle.published, false);
+  });
+
+  await t.test('Eagle\'s raw copy at DEMI\'s level wins over a stale stored level and PUTs only', async (tt) => {
+    const store = wireStore(tt, sentRow(true, {
+      read: STAFF_ACL, isPublished: false, sources: { eagle: { _id: EAGLE_ID, read: STAFF_ACL } }
+    }));
+    const calls = wireEagle(tt, { [PUT]: {} });
+
+    await consumer.send(store.row, { update: store.update });
+
+    assert.deepStrictEqual(keys(calls), [PUT], 'no unpublish, which would mark it Rejected');
+  });
+
+  await t.test('a first send to an Eagle id Eagle no longer holds fails before any PUT', async (tt) => {
+    const store = wireStore(tt, demiRow());
+    const calls = wireEagle(tt, { [GET]: { body: [] }, [PUT]: {} });
+
+    await assert.rejects(consumer.send(store.row, { update: store.update }), /Eagle has no document/);
+
+    assert.deepStrictEqual(keys(calls), [GET]);
+    assert.strictEqual(store.row.syncOut.eagle.status, 'failed');
+  });
+
   await t.test('a level unchanged since the last send PUTs only, with no comment period milestone set', async (tt) => {
     delete process.env.EAGLE_ENGAGE_MILESTONE;
     const store = wireStore(tt, sentRow(false, { read: STAFF_ACL, isPublished: false }));
@@ -189,6 +222,16 @@ test('sync-out of documents to Eagle', async (t) => {
       'not sortOrder or projectPhaseId, which Eagle never held either');
   });
 
+  await t.test('a cleared field is not named when the row holds no Eagle raw copy', async (tt) => {
+    const store = wireStore(tt, sentRow(true, { description: '' }));
+    wireEagle(tt, { [PUT]: {} });
+
+    await consumer.send(store.row, { update: store.update });
+
+    assert.strictEqual(logged('info', `document ${ROW_ID} sent to Eagle`).length, 1);
+    assert.strictEqual(logged('warn', 'eagle-api cannot clear').length, 0);
+  });
+
   await t.test('a row without an eagleId, or one Eagle owns, is not wanted and sends nothing', async (tt) => {
     const calls = wireEagle(tt, {});
     const noId = wireStore(tt, demiRow({ eagleId: null }));
@@ -201,10 +244,17 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.strictEqual(noId.writes, 0);
   });
 
-  await t.test('with SYNC_OUT_EAGLE_DOCUMENT_ENABLED off nothing is wanted or sent', async (tt) => {
+  await t.test('SYNC_OUT_EAGLE_DOCUMENT_ENABLED gates the consumer, not which rows it wants', () => {
+    assert.strictEqual(consumer.enabled(), true);
     delete process.env.SYNC_OUT_EAGLE_DOCUMENT_ENABLED;
+
+    assert.strictEqual(consumer.enabled(), false);
+    assert.strictEqual(consumer.wants(demiRow()), true);
+  });
+
+  await t.test('a row Eagle deleted is not wanted and sends nothing', async (tt) => {
     const calls = wireEagle(tt, {});
-    const store = wireStore(tt, demiRow());
+    const store = wireStore(tt, demiRow({ syncOut: { eagle: { status: 'sent', sentVersion: 1, published: true, eagleDeleted: true } } }));
 
     assert.strictEqual(consumer.wants(store.row), false);
     assert.deepStrictEqual(await consumer.send(store.row, { update: store.update }), { status: 'skipped' });
