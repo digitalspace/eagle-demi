@@ -10,7 +10,6 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const cache = require('../../src/repositories/cache');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
@@ -40,7 +39,7 @@ function harness(rows, { wants = () => true, enabled = () => true, answer = asyn
     consumers: [{ name: eagle.name, enabled, wants, inFlight: eagle.inFlight }],
     enqueue: async (row, options) => {
       queued.push({ id: row.id, options });
-      return answer();
+      return answer(row);
     }
   };
   const log = { info: (line) => lines.push(line), warn: (line) => lines.push(line) };
@@ -52,6 +51,8 @@ test('a create whose lease lapsed is listed and, on repair, queued once as a rep
   const report = await reconcile({ repair: true, log: h.log }, h.deps);
   assert.deepStrictEqual(report.listed, ['cp-native-1']);
   assert.deepStrictEqual(h.queued, [{ id: 'cp-native-1', options: { repair: true, kind: KIND } }]);
+  assert.strictEqual(report.queued, 1);
+  assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 1 queued`]);
 });
 
 test('a create claim still inside its lease is not queued', async () => {
@@ -79,25 +80,32 @@ test('without repair the row is listed and nothing is queued', async () => {
   assert.strictEqual(h.queued.length, 0);
 });
 
-test('a store run writes no report and logs the count line', async (t) => {
-  const put = t.mock.method(cache, 'put', async () => {});
+test('a store run logs only the count line', async () => {
   const h = harness([lapsedCreate()]);
   await reconcile({ store: true, log: h.log }, h.deps);
-  assert.strictEqual(put.mock.callCount(), 0);
   assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 0 queued`]);
 });
 
-test('a row whose enqueue throws lands in failed and logs a warning', async () => {
-  const h = harness([lapsedCreate()], { answer: async () => { throw new Error('queue down'); } });
+test('a row whose enqueue throws lands in failed, logs a warning, and the next row is still queued', async () => {
+  const h = harness([lapsedCreate(), { ...lapsedCreate(), id: 'cp-native-2' }], {
+    answer: async (row) => (row.id === 'cp-native-1' ? Promise.reject(new Error('queue down')) : [eagle.name])
+  });
   const report = await reconcile({ repair: true, log: h.log }, h.deps);
   assert.deepStrictEqual(report.failed, ['cp-native-1']);
   assert.match(h.lines[0], /could not re-queue row cp-native-1/);
+  assert.deepStrictEqual(h.queued.map(q => q.id), ['cp-native-1', 'cp-native-2']);
+  assert.strictEqual(report.queued, 1);
 });
 
-test('a row enqueue sends to no consumer is not counted as queued', async () => {
+test('a row enqueue sends to no consumer lands in failed, is not counted as queued, and logs why', async () => {
   const h = harness([lapsedCreate()], { answer: async () => [] });
   const report = await reconcile({ repair: true, log: h.log }, h.deps);
+  assert.deepStrictEqual(report.failed, ['cp-native-1']);
   assert.strictEqual(report.queued, 0);
+  assert.deepStrictEqual(h.lines, [
+    `[sync-out pending] ${KIND}: row cp-native-1 not re-queued: no enabled consumer took it`,
+    `[sync-out pending] ${KIND}: 1 pending, 0 queued`
+  ]);
 });
 
 test('repair with every consumer disabled fails the rows and names the setting', async () => {
@@ -118,6 +126,13 @@ test('the CLI run fails when a row was not re-queued', async (t) => {
   t.mock.method(logger, 'info', () => {});
   t.mock.method(logger, 'warn', () => {});
   const h = harness([lapsedCreate()], { enabled: () => false });
+  await assert.rejects(run({ kind: KIND, repair: true }, h.deps), /1 row\(s\) not re-queued: cp-native-1/);
+});
+
+test('the CLI run fails when enqueue sent a row to no consumer', async (t) => {
+  t.mock.method(logger, 'info', () => {});
+  t.mock.method(logger, 'warn', () => {});
+  const h = harness([lapsedCreate()], { answer: async () => [] });
   await assert.rejects(run({ kind: KIND, repair: true }, h.deps), /1 row\(s\) not re-queued: cp-native-1/);
 });
 

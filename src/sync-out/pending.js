@@ -44,7 +44,14 @@ async function reconcile({ repair = false, log = logger } = {}, { kind, repo, co
   } else if (repair) {
     for (const row of rows) {
       try {
-        if ((await enqueue(row, { repair: true, kind })).length) report.queued++;
+        const queued = await enqueue(row, { repair: true, kind });
+        if (queued && queued.length) {
+          report.queued++;
+        } else {
+          // enqueue drops disabled consumers, so an empty result means none took this row.
+          report.failed.push(String(row.id));
+          log.warn(`${TAG} ${kind}: row ${row.id} not re-queued: no enabled consumer took it`, { kind, id: row.id });
+        }
       } catch (err) {
         report.failed.push(String(row.id));
         log.warn(`${TAG} ${kind}: could not re-queue row ${row.id}`, { kind, id: row.id, error: err.message });
