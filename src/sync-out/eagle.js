@@ -207,7 +207,7 @@ async function claimMinted(row, update, kind) {
   return { claim, eagleId };
 }
 
-/** Restart the lease just before the POST, or throw when another delivery has taken the claim. */
+/** Restart the lease just before the next eagle-api write, or throw when another delivery has taken the claim. */
 async function refreshClaim(row, update, claim) {
   let ours = false;
   await update((current) => {
@@ -219,7 +219,7 @@ async function refreshClaim(row, update, claim) {
       syncOut: { ...current.syncOut, [NAME]: { ...entry, claimedAt: new Date().toISOString() } }
     };
   });
-  if (!ours) throw new Error(`the create claim on row ${row.id} was taken by another delivery`);
+  if (!ours) throw new Error(`the send claim on row ${row.id} was taken by another delivery`);
 }
 
 /**
