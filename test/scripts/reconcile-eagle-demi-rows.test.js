@@ -1,7 +1,7 @@
 'use strict';
 
-// Reconcile and rows DEMI creates itself: an organization born in DEMI has no Eagle copy, so it
-// must not read as gone from Eagle and trip the nightly drift alert.
+// Reconcile and rows DEMI creates itself: one born in DEMI is not gone from Eagle, and once sync-out
+// creates its Eagle copy, that copy (named by the row's `eagleId`) is not missing from DEMI.
 
 process.env.NODE_ENV = 'test';
 
@@ -10,9 +10,12 @@ const assert = require('node:assert');
 
 const { listsSummary } = require('../../src/scripts/reconcile-eagle');
 
-const EAGLE_ORG = { id: '5c1f7a3e9b1d2c0012340001', kind: 'Organization', sourceSystem: 'eagle', read: ['public'], isPublished: true };
+// The shape the organization mirror writes: `eagleId` equal to `id`.
+const EAGLE_ORG = { id: '5c1f7a3e9b1d2c0012340001', eagleId: '5c1f7a3e9b1d2c0012340001', kind: 'Organization', sourceSystem: 'eagle', read: ['public'], isPublished: true };
 const DEMI_ORG = { id: '0b7c3d5e-1f2a-4b6c-8d9e-0a1b2c3d4e5f', kind: 'Organization', sourceSystem: 'demi', read: ['public'], isPublished: true };
+const COPIED_ORG = { ...DEMI_ORG, id: '1c8d4e6f-2a3b-4c7d-9e0f-1b2c3d4e5f60', eagleId: '5c1f7a3e9b1d2c0012340003' };
 const GONE_ORG = { id: '5c1f7a3e9b1d2c0012340002', kind: 'Organization', sourceSystem: 'eagle', read: ['public'], isPublished: true };
+const UNCLAIMED_ID = '5c1f7a3e9b1d2c0012340004';
 
 test('an organization created in DEMI is counted but is not drift', () => {
   const summary = listsSummary([EAGLE_ORG, DEMI_ORG], new Set([EAGLE_ORG.id]), new Map([[EAGLE_ORG.id, ['public']]]));
@@ -26,4 +29,30 @@ test('an Eagle-mirrored organization Eagle no longer publishes is still drift', 
   const summary = listsSummary([EAGLE_ORG, GONE_ORG, DEMI_ORG], new Set([EAGLE_ORG.id]), new Map());
 
   assert.deepStrictEqual(summary.unpublishedOrDeleted.map(row => row.id), [GONE_ORG.id]);
+});
+
+test('an organization created in DEMI and then in Eagle holds its Eagle copy and no other', () => {
+  const summary = listsSummary([EAGLE_ORG, COPIED_ORG],
+    new Set([EAGLE_ORG.id, COPIED_ORG.eagleId, UNCLAIMED_ID]), new Map());
+
+  assert.deepStrictEqual(summary.eagleOnly, [UNCLAIMED_ID]);
+  assert.deepStrictEqual(summary.unpublishedOrDeleted, []);
+});
+
+test('an Eagle-owned organization keeps its match when a DEMI row claims the same Eagle id', () => {
+  const owned = { ...EAGLE_ORG, id: COPIED_ORG.eagleId, eagleId: COPIED_ORG.eagleId };
+  const summary = listsSummary([owned, COPIED_ORG], new Set([COPIED_ORG.eagleId]), new Map());
+
+  assert.deepStrictEqual(summary.unpublishedOrDeleted, []);
+  assert.deepStrictEqual(summary.eagleOnly, []);
+});
+
+// A lost Eagle copy is reportable only through the row's own read[]: Eagle's id set holds public rows only.
+test('an organization whose Eagle copy is gone is in no drift bucket', () => {
+  const summary = listsSummary([COPIED_ORG], new Set(), new Map());
+
+  assert.deepStrictEqual(summary.eagleOnly, []);
+  assert.deepStrictEqual(summary.unpublishedOrDeleted, []);
+  assert.deepStrictEqual(summary.trackOnly, []);
+  assert.deepStrictEqual(summary.unresolvedParent, []);
 });
