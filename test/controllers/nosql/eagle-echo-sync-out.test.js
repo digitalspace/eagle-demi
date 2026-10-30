@@ -1,7 +1,7 @@
 'use strict';
 
-// eagle-api echoes every sync-out send back through the mirror. The echo must keep the row's
-// sync-out state, or `versionOf` reads 0 and sync-out sends the row again.
+// eagle-api echoes a sync-out send back through the mirror, for any kind sync-out sends. The echo
+// must keep the row's sync-out state, or `versionOf` reads 0 and sync-out sends the row again.
 
 process.env.NODE_ENV = 'test';
 
@@ -39,13 +39,13 @@ function mockRes() {
   };
 }
 
-const syncStateOf = row => ({ syncVersion: row.syncVersion, syncOut: row.syncOut, eagleId: row.eagleId });
+const syncStateOf = row => ({ syncVersion: row.syncVersion, syncOut: row.syncOut });
 
 test('an eagle-api echo keeps the sync-out state', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('project', async () => {
-    // A Track row with no `epic_guid`: its Eagle id is the one sync-out assigned.
+    // A Track row with no `epic_guid`, so only the stored row holds its Eagle id.
     const stored = storedEagleProject({ ...structuredClone(SYNC_STATE) });
     delete stored.sources.track.epic_guid;
     projectReadForWriteFromGet(t);
@@ -61,7 +61,8 @@ test('an eagle-api echo keeps the sync-out state', async (t) => {
     }, res);
 
     assert.strictEqual(res.statusCode, 200);
-    assert.deepStrictEqual(syncStateOf(saved), { ...SYNC_STATE, eagleId: PROJECT_EAGLE_ID });
+    assert.deepStrictEqual(syncStateOf(saved), SYNC_STATE);
+    assert.strictEqual(saved.eagleId, PROJECT_EAGLE_ID);
   });
 
   await t.test('document', async () => {
@@ -83,7 +84,7 @@ test('an eagle-api echo keeps the sync-out state', async (t) => {
     }, res);
 
     assert.deepStrictEqual(res.body, { id: DOC_EAGLE_ID, action: 'upsert' });
-    assert.deepStrictEqual(syncStateOf(written), { ...SYNC_STATE, eagleId: DOC_EAGLE_ID });
+    assert.deepStrictEqual(syncStateOf(written), SYNC_STATE);
   });
 
   await t.test('organization', async () => {
@@ -99,6 +100,6 @@ test('an eagle-api echo keeps the sync-out state', async (t) => {
       { _id: ORG_EAGLE_ID, name: 'Acme Mining Ltd', read: ['public', 'sysadmin'] });
 
     assert.strictEqual(written.name, 'Acme Mining Ltd', 'the echo still lands');
-    assert.deepStrictEqual(syncStateOf(written), { ...SYNC_STATE, eagleId: ORG_EAGLE_ID });
+    assert.deepStrictEqual(syncStateOf(written), SYNC_STATE);
   });
 });

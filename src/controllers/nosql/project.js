@@ -29,7 +29,8 @@ const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS
+  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS,
+  hasValue
 } = require('../../merge/project');
 const { LEGISLATION_KEY, PUT_IGNORED_FIELDS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
@@ -411,19 +412,8 @@ exports.createProject = async (req, res) => {
       description: description || '',
       sector: sector || '',
       region: region || '',
-      // `status` ON THE WIRE, `projectState` AT REST — one stored name, chosen by the writer that
-      // owns the 389 synced rows (`merge/project.js:38` via TRACK_PRECEDENCE). This used to store
-      // the wire name verbatim, so an API-created project was the only row in the container whose
-      // state lived under a different key, and the projects data source aliases
-      // `c.projectState AS status`: the alias resolved to nothing and the row indexed as though it
-      // had no state at all. Measured 2026-08-24 before this change: 0 rows carried `status`, 389
-      // carried `projectState` — nothing to migrate, because nothing had been created through this
-      // route since the drift appeared.
-      //
-      // BOTH INPUT NAMES, and the same precedence PUT uses. Accepting only the wire name made a
-      // GET-then-POST round trip lose the state silently: a GET returns the stored name, so
-      // the body a caller sends back carries `projectState`, which this route dropped on the floor
-      // while its sibling honoured it.
+      // Stored as `projectState` (TRACK_PRECEDENCE in src/ownership/project.js); the search alias reads
+      // that name. Both input names, as PUT, so a GET-then-POST keeps the state.
       projectState: projectState || status || '',
       centroid,
       read,
@@ -824,6 +814,8 @@ function mergeEaglePush(doc, existing) {
   // failed would clear the marker saying that cascade is still owed.
   if (existing && existing.cascadePendingAt) merged.cascadePendingAt = existing.cascadePendingAt;
   carryDemiOnlyFields(merged, existing);
+  // A Track row with no `epic_guid` holds the Eagle id sync-out gave it; the echo must keep it.
+  if (existing && !hasValue(merged.eagleId) && hasValue(existing.eagleId)) merged.eagleId = existing.eagleId;
   return merged;
 }
 

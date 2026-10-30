@@ -3,7 +3,7 @@
 // Who owns each project field: Track, Eagle, DEMI or the eagle-api push. A field has one owner
 // (test/ownership/ownership.test.js); the merge rules that apply these lists are in src/merge/project.js.
 
-const { SYNC_OUT_FIELDS } = require('./sync-out');
+const { SYNC_STATE_FIELDS } = require('./sync-out');
 
 /**
  * `[targetField, trackField, eagleField]`; eagleField null means Eagle has no equivalent.
@@ -90,7 +90,7 @@ const PUSH_ONLY_FIELDS = [
 ];
 
 /** Only DEMI writes these (PUT, `/level`, the dating pass, sync-out), so no re-merge can rebuild them. */
-const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt', 'documentPhases', ...SYNC_OUT_FIELDS];
+const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt', 'documentPhases', ...SYNC_STATE_FIELDS];
 
 /** Each field's one owner. `legislation_<year>` blocks are Eagle's too (`LEGISLATION_KEY`). */
 const OWNERS = Object.freeze({

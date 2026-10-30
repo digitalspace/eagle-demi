@@ -1035,6 +1035,21 @@ test('carryDemiOnlyFields', async (t) => {
     assert.deepStrictEqual(merged.pinsRead, ['project-system-admin']);
   });
 
+  await t.test('a re-merge takes the guid Track gained over a stored null eagleId', () => {
+    const track = { ...TRACK_207, epic_guid: '5cf00c03a266b7e18775000a' };
+    const merged = carryDemiOnlyFields(mergeTrackProject(track, null, OPTS), { id: '207', eagleId: null });
+
+    assert.strictEqual(merged.eagleId, '5cf00c03a266b7e18775000a');
+  });
+
+  await t.test('a re-merge follows a Track guid that moved to another Eagle project', () => {
+    const track = { ...TRACK_207, epic_guid: '5cf00c03a266b7e18775000b' };
+    const merged = carryDemiOnlyFields(mergeTrackProject(track, null, OPTS),
+      { id: '207', eagleId: '5cf00c03a266b7e18775000a' });
+
+    assert.strictEqual(merged.eagleId, '5cf00c03a266b7e18775000b');
+  });
+
   await t.test('no stored row hands the rebuilt row back as it was', () => {
     const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207), OPTS);
 

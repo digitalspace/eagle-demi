@@ -153,10 +153,10 @@ function heldRead(read, existing) {
  * Carry the DEMI-only fields off the stored row onto a rebuilt one, then derive its assessments. A
  * held row keeps the lower of the rebuilt and stored `read` (`heldRead`): Eagle narrows, never widens.
  */
-function carryDemiOnlyFields(merged, existing) {
+function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS) {
   if (!merged) return merged;
   if (existing) {
-    for (const field of DEMI_ONLY_FIELDS) {
+    for (const field of fields) {
       const value = existing[field];
       if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
     }
