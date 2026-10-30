@@ -11,6 +11,8 @@ const { projectsKind } = require('../nosql/project');
 const { documentsKind } = require('../nosql/document');
 const updates = require('./updates');
 const notifications = require('./notifications');
+const commentPeriods = require('./comment-periods');
+const commentPeriodRows = require('../../repositories/comment-periods');
 
 const KINDS = Object.freeze({
   projects: { spec: projectsKind, label: 'name', fields: ['id', 'eagleId', 'name'] },
@@ -24,7 +26,19 @@ const KINDS = Object.freeze({
     label: 'headline',
     fields: ['id', 'headline', 'projectId', 'projectEagleId', 'projectName', 'notificationName']
   },
-  notifications: { spec: notifications.SPEC, label: 'name', fields: ['id', 'name', 'associatedProjectId'] }
+  notifications: { spec: notifications.SPEC, label: 'name', fields: ['id', 'name', 'associatedProjectId'] },
+  'comment-periods': {
+    spec: commentPeriods.SPEC,
+    // q also matches the parent project name, so the repository applies it, as on the native list.
+    repositoryFor: (q) => {
+      const keywords = commentPeriodRows.keywordsOf(q);
+      return keywords ? commentPeriodRows.nativeRepository({ keywords }) : null;
+    },
+    label: 'informationLabel',
+    // parentJoin fills it from projectId; a period matched on its project name may have no label.
+    fallback: 'projectName',
+    fields: ['id', 'informationLabel', 'projectId', 'projectEagleId', 'projectName']
+  }
 });
 
 const PARAMS = ['kind', 'q', 'limit'];
@@ -46,7 +60,6 @@ function parseSuggestQuery(query) {
   }
   const { kind, q: rawQ, limit: rawLimit } = query || {};
 
-  if (kind === 'comment-periods') return { error: 'q is not supported on this list' };
   if (!Object.hasOwn(KINDS, kind)) return { error: `kind must be one of ${Object.keys(KINDS).join(', ')}` };
 
   const q = (rawQ || '').trim().normalize('NFC');
@@ -60,8 +73,8 @@ function parseSuggestQuery(query) {
   return { kind, q, limit };
 }
 
-/** True when a redacted row still holds its label: not withheld, not blank. */
-const hasLabel = (row, { label }) => Boolean(row) && row[label] !== undefined && row[label] !== null && row[label] !== '';
+/** True when a redacted row still holds `field`: not withheld, not blank. */
+const hasLabel = (row, field) => Boolean(row) && row[field] !== undefined && row[field] !== null && row[field] !== '';
 
 /** The suggestion fields a redacted row still holds. */
 function slim(row, { fields }) {
@@ -78,9 +91,12 @@ exports.getSuggestions = async (req, res) => {
     if (asked.error) return res.status(400).json({ error: asked.error });
 
     const kind = KINDS[asked.kind];
-    const { spec } = kind;
+    const repository = kind.repositoryFor && kind.repositoryFor(asked.q);
+    if (repository === null) return res.status(400).json({ error: 'q needs more than quotes' });
+    const spec = repository ? { ...kind.spec, repository } : kind.spec;
     const page = asked.limit * ID_PAGE_FACTOR;
-    const parsed = parseNativeQuery(spec, { q: asked.q, pageSize: String(page) }, access);
+    const listQuery = repository ? { pageSize: String(page) } : { q: asked.q, pageSize: String(page) };
+    const parsed = parseNativeQuery(spec, listQuery, access);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
 
     const { criteria, orderBy } = nativeCriteria(spec, parsed, access);
@@ -89,8 +105,11 @@ exports.getSuggestions = async (req, res) => {
     });
 
     // Cut to limit before the join so it looks up parents for the rows answered, not the whole page.
-    let kept = redactAllForAccess(spec.entity, rows, access).filter(row => hasLabel(row, kind)).slice(0, asked.limit);
+    let kept = redactAllForAccess(spec.entity, rows, access)
+      .filter(row => hasLabel(row, kind.label) || (kind.fallback && hasLabel(row, 'projectId')))
+      .slice(0, asked.limit);
     if (spec.parentJoin) kept = await spec.parentJoin(access, kept);
+    if (kind.fallback) kept = kept.filter(row => hasLabel(row, kind.label) || hasLabel(row, kind.fallback));
     const items = kept.map(row => slim(row, kind));
 
     if (isAnonymous(access)) res.setHeader('Cache-Control', `public, max-age=${MAX_AGE}`);
