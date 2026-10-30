@@ -7,7 +7,8 @@
  * row's kind (`./kinds.js`) and ids only; the worker re-reads the row through the kind's repository,
  * so a redelivered or late message sends the current state. `syncVersion` is the version, raised by
  * every ENGAGE ingest write and every domain `writeRow`: a row whose `syncOut[name].sentVersion` is
- * at or past it is not sent again.
+ * at or past it is not sent again. A send that resolves `{ status: 'held' }` records nothing, so the
+ * version stays owed and the kind's reconcile lists it once the consumer wants the row.
  */
 
 const queues = require('../jobs/queue-client');
@@ -244,6 +245,10 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
       update: (mutate) => updateRow(repo, row.id, row.projectId, mutate)
     });
     const status = (result && result.status) || 'sent';
+    if (status === 'held') {
+      logger.info(`[sync-out] ${job.consumer} held ${job.id}, version ${version} left unsent`, job);
+      return { status };
+    }
     const { row: stored } = await recordOutcome(repo, consumer, row,
       { status, version, record: result && result.record, at: new Date().toISOString() });
     // A write landed while this one was sending, so what reached the consumer may be older than the row.
