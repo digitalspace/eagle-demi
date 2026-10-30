@@ -32,6 +32,7 @@ const OBJECT_ID = /^[0-9a-f]{24}$/;
 const ENV = {
   SYNC_OUT_QUEUE: 'sync-out',
   SYNC_OUT_EAGLE_ENABLED: 'true',
+  SYNC_OUT_EAGLE_NATIVE_ENABLED: 'true',
   EAGLE_PROTECTED_API_BASE: API,
   EAGLE_KC_CLIENT_ID: 'demi-sync-out',
   EAGLE_KC_CLIENT_SECRET: 'not-a-real-value',
@@ -67,9 +68,13 @@ function nativeRow(overrides = {}) {
   };
 }
 
-/** Every comment period row by id, writes guarded on `_etag` as Cosmos replace and create are. */
+/**
+ * Every comment period row by id, writes guarded on `_etag` as Cosmos replace and create are. Set
+ * `store.conflicts` to n to lose the next n writes to a concurrent writer.
+ */
 function wireStore(t, rows) {
   const store = new Map(rows.map(row => [row.id, { ...row, _etag: 'e1' }]));
+  store.conflicts = 0;
   let writes = 0;
   t.mock.method(commentPeriods, 'readForWrite', async (id) =>
     (store.has(String(id)) ? structuredClone(store.get(String(id))) : null));
@@ -81,7 +86,9 @@ function wireStore(t, rows) {
   t.mock.method(commentPeriods, 'upsert', async (item, current) => {
     const stored = store.get(item.id);
     if (!current && stored) throw Object.assign(new Error('exists'), { code: 409 });
-    if (current && (!stored || current._etag !== stored._etag)) {
+    const lost = store.conflicts > 0 || (current && (!stored || current._etag !== stored._etag));
+    if (lost) {
+      store.conflicts = Math.max(store.conflicts - 1, 0);
       throw Object.assign(new Error('precondition'), { code: 412 });
     }
     writes += 1;
@@ -108,8 +115,8 @@ function wireQueue(t) {
 }
 
 /**
- * Fake eagle-api and Keycloak. `routes` maps `METHOD path` to a reply, a list served in order, or a function
- * of the request body; a reply `{ lost: true }` rejects as a dropped connection.
+ * Fake eagle-api and Keycloak. `routes` maps `METHOD path`, or `METHOD *` for any path, to a reply, a list
+ * served in order, or a function of the request body; a reply `{ lost: true }` rejects as a dropped connection.
  */
 function wireEagle(t, routes) {
   const calls = [];
@@ -118,7 +125,7 @@ function wireEagle(t, routes) {
     const method = opts.method || 'GET';
     if (url === `${ISSUER}/protocol/openid-connect/token`) return Response.json({ access_token: 'token', expires_in: 300 });
     const key = `${method} ${url.slice(API.length)}`;
-    const route = routes[key];
+    const route = routes[key] || routes[`${method} *`];
     const body = opts.body ? JSON.parse(opts.body) : undefined;
     // Recorded before the check: the engine turns the thrown assertion into a retry, not a test failure.
     calls.push({ key, body });
@@ -242,9 +249,11 @@ test('sync-out of DEMI-native comment periods', async (t) => {
 
     const results = await Promise.all([run(), run()]);
 
+    const minted = calls[0].body._id;
     assert.deepStrictEqual(keys(calls), ['POST /commentperiod']);
-    assert.deepStrictEqual(results.map(r => r.status || 'retry').sort(), ['retry', 'sent']);
-    assert.strictEqual(store.get(ROW_ID).eagleId, calls[0].body._id);
+    assert.deepStrictEqual(results.filter(r => r.status), [{ status: 'sent', eagleId: minted }]);
+    assert.deepStrictEqual(results.filter(r => !r.status), [{ retryQueued: 2 }]);
+    assert.strictEqual(store.get(ROW_ID).eagleId, minted);
     assert.strictEqual(store.get(ROW_ID).syncOut.eagle.status, 'sent');
   });
 
@@ -267,15 +276,28 @@ test('sync-out of DEMI-native comment periods', async (t) => {
   await t.test('a lapsed creating claim is retaken with the stored eagleId, not a new one', async (tt) => {
     const minted = eagle.mintEagleId();
     const lapsed = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    wireStore(tt, [nativeRow({ eagleId: minted, syncOut: { eagle: { status: 'creating', claim: 'dead', claimedAt: lapsed } } })]);
+    const store = wireStore(tt, [nativeRow({
+      eagleId: minted, syncOut: { eagle: { status: 'creating', claim: 'dead', claimedAt: lapsed } }
+    })]);
     wireParent(tt);
     wireQueue(tt);
-    const calls = wireEagle(tt, { 'POST /commentperiod': { body: { _id: minted } } });
+    let claimDuringPost = null;
+    const calls = wireEagle(tt, {
+      'POST /commentperiod': (body) => {
+        claimDuringPost = store.get(ROW_ID).syncOut.eagle.claim;
+        return accept(body);
+      }
+    });
 
     await run();
 
     assert.strictEqual(calls[0].body._id, minted);
     assert.strictEqual(logged('info', 'minted Eagle id').length, 0, 'nothing minted');
+    assert.match(claimDuringPost, /^[0-9a-f-]{36}$/, 'this delivery holds a claim of its own during the POST');
+    const row = store.get(ROW_ID);
+    assert.strictEqual(row.eagleId, minted);
+    assert.strictEqual(row.syncOut.eagle.status, 'sent');
+    assert.strictEqual(row.syncOut.eagle.claim, undefined, 'the dead claim is gone');
   });
 
   await t.test('a parent project without an eagleId ends failed, POSTs nothing and logs the error line',
@@ -323,7 +345,8 @@ test('sync-out of DEMI-native comment periods', async (t) => {
       assert.notStrictEqual(row.eagleId, '5cf00c03a266b7e18775ffff');
       assert.strictEqual(row.syncOut.eagle.status, 'failed');
       assert.strictEqual(row.syncOut.eagle.strayEagleId, '5cf00c03a266b7e18775ffff');
-      assert.strictEqual(logged('error', 'not re-keyed').length, 1);
+      const [line] = logged('error', 'not re-keyed');
+      assert.strictEqual(line.arguments[1].mirrorRowId, '5cf00c03a266b7e18775ffff', 'names the extra DEMI row');
 
       await run(message({ attempt: MAX_ATTEMPTS }), { attempt: MAX_ATTEMPTS });
       assert.strictEqual(calls.length, 1, 'the retry does not POST a second stray');
@@ -348,5 +371,160 @@ test('sync-out of DEMI-native comment periods', async (t) => {
     assert.deepStrictEqual(keys(calls), [put, 'POST /commentperiod']);
     assert.strictEqual(calls[1].body._id, minted);
     assert.strictEqual(store.get(ROW_ID).syncOut.eagle.sentVersion, 2);
+  });
+
+  await t.test('wants ENGAGE rows always, native rows only with SYNC_OUT_EAGLE_NATIVE_ENABLED', () => {
+    const engage = { id: 'engage-42', sourceSystem: 'engage' };
+    const native = nativeRow();
+    const eagleOwned = { id: 'cp-1', sourceSystem: 'eagle' };
+
+    assert.deepStrictEqual([engage, native, eagleOwned].map(eagle.wants), [true, true, false]);
+
+    delete process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED;
+    assert.deepStrictEqual([engage, native, eagleOwned, native].map(eagle.wants), [true, false, false, false]);
+    assert.strictEqual(logged('info', 'SYNC_OUT_EAGLE_NATIVE_ENABLED is not true').length, 1, 'logged once, not per row');
+  });
+
+  await t.test('a 2xx without _id whose PUT of the minted id matches is sent', async (tt) => {
+    const store = wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'POST /commentperiod': { body: {} }, 'PUT *': { body: { matchedCount: 1 } } });
+
+    const result = await run();
+
+    const minted = calls[0].body._id;
+    assert.deepStrictEqual(keys(calls), ['POST /commentperiod', `PUT /commentperiod/${minted}`]);
+    assert.strictEqual(result.status, 'sent');
+    assert.strictEqual(store.get(ROW_ID).eagleId, minted);
+    assert.strictEqual(Object.hasOwn(store.get(ROW_ID).syncOut.eagle, 'strayEagleId'), false);
+  });
+
+  await t.test('a 2xx without _id whose PUT finds nothing is a stray with no known id', async (tt) => {
+    const store = wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'POST /commentperiod': { body: {} }, 'PUT *': { body: { matchedCount: 0 } } });
+
+    assert.deepStrictEqual(await run(), { retryQueued: 2 });
+
+    assert.deepStrictEqual(keys(calls), ['POST /commentperiod', `PUT /commentperiod/${calls[0].body._id}`]);
+    const entry = store.get(ROW_ID).syncOut.eagle;
+    assert.strictEqual(entry.status, 'failed');
+    assert.strictEqual(entry.strayEagleId, null);
+  });
+
+  await t.test('a 409 whose PUT finds nothing fails the attempt and keeps the minted id', async (tt) => {
+    const store = wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'POST /commentperiod': { status: 409 }, 'PUT *': { body: { matchedCount: 0 } } });
+
+    assert.deepStrictEqual(await run(), { retryQueued: 2 });
+
+    assert.deepStrictEqual(keys(calls), ['POST /commentperiod', `PUT /commentperiod/${calls[0].body._id}`]);
+    const row = store.get(ROW_ID);
+    assert.strictEqual(row.eagleId, calls[0].body._id);
+    assert.strictEqual(row.syncOut.eagle.status, 'failed');
+    assert.strictEqual(Object.hasOwn(row.syncOut.eagle, 'strayEagleId'), false, 'a 409 is not a stray');
+  });
+
+  await t.test('the stray marker survives a write lost to a concurrent writer', async (tt) => {
+    const store = wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    wireEagle(tt, {
+      'POST /commentperiod': () => {
+        store.conflicts = 1;
+        return { body: { _id: '5cf00c03a266b7e18775ffff' } };
+      }
+    });
+
+    await run();
+
+    assert.strictEqual(store.get(ROW_ID).syncOut.eagle.strayEagleId, '5cf00c03a266b7e18775ffff');
+  });
+
+  await t.test('the stray marker is stored even when another delivery took the claim', async (tt) => {
+    const store = wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    wireEagle(tt, {
+      'POST /commentperiod': () => {
+        const row = store.get(ROW_ID);
+        store.set(ROW_ID, { ...row, syncOut: { eagle: { ...row.syncOut.eagle, claim: 'other' } }, _etag: 'taken' });
+        return { body: { _id: '5cf00c03a266b7e18775ffff' } };
+      }
+    });
+
+    await run();
+
+    const entry = store.get(ROW_ID).syncOut.eagle;
+    assert.strictEqual(entry.strayEagleId, '5cf00c03a266b7e18775ffff');
+    assert.strictEqual(entry.claim, 'other', 'the other delivery\'s claim is left alone');
+  });
+
+  await t.test('a stray marker no write could store is named in the error line', async (tt) => {
+    const store = wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    wireEagle(tt, {
+      'POST /commentperiod': () => {
+        store.conflicts = 99;
+        return { body: { _id: '5cf00c03a266b7e18775ffff' } };
+      }
+    });
+
+    await run();
+    store.conflicts = 0;
+
+    const [line] = logged('error', 'stray Eagle id 5cf00c03a266b7e18775ffff not recorded');
+    assert.ok(line, 'the error line names the stray');
+    assert.strictEqual(line.arguments[1].strayEagleId, '5cf00c03a266b7e18775ffff');
+  });
+
+  await t.test('a deleted native row DELETEs its minted id', async (tt) => {
+    const minted = eagle.mintEagleId();
+    const store = wireStore(tt, [nativeRow({
+      eagleId: minted, isDeleted: true, syncVersion: 2, syncOut: { eagle: { status: 'sent', sentVersion: 1 } }
+    })]);
+    wireParent(tt);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { [`DELETE /commentperiod/${minted}`]: {} });
+
+    await run();
+
+    assert.deepStrictEqual(keys(calls), [`DELETE /commentperiod/${minted}`]);
+    assert.strictEqual(store.get(ROW_ID).syncOut.eagle.sentVersion, 2);
+  });
+
+  await t.test('a deleted native row never sent makes no call', async (tt) => {
+    const store = wireStore(tt, [nativeRow({ isDeleted: true })]);
+    wireParent(tt);
+    wireQueue(tt);
+    const calls = wireEagle(tt, {});
+
+    const result = await run();
+
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(result.status, 'skipped');
+    assert.strictEqual(store.get(ROW_ID).eagleId, null);
+  });
+
+  await t.test('a deleted native row holding a stray DELETEs nothing and fails', async (tt) => {
+    const minted = eagle.mintEagleId();
+    const store = wireStore(tt, [nativeRow({
+      eagleId: minted, isDeleted: true, syncOut: { eagle: { status: 'failed', strayEagleId: '5cf00c03a266b7e18775ffff' } }
+    })]);
+    wireParent(tt);
+    wireQueue(tt);
+    const calls = wireEagle(tt, {});
+
+    await run(message({ attempt: MAX_ATTEMPTS }), { attempt: MAX_ATTEMPTS });
+
+    assert.deepStrictEqual(calls, []);
+    const entry = store.get(ROW_ID).syncOut.eagle;
+    assert.strictEqual(entry.status, 'failed');
+    assert.match(entry.error, /stored in Eagle as 5cf00c03a266b7e18775ffff/);
   });
 });

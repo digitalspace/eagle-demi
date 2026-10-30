@@ -21,7 +21,6 @@ const { isScanCleared } = require('../repositories/documents');
 const NAME = 'eagle';
 /** Rows created in DEMI: sent under an Eagle id DEMI mints, never joined by metURL. */
 const NATIVE = 'demi';
-const SENT_SOURCES = Object.freeze(['engage', NATIVE]);
 const TIMEOUT_MS = 30000;
 const ERROR_BODY_CHARS = 300;
 /** A create claim older than this belongs to a delivery that died: past a token, a GET, a PUT and a POST at TIMEOUT_MS each (120s). */
@@ -138,7 +137,7 @@ function bodyFor(row, s, project = row.eagleProjectId) {
   };
 }
 
-const claimHeld = (entry, now) => Boolean(entry) && entry.status === 'creating' &&
+const claimHeld = (entry, now) => entry && entry.status === 'creating' &&
   now - Date.parse(entry.claimedAt) < CLAIM_LEASE_MS;
 
 /** An ObjectId-shaped id: 4-byte seconds then 8 random bytes, so Eagle's `_id` order stays creation order. */
@@ -223,19 +222,19 @@ async function refreshClaim(row, update, claim) {
 }
 
 /**
- * End this delivery's create claim with `status` and any `extra` entry fields, storing `eagleId` when given.
- * A lost claim is left alone.
+ * End this delivery's create claim with `status`, storing `eagleId` when given. A lost claim keeps its
+ * status; `extra` entry fields are written either way.
  */
-function endClaim(update, claim, status, eagleId = null, extra = {}) {
+function endClaim(update, claim, status, eagleId = null, extra = null) {
   return update((current) => {
     const entry = (current.syncOut && current.syncOut[NAME]) || {};
     const ours = entry.claim === claim;
-    if (!ours && !eagleId) return null;
+    if (!ours && !eagleId && !extra) return null;
     const { claim: _claim, claimedAt: _claimedAt, ...rest } = entry;
     return {
       ...current,
       ...(eagleId ? { eagleId } : {}),
-      syncOut: { ...current.syncOut, [NAME]: ours ? { ...rest, ...extra, status } : entry }
+      syncOut: { ...current.syncOut, [NAME]: ours ? { ...rest, ...extra, status } : { ...entry, ...extra } }
     };
   });
 }
@@ -325,10 +324,6 @@ async function create(s, row, body, update, logFields, goneId) {
  * answer was lost, or another delivery won: the period exists, so PUT.
  */
 async function createNative(s, row, body, update, logFields) {
-  const entry = (row.syncOut && row.syncOut[NAME]) || {};
-  if (Object.hasOwn(entry, 'strayEagleId')) {
-    throw new Error(`row ${row.id} was stored in Eagle as ${entry.strayEagleId}, not ${row.eagleId}; not POSTed again`);
-  }
   const claimed = await claimMinted(row, update, COMMENT_PERIOD);
   if (claimed.missing) return { status: 'skipped' };
   const { claim, eagleId } = claimed;
@@ -343,19 +338,32 @@ async function createNative(s, row, body, update, logFields) {
       }
     } else if (!res.ok) {
       throw failure('POST', '/commentperiod', res);
-    } else if (!res.body || String(res.body._id) !== eagleId) {
-      // eagle-api ignored `_id`: each POST adds another Eagle period, so the stored stray stops every retry.
-      stray = { strayEagleId: res.body && res.body._id ? String(res.body._id) : null };
-      logger.error(`[sync-out eagle] eagle-api stored row ${row.id} as ${stray.strayEagleId}, not ${eagleId}; not re-keyed`,
-        { ...fields, ...stray });
-      throw new Error(`eagle-api ignored _id ${eagleId} for row ${row.id}`);
+    } else {
+      const answered = res.body && res.body._id ? String(res.body._id) : null;
+      // An answer without `_id` may still be ours: a PUT that matches shows Eagle stored it under our id.
+      if (answered !== eagleId && (answered || !await put(s, eagleId, body, fields))) {
+        // eagle-api ignored `_id`: each POST adds another Eagle period, so the stored stray stops every retry.
+        stray = { strayEagleId: answered };
+        logger.error(`[sync-out eagle] eagle-api stored row ${row.id} as ${answered}, not ${eagleId}; not re-keyed. ` +
+          `${answered} is also the id of the DEMI mirror row its echo made`, { ...fields, ...stray, mirrorRowId: answered });
+        throw new Error(`eagle-api ignored _id ${eagleId} for row ${row.id}`);
+      }
     }
     await endClaim(update, claim, 'sent');
     return sent(eagleId, body);
   } catch (err) {
-    await endClaim(update, claim, 'failed', null, stray).catch((releaseErr) => logger.error('[sync-out eagle] claim not released',
-      { ...fields, error: releaseErr.message }));
+    await endClaim(update, claim, 'failed', null, stray).catch((releaseErr) => logger.error(
+      `[sync-out eagle] claim not released${stray ? `, stray Eagle id ${stray.strayEagleId} not recorded` : ''}`,
+      { ...fields, ...stray, error: releaseErr.message }));
     throw err;
+  }
+}
+
+/** A native row Eagle stored under another id: any further POST or DELETE only adds to what must be cleared by hand. */
+function refuseStray(row) {
+  const entry = (row.syncOut && row.syncOut[NAME]) || {};
+  if (Object.hasOwn(entry, 'strayEagleId')) {
+    throw new Error(`row ${row.id} was stored in Eagle as ${entry.strayEagleId}, not ${row.eagleId}; nothing sent`);
   }
 }
 
@@ -402,12 +410,34 @@ function eagleReader(get) {
   };
 }
 
+let nativeOffLogged = false;
+
+/** ENGAGE rows, and native rows once SYNC_OUT_EAGLE_NATIVE_ENABLED is on; the refusal is logged once per off spell. */
+function wants(row) {
+  if (!row || !isScanCleared(row)) return false;
+  if (row.sourceSystem === 'engage') return true;
+  if (row.sourceSystem !== NATIVE) return false;
+  if (settings.eagle.nativeEnabled) {
+    nativeOffLogged = false;
+    return true;
+  }
+  if (!nativeOffLogged) {
+    nativeOffLogged = true;
+    logger.info('[sync-out eagle] SYNC_OUT_EAGLE_NATIVE_ENABLED is not true, DEMI-native rows are not sent',
+      { rowId: row.id });
+  }
+  return false;
+}
+
 /** Write the row's current state to Eagle. `update` is the engine's etag-guarded write of this row. */
 async function send(row, { update }) {
   const s = requireSettings();
   const native = row.sourceSystem === NATIVE;
   if (!native && !row.eagleProjectId) throw new Error(`row ${row.id} has no eagleProjectId`);
-  const logFields = { rowId: row.id, engagementId: row.engagementId, eagleId: row.eagleId || null };
+  const logFields = {
+    rowId: row.id, ...(native ? {} : { engagementId: row.engagementId }), eagleId: row.eagleId || null
+  };
+  if (native) refuseStray(row);
   if (isDeletedRow(row)) {
     if (!row.eagleId) return { status: 'skipped' };
     await remove(s, row.eagleId, logFields);
@@ -445,9 +475,9 @@ async function send(row, { update }) {
 module.exports = {
   name: NAME,
   enabled: () => settings.eagle.enabled,
-  wants: (row) => Boolean(row) && SENT_SOURCES.includes(row.sourceSystem) && isScanCleared(row),
+  wants,
   // Another delivery holds a live create claim: its outcome, not this one's failure, settles the row.
-  inFlight: (entry) => claimHeld(entry, Date.now()),
+  inFlight: (entry) => Boolean(claimHeld(entry, Date.now())),
   send,
   bodyFor,
   call,

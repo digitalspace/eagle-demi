@@ -105,6 +105,11 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing; reconcile re-queues.
 - A Flip that needs sync-out adds its kind to `kinds.js`, its consumer to the list in `index.js`, and calls `enqueueQuietly` after its write.
 - `test/sync-out/sync-out.test.js` holds the echo test: a sync-out create, eagle-api's echo through the mirror answered 2xx, the DEMI fields and `syncVersion` unchanged, and no second send.
+- Comment periods created in DEMI are sent only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Leave it off until eagle-api's POST keeps the `_id` DEMI sends.
+- If eagle-api stores a native period under another id, the row gets `syncOut.eagle.strayEagleId` and the error line `not re-keyed`. Sync-out then sends nothing for that row. To clear it:
+  1. Delete the Eagle period `strayEagleId` through eagle-api.
+  2. Delete the DEMI comment period whose `id` is `strayEagleId`. Its echo created that row.
+  3. Remove `strayEagleId` from the DEMI row and queue the row again. The next delivery POSTs the row's own `eagleId`.
 
 `test/sync-out-triggers.test.js` sits at the test root beside `test/sync-out/sync-out.test.js`.
 
