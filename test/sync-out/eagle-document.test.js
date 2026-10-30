@@ -154,7 +154,8 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.strictEqual(store.row.syncOut.eagle.published, false);
   });
 
-  await t.test('a level unchanged since the last send PUTs only', async (tt) => {
+  await t.test('a level unchanged since the last send PUTs only, with no comment period milestone set', async (tt) => {
+    delete process.env.EAGLE_ENGAGE_MILESTONE;
     const store = wireStore(tt, sentRow(false, { read: STAFF_ACL, isPublished: false }));
     const calls = wireEagle(tt, { [PUT]: {} });
 

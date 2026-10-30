@@ -95,7 +95,7 @@ async function setPublished(s, row, published, logFields) {
 /** Write the row's fields and level to its Eagle document. `update` is the engine's etag-guarded write of this row. */
 async function send(row, { update }) {
   if (!wants(row)) return { status: 'skipped' };
-  const s = requireSettings();
+  const s = requireSettings({ milestone: false });
   const eagleId = String(row.eagleId);
   const published = Array.isArray(row.read) && row.read.includes('public');
   const logFields = { rowId: row.id, eagleId, kind: 'document' };
