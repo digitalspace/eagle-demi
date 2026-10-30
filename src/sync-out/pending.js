@@ -9,7 +9,7 @@ const { logger } = require('../utils/logger');
 
 const TAG = '[sync-out pending]';
 
-// Required on call, here and below: kinds.js registers this file's hook and index.js requires kinds.js.
+// Required on call, here and below: index.js requires kinds.js, which will register this hook per kind.
 const kinds = () => require('./kinds');
 
 /** The repository, consumers and enqueue of `kind`, as the sync-out worker uses them. */
@@ -19,6 +19,9 @@ function depsFor(kind) {
   return { kind, repo, consumers: syncOut.consumers.filter(c => consumers.includes(c.name)), enqueue: syncOut.enqueue };
 }
 
+/** The app setting that turns a consumer on, e.g. SYNC_OUT_EAGLE_ENABLED. */
+const enableSetting = (consumer) => `SYNC_OUT_${consumer.name.toUpperCase()}_ENABLED`;
+
 /** True when `consumer` wants `row`, has not sent its version, and no live delivery holds a create claim on it. */
 function owes(consumer, row) {
   const entry = (row.syncOut && row.syncOut[consumer.name]) || {};
@@ -27,13 +30,18 @@ function owes(consumer, row) {
 }
 
 /**
- * List the kind's pending rows and, with `repair`, re-queue each. `deps` is `depsFor(kind)`, or stubs.
- * Resolves to `{ kind, listed, queued, failed }`: listed and failed hold row ids.
+ * List pending rows, re-queue each on `repair`; resolves to `{ kind, listed, queued, failed }` (row ids).
+ * A kind registers it as `(options) => reconcile(options, depsFor(kind))`; tests pass stub deps.
  */
 async function reconcile({ repair = false, log = logger } = {}, { kind, repo, consumers, enqueue }) {
   const rows = (await repo.listSyncPending()).filter(row => consumers.some(c => owes(c, row)));
   const report = { kind, listed: rows.map(row => String(row.id)), queued: 0, failed: [] };
-  if (repair) {
+  if (repair && !consumers.some(c => c.enabled())) {
+    // enqueue skips disabled consumers, so a repair run would queue nothing and still look clean.
+    report.failed = [...report.listed];
+    log.warn(`${TAG} ${kind}: ${consumers.map(enableSetting).join(', ')} not true: --repair queued nothing`,
+      { kind, listed: report.listed.length });
+  } else if (repair) {
     for (const row of rows) {
       try {
         if ((await enqueue(row, { repair: true, kind })).length) report.queued++;

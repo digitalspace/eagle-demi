@@ -461,10 +461,11 @@ async function listEveryEngage() {
 
 /**
  * Every row, deleted ones too, whose `syncVersion` the Eagle sync-out has not sent: never sent, failed,
- * or a create whose delivery died. Across partitions — for `src/sync-out/pending.js` only.
+ * or a create whose delivery died. Across partitions. For `src/sync-out/pending.js` only.
  */
 async function listSyncPending() {
   return fetchAll(CONTAINER, {
+    // Eagle is the kind's only consumer; a second one needs its own sentVersion path here.
     query: 'SELECT * FROM c WHERE c.syncVersion > 0 AND (NOT IS_NUMBER(c.syncOut.eagle.sentVersion) ' +
       'OR c.syncVersion > c.syncOut.eagle.sentVersion)'
   });

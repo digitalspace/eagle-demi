@@ -10,7 +10,7 @@ const { KINDS } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
 const TAG = '[sync-out pending]';
-const USAGE = `usage: node src/scripts/sync-out-pending.js --kind <${Object.keys(KINDS).join('|')}> [--repair]`;
+const USAGE = `usage: node src/scripts/sync-out-pending.js --kind <${Object.keys(KINDS).join('|')}> [--repair] [--help]`;
 
 function parseArgs(argv) {
   const args = { kind: null, repair: false, help: false };
@@ -25,8 +25,8 @@ function parseArgs(argv) {
   return args;
 }
 
-async function run({ kind, repair }) {
-  const report = await reconcile({ repair }, depsFor(kind));
+async function run({ kind, repair }, deps = depsFor(kind)) {
+  const report = await reconcile({ repair }, deps);
   if (report.failed.length) throw new Error(`${report.failed.length} row(s) not re-queued: ${report.failed.join(', ')}`);
   return report;
 }

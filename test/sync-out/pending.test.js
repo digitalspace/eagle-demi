@@ -11,9 +11,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const cache = require('../../src/repositories/cache');
+const commentPeriods = require('../../src/repositories/comment-periods');
+const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
-const { reconcile } = require('../../src/sync-out/pending');
-const { parseArgs } = require('../../src/scripts/sync-out-pending');
+const { logger } = require('../../src/utils/logger');
+const { depsFor, reconcile } = require('../../src/sync-out/pending');
+const { parseArgs, run } = require('../../src/scripts/sync-out-pending');
 
 const KIND = 'commentPeriod';
 const EAGLE_ID = '6720b3c0a1b2c3d4e5f60718';
@@ -28,21 +31,20 @@ function nativeRow(entry) {
 
 const lapsedCreate = () => nativeRow({ status: 'creating', claim: 'c-1', claimedAt: minutesAgo(10) });
 
-function harness(rows) {
-  const writes = [];
+function harness(rows, { wants = () => true, enabled = () => true, answer = async () => [eagle.name] } = {}) {
   const queued = [];
   const lines = [];
   const deps = {
     kind: KIND,
-    repo: { listSyncPending: async () => rows, upsert: async (item) => writes.push(item) },
-    consumers: [{ name: eagle.name, wants: () => true, inFlight: eagle.inFlight }],
+    repo: { listSyncPending: async () => rows },
+    consumers: [{ name: eagle.name, enabled, wants, inFlight: eagle.inFlight }],
     enqueue: async (row, options) => {
       queued.push({ id: row.id, options });
-      return [eagle.name];
+      return answer();
     }
   };
   const log = { info: (line) => lines.push(line), warn: (line) => lines.push(line) };
-  return { deps, writes, queued, lines, log };
+  return { deps, queued, lines, log };
 }
 
 test('a create whose lease lapsed is listed and, on repair, queued once as a repair', async () => {
@@ -64,18 +66,59 @@ test('a row whose sentVersion is current is not queued', async () => {
   assert.strictEqual(h.queued.length, 0);
 });
 
-test('without repair nothing is queued', async () => {
+test('a row no consumer wants is not listed', async () => {
+  const h = harness([lapsedCreate()], { wants: () => false });
+  const report = await reconcile({ log: h.log }, h.deps);
+  assert.deepStrictEqual(report.listed, []);
+});
+
+test('without repair the row is listed and nothing is queued', async () => {
   const h = harness([lapsedCreate()]);
-  await reconcile({ log: h.log }, h.deps);
+  const report = await reconcile({ log: h.log }, h.deps);
+  assert.deepStrictEqual(report.listed, ['cp-native-1']);
   assert.strictEqual(h.queued.length, 0);
 });
 
-test('a store run writes nothing and logs the count line', async (t) => {
+test('a store run writes no report and logs the count line', async (t) => {
   const put = t.mock.method(cache, 'put', async () => {});
   const h = harness([lapsedCreate()]);
   await reconcile({ store: true, log: h.log }, h.deps);
-  assert.strictEqual(h.writes.length + put.mock.callCount(), 0);
+  assert.strictEqual(put.mock.callCount(), 0);
   assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 0 queued`]);
+});
+
+test('a row whose enqueue throws lands in failed and logs a warning', async () => {
+  const h = harness([lapsedCreate()], { answer: async () => { throw new Error('queue down'); } });
+  const report = await reconcile({ repair: true, log: h.log }, h.deps);
+  assert.deepStrictEqual(report.failed, ['cp-native-1']);
+  assert.match(h.lines[0], /could not re-queue row cp-native-1/);
+});
+
+test('a row enqueue sends to no consumer is not counted as queued', async () => {
+  const h = harness([lapsedCreate()], { answer: async () => [] });
+  const report = await reconcile({ repair: true, log: h.log }, h.deps);
+  assert.strictEqual(report.queued, 0);
+});
+
+test('repair with every consumer disabled fails the rows and names the setting', async () => {
+  const h = harness([lapsedCreate()], { enabled: () => false });
+  const report = await reconcile({ repair: true, log: h.log }, h.deps);
+  assert.deepStrictEqual(report.failed, ['cp-native-1']);
+  assert.match(h.lines[0], /SYNC_OUT_EAGLE_ENABLED not true/);
+});
+
+test('depsFor wires a kind to its repository, its consumers and the sync-out enqueue', () => {
+  const deps = depsFor(KIND);
+  assert.strictEqual(deps.repo, commentPeriods);
+  assert.deepStrictEqual(deps.consumers, [eagle]);
+  assert.strictEqual(deps.enqueue, syncOut.enqueue);
+});
+
+test('the CLI run fails when a row was not re-queued', async (t) => {
+  t.mock.method(logger, 'info', () => {});
+  t.mock.method(logger, 'warn', () => {});
+  const h = harness([lapsedCreate()], { enabled: () => false });
+  await assert.rejects(run({ kind: KIND, repair: true }, h.deps), /1 row\(s\) not re-queued: cp-native-1/);
 });
 
 test('the CLI refuses a kind sync-out does not register', () => {
