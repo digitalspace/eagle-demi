@@ -523,6 +523,25 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 5);
   });
 
+  await t.test('a period created in DEMI and then in Eagle holds its Eagle copy and no other', async () => {
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, {
+        ...EAGLE_BY_DATASET,
+        CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-copy', project: 'P1' }, { _id: 'CP-new', project: 'P1' }]
+      }),
+      commentPeriods: {
+        listEveryByProject: async (projectId, access) => {
+          assertSystem(access);
+          const copied = { id: 'CP-demi', projectId: '207', sourceSystem: 'demi', eagleId: 'CP-copy' };
+          return ({ 207: [...PERIOD_ROWS[207], copied] })[projectId] || [];
+        }
+      }
+    }));
+
+    assert.deepStrictEqual(summary.commentPeriods.eagleOnly, ['CP-new']);
+    assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, []);
+  });
+
   // POST /notifications writes a DEMI row with no Eagle copy until sync-out covers notifications.
   await t.test('a notification created in DEMI is not drift', async () => {
     const summary = await reconcile([], makeDeps({
