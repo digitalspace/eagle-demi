@@ -1362,7 +1362,7 @@ test('PUT /eagle/organizations/:eagleId on an organization DEMI created', async 
       sourceSystem: 'demi',
       name: 'Sunny Ridge Aggregates',
       description: 'Gravel proponent.',
-      country: 'Canada',
+      country: 'United States',
       postal: 'V2C 2B2',
       province: 'AB',
       city: 'Kamloops',
@@ -1414,34 +1414,31 @@ test('PUT /eagle/organizations/:eagleId on an organization DEMI created', async 
     });
   });
 
-  await t.test('the fields DEMI writes survive different Eagle values', async () => {
-    const { store } = partitionedCosmos(t, 'kind', [demiRow()]);
-
-    const doc = eagleOrganization();
-
-    await push(doc);
-
-    const row = store.get(NATIVE_KEY);
-    assert.deepStrictEqual(row.sources.eagle, doc, 'the echo landed on this row');
-    assert.strictEqual(row.name, 'Sunny Ridge Aggregates');
-    assert.strictEqual(row.description, 'Gravel proponent.');
-    assert.strictEqual(row.companyLegal, 'Sunny Ridge Aggregates Inc.');
-    assert.strictEqual(row.addedBy, 'staff-1');
-    assert.strictEqual(row.dateUpdated, '2026-10-29T18:00:00.000Z');
-    assert.strictEqual(row.isPublished, false);
-    assert.deepStrictEqual(row.read, ['staff', 'sysadmin']);
-  });
-
   await t.test('an Eagle delete leaves the native row live and only lands in the raw copy', async () => {
     const { store } = partitionedCosmos(t, 'kind', [demiRow()]);
+    const doc = eagleOrganization({ isDeleted: true });
 
-    const res = await push(eagleOrganization({ isDeleted: true }));
+    const res = await push(doc);
 
     assert.deepStrictEqual(res.body, { id: NATIVE_ID, action: 'upsert' });
-    const row = store.get(NATIVE_KEY);
-    assert.deepStrictEqual(row.read, ['staff', 'sysadmin']);
-    assert.strictEqual(row.isPublished, false);
-    assert.strictEqual(row.sources.eagle.isDeleted, true);
+    assert.deepStrictEqual(store.get(NATIVE_KEY), {
+      ...demiRow(), sources: { eagle: doc }, eaglePushedAt: PUSHED_AT
+    });
+  });
+
+  await t.test('a mirror row stored under the Eagle id wins over a DEMI row naming that id', async () => {
+    const mirrorKey = `Organization::${ORG_EAGLE_ID}`;
+    const mirror = {
+      id: ORG_EAGLE_ID, eagleId: ORG_EAGLE_ID, kind: 'Organization', sourceSystem: 'eagle',
+      name: 'Old name', read: PUBLIC_ACL
+    };
+    const { store } = partitionedCosmos(t, 'kind', [mirror, demiRow()]);
+
+    const res = await push(eagleOrganization());
+
+    assert.deepStrictEqual(res.body, { id: ORG_EAGLE_ID, action: 'upsert' });
+    assert.strictEqual(store.get(mirrorKey).name, 'Nicomen Energy Ltd');
+    assert.deepStrictEqual(store.get(NATIVE_KEY), demiRow());
   });
 
   await t.test('a push of an id no row holds still creates the Eagle mirror row', async () => {

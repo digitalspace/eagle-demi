@@ -1,7 +1,7 @@
 'use strict';
 
-// An in-memory `updates` container that evaluates the SQL the repository sends, so a dropped clause
-// stops being enforced and its test goes red. `evaluate` throws on any term it does not know.
+// An in-memory `updates` container, and an `evaluate` the `lists` tests use too, that run the SQL a
+// repository sends: a dropped clause stops being enforced. `evaluate` throws on any term it does not know.
 
 const cosmos = require('../../src/db/cosmos-nosql');
 

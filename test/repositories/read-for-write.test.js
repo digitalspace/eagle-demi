@@ -150,7 +150,7 @@ test('readForWrite on the parent-partitioned mirrors', async (t) => {
   });
 
   const EAGLE_ID = '588511d0aaecd9001b825604';
-  const projectRows =(t, items) =>
+  const projectRows = (t, items) =>
     t.mock.method(cosmos, 'query', async () => ({ items: items.map(row => ({ ...row })) }));
 
   await t.test('a Track row beside its eagle-<id> twin is not refused, and the Track row wins', async () => {
