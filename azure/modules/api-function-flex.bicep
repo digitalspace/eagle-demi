@@ -324,6 +324,9 @@ param syncOutEagleEnabled bool = false
 @description('Also send comment periods created in DEMI. Turn on only when eagle-api\'s POST honours the `_id` DEMI sends and answers a duplicate `_id` with 409.')
 param syncOutEagleNativeEnabled bool = false
 
+@description('Also send document edits and level changes to eagle-api, for documents that already hold an Eagle id. Off until the document cutover.')
+param syncOutEagleDocumentEnabled bool = false
+
 @description('eagle-api base the sync-out consumer writes to, e.g. https://eagle-test.apps.silver.devops.gov.bc.ca/api. Not eagleApiBase, which is the public read path.')
 param eagleProtectedApiBase string = ''
 
@@ -789,6 +792,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SYNC_OUT_EAGLE_NATIVE_ENABLED'
           value: syncOutEagleNativeEnabled ? 'true' : 'false'
+        }
+        {
+          name: 'SYNC_OUT_EAGLE_DOCUMENT_ENABLED'
+          value: syncOutEagleDocumentEnabled ? 'true' : 'false'
         }
         {
           name: 'EAGLE_PROTECTED_API_BASE'

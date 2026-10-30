@@ -1,15 +1,7 @@
 'use strict';
 
-/**
- * Sync-out: DEMI-owned rows written to other systems, one queue message per consumer.
- *
- * A consumer is `{ name, enabled(), wants(row), send(row, { update }) }`. The message carries the
- * row's kind (`./kinds.js`) and ids only; the worker re-reads the row through the kind's repository,
- * so a redelivered or late message sends the current state. `syncVersion` is the version, raised by
- * every ENGAGE ingest write and every domain `writeRow`: a row whose `syncOut[name].sentVersion` is
- * at or past it is not sent again. A send that resolves `{ status: 'held' }` records nothing, so the
- * version stays owed and the kind's reconcile lists it once the consumer wants the row.
- */
+// Consumer: `{ name, enabled(), wants(row), send(row, { update }) }`. Messages carry kind and ids only, so a
+// late one sends the row as it is now; `sentVersion` at `syncVersion` is not resent; `{ status: 'held' }` records nothing.
 
 const queues = require('../jobs/queue-client');
 const { kindOf, versionOf, DEFAULT_KIND } = require('./kinds');
@@ -191,12 +183,8 @@ async function giveUp({ message, job, repo, consumer, row, version }, err) {
 }
 
 /**
- * One delivery. Earlier failures re-queue with a doubled delay and complete the original. The last
- * attempt never throws, wherever it failed: it records the failure and moves the message to the poison
- * queue itself, so the alert line is written exactly once.
- *
- * @param {object} [delivery] `attempt` is the message's `dequeueCount`, `maxAttempts` host.json's
- *   `maxDequeueCount`; api/index.js reads both.
+ * One delivery; `attempt` is the host's `dequeueCount`, `maxAttempts` host.json's `maxDequeueCount`. The last
+ * attempt never throws: it records the failure and parks the message itself, so the alert is written once.
  */
 async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {}) {
   const state = { message, job: null, repo: null, consumer: null, row: null, version: 0 };
@@ -269,4 +257,4 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
   }
 }
 
-module.exports = { enqueue, enqueueQuietly, consumers, run, RETRY_VISIBILITY_SECONDS };
+module.exports = { enqueue, enqueueQuietly, consumers, run, updateRow, RETRY_VISIBILITY_SECONDS };

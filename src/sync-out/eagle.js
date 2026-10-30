@@ -32,11 +32,12 @@ function clearToken() {
   cachedToken = null;
 }
 
-function requireSettings() {
+/** The eagle-api settings; `milestone: false` for a consumer that sends no comment period. */
+function requireSettings({ milestone = true } = {}) {
   const s = settings.eagle;
   const missing = [
     ['EAGLE_PROTECTED_API_BASE', s.apiBase], ['EAGLE_KC_CLIENT_ID', s.clientId],
-    ['EAGLE_KC_CLIENT_SECRET', s.clientSecret], ['EAGLE_ENGAGE_MILESTONE', s.milestone]
+    ['EAGLE_KC_CLIENT_SECRET', s.clientSecret], ...(milestone ? [['EAGLE_ENGAGE_MILESTONE', s.milestone]] : [])
   ].filter(([, value]) => !value).map(([name]) => name);
   if (missing.length) throw new Error(`sync-out eagle is not configured: ${missing.join(', ')} not set`);
   return s;
@@ -207,7 +208,7 @@ async function claimMinted(row, update, kind) {
   return { claim, eagleId };
 }
 
-/** Restart the lease just before the POST, or throw when another delivery has taken the claim. */
+/** Restart the lease just before the next eagle-api write, or throw when another delivery has taken the claim. */
 async function refreshClaim(row, update, claim) {
   let ours = false;
   await update((current) => {
@@ -219,7 +220,7 @@ async function refreshClaim(row, update, claim) {
       syncOut: { ...current.syncOut, [NAME]: { ...entry, claimedAt: new Date().toISOString() } }
     };
   });
-  if (!ours) throw new Error(`the create claim on row ${row.id} was taken by another delivery`);
+  if (!ours) throw new Error(`the send claim on row ${row.id} was taken by another delivery`);
 }
 
 /**
@@ -498,7 +499,9 @@ module.exports = {
   inFlight: (entry) => Boolean(claimHeld(entry, Date.now())),
   send,
   bodyFor,
+  requireSettings,
   call,
+  failure,
   token,
   clearToken,
   mintEagleId,

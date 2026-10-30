@@ -451,6 +451,8 @@ const config = {
       // On only when eagle-api's POST honours the `_id` DEMI sends and answers a duplicate `_id` with 409.
       // Before that every native create lands as a stray.
       get nativeEnabled() { return envTrim('SYNC_OUT_EAGLE_NATIVE_ENABLED') === 'true'; },
+      // Documents go to Eagle only with this on as well, so registering the kind does not send them.
+      get documentEnabled() { return envTrim('SYNC_OUT_EAGLE_DOCUMENT_ENABLED') === 'true'; },
       // eagle-api's protected `/api`, not EAGLE_API_BASE: that one is the public base the seed reads.
       get apiBase() { return envTrim('EAGLE_PROTECTED_API_BASE').replace(/\/+$/, ''); },
       // The realm eagle-api trusts is DEMI's own, so the issuer comes from KEYCLOAK_URL and KEYCLOAK_REALM.

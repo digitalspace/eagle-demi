@@ -112,6 +112,8 @@ param syncOutQueue = 'sync-out'
 param syncOutEagleEnabled = true
 // Native comment periods stay off until eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409.
 param syncOutEagleNativeEnabled = false
+// Documents stay off until the document cutover.
+param syncOutEagleDocumentEnabled = false
 param eagleProtectedApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api'
 // Eagle List item "Time Limit Imposition", the milestone on every ENGAGE comment period in Eagle test and prod.
