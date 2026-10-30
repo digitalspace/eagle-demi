@@ -13,10 +13,7 @@ const {
   eagleOnlyProjectId, isEagleOnlyProjectId, heldRead
 } = require('../merge/project');
 const { DEMI_ONLY_FIELDS } = require('../ownership/project');
-const { SYNC_OUT_FIELDS } = require('../ownership/sync-out');
-
-const TWIN_CARRY_FIELDS = DEMI_ONLY_FIELDS.filter(f => !SYNC_OUT_FIELDS.includes(f));
-
+const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
 const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
 const { pickParent } = require('../helpers/parent-admit');
@@ -33,6 +30,8 @@ const boundariesRepo = require('../repositories/boundaries');
 const linksRepo = require('../repositories/links');
 const chunksRepo = require('../repositories/chunks');
 const { ensureProjectShortLink, carryShortLink } = require('../helpers/short-links');
+
+const TWIN_CARRY_FIELDS = DEMI_ONLY_FIELDS.filter(f => !SYNC_STATE_FIELDS.includes(f));
 
 /** Every stage `--only` accepts. */
 const ALL_STAGES = ['projects', 'documents', 'boundaries'];

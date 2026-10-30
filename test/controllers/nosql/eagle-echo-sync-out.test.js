@@ -103,3 +103,22 @@ test('an eagle-api echo keeps the sync-out state', async (t) => {
     assert.deepStrictEqual(syncStateOf(written), SYNC_STATE);
   });
 });
+
+test('a project echo takes the Track epic_guid over an Eagle id stored by sync-out', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const stored = storedEagleProject({ eagleId: '5f1e0c3a9b2d4e0017a6c001' });
+  projectReadForWriteFromGet(t);
+  t.mock.method(projects, 'getByEagleId', async () => structuredClone(stored));
+  let saved;
+  t.mock.method(projects, 'upsert', async (item) => { saved = item; return item; });
+  t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
+  t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
+
+  const res = mockRes();
+  await projectController.upsertFromEagle({
+    params: { eagleId: PROJECT_EAGLE_ID }, query: {}, body: { doc: eagleProject() }, user: STAFF
+  }, res);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(saved.eagleId, '588511d0aaecd9001b825604');
+});

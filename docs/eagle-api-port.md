@@ -169,7 +169,7 @@ Rules:
 
 Ownership per phase:
 - Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:491-494` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`), which has no caller until F1 maps `id` to `_id`.
-- Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/ownership/project.js`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `controllers/nosql/project.js:493` and remove the dead pins-shape branch in `carryEagleOnlyFields` (`src/merge/project.js`) and its tests (`test/merge/project.test.js`).
+- Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/ownership/project.js`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `src/ownership/project.js:111-114` (the `PUT_IGNORED_FIELDS` block) and remove the dead pins-shape branch in `carryEagleOnlyFields` (`src/merge/project.js`) and its tests (`test/merge/project.test.js`).
 - Sync-out: DEMI pushes the project's organization id list and published flag into eagle-api's `pins` and `pinsRead`. eagle-api project PUT does not touch `pins` (`api/controllers/project.js` has no `pins` reference on `origin/develop`), so the push uses the eagle-api pin routes: `POST /project/:id/pin` for ids to add, `DELETE /project/:id/pin/:pinId` for ids to remove, `PUT /project/:id/pin/publish` or `/unpublish` for the flag. The consumer reads the eagle-api list first and sends the difference.
 
 Open before build:

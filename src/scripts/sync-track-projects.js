@@ -12,6 +12,7 @@ const {
 const { writeGuarded } = require('../helpers/etag-write');
 const { TRACK_PRECEDENCE, mergeTrackProject } = require('../merge/project');
 const { deriveAssessments } = require('../merge/assessments');
+const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
 const { clientToken, fetchTrackProjects, trackApiToExtract } = require('../seed/sources');
 const config = require('../config');
 const linksRepository = require('../repositories/links');
@@ -229,7 +230,9 @@ async function syncProjects(apiProjects, opts = {}) {
         await insert(id, async () => {
           const twin = (live && await repo.getById(systemAccess(), relink.id)) || relink;
           const merged = mergeTrackProject(track, eagleOf(twin), mergeOpts);
-          return withDerived({ ...twin, ...merged, read: twin.read, isPublished: twin.isPublished }, twin);
+          // The Track row is a new record: it must not inherit the twin's sync-out state.
+          const carried = Object.fromEntries(Object.entries(twin).filter(([k]) => !SYNC_STATE_FIELDS.includes(k)));
+          return withDerived({ ...carried, ...merged, read: twin.read, isPublished: twin.isPublished }, twin);
         });
         continue;
       }
