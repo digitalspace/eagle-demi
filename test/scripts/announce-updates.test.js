@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * The scheduled announce: which rows it lists, and that each goes through the claim so a scheduled
- * Update is emailed once, only once it is due, and never from a stale read.
- *
- * The container is in memory (helpers/updates-store) and enforces the claim's own condition, so the
- * race between listing a row and claiming it is played out rather than asserted.
- */
+// Each due Update goes through the claim: emailed once, only once due, never from a stale read. The
+// in-memory store (helpers/updates-store) enforces the claim's condition, so the race is played out.
 
 process.env.NODE_ENV = 'test';
 
@@ -18,6 +13,8 @@ const notify = require('../../src/services/notify');
 const { logger } = require('../../src/utils/logger');
 const { updatesStore } = require('../helpers/updates-store');
 const { parentProject, parentNotification } = require('../helpers/update-parents');
+const updateDomain = require('../../src/domain/updates');
+const { ctxFor } = require('../helpers/domain-ctx');
 const script = () => require('../../src/scripts/announce-updates');
 const run = (opts) => script().run(opts);
 
@@ -152,6 +149,36 @@ test('scheduled announce', async (t) => {
 
     await run({ now: at(2) });
     assert.deepStrictEqual(sent.map(s => s.id), ['soon']);
+  });
+
+  await t.test('an Update written in DEMI and then published is emailed once its publishDate passes', async (t) => {
+    // The row the domain writes (isPublished, status, its publishDate, notify fields null) must
+    // pass the due list and the claim as a pushed row does.
+    const sent = wire();
+    parentProject(t, { id: 'demi-p', name: 'Open', read: ['public', 'staff', 'sysadmin'] });
+    parentNotification(t, null);
+    const { row } = updatesStore(t, []);
+    const staff = ctxFor(['staff']);
+
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse(NOW) });
+    const created = await updateDomain.create(staff, { projectId: '5c1f7a3e9b1d2c0012340001', headline: 'Open house' });
+    assert.strictEqual(created.status, 'ok', JSON.stringify(created));
+    const id = created.value.id;
+    const published = await updateDomain.update(staff, id, { status: 'published', publishDate: at(30) });
+    t.mock.timers.reset();
+    assert.strictEqual(published.status, 'ok', JSON.stringify(published));
+    assert.strictEqual(row(id).sourceSystem, 'demi');
+    assert.strictEqual(row(id).publishDate, at(30), 'scheduled, not stamped with the write time');
+
+    await run({ now: NOW });
+    assert.deepStrictEqual(sent, [], 'not due before its publishDate');
+    assert.strictEqual(row(id).notifiedAt, null);
+
+    await run({ now: at(31) });
+    assert.deepStrictEqual(sent.map(s => s.id), [id]);
+    assert.strictEqual(sent[0].headline, 'Open house');
+    assert.strictEqual(row(id).notifiedBy, 'demi');
+    assert.strictEqual(row(id).notifySentAt, at(31));
   });
 
   await t.test('a refused send (4xx) keeps the claim, is recorded, and is never retried', async () => {

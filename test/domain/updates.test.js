@@ -12,9 +12,9 @@ const audit = require('../../src/utils/audit');
 const updates = require('../../src/repositories/updates');
 const documents = require('../../src/repositories/documents');
 const updateParent = require('../../src/helpers/update-parent');
-const { resolveAccess } = require('../../src/helpers/access-sql');
 const update = require('../../src/domain/updates');
 const { fakeImages } = require('../helpers/update-images-store');
+const { ctxFor } = require('../helpers/domain-ctx');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -41,10 +41,6 @@ const DRAFT = Object.freeze({
   ...STORED, status: 'draft', active: false, attachments: [], read: ['staff', 'sysadmin'], isPublished: false
 });
 
-function ctxFor(roles, username = 'idir-staff') {
-  const req = { user: { sub: 'kc-1', preferred_username: username, realm_access: { roles } }, headers: {} };
-  return { access: resolveAccess(req), req };
-}
 const STAFF = ctxFor(['staff']);
 
 /** Fake storage holding `stored`, the two parents, and PUBLIC_DOC as the one public document. */
