@@ -6,7 +6,8 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
-  eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll, oneRowOf
+  eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll, oneRowOf,
+  EAGLE_SYNC_PENDING
 } = require('./_sql');
 
 const CONTAINER = 'lists';
@@ -63,10 +64,7 @@ async function readForWriteByEagleId(eagleId, kind) {
 async function listSyncPending(kind) {
   const { clause, params } = eq(PARTITION_FIELD, String(kind), '@kind');
   return fetchAll(CONTAINER, {
-    // Eagle is the only consumer; a second one needs its own sentVersion path here.
-    query: `SELECT * FROM c WHERE ${clause} AND c.syncVersion > 0 AND ` +
-      '(NOT IS_NUMBER(c.syncOut.eagle.sentVersion) OR c.syncVersion > c.syncOut.eagle.sentVersion)',
-    parameters: params
+    query: `SELECT * FROM c WHERE ${clause} AND ${EAGLE_SYNC_PENDING}`, parameters: params
   }, { partitionKey: String(kind) });
 }
 
