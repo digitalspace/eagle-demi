@@ -532,14 +532,17 @@ test('reconcile', async (t) => {
       commentPeriods: {
         listEveryByProject: async (projectId, access) => {
           assertSystem(access);
+          // `mirrored` has the shape the period mirror writes: `eagleId` equal to `id`.
+          const mirrored = { id: 'CP1', projectId: '207', sourceSystem: 'eagle', eagleId: 'CP1' };
           const copied = { id: 'CP-demi', projectId: '207', sourceSystem: 'demi', eagleId: 'CP-copy' };
-          return ({ 207: [...PERIOD_ROWS[207], copied] })[projectId] || [];
+          return ({ 207: [mirrored, copied] })[projectId] || [];
         }
       }
     }));
 
     assert.deepStrictEqual(summary.commentPeriods.eagleOnly, ['CP-new']);
     assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, []);
+    assert.deepStrictEqual(summary.commentPeriods.unpublishedOrDeleted, []);
   });
 
   // POST /notifications writes a DEMI row with no Eagle copy until sync-out covers notifications.

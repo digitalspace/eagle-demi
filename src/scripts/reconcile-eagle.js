@@ -263,8 +263,10 @@ function aclMismatch(rows, keyOf, eagleRead, parentReadOf = () => null, derive =
 function diffById(rows, eagleIds, parentPublished) {
   const created = row => row.sourceSystem === 'demi';
   const copies = new Set(rows.filter(row => created(row) && row.eagleId).map(row => String(row.eagleId)));
-  return diff(rows.filter(row => !created(row)), row => String(row.id),
-    new Set([...eagleIds].filter(id => !copies.has(id))), undefined, parentPublished);
+  const result = diff(rows.filter(row => !created(row)), row => String(row.id), eagleIds, undefined, parentPublished);
+  const notCopy = id => !copies.has(id);
+  return { ...result, eagleOnly: result.eagleOnly.filter(notCopy),
+    unresolvedParent: result.unresolvedParent.filter(notCopy) };
 }
 
 /** The `lists` drift. */
