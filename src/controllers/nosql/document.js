@@ -1473,7 +1473,7 @@ exports.upsertFromEagle = async (req, res) => {
     }
 
     // Unfiltered: a gated read misses a sealed or read-less row, and a create over it never lands.
-    // Then a DEMI or ENGAGE row sync-out sent under this Eagle id, so its echo makes no twin.
+    // Then a DEMI row sync-out sent under this Eagle id, so its echo makes no twin.
     const readExisting = async () => await documents.readForWrite(eagleId, parent.id)
       || await documents.readForWriteByEagleId(eagleId, parent.id);
     let existing = await readExisting();
@@ -1492,7 +1492,15 @@ exports.upsertFromEagle = async (req, res) => {
         sealed = current;
         return null;
       }
-      if (ownedOutsideEagle(current)) return { ...current, eagleId, sources: { ...current.sources, eagle: doc } };
+      if (ownedOutsideEagle(current)) {
+        const kept = { ...current, eagleId, sources: { ...current.sources, eagle: doc } };
+        const eagleOut = { ...(current.syncOut && current.syncOut.eagle) };
+        // Marks that Eagle dropped the record, so sync-out stops sending to it until Eagle has it again.
+        if (doc.isDeleted === true) eagleOut.eagleDeleted = true;
+        else delete eagleOut.eagleDeleted;
+        if (doc.isDeleted === true || current.syncOut) kept.syncOut = { ...current.syncOut, eagle: eagleOut };
+        return kept;
+      }
       const row = transformDocument(
         doc, parent.id, listLookupFrom(doc, req.body.labels),
         { existing: current, projectRead: parent.kind === 'notification' ? undefined : parent.read }
@@ -1535,6 +1543,9 @@ exports.upsertFromEagle = async (req, res) => {
     if (ownedOutsideEagle(from)) {
       logger.info('[Document Controller] eagle push kept to the raw copy on a row it does not own',
         { eagleId, id: saved.id, projectId: saved.projectId, sourceSystem: from.sourceSystem });
+      if (doc.isDeleted === true) {
+        logger.warn(`[Document Controller] eagle deleted document ${eagleId} that DEMI row ${saved.id} sends to; sync-out stops`);
+      }
     }
 
     // A document that moved project lands in a NEW partition and Cosmos leaves the old row behind,

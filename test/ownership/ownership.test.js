@@ -36,6 +36,13 @@ test('sharedFields names a field two owners claim', () => {
   assert.deepStrictEqual(sharedFields({ eagle: ['pins', 'region'], demi: ['tags', 'pins'] }), ['pins: eagle, demi']);
 });
 
+test('document: only a DEMI row is owned outside Eagle', () => {
+  assert.strictEqual(document.ownedOutsideEagle({ sourceSystem: 'demi' }), true);
+  assert.strictEqual(document.ownedOutsideEagle({ sourceSystem: 'engage' }), false);
+  assert.strictEqual(document.ownedOutsideEagle({ sourceSystem: 'eagle' }), false);
+  assert.strictEqual(document.ownedOutsideEagle(null), false);
+});
+
 test('project: no owner list names a legislation block, which Eagle owns by pattern', () => {
   const named = Object.values(project.OWNERS).flat().filter(f => project.LEGISLATION_KEY.test(f));
   assert.deepStrictEqual(named, []);

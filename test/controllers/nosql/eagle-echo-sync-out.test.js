@@ -12,6 +12,7 @@ const projects = require('../../../src/repositories/projects');
 const documents = require('../../../src/repositories/documents');
 const lists = require('../../../src/repositories/lists');
 const aiSearch = require('../../../src/search/ai-search');
+const { logger } = require('../../../src/utils/logger');
 const projectController = require('../../../src/controllers/nosql/project');
 const documentController = require('../../../src/controllers/nosql/document');
 const organizationController = require('../../../src/controllers/nosql/organization');
@@ -109,8 +110,17 @@ test('a document echo and the row sync-out sent it from', async (t) => {
   const DEMI_ROW_ID = '7d1e2f40-0000-4000-8000-0000000000d1';
   const echo = { _id: DOC_EAGLE_ID, project: PROJECT_EAGLE_ID, displayName: 'Eagle title', internalURL: 'eagle/key.pdf', read: ['public', 'sysadmin'] };
 
-  /** Mirror `echo` over the stored `rows`, returning the response and every write. */
-  async function mirror(rows) {
+  const demiRow = (overrides = {}) => ({
+    id: DEMI_ROW_ID, eagleId: DOC_EAGLE_ID, projectId: '207', sourceSystem: 'demi', displayName: 'DEMI title',
+    s3Key: 'demi/key.pdf', read: ['staff', 'sysadmin'], isPublished: false, _etag: 'e1', ...overrides
+  });
+  const deletedEcho = { ...echo, isDeleted: true };
+  const warnedDeleted = () => logger.warn.mock.calls.filter(c => String(c.arguments[0]).includes(`eagle deleted document ${DOC_EAGLE_ID}`));
+
+  /** Mirror `doc` over the stored `rows`, returning the response and every write. */
+  async function mirror(rows, doc = echo) {
+    t.mock.method(logger, 'info', () => {});
+    t.mock.method(logger, 'warn', () => {});
     t.mock.method(projects, 'getByEagleId', async () => storedEagleProject());
     t.mock.method(documents, 'readForWrite', async (id) => structuredClone(rows.find(r => r.id === id) || null));
     t.mock.method(documents, 'readForWriteByEagleId', async (eagleId) =>
@@ -120,16 +130,13 @@ test('a document echo and the row sync-out sent it from', async (t) => {
     t.mock.method(aiSearch, 'writeAcls', async (_index, list) => list.length);
     const res = mockRes();
     await documentController.upsertFromEagle({
-      params: { eagleId: DOC_EAGLE_ID }, query: {}, user: STAFF, body: { doc: echo, pushedAt: 1000 }
+      params: { eagleId: DOC_EAGLE_ID }, query: {}, user: STAFF, body: { doc, pushedAt: 1000 }
     }, res);
     return { res, writes };
   }
 
   await t.test('onto a DEMI row takes only the Eagle id, raw copy and push stamp', async () => {
-    const stored = {
-      id: DEMI_ROW_ID, eagleId: DOC_EAGLE_ID, projectId: '207', sourceSystem: 'demi', displayName: 'DEMI title',
-      s3Key: 'demi/key.pdf', read: ['staff', 'sysadmin'], isPublished: false, _etag: 'e1', ...structuredClone(SYNC_STATE)
-    };
+    const stored = demiRow(structuredClone(SYNC_STATE));
 
     const { res, writes } = await mirror([stored]);
 
@@ -141,6 +148,38 @@ test('a document echo and the row sync-out sent it from', async (t) => {
     assert.deepStrictEqual(rest, stored, 'sourceSystem, s3Key, read and metadata as stored');
     assert.deepStrictEqual(sources.eagle, echo);
     assert.strictEqual(eaglePushedAt, 1000);
+  });
+
+  await t.test('onto a DEMI row with no sync-out state adds none', async () => {
+    const { writes } = await mirror([demiRow()]);
+
+    assert.strictEqual(Object.hasOwn(writes[0].item, 'syncOut'), false);
+  });
+
+  await t.test('a delete onto a DEMI row marks Eagle\'s copy deleted, keeps the row and warns', async () => {
+    const { res, writes } = await mirror([demiRow(structuredClone(SYNC_STATE))], deletedEcho);
+
+    assert.deepStrictEqual(res.body, { id: DEMI_ROW_ID, action: 'upsert' });
+    const { item } = writes[0];
+    assert.deepStrictEqual(item.syncOut.eagle, { ...SYNC_STATE.syncOut.eagle, eagleDeleted: true });
+    assert.deepStrictEqual(item.read, ['staff', 'sysadmin'], 'the DEMI row is not narrowed');
+    assert.strictEqual(Object.hasOwn(item, 'isDeleted'), false);
+    assert.strictEqual(warnedDeleted().length, 1);
+  });
+
+  await t.test('a delete onto a DEMI row never sent marks it too', async () => {
+    const { writes } = await mirror([demiRow()], deletedEcho);
+
+    assert.deepStrictEqual(writes[0].item.syncOut, { eagle: { eagleDeleted: true } });
+  });
+
+  await t.test('a later echo of the document clears the mark', async () => {
+    const stored = demiRow({ syncOut: { eagle: { ...SYNC_STATE.syncOut.eagle, eagleDeleted: true } } });
+
+    const { writes } = await mirror([stored], echo);
+
+    assert.deepStrictEqual(writes[0].item.syncOut.eagle, SYNC_STATE.syncOut.eagle);
+    assert.strictEqual(warnedDeleted().length, 0);
   });
 
   await t.test('for an Eagle id no row holds still creates the Eagle row', async () => {
