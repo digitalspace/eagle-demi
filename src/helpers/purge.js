@@ -9,14 +9,8 @@ const { systemAccess } = require('./access-sql');
 const aiSearch = require('../search/ai-search');
 const { logger } = require('../utils/logger');
 
-/**
- * Remove a document, its chunks, and both search-index entries.
- * Index cleanup is best-effort and reported rather than thrown.
- *
- * Index first, then Cosmos, row last: a request that dies part way leaves the row, so a retried
- * DELETE finds the chunks again. The other order leaves index rows nothing can reach. For the same
- * reason a chunk removal that threw or left chunks behind keeps the row: `rowKept: true`.
- */
+// Index first, row last, so a retried DELETE finds the chunks again; a chunk removal that threw or
+// left chunks keeps the row (`rowKept: true`). Index cleanup is reported, never thrown.
 async function purgeDocument({ id, projectId, s3Key, pdfTitle } = {}) {
   const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(id);
   const removedFromSearch = await aiSearch.deleteFromIndex(aiSearch.indexes().documents, id);
