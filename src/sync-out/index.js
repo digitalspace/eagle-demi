@@ -1,7 +1,7 @@
 'use strict';
 
-// Consumer: `{ name, enabled(), wants(row), send(row, { update }) }`. Messages carry kind and ids only, so a
-// late one sends the row as it is now; `sentVersion` at `syncVersion` is not resent; `{ status: 'held' }` records nothing.
+// Consumer: `{ name, enableSettings, enabled(), wants(row), send(row, { update }) }`. Messages hold kind and ids only;
+// late ones send the current row; `sentVersion` at `syncVersion` is not resent; `{ status: 'held' }` records nothing.
 
 const queues = require('../jobs/queue-client');
 const { kindOf, versionOf, DEFAULT_KIND, COMMENT_PERIOD, DOCUMENT } = require('./kinds');
