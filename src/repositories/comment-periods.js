@@ -7,7 +7,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem,
-  assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria
+  assertFilterable, readForWriteIn, oneRowOf, fetchAll, readPage, NOT_DELETED, withCriteria, EAGLE_SYNC_PENDING
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 const { cosmosKind, dialAllows } = require('../helpers/native-query');
@@ -464,11 +464,7 @@ async function listEveryEngage() {
  * or a create whose delivery died. Across partitions. For `src/sync-out/pending.js` only.
  */
 async function listSyncPending() {
-  return fetchAll(CONTAINER, {
-    // Eagle is the kind's only consumer; a second one needs its own sentVersion path here.
-    query: 'SELECT * FROM c WHERE c.syncVersion > 0 AND (NOT IS_NUMBER(c.syncOut.eagle.sentVersion) ' +
-      'OR c.syncVersion > c.syncOut.eagle.sentVersion)'
-  });
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${EAGLE_SYNC_PENDING}` });
 }
 
 module.exports = {
