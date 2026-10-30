@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * Sync-out consumer: ENGAGE-owned and DEMI-native comment periods written into Eagle through eagle-api.
- *
- * To remove it: this file, its line in `./index.js`, the `syncOut.eagle` block in `src/config.js`, the
- * SYNC_OUT_EAGLE_ENABLED and EAGLE_* app settings in `azure/modules/api-function-flex.bicep`, and the
- * Eagle half of `src/scripts/reconcile-engage.js`, which reads `bodyFor` and `name` from here.
- */
+// Sync-out consumer: ENGAGE-owned and DEMI-native comment periods written into Eagle through eagle-api.
+// Also wired in `./index.js`, `syncOut.eagle` in `src/config.js`, EAGLE_* bicep settings, reconcile-engage.js.
 
 const crypto = require('node:crypto');
 const settings = require('../config').syncOut;
@@ -147,9 +142,8 @@ function mintEagleId() {
 }
 
 /**
- * Claim the create, so two deliveries never both POST. Returns the claim token, an `eagleId` another
- * writer stored meanwhile, or `missing` when the row is gone. `goneId` is a stored id Eagle no longer
- * holds; the claim clears it, so the echo of the new period can join the row by metURL.
+ * Claim an ENGAGE create so two deliveries never both POST: the claim, an `eagleId` stored meanwhile, or
+ * `missing`. `goneId`, a stored id Eagle lost, is cleared so the new period's echo joins by metURL.
  */
 async function claimCreate(row, update, goneId) {
   const claim = crypto.randomUUID();
@@ -257,7 +251,7 @@ async function put(s, eagleId, body, logFields) {
   return true;
 }
 
-/** DELETE one Eagle period; one Eagle no longer holds counts as deleted. */
+/** DELETE one Eagle period; a 404 counts as deleted. */
 async function remove(s, eagleId, logFields) {
   const path = `/commentperiod/${encodeURIComponent(eagleId)}`;
   const res = await call(s, 'DELETE', path, null, { ...logFields, eagleId });
