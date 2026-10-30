@@ -576,6 +576,9 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
           {
             path: '/companyLegal/?'
           }
+          {
+            path: '/eagleId/?'
+          }
         ]
         excludedPaths: noIndex
       }
