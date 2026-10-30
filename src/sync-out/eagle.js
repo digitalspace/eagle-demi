@@ -177,8 +177,14 @@ async function claimMinted(row, update, kind) {
   let held = false;
   let minted = false;
   let eagleId = null;
+  let strayRow = null;
   const result = await update((current) => {
     const entry = current.syncOut && current.syncOut[NAME];
+    // A delivery that read the row before another recorded a stray must not take the claim and POST again.
+    if (Object.hasOwn(entry || {}, 'strayEagleId')) {
+      strayRow = current;
+      return null;
+    }
     held = claimHeld(entry, Date.now());
     if (held) return null;
     minted = !current.eagleId;
@@ -193,6 +199,7 @@ async function claimMinted(row, update, kind) {
     };
   });
   if (result.status === 'missing') return { missing: true };
+  if (strayRow) refuseStray(strayRow);
   if (held) throw new Error(`another delivery is creating the Eagle copy of ${kind} ${row.id}`);
   if (minted) {
     logger.info(`[sync-out eagle] minted Eagle id ${eagleId} for ${kind} ${row.id}`, { rowId: row.id, eagleId, kind });
@@ -338,12 +345,26 @@ async function createNative(s, row, body, update, logFields) {
       if (answered !== eagleId && (answered || !await put(s, eagleId, body, fields))) {
         // eagle-api ignored `_id`: each POST adds another Eagle period, so the stored stray stops every retry.
         stray = { strayEagleId: answered };
-        logger.error(`[sync-out eagle] eagle-api stored row ${row.id} as ${answered}, not ${eagleId}; not re-keyed. ` +
-          `${answered} is also the id of the DEMI mirror row its echo made`, { ...fields, ...stray, mirrorRowId: answered });
+        if (answered) {
+          logger.error(`[sync-out eagle] eagle-api stored row ${row.id} as ${answered}, not ${eagleId}; not re-keyed. ` +
+            `${answered} is also the id of the DEMI mirror row its echo made`, { ...fields, ...stray, mirrorRowId: answered });
+        } else {
+          logger.error(`[sync-out eagle] row ${row.id}: Eagle stored the period under an unknown id; find it by project and dates`,
+            { rowId: row.id, eagleProjectId: body.project });
+        }
         throw new Error(`eagle-api ignored _id ${eagleId} for row ${row.id}`);
       }
     }
     await endClaim(update, claim, 'sent');
+    // eagle-api awaits its DEMI push before answering, so the echo has landed; Session consistency can still miss the claim.
+    try {
+      if (await mirroredAsEagleRow(eagleId, row)) {
+        logger.error(`[sync-out eagle] row ${row.id}: echo created mirror twin ${eagleId}; merge by hand`,
+          { rowId: row.id, eagleId, twinRowId: eagleId });
+      }
+    } catch (e) {
+      logger.warn(`[sync-out eagle] row ${row.id}: twin check failed`, { rowId: row.id, eagleId, error: e.message });
+    }
     return sent(eagleId, body);
   } catch (err) {
     await endClaim(update, claim, 'failed', null, stray).catch((releaseErr) => logger.error(
@@ -427,6 +448,8 @@ function wants(row) {
 async function send(row, { update }) {
   const s = requireSettings();
   const native = row.sourceSystem === NATIVE;
+  // Checked here as well as in wants(): queued messages and retries reach send() without it.
+  if (native && !settings.eagle.nativeEnabled) return { status: 'skipped' };
   if (!native && !row.eagleProjectId) throw new Error(`row ${row.id} has no eagleProjectId`);
   const logFields = {
     rowId: row.id, ...(native ? {} : { engagementId: row.engagementId }), eagleId: row.eagleId || null

@@ -110,7 +110,7 @@ param searchDefinitionsQueue = 'search-definitions'
 // `eagle-sync-out-client-secret` in demi-kv-test, named in optionalSecretNames above.
 param syncOutQueue = 'sync-out'
 param syncOutEagleEnabled = true
-// Native comment periods stay off until eagle-api's POST keeps the `_id` DEMI sends.
+// Native comment periods stay off until eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409.
 param syncOutEagleNativeEnabled = false
 param eagleProtectedApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api'

@@ -321,7 +321,7 @@ param syncOutQueue string = ''
 @description('Send DEMI-owned comment periods on to eagle-api. Off until the cutover turns it on.')
 param syncOutEagleEnabled bool = false
 
-@description('Also send comment periods created in DEMI. Off until eagle-api\'s POST keeps the `_id` DEMI sends.')
+@description('Also send comment periods created in DEMI. Turn on only when eagle-api\'s POST honours the `_id` DEMI sends and answers a duplicate `_id` with 409.')
 param syncOutEagleNativeEnabled bool = false
 
 @description('eagle-api base the sync-out consumer writes to, e.g. https://eagle-test.apps.silver.devops.gov.bc.ca/api. Not eagleApiBase, which is the public read path.')

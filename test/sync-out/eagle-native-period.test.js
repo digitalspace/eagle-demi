@@ -383,6 +383,61 @@ test('sync-out of DEMI-native comment periods', async (t) => {
     delete process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED;
     assert.deepStrictEqual([engage, native, eagleOwned, native].map(eagle.wants), [true, false, false, false]);
     assert.strictEqual(logged('info', 'SYNC_OUT_EAGLE_NATIVE_ENABLED is not true').length, 1, 'logged once, not per row');
+
+    process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED = 'true';
+    assert.strictEqual(eagle.wants(native), true);
+    delete process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED;
+    assert.strictEqual(eagle.wants(native), false);
+    assert.strictEqual(logged('info', 'SYNC_OUT_EAGLE_NATIVE_ENABLED is not true').length, 2, 'logged again after an on spell');
+  });
+
+  await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a queued native row is skipped before any claim or call',
+    async (tt) => {
+      delete process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED;
+      const store = wireStore(tt, [nativeRow()]);
+      wireParent(tt);
+      wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      assert.deepStrictEqual(await run(), { status: 'skipped' });
+
+      assert.deepStrictEqual(calls, []);
+      assert.strictEqual(store.get(ROW_ID).eagleId, null, 'no id minted');
+    });
+
+  await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a deleted native row DELETEs nothing', async (tt) => {
+    delete process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED;
+    const minted = eagle.mintEagleId();
+    wireStore(tt, [nativeRow({
+      eagleId: minted, isDeleted: true, syncVersion: 2, syncOut: { eagle: { status: 'sent', sentVersion: 1 } }
+    })]);
+    wireParent(tt);
+    wireQueue(tt);
+    const calls = wireEagle(tt, {});
+
+    assert.deepStrictEqual(await run(), { status: 'skipped' });
+    assert.deepStrictEqual(calls, []);
+  });
+
+  await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off an ENGAGE row still sends', async (tt) => {
+    delete process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED;
+    const eagleId = eagle.mintEagleId();
+    wireStore(tt, [{
+      id: 'engage-cp-1', projectId: PROJECT_ID, sourceSystem: 'engage', engagementId: 42, eagleId,
+      eagleProjectId: PROJECT_EAGLE_ID, syncVersion: 2, dateStarted: '2026-11-01T07:00:00.000Z',
+      dateCompleted: '2026-12-01T08:00:00.000Z', read: PUBLIC_ACL,
+      sources: { engage: { metURL: 'https://engage.example/42', name: 'Draft plan', isPublished: true } },
+      syncOut: { eagle: { status: 'sent', sentVersion: 1, projectId: PROJECT_EAGLE_ID } }
+    }]);
+    wireParent(tt);
+    wireQueue(tt);
+    const put = `PUT /commentperiod/${eagleId}`;
+    const calls = wireEagle(tt, { [put]: { body: { matchedCount: 1 } } });
+
+    const result = await run(message({ id: 'engage-cp-1' }));
+
+    assert.deepStrictEqual(result, { status: 'sent', eagleId });
+    assert.deepStrictEqual(keys(calls), [put]);
   });
 
   await t.test('a 2xx without _id whose PUT of the minted id matches is sent', async (tt) => {
@@ -412,6 +467,60 @@ test('sync-out of DEMI-native comment periods', async (t) => {
     const entry = store.get(ROW_ID).syncOut.eagle;
     assert.strictEqual(entry.status, 'failed');
     assert.strictEqual(entry.strayEagleId, null);
+    const [line] = logged('error', `row ${ROW_ID}: Eagle stored the period under an unknown id; find it by project and dates`);
+    assert.ok(line, 'the unknown-id error line');
+    assert.deepStrictEqual(line.arguments[1], { rowId: ROW_ID, eagleProjectId: PROJECT_EAGLE_ID });
+  });
+
+  await t.test('a stray recorded after this delivery read the row stops its claim and its POST', async (tt) => {
+    const store = wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    const readParent = projects.readForWrite;
+    // Another delivery records its stray after this one read the row, so send's own check saw none.
+    tt.mock.method(projects, 'readForWrite', async (id) => {
+      const row = store.get(ROW_ID);
+      store.set(ROW_ID, { ...row, syncOut: { eagle: { status: 'failed', strayEagleId: null } }, _etag: 'stray' });
+      return readParent(id);
+    });
+    const calls = wireEagle(tt, {});
+
+    await run(message({ attempt: MAX_ATTEMPTS }), { attempt: MAX_ATTEMPTS });
+
+    assert.deepStrictEqual(calls, []);
+    const row = store.get(ROW_ID);
+    assert.strictEqual(row.eagleId, null, 'no id minted');
+    assert.match(row.syncOut.eagle.error, /was stored in Eagle as null/);
+  });
+
+  await t.test('a create whose echo made an Eagle-owned twin row logs the twin and is still sent', async (tt) => {
+    const store = wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    const calls = wireEagle(tt, {
+      'POST /commentperiod': (body) => {
+        store.set(body._id, { id: body._id, projectId: PROJECT_ID, sourceSystem: 'eagle', eagleId: body._id, _etag: 'e1' });
+        return accept(body);
+      }
+    });
+
+    const result = await run();
+
+    const minted = calls[0].body._id;
+    assert.strictEqual(result.status, 'sent');
+    const [line] = logged('error', `row ${ROW_ID}: echo created mirror twin ${minted}; merge by hand`);
+    assert.ok(line, 'the twin error line');
+    assert.deepStrictEqual(line.arguments[1], { rowId: ROW_ID, eagleId: minted, twinRowId: minted });
+  });
+
+  await t.test('a create with no twin row logs no twin line', async (tt) => {
+    wireStore(tt, [nativeRow()]);
+    wireParent(tt);
+    wireQueue(tt);
+    wireEagle(tt, { 'POST /commentperiod': accept });
+
+    assert.strictEqual((await run()).status, 'sent');
+    assert.strictEqual(logged('error', 'mirror twin').length, 0);
   });
 
   await t.test('a 409 whose PUT finds nothing fails the attempt and keeps the minted id', async (tt) => {

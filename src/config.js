@@ -448,7 +448,8 @@ const config = {
     get queue() { return envTrim('SYNC_OUT_QUEUE'); },
     eagle: {
       get enabled() { return envTrim('SYNC_OUT_EAGLE_ENABLED') === 'true'; },
-      // Off until eagle-api's POST honours `_id`: before that every native create lands as a stray.
+      // On only when eagle-api's POST honours the `_id` DEMI sends and answers a duplicate `_id` with 409.
+      // Before that every native create lands as a stray.
       get nativeEnabled() { return envTrim('SYNC_OUT_EAGLE_NATIVE_ENABLED') === 'true'; },
       // eagle-api's protected `/api`, not EAGLE_API_BASE: that one is the public base the seed reads.
       get apiBase() { return envTrim('EAGLE_PROTECTED_API_BASE').replace(/\/+$/, ''); },
