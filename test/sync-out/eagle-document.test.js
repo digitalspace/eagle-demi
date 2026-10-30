@@ -174,6 +174,21 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.strictEqual(store.row.syncOut.eagle.published, false);
   });
 
+  await t.test('fields cleared in DEMI that eagle-api cannot clear are named in one warn line', async (tt) => {
+    const store = wireStore(tt, sentRow(true, {
+      description: '', milestoneId: null, sortOrder: 0, projectPhaseId: null,
+      sources: { eagle: { _id: EAGLE_ID, description: 'Old text', milestone: '5cf00c03a266b7e18775aa02', sortOrder: 0 } }
+    }));
+    wireEagle(tt, { [PUT]: {} });
+
+    await consumer.send(store.row, { update: store.update });
+
+    const warned = logged('warn', `document ${ROW_ID}: eagle-api cannot clear`);
+    assert.strictEqual(warned.length, 1);
+    assert.deepStrictEqual(warned[0].arguments[1].fields, ['description', 'milestoneId'],
+      'not sortOrder or projectPhaseId, which Eagle never held either');
+  });
+
   await t.test('a row without an eagleId, or one Eagle owns, is not wanted and sends nothing', async (tt) => {
     const calls = wireEagle(tt, {});
     const noId = wireStore(tt, demiRow({ eagleId: null }));

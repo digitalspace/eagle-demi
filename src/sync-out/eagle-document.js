@@ -37,6 +37,17 @@ function bodyFor(row) {
 }
 
 /**
+ * Fields cleared in DEMI that eagle-api's PUT skips, as it skips every falsy value, so Eagle keeps
+ * its old one. Against Eagle's raw copy when the row holds one, so a field Eagle never had is not named.
+ */
+function unsendable(row) {
+  const copy = row.sources && row.sources.eagle;
+  return Object.entries(PUT_FIELDS)
+    .filter(([field, eagleField]) => Object.hasOwn(row, field) && !row[field] && (!copy || Boolean(copy[eagleField])))
+    .map(([field]) => field);
+}
+
+/**
  * Only with SYNC_OUT_EAGLE_DOCUMENT_ENABLED on, and only a row DEMI or ENGAGE owns that is tied to an
  * Eagle id. send() asks too: queued messages and retries reach it without wants().
  */
@@ -122,6 +133,11 @@ async function send(row, { update }) {
   }
   const level = changed ? (published ? 'published' : 'unpublished') : 'level unchanged';
   logger.info(`[sync-out eagle] document ${row.id} sent to Eagle ${eagleId}, ${level}`, { ...logFields, published, changed });
+  const cleared = unsendable(row);
+  if (cleared.length) {
+    logger.warn(`[sync-out eagle] document ${row.id}: eagle-api cannot clear ${cleared.join(', ')}, Eagle keeps its old values`,
+      { ...logFields, fields: cleared });
+  }
   return { status: 'sent', eagleId };
 }
 
