@@ -2262,6 +2262,9 @@ paths:
         suggestion shows. A row whose label the caller may not see is left out, so FEWER than
         `limit` rows is a normal answer. No `search` analytics event is logged.
 
+        A comment period's label is `informationLabel`, or `projectName` when it has none: `q`
+        matches either, as on `GET /api/comment-periods?q=`.
+
         A 200 to an anonymous request carries `Cache-Control: public, max-age=60`. A 200 to a
         request that presented a credential carries `private, no-store`, because the rows differ
         per caller, and so does every error the endpoint itself answers. All of
@@ -2271,11 +2274,10 @@ paths:
         - name: kind
           in: query
           required: true
-          description: >-
-            What to suggest. `comment-periods` has no keyword search and is refused with 400.
+          description: What to suggest.
           schema:
             type: string
-            enum: [projects, documents, updates, notifications]
+            enum: [projects, documents, updates, notifications, comment-periods]
         - name: q
           in: query
           required: true
@@ -2300,7 +2302,8 @@ paths:
       responses:
         '200':
           description: >-
-            The best matches, at most `limit` of them, in search rank order. The fields depend on
+            The best matches, at most `limit` of them, in search rank order (comment periods: newest
+            start first). The fields depend on
             `kind`; `projectName` and `projectEagleId` come from the parent project and are left
             out when the caller cannot read it.
           content:
@@ -2368,11 +2371,28 @@ paths:
                             associatedProjectId:
                               type: string
                               nullable: true
+                        - title: comment-periods
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            informationLabel:
+                              type: string
+                              nullable: true
+                            projectId:
+                              type: string
+                            projectEagleId:
+                              type: string
+                              nullable: true
+                            projectName:
+                              type: string
+                              nullable: true
         '400':
           description: >-
-            An unknown parameter, a parameter given more than once, a `kind` off the list
-            (`comment-periods` included), `q` missing or outside 2 to 100 characters, `limit` not a
-            plain whole number between 1 and 8, or a keyword the search service could not run.
+            An unknown parameter, a parameter given more than once, a `kind` off the list, `q`
+            missing or outside 2 to 100 characters, a comment-periods `q` that is only quotes and
+            spaces, `limit` not a plain whole number between 1 and 8, or a keyword the search
+            service could not run.
         '401':
           description: A Bearer token was presented and rejected. No token gets the public view.
         '500':

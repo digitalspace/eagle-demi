@@ -31,7 +31,8 @@ const FIELDS = {
   projects: ['id', 'eagleId', 'name'],
   documents: ['id', 'displayName', 'projectId', 'projectEagleId', 'projectName'],
   updates: ['id', 'headline', 'projectId', 'projectEagleId', 'projectName', 'notificationName'],
-  notifications: ['id', 'name', 'associatedProjectId']
+  notifications: ['id', 'name', 'associatedProjectId'],
+  'comment-periods': ['id', 'informationLabel', 'projectId', 'projectEagleId', 'projectName']
 };
 
 const sources = { eagle: { id: 'e1' } };
@@ -42,19 +43,30 @@ const CONTAINERS = {
     // Public row, staff-only name: the redactor withholds the label below staff.
     { id: 'p-hidden-name', name: 'Site secret', description: 'Quarry', read: ['public'], vis: { name: 2 }, sources },
     // Older mirror rows carry an empty name rather than none.
-    { id: 'p-blank', name: '', description: 'Gravel', read: ['public'], vis: {}, sources }
+    { id: 'p-blank', name: '', description: 'Gravel', read: ['public'], vis: {}, sources },
+    { id: 'p-staff', name: 'Site staff', description: 'Pit', read: ['staff'], vis: {}, sources }
   ],
   documents: [
     { id: 'd1', projectId: 'p1', displayName: 'Site C report', documentFileName: 'a.pdf', read: ['public'], vis: {}, sources },
     { id: 'd2', projectId: 'p1', displayName: 'Site C letter', documentFileName: 'b.pdf', read: ['public'], vis: {}, sources },
     { id: 'd3', projectId: 'p1', displayName: 'Site C memo', documentFileName: 'c.pdf', read: ['public'], vis: {}, sources },
-    { id: 'd4', projectId: 'p2', displayName: 'Site D report', documentFileName: 'd.pdf', read: ['public'], vis: {}, sources }
+    { id: 'd4', projectId: 'p2', displayName: 'Site D report', documentFileName: 'd.pdf', read: ['public'], vis: {}, sources },
+    { id: 'd-hidden', projectId: 'p1', displayName: 'Site C secret', documentFileName: 'e.pdf', read: ['public'], vis: { displayName: 2 }, sources },
+    { id: 'd-blank', projectId: 'p1', displayName: '', documentFileName: 'f.pdf', read: ['public'], vis: {}, sources }
   ],
   updates: [
     { id: 'u1', projectId: EAGLE_ID, type: 'News', headline: 'Site C opens', notificationName: null, read: ['public'], vis: {}, status: 'published', publishDate: '2026-01-02T00:00:00.000Z', dateAdded: '2026-01-02T00:00:00.000Z', sources }
   ],
   notifications: [
     { id: 'n1', name: 'Site notice', associatedProjectId: 'p1', type: 'Mines', region: 'Peace', read: ['public'], vis: {}, sources }
+  ],
+  commentPeriods: [
+    { id: 'cp1', projectId: 'p1', informationLabel: 'Site C early engagement', read: ['public'], vis: {}, sources },
+    // Matched on the project name: no label of its own.
+    { id: 'cp-blank', projectId: 'p2', informationLabel: '', read: ['public'], vis: {}, sources },
+    { id: 'cp-hidden-label', projectId: 'p1', informationLabel: 'Site C secret round', read: ['public'], vis: { informationLabel: 2 }, sources },
+    // No label, and the parent is staff only.
+    { id: 'cp-orphan', projectId: 'p-staff', informationLabel: '', read: ['public'], vis: {}, sources }
   ]
 };
 
@@ -67,23 +79,29 @@ const RANKED = {
 
 const values = (spec, prefix) => spec.parameters.filter(p => p.name.startsWith(prefix)).map(p => p.value);
 
-/** The role arm and the `@xid`/`@pid`/`@eid` id lists; every other clause is the real store's. */
+/**
+ * The role arm and the `@xid`/`@pid`/`@eid` id lists; every other clause is the real store's. The
+ * project name lookup (`queryPage`) answers every project the role arm admits.
+ */
 function fakeStores(t, { fail, ranked = RANKED } = {}) {
   updates.forgetParents();
   const searches = [];
   const reads = [];
-  t.mock.method(cosmos, 'query', async (container, spec) => {
+  const admitted = (container, spec) => {
     const roles = values(spec, '@role');
+    return CONTAINERS[container].filter(row => roles.length === 0 || row.read.some(r => roles.includes(r)));
+  };
+  t.mock.method(cosmos, 'query', async (container, spec, options) => {
     const ids = [...values(spec, '@xid'), ...values(spec, '@pid')];
-    reads.push({ container, ids });
+    reads.push({ container, ids, spec, maxItemCount: options && options.maxItemCount });
     const eagleIds = values(spec, '@eid');
-    const rows = CONTAINERS[container]
-      .filter(row => roles.length === 0 || row.read.some(r => roles.includes(r)))
+    const rows = admitted(container, spec)
       .filter(row => ids.length === 0 || ids.includes(row.id))
       .filter(row => eagleIds.length === 0 || eagleIds.includes(row.eagleId));
     if (spec.query.includes('COUNT(1)')) return { items: [rows.length] };
     return { items: structuredClone(rows) };
   });
+  t.mock.method(cosmos, 'queryPage', async (container, spec) => admitted(container, spec).map(row => row.id));
   const index = kind => async (opts) => {
     searches.push(opts);
     if (fail) throw fail;
@@ -173,12 +191,57 @@ test('GET /suggest', async (t) => {
     assert.deepStrictEqual(await ids(STAFF), ['p1', 'p2', 'p-hidden-name']);
   });
 
+  await t.test('documents: a withheld or empty label drops the row; the parent project is no fallback', async (t) => {
+    fakeStores(t, { ranked: { documents: ['d-hidden', 'd-blank', 'd1'] } });
+    const ids = async user => (await call('kind=documents&q=site', user)).body.items.map(item => item.id);
+    assert.deepStrictEqual(await ids(), ['d1']);
+    assert.deepStrictEqual(await ids(STAFF), ['d-hidden', 'd1']);
+  });
+
+  await t.test('comment periods: q reaches the repository as keywords, and limit * 3 rows are read', async (t) => {
+    const { reads } = fakeStores(t);
+    assert.strictEqual((await call('kind=comment-periods&q=%22site%22&limit=2')).status, 200);
+    const [read] = reads.filter(r => r.container === 'commentPeriods');
+    assert.deepStrictEqual(values(read.spec, '@keywords'), ['site']);
+    assert.strictEqual(read.maxItemCount, 6);
+  });
+
+  await t.test('comment periods: a blank label falls back to the parent project name', async (t) => {
+    fakeStores(t);
+    const items = (await call('kind=comment-periods&q=site')).body.items;
+    assert.deepStrictEqual(items.find(item => item.id === 'cp-blank'),
+      { id: 'cp-blank', informationLabel: '', projectId: 'p2', projectEagleId: 'cccccccccccccccccccccccc', projectName: 'Site D' });
+  });
+
+  await t.test('comment periods: a withheld label falls back to the project name; staff see the label', async (t) => {
+    fakeStores(t);
+    const hidden = async user => (await call('kind=comment-periods&q=site', user)).body.items
+      .find(item => item.id === 'cp-hidden-label');
+    assert.strictEqual((await hidden()).informationLabel, undefined);
+    assert.strictEqual((await hidden()).projectName, 'Site C');
+    assert.strictEqual((await hidden(STAFF)).informationLabel, 'Site C secret round');
+  });
+
+  await t.test('comment periods: drops a row with no label and no parent the caller can read', async (t) => {
+    fakeStores(t);
+    const ids = async user => (await call('kind=comment-periods&q=site', user)).body.items.map(item => item.id);
+    assert.deepStrictEqual(await ids(), ['cp1', 'cp-blank', 'cp-hidden-label']);
+    assert.deepStrictEqual(await ids(STAFF), ['cp1', 'cp-blank', 'cp-hidden-label', 'cp-orphan']);
+  });
+
+  await t.test('comment periods: reads parent projects for the rows answered, not the whole page', async (t) => {
+    const { reads } = fakeStores(t);
+    const res = await call('kind=comment-periods&q=site&limit=1');
+    assert.deepStrictEqual(res.body.items.map(item => item.id), ['cp1']);
+    assert.deepStrictEqual(reads.filter(read => read.container === 'projects').map(read => read.ids), [['p1']]);
+  });
+
   await t.test('refuses a bad query with 400 before any search', async (t) => {
-    const { searches } = fakeStores(t);
+    const { searches, reads } = fakeStores(t);
     const cases = {
-      'kind=comment-periods&q=site': 'q is not supported on this list',
-      'kind=users&q=site': 'kind must be one of projects, documents, updates, notifications',
-      'q=site': 'kind must be one of projects, documents, updates, notifications',
+      'kind=users&q=site': 'kind must be one of projects, documents, updates, notifications, comment-periods',
+      'q=site': 'kind must be one of projects, documents, updates, notifications, comment-periods',
+      'kind=comment-periods&q=%22%20%22': 'q needs more than quotes',
       'kind=projects&q=site&pageSize=2': 'unknown parameter: pageSize',
       'kind=projects&q=+a+': 'q takes 2 to 100 characters',
       'kind=projects': 'q takes 2 to 100 characters',
@@ -205,6 +268,7 @@ test('GET /suggest', async (t) => {
       assert.strictEqual(res.headers.vary, VARY, qs);
     }
     assert.strictEqual(searches.length, 0);
+    assert.deepStrictEqual(reads, []);
   });
 
   await t.test('counts q in code points after trim', async (t) => {
@@ -228,6 +292,12 @@ test('GET /suggest', async (t) => {
     const staff = await call('kind=projects&q=site', STAFF);
     assert.strictEqual(staff.headers['cache-control'], 'private, no-store');
     assert.strictEqual(staff.headers.vary, VARY);
+  });
+
+  await t.test('comment periods: anonymous success is public for 60 s; credentialed success is private', async (t) => {
+    fakeStores(t);
+    assert.strictEqual((await call('kind=comment-periods&q=site')).headers['cache-control'], 'public, max-age=60');
+    assert.strictEqual((await call('kind=comment-periods&q=site', STAFF)).headers['cache-control'], 'private, no-store');
   });
 
   await t.test('logs no search analytics event', async (t) => {
@@ -269,8 +339,8 @@ test('GET /suggest', async (t) => {
 
 test('GET /api/suggest through the dispatcher', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
-  const send = headers => dispatch(new HttpRequest({
-    method: 'GET', url: 'http://127.0.0.1/api/suggest?kind=projects&q=site', headers
+  const send = (headers, qs = 'kind=projects&q=site') => dispatch(new HttpRequest({
+    method: 'GET', url: `http://127.0.0.1/api/suggest?${qs}`, headers
   }), { error: () => {} });
 
   await t.test('no credential reaches the handler as anonymous', async (t) => {
@@ -278,6 +348,14 @@ test('GET /api/suggest through the dispatcher', async (t) => {
     const res = await send({});
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(JSON.parse(res.body).items.map(item => item.id), ['p1', 'p2']);
+  });
+
+  await t.test('comment periods reach the handler as anonymous', async (t) => {
+    fakeStores(t);
+    const res = await send({}, 'kind=comment-periods&q=site');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers['cache-control'], 'public, max-age=60');
+    assert.deepStrictEqual(JSON.parse(res.body).items.map(item => item.id), ['cp1', 'cp-blank', 'cp-hidden-label']);
   });
 
   await t.test('a rejected Bearer answers 401, not the public view', async (t) => {
