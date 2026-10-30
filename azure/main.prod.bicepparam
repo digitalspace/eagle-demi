@@ -233,6 +233,7 @@ param searchDefinitionsQueue = ''
 // after test has run the cutover and demi-kv-prod holds the secret.
 param syncOutQueue = ''
 param syncOutEagleEnabled = false
+param syncOutEagleNativeEnabled = false
 param eagleProtectedApiBase = 'https://projects.eao.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-prod.apps.gold.devops.gov.bc.ca/api'
 
