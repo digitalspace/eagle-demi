@@ -1426,6 +1426,21 @@ test('PUT /eagle/organizations/:eagleId on an organization DEMI created', async 
     });
   });
 
+  await t.test('a stale echo onto the native row is ignored and changes nothing', async () => {
+    const NEWER = PUSHED_AT + 1000;
+    const echoed = () => ({
+      ...demiRow(), sources: { eagle: eagleOrganization({ name: 'Newer Eagle name' }) }, eaglePushedAt: NEWER
+    });
+    const { store, created } = partitionedCosmos(t, 'kind', [echoed()]);
+
+    const res = await push(eagleOrganization());
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.body, { ok: true, ignored: 'stale', eaglePushedAt: NEWER });
+    assert.deepStrictEqual(created, []);
+    assert.deepStrictEqual(store.get(NATIVE_KEY), echoed());
+  });
+
   await t.test('a mirror row stored under the Eagle id wins over a DEMI row naming that id', async () => {
     const mirrorKey = `Organization::${ORG_EAGLE_ID}`;
     const mirror = {
