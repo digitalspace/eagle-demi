@@ -14,6 +14,7 @@ const {
   buildRegistry,
   buildProjectIndex,
   normalizeCentroid,
+  validCoordinates,
   resolveProjectAcl,
   BC_BBOX
 } = require('../../src/merge/project');
@@ -463,6 +464,71 @@ test('Eagle dates before 1971 are null', async (t) => {
   });
 });
 
+test('DMS coordinates convert to decimal degrees', () => {
+  const [lng, lat] = validCoordinates('122°43\'20.8"W', '53°49\'42.9"N').coordinates;
+  assert.ok(Math.abs(lng - -122.72244) < 1e-5, `lng ${lng}`);
+  assert.ok(Math.abs(lat - 53.82858) < 1e-5, `lat ${lat}`);
+
+  const [altLng, altLat] = validCoordinates('122º43\'20.8\'\'W', '53°49\'42.9"N').coordinates;
+  assert.ok(Math.abs(altLng - -122.72244) < 1e-5, `º and '' marks lng ${altLng}`);
+  assert.ok(Math.abs(altLat - 53.82858) < 1e-5, `º and '' marks lat ${altLat}`);
+
+  const [primeLng, primeLat] = validCoordinates('122d43m20.8sW', '53˚49′42.9″N').coordinates;
+  assert.ok(Math.abs(primeLng - -122.72244) < 1e-5, `d m s letter marks lng ${primeLng}`);
+  assert.ok(Math.abs(primeLat - 53.82858) < 1e-5, `˚ ′ ″ marks lat ${primeLat}`);
+  // 53°43' would sit inside BC, so a split shows up as a non-null result
+  assert.strictEqual(validCoordinates('-122.9', '5343N'), null, 'unmarked digits are not split into degrees and minutes');
+  assert.strictEqual(validCoordinates('1225\'W', '53°N'), null, 'a minute mark does not split a run of digits');
+
+  assert.deepStrictEqual(validCoordinates('122.9W', '53.8°N').coordinates, [-122.9, 53.8],
+    'decimal degrees with a hemisphere letter');
+  assert.deepStrictEqual(validCoordinates('122.9 W', '53 N').coordinates, [-122.9, 53],
+    'space instead of a degree mark');
+  assert.deepStrictEqual(validCoordinates('122°W', '53°N').coordinates, [-122, 53],
+    'degrees only');
+  assert.deepStrictEqual(validCoordinates('122°43\'20.8"w', '53°49\'42.9"n').coordinates.map(Math.sign),
+    [-1, 1], 'lowercase hemisphere letters');
+  // a positive latitude would be inside BC; S must flip it south, out of the box
+  assert.strictEqual(validCoordinates('-122.9', '53°49\'42.9"S'), null, 'S gives a negative latitude');
+  assert.deepStrictEqual(validCoordinates(' -122.9 ', ' 49.1 ').coordinates, [-122.9, 49.1],
+    'surrounding whitespace is trimmed');
+
+  // the other value is a plain decimal so only the side under test can make the pair null
+  assert.strictEqual(validCoordinates('-122.9', '53°60\'0"N'), null, 'minutes of 60 are rejected');
+  assert.strictEqual(validCoordinates('-122.9', '53°59\'60"N'), null, 'seconds of 60 are rejected');
+  assert.strictEqual(validCoordinates('122°43\'20.8"N', '49.1'), null, 'N on a longitude');
+  assert.strictEqual(validCoordinates('-122.9', '53°49\'42.9"E'), null, 'E on a latitude');
+  assert.strictEqual(validCoordinates('-122.9W', '49.1'), null, 'minus plus a hemisphere letter');
+  assert.strictEqual(validCoordinates('0x7A', '49.1'), null, 'hex string is not a number');
+  assert.strictEqual(validCoordinates('-122.9', '0b110001'), null, 'binary string is not a number');
+
+  // E reads as +122.72; the positive-longitude flip must still land it in BC
+  const [eastLng] = validCoordinates('122°43\'20.8"E', '53°49\'42.9"N').coordinates;
+  assert.ok(Math.abs(eastLng - -122.72244) < 1e-5, `east lng ${eastLng}`);
+
+  assert.deepStrictEqual(validCoordinates('-122.9', '49.1').coordinates, [-122.9, 49.1]);
+
+  const near = (c, want) => c !== null && c.coordinates.every((v, i) => Math.abs(v - want[i]) < 1e-9);
+  assert.ok(near(validCoordinates('-122.9', '+49.1'), [-122.9, 49.1]), 'explicit plus sign');
+  assert.ok(near(validCoordinates('-1.229e2', '4.91e1'), [-122.9, 49.1]), 'exponent notation');
+  assert.ok(near(validCoordinates('-122.9°', '49.1 °'), [-122.9, 49.1]),
+    'decimal with a trailing degree mark, with or without a space');
+
+  // trailing text after a number gives null instead of the number alone
+  assert.strictEqual(validCoordinates('-122.9', '53 degrees-ish'), null, 'trailing text is not ignored');
+
+  // adjacent \s* groups backtrack polynomially: ~8 s on this input, under 1 ms when linear
+  const gap = ' '.repeat(200);
+  const started = performance.now();
+  assert.strictEqual(validCoordinates(`1${gap}1${gap}1${gap}x`, '49.1'), null, 'long whitespace runs are rejected');
+  assert.ok(performance.now() - started < 500, 'long whitespace runs do not backtrack');
+
+  // an optional dot between two digit runs splits them quadratically: ~3.5 s here
+  const digitsStarted = performance.now();
+  assert.strictEqual(validCoordinates(`${'1'.repeat(50000)}x`, '49.1'), null, 'long digit run is rejected');
+  assert.ok(performance.now() - digitsStarted < 500, 'long digit runs do not backtrack');
+});
+
 test('centroid normalisation', async (t) => {
   await t.test('Track lat/lng strings become GeoJSON [lng, lat]', () => {
     // Track stores these as strings and lat-first; GeoJSON is lng-first. Getting this backwards
@@ -477,6 +543,12 @@ test('centroid normalisation', async (t) => {
     assert.deepStrictEqual(
       normalizeCentroid(null, { centroid: { coordinates: [-122.9, 49.1] } }).coordinates,
       [-122.9, 49.1]);
+  });
+
+  await t.test('an Eagle centroid of DMS strings converts to decimal degrees', () => {
+    const c = normalizeCentroid(null, { centroid: ['122°43\'20.8"W', '53°49\'42.9"N'] });
+    assert.ok(Math.abs(c.coordinates[0] - -122.72244) < 1e-5, `lng ${c.coordinates[0]}`);
+    assert.ok(Math.abs(c.coordinates[1] - 53.82858) < 1e-5, `lat ${c.coordinates[1]}`);
   });
 
   await t.test('unparseable coordinates yield null, not NaN', () => {

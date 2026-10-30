@@ -275,6 +275,31 @@ function inBC(lng, lat) {
          lat >= BC_BBOX.minLat && lat <= BC_BBOX.maxLat;
 }
 
+// Two Eagle projects store DMS text (53°49'42.9"N); parseFloat would read only the degrees.
+const DMS_NUM = String.raw`(\d+(?:\.\d+)?)(?![\d.])`;
+const DMS = new RegExp(
+  String.raw`^${DMS_NUM}\s*(?:[°º˚d]\s*)?` +
+  String.raw`(?:${DMS_NUM}\s*(?:['′’m]\s*)?` +
+  String.raw`(?:${DMS_NUM}\s*(?:(?:''|["″”s])\s*)?)?)?` +
+  String.raw`([NSEW])$`, 'i');
+const DECIMAL = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*[°º˚]?$/;
+const HEMISPHERES = { lat: 'NS', lng: 'EW' };
+
+function toDegrees(raw, axis) {
+  if (typeof raw === 'number') return raw;
+  if (typeof raw !== 'string') return NaN;
+  const s = raw.trim();
+  const d = DECIMAL.exec(s);
+  if (d) return Number(d[1]);
+  const m = DMS.exec(s);
+  if (!m) return NaN;
+  const hemisphere = m[4].toUpperCase();
+  if (!HEMISPHERES[axis].includes(hemisphere)) return NaN;
+  if (Number(m[2] || 0) >= 60 || Number(m[3] || 0) >= 60) return NaN;
+  const deg = Number(m[1]) + Number(m[2] || 0) / 60 + Number(m[3] || 0) / 3600;
+  return hemisphere === 'S' || hemisphere === 'W' ? -deg : deg;
+}
+
 /**
  * Validate a coordinate pair, repairing the one error that is unambiguous.
  *
@@ -285,8 +310,8 @@ function inBC(lng, lat) {
  * rather than an invented one.
  */
 function validCoordinates(lngRaw, latRaw) {
-  let lng = parseFloat(lngRaw);
-  const lat = parseFloat(latRaw);
+  let lng = toDegrees(lngRaw, 'lng');
+  const lat = toDegrees(latRaw, 'lat');
   if (isNaN(lng) || isNaN(lat)) return null;
 
   if (lng > 0 && inBC(-lng, lat)) lng = -lng;
