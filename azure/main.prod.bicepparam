@@ -234,6 +234,7 @@ param searchDefinitionsQueue = ''
 param syncOutQueue = ''
 param syncOutEagleEnabled = false
 param syncOutEagleNativeEnabled = false
+param syncOutEagleDocumentEnabled = false
 param eagleProtectedApiBase = 'https://projects.eao.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-prod.apps.gold.devops.gov.bc.ca/api'
 

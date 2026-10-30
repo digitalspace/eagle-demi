@@ -25,6 +25,7 @@ const STAFF_ACL = ['staff', 'sysadmin'];
 
 const ENV = {
   SYNC_OUT_EAGLE_ENABLED: 'true',
+  SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true',
   EAGLE_PROTECTED_API_BASE: API,
   EAGLE_KC_CLIENT_ID: 'demi-sync-out',
   EAGLE_KC_CLIENT_SECRET: 'not-a-real-value',
@@ -182,6 +183,17 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.deepStrictEqual(await consumer.send(noId.row, { update: noId.update }), { status: 'skipped' });
     assert.deepStrictEqual(calls, []);
     assert.strictEqual(noId.writes, 0);
+  });
+
+  await t.test('with SYNC_OUT_EAGLE_DOCUMENT_ENABLED off nothing is wanted or sent', async (tt) => {
+    delete process.env.SYNC_OUT_EAGLE_DOCUMENT_ENABLED;
+    const calls = wireEagle(tt, {});
+    const store = wireStore(tt, demiRow());
+
+    assert.strictEqual(consumer.wants(store.row), false);
+    assert.deepStrictEqual(await consumer.send(store.row, { update: store.update }), { status: 'skipped' });
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(store.writes, 0, 'no claim taken');
   });
 
   await t.test('two concurrent deliveries make one PUT', async (tt) => {

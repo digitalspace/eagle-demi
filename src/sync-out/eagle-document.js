@@ -36,8 +36,12 @@ function bodyFor(row) {
   return body;
 }
 
-/** Rows that came from Eagle are Eagle's own; only a row DEMI or ENGAGE owns, tied to an Eagle id, is sent. */
-const wants = row => Boolean(row && row.eagleId && row.sourceSystem !== 'eagle' && isScanCleared(row));
+/**
+ * Only with SYNC_OUT_EAGLE_DOCUMENT_ENABLED on, and only a row DEMI or ENGAGE owns that is tied to an
+ * Eagle id. send() asks too: queued messages and retries reach it without wants().
+ */
+const wants = row => Boolean(settings.eagle.documentEnabled &&
+  row && row.eagleId && row.sourceSystem !== 'eagle' && isScanCleared(row));
 
 /**
  * Take the row's send claim: `{ claim, published }` with the level last sent, `{ missing: true }`,
