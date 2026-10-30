@@ -13,6 +13,7 @@ const lists = require('../../repositories/lists');
 const { eagleBaseAcl } = require('../../seed/transform');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
+const { DEMI_OWNED_FIELDS } = require('../../ownership/organization');
 const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
@@ -52,7 +53,9 @@ function mirrorItem(eagleId, doc, read, existing) {
 
     isPublished: read.includes('public'),
     read,
-    sources: { ...(existing && existing.sources), eagle: doc }
+    sources: { ...(existing && existing.sources), eagle: doc },
+    ...Object.fromEntries(DEMI_OWNED_FIELDS
+      .filter(f => existing && existing[f] !== undefined).map(f => [f, existing[f]]))
   };
 }
 
