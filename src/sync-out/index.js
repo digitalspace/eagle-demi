@@ -1,7 +1,7 @@
 'use strict';
 
 // Consumer: `{ name, enabled(), wants(row), send(row, { update }) }`. Messages carry kind and ids only, so a
-// late one sends the row as it is now; a row whose `syncOut[name].sentVersion` reaches `syncVersion` is not resent.
+// late one sends the row as it is now; `sentVersion` at `syncVersion` is not resent; `{ status: 'held' }` records nothing.
 
 const queues = require('../jobs/queue-client');
 const { kindOf, versionOf, DEFAULT_KIND } = require('./kinds');
@@ -233,6 +233,10 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
       update: (mutate) => updateRow(repo, row.id, row.projectId, mutate)
     });
     const status = (result && result.status) || 'sent';
+    if (status === 'held') {
+      logger.info(`[sync-out] ${job.consumer} held ${job.id}, version ${version} left unsent`, job);
+      return { status };
+    }
     const { row: stored } = await recordOutcome(repo, consumer, row,
       { status, version, record: result && result.record, at: new Date().toISOString() });
     // A write landed while this one was sending, so what reached the consumer may be older than the row.

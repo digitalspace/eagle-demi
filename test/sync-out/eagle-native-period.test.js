@@ -391,32 +391,44 @@ test('sync-out of DEMI-native comment periods', async (t) => {
     assert.strictEqual(logged('info', 'SYNC_OUT_EAGLE_NATIVE_ENABLED is not true').length, 2, 'logged again after an on spell');
   });
 
-  await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a queued native row is skipped before any claim or call',
+  await t.test('a native row queued while SYNC_OUT_EAGLE_NATIVE_ENABLED is off is held, then POSTed once it is on',
     async (tt) => {
       delete process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED;
       const store = wireStore(tt, [nativeRow()]);
       wireParent(tt);
       wireQueue(tt);
-      const calls = wireEagle(tt, {});
+      const off = wireEagle(tt, {});
 
-      assert.deepStrictEqual(await run(), { status: 'skipped' });
+      assert.deepStrictEqual(await run(), { status: 'held' });
 
-      assert.deepStrictEqual(calls, []);
+      assert.deepStrictEqual(off, []);
       assert.strictEqual(store.get(ROW_ID).eagleId, null, 'no id minted');
+      assert.strictEqual(store.get(ROW_ID).syncOut, undefined, 'no version recorded as sent');
+
+      process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED = 'true';
+      const on = wireEagle(tt, { 'POST /commentperiod': accept });
+
+      const result = await run();
+
+      assert.deepStrictEqual(keys(on), ['POST /commentperiod']);
+      assert.strictEqual(result.eagleId, on[0].body._id);
+      assert.strictEqual(store.get(ROW_ID).eagleId, on[0].body._id, 'the minted id is the one POSTed');
+      assert.strictEqual(store.get(ROW_ID).syncOut.eagle.sentVersion, 1);
     });
 
   await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a deleted native row DELETEs nothing', async (tt) => {
     delete process.env.SYNC_OUT_EAGLE_NATIVE_ENABLED;
     const minted = eagle.mintEagleId();
-    wireStore(tt, [nativeRow({
+    const store = wireStore(tt, [nativeRow({
       eagleId: minted, isDeleted: true, syncVersion: 2, syncOut: { eagle: { status: 'sent', sentVersion: 1 } }
     })]);
     wireParent(tt);
     wireQueue(tt);
     const calls = wireEagle(tt, {});
 
-    assert.deepStrictEqual(await run(), { status: 'skipped' });
+    assert.deepStrictEqual(await run(), { status: 'held' });
     assert.deepStrictEqual(calls, []);
+    assert.strictEqual(store.get(ROW_ID).syncOut.eagle.sentVersion, 1, 'the delete stays owed');
   });
 
   await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off an ENGAGE row still sends', async (tt) => {

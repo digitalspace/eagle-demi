@@ -449,8 +449,9 @@ function wants(row) {
 async function send(row, { update }) {
   const s = requireSettings();
   const native = row.sourceSystem === NATIVE;
-  // Checked here as well as in wants(): queued messages and retries reach send() without it.
-  if (native && !settings.eagle.nativeEnabled) return { status: 'skipped' };
+  // Also checked in wants(): queued messages and retries reach send() without it. Held, not skipped:
+  // a skip records the version as sent, so the row would never go once the switch is on.
+  if (native && !settings.eagle.nativeEnabled) return { status: 'held' };
   if (!native && !row.eagleProjectId) throw new Error(`row ${row.id} has no eagleProjectId`);
   const logFields = {
     rowId: row.id, ...(native ? {} : { engagementId: row.engagementId }), eagleId: row.eagleId || null
