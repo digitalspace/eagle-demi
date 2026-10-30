@@ -24,7 +24,6 @@ const { catalogFor } = require('../../vis/catalog');
 const { serverError } = require('../../helpers/response');
 const { inList } = require('../../repositories/_sql');
 const aiSearch = require('../../search/ai-search');
-const { purgeProject } = require('../../helpers/purge');
 const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
@@ -797,9 +796,11 @@ exports.upsertFromEagle = async (req, res) => {
 function mergeEaglePush(doc, existing) {
   // A push carries no Track phases or works, so the stored ones go back in (not DEMI-only: the sync
   // rebuilds them).
+  // A push that says nothing about the delete leaves a DEMI one standing; `isDeleted: false` restores.
+  const deleted = typeof doc.isDeleted === 'boolean' ? doc.isDeleted : Boolean(existing && existing.isDeleted);
   const merged = existing && existing.sources && existing.sources.track
-    ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases, works: existing.works })
-    : mergeEagleOnlyProject(doc);
+    ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases, works: existing.works, deleted })
+    : mergeEagleOnlyProject(doc, { deleted });
 
   // Every OTHER source block survives the push. A Cosmos upsert replaces the item, and the merge
   // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
@@ -1093,28 +1094,49 @@ function shortCodeBody(project, row) {
   };
 }
 
+/** Flag and narrow to staff, never remove: eagle-api's delete only flags, and staff and reconcile still read the row. */
 exports.deleteProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    const existing = await projects.getById(access, req.params.id);
+    const reread = () => projects.getById(access, req.params.id);
+    const existing = await reread();
     if (!existing) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    const { removedFromSearch } = await purgeProject(existing);
+    const written = await writeGuarded({
+      existing,
+      reread,
+      attempt: async (current) => {
+        if (!current) return { status: 'missing' };
+        const read = documents.constrainToProject(current.read, documents.DELETED_CEILING);
+        const row = {
+          ...current, isDeleted: true, read, isPublished: read.includes('public'), updatedAt: new Date().toISOString()
+        };
+        return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), existing: current };
+      },
+      onLost: (_current, attempt) =>
+        logger.warn('[Project Controller] project delete lost its etag race, rebuilding',
+          { id: req.params.id, attempt })
+    });
+    if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (written.status === 'conflict') return writeConflict(res, 'project delete', req.params.id);
+    const { saved, existing: from } = written;
 
     auditEvent(req, {
       action: 'project.delete',
       targetType: 'project',
-      targetId: existing.id,
-      projectId: existing.id,
-      detail: { name: existing.name, removedFromSearch }
+      targetId: saved.id,
+      projectId: saved.id,
+      detail: { name: saved.name, isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished }
     });
+
+    const failure = visibilityMoved(from, saved) ? await runCascade(saved, saved.eagleId) : null;
+    if (failure) return res.status(500).json({ success: false, error: failure });
 
     return res.json({
       message: 'Project deleted successfully',
-      deleted: redactForAccess('projects', existing, access),
-      removedFromSearch
+      deleted: redactForAccess('projects', saved, access)
     });
   } catch (err) {
     return serverError(res, err, 'project controller failed');

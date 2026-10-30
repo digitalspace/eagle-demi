@@ -21,6 +21,7 @@
 
 const { eagleBaseAcl } = require('../seed/transform');
 const { capRead } = require('../helpers/access-sql');
+const { DELETED_CEILING } = require('../repositories/documents');
 const { beforeDateFloor } = require('../domain/project-legislation');
 const { ASSESSMENT_WORK_TYPE, deriveAssessments } = require('./assessments');
 const {
@@ -239,6 +240,8 @@ function flattenEagleProject(doc, orgs) {
   }
   // Every block rides along, so `sources.eagle` can be flattened again under another year.
   for (const k of legislationKeys) flat[k] = doc[k];
+  // eagle-api flags a delete on the top level only (`helpers/actions.js`), never in a block.
+  if (doc.isDeleted !== undefined) flat.isDeleted = doc.isDeleted;
   return normalizeEagleSlot(flat, orgs);
 }
 
@@ -343,6 +346,15 @@ function normalizeCentroid(track, eagle) {
   return pair ? validCoordinates(pair[0], pair[1]) : null;
 }
 
+const isDeletedInEagle = (eagle) => Boolean(eagle) && eagle.isDeleted === true;
+
+/**
+ * Whether a merge marks the row deleted: `opts.deleted` when the caller decided (a push that says
+ * nothing keeps a DEMI delete), else the Eagle copy's own flag.
+ */
+const mergeDeleted = (eagle, opts) =>
+  (typeof opts.deleted === 'boolean' ? opts.deleted : isDeletedInEagle(eagle));
+
 /**
  * The ACL for a merged project.
  *
@@ -362,11 +374,14 @@ function normalizeCentroid(track, eagle) {
  * Failing closed here is also right for the Eagle-only path (`mergeEagleOnlyProject`), where a
  * missing or empty `read[]` on an Eagle record is an absence of evidence, not evidence of consent.
  */
-function resolveProjectAcl(eagle) {
+function resolveProjectAcl(eagle, deleted = isDeletedInEagle(eagle)) {
   // Level 2 when Eagle sent none, or only the sealed token: the level the legacy admin-role list
   // already meant, written in ladder tokens so a re-merge does not rewrite what a controller wrote.
-  return eagleBaseAcl(eagle && eagle.read);
+  const read = eagleBaseAcl(eagle && eagle.read);
+  // A deleted project's Eagle `read` still says `public`; the row stays, for staff only.
+  return deleted ? capRead(read, DELETED_CEILING) : read;
 }
+
 
 /**
  * Merge one Track project with its optional Eagle counterpart.
@@ -379,6 +394,7 @@ function resolveProjectAcl(eagle) {
  * @param {Array}       [opts.works]   this project's Track works (seed/sources.js); absent when
  *                                     not fetched, which also leaves `legislationTransitions` out
  * @param {Map}         [opts.orgs]    Organization lookup, for resolving seed-shaped `pins`
+ * @param {boolean}     [opts.deleted] the row's delete flag; defaults to the Eagle record's
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
   if (!track || !hasValue(track.track_project_id)) {
@@ -402,7 +418,8 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   // no document could be published under any of them.
   //
   // `is_active` is still carried through, as `isActive` via TRACK_PRECEDENCE.
-  const read = resolveProjectAcl(eagle);
+  const deleted = mergeDeleted(eagle, opts);
+  const read = resolveProjectAcl(eagle, deleted);
   const isPublished = read.includes('public');
 
   const merged = {
@@ -412,6 +429,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
     sourceSystem: 'track',
     isPublished,
     read,
+    ...(deleted ? { isDeleted: true } : {}),
     updatedAt: now
   };
 
@@ -478,7 +496,8 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   const eagleId = String(eagle._id);
 
   // Same rule as the Track path: the flag mirrors the ACL rather than a separate status field.
-  const read = resolveProjectAcl(eagle);
+  const deleted = mergeDeleted(eagle, opts);
+  const read = resolveProjectAcl(eagle, deleted);
   const isPublished = read.includes('public');
 
   const merged = {
@@ -488,6 +507,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
     sourceSystem: 'eagle',
     isPublished,
     read,
+    ...(deleted ? { isDeleted: true } : {}),
     updatedAt: now
   };
 

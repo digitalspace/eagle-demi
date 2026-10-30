@@ -285,9 +285,8 @@ test('authenticated CUD audit coverage', async (t) => {
   });
 
   await t.test('project delete writes one project.delete', async () => {
-    t.mock.method(projects, 'getById', async () => ({ id: '207', name: 'Skeena LNG' }));
-    t.mock.method(projects, 'deleteById', async () => ({}));
-    t.mock.method(aiSearch, 'deleteFromIndex', async () => true);
+    t.mock.method(projects, 'getById', async () => ({ id: '207', name: 'Skeena LNG', read: ['staff'] }));
+    t.mock.method(projects, 'upsert', async (item) => item);
 
     const written = await rowsFrom(() => projectController.deleteProject({
       params: { id: '207' }, query: {}, user: STAFF
@@ -296,7 +295,7 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written.length, 1);
     assert.strictEqual(written[0].Action, 'project.delete');
     assert.strictEqual(written[0].TargetId, '207');
-    assert.strictEqual(written[0].Detail.removedFromSearch, true);
+    assert.strictEqual(written[0].Detail.name, 'Skeena LNG');
   });
 
   await t.test('a project summary write writes one projectSummary.save under the resolved project', async () => {
