@@ -264,4 +264,4 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
   }
 }
 
-module.exports = { enqueue, enqueueQuietly, consumers, run, RETRY_VISIBILITY_SECONDS };
+module.exports = { enqueue, enqueueQuietly, consumers, run, updateRow, RETRY_VISIBILITY_SECONDS };

@@ -8,8 +8,10 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { writeGuarded } = require('../../src/helpers/etag-write');
+const cosmos = require('../../src/db/cosmos-nosql');
+const documents = require('../../src/repositories/documents');
 const { logger } = require('../../src/utils/logger');
+const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const consumer = require('../../src/sync-out/eagle-document');
 const config = require('../../src/config');
@@ -56,22 +58,25 @@ function demiRow(overrides = {}) {
   };
 }
 
-/** One row, writes guarded on `_etag`, and the engine's `update` over it. */
-function wireStore(row) {
-  const store = { row: { ...row, _etag: 'e1' }, writes: 0 };
-  const reread = async () => structuredClone(store.row);
-  store.update = async mutate => writeGuarded({
-    existing: await reread(),
-    reread,
-    attempt: async (current) => {
-      const item = mutate(current);
-      if (!item) return { status: 'unchanged', row: current };
-      if (current._etag !== store.row._etag) throw Object.assign(new Error('precondition'), { code: 412 });
-      store.writes += 1;
-      store.row = { ...structuredClone(item), _etag: `e${store.writes + 1}` };
-      return { status: 'saved', row: store.row };
-    }
+/** The document repository as sync-out reads and writes it. */
+const SYNC_REPO = { readForWrite: documents.readForWrite, upsert: documents.upsertForSync };
+
+/**
+ * One row in Cosmos, whose replace honours IfMatch as Cosmos does: no etag, no check. `update` is the
+ * engine's own etag-guarded write through the real repository.
+ */
+function wireStore(t, row) {
+  const store = { row: { ...row, _etag: 'e1' }, writes: 0, etags: [] };
+  t.mock.method(cosmos, 'readItem', async (container, id, pk) =>
+    (container === 'documents' && id === store.row.id && pk === store.row.projectId ? structuredClone(store.row) : null));
+  t.mock.method(cosmos, 'replace', async (_container, _id, _pk, item, etag) => {
+    store.etags.push(etag);
+    if (etag && etag !== store.row._etag) throw Object.assign(new Error('precondition'), { code: 412 });
+    store.writes += 1;
+    store.row = { ...structuredClone(item), _etag: `e${store.writes + 1}` };
+    return structuredClone(store.row);
   });
+  store.update = mutate => syncOut.updateRow(SYNC_REPO, store.row.id, store.row.projectId, mutate);
   return store;
 }
 
@@ -109,7 +114,7 @@ test('sync-out of documents to Eagle', async (t) => {
   });
 
   await t.test('a public row PUTs the DEMI fields, then publishes', async (tt) => {
-    const store = wireStore(demiRow());
+    const store = wireStore(tt, demiRow());
     const calls = wireEagle(tt, { [PUT]: {}, [PUBLISH]: {} });
 
     const result = await consumer.send(store.row, { update: store.update });
@@ -132,7 +137,7 @@ test('sync-out of documents to Eagle', async (t) => {
   });
 
   await t.test('a row without public in read unpublishes', async (tt) => {
-    const store = wireStore(demiRow({ read: STAFF_ACL, isPublished: false }));
+    const store = wireStore(tt, demiRow({ read: STAFF_ACL, isPublished: false }));
     const calls = wireEagle(tt, { [PUT]: {}, [UNPUBLISH]: {} });
 
     await consumer.send(store.row, { update: store.update });
@@ -142,7 +147,7 @@ test('sync-out of documents to Eagle', async (t) => {
 
   await t.test('a row without an eagleId, or one Eagle owns, is not wanted and sends nothing', async (tt) => {
     const calls = wireEagle(tt, {});
-    const noId = wireStore(demiRow({ eagleId: null }));
+    const noId = wireStore(tt, demiRow({ eagleId: null }));
 
     assert.strictEqual(consumer.wants(noId.row), false);
     assert.strictEqual(consumer.wants(demiRow({ sourceSystem: 'eagle' })), false);
@@ -153,7 +158,7 @@ test('sync-out of documents to Eagle', async (t) => {
   });
 
   await t.test('two concurrent deliveries make one PUT', async (tt) => {
-    const store = wireStore(demiRow());
+    const store = wireStore(tt, demiRow());
     const calls = wireEagle(tt, { [PUT]: {}, [PUBLISH]: {} });
     const row = structuredClone(store.row);
 
@@ -166,10 +171,11 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.deepStrictEqual(results.filter(r => r.status === 'fulfilled').map(r => r.value),
       [{ status: 'sent', eagleId: EAGLE_ID }]);
     assert.match(results.find(r => r.status === 'rejected').reason.message, /another delivery is sending/);
+    assert.strictEqual(store.etags[0], 'e1', 'the claim write is guarded on the revision it read');
   });
 
   await t.test('a failed PUT logs one error, releases the claim and publishes nothing', async (tt) => {
-    const store = wireStore(demiRow());
+    const store = wireStore(tt, demiRow());
     const calls = wireEagle(tt, { [PUT]: { status: 500, body: { message: 'down' } } });
 
     await assert.rejects(consumer.send(store.row, { update: store.update }), /HTTP 500/);

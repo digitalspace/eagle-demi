@@ -14,7 +14,7 @@ const {
 } = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED, EAGLE_SYNC_PENDING
+  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED, EAGLE_SYNC_PENDING, upsertItem
 } = require('./_sql');
 // The fields the chunks carry a copy of, read from the one list that owns them.
 const { CHUNK_PARENT_FIELDS } = require('./chunks');
@@ -989,6 +989,11 @@ async function listSyncPending() {
   return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${EAGLE_SYNC_PENDING}` });
 }
 
+/** Sync-out's `repo.upsert(item, existing)`: guarded on the stored row's `_etag`, which `upsert` above never reads. */
+async function upsertForSync(item, existing) {
+  return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
+}
+
 module.exports = {
   CONTAINER,
   UPDATE_SOURCE,
@@ -1037,5 +1042,6 @@ module.exports = {
   patchExtraction,
   setPublished,
   listSyncPending,
+  upsertForSync,
   deleteById
 };
