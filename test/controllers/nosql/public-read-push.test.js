@@ -1106,6 +1106,16 @@ test('the four mirror routes reject anonymous and admit eagle-api', async (t) =>
   });
 });
 
+/** An Eagle period push under the project `storedProject` holds. */
+async function pushPeriod(t, doc, pushedAt) {
+  t.mock.method(projects, 'getByEagleId', async () => storedProject());
+  const res = mockRes();
+  await commentPeriodController.upsertFromEagle({
+    params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc, pushedAt }, user: STAFF
+  }, res);
+  return res;
+}
+
 test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -1147,14 +1157,7 @@ test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => 
     return { ...row, ...staff, eagleId: PERIOD_EAGLE_ID, sources: { ...row.sources, eagle: doc }, eaglePushedAt: PUSHED_AT };
   }
 
-  async function push(doc) {
-    t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    const res = mockRes();
-    await commentPeriodController.upsertFromEagle({
-      params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc, pushedAt: PUSHED_AT }, user: STAFF
-    }, res);
-    return res;
-  }
+  const push = (doc) => pushPeriod(t, doc, PUSHED_AT);
 
   // The echo eagle-api sends after DEMI wrote the period there, carrying Eagle's own view of it.
   const echo = (overrides) => eaglePeriod({ metURL: ENGAGE_URL, read: ['staff'], ...overrides });
@@ -1279,5 +1282,87 @@ test('PUT /eagle/commentperiods/:eagleId on a period ENGAGE owns', async (t) => 
     assert.strictEqual(tombstone.isDeleted, true);
     assert.deepStrictEqual(tombstone.read, ['staff']);
     assert.deepStrictEqual(store.get('207::engage-42'), movedRow('5b8bcf0d0f5e9c0019a7a1ff'), 'the ENGAGE row is untouched');
+  });
+});
+
+test('PUT /eagle/commentperiods/:eagleId on a period DEMI created', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const NATIVE_ID = '3f2b8c1e-7a4d-4e9b-9c61-2d5e8f0a1b37';
+  const NATIVE_KEY = `207::${NATIVE_ID}`;
+  const SYNC_OUT = { eagle: { status: 'sent', sentVersion: 1, claim: null } };
+
+  /** A staff-created period sync-out sent to Eagle; every field DEMI writes differs from `eaglePeriod`. */
+  function demiRow() {
+    return {
+      id: NATIVE_ID,
+      eagleId: PERIOD_EAGLE_ID,
+      projectId: '207',
+      sourceSystem: 'demi',
+      informationLabel: 'DEMI label',
+      metURLAdmin: 'https://engage.gov.bc.ca/admin/demi',
+      milestone: '5cf00c03a266b7e1877500aa',
+      commentIdCount: 3,
+      dateUpdated: '2026-10-29T18:00:00.000Z',
+      isDeleted: false,
+      isPublished: false,
+      read: ['staff', 'idir'],
+      syncOut: SYNC_OUT,
+      syncVersion: 1,
+      sources: { demi: { read: ['staff', 'idir'] } }
+    };
+  }
+
+  const push = (doc) => pushPeriod(t, doc, 1757980005000);
+
+  await t.test('the echo lands on the native row: 2xx, no second row', async () => {
+    const { store, created } = partitionedCosmos(t, 'projectId', [demiRow()]);
+
+    const res = await push(eaglePeriod());
+
+    assert.deepStrictEqual(res.body, { id: NATIVE_ID, action: 'upsert' });
+    assert.deepStrictEqual(created, []);
+    assert.deepStrictEqual([...store.keys()], [NATIVE_KEY]);
+  });
+
+  await t.test('the echo keeps the native owner, ACL and sync-out state and records the Eagle copy',
+    async () => {
+      const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);
+
+      await push(eaglePeriod());
+
+      const row = store.get(NATIVE_KEY);
+      assert.strictEqual(row.sourceSystem, 'demi');
+      assert.deepStrictEqual(row.read, ['staff', 'idir']);
+      assert.strictEqual(row.isPublished, false);
+      assert.deepStrictEqual(row.syncOut, SYNC_OUT);
+      assert.strictEqual(row.syncVersion, 1);
+      assert.strictEqual(row.informationLabel, 'DEMI label');
+      assert.strictEqual(row.sources.eagle._id, PERIOD_EAGLE_ID);
+      assert.strictEqual(row.ceaaInformationLabel, STAFF_PERIOD_FIELDS.ceaaInformationLabel);
+    });
+
+  await t.test('the echo keeps the comment counter, milestone and edit date DEMI staff write', async () => {
+    const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);
+
+    await push(eaglePeriod());
+
+    const row = store.get(NATIVE_KEY);
+    assert.strictEqual(row.commentIdCount, 3);
+    assert.strictEqual(row.milestone, '5cf00c03a266b7e1877500aa');
+    assert.strictEqual(row.dateUpdated, '2026-10-29T18:00:00.000Z');
+    assert.strictEqual(row.metURLAdmin, 'https://engage.gov.bc.ca/admin/demi');
+  });
+
+  await t.test('an Eagle delete leaves the native row live and only lands in the raw copy', async () => {
+    const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);
+
+    const res = await push(eaglePeriod({ isDeleted: true }));
+
+    assert.deepStrictEqual(res.body, { id: NATIVE_ID, action: 'upsert' });
+    const row = store.get(NATIVE_KEY);
+    assert.strictEqual(row.isDeleted, false);
+    assert.deepStrictEqual(row.read, ['staff', 'idir']);
+    assert.strictEqual(row.sources.eagle.isDeleted, true);
   });
 });

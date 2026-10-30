@@ -32,10 +32,8 @@
  * copy. Mongo does not reuse an ObjectId, so a later push under this id is Eagle holding a record
  * again, which is the one thing that should bring it back.
  *
- * A ROW ENGAGE OR DEMI OWNS (`sourceSystem` `engage` or `demi`) takes only Eagle's own fields from a
- * push: the Eagle id, the raw copy and the staff fields. Its id, dates, URLs, labels, ACL, delete flag
- * and sync-out state stay its owner's, and an Eagle push is often just the echo of what DEMI sent
- * there, so it must not write them back.
+ * A ROW ENGAGE OR DEMI OWNS takes from a push only the Eagle id, the raw copy and the staff fields
+ * its owner does not write (`KEPT_FROM_ECHO`); everything else stays the row's.
  */
 
 const commentPeriods = require('../../repositories/comment-periods');
@@ -53,8 +51,12 @@ const {
   eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
-const OWNED_ELSEWHERE = new Set(['engage', 'demi']);
-const ownedElsewhere = (row) => Boolean(row) && OWNED_ELSEWHERE.has(row.sourceSystem);
+/** Staff fields an Eagle echo leaves alone, by the `sourceSystem` that writes them. */
+const KEPT_FROM_ECHO = Object.freeze({
+  engage: ['metURLAdmin'],
+  demi: ['metURLAdmin', 'commentIdCount', 'milestone', 'dateUpdated']
+});
+const ownedElsewhere = (row) => Boolean(row) && Object.hasOwn(KEPT_FROM_ECHO, row.sourceSystem);
 
 /** Eagle's staff-side period fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
 function staffFields(doc) {
@@ -134,8 +136,8 @@ function eagleOwnedOnto(current, eagleId, doc) {
   // The delete of an Eagle period the row no longer names: sync-out removed it to recreate the period
   // under a new project. It must not tie the row back to the old id.
   if (doc.isDeleted === true && current.eagleId !== eagleId) return current;
-  // `metURLAdmin` is an ENGAGE link that Eagle also carries: the row keeps its own.
-  const { metURLAdmin: _engageOwned, ...staff } = staffFields(doc);
+  const staff = staffFields(doc);
+  for (const field of KEPT_FROM_ECHO[current.sourceSystem]) delete staff[field];
   return { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
 }
 
