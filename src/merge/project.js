@@ -593,7 +593,6 @@ function buildProjectIndex(projects) {
 
 module.exports = {
   TRACK_PRECEDENCE,
-  LEGISLATION_KEY,
   EAGLE_ONLY_FIELDS,
   EAGLE_STAFF_FIELDS,
   pickEagleFields,
