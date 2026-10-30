@@ -18,6 +18,8 @@ const notify = require('../../src/services/notify');
 const { logger } = require('../../src/utils/logger');
 const { updatesStore } = require('../helpers/updates-store');
 const { parentProject, parentNotification } = require('../helpers/update-parents');
+const updateDomain = require('../../src/domain/updates');
+const { resolveAccess } = require('../../src/helpers/access-sql');
 const script = () => require('../../src/scripts/announce-updates');
 const run = (opts) => script().run(opts);
 
@@ -152,6 +154,31 @@ test('scheduled announce', async (t) => {
 
     await run({ now: at(2) });
     assert.deepStrictEqual(sent.map(s => s.id), ['soon']);
+  });
+
+  await t.test('an Update written in DEMI and then published is emailed once its publishDate passes', async () => {
+    // The native write path, not a pushed row: the due list must not ask which system wrote it.
+    const sent = wire();
+    parentProject(t, { id: 'demi-p', name: 'Open', read: ['public', 'staff', 'sysadmin'] });
+    parentNotification(t, null);
+    const { row } = updatesStore(t, []);
+    const req = { user: { sub: 'kc-1', preferred_username: 'idir-staff', realm_access: { roles: ['staff'] } }, headers: {} };
+    const staff = { access: resolveAccess(req), req };
+
+    const created = await updateDomain.create(staff, { projectId: '5c1f7a3e9b1d2c0012340001', headline: 'Open house' });
+    const id = created.value.id;
+    const published = await updateDomain.update(staff, id, { status: 'published', publishDate: at(30) });
+    assert.strictEqual(published.status, 'ok');
+    assert.strictEqual(row(id).sourceSystem, 'demi');
+
+    await run({ now: NOW });
+    assert.deepStrictEqual(sent, [], 'not due before its publishDate');
+
+    await run({ now: at(31) });
+    assert.deepStrictEqual(sent.map(s => s.id), [id]);
+    assert.strictEqual(sent[0].headline, 'Open house');
+    assert.strictEqual(row(id).notifiedBy, 'demi');
+    assert.strictEqual(row(id).notifySentAt, at(31));
   });
 
   await t.test('a refused send (4xx) keeps the claim, is recorded, and is never retried', async () => {
