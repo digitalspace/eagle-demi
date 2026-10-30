@@ -76,7 +76,7 @@ async function readForWriteByField(field, value, projectId) {
   return oneRowOf(CONTAINER, value, items, PARTITION_FIELD);
 }
 
-/** The row that names this Eagle period without being stored under its id: an ENGAGE-created one. */
+/** The row that names this Eagle period without being stored under its id: one DEMI owns (engage or demi). */
 async function readForWriteByEagleId(eagleId, projectId) {
   return readForWriteByField('eagleId', eagleId, projectId);
 }
@@ -459,6 +459,18 @@ async function listEveryEngage() {
   return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${clause}`, parameters: params });
 }
 
+/**
+ * Every row, deleted ones too, whose `syncVersion` the Eagle sync-out has not sent: never sent, failed,
+ * or a create whose delivery died. Across partitions. For `src/sync-out/pending.js` only.
+ */
+async function listSyncPending() {
+  return fetchAll(CONTAINER, {
+    // Eagle is the kind's only consumer; a second one needs its own sentVersion path here.
+    query: 'SELECT * FROM c WHERE c.syncVersion > 0 AND (NOT IS_NUMBER(c.syncOut.eagle.sentVersion) ' +
+      'OR c.syncVersion > c.syncOut.eagle.sentVersion)'
+  });
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
@@ -490,5 +502,6 @@ module.exports = {
   upsert,
   deleteById,
   nextCommentId,
-  listEveryEngage
+  listEveryEngage,
+  listSyncPending
 };
