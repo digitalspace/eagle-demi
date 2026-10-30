@@ -1267,10 +1267,23 @@ test('PUT /eagle/commentperiods/:eagleId on a period DEMI created', async (t) =>
       eagleId: PERIOD_EAGLE_ID,
       projectId: '207',
       sourceSystem: 'demi',
+      dateStarted: '2026-11-01T00:00:00.000Z',
+      dateCompleted: '2026-11-30T00:00:00.000Z',
+      dateAdded: '2026-10-28T18:00:00.000Z',
+      isMet: true,
+      metURL: 'https://engage.gov.bc.ca/demi-period',
+      metBannerImageUrl: 'https://engage.gov.bc.ca/demi-banner.jpg',
       informationLabel: 'DEMI label',
+      instructions: 'DEMI instructions',
+      additionalText: 'DEMI blurb',
+      openHouses: [{ eventDate: '2026-11-10T00:00:00.000Z', description: 'DEMI hall' }],
+      relatedDocuments: ['demi-doc-1'],
+      commentTip: 'DEMI tip',
       metURLAdmin: 'https://engage.gov.bc.ca/admin/demi',
       milestone: '5cf00c03a266b7e1877500aa',
       commentIdCount: 3,
+      addedBy: 'staff-1',
+      updatedBy: 'staff-1',
       dateUpdated: '2026-10-29T18:00:00.000Z',
       isDeleted: false,
       isPublished: false,
@@ -1281,7 +1294,8 @@ test('PUT /eagle/commentperiods/:eagleId on a period DEMI created', async (t) =>
     };
   }
 
-  const push = (doc) => pushPeriod(t, doc, 1757980005000);
+  const PUSHED_AT = 1757980005000;
+  const push = (doc) => pushPeriod(t, doc, PUSHED_AT);
 
   await t.test('the echo lands on the native row: 2xx, no second row', async () => {
     const { store, created } = partitionedCosmos(t, 'projectId', [demiRow()]);
@@ -1293,22 +1307,19 @@ test('PUT /eagle/commentperiods/:eagleId on a period DEMI created', async (t) =>
     assert.deepStrictEqual([...store.keys()], [NATIVE_KEY]);
   });
 
-  await t.test('the echo keeps the native owner, ACL and sync-out state and records the Eagle copy',
-    async () => {
-      const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);
+  await t.test('the echo changes only the Eagle-owned fields of the native row', async () => {
+    const stored = demiRow();
+    const { store } = partitionedCosmos(t, 'projectId', [stored]);
+    const doc = eaglePeriod();
 
-      await push(eaglePeriod());
+    await push(doc);
 
-      const row = store.get(NATIVE_KEY);
-      assert.strictEqual(row.sourceSystem, 'demi');
-      assert.deepStrictEqual(row.read, ['staff', 'idir']);
-      assert.strictEqual(row.isPublished, false);
-      assert.deepStrictEqual(row.syncOut, SYNC_OUT);
-      assert.strictEqual(row.syncVersion, 1);
-      assert.strictEqual(row.informationLabel, 'DEMI label');
-      assert.strictEqual(row.sources.eagle._id, PERIOD_EAGLE_ID);
-      assert.strictEqual(row.ceaaInformationLabel, STAFF_PERIOD_FIELDS.ceaaInformationLabel);
+    const { metURLAdmin: _a, commentIdCount: _c, milestone: _m, dateUpdated: _d, ...eagleStaff } =
+      STAFF_PERIOD_FIELDS;
+    assert.deepStrictEqual(store.get(NATIVE_KEY), {
+      ...stored, ...eagleStaff, sources: { ...stored.sources, eagle: doc }, eaglePushedAt: PUSHED_AT
     });
+  });
 
   await t.test('the echo keeps the comment counter, milestone and edit date DEMI staff write', async () => {
     const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);

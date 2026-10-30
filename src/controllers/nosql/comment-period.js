@@ -1,7 +1,7 @@
 'use strict';
 
-// Eagle mirror for `CommentPeriod`, sole writer of `commentPeriods`. A period never out-ranks its
-// project (`constrainToProject` keeps the lower level), so an unpublished project hides its periods.
+// The Eagle echo path for `CommentPeriod`. A period never out-ranks its project
+// (`constrainToProject` keeps the lower level), so an unpublished project hides its periods.
 
 // A `ProjectNotification` parent has no ACL to out-rank: the period keeps its own `read[]` minus
 // compliance, partitioned under the notification id. `helpers/parent-admit` tells the parents apart.
@@ -9,11 +9,11 @@
 // Comments are gated on their own stored `read[]`, never on the period's, so every level change
 // here is re-derived onto them.
 
-// Eagle sends a hard delete as a push with `isDeleted: true`. DEMI flags and narrows to level 2,
-// never removes; only a later Eagle push of the same id clears it (`helpers/acl-cascade` honours it).
+// Eagle sends a hard delete as a push with `isDeleted: true`; DEMI flags it and narrows to level 2.
+// Only a later push of the same id clears the flag: Mongo never reuses an ObjectId.
 
-// A row ENGAGE or DEMI owns takes from a push only the Eagle id, the raw copy and the staff fields
-// its owner does not write (`KEPT_FROM_ECHO`); everything else stays the row's.
+// A row ENGAGE or DEMI owns takes only the Eagle id, raw copy and staff fields its owner does not
+// write (`KEPT_FROM_ECHO`): an Eagle push is often the echo of what DEMI sent.
 
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
@@ -97,8 +97,8 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
     commentTip: doc.commentTip || '',
     ...staffFields(doc),
 
-    // Eagle dropped this record. `read` hides the row; this flag says why and stops a cascade
-    // widening it again.
+    // Flag, never remove: staff and reconcile still see what Eagle dropped. `helpers/acl-cascade`
+    // checks this flag, not the raw copy, because the Eagle copy still says public.
     isDeleted: doc.isDeleted === true,
 
     // read[] is authoritative and isPublished mirrors it (ADR-004), as every other mirror does.
@@ -130,10 +130,10 @@ async function readTarget(eagleId, doc, projectId) {
 }
 
 /**
- * Mirror one raw Eagle `CommentPeriod` for the push handler or src/scripts/seed-public-reads.js;
- * null when the parent is in neither container.
+ * Mirror one raw Eagle `CommentPeriod` for the push handler or src/scripts/seed-public-reads.js; null
+ * when the parent is missing (push answers 404, backfill counts it). `ignored` (stale, dropped-by-sync-out) wrote nothing.
  * @param {object} [parentRow] the admitted parent from `helpers/parent-admit`; no `kind` = project
- * @returns {Promise<{saved, existing, cascadeError}|{ignored, existing}|null>} `ignored` wrote nothing
+ * @returns {Promise<{saved, existing, cascadeError}|{ignored, existing}|null>}
  */
 async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}) {
   const parent = parentRow || await admitParent(doc.project, { childId: eagleId });
