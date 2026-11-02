@@ -817,6 +817,11 @@ function keepNativeIdentity(merged, existing) {
     else merged[field] = existing[field];
   }
   merged.sources = { ...existing.sources, eagle: merged.sources.eagle };
+  // Sync-out drives the level of a project it created from DEMI; Eagle's stays in `sources.eagle.read`.
+  if (hasValue(existing.eagleId) && existing.syncOut?.eagle?.mintedId === String(existing.eagleId)) {
+    merged.read = existing.read;
+    merged.isPublished = existing.isPublished;
+  }
 }
 
 /** The row a push writes, built from whatever revision is stored at the moment of the write. */

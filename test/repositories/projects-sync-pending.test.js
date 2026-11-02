@@ -24,6 +24,8 @@ const ROWS = [
   project('never-sent', 1),
   project('never-changed', 0),
   project('track-null', 2, 1, { sources: { track: null } }),
+  // Cosmos answers `null != 'eagle'` as undefined, which drops the row; the evaluator does the same.
+  project('source-null', 2, 1, { sourceSystem: null }),
   project('tracked', 2, 1, { sources: { track: { track_project_id: 7 } } }),
   project('eagle-owned', 2, 1, { sourceSystem: 'eagle' }),
   project('eagle-5cf00c03a266b7e1877504db', 2, 1, { sourceSystem: undefined })
@@ -38,7 +40,7 @@ test('projects.listSyncPending lists only native rows past their sent version, a
 
     const rows = await projects.listSyncPending();
 
-    assert.deepStrictEqual(rows.map(row => row.id), ['behind', 'never-sent', 'track-null']);
+    assert.deepStrictEqual(rows.map(row => row.id), ['behind', 'never-sent', 'track-null', 'source-null']);
     assert.deepStrictEqual(ROWS.filter(isNativeProject).map(row => row.id),
-      ['behind', 'sent', 'never-sent', 'never-changed', 'track-null'], 'the SQL and the JS rule agree');
+      ['behind', 'sent', 'never-sent', 'never-changed', 'track-null', 'source-null'], 'the SQL and the JS rule agree');
   });

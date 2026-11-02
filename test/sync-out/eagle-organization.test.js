@@ -159,7 +159,11 @@ test('sync-out of DEMI-created organizations', async (t) => {
   await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off an organization with no eagleId is held, its sync state untouched',
     async (tt) => {
       useEnv(tt, { SYNC_OUT_EAGLE_NATIVE_ENABLED: 'false' });
-      const store = mirrorStore(tt, [nativeOrg()]);
+      // A parent Eagle lacks: held must answer before the body lookup that would fail on it.
+      const store = mirrorStore(tt, [
+        nativeOrg({ parentCompany: 'org-parent' }),
+        { container: 'lists', id: 'org-parent', kind: 'Organization', sourceSystem: 'demi', eagleId: null, read: PUBLIC_ACL }
+      ]);
       wireQueue(tt);
       const calls = wireEagle(tt, {});
 
@@ -206,6 +210,17 @@ test('sync-out of DEMI-created organizations', async (t) => {
 
     assert.deepStrictEqual(keys(calls), ['POST /organization', `PUT /organization/${STRAY_ID}/unpublish`]);
     assert.strictEqual(rowOf(store).syncOut.eagle.strayEagleId, STRAY_ID);
+  });
+
+  await t.test('a stray unpublish that fails is logged, and the stray is still recorded', async (tt) => {
+    const store = mirrorStore(tt, [nativeOrg({ isPublished: false, read: [...PRIVATE_ACL] })]);
+    wireQueue(tt);
+    wireEagle(tt, { 'POST /organization': { body: { _id: STRAY_ID } }, 'PUT *': { status: 500 } });
+
+    await run(message(), 1);
+
+    assert.strictEqual(rowOf(store).syncOut.eagle.strayEagleId, STRAY_ID);
+    assert.strictEqual(logged('error', `stray Eagle id ${STRAY_ID} not cleaned up`).length, 1);
   });
 
   await t.test('an id already held by an Eagle-owned mirror row is refused before any POST', async (tt) => {

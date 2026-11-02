@@ -19,7 +19,7 @@ const KIND = 'project';
 const RENAMED = Object.freeze({ projectType: 'type', abbreviation: 'shortName', address: 'location' });
 /** Fields eagle-api's PUT writes under the same name, as stored. */
 const SAME_NAME = Object.freeze([
-  'name', 'description', 'eaStatus', 'eaStatusDate', 'decisionDate', 'legislationYear', 'CEAALink', 'build',
+  'name', 'description', 'eaStatus', 'eaStatusDate', 'decisionDate', 'CEAALink', 'build',
   'sector', 'commodity', 'region', 'substantially', 'substantiallyDate', 'intake', 'dispute', 'disputeDate'
 ]);
 /** ObjectId fields in eagle-api's model that DEMI may hold as `{ _id, name }` refs: sent as the bare id or null. */
@@ -91,6 +91,10 @@ async function send(row, { update }) {
     path: '/project',
     noun: 'project',
     put: (eagleId, fields) => put(s, eagleId, body, fields),
+    // A PUT naming a year whose block the Eagle project lacks answers 404, so the year rides the create only.
+    ...(row.legislationYear !== undefined ? { postOnly: { legislationYear: row.legislationYear } } : {}),
+    mintedOnly: true,
+    mirrorRowId: eagleOnlyProjectId,
     unknownId: () => ({ line: 'Eagle stored the project under an unknown id; find it by name', fields: { name: body.name } }),
     twinOf: async (eagleId) => Boolean(await projects.readForWrite(eagleOnlyProjectId(eagleId))),
     // eagle-api's POST stores every new project staff-only, and its echo narrows the DEMI row to match.

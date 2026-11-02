@@ -189,17 +189,23 @@ async function claimCreate(row, update, goneId) {
  * Claim the create of a native row and store its Eagle id in the same write, so the echo of the POST finds
  * the row. A live claim blocks whether or not it holds an id; a lapsed one is retaken with the stored id.
  */
-async function claimMinted(row, update, kind) {
+async function claimMinted(row, update, kind, { mintedOnly = false } = {}) {
   const claim = crypto.randomUUID();
   let held = false;
   let minted = false;
   let eagleId = null;
   let strayRow = null;
+  let foreignId = null;
   const result = await update((current) => {
     const entry = current.syncOut && current.syncOut[NAME];
     // A delivery that read the row before another recorded a stray must not take the claim and POST again.
     if (Object.hasOwn(entry || {}, 'strayEagleId')) {
       strayRow = current;
+      return null;
+    }
+    // An id staff linked after this delivery read the row names a record Eagle staff own.
+    if (mintedOnly && current.eagleId && (entry || {}).mintedId !== String(current.eagleId)) {
+      foreignId = String(current.eagleId);
       return null;
     }
     held = claimHeld(entry, Date.now());
@@ -219,6 +225,7 @@ async function claimMinted(row, update, kind) {
   });
   if (result.status === 'missing') return { missing: true };
   if (strayRow) refuseStray(strayRow);
+  if (foreignId) return { foreignId };
   if (held) throw new Error(`another delivery is creating the Eagle copy of ${kind} ${row.id}`);
   if (minted) {
     logger.info(`[sync-out eagle] minted Eagle id ${eagleId} for ${kind} ${row.id}`, { rowId: row.id, eagleId, kind });
@@ -341,11 +348,16 @@ async function create(s, row, body, update, logFields, goneId) {
 
 /**
  * POST a native row under its stored or newly minted id; a 409 means the record exists, so PUT. `spec` names
- * the kind's route, PUT and optional hooks (`heldByMirror`, `onStray`, `afterCreate`, `twinOf`).
+ * the kind's route, PUT, options (`mintedOnly`, `postOnly`, `mirrorRowId`) and hooks (`heldByMirror`, `onStray`, ...).
  */
 async function createMinted(s, row, body, update, logFields, spec) {
-  const claimed = await claimMinted(row, update, spec.kind);
+  const claimed = await claimMinted(row, update, spec.kind, { mintedOnly: spec.mintedOnly });
   if (claimed.missing) return { status: 'skipped' };
+  if (claimed.foreignId) {
+    logger.warn(`[sync-out eagle] ${spec.kind} ${row.id} holds Eagle id ${claimed.foreignId}, which sync-out did not create; ` +
+      'not sent', { ...logFields, eagleId: claimed.foreignId });
+    return { status: 'skipped' };
+  }
   const { claim, eagleId } = claimed;
   const fields = { ...logFields, eagleId };
   let stray;
@@ -355,7 +367,7 @@ async function createMinted(s, row, body, update, logFields, spec) {
         { ...fields, mirrorRowId: eagleId });
       throw new Error(`Eagle id ${eagleId} of ${spec.kind} ${row.id} is held by an Eagle-owned DEMI row`);
     }
-    const res = await call(s, 'POST', spec.path, { ...body, _id: eagleId }, fields);
+    const res = await call(s, 'POST', spec.path, { ...body, ...spec.postOnly, _id: eagleId }, fields);
     if (res.status === 409) {
       logger.info(`[sync-out eagle] Eagle already holds ${eagleId} for row ${row.id}, PUT instead`, fields);
       if (!await spec.put(eagleId, fields)) {
@@ -370,8 +382,9 @@ async function createMinted(s, row, body, update, logFields, spec) {
         // eagle-api ignored `_id`: each POST adds another Eagle record, so the stored stray stops every retry.
         stray = { strayEagleId: answered };
         if (answered) {
+          const mirrorRowId = spec.mirrorRowId ? spec.mirrorRowId(answered) : answered;
           logger.error(`[sync-out eagle] eagle-api stored row ${row.id} as ${answered}, not ${eagleId}; not re-keyed. ` +
-            `${answered} is also the id of the DEMI mirror row its echo made`, { ...fields, ...stray, mirrorRowId: answered });
+            `Its echo made the DEMI mirror row ${mirrorRowId}`, { ...fields, ...stray, mirrorRowId });
           if (spec.onStray) {
             await spec.onStray(answered, fields).catch(e => logger.error(
               `[sync-out eagle] row ${row.id}: stray Eagle id ${answered} not cleaned up`, { ...fields, ...stray, error: e.message }));
