@@ -70,16 +70,6 @@ resource costBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
         threshold: 100
         contactEmails: contactEmails
       }
-      // Forecast, not actual: this is the only notification that can arrive while the money is
-      // still unspent. Azure projects the month from the trend so far, so a resource left running
-      // on the 3rd is reported on the 4th rather than confirmed on the 30th.
-      Forecasted_100_Percent: {
-        enabled: true
-        operator: 'GreaterThanOrEqualTo'
-        threshold: 100
-        contactEmails: contactEmails
-        thresholdType: 'Forecasted'
-      }
     }
   }
 }

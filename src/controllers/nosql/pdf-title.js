@@ -57,6 +57,9 @@ const SWEEP_MAX = 20;
  * can take many leases to finish. 10 gives them room and still ends a crash loop after 10 runs.
  */
 const MAX_SILENT_RELEASES = 10;
+// Failed backup copies in a row before a row is parked for review. The worker tries a 503 lease
+// 4 times per run, so 12 is 3 runs: one store hiccup inside a run does not park a file.
+const MAX_BACKUP_FAILURES = 12;
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const MD5_B64 = /^[A-Za-z0-9+/]{22}==$/;
@@ -687,12 +690,25 @@ async function backupAndAnswer(req, res, row, leaseRecord, original, title) {
     }
   } catch (err) {
     const changed = isPreconditionFailed(err) || err.code === 'PreconditionFailed';
-    logger.error('[pdf-title] backup copy failed; lease released', { ...fields, error: err.message, changed });
-    await release(row);
-    return changed ? refuse(res, 409, 'source-changed') : refuse(res, 503, 'backup-failed');
+    logger.error('[pdf-title] backup copy failed; lease released', {
+      ...fields, error: err.message || String(err), code: err.code, name: err.name, stack: err.stack, changed
+    });
+    if (changed) {
+      await release(row);
+      return refuse(res, 409, 'source-changed');
+    }
+    const backupFailures = (recordOf(row).backupFailures || 0) + 1;
+    if (backupFailures < MAX_BACKUP_FAILURES) {
+      await release(row, { backupFailures });
+      return refuse(res, 503, 'backup-failed');
+    }
+    logger.error('[pdf-title] backup copy failed too often; needs review', { ...fields, backupFailures });
+    await release(row, { status: 'needs-review', reason: 'backup-failed', backupFailures: null });
+    return refuse(res, 409, 'backup-failed');
   }
 
-  const record = recordOf(row);
+  // A copy that worked ends the run of failures.
+  const { backupFailures: _failures, ...record } = recordOf(row);
   const withBackup = { ...leaseRecord, backupKey, backupVersionId: copied.versionId || null };
   if (leaseRecord.mode === 'title' && !copied.versionId) {
     // The original is read by version at commit; refusing here costs no hash of the file.

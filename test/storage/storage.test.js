@@ -418,25 +418,6 @@ test('upload URLs and backup copies', async (t) => {
     await assert.rejects(require('../../src/storage/minio').getUploadUrl(KEY), /needs an expiry/);
   });
 
-  await t.test('a backup copies the original to its backup key, only at the stat etag', async () => {
-    t.mock.method(Minio.Client.prototype, 'statObject', async () => {
-      throw Object.assign(new Error('Not Found'), { code: 'NotFound' });
-    });
-    let headers, dest;
-    t.mock.method(Minio.Client.prototype, 'copyObject', async (source, target) => {
-      headers = source.getHeaders(); dest = target.Object;
-      return { Etag: 'aa11' };
-    });
-
-    const res = await storage.copyObject(KEY, storage.backupKeyFor(KEY), { ifSourceEtag: 'e7f3' });
-
-    assert.strictEqual(dest, `ozwdez/pdf-title-backup/${KEY}`);
-    assert.strictEqual(headers['x-amz-copy-source'], `zdspnb/ozwdez/${KEY}`);
-    assert.strictEqual(headers['x-amz-copy-source-if-match'], 'e7f3');
-    assert.strictEqual(res.etag, 'aa11');
-    assert.strictEqual(res.versionId, null);
-  });
-
   await t.test('a backup copy reports the version it wrote', async () => {
     t.mock.method(Minio.Client.prototype, 'statObject', async () => {
       throw Object.assign(new Error('Not Found'), { code: 'NotFound' });
@@ -481,6 +462,26 @@ test('upload URLs and backup copies', async (t) => {
     assert.strictEqual(dest, `ozwdez/${KEY}`);
     assert.strictEqual(headers['x-amz-copy-source'], `zdspnb/ozwdez/pdf-title-backup/${KEY}`);
     assert.strictEqual(headers['x-amz-copy-source-if-match'], 'aa11');
+  });
+
+  await t.test('a backup copies the original to its backup key, only at the stat etag', async () => {
+    // `+` sent raw in the copy source is read by the store as a space, so the source is not found.
+    const key = 'etl/brilliant-powerplant-expansion/1041983059473_PhtYT0k+Oyjd78=.pdf';
+    t.mock.method(Minio.Client.prototype, 'statObject', async () => {
+      throw Object.assign(new Error('Not Found'), { code: 'NotFound' });
+    });
+    const req = t.mock.method(Minio.Client.prototype, 'makeRequestAsync', async () => Object.assign(
+      require('stream').Readable.from([Buffer.from('<CopyObjectResult><ETag>"aa11"</ETag></CopyObjectResult>')]),
+      { headers: { etag: '"aa11"' } }));
+
+    const res = await storage.copyObject(key, storage.backupKeyFor(key), { ifSourceEtag: 'e7f3' });
+
+    const { objectName, headers } = req.mock.calls[0].arguments[0];
+    assert.strictEqual(headers['x-amz-copy-source'],
+      'zdspnb/ozwdez/etl/brilliant-powerplant-expansion/1041983059473_PhtYT0k%2BOyjd78%3D.pdf');
+    assert.strictEqual(headers['x-amz-copy-source-if-match'], 'e7f3');
+    assert.strictEqual(objectName, `ozwdez/pdf-title-backup/${key}`);
+    assert.deepStrictEqual(res, { etag: 'aa11', versionId: null });
   });
 
   const refusedCopies = [
