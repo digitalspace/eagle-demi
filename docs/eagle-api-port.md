@@ -205,7 +205,7 @@ Rules:
 Ownership per phase:
 - Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:491-494` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`), which has no caller until F1 maps `id` to `_id`.
 - Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/ownership/project.js`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `src/ownership/project.js:111-114` (the `PUT_IGNORED_FIELDS` block) and remove the dead pins-shape branch in `carryEagleOnlyFields` (`src/merge/project.js`) and its tests (`test/merge/project.test.js`).
-- Sync-out: DEMI pushes the project's organization id list and published flag into eagle-api's `pins` and `pinsRead`. eagle-api project PUT does not touch `pins` (`api/controllers/project.js` has no `pins` reference on `origin/develop`), so the push uses the eagle-api pin routes: `POST /project/:id/pin` for ids to add, `DELETE /project/:id/pin/:pinId` for ids to remove, `PUT /project/:id/pin/publish` or `/unpublish` for the flag. The consumer reads the eagle-api list first and sends the difference.
+- Sync-out: none. Pins are not synced to eagle-api. After the Flip, eagle-admin and eagle-public read and write pins on DEMI's project, and on eagle-api only the pin routes (`api/controllers/pins.js`, retired in R2) use `pins` and `pinsRead`, so no Eagle reader and no eagle-api write needs them. `src/sync-out/kinds.js` registers no pins kind.
 
 Open before build:
 - (a) Resolved: the label read exists as `listOrganizationLabels` in `src/repositories/lists.js`, selecting `c.id, c.name, c.province` with key `id`; the domain maps `id` to `_id` in F1; no caller until F1.

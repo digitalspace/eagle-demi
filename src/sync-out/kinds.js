@@ -31,12 +31,18 @@ async function reconcileCommentPeriods(options = {}) {
   return { ...(await pending.reconcile(options, { ...deps, repo })), engage };
 }
 
+// No pins kind: after F1 eagle-admin and eagle-public read and write pins on DEMI's project; on eagle-api only the
+// pin routes eagle-admin stops calling use `pins` and `pinsRead`.
 const KINDS = Object.freeze({
+  // eagle-admin writes comments through eagle-api until F3; that handler takes the period's `commentIdCount`
+  // (comment.js getNextCommentIdCount) and comment reads gate on the period (helpers/parentRead.js).
   [COMMENT_PERIOD]: Object.freeze({
     repo: commentPeriods,
     consumers: Object.freeze(['eagle']),
     reconcile: reconcileCommentPeriods
   }),
+  // eagle-admin writes documents through eagle-api until F10 (PUT, publish, feature); those handlers read
+  // Eagle's copy of the document.
   [DOCUMENT]: Object.freeze({
     // Called through the module, so a stub on the repository reaches the engine. The plain upsert never reads `_etag`.
     repo: Object.freeze({
@@ -47,6 +53,8 @@ const KINDS = Object.freeze({
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(DOCUMENT))
   }),
+  // A project's proponent and an organization's parentCompany are sent by Eagle id, and eagle-api's project reads
+  // join `proponent` to the organization (helpers/aggregators.js).
   [ORGANIZATION]: Object.freeze({
     // `lists` is partitioned on kind, so the read names it; a message's null projectId would miss the row.
     repo: Object.freeze({
@@ -57,6 +65,8 @@ const KINDS = Object.freeze({
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(ORGANIZATION))
   }),
+  // eagle-api's document handlers, which eagle-admin writes through until F10, read the parent project
+  // (document.js featureDocument counts featured documents per project).
   [PROJECT]: Object.freeze({
     repo: Object.freeze({
       readForWrite: (id) => projects.readForWrite(id),
