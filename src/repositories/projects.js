@@ -276,7 +276,8 @@ async function listWithEagleId(access) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: eagleIdCriteria(),
-    select: 'c.id, c.eagleId, c.sourceSystem, c.read, c.isPublished, c.isDeleted'
+    select: 'c.id, c.eagleId, c.sourceSystem, c.read, c.isPublished, c.isDeleted, ' +
+      'c.sources.eagle.isDeleted AS eagleDeleted, c.cascadePendingAt'
   });
   return fetchAll(CONTAINER, spec);
 }

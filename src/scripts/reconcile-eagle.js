@@ -351,7 +351,8 @@ function driftOf(summary) {
     // A misfiled row is drift the id-set diffs cannot see — present in both, stored under the
     // wrong parent — so it counts here or the alert stays quiet about it.
     return total + s.unpublishedOrDeleted.length + s.eagleOnly.length +
-      (s.misfiledParent ? s.misfiledParent.length : 0) + (s.aclMismatch ? s.aclMismatch.length : 0);
+      (s.misfiledParent ? s.misfiledParent.length : 0) + (s.aclMismatch ? s.aclMismatch.length : 0) +
+      (s.staleRetired ? s.staleRetired.length : 0);
   }, orphans + stored);
 }
 
@@ -546,16 +547,24 @@ async function reconcile(argv = [], deps = {}) {
   const projectRead = new Map(projectRows.map(row => [String(row.id), row.read]));
   const projectReadOf = row => projectRead.get(String(row.projectId)) || null;
 
-  // A DEMI delete caps a row Eagle still publishes; reported on its own, never as ACL drift.
+  // A delete caps a row Eagle may still publish, so a deleted row and its twin (same eagleId) are
+  // never ACL drift. Still listed: a DEMI delete is reported apart, an Eagle-side one is stale drift.
   const deleted = row => row.isDeleted === true;
-  const deletedProjects = new Set(projectRows.filter(deleted).map(row => String(row.id)));
+  const listed = row => eagleProjectIds.has(String(row.eagleId));
+  const deletedRows = projectRows.filter(deleted);
+  const deletedEagleIds = new Set(deletedRows.map(row => String(row.eagleId)));
+  const eagleIdsOf = rows => [...new Set(rows.map(row => String(row.eagleId)))];
+  // Under a project gone from Eagle, unless its cascade is still owed and the document may be public.
+  const retiredParents = new Set(deletedRows.filter(row => !listed(row) && !row.cascadePendingAt)
+    .map(row => String(row.id)));
   summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size,
     ...splitRetired(projectDiff, deleted),
-    aclMismatch: aclMismatch(projectRows.filter(row => !deleted(row)), row => String(row.eagleId), eagleRead),
-    demiDeleted: projectRows.filter(row => deleted(row) && eagleRead.has(String(row.eagleId)))
-      .map(row => String(row.eagleId)) };
+    aclMismatch: aclMismatch(projectRows.filter(row => !deletedEagleIds.has(String(row.eagleId))),
+      row => String(row.eagleId), eagleRead),
+    demiDeleted: eagleIdsOf(deletedRows.filter(row => listed(row) && row.eagleDeleted !== true)),
+    staleRetired: eagleIdsOf(deletedRows.filter(row => listed(row) && row.eagleDeleted === true)) };
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size,
-    ...splitRetired(documentDiff, row => deletedProjects.has(String(row.projectId))),
+    ...splitRetired(documentDiff, row => retiredParents.has(String(row.projectId))),
     aclMismatch: aclMismatch(documentRows, row => String(row.id), eagleRead, projectReadOf) };
 
   // The public-read containers, enumerated with the SAME predicates a request reads under, but
@@ -804,6 +813,10 @@ function report(summary, { json } = {}) {
     }
     if (s.demiDeleted && s.demiDeleted.length) {
       line('demiDeleted (deleted in DEMI, still published in Eagle; not counted as drift)', s.demiDeleted);
+    }
+    if (s.staleRetired && s.staleRetired.length) {
+      line('staleRetired (retired as gone from Eagle, but Eagle lists it again; a seed run or push restores it)',
+        s.staleRetired);
     }
     if (s.retired && s.retired.length) {
       line('retired (deleted in DEMI, or under a deleted project, and gone from Eagle; not counted as drift)',

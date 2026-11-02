@@ -572,7 +572,7 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     await projects.listWithEagleId(SYSTEM);
 
     const { spec } = calls[0];
-    assert.match(spec.query, /^SELECT c\.id, c\.eagleId, c\.sourceSystem, c\.read, c\.isPublished, c\.isDeleted FROM c/);
+    assert.match(spec.query, /^SELECT c\.id, c\.eagleId, c\.sourceSystem, c\.read, c\.isPublished, c\.isDeleted, c\.sources\.eagle\.isDeleted AS eagleDeleted, c\.cascadePendingAt FROM c/);
     assert.match(spec.query, /IS_DEFINED\(c\.eagleId\) AND NOT IS_NULL\(c\.eagleId\)/);
     assert.doesNotMatch(spec.query, /c\.sourceSystem = /,
       'filtering by sourceSystem here reports ~350 matched projects as missing from DEMI');
