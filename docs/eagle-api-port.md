@@ -101,8 +101,8 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 
 - `writeRow` raises `syncVersion` on every write, one past the stored row it rebuilt from (`nextSyncVersion` in `src/sync-out/kinds.js`, which the ENGAGE ingest uses too). It does not queue anything.
 - `src/sync-out/kinds.js` maps each kind to its repository, the names of the consumers that send it, and its reconcile hook. Four kinds are registered: `commentPeriod`, `document`, `organization` and `project`. The `reconcileEngage` timer in `api/index.js` runs every kind's hook on `RECONCILE_ENGAGE_SCHEDULE`.
-- `commentPeriod` reconciles through `src/scripts/reconcile-engage.js`.
-- `document`, `organization` and `project` reconcile through the pending hook in `src/sync-out/pending.js`. The hook lists the kind's rows holding a version a consumer has not sent.
+- Every kind reconciles through the pending hook in `src/sync-out/pending.js`. The hook lists the kind's rows holding a version a consumer has not sent, a create claim whose lease lapsed included.
+- `commentPeriod` first runs the ENGAGE checks in `src/scripts/reconcile-engage.js`, then the pending hook, which alone sees DEMI-native periods. A row the ENGAGE pass re-queued is left out of the pending pass, so it gets one message.
 - With `{ repair: true }` the hook queues each again as a repair message of that kind (`node src/scripts/sync-out-pending.js --kind document --repair`). The timer only lists them.
 - Every kind has a consumer named `eagle`, so `index.js` keeps a consumer list per kind and a message finds its consumer through its `kind`.
 - Each kind except `commentPeriod` sends only when `SYNC_OUT_EAGLE_ENABLED` and its own switch are both `true`. Every switch is off by default.

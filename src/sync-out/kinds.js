@@ -14,12 +14,28 @@ const DOCUMENT = 'document';
 const ORGANIZATION = 'organization';
 const PROJECT = 'project';
 
+/**
+ * The ENGAGE checks, then the pending hook, which alone sees native rows and lapsed create claims.
+ * Resolves to the pending report with the ENGAGE report under `engage`.
+ */
+async function reconcileCommentPeriods(options = {}) {
+  // Required on call: the script requires sync-out itself.
+  const engage = await require('../scripts/reconcile-engage').run(options);
+  const deps = pending.depsFor(COMMENT_PERIOD);
+  // A row the ENGAGE pass re-queued reads as unsent now; a second message would only be skipped as current.
+  const requeued = new Set(options.repair
+    ? [...engage.neverSynced, ...engage.missingInEagle, ...engage.drift].map(f => f.id) : []);
+  const repo = {
+    listSyncPending: async () => (await deps.repo.listSyncPending()).filter(row => !requeued.has(String(row.id)))
+  };
+  return { ...(await pending.reconcile(options, { ...deps, repo })), engage };
+}
+
 const KINDS = Object.freeze({
   [COMMENT_PERIOD]: Object.freeze({
     repo: commentPeriods,
     consumers: Object.freeze(['eagle']),
-    // Required on call: the script requires sync-out itself.
-    reconcile: (options) => require('../scripts/reconcile-engage').run(options)
+    reconcile: reconcileCommentPeriods
   }),
   [DOCUMENT]: Object.freeze({
     // Called through the module, so a stub on the repository reaches the engine. The plain upsert never reads `_etag`.
