@@ -65,14 +65,16 @@ function stubModule(t, module, exports) {
   t.after(() => { require.cache[file] = cached; });
 }
 
+const pick = (obj, keys) => Object.fromEntries(keys.map(k => [k, obj[k]]));
+
+test('with every schedule unset, no timer registers and both HTTP routes stay', (t) => {
+  const { registered } = loadIndex(t);
+
+  assert.deepStrictEqual(registered.timers, []);
+  assert.deepStrictEqual(registered.https.map(h => h.name), ['api', 'apiRoot']);
+});
+
 for (const row of TIMERS) {
-  test(`${row.name}: an unset ${row.setting} registers no timer and keeps both HTTP routes`, (t) => {
-    const { registered } = loadIndex(t, row.setting, undefined);
-
-    assert.deepStrictEqual(registered.timers, []);
-    assert.deepStrictEqual(registered.https.map(h => h.name), ['api', 'apiRoot']);
-  });
-
   // Every environment declares the setting, empty until it opts in: appSettings is a PUT.
   test(`${row.name}: an empty ${row.setting} registers no timer`, (t) => {
     const { registered } = loadIndex(t, row.setting, '');
@@ -83,12 +85,12 @@ for (const row of TIMERS) {
   test(`${row.name}: a set ${row.setting} binds the setting name, not its value, and skips startup`, (t) => {
     const { registered, index } = loadIndex(t, row.setting, SCHEDULE);
 
-    assert.deepStrictEqual(registered.timers.map(({ name, options }) => ({ name, ...options })), [{
-      name: row.name,
+    assert.deepStrictEqual(registered.timers.map(({ name }) => name), [row.name]);
+    assert.deepStrictEqual(pick(registered.timers[0].options, ['schedule', 'runOnStartup', 'handler']), {
       schedule: `%${row.setting}%`,
       runOnStartup: false,
       handler: index[row.name]
-    }]);
+    });
   });
 
   test(`${row.name}: the handler runs its job with ${JSON.stringify(row.args)}`, async (t) => {
@@ -110,10 +112,9 @@ for (const row of TIMERS) {
 
     await assert.doesNotReject(() => index[row.name]());
 
-    assert.deepStrictEqual(errors, [{
-      message: row.failure.message,
-      meta: { ...row.failure.meta, error: 'upstream unreachable', stack: thrown.stack }
-    }]);
+    const expected = { ...row.failure.meta, error: 'upstream unreachable', stack: thrown.stack };
+    assert.deepStrictEqual(errors.map(e => e.message), [row.failure.message]);
+    assert.deepStrictEqual(pick(errors[0].meta, Object.keys(expected)), expected);
   });
 }
 

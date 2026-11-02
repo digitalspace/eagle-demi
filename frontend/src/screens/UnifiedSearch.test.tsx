@@ -436,6 +436,7 @@ describe('UnifiedSearch', () => {
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'dam' } });
     await act(() => vi.advanceTimersByTimeAsync(300));
     await act(() => vi.advanceTimersByTimeAsync(0));
+    // findByText polls on setTimeout, so the real clock must be back before it, not in afterEach.
     vi.useRealTimers();
 
     expect(await screen.findByText('The index is down')).toBeTruthy();

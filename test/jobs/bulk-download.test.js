@@ -360,8 +360,9 @@ test('the bulk download worker', async (t) => {
     await assert.rejects(worker.run('job-1'), /403 from the object store/);
     assert.deepStrictEqual(destroyed, [], 'nothing has arrived yet — that is the whole problem');
     land();
-    // The worker awaited each open before this test did, so its close has run once these settle.
+    // The worker closes each stream in its own continuation of the open; one macrotask lets them all run.
     await Promise.all(opens);
+    await new Promise(r => setImmediate(r));
 
     assert.deepStrictEqual(destroyed.sort(), opened.sort(),
       'every socket the window started is closed when it lands, the one taken for this document ' +
@@ -574,6 +575,7 @@ test('the bulk download worker', async (t) => {
 
     await assert.rejects(worker.run('job-1'), /403 from the object store/);
     await Promise.all(opens);
+    await new Promise(r => setImmediate(r));
 
     assert.deepStrictEqual(destroyed.sort(), opened.sort(),
       'destroying a buffer does not close the socket feeding it, so every source has to be closed ' +

@@ -50,6 +50,20 @@ test('PROJECT_SELECT is a subset of maxVis 4 index fields', () => {
   }
 });
 
+// The index names the Cosmos `id` a second time as `chunkId`; the indexer's field mappings say so.
+test('CHUNK_SELECT is a subset of maxVis 4 chunk fields', () => {
+  const catalog = catalogFor('chunks');
+  const sourceOf = new Map(require('../../azure/search/indexers/chunks-indexer.json').fieldMappings
+    .map(m => [m.targetFieldName, m.sourceFieldName]));
+  const names = aiSearch.CHUNK_SELECT.split(',');
+  assert.ok(names.length > 1, 'the select must not be empty, or this passes vacuously');
+
+  const offPolicy = names
+    .map(name => [name, catalog[sourceOf.get(name) ?? name]?.maxVis])
+    .filter(([name, maxVis]) => maxVis !== (POLICY_FIELDS.has(name) ? 0 : 4));
+  assert.deepStrictEqual(offPolicy, [], 'each selected chunk field reaches the mapper at every level');
+});
+
 // Chunk text is held back twice, by the catalog and by every select: semantic ranking keeps
 // `content` retrievable in the index (docs/rbac-architecture.md §2 item 9). Inline selects count.
 test('content is maxVis 0 and absent from every select', () => {

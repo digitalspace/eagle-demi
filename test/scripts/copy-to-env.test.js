@@ -17,6 +17,7 @@ const TARGET = 'https://target.example/';
 function fakeContainer(pages, total) {
   const reads = [];
   const stored = [];
+  let fetches = 0;
   return {
     reads,
     stored,
@@ -25,7 +26,11 @@ function fakeContainer(pages, total) {
         reads.push({ query: spec.query, token: opts.continuationToken });
         return {
           async fetchAll() { return { resources: [total ?? stored.length] }; },
-          async fetchNext() { return pages[opts.continuationToken || 'start']; }
+          async fetchNext() {
+            // Each page is served once; a copy loop that never stops fails here instead of hanging.
+            if (++fetches > Object.keys(pages).length) throw new Error(`fetchNext called ${fetches} times`);
+            return pages[opts.continuationToken || 'start'];
+          }
         };
       },
       async upsert(row) { stored.push(row); return { resource: row }; }
@@ -98,5 +103,27 @@ test('copy-to-env', async (t) => {
       { client: fakeClient(source, target) });
     assert.deepStrictEqual(target.stored.map((r) => r.id), ['b']);
     assert.strictEqual(JSON.parse(fs.readFileSync(checkpoint, 'utf8')).projects.copied, 2);
+  });
+
+  await t.test('--live skips a container whose target already holds as many rows as the source', async (tt) => {
+    const source = fakeContainer(onePage(), 2);
+    const target = fakeContainer({}, 2);
+    await main(['--target', TARGET, '--containers', 'projects', '--checkpoint', tmpCheckpoint(tt), '--live'],
+      { client: fakeClient(source, target) });
+    assert.deepStrictEqual(source.reads.map((r) => r.query), ['SELECT VALUE COUNT(1) FROM c']);
+    assert.deepStrictEqual(target.stored, []);
+  });
+
+  await t.test('a run with no --target throws', async (tt) => {
+    await assert.rejects(main(['--containers', 'projects', '--checkpoint', tmpCheckpoint(tt)],
+      { client: fakeClient(fakeContainer({}), fakeContainer({})) }), { message: 'Missing --target <endpoint>' });
+  });
+
+  await t.test('a run with no COSMOS_ENDPOINT throws', async (tt) => {
+    const endpoint = process.env.COSMOS_ENDPOINT;
+    delete process.env.COSMOS_ENDPOINT;
+    tt.after(() => { process.env.COSMOS_ENDPOINT = endpoint; });
+    await assert.rejects(main(['--target', TARGET, '--containers', 'projects', '--checkpoint', tmpCheckpoint(tt)],
+      { client: fakeClient(fakeContainer({}), fakeContainer({})) }), { message: 'COSMOS_ENDPOINT not set' });
   });
 });

@@ -652,6 +652,40 @@ test('the PDF title worker live flag reaches the app as lowercase true or false'
     'ARM renders string(true) as True, which a case-sensitive check reads as off');
 });
 
+// A param line absent from the file deploys main.bicep's default, passed in as `fallback`.
+const paramValue = (params, name, fallback) =>
+  new RegExp(`^param ${name} = (.+)$`, 'm').exec(params)?.[1].trim() ?? fallback;
+const stringParam = (params, name, fallback) => /^'([^']*)'$/.exec(paramValue(params, name, `'${fallback}'`))?.[1];
+const secretNames = (params) => [...(/^param optionalSecretNames = \[\n([\s\S]*?)^\]$/m.exec(params)?.[1] ?? '')
+  .matchAll(/^\s+'([^']+)'$/gm)].map((m) => m[1]);
+
+// main.bicep gates on all three and skips the deploy silently when one is missing.
+for (const [env, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  test(`${env}: deployPdfTitleWorker = true comes with its vault secret and the API subnet`, () => {
+    const on = paramValue(params, 'deployPdfTitleWorker', 'false') === 'true';
+    assert.ok(!on || secretNames(params).includes('pdf-title-worker-api-key'),
+      `${env} turns the PDF title worker on without naming pdf-title-worker-api-key in optionalSecretNames`);
+    assert.ok(!on || stringParam(params, 'apiFlexSubnetId', '') !== '',
+      `${env} turns the PDF title worker on with no apiFlexSubnetId`);
+  });
+
+  test(`${env}: an edgeBanMode other than off comes with the edge-ban-policy secret`, () => {
+    const mode = stringParam(params, 'edgeBanMode', 'off');
+    assert.ok(mode === 'off' || secretNames(params).includes('edge-ban-policy'),
+      `${env} runs edgeBan in ${mode} mode without naming edge-ban-policy in optionalSecretNames`);
+  });
+}
+
+// Test's corpus is not eagle-test's, so a reconcile against it reports unrelated drift every night.
+test('test runs no reconcile and no drift alert while eagleApiBase is eagle-test', () => {
+  const reconciles = stringParam(TEST_PARAMS, 'reconcileSchedule', '') !== '' ||
+    paramValue(TEST_PARAMS, 'deployReconcileDriftAlert', 'false') === 'true';
+  const base = stringParam(TEST_PARAMS, 'eagleApiBase');
+  assert.ok(base, 'test must state eagleApiBase');
+  assert.ok(!reconciles || new URL(base).hostname !== 'eagle-test.apps.silver.devops.gov.bc.ca',
+    `test schedules a reconcile against ${base}`);
+});
+
 // The backup gate in src/helpers/backup-check.js reads BACKUP_ACCOUNT and BACKUP_CONTAINER and
 // refuses every PDF title lease when either is empty. Both settings must always be written, so an
 // environment with no backup reads empty rather than keeping a stale value.

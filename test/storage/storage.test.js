@@ -7,11 +7,8 @@ const assert = require('node:assert');
 
 const config = require('../../src/config');
 
-// ── Backend selection ────────────────────────────────────────────────────────
-// The lesson this asserts: a mode switch must be EXPLICIT and must fail loudly. Inferring the
-// data layer from whichever config happened to be set (COSMOS_ENDPOINT) silently routed live
-// traffic through the wrong implementation. A storage switch decides where document bytes are
-// read from and written to, so the same rule applies with higher stakes.
+// The backend is named explicitly and an unknown one throws: inferring it from whichever config
+// is set routes document bytes through the wrong store.
 
 test('backend selection', async (t) => {
   const load = (backend) => {
@@ -67,10 +64,7 @@ test('backend selection', async (t) => {
   });
 });
 
-// ── MinIO backend ────────────────────────────────────────────────────────────
-// The key prefix must be applied by the BACKEND, not by call sites. extract.js read `s3Key`
-// raw, so every extraction in dev fetched a key that 404s, while the download endpoint applied
-// the prefix correctly. Same bug, two outcomes, because there was no single owner.
+// The backend applies the key prefix, never the call site, so every caller reads the same key.
 
 test('minio backend', async (t) => {
   const minio = require('../../src/storage/minio');
@@ -83,8 +77,10 @@ test('minio backend', async (t) => {
   const PDF = 'ozwdez/etl/site-c/abc.pdf';
   const SOURCE = (async function* () { yield Buffer.from('%PDF-1.5'); })();
   const LAST_MODIFIED = new Date('2026-10-05T01:02:03Z');
+  /** The bucket and the arguments a row names; optional ones the SDK defaults after them are not pinned. */
+  const leadingArgs = (call, row) => call.slice(0, 1 + row.args.length);
 
-  /** Each row: the client method the operation reaches, what it replies, and the client arguments after the bucket. */
+  /** Each row: the client method the operation reaches, what it replies, and the leading client arguments after the bucket. */
   const KEYED_OPS = [
     {
       op: 'getBuffer drains the object at the prefixed key',
@@ -93,14 +89,6 @@ test('minio backend', async (t) => {
       call: () => minio.getBuffer('etl/site-c/abc.pdf'),
       args: [PDF],
       returns: Buffer.from('%PDF-1.5')
-    },
-    {
-      op: 'getObjectStream hands back the stream at the prefixed key undrained',
-      method: 'getObject',
-      reply: () => SOURCE,
-      call: () => minio.getObjectStream('etl/site-c/abc.pdf'),
-      args: [PDF, undefined],
-      returns: SOURCE
     },
     {
       op: 'getDownloadUrl presigns the prefixed key for the expiry asked',
@@ -115,7 +103,7 @@ test('minio backend', async (t) => {
       method: 'removeObject',
       reply: () => undefined,
       call: () => minio.removeObject('zips/abc.zip'),
-      args: ['ozwdez/zips/abc.zip', undefined],
+      args: ['ozwdez/zips/abc.zip'],
       returns: undefined
     },
     {
@@ -161,10 +149,22 @@ test('minio backend', async (t) => {
 
       const returned = await row.call();
 
-      assert.deepStrictEqual(calls, [[config.minioBucket, ...row.args]]);
+      assert.strictEqual(calls.length, 1);
+      assert.deepStrictEqual(leadingArgs(calls[0], row), [config.minioBucket, ...row.args]);
       assert.deepStrictEqual(returned, row.returns);
     });
   }
+
+  await t.test('getObjectStream hands back the client stream at the prefixed key, undrained', async () => {
+    const keys = [];
+    t.mock.method(Minio.Client.prototype, 'bucketExists', async () => true);
+    t.mock.method(Minio.Client.prototype, 'getObject', async (bucket, key) => { keys.push(key); return SOURCE; });
+
+    const returned = await minio.getObjectStream('etl/site-c/abc.pdf');
+
+    assert.deepStrictEqual(keys, [PDF]);
+    assert.strictEqual(returned, SOURCE);
+  });
 
   await t.test('a download URL is never issued without an expiry', async () => {
     let seenExpiry;
@@ -215,9 +215,8 @@ test('minio backend', async (t) => {
     await minio.putObjectStream(
       'zips/abc.zip', require('stream').Readable.from(['x']), 'application/zip');
 
-    // An upload with no size is treated as a 5 TB object, and without an explicit partSize the
-    // SDK then climbs from 64 MiB in 16 MiB steps until 10,000 parts cover it — 528 MiB, each
-    // one BUFFERED. host.json's one-zip-per-instance memory budget is written against 64 MiB.
+    // With no size the SDK assumes 5 TB and climbs to 528 MiB buffered parts; host.json's
+    // one-zip-per-instance memory budget assumes 64 MiB.
     assert.strictEqual(client.calculatePartSize(client.maxObjectSize), 64 * 1024 * 1024);
   });
 
@@ -300,11 +299,8 @@ test('minio backend', async (t) => {
   });
 });
 
-// ── Upload URLs and backup copies ────────────────────────────────────────────
-// The title worker holds no storage credential, so a presigned PUT for one exact original is the
-// only write it gets. A link for a zip or a backup, or one that outlives a few minutes, widens what
-// a leaked URL can destroy. Signed for real by the SDK, offline: an explicit region skips the
-// bucket lookup.
+// A short presigned PUT for one original is the title worker's only write. Signed by the real SDK
+// offline: an explicit region skips the bucket lookup.
 
 test('upload URLs and backup copies', async (t) => {
   const Minio = require('minio');
@@ -693,13 +689,8 @@ test('azure blob backend', async (t) => {
     container: config.azureStorageContainer
   };
 
-  // A structurally valid delegation key. `value` must be base64 — the SAS signature is a real
-  // HMAC over it, so this exercises the actual signing path offline.
-  //
-  // signedStartsOn/signedExpiresOn must be Date objects, not the ISO strings the REST API
-  // returns: the generated mapper types them as String, but generateBlobSASQueryParameters
-  // calls toISOString() on them. BlobServiceClient.getUserDelegationKey bridges the two with
-  // `new Date(...)`, so anything that builds a delegation key by hand must do the same.
+  // `value` is base64 because the SAS is a real HMAC over it; the dates are Date objects because
+  // generateBlobSASQueryParameters calls toISOString() on them.
   const fakeKey = {
     signedObjectId: '00000000-0000-0000-0000-000000000001',
     signedTenantId: '00000000-0000-0000-0000-000000000002',
@@ -893,9 +884,8 @@ test('azure blob backend', async (t) => {
   });
 
   await t.test('putObjectStream uploads in bounded blocks, not one buffer', async () => {
-    // The whole point of the streaming pair: a multi-GB zip must never be held in memory. Block
-    // size and concurrency are positional, so a swap here is a silent memory blow-up on the day
-    // STORAGE_BACKEND flips.
+    // A multi-GB zip must never be held in memory; block size and concurrency are positional, so a
+    // swap is a silent memory blow-up.
     let seenName, seenBlock, seenConcurrency, seenOpts;
     t.mock.method(BlockBlobClient.prototype, 'uploadStream',
       async function (s, block, concurrency, opts) {

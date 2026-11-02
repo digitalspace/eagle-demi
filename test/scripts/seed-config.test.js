@@ -21,10 +21,11 @@ function fakeRepo(existing) {
 test('seed-config', async (t) => {
   t.beforeEach((tt) => tt.mock.method(console, 'log', () => {}));
 
-  await t.test('a run without --live writes nothing', async () => {
-    const { store, repo } = fakeRepo(null);
-    await main([], { configRepository: repo });
-    assert.strictEqual(store.doc, null);
+  await t.test('a run without --live writes nothing, even with --force', async () => {
+    const existing = { id: 'config', BANNER_COLOUR: 'sentinel' };
+    const { store, repo } = fakeRepo(existing);
+    await main(['--force'], { configRepository: repo });
+    assert.strictEqual(store.doc, existing);
   });
 
   await t.test('--live leaves an existing document alone without --force', async () => {
