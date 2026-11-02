@@ -49,6 +49,8 @@ const DEFAULT_STAGES = ['projects', 'documents', 'boundaries'];
 // 1.5 GB plan. 100 is the Cosmos bulk limit, so a full buffer is one request.
 const FLUSH_THRESHOLD = 100;
 
+const CASCADE_RETRY = 'The next --live --reconcile run retries it.';
+
 function parseArgs(argv) {
   const args = {
     live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false, maxSurplus: null,
@@ -328,7 +330,8 @@ const reconcileCounts = r => r && {
   inCosmos: r.inCosmos, wouldDelete: r.wouldDelete, deleted: r.deleted,
   ...(r.wouldKeep ? { wouldKeep: r.wouldKeep.length } : {}),
   ...(r.keptLive ? { keptLive: r.keptLive.length } : {}),
-  ...(r.surplusHeld !== undefined ? { surplusHeld: r.surplusHeld } : {}), ceiling: r.ceiling
+  ...(r.surplusHeld !== undefined ? { surplusHeld: r.surplusHeld } : {}),
+  ...(r.cascadesOwed ? { cascadesOwed: r.cascadesOwed } : {}), ceiling: r.ceiling
 };
 
 /** The `--summary` file: counts only, failures capped, so a wrapper can fetch and parse it whole. */
@@ -423,9 +426,27 @@ async function runSeed(args, deps, summary) {
     if (written.status !== 'saved') return { skipped: true };
     const { saved } = written;
     const failure = await projectController.runCascade(saved, saved.eagleId);
-    if (failure) summary.failures.push(`reconcile: retired project ${id}: ${failure} DELETE /projects/${id} retries it`);
+    if (failure) summary.failures.push(`reconcile: retired project ${id}: ${failure} ${CASCADE_RETRY}`);
     return null;
   });
+  // A staff DELETE would make the delete DEMI's, and no push comes while Eagle lists none of them.
+  const repayCascade = async ({ id }, trackEagleIds) => {
+    const row = await repos.projects.getById(access, id);
+    if (!row || row.isDeleted !== true || !row.cascadePendingAt) return;
+    // A twin's updates belong to its Track row, as in narrowTwin.
+    const options = isEagleOnlyProjectId(row.id) && trackEagleIds.has(String(row.eagleId))
+      ? { updates: false } : undefined;
+    const failure = await projectController.runCascade(row, row.eagleId, options);
+    if (failure) {
+      summary.failures.push(`reconcile: deleted project ${id}: ${failure} ${CASCADE_RETRY}`);
+      return;
+    }
+    try {
+      await repos.projects.patchCascadePending(row.id, null, row._etag);
+    } catch (err) {
+      logger.error('[seed] could not clear the repaid cascade', { projectId: row.id, error: err.message, stack: err.stack });
+    }
+  };
   // Reading what is already there needs Cosmos. A live run always has it; a dry run only when the
   // operator is inside the private endpoint and set COSMOS_ENDPOINT.
   const cosmosReady = deps.cosmosReady !== undefined
@@ -970,6 +991,12 @@ async function runSeed(args, deps, summary) {
       const keptDocs = summary.reconcile.documents.kept || [];
       summary.reconcile.projects = await reconcileContainer(...containers[1],
         { live, logPath, audit, spare: listedProject, servedUpstream: servedUpstream('projects'), held: keptLive > 0 });
+      const owedCascades = eagleIdRows.filter(row => row.isDeleted === true && row.cascadePendingAt);
+      summary.reconcile.projects.cascadesOwed = owedCascades.length;
+      if (args.live) {
+        const trackEagleIds = new Set(eagleIdRows.filter(row => !isEagleOnlyProjectId(row.id)).map(projectKey));
+        for (const row of owedCascades) await repayCascade(row, trackEagleIds);
+      }
       for (const { label, surplus, ceiling } of sized) {
         summary.reconcile[label].ceiling = ceiling;
         // A live row held both containers back, so a dry run must report the 0 a live run deletes.

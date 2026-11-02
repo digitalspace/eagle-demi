@@ -1150,8 +1150,9 @@ paths:
         '500':
           description: >-
             The row was flagged, but its documents, engagement or updates were not narrowed. The
-            row keeps `cascadePendingAt`; sending the DELETE again retries the cascade, as does the
-            next Eagle push when the project has an Eagle record.
+            row keeps `cascadePendingAt`. When the project has an Eagle record, the next Eagle push
+            or `seed-nosql --live --reconcile` run retries the cascade; otherwise send the DELETE
+            again.
         '503':
           description: The row kept changing under the write; send the request again.
 

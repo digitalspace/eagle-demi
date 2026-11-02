@@ -1763,6 +1763,56 @@ test('seed --reconcile end to end', async (t) => {
     assert.match(summary.failures.join(' '), /retired project eagle-gone: documents were not updated\./);
   });
 
+  const owedDeps = (tt, cascadeResult = null) => {
+    const { deps } = makeDeps();
+    const owed = { id: 'eagle-old', eagleId: 'old', isDeleted: true, cascadePendingAt: NOW, read: ['staff'], _etag: 'v1' };
+    const twin = { id: 'eagle-tw', eagleId: 'tw', isDeleted: true, cascadePendingAt: NOW, read: ['staff'], _etag: 'v1' };
+    const rows = [owed, twin, { id: '300', eagleId: 'tw', sourceSystem: 'track', isDeleted: true }];
+    deps.repos.projects.listWithEagleId = async () => rows;
+    deps.repos.projects.countWithEagleId = async () => rows.length;
+    deps.repos.projects.getById = async (_access, id) => structuredClone(rows.find(row => row.id === id) || null);
+    const cleared = [];
+    deps.repos.projects.patchCascadePending = async (id, pendingAt, etag) => { cleared.push([id, pendingAt, etag]); };
+    const cascaded = [];
+    tt.mock.method(projectController, 'runCascade', async (row, _eagleId, options) => {
+      cascaded.push([row.id, options]);
+      return cascadeResult;
+    });
+    return { deps, cascaded, cleared };
+  };
+
+  await t.test('a deleted project still owing its cascade gets it repaid, not left for a DELETE', async (tt) => {
+    const { deps, cascaded, cleared } = owedDeps(tt);
+
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(cascaded, [['eagle-old', undefined], ['eagle-tw', { updates: false }]],
+      'the twin leaves the updates its Track row 300 owns');
+    assert.deepStrictEqual(cleared, [['eagle-old', null, 'v1'], ['eagle-tw', null, 'v1']]);
+    assert.strictEqual(summary.reconcile.projects.cascadesOwed, 2);
+  });
+
+  await t.test('a repaid cascade that fails again keeps its marker and fails the run', async (tt) => {
+    const { deps, cleared } = owedDeps(tt, 'documents were not updated.');
+
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(cleared, []);
+    assert.match(summary.failures.join(' '),
+      /deleted project eagle-old: documents were not updated\. The next --live --reconcile run retries it\./);
+  });
+
+  await t.test('a dry run counts the owed cascades and runs none', async (tt) => {
+    const { deps, cascaded } = owedDeps(tt);
+
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'], { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(cascaded, []);
+    assert.strictEqual(summary.reconcile.projects.cascadesOwed, 2);
+  });
+
   await t.test('a retire loses to a delete that landed after the enumeration', async (tt) => {
     const { deps, upserts } = retireDeps(tt);
     const audited = [];

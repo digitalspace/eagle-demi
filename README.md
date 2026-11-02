@@ -234,28 +234,39 @@ fields; it keeps `vis`, the short-link fields (`shortCode`, `shortCodeSource`,
 
 `--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch.
 A surplus document is deleted through the helper `DELETE /documents/:id` uses, so its chunks and
-search-index entries go with it. A surplus project is never removed. A project missing from the
-public feed may only be unpublished, so it is flagged the way `DELETE /projects/:id` flags it
-(`isDeleted`, `read` capped at staff, the visibility cascade) and on its Eagle copy too
-(`sources.eagle.isDeleted`). The documents of every deleted project the feed lacks stay, capped by
-that cascade, Track-sourced projects included. When the feed lists the project again, the next seed
-or Eagle push restores it and runs the cascade again. A staff `DELETE /projects/:id` on a retired
-project clears the Eagle-side flag, so the project stays deleted. Each row emits the same
-`document.delete` / `project.delete` audit event those routes do; a project deleted by another
-writer since the enumeration is skipped and not counted. A dry run reports `wouldDelete`
-per container and deletes nothing. Deletion is a single phase after every fetch has finished, so a
-refusal stops it **before any delete**, in both containers at once.
-It refuses — exit 1, nothing removed — if `--only` dropped a stage, if `--limit-documents` was
-given, if the Project, ProjectNotification or Document fetch was not verified complete against
-eagle-api's `searchResultsTotal`, if a document that resolved to neither a project nor a
-ProjectNotification is already in Cosmos (a drop the fetch cannot account for is only at risk when
-there is a row to delete; drops absent from Cosmos are reported as `droppedUnresolvable` and do not
-refuse), if either container enumerated fewer rows than a `COUNT` of the same predicate reports (a
-truncated read is indistinguishable from a container that shrank), or if there is no
-`COSMOS_ENDPOINT` to enumerate the containers with: every one of those makes the untouched remainder
-look like surplus. A live run also refuses when `SEARCH_ENDPOINT` is unset, for the opposite reason —
-the deletes would land in Cosmos and silently no-op against the index, leaving the purged rows
-searchable. A dry run reports that as `search: unconfigured — live would refuse` instead.
+search-index entries go with it. A surplus project is never removed, since one missing from the
+public feed may only be unpublished.
+
+The seed flags a surplus project the way `DELETE /projects/:id` does (`isDeleted`, `read` capped at
+staff, the visibility cascade), and its Eagle copy too (`sources.eagle.isDeleted`). The documents of
+every deleted project the feed lacks stay, capped by that cascade, Track-sourced projects included.
+When the feed lists the project again, the next seed or Eagle push restores it and runs the cascade
+again.
+
+A deleted project whose cascade failed keeps `cascadePendingAt`, and each `--live --reconcile` run
+retries that cascade; a dry run counts those rows as `cascadesOwed`. A staff `DELETE /projects/:id`
+on a retired project clears the Eagle-side flag, so the project stays deleted. Each row emits the
+same `document.delete` / `project.delete` audit event those routes do.
+
+A project deleted by another writer since the enumeration is skipped and not counted. A dry run
+reports `wouldDelete` per container and deletes nothing. Deletion is a single phase after every
+fetch has finished, so a refusal stops it **before any delete**, in both containers at once.
+
+It refuses, with exit 1 and nothing removed, when any of these makes the untouched remainder look
+like surplus:
+
+- `--only` dropped a stage, or `--limit-documents` was given.
+- The Project, ProjectNotification or Document fetch was not verified complete against eagle-api's
+  `searchResultsTotal`.
+- A document that resolved to neither a project nor a ProjectNotification is already in Cosmos. A
+  drop absent from Cosmos is reported as `droppedUnresolvable` and does not refuse.
+- Either container enumerated fewer rows than a `COUNT` of the same predicate reports, since a
+  truncated read looks the same as a container that shrank.
+- There is no `COSMOS_ENDPOINT` to enumerate the containers with.
+
+A live run also refuses when `SEARCH_ENDPOINT` is unset, because the deletes would land in Cosmos
+and silently no-op against the index, leaving the purged rows searchable. A dry run reports that as
+`search: unconfigured — live would refuse` instead.
 
 Every surplus id goes to an NDJSON file — one `{label, id, partitionKey, deleted}` row per surplus
 row, both containers, dry run and live — and the run prints the path. It defaults to
