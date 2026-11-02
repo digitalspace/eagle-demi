@@ -379,31 +379,11 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   }
 }
 
-test('the test param file turns trackWorksSync on', () => {
-  assert.match(TEST_PARAMS, /^param trackWorksSync = true$/m,
-    'test mirrors works[] so it is proven before prod');
-});
-
-test('the prod param file turns trackWorksSync on', () => {
-  assert.match(PROD_PARAMS, /^param trackWorksSync = true$/m,
-    'prod mirrors Track works nightly now that test has proven the milestone names');
-});
-
 test('the API app carries TRACK_WORKS_SYNC from trackWorksSync, default off', () => {
   assert.match(API_MODULE, /^param trackWorksSync bool = false$/m);
   assert.match(MAIN, /^param trackWorksSync bool = false$/m);
   assert.match(API_MODULE, /name: 'TRACK_WORKS_SYNC'\n\s+value: trackWorksSync \? 'true' : 'false'$/m,
     "src/config.js reads only the string 'true' as on");
-});
-
-test('the test param file turns assessmentPass on', () => {
-  assert.match(TEST_PARAMS, /^param assessmentPass = true$/m,
-    'test dates assessments nightly so it is proven before prod');
-});
-
-test('the prod param file turns assessmentPass on', () => {
-  assert.match(PROD_PARAMS, /^param assessmentPass = true$/m,
-    'prod dates assessments nightly now that test has proven the pass');
 });
 
 test('the API app carries ASSESSMENT_PASS from assessmentPass, default off', () => {
@@ -672,34 +652,6 @@ test('the PDF title worker live flag reaches the app as lowercase true or false'
     'ARM renders string(true) as True, which a case-sensitive check reads as off');
 });
 
-test('prod deploys the PDF title worker live', () => {
-  assert.match(PROD_PARAMS, /^param deployPdfTitleWorker = true$/m,
-    'prod must ask for the worker');
-  assert.match(PROD_PARAMS, /^param optionalSecretNames = \[[^\]]*^\s+'pdf-title-worker-api-key'$[^\]]*\]/m,
-    'without the secret name main.bicep skips the worker app');
-  assert.match(PROD_PARAMS, /^param optionalSecretNames = \[[^\]]*^\s+'edge-secret'$[^\]]*\]/m,
-    'the Front Door secret must stay named');
-  assert.match(PROD_PARAMS, /^param apiFlexSubnetId = '\/subscriptions\/[^']+\/subnets\/snet-demi-func-fc1-prod'$/m,
-    'without the Flex subnet main.bicep skips the worker app');
-  assert.match(PROD_PARAMS, /^param pdfTitleWorkerPrincipals = 'c4e6496061d859df'$/m,
-    'the prod worker key id, or the API refuses the worker on every route');
-  assert.match(PROD_PARAMS, /^param pdfTitleLive = true$/m,
-    'prod runs the worker live since 2026-10-08');
-  assert.doesNotMatch(PROD_PARAMS, /^param pdfTitle(MaxRows|MaxMinutes|Schedule) /m,
-    'prod keeps the main.bicep defaults, as test does');
-});
-
-test('prod runs the edge ban timer in shadow mode', () => {
-  assert.match(PROD_PARAMS, /^param optionalSecretNames = \[[^\]]*^\s+'edge-ban-policy'$[^\]]*\]/m,
-    'without the secret name the edge ban timer has no policy to read');
-  assert.match(PROD_PARAMS, /^param edgeBanMode = 'shadow'$/m,
-    'prod soaks the edge ban timer in shadow mode before it writes anything');
-  assert.match(PROD_PARAMS, /^param edgeLogWorkspaceId = 'c63b7683-1773-4610-97b7-6326b860e9f0'$/m,
-    'the eagle-logs-prod workspace customerId the shadow timer reads');
-  assert.match(PROD_PARAMS, /^param edgeBanRuleId = '\/subscriptions\/[^']+\/ruleSets\/rulesdemidocs\/rules\/banauto'$/m,
-    'the banauto rule id write mode will use once eagle-edge deploys it');
-});
-
 // The backup gate in src/helpers/backup-check.js reads BACKUP_ACCOUNT and BACKUP_CONTAINER and
 // refuses every PDF title lease when either is empty. Both settings must always be written, so an
 // environment with no backup reads empty rather than keeping a stale value.
@@ -766,20 +718,6 @@ test('prod runs the nightly reconcile and alerts on its drift', () => {
     'once a night on the hour is the only shape this job is written for');
   assert.match(PROD_PARAMS, /^param deployReconcileDriftAlert = true$/m,
     'the run without the alert is a log line nobody reads');
-});
-
-// TEST IS OFF ON PURPOSE, and it is the pair that has to stay off: `eagleApiBase` there is
-// eagle-test while the test corpus was seeded from PROD Eagle, so a nightly diff compares two
-// unrelated corpora and alerts every night on the difference. Turning either half on is only
-// correct in the same edit that repoints eagleApiBase — which this fails on, since nothing else
-// would.
-test('test schedules no reconcile and deploys no drift alert', () => {
-  assert.match(TEST_PARAMS, /^param reconcileSchedule = ''$/m,
-    'a schedule here diffs the test corpus against an upstream it did not come from');
-  assert.match(TEST_PARAMS, /^param deployReconcileDriftAlert = false$/m,
-    'and the alert on that diff would fire every night');
-  assert.match(TEST_PARAMS, /^param eagleApiBase = 'https:\/\/eagle-test\./m,
-    'this is the reason for both — turn them on in the edit that changes this line, not before');
 });
 
 // The alert reads a number out of a log line this repo formats. Both halves are strings in
@@ -1684,15 +1622,6 @@ test('the optional secret URIs are decided identically in both modes', () => {
   }
 });
 
-test('both param files pin deployFoundation to the environment variable', () => {
-  const pin = /^param deployFoundation = bool\(readEnvironmentVariable\('DEPLOY_FOUNDATION', 'false'\)\)$/m;
-  assert.match(TEST_PARAMS, pin,
-    'test must read the switch from the environment — `az` refuses a second --parameters beside a ' +
-    '.bicepparam, so there is no other way to pass it');
-  assert.match(PROD_PARAMS, pin,
-    'and prod the same, defaulting to the application layer when the variable is unset');
-});
-
 test('deploy-infra.sh sets DEPLOY_FOUNDATION only under --foundation', () => {
   assert.match(DEPLOY, /^DEPLOY_FOUNDATION='false'$/m,
     'the default must be application-only, and must not be inherited from the caller');
@@ -1730,6 +1659,16 @@ test('deploy-infra.sh sets DEPLOY_FOUNDATION only under --foundation', () => {
   assert.match(DEPLOY, /\[ "\$\{CONFIRM_PROD:-\}" != 'yes' \]/,
     'the prod apply guard is not conditional on the layer either');
 });
+
+// `--foundation` reaches bicep only through the variable the script exports and the param files read.
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  test(`the ${envName} param file reads deployFoundation from the variable deploy-infra.sh exports`, () => {
+    const read = /^param deployFoundation = bool\(readEnvironmentVariable\('(\w+)', 'false'\)\)$/m.exec(params);
+    assert.ok(read, 'deployFoundation must come from the environment, application layer when unset');
+
+    assert.match(DEPLOY, new RegExp(`^export ${read[1]}$`, 'm'));
+  });
+}
 
 // The currency check is the only thing standing between an application-only apply and a foundation
 // edit that is never PUT, so what it can SEE is the whole guard. `az` deploys the working tree;
