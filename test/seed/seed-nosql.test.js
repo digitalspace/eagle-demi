@@ -1834,6 +1834,8 @@ test('seed --reconcile end to end', async (t) => {
 
     assert.deepStrictEqual(upserts.filter(p => p.id === 'eagle-gone'), [], 'the staff delete stands as written');
     assert.strictEqual(summary.reconcile.projects.deleted, 0);
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 0, 'a skipped row is not one the run deletes');
+    assert.strictEqual(summary.reconcile.projects.skipped, 1);
     assert.deepStrictEqual(audited.filter(e => e.action === 'project.delete'), []);
   });
 

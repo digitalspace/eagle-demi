@@ -185,7 +185,8 @@ function reconcileLogPath(now, dir = '/home') {
  * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs ask too, so `wouldKeep` and `wouldDelete` match a live run
  * @param {function} [opts.servedUpstream] row -> true when eagle-api still serves it, so never deleted
  * @param {boolean}  [opts.held]    a surplus row still live upstream holds every delete: the rest log held
- * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place, `keptLive` = ids eagle-api still serves
+ * @returns `kept` = rows a failed purge left behind, `wouldKeep` = ids `spare` left in place, `keptLive` = ids eagle-api still serves,
+ *   `skipped` = rows `remove` found nothing left to remove
  */
 async function reconcileContainer(label, rows, keyOf, fetched, remove,
   { live, logPath, audit, spare = () => false, servedUpstream = () => false, held = false }) {
@@ -203,6 +204,7 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
   const fd = logPath ? fs.openSync(logPath, 'a') : null;
 
   let deleted = 0;
+  let skipped = 0;
   const kept = [];
   const wouldKeep = [];
   const keptLive = [];
@@ -218,6 +220,7 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
       if (upstream) keptLive.push(row.id);
       if (failed) kept.push({ id: row.id, partitionKey: partitionOf(row) });
       if (removed) deleted++;
+      if (outcome?.skipped) skipped++;
       // The DELETE controllers' own event, so a purge is traceable however it was issued. A failed
       // one is recorded too: its search-index entries are already gone.
       if (audit && (removed || failed)) {
@@ -242,8 +245,8 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
     if (fd !== null) fs.closeSync(fd);
   }
   return {
-    inCosmos: rows.length, wouldDelete: surplus.length - wouldKeep.length - keptLive.length, deleted,
-    ...(wouldKeep.length ? { wouldKeep } : {}), ...(keptLive.length ? { keptLive } : {}),
+    inCosmos: rows.length, wouldDelete: surplus.length - wouldKeep.length - keptLive.length - skipped, deleted,
+    ...(skipped ? { skipped } : {}), ...(wouldKeep.length ? { wouldKeep } : {}), ...(keptLive.length ? { keptLive } : {}),
     ...(kept.length ? { kept } : {})
   };
 }
@@ -331,7 +334,8 @@ const reconcileCounts = r => r && {
   ...(r.wouldKeep ? { wouldKeep: r.wouldKeep.length } : {}),
   ...(r.keptLive ? { keptLive: r.keptLive.length } : {}),
   ...(r.surplusHeld !== undefined ? { surplusHeld: r.surplusHeld } : {}),
-  ...(r.cascadesOwed ? { cascadesOwed: r.cascadesOwed } : {}), ceiling: r.ceiling
+  ...(r.skipped ? { skipped: r.skipped } : {}), ...(r.cascadesOwed ? { cascadesOwed: r.cascadesOwed } : {}),
+  ceiling: r.ceiling
 };
 
 /** The `--summary` file: counts only, failures capped, so a wrapper can fetch and parse it whole. */

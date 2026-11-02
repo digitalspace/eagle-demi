@@ -248,7 +248,8 @@ retries that cascade; a dry run counts those rows as `cascadesOwed`. A staff `DE
 on a retired project clears the Eagle-side flag, so the project stays deleted. Each row emits the
 same `document.delete` / `project.delete` audit event those routes do.
 
-A project deleted by another writer since the enumeration is skipped and not counted. A dry run
+A project deleted by another writer since the enumeration is skipped and counted as `skipped`,
+not under `wouldDelete` or `deleted`. A dry run
 reports `wouldDelete` per container and deletes nothing. Deletion is a single phase after every
 fetch has finished, so a refusal stops it **before any delete**, in both containers at once.
 
