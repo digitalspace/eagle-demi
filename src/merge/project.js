@@ -380,20 +380,47 @@ function resolveProjectAcl(eagle, deleted = isDeletedInEagle(eagle)) {
   return deleted ? capRead(read, DELETED_CEILING) : read;
 }
 
+/** Who deleted a stored project: `'eagle'` when its Eagle copy carries the flag, else `'demi'`; null when live. */
+function deletedBy(row) {
+  if (!row || row.isDeleted !== true) return null;
+  return row.sources && row.sources.eagle && row.sources.eagle.isDeleted === true ? 'eagle' : 'demi';
+}
+
 /**
  * Whether a rebuild from an Eagle record with no delete flag keeps the stored delete. eagle-api never
  * sends `isDeleted: false`, so only a delete Eagle made (`sources.eagle.isDeleted`) clears.
  */
-function deleteStands(existing) {
-  if (!existing || existing.isDeleted !== true) return false;
-  return !(existing.sources && existing.sources.eagle && existing.sources.eagle.isDeleted === true);
+const deleteStands = (existing) => deletedBy(existing) === 'demi';
+
+/** Set or drop the flag on `row`'s Eagle copy, through a new `sources` so a shallow copy's original keeps its own. */
+function markEagleCopy(row, on) {
+  const eagle = row.sources && row.sources.eagle;
+  if (!on && !(eagle && 'isDeleted' in eagle)) return;
+  const { isDeleted: _flag, ...rest } = eagle || {};
+  row.sources = { ...row.sources, eagle: on ? { ...rest, isDeleted: true } : rest };
 }
 
-/** Flag a stored project deleted and cap its `read` at staff, in place: the row stays for staff and reconcile. */
-function markDeleted(row) {
+/** Flag a project deleted by `by` and cap its `read` at staff, in place: the row stays for staff and reconcile. */
+function markDeleted(row, by = 'demi') {
   row.isDeleted = true;
+  markEagleCopy(row, by === 'eagle');
   row.read = capRead(row.read, DELETED_CEILING);
   row.isPublished = row.read.includes('public');
+  return row;
+}
+
+/** Drop the delete flag, in place. `read` stays: widening is the caller's call. */
+function clearDeleted(row) {
+  delete row.isDeleted;
+  markEagleCopy(row, false);
+  return row;
+}
+
+/** Keep the stored delete on a rebuilt row, in place: a DEMI one always, an Eagle one until Eagle sends the record. */
+function carryDelete(row, existing) {
+  const by = deletedBy(existing);
+  if (by === 'demi') return markDeleted(row);
+  if (by === 'eagle' && !(row.sources && row.sources.eagle)) return markDeleted(row, 'eagle');
   return row;
 }
 
@@ -667,6 +694,9 @@ module.exports = {
   normalizeCentroid,
   resolveProjectAcl,
   markDeleted,
+  clearDeleted,
+  carryDelete,
+  deletedBy,
   deleteStands,
   mergeTrackProject,
   mergeEagleOnlyProject,

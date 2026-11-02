@@ -10,7 +10,7 @@ const sources = require('../seed/sources');
 const transform = require('../seed/transform');
 const {
   buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
-  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, deleteStands
+  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, carryDelete, deletedBy
 } = require('../merge/project');
 const { DEMI_ONLY_FIELDS } = require('../ownership/project');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
@@ -19,6 +19,8 @@ const { systemAccess } = require('../helpers/access-sql');
 const { pickParent } = require('../helpers/parent-admit');
 const { refId } = require('../controllers/nosql/eagle-mirror');
 const projectController = require('../controllers/nosql/project');
+const projectTwin = require('../helpers/project-twin');
+const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
 const { readKeepIds } = require('../utils/keep-ids');
 const purgeHelpers = require('../helpers/purge');
@@ -174,7 +176,8 @@ function reconcileLogPath(now, dir = '/home') {
  * @param {Array}    rows      `{id, ...}` read out of Cosmos
  * @param {function} keyOf     row -> the key to test against `fetched`
  * @param {Set}      fetched   keys the upstream fetch produced
- * @param {function} remove    row -> Promise, called ONLY when live; `{ rowKept: true }` = not deleted
+ * @param {function} remove    row -> Promise, called ONLY when live; `{ rowKept: true }` = not deleted,
+ *                             `{ skipped: true }` = nothing left to remove
  * @param {string}   [opts.logPath] NDJSON sink for every surplus id, dry run included
  * @param {object}   [opts.audit]   `utils/audit`, called once per row deleted or kept by a failed purge
  * @param {function} [opts.spare]   row -> true to leave a surplus row in place this run; dry runs ask too, so `wouldKeep` and `wouldDelete` match a live run
@@ -206,8 +209,9 @@ async function reconcileContainer(label, rows, keyOf, fetched, remove,
       const upstream = Boolean(servedUpstream(row));
       const spared = !upstream && Boolean(spare(row));
       // A purge that could not clear a row's chunks keeps the row; the next reconcile retries it.
-      const failed = live && !spared && !upstream && Boolean((await remove(row))?.rowKept);
-      const removed = live && !spared && !upstream && !failed;
+      const outcome = live && !spared && !upstream ? await remove(row) : null;
+      const failed = Boolean(outcome?.rowKept);
+      const removed = live && !spared && !upstream && !failed && !outcome?.skipped;
       if (spared) wouldKeep.push(row.id);
       if (upstream) keptLive.push(row.id);
       if (failed) kept.push({ id: row.id, partitionKey: partitionOf(row) });
@@ -402,14 +406,25 @@ async function runSeed(args, deps, summary) {
   // Flagged and capped as an Eagle delete push would, never removed. Absent from the public feed may
   // mean unpublished, so the flag goes on the Eagle copy too: the project's return clears it.
   const retireProject = deps.retireProject || (async ({ id }) => {
-    const current = await repos.projects.getById(access, id);
-    if (!current) return;
-    const eagle = { ...(current.sources && current.sources.eagle), isDeleted: true };
-    const saved = await repos.projects.upsert(markDeleted({
-      ...current, sources: { ...current.sources, eagle }, updatedAt: new Date().toISOString()
-    }));
+    const read = () => repos.projects.getById(access, id);
+    const written = await writeGuarded({
+      existing: await read(),
+      reread: read,
+      attempt: async (current) => {
+        // Deleted since the enumeration: a push or a staff DELETE got there first.
+        if (!current || current.isDeleted === true) return { status: 'gone' };
+        const row = markDeleted({ ...current, updatedAt: new Date().toISOString() }, 'eagle');
+        return { status: 'saved', saved: await repos.projects.upsert(row, { etag: current._etag }) };
+      }
+    });
+    if (written.status === 'conflict') {
+      summary.failures.push(`reconcile: retired project ${id} kept changing under the write; re-run to retry`);
+    }
+    if (written.status !== 'saved') return { skipped: true };
+    const { saved } = written;
     const failure = await projectController.runCascade(saved, saved.eagleId);
     if (failure) summary.failures.push(`reconcile: retired project ${id}: ${failure} DELETE /projects/${id} retries it`);
+    return null;
   });
   // Reading what is already there needs Cosmos. A live run always has it; a dry run only when the
   // operator is inside the private endpoint and set COSMOS_ENDPOINT.
@@ -490,8 +505,7 @@ async function runSeed(args, deps, summary) {
           carryEagleOnlyFields(project, existing);
           carryDemiOnlyFields(project, existing);
           // The public feed never says a project was deleted, so a rebuilt row would republish it.
-          // Only the feed listing the project again clears an Eagle-side delete.
-          if (deleteStands(existing) || (existing.isDeleted === true && !project.sources.eagle)) markDeleted(project);
+          carryDelete(project, existing);
         } else if (project.eagleId && !isEagleOnlyProjectId(project.id)) {
           // A Track row built for the first time beside its `eagle-<id>` twin takes the twin's
           // tags, the same as the Track relink. Not its sync-out state: that row was never sent.
@@ -502,8 +516,17 @@ async function runSeed(args, deps, summary) {
         const heldCode = project.shortCode;
         await ensureProjectShortLink(project, { links: repos.links, projects: repos.projects });
         if (project.shortCode !== heldCode) summary.stages.projects.shortLinks++;
-        await repos.projects.upsert(project);
+        const saved = (await repos.projects.upsert(project)) || project;
         summary.stages.projects.written++;
+        // The retire capped its engagement too, and no later push sees a move to cascade on.
+        if (existing && deletedBy(existing) && !deletedBy(saved)) {
+          const cascade = (row, eagleId, options) => projectController.runCascade(row, eagleId, options);
+          let failure = projectController.visibilityMoved(existing, saved) ? await cascade(saved, saved.eagleId) : null;
+          if (!failure && saved.eagleId) {
+            failure = await projectTwin.narrowTwin(saved, saved.eagleId, (twin, id) => cascade(twin, id, { updates: false }));
+          }
+          if (failure) summary.failures.push(`projects: restored project ${saved.id}: ${failure}`);
+        }
       }
     }
     log(`  projects ${args.live ? 'written' : 'would write'}: ${projects.length}\n`);
@@ -848,6 +871,8 @@ async function runSeed(args, deps, summary) {
     // that IS in Cosmos refuses — matched on id alone, a dropped document having no partition.
     const documentRows = unverified.length ? [] : await repos.documents.listSeededIds(access);
     const projectRows = unverified.length ? [] : await repos.projects.listEagleOnlyIds(access);
+    // Track rows too: a deleted one's documents leave the feed with it, the same as an Eagle-only one's.
+    const eagleIdRows = unverified.length ? [] : await repos.projects.listWithEagleId(access);
     const inCosmos = new Set(documentRows.map(row => String(row.id)));
     const dropped = (documentFetch || {}).droppedIds || [];
     const droppedInCosmos = dropped.filter(id => inCosmos.has(id));
@@ -857,7 +882,8 @@ async function runSeed(args, deps, summary) {
 
     const truncated = await truncatedReads(access, unverified.length ? [] : [
       ['documents', documentRows, repos.documents.countSeededIds],
-      ['projects', projectRows, repos.projects.countEagleOnlyIds]
+      ['projects', projectRows, repos.projects.countEagleOnlyIds],
+      ['projects with an Eagle id', eagleIdRows, repos.projects.countWithEagleId]
     ]);
 
     if (unverified.length) {
@@ -883,10 +909,12 @@ async function runSeed(args, deps, summary) {
       const projectKey = row => String(row.eagleId);
       const fetchedProjects = new Set(eagleProjects.map(p => String(p._id)));
       const liveProjects = projectRows.filter(row => row.isDeleted !== true);
-      // A retired project's documents leave the feed with it; they stay, capped by its cascade.
-      const retired = new Set([...projectRows.filter(row => row.isDeleted === true),
-        ...surplusOf(liveProjects, projectKey, fetchedProjects).filter(row => !listedProject(row))]
-        .map(row => String(row.id)));
+      // A retired project's documents leave the feed with it; they stay, capped by its cascade. One the
+      // feed still lists keeps its documents in step, as a published one does.
+      const retired = new Set([
+        ...surplusOf([...projectRows, ...eagleIdRows].filter(row => row.isDeleted === true), projectKey, fetchedProjects),
+        ...surplusOf(liveProjects, projectKey, fetchedProjects).filter(row => !listedProject(row))
+      ].map(row => String(row.id)));
       const containers = [
         ['documents', documentRows.filter(row => !retired.has(String(row.projectId))),
           row => `${row.projectId}|${row.id}`, documentFetch.keys,
@@ -939,12 +967,9 @@ async function runSeed(args, deps, summary) {
       const spareDocument = row => listed(row.id) || keptProjects.has(String(row.projectId));
       summary.reconcile.documents = await reconcileContainer(...containers[0],
         { live, logPath, audit, spare: spareDocument, servedUpstream: servedUpstream('documents'), held: keptLive > 0 });
-      // A project holding a listed document stays listed with it.
       const keptDocs = summary.reconcile.documents.kept || [];
-      const holding = new Set(documentRows.filter(spareDocument).map(row => String(row.projectId)));
       summary.reconcile.projects = await reconcileContainer(...containers[1],
-        { live, logPath, audit, spare: row => listedProject(row) || holding.has(String(row.id)),
-          servedUpstream: servedUpstream('projects'), held: keptLive > 0 });
+        { live, logPath, audit, spare: listedProject, servedUpstream: servedUpstream('projects'), held: keptLive > 0 });
       for (const { label, surplus, ceiling } of sized) {
         summary.reconcile[label].ceiling = ceiling;
         // A live row held both containers back, so a dry run must report the 0 a live run deletes.

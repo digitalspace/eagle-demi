@@ -11,13 +11,13 @@ const { levelOfRead } = require('./access-sql');
 const { writeGuarded } = require('./etag-write');
 const { logger } = require('../utils/logger');
 const { auditEvent } = require('../utils/audit');
-const { eagleOnlyProjectId } = require('../merge/project');
+const { eagleOnlyProjectId, deletedBy, markDeleted, clearDeleted } = require('../merge/project');
 const { refusedWriteKeys } = require('../vis/redact');
 
 /**
- * Bring the twin down to the Track row's read when that is lower, then cascade it onto the twin's
- * own documents and engagement. Never widens it. A cascade the twin still owes runs here too, since
- * no push ever lands on the twin to repay it.
+ * Bring the twin down to the Track row's read when that is lower, and its delete flag in step, then
+ * cascade it onto the twin's own documents and engagement. Never widens it. A cascade the twin
+ * still owes runs here too, since no push ever lands on the twin to repay it.
  *
  * @param {object} saved  the Track row this push wrote
  * @param {(row: object, eagleId: string) => Promise<string|null>} cascade  the project cascade
@@ -33,10 +33,17 @@ async function narrowTwin(saved, eagleId, cascade) {
     reread: read,
     attempt: async (twin) => {
       if (!twin) return { status: 'none' };
-      if (levelOfRead(twin.read) <= levelOfRead(saved.read)) {
-        return twin.cascadePendingAt ? { status: 'owed', twin } : { status: 'none' };
+      const narrow = levelOfRead(twin.read) > levelOfRead(saved.read);
+      // The twin follows the Track row's delete and an Eagle one's undo; a delete of its own stays.
+      const by = deletedBy(saved);
+      const twinBy = deletedBy(twin);
+      const follow = by ? twinBy !== by && twinBy !== 'demi' : twinBy === 'eagle';
+      if (!narrow && !follow) return twin.cascadePendingAt ? { status: 'owed', twin } : { status: 'none' };
+      const narrowed = narrow ? { ...twin, read: saved.read, isPublished: saved.isPublished } : { ...twin };
+      if (follow) {
+        if (by) markDeleted(narrowed, by);
+        else clearDeleted(narrowed);
       }
-      const narrowed = { ...twin, read: saved.read, isPublished: saved.isPublished };
       return { status: 'narrowed', twin: await projects.upsert(narrowed, { etag: twin._etag }) };
     }
   });

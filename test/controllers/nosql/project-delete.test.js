@@ -114,6 +114,29 @@ test('an Eagle push with isDeleted', async (t) => {
     assert.ok(!('isDeleted' in seen.written));
   });
 
+  await t.test('absent restores an Eagle-side delete on the twin too, without widening it', async () => {
+    const eagleDeleted = (row) => ({ ...row, isDeleted: true, ...STAFF_ONLY,
+      sources: { ...row.sources, eagle: { ...(row.sources && row.sources.eagle), isDeleted: true } } });
+    const twin = eagleDeleted({ id: TWIN_ID, eagleId: PROJECT_EAGLE_ID });
+    const seen = stage(t, eagleDeleted(storedEagleProject()), { twin });
+
+    await push(rawEagleProject());
+
+    const twinWrite = seen.writes.find(w => w.item.id === TWIN_ID);
+    assert.ok(!('isDeleted' in twinWrite.item), 'else PUT /level on the twin answers 409 for good');
+    assert.ok(!('isDeleted' in twinWrite.item.sources.eagle));
+    assert.ok(!twinWrite.item.read.includes('public'));
+  });
+
+  await t.test('true on a DEMI-deleted row keeps the delete DEMI\'s', async () => {
+    const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY }));
+
+    await push(rawEagleProject({ isDeleted: true }));
+
+    assert.strictEqual(seen.written.isDeleted, true);
+    assert.ok(!('isDeleted' in seen.written.sources.eagle), 'a later push without the flag would undo it');
+  });
+
   await t.test('absent leaves a DEMI delete standing', async () => {
     const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY }));
 
@@ -187,6 +210,18 @@ test('DELETE /projects/:id', async (t) => {
     assert.strictEqual(seen.cascaded.length, 0);
   });
 
+  await t.test('takes over a delete the seed made, so Eagle republishing cannot undo it', async () => {
+    const stored = storedEagleProject({ isDeleted: true, ...STAFF_ONLY });
+    stored.sources.eagle.isDeleted = true;
+    const seen = stage(t, stored);
+
+    const res = await del();
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(seen.written.isDeleted, true);
+    assert.ok(!('isDeleted' in seen.written.sources.eagle));
+  });
+
   await t.test('a repeat retries a cascade the first call left owed', async () => {
     const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY, cascadePendingAt: '2026-10-30T00:00:00.000Z' }));
 
@@ -208,6 +243,7 @@ test('DELETE /projects/:id', async (t) => {
     const twinWrite = seen.writes.find(w => w.item.id === TWIN_ID);
     assert.ok(twinWrite, 'the twin was written');
     assert.ok(!twinWrite.item.read.includes('public'));
+    assert.strictEqual(twinWrite.item.isDeleted, true, 'else PUT /projects/eagle-<id>/level republishes it');
   });
 
   await t.test('a repeat still narrows a twin left public', async () => {

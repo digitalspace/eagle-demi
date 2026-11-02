@@ -823,6 +823,8 @@ function mergeEaglePush(doc, existing) {
   carryDemiOnlyFields(merged, existing);
   // A Track row with no `epic_guid` holds the Eagle id sync-out gave it; the echo must keep it.
   if (existing && !hasValue(merged.eagleId) && hasValue(existing.eagleId)) merged.eagleId = existing.eagleId;
+  // Eagle deleting a project DEMI already deleted must not hand the delete to Eagle to undo.
+  if (merged.isDeleted === true) markDeleted(merged, deleteStands(existing) ? 'demi' : 'eagle');
   return merged;
 }
 
@@ -859,6 +861,7 @@ async function runCascade(saved, eagleId, options) {
   return failure;
 }
 exports.runCascade = runCascade;
+exports.visibilityMoved = visibilityMoved;
 
 /** Best effort, and deliberately so: the 500 the caller is about to send is the real answer. */
 async function markCascadePending(saved, eagleId) {
@@ -1116,7 +1119,8 @@ exports.deleteProject = async (req, res) => {
       reread,
       attempt: async (current) => {
         if (!current) return { status: 'missing' };
-        if (current.isDeleted === true) return { status: 'already', saved: current };
+        if (deleteStands(current)) return { status: 'already', saved: current };
+        // An Eagle-side delete becomes DEMI's, or Eagle republishing the project would undo it.
         const row = markDeleted({ ...current, updatedAt: new Date().toISOString() });
         return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), existing: current };
       },
@@ -1126,42 +1130,35 @@ exports.deleteProject = async (req, res) => {
     });
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project delete', req.params.id);
-    const deleted = () => res.json({
-      message: 'Project deleted successfully',
-      deleted: redactForAccess('projects', written.saved, access)
-    });
-    const narrowSavedTwin = (saved) => (saved.eagleId
-      ? narrowTwin(saved, saved.eagleId, (twin, id) => runCascade(twin, id, { updates: false }))
-      : null);
-    // A repeat writes nothing and audits nothing; it only retries what the first call left owed.
-    if (written.status === 'already') {
-      const { saved } = written;
-      if (saved.cascadePendingAt) {
-        const failure = await runCascade(saved, saved.eagleId);
-        if (failure) return res.status(500).json({ success: false, error: failure });
-        await clearCascadePending(saved, saved.eagleId);
-      }
-      const twinFailure = await narrowSavedTwin(saved);
-      if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
-      return deleted();
-    }
     const { saved, existing: from } = written;
 
-    auditEvent(req, {
-      action: 'project.delete',
-      targetType: 'project',
-      targetId: saved.id,
-      projectId: saved.id,
-      detail: { name: saved.name, isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished }
-    });
+    // A repeat writes nothing and audits nothing; it only retries what the first call left owed.
+    if (from) {
+      auditEvent(req, {
+        action: 'project.delete',
+        targetType: 'project',
+        targetId: saved.id,
+        projectId: saved.id,
+        detail: { name: saved.name, isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished }
+      });
+    }
 
-    const failure = visibilityMoved(from, saved) ? await runCascade(saved, saved.eagleId) : null;
-    if (failure) return res.status(500).json({ success: false, error: failure });
+    const owed = Boolean(saved.cascadePendingAt);
+    if ((from && visibilityMoved(from, saved)) || owed) {
+      const failure = await runCascade(saved, saved.eagleId);
+      if (failure) return res.status(500).json({ success: false, error: failure });
+      if (owed) await clearCascadePending(saved, saved.eagleId);
+    }
 
-    const twinFailure = await narrowSavedTwin(saved);
+    const twinFailure = saved.eagleId
+      ? await narrowTwin(saved, saved.eagleId, (twin, id) => runCascade(twin, id, { updates: false }))
+      : null;
     if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
 
-    return deleted();
+    return res.json({
+      message: 'Project deleted successfully',
+      deleted: redactForAccess('projects', saved, access)
+    });
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
