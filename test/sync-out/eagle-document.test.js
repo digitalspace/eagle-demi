@@ -571,6 +571,7 @@ test('sync-out of documents to Eagle', async (t) => {
 
     assert.deepStrictEqual(calls, []);
     assert.strictEqual(store.row.syncOut.eagle.status, 'failed');
+    assert.strictEqual(store.row.syncOut.eagle.error, `project 1234 of row ${ROW_ID} has no eagleId`);
     assert.strictEqual(store.row.eagleId, undefined, 'no id minted');
     assert.strictEqual(logged('error', `[sync-out eagle] project 1234 of row ${ROW_ID} has no eagleId`).length, 1);
   });
