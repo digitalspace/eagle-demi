@@ -14,7 +14,11 @@ const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const consumer = require('../../src/sync-out/eagle-document');
 const { DOCUMENT, kindOf } = require('../../src/sync-out/kinds');
-const { API, useEnv, wireEagle, keys } = require('../helpers/sync-out-eagle');
+const documentController = require('../../src/controllers/nosql/document');
+const aiSearch = require('../../src/search/ai-search');
+const { mirrorStore } = require('../helpers/mirror-store');
+const { mockRes, STAFF, PROJECT_EAGLE_ID, storedEagleProject } = require('../helpers/eagle-mirror-fixtures');
+const { API, useEnv, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 
 const EAGLE_ID = '5cf00c03a266b7e1877504dd';
 const ROW_ID = '7d1e2f40-0000-4000-8000-0000000000d1';
@@ -117,6 +121,50 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
     assert.deepStrictEqual(store.row.syncOut.eagle, { status: 'sent', published: true }, 'claim released, level kept');
     assert.strictEqual(logged('info', `document ${ROW_ID} sent to Eagle`).length, 1);
+  });
+
+  await t.test('the echo of a PUT leaves the row\'s fields and sync state alone, and nothing is sent again', async (tt) => {
+    const store = mirrorStore(tt, [
+      { container: 'projects', ...storedEagleProject() },
+      { container: 'documents', ...sentRow(true, { projectId: '207' }) }
+    ]);
+    tt.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
+    const queued = wireQueue(tt);
+    const rowOf = () => store.rows('documents').find(r => r.id === ROW_ID);
+    let echo = null;
+    let before = null;
+    let echoed = null;
+    const calls = wireEagle(tt, {
+      // eagle-api awaits its push to DEMI before it answers the PUT.
+      [PUT]: async (body) => {
+        before = rowOf();
+        echo = mockRes();
+        await documentController.upsertFromEagle({
+          params: { eagleId: EAGLE_ID }, query: {}, user: STAFF,
+          body: { doc: { ...body, _id: EAGLE_ID, project: PROJECT_EAGLE_ID, read: PUBLIC_ACL }, pushedAt: Date.now() }
+        }, echo);
+        echoed = rowOf();
+        return {};
+      }
+    });
+    const message = { kind: DOCUMENT, consumer: 'eagle', id: ROW_ID, projectId: '207', attempt: 1 };
+
+    const result = await syncOut.run(message);
+
+    assert.deepStrictEqual(keys(calls), [PUT]);
+    assert.strictEqual(echo.statusCode, 200, 'the echo is accepted');
+    const { sources, _etag: _e, eaglePushedAt: _p, ...fields } = echoed;
+    const { sources: _bs, _etag: _be, ...was } = before;
+    assert.deepStrictEqual(fields, was, 'the echo changed no DEMI field, syncOut or syncVersion');
+    assert.strictEqual(sources?.eagle?._id, EAGLE_ID, 'the echo landed on this row');
+    assert.strictEqual(store.rows('documents').length, 1, 'the echo made no second row');
+    assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
+    assert.strictEqual(rowOf().syncOut.eagle.sentVersion, 2);
+    assert.deepStrictEqual(queued, [], 'the echo queues nothing');
+
+    const again = wireEagle(tt, {});
+    assert.deepStrictEqual(await syncOut.run(message), { skipped: 'current' });
+    assert.deepStrictEqual(again, [], 'no second send');
   });
 
   await t.test('a document message runs through the document consumer and records the sent version', async (tt) => {
