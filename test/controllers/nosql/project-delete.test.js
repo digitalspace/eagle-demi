@@ -210,6 +210,17 @@ test('DELETE /projects/:id', async (t) => {
     assert.ok(!twinWrite.item.read.includes('public'));
   });
 
+  await t.test('a repeat still narrows a twin left public', async () => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, read: ['public', 'staff'], isPublished: true };
+    const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY }), { twin });
+
+    const res = await del();
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(seen.writes.map(w => w.item.id), [TWIN_ID], 'only the twin is written');
+    assert.ok(!seen.writes[0].item.read.includes('public'));
+  });
+
   await t.test('an unknown project is a 404', async () => {
     t.mock.method(projects, 'getById', async () => null);
 

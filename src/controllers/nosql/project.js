@@ -1133,13 +1133,19 @@ exports.deleteProject = async (req, res) => {
       message: 'Project deleted successfully',
       deleted: redactForAccess('projects', written.saved, access)
     });
-    // A repeat writes nothing and audits nothing; it only retries a cascade the first call left owed.
+    const narrowSavedTwin = (saved) => (saved.eagleId
+      ? narrowTwin(saved, saved.eagleId, (twin, id) => runCascade(twin, id, { updates: false }))
+      : null);
+    // A repeat writes nothing and audits nothing; it only retries what the first call left owed.
     if (written.status === 'already') {
       const { saved } = written;
-      if (!saved.cascadePendingAt) return deleted();
-      const failure = await runCascade(saved, saved.eagleId);
-      if (failure) return res.status(500).json({ success: false, error: failure });
-      await clearCascadePending(saved, saved.eagleId);
+      if (saved.cascadePendingAt) {
+        const failure = await runCascade(saved, saved.eagleId);
+        if (failure) return res.status(500).json({ success: false, error: failure });
+        await clearCascadePending(saved, saved.eagleId);
+      }
+      const twinFailure = await narrowSavedTwin(saved);
+      if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
       return deleted();
     }
     const { saved, existing: from } = written;
@@ -1155,9 +1161,7 @@ exports.deleteProject = async (req, res) => {
     const failure = visibilityMoved(from, saved) ? await runCascade(saved, saved.eagleId) : null;
     if (failure) return res.status(500).json({ success: false, error: failure });
 
-    const twinFailure = saved.eagleId
-      ? await narrowTwin(saved, saved.eagleId, (twin, id) => runCascade(twin, id, { updates: false }))
-      : null;
+    const twinFailure = await narrowSavedTwin(saved);
     if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
 
     return deleted();
