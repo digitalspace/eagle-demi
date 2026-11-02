@@ -15,9 +15,8 @@ const { eagleOnlyProjectId, deletedBy, markDeleted, clearDeleted } = require('..
 const { refusedWriteKeys } = require('../vis/redact');
 
 /**
- * Bring the twin down to the Track row's read when that is lower, and its delete flag in step, then
- * cascade it onto the twin's own documents and engagement. Never widens it. A cascade the twin
- * still owes runs here too, since no push ever lands on the twin to repay it.
+ * Narrow the twin to the Track row's read, keep its delete flag in step, then cascade it; never
+ * widens it. Also repays a cascade the twin owes, since no push lands on the twin.
  *
  * @param {object} saved  the Track row this push wrote
  * @param {(row: object, eagleId: string) => Promise<string|null>} cascade  the project cascade
