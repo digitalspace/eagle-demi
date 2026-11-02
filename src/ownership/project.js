@@ -71,7 +71,7 @@ const EAGLE_TOP_LEVEL_FIELDS = [
   '_id', 'read', 'write', 'delete', 'pins', 'pinsRead', 'pinsHistory', 'links',
   'featuredDocuments', 'projectCAC', 'cacMembers', 'cacEmail', 'projectCACPublished',
   '_schemaName', ...LEGISLATION_INDEX_FIELDS,
-  '_updatedBy', '_addedBy', '_deletedBy', '__v'
+  '_updatedBy', '_addedBy', '_deletedBy', 'isDeleted', '__v'
 ];
 
 /**
@@ -106,6 +106,8 @@ const PUT_IGNORED_FIELDS = [
   'id', 'trackProjectId',
   // PUT does not move a level; widening is `PUT /projects/:id/level`.
   'read', 'isPublished',
+  // Only DELETE /projects/:id and the Eagle push move it, together with `read`.
+  'isDeleted',
   // The cacPublished predicate reads this, so PUT must not set it (doc §2 item 7).
   'projectCACPublished',
   // Derived from `pinsRead` on every read, so a GET-then-PUT must not store a copy.

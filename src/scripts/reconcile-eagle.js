@@ -1,37 +1,7 @@
 'use strict';
 
-/**
- * Diff the published Eagle id sets against the rows the Eagle push mirrored into DEMI, and for an
- * id on both sides, the ACL DEMI holds against the one the mirror would write from Eagle's `read[]`.
- *
- * Only the document and comment-period pushes carry a tombstone (`isDeleted: true`); every other
- * container is hard-deleted with none, so the push cannot tell DEMI those rows are gone. This
- * reports both directions and CHANGES NOTHING — a DEMI row absent from Eagle's public search may
- * equally be one Eagle merely unpublished, and eagle-api gives an anonymous caller no way to tell
- * the two apart (see `unpublishedOrDeleted` below), so there is nothing here it is safe to delete.
- *
- *   node src/scripts/reconcile-eagle.js [--json] [--comments] [--engage] [--drop-orphans] [--store]
- *
- * `--drop-orphans` IS THE ONE THING HERE THAT WRITES DATA. Everything else above still holds; see
- * `engageOrphans` for what it deletes and why that one set is safe when no other is. `--store`
- * writes only the run's own report row (`cache.RECONCILE_REPORT_ID`), served by GET /admin/reconcile.
- *
- * It covers the containers the Eagle push and the backfill write: projects, documents, comment
- * periods, lists (both kinds), notifications, updates, and — only with `--comments`, which costs
- * one eagle-api round trip per comment period — comments. Users, groups and inspections are checked
- * against their own stored Eagle copy only (`storedMirrorDrift`).
- *
- * Runs on the devbox via `demi-run` — same recipe as the other database scripts,
- * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
- * The API app also runs `run()` nightly on a Functions timer when RECONCILE_SCHEDULE is set — see
- * api/index.js, and azure/modules/observability.bicep for the alert that reads the line.
- *
- * A document or a comment period only counts as `eagleOnly` when DEMI would hold it — its Eagle
- * `project` ref names a project in the merged registry, or a `ProjectNotification`. That is not a
- * rule restated here: `documentAdmission` IS seed-nosql's own function, run over the same merged
- * project registry. The rest report separately under `unresolvedParent`, since the seed and the
- * mirrors drop them too and they are not push drift.
- */
+// Reports drift between Eagle and the rows its pushes mirrored into DEMI; `--drop-orphans` is its one
+// data write. A row gone from Eagle's public search may be unpublished, not deleted, so none is purged.
 
 const sources = require('../seed/sources');
 const projects = require('../repositories/projects');
@@ -46,7 +16,7 @@ const groups = require('../repositories/groups');
 const inspections = require('../repositories/inspections');
 const { constrainToProject, DELETED_CEILING } = documents;
 const { unlessUnprovisioned } = require('../helpers/unprovisioned');
-const { buildRegistry, buildProjectIndex } = require('../merge/project');
+const { buildRegistry, buildProjectIndex, isEagleOnlyProjectId } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
 const { eagleBaseAcl, eagleReadUnder } = require('../seed/transform');
 const { readUnder } = require('../helpers/update-parent');
@@ -236,6 +206,14 @@ function diff(rows, keyOf, eagleIds, pushOwned = () => true, parentPublished = (
   };
 }
 
+/**
+ * A diff with the rows a delete retired (gone from Eagle, deleted in DEMI or under a deleted project)
+ * moved out of `unpublishedOrDeleted` into `retired`, row ids, so they never count as drift.
+ */
+function splitRetired(d, retired) {
+  return { ...d, unpublishedOrDeleted: d.unpublishedOrDeleted.filter(row => !retired(row)),
+    retired: d.unpublishedOrDeleted.filter(retired).map(row => String(row.id)) };
+}
 
 /**
  * Ids in both Eagle and DEMI whose DEMI `read[]` grants different access than the one the mirror
@@ -358,7 +336,8 @@ function driftOf(summary) {
     // A misfiled row is drift the id-set diffs cannot see — present in both, stored under the
     // wrong parent — so it counts here or the alert stays quiet about it.
     return total + s.unpublishedOrDeleted.length + s.eagleOnly.length +
-      (s.misfiledParent ? s.misfiledParent.length : 0) + (s.aclMismatch ? s.aclMismatch.length : 0);
+      (s.misfiledParent ? s.misfiledParent.length : 0) + (s.aclMismatch ? s.aclMismatch.length : 0) +
+      (s.staleRetired ? s.staleRetired.length : 0);
   }, orphans + stored);
 }
 
@@ -553,9 +532,28 @@ async function reconcile(argv = [], deps = {}) {
   const projectRead = new Map(projectRows.map(row => [String(row.id), row.read]));
   const projectReadOf = row => projectRead.get(String(row.projectId)) || null;
 
-  summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff,
-    aclMismatch: aclMismatch(projectRows, row => String(row.eagleId), eagleRead) };
-  summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff,
+  // A delete caps a row Eagle may still publish, so a deleted row and the twin of a deleted Track row
+  // are never ACL drift. Still listed: a DEMI delete is reported apart, an Eagle-side one is stale drift.
+  const deleted = row => row.isDeleted === true;
+  const listed = row => eagleProjectIds.has(String(row.eagleId));
+  const deletedRows = projectRows.filter(deleted);
+  const deletedTrackEagleIds = new Set(deletedRows.filter(row => !isEagleOnlyProjectId(row.id))
+    .map(row => String(row.eagleId)));
+  const capped = row => deleted(row) || (isEagleOnlyProjectId(row.id) && deletedTrackEagleIds.has(String(row.eagleId)));
+  const servedRows = projectRows.filter(row => !capped(row));
+  const servedEagleIds = new Set(servedRows.map(row => String(row.eagleId)));
+  const eagleIdsOf = rows => [...new Set(rows.filter(row => !servedEagleIds.has(String(row.eagleId)))
+    .map(row => String(row.eagleId)))];
+  // Under a project gone from Eagle, unless its cascade is still owed and the document may be public.
+  const retiredParents = new Set(deletedRows.filter(row => !listed(row) && !row.cascadePendingAt)
+    .map(row => String(row.id)));
+  summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size,
+    ...splitRetired(projectDiff, deleted),
+    aclMismatch: aclMismatch(servedRows, row => String(row.eagleId), eagleRead),
+    demiDeleted: eagleIdsOf(deletedRows.filter(row => listed(row) && row.eagleDeleted !== true)),
+    staleRetired: eagleIdsOf(deletedRows.filter(row => listed(row) && row.eagleDeleted === true)) };
+  summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size,
+    ...splitRetired(documentDiff, row => retiredParents.has(String(row.projectId))),
     aclMismatch: aclMismatch(documentRows, row => String(row.id), eagleRead, projectReadOf) };
 
   // The public-read containers, enumerated with the SAME predicates a request reads under, but
@@ -801,6 +799,17 @@ function report(summary, { json } = {}) {
       line('aclMismatch (in both, but DEMI read[] lets in different callers than the read[] the ' +
         'mirror would write from Eagle\'s, or isPublished disagrees with read[]; check each row, ' +
         'a full re-push would overwrite DEMI-side changes)', s.aclMismatch);
+    }
+    if (s.demiDeleted && s.demiDeleted.length) {
+      line('demiDeleted (deleted in DEMI, still published in Eagle; not counted as drift)', s.demiDeleted);
+    }
+    if (s.staleRetired && s.staleRetired.length) {
+      line('staleRetired (retired as gone from Eagle, but Eagle lists it again; a seed run or push restores it)',
+        s.staleRetired);
+    }
+    if (s.retired && s.retired.length) {
+      line('retired (deleted in DEMI, or under a deleted project, and gone from Eagle; not counted as drift)',
+        s.retired);
     }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +

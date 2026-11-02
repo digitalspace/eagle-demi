@@ -255,7 +255,7 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 46,
+    assert.strictEqual(emissions.length, 49,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
     // The short-link sites by name: the count alone passes when one is swapped for a wider one.
     for (const site of [
@@ -318,8 +318,8 @@ test('access gate coverage', async (t) => {
     assert.ok(emissions.some(e => /'upsert'/.test(e)), 'the Eagle push ack is in the scan');
     assert.ok(emissions.some(e => /chunks:/.test(e)), 'a chunk ingest ack is in the scan');
 
-    // The download payload is no longer a res.json site, so the scan cannot see it. It is the one
-    // response built from a document row outside the emission set — assert it stays hand-built.
+    // The download payload is not a res.json site, so the scan cannot see it; it is the one
+    // document-row response outside the emission set, so assert it stays hand-built.
     const download = /return \{\s*status: 200,\s*body: \{([^}]*)\}/.exec(code(controller));
     assert.ok(download, 'resolveDownload no longer returns a literal body — re-check what it emits');
     assert.ok(!/\bdoc\b(?!\s*\.)/.test(download[1]),

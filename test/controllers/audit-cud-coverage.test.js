@@ -1,19 +1,7 @@
 'use strict';
 
-/**
- * Every authenticated create, update and delete writes exactly one audit row.
- * Exception: a tags PUT that changes the other row of a Track/Eagle pair writes two,
- * `project.update` and `project.mirrorTags`.
- *
- * That rule is the reason this file exists rather than a handful of assertions scattered through
- * the controller tests: the gap it closed was not a broken audit call, it was seven handlers that
- * never had one — including all three boundary mutations, which nobody noticed until the rule was
- * applied as a checklist. A test per controller would have kept that shape invisible.
- *
- * `exactly one` is the load-bearing word in every assertion below. The failure mode that costs
- * money here is not a missing row, it is a row per chunk or per project: the ingest routes handle
- * ~1.13M chunks and the wildfire sync patches every project, into a table kept for seven years.
- */
+// Every authenticated create, update and delete writes exactly one audit row (a tags PUT on a
+// Track/Eagle pair writes two); a row per chunk or per project would flood a seven-year table.
 
 process.env.NODE_ENV = 'test';
 // Both, before src/config is first required: the writer is inert without them (utils/audit.js),
@@ -61,9 +49,8 @@ function mockRes() {
   };
 }
 
-// A real Keycloak-shaped principal, not a bare roles object: actorFor() classifies on `sub` and
-// `preferred_username`, so a stub without them lands in the 'unknown' bucket and the ActorType
-// assertions below would pass while proving nothing.
+// actorFor() classifies on `sub` and `preferred_username`; without them the ActorType asserts
+// below would pass on the 'unknown' bucket.
 const STAFF = {
   sub: 'kc-sub-1',
   preferred_username: 'staff.person',
@@ -177,9 +164,8 @@ test('authenticated CUD audit coverage', async (t) => {
   });
 
   await t.test('NDJSON chunk ingest writes one document.ingest marked streamed', async () => {
-    // Asserted separately from the JSON path because they are two literal call sites:
-    // ingestChunksStreaming and its fail() both hand the same `res` back to ingestChunks, so a
-    // single row emitted by the caller could not tell a completed stream from a 500.
+    // A separate call site from the JSON path: ingestChunksStreaming and its fail() share one
+    // `res`, so a row emitted by the caller could not tell a finished stream from a 500.
     t.mock.method(documents, 'getById', async () => ({
       id: 'd1', projectId: '207', read: ['staff', 'sysadmin'], isPublished: false
     }));
@@ -207,9 +193,8 @@ test('authenticated CUD audit coverage', async (t) => {
   });
 
   await t.test('a reported extraction failure writes one row, marked failure', async () => {
-    // Answers 200 and marks the document extracted with zero chunks, so it is a successful
-    // authenticated update however the extraction went — the row is what attributes a document
-    // that looks processed and has no text.
+    // A 200 that marks the document extracted with zero chunks: the row is what attributes a
+    // document that looks processed and has no text.
     t.mock.method(documents, 'getById', async () => ({
       id: 'd2', projectId: '207', read: ['staff', 'sysadmin'], isPublished: false
     }));
@@ -285,9 +270,11 @@ test('authenticated CUD audit coverage', async (t) => {
   });
 
   await t.test('project delete writes one project.delete', async () => {
-    t.mock.method(projects, 'getById', async () => ({ id: '207', name: 'Skeena LNG' }));
-    t.mock.method(projects, 'deleteById', async () => ({}));
-    t.mock.method(aiSearch, 'deleteFromIndex', async () => true);
+    t.mock.method(projects, 'getById', async () =>
+      ({ id: '207', name: 'Skeena LNG', read: ['public', 'staff'], isPublished: true }));
+    t.mock.method(projects, 'upsert', async (item) => item);
+    t.mock.method(aiSearch, 'writeAcls', async () => 1);
+    t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
 
     const written = await rowsFrom(() => projectController.deleteProject({
       params: { id: '207' }, query: {}, user: STAFF
@@ -296,7 +283,20 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written.length, 1);
     assert.strictEqual(written[0].Action, 'project.delete');
     assert.strictEqual(written[0].TargetId, '207');
-    assert.strictEqual(written[0].Detail.removedFromSearch, true);
+    assert.strictEqual(written[0].Detail.name, 'Skeena LNG');
+    assert.strictEqual(written[0].Detail.isPublishedFrom, true);
+    assert.strictEqual(written[0].Detail.isPublishedTo, false);
+  });
+
+  await t.test('a repeated project delete writes no second row', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '207', isDeleted: true, read: ['staff'] }));
+    t.mock.method(projects, 'upsert', async (item) => item);
+
+    const written = await rowsFrom(() => projectController.deleteProject({
+      params: { id: '207' }, query: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 0);
   });
 
   await t.test('a project summary write writes one projectSummary.save under the resolved project', async () => {
@@ -635,9 +635,8 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].Action, 'wildfire.sync');
     assert.strictEqual(written[0].Detail.updatedProjects, 1);
 
-    // The written shape IS the public contract: repositories/projects.publicView emits this object
-    // verbatim under `sources.wildfire`, so a renamed or extra key ships straight to anonymous
-    // callers and to the map explorer that reads it.
+    // A public contract: projects.publicView emits this object verbatim under `sources.wildfire`,
+    // so a renamed or extra key reaches anonymous callers and the map explorer.
     assert.strictEqual(patched.length, 1, 'one patch per project with a centroid');
     assert.deepStrictEqual(Object.keys(patched[0]).sort(),
       ['activeCountWithin50km', 'firesOfNoteNearby', 'lastCalculatedAt', 'nearestDistanceKm']);

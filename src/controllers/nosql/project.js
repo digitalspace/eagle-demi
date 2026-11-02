@@ -24,13 +24,12 @@ const { catalogFor } = require('../../vis/catalog');
 const { serverError } = require('../../helpers/response');
 const { inList } = require('../../repositories/_sql');
 const aiSearch = require('../../search/ai-search');
-const { purgeProject } = require('../../helpers/purge');
 const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, TRIMMED_FIELDS,
-  hasValue
+  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, deleteStands,
+  TRIMMED_FIELDS, hasValue
 } = require('../../merge/project');
 const { LEGISLATION_KEY, PUT_IGNORED_FIELDS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
@@ -627,6 +626,7 @@ exports.setLevel = async (req, res) => {
       reread: () => projects.getById(access, req.params.id),
       attempt: async (current, attempt) => {
         if (!current) return { status: 'missing' };
+        if (current.isDeleted === true) return { status: 'refused', code: 409, error: 'Project is deleted' };
         // Per try: a reread after a lost race can find the project moved under a locked Act.
         const move = year.value === null ? { key: null } : yearSwitch(current, year.value);
         if (move.error) {
@@ -793,13 +793,20 @@ exports.upsertFromEagle = async (req, res) => {
   return applyEaglePush(req, res, push);
 };
 
+/** Whether a push leaves the row deleted: its own flag, else the stored delete if it stands. */
+function pushDeleted(doc, existing) {
+  if (typeof doc.isDeleted === 'boolean') return doc.isDeleted;
+  return deleteStands(existing);
+}
+
 /** The row a push writes, built from whatever revision is stored at the moment of the write. */
 function mergeEaglePush(doc, existing) {
+  const deleted = pushDeleted(doc, existing);
   // A push carries no Track phases or works, so the stored ones go back in (not DEMI-only: the sync
   // rebuilds them).
   const merged = existing && existing.sources && existing.sources.track
-    ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases, works: existing.works })
-    : mergeEagleOnlyProject(doc);
+    ? mergeTrackProject(existing.sources.track, doc, { phases: existing.phases, works: existing.works, deleted })
+    : mergeEagleOnlyProject(doc, { deleted });
 
   // Every OTHER source block survives the push. A Cosmos upsert replaces the item, and the merge
   // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
@@ -816,6 +823,8 @@ function mergeEaglePush(doc, existing) {
   carryDemiOnlyFields(merged, existing);
   // A Track row with no `epic_guid` holds the Eagle id sync-out gave it; the echo must keep it.
   if (existing && !hasValue(merged.eagleId) && hasValue(existing.eagleId)) merged.eagleId = existing.eagleId;
+  // Eagle deleting a project DEMI already deleted must not hand the delete to Eagle to undo.
+  if (merged.isDeleted === true) markDeleted(merged, deleteStands(existing) ? 'demi' : 'eagle');
   return merged;
 }
 
@@ -851,6 +860,8 @@ async function runCascade(saved, eagleId, options) {
   if (failure) await markCascadePending(saved, eagleId);
   return failure;
 }
+exports.runCascade = runCascade;
+exports.visibilityMoved = visibilityMoved;
 
 /** Best effort, and deliberately so: the 500 the caller is about to send is the real answer. */
 async function markCascadePending(saved, eagleId) {
@@ -1093,28 +1104,60 @@ function shortCodeBody(project, row) {
   };
 }
 
+/** Flag and narrow to staff, never remove: eagle-api's delete only flags, and staff and reconcile still read the row. */
 exports.deleteProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    const existing = await projects.getById(access, req.params.id);
+    const reread = () => projects.getById(access, req.params.id);
+    const existing = await reread();
     if (!existing) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    const { removedFromSearch } = await purgeProject(existing);
-
-    auditEvent(req, {
-      action: 'project.delete',
-      targetType: 'project',
-      targetId: existing.id,
-      projectId: existing.id,
-      detail: { name: existing.name, removedFromSearch }
+    const written = await writeGuarded({
+      existing,
+      reread,
+      attempt: async (current) => {
+        if (!current) return { status: 'missing' };
+        if (deleteStands(current)) return { status: 'already', saved: current };
+        // An Eagle-side delete becomes DEMI's, or Eagle republishing the project would undo it.
+        const row = markDeleted({ ...current, updatedAt: new Date().toISOString() });
+        return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), existing: current };
+      },
+      onLost: (_current, attempt) =>
+        logger.warn('[Project Controller] project delete lost its etag race, rebuilding',
+          { id: req.params.id, attempt })
     });
+    if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (written.status === 'conflict') return writeConflict(res, 'project delete', req.params.id);
+    const { saved, existing: from } = written;
+
+    // A repeat writes nothing and audits nothing; it only retries what the first call left owed.
+    if (from) {
+      auditEvent(req, {
+        action: 'project.delete',
+        targetType: 'project',
+        targetId: saved.id,
+        projectId: saved.id,
+        detail: { name: saved.name, isPublishedFrom: from.isPublished, isPublishedTo: saved.isPublished }
+      });
+    }
+
+    const owed = Boolean(saved.cascadePendingAt);
+    if ((from && visibilityMoved(from, saved)) || owed) {
+      const failure = await runCascade(saved, saved.eagleId);
+      if (failure) return res.status(500).json({ success: false, error: failure });
+      if (owed) await clearCascadePending(saved, saved.eagleId);
+    }
+
+    const twinFailure = saved.eagleId
+      ? await narrowTwin(saved, saved.eagleId, (twin, id) => runCascade(twin, id, { updates: false }))
+      : null;
+    if (twinFailure) return res.status(500).json({ success: false, error: twinFailure });
 
     return res.json({
       message: 'Project deleted successfully',
-      deleted: redactForAccess('projects', existing, access),
-      removedFromSearch
+      deleted: redactForAccess('projects', saved, access)
     });
   } catch (err) {
     return serverError(res, err, 'project controller failed');

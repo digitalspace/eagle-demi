@@ -332,6 +332,48 @@ test('aclMismatch', async (t) => {
 });
 
 test('reconcile', async (t) => {
+  const PUBLIC = readForLevel(4);
+  const STAFF_ONLY = { read: readForLevel(2), isPublished: false };
+  // 207 deleted with `flags`, its relink twin narrowed beside it, and every other row public.
+  const deletedRun = (flags, extraRows = []) => {
+    const rows = [...PROJECT_ROWS.map(row => (row.id === '207'
+      ? { ...row, ...STAFF_ONLY, isDeleted: true, ...flags }
+      : { ...row, read: PUBLIC, isPublished: true })), ...extraRows];
+    return reconcile([], makeDeps({
+      sources: stubSources({
+        fetchEagleProjects: async () => EAGLE_PROJECTS.map(p => ({ ...p, read: PUBLIC }))
+      }),
+      projects: { listWithEagleId: async () => rows, countWithEagleId: async () => rows.length }
+    }));
+  };
+
+  await t.test('a DEMI-deleted project Eagle still publishes is demiDeleted, not ACL drift', async () => {
+    const twin = { id: 'eagle-P1', eagleId: 'P1', sourceSystem: 'eagle', ...STAFF_ONLY };
+    const summary = await deletedRun({}, [twin]);
+
+    assert.deepStrictEqual(summary.projects.demiDeleted, ['P1']);
+    assert.deepStrictEqual(summary.projects.aclMismatch, [], 'the narrowed twin is not drift either');
+    assert.deepStrictEqual(summary.documents.retired, [],
+      'D-gone left Eagle under a project Eagle still publishes: drift, not retired');
+  });
+
+  await t.test('a deleted twin leaves its live Track row open to ACL drift', async () => {
+    const twin = { id: 'eagle-P1', eagleId: 'P1', sourceSystem: 'eagle', ...STAFF_ONLY, isDeleted: true };
+    const summary = await deletedRun({ isDeleted: false }, [twin]);
+
+    assert.deepStrictEqual(summary.projects.aclMismatch, ['P1'], 'Track row 207 is staff-only, Eagle public');
+    assert.deepStrictEqual(summary.projects.demiDeleted, [], 'P1 is still served by 207');
+  });
+
+  await t.test('a retire Eagle undid since is staleRetired, and drift', async () => {
+    const live = await deletedRun({ isDeleted: false, read: PUBLIC, isPublished: true });
+    const summary = await deletedRun({ eagleDeleted: true });
+
+    assert.deepStrictEqual(summary.projects.staleRetired, ['P1']);
+    assert.deepStrictEqual(summary.projects.demiDeleted, []);
+    assert.strictEqual(summary.drift, live.drift + 1);
+  });
+
   // Every id here is in both Eagle and DEMI, so each id-set diff reads them as clean.
   await t.test('reports ACL drift on ids both sides hold', async () => {
     const PUBLIC = readForLevel(4);
@@ -409,6 +451,46 @@ test('reconcile', async (t) => {
     assert.deepStrictEqual(summary.documents.unresolvedParent, ['D3']);
     assert.strictEqual(summary.drift, 5);
     assert.deepStrictEqual(summary.failures, []);
+  });
+
+  await t.test('a deleted project gone from Eagle, and its documents, are retired, not drift', async () => {
+    const base = await reconcile([], makeDeps());
+    const summary = await reconcile([], makeDeps({
+      projects: {
+        listWithEagleId: async () => PROJECT_ROWS.map(row => (row.id === 'eagle-gone'
+          ? { ...row, isDeleted: true } : row)),
+        countWithEagleId: async () => PROJECT_ROWS.length
+      },
+      documents: {
+        ...makeDeps().documents,
+        listSeededIds: async () => [...DOCUMENT_ROWS, { id: 'D-retired', projectId: 'eagle-gone' }],
+        countSeededIds: async () => DOCUMENT_ROWS.length + 1
+      }
+    }));
+
+    assert.deepStrictEqual(summary.projects.retired, ['eagle-gone']);
+    assert.deepStrictEqual(summary.documents.retired, ['D-retired']);
+    assert.deepStrictEqual(summary.projects.unpublishedOrDeleted, []);
+    assert.strictEqual(summary.drift, base.drift - 1, 'only the project row leaves drift; its document never entered');
+    assert.match(report(summary), /retired \(deleted in DEMI.*\): 1 — eagle-gone/);
+  });
+
+  await t.test('a document under a retired project whose cascade is owed is still drift', async () => {
+    const summary = await reconcile([], makeDeps({
+      projects: {
+        listWithEagleId: async () => PROJECT_ROWS.map(row => (row.id === 'eagle-gone'
+          ? { ...row, isDeleted: true, cascadePendingAt: '2026-11-01T00:00:00.000Z' } : row)),
+        countWithEagleId: async () => PROJECT_ROWS.length
+      },
+      documents: {
+        ...makeDeps().documents,
+        listSeededIds: async () => [...DOCUMENT_ROWS, { id: 'D-retired', projectId: 'eagle-gone' }],
+        countSeededIds: async () => DOCUMENT_ROWS.length + 1
+      }
+    }));
+
+    assert.deepStrictEqual(summary.documents.retired, []);
+    assert.ok(summary.documents.unpublishedOrDeleted.some(row => row.id === 'D-retired'));
   });
 
   await t.test('an id Eagle publishes and DEMI never mirrored is reported', async () => {

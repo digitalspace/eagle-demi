@@ -232,23 +232,42 @@ fields; it keeps `vis`, the short-link fields (`shortCode`, `shortCodeSource`,
 `legacyShortCodes`), the Track source block, and the two fields the search does not carry at all
 (`applicableRegulation`, `featuredDocuments`).
 
-`--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch are
-deleted through the same helpers `DELETE /documents/:id` and `DELETE /projects/:id` use, so the
-chunks and the search-index entries go with them, and each deleted row emits the same
-`document.delete` / `project.delete` audit event those routes do. A dry run reports `wouldDelete`
-per container and deletes nothing. Deletion is a single phase after every fetch has finished —
-documents before projects — so a refusal stops it **before any delete**, in both containers at once.
-It refuses — exit 1, nothing removed — if `--only` dropped a stage, if `--limit-documents` was
-given, if the Project, ProjectNotification or Document fetch was not verified complete against
-eagle-api's `searchResultsTotal`, if a document that resolved to neither a project nor a
-ProjectNotification is already in Cosmos (a drop the fetch cannot account for is only at risk when
-there is a row to delete; drops absent from Cosmos are reported as `droppedUnresolvable` and do not
-refuse), if either container enumerated fewer rows than a `COUNT` of the same predicate reports (a
-truncated read is indistinguishable from a container that shrank), or if there is no
-`COSMOS_ENDPOINT` to enumerate the containers with: every one of those makes the untouched remainder
-look like surplus. A live run also refuses when `SEARCH_ENDPOINT` is unset, for the opposite reason —
-the deletes would land in Cosmos and silently no-op against the index, leaving the purged rows
-searchable. A dry run reports that as `search: unconfigured — live would refuse` instead.
+`--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch.
+A surplus document is deleted through the helper `DELETE /documents/:id` uses, so its chunks and
+search-index entries go with it. A surplus project is never removed, since one missing from the
+public feed may only be unpublished.
+
+The seed flags a surplus project the way `DELETE /projects/:id` does (`isDeleted`, `read` capped at
+staff, the visibility cascade), and its Eagle copy too (`sources.eagle.isDeleted`). The documents of
+every deleted project the feed lacks stay, capped by that cascade, Track-sourced projects included.
+When the feed lists the project again, the next seed or Eagle push restores it and runs the cascade
+again.
+
+A deleted project whose cascade failed keeps `cascadePendingAt`, and each `--live --reconcile` run
+retries that cascade; a dry run counts those rows as `cascadesOwed`. A staff `DELETE /projects/:id`
+on a retired project clears the Eagle-side flag, so the project stays deleted. Each row emits the
+same `document.delete` / `project.delete` audit event those routes do.
+
+A project deleted by another writer since the enumeration is skipped and counted as `skipped`,
+not under `wouldDelete` or `deleted`. A dry run
+reports `wouldDelete` per container and deletes nothing. Deletion is a single phase after every
+fetch has finished, so a refusal stops it **before any delete**, in both containers at once.
+
+It refuses, with exit 1 and nothing removed, when any of these makes the untouched remainder look
+like surplus:
+
+- `--only` dropped a stage, or `--limit-documents` was given.
+- The Project, ProjectNotification or Document fetch was not verified complete against eagle-api's
+  `searchResultsTotal`.
+- A document that resolved to neither a project nor a ProjectNotification is already in Cosmos. A
+  drop absent from Cosmos is reported as `droppedUnresolvable` and does not refuse.
+- Either container enumerated fewer rows than a `COUNT` of the same predicate reports, since a
+  truncated read looks the same as a container that shrank.
+- There is no `COSMOS_ENDPOINT` to enumerate the containers with.
+
+A live run also refuses when `SEARCH_ENDPOINT` is unset, because the deletes would land in Cosmos
+and silently no-op against the index, leaving the purged rows searchable. A dry run reports that as
+`search: unconfigured — live would refuse` instead.
 
 Every surplus id goes to an NDJSON file — one `{label, id, partitionKey, deleted}` row per surplus
 row, both containers, dry run and live — and the run prints the path. It defaults to
@@ -273,13 +292,22 @@ node src/scripts/reconcile-eagle.js --store    # and save the class report for G
 
 The drift check for the Eagle push, without a re-seed: DEMI rows gone from Eagle's public search
 (a hard delete carries no tombstone) and Eagle ids the push never landed. **It reports and changes
-nothing.** `unpublishedOrDeleted` is not a delete list: eagle-api answers `200 []` on
-`/api/public/{document,project}/{id}` both for a deleted row and for one that merely lost `public`
-from its `read[]`, so an anonymous caller cannot tell the two apart, and purging on that set would
-destroy an unpublished row along with its chunks and index entries. A purge needs a probe that
-separates them — a tombstone, or a credential that reads unpublished rows. A document whose own
-project is unpublished/gone is not counted as `eagleOnly` drift either — seed-nosql drops it the
-same way — it reports separately as `unresolvedParent`.
+nothing.** A document whose own project is unpublished or gone reports as `unresolvedParent`, not
+`eagleOnly` drift, since seed-nosql drops it the same way.
+
+`unpublishedOrDeleted` is not a delete list. For a deleted row and for one that only lost `public`
+from its `read[]`, eagle-api answers `200 []` on `/api/public/{document,project}/{id}` alike, so
+purging on that set would destroy unpublished rows. A purge needs a probe that separates them: a
+tombstone, or a credential that reads unpublished rows.
+
+A project deleted in DEMI that Eagle still publishes reports as `demiDeleted`, and its `eagle-<id>`
+twin is not ACL drift. A project the seed retired that Eagle lists again reports as `staleRetired`
+and counts toward `drift=`: the next seed or push restores it.
+
+A deleted Eagle-sourced project gone from Eagle reports under `projects.retired`, even with
+`cascadePendingAt` set. Its documents report under `documents.retired` unless that cascade is still
+owed, and then they stay drift. Neither `retired` list counts toward `drift=`, and a deleted Track
+row gone from Eagle reports under `trackOnly` instead.
 
 For an id both sides hold, `aclMismatch` lists rows whose DEMI `read[]` lets in different callers
 than the `read[]` the mirror would write from Eagle's, or whose `isPublished` no longer matches

@@ -12,6 +12,8 @@ const catalog = {
   eagleId: { defaultVis: 4, maxVis: 4 },
   sourceSystem: { defaultVis: 4, maxVis: 4 },
   isPublished: { defaultVis: 4, maxVis: 4 },
+  // Staff only: `read` already hides a deleted row; this says why.
+  isDeleted: { defaultVis: 2, maxVis: 2 },
   createdAt: { defaultVis: 4, maxVis: 4 },
   updatedAt: { defaultVis: 4, maxVis: 4 },
   centroid: { defaultVis: 4, maxVis: 4 },

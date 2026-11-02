@@ -21,6 +21,7 @@
 
 const { eagleBaseAcl } = require('../seed/transform');
 const { capRead } = require('../helpers/access-sql');
+const { DELETED_CEILING } = require('../repositories/documents');
 const { beforeDateFloor } = require('../domain/project-legislation');
 const { ASSESSMENT_WORK_TYPE, deriveAssessments } = require('./assessments');
 const {
@@ -142,9 +143,9 @@ function normalizeEagleSlot(flat, orgs) {
   return flat;
 }
 
-/** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`). */
+/** A rebuilt project `read`, capped at the stored row's while DEMI holds it (`levelHeldAt`) or it is deleted. */
 function heldRead(read, existing) {
-  return existing && existing.levelHeldAt && Array.isArray(existing.read)
+  return existing && (existing.levelHeldAt || existing.isDeleted === true) && Array.isArray(existing.read)
     ? capRead(read, existing.read)
     : read;
 }
@@ -343,6 +344,15 @@ function normalizeCentroid(track, eagle) {
   return pair ? validCoordinates(pair[0], pair[1]) : null;
 }
 
+const isDeletedInEagle = (eagle) => Boolean(eagle) && eagle.isDeleted === true;
+
+/**
+ * Whether a merge marks the row deleted: `opts.deleted` when the caller decided (a push that says
+ * nothing keeps a DEMI delete), else the Eagle copy's own flag.
+ */
+const mergeDeleted = (eagle, opts) =>
+  (typeof opts.deleted === 'boolean' ? opts.deleted : isDeletedInEagle(eagle));
+
 /**
  * The ACL for a merged project.
  *
@@ -362,10 +372,56 @@ function normalizeCentroid(track, eagle) {
  * Failing closed here is also right for the Eagle-only path (`mergeEagleOnlyProject`), where a
  * missing or empty `read[]` on an Eagle record is an absence of evidence, not evidence of consent.
  */
-function resolveProjectAcl(eagle) {
+function resolveProjectAcl(eagle, deleted = isDeletedInEagle(eagle)) {
   // Level 2 when Eagle sent none, or only the sealed token: the level the legacy admin-role list
   // already meant, written in ladder tokens so a re-merge does not rewrite what a controller wrote.
-  return eagleBaseAcl(eagle && eagle.read);
+  const read = eagleBaseAcl(eagle && eagle.read);
+  // A deleted project's Eagle `read` still says `public`; the row stays, for staff only.
+  return deleted ? capRead(read, DELETED_CEILING) : read;
+}
+
+/** Who deleted a stored project: `'eagle'` when its Eagle copy carries the flag, else `'demi'`; null when live. */
+function deletedBy(row) {
+  if (!row || row.isDeleted !== true) return null;
+  return row.sources && row.sources.eagle && row.sources.eagle.isDeleted === true ? 'eagle' : 'demi';
+}
+
+/**
+ * Whether a rebuild from an Eagle record with no delete flag keeps the stored delete. eagle-api never
+ * sends `isDeleted: false`, so only a delete Eagle made (`sources.eagle.isDeleted`) clears.
+ */
+const deleteStands = (existing) => deletedBy(existing) === 'demi';
+
+/** Set or drop the flag on `row`'s Eagle copy, through a new `sources` so a shallow copy's original keeps its own. */
+function markEagleCopy(row, on) {
+  const eagle = row.sources && row.sources.eagle;
+  if (!on && !(eagle && 'isDeleted' in eagle)) return;
+  const { isDeleted: _flag, ...rest } = eagle || {};
+  row.sources = { ...row.sources, eagle: on ? { ...rest, isDeleted: true } : rest };
+}
+
+/** Flag a project deleted by `by` and cap its `read` at staff, in place: the row stays for staff and reconcile. */
+function markDeleted(row, by = 'demi') {
+  row.isDeleted = true;
+  markEagleCopy(row, by === 'eagle');
+  row.read = capRead(row.read, DELETED_CEILING);
+  row.isPublished = row.read.includes('public');
+  return row;
+}
+
+/** Drop the delete flag, in place. `read` stays: widening is the caller's call. */
+function clearDeleted(row) {
+  delete row.isDeleted;
+  markEagleCopy(row, false);
+  return row;
+}
+
+/** Keep the stored delete on a rebuilt row, in place: a DEMI one always, an Eagle one until Eagle sends the record. */
+function carryDelete(row, existing) {
+  const by = deletedBy(existing);
+  if (by === 'demi') return markDeleted(row);
+  if (by === 'eagle' && !(row.sources && row.sources.eagle)) return markDeleted(row, 'eagle');
+  return row;
 }
 
 /**
@@ -379,6 +435,7 @@ function resolveProjectAcl(eagle) {
  * @param {Array}       [opts.works]   this project's Track works (seed/sources.js); absent when
  *                                     not fetched, which also leaves `legislationTransitions` out
  * @param {Map}         [opts.orgs]    Organization lookup, for resolving seed-shaped `pins`
+ * @param {boolean}     [opts.deleted] the row's delete flag; defaults to the Eagle record's
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
   if (!track || !hasValue(track.track_project_id)) {
@@ -402,7 +459,8 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   // no document could be published under any of them.
   //
   // `is_active` is still carried through, as `isActive` via TRACK_PRECEDENCE.
-  const read = resolveProjectAcl(eagle);
+  const deleted = mergeDeleted(eagle, opts);
+  const read = resolveProjectAcl(eagle, deleted);
   const isPublished = read.includes('public');
 
   const merged = {
@@ -412,6 +470,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
     sourceSystem: 'track',
     isPublished,
     read,
+    ...(deleted ? { isDeleted: true } : {}),
     updatedAt: now
   };
 
@@ -478,7 +537,8 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   const eagleId = String(eagle._id);
 
   // Same rule as the Track path: the flag mirrors the ACL rather than a separate status field.
-  const read = resolveProjectAcl(eagle);
+  const deleted = mergeDeleted(eagle, opts);
+  const read = resolveProjectAcl(eagle, deleted);
   const isPublished = read.includes('public');
 
   const merged = {
@@ -488,6 +548,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
     sourceSystem: 'eagle',
     isPublished,
     read,
+    ...(deleted ? { isDeleted: true } : {}),
     updatedAt: now
   };
 
@@ -632,6 +693,11 @@ module.exports = {
   validCoordinates,
   normalizeCentroid,
   resolveProjectAcl,
+  markDeleted,
+  clearDeleted,
+  carryDelete,
+  deletedBy,
+  deleteStands,
   mergeTrackProject,
   mergeEagleOnlyProject,
   eagleOnlyProjectId,

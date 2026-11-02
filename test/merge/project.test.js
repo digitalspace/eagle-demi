@@ -653,6 +653,42 @@ test('ACL — the merge never widens visibility', async (t) => {
   });
 });
 
+test('a project Eagle deleted keeps its row, for staff only', async (t) => {
+  // eagle-api's delete flags the top level of the raw record and leaves `public` in its read[].
+  const raw = (top = {}) => ({
+    _id: TRACK_207.epic_guid,
+    read: ['public', 'sysadmin', 'staff'],
+    currentLegislationYear: 'legislation_2018',
+    legislation_2018: { name: 'Deleted Mine', legislationYear: 2018 },
+    ...top
+  });
+
+  await t.test('both merges leave public out of read[] and flag the row', () => {
+    for (const merged of [mergeTrackProject(TRACK_207, raw({ isDeleted: true }), OPTS),
+      mergeEagleOnlyProject(raw({ isDeleted: true }), OPTS)]) {
+      assert.deepStrictEqual(merged.read, ['staff']);
+      assert.strictEqual(merged.isPublished, false);
+      assert.strictEqual(merged.isDeleted, true);
+      assert.strictEqual(merged.sources.eagle.isDeleted, true, 'kept through the flatten for a re-merge');
+    }
+  });
+
+  await t.test('a live record stays public and carries no flag', () => {
+    const merged = mergeEagleOnlyProject(raw({ isDeleted: false }), OPTS);
+    assert.ok(merged.read.includes('public'));
+    assert.ok(!('isDeleted' in merged));
+  });
+
+  await t.test('the caller\'s delete flag wins over the record\'s', () => {
+    assert.ok(!mergeEagleOnlyProject(raw(), { ...OPTS, deleted: true }).read.includes('public'));
+    assert.ok(mergeEagleOnlyProject(raw({ isDeleted: true }), { ...OPTS, deleted: false }).read.includes('public'));
+  });
+
+  await t.test('Eagle\'s level for a deleted record is staff', () => {
+    assert.deepStrictEqual(resolveProjectAcl({ read: ['public'], isDeleted: true }), ['staff']);
+  });
+});
+
 test('Eagle-only projects', async (t) => {
   const eagle = eagleFor({ epic_guid: 'abc123', name: 'Orphan' });
 
