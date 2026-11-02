@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { PROD_API, TEST_ORIGIN, makeRequest, residue, verify } = require('../../scripts/reseed-public-check');
+const { PROD_API, TEST_ORIGIN, TEST_STAFF_ORIGIN, makeRequest, residue, verify } = require('../../scripts/reseed-public-check');
 
 const KEEP = '6abf251529e23409d1307085';
 const KEEP_ROW = { id: `eagle-${KEEP}`, name: 'Pacific Link', tags: ['West Coast Oil Pipeline'], shortUrl: '/s/pacific-link', shortLinkCustom: false };
@@ -68,8 +68,15 @@ test('request lets DELETE through to the test host', async () => {
   // Without this, a guard that refuses every DELETE would pass the test above and break S6.
   const request = makeRequest(async () => new Response(null, { status: 204 }));
 
-  const res = await request(`${TEST_ORIGIN}/demi/api/updates/u9`, { method: 'DELETE' });
+  const res = await request(`${TEST_STAFF_ORIGIN}/api/updates/u9`, { method: 'DELETE' });
   assert.strictEqual(res.status, 204);
+});
+
+// The public host's APIM drops DELETE, so the guard must not let it through either.
+test('request refuses DELETE to the public test host', async () => {
+  const request = makeRequest(async () => new Response(null, { status: 204 }));
+
+  await assert.rejects(request(`${TEST_ORIGIN}/demi/api/updates/u9`, { method: 'DELETE' }), /refused DELETE/);
 });
 
 test('residue drops rows of a kept project', async () => {
