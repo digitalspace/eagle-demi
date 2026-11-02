@@ -1,10 +1,7 @@
 'use strict';
 
-/**
- * Sync-out engine and its Eagle consumer, against a fake queue, an in-memory row with etags and a
- * fake eagle-api. What matters is what reaches Eagle (which verb, which id) and what the row says
- * afterwards, because the row is what makes the next delivery skip or retry.
- */
+// What matters is what reaches Eagle (which verb, which id) and what the row says afterwards: the row
+// is what makes the next delivery skip or retry.
 
 process.env.NODE_ENV = 'test';
 
@@ -24,6 +21,7 @@ const { writeRow } = require('../../src/domain/_write');
 const commentPeriodController = require('../../src/controllers/nosql/comment-period');
 const { mockRes, STAFF, PUBLIC_ACL } = require('../helpers/eagle-mirror-fixtures');
 const config = require('../../src/config');
+const { useEnv } = require('../helpers/sync-out-eagle');
 
 const API = 'https://eagle.example/api';
 // Derived from KEYCLOAK_URL and KEYCLOAK_REALM, not a setting of its own.
@@ -144,13 +142,7 @@ const LIST_PATH = '/commentperiod?project=5cf00c03a266b7e1877504db&fields=metURL
 
 test('sync-out', async (t) => {
   t.beforeEach((tt) => {
-    const previous = Object.fromEntries(Object.keys(ENV).map(k => [k, process.env[k]]));
-    Object.assign(process.env, ENV);
-    tt.after(() => {
-      for (const [k, v] of Object.entries(previous)) {
-        if (v === undefined) delete process.env[k]; else process.env[k] = v;
-      }
-    });
+    useEnv(tt, ENV);
     eagle.clearToken();
     for (const level of ['info', 'warn', 'error']) tt.mock.method(logger, level, () => {});
   });

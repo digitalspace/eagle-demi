@@ -17,7 +17,7 @@ const eagle = require('../../src/sync-out/eagle');
 const { COMMENT_PERIOD } = require('../../src/sync-out/kinds');
 const commentPeriodController = require('../../src/controllers/nosql/comment-period');
 const { mockRes, STAFF, PUBLIC_ACL } = require('../helpers/eagle-mirror-fixtures');
-const { API, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
+const { API, useEnv, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 
 const MILESTONE = '5cf00c03a266b7e1877504aa';
 const PROJECT_ID = '1234';
@@ -112,13 +112,7 @@ const logged = (level, text) => logger[level].mock.calls.filter(c => String(c.ar
 
 test('sync-out of DEMI-native comment periods', async (t) => {
   t.beforeEach((tt) => {
-    const previous = Object.fromEntries(Object.keys(ENV).map(k => [k, process.env[k]]));
-    Object.assign(process.env, ENV);
-    tt.after(() => {
-      for (const [k, v] of Object.entries(previous)) {
-        if (v === undefined) delete process.env[k]; else process.env[k] = v;
-      }
-    });
+    useEnv(tt, ENV);
     eagle.clearToken();
     for (const level of ['info', 'warn', 'error']) tt.mock.method(logger, level, () => {});
   });

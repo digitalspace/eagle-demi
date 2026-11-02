@@ -159,14 +159,7 @@ test('depsFor wires a kind to its repository, its consumers and the sync-out enq
 });
 
 test('the document hook re-queues only rows owed a send, and names both flags when the document one is off', async (t) => {
-  const env = { SYNC_OUT_EAGLE_ENABLED: 'true', SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true' };
-  const previous = Object.fromEntries(Object.keys(env).map(k => [k, process.env[k]]));
-  Object.assign(process.env, env);
-  t.after(() => {
-    for (const [k, v] of Object.entries(previous)) {
-      if (v === undefined) delete process.env[k]; else process.env[k] = v;
-    }
-  });
+  useEnv(t, { SYNC_OUT_EAGLE_ENABLED: 'true', SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true' });
   const docRow = (id, sentVersion) => ({
     id, projectId: '1234', sourceSystem: 'demi', eagleId: `eagle-${id}`, syncVersion: 3,
     syncOut: { eagle: { status: 'sent', sentVersion } }
