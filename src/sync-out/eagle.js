@@ -322,57 +322,85 @@ async function create(s, row, body, update, logFields, goneId) {
 }
 
 /**
- * Create a native period under its stored or newly minted id. A 409 means an earlier POST landed and its
- * answer was lost, or another delivery won: the period exists, so PUT.
+ * POST a native row under its stored or newly minted id. A 409 means an earlier POST landed and its answer
+ * was lost, or another delivery won: the record exists, so PUT. Resolves to `{ status, eagleId }`.
+ * `spec`: `kind`, `path`, `noun`, `put(eagleId, fields)` true when it matched, `unknownId` (line and fields for
+ * an answer with no id), optional `heldByMirror(eagleId, row)`, `afterCreate(eagleId, fields)`, `twinOf(eagleId, row)`.
  */
-async function createNative(s, row, body, update, logFields) {
-  const claimed = await claimMinted(row, update, COMMENT_PERIOD);
+async function createMinted(s, row, body, update, logFields, spec) {
+  const claimed = await claimMinted(row, update, spec.kind);
   if (claimed.missing) return { status: 'skipped' };
   const { claim, eagleId } = claimed;
   const fields = { ...logFields, eagleId };
   let stray;
   try {
-    const res = await call(s, 'POST', '/commentperiod', { ...body, _id: eagleId }, fields);
+    if (spec.heldByMirror && await spec.heldByMirror(eagleId, row)) {
+      logger.error(`[sync-out eagle] ${spec.kind} ${row.id}: Eagle id ${eagleId} is already an Eagle-owned DEMI row, nothing sent`,
+        { ...fields, mirrorRowId: eagleId });
+      throw new Error(`Eagle id ${eagleId} of ${spec.kind} ${row.id} is held by an Eagle-owned DEMI row`);
+    }
+    const res = await call(s, 'POST', spec.path, { ...body, _id: eagleId }, fields);
     if (res.status === 409) {
       logger.info(`[sync-out eagle] Eagle already holds ${eagleId} for row ${row.id}, PUT instead`, fields);
-      if (!await put(s, eagleId, body, fields)) {
-        throw new Error(`eagle-api answered 409 for ${eagleId} but its PUT found no comment period`);
+      if (!await spec.put(eagleId, fields)) {
+        throw new Error(`eagle-api answered 409 for ${eagleId} but its PUT found no ${spec.noun}`);
       }
     } else if (!res.ok) {
-      throw failure('POST', '/commentperiod', res);
+      throw failure('POST', spec.path, res);
     } else {
       const answered = res.body && res.body._id ? String(res.body._id) : null;
       // An answer without `_id` may still be ours: a PUT that matches shows Eagle stored it under our id.
-      if (answered !== eagleId && (answered || !await put(s, eagleId, body, fields))) {
-        // eagle-api ignored `_id`: each POST adds another Eagle period, so the stored stray stops every retry.
+      if (answered !== eagleId && (answered || !await spec.put(eagleId, fields))) {
+        // eagle-api ignored `_id`: each POST adds another Eagle record, so the stored stray stops every retry.
         stray = { strayEagleId: answered };
         if (answered) {
           logger.error(`[sync-out eagle] eagle-api stored row ${row.id} as ${answered}, not ${eagleId}; not re-keyed. ` +
             `${answered} is also the id of the DEMI mirror row its echo made`, { ...fields, ...stray, mirrorRowId: answered });
         } else {
-          logger.error(`[sync-out eagle] row ${row.id}: Eagle stored the period under an unknown id; find it by project and dates`,
-            { rowId: row.id, eagleProjectId: body.project });
+          const { line, fields: findBy } = spec.unknownId(body);
+          logger.error(`[sync-out eagle] row ${row.id}: ${line}`, { rowId: row.id, ...findBy });
         }
         throw new Error(`eagle-api ignored _id ${eagleId} for row ${row.id}`);
       }
     }
+    if (spec.afterCreate) {
+      await refreshClaim(row, update, claim);
+      await spec.afterCreate(eagleId, fields);
+    }
     await endClaim(update, claim, 'sent');
     // eagle-api awaits its DEMI push before answering, so the echo has landed; Session consistency can still miss the claim.
-    try {
-      if (await mirroredAsEagleRow(eagleId, row)) {
-        logger.error(`[sync-out eagle] row ${row.id}: echo created mirror twin ${eagleId}; merge by hand`,
-          { rowId: row.id, eagleId, twinRowId: eagleId });
+    if (spec.twinOf) {
+      try {
+        if (await spec.twinOf(eagleId, row)) {
+          logger.error(`[sync-out eagle] row ${row.id}: echo created mirror twin ${eagleId}; merge by hand`,
+            { rowId: row.id, eagleId, twinRowId: eagleId });
+        }
+      } catch (e) {
+        logger.warn(`[sync-out eagle] row ${row.id}: twin check failed`, { rowId: row.id, eagleId, error: e.message });
       }
-    } catch (e) {
-      logger.warn(`[sync-out eagle] row ${row.id}: twin check failed`, { rowId: row.id, eagleId, error: e.message });
     }
-    return sent(eagleId, body);
+    return { status: 'sent', eagleId };
   } catch (err) {
     await endClaim(update, claim, 'failed', null, stray).catch((releaseErr) => logger.error(
       `[sync-out eagle] claim not released${stray ? `, stray Eagle id ${stray.strayEagleId} not recorded` : ''}`,
       { ...fields, ...stray, error: releaseErr.message }));
     throw err;
   }
+}
+
+async function createNative(s, row, body, update, logFields) {
+  const created = await createMinted(s, row, body, update, logFields, {
+    kind: COMMENT_PERIOD,
+    path: '/commentperiod',
+    noun: 'comment period',
+    put: (eagleId, fields) => put(s, eagleId, body, fields),
+    unknownId: () => ({
+      line: 'Eagle stored the period under an unknown id; find it by project and dates',
+      fields: { eagleProjectId: body.project }
+    }),
+    twinOf: mirroredAsEagleRow
+  });
+  return created.status === 'sent' ? sent(created.eagleId, body) : created;
 }
 
 /** A native row Eagle stored under another id: any further POST or DELETE only adds to what must be cleared by hand. */
@@ -508,6 +536,8 @@ module.exports = {
   mintEagleId,
   claimHeld,
   claimMinted,
+  createMinted,
+  refuseStray,
   refreshClaim,
   endClaim,
   isDeletedRow,

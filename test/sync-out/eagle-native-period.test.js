@@ -8,7 +8,6 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const queues = require('../../src/jobs/queue-client');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
@@ -18,10 +17,8 @@ const eagle = require('../../src/sync-out/eagle');
 const { COMMENT_PERIOD } = require('../../src/sync-out/kinds');
 const commentPeriodController = require('../../src/controllers/nosql/comment-period');
 const { mockRes, STAFF, PUBLIC_ACL } = require('../helpers/eagle-mirror-fixtures');
-const config = require('../../src/config');
+const { API, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 
-const API = 'https://eagle.example/api';
-const ISSUER = config.keycloakIssuer;
 const MILESTONE = '5cf00c03a266b7e1877504aa';
 const PROJECT_ID = '1234';
 const PROJECT_EAGLE_ID = '5cf00c03a266b7e1877504db';
@@ -106,43 +103,9 @@ function wireParent(t, eagleId = PROJECT_EAGLE_ID) {
   t.mock.method(notifications, 'readForWrite', async () => null);
 }
 
-function wireQueue(t) {
-  const sent = [];
-  t.mock.method(queues, 'queueClientFor', ({ name }) => ({
-    sendMessage: async (body) => { sent.push({ queue: name, body: JSON.parse(body) }); }
-  }));
-  return sent;
-}
-
-/**
- * Fake eagle-api and Keycloak. `routes` maps `METHOD path`, or `METHOD *` for any path, to a reply, a list
- * served in order, or a function of the request body; a reply `{ lost: true }` rejects as a dropped connection.
- */
-function wireEagle(t, routes) {
-  const calls = [];
-  const served = {};
-  t.mock.method(globalThis, 'fetch', async (url, opts = {}) => {
-    const method = opts.method || 'GET';
-    if (url === `${ISSUER}/protocol/openid-connect/token`) return Response.json({ access_token: 'token', expires_in: 300 });
-    const key = `${method} ${url.slice(API.length)}`;
-    const route = routes[key] || routes[`${method} *`];
-    const body = opts.body ? JSON.parse(opts.body) : undefined;
-    // Recorded before the check: the engine turns the thrown assertion into a retry, not a test failure.
-    calls.push({ key, body });
-    assert.ok(route, `unexpected eagle-api call ${key}`);
-    const index = served[key] = (served[key] || 0) + 1;
-    const listed = Array.isArray(route) ? route[Math.min(index, route.length) - 1] : route;
-    const reply = typeof listed === 'function' ? await listed(body) : listed;
-    if (reply.lost) throw new TypeError('fetch failed');
-    return Response.json(reply.body ?? {}, { status: reply.status || 200 });
-  });
-  return calls;
-}
-
 const message = (overrides = {}) =>
   ({ kind: COMMENT_PERIOD, consumer: 'eagle', id: ROW_ID, projectId: PROJECT_ID, attempt: 1, ...overrides });
 const run = (msg = message(), delivery = {}) => syncOut.run(msg, { maxAttempts: MAX_ATTEMPTS, ...delivery });
-const keys = calls => calls.map(c => c.key);
 /** eagle-api once it honours `_id`: the period is stored under the id it was sent. */
 const accept = body => ({ body: { _id: body._id } });
 const logged = (level, text) => logger[level].mock.calls.filter(c => String(c.arguments[0]).includes(text));
