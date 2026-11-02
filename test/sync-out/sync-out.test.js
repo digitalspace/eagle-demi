@@ -743,10 +743,9 @@ test('sync-out', async (t) => {
 
   await t.test('every kind names only consumers the engine has, and comment periods reconcile through reconcile-engage',
     async (tt) => {
-      const names = syncOut.consumers.map(c => c.name);
       for (const [name, kind] of Object.entries(KINDS)) {
         assert.ok(kind.consumers.length > 0, `${name} has a consumer`);
-        assert.deepStrictEqual(kind.consumers.filter(c => !names.includes(c)), [], `${name} names a missing consumer`);
+        assert.deepStrictEqual(syncOut.consumersOf(name).map(c => c.name), kind.consumers, `${name} has each consumer it names`);
       }
       tt.mock.method(reconcileEngage, 'run', async (options) => ({ ran: options }));
 

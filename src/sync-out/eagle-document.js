@@ -151,6 +151,7 @@ module.exports = {
   name: NAME,
   // The flag lives here, not in wants(): a message queued while it is off must stay queued, not be recorded as sent.
   enabled: () => settings.eagle.enabled && settings.eagle.documentEnabled,
+  enableSettings: Object.freeze(['SYNC_OUT_EAGLE_ENABLED', 'SYNC_OUT_EAGLE_DOCUMENT_ENABLED']),
   wants,
   inFlight: entry => Boolean(claimHeld(entry, Date.now())),
   send,

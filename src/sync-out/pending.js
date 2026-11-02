@@ -9,18 +9,14 @@ const { logger } = require('../utils/logger');
 
 const TAG = '[sync-out pending]';
 
-// Required on call, here and below: index.js requires kinds.js, which will register this hook per kind.
+// Required on call, here and below: kinds.js requires this file to register the hook per kind.
 const kinds = () => require('./kinds');
 
 /** The repository, consumers and enqueue of `kind`, as the sync-out worker uses them. */
 function depsFor(kind) {
   const syncOut = require('./index');
-  const { repo, consumers } = kinds().kindOf(kind);
-  return { kind, repo, consumers: syncOut.consumers.filter(c => consumers.includes(c.name)), enqueue: syncOut.enqueue };
+  return { kind, repo: kinds().kindOf(kind).repo, consumers: syncOut.consumersOf(kind), enqueue: syncOut.enqueue };
 }
-
-/** The app setting that turns a consumer on, e.g. SYNC_OUT_EAGLE_ENABLED. */
-const enableSetting = (consumer) => `SYNC_OUT_${consumer.name.toUpperCase()}_ENABLED`;
 
 const entryOf = (consumer, row) => (row.syncOut && row.syncOut[consumer.name]) || {};
 
@@ -48,7 +44,8 @@ async function reconcile({ repair = false, log = logger } = {}, { kind, repo, co
   if (repair && !consumers.some(c => c.enabled())) {
     // enqueue skips disabled consumers, so a repair run would queue nothing and still look clean.
     report.failed = [...report.listed];
-    log.warn(`${TAG} ${kind}: ${consumers.map(enableSetting).join(', ')} not true: --repair queued nothing`,
+    const needed = consumers.map(c => c.enableSettings.join(' and ')).join(' or ');
+    log.warn(`${TAG} ${kind}: needs ${needed} true: --repair queued nothing`,
       { kind, listed: report.listed.length });
   } else if (repair) {
     for (const row of rows) {
