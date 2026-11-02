@@ -803,10 +803,18 @@ function pushDeleted(doc, existing) {
 const isNativeProject = (row) => Boolean(row) && row.sourceSystem !== 'eagle' &&
   !isEagleOnlyProjectId(row.id) && !(row.sources && row.sources.track);
 
-/** On a native row DEMI owns these outright: no source block exists to re-derive them, so an Eagle fill would stick. */
-const NATIVE_KEPT_FIELDS = ['id', 'trackProjectId', 'sourceSystem', 'centroid', 'createdAt', ...OWNERS.track];
+/**
+ * On a native row DEMI owns these outright: no source block exists to re-derive them, so an Eagle
+ * fill would stick. `proponentName` follows Eagle's `proponentId`, `isActive` its `activeStatus`.
+ */
+const EAGLE_FED = new Set(['proponentName', 'isActive']);
+const NATIVE_KEPT_FIELDS = ['id', 'trackProjectId', 'sourceSystem', 'centroid', 'createdAt',
+  ...OWNERS.track.filter(field => !EAGLE_FED.has(field))];
 
-/** Put a native row's own fields back over the Eagle merge, so the push lands on that row, not an `eagle-<id>` one. */
+/**
+ * Put a native row's own fields back over the Eagle merge, so the push lands on that row, not an
+ * `eagle-<id>` one.
+ */
 function keepNativeIdentity(merged, existing) {
   for (const field of NATIVE_KEPT_FIELDS) {
     if (existing[field] === undefined) delete merged[field];

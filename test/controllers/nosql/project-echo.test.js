@@ -73,7 +73,8 @@ test('an Eagle push for a DEMI-created project', async (t) => {
     const writes = stage(t, nativeRow());
 
     const res = await push(eagleProject({
-      description: 'Eagle text', status: 'Under Construction', eacDecision: 'Certificate Issued'
+      description: 'Eagle text', status: 'Under Construction', eacDecision: 'Certificate Issued',
+      proponentName: 'Nicomen Wind Corp', activeStatus: 'active'
     }));
 
     assert.strictEqual(res.statusCode, 200);
@@ -88,6 +89,8 @@ test('an Eagle push for a DEMI-created project', async (t) => {
     assert.deepStrictEqual(row.centroid, CENTROID);
     assert.strictEqual(row.createdAt, CREATED_AT);
     assert.strictEqual(row.eacDecision, 'Certificate Issued', 'Eagle-only fields merge on top');
+    assert.deepStrictEqual([row.proponentName, row.isActive], ['Nicomen Wind Corp', 'active'],
+      'the proponent name and active status follow Eagle');
     assert.deepStrictEqual(Object.keys(row.sources), ['eagle']);
     assert.deepStrictEqual({ syncOut: row.syncOut, syncVersion: row.syncVersion },
       { syncOut: SYNC_OUT, syncVersion: 1 });
