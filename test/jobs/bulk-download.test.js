@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * The bulk-download worker, with the repositories and object storage stubbed — no Cosmos, no NRS.
- *
- * The zips are asserted by reading the bytes the upload received: entries are STORED (no deflate),
- * so an entry name and its content are plain text inside the archive. That keeps the assertions on
- * what a caller actually unzips without adding an unzip dependency for the test suite.
- */
+// Zip entries are STORED (no deflate), so the uploaded bytes hold each entry name and content as
+// plain text; assertions read those, with no unzip dependency.
 
 process.env.NODE_ENV = 'test';
 
@@ -90,11 +85,8 @@ function trickle(key, chunks, onPush, onEnd, failAt) {
   });
 }
 
-/**
- * Stub every dependency the worker has and hand back what each recorded.
- * `docs` is what the manifest read returns — leaving a requested id out of it is how a test says
- * "no longer visible to this caller".
- */
+/** Stub every worker dependency and hand back what each recorded. `docs` is what the manifest
+ * read returns: a requested id left out is one this caller cannot see. */
 function harness(t, { row, docs, getObjectStream, putObjectStream } = {}) {
   const patches = [];
   const uploads = new Map();
@@ -241,9 +233,8 @@ test('the bulk download worker', async (t) => {
       docs,
       getObjectStream: async key => {
         opens.push(key);
-        // d0 is slow to pack, so d1 is still parked in the window when its socket resets — the gap
-        // the read-ahead opened. Nothing is subscribed to a parked stream but the window itself,
-        // so an unhandled 'error' here is an uncaught exception rather than a failed document.
+        // d0 packs slowly, so d1 is parked in the window when its socket resets; only the window
+        // listens to a parked stream, so an unhandled 'error' here would crash the worker.
         if (key === 'etl/d0.pdf') {
           const slow = new PassThrough();
           slow.write('bytes of etl/d0.pdf');
@@ -342,19 +333,25 @@ test('the bulk download worker', async (t) => {
     config.bulkFetchAhead = 3;
     const docs = [doc('d0'), doc('d1'), doc('d2'), doc('d3')];
     const opened = [];
+    const opens = [];
     const destroyed = [];
+    let land;
+    const gate = new Promise(resolve => { land = resolve; });
     const { patches } = harness(tt, {
       row: job(docs),
       docs,
       // The outage that fails the upload is the outage that makes the opens slow: every one of
       // them is still in flight when the part dies, so none can be closed where it is dropped.
-      getObjectStream: async key => {
+      getObjectStream: key => {
         opened.push(key);
-        await new Promise(resolve => setTimeout(resolve, 30).unref());
-        const stream = new PassThrough();
-        const destroy = stream.destroy.bind(stream);
-        stream.destroy = (...args) => { destroyed.push(key); return destroy(...args); };
-        return stream;
+        const arriving = gate.then(() => {
+          const stream = new PassThrough();
+          const destroy = stream.destroy.bind(stream);
+          stream.destroy = (...args) => { destroyed.push(key); return destroy(...args); };
+          return stream;
+        });
+        opens.push(arriving);
+        return arriving;
       },
       putObjectStream: async () => { throw new Error('403 from the object store'); }
     });
@@ -362,7 +359,9 @@ test('the bulk download worker', async (t) => {
 
     await assert.rejects(worker.run('job-1'), /403 from the object store/);
     assert.deepStrictEqual(destroyed, [], 'nothing has arrived yet — that is the whole problem');
-    await new Promise(resolve => setTimeout(resolve, 60));
+    land();
+    // The worker awaited each open before this test did, so its close has run once these settle.
+    await Promise.all(opens);
 
     assert.deepStrictEqual(destroyed.sort(), opened.sort(),
       'every socket the window started is closed when it lands, the one taken for this document ' +
@@ -526,9 +525,8 @@ test('the bulk download worker', async (t) => {
       docs,
       getObjectStream: async key => {
         opens.push(key);
-        // d0 is the long one, so d1's socket dies while it is still parked behind it. Nothing reads
-        // a parked buffer, so both it and the source it is piped from are streams whose 'error'
-        // only the window is subscribed to.
+        // d1's socket dies while parked behind the long d0; only the window listens for 'error' on
+        // the parked buffer and its source.
         if (key === 'etl/d1.pdf' && opens.filter(k => k === 'etl/d1.pdf').length === 1) {
           return trickle(key, 20, null, null, 1);
         }
@@ -556,23 +554,26 @@ test('the bulk download worker', async (t) => {
     config.bulkFetchBufferBytes = 4096;
     const docs = Array.from({ length: 4 }, (_, i) => doc(`d${i}`));
     const opened = [];
+    const opens = [];
     const destroyed = [];
     const { patches } = harness(tt, {
       row: job(docs),
       docs,
-      getObjectStream: async key => {
+      getObjectStream: key => {
         opened.push(key);
         const source = trickle(key, 40);
         const destroy = source.destroy.bind(source);
         source.destroy = (...args) => { destroyed.push(key); return destroy(...args); };
-        return source;
+        const arriving = Promise.resolve(source);
+        opens.push(arriving);
+        return arriving;
       },
       putObjectStream: async () => { throw new Error('403 from the object store'); }
     });
     tt.mock.method(logger, 'error', () => {});
 
     await assert.rejects(worker.run('job-1'), /403 from the object store/);
-    await new Promise(resolve => setTimeout(resolve, 40));
+    await Promise.all(opens);
 
     assert.deepStrictEqual(destroyed.sort(), opened.sort(),
       'destroying a buffer does not close the socket feeding it, so every source has to be closed ' +
@@ -760,9 +761,8 @@ test('the bulk download worker', async (t) => {
   });
 
   await t.test('documents nobody recorded a size for still pack into one part', async () => {
-    // The estimate counts an unknown size as nothing, so the WORKER's own byte counter is the only
-    // thing that can close a part here. A packer that gave each one its own part would upload 2,500
-    // zips of one file for a selection this size.
+    // An unknown size estimates as nothing, so only the worker's byte counter can close a part; a
+    // part per file would upload 2,500 one-file zips.
     const docs = Array.from({ length: 2500 }, (_, i) => doc(`d${i}`, { fileSize: undefined }));
     const { uploads, patches } = harness(t, {
       row: job(docs),
@@ -1212,9 +1212,8 @@ test('the bulk download worker and the rows it does not own', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('a searchdef id on the zip queue is refused before the row is read', async () => {
-    // The `bulkDownloads` container holds three kinds of row and this worker owns one of them. A
-    // search-definition job patched to `ready` here reads as terminal to its own handler, which
-    // then walks away from a chunks rebuild that is hours in.
+    // `bulkDownloads` holds three row kinds; a search-definition job patched `ready` here would
+    // make its own handler abandon a chunks rebuild hours in.
     const reads = [];
     const patches = [];
     t.mock.method(bulkDownloads, 'getById', async (id) => {
@@ -1234,9 +1233,8 @@ test('the bulk download worker and the rows it does not own', async (t) => {
   });
 
   await t.test('a row of another kind under a bare id is refused after the read', async () => {
-    // The id shape is a convention, so the row has the last word. The claim is what this asserts
-    // on: it is the worker's first write, an etag-conditioned replace that takes ownership of the
-    // row, and everything else it would do follows from having taken it.
+    // The id shape is only a convention; the row decides. The claim (first write, etag-conditioned)
+    // is asserted because everything else follows from it.
     const claims = [];
     const patches = [];
     // `queued`, so the claim is genuinely available: a status the worker already declines would

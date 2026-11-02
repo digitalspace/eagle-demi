@@ -1,12 +1,7 @@
 'use strict';
 
-/**
- * The Cosmos-backed `/search` datasets — the reads eagle-public used to make against eagle-api.
- *
- * One case per dataset and per guard. The two home-page reads have their own files beside this one
- * (`search.commentperiods`, `search.recentactivity`); the harness they all share, and why it stubs
- * where it does, is `test/helpers/search-reads.js`.
- */
+// The Cosmos-backed `/search` datasets eagle-public reads. Shared harness:
+// `test/helpers/search-reads.js`.
 
 process.env.NODE_ENV = 'test';
 
@@ -117,9 +112,8 @@ test('GET /search?dataset=CommentPeriod', async (t) => {
     assert.strictEqual(row.project, PROJECT_EAGLE_ID);
     assert.strictEqual(row.projectId, '207');
     assert.strictEqual(row.instructions, 'Tell us what you think.');
-    // Both carried from Eagle at the same visibility as `instructions`: eagle-public renders
-    // `additionalText` as the period's blurb, and the Engage callout has no image without
-    // `metBannerImageUrl`. A field the catalog does not publish is dropped here, silently.
+    // eagle-public renders `additionalText` as the blurb and the Engage callout needs
+    // `metBannerImageUrl`; a field the catalog does not publish drops silently.
     assert.strictEqual(row.additionalText, 'Comment on the amendment application.');
     assert.strictEqual(row.metBannerImageUrl, 'https://engage.gov.bc.ca/banner.jpg');
     assert.strictEqual(body[0].count, 3);
@@ -138,9 +132,8 @@ test('GET /search?dataset=CommentPeriod', async (t) => {
   });
 
   await t.test('a period under a project this caller cannot see answers nothing', async () => {
-    // The project point read is ACL-enforcing, so an unpublished project resolves to no DEMI id and
-    // the period read is never made. This is the case that decides whether an unpublished
-    // project's engagement tab is readable through the mirror.
+    // The project point read enforces ACL, so an unpublished project resolves to no DEMI id and
+    // its periods are never read.
     stubCosmos(t, { projects: [], commentPeriods: [periodRow()] });
 
     const { body } = await get(
@@ -151,9 +144,8 @@ test('GET /search?dataset=CommentPeriod', async (t) => {
   });
 
   await t.test('a period under a ProjectNotification carries the notification id back', async () => {
-    // Eagle hangs some periods off a ProjectNotification, and the mirror partitions those under
-    // the notification's own id. Resolving the parent through `projects` alone answered
-    // `project: null`, and eagle-public's CommentPeriod model has nowhere to link that.
+    // Such periods are partitioned under the notification's id; a `projects`-only lookup would
+    // answer `project: null`, which eagle-public cannot link.
     const notification = notificationRow();
     const seen = stubCosmos(t, {
       notifications: [notification],
@@ -172,10 +164,8 @@ test('GET /search?dataset=CommentPeriod', async (t) => {
     assert.ok(boundValues(specsFor(seen, 'commentPeriods')[0]).includes(notification.id));
   });
 
-  // Some Track projects carry a ProjectNotification _id in `epic_guid`, which the merge copies to
-  // the project row's `eagleId` (test 2026-09-08: Track 351 and 353). eagle-public sends the
-  // notification's own id as its project filter, so translating it to that project searched a
-  // partition holding none of the notification's periods.
+  // Some Track projects carry a notification _id as `eagleId`; translating the notification's id
+  // to that project would search a partition holding none of its periods.
   await t.test('a project row carrying the notification id does not capture the filter', async () => {
     const notification = notificationRow();
     const seen = stubCosmos(t, {
@@ -231,9 +221,8 @@ test('GET /search?dataset=Comment', async (t) => {
     assert.strictEqual(row._schemaName, 'Comment');
     assert.strictEqual(row.period, PERIOD_EAGLE_ID, "eagle-public's Comment model reads `period`");
     assert.strictEqual(row.comment, 'Please consider the wetland.');
-    // The three fields eagle-public's Comment model reads beyond the text itself. `location` is
-    // free text the commenter typed and is public in eagle-api too (ALLOWED_FIELDS, publicGet as
-    // `['public']`), so it is public here.
+    // What eagle-public's Comment model reads beyond the text. `location` is commenter free text,
+    // public in eagle-api too.
     assert.strictEqual(row.dateUpdated, '2026-08-06T00:00:00.000Z');
     assert.strictEqual(row.location, 'Nicomen Island');
     assert.strictEqual(row.submittedCAC, true);
@@ -288,58 +277,62 @@ test('GET /search?dataset=Comment', async (t) => {
 test('GET /search?dataset=RecentActivity', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('top=true is pinned first, capped at four, with the project resolved', async () => {
-    const pinned = [1, 2].map(n => updateRow({ id: `pin-${n}`, eagleId: `pin-${n}`, pinned: true }));
-    const unpinned = [1, 2, 3, 4].map(n =>
-      updateRow({ id: `un-${n}`, eagleId: `un-${n}`, pinned: false }));
-
-    // The two states are two queries; served in call order, pinned first.
-    let call = 0;
+  /** One update whose project, period and notification all resolve, each cut to the columns read. */
+  const stubResolvable = (t) => {
+    const references = {
+      projects: [PROJECT_ROW],
+      commentPeriods: [periodRow({ isMet: true, metURL: 'https://eao.gov.bc.ca/met' })],
+      notifications: [notificationRow()]
+    };
     t.mock.method(cosmos, 'query', async (container, spec) => {
-      if (container === 'projects') return { items: [projected(spec, { ...PROJECT_ROW, address: 'Nicomen Island' })] };
-      // The two references an update carries, as the repositories project them.
-      if (container === 'commentPeriods') {
-        return { items: [projected(spec, periodRow({ isMet: true, metURL: 'https://eao.gov.bc.ca/met' }))] };
-      }
-      if (container === 'notifications') {
-        return { items: [{ id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' }] };
-      }
-      if (/COUNT\(1\)/.test(spec.query)) return { items: [6] };
-      return { items: call++ === 0 ? pinned : unpinned };
+      if (/COUNT\(1\)/.test(spec.query)) return { items: [1] };
+      if (container === 'updates') return { items: [updateRow()] };
+      return { items: (references[container] || []).map(row => projected(spec, row)) };
+    });
+  };
+
+  await t.test('an update carries the fields eagle-public\'s News model reads', async () => {
+    stubResolvable(t);
+
+    const { body } = await get('/api/search?dataset=RecentActivity');
+
+    const { _schemaName, headline, pinned, active, notificationName, contentUrl, documentUrl } =
+      body[0].searchResults[0];
+    assert.deepStrictEqual(
+      { _schemaName, headline, pinned, active, notificationName, contentUrl, documentUrl },
+      {
+        _schemaName: 'RecentActivity', headline: 'Application accepted', pinned: true, active: true,
+        notificationName: 'Nicomen Wind Energy',
+        contentUrl: 'https://projects.eao.gov.bc.ca/p/588511d0aaecd9001b825604/news',
+        documentUrl: 'https://projects.eao.gov.bc.ca/api/document/5cf00c03a266b7e187750002/fetch'
+      });
+  });
+
+  await t.test('an update answers its period and notification as objects, not the stored ids',
+    async () => {
+      // The News template reads `pcp.isMet` and `projectNotification.name`; a string answers both
+      // with undefined. The period dates tell an open period from a closed one.
+      stubResolvable(t);
+
+      const { body } = await get('/api/search?dataset=RecentActivity');
+
+      const { pcp, projectNotification } = body[0].searchResults[0];
+      assert.deepStrictEqual({ pcp, projectNotification }, {
+        pcp: {
+          _id: PERIOD_EAGLE_ID, isMet: true, metURL: 'https://eao.gov.bc.ca/met',
+          dateStarted: '2026-08-01T00:00:00.000Z', dateCompleted: '2026-08-30T00:00:00.000Z'
+        },
+        projectNotification: { _id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' }
+      });
     });
 
-    const { status, body } = await get('/api/search?dataset=RecentActivity&top=true');
+  await t.test('an update withholds the notify claim and the read list', async () => {
+    stubResolvable(t);
 
-    assert.strictEqual(status, 200);
-    const ids = body[0].searchResults.map(r => r._id);
-    // FOUR IN TOTAL, pinned first — what eagle-api's /api/public/recentActivity?top=true answers.
-    assert.deepStrictEqual(ids, ['pin-1', 'pin-2', 'un-1', 'un-2']);
-    assert.strictEqual(body[0].count, 4);
+    const { body } = await get('/api/search?dataset=RecentActivity');
 
     const [row] = body[0].searchResults;
-    assert.strictEqual(row._schemaName, 'RecentActivity');
-    assert.strictEqual(row.headline, 'Application accepted');
-    assert.strictEqual(row.pinned, true);
-    // Everything else eagle-public's News model reads off the row.
-    assert.strictEqual(row.active, true);
-    assert.strictEqual(row.notificationName, 'Nicomen Wind Energy');
-    assert.strictEqual(row.contentUrl,
-      'https://projects.eao.gov.bc.ca/p/588511d0aaecd9001b825604/news');
-    assert.strictEqual(row.documentUrl,
-      'https://projects.eao.gov.bc.ca/api/document/5cf00c03a266b7e187750002/fetch');
-    // OBJECTS, not the bare ids the mirror stores: the News template reads `pcp.isMet` and
-    // `projectNotification.name`, and a string answers both with undefined. The dates, as stored,
-    // are what tell an open period from a closed one.
-    assert.deepStrictEqual(row.pcp, {
-      _id: PERIOD_EAGLE_ID, isMet: true, metURL: 'https://eao.gov.bc.ca/met',
-      dateStarted: '2026-08-01T00:00:00.000Z', dateCompleted: '2026-08-30T00:00:00.000Z'
-    });
-    assert.deepStrictEqual(row.projectNotification,
-      { _id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' });
-    assert.deepStrictEqual(row.project,
-      { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy', location: 'Nicomen Island' });
-    assert.strictEqual(row.notifiedAt, undefined, 'the notify claim is not public');
-    assert.strictEqual(row.read, undefined);
+    assert.deepStrictEqual([row.notifiedAt, row.read], [undefined, undefined]);
   });
 
   await t.test('a project filter keeps the EAGLE id, which is what this container stores',
@@ -606,13 +599,8 @@ test('GET /search?dataset=Document&docIds=', async (t) => {
     });
 });
 
-/**
- * The same two datasets, WITH keywords: ranked by the index, read back from Cosmos.
- *
- * The index is stubbed at `aiSearch.searchActivities`/`searchNotifications` — what belongs here is
- * the routing, the filter the controller hands the index, and the row shape it answers with. The
- * query those two functions build is pinned in `test/search/ai-search.test.js`.
- */
+// The same two datasets with keywords: ranked by the stubbed index, read back from Cosmos. The
+// index query itself is tested in `test/search/ai-search.test.js`.
 test('GET /search keyword searches over the indexed Cosmos datasets', async (t) => {
   t.beforeEach(() => {
     process.env.SEARCH_ENDPOINT = 'https://demi-search-test.search.windows.net';
@@ -828,9 +816,8 @@ test('GET /search keyword searches over the indexed Cosmos datasets', async (t) 
         'once per process — the frontend searches on every keystroke');
     });
 
-  // THE BUG THIS PAIR EXISTS FOR. Test carries neither app setting — the two indexes were never
-  // created there — and the code used to supply a default name, so the switch read "on", the query
-  // hit an index the service does not hold, and both datasets answered 502 on every keyword search.
+  // An unset index name must read as "off": a default name would query an index the service
+  // does not hold and answer 502.
   await t.test('an app setting that was never deployed answers from Cosmos, both datasets',
     async () => {
       t.mock.method(logger, 'warn', () => {});

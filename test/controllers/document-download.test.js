@@ -1,17 +1,7 @@
 'use strict';
 
-/**
- * GET /api/documents/:id/download — the two modes.
- *
- * JSON is what eagle-admin-console and the old public site read. The 302 is what a plain
- * `<a href>` needs: a browser navigation cannot read the JSON body, so without it the visitor
- * lands on a page of presigned URL text. Both modes run the SAME visibility check, and that is the
- * assertion that matters most here — a redirect that skipped `documents.getById` would hand out a
- * link to an unpublished document.
- *
- * The router's own response object, not a `{ status, json }` double: it refuses a second send, so a
- * handler that redirected AND answered JSON fails here instead of passing.
- */
+// Both modes (JSON, 302) must run the same visibility check. The router's own response object
+// refuses a second send, so a handler that redirected AND answered JSON fails here.
 
 process.env.NODE_ENV = 'test';
 // Before src/config is first required: the audit writer is inert without these, so a HEAD that
@@ -409,9 +399,8 @@ test('download in inline mode', async (t) => {
 test('the redirect survives the dispatcher', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  // The handler setting a header is not the same as the host returning one: `makeRes` merges the
-  // security headers and dispatch() hands back `{ status, headers, body }`, so this is the only
-  // place the 302 is checked as the caller would receive it.
+  // Through dispatch(), where `makeRes` merges the security headers: the one place the 302 is
+  // checked as the caller receives it.
   await t.test('302, Location and no-store reach the caller', async (t) => {
     allow(t);
     await withServer(async (call) => {
@@ -682,10 +671,8 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
     return out;
   }
 
-  /**
-   * The handler called directly, for a credentialed caller the dispatcher would need a token for.
-   * The body is drained, so the stream's slot is free for the next case.
-   */
+  /** The handler called directly, for a credentialed caller the dispatcher would need a token for.
+   * The body is drained, so the stream's slot is free for the next case. */
   async function getAs(user, headers = {}) {
     const out = res();
     await controller.downloadDocument(req({ user, headers, query: { inline: '1' } }), out);
@@ -1052,16 +1039,22 @@ test('download in stream mode: ?inline=1 without redirect=1', async (t) => {
   });
 
   await t.test('viewers arriving together get one stream at a cap of 1, the rest the 302', async (t) => {
-    // The open is slow, so all three are past the cap check before any read has started.
     config.downloadStreamMaxConcurrent = 1;
     stored(t);
+    let land;
+    const gate = new Promise(resolve => { land = resolve; });
     t.mock.method(storage, 'getObjectStream', async (key, { offset, length }) => {
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await gate;
       return Readable.from([BYTES.subarray(offset, offset + length)]);
     });
     t.mock.method(logger, 'info', () => {});
     const outs = [res(), res(), res()];
-    await Promise.all(outs.map(out => controller.downloadDocument(req({ query: { inline: '1' } }), out)));
+    const runs = outs.map(out => controller.downloadDocument(req({ query: { inline: '1' } }), out));
+    // Every stub the requests await before the cap check is settled, so all three are past it
+    // once queued work drains; only then may an open finish.
+    await new Promise(resolve => setImmediate(resolve));
+    land();
+    await Promise.all(runs);
     assert.deepEqual(outs.map(out => out.statusCode).sort(), [200, 302, 302]);
     await Promise.all(outs.filter(out => out.streamed).map(out => out.body.toArray()));
   });

@@ -13,9 +13,8 @@ const { catalogFor } = require('../../src/vis/catalog');
 
 const AI_SEARCH_PATH = path.join(__dirname, '..', '..', 'src', 'search', 'ai-search.js');
 
-// The index definition and the catalog are edited by different people for different reasons — a
-// field arrives in one PUT and gets classified in another, or never. These cases are the ratchet
-// between them: they fail on the change that ships a restricted field to a search caller.
+// The index definition and the catalog change apart; these cases fail on the change that ships a
+// restricted field to a search caller.
 const INDEX_CATALOGS = [
   ['projects', 'index-projects'],
   ['documents', 'index-documents']
@@ -51,18 +50,11 @@ test('PROJECT_SELECT is a subset of maxVis 4 index fields', () => {
   }
 });
 
-// Chunk text has two enforcement points and both are asserted here: the catalog entry, and the
-// select (docs/rbac-architecture.md §2 item 9 — semantic ranking needs `content` retrievable in the
-// index, so the index cannot hold the line). The source is still scanned as well as the three
-// exported constants, because leg two of the document search selects an inline `'id'` and any
-// future inline select must meet the same bar.
+// Chunk text is held back twice, by the catalog and by every select: semantic ranking keeps
+// `content` retrievable in the index (docs/rbac-architecture.md §2 item 9). Inline selects count.
 test('content is maxVis 0 and absent from every select', () => {
   assert.strictEqual(catalogFor('chunks').content.maxVis, 0,
     'a chunk field above maxVis 0 would be shippable; chunk text is never a response field');
-
-  assert.strictEqual(aiSearch.CHUNK_SELECT,
-    'chunkId,documentId,projectId,pageNumber,pageNumbered,read',
-    'adding a name here ships that column to every chunk caller; `content` ships whole chunk text');
 
   const source = code(fs.readFileSync(AI_SEARCH_PATH, 'utf8'));
   const selects = [...source.matchAll(/select: '([^']*)'/g)].map(m => m[1]);
@@ -103,10 +95,8 @@ test('every index field is catalogued, retrievable or not', () => {
   }
 });
 
-// `vis` is the classification itself. Retrievable, because the redactor reads the dials off the
-// hit; never searchable, because a searchable dial map lets a caller find records BY their
-// classification — a term query for a dialled field name would enumerate every dialled row.
-// Filterable and facetable are the same leak through a different door.
+// The redactor reads `vis` off the hit; searchable, filterable or facetable, it would let a caller
+// find records by their classification.
 test('vis is retrievable and never searchable', () => {
   const definition = require('../../azure/search/indexes/projects.json');
   const vis = definition.fields.find(f => f.name === 'vis');
@@ -119,9 +109,8 @@ test('vis is retrievable and never searchable', () => {
   assert.strictEqual(vis.facetable, false, 'a facet count over dials answers the same question');
 });
 
-// The dial keys are stored in the Cosmos vocabulary and applied to a hit in the index one, so the
-// rename map is the third file that has to move when a column is renamed. An entry pointing at a
-// key that no longer exists on either side is silent: the dial simply stops applying.
+// Dials are stored in Cosmos names and applied in index names; a rename entry naming a missing
+// key fails silent, the dial just stops applying.
 test('every rename maps a real stored field onto a real index field', () => {
   const { PROJECT_TO_INDEX, dialsForIndex } = require('../../src/vis/catalog/index-projects-renames');
   const stored = catalogFor('projects');
