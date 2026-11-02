@@ -390,6 +390,7 @@ test('pdf title lease API', async (t) => {
     assert.equal(res.body.reason, 'backup-failed');
     assert.equal(w.row().pdfTitle.status, 'needs-review');
     assert.equal(w.row().pdfTitle.reason, 'backup-failed');
+    assert.equal(w.row().pdfTitle.backupFailures, null);
     assert.equal((await pending()).length, 0, 'not offered again');
     assert.equal((await lease()).body.reason, 'needs-review');
   });
