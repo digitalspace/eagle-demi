@@ -243,7 +243,6 @@ param engageApiBase = 'https://epic-engage-web-prod.apps.gold.devops.gov.bc.ca/a
 param budgetAmount = 400
 
 param contactEmails = [
-  'daniel@digitalspace.ca'
   'Daniel.T.Truong@gov.bc.ca'
 ]
 
