@@ -34,26 +34,30 @@ const PAGE_SIZE = 100;
 // Cosmos system properties — upserting them to another account is at best ignored, at worst 400.
 const SYSTEM_PROPS = ['_rid', '_self', '_etag', '_attachments', '_ts'];
 
-function arg(name, fallback) {
-  const i = process.argv.indexOf(`--${name}`);
-  return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+function arg(argv, name, fallback) {
+  const i = argv.indexOf(`--${name}`);
+  return i > -1 && argv[i + 1] ? argv[i + 1] : fallback;
 }
 
-const TARGET = arg('target', '');
-const CONTAINERS = arg('containers', 'projects,documents,boundaries,chunks').split(',');
-const CHECKPOINT = arg('checkpoint', './copy-checkpoint.json');
-const LIVE = process.argv.includes('--live');
+function parseArgs(argv) {
+  return {
+    target: arg(argv, 'target', ''),
+    containers: arg(argv, 'containers', 'projects,documents,boundaries,chunks').split(','),
+    checkpoint: arg(argv, 'checkpoint', './copy-checkpoint.json'),
+    live: argv.includes('--live')
+  };
+}
 
 function client(endpoint) {
   return new CosmosClient({ endpoint, aadCredentials: createCredential() });
 }
 
-function loadCheckpoint() {
-  try { return JSON.parse(fs.readFileSync(CHECKPOINT, 'utf8')); } catch { return {}; }
+function loadCheckpoint(path) {
+  try { return JSON.parse(fs.readFileSync(path, 'utf8')); } catch { return {}; }
 }
 
-function saveCheckpoint(state) {
-  fs.writeFileSync(CHECKPOINT, JSON.stringify(state));
+function saveCheckpoint(path, state) {
+  fs.writeFileSync(path, JSON.stringify(state));
 }
 
 async function count(container) {
@@ -63,23 +67,30 @@ async function count(container) {
   return resources[0];
 }
 
-async function main() {
-  if (!TARGET) { console.error('Missing --target <endpoint>'); process.exit(1); }
-  if (!process.env.COSMOS_ENDPOINT) { console.error('COSMOS_ENDPOINT not set'); process.exit(1); }
+/**
+ * @param {string[]} [argv]
+ * @param {object} [deps] test seam: {client: (endpoint) => CosmosClient-like}
+ */
+async function main(argv = process.argv.slice(2), deps = {}) {
+  const makeClient = deps.client || client;
+  const { target, containers, checkpoint, live } = parseArgs(argv);
+  // Thrown so callers can catch it; the script entry below prints err.message and exits 1.
+  if (!target) throw new Error('Missing --target <endpoint>');
+  if (!process.env.COSMOS_ENDPOINT) throw new Error('COSMOS_ENDPOINT not set');
 
-  const sourceDb = client(process.env.COSMOS_ENDPOINT).database(DATABASE_ID);
-  const targetDb = client(TARGET).database(DATABASE_ID);
+  const sourceDb = makeClient(process.env.COSMOS_ENDPOINT).database(DATABASE_ID);
+  const targetDb = makeClient(target).database(DATABASE_ID);
 
-  for (const name of CONTAINERS) {
+  for (const name of containers) {
     const src = sourceDb.container(name);
     const dst = targetDb.container(name);
     const srcCount = await count(src);
     const dstCount = await count(dst);
     console.log(`[${name}] source=${srcCount} target=${dstCount}`);
-    if (!LIVE) continue;
+    if (!live) continue;
     if (dstCount >= srcCount) { console.log(`[${name}] already complete, skipping`); continue; }
 
-    const state = loadCheckpoint();
+    const state = loadCheckpoint(checkpoint);
     let copied = state[name]?.copied || 0;
     let continuationToken = state[name]?.token || undefined;
 
@@ -97,7 +108,7 @@ async function main() {
       }
       continuationToken = page.continuationToken;
       state[name] = { copied, token: continuationToken };
-      saveCheckpoint(state);
+      saveCheckpoint(checkpoint, state);
       if (copied % 1000 < PAGE_SIZE) {
         console.log(`[${name}] ${copied}/${srcCount} @ ${new Date().toISOString()}`);
       }
@@ -107,4 +118,8 @@ async function main() {
   }
 }
 
-main().catch((err) => { console.error(err.message); process.exit(1); });
+module.exports = { main, parseArgs };
+
+if (require.main === module) {
+  main().catch((err) => { console.error(err.message); process.exit(1); });
+}

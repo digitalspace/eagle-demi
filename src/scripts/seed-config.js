@@ -50,14 +50,19 @@ function buildDocument() {
   };
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+/**
+ * @param {string[]} [argv]
+ * @param {object} [deps] test seam: {configRepository}
+ */
+async function main(argv = process.argv.slice(2), deps = {}) {
+  const repo = deps.configRepository || configRepository;
+  const args = parseArgs(argv);
   const doc = buildDocument();
 
   console.log('Seeding config document from app settings:');
   console.log(JSON.stringify(doc, null, 2));
 
-  const existing = await configRepository.get();
+  const existing = await repo.get();
   if (existing && !args.force) {
     console.log('\nA config document already exists. Re-run with --force to overwrite it:');
     console.log(JSON.stringify(existing, null, 2));
@@ -69,12 +74,16 @@ async function main() {
     return;
   }
 
-  const written = await configRepository.upsert(doc);
+  const written = await repo.upsert(doc);
   console.log('\nWritten:');
   console.log(JSON.stringify(written, null, 2));
 }
 
-main().catch((err) => {
-  console.error('[seed-config] failed:', err);
-  process.exitCode = 1;
-});
+module.exports = { main, parseArgs };
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('[seed-config] failed:', err);
+    process.exitCode = 1;
+  });
+}
