@@ -780,7 +780,7 @@ exports.setVisibility = async (req, res) => {
  * The body carries the RAW Eagle record, so the merge rules stay in `merge/project.js` and this
  * route produces exactly what the seed produces — a push and a re-seed cannot disagree about the
  * same project. Identity comes from the merge too: the Track id when the project is already
- * matched, `eagle-<eagleId>` when it is not.
+ * matched, `eagle-<eagleId>` when it is not, and a DEMI-created row's own id (`isNativeProject`).
  */
 exports.upsertFromEagle = async (req, res) => {
   const push = eaglePush(req);
@@ -803,16 +803,14 @@ function pushDeleted(doc, existing) {
 const isNativeProject = (row) => Boolean(row) && row.sourceSystem !== 'eagle' &&
   !isEagleOnlyProjectId(row.id) && !(row.sources && row.sources.track);
 
-/**
- * Put a native row's identity and Track-owned fields back over the Eagle merge, so the echo of its
- * sync-out lands on that row instead of minting an `eagle-<id>` one. DEMI fills those fields as Track would.
- */
+/** On a native row DEMI owns these outright: no source block exists to re-derive them, so an Eagle fill would stick. */
+const NATIVE_KEPT_FIELDS = ['id', 'trackProjectId', 'sourceSystem', 'centroid', 'createdAt', ...OWNERS.track];
+
+/** Put a native row's own fields back over the Eagle merge, so the push lands on that row, not an `eagle-<id>` one. */
 function keepNativeIdentity(merged, existing) {
-  merged.id = existing.id;
-  merged.trackProjectId = existing.trackProjectId ?? null;
-  merged.sourceSystem = existing.sourceSystem;
-  for (const field of OWNERS.track) {
-    if (hasValue(existing[field])) merged[field] = existing[field];
+  for (const field of NATIVE_KEPT_FIELDS) {
+    if (existing[field] === undefined) delete merged[field];
+    else merged[field] = existing[field];
   }
   merged.sources = { ...existing.sources, eagle: merged.sources.eagle };
 }
