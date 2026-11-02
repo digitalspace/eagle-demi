@@ -2,7 +2,7 @@
 
 /**
  * Sync-out pending hook against a stub repository and queue. The Eagle consumer's own lease rule
- * decides whether a create claim is still held.
+ * decides whether a send claim (`creating`) is still held.
  */
 
 process.env.NODE_ENV = 'test';
@@ -58,7 +58,7 @@ function harness(rows, { wants = () => true, enabled = () => true, answer = asyn
   return { deps, queued, lines, metas, log };
 }
 
-test('a create whose lease lapsed is listed and, on repair, queued once as a repair', async () => {
+test('a send claim whose lease lapsed is listed and, on repair, queued once as a repair', async () => {
   const h = harness([lapsedCreate()]);
   const report = await reconcile({ repair: true, log: h.log }, h.deps);
   assert.deepStrictEqual(report.listed, ['cp-native-1']);
@@ -67,7 +67,7 @@ test('a create whose lease lapsed is listed and, on repair, queued once as a rep
   assert.deepStrictEqual(h.lines, [`[sync-out pending] ${KIND}: 1 pending, 1 queued, 0 stray`]);
 });
 
-test('a create claim still inside its lease is not queued', async () => {
+test('a send claim still inside its lease is not queued', async () => {
   const h = harness([nativeRow({ status: 'creating', claim: 'c-1', claimedAt: minutesAgo(0.5) })]);
   await reconcile({ repair: true, log: h.log }, h.deps);
   assert.strictEqual(h.queued.length, 0);
