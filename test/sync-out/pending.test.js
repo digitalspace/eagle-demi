@@ -235,9 +235,9 @@ test('the CLI run fails when enqueue sent a row to no consumer', async (t) => {
     /1 row\(s\) not re-queued: cp-native-1/);
 });
 
-test('the CLI run fails when the ENGAGE checks threw', async () => {
-  await assert.rejects(run({ kind: KIND, repair: true }, async () => ({ failed: [], engage: { error: 'engage down' } })),
-    /ENGAGE checks failed: engage down/);
+test('the CLI run names a thrown ENGAGE pass and failed pending rows in one message', async () => {
+  await assert.rejects(run({ kind: KIND, repair: true }, async () => ({ failed: ['r-1'], engage: { error: 'engage down' } })),
+    { message: 'ENGAGE checks failed: engage down; 1 row(s) not re-queued: r-1' });
 });
 
 test('the CLI refuses a kind sync-out does not register', () => {

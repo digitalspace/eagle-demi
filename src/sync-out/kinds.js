@@ -26,7 +26,7 @@ async function reconcileCommentPeriods(options = {}) {
     engage = await require('../scripts/reconcile-engage').run(options);
   } catch (err) {
     engage = { error: err.message };
-    logger.warn('[sync-out pending] commentPeriod: ENGAGE checks failed, pending pass runs anyway',
+    logger.error('[sync-out pending] commentPeriod: ENGAGE checks failed, pending pass runs anyway',
       { error: err.message, stack: err.stack });
   }
   // A row both passes queue gets a second message, which the worker skips as current.

@@ -27,8 +27,14 @@ function parseArgs(argv) {
 
 async function run({ kind, repair }, reconcile = kindOf(kind).reconcile) {
   const report = await reconcile({ repair });
-  if (report.engage && report.engage.error) throw new Error(`ENGAGE checks failed: ${report.engage.error}`);
-  if (report.failed.length) throw new Error(`${report.failed.length} row(s) not re-queued: ${report.failed.join(', ')}`);
+  const engage = report.engage || {};
+  const problems = [
+    engage.error && `ENGAGE checks failed: ${engage.error}`,
+    engage.notRequeued && engage.notRequeued.length &&
+      `${engage.notRequeued.length} ENGAGE row(s) not re-queued: ${engage.notRequeued.join(', ')}`,
+    report.failed.length && `${report.failed.length} row(s) not re-queued: ${report.failed.join(', ')}`
+  ].filter(Boolean);
+  if (problems.length) throw new Error(problems.join('; '));
   return report;
 }
 

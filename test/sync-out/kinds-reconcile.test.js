@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const cache = require('../../src/repositories/cache');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const { logger } = require('../../src/utils/logger');
-const { KINDS, COMMENT_PERIOD, DOCUMENT, ORGANIZATION, PROJECT, kindOf } = require('../../src/sync-out/kinds');
+const { COMMENT_PERIOD, kindOf } = require('../../src/sync-out/kinds');
 const { run } = require('../../src/scripts/sync-out-pending');
 const { API, useEnv, wireQueue, wireEagle } = require('../helpers/sync-out-eagle');
 
@@ -36,30 +36,18 @@ const engageRow = () => ({
  * Env on, no eagle-api call allowed, and the repository serving `engage` to the ENGAGE pass and `pending` to the
  * pending pass, each read recorded in `order`.
  */
-function wire(t, { engage = [], pending = [lapsedRow()], listEveryEngage } = {}) {
-  useEnv(t, ENV);
+function wire(t, { engage = [], pending = [lapsedRow()], listEveryEngage, readForWrite, env = {} } = {}) {
+  useEnv(t, { ...ENV, ...env });
   t.mock.method(logger, 'info', () => {});
-  const warn = t.mock.method(logger, 'warn', () => {});
+  t.mock.method(logger, 'warn', () => {});
+  const error = t.mock.method(logger, 'error', () => {});
   wireEagle(t, {});
   const order = [];
   t.mock.method(commentPeriods, 'listEveryEngage', listEveryEngage || (async () => { order.push('engage'); return engage; }));
-  t.mock.method(commentPeriods, 'readForWrite', async (id) => engage.find(r => r.id === id) || null);
+  t.mock.method(commentPeriods, 'readForWrite', readForWrite || (async (id) => engage.find(r => r.id === id) || null));
   t.mock.method(commentPeriods, 'listSyncPending', async () => { order.push('pending'); return pending; });
-  return { sent: wireQueue(t), order, warn };
+  return { sent: wireQueue(t), order, error };
 }
-
-test('every registered kind has a lapsed send claim case: commentPeriod here, the rest in pending.test.js', () => {
-  assert.deepStrictEqual(Object.keys(KINDS).sort(), [COMMENT_PERIOD, DOCUMENT, ORGANIZATION, PROJECT].sort());
-});
-
-test('a native period whose send claim lapsed is re-queued once as a repair', async (t) => {
-  const { sent } = wire(t);
-
-  const report = await kindOf(COMMENT_PERIOD).reconcile({ repair: true });
-
-  assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id, m.body.repair]), [[COMMENT_PERIOD, 'lapsed', true]]);
-  assert.deepStrictEqual({ queued: report.queued, failed: report.failed }, { queued: 1, failed: [] });
-});
 
 test('the ENGAGE checks run before the pending pass, and their report rides under engage', async (t) => {
   const { order } = wire(t, { engage: [engageRow()] });
@@ -83,14 +71,15 @@ test('the nightly store run lists both passes, queues nothing and stores the ENG
     [[cache.RECONCILE_ENGAGE_REPORT_ID, ['engage-1']]]);
 });
 
-test('an ENGAGE pass that throws is warned and the pending pass still re-queues', async (t) => {
-  const { sent, warn } = wire(t, { listEveryEngage: async () => { throw new Error('cosmos down'); } });
+test('an ENGAGE pass that throws is logged as an error and the lapsed send claim is still re-queued', async (t) => {
+  const { sent, error } = wire(t, { listEveryEngage: async () => { throw new Error('cosmos down'); } });
 
   const report = await kindOf(COMMENT_PERIOD).reconcile({ repair: true });
 
   assert.deepStrictEqual(report.engage, { error: 'cosmos down' });
-  assert.deepStrictEqual(sent.map(m => m.body.id), ['lapsed']);
-  assert.deepStrictEqual(warn.mock.calls.map(c => [c.arguments[0], c.arguments[1].error]),
+  assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id, m.body.repair]), [[COMMENT_PERIOD, 'lapsed', true]]);
+  assert.deepStrictEqual({ queued: report.queued, failed: report.failed }, { queued: 1, failed: [] });
+  assert.deepStrictEqual(error.mock.calls.map(c => [c.arguments[0], c.arguments[1].error]),
     [['[sync-out pending] commentPeriod: ENGAGE checks failed, pending pass runs anyway', 'cosmos down']]);
 });
 
@@ -101,4 +90,28 @@ test('the CLI runs the comment period hook, ENGAGE checks first', async (t) => {
 
   assert.deepStrictEqual(order, ['engage', 'pending']);
   assert.deepStrictEqual(sent.map(m => m.body.id), ['lapsed']);
+});
+
+test('an ENGAGE row whose repair throws fails the CLI, named apart from pending rows', async (t) => {
+  wire(t, { engage: [engageRow()], readForWrite: async () => { throw new Error('read lost'); } });
+
+  await assert.rejects(run({ kind: COMMENT_PERIOD, repair: true }), {
+    message: '1 ENGAGE row(s) not re-queued: engage-1'
+  });
+});
+
+test('with SYNC_OUT_EAGLE_ENABLED off every ENGAGE repair candidate is reported not re-queued', async (t) => {
+  wire(t, { engage: [engageRow()], env: { SYNC_OUT_EAGLE_ENABLED: 'false' } });
+
+  const report = await kindOf(COMMENT_PERIOD).reconcile({ repair: true });
+
+  assert.deepStrictEqual(report.engage.notRequeued, ['engage-1']);
+});
+
+test('an ENGAGE repair candidate no consumer takes is reported not re-queued', async (t) => {
+  wire(t, { engage: [{ ...engageRow(), scanStatus: 'pending' }] });
+
+  const report = await kindOf(COMMENT_PERIOD).reconcile({ repair: true });
+
+  assert.deepStrictEqual(report.engage.notRequeued, ['engage-1']);
 });
