@@ -1000,14 +1000,19 @@ async function listByIdsUnscoped(access, ids, select) {
   return items;
 }
 
+/** What the document pending hook and `enqueue` read: `wants`, `inFlight` and the version check. */
+const SYNC_PENDING_FIELDS = ['id', 'projectId', 'sourceSystem', 'eagleId', 'syncVersion', 'syncOut', 'scanStatus'];
+
 /**
- * Rows, across partitions, tied to an Eagle id and holding a version not yet sent to Eagle: the
- * sync-out pending hook's list. A row with no Eagle id is never sent, so it is never pending.
+ * The sync-out pending hook's list, across partitions: DEMI rows holding a version not yet sent, and rows never
+ * sent that are untied or tied to an id sync-out minted. Native writes raise no syncVersion.
  */
 async function listSyncPending() {
   const tied = isDefinedAndNotNull('eagleId').clause;
+  const select = SYNC_PENDING_FIELDS.map(field => `c.${field}`).join(', ');
+  const neverSent = `(NOT IS_NUMBER(c.syncOut.eagle.sentVersion) AND (NOT ${tied} OR c.syncOut.eagle.mintedId = c.eagleId))`;
   return fetchAll(CONTAINER, {
-    query: `SELECT * FROM c WHERE c.sourceSystem = 'demi' AND ${tied} AND ${EAGLE_SYNC_PENDING}`
+    query: `SELECT ${select} FROM c WHERE c.sourceSystem = 'demi' AND (${neverSent} OR (${EAGLE_SYNC_PENDING}))`
   });
 }
 

@@ -235,7 +235,9 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'sync-out/eagle.js',
     // A parent company's or proponent's Eagle id, and a mirror row under the minted id, whatever their level.
     'sync-out/eagle-organization.js',
-    'sync-out/eagle-project.js'
+    'sync-out/eagle-project.js',
+    // A document's parent project send record, and a mirror row under the minted id, whatever their level.
+    'sync-out/eagle-document.js'
   ].map(file => path.join(...file.split('/'))));
   const allowed = (file) => ALLOWED.has(file);
 

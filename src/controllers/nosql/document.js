@@ -42,6 +42,8 @@ const { naturalSortKey } = require('../../helpers/natural-sort');
 const { fileNameFor } = require('../../helpers/file-name');
 const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
 const config = require('../../config');
+const syncOut = require('../../sync-out');
+const { DOCUMENT } = require('../../sync-out/kinds');
 const { featuresDocument, capRefusal } = require('../../domain/document-feature');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
@@ -1060,6 +1062,7 @@ exports.createDocument = async (req, res) => {
       createdAt: now,
       updatedAt: now
     });
+    await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
 
     auditEvent(req, {
       action: 'document.create',
@@ -1127,6 +1130,7 @@ exports.extractDocument = async (req, res) => {
       createdAt: now,
       updatedAt: now
     });
+    await syncOut.enqueueQuietly(saved, { kind: DOCUMENT });
 
     // Same action as createDocument, not a `document.upload` of its own: this is the same thing
     // happening through a second door, and two action names would make "who created documents"
