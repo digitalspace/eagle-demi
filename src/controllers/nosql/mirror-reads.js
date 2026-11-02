@@ -52,15 +52,20 @@ function nativeListHandler(spec) {
       }
       return res.json(body);
     } catch (err) {
-      const searchFailed = searchServiceError(res, err, `${spec.entity} list`);
-      if (searchFailed) return searchFailed;
-      // `readPage` refuses a page past MAX_PAGE_DEPTH before reading anything.
-      if (err && err.status === 400) return res.status(400).json({ error: err.message });
-      // A store that cannot answer yet (passages over an unstamped scope) says why, not a bare 500.
-      if (err && err.status === 503) return res.status(503).json({ error: err.message });
-      return serverError(res, err, `${spec.entity} list failed`);
+      return listFailure(res, err, `${spec.entity} list`);
     }
   };
+}
+
+/** The answer for a native list read that threw. */
+function listFailure(res, err, context) {
+  const searchFailed = searchServiceError(res, err, context);
+  if (searchFailed) return searchFailed;
+  // `readPage` refuses a page past MAX_PAGE_DEPTH before reading anything.
+  if (err && err.status === 400) return res.status(400).json({ error: err.message });
+  // A store that cannot answer yet (passages over an unstamped scope) says why, not a bare 500.
+  if (err && err.status === 503) return res.status(503).json({ error: err.message });
+  return serverError(res, err, `${context} failed`);
 }
 
 /** By id: a DEMI id, or a 24-hex Eagle id where the kind keys rows differently. One 404 for both. */
@@ -133,4 +138,4 @@ function getHandler(entity, notFound, get, shape = (body) => body) {
   };
 }
 
-module.exports = { listHandler, getHandler, NO_STORE };
+module.exports = { listHandler, getHandler, listFailure, NO_STORE };

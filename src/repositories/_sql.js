@@ -344,16 +344,11 @@ function pageSlice({ pageNum, pageSize } = {}) {
 const READ_PAGE_MAX_FETCHES = Math.ceil(MAX_PAGE_DEPTH / MAX_PAGE_SIZE) + 30;
 
 /**
- * One `pageSlice` page of `spec`, in the query's own order, following the continuation until
- * `skip + size` rows are in — past the MAX_PAGE_SIZE one fetch carries, and past a short or empty
- * fetch that still carries a token. A deep page costs every row before it: at least
- * `(skip + size) / MAX_PAGE_SIZE` round trips (cross-partition fetches can come back short, and
- * each call adds a query-plan trip), never more rows than the predicate matches.
- *
- * @throws {Error} `status: 400` when `skip + size` is past MAX_PAGE_DEPTH, before any read
+ * One `pageSlice` page of `spec`, or its first `fetch` rows with no MAX_PAGE_SIZE clamp, following continuations;
+ * a deep page costs every row before it. Throws `status: 400` past MAX_PAGE_DEPTH, before any read.
  */
-async function readPage(container, spec, { pageNum, pageSize, partitionKey } = {}) {
-  const { skip, fetch } = pageSlice({ pageNum, pageSize });
+async function readPage(container, spec, { pageNum, pageSize, partitionKey, fetch: first } = {}) {
+  const { skip, fetch } = first === undefined ? pageSlice({ pageNum, pageSize }) : { skip: 0, fetch: first };
   if (fetch > MAX_PAGE_DEPTH) {
     throw Object.assign(new Error('page is past the deepest page this list serves: ' +
       `pageNum * pageSize + pageSize must stay within ${MAX_PAGE_DEPTH} rows`), { status: 400 });

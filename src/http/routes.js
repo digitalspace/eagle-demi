@@ -155,8 +155,9 @@ const routes = [
   { method: 'get', path: '/admin/reconcile-engage', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getReconcileEngageReport },
 
   // Projects Routes
-  // projects/counts: native list contract. `strict` answers a rejected Bearer with its 401, not the public view.
+  // projects/project-records/counts: native list contract. `strict` answers a rejected Bearer with its 401, not the public view.
   { method: 'get', path: '/projects', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => projectController().getProjects },
+  { method: 'get', path: '/project-records', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/project-records').getProjectRecords },
   { method: 'get', path: '/counts', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => require('../controllers/native/counts').counts },
   { method: 'get', path: '/projects/:id', guards: [passiveAuthMiddleware.strict, credentialsMiddleware], load: () => projectController().getProject },
   // The stored AI summary. Same guards as `/search/summary` and for the same reason — every AI

@@ -329,27 +329,43 @@ exports.projectsKind = projectsKind;
 
 const unfilteredProjects = listHandler(projectsKind);
 
+/** A `pcp` query value (repeatable) as `{ statuses }`, or `{ error }` when one is not a `PCP_STATUSES` value. */
+function pcpStatuses(pcp) {
+  const statuses = [...new Set([].concat(pcp))];
+  if (statuses.some(value => !commentPeriods.PCP_STATUSES.includes(value))) {
+    return { error: `pcp takes ${commentPeriods.PCP_STATUSES.join(', ')}` };
+  }
+  return { statuses };
+}
+exports.pcpStatuses = pcpStatuses;
+
 /**
- * `GET /projects`. `pcp` (a `PCP_STATUSES` value; repeatable) is a property of the project's comment
- * periods, not of the row, so it is taken out here and read as the ids of the projects that have
- * such a period this caller may read. Those ids narrow the Cosmos read and the `q` re-read alike.
+ * The projects repository narrowed to the projects with a comment period in `statuses` that this
+ * caller may read. Those ids narrow the Cosmos read and the `q` re-read alike.
+ */
+async function pcpRepository(access, statuses) {
+  const ids = await commentPeriods.projectIdsWithStatus(access, statuses);
+  return indexedKind({ ...PROJECTS_STORE, baseCriteria: [inList('id', ids, '@pcp')] });
+}
+exports.pcpRepository = pcpRepository;
+
+/**
+ * `GET /projects`. `pcp` is a property of the project's comment periods, not of the row, so it is
+ * taken out here and read through `pcpRepository`.
  */
 exports.getProjects = async (req, res) => {
   const { pcp, ...query } = req.query || {};
   if (pcp === undefined) return unfilteredProjects(req, res);
   req.query = query;
 
-  const statuses = [...new Set([].concat(pcp))];
-  if (statuses.some(value => !commentPeriods.PCP_STATUSES.includes(value))) {
-    return res.status(400).json({ error: `pcp takes ${commentPeriods.PCP_STATUSES.join(', ')}` });
-  }
-  let ids;
+  const { statuses, error } = pcpStatuses(pcp);
+  if (error) return res.status(400).json({ error });
+  let repository;
   try {
-    ids = await commentPeriods.projectIdsWithStatus(resolveAccess(req), statuses);
+    repository = await pcpRepository(resolveAccess(req), statuses);
   } catch (err) {
     return serverError(res, err, 'projects pcp read failed');
   }
-  const repository = indexedKind({ ...PROJECTS_STORE, baseCriteria: [inList('id', ids, '@pcp')] });
   return listHandler({ ...projectsKind, repository })(req, res);
 };
 
