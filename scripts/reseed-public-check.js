@@ -17,7 +17,9 @@ const { readKeepIds } = require('../src/utils/keep-ids');
 const PROD_API = 'https://projects.eao.gov.bc.ca/api/public';
 const TEST_ORIGIN = 'https://test.projects.eao.gov.bc.ca';
 const TEST_SEARCH = `${TEST_ORIGIN}/demi-search`;
-const TEST_STAFF_API = `${TEST_ORIGIN}/demi/api`;
+// APIM on the public host answers 404 to DELETE; staff writes go to the Function host.
+const TEST_STAFF_ORIGIN = 'https://demi-api-fc-test.azurewebsites.net';
+const TEST_STAFF_API = `${TEST_STAFF_ORIGIN}/api`;
 
 const RESIDUE_DATASETS = ['RecentActivity', 'ProjectNotification', 'CommentPeriod'];
 const COUNT_DATASETS = ['Project', 'Document', ...RESIDUE_DATASETS];
@@ -47,13 +49,13 @@ const CHECKLIST = [
 
 /**
  * The only way this tool reaches the network. Prod is read only: anything but GET is refused
- * unless it targets the test site, before a request leaves the process.
+ * unless it targets the test Function host, before a request leaves the process.
  */
 function makeRequest(fetchImpl = globalThis.fetch) {
   return async function request(url, { method = 'GET', headers = {} } = {}) {
     const target = new URL(url);
-    if (method !== 'GET' && target.origin !== TEST_ORIGIN) {
-      throw new Error(`refused ${method} to ${target.origin}: only ${TEST_ORIGIN} takes anything but GET`);
+    if (method !== 'GET' && target.origin !== TEST_STAFF_ORIGIN) {
+      throw new Error(`refused ${method} to ${target.origin}: only ${TEST_STAFF_ORIGIN} takes anything but GET`);
     }
     return fetchImpl(target.href, { method, headers });
   };
@@ -333,4 +335,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { PROD_API, TEST_ORIGIN, makeRequest, snapshot, residue, residueLive, verify, main };
+module.exports = { PROD_API, TEST_ORIGIN, TEST_STAFF_ORIGIN, makeRequest, snapshot, residue, residueLive, verify, main };
