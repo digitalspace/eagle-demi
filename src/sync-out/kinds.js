@@ -1,17 +1,7 @@
 'use strict';
 
-/**
- * Sync-out kinds: the row types sync-out sends. Each message names its kind, and the worker re-reads
- * and writes the row through that kind's repository.
- *
- * A kind is `{ repo, consumers, reconcile }`:
- * - `repo`: the kind's repository; sync-out re-reads the row through it and writes back etag-guarded.
- * - `consumers`: names of the consumers in `./index.js` that send this kind; names repeat across kinds.
- * - `reconcile(options)`: checks the kind's rows against what the consumers wrote; `{ repair: true }`
- *   re-queues the ones that drifted.
- *
- * A Flip adds its kind here and its consumers to that kind's list in `./index.js`.
- */
+// A kind is `{ repo, consumers, reconcile }`: the repository the worker re-reads and etag-writes a row through,
+// consumer names in `./index.js`, and a hook whose `{ repair: true }` re-queues drifted rows.
 
 const commentPeriods = require('../repositories/comment-periods');
 const documents = require('../repositories/documents');
