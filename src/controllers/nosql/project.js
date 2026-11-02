@@ -29,9 +29,9 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, deleteStands,
-  TRIMMED_FIELDS, hasValue
+  TRIMMED_FIELDS, hasValue, isEagleOnlyProjectId
 } = require('../../merge/project');
-const { LEGISLATION_KEY, PUT_IGNORED_FIELDS } = require('../../ownership/project');
+const { LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
@@ -799,6 +799,24 @@ function pushDeleted(doc, existing) {
   return deleteStands(existing);
 }
 
+/** A project DEMI created: neither Eagle's own row nor a Track one. */
+const isNativeProject = (row) => Boolean(row) && row.sourceSystem !== 'eagle' &&
+  !isEagleOnlyProjectId(row.id) && !(row.sources && row.sources.track);
+
+/**
+ * Put a native row's identity and Track-owned fields back over the Eagle merge, so the echo of its
+ * sync-out lands on that row instead of minting an `eagle-<id>` one. DEMI fills those fields as Track would.
+ */
+function keepNativeIdentity(merged, existing) {
+  merged.id = existing.id;
+  merged.trackProjectId = existing.trackProjectId ?? null;
+  merged.sourceSystem = existing.sourceSystem;
+  for (const field of OWNERS.track) {
+    if (hasValue(existing[field])) merged[field] = existing[field];
+  }
+  merged.sources = { ...existing.sources, eagle: merged.sources.eagle };
+}
+
 /** The row a push writes, built from whatever revision is stored at the moment of the write. */
 function mergeEaglePush(doc, existing) {
   const deleted = pushDeleted(doc, existing);
@@ -812,6 +830,7 @@ function mergeEaglePush(doc, existing) {
   // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
   // nothing upstream can rebuild. The same trap the seed hit.
   merged.sources = { ...(existing && existing.sources), ...merged.sources };
+  if (isNativeProject(existing)) keepNativeIdentity(merged, existing);
   // Same replace-the-whole-item trap as sources: an upsert with no vis wipes classification.
   if (existing && existing.vis) merged.vis = existing.vis;
   // And the same for the code: dropping it would leave a printed link pointing at nothing once
