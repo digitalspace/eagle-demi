@@ -5,7 +5,7 @@
 
 const settings = require('../config').syncOut;
 const projects = require('../repositories/projects');
-const { isNativeProject, eagleOnlyProjectId } = require('../merge/project');
+const { isNativeProject, eagleOnlyProjectId, isMintedNative: mintedHere } = require('../merge/project');
 const { logger } = require('../utils/logger');
 const {
   requireSettings, call, failure, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
@@ -58,9 +58,6 @@ async function put(s, eagleId, body, logFields) {
   if (!res.ok) throw failure('PUT', path, res);
   return true;
 }
-
-/** Whether this consumer minted the row's Eagle id. Any other id names a project Eagle staff own. */
-const mintedHere = row => Boolean(row.eagleId) && row.syncOut?.eagle?.mintedId === String(row.eagleId);
 
 const owned = row => isNativeProject(row) && row.isDeleted !== true;
 const wants = row => owned(row) && (row.eagleId ? mintedHere(row) : settings.eagle.nativeEnabled);

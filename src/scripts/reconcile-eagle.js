@@ -496,8 +496,8 @@ async function reconcile(argv = [], deps = {}) {
   // The registry seed-nosql builds. A Track row's dangling epic_guid resolves here exactly as it
   // does there, which is why this and not `eagleProjectIds` is the parent test: DEMI holds a
   // project row for such a guid, so a child under one is drift rather than unresolvable.
-  const projectIndex = buildProjectIndex(
-    buildRegistry(await src.loadTrackProjects(), eagleProjects).projects);
+  const projectIndex = buildProjectIndex(buildRegistry(await src.loadTrackProjects(), eagleProjects,
+    { nativeRows: await projectsRepo.listNative() }).projects);
   // `admit` is the parent gate for BOTH children Eagle hangs off a `project` reference: a document
   // and a comment period. Either may name a `ProjectNotification` there.
   const { admit } = await documentAdmission(src, projectIndex);

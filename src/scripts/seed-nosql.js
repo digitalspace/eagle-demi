@@ -10,7 +10,7 @@ const sources = require('../seed/sources');
 const transform = require('../seed/transform');
 const {
   buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
-  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, carryDelete, deletedBy
+  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, carryDelete, deletedBy, hasValue
 } = require('../merge/project');
 const { DEMI_ONLY_FIELDS } = require('../ownership/project');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
@@ -35,6 +35,15 @@ const chunksRepo = require('../repositories/chunks');
 const { ensureProjectShortLink, carryShortLink } = require('../helpers/short-links');
 
 const TWIN_CARRY_FIELDS = DEMI_ONLY_FIELDS.filter(f => !SYNC_STATE_FIELDS.includes(f));
+
+/** The failure line for each `buildRegistry` native conflict. */
+const NATIVE_CONFLICT = {
+  shared: c => `Track project ${c.trackId} and native project ${c.nativeId} both hold Eagle ${c.eagleId}, ` +
+    'which sync-out did not mint for the native one',
+  twoNative: c => `native projects ${c.nativeIds.join(' and ')} both hold Eagle ${c.eagleId}`,
+  trackGuid: c => `Track project ${c.trackId} names Eagle ${c.epicGuid}, but native project ${c.trackId} ` +
+    `holds ${c.eagleId ?? 'no Eagle id'}`
+};
 
 /** Every stage `--only` accepts. */
 const ALL_STAGES = ['projects', 'documents', 'boundaries'];
@@ -320,6 +329,11 @@ function verifyItems(items, label, partitionField, projectRead) {
   return failures;
 }
 
+function logFailures(summary) {
+  log('=== VERIFICATION FAILURES ===');
+  for (const f of summary.failures) log(`  ✗ ${f}`);
+}
+
 function log(...parts) {
   console.log(...parts);
 }
@@ -466,8 +480,7 @@ async function runSeed(args, deps, summary) {
   if (args.reconcile && !cosmosReady) {
     summary.failures.push('--reconcile needs COSMOS_ENDPOINT: the surplus set cannot be computed ' +
       'without enumerating the containers');
-    log('=== VERIFICATION FAILURES ===');
-    for (const f of summary.failures) log(`  \u2717 ${f}`);
+    logFailures(summary);
     return summary;
   }
   log(`\n=== DEMI seed — ${args.live ? 'LIVE' : 'DRY RUN (nothing will be written)'} ===`);
@@ -492,18 +505,39 @@ async function runSeed(args, deps, summary) {
   const orgs = await src.fetchOrganizationLookup();
   log(`  ${orgs.size} organizations for pin and proponent resolution`);
 
-  const { projects, report } = buildRegistry(trackProjects, eagleProjects, { now, orgs });
+  // DEMI-created projects are kept whole: rebuilt from Track they would lose their Eagle id to an `eagle-<id>` twin.
+  // Read after the Eagle fetch: sync-out creates in Eagle before it stamps the row, so this order leaves the smaller race.
+  const nativeRows = cosmosReady ? await repos.projects.listNative() : undefined;
+  if (!cosmosReady) {
+    log('  native projects not read (no COSMOS_ENDPOINT): one may show as a Track row plus an Eagle-only twin, ' +
+      'its documents planned under the twin, unlike a live run');
+  }
+  const { projects, report, nativeIds, clashTrackIds } = buildRegistry(trackProjects, eagleProjects,
+    { now, orgs, nativeRows });
   log(`  merged: ${report.matched} matched · ${report.trackOnlyNoGuid} Track without epic_guid · ` +
-    `${report.trackOnlyDanglingGuid} dangling · ${report.eagleOnly} Eagle-only = ${report.total}`);
+    `${report.trackOnlyDanglingGuid} dangling · ${report.eagleOnly} Eagle-only · ` +
+    `${report.nativeKept ?? 0} native · ${report.nativeClash ?? 0} Track beside a native Eagle id = ${report.total}`);
   if (report.danglingGuids.length) {
     log(`  dangling epic_guids: ${report.danglingGuids.slice(0, 5).join(', ')}`);
+  }
+  for (const { trackId, eagleId } of report.nativeClashes || []) {
+    logger.warn(`[seed] Track project ${trackId} names Eagle ${eagleId}, minted for a native project; built with no Eagle id`);
+  }
+  for (const conflict of report.nativeConflicts || []) {
+    summary.failures.push(`projects: ${NATIVE_CONFLICT[conflict.reason](conflict)}; fix the data before a live seed`);
+  }
+  if (args.live && report.nativeConflicts?.length) {
+    logFailures(summary);
+    return summary;
   }
 
   const projectIndex = buildProjectIndex(projects);
   // Parent ACLs by canonical id: documents are narrowed against these, and the pre-write gate
   // checks the same invariant.
   const projectRead = new Map(projects.map(p => [String(p.id), p.read]));
-  summary.stages.projects = { built: projects.length, report, written: 0, visCarried: 0, shortLinks: 0 };
+  summary.stages.projects = {
+    built: projects.length - nativeIds.size, report, written: 0, visCarried: 0, shortLinks: 0, nativeKept: nativeIds.size
+  };
 
   const projectFailures = verifyProjects(projects);
   summary.failures.push(...projectFailures);
@@ -513,6 +547,7 @@ async function runSeed(args, deps, summary) {
       // Projects partition on /id, so every project is its own partition and bulk cannot batch
       // across them. 392 sequential upserts is a few seconds.
       for (const project of projects) {
+        if (nativeIds.has(String(project.id))) continue;
         // A Cosmos upsert replaces the item, so without this every re-seed wipes vis and any
         // source block the run itself did not rebuild.
         const existing = await repos.projects.getById(access, project.id);
@@ -525,9 +560,12 @@ async function runSeed(args, deps, summary) {
           // nor drop the legacy codes that still resolve to it.
           carryShortLink(project, existing);
           project.sources = { ...existing.sources, ...project.sources };
+          // A row that lost its Eagle id (to a native project, or in Track) keeps none of that project's Eagle data.
+          const unlinked = !project.eagleId && hasValue(existing.eagleId);
+          if (unlinked) delete project.sources.eagle;
           // The public search lacks applicableRegulation, featuredDocuments and the push bookkeeping; carried
           // over so a re-seed neither blanks them nor lets an applied push land again.
-          carryEagleOnlyFields(project, existing);
+          if (!unlinked) carryEagleOnlyFields(project, existing);
           carryDemiOnlyFields(project, existing);
           // The public feed never says a project was deleted, so a rebuilt row would republish it.
           carryDelete(project, existing);
@@ -554,7 +592,7 @@ async function runSeed(args, deps, summary) {
         }
       }
     }
-    log(`  projects ${args.live ? 'written' : 'would write'}: ${projects.length}\n`);
+    log(`  projects ${args.live ? 'written' : 'would write'}: ${projects.length - nativeIds.size}\n`);
   }
 
   // ── 2. Documents ───────────────────────────────────────────────────────────
@@ -604,16 +642,27 @@ async function runSeed(args, deps, summary) {
     let reStampErrorsLogged = 0;
     const writeStatus = {};
     const fetchedKeys = new Set();
+    const writeFailedIds = new Set();
     let duplicateIds = 0;
     let gateFailures = [];
 
     // projectId -> (documentId -> extraction state already in Cosmos). One partition read per
     // project, not per batch: a project's documents flush more than once.
     const existingByProject = new Map();
+    // A native project's documents may sit under its stale `eagle-<id>` twin or a Track row that lost the
+    // id to it: they keep their extraction there, and the projectId change re-stamps their chunks.
+    const formerPartitionsOf = new Map((nativeRows || []).filter(row => nativeIds.has(String(row.id))).map(row => [
+      String(row.id),
+      [...(row.eagleId ? [eagleOnlyProjectId(String(row.eagleId))] : []), ...(clashTrackIds.get(String(row.id)) || [])]
+    ]));
     const existingFor = async (projectId) => {
       if (!cosmosReady) return null;
       if (!existingByProject.has(projectId)) {
-        const rows = await repos.documents.extractionRowsForProject(access, projectId);
+        const rows = [];
+        for (const partition of [...(formerPartitionsOf.get(String(projectId)) || []), projectId]) {
+          rows.push(...await repos.documents.extractionRowsForProject(access, partition));
+        }
+        // Later partitions win, so the project's own row beats a former one.
         existingByProject.set(projectId, new Map(rows.map(r => [String(r.id), r])));
       }
       return existingByProject.get(projectId);
@@ -677,6 +726,7 @@ async function runSeed(args, deps, summary) {
         const r = await repos.documents.bulkUpsertForProject(projectId, docs);
         stats.written += r.succeeded;
         stats.writeFailed += r.failed;
+        for (const id of r.failedIds || []) writeFailedIds.add(String(id));
         for (const [code, n] of Object.entries(r.statusCounts)) {
           writeStatus[code] = (writeStatus[code] || 0) + n;
         }
@@ -854,7 +904,7 @@ async function runSeed(args, deps, summary) {
     log(`  extraction state carried forward on ${stats.preserved} existing rows`);
     log(`  documents ${args.live ? 'written' : 'would write'}: ${stats.built}\n`);
 
-    documentFetch = { keys: fetchedKeys, total: documentsTotal, fetched: count, droppedIds };
+    documentFetch = { keys: fetchedKeys, total: documentsTotal, fetched: count, droppedIds, writeFailedIds };
   }
 
   // ── 5. Boundaries ──────────────────────────────────────────────────────────
@@ -940,10 +990,14 @@ async function runSeed(args, deps, summary) {
         ...surplusOf([...projectRows, ...eagleIdRows].filter(row => row.isDeleted === true), projectKey, fetchedProjects),
         ...surplusOf(liveProjects, projectKey, fetchedProjects).filter(row => !listedProject(row))
       ].map(row => String(row.id)));
+      const fetchedDocIds = new Set([...documentFetch.keys].map(key => key.slice(key.indexOf('|') + 1)));
+      // A moved document's chunks and index entry now belong to its new row, so only the old row goes.
+      const removeDocument = row => (fetchedDocIds.has(String(row.id))
+        ? repos.documents.deleteById(row.id, row.projectId).then(gone => (gone ? null : { skipped: true }))
+        : purge.purgeDocument(row));
       const containers = [
         ['documents', documentRows.filter(row => !retired.has(String(row.projectId))),
-          row => `${row.projectId}|${row.id}`, documentFetch.keys,
-          row => purge.purgeDocument(row)],
+          row => `${row.projectId}|${row.id}`, documentFetch.keys, removeDocument],
         ['projects', liveProjects, projectKey, fetchedProjects, retireProject]
       ];
       // Both containers sized BEFORE either delete, so a breach in one stops the other too.
@@ -962,7 +1016,6 @@ async function runSeed(args, deps, summary) {
       // Skipped on a breach: nothing is deleted then, and an empty upstream would cost one GET per row.
       const servedIds = { documents: new Set(), projects: new Set() };
       if (!breached.length) {
-        const fetchedDocIds = new Set([...documentFetch.keys].map(key => key.slice(key.indexOf('|') + 1)));
         for (const { label, surplus } of sized) {
           for (const row of surplus) {
             // A document fetched under another parent moved: its old row is surplus, not skipped.
@@ -989,7 +1042,9 @@ async function runSeed(args, deps, summary) {
       // A listed project spares its documents too, so the keep file can name projects only.
       const keptProjects = new Set([...keepIds,
         ...[...projectRows, ...projects].filter(listedProject).map(p => String(p.id))]);
-      const spareDocument = row => listed(row.id) || keptProjects.has(String(row.projectId));
+      // A moved document whose new row failed to write keeps its old one until a run lands it.
+      const spareDocument = row => listed(row.id) || keptProjects.has(String(row.projectId)) ||
+        documentFetch.writeFailedIds.has(String(row.id));
       summary.reconcile.documents = await reconcileContainer(...containers[0],
         { live, logPath, audit, spare: spareDocument, servedUpstream: servedUpstream('documents'), held: keptLive > 0 });
       const keptDocs = summary.reconcile.documents.kept || [];
@@ -1030,8 +1085,7 @@ async function runSeed(args, deps, summary) {
 
   // ── Gates ──────────────────────────────────────────────────────────────────
   if (summary.failures.length) {
-    log('=== VERIFICATION FAILURES ===');
-    for (const f of summary.failures) log(`  ✗ ${f}`);
+    logFailures(summary);
   } else {
     log('=== Verification passed ===');
   }

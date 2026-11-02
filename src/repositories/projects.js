@@ -126,6 +126,11 @@ async function readForWrite(id) {
 const NATIVE_PROJECT = '(NOT IS_DEFINED(c.sources.track) OR IS_NULL(c.sources.track)) AND ' +
   "(NOT IS_DEFINED(c.sourceSystem) OR IS_NULL(c.sourceSystem) OR c.sourceSystem != 'eagle') AND NOT STARTSWITH(c.id, 'eagle-')";
 
+/** Every native row, unfiltered, for the seeder: it keeps these whole, and one it missed would be rebuilt from Track. */
+async function listNative() {
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT}` });
+}
+
 /** Native rows whose `syncVersion` the Eagle sync-out has not sent, across partitions. For `src/sync-out/pending.js` only. */
 async function listSyncPending() {
   return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT} AND ${EAGLE_SYNC_PENDING}` });
@@ -452,6 +457,7 @@ module.exports = {
   readForWriteByEagleId,
   readForWrite,
   listSyncPending,
+  listNative,
   listByIds,
   listRowsByIds,
   listIdsByName,

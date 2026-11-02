@@ -37,6 +37,9 @@ const isEagleOnlyProjectId = (id) => String(id).startsWith(eagleOnlyProjectId(''
 const isNativeProject = (row) => Boolean(row) && row.sourceSystem !== 'eagle' &&
   !isEagleOnlyProjectId(row.id) && !(row.sources && row.sources.track);
 
+/** A native row whose `eagleId` is the one sync-out minted for it, not one typed in by staff. */
+const isMintedNative = (row) => hasValue(row.eagleId) && row.syncOut?.eagle?.mintedId === String(row.eagleId);
+
 /** Which block is current, the years held, and every `legislation_<year>` block. */
 const legislationFields = (eagle) => [...LEGISLATION_INDEX_FIELDS,
   ...Object.keys(eagle).filter(k => LEGISLATION_KEY.test(k))];
@@ -594,9 +597,44 @@ function buildRegistry(trackProjects, eagleProjects, opts = {}) {
   };
 
   const consumedEagleIds = new Set();
+  const nativeRows = (opts.nativeRows || []).filter(isNativeProject);
+  const nativeIds = new Set(nativeRows.map(row => String(row.id)));
+  if (opts.nativeRows) {
+    Object.assign(report, { nativeKept: nativeRows.length, nativeClash: 0, nativeClashes: [], nativeConflicts: [] });
+  }
+  const nativeById = new Map(nativeRows.map(row => [String(row.id), row]));
+  const nativeByEagleId = new Map();
+  for (const row of nativeRows.filter(r => hasValue(r.eagleId))) {
+    const eagleId = String(row.eagleId);
+    const held = nativeByEagleId.get(eagleId);
+    if (held) report.nativeConflicts.push({ reason: 'twoNative', eagleId, nativeIds: [String(held.id), String(row.id)] });
+    else nativeByEagleId.set(eagleId, row);
+    consumedEagleIds.add(eagleId);
+  }
+  // Native id -> the Track rows that lost its Eagle id here: their stored documents move to it.
+  const clashTrackIds = new Map();
 
   for (const track of trackProjects || []) {
+    const trackId = String(track.track_project_id);
     const guid = hasValue(track.epic_guid) ? String(track.epic_guid) : null;
+    const own = nativeById.get(trackId);
+    if (own) {
+      const eagleId = hasValue(own.eagleId) ? String(own.eagleId) : null;
+      if (guid && guid !== eagleId) report.nativeConflicts.push({ reason: 'trackGuid', trackId, epicGuid: guid, eagleId });
+      continue;
+    }
+    const native = guid ? nativeByEagleId.get(guid) : null;
+    // Only an id sync-out minted for the native row outranks Track's; a second holder makes the
+    // write-side Eagle id lookup throw DUPLICATE_ID, so any other clash is the caller's to refuse.
+    if (native && isMintedNative(native)) {
+      report.nativeClash++;
+      if (report.nativeClashes.length < 20) report.nativeClashes.push({ trackId, eagleId: guid });
+      const nativeId = String(native.id);
+      clashTrackIds.set(nativeId, [...(clashTrackIds.get(nativeId) || []), trackId]);
+      projects.push({ ...mergeTrackProject(track, null, opts), eagleId: null });
+      continue;
+    }
+    if (native) report.nativeConflicts.push({ reason: 'shared', trackId, nativeId: String(native.id), eagleId: guid });
     const eagle = guid ? eagleById.get(guid) || null : null;
 
     if (eagle) {
@@ -620,8 +658,9 @@ function buildRegistry(trackProjects, eagleProjects, opts = {}) {
     projects.push(mergeEagleOnlyProject(eagle, opts));
   }
 
+  projects.push(...nativeRows);
   report.total = projects.length;
-  return { projects, report };
+  return { projects, report, nativeIds, clashTrackIds };
 }
 
 /**
@@ -707,6 +746,7 @@ module.exports = {
   eagleOnlyProjectId,
   isEagleOnlyProjectId,
   isNativeProject,
+  isMintedNative,
   buildRegistry,
   buildProjectIndex,
   notificationShadowedProjects

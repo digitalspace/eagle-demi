@@ -162,6 +162,7 @@ function makeDeps(over = {}, counts = {}) {
     countByPeriod: countOfRead(deps.comments.listEveryByPeriod, counts.comments),
     ...deps.comments
   };
+  deps.projects = { listNative: async () => [], ...deps.projects };
   return deps;
 }
 
@@ -711,6 +712,25 @@ test('reconcile', async (t) => {
 
     assert.deepStrictEqual(summary.commentPeriods.misfiledParent, []);
     assert.strictEqual(summary.drift, 5);
+  });
+
+  await t.test('a period under a native project holding its Eagle id is not misfiled', async () => {
+    const native = { id: '1234', eagleId: 'P2', sourceSystem: 'track', sources: {} };
+    const rows = [...PROJECT_ROWS.filter(row => row.eagleId !== 'P2'), native];
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, { ...EAGLE_BY_DATASET, CommentPeriod: [{ _id: 'CP-native', project: 'P2' }] }),
+      projects: {
+        listNative: async () => [native],
+        listWithEagleId: async () => rows,
+        countWithEagleId: async () => rows.length
+      },
+      commentPeriods: {
+        listEveryByProject: async (projectId) => (projectId === '1234' ? [{ id: 'CP-native', projectId: '1234' }] : [])
+      }
+    }));
+
+    assert.deepStrictEqual(summary.commentPeriods.misfiledParent, []);
+    assert.deepStrictEqual(summary.commentPeriods.eagleOnly, []);
   });
 
   // A period carrying no project ref at all: the mirror has nothing to resolve, so it drops it.

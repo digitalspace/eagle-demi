@@ -29,7 +29,7 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, deleteStands,
-  TRIMMED_FIELDS, hasValue, isNativeProject
+  TRIMMED_FIELDS, hasValue, isNativeProject, isMintedNative
 } = require('../../merge/project');
 const { LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
@@ -818,7 +818,7 @@ function keepNativeIdentity(merged, existing) {
   }
   merged.sources = { ...existing.sources, eagle: merged.sources.eagle };
   // Sync-out drives the level of a project it created from DEMI; Eagle's stays in `sources.eagle.read`.
-  if (hasValue(existing.eagleId) && existing.syncOut?.eagle?.mintedId === String(existing.eagleId)) {
+  if (isMintedNative(existing)) {
     merged.read = existing.read;
     merged.isPublished = existing.isPublished;
   }
