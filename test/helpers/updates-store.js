@@ -1,19 +1,7 @@
 'use strict';
 
-/**
- * An in-memory `updates` container that evaluates the SQL the repository sends.
- *
- * A patch condition and a query filter are SQL only Cosmos evaluates, so a stub that always
- * succeeds, or answers every row, passes whatever the SQL says. This one evaluates the predicate
- * text itself, and throws on any term it does not know: drop a clause from the repository and the
- * store stops enforcing it, so the test that relies on it goes red.
- *
- * Supported: AND, OR, parentheses, `c.f <op> value` (=, !=, <, <=, >, >=; value a @param, a
- * "string", a number, true or false), IS_STRING, IS_DEFINED, IS_NULL, IS_ARRAY (these four and the
- * comparison also on a dotted `c.a.b` or a dial `c.vis["f"]`), NOT, ARRAY_CONTAINS on a dotted path with
- * a 'string' or @param, `ARRAY_LENGTH(c.a.b) <op> value`, `EXISTS(SELECT VALUE p FROM p IN c.a WHERE p IN
- * (@x, ...))`, and on queries ORDER BY one field, maxItemCount and a continuation.
- */
+// An in-memory `updates` container, and an `evaluate` the `lists` tests use too, that run the SQL a
+// repository sends: a dropped clause stops being enforced. `evaluate` throws on any term it does not know.
 
 const cosmos = require('../../src/db/cosmos-nosql');
 
@@ -96,10 +84,11 @@ function evaluate(text, row, params) {
   if (ands.length > 1) return ands.every(part => evaluate(part, row, params));
   if (expr.startsWith('NOT ')) return !evaluate(expr.slice(4), row, params);
 
-  let m = new RegExp(`^IS_(STRING|BOOL|DEFINED|NULL|ARRAY)\\(${PATH}\\)$`).exec(expr);
+  let m = new RegExp(`^IS_(STRING|NUMBER|BOOL|DEFINED|NULL|ARRAY)\\(${PATH}\\)$`).exec(expr);
   if (m) {
     const value = pathOf(row, m[2]);
     if (m[1] === 'STRING') return typeof value === 'string';
+    if (m[1] === 'NUMBER') return typeof value === 'number';
     if (m[1] === 'BOOL') return typeof value === 'boolean';
     if (m[1] === 'DEFINED') return value !== undefined;
     if (m[1] === 'ARRAY') return Array.isArray(value);
@@ -122,7 +111,10 @@ function evaluate(text, row, params) {
     return Array.isArray(array) && array.some(item => wanted.includes(item));
   }
   m = new RegExp(`^${PATH} (=|!=|<=|>=|<|>) (\\S+)$`).exec(expr);
-  if (m) return compare(pathOf(row, m[1]), m[2], valueOf(m[3], params));
+  if (m) {
+    const right = m[3].startsWith('c.') ? pathOf(row, m[3].slice(2)) : valueOf(m[3], params);
+    return compare(pathOf(row, m[1]), m[2], right);
+  }
   throw new Error(`updates-store: cannot evaluate "${expr}"`);
 }
 
@@ -159,11 +151,8 @@ function apply(row, operations) {
 }
 
 /**
- * Mock the Cosmos calls the updates repository makes, over `rows`.
- *
- * `onQuery(store, items)` runs after a query has matched its rows and before it answers — the window
- * a row can change in between the timer listing it and claiming it. `pageSize` caps a page below
- * what was asked, as Cosmos may. `queries` records each query's spec and options.
+ * Mock the Cosmos calls the updates repository makes, over `rows`. `onQuery(store, items)` runs between
+ * match and answer, where a row can change between listing and claiming; `pageSize` caps a page.
  */
 function updatesStore(t, rows, { onQuery = null, pageSize = Infinity } = {}) {
   const store = new Map(rows.map(row => [String(row.id), { ...row }]));

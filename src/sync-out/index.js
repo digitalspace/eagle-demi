@@ -1,25 +1,31 @@
 'use strict';
 
-/**
- * Sync-out: DEMI-owned rows written to other systems, one queue message per consumer.
- *
- * A consumer is `{ name, enabled(), wants(row), send(row, { update }) }`. The message carries the
- * row's kind (`./kinds.js`) and ids only; the worker re-reads the row through the kind's repository,
- * so a redelivered or late message sends the current state. `syncVersion` is the version, raised by
- * every ENGAGE ingest write and every domain `writeRow`: a row whose `syncOut[name].sentVersion` is
- * at or past it is not sent again.
- */
+// Consumer: `{ name, enableSettings, enabled(), wants(row), send(row, { update }) }`. Messages hold kind and ids only;
+// late ones send the current row; `sentVersion` at `syncVersion` is not resent; `{ status: 'held' }` records nothing.
 
 const queues = require('../jobs/queue-client');
-const { kindOf, versionOf, DEFAULT_KIND } = require('./kinds');
+const { kindOf, versionOf, DEFAULT_KIND, COMMENT_PERIOD, DOCUMENT } = require('./kinds');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
 const settings = require('../config').syncOut;
 
-const consumers = [
-  require('./eagle')
-];
+// Keyed by kind: the comment period and document consumers are both named eagle.
+const CONSUMERS_BY_KIND = Object.freeze({
+  [COMMENT_PERIOD]: Object.freeze([require('./eagle')]),
+  [DOCUMENT]: Object.freeze([require('./eagle-document')])
+});
+const consumers = Object.freeze(Object.values(CONSUMERS_BY_KIND).flat());
+
+/** The consumers that send `kind`, one per name its registry entry lists; throws for a name with none here. */
+function consumersOf(kind) {
+  const own = CONSUMERS_BY_KIND[kind] || [];
+  return kindOf(kind).consumers.map((name) => {
+    const consumer = own.find(c => c.name === name);
+    if (!consumer) throw new Error(`sync-out kind ${kind} names consumer ${name}, which has no entry for that kind`);
+    return consumer;
+  });
+}
 
 /** First retry hides this long, doubling per attempt. host.json's hour-long default is the zip worker's. */
 const RETRY_VISIBILITY_SECONDS = 30;
@@ -38,8 +44,7 @@ async function send(message, options = undefined) {
  * reconcile re-send, which a delivery never drops as an already-failed redelivery.
  */
 async function enqueue(row, { repair = false, kind = DEFAULT_KIND } = {}) {
-  const names = kindOf(kind).consumers;
-  const wanted = consumers.filter(c => names.includes(c.name) && c.enabled() && c.wants(row));
+  const wanted = consumersOf(kind).filter(c => c.enabled() && c.wants(row));
   for (const consumer of wanted) {
     await send({
       kind, consumer: consumer.name, id: String(row.id), projectId: row.projectId ?? null, attempt: 1,
@@ -190,12 +195,8 @@ async function giveUp({ message, job, repo, consumer, row, version }, err) {
 }
 
 /**
- * One delivery. Earlier failures re-queue with a doubled delay and complete the original. The last
- * attempt never throws, wherever it failed: it records the failure and moves the message to the poison
- * queue itself, so the alert line is written exactly once.
- *
- * @param {object} [delivery] `attempt` is the message's `dequeueCount`, `maxAttempts` host.json's
- *   `maxDequeueCount`; api/index.js reads both.
+ * One delivery; `attempt` is the host's `dequeueCount`, `maxAttempts` host.json's `maxDequeueCount`. The last
+ * attempt never throws: it records the failure and parks the message itself, so the alert is written once.
  */
 async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {}) {
   const state = { message, job: null, repo: null, consumer: null, row: null, version: 0 };
@@ -204,9 +205,9 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
     const job = state.job = { ...parsed, attempt: Math.max(parsed.attempt, dequeueCount) };
 
     const kind = kindOf(job.kind);
-    const consumer = consumers.find(c => c.name === job.consumer);
-    if (!consumer) throw new Error(`sync-out has no consumer named ${job.consumer}`);
-    if (!kind.consumers.includes(consumer.name)) {
+    const consumer = consumersOf(job.kind).find(c => c.name === job.consumer);
+    if (!consumer) {
+      if (!consumers.some(c => c.name === job.consumer)) throw new Error(`sync-out has no consumer named ${job.consumer}`);
       throw new Error(`sync-out consumer ${job.consumer} does not send kind ${job.kind}`);
     }
     if (!consumer.enabled()) {
@@ -244,6 +245,10 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
       update: (mutate) => updateRow(repo, row.id, row.projectId, mutate)
     });
     const status = (result && result.status) || 'sent';
+    if (status === 'held') {
+      logger.info(`[sync-out] ${job.consumer} held ${job.id}, version ${version} left unsent`, job);
+      return { status };
+    }
     const { row: stored } = await recordOutcome(repo, consumer, row,
       { status, version, record: result && result.record, at: new Date().toISOString() });
     // A write landed while this one was sending, so what reached the consumer may be older than the row.
@@ -264,4 +269,4 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
   }
 }
 
-module.exports = { enqueue, enqueueQuietly, consumers, run, RETRY_VISIBILITY_SECONDS };
+module.exports = { enqueue, enqueueQuietly, consumers, consumersOf, run, updateRow, RETRY_VISIBILITY_SECONDS };

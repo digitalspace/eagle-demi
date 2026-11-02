@@ -1,20 +1,14 @@
 'use strict';
 
-/**
- * Lookups repository — Cosmos NoSQL.
- *
- * Container `lists`, partitioned by `/kind`: Eagle `List` rows and Eagle `Organization` rows in one
- * container, discriminated by `kind`. Two logical partitions is normally an anti-pattern; it is
- * correct here for the same reason as `boundaries` — a few thousand tiny rows whose only query is
- * "everything of this kind", so a container each would buy nothing.
- *
- * Neither kind is project data, so `visibilityFor` is called with a NULL partition field: role ACL
- * applies, project scope does not.
- */
+// `List` and `Organization` rows share one container, partitioned by `/kind`: a few thousand tiny
+// rows read a kind at a time. Neither is project data, so role ACL applies and project scope does not.
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll } = require('./_sql');
+const {
+  eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll, oneRowOf,
+  EAGLE_SYNC_PENDING
+} = require('./_sql');
 
 const CONTAINER = 'lists';
 const PARTITION_FIELD = 'kind';
@@ -23,14 +17,8 @@ const SCOPE_FIELD = null;
 
 const KINDS = Object.freeze({ LIST: 'List', ORGANIZATION: 'Organization' });
 
-/**
- * Order keys PER KIND. `type`, `item`, `legislation` and `listOrder` live on `List` rows only and
- * the Organization mirror writes none of them, so one shared allow-list would let
- * `?sortBy=listOrder` on Organizations emit an ORDER BY over a property those rows lack — which
- * drops every one of them (see `orderByFrom` in ./_sql). Every key here is an included path in the
- * `lists` container indexing policy (azure/modules/cosmos-nosql.bicep); an unindexed ORDER BY
- * cannot be served at all.
- */
+// Per kind: an ORDER BY on a field a kind's rows lack drops every row. Each key must be an
+// included path in the `lists` indexing policy (azure/modules/cosmos-nosql.bicep).
 const SORTABLE = Object.freeze({
   [KINDS.LIST]: ['name', 'type', 'listOrder'],
   [KINDS.ORGANIZATION]: ['name', 'companyType']
@@ -60,6 +48,27 @@ async function getById(access, id, kind) {
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
 async function readForWrite(id, kind) {
   return cosmos.readItem(CONTAINER, String(id), String(kind));
+}
+
+/**
+ * Rows of one kind whose `eagleId` field names the id, including one stored under it;
+ * callers read by id first.
+ */
+async function readForWriteByEagleId(eagleId, kind) {
+  const criteria = [eq(PARTITION_FIELD, String(kind), '@kind'), eq('eagleId', String(eagleId), '@eagleId')];
+  const { items } = await cosmos.query(CONTAINER, {
+    query: `SELECT * FROM c WHERE ${criteria.map(c => c.clause).join(' AND ')}`,
+    parameters: criteria.flatMap(c => c.params)
+  }, { partitionKey: String(kind) });
+  return oneRowOf(CONTAINER, eagleId, items);
+}
+
+/** Rows of one kind holding a version not yet sent to Eagle: the sync-out pending hook's list. */
+async function listSyncPending(kind) {
+  const { clause, params } = eq(PARTITION_FIELD, String(kind), '@kind');
+  return fetchAll(CONTAINER, {
+    query: `SELECT * FROM c WHERE ${clause} AND ${EAGLE_SYNC_PENDING}`, parameters: params
+  }, { partitionKey: String(kind) });
 }
 
 /**
@@ -137,10 +146,8 @@ async function countByKind(kind, access, opts = {}) {
 }
 
 /**
- * The native list contract's repository for one kind (the `cosmosKind` shape in
- * helpers/native-query.js), pinned to that kind's partition. The contract's `q` arrives as a
- * `CONTAINS(c.name, ...)` criterion, so name search needs nothing more here. By id is the point
- * read, so `/lists/:id` cannot answer an Organization row or the other way round.
+ * The native list contract's repository for one kind (`cosmosKind` in helpers/native-query.js),
+ * pinned to its partition, so `/lists/:id` cannot answer an Organization row or the reverse.
  */
 function nativeKind(kind) {
   const pinned = criteria => [eq(PARTITION_FIELD, String(kind), '@kind'), ...criteria];
@@ -176,11 +183,13 @@ module.exports = {
   SORTABLE,
   getById,
   readForWrite,
+  readForWriteByEagleId,
   listByIds,
   listOrganizationLabels,
   listByKind,
   listEveryOfKind,
   countByKind,
   nativeKind,
+  listSyncPending,
   upsert
 };

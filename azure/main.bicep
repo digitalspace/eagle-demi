@@ -350,6 +350,12 @@ param syncOutQueue string = ''
 @description('Turn on the Eagle consumer of the sync-out queue. Off until the cutover.')
 param syncOutEagleEnabled bool = false
 
+@description('Also send comment periods created in DEMI. Turn on only when eagle-api\'s POST honours the `_id` DEMI sends and answers a duplicate `_id` with 409.')
+param syncOutEagleNativeEnabled bool = false
+
+@description('Also send document edits and level changes to eagle-api, for documents that already hold an Eagle id. Off until the document cutover.')
+param syncOutEagleDocumentEnabled bool = false
+
 @description('eagle-api base the sync-out consumer writes to, e.g. https://eagle-test.apps.silver.devops.gov.bc.ca/api. Distinct from eagleApiBase, the public read path.')
 param eagleProtectedApiBase string = ''
 
@@ -844,6 +850,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     searchDefinitionsQueue: searchDefinitionsQueue
     syncOutQueue: syncOutQueue
     syncOutEagleEnabled: syncOutEagleEnabled
+    syncOutEagleNativeEnabled: syncOutEagleNativeEnabled
+    syncOutEagleDocumentEnabled: syncOutEagleDocumentEnabled
     eagleProtectedApiBase: eagleProtectedApiBase
     syncOutEagleClientSecretUri: syncOutEagleClientSecretUri
     eagleEngageMilestone: eagleEngageMilestone

@@ -14,7 +14,7 @@ const {
 } = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED
+  upsertWithEtag, createItem, readForWriteIn, NOT_DELETED, EAGLE_SYNC_PENDING, upsertItem, oneRowOf
 } = require('./_sql');
 // The fields the chunks carry a copy of, read from the one list that owns them.
 const { CHUNK_PARENT_FIELDS } = require('./chunks');
@@ -312,6 +312,22 @@ async function getById(access, id, projectId, { includeUnscanned = false } = {})
  */
 async function readForWrite(id, projectId) {
   return readForWriteIn(CONTAINER, id, projectId, PARTITION_FIELD);
+}
+
+/**
+ * The stored row whose `eagleId` names this id, unfiltered like `readForWrite`: in the partition first,
+ * then across partitions. Throws `DUPLICATE_ID` when two rows name it.
+ */
+async function readForWriteByEagleId(eagleId, projectId) {
+  const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
+  // Only DEMI-owned rows carry a foreign eagleId; the filter lets the indexed path narrow the scan.
+  const spec = { query: `SELECT * FROM c WHERE ${clause} AND c.sourceSystem = 'demi'`, parameters: params };
+  if (projectId != null) {
+    const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
+    if (items.length) return oneRowOf(CONTAINER, eagleId, items, PARTITION_FIELD);
+  }
+  const { items } = await cosmos.query(CONTAINER, spec);
+  return oneRowOf(CONTAINER, eagleId, items, PARTITION_FIELD);
 }
 
 /** Drop a moved row's owed-delete marker once the old partition's copy is gone. */
@@ -984,6 +1000,22 @@ async function listByIdsUnscoped(access, ids, select) {
   return items;
 }
 
+/**
+ * Rows, across partitions, tied to an Eagle id and holding a version not yet sent to Eagle: the
+ * sync-out pending hook's list. A row with no Eagle id is never sent, so it is never pending.
+ */
+async function listSyncPending() {
+  const tied = isDefinedAndNotNull('eagleId').clause;
+  return fetchAll(CONTAINER, {
+    query: `SELECT * FROM c WHERE c.sourceSystem = 'demi' AND ${tied} AND ${EAGLE_SYNC_PENDING}`
+  });
+}
+
+/** Sync-out's `repo.upsert(item, existing)`: guarded on the stored row's `_etag`, which `upsert` above never reads. */
+async function upsertForSync(item, existing) {
+  return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
+}
+
 module.exports = {
   CONTAINER,
   UPDATE_SOURCE,
@@ -1005,6 +1037,7 @@ module.exports = {
   countFeatured,
   getById,
   readForWrite,
+  readForWriteByEagleId,
   clearMovedFrom,
   readStored,
   listByIds,
@@ -1031,5 +1064,7 @@ module.exports = {
   bulkUpsertForProject,
   patchExtraction,
   setPublished,
+  listSyncPending,
+  upsertForSync,
   deleteById
 };

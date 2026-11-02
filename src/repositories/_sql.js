@@ -41,6 +41,10 @@ function isDefinedAndNotNull(field, alias = 'c') {
  */
 const NOT_DELETED = { clause: 'NOT (IS_BOOL(c.isDeleted) AND c.isDeleted = true)', params: [] };
 
+/** A row holding a version Eagle, its only sync-out consumer, has not been sent. */
+const EAGLE_SYNC_PENDING = 'c.syncVersion > 0 AND ' +
+  '(NOT IS_NUMBER(c.syncOut.eagle.sentVersion) OR c.syncVersion > c.syncOut.eagle.sentVersion)';
+
 /** A native repository (`cosmosKind` shape) whose list and count always carry `fixed` as well. */
 function withCriteria(kind, fixed) {
   const where = criteria => [...fixed, ...(criteria || [])];
@@ -377,6 +381,7 @@ async function readPage(container, spec, { pageNum, pageSize, partitionKey } = {
 
 module.exports = {
   NOT_DELETED,
+  EAGLE_SYNC_PENDING,
   withCriteria,
   eq,
   inList,

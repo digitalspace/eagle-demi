@@ -21,4 +21,7 @@ const DEMI_OWNED_FIELDS = [...EXTRACTION_FIELDS, 'pdfTitle', 'levelHeldAt', ...S
 
 const OWNERS = Object.freeze({ demi: DEMI_OWNED_FIELDS });
 
-module.exports = { EXTRACTION_FIELDS, DEMI_OWNED_FIELDS, OWNERS };
+/** A row DEMI owns: sync-out sends it to Eagle, and Eagle's echo writes only its raw copy. */
+const ownedOutsideEagle = row => Boolean(row) && row.sourceSystem === 'demi';
+
+module.exports = { EXTRACTION_FIELDS, DEMI_OWNED_FIELDS, OWNERS, ownedOutsideEagle };

@@ -16,6 +16,7 @@ const cosmos = require('../../src/db/cosmos-nosql');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
 const documents = require('../../src/repositories/documents');
+const lists = require('../../src/repositories/lists');
 const projects = require('../../src/repositories/projects');
 const { logger } = require('../../src/utils/logger');
 
@@ -130,6 +131,24 @@ test('readForWrite on the parent-partitioned mirrors', async (t) => {
       [{ name: '@eagleId', value: '588511d0aaecd9001b825604' }]);
   });
 
+  await t.test('an organization by Eagle id is one partition, with no ACL predicate', async () => {
+    const calls = [];
+    t.mock.method(cosmos, 'query', async (container, spec, options) => {
+      calls.push({ container, spec, options });
+      return { items: [{ id: 'native-1', kind: 'Organization', eagleId: '58850f69aaecd9001b8085cc' }] };
+    });
+
+    const row = await lists.readForWriteByEagleId('58850f69aaecd9001b8085cc', lists.KINDS.ORGANIZATION);
+
+    assert.strictEqual(row.id, 'native-1');
+    assert.strictEqual(calls[0].container, 'lists');
+    assert.deepStrictEqual(calls[0].options, { partitionKey: 'Organization' });
+    assert.doesNotMatch(calls[0].spec.query, /read/);
+    assert.deepStrictEqual(calls[0].spec.parameters, [
+      { name: '@kind', value: 'Organization' }, { name: '@eagleId', value: '58850f69aaecd9001b8085cc' }
+    ]);
+  });
+
   const EAGLE_ID = '588511d0aaecd9001b825604';
   const projectRows = (t, items) =>
     t.mock.method(cosmos, 'query', async () => ({ items: items.map(row => ({ ...row })) }));
@@ -210,6 +229,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'scripts/seed-public-reads.js',
     // Sync-out writes `syncOut` and `eagleId` back onto the row it sends, sealed or not.
     'sync-out/index.js',
+    // The document kind's repository as the sync-out worker reads it.
+    'sync-out/kinds.js',
     // Refuses to adopt an Eagle period DEMI already holds as an Eagle-owned row, whatever its level.
     'sync-out/eagle.js'
   ].map(file => path.join(...file.split('/'))));

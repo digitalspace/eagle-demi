@@ -633,6 +633,20 @@ test('sync-out', async (t) => {
     assert.strictEqual(store.row.syncOut.eagle.sentVersion, VERSION);
   });
 
+  await t.test('a send the consumer holds writes nothing, so the version stays owed', async (tt) => {
+    const store = wireStore(tt, engageRow({
+      eagleId: 'cp-9', syncOut: { eagle: { sentVersion: VERSION - 1, status: 'sent' } }
+    }));
+    const queued = wireQueue(tt);
+    tt.mock.method(eagle, 'send', async () => ({ status: 'held' }));
+
+    assert.deepStrictEqual(await run(message()), { status: 'held' });
+
+    assert.strictEqual(store.writes, 0);
+    assert.strictEqual(store.row.syncOut.eagle.sentVersion, VERSION - 1);
+    assert.deepStrictEqual(queued, [], 'no resend queued');
+  });
+
   await t.test('a slug-only edit, same engagePushedAt but a new syncVersion, is sent', async (tt) => {
     wireStore(tt, engageRow({
       eagleId: 'cp-9', syncOut: { eagle: { sentVersion: VERSION - 1, status: 'sent' } }
@@ -729,10 +743,9 @@ test('sync-out', async (t) => {
 
   await t.test('every kind names only consumers the engine has, and comment periods reconcile through reconcile-engage',
     async (tt) => {
-      const names = syncOut.consumers.map(c => c.name);
       for (const [name, kind] of Object.entries(KINDS)) {
         assert.ok(kind.consumers.length > 0, `${name} has a consumer`);
-        assert.deepStrictEqual(kind.consumers.filter(c => !names.includes(c)), [], `${name} names a missing consumer`);
+        assert.deepStrictEqual(syncOut.consumersOf(name).map(c => c.name), kind.consumers, `${name} has each consumer it names`);
       }
       tt.mock.method(reconcileEngage, 'run', async (options) => ({ ran: options }));
 
