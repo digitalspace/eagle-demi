@@ -101,9 +101,9 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 
 - `writeRow` raises `syncVersion` on every write, one past the stored row it rebuilt from (`nextSyncVersion` in `src/sync-out/kinds.js`, which the ENGAGE ingest uses too). It does not queue anything.
 - `src/sync-out/kinds.js` maps each kind to its repository, the names of the consumers that send it, and its reconcile hook. Four kinds are registered: `commentPeriod`, `document`, `organization` and `project`. The `reconcileEngage` timer in `api/index.js` runs every kind's hook on `RECONCILE_ENGAGE_SCHEDULE`.
-- Every kind reconciles through the pending hook in `src/sync-out/pending.js`. The hook lists the kind's rows holding a version a consumer has not sent, a create claim whose lease lapsed included.
-- `commentPeriod` first runs the ENGAGE checks in `src/scripts/reconcile-engage.js`, then the pending hook, which alone sees DEMI-native periods. A row the ENGAGE pass re-queued is left out of the pending pass, so it gets one message.
-- With `{ repair: true }` the hook queues each again as a repair message of that kind (`node src/scripts/sync-out-pending.js --kind document --repair`). The timer only lists them.
+- Every kind reconciles through the pending hook in `src/sync-out/pending.js`. The hook lists the kind's rows holding a version a consumer has not sent, a send claim (`creating`) whose lease lapsed included.
+- `commentPeriod` first runs the ENGAGE checks in `src/scripts/reconcile-engage.js`, then the pending hook, which alone sees DEMI-native periods. When the ENGAGE pass throws, the hook logs a warning and runs the pending pass anyway. A row both passes queue gets two messages; the worker skips the second as current, so the row is sent at most once.
+- With `{ repair: true }` the hook queues each again as a repair message of that kind (`node src/scripts/sync-out-pending.js --kind document --repair`, which runs the kind's hook, so `--kind commentPeriod` runs the ENGAGE checks too). The timer only lists them.
 - Every kind has a consumer named `eagle`, so `index.js` keeps a consumer list per kind and a message finds its consumer through its `kind`.
 - Each kind except `commentPeriod` sends only when `SYNC_OUT_EAGLE_ENABLED` and its own switch are both `true`. Every switch is off by default.
 
@@ -205,7 +205,7 @@ Rules:
 Ownership per phase:
 - Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:491-494` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`), which has no caller until F1 maps `id` to `_id`.
 - Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/ownership/project.js`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `src/ownership/project.js:111-114` (the `PUT_IGNORED_FIELDS` block) and remove the dead pins-shape branch in `carryEagleOnlyFields` (`src/merge/project.js`) and its tests (`test/merge/project.test.js`).
-- Sync-out: none. Pins are not synced to eagle-api. After the Flip, eagle-admin and eagle-public read and write pins on DEMI's project, and on eagle-api only the pin routes (`api/controllers/pins.js`, retired in R2) use `pins` and `pinsRead`, so no Eagle reader and no eagle-api write needs them. `src/sync-out/kinds.js` registers no pins kind.
+- Sync-out: none. No client still reads pins from eagle-api: eagle-admin reads them from DEMI's project (`pins-list.component.ts:117-119` on `origin/develop`), and so does eagle-public (`api.ts:277-280`). After the Flip, eagle-admin writes them through the DEMI project PUT as well.
 
 Open before build:
 - (a) Resolved: the label read exists as `listOrganizationLabels` in `src/repositories/lists.js`, selecting `c.id, c.name, c.province` with key `id`; the domain maps `id` to `_id` in F1; no caller until F1.

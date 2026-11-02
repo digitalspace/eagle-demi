@@ -36,6 +36,9 @@ function nativeRow(entry) {
 }
 
 const lapsedCreate = () => nativeRow({ status: 'creating', claim: 'c-1', claimedAt: minutesAgo(10) });
+/** `row` holding a send claim whose lease lapsed. */
+const lapsed = row =>
+  ({ ...row, syncOut: { eagle: { ...row.syncOut.eagle, status: 'creating', claim: 'c-1', claimedAt: minutesAgo(10) } } });
 
 function harness(rows, { wants = () => true, enabled = () => true, answer = async () => [eagle.name] } = {}) {
   const queued = [];
@@ -158,13 +161,14 @@ test('depsFor wires a kind to its repository, its consumers and the sync-out enq
   assert.deepStrictEqual(depsFor(DOCUMENT).consumers, [eagleDocument], 'not the comment period consumer of the same name');
 });
 
-test('the document hook re-queues only rows owed a send, and names both flags when the document one is off', async (t) => {
+test('the document hook re-queues only rows owed a send, a lapsed send claim included, and names both flags when the document one is off', async (t) => {
   useEnv(t, { SYNC_OUT_EAGLE_ENABLED: 'true', SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true' });
   const docRow = (id, sentVersion) => ({
     id, projectId: '1234', sourceSystem: 'demi', eagleId: `eagle-${id}`, syncVersion: 3,
     syncOut: { eagle: { status: 'sent', sentVersion } }
   });
-  t.mock.method(documents, 'listSyncPending', async () => [docRow('owed', 2), docRow('current', 3)]);
+  t.mock.method(documents, 'listSyncPending', async () =>
+    [docRow('owed', 2), docRow('current', 3), lapsed(docRow('lapsed', 2))]);
   const sent = [];
   t.mock.method(queues, 'queueClientFor', () => ({ sendMessage: async (body) => { sent.push(JSON.parse(body)); } }));
   const lines = [];
@@ -172,14 +176,15 @@ test('the document hook re-queues only rows owed a send, and names both flags wh
 
   const report = await kindOf(DOCUMENT).reconcile({ repair: true, log });
 
-  assert.deepStrictEqual(sent, [{ kind: DOCUMENT, consumer: 'eagle', id: 'owed', projectId: '1234', attempt: 1, repair: true }]);
+  assert.deepStrictEqual(sent, ['owed', 'lapsed'].map(id =>
+    ({ kind: DOCUMENT, consumer: 'eagle', id, projectId: '1234', attempt: 1, repair: true })));
   assert.deepStrictEqual({ listed: report.listed, queued: report.queued, failed: report.failed },
-    { listed: ['owed'], queued: 1, failed: [] });
+    { listed: ['owed', 'lapsed'], queued: 2, failed: [] });
 
   delete process.env.SYNC_OUT_EAGLE_DOCUMENT_ENABLED;
   await kindOf(DOCUMENT).reconcile({ repair: true, log });
   assert.match(lines[0], /needs SYNC_OUT_EAGLE_ENABLED and SYNC_OUT_EAGLE_DOCUMENT_ENABLED true/);
-  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent.length, 2);
 });
 
 for (const { kind, flag, repo, row } of [
@@ -190,12 +195,12 @@ for (const { kind, flag, repo, row } of [
     row: (id, sentVersion) => ({ id, sourceSystem: 'track', sources: {}, eagleId: `e-${id}`,
       syncVersion: 3, syncOut: { eagle: { status: 'sent', sentVersion, mintedId: `e-${id}` } } }) }
 ]) {
-  test(`the ${kind} hook re-queues only rows owed a send, and names its flag when it is off`, async (t) => {
+  test(`the ${kind} hook re-queues only rows owed a send, a lapsed send claim included, and names its flag when it is off`, async (t) => {
     useEnv(t, { SYNC_OUT_EAGLE_ENABLED: 'true', [flag]: 'true' });
     const listedWith = [];
     t.mock.method(repo, 'listSyncPending', async (...args) => {
       listedWith.push(args);
-      return [row('owed', 2), row('current', 3)];
+      return [row('owed', 2), row('current', 3), lapsed(row('lapsed', 2))];
     });
     const sent = [];
     t.mock.method(queues, 'queueClientFor', () => ({ sendMessage: async (body) => { sent.push(JSON.parse(body)); } }));
@@ -205,8 +210,8 @@ for (const { kind, flag, repo, row } of [
     const report = await kindOf(kind).reconcile({ repair: true, log });
 
     assert.deepStrictEqual(listedWith, [kind === ORGANIZATION ? ['Organization'] : []]);
-    assert.deepStrictEqual(sent.map(m => [m.kind, m.id]), [[kind, 'owed']]);
-    assert.deepStrictEqual({ listed: report.listed, queued: report.queued }, { listed: ['owed'], queued: 1 });
+    assert.deepStrictEqual(sent.map(m => [m.kind, m.id, m.repair]), [[kind, 'owed', true], [kind, 'lapsed', true]]);
+    assert.deepStrictEqual({ listed: report.listed, queued: report.queued }, { listed: ['owed', 'lapsed'], queued: 2 });
 
     delete process.env[flag];
     await kindOf(kind).reconcile({ repair: true, log });
@@ -218,14 +223,21 @@ test('the CLI run fails when a row was not re-queued', async (t) => {
   t.mock.method(logger, 'info', () => {});
   t.mock.method(logger, 'warn', () => {});
   const h = harness([lapsedCreate()], { enabled: () => false });
-  await assert.rejects(run({ kind: KIND, repair: true }, h.deps), /1 row\(s\) not re-queued: cp-native-1/);
+  await assert.rejects(run({ kind: KIND, repair: true }, (o) => reconcile(o, h.deps)),
+    /1 row\(s\) not re-queued: cp-native-1/);
 });
 
 test('the CLI run fails when enqueue sent a row to no consumer', async (t) => {
   t.mock.method(logger, 'info', () => {});
   t.mock.method(logger, 'warn', () => {});
   const h = harness([lapsedCreate()], { answer: async () => [] });
-  await assert.rejects(run({ kind: KIND, repair: true }, h.deps), /1 row\(s\) not re-queued: cp-native-1/);
+  await assert.rejects(run({ kind: KIND, repair: true }, (o) => reconcile(o, h.deps)),
+    /1 row\(s\) not re-queued: cp-native-1/);
+});
+
+test('the CLI run fails when the ENGAGE checks threw', async () => {
+  await assert.rejects(run({ kind: KIND, repair: true }, async () => ({ failed: [], engage: { error: 'engage down' } })),
+    /ENGAGE checks failed: engage down/);
 });
 
 test('the CLI refuses a kind sync-out does not register', () => {

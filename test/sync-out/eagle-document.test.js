@@ -141,7 +141,11 @@ test('sync-out of documents to Eagle', async (t) => {
         echo = mockRes();
         await documentController.upsertFromEagle({
           params: { eagleId: EAGLE_ID }, query: {}, user: STAFF,
-          body: { doc: { ...body, _id: EAGLE_ID, project: PROJECT_EAGLE_ID, read: PUBLIC_ACL }, pushedAt: Date.now() }
+          // Eagle's own title and level, so a mirror that copied them over DEMI's would show.
+          body: {
+            doc: { ...body, _id: EAGLE_ID, project: PROJECT_EAGLE_ID, displayName: 'Eagle title', read: STAFF_ACL },
+            pushedAt: Date.now()
+          }
         }, echo);
         echoed = rowOf();
         return {};
@@ -162,9 +166,8 @@ test('sync-out of documents to Eagle', async (t) => {
     assert.strictEqual(rowOf().syncOut.eagle.sentVersion, 2);
     assert.deepStrictEqual(queued, [], 'the echo queues nothing');
 
-    const again = wireEagle(tt, {});
-    assert.deepStrictEqual(await syncOut.run(message), { skipped: 'current' });
-    assert.deepStrictEqual(again, [], 'no second send');
+    wireEagle(tt, {});
+    assert.deepStrictEqual(await syncOut.run(message), { skipped: 'current' }, 'no second send');
   });
 
   await t.test('a document message runs through the document consumer and records the sent version', async (tt) => {

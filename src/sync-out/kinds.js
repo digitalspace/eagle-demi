@@ -8,6 +8,7 @@ const documents = require('../repositories/documents');
 const lists = require('../repositories/lists');
 const projects = require('../repositories/projects');
 const pending = require('./pending');
+const { logger } = require('../utils/logger');
 
 const COMMENT_PERIOD = 'commentPeriod';
 const DOCUMENT = 'document';
@@ -15,24 +16,24 @@ const ORGANIZATION = 'organization';
 const PROJECT = 'project';
 
 /**
- * The ENGAGE checks, then the pending hook, which alone sees native rows and lapsed create claims.
- * Resolves to the pending report with the ENGAGE report under `engage`.
+ * The ENGAGE checks, then the pending hook, which alone sees native rows and lapsed send claims. Resolves to the
+ * pending report with the ENGAGE report, or `{ error }` when that pass threw, under `engage`.
  */
 async function reconcileCommentPeriods(options = {}) {
-  // Required on call: the script requires sync-out itself.
-  const engage = await require('../scripts/reconcile-engage').run(options);
-  const deps = pending.depsFor(COMMENT_PERIOD);
-  // A row the ENGAGE pass re-queued reads as unsent now; a second message would only be skipped as current.
-  const requeued = new Set(options.repair
-    ? [...engage.neverSynced, ...engage.missingInEagle, ...engage.drift].map(f => f.id) : []);
-  const repo = {
-    listSyncPending: async () => (await deps.repo.listSyncPending()).filter(row => !requeued.has(String(row.id)))
-  };
-  return { ...(await pending.reconcile(options, { ...deps, repo })), engage };
+  let engage;
+  try {
+    // Required on call: the script requires sync-out itself.
+    engage = await require('../scripts/reconcile-engage').run(options);
+  } catch (err) {
+    engage = { error: err.message };
+    logger.warn('[sync-out pending] commentPeriod: ENGAGE checks failed, pending pass runs anyway',
+      { error: err.message, stack: err.stack });
+  }
+  // A row both passes queue gets a second message, which the worker skips as current.
+  return { ...(await pending.reconcile(options, pending.depsFor(COMMENT_PERIOD))), engage };
 }
 
-// No pins kind: after F1 eagle-admin and eagle-public read and write pins on DEMI's project; on eagle-api only the
-// pin routes eagle-admin stops calling use `pins` and `pinsRead`.
+// No pins kind: no client still reads pins from eagle-api (docs/eagle-api-port.md, Pins, Sync-out).
 const KINDS = Object.freeze({
   // eagle-admin writes comments through eagle-api until F3; that handler takes the period's `commentIdCount`
   // (comment.js getNextCommentIdCount) and comment reads gate on the period (helpers/parentRead.js).
