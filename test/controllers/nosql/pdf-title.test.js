@@ -366,6 +366,40 @@ test('pdf title lease API', async (t) => {
     assert.equal(w.row().pdfTitle.lease, undefined);
   });
 
+  // The store's copy error reached the log with an empty message.
+  const copyFails = (t) => t.mock.method(storage, 'copyObject', async () => { throw Object.assign(new Error(''), { code: 'NoSuchKey' }); });
+
+  await t.test('a failed backup copy releases the lease, counts, logs the error code and offers the row again', async (t) => {
+    const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, backupFailures: 10 } }] });
+    copyFails(t);
+    const errors = t.mock.method(logger, 'error', () => {});
+    const res = await lease();
+    assert.equal(res.status, 503);
+    assert.equal(res.body.reason, 'backup-failed');
+    assert.equal(w.row().pdfTitle.lease, undefined);
+    assert.equal(w.row().pdfTitle.backupFailures, 11);
+    assert.equal(errors.mock.calls[0].arguments[1].code, 'NoSuchKey');
+    assert.equal((await pending()).length, 1, 'offered again');
+  });
+
+  await t.test('the twelfth failed backup copy in a row parks the row for review', async (t) => {
+    const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, backupFailures: 11 } }] });
+    copyFails(t);
+    const res = await lease();
+    assert.equal(res.status, 409);
+    assert.equal(res.body.reason, 'backup-failed');
+    assert.equal(w.row().pdfTitle.status, 'needs-review');
+    assert.equal(w.row().pdfTitle.reason, 'backup-failed');
+    assert.equal((await pending()).length, 0, 'not offered again');
+    assert.equal((await lease()).body.reason, 'needs-review');
+  });
+
+  await t.test('a backup copy that works clears the count of failed ones', async (t) => {
+    const w = world(t, { rows: [{ ...DOC, pdfTitle: { sourceKey: KEY, backupFailures: 11 } }] });
+    assert.equal((await lease()).status, 201);
+    assert.equal(w.row().pdfTitle.backupFailures, undefined);
+  });
+
   await t.test('commit refusals', async (t) => {
     await t.test('the source changed: 409, nothing signed, backup deleted', async (t) => {
       const w = world(t);

@@ -2804,13 +2804,17 @@ paths:
             `not-from-eagle`, `sealed`, `not-pdf`, `no-file`, `not-public`, `no-public-name`,
             `current`, `no-original`, `not-titled`, `no-project`, `no-object`, `record-mismatch`,
             `empty`, `over-cap`, `shared-key`, `orphan-backup-differs`, `source-changed`,
-            `backup-unversioned` (a title lease whose backup copy has no version), or a
-            backup gate reason (`no-backup`, `size-mismatch`, `md5-mismatch`, `not-archive`,
-            `backup-unconfigured`).
+            `backup-unversioned` (a title lease whose backup copy has no version),
+            `backup-failed` (the backup copy failed too often in a row; the row is now
+            `needs-review`), or a backup gate reason (`no-backup`, `size-mismatch`,
+            `md5-mismatch`, `not-archive`, `backup-unconfigured`).
         '412':
           description: Another worker leased the document first (`lease-race`).
         '503':
-          description: The backup copy failed and the lease was released, or an unsupported store.
+          description: >-
+            The backup copy failed and the lease was released (`backup-failed`; once failures in
+            a row reach the limit the answer is 409), the lease could not be completed
+            (`lease-failed`), or an unsupported store (`backend-unsupported`).
 
   /api/documents/{id}/pdf-title/commit:
     post:
