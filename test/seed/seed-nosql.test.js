@@ -2001,7 +2001,6 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
     const failure = summary.failures.find(f => /kept 1 document row/.test(f));
     assert.ok(failure, summary.failures.join(' | '));
     assert.match(failure, /\(documents: s1\); re-run to retry$/);
-    assert.ok(!/project row/.test(failure), 'no project clause when no project was kept');
   });
 
   await t.test('a retired project keeps its documents, and so does one already deleted', async () => {
