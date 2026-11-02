@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * In-memory `documents` and `projects` containers for the Eagle mirror's existence reads.
+ * In-memory `documents`, `projects` and `lists` containers for the Eagle mirror's existence reads.
  *
  * The one predicate it evaluates is the seal exclusion every ACL-gated read carries,
  * `NOT ARRAY_CONTAINS(c.read, '<sealed>')`, with Cosmos semantics: on a row with no `read[]` the
@@ -12,8 +12,8 @@
 
 const cosmos = require('../../src/db/cosmos-nosql');
 
-const PARTITION = { documents: 'projectId', projects: 'id' };
-const FIELD_OF_PARAM = { '@id': 'id', '@eagleId': 'eagleId', '@projectId': 'projectId' };
+const PARTITION = { documents: 'projectId', projects: 'id', lists: 'kind' };
+const FIELD_OF_PARAM = { '@id': 'id', '@eagleId': 'eagleId', '@projectId': 'projectId', '@kind': 'kind' };
 
 const failure = (code, message) => Object.assign(new Error(message), { code });
 
@@ -82,6 +82,15 @@ function mirrorStore(t, rows) {
     if (hit) hit.row = row;
     else stored.push({ container, row });
     return { ...row };
+  });
+
+  t.mock.method(cosmos, 'replace', async (container, id, pk, item, etag) => {
+    writes.push({ op: 'replace', container, item, etag });
+    const hit = find(container, { id, [PARTITION[container]]: pk });
+    if (!hit) throw failure(404, 'not found');
+    if (etag && hit.row._etag !== etag) throw failure(412, 'precondition failed');
+    hit.row = stamp(item);
+    return { ...hit.row };
   });
 
   t.mock.method(cosmos, 'remove', async (container, id, pk, { etag } = {}) => {

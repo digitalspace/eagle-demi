@@ -885,6 +885,7 @@ async function runCascade(saved, eagleId, options) {
   if (failure) await markCascadePending(saved, eagleId);
   return failure;
 }
+exports.isNativeProject = isNativeProject;
 exports.runCascade = runCascade;
 exports.visibilityMoved = visibilityMoved;
 

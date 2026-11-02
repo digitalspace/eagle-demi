@@ -15,10 +15,14 @@
 
 const commentPeriods = require('../repositories/comment-periods');
 const documents = require('../repositories/documents');
+const lists = require('../repositories/lists');
+const projects = require('../repositories/projects');
 const pending = require('./pending');
 
 const COMMENT_PERIOD = 'commentPeriod';
 const DOCUMENT = 'document';
+const ORGANIZATION = 'organization';
+const PROJECT = 'project';
 
 const KINDS = Object.freeze({
   [COMMENT_PERIOD]: Object.freeze({
@@ -36,6 +40,26 @@ const KINDS = Object.freeze({
     }),
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(DOCUMENT))
+  }),
+  [ORGANIZATION]: Object.freeze({
+    // `lists` is partitioned on kind, so the read names it; a message's null projectId would miss the row.
+    repo: Object.freeze({
+      readForWrite: (id) => lists.readForWrite(id, lists.KINDS.ORGANIZATION),
+      listSyncPending: () => lists.listSyncPending(lists.KINDS.ORGANIZATION),
+      upsert: (item, existing) => lists.upsert(item, existing)
+    }),
+    consumers: Object.freeze(['eagle']),
+    reconcile: (options) => pending.reconcile(options, pending.depsFor(ORGANIZATION))
+  }),
+  [PROJECT]: Object.freeze({
+    repo: Object.freeze({
+      readForWrite: (id) => projects.readForWrite(id),
+      listSyncPending: () => projects.listSyncPending(),
+      // Guarded on the stored row's etag, or a create, so two deliveries cannot both take the create claim.
+      upsert: (item, existing) => projects.upsert(item, existing ? { etag: existing._etag } : { create: true })
+    }),
+    consumers: Object.freeze(['eagle']),
+    reconcile: (options) => pending.reconcile(options, pending.depsFor(PROJECT))
   })
 });
 
@@ -54,4 +78,4 @@ function kindOf(name) {
   return KINDS[name];
 }
 
-module.exports = { KINDS, COMMENT_PERIOD, DOCUMENT, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion };
+module.exports = { KINDS, COMMENT_PERIOD, DOCUMENT, ORGANIZATION, PROJECT, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion };
