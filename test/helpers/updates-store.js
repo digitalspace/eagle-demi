@@ -1,7 +1,7 @@
 'use strict';
 
-// An in-memory `updates` container, and an `evaluate` the `lists` tests use too, that run the SQL a
-// repository sends: a dropped clause stops being enforced. `evaluate` throws on any term it does not know.
+// An in-memory `updates` container, plus `evaluate` and `fakeWhereQuery` for other tests, that run the
+// SQL a repository sends: a dropped clause stops being enforced. `evaluate` throws on unknown terms.
 
 const cosmos = require('../../src/db/cosmos-nosql');
 
@@ -134,7 +134,7 @@ function conditionHolds(row, condition) {
 function answer(rows, spec) {
   const m = /^SELECT .+? FROM c WHERE (.+?)(?: ORDER BY c\.(\w+) (ASC|DESC))?$/s.exec(spec.query);
   if (!m) throw new Error(`updates-store: unknown query ${spec.query}`);
-  const params = Object.fromEntries((spec.parameters || []).map(p => [p.name, p.value]));
+  const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
   let matched = rows.filter(row => evaluate(m[1], row, params));
   if (m[2]) {
     const field = m[2];
@@ -143,6 +143,14 @@ function answer(rows, spec) {
       .sort((a, b) => (a[field] < b[field] ? -sign : a[field] > b[field] ? sign : 0));
   }
   return matched;
+}
+
+/** Mock `cosmos.query` to answer each `SELECT * FROM c WHERE` from `rows` by evaluating its SQL and parameters. */
+function fakeWhereQuery(t, rows) {
+  return t.mock.method(cosmos, 'query', async (container, spec) => {
+    cosmos.assertQuerySpec(spec, container);
+    return { items: answer(rows, spec) };
+  });
 }
 
 function apply(row, operations) {
@@ -174,6 +182,7 @@ function updatesStore(t, rows, { onQuery = null, pageSize = Infinity } = {}) {
     return { ...next };
   });
   t.mock.method(cosmos, 'query', async (container, spec, options = {}) => {
+    cosmos.assertQuerySpec(spec, container);
     queries.push({ spec, options });
     const matched = answer([...store.values()].map(row => ({ ...row })), spec);
     const offset = Number(options.continuationToken || 0);
@@ -216,4 +225,4 @@ function updatesStore(t, rows, { onQuery = null, pageSize = Infinity } = {}) {
   return { store, patches, queries, writes, row: (id) => store.get(String(id)) };
 }
 
-module.exports = { updatesStore, evaluate };
+module.exports = { updatesStore, evaluate, fakeWhereQuery };

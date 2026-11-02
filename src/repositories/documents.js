@@ -1012,7 +1012,8 @@ async function listSyncPending() {
   const select = SYNC_PENDING_FIELDS.map(field => `c.${field}`).join(', ');
   const neverSent = `(NOT IS_NUMBER(c.syncOut.eagle.sentVersion) AND (NOT ${tied} OR c.syncOut.eagle.mintedId = c.eagleId))`;
   return fetchAll(CONTAINER, {
-    query: `SELECT ${select} FROM c WHERE c.sourceSystem = 'demi' AND (${neverSent} OR (${EAGLE_SYNC_PENDING}))`
+    query: `SELECT ${select} FROM c WHERE c.sourceSystem = 'demi' AND (${neverSent} OR (${EAGLE_SYNC_PENDING}))`,
+    parameters: []
   });
 }
 

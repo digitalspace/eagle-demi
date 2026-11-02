@@ -128,12 +128,12 @@ const NATIVE_PROJECT = '(NOT IS_DEFINED(c.sources.track) OR IS_NULL(c.sources.tr
 
 /** Every native row, unfiltered, for the seeder: it keeps these whole, and one it missed would be rebuilt from Track. */
 async function listNative() {
-  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT}` });
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT}`, parameters: [] });
 }
 
 /** Native rows whose `syncVersion` the Eagle sync-out has not sent, across partitions. For `src/sync-out/pending.js` only. */
 async function listSyncPending() {
-  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT} AND ${EAGLE_SYNC_PENDING}` });
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT} AND ${EAGLE_SYNC_PENDING}`, parameters: [] });
 }
 
 /**

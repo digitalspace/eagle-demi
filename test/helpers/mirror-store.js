@@ -33,7 +33,7 @@ function applyPatch(row, operations) {
 }
 
 function matches(row, spec) {
-  for (const { name, value } of spec.parameters || []) {
+  for (const { name, value } of spec.parameters) {
     if (!(name in FIELD_OF_PARAM)) throw new Error(`mirror-store: unknown parameter ${name}`);
     if (String(row[FIELD_OF_PARAM[name]]) !== String(value)) return false;
   }
@@ -59,9 +59,12 @@ function mirrorStore(t, rows) {
     const hit = find(container, { id, [PARTITION[container]]: pk });
     return hit ? { ...hit.row } : null;
   });
-  t.mock.method(cosmos, 'query', async (container, spec) =>
-    ({ items: inContainer(container).filter(row => matches(row, spec)).map(row => ({ ...row })) }));
+  t.mock.method(cosmos, 'query', async (container, spec) => {
+    cosmos.assertQuerySpec(spec, container);
+    return { items: inContainer(container).filter(row => matches(row, spec)).map(row => ({ ...row })) };
+  });
   t.mock.method(cosmos, 'queryFirst', async (container, spec) => {
+    cosmos.assertQuerySpec(spec, container);
     const row = inContainer(container).find(r => matches(r, spec));
     return row ? { ...row } : null;
   });
