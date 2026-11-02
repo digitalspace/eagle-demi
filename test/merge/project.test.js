@@ -918,6 +918,65 @@ test('buildRegistry against the real Track dataset', async (t) => {
   });
 });
 
+test('buildRegistry keeps DEMI-created projects whole', async (t) => {
+  const X = '5cf00c03a266b7e1877504aa';
+  const track1234 = { ...TRACK_207, track_project_id: 1234, epic_guid: null, name: 'Native One' };
+  const native1234 = { id: '1234', trackProjectId: 1234, sourceSystem: 'track', sources: {}, eagleId: X, read: ['staff'] };
+  const eagleX = eagleFor({ epic_guid: X, name: 'Native One' });
+  const idsAndEagleIds = projects => projects.map(p => [p.id, p.eagleId]);
+  const bucketSum = r => r.matched + r.trackOnlyNoGuid + r.trackOnlyDanglingGuid + r.eagleOnly + r.nativeKept + r.nativeClash;
+  const track555 = { ...TRACK_207, track_project_id: 555, epic_guid: X };
+  const native99 = { ...native1234, id: '99', trackProjectId: 99 };
+
+  await t.test('a native row stays one row with its Eagle id, and makes no eagle-<id> twin', () => {
+    const { projects, report } = buildRegistry([track1234], [eagleX], { ...OPTS, nativeRows: [native1234] });
+    assert.deepStrictEqual(idsAndEagleIds(projects), [['1234', X]]);
+    assert.strictEqual(projects[0].sources.track, undefined);
+    assert.strictEqual(report.nativeKept, 1);
+    assert.strictEqual(report.eagleOnly, 0);
+    assert.deepStrictEqual(idsAndEagleIds(buildRegistry([track1234], [eagleX], OPTS).projects),
+      [['1234', null], [`eagle-${X}`, X]], 'without nativeRows the same inputs split');
+  });
+
+  await t.test('a stored row that is not native is rebuilt from Track', () => {
+    const tracked = { ...native1234, sources: { track: { track_project_id: 1234 } } };
+    const { projects } = buildRegistry([track1234], [eagleX], { ...OPTS, nativeRows: [tracked] });
+    assert.deepStrictEqual(idsAndEagleIds(projects), [['1234', null], [`eagle-${X}`, X]]);
+  });
+
+  await t.test('a Track row naming an Eagle id minted for a native row is built without it', () => {
+    const minted = { ...native99, syncOut: { eagle: { mintedId: X } } };
+    const { projects, report, clashTrackIds } = buildRegistry([track555], [eagleX], { ...OPTS, nativeRows: [minted] });
+    assert.deepStrictEqual(report.nativeClashes, [{ trackId: '555', eagleId: X }]);
+    assert.deepStrictEqual([...clashTrackIds], [['99', ['555']]]);
+    assert.deepStrictEqual(report.nativeConflicts, []);
+    assert.deepStrictEqual(idsAndEagleIds(projects), [['555', null], ['99', X]]);
+    assert.strictEqual(buildProjectIndex(projects).resolve(X), '99');
+    assert.strictEqual(bucketSum(report), report.total);
+  });
+
+  await t.test('a Track row sharing an Eagle id sync-out did not mint keeps it, and is a conflict', () => {
+    const { projects, report } = buildRegistry([track555], [eagleX], { ...OPTS, nativeRows: [native99] });
+    assert.deepStrictEqual(report.nativeConflicts, [{ reason: 'shared', trackId: '555', nativeId: '99', eagleId: X }]);
+    assert.deepStrictEqual(report.nativeClashes, []);
+    assert.strictEqual(projects.find(p => p.id === '555').eagleId, X);
+    assert.strictEqual(bucketSum(report), report.total);
+  });
+
+  await t.test('two native rows holding one Eagle id are a conflict', () => {
+    const { report } = buildRegistry([], [eagleX], { ...OPTS, nativeRows: [native1234, native99] });
+    assert.deepStrictEqual(report.nativeConflicts, [{ reason: 'twoNative', eagleId: X, nativeIds: ['1234', '99'] }]);
+  });
+
+  await t.test('a Track row naming another Eagle id than its native row is a conflict', () => {
+    const track = { ...track1234, epic_guid: 'other' };
+    const { report: held } = buildRegistry([track], [eagleX], { ...OPTS, nativeRows: [native1234] });
+    const { report: none } = buildRegistry([track], [eagleX], { ...OPTS, nativeRows: [{ ...native1234, eagleId: null }] });
+    assert.deepStrictEqual(held.nativeConflicts, [{ reason: 'trackGuid', trackId: '1234', epicGuid: 'other', eagleId: X }]);
+    assert.deepStrictEqual(none.nativeConflicts, [{ reason: 'trackGuid', trackId: '1234', epicGuid: 'other', eagleId: null }]);
+  });
+});
+
 test('buildProjectIndex — the deterministic id join', async (t) => {
   const projects = [
     mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS),

@@ -520,7 +520,8 @@ test('seed() end to end with stubbed sources', async (t) => {
         }),
         projects: {
           upsert: async (p) => { written.projects.push(p); return p; },
-          getById: async () => null
+          getById: async () => null,
+          listNative: async () => []
         },
         links: {
           create: async (record) => { written.links.push(record); return record; }
@@ -572,6 +573,103 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(summary.stages.projects.written, 2);
     assert.strictEqual(summary.stages.documents.written, 2);
     assert.strictEqual(summary.stages.boundaries.written, 1);
+  });
+
+  const X = '5cf00c03a266b7e1877504aa';
+  const nativeRow = { id: '1234', trackProjectId: 1234, sourceSystem: 'track', sources: {}, eagleId: X,
+    name: 'Native One', read: ['public', 'staff'] };
+  const seedWithNative = async (native, extraTrack = [], extraction = {}, { live = true, stored = {} } = {}) => {
+    const { written, repos } = makeRepos();
+    repos.projects.listNative = async () => [native];
+    repos.projects.getById = async (_access, id) => stored[id] || null;
+    repos.documents.extractionRowsForProject = async (_access, projectId) => extraction[projectId] || [];
+    repos.documents.pendingRaiseOps = documentsRepo.pendingRaiseOps;
+    repos.documents.setParentFieldsPending = async () => ({ status: 'cleared', pendingAt: null });
+    const sources = {
+      ...stubSources,
+      loadTrackProjects: () => [...track, { ...track[0], track_project_id: 1234, epic_guid: null, name: 'Native One' },
+        ...extraTrack],
+      fetchEagleProjects: async () => [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)'), eagleProject(X, 'Native One')],
+      streamEagleDocuments: async (onPage) => {
+        await onPage([eagleDoc('doc-native', X)], 1, 1);
+        return { count: 1, total: 1 };
+      }
+    };
+    const summary = await seed([...(live ? ['--live'] : []), '--only', 'projects,documents'],
+      { sources, repos, now: NOW, cosmosReady: true });
+    return { summary, written };
+  };
+  const track555 = { ...track[0], track_project_id: 555, epic_guid: X };
+  const minted = { ...nativeRow, syncOut: { eagle: { mintedId: X } } };
+
+  await t.test('a live run keeps a native project and files its Eagle documents under it', async () => {
+    // The document sat under the stale `eagle-<id>` twin: its extraction carries, and its chunks re-stamp.
+    const twinRow = { id: 'doc-native', projectId: `eagle-${X}`, contentExtracted: true, contentPageCount: 9 };
+    const { summary, written } = await seedWithNative(nativeRow, [], { [`eagle-${X}`]: [twinRow] });
+
+    assert.deepStrictEqual(summary.failures, []);
+    assert.deepStrictEqual(written.projects.map(p => p.id).sort(), ['207', '373']);
+    assert.strictEqual(summary.stages.projects.nativeKept, 1);
+    assert.deepStrictEqual(written.documents.map(([pid, docs]) => [pid, docs.map(d => d.id)]), [['1234', ['doc-native']]]);
+    assert.strictEqual(written.documents[0][1][0].contentPageCount, 9);
+    assert.deepStrictEqual(written.reStamped.map(r => [r.id, r.doc.projectId]), [['doc-native', '1234']]);
+  });
+
+  await t.test('the native partition wins over a former one holding the same document', async () => {
+    const row = (projectId, contentPageCount) => ({ id: 'doc-native', projectId, contentExtracted: true, contentPageCount });
+    const { written } = await seedWithNative(nativeRow, [],
+      { [`eagle-${X}`]: [row(`eagle-${X}`, 9)], 1234: [row('1234', 4)] });
+
+    assert.strictEqual(written.documents[0][1][0].contentPageCount, 4);
+    assert.deepStrictEqual(written.reStamped, []);
+  });
+
+  await t.test('a Track project beside an Eagle id minted for a native one is written without it', async () => {
+    // Stored as matched by an earlier seed: its Eagle data and its documents go with the id.
+    const stored555 = { id: '555', eagleId: X, sources: { eagle: { _id: X } }, applicableRegulation: 'Reg' };
+    const docRow = { id: 'doc-native', projectId: '555', contentExtracted: true, pdfTitle: { title: 'T' } };
+    const { summary, written } = await seedWithNative(minted, [track555], { 555: [docRow] }, { stored: { 555: stored555 } });
+
+    assert.deepStrictEqual(summary.failures, []);
+    const row555 = written.projects.find(p => p.id === '555');
+    assert.strictEqual(row555.eagleId, null);
+    assert.strictEqual(row555.sources.eagle, undefined);
+    assert.strictEqual(row555.applicableRegulation, undefined);
+    assert.strictEqual(summary.stages.projects.written, summary.stages.projects.built);
+    const doc = written.documents[0][1][0];
+    assert.deepStrictEqual([written.documents[0][0], doc.contentExtracted, doc.pdfTitle], ['1234', true, { title: 'T' }]);
+    assert.deepStrictEqual(written.reStamped.map(r => [r.id, r.doc.projectId]), [['doc-native', '1234']]);
+  });
+
+  await t.test('a Track project beside an Eagle id staff typed on a native one stops a live run', async () => {
+    const { summary, written } = await seedWithNative(nativeRow, [track555]);
+
+    assert.match(summary.failures.join(' '), /Track project 555 and native project 1234 both hold Eagle 5cf00c03a266b7e1877504aa/);
+    assert.deepStrictEqual(written.projects, []);
+    assert.deepStrictEqual(written.documents, []);
+  });
+
+  await t.test('a dry run with a native conflict fails but still plans the documents', async () => {
+    const { summary } = await seedWithNative(nativeRow, [track555], {}, { live: false });
+
+    // `main` exits 1 on any failure.
+    assert.match(summary.failures.join(' '), /Track project 555 and native project 1234 both hold Eagle/);
+    assert.strictEqual(summary.stages.documents.built, 1);
+  });
+
+  await t.test('a matched project keeps its Eagle source and the Eagle-only fields the feed lacks', async () => {
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) => (id === '207'
+      ? { id: '207', eagleId: matchedGuid, sources: { eagle: { _id: matchedGuid } },
+        applicableRegulation: 'Reg', featuredDocuments: ['d1'] }
+      : null);
+
+    await seed(['--live', '--only', 'projects'], { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.strictEqual(matched.sources.eagle._id, matchedGuid);
+    assert.strictEqual(matched.applicableRegulation, 'Reg');
+    assert.deepStrictEqual(matched.featuredDocuments, ['d1']);
   });
 
   await t.test('the project stage carries vis forward', async () => {
@@ -1172,24 +1270,27 @@ test('seed --reconcile end to end', async (t) => {
         listEagleOnlyIds: async () => eagleOnlyRows,
         countEagleOnlyIds: async () => counts.projects ?? eagleOnlyRows.length,
         listWithEagleId: async () => eagleOnlyRows,
-        countWithEagleId: async () => counts.eagleId ?? eagleOnlyRows.length
+        countWithEagleId: async () => counts.eagleId ?? eagleOnlyRows.length,
+        listNative: async () => []
       },
       documents: {
         extractionRowsForProject: async () => [],
         bulkUpsertForProject: async (_pid, docs) => (
           { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } }),
         listSeededIds: async () => seededDocs,
-        countSeededIds: async () => counts.documents ?? seededDocs.length
+        countSeededIds: async () => counts.documents ?? seededDocs.length,
+        deleteById: async (id, projectId) => { moved.push(`${projectId}|${id}`); return true; }
       },
       boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) },
       links: { create: async (record) => record }
     };
+    const moved = [];
     const purge = {
       purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); }
     };
     const retireProject = async (row) => { purged.projects.push(row.id); };
     return {
-      purged, deps: { repos, purge, retireProject, cosmosReady: true, searchReady: true, now: NOW, ...over }
+      purged, moved, deps: { repos, purge, retireProject, cosmosReady: true, searchReady: true, now: NOW, ...over }
     };
   };
 
@@ -1392,15 +1493,36 @@ test('seed --reconcile end to end', async (t) => {
     assert.match(summary.failures.join(' '), /^reconcile: 1 surplus ids still live upstream/);
   });
 
-  await t.test('a surplus document fetched under another parent moved: no lookup, deleted', async () => {
+  await t.test('a surplus document fetched under another parent moved: no lookup, only its old row deleted', async () => {
     const asked = [];
-    const { purged, deps } = makeDeps({}, [...SEEDED_DOCS, { id: 'doc1', projectId: 'old-parent' }]);
+    const { purged, moved, deps } = makeDeps({}, [...SEEDED_DOCS, { id: 'doc1', projectId: 'old-parent' }]);
     await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
       ...deps, sources: stubSources({ eagleRowLive: async (_dataset, id) => { asked.push(id); return false; } })
     });
 
     assert.deepStrictEqual(asked, ['stale', 'gone']);
-    assert.deepStrictEqual(purged.documents, ['207|stale', 'old-parent|doc1']);
+    // A purge would take the chunks and index entry the moved row now owns.
+    assert.deepStrictEqual(purged.documents, ['207|stale']);
+    assert.deepStrictEqual(moved, ['old-parent|doc1']);
+  });
+
+  await t.test('a moved document whose old row is already gone counts as skipped, not deleted', async () => {
+    const { deps } = makeDeps({}, [...SEEDED_DOCS, { id: 'doc1', projectId: 'old-parent' }]);
+    deps.repos.documents.deleteById = async () => false;
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], { ...deps, sources: stubSources() });
+
+    assert.strictEqual(summary.reconcile.documents.skipped, 1);
+    assert.strictEqual(summary.reconcile.documents.deleted, 1, 'only the stale row');
+  });
+
+  await t.test('a moved document whose new row failed to write keeps its old row', async () => {
+    const { moved, deps } = makeDeps({}, [...SEEDED_DOCS, { id: 'doc1', projectId: 'old-parent' }]);
+    deps.repos.documents.bulkUpsertForProject = async () =>
+      ({ succeeded: 0, failed: 1, failedIds: ['doc1'], statusCounts: { 429: 1 } });
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(moved, []);
+    assert.deepStrictEqual(summary.reconcile.documents.wouldKeep, ['doc1']);
   });
 
   await t.test('an enumeration shorter than the container COUNT refuses BOTH containers',
@@ -1912,7 +2034,8 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
         listEagleOnlyIds: async () => projRows.filter(row => row.sourceSystem !== 'track'),
         countEagleOnlyIds: async () => projRows.filter(row => row.sourceSystem !== 'track').length,
         listWithEagleId: async () => projRows,
-        countWithEagleId: async () => projRows.length
+        countWithEagleId: async () => projRows.length,
+        listNative: async () => []
       },
       documents: {
         extractionRowsForProject: async () => [],
@@ -2085,7 +2208,8 @@ test('a re-seed carries extraction state forward', async (t) => {
     const repos = {
       projects: {
         upsert: async (p) => p,
-        getById: async () => (opts.storedProject ? structuredClone(opts.storedProject) : null)
+        getById: async () => (opts.storedProject ? structuredClone(opts.storedProject) : null),
+        listNative: async () => []
       },
       documents: {
         // The REAL raise. A fake returning a constant would let a seed that re-uses the token
