@@ -429,6 +429,28 @@ test('reconcile', async (t) => {
     assert.deepStrictEqual(summary.failures, []);
   });
 
+  await t.test('a deleted project gone from Eagle, and its documents, are retired, not drift', async () => {
+    const base = await reconcile([], makeDeps());
+    const summary = await reconcile([], makeDeps({
+      projects: {
+        listWithEagleId: async () => PROJECT_ROWS.map(row => (row.id === 'eagle-gone'
+          ? { ...row, isDeleted: true } : row)),
+        countWithEagleId: async () => PROJECT_ROWS.length
+      },
+      documents: {
+        ...makeDeps().documents,
+        listSeededIds: async () => [...DOCUMENT_ROWS, { id: 'D-retired', projectId: 'eagle-gone' }],
+        countSeededIds: async () => DOCUMENT_ROWS.length + 1
+      }
+    }));
+
+    assert.deepStrictEqual(summary.projects.retired, ['eagle-gone']);
+    assert.deepStrictEqual(summary.documents.retired, ['D-retired']);
+    assert.deepStrictEqual(summary.projects.unpublishedOrDeleted, []);
+    assert.strictEqual(summary.drift, base.drift - 1, 'only the project row leaves drift; its document never entered');
+    assert.match(report(summary), /retired \(deleted in DEMI.*\): 1 — eagle-gone/);
+  });
+
   await t.test('an id Eagle publishes and DEMI never mirrored is reported', async () => {
     const summary = await reconcile([], makeDeps({
       sources: stubSources({ fetchEagleProjects: async () => [...EAGLE_PROJECTS, { _id: 'P3' }] })

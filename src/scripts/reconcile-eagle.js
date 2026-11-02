@@ -221,6 +221,14 @@ function diff(rows, keyOf, eagleIds, pushOwned = () => true, parentPublished = (
   };
 }
 
+/**
+ * A diff with the rows a delete retired (gone from Eagle, deleted in DEMI or under a deleted project)
+ * moved out of `unpublishedOrDeleted` into `retired`, row ids, so they never count as drift.
+ */
+function splitRetired(d, retired) {
+  return { ...d, unpublishedOrDeleted: d.unpublishedOrDeleted.filter(row => !retired(row)),
+    retired: d.unpublishedOrDeleted.filter(retired).map(row => String(row.id)) };
+}
 
 /**
  * Ids in both Eagle and DEMI whose DEMI `read[]` grants different access than the one the mirror
@@ -540,11 +548,14 @@ async function reconcile(argv = [], deps = {}) {
 
   // A DEMI delete caps a row Eagle still publishes; reported on its own, never as ACL drift.
   const deleted = row => row.isDeleted === true;
-  summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff,
+  const deletedProjects = new Set(projectRows.filter(deleted).map(row => String(row.id)));
+  summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size,
+    ...splitRetired(projectDiff, deleted),
     aclMismatch: aclMismatch(projectRows.filter(row => !deleted(row)), row => String(row.eagleId), eagleRead),
     demiDeleted: projectRows.filter(row => deleted(row) && eagleRead.has(String(row.eagleId)))
       .map(row => String(row.eagleId)) };
-  summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff,
+  summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size,
+    ...splitRetired(documentDiff, row => deletedProjects.has(String(row.projectId))),
     aclMismatch: aclMismatch(documentRows, row => String(row.id), eagleRead, projectReadOf) };
 
   // The public-read containers, enumerated with the SAME predicates a request reads under, but
@@ -793,6 +804,10 @@ function report(summary, { json } = {}) {
     }
     if (s.demiDeleted && s.demiDeleted.length) {
       line('demiDeleted (deleted in DEMI, still published in Eagle; not counted as drift)', s.demiDeleted);
+    }
+    if (s.retired && s.retired.length) {
+      line('retired (deleted in DEMI, or under a deleted project, and gone from Eagle; not counted as drift)',
+        s.retired);
     }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +
