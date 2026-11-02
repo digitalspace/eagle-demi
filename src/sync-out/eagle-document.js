@@ -10,12 +10,11 @@ const { logger } = require('../utils/logger');
 const documents = require('../repositories/documents');
 const projects = require('../repositories/projects');
 const { ownedOutsideEagle } = require('../ownership/document');
-const { isNativeProject } = require('../merge/project');
+const { isNativeProject, isMintedNative } = require('../merge/project');
 const { resolveObjectKey } = require('../storage/objectKey');
 const { DOCUMENT } = require('./kinds');
 const {
-  requireSettings, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic,
-  parentEagleId
+  requireSettings, call, failure, claimHeld, refreshClaim, endClaim, createMinted, refuseStray, setPublished, isPublic
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -58,9 +57,8 @@ function unsendable(row) {
 const owned = row => Boolean(row && ownedOutsideEagle(row) && documents.isScanCleared(row) &&
   row.syncOut?.eagle?.eagleDeleted !== true);
 
-const mintedHere = row => Boolean(row.eagleId) && row.syncOut?.eagle?.mintedId === String(row.eagleId);
 /** No Eagle id, or a minted one whose create never recorded a send: Eagle may hold nothing under it. */
-const needsCreate = row => !row.eagleId || (mintedHere(row) && !Number.isInteger(row.syncOut?.eagle?.sentVersion));
+const needsCreate = row => !row.eagleId || (isMintedNative(row) && !Number.isInteger(row.syncOut?.eagle?.sentVersion));
 
 /** A row DEMI owns that Eagle has not deleted; a row Eagle may not hold yet is wanted only while the native switch is on. */
 const wants = row => owned(row) && (!needsCreate(row) || settings.eagle.nativeEnabled);
@@ -132,7 +130,10 @@ async function readyParentEagleId(row, logFields) {
   const fields = { ...logFields, parentId: row.projectId };
   const parent = await projects.readForWrite(row.projectId);
   const out = parent?.syncOut?.eagle;
-  if (parent && !parent.eagleId && !isNativeProject(parent)) return parentEagleId(row, logFields);
+  if (parent && !parent.eagleId && !isNativeProject(parent)) {
+    logger.error(`[sync-out eagle] project ${row.projectId} of row ${row.id} has no eagleId, nothing sent`, fields);
+    throw new Error(`project ${row.projectId} of row ${row.id} has no eagleId`);
+  }
   if (!parent || !parent.eagleId || (out?.mintedId === String(parent.eagleId) && !Number.isInteger(out.sentVersion))) {
     logger.warn(`[sync-out eagle] parent project ${row.projectId} not yet in Eagle; document ${row.id} waits`, fields);
     throw new Error(`parent project ${row.projectId} of document ${row.id} not yet in Eagle`);
