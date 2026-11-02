@@ -1,22 +1,7 @@
 'use strict';
 
-// Diff Eagle's published ids and read[] against the rows the push mirrored into DEMI. Only project,
-// document and comment-period pushes carry a tombstone (`isDeleted: true`); other kinds hard-delete.
-
-// Reports only: a row gone from Eagle's public search may be unpublished, not deleted, and eagle-api
-// cannot tell an anonymous caller which (`unpublishedOrDeleted`).
-
-// node src/scripts/reconcile-eagle.js [--json] [--comments] [--engage] [--drop-orphans] [--store]
-// `--drop-orphans` is the one data write (`engageOrphans`); `--store` writes only the report row.
-
-// Covers projects, documents, periods, lists, notifications, updates, and comments with `--comments`
-// (one eagle-api call per period); users, groups, inspections against their stored copy only.
-
-// Devbox via `demi-run`, or nightly on the Functions timer when RECONCILE_SCHEDULE is set; the
-// alert reads the one `drift=` line (azure/modules/observability.bicep), clean is 0.
-
-// A document or period counts as `eagleOnly` only when seed-nosql's `documentAdmission` would admit
-// it; the rest report under `unresolvedParent`, which the seed and mirrors drop too.
+// Reports drift between Eagle and the rows its pushes mirrored into DEMI; `--drop-orphans` is its one
+// data write. A row gone from Eagle's public search may be unpublished, not deleted, so none is purged.
 
 const sources = require('../seed/sources');
 const projects = require('../repositories/projects');
