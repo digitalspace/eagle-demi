@@ -159,11 +159,9 @@ param privateEndpointSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff671
 // demanded by policy). The private-endpoint subnet above cannot host it.
 param apiFlexSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-demi-func-fc1-test'
 
-// Both, deliberately. These carry the audit-drop and ingestion-quota alerts, and a gap in the
-// audit trail reaching exactly one mailbox is a single point of failure. Replace with a team
+// One address: a second mailbox of the same person only doubles every alert. Replace with a team
 // destination when there is one.
 param contactEmails = [
-  'daniel@digitalspace.ca'
   'Daniel.T.Truong@gov.bc.ca'
 ]
 
