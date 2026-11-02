@@ -1172,7 +1172,7 @@ test('seed --reconcile end to end', async (t) => {
         listEagleOnlyIds: async () => eagleOnlyRows,
         countEagleOnlyIds: async () => counts.projects ?? eagleOnlyRows.length,
         listWithEagleId: async () => eagleOnlyRows,
-        countWithEagleId: async () => eagleOnlyRows.length
+        countWithEagleId: async () => counts.eagleId ?? eagleOnlyRows.length
       },
       documents: {
         extractionRowsForProject: async () => [],
@@ -1425,6 +1425,16 @@ test('seed --reconcile end to end', async (t) => {
       { ...deps, sources: stubSources() });
 
     assert.match(summary.failures.join(' '), /projects enumerated 2 rows but the container holds 9/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('a short read of the rows with an Eagle id refuses both containers', async () => {
+    const { purged, deps } = makeDeps({}, SEEDED_DOCS, { eagleId: 9 });
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.match(summary.failures.join(' '), /projects with an Eagle id enumerated 2 rows but the container holds 9/);
     assert.deepStrictEqual(purged, { documents: [], projects: [] });
     assert.strictEqual(summary.reconcile, undefined);
   });
