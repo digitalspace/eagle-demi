@@ -14,7 +14,7 @@ const { deriveAssessments } = require('../merge/assessments');
 const { raced } = require('../helpers/etag-write');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll,
-  upsertWithEtag, createItem, assertFilterable, readPage
+  upsertWithEtag, createItem, assertFilterable, readPage, EAGLE_SYNC_PENDING
 } = require('./_sql');
 
 const CONTAINER = 'projects';
@@ -120,6 +120,15 @@ async function readForWriteByEagleId(eagleId) {
 /** The stored row by DEMI id, unfiltered. Write side only, like every `readForWrite`. */
 async function readForWrite(id) {
   return cosmos.readItem(CONTAINER, String(id), String(id));
+}
+
+/** `isNativeProject` (src/merge/project.js) in SQL: no Track source, not Eagle's own row or its `eagle-<id>` id. */
+const NATIVE_PROJECT = '(NOT IS_DEFINED(c.sources.track) OR IS_NULL(c.sources.track)) AND ' +
+  "(NOT IS_DEFINED(c.sourceSystem) OR IS_NULL(c.sourceSystem) OR c.sourceSystem != 'eagle') AND NOT STARTSWITH(c.id, 'eagle-')";
+
+/** Native rows whose `syncVersion` the Eagle sync-out has not sent, across partitions. For `src/sync-out/pending.js` only. */
+async function listSyncPending() {
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT} AND ${EAGLE_SYNC_PENDING}` });
 }
 
 /**
@@ -442,6 +451,7 @@ module.exports = {
   getByEagleId,
   readForWriteByEagleId,
   readForWrite,
+  listSyncPending,
   listByIds,
   listRowsByIds,
   listIdsByName,

@@ -33,6 +33,10 @@ const {
 const eagleOnlyProjectId = (eagleId) => `eagle-${eagleId}`;
 const isEagleOnlyProjectId = (id) => String(id).startsWith(eagleOnlyProjectId(''));
 
+/** A project DEMI created: neither Eagle's own row nor a Track one. */
+const isNativeProject = (row) => Boolean(row) && row.sourceSystem !== 'eagle' &&
+  !isEagleOnlyProjectId(row.id) && !(row.sources && row.sources.track);
+
 /** Which block is current, the years held, and every `legislation_<year>` block. */
 const legislationFields = (eagle) => [...LEGISLATION_INDEX_FIELDS,
   ...Object.keys(eagle).filter(k => LEGISLATION_KEY.test(k))];
@@ -702,6 +706,7 @@ module.exports = {
   mergeEagleOnlyProject,
   eagleOnlyProjectId,
   isEagleOnlyProjectId,
+  isNativeProject,
   buildRegistry,
   buildProjectIndex,
   notificationShadowedProjects

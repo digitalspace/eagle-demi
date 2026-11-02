@@ -4,16 +4,20 @@
 // late ones send the current row; `sentVersion` at `syncVersion` is not resent; `{ status: 'held' }` records nothing.
 
 const queues = require('../jobs/queue-client');
-const { kindOf, versionOf, DEFAULT_KIND, COMMENT_PERIOD, DOCUMENT } = require('./kinds');
+const {
+  kindOf, versionOf, DEFAULT_KIND, COMMENT_PERIOD, DOCUMENT, ORGANIZATION, PROJECT
+} = require('./kinds');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
 const settings = require('../config').syncOut;
 
-// Keyed by kind: the comment period and document consumers are both named eagle.
+// Keyed by kind: every kind's consumer is named eagle.
 const CONSUMERS_BY_KIND = Object.freeze({
   [COMMENT_PERIOD]: Object.freeze([require('./eagle')]),
-  [DOCUMENT]: Object.freeze([require('./eagle-document')])
+  [DOCUMENT]: Object.freeze([require('./eagle-document')]),
+  [ORGANIZATION]: Object.freeze([require('./eagle-organization')]),
+  [PROJECT]: Object.freeze([require('./eagle-project')])
 });
 const consumers = Object.freeze(Object.values(CONSUMERS_BY_KIND).flat());
 

@@ -1,24 +1,18 @@
 'use strict';
 
-/**
- * Sync-out kinds: the row types sync-out sends. Each message names its kind, and the worker re-reads
- * and writes the row through that kind's repository.
- *
- * A kind is `{ repo, consumers, reconcile }`:
- * - `repo`: the kind's repository; sync-out re-reads the row through it and writes back etag-guarded.
- * - `consumers`: names of the consumers in `./index.js` that send this kind; names repeat across kinds.
- * - `reconcile(options)`: checks the kind's rows against what the consumers wrote; `{ repair: true }`
- *   re-queues the ones that drifted.
- *
- * A Flip adds its kind here and its consumers to that kind's list in `./index.js`.
- */
+// A kind is `{ repo, consumers, reconcile }`: the repository the worker re-reads and etag-writes a row through,
+// consumer names in `./index.js`, and a hook whose `{ repair: true }` re-queues drifted rows.
 
 const commentPeriods = require('../repositories/comment-periods');
 const documents = require('../repositories/documents');
+const lists = require('../repositories/lists');
+const projects = require('../repositories/projects');
 const pending = require('./pending');
 
 const COMMENT_PERIOD = 'commentPeriod';
 const DOCUMENT = 'document';
+const ORGANIZATION = 'organization';
+const PROJECT = 'project';
 
 const KINDS = Object.freeze({
   [COMMENT_PERIOD]: Object.freeze({
@@ -36,6 +30,26 @@ const KINDS = Object.freeze({
     }),
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(DOCUMENT))
+  }),
+  [ORGANIZATION]: Object.freeze({
+    // `lists` is partitioned on kind, so the read names it; a message's null projectId would miss the row.
+    repo: Object.freeze({
+      readForWrite: (id) => lists.readForWrite(id, lists.KINDS.ORGANIZATION),
+      listSyncPending: () => lists.listSyncPending(lists.KINDS.ORGANIZATION),
+      upsert: (item, existing) => lists.upsert(item, existing)
+    }),
+    consumers: Object.freeze(['eagle']),
+    reconcile: (options) => pending.reconcile(options, pending.depsFor(ORGANIZATION))
+  }),
+  [PROJECT]: Object.freeze({
+    repo: Object.freeze({
+      readForWrite: (id) => projects.readForWrite(id),
+      listSyncPending: () => projects.listSyncPending(),
+      // Guarded on the stored row's etag, so two deliveries cannot both take the create claim.
+      upsert: (item, existing) => projects.upsert(item, { etag: existing._etag })
+    }),
+    consumers: Object.freeze(['eagle']),
+    reconcile: (options) => pending.reconcile(options, pending.depsFor(PROJECT))
   })
 });
 
@@ -54,4 +68,4 @@ function kindOf(name) {
   return KINDS[name];
 }
 
-module.exports = { KINDS, COMMENT_PERIOD, DOCUMENT, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion };
+module.exports = { KINDS, COMMENT_PERIOD, DOCUMENT, ORGANIZATION, PROJECT, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion };

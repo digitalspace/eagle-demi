@@ -94,6 +94,11 @@ function evaluate(text, row, params) {
     if (m[1] === 'ARRAY') return Array.isArray(value);
     return value === null;
   }
+  m = /^STARTSWITH\(c\.([\w.]+), ('[^']*'|@\w+)\)$/.exec(expr);
+  if (m) {
+    const value = pathOf(row, m[1]);
+    return typeof value === 'string' && value.startsWith(valueOf(m[2], params));
+  }
   m = /^ARRAY_LENGTH\(c\.([\w.]+)\) (=|!=|<=|>=|<|>) (\S+)$/.exec(expr);
   if (m) {
     const value = pathOf(row, m[1]);

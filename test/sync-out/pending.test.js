@@ -16,10 +16,13 @@ const documents = require('../../src/repositories/documents');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const eagleDocument = require('../../src/sync-out/eagle-document');
-const { DOCUMENT, kindOf } = require('../../src/sync-out/kinds');
+const lists = require('../../src/repositories/lists');
+const projects = require('../../src/repositories/projects');
+const { DOCUMENT, ORGANIZATION, PROJECT, kindOf } = require('../../src/sync-out/kinds');
 const { logger } = require('../../src/utils/logger');
 const { depsFor, reconcile } = require('../../src/sync-out/pending');
 const { parseArgs, run } = require('../../src/scripts/sync-out-pending');
+const { useEnv } = require('../helpers/sync-out-eagle');
 
 const KIND = 'commentPeriod';
 const EAGLE_ID = '6720b3c0a1b2c3d4e5f60718';
@@ -156,14 +159,7 @@ test('depsFor wires a kind to its repository, its consumers and the sync-out enq
 });
 
 test('the document hook re-queues only rows owed a send, and names both flags when the document one is off', async (t) => {
-  const env = { SYNC_OUT_EAGLE_ENABLED: 'true', SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true' };
-  const previous = Object.fromEntries(Object.keys(env).map(k => [k, process.env[k]]));
-  Object.assign(process.env, env);
-  t.after(() => {
-    for (const [k, v] of Object.entries(previous)) {
-      if (v === undefined) delete process.env[k]; else process.env[k] = v;
-    }
-  });
+  useEnv(t, { SYNC_OUT_EAGLE_ENABLED: 'true', SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true' });
   const docRow = (id, sentVersion) => ({
     id, projectId: '1234', sourceSystem: 'demi', eagleId: `eagle-${id}`, syncVersion: 3,
     syncOut: { eagle: { status: 'sent', sentVersion } }
@@ -185,6 +181,38 @@ test('the document hook re-queues only rows owed a send, and names both flags wh
   assert.match(lines[0], /needs SYNC_OUT_EAGLE_ENABLED and SYNC_OUT_EAGLE_DOCUMENT_ENABLED true/);
   assert.strictEqual(sent.length, 1);
 });
+
+for (const { kind, flag, repo, row } of [
+  { kind: ORGANIZATION, flag: 'SYNC_OUT_EAGLE_ORGANIZATION_ENABLED', repo: lists,
+    row: (id, sentVersion) => ({ id, kind: 'Organization', projectId: null, sourceSystem: 'demi', eagleId: `e-${id}`,
+      syncVersion: 3, syncOut: { eagle: { status: 'sent', sentVersion } } }) },
+  { kind: PROJECT, flag: 'SYNC_OUT_EAGLE_PROJECT_ENABLED', repo: projects,
+    row: (id, sentVersion) => ({ id, sourceSystem: 'track', sources: {}, eagleId: `e-${id}`,
+      syncVersion: 3, syncOut: { eagle: { status: 'sent', sentVersion, mintedId: `e-${id}` } } }) }
+]) {
+  test(`the ${kind} hook re-queues only rows owed a send, and names its flag when it is off`, async (t) => {
+    useEnv(t, { SYNC_OUT_EAGLE_ENABLED: 'true', [flag]: 'true' });
+    const listedWith = [];
+    t.mock.method(repo, 'listSyncPending', async (...args) => {
+      listedWith.push(args);
+      return [row('owed', 2), row('current', 3)];
+    });
+    const sent = [];
+    t.mock.method(queues, 'queueClientFor', () => ({ sendMessage: async (body) => { sent.push(JSON.parse(body)); } }));
+    const lines = [];
+    const log = { info: () => {}, warn: (line) => { lines.push(line); } };
+
+    const report = await kindOf(kind).reconcile({ repair: true, log });
+
+    assert.deepStrictEqual(listedWith, [kind === ORGANIZATION ? ['Organization'] : []]);
+    assert.deepStrictEqual(sent.map(m => [m.kind, m.id]), [[kind, 'owed']]);
+    assert.deepStrictEqual({ listed: report.listed, queued: report.queued }, { listed: ['owed'], queued: 1 });
+
+    delete process.env[flag];
+    await kindOf(kind).reconcile({ repair: true, log });
+    assert.match(lines[0], new RegExp(`needs SYNC_OUT_EAGLE_ENABLED and ${flag} true`));
+  });
+}
 
 test('the CLI run fails when a row was not re-queued', async (t) => {
   t.mock.method(logger, 'info', () => {});

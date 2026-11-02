@@ -12,7 +12,7 @@ const lists = require('../../src/repositories/lists');
 const { evaluate } = require('../helpers/updates-store');
 
 const org = (id, syncVersion, sentVersion) => ({
-  id, kind: 'Organization', syncVersion,
+  id, kind: 'Organization', sourceSystem: 'demi', syncVersion,
   ...(sentVersion === undefined ? {} : { syncOut: { eagle: { sentVersion } } })
 });
 
@@ -21,7 +21,8 @@ const ROWS = [
   org('sent', 2, 2),
   org('never-sent', 1),
   org('never-changed', 0),
-  { ...org('a-list', 2, 1), kind: 'List' }
+  { ...org('a-list', 2, 1), kind: 'List' },
+  { ...org('eagle-owned', 2, 1), sourceSystem: 'eagle' }
 ];
 
 /** Answer each query from ROWS by evaluating its SQL, one row per page so paging shows. */
@@ -42,7 +43,7 @@ function store(t) {
 test('lists.listSyncPending', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('lists the rows of one kind past their sent version, every page', async () => {
+  await t.test('lists the DEMI rows of one kind past their sent version, every page', async () => {
     const calls = store(t);
 
     const rows = await lists.listSyncPending(lists.KINDS.ORGANIZATION);

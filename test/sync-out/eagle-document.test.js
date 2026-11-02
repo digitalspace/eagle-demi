@@ -13,11 +13,9 @@ const { logger } = require('../../src/utils/logger');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const consumer = require('../../src/sync-out/eagle-document');
-const config = require('../../src/config');
 const { DOCUMENT, kindOf } = require('../../src/sync-out/kinds');
+const { API, useEnv, wireEagle, keys } = require('../helpers/sync-out-eagle');
 
-const API = 'https://eagle.example/api';
-const ISSUER = config.keycloakIssuer;
 const EAGLE_ID = '5cf00c03a266b7e1877504dd';
 const ROW_ID = '7d1e2f40-0000-4000-8000-0000000000d1';
 const PUBLIC_ACL = ['public', 'staff', 'sysadmin'];
@@ -83,39 +81,17 @@ function wireStore(t, row) {
   return store;
 }
 
-/** Fake eagle-api and Keycloak; `routes` maps `METHOD path` to a reply, or a function returning one. */
-function wireEagle(t, routes) {
-  const calls = [];
-  t.mock.method(globalThis, 'fetch', async (url, opts = {}) => {
-    if (url === `${ISSUER}/protocol/openid-connect/token`) return Response.json({ access_token: 'token', expires_in: 300 });
-    const key = `${opts.method || 'GET'} ${url.slice(API.length)}`;
-    calls.push({ key, body: opts.body ? JSON.parse(opts.body) : undefined });
-    const route = routes[key];
-    assert.ok(route, `unexpected eagle-api call ${key}`);
-    const reply = typeof route === 'function' ? await route() : route;
-    return Response.json(reply.body ?? {}, { status: reply.status || 200 });
-  });
-  return calls;
-}
-
 const GET = `GET /document/${EAGLE_ID}`;
 const PUT = `PUT /document/${EAGLE_ID}`;
 const PUBLISH = `PUT /document/${EAGLE_ID}/publish`;
 const UNPUBLISH = `PUT /document/${EAGLE_ID}/unpublish`;
 /** eagle-api's GET answers a list, `read` always projected. */
 const eagleCopy = read => ({ body: [{ _id: EAGLE_ID, read }] });
-const keys = calls => calls.map(c => c.key);
 const logged = (level, text) => logger[level].mock.calls.filter(c => String(c.arguments[0]).includes(text));
 
 test('sync-out of documents to Eagle', async (t) => {
   t.beforeEach((tt) => {
-    const previous = Object.fromEntries(Object.keys(ENV).map(k => [k, process.env[k]]));
-    Object.assign(process.env, ENV);
-    tt.after(() => {
-      for (const [k, v] of Object.entries(previous)) {
-        if (v === undefined) delete process.env[k]; else process.env[k] = v;
-      }
-    });
+    useEnv(tt, ENV);
     eagle.clearToken();
     for (const level of ['info', 'warn', 'error']) tt.mock.method(logger, level, () => {});
   });
