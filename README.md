@@ -237,11 +237,14 @@ A surplus document is deleted through the helper `DELETE /documents/:id` uses, s
 search-index entries go with it. A surplus project is never removed. A project missing from the
 public feed may only be unpublished, so it is flagged the way `DELETE /projects/:id` flags it
 (`isDeleted`, `read` capped at staff, the visibility cascade) and on its Eagle copy too
-(`sources.eagle.isDeleted`). Its documents stay, capped by that cascade. When the feed lists the
-project again, the next seed or Eagle push restores it. Each row emits the same `document.delete` /
-`project.delete` audit event those routes do. A dry run reports `wouldDelete`
-per container and deletes nothing. Deletion is a single phase after every fetch has finished —
-documents before projects — so a refusal stops it **before any delete**, in both containers at once.
+(`sources.eagle.isDeleted`). The documents of every deleted project the feed lacks stay, capped by
+that cascade, Track-sourced projects included. When the feed lists the project again, the next seed
+or Eagle push restores it and runs the cascade again. A staff `DELETE /projects/:id` on a retired
+project clears the Eagle-side flag, so the project stays deleted. Each row emits the same
+`document.delete` / `project.delete` audit event those routes do; a project deleted by another
+writer since the enumeration is skipped and not counted. A dry run reports `wouldDelete`
+per container and deletes nothing. Deletion is a single phase after every fetch has finished, so a
+refusal stops it **before any delete**, in both containers at once.
 It refuses — exit 1, nothing removed — if `--only` dropped a stage, if `--limit-documents` was
 given, if the Project, ProjectNotification or Document fetch was not verified complete against
 eagle-api's `searchResultsTotal`, if a document that resolved to neither a project nor a
@@ -284,8 +287,10 @@ destroy an unpublished row along with its chunks and index entries. A purge need
 separates them — a tombstone, or a credential that reads unpublished rows. A document whose own
 project is unpublished/gone is not counted as `eagleOnly` drift either — seed-nosql drops it the
 same way — it reports separately as `unresolvedParent`. A project deleted in DEMI that Eagle still
-publishes reports as `demiDeleted`. A deleted project gone from Eagle, and every document under it,
-reports as `retired`. Neither counts toward `drift=`.
+publishes reports as `demiDeleted`, and its `eagle-<id>` twin is not ACL drift. A deleted project
+gone from Eagle, and every document under it, reports as `retired`, unless its cascade is still owed
+(`cascadePendingAt`). Neither counts toward `drift=`. A project the seed retired that Eagle lists
+again reports as `staleRetired` and does count: the next seed or push restores it.
 
 For an id both sides hold, `aclMismatch` lists rows whose DEMI `read[]` lets in different callers
 than the `read[]` the mirror would write from Eagle's, or whose `isPublished` no longer matches
