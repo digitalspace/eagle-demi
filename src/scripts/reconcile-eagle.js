@@ -31,7 +31,7 @@ const groups = require('../repositories/groups');
 const inspections = require('../repositories/inspections');
 const { constrainToProject, DELETED_CEILING } = documents;
 const { unlessUnprovisioned } = require('../helpers/unprovisioned');
-const { buildRegistry, buildProjectIndex } = require('../merge/project');
+const { buildRegistry, buildProjectIndex, isEagleOnlyProjectId } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
 const { eagleBaseAcl, eagleReadUnder } = require('../seed/transform');
 const { readUnder } = require('../helpers/update-parent');
@@ -547,20 +547,24 @@ async function reconcile(argv = [], deps = {}) {
   const projectRead = new Map(projectRows.map(row => [String(row.id), row.read]));
   const projectReadOf = row => projectRead.get(String(row.projectId)) || null;
 
-  // A delete caps a row Eagle may still publish, so a deleted row and its twin (same eagleId) are
-  // never ACL drift. Still listed: a DEMI delete is reported apart, an Eagle-side one is stale drift.
+  // A delete caps a row Eagle may still publish, so a deleted row and the twin of a deleted Track row
+  // are never ACL drift. Still listed: a DEMI delete is reported apart, an Eagle-side one is stale drift.
   const deleted = row => row.isDeleted === true;
   const listed = row => eagleProjectIds.has(String(row.eagleId));
   const deletedRows = projectRows.filter(deleted);
-  const deletedEagleIds = new Set(deletedRows.map(row => String(row.eagleId)));
-  const eagleIdsOf = rows => [...new Set(rows.map(row => String(row.eagleId)))];
+  const deletedTrackEagleIds = new Set(deletedRows.filter(row => !isEagleOnlyProjectId(row.id))
+    .map(row => String(row.eagleId)));
+  const capped = row => deleted(row) || (isEagleOnlyProjectId(row.id) && deletedTrackEagleIds.has(String(row.eagleId)));
+  const servedRows = projectRows.filter(row => !capped(row));
+  const servedEagleIds = new Set(servedRows.map(row => String(row.eagleId)));
+  const eagleIdsOf = rows => [...new Set(rows.filter(row => !servedEagleIds.has(String(row.eagleId)))
+    .map(row => String(row.eagleId)))];
   // Under a project gone from Eagle, unless its cascade is still owed and the document may be public.
   const retiredParents = new Set(deletedRows.filter(row => !listed(row) && !row.cascadePendingAt)
     .map(row => String(row.id)));
   summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size,
     ...splitRetired(projectDiff, deleted),
-    aclMismatch: aclMismatch(projectRows.filter(row => !deletedEagleIds.has(String(row.eagleId))),
-      row => String(row.eagleId), eagleRead),
+    aclMismatch: aclMismatch(servedRows, row => String(row.eagleId), eagleRead),
     demiDeleted: eagleIdsOf(deletedRows.filter(row => listed(row) && row.eagleDeleted !== true)),
     staleRetired: eagleIdsOf(deletedRows.filter(row => listed(row) && row.eagleDeleted === true)) };
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size,

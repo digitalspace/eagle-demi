@@ -357,6 +357,14 @@ test('reconcile', async (t) => {
       'D-gone left Eagle under a project Eagle still publishes: drift, not retired');
   });
 
+  await t.test('a deleted twin leaves its live Track row open to ACL drift', async () => {
+    const twin = { id: 'eagle-P1', eagleId: 'P1', sourceSystem: 'eagle', ...STAFF_ONLY, isDeleted: true };
+    const summary = await deletedRun({ isDeleted: false }, [twin]);
+
+    assert.deepStrictEqual(summary.projects.aclMismatch, ['P1'], 'Track row 207 is staff-only, Eagle public');
+    assert.deepStrictEqual(summary.projects.demiDeleted, [], 'P1 is still served by 207');
+  });
+
   await t.test('a retire Eagle undid since is staleRetired, and drift', async () => {
     const live = await deletedRun({ isDeleted: false, read: PUBLIC, isPublished: true });
     const summary = await deletedRun({ eagleDeleted: true });
