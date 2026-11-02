@@ -571,6 +571,7 @@ module.exports = {
   claimMinted,
   createMinted,
   refuseStray,
+  parentEagleId,
   isPublic,
   setPublished,
   syncLevel,

@@ -33,6 +33,8 @@ function consumersOf(kind) {
 
 /** First retry hides this long, doubling per attempt. host.json's hour-long default is the zip worker's. */
 const RETRY_VISIBILITY_SECONDS = 30;
+/** How long a request waits on its enqueue, well inside APIM's 30 s cap; a slower send still lands or is re-queued. */
+const ENQUEUE_TIMEOUT_MS = 5000;
 
 function queueClient() {
   return queues.queueClientFor({ name: settings.queue, setting: 'SYNC_OUT_QUEUE', feature: 'sync-out' });
@@ -58,15 +60,27 @@ async function enqueue(row, { repair = false, kind = DEFAULT_KIND } = {}) {
   return wanted.map(c => c.name);
 }
 
-/** `enqueue` for a write that has already landed: a failure is logged, not thrown, and reconcile re-queues. */
+const TIMED_OUT = Symbol('enqueue timed out');
+
+/** `enqueue` for a write that has already landed: a failure or timeout is logged, not thrown, and reconcile re-queues. */
 async function enqueueQuietly(row, { kind = DEFAULT_KIND } = {}) {
+  const fields = { kind, id: row.id, projectId: row.projectId };
+  let timer;
+  const timedOut = new Promise((resolve) => { timer = setTimeout(resolve, ENQUEUE_TIMEOUT_MS, TIMED_OUT); });
   try {
     // Through module.exports, so a test that stubs enqueue sees this call too.
-    return await module.exports.enqueue(row, { kind });
-  } catch (err) {
-    logger.error('[sync-out] enqueue failed',
-      { kind, id: row.id, projectId: row.projectId, error: err.message, stack: err.stack });
+    const queued = module.exports.enqueue(row, { kind });
+    const result = await Promise.race([queued, timedOut]);
+    if (result !== TIMED_OUT) return result;
+    logger.error('[sync-out] enqueue timed out', { ...fields, timeoutMs: ENQUEUE_TIMEOUT_MS });
+    queued.catch(err => logger.error('[sync-out] enqueue failed after timeout',
+      { ...fields, error: err.message, stack: err.stack }));
     return [];
+  } catch (err) {
+    logger.error('[sync-out] enqueue failed', { ...fields, error: err.message, stack: err.stack });
+    return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
 

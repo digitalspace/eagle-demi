@@ -110,11 +110,19 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 | Kind | Consumer | Switch | Sends |
 |---|---|---|---|
 | `commentPeriod` | `src/sync-out/eagle.js` | none | ENGAGE rows, and DEMI rows (see `SYNC_OUT_EAGLE_NATIVE_ENABLED` below) |
-| `document` | `src/sync-out/eagle-document.js` | `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` | updates only, to rows with an `eagleId` |
+| `document` | `src/sync-out/eagle-document.js` | `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` | rows with `sourceSystem: 'demi'` |
 | `organization` | `src/sync-out/eagle-organization.js` | `SYNC_OUT_EAGLE_ORGANIZATION_ENABLED` | rows with `sourceSystem: 'demi'` |
 | `project` | `src/sync-out/eagle-project.js` | `SYNC_OUT_EAGLE_PROJECT_ENABLED` | rows made by `POST /projects` (`isNativeProject`) |
 
-- The document consumer PUTs the row's fields, then calls publish or unpublish only when the public level changed.
+- The document consumer PUTs a row whose `eagleId` was linked by staff, or whose create has landed, then calls publish or unpublish only when the public level changed. A minted row whose create has not landed is POSTed again.
+- A document with no `eagleId` is POSTed to eagle-api's `POST /document/stored` under a minted id, as JSON, only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. The body holds the PUT fields plus `project`, `internalURL`, `documentFileName`, `internalExt` and `passedAVCheck`. eagle-api points its record at the object DEMI stored, so no bytes are sent.
+- `documentFileName` is the row's `displayName`, else the `s3Key` file name. `internalExt` is `fileExt`, else the `s3Key` extension. A row with no `s3Key`, or no type in `fileExt` or the `s3Key`, makes no call and fails.
+- The create body never holds `edrmsRecordNumber`, because eagle-api's unique sparse index on it would collide on two empty strings.
+- A document's parent project must be in Eagle first. A parent whose Eagle id sync-out minted counts once its own create recorded `sentVersion`.
+- A parent not yet in Eagle stops the send before its claim with the warn line `parent project <id> not yet in Eagle`, and the engine retries. That covers a missing parent, a native parent with no `eagleId`, and a minted parent whose create has not landed.
+- A Track parent with no `eagleId` stops the send with the error line `has no eagleId, nothing sent`.
+- After a create, or the PUT that follows a 409, the consumer moves Eagle's copy to the row's level. It reads the level from the echo, else from eagle-api.
+- `createDocument` and `extractDocument` call `enqueueQuietly` after the write. The document pending hook also lists DEMI documents never recorded as sent that have no `eagleId` or one sync-out minted.
 - The organization consumer PUTs a row that holds an `eagleId`. Eagle answers an unknown organization with 200 and a `null` body, which leads to a POST of the same id.
 - The project consumer PUTs only an Eagle id it minted itself (`syncOut.eagle.mintedId`). A project linked by staff to an Eagle project that already existed is skipped with the warn line `which sync-out did not create; not sent`, because Eagle staff own that project.
 - An unknown project answers the PUT with 404, which leads to a POST of the same id.
@@ -127,13 +135,14 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - An organization with no `eagleId` there stops the send before any call, with the error line `has no eagleId, nothing sent`.
 - A send that answers `held` records nothing on the row, so its version stays owed and a later delivery or the pending hook sends it.
 - Queue messages and resends carry `kind`. A message with no `kind`, queued before the field existed, is read as a comment period.
-- `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing; reconcile re-queues.
+- `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing; reconcile re-queues. It waits at most 5 s, then logs `[sync-out] enqueue timed out`.
 - A Flip that needs sync-out adds its kind to `kinds.js`, its consumers to that kind's list in `index.js`, and calls `enqueueQuietly` after its write.
 - The Eagle mirror keeps a DEMI-created row when eagle-api pushes the record under the row's `eagleId`, and makes no second row. Organizations (`controllers/nosql/organization.js`) take only `sources.eagle`. Comment periods (`controllers/nosql/comment-period.js`) take the Eagle staff fields except the ones DEMI writes.
 - A project made by `POST /projects` (no `sources.track`) gets its `eagleId` from a staff `PUT` or from sync-out, and the next Eagle push for that id lands on it (`mergeEaglePush` in `controllers/nosql/project.js`). DEMI owns its id, `sourceSystem`, `trackProjectId`, `centroid`, `createdAt` and Track-owned fields, empty ones included, except `proponentName` and `isActive`, which follow Eagle's `proponentId` and `activeStatus`; Eagle fills the other fields. `syncOut` and `syncVersion` stay as they were.
 - On a project whose Eagle id sync-out minted (`syncOut.eagle.mintedId`), the push also keeps DEMI's `read` and `isPublished`. Eagle's level stays in `sources.eagle.read`, and sync-out moves Eagle to DEMI's level.
-- `test/sync-out/sync-out.test.js`, `eagle-organization.test.js`, `eagle-project.test.js` and `eagle-document.test.js` hold the echo tests: a sync-out send (a create, or a PUT for documents, which sync-out only updates), eagle-api's echo through the mirror answered 2xx, the DEMI fields and `syncVersion` unchanged, and no second send.
-- Comment periods created in DEMI are sent only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Sync-out POSTs them under an id it mints and stores as `eagleId`. A 409 means an earlier POST landed, so it PUTs instead. The switch also stops queued and retried sends. Turn it on only when eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409.
+- `test/sync-out/sync-out.test.js`, `eagle-organization.test.js`, `eagle-project.test.js` and `eagle-document.test.js` hold the echo tests. Each runs a sync-out send (a create, or a document PUT) and eagle-api's echo through the mirror, answered 2xx, with the DEMI fields and `syncVersion` unchanged and no second send.
+- Comment periods and documents created in DEMI are sent only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Sync-out POSTs them under an id it mints and stores as `eagleId`. A 409 means an earlier POST landed, so it PUTs instead.
+- The switch also stops queued and retried sends. Turn it on only when eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409. With `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` on, it also needs eagle-api's `POST /document/stored` deployed, or every document create fails.
 - If eagle-api stores a native row under another id, the row gets `syncOut.eagle.strayEagleId` and the error line `not re-keyed`. Sync-out then sends nothing for that row. To clear it:
   1. For a staff-only organization, check that the stray is unpublished in Eagle. Sync-out unpublishes it before it stops; the error line `stray Eagle id ... not cleaned up` means that call failed.
   2. Delete the Eagle record `strayEagleId` through eagle-api.
