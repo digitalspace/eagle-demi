@@ -380,6 +380,15 @@ function resolveProjectAcl(eagle, deleted = isDeletedInEagle(eagle)) {
   return deleted ? capRead(read, DELETED_CEILING) : read;
 }
 
+/**
+ * Whether a rebuild from an Eagle record with no delete flag keeps the stored delete. eagle-api never
+ * sends `isDeleted: false`, so only a delete Eagle made (`sources.eagle.isDeleted`) clears.
+ */
+function deleteStands(existing) {
+  if (!existing || existing.isDeleted !== true) return false;
+  return !(existing.sources && existing.sources.eagle && existing.sources.eagle.isDeleted === true);
+}
+
 /** Flag a stored project deleted and cap its `read` at staff, in place: the row stays for staff and reconcile. */
 function markDeleted(row) {
   row.isDeleted = true;
@@ -658,6 +667,7 @@ module.exports = {
   normalizeCentroid,
   resolveProjectAcl,
   markDeleted,
+  deleteStands,
   mergeTrackProject,
   mergeEagleOnlyProject,
   eagleOnlyProjectId,

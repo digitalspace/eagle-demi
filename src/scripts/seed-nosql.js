@@ -10,7 +10,7 @@ const sources = require('../seed/sources');
 const transform = require('../seed/transform');
 const {
   buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
-  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted
+  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, deleteStands
 } = require('../merge/project');
 const { DEMI_ONLY_FIELDS } = require('../ownership/project');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
@@ -18,6 +18,7 @@ const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
 const { pickParent } = require('../helpers/parent-admit');
 const { refId } = require('../controllers/nosql/eagle-mirror');
+const projectController = require('../controllers/nosql/project');
 const { logger } = require('../utils/logger');
 const { readKeepIds } = require('../utils/keep-ids');
 const purgeHelpers = require('../helpers/purge');
@@ -398,10 +399,17 @@ async function runSeed(args, deps, summary) {
   const purge = deps.purge || purgeHelpers;
   const audit = deps.audit || auditHelpers;
   const access = systemAccess();
-  // A surplus project is flagged and capped as a delete push would, never removed.
+  // Flagged and capped as an Eagle delete push would, never removed. Absent from the public feed may
+  // mean unpublished, so the flag goes on the Eagle copy too: the project's return clears it.
   const retireProject = deps.retireProject || (async ({ id }) => {
     const current = await repos.projects.getById(access, id);
-    if (current) await repos.projects.upsert(markDeleted({ ...current, updatedAt: new Date().toISOString() }));
+    if (!current) return;
+    const eagle = { ...(current.sources && current.sources.eagle), isDeleted: true };
+    const saved = await repos.projects.upsert(markDeleted({
+      ...current, sources: { ...current.sources, eagle }, updatedAt: new Date().toISOString()
+    }));
+    const failure = await projectController.runCascade(saved, saved.eagleId);
+    if (failure) summary.failures.push(`reconcile: retired project ${id}: ${failure} DELETE /projects/${id} retries it`);
   });
   // Reading what is already there needs Cosmos. A live run always has it; a dry run only when the
   // operator is inside the private endpoint and set COSMOS_ENDPOINT.
@@ -482,7 +490,8 @@ async function runSeed(args, deps, summary) {
           carryEagleOnlyFields(project, existing);
           carryDemiOnlyFields(project, existing);
           // The public feed never says a project was deleted, so a rebuilt row would republish it.
-          if (existing.isDeleted === true) markDeleted(project);
+          // Only the feed listing the project again clears an Eagle-side delete.
+          if (deleteStands(existing) || (existing.isDeleted === true && !project.sources.eagle)) markDeleted(project);
         } else if (project.eagleId && !isEagleOnlyProjectId(project.id)) {
           // A Track row built for the first time beside its `eagle-<id>` twin takes the twin's
           // tags, the same as the Track relink. Not its sync-out state: that row was never sent.
@@ -868,14 +877,21 @@ async function runSeed(args, deps, summary) {
         'container: SEARCH_ENDPOINT is not set, so every index delete would be a silent no-op and ' +
         'the purged rows would stay searchable with no indexer to clean them up');
     } else {
-      // Documents first: a project whose documents are already gone cannot orphan any.
+      const keepIds = args.keepIds || new Set();
+      const listed = id => keepIds.has(String(id));
+      const listedProject = row => listed(row.id) || listed(row.eagleId);
+      const projectKey = row => String(row.eagleId);
+      const fetchedProjects = new Set(eagleProjects.map(p => String(p._id)));
+      const liveProjects = projectRows.filter(row => row.isDeleted !== true);
+      // A retired project's documents leave the feed with it; they stay, capped by its cascade.
+      const retired = new Set([...projectRows.filter(row => row.isDeleted === true),
+        ...surplusOf(liveProjects, projectKey, fetchedProjects).filter(row => !listedProject(row))]
+        .map(row => String(row.id)));
       const containers = [
-        ['documents', documentRows,
+        ['documents', documentRows.filter(row => !retired.has(String(row.projectId))),
           row => `${row.projectId}|${row.id}`, documentFetch.keys,
           row => purge.purgeDocument(row)],
-        ['projects', projectRows.filter(row => row.isDeleted !== true),
-          row => String(row.eagleId), new Set(eagleProjects.map(p => String(p._id))),
-          retireProject]
+        ['projects', liveProjects, projectKey, fetchedProjects, retireProject]
       ];
       // Both containers sized BEFORE either delete, so a breach in one stops the other too.
       const sized = containers.map(([label, rows, keyOf, fetched]) => ({
@@ -917,20 +933,15 @@ async function runSeed(args, deps, summary) {
       const logPath = reconcileLogPath(now);
       summary.reconcile = { log: logPath };
       if (!searchReady) summary.reconcile.search = 'unconfigured — live would refuse';
-      const keepIds = args.keepIds || new Set();
-      const listed = id => keepIds.has(String(id));
-      const listedProject = row => listed(row.id) || listed(row.eagleId);
       // A listed project spares its documents too, so the keep file can name projects only.
       const keptProjects = new Set([...keepIds,
         ...[...projectRows, ...projects].filter(listedProject).map(p => String(p.id))]);
       const spareDocument = row => listed(row.id) || keptProjects.has(String(row.projectId));
       summary.reconcile.documents = await reconcileContainer(...containers[0],
         { live, logPath, audit, spare: spareDocument, servedUpstream: servedUpstream('documents'), held: keptLive > 0 });
-      // A project still holding a kept or spared document stays too, or that document is orphaned.
+      // A project holding a listed document stays listed with it.
       const keptDocs = summary.reconcile.documents.kept || [];
-      const failedHolding = new Set(keptDocs.map(k => String(k.partitionKey)));
-      const holding = new Set([...failedHolding,
-        ...documentRows.filter(spareDocument).map(row => String(row.projectId))]);
+      const holding = new Set(documentRows.filter(spareDocument).map(row => String(row.projectId)));
       summary.reconcile.projects = await reconcileContainer(...containers[1],
         { live, logPath, audit, spare: row => listedProject(row) || holding.has(String(row.id)),
           servedUpstream: servedUpstream('projects'), held: keptLive > 0 });
@@ -945,15 +956,9 @@ async function runSeed(args, deps, summary) {
         for (const id of summary.reconcile[label].wouldKeep || []) sparedIds.add(String(id));
       }
       if (keptDocs.length) {
-        const heldProjects = (summary.reconcile.projects.wouldKeep || [])
-          .filter(id => failedHolding.has(String(id)));
-        const idsOf = ids => ids.slice(0, 20).join(', ');
         summary.failures.push(`--reconcile kept ${keptDocs.length} document row(s) whose chunks ` +
-          `could not all be removed (documents: ${idsOf(keptDocs.map(k => k.id))})` +
-          (heldProjects.length
-            ? ` and ${heldProjects.length} project row(s) holding them (projects: ${idsOf(heldProjects)})`
-            : '') +
-          '; re-run to retry');
+          `could not all be removed (documents: ${keptDocs.slice(0, 20).map(k => k.id).join(', ')}); ` +
+          're-run to retry');
       }
       log(`  surplus ids: ${logPath}`);
     }

@@ -28,7 +28,7 @@ const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted,
+  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, deleteStands,
   TRIMMED_FIELDS, hasValue
 } = require('../../merge/project');
 const { LEGISLATION_KEY, PUT_IGNORED_FIELDS } = require('../../ownership/project');
@@ -793,14 +793,10 @@ exports.upsertFromEagle = async (req, res) => {
   return applyEaglePush(req, res, push);
 };
 
-/**
- * Whether a push leaves the row deleted. eagle-api never sends `isDeleted: false`, so an unflagged
- * push restores only a delete Eagle made (`sources.eagle.isDeleted`); a DEMI delete stands.
- */
+/** Whether a push leaves the row deleted: its own flag, else the stored delete if it stands. */
 function pushDeleted(doc, existing) {
   if (typeof doc.isDeleted === 'boolean') return doc.isDeleted;
-  if (!existing || existing.isDeleted !== true) return false;
-  return !(existing.sources && existing.sources.eagle && existing.sources.eagle.isDeleted === true);
+  return deleteStands(existing);
 }
 
 /** The row a push writes, built from whatever revision is stored at the moment of the write. */
@@ -862,6 +858,7 @@ async function runCascade(saved, eagleId, options) {
   if (failure) await markCascadePending(saved, eagleId);
   return failure;
 }
+exports.runCascade = runCascade;
 
 /** Best effort, and deliberately so: the 500 the caller is about to send is the real answer. */
 async function markCascadePending(saved, eagleId) {
