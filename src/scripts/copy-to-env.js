@@ -1,28 +1,7 @@
 'use strict';
 
-/**
- * Copy containers from THIS environment's Cosmos account to another environment's.
- *
- * Written for the dev → test (staging) migration: demi-cosmos-dev holds the only copy of the
- * extracted corpus, and the copy is the corpus-preservation prerequisite for tearing dev down.
- *
- * Where it runs: inside the SOURCE VNet, on the devbox via `demi-run`, detached with a log file
- * (same harness as seed-nosql.js — `demi-run` supplies the settings, and the heap ceiling is
- * whatever the VM size allows). Both accounts are keyless behind private endpoints, so the TARGET
- * account needs (1) a private endpoint reachable from the source VNet and (2) a Cosmos data-plane
- * role assignment for this app's identity. Both are temporary and torn down after the copy.
- *
- * Usage:
- *   node src/scripts/copy-to-env.js --target https://demi-cosmos-test.documents.azure.com:443/
- *     [--containers projects,documents,boundaries,chunks] [--checkpoint /home/copy-checkpoint.json]
- *     [--live]
- *
- * Without --live it connects, counts both sides per container, and exits — the same probe you run
- * afterwards to verify the copy landed.
- *
- * Resumable: the checkpoint file stores the source continuation token per container, so a killed
- * run restarts where it stopped rather than at zero. Upserts make replays harmless.
- */
+// Usage: node src/scripts/copy-to-env.js --target <endpoint> [--containers a,b] [--checkpoint <file>] [--live]
+// Run on the devbox via `demi-run`: both Cosmos accounts are private-endpoint-only, so target needs a PE from the source VNet.
 
 const fs = require('fs');
 const { CosmosClient } = require('@azure/cosmos');
@@ -67,10 +46,7 @@ async function count(container) {
   return resources[0];
 }
 
-/**
- * @param {string[]} [argv]
- * @param {object} [deps] test seam: {client: (endpoint) => CosmosClient-like}
- */
+// argv and deps are injectable so tests can run main() without Cosmos.
 async function main(argv = process.argv.slice(2), deps = {}) {
   const makeClient = deps.client || client;
   const { target, containers, checkpoint, live } = parseArgs(argv);

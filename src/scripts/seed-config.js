@@ -1,28 +1,7 @@
 'use strict';
 
-/**
- * Seeds the single `config` document that GET /api/config overlays on the app settings.
- *
- * It seeds FROM the app settings of the container it runs in, so the first read after seeding
- * returns byte-for-byte what the endpoint returned before the container existed. Parity is by
- * construction rather than by transcription — there is no table here to drift out of date.
- *
- * MUST RUN ON THE DEVBOX (`demi-devbox-<env>`) via `demi-run`. `demi-cosmos-*` is
- * private-endpoint-only and keyless, reachable as the app's managed identity and from nowhere
- * else; a laptop with `az` logged in cannot reach it. Kudu's /api/command will not do either —
- * the SCM container has no managed-identity endpoint. Same constraint as
- * `export-chunks-to-eagle.js`; see README.md for the recipe.
- *
- * Usage:
- *   node src/scripts/seed-config.js                  # print what would be written, write nothing
- *   node src/scripts/seed-config.js --live           # write it
- *   node src/scripts/seed-config.js --live --force   # overwrite an existing document
- *
- * Deliberately seeds only the keys the controller will accept from the document
- * (`OVERRIDABLE_KEYS`). API_LOCATION, API_PATH and BUILD_ID are not among them: the first two are
- * what the frontend bootstraps from, and BUILD_ID has to keep coming from the deploy package or it
- * stops proving which build is answering.
- */
+// Usage: node src/scripts/seed-config.js [--live [--force]]; no flags prints the document and writes nothing.
+// Run on the devbox via `demi-run`: Cosmos is private-endpoint-only and keyless, so a laptop cannot reach it.
 
 const configRepository = require('../repositories/config');
 const config = require('../config');
@@ -50,10 +29,7 @@ function buildDocument() {
   };
 }
 
-/**
- * @param {string[]} [argv]
- * @param {object} [deps] test seam: {configRepository}
- */
+// argv and deps are injectable so tests can run main() without Cosmos.
 async function main(argv = process.argv.slice(2), deps = {}) {
   const repo = deps.configRepository || configRepository;
   const args = parseArgs(argv);
