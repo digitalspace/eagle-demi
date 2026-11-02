@@ -232,10 +232,14 @@ fields; it keeps `vis`, the short-link fields (`shortCode`, `shortCodeSource`,
 `legacyShortCodes`), the Track source block, and the two fields the search does not carry at all
 (`applicableRegulation`, `featuredDocuments`).
 
-`--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch are
-deleted through the same helpers `DELETE /documents/:id` and `DELETE /projects/:id` use, so the
-chunks and the search-index entries go with them, and each deleted row emits the same
-`document.delete` / `project.delete` audit event those routes do. A dry run reports `wouldDelete`
+`--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch.
+A surplus document is deleted through the helper `DELETE /documents/:id` uses, so its chunks and
+search-index entries go with it. A surplus project is never removed. A project missing from the
+public feed may only be unpublished, so it is flagged the way `DELETE /projects/:id` flags it
+(`isDeleted`, `read` capped at staff, the visibility cascade) and on its Eagle copy too
+(`sources.eagle.isDeleted`). Its documents stay, capped by that cascade. When the feed lists the
+project again, the next seed or Eagle push restores it. Each row emits the same `document.delete` /
+`project.delete` audit event those routes do. A dry run reports `wouldDelete`
 per container and deletes nothing. Deletion is a single phase after every fetch has finished —
 documents before projects — so a refusal stops it **before any delete**, in both containers at once.
 It refuses — exit 1, nothing removed — if `--only` dropped a stage, if `--limit-documents` was
@@ -279,7 +283,9 @@ from its `read[]`, so an anonymous caller cannot tell the two apart, and purging
 destroy an unpublished row along with its chunks and index entries. A purge needs a probe that
 separates them — a tombstone, or a credential that reads unpublished rows. A document whose own
 project is unpublished/gone is not counted as `eagleOnly` drift either — seed-nosql drops it the
-same way — it reports separately as `unresolvedParent`.
+same way — it reports separately as `unresolvedParent`. A project deleted in DEMI that Eagle still
+publishes reports as `demiDeleted`. A deleted project gone from Eagle, and every document under it,
+reports as `retired`. Neither counts toward `drift=`.
 
 For an id both sides hold, `aclMismatch` lists rows whose DEMI `read[]` lets in different callers
 than the `read[]` the mirror would write from Eagle's, or whose `isPublished` no longer matches
