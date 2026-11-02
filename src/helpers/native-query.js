@@ -360,8 +360,8 @@ function cosmosKind({ container, entity, partitionField, defaultOrder }) {
     access, partitionField, criteria, select: selectFor(entity, access, partitionField), orderBy
   });
   return {
-    async list(access, { criteria, orderBy, pageNum, pageSize }) {
-      return readPage(container, spec(access, criteria, orderBy || defaultOrder), { pageNum, pageSize });
+    async list(access, { criteria, orderBy, pageNum, pageSize, fetch }) {
+      return readPage(container, spec(access, criteria, orderBy || defaultOrder), { pageNum, pageSize, fetch });
     },
     async count(access, { criteria }) {
       const { items } = await cosmos.query(container, countWhere({ access, partitionField, criteria }), {});

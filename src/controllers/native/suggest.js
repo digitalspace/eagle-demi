@@ -14,8 +14,11 @@ const notifications = require('./notifications');
 const commentPeriods = require('./comment-periods');
 const commentPeriodRows = require('../../repositories/comment-periods');
 
+const PROJECTS = { spec: projectsKind, label: 'name', fields: ['id', 'eagleId', 'name'] };
+const NOTIFICATIONS = { spec: notifications.SPEC, label: 'name', fields: ['id', 'name', 'associatedProjectId'] };
+
 const KINDS = Object.freeze({
-  projects: { spec: projectsKind, label: 'name', fields: ['id', 'eagleId', 'name'] },
+  projects: PROJECTS,
   documents: {
     spec: documentsKind,
     label: 'displayName',
@@ -26,7 +29,7 @@ const KINDS = Object.freeze({
     label: 'headline',
     fields: ['id', 'headline', 'projectId', 'projectEagleId', 'projectName', 'notificationName']
   },
-  notifications: { spec: notifications.SPEC, label: 'name', fields: ['id', 'name', 'associatedProjectId'] },
+  notifications: NOTIFICATIONS,
   'comment-periods': {
     spec: commentPeriods.SPEC,
     // q also matches the parent project name, so the repository applies it, as on the native list.
@@ -38,6 +41,13 @@ const KINDS = Object.freeze({
     // parentJoin fills it from projectId; a period matched on its project name may have no label.
     fallback: 'projectName',
     fields: ['id', 'informationLabel', 'projectId', 'projectEagleId', 'projectName']
+  },
+  // The GET /project-records list: each side read in its own rank, then taken in turn.
+  'project-records': {
+    sides: {
+      project: PROJECTS,
+      notification: { ...NOTIFICATIONS, fields: ['id', 'eagleId', 'name'] }
+    }
   }
 });
 
@@ -81,6 +91,49 @@ function slim(row, { fields }) {
   return Object.fromEntries(fields.filter(field => row[field] !== undefined).map(field => [field, row[field]]));
 }
 
+/** One kind's suggestions for `{ q, limit }`: `{ items }`, or `{ error }` for a 400. */
+async function suggestKind(kind, { q, limit }, access) {
+  const repository = kind.repositoryFor && kind.repositoryFor(q);
+  if (repository === null) return { error: 'q needs more than quotes' };
+  const spec = repository ? { ...kind.spec, repository } : kind.spec;
+  const page = limit * ID_PAGE_FACTOR;
+  const listQuery = repository ? { pageSize: String(page) } : { q, pageSize: String(page) };
+  const parsed = parseNativeQuery(spec, listQuery, access);
+  if (parsed.error) return { error: parsed.error };
+
+  const { criteria, orderBy } = nativeCriteria(spec, parsed, access);
+  const rows = await spec.repository.list(access, {
+    criteria, orderBy, pageNum: 0, pageSize: page, parsed: { ...parsed, idPage: page }
+  });
+
+  // Cut to limit before the join so it looks up parents for the rows answered, not the whole page.
+  let kept = redactAllForAccess(spec.entity, rows, access)
+    .filter(row => hasLabel(row, kind.label) || (kind.fallback && hasLabel(row, 'projectId')))
+    .slice(0, limit);
+  if (spec.parentJoin) kept = await spec.parentJoin(access, kept);
+  if (kind.fallback) kept = kept.filter(row => hasLabel(row, kind.label) || hasLabel(row, kind.fallback));
+  return { items: kept.map(row => slim(row, kind)) };
+}
+
+/** First of each list, then second of each, and so on, up to `limit`; a short list lets the rest fill. */
+function takeInTurn(lists, limit) {
+  const taken = [];
+  for (let i = 0; taken.length < limit && lists.some(list => i < list.length); i++) {
+    for (const list of lists) if (i < list.length && taken.length < limit) taken.push(list[i]);
+  }
+  return taken;
+}
+
+/** Each side in its own rank, taken in turn, each item tagged with its side's record kind. */
+async function suggestSides(kind, asked, access) {
+  const sides = Object.entries(kind.sides);
+  const answers = await Promise.all(sides.map(([, side]) => suggestKind(side, asked, access)));
+  const refused = answers.find(answer => answer.error);
+  if (refused) return refused;
+  const tagged = answers.map(({ items }, i) => items.map(item => ({ ...item, recordKind: sides[i][0] })));
+  return { items: takeInTurn(tagged, asked.limit) };
+}
+
 exports.getSuggestions = async (req, res) => {
   // applyCors set `Vary: Origin` and this replaces it, so Origin is named again.
   res.setHeader('Vary', 'Origin, Authorization, X-Api-Key');
@@ -91,29 +144,11 @@ exports.getSuggestions = async (req, res) => {
     if (asked.error) return res.status(400).json({ error: asked.error });
 
     const kind = KINDS[asked.kind];
-    const repository = kind.repositoryFor && kind.repositoryFor(asked.q);
-    if (repository === null) return res.status(400).json({ error: 'q needs more than quotes' });
-    const spec = repository ? { ...kind.spec, repository } : kind.spec;
-    const page = asked.limit * ID_PAGE_FACTOR;
-    const listQuery = repository ? { pageSize: String(page) } : { q: asked.q, pageSize: String(page) };
-    const parsed = parseNativeQuery(spec, listQuery, access);
-    if (parsed.error) return res.status(400).json({ error: parsed.error });
-
-    const { criteria, orderBy } = nativeCriteria(spec, parsed, access);
-    const rows = await spec.repository.list(access, {
-      criteria, orderBy, pageNum: 0, pageSize: page, parsed: { ...parsed, idPage: page }
-    });
-
-    // Cut to limit before the join so it looks up parents for the rows answered, not the whole page.
-    let kept = redactAllForAccess(spec.entity, rows, access)
-      .filter(row => hasLabel(row, kind.label) || (kind.fallback && hasLabel(row, 'projectId')))
-      .slice(0, asked.limit);
-    if (spec.parentJoin) kept = await spec.parentJoin(access, kept);
-    if (kind.fallback) kept = kept.filter(row => hasLabel(row, kind.label) || hasLabel(row, kind.fallback));
-    const items = kept.map(row => slim(row, kind));
+    const answer = await (kind.sides ? suggestSides : suggestKind)(kind, asked, access);
+    if (answer.error) return res.status(400).json({ error: answer.error });
 
     if (isAnonymous(access)) res.setHeader('Cache-Control', `public, max-age=${MAX_AGE}`);
-    return res.json({ items });
+    return res.json({ items: answer.items });
   } catch (err) {
     const searchFailed = searchServiceError(res, err, 'suggest');
     if (searchFailed) return searchFailed;

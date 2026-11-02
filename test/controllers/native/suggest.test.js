@@ -32,7 +32,8 @@ const FIELDS = {
   documents: ['id', 'displayName', 'projectId', 'projectEagleId', 'projectName'],
   updates: ['id', 'headline', 'projectId', 'projectEagleId', 'projectName', 'notificationName'],
   notifications: ['id', 'name', 'associatedProjectId'],
-  'comment-periods': ['id', 'informationLabel', 'projectId', 'projectEagleId', 'projectName']
+  'comment-periods': ['id', 'informationLabel', 'projectId', 'projectEagleId', 'projectName'],
+  'project-records': ['id', 'eagleId', 'name', 'recordKind']
 };
 
 const sources = { eagle: { id: 'e1' } };
@@ -83,13 +84,13 @@ const values = (spec, prefix) => spec.parameters.filter(p => p.name.startsWith(p
  * The role arm and the `@xid`/`@pid`/`@eid` id lists; every other clause is the real store's. The
  * project name lookup (`queryPage`) answers every project the role arm admits.
  */
-function fakeStores(t, { fail, ranked = RANKED } = {}) {
+function fakeStores(t, { fail, ranked = RANKED, containers = CONTAINERS } = {}) {
   updates.forgetParents();
   const searches = [];
   const reads = [];
   const admitted = (container, spec) => {
     const roles = values(spec, '@role');
-    return CONTAINERS[container].filter(row => roles.length === 0 || row.read.some(r => roles.includes(r)));
+    return containers[container].filter(row => roles.length === 0 || row.read.some(r => roles.includes(r)));
   };
   t.mock.method(cosmos, 'query', async (container, spec, options) => {
     const ids = [...values(spec, '@xid'), ...values(spec, '@pid')];
@@ -236,11 +237,32 @@ test('GET /suggest', async (t) => {
     assert.deepStrictEqual(reads.filter(read => read.container === 'projects').map(read => read.ids), [['p1']]);
   });
 
+  await t.test('project-records: a project, then a notification, each in its own rank; the longer side fills', async (t) => {
+    const row = (id, name) => ({ id, eagleId: `e-${id}`, name, read: ['public'], vis: {}, sources });
+    const containers = {
+      ...CONTAINERS,
+      projects: ['r1', 'r2', 'r3', 'r4', 'r5'].map(id => row(id, `Site ${id}`)),
+      notifications: ['m1', 'm2'].map(id => row(id, `Site ${id}`))
+    };
+    const ranked = { projects: ['r3', 'r1', 'r5', 'r2', 'r4'], notifications: ['m2', 'm1'] };
+    const item = recordKind => id => ({ id, eagleId: `e-${id}`, name: `Site ${id}`, recordKind });
+    const [project, notification] = [item('project'), item('notification')];
+
+    fakeStores(t, { containers, ranked });
+    assert.deepStrictEqual((await call('kind=project-records&q=site&limit=4')).body.items,
+      [project('r3'), notification('m2'), project('r1'), notification('m1')]);
+
+    t.mock.restoreAll();
+    fakeStores(t, { containers, ranked: { ...ranked, notifications: [] } });
+    assert.deepStrictEqual((await call('kind=project-records&q=site&limit=4')).body.items,
+      ['r3', 'r1', 'r5', 'r2'].map(project));
+  });
+
   await t.test('refuses a bad query with 400 before any search', async (t) => {
     const { searches, reads } = fakeStores(t);
     const cases = {
-      'kind=users&q=site': 'kind must be one of projects, documents, updates, notifications, comment-periods',
-      'q=site': 'kind must be one of projects, documents, updates, notifications, comment-periods',
+      'kind=users&q=site': 'kind must be one of projects, documents, updates, notifications, comment-periods, project-records',
+      'q=site': 'kind must be one of projects, documents, updates, notifications, comment-periods, project-records',
       'kind=comment-periods&q=%22%20%22': 'q needs more than quotes',
       'kind=projects&q=site&pageSize=2': 'unknown parameter: pageSize',
       'kind=projects&q=+a+': 'q takes 2 to 100 characters',
