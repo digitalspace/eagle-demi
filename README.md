@@ -292,17 +292,22 @@ node src/scripts/reconcile-eagle.js --store    # and save the class report for G
 
 The drift check for the Eagle push, without a re-seed: DEMI rows gone from Eagle's public search
 (a hard delete carries no tombstone) and Eagle ids the push never landed. **It reports and changes
-nothing.** `unpublishedOrDeleted` is not a delete list: eagle-api answers `200 []` on
-`/api/public/{document,project}/{id}` both for a deleted row and for one that merely lost `public`
-from its `read[]`, so an anonymous caller cannot tell the two apart, and purging on that set would
-destroy an unpublished row along with its chunks and index entries. A purge needs a probe that
-separates them — a tombstone, or a credential that reads unpublished rows. A document whose own
-project is unpublished/gone is not counted as `eagleOnly` drift either — seed-nosql drops it the
-same way — it reports separately as `unresolvedParent`. A project deleted in DEMI that Eagle still
-publishes reports as `demiDeleted`, and its `eagle-<id>` twin is not ACL drift. A deleted project
-gone from Eagle, and every document under it, reports as `retired`, unless its cascade is still owed
-(`cascadePendingAt`). Neither counts toward `drift=`. A project the seed retired that Eagle lists
-again reports as `staleRetired` and does count: the next seed or push restores it.
+nothing.** A document whose own project is unpublished or gone reports as `unresolvedParent`, not
+`eagleOnly` drift, since seed-nosql drops it the same way.
+
+`unpublishedOrDeleted` is not a delete list. For a deleted row and for one that only lost `public`
+from its `read[]`, eagle-api answers `200 []` on `/api/public/{document,project}/{id}` alike, so
+purging on that set would destroy unpublished rows. A purge needs a probe that separates them: a
+tombstone, or a credential that reads unpublished rows.
+
+A project deleted in DEMI that Eagle still publishes reports as `demiDeleted`, and its `eagle-<id>`
+twin is not ACL drift. A project the seed retired that Eagle lists again reports as `staleRetired`
+and counts toward `drift=`: the next seed or push restores it.
+
+A deleted Eagle-sourced project gone from Eagle reports under `projects.retired`, even with
+`cascadePendingAt` set. Its documents report under `documents.retired` unless that cascade is still
+owed, and then they stay drift. Neither `retired` list counts toward `drift=`, and a deleted Track
+row gone from Eagle reports under `trackOnly` instead.
 
 For an id both sides hold, `aclMismatch` lists rows whose DEMI `read[]` lets in different callers
 than the `read[]` the mirror would write from Eagle's, or whose `isPublished` no longer matches
