@@ -657,6 +657,21 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(summary.stages.documents.built, 1);
   });
 
+  await t.test('a matched project keeps its Eagle source and the Eagle-only fields the feed lacks', async () => {
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) => (id === '207'
+      ? { id: '207', eagleId: matchedGuid, sources: { eagle: { _id: matchedGuid } },
+        applicableRegulation: 'Reg', featuredDocuments: ['d1'] }
+      : null);
+
+    await seed(['--live', '--only', 'projects'], { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.strictEqual(matched.sources.eagle._id, matchedGuid);
+    assert.strictEqual(matched.applicableRegulation, 'Reg');
+    assert.deepStrictEqual(matched.featuredDocuments, ['d1']);
+  });
+
   await t.test('the project stage carries vis forward', async () => {
     // An upsert replaces the item, so classification must be carried. 373 has no vis (not counted);
     // 207 has a stale sources.track that the rebuilt block must replace.
