@@ -156,13 +156,13 @@ test('minio backend', async (t) => {
   }
 
   await t.test('getObjectStream hands back the client stream at the prefixed key, undrained', async () => {
-    const keys = [];
+    const calls = [];
     t.mock.method(Minio.Client.prototype, 'bucketExists', async () => true);
-    t.mock.method(Minio.Client.prototype, 'getObject', async (bucket, key) => { keys.push(key); return SOURCE; });
+    t.mock.method(Minio.Client.prototype, 'getObject', async (bucket, key) => { calls.push([bucket, key]); return SOURCE; });
 
     const returned = await minio.getObjectStream('etl/site-c/abc.pdf');
 
-    assert.deepStrictEqual(keys, [PDF]);
+    assert.deepStrictEqual(calls, [[config.minioBucket, PDF]]);
     assert.strictEqual(returned, SOURCE);
   });
 

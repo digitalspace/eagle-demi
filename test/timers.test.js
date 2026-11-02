@@ -114,7 +114,7 @@ for (const row of TIMERS) {
 
     const expected = { ...row.failure.meta, error: 'upstream unreachable', stack: thrown.stack };
     assert.deepStrictEqual(errors.map(e => e.message), [row.failure.message]);
-    assert.deepStrictEqual(pick(errors[0].meta, Object.keys(expected)), expected);
+    assert.deepStrictEqual(pick(errors[0].meta ?? {}, Object.keys(expected)), expected);
   });
 }
 

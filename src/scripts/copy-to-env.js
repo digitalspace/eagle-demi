@@ -1,7 +1,7 @@
 'use strict';
 
 // Usage: node src/scripts/copy-to-env.js --target <endpoint> [--containers a,b] [--checkpoint <file>] [--live]
-// Run on the devbox via `demi-run`: both Cosmos accounts are private-endpoint-only, so target needs a PE from the source VNet.
+// Run on the devbox: both accounts are private-endpoint-only, and the app identity needs a Cosmos data-plane role on the target.
 
 const fs = require('fs');
 const { CosmosClient } = require('@azure/cosmos');

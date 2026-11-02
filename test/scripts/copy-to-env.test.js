@@ -105,6 +105,20 @@ test('copy-to-env', async (t) => {
     assert.strictEqual(JSON.parse(fs.readFileSync(checkpoint, 'utf8')).projects.copied, 2);
   });
 
+  await t.test('--live follows the continuation token across pages and ends with no stored token', async (tt) => {
+    const checkpoint = tmpCheckpoint(tt);
+    const pages = {
+      start: { resources: [{ id: 'a' }, { id: 'b' }], continuationToken: 't1', hasMoreResults: true },
+      t1: { resources: [{ id: 'c' }], continuationToken: undefined, hasMoreResults: false }
+    };
+    const source = fakeContainer(pages, 3);
+    const target = fakeContainer({});
+    await main(['--target', TARGET, '--containers', 'projects', '--checkpoint', checkpoint, '--live'],
+      { client: fakeClient(source, target) });
+    assert.deepStrictEqual(target.stored.map((r) => r.id), ['a', 'b', 'c']);
+    assert.strictEqual(JSON.parse(fs.readFileSync(checkpoint, 'utf8')).projects.token, undefined);
+  });
+
   await t.test('--live skips a container whose target already holds as many rows as the source', async (tt) => {
     const source = fakeContainer(onePage(), 2);
     const target = fakeContainer({}, 2);

@@ -653,16 +653,26 @@ test('the PDF title worker live flag reaches the app as lowercase true or false'
 });
 
 // A param line absent from the file deploys main.bicep's default, passed in as `fallback`.
-const paramValue = (params, name, fallback) =>
-  new RegExp(`^param ${name} = (.+)$`, 'm').exec(params)?.[1].trim() ?? fallback;
-const stringParam = (params, name, fallback) => /^'([^']*)'$/.exec(paramValue(params, name, `'${fallback}'`))?.[1];
+// A line present but not a plain literal fails here, so a misread cannot pass an implication.
+const paramValue = (params, name) => new RegExp(`^param ${name} = (.+)$`, 'm').exec(params)?.[1].trim();
+const stringParam = (params, name, fallback) => {
+  const raw = paramValue(params, name);
+  if (raw === undefined) return fallback;
+  assert.match(raw, /^'[^']*'$/, `param ${name} = ${raw} is not a plain string literal`);
+  return raw.slice(1, -1);
+};
+const boolParam = (params, name, fallback) => {
+  const raw = paramValue(params, name) ?? String(fallback);
+  assert.match(raw, /^(true|false)$/, `param ${name} = ${raw} is not a bare true or false`);
+  return raw === 'true';
+};
 const secretNames = (params) => [...(/^param optionalSecretNames = \[\n([\s\S]*?)^\]$/m.exec(params)?.[1] ?? '')
   .matchAll(/^\s+'([^']+)'$/gm)].map((m) => m[1]);
 
 // main.bicep gates on all three and skips the deploy silently when one is missing.
 for (const [env, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
   test(`${env}: deployPdfTitleWorker = true comes with its vault secret and the API subnet`, () => {
-    const on = paramValue(params, 'deployPdfTitleWorker', 'false') === 'true';
+    const on = boolParam(params, 'deployPdfTitleWorker', false);
     assert.ok(!on || secretNames(params).includes('pdf-title-worker-api-key'),
       `${env} turns the PDF title worker on without naming pdf-title-worker-api-key in optionalSecretNames`);
     assert.ok(!on || stringParam(params, 'apiFlexSubnetId', '') !== '',
@@ -679,10 +689,10 @@ for (const [env, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
 // Test's corpus is not eagle-test's, so a reconcile against it reports unrelated drift every night.
 test('test runs no reconcile and no drift alert while eagleApiBase is eagle-test', () => {
   const reconciles = stringParam(TEST_PARAMS, 'reconcileSchedule', '') !== '' ||
-    paramValue(TEST_PARAMS, 'deployReconcileDriftAlert', 'false') === 'true';
+    boolParam(TEST_PARAMS, 'deployReconcileDriftAlert', false);
   const base = stringParam(TEST_PARAMS, 'eagleApiBase');
   assert.ok(base, 'test must state eagleApiBase');
-  assert.ok(!reconciles || new URL(base).hostname !== 'eagle-test.apps.silver.devops.gov.bc.ca',
+  assert.ok(!reconciles || !/eagle-test|6cdc9e-test/.test(new URL(base).hostname),
     `test schedules a reconcile against ${base}`);
 });
 
