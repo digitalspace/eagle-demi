@@ -77,6 +77,8 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
     disableLocalAuth: true
     disableKeyBasedMetadataWriteAccess: true
     minimalTlsVersion: 'Tls12'
+    // On live in both environments; a template that omits it turns it off on every deploy.
+    enablePartitionKeyMonitor: true
     // All three are on the live account. The two preview enrolments are VESTIGIAL: Cosmos native
     // full-text search was ruled out (fuzzy `distance` is a silent no-op even with the preview
     // enrolled, MIGRATION.md §F) and nothing generates embeddings, so neither is used by any query.
