@@ -39,9 +39,11 @@ function store(t) {
   const calls = [];
   t.mock.method(cosmos, 'query', async (container, spec, options) => {
     calls.push({ container, options });
+    // The real client refuses a spec without a parameters array; the fake must too.
+    cosmos.assertQuerySpec(spec, container);
     const [, select, where] = /^SELECT (.+?) FROM c WHERE (.+)$/s.exec(spec.query);
     const fields = select.split(', ').map(field => field.replace(/^c\./, ''));
-    const params = Object.fromEntries((spec.parameters || []).map(p => [p.name, p.value]));
+    const params = Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
     const hits = ROWS.filter(row => evaluate(where, row, params))
       .map(row => Object.fromEntries(fields.filter(f => Object.hasOwn(row, f)).map(f => [f, row[f]])));
     const at = Number(options.continuationToken || 0);

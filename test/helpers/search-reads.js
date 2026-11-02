@@ -52,7 +52,7 @@ const PARTITION_FIELD = {
 };
 
 /** One spec's bound parameters, by name. */
-const bound = (spec) => Object.fromEntries((spec.parameters || []).map(p => [p.name, p.value]));
+const bound = (spec) => Object.fromEntries(spec.parameters.map(p => [p.name, p.value]));
 
 /**
  * The role arm of `readClause`, run over a row the way Cosmos would: a spec carrying the
@@ -61,7 +61,7 @@ const bound = (spec) => Object.fromEntries((spec.parameters || []).map(p => [p.n
  */
 function admitsByRole(spec, row) {
   if (!/EXISTS\(SELECT VALUE r FROM r IN c\.read WHERE r IN \(/.test(spec.query)) return true;
-  const roles = (spec.parameters || []).filter(p => /^@role\d+$/.test(p.name)).map(p => p.value);
+  const roles = spec.parameters.filter(p => /^@role\d+$/.test(p.name)).map(p => p.value);
   return (row.read || []).some(token => roles.includes(token));
 }
 
@@ -75,7 +75,7 @@ function matchesCriteria(spec, row) {
   for (const [name, field] of Object.entries(STRICT_EQ)) {
     if (params[name] !== undefined && String(row[field]) !== String(params[name])) return false;
   }
-  const statuses = (spec.parameters || []).filter(p => /^@eaoStatus\d+$/.test(p.name)).map(p => p.value);
+  const statuses = spec.parameters.filter(p => /^@eaoStatus\d+$/.test(p.name)).map(p => p.value);
   return statuses.length === 0 || statuses.includes(row.eaoStatus);
 }
 
@@ -93,6 +93,7 @@ function stubCosmos(t, rows, counts = {}, { strict = false } = {}) {
   // The Update parent gate caches parent rows per process; each stub is a new store.
   updatesRepo.forgetParents();
   const run = (container, spec, options) => {
+    cosmos.assertQuerySpec(spec, container);
     seen.push({ container, spec, options });
     // A partition key is HONOURED, so a read aimed at a partition that does not exist answers
     // nothing — the case an unresolved project id produces, and the one a stub that always serves
@@ -145,7 +146,7 @@ const specsFor = (seen, container) =>
   seen.filter(s => s.container === container).map(s => s.spec);
 
 /** Every parameter value one spec bound, so an ACL token can be looked for by value. */
-const boundValues = (spec) => (spec.parameters || []).map(p => String(p.value));
+const boundValues = (spec) => spec.parameters.map(p => String(p.value));
 
 /** One response as the tests read it. A HEAD has no body to parse. */
 async function readResponse(res, init) {

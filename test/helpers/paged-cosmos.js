@@ -22,6 +22,7 @@ function pagedCosmos(t, rowsOf, { pageSize = MAX_PAGE_SIZE, emptyFetches = 0 } =
   const seen = [];
   let empties = emptyFetches;
   t.mock.method(cosmos, 'query', async (container, spec, options = {}) => {
+    cosmos.assertQuerySpec(spec, container);
     seen.push({ container, spec, options });
     const rows = rowsOf(container);
     if (/COUNT\(1\)/.test(spec.query)) return { items: [rows.length] };

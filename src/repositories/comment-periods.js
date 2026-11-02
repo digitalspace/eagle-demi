@@ -464,7 +464,7 @@ async function listEveryEngage() {
  * or a create whose delivery died. Across partitions. For `src/sync-out/pending.js` only.
  */
 async function listSyncPending() {
-  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${EAGLE_SYNC_PENDING}` });
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${EAGLE_SYNC_PENDING}`, parameters: [] });
 }
 
 module.exports = {
