@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * Rows of one kind holding a version a consumer has not sent, lapsed create claims included; a kind's
- * reconcile hook. `{ repair: true }` re-queues them. It keeps no report, so `store` is ignored.
+ * Rows of one kind holding a version a consumer has not sent, lapsed send claims (`creating`) included; a
+ * kind's reconcile hook. `{ repair: true }` re-queues them. It keeps no report, so `store` is ignored.
  */
 
 const { logger } = require('../utils/logger');
@@ -23,7 +23,7 @@ const entryOf = (consumer, row) => (row.syncOut && row.syncOut[consumer.name]) |
 // A stray row is one the consumer refuses; re-queuing it would fail into poison and re-alert every run.
 const isStray = (consumer, row) => Object.hasOwn(entryOf(consumer, row), 'strayEagleId');
 
-/** True when `consumer` wants `row`, has not sent its version, and no live delivery holds a create claim on it. */
+/** True when `consumer` wants `row`, has not sent its version, and no live delivery holds a send claim (`creating`) on it. */
 function pendingFor(consumer, row) {
   const entry = entryOf(consumer, row);
   const sent = Number.isInteger(entry.sentVersion) && entry.sentVersion >= kinds().versionOf(row);

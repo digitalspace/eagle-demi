@@ -162,13 +162,16 @@ async function markUnsent(repo, row) {
 async function repair(rows, { repo, enqueue }, report) {
   if (!eagle.enabled()) {
     report.warnings.push('SYNC_OUT_EAGLE_ENABLED is not true: --repair queued nothing');
+    report.notRequeued = rows.map(row => String(row.id));
     return;
   }
   for (const row of rows) {
     try {
       await markUnsent(repo, row);
       if ((await enqueue(row, { repair: true })).length) report.queued++;
+      else report.notRequeued.push(String(row.id));
     } catch (err) {
+      report.notRequeued.push(String(row.id));
       report.warnings.push(`could not re-queue row ${row.id}: ${err.message}`);
     }
   }
@@ -226,7 +229,7 @@ async function reconcileEngage({ repair: doRepair = false, limit = null, deps = 
   const get = deps.fetch || fetch;
   const report = {
     at: new Date().toISOString(), checked: 0, neverSynced: [], missingInEagle: [], drift: [],
-    duplicates: [], conflicts: [], skipped: [], engageMissingInDemi: [], queued: 0, warnings: [],
+    duplicates: [], conflicts: [], skipped: [], engageMissingInDemi: [], queued: 0, notRequeued: [], warnings: [],
     engageChecked: false
   };
 

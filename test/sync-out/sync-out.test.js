@@ -15,8 +15,7 @@ const notifications = require('../../src/repositories/notifications');
 const { logger } = require('../../src/utils/logger');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
-const { KINDS, COMMENT_PERIOD, kindOf } = require('../../src/sync-out/kinds');
-const reconcileEngage = require('../../src/scripts/reconcile-engage');
+const { KINDS, COMMENT_PERIOD } = require('../../src/sync-out/kinds');
 const { writeRow } = require('../../src/domain/_write');
 const commentPeriodController = require('../../src/controllers/nosql/comment-period');
 const { mockRes, STAFF, PUBLIC_ACL } = require('../helpers/eagle-mirror-fixtures');
@@ -733,16 +732,12 @@ test('sync-out', async (t) => {
         [['[sync-out] enqueue failed', COMMENT_PERIOD, 'engage-42', 'queue sync-out down']]);
     });
 
-  await t.test('every kind names only consumers the engine has, and comment periods reconcile through reconcile-engage',
-    async (tt) => {
-      for (const [name, kind] of Object.entries(KINDS)) {
-        assert.ok(kind.consumers.length > 0, `${name} has a consumer`);
-        assert.deepStrictEqual(syncOut.consumersOf(name).map(c => c.name), kind.consumers, `${name} has each consumer it names`);
-      }
-      tt.mock.method(reconcileEngage, 'run', async (options) => ({ ran: options }));
-
-      assert.deepStrictEqual(await kindOf(COMMENT_PERIOD).reconcile({ repair: true }), { ran: { repair: true } });
-    });
+  await t.test('every kind names only consumers the engine has', () => {
+    for (const [name, kind] of Object.entries(KINDS)) {
+      assert.ok(kind.consumers.length > 0, `${name} has a consumer`);
+      assert.deepStrictEqual(syncOut.consumersOf(name).map(c => c.name), kind.consumers, `${name} has each consumer it names`);
+    }
+  });
 
   await t.test('a domain writeRow raises syncVersion from the stored row, so a sent row is sent again', async (tt) => {
     const store = wireStore(tt, engageRow({

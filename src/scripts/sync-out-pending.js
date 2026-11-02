@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * Lists rows of one sync-out kind with a version not yet sent; `--repair` re-queues them. Runs on the
- * devbox via `demi-run`, like reconcile-engage.js.
+ * Runs one sync-out kind's reconcile hook: lists rows with a version not yet sent, and `--repair` re-queues
+ * them. For comment periods the ENGAGE checks of reconcile-engage.js run first. Runs on the devbox via
+ * `demi-run`, like reconcile-engage.js.
  */
 
-const { depsFor, reconcile } = require('../sync-out/pending');
-const { KINDS } = require('../sync-out/kinds');
+const { KINDS, kindOf } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
 const TAG = '[sync-out pending]';
@@ -25,9 +25,16 @@ function parseArgs(argv) {
   return args;
 }
 
-async function run({ kind, repair }, deps = depsFor(kind)) {
-  const report = await reconcile({ repair }, deps);
-  if (report.failed.length) throw new Error(`${report.failed.length} row(s) not re-queued: ${report.failed.join(', ')}`);
+async function run({ kind, repair }, reconcile = kindOf(kind).reconcile) {
+  const report = await reconcile({ repair });
+  const engage = report.engage || {};
+  const problems = [
+    engage.error && `ENGAGE checks failed: ${engage.error}`,
+    engage.notRequeued && engage.notRequeued.length &&
+      `${engage.notRequeued.length} ENGAGE row(s) not re-queued: ${engage.notRequeued.join(', ')}`,
+    report.failed.length && `${report.failed.length} row(s) not re-queued: ${report.failed.join(', ')}`
+  ].filter(Boolean);
+  if (problems.length) throw new Error(problems.join('; '));
   return report;
 }
 

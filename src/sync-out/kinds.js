@@ -8,19 +8,42 @@ const documents = require('../repositories/documents');
 const lists = require('../repositories/lists');
 const projects = require('../repositories/projects');
 const pending = require('./pending');
+const { logger } = require('../utils/logger');
 
 const COMMENT_PERIOD = 'commentPeriod';
 const DOCUMENT = 'document';
 const ORGANIZATION = 'organization';
 const PROJECT = 'project';
 
+/**
+ * The ENGAGE checks, then the pending hook, which alone sees native rows and lapsed send claims. Resolves to the
+ * pending report with the ENGAGE report, or `{ error }` when that pass threw, under `engage`.
+ */
+async function reconcileCommentPeriods(options = {}) {
+  let engage;
+  try {
+    // Required on call: the script requires sync-out itself.
+    engage = await require('../scripts/reconcile-engage').run(options);
+  } catch (err) {
+    engage = { error: err.message };
+    logger.error('[sync-out pending] commentPeriod: ENGAGE checks failed, pending pass runs anyway',
+      { error: err.message, stack: err.stack });
+  }
+  // A row both passes queue gets a second message, which the worker skips as current.
+  return { ...(await pending.reconcile(options, pending.depsFor(COMMENT_PERIOD))), engage };
+}
+
+// No pins kind: no client still reads pins from eagle-api (docs/eagle-api-port.md, Pins, Sync-out).
 const KINDS = Object.freeze({
+  // eagle-admin writes comments through eagle-api until F3; that handler takes the period's `commentIdCount`
+  // (comment.js getNextCommentIdCount) and comment reads gate on the period (helpers/parentRead.js).
   [COMMENT_PERIOD]: Object.freeze({
     repo: commentPeriods,
     consumers: Object.freeze(['eagle']),
-    // Required on call: the script requires sync-out itself.
-    reconcile: (options) => require('../scripts/reconcile-engage').run(options)
+    reconcile: reconcileCommentPeriods
   }),
+  // eagle-admin writes documents through eagle-api until F10 (PUT, publish, feature); those handlers read
+  // Eagle's copy of the document.
   [DOCUMENT]: Object.freeze({
     // Called through the module, so a stub on the repository reaches the engine. The plain upsert never reads `_etag`.
     repo: Object.freeze({
@@ -31,6 +54,8 @@ const KINDS = Object.freeze({
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(DOCUMENT))
   }),
+  // A project's proponent and an organization's parentCompany are sent by Eagle id, and eagle-api's project reads
+  // join `proponent` to the organization (helpers/aggregators.js).
   [ORGANIZATION]: Object.freeze({
     // `lists` is partitioned on kind, so the read names it; a message's null projectId would miss the row.
     repo: Object.freeze({
@@ -41,6 +66,8 @@ const KINDS = Object.freeze({
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(ORGANIZATION))
   }),
+  // eagle-api's document handlers, which eagle-admin writes through until F10, read the parent project
+  // (document.js featureDocument counts featured documents per project).
   [PROJECT]: Object.freeze({
     repo: Object.freeze({
       readForWrite: (id) => projects.readForWrite(id),

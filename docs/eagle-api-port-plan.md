@@ -290,7 +290,7 @@ Guards are `authMiddleware` plus `requireRole(<eagle-api scopes>)`. Line numbers
   - Move `pins`, `pinsRead` and `pinsHistory` into DEMI_ONLY.
   - Delete the pins branch at `merge/project.js:220-232` and its test at `test/merge/project.test.js:899-913`.
   - Ignore Eagle fields in `controllers/nosql/organization.js`.
-  - Sync-out uses the pin routes, sending only the difference (tracker).
+  - No pins sync-out; why: `docs/eagle-api-port.md`, Pins, Sync-out line.
 - eagle-admin half:
   - `project.service.ts:231-247` becomes one project PUT.
   - `pins-list.component.ts:126-136` reads `pinsPublished` from DEMI.
