@@ -17,6 +17,7 @@ const { makeRes } = require('../../../src/http/router');
 const { swaggerParams, queryNames } = require('../../helpers/swagger-params');
 const { recordEvents } = require('../../helpers/record-events');
 const audit = require('../../../src/utils/audit');
+const { logger } = require('../../../src/utils/logger');
 
 const STAFF = { realm_access: { roles: ['staff'] } };
 
@@ -265,6 +266,27 @@ test('GET /project-records', async (t) => {
     const down = await call('sort=-name');
     assert.strictEqual(down.body.at(-1).id, 'n0');
     assert.strictEqual(down.body[0].id, 'p6');
+  });
+
+  await t.test('sort=-name lists the merge descending, the project first on a tied name', async (t) => {
+    fakeStores(t);
+    const res = await call('sort=-name');
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.map(row => row.id), ['p6', 'p5', 'n3', 'p4', 'p3', 'n2', 'n1', 'p2', 'p1']);
+  });
+
+  await t.test('an oversize notification read warns once per process, not once per read', async (t) => {
+    const modulePath = require.resolve('../../../src/controllers/native/project-records');
+    const cached = require.cache[modulePath];
+    delete require.cache[modulePath];
+    t.after(() => { require.cache[modulePath] = cached; });
+    const fresh = require(modulePath).getProjectRecords;
+
+    const warnings = [];
+    t.mock.method(logger, 'warn', (message, meta) => { warnings.push({ message, meta }); });
+    fakeStores(t, { notices: Array.from({ length: 501 }, (_, i) => notice(`n${i}`, `N${String(i).padStart(3, '0')}`)) });
+    for (let read = 0; read < 2; read++) assert.strictEqual((await call('', { handler: fresh })).status, 200);
+    assert.deepStrictEqual(warnings.filter(({ message }) => message.startsWith('[project-records]')).map(({ meta }) => meta), [{ rows: 501 }]);
   });
 
   await t.test('a search-service failure on a keyword list answers as /projects does', async (t) => {
