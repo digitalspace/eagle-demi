@@ -29,9 +29,9 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, deleteStands,
-  TRIMMED_FIELDS, hasValue
+  TRIMMED_FIELDS, hasValue, isEagleOnlyProjectId
 } = require('../../merge/project');
-const { LEGISLATION_KEY, PUT_IGNORED_FIELDS } = require('../../ownership/project');
+const { LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
@@ -780,7 +780,7 @@ exports.setVisibility = async (req, res) => {
  * The body carries the RAW Eagle record, so the merge rules stay in `merge/project.js` and this
  * route produces exactly what the seed produces — a push and a re-seed cannot disagree about the
  * same project. Identity comes from the merge too: the Track id when the project is already
- * matched, `eagle-<eagleId>` when it is not.
+ * matched, `eagle-<eagleId>` when it is not, and a DEMI-created row's own id (`isNativeProject`).
  */
 exports.upsertFromEagle = async (req, res) => {
   const push = eaglePush(req);
@@ -799,6 +799,30 @@ function pushDeleted(doc, existing) {
   return deleteStands(existing);
 }
 
+/** A project DEMI created: neither Eagle's own row nor a Track one. */
+const isNativeProject = (row) => Boolean(row) && row.sourceSystem !== 'eagle' &&
+  !isEagleOnlyProjectId(row.id) && !(row.sources && row.sources.track);
+
+/**
+ * On a native row DEMI owns these outright: no source block exists to re-derive them, so an Eagle
+ * fill would stick. `proponentName` follows Eagle's `proponentId`, `isActive` its `activeStatus`.
+ */
+const EAGLE_FED = new Set(['proponentName', 'isActive']);
+const NATIVE_KEPT_FIELDS = ['id', 'trackProjectId', 'sourceSystem', 'centroid', 'createdAt',
+  ...OWNERS.track.filter(field => !EAGLE_FED.has(field))];
+
+/**
+ * Put a native row's own fields back over the Eagle merge, so the push lands on that row, not an
+ * `eagle-<id>` one.
+ */
+function keepNativeIdentity(merged, existing) {
+  for (const field of NATIVE_KEPT_FIELDS) {
+    if (existing[field] === undefined) delete merged[field];
+    else merged[field] = existing[field];
+  }
+  merged.sources = { ...existing.sources, eagle: merged.sources.eagle };
+}
+
 /** The row a push writes, built from whatever revision is stored at the moment of the write. */
 function mergeEaglePush(doc, existing) {
   const deleted = pushDeleted(doc, existing);
@@ -812,6 +836,7 @@ function mergeEaglePush(doc, existing) {
   // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
   // nothing upstream can rebuild. The same trap the seed hit.
   merged.sources = { ...(existing && existing.sources), ...merged.sources };
+  if (isNativeProject(existing)) keepNativeIdentity(merged, existing);
   // Same replace-the-whole-item trap as sources: an upsert with no vis wipes classification.
   if (existing && existing.vis) merged.vis = existing.vis;
   // And the same for the code: dropping it would leave a printed link pointing at nothing once
