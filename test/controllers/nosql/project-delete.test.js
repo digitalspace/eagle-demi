@@ -128,6 +128,17 @@ test('an Eagle push with isDeleted', async (t) => {
     assert.ok(!twinWrite.item.read.includes('public'));
   });
 
+  await t.test('true leaves the twin\'s own DEMI delete as it is', async () => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, isDeleted: true, ...STAFF_ONLY, sources: { eagle: {} } };
+    const seen = stage(t, storedEagleProject(), { twin });
+
+    await push(rawEagleProject({ isDeleted: true }));
+
+    assert.strictEqual(seen.written.id, '207', 'the premise: the Track row took the Eagle delete');
+    assert.deepStrictEqual(seen.writes.filter(w => w.item.id === TWIN_ID), [],
+      'an Eagle-side flag on the twin would let Eagle republishing undo its delete');
+  });
+
   await t.test('true on a DEMI-deleted row keeps the delete DEMI\'s', async () => {
     const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY }));
 
@@ -244,6 +255,19 @@ test('DELETE /projects/:id', async (t) => {
     assert.ok(twinWrite, 'the twin was written');
     assert.ok(!twinWrite.item.read.includes('public'));
     assert.strictEqual(twinWrite.item.isDeleted, true, 'else PUT /projects/eagle-<id>/level republishes it');
+  });
+
+  await t.test('takes over a delete the seed made on the twin', async () => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, isDeleted: true, ...STAFF_ONLY,
+      sources: { eagle: { isDeleted: true } } };
+    const seen = stage(t, storedEagleProject(), { twin });
+
+    const res = await del();
+
+    assert.strictEqual(res.statusCode, 200);
+    const twinWrite = seen.writes.find(w => w.item.id === TWIN_ID);
+    assert.strictEqual(twinWrite.item.isDeleted, true);
+    assert.ok(!('isDeleted' in twinWrite.item.sources.eagle), 'else Eagle republishing undoes the twin\'s delete');
   });
 
   await t.test('a repeat still narrows a twin left public', async () => {
