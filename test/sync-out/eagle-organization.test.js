@@ -14,13 +14,16 @@ const eagle = require('../../src/sync-out/eagle');
 const { ORGANIZATION } = require('../../src/sync-out/kinds');
 const organizationController = require('../../src/controllers/nosql/organization');
 const { mirrorStore } = require('../helpers/mirror-store');
-const { mockRes, STAFF, PUBLIC_ACL, PRIVATE_ACL, eagleOrganization } = require('../helpers/eagle-mirror-fixtures');
+const {
+  mockRes, STAFF, PUBLIC_ACL, PRIVATE_ACL, ORG_EAGLE_ID, eagleOrganization
+} = require('../helpers/eagle-mirror-fixtures');
 const { API, useEnv, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 
 audit._setTransport(async () => {});
 
 const ROW_ID = '7d1e2f40-0000-4000-8000-0000000000aa';
 const EAGLE_ID = '6720b3c0a1b2c3d4e5f60718';
+const STRAY_ID = '6720b3c0a1b2c3d4e5f607ff';
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
 const ENV = {
@@ -131,6 +134,78 @@ test('sync-out of DEMI-created organizations', async (t) => {
 
     const posted = calls[0].body._id;
     assert.deepStrictEqual(keys(calls), ['POST /organization', `PUT /organization/${posted}/unpublish`]);
+  });
+
+  for (const { label, eagleRead, read, level } of [
+    { label: 'public in Eagle, staff-only in DEMI, unpublishes', eagleRead: PUBLIC_ACL, read: PRIVATE_ACL, level: 'unpublish' },
+    { label: 'staff-only in Eagle, public in DEMI, publishes', eagleRead: PRIVATE_ACL, read: PUBLIC_ACL, level: 'publish' },
+    { label: 'at the same level makes no level call', eagleRead: PUBLIC_ACL, read: PUBLIC_ACL, level: null }
+  ]) {
+    await t.test(`a PUT that matches, ${label}`, async (tt) => {
+      mirrorStore(tt, [nativeOrg({
+        eagleId: EAGLE_ID, read: [...read], isPublished: read.includes('public'),
+        sources: { eagle: { _id: EAGLE_ID, read: eagleRead } }
+      })]);
+      wireQueue(tt);
+      const put = `PUT /organization/${EAGLE_ID}`;
+      const calls = wireEagle(tt, { 'PUT *': { body: { _id: EAGLE_ID } } });
+
+      assert.strictEqual((await run()).status, 'sent');
+
+      assert.deepStrictEqual(keys(calls), [put, ...(level ? [`${put}/${level}`] : [])]);
+    });
+  }
+
+  await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off an organization with no eagleId is held, its sync state untouched',
+    async (tt) => {
+      useEnv(tt, { SYNC_OUT_EAGLE_NATIVE_ENABLED: 'false' });
+      const store = mirrorStore(tt, [nativeOrg()]);
+      wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      assert.deepStrictEqual(await run(), { status: 'held' });
+
+      assert.deepStrictEqual(calls, []);
+      assert.strictEqual(rowOf(store).syncOut, undefined);
+    });
+
+  await t.test('a parent company Eagle lacks stops the send before any call', async (tt) => {
+    const store = mirrorStore(tt, [
+      nativeOrg({ eagleId: EAGLE_ID, parentCompany: 'org-parent' }),
+      { container: 'lists', id: 'org-parent', kind: 'Organization', sourceSystem: 'demi', eagleId: null, read: PUBLIC_ACL }
+    ]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, {});
+
+    await run(message(), 1);
+
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(rowOf(store).syncOut.eagle.status, 'failed');
+    assert.strictEqual(logged('error', `[sync-out eagle] parent org-parent of organization ${ROW_ID} has no eagleId`).length, 1);
+  });
+
+  await t.test('a parent company named by its Eagle id is sent as that id', async (tt) => {
+    mirrorStore(tt, [
+      nativeOrg({ eagleId: EAGLE_ID, parentCompany: ORG_EAGLE_ID, sources: { eagle: { read: PUBLIC_ACL } } }),
+      { container: 'lists', id: 'org-parent', kind: 'Organization', sourceSystem: 'demi', eagleId: ORG_EAGLE_ID, read: PUBLIC_ACL }
+    ]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'PUT *': { body: { _id: EAGLE_ID } } });
+
+    await run();
+
+    assert.strictEqual(calls[0].body.parentCompany, ORG_EAGLE_ID);
+  });
+
+  await t.test('a staff-only organization Eagle stored under another id has that stray unpublished', async (tt) => {
+    const store = mirrorStore(tt, [nativeOrg({ isPublished: false, read: [...PRIVATE_ACL] })]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'POST /organization': { body: { _id: STRAY_ID } }, 'PUT *': {} });
+
+    await run(message(), 1);
+
+    assert.deepStrictEqual(keys(calls), ['POST /organization', `PUT /organization/${STRAY_ID}/unpublish`]);
+    assert.strictEqual(rowOf(store).syncOut.eagle.strayEagleId, STRAY_ID);
   });
 
   await t.test('an id already held by an Eagle-owned mirror row is refused before any POST', async (tt) => {

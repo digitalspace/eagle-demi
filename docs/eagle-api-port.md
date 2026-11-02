@@ -105,7 +105,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - `document`, `organization` and `project` reconcile through the pending hook in `src/sync-out/pending.js`. The hook lists the kind's rows holding a version a consumer has not sent.
 - With `{ repair: true }` the hook queues each again as a repair message of that kind (`node src/scripts/sync-out-pending.js --kind document --repair`). The timer only lists them.
 - Every kind has a consumer named `eagle`, so `index.js` keeps a consumer list per kind and a message finds its consumer through its `kind`.
-- Each kind sends only when `SYNC_OUT_EAGLE_ENABLED` and its own switch are both `true`. Every switch is off by default.
+- Each kind except `commentPeriod` sends only when `SYNC_OUT_EAGLE_ENABLED` and its own switch are both `true`. Every switch is off by default.
 
 | Kind | Consumer | Switch | Sends |
 |---|---|---|---|
@@ -115,11 +115,16 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 | `project` | `src/sync-out/eagle-project.js` | `SYNC_OUT_EAGLE_PROJECT_ENABLED` | rows made by `POST /projects` (`isNativeProject`) |
 
 - The document consumer PUTs the row's fields, then calls publish or unpublish only when the public level changed.
-- The organization and project consumers PUT a row that holds an `eagleId`. Eagle answers an unknown organization with 200 and a `null` body, and an unknown project with 404; both lead to a POST of the same id.
+- The organization consumer PUTs a row that holds an `eagleId`. Eagle answers an unknown organization with 200 and a `null` body, which leads to a POST of the same id.
+- The project consumer PUTs only an Eagle id it minted itself (`syncOut.eagle.mintedId`). A project linked by staff to an Eagle project that already existed is skipped with the warn line `which sync-out did not create; not sent`, because Eagle staff own that project.
+- An unknown project answers the PUT with 404, which leads to a POST of the same id.
 - A row with no `eagleId`, or one Eagle lacks, is POSTed only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Until then the send answers `held`.
-- An organization create ends with an unpublish call when the row is staff-only, because eagle-api publishes every new organization. An organization PUT also calls publish or unpublish when Eagle's copy sits at another level.
+- After a PUT, both consumers call publish or unpublish when Eagle's copy sits at another level than the row.
+- eagle-api publishes every new organization, so a staff-only organization's create ends with an unpublish call.
+- eagle-api stores every new project staff-only, so a public project's create ends with a publish call. The echo of the POST narrows the DEMI row until the publish echo widens it again.
 - An organization POST is refused when the minted id already names an Eagle-owned DEMI row: the mirror reads by id first, so that row would take every echo.
-- A project body names its proponent by the organization's `eagleId`. A proponent with no `eagleId` stops the send before any call, with the error line `has no eagleId, nothing sent`. `featuredDocuments` carries only the documents that hold an `eagleId`.
+- The organization a body names (a project's proponent, an organization's `parentCompany`) is sent by its `eagleId`. Sync-out finds it by DEMI id or, after an echo, by Eagle id.
+- An organization with no `eagleId` there stops the send before any call, with the error line `has no eagleId, nothing sent`.
 - A send that answers `held` records nothing on the row, so its version stays owed and a later delivery or the pending hook sends it.
 - Queue messages and resends carry `kind`. A message with no `kind`, queued before the field existed, is read as a comment period.
 - `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing; reconcile re-queues.
@@ -128,11 +133,12 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - A project made by `POST /projects` (no `sources.track`) gets its `eagleId` from a staff `PUT` or from sync-out, and the next Eagle push for that id lands on it (`mergeEaglePush` in `controllers/nosql/project.js`). DEMI owns its id, `sourceSystem`, `trackProjectId`, `centroid`, `createdAt` and Track-owned fields, empty ones included, except `proponentName` and `isActive`, which follow Eagle's `proponentId` and `activeStatus`; Eagle fills the other fields. `syncOut` and `syncVersion` stay as they were.
 - `test/sync-out/sync-out.test.js`, `eagle-organization.test.js` and `eagle-project.test.js` hold the echo tests: a sync-out create, eagle-api's echo through the mirror answered 2xx, the DEMI fields and `syncVersion` unchanged, and no second send.
 - Comment periods created in DEMI are sent only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Sync-out POSTs them under an id it mints and stores as `eagleId`. A 409 means an earlier POST landed, so it PUTs instead. The switch also stops queued and retried sends. Turn it on only when eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409.
-- If eagle-api stores a native period under another id, the row gets `syncOut.eagle.strayEagleId` and the error line `not re-keyed`. Sync-out then sends nothing for that row. To clear it:
-  1. Delete the Eagle period `strayEagleId` through eagle-api.
-  2. Delete the DEMI comment period whose `id` is `strayEagleId`. Its echo created that row.
-  3. Remove `strayEagleId` from the DEMI row and queue the row again. The next delivery POSTs the row's own `eagleId`.
-- If `strayEagleId` is `null`, eagle-api answered without an id and the error line reads `stored the period under an unknown id`. In eagle-admin, find the period by its project and dates for step 1. Step 2 does not apply.
+- If eagle-api stores a native row under another id, the row gets `syncOut.eagle.strayEagleId` and the error line `not re-keyed`. Sync-out then sends nothing for that row. To clear it:
+  1. For a staff-only organization, check that the stray is unpublished in Eagle. Sync-out unpublishes it before it stops; the error line `stray Eagle id ... not cleaned up` means that call failed.
+  2. Delete the Eagle record `strayEagleId` through eagle-api.
+  3. Delete the DEMI row whose `id` is `strayEagleId`. Its echo created that row.
+  4. Remove `strayEagleId` from the DEMI row and queue the row again. The next delivery POSTs the row's own `eagleId`.
+- If `strayEagleId` is `null`, eagle-api answered without an id and the error line reads `stored the period under an unknown id` (or the organization or project). In eagle-admin, find the record for step 2: a period by its project and dates, an organization or project by its name. Step 3 does not apply.
 
 `test/sync-out-triggers.test.js` sits at the test root beside `test/sync-out/sync-out.test.js`.
 

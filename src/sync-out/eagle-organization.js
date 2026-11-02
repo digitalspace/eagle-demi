@@ -9,7 +9,7 @@ const { SCHEMA } = require('../domain/organizations');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
 const {
-  requireSettings, call, failure, claimHeld, createMinted, refuseStray
+  requireSettings, call, failure, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -17,17 +17,28 @@ const KIND = 'organization';
 const NATIVE = 'demi';
 
 const pathOf = eagleId => `/organization/${encodeURIComponent(eagleId)}`;
-const isPublic = read => Array.isArray(read) && read.includes('public');
+
+/**
+ * The Eagle id of the organization a row names by DEMI id or, after an echo, by Eagle id. Throws without one:
+ * eagle-api's PUT writes the body as sent, so a null would clear the link in Eagle.
+ */
+async function organizationEagleId(id, what, logFields) {
+  const org = id ? await lists.readForWrite(id, lists.KINDS.ORGANIZATION)
+    || await lists.readForWriteByEagleId(id, lists.KINDS.ORGANIZATION) : null;
+  if (org && org.eagleId) return String(org.eagleId);
+  logger.error(`[sync-out eagle] ${what} has no eagleId, nothing sent`, { ...logFields, organizationId: id ?? null });
+  throw new Error(`${what} has no eagleId`);
+}
 
 /** eagle-api's organization body: the fields its POST copies. `parentCompany` names the parent's Eagle id. */
-async function bodyFor(row) {
+async function bodyFor(row, logFields) {
   const body = {};
   for (const field of Object.keys(SCHEMA)) {
     if (row[field] !== undefined) body[field] = row[field];
   }
   if (row.parentCompany) {
-    const parent = await lists.readForWrite(row.parentCompany, lists.KINDS.ORGANIZATION);
-    body.parentCompany = parent && parent.eagleId ? String(parent.eagleId) : null;
+    body.parentCompany = await organizationEagleId(row.parentCompany,
+      `parent ${row.parentCompany} of organization ${row.id}`, logFields);
   }
   return body;
 }
@@ -47,12 +58,6 @@ async function put(s, eagleId, body, logFields) {
   return true;
 }
 
-async function setPublished(s, eagleId, published, logFields) {
-  const path = `${pathOf(eagleId)}/${published ? 'publish' : 'unpublish'}`;
-  const res = await call(s, 'PUT', path, null, logFields);
-  if (!res.ok) throw failure('PUT', path, res);
-}
-
 /** Organizations created in DEMI; one with no Eagle id only once SYNC_OUT_EAGLE_NATIVE_ENABLED is on. */
 const owned = row => Boolean(row && row.sourceSystem === NATIVE && row.isDeleted !== true && isScanCleared(row));
 const wants = row => owned(row) && Boolean(row.eagleId || settings.eagle.nativeEnabled);
@@ -62,20 +67,20 @@ async function send(row, { update }) {
   if (!owned(row)) return { status: 'skipped' };
   const s = requireSettings({ milestone: false });
   refuseStray(row);
+  // Held, not skipped: a skip records the version as sent, so the row would never go once the switch is on.
+  if (!row.eagleId && !settings.eagle.nativeEnabled) return { status: 'held' };
   const logFields = { rowId: row.id, eagleId: row.eagleId || null, kind: KIND };
-  const body = await bodyFor(row);
+  const body = await bodyFor(row, logFields);
   const published = isPublic(row.read);
 
   if (row.eagleId && await put(s, String(row.eagleId), body, logFields)) {
-    const eagleRead = row.sources && row.sources.eagle && row.sources.eagle.read;
-    if (!Array.isArray(eagleRead) || isPublic(eagleRead) !== published) {
-      await setPublished(s, String(row.eagleId), published, logFields);
-    }
+    await syncLevel(s, pathOf(row.eagleId), row, logFields);
     return { status: 'sent', eagleId: String(row.eagleId) };
   }
-  // Held, not skipped: a skip records the version as sent, so the row would never go once the switch is on.
   if (!settings.eagle.nativeEnabled) return { status: 'held' };
 
+  // eagle-api's POST publishes every new organization, so a staff-only row is unpublished after it.
+  const unpublish = (eagleId, fields) => setPublished(s, pathOf(eagleId), false, fields);
   return createMinted(s, row, body, update, logFields, {
     kind: KIND,
     path: '/organization',
@@ -85,8 +90,7 @@ async function send(row, { update }) {
     // The mirror reads by id first, so a row already stored under the id would take every echo for good.
     heldByMirror: mirroredAsEagleRow,
     twinOf: mirroredAsEagleRow,
-    // eagle-api's POST publishes every new organization.
-    afterCreate: (eagleId, fields) => (published ? null : setPublished(s, eagleId, false, fields))
+    ...(published ? {} : { afterCreate: unpublish, onStray: unpublish })
   });
 }
 
@@ -102,5 +106,6 @@ module.exports = {
   wants,
   inFlight: entry => Boolean(claimHeld(entry, Date.now())),
   send,
-  bodyFor
+  bodyFor,
+  organizationEagleId
 };

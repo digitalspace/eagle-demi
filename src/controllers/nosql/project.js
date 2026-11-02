@@ -29,7 +29,7 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, deleteStands,
-  TRIMMED_FIELDS, hasValue, isEagleOnlyProjectId
+  TRIMMED_FIELDS, hasValue, isNativeProject
 } = require('../../merge/project');
 const { LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
@@ -799,10 +799,6 @@ function pushDeleted(doc, existing) {
   return deleteStands(existing);
 }
 
-/** A project DEMI created: neither Eagle's own row nor a Track one. */
-const isNativeProject = (row) => Boolean(row) && row.sourceSystem !== 'eagle' &&
-  !isEagleOnlyProjectId(row.id) && !(row.sources && row.sources.track);
-
 /**
  * On a native row DEMI owns these outright: no source block exists to re-derive them, so an Eagle
  * fill would stick. `proponentName` follows Eagle's `proponentId`, `isActive` its `activeStatus`.
@@ -885,7 +881,6 @@ async function runCascade(saved, eagleId, options) {
   if (failure) await markCascadePending(saved, eagleId);
   return failure;
 }
-exports.isNativeProject = isNativeProject;
 exports.runCascade = runCascade;
 exports.visibilityMoved = visibilityMoved;
 

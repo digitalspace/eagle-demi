@@ -16,7 +16,9 @@ const eagle = require('../../src/sync-out/eagle');
 const { PROJECT } = require('../../src/sync-out/kinds');
 const projectController = require('../../src/controllers/nosql/project');
 const { mirrorStore } = require('../helpers/mirror-store');
-const { mockRes, STAFF, PRIVATE_ACL, ORG_EAGLE_ID, eagleProject } = require('../helpers/eagle-mirror-fixtures');
+const {
+  mockRes, STAFF, PRIVATE_ACL, PUBLIC_ACL, ORG_EAGLE_ID, eagleProject
+} = require('../helpers/eagle-mirror-fixtures');
 const { API, useEnv, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 
 audit._setTransport(async () => {});
@@ -24,6 +26,7 @@ audit._setTransport(async () => {});
 const ROW_ID = '1234';
 const ORG_ID = 'org-native-1';
 const EAGLE_ID = '6720b3c0a1b2c3d4e5f60719';
+const PHASE_ID = '5cf00c03a266b7e1877504ff';
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
 const ENV = {
@@ -76,45 +79,64 @@ test('sync-out of DEMI-created projects', async (t) => {
     tt.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
   });
 
-  await t.test('the echo of the create lands on the row and leaves its sync state alone', async (tt) => {
-    const store = mirrorStore(tt, [nativeProject(), proponent()]);
+  await t.test('a published project\'s create and its echoes leave it public, and a later send PUTs', async (tt) => {
+    const store = mirrorStore(tt, [nativeProject({ read: [...PUBLIC_ACL], isPublished: true }), proponent()]);
     const sent = wireQueue(tt);
-    let echo = null;
+    let posted = null;
     let before = null;
     let echoed = null;
+    // eagle-api awaits its push to DEMI before it answers; it stores a new project staff-only.
+    const echo = async (read) => {
+      const res = mockRes();
+      await projectController.upsertFromEagle({
+        params: { eagleId: posted }, query: {}, user: STAFF,
+        body: { doc: eagleProject({ _id: posted, read, proponent: ORG_EAGLE_ID }), pushedAt: Date.now() }
+      }, res);
+      assert.strictEqual(res.statusCode, 200, 'the echo is accepted');
+    };
     const calls = wireEagle(tt, {
       'POST /project': async (body) => {
+        posted = body._id;
         before = rowOf(store);
-        echo = mockRes();
-        await projectController.upsertFromEagle({
-          params: { eagleId: body._id }, query: {}, user: STAFF,
-          body: { doc: eagleProject({ _id: body._id, name: body.name, read: PRIVATE_ACL }), pushedAt: Date.now() }
-        }, echo);
+        await echo(PRIVATE_ACL);
         echoed = rowOf(store);
         return accept(body);
+      },
+      'PUT *': async () => {
+        await echo(PUBLIC_ACL);
+        return {};
       }
     });
 
     const result = await run();
 
-    const posted = calls[0].body._id;
     assert.match(posted, OBJECT_ID);
-    assert.strictEqual(echo.statusCode, 200, 'the echo is accepted');
+    assert.deepStrictEqual(keys(calls), ['POST /project', `PUT /project/${posted}/publish`]);
     assert.deepStrictEqual(store.rows('projects').map(r => r.id), [ROW_ID], 'the echo made no eagle-<id> row');
     for (const field of ['id', 'eagleId', 'sourceSystem', 'name', 'syncOut', 'syncVersion', 'centroid']) {
       assert.deepStrictEqual(echoed[field], before[field], `the echo kept ${field}`);
     }
-    assert.strictEqual(echoed.sources.eagle._id, posted, 'the echo landed on this row');
     assert.strictEqual(result.eagleId, posted);
-    assert.deepStrictEqual(sent, [], 'the echo queues nothing');
-
-    const again = wireEagle(tt, {});
+    assert.deepStrictEqual(rowOf(store).read, PUBLIC_ACL, 'the publish echo leaves the row public');
+    assert.deepStrictEqual(sent, [], 'the echoes queue nothing');
     assert.deepStrictEqual(await run(), { skipped: 'current' });
-    assert.deepStrictEqual(again, [], 'no second send');
+
+    // A staff edit, as writeRow stores it: the stored row in place, one version on.
+    const stored = rowOf(store);
+    Object.assign(stored, { name: 'Nicomen Wind Energy (renamed)', syncVersion: stored.syncVersion + 1 });
+    const later = wireEagle(tt, { [`PUT /project/${posted}`]: {} });
+
+    assert.strictEqual((await run()).status, 'sent');
+    assert.deepStrictEqual(keys(later), [`PUT /project/${posted}`], 'no level call: Eagle is already public');
+    assert.strictEqual(later[0].body.proponent, ORG_EAGLE_ID, 'the proponent is found by the Eagle id the echo stored');
+    assert.strictEqual(later[0].body.name, 'Nicomen Wind Energy (renamed)');
   });
 
-  await t.test('a PUT answered 404 POSTs the same id with the proponent\'s Eagle id', async (tt) => {
-    const store = mirrorStore(tt, [nativeProject({ eagleId: EAGLE_ID }), proponent()]);
+  await t.test('a PUT answered 404 POSTs the same minted id, with ref fields as bare ids', async (tt) => {
+    const store = mirrorStore(tt, [nativeProject({
+      eagleId: EAGLE_ID, syncOut: { eagle: { mintedId: EAGLE_ID } },
+      currentPhaseName: { _id: PHASE_ID, name: 'Proposed' }, eacDecision: { _id: null, name: null }
+    }), proponent()]);
     wireQueue(tt);
     const put = `PUT /project/${EAGLE_ID}`;
     const calls = wireEagle(tt, { [put]: { status: 404 }, 'POST /project': accept });
@@ -124,10 +146,37 @@ test('sync-out of DEMI-created projects', async (t) => {
     assert.deepStrictEqual(keys(calls), [put, 'POST /project']);
     assert.strictEqual(calls[1].body._id, EAGLE_ID);
     assert.strictEqual(calls[1].body.proponent, ORG_EAGLE_ID);
+    assert.strictEqual(calls[1].body.currentPhaseName, PHASE_ID);
+    assert.strictEqual(calls[1].body.eacDecision, null);
     assert.deepStrictEqual(calls[1].body.centroid, [-120.4, 50.6]);
     assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
     assert.strictEqual(rowOf(store).syncOut.eagle.status, 'sent');
   });
+
+  await t.test('an Eagle id sync-out did not mint is not sent: skipped and warned, no call', async (tt) => {
+    const store = mirrorStore(tt, [nativeProject({ eagleId: EAGLE_ID }), proponent()]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, {});
+
+    assert.deepStrictEqual(await run(), { status: 'skipped' });
+
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(rowOf(store).eagleId, EAGLE_ID);
+    assert.strictEqual(logged('warn', 'which sync-out did not create; not sent').length, 1);
+  });
+
+  await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a project with no eagleId is held, its sync state untouched',
+    async (tt) => {
+      useEnv(tt, { SYNC_OUT_EAGLE_NATIVE_ENABLED: 'false' });
+      const store = mirrorStore(tt, [nativeProject(), proponent()]);
+      wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      assert.deepStrictEqual(await run(), { status: 'held' });
+
+      assert.deepStrictEqual(calls, []);
+      assert.strictEqual(rowOf(store).syncOut, undefined);
+    });
 
   await t.test('a proponent with no eagleId makes no POST and ends failed with the error line', async (tt) => {
     const store = mirrorStore(tt, [nativeProject(), proponent(null)]);
@@ -139,21 +188,6 @@ test('sync-out of DEMI-created projects', async (t) => {
     assert.deepStrictEqual(calls, []);
     assert.strictEqual(rowOf(store).syncOut.eagle.status, 'failed');
     assert.strictEqual(logged('error', `[sync-out eagle] proponent ${ORG_ID} of project ${ROW_ID} has no eagleId`).length, 1);
-  });
-
-  await t.test('featuredDocuments sends only the documents that hold an Eagle id', async (tt) => {
-    mirrorStore(tt, [
-      nativeProject({ featuredDocuments: ['doc-sent', 'doc-unsent', 'doc-gone'] }),
-      proponent(),
-      { container: 'documents', id: 'doc-sent', projectId: ROW_ID, eagleId: '6720b3c0a1b2c3d4e5f6071a', read: PRIVATE_ACL },
-      { container: 'documents', id: 'doc-unsent', projectId: ROW_ID, eagleId: null, read: PRIVATE_ACL }
-    ]);
-    wireQueue(tt);
-    const calls = wireEagle(tt, { 'POST /project': accept });
-
-    await run();
-
-    assert.deepStrictEqual(calls[0].body.featuredDocuments, ['6720b3c0a1b2c3d4e5f6071a']);
   });
 
   await t.test('two concurrent deliveries make one POST with one minted id; the losing claim re-reads', async (tt) => {

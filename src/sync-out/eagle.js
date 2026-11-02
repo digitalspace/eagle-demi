@@ -92,6 +92,22 @@ function failure(method, path, res) {
   return new Error(`eagle-api ${method} ${path}: HTTP ${res.status} ${String(detail || '').slice(0, ERROR_BODY_CHARS)}`);
 }
 
+const isPublic = read => Array.isArray(read) && read.includes('public');
+
+/** Publish or unpublish the Eagle record at `path` (`/organization/<id>`, `/project/<id>`). */
+async function setPublished(s, path, published, logFields) {
+  const target = `${path}/${published ? 'publish' : 'unpublish'}`;
+  const res = await call(s, 'PUT', target, null, logFields);
+  if (!res.ok) throw failure('PUT', target, res);
+}
+
+/** Move Eagle's level to the row's when its raw copy sits elsewhere, or when no echo has shown it yet. */
+async function syncLevel(s, path, row, logFields) {
+  const eagleRead = row.sources && row.sources.eagle && row.sources.eagle.read;
+  const published = isPublic(row.read);
+  if (!Array.isArray(eagleRead) || isPublic(eagleRead) !== published) await setPublished(s, path, published, logFields);
+}
+
 /** eagle-api answers a PUT to an unknown id with 200 and a zero match count, not 404. */
 const missingOnPut = (res) =>
   res.status === 404 || (res.ok && res.body && (res.body.matchedCount === 0 || res.body.n === 0));
@@ -195,7 +211,9 @@ async function claimMinted(row, update, kind) {
       eagleId,
       syncOut: {
         ...current.syncOut,
-        [NAME]: { ...entry, status: 'creating', claim, claimedAt: new Date().toISOString() }
+        [NAME]: {
+          ...entry, ...(minted ? { mintedId: eagleId } : {}), status: 'creating', claim, claimedAt: new Date().toISOString()
+        }
       }
     };
   });
@@ -322,10 +340,8 @@ async function create(s, row, body, update, logFields, goneId) {
 }
 
 /**
- * POST a native row under its stored or newly minted id. A 409 means an earlier POST landed and its answer
- * was lost, or another delivery won: the record exists, so PUT. Resolves to `{ status, eagleId }`.
- * `spec`: `kind`, `path`, `noun`, `put(eagleId, fields)` true when it matched, `unknownId` (line and fields for
- * an answer with no id), optional `heldByMirror(eagleId, row)`, `afterCreate(eagleId, fields)`, `twinOf(eagleId, row)`.
+ * POST a native row under its stored or newly minted id; a 409 means the record exists, so PUT. `spec` names
+ * the kind's route, PUT and optional hooks (`heldByMirror`, `onStray`, `afterCreate`, `twinOf`).
  */
 async function createMinted(s, row, body, update, logFields, spec) {
   const claimed = await claimMinted(row, update, spec.kind);
@@ -356,6 +372,10 @@ async function createMinted(s, row, body, update, logFields, spec) {
         if (answered) {
           logger.error(`[sync-out eagle] eagle-api stored row ${row.id} as ${answered}, not ${eagleId}; not re-keyed. ` +
             `${answered} is also the id of the DEMI mirror row its echo made`, { ...fields, ...stray, mirrorRowId: answered });
+          if (spec.onStray) {
+            await spec.onStray(answered, fields).catch(e => logger.error(
+              `[sync-out eagle] row ${row.id}: stray Eagle id ${answered} not cleaned up`, { ...fields, ...stray, error: e.message }));
+          }
         } else {
           const { line, fields: findBy } = spec.unknownId(body);
           logger.error(`[sync-out eagle] row ${row.id}: ${line}`, { rowId: row.id, ...findBy });
@@ -538,6 +558,9 @@ module.exports = {
   claimMinted,
   createMinted,
   refuseStray,
+  isPublic,
+  setPublished,
+  syncLevel,
   refreshClaim,
   endClaim,
   isDeletedRow,

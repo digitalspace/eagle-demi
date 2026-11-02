@@ -45,8 +45,8 @@ const KINDS = Object.freeze({
     repo: Object.freeze({
       readForWrite: (id) => projects.readForWrite(id),
       listSyncPending: () => projects.listSyncPending(),
-      // Guarded on the stored row's etag, or a create, so two deliveries cannot both take the create claim.
-      upsert: (item, existing) => projects.upsert(item, existing ? { etag: existing._etag } : { create: true })
+      // Guarded on the stored row's etag, so two deliveries cannot both take the create claim.
+      upsert: (item, existing) => projects.upsert(item, { etag: existing._etag })
     }),
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(PROJECT))
