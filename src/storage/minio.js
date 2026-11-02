@@ -108,10 +108,20 @@ async function getUploadUrl(key, { expirySeconds, contentMd5 } = {}) {
     config.minioRegion, new Date(), expirySeconds);
 }
 
+// The SDK builds x-amz-copy-source with encodeURI, which leaves `+` raw for the store to read as a
+// space. This escapes it the way the SDK escapes request paths. VersionID is never set here.
+class CopySource extends Minio.CopySourceOptions {
+  getHeaders() {
+    const source = encodeURIComponent(`${this.Bucket}/${this.Object}`)
+      .replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`).replace(/%2F/g, '/');
+    return { ...super.getHeaders(), 'x-amz-copy-source': source };
+  }
+}
+
 /** Server-side copy, refused by the store with 412 when the source etag has moved on. */
 async function copyObject(src, dest, { ifSourceEtag }) {
   const res = await getClient().copyObject(
-    new Minio.CopySourceOptions({
+    new CopySource({
       Bucket: config.minioBucket, Object: resolveObjectKey(src), MatchETag: ifSourceEtag
     }),
     new Minio.CopyDestinationOptions({ Bucket: config.minioBucket, Object: resolveObjectKey(dest) })

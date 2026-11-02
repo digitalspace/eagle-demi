@@ -483,12 +483,8 @@ resource analyticsApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-
 // APIM answers the preflight from this scope itself — declaring an OPTIONS operation would REPLACE
 // that built-in handling, which is why there is none.
 //
-// NO per-caller throttle here, and that is a tier limit rather than a choice: `rate-limit-by-key`
-// and `quota-by-key` do not exist in Consumption, and plain `rate-limit` counts per subscription,
-// which an anonymous product has none of. What guards the uncapped workspace instead is the ingest
-// Function's own per-session cap plus the budget forecast alert.
-// ponytail: public ingest with no gateway rate limit. Per-IP limiting needs Basic v2 or a counter
-// of our own in Table Storage — revisit if the drop alert or the budget alert ever fires.
+// ponytail: no gateway throttle, as Consumption has no `rate-limit-by-key`; the per-session cap and
+// 80/100 percent budget emails guard it. Per-IP limits need Basic v2 or a Table Storage counter.
 //
 // 100 KiB, not the 256 KB a 50-event batch could reach: that is the gateway's own runtime ceiling
 // for validate-content, and a larger number would read as enforced without being it.
