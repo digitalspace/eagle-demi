@@ -122,9 +122,13 @@ async function readForWrite(id) {
   return cosmos.readItem(CONTAINER, String(id), String(id));
 }
 
-/** Every row whose `syncVersion` the Eagle sync-out has not sent, across partitions. For `src/sync-out/pending.js` only. */
+/** `isNativeProject` (src/merge/project.js) in SQL: no Track source, not Eagle's own row or its `eagle-<id>` id. */
+const NATIVE_PROJECT = '(NOT IS_DEFINED(c.sources.track) OR IS_NULL(c.sources.track)) AND ' +
+  "(NOT IS_DEFINED(c.sourceSystem) OR c.sourceSystem != 'eagle') AND NOT STARTSWITH(c.id, 'eagle-')";
+
+/** Native rows whose `syncVersion` the Eagle sync-out has not sent, across partitions. For `src/sync-out/pending.js` only. */
 async function listSyncPending() {
-  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${EAGLE_SYNC_PENDING}` });
+  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT} AND ${EAGLE_SYNC_PENDING}` });
 }
 
 /**

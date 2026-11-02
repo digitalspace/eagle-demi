@@ -63,11 +63,11 @@ async function readForWriteByEagleId(eagleId, kind) {
   return oneRowOf(CONTAINER, eagleId, items);
 }
 
-/** Rows of one kind holding a version not yet sent to Eagle: the sync-out pending hook's list. */
+/** DEMI-created rows of one kind holding a version not yet sent to Eagle: the sync-out pending hook's list. */
 async function listSyncPending(kind) {
   const { clause, params } = eq(PARTITION_FIELD, String(kind), '@kind');
   return fetchAll(CONTAINER, {
-    query: `SELECT * FROM c WHERE ${clause} AND ${EAGLE_SYNC_PENDING}`, parameters: params
+    query: `SELECT * FROM c WHERE ${clause} AND c.sourceSystem = 'demi' AND ${EAGLE_SYNC_PENDING}`, parameters: params
   }, { partitionKey: String(kind) });
 }
 
