@@ -79,6 +79,16 @@ function applyKeywordPredicate(spec, rows, level = 4) {
     (shows(r, 'projectId') && params['@keywordProjects'].includes(r.projectId)));
 }
 
+/** Runs the emitted ORDER BY and OFFSET paging over the fixtures, as Cosmos would page them. */
+function pageOf(spec, rows) {
+  const m = / ORDER BY c\.(\w+) (ASC|DESC) OFFSET @skip LIMIT @size$/.exec(spec.query);
+  assert.ok(m, `no one-key ORDER BY paged by OFFSET in: ${spec.query}`);
+  const [, field, direction] = m;
+  const sign = direction === 'DESC' ? -1 : 1;
+  const { '@skip': skip, '@size': size } = bound(spec);
+  return [...rows].sort((a, b) => sign * a[field].localeCompare(b[field])).slice(skip, skip + size);
+}
+
 test('GET /search?dataset=CommentPeriod&and[status]=open', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -292,8 +302,6 @@ test('GET /search?dataset=CommentPeriod with no project lists every period', asy
     assert.strictEqual(body[0].meta[0].searchResultsTotal, 9);
     const read = seen.find(s => s.container === 'commentPeriods' && !/COUNT\(1\)/.test(s.spec.query));
     assert.strictEqual(read.options.partitionKey, undefined, 'no project, so no partition');
-    assert.match(read.spec.query, / OFFSET @skip LIMIT @size$/);
-    assert.deepStrictEqual([bound(read.spec)['@skip'], bound(read.spec)['@size']], [2, 2]);
   });
 
   await t.test('rows carry their Eagle project id and project name', async () => {
@@ -421,7 +429,6 @@ test('GET /search?dataset=CommentPeriod with no project lists every period', asy
 
     assert.strictEqual(status, 200);
     const read = assertOpenKeywordList(seen);
-    assert.match(read.query, /ORDER BY c\.dateStarted DESC OFFSET @skip LIMIT @size$/);
     assert.deepStrictEqual([bound(read)['@skip'], bound(read)['@size']], [2, 2], 'paged');
     assert.strictEqual(body[0].meta[0].searchResultsTotal, 9, 'the whole list, not the page');
     assert.ok(!('closedCount' in body[0]), 'the rail count belongs to the rail read only');
@@ -435,7 +442,6 @@ test('GET /search?dataset=CommentPeriod with no project lists every period', asy
     const [read] = specsFor(seen, 'commentPeriods');
     assert.deepStrictEqual(applyOpenPredicate(read, TAB_ROWS).map(r => r.id),
       [PERIOD_EAGLE_ID, 'CP-open-label', 'CP-open-other']);
-    assert.match(read.query, /ORDER BY c\.dateStarted DESC OFFSET @skip LIMIT @size$/);
     assert.strictEqual(body[0].meta[0].searchResultsTotal, 9);
   });
 
@@ -449,17 +455,27 @@ test('GET /search?dataset=CommentPeriod with no project lists every period', asy
     assert.ok(!('closedCount' in body[0]));
   });
 
-  for (const [sortBy, order, meaning] of [
-    [undefined, 'c.dateStarted DESC', 'newest start first, the default'],
-    ['%2BdateStarted', 'c.dateStarted ASC', 'oldest start first'],
-    ['-dateCompleted', 'c.dateCompleted DESC', 'latest close first'],
-    ['%2BdateCompleted', 'c.dateCompleted ASC', 'soonest close first']
+  // Every sort key puts a different pair on page 2, so a wrong key, direction or offset shows.
+  const SORT_ROWS = [
+    ['CP-a', '2026-01-01', '2026-03-01'], ['CP-b', '2026-02-01', '2026-01-15'],
+    ['CP-c', '2026-03-01', '2026-02-01'], ['CP-d', '2026-04-01', '2026-04-15']
+  ].map(([id, started, completed]) => periodRow({
+    id, eagleId: id, dateStarted: `${started}T00:00:00.000Z`, dateCompleted: `${completed}T00:00:00.000Z`
+  }));
+
+  for (const [sortBy, page, meaning] of [
+    ['', ['CP-b', 'CP-a'], 'newest start first, the default'],
+    ['&sortBy=%2BdateStarted', ['CP-c', 'CP-d'], 'oldest start first'],
+    ['&sortBy=-dateCompleted', ['CP-c', 'CP-b'], 'latest close first'],
+    ['&sortBy=%2BdateCompleted', ['CP-a', 'CP-d'], 'soonest close first']
   ]) {
-    await t.test(`sortBy=${sortBy === undefined ? '(none)' : decodeURIComponent(sortBy)} is ${meaning}`, async () => {
-      const seen = stubPeriods(t, ROWS);
-      await get(sortBy === undefined ? LIST : `${LIST}&sortBy=${sortBy}`);
-      const { query } = specsFor(seen, 'commentPeriods')[0];
-      assert.ok(query.endsWith(`ORDER BY ${order} OFFSET @skip LIMIT @size`), query);
+    await t.test(`page 2 of ${decodeURIComponent(sortBy) || 'no sortBy'} is ${meaning}`, async () => {
+      const seen = stubPeriods(t, SORT_ROWS);
+
+      await get(`${LIST}${sortBy}&pageNum=1&pageSize=2`);
+
+      const [read] = specsFor(seen, 'commentPeriods');
+      assert.deepStrictEqual(pageOf(read, SORT_ROWS).map(r => r.id), page);
     });
   }
 });

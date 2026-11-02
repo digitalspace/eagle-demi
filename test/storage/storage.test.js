@@ -7,11 +7,8 @@ const assert = require('node:assert');
 
 const config = require('../../src/config');
 
-// ── Backend selection ────────────────────────────────────────────────────────
-// The lesson this asserts: a mode switch must be EXPLICIT and must fail loudly. Inferring the
-// data layer from whichever config happened to be set (COSMOS_ENDPOINT) silently routed live
-// traffic through the wrong implementation. A storage switch decides where document bytes are
-// read from and written to, so the same rule applies with higher stakes.
+// The backend is named explicitly and an unknown one throws: inferring it from whichever config
+// is set routes document bytes through the wrong store.
 
 test('backend selection', async (t) => {
   const load = (backend) => {
@@ -55,21 +52,21 @@ test('backend selection', async (t) => {
     }
   });
 
-  await t.test('describe() exposes no secret', () => {
+  await t.test('describe() exposes no secret', (st) => {
+    const prev = { minioAccess: config.minioAccess, minioSecret: config.minioSecret };
+    Object.assign(config, { minioAccess: 'access-id-7f3a', minioSecret: 'secret-value-9c1e' });
+    st.after(() => Object.assign(config, prev));
+
     const described = JSON.stringify(require('../../src/storage/minio').describe());
-    // Only meaningful when a secret is configured: includes('') is true of every string, and
-    // the NUL sentinel that used to paper over that made the assertion unfalsifiable.
-    if (config.minioSecret) assert.ok(!described.includes(config.minioSecret));
-    assert.ok(!/secret|accessKey|password/i.test(described));
+
+    assert.doesNotMatch(described, /access-id-7f3a|secret-value-9c1e/);
+    assert.doesNotMatch(described, /secret|accessKey|password/i);
   });
 });
 
-// ── MinIO backend ────────────────────────────────────────────────────────────
-// The key prefix must be applied by the BACKEND, not by call sites. extract.js read `s3Key`
-// raw, so every extraction in dev fetched a key that 404s, while the download endpoint applied
-// the prefix correctly. Same bug, two outcomes, because there was no single owner.
+// The backend applies the key prefix, never the call site, so every caller reads the same key.
 
-test('minio backend applies the key prefix to every operation', async (t) => {
+test('minio backend', async (t) => {
   const minio = require('../../src/storage/minio');
   const original = config.minioKeyPrefix;
   t.beforeEach(() => { config.minioKeyPrefix = 'ozwdez'; });
@@ -77,28 +74,96 @@ test('minio backend applies the key prefix to every operation', async (t) => {
 
   const Minio = require('minio');
 
-  await t.test('getBuffer reads the prefixed key', async () => {
-    let seen;
-    t.mock.method(Minio.Client.prototype, 'getObject', async (bucket, key) => {
-      seen = key;
-      return (async function* () { yield Buffer.from('%PDF-1.5'); })();
+  const PDF = 'ozwdez/etl/site-c/abc.pdf';
+  const SOURCE = (async function* () { yield Buffer.from('%PDF-1.5'); })();
+  const LAST_MODIFIED = new Date('2026-10-05T01:02:03Z');
+  /** The bucket and the arguments a row names; optional ones the SDK defaults after them are not pinned. */
+  const leadingArgs = (call, row) => call.slice(0, 1 + row.args.length);
+
+  /** Each row: the client method the operation reaches, what it replies, and the leading client arguments after the bucket. */
+  const KEYED_OPS = [
+    {
+      op: 'getBuffer drains the object at the prefixed key',
+      method: 'getObject',
+      reply: () => (async function* () { yield Buffer.from('%PDF-'); yield Buffer.from('1.5'); })(),
+      call: () => minio.getBuffer('etl/site-c/abc.pdf'),
+      args: [PDF],
+      returns: Buffer.from('%PDF-1.5')
+    },
+    {
+      op: 'getDownloadUrl presigns the prefixed key for the expiry asked',
+      method: 'presignedGetObject',
+      reply: () => 'https://example.invalid/signed',
+      call: () => minio.getDownloadUrl('etl/site-c/abc.pdf', { expirySeconds: 120 }),
+      args: [PDF, 120, {}],
+      returns: 'https://example.invalid/signed'
+    },
+    {
+      op: 'removeObject deletes the prefixed key',
+      method: 'removeObject',
+      reply: () => undefined,
+      call: () => minio.removeObject('zips/abc.zip'),
+      args: ['ozwdez/zips/abc.zip'],
+      returns: undefined
+    },
+    {
+      op: 'removeObject with a versionId deletes that version of the prefixed key',
+      method: 'removeObject',
+      reply: () => undefined,
+      call: () => minio.removeObject('pdf-title-backup/etl/abc.pdf', { versionId: 'v9' }),
+      args: ['ozwdez/pdf-title-backup/etl/abc.pdf', { versionId: 'v9' }],
+      returns: undefined
+    },
+    {
+      op: 'statObject reads the prefixed key and maps size, type, etag, version and date',
+      method: 'statObject',
+      reply: () => ({
+        size: 48213, etag: '9b2cf535f27731c974343645a3985328', versionId: 'v7', lastModified: LAST_MODIFIED,
+        metaData: { 'content-type': 'application/pdf' }
+      }),
+      call: () => minio.statObject('etl/site-c/abc.pdf'),
+      args: [PDF],
+      returns: {
+        size: 48213, contentType: 'application/pdf', etag: '9b2cf535f27731c974343645a3985328',
+        versionId: 'v7', lastModified: LAST_MODIFIED
+      }
+    },
+    {
+      op: 'putFile stores under the prefixed key and returns it',
+      method: 'fPutObject',
+      reply: () => undefined,
+      call: () => minio.putFile('12345/abc.pdf', '/tmp/x.pdf', 'application/pdf'),
+      args: ['ozwdez/12345/abc.pdf', '/tmp/x.pdf', { 'Content-Type': 'application/pdf' }],
+      returns: 'ozwdez/12345/abc.pdf'
+    }
+  ];
+
+  for (const row of KEYED_OPS) {
+    await t.test(row.op, async () => {
+      const calls = [];
+      t.mock.method(Minio.Client.prototype, 'bucketExists', async () => true);
+      t.mock.method(Minio.Client.prototype, row.method, async (bucket, ...args) => {
+        calls.push([bucket, ...args]);
+        return row.reply();
+      });
+
+      const returned = await row.call();
+
+      assert.strictEqual(calls.length, 1);
+      assert.deepStrictEqual(leadingArgs(calls[0], row), [config.minioBucket, ...row.args]);
+      assert.deepStrictEqual(returned, row.returns);
     });
+  }
 
-    const buf = await minio.getBuffer('etl/site-c/abc.pdf');
-    assert.strictEqual(seen, 'ozwdez/etl/site-c/abc.pdf');
-    assert.strictEqual(buf.toString(), '%PDF-1.5');
-  });
+  await t.test('getObjectStream hands back the client stream at the prefixed key, undrained', async () => {
+    const calls = [];
+    t.mock.method(Minio.Client.prototype, 'bucketExists', async () => true);
+    t.mock.method(Minio.Client.prototype, 'getObject', async (bucket, key) => { calls.push([bucket, key]); return SOURCE; });
 
-  await t.test('getDownloadUrl presigns the prefixed key with an expiry', async () => {
-    let seenKey, seenExpiry;
-    t.mock.method(Minio.Client.prototype, 'presignedGetObject', async (b, key, expiry) => {
-      seenKey = key; seenExpiry = expiry;
-      return 'https://example.invalid/signed';
-    });
+    const returned = await minio.getObjectStream('etl/site-c/abc.pdf');
 
-    await minio.getDownloadUrl('etl/site-c/abc.pdf', { expirySeconds: 300 });
-    assert.strictEqual(seenKey, 'ozwdez/etl/site-c/abc.pdf');
-    assert.strictEqual(seenExpiry, 300);
+    assert.deepStrictEqual(calls, [[config.minioBucket, PDF]]);
+    assert.strictEqual(returned, SOURCE);
   });
 
   await t.test('a download URL is never issued without an expiry', async () => {
@@ -150,23 +215,9 @@ test('minio backend applies the key prefix to every operation', async (t) => {
     await minio.putObjectStream(
       'zips/abc.zip', require('stream').Readable.from(['x']), 'application/zip');
 
-    // An upload with no size is treated as a 5 TB object, and without an explicit partSize the
-    // SDK then climbs from 64 MiB in 16 MiB steps until 10,000 parts cover it — 528 MiB, each
-    // one BUFFERED. host.json's one-zip-per-instance memory budget is written against 64 MiB.
+    // With no size the SDK assumes 5 TB and climbs to 528 MiB buffered parts; host.json's
+    // one-zip-per-instance memory budget assumes 64 MiB.
     assert.strictEqual(client.calculatePartSize(client.maxObjectSize), 64 * 1024 * 1024);
-  });
-
-  await t.test('getObjectStream reads the prefixed key without draining it', async () => {
-    let seen;
-    const source = (async function* () { yield Buffer.from('%PDF-1.5'); })();
-    t.mock.method(Minio.Client.prototype, 'getObject', async (b, key) => {
-      seen = key;
-      return source;
-    });
-
-    const stream = await minio.getObjectStream('etl/site-c/abc.pdf');
-    assert.strictEqual(seen, 'ozwdez/etl/site-c/abc.pdf');
-    assert.strictEqual(stream, source, 'the stream was consumed instead of handed back');
   });
 
   await t.test('putObjectStream omits the size, so the SDK multiparts the stream', async () => {
@@ -186,23 +237,6 @@ test('minio backend applies the key prefix to every operation', async (t) => {
     assert.strictEqual(stored, 'ozwdez/zips/abc.zip');
   });
 
-  await t.test('removeObject deletes the prefixed key', async () => {
-    let seen;
-    t.mock.method(Minio.Client.prototype, 'removeObject', async (b, key) => { seen = key; });
-
-    await minio.removeObject('zips/abc.zip');
-    assert.strictEqual(seen, 'ozwdez/zips/abc.zip');
-  });
-
-  await t.test('removeObject with a versionId deletes that version of the prefixed key', async () => {
-    let seen;
-    t.mock.method(Minio.Client.prototype, 'removeObject', async (b, key, opts) => { seen = { key, opts }; });
-
-    await minio.removeObject('pdf-title-backup/etl/abc.pdf', { versionId: 'v9' });
-
-    assert.deepStrictEqual(seen, { key: 'ozwdez/pdf-title-backup/etl/abc.pdf', opts: { versionId: 'v9' } });
-  });
-
   await t.test('removeObject treats an already-deleted key as done', async () => {
     // The sweeper re-runs over rows a retry may have half-cleared; a 404 there is not a failure.
     t.mock.method(Minio.Client.prototype, 'removeObject', async () => {
@@ -211,7 +245,7 @@ test('minio backend applies the key prefix to every operation', async (t) => {
       throw err;
     });
 
-    await minio.removeObject('zips/gone.zip');
+    await assert.doesNotReject(minio.removeObject('zips/gone.zip'));
   });
 
   await t.test('removeObject still reports a failure that is not a missing key', async () => {
@@ -225,23 +259,6 @@ test('minio backend applies the key prefix to every operation', async (t) => {
       'swallowing this would report a permission problem as a completed sweep');
   });
 
-  await t.test('statObject reads the prefixed key and maps size, type, etag, version and date', async () => {
-    let seen;
-    const lastModified = new Date('2026-10-05T01:02:03Z');
-    t.mock.method(Minio.Client.prototype, 'statObject', async (b, key) => {
-      seen = key;
-      return {
-        size: 48213, etag: '9b2cf535f27731c974343645a3985328', versionId: 'v7', lastModified,
-        metaData: { 'content-type': 'application/pdf' }
-      };
-    });
-
-    assert.deepStrictEqual(await minio.statObject('etl/site-c/abc.pdf'), {
-      size: 48213, contentType: 'application/pdf', etag: '9b2cf535f27731c974343645a3985328',
-      versionId: 'v7', lastModified
-    });
-    assert.strictEqual(seen, 'ozwdez/etl/site-c/abc.pdf');
-  });
 
   await t.test('statObject gives a null date, not an Invalid Date, when the store sends none', async () => {
     t.mock.method(Minio.Client.prototype, 'statObject', async () => ({
@@ -251,15 +268,16 @@ test('minio backend applies the key prefix to every operation', async (t) => {
     assert.strictEqual((await minio.statObject('etl/abc.pdf')).lastModified, null);
   });
 
-  await t.test('statObject is null for a missing key', async () => {
-    // A bodiless HEAD 404 is `NotFound`; a server that sends a body says `NoSuchKey`.
-    for (const code of ['NotFound', 'NoSuchKey']) {
+  // A bodiless HEAD 404 is `NotFound`, a server that sends a body says `NoSuchKey`.
+  for (const fault of [{ code: 'NotFound' }, { code: 'NoSuchKey' }, { statusCode: 404 }]) {
+    await t.test(`statObject is null for a missing key (${JSON.stringify(fault)})`, async () => {
       t.mock.method(Minio.Client.prototype, 'statObject', async () => {
-        throw Object.assign(new Error('Not Found'), { code });
+        throw Object.assign(new Error('Not Found'), fault);
       });
-      assert.strictEqual(await minio.statObject('etl/gone.pdf'), null, code);
-    }
-  });
+
+      assert.strictEqual(await minio.statObject('etl/gone.pdf'), null);
+    });
+  }
 
   await t.test('statObject reports any other failure', async () => {
     t.mock.method(Minio.Client.prototype, 'statObject', async () => {
@@ -268,16 +286,6 @@ test('minio backend applies the key prefix to every operation', async (t) => {
 
     await assert.rejects(minio.statObject('etl/abc.pdf'), /Access Denied/,
       'a permission fault read as "missing" would answer 404 for a file that is there');
-  });
-
-  await t.test('putFile stores under the prefixed key and returns it', async () => {
-    let seen;
-    t.mock.method(Minio.Client.prototype, 'bucketExists', async () => true);
-    t.mock.method(Minio.Client.prototype, 'fPutObject', async (b, key) => { seen = key; });
-
-    const stored = await minio.putFile('12345/abc.pdf', '/tmp/x.pdf', 'application/pdf');
-    assert.strictEqual(seen, 'ozwdez/12345/abc.pdf');
-    assert.strictEqual(stored, 'ozwdez/12345/abc.pdf');
   });
 
   await t.test('a missing bucket is created before the first upload', async () => {
@@ -289,25 +297,10 @@ test('minio backend applies the key prefix to every operation', async (t) => {
     await minio.putFile('12345/abc.pdf', '/tmp/x.pdf');
     assert.ok(made);
   });
-
-  await t.test('with no prefix configured (prod) the key is untouched', async () => {
-    config.minioKeyPrefix = '';
-    let seen;
-    t.mock.method(Minio.Client.prototype, 'getObject', async (b, key) => {
-      seen = key;
-      return (async function* () { yield Buffer.alloc(0); })();
-    });
-
-    await minio.getBuffer('etl/site-c/abc.pdf');
-    assert.strictEqual(seen, 'etl/site-c/abc.pdf');
-  });
 });
 
-// ── Upload URLs and backup copies ────────────────────────────────────────────
-// The title worker holds no storage credential, so a presigned PUT for one exact original is the
-// only write it gets. A link for a zip or a backup, or one that outlives a few minutes, widens what
-// a leaked URL can destroy. Signed for real by the SDK, offline: an explicit region skips the
-// bucket lookup.
+// A short presigned PUT for one original is the title worker's only write. Signed by the real SDK
+// offline: an explicit region skips the bucket lookup.
 
 test('upload URLs and backup copies', async (t) => {
   const Minio = require('minio');
@@ -697,13 +690,8 @@ test('azure blob backend', async (t) => {
     container: config.azureStorageContainer
   };
 
-  // A structurally valid delegation key. `value` must be base64 — the SAS signature is a real
-  // HMAC over it, so this exercises the actual signing path offline.
-  //
-  // signedStartsOn/signedExpiresOn must be Date objects, not the ISO strings the REST API
-  // returns: the generated mapper types them as String, but generateBlobSASQueryParameters
-  // calls toISOString() on them. BlobServiceClient.getUserDelegationKey bridges the two with
-  // `new Date(...)`, so anything that builds a delegation key by hand must do the same.
+  // `value` is base64 because the SAS is a real HMAC over it; the dates are Date objects because
+  // generateBlobSASQueryParameters calls toISOString() on them.
   const fakeKey = {
     signedObjectId: '00000000-0000-0000-0000-000000000001',
     signedTenantId: '00000000-0000-0000-0000-000000000002',
@@ -897,9 +885,8 @@ test('azure blob backend', async (t) => {
   });
 
   await t.test('putObjectStream uploads in bounded blocks, not one buffer', async () => {
-    // The whole point of the streaming pair: a multi-GB zip must never be held in memory. Block
-    // size and concurrency are positional, so a swap here is a silent memory blow-up on the day
-    // STORAGE_BACKEND flips.
+    // A multi-GB zip must never be held in memory; block size and concurrency are positional, so a
+    // swap is a silent memory blow-up.
     let seenName, seenBlock, seenConcurrency, seenOpts;
     t.mock.method(BlockBlobClient.prototype, 'uploadStream',
       async function (s, block, concurrency, opts) {

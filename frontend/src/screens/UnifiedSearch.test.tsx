@@ -38,11 +38,8 @@ const SAVED: SavedQuery[] = [
   { slug: 'dam-decisions', name: 'Dam decisions', params: 'record=activities&keywords=dam', savedAt: '2026-01-01T00:00:00Z' },
 ];
 
-/**
- * Answers each read the page makes by what it asks for. `rows` overrides a dataset's answer;
- * `saveError` and `deleteError` refuse those writes with that server message; `total` is the
- * document total the envelope reports.
- */
+/** Answers each read by what it asks for. `rows` overrides a dataset; `saveError`/`deleteError`
+ * refuse those writes with that message; `total` is the document total the envelope reports. */
 function stubApi(rows: Record<string, unknown[]> = {}, { saveError = '', deleteError = '', total = 0 } = {}) {
   const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
     const url = String(input);
@@ -84,9 +81,8 @@ function renderAt(url: string) {
   return { search: () => new URLSearchParams(router.state.location.search) };
 }
 
-// The first render in a worker pays for compiling React and the whole grid, which on a loaded
-// machine outlasts findBy's 1 s wait in whichever test runs first. One render here moves that cost
-// out of the tests.
+// The first render in a worker compiles React and the grid, which can outlast findBy's 1 s wait;
+// one render here moves that cost out of the tests.
 beforeAll(async () => {
   stubNarrow(false);
   stubApi();
@@ -165,21 +161,17 @@ describe('UnifiedSearch', () => {
     const { search } = renderAt('/search');
     await screen.findByRole('button', { name: 'Site C Application' });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    try {
-      fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'site c' } });
-      const typed = (url: string) => url.includes('keywords=site c');
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'site c' } });
+    const typed = (url: string) => url.includes('keywords=site c');
 
-      await act(() => vi.advanceTimersByTimeAsync(299));
-      expect(search().get('keywords')).toBeNull();
-      expect(searchesFor(fetchMock, 'Document').some(typed)).toBe(false);
+    await act(() => vi.advanceTimersByTimeAsync(299));
+    expect(search().get('keywords')).toBeNull();
+    expect(searchesFor(fetchMock, 'Document').some(typed)).toBe(false);
 
-      await act(() => vi.advanceTimersByTimeAsync(1));
-      expect(search().get('keywords')).toBe('site c');
-      await act(() => vi.advanceTimersByTimeAsync(0));
-      expect(searchesFor(fetchMock, 'Document').at(-1)).toContain('&keywords=site c&');
-    } finally {
-      vi.useRealTimers();
-    }
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(search().get('keywords')).toBe('site c');
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(searchesFor(fetchMock, 'Document').at(-1)).toContain('&keywords=site c&');
   });
 
   it('leaves a one-character keyword out of the search', async () => {
@@ -214,14 +206,14 @@ describe('UnifiedSearch', () => {
 
   it('clears the keyword through its chip and keeps it cleared once typing would have settled', async () => {
     const fetchMock = stubApi();
-    const user = userEvent.setup();
     const { search } = renderAt('/search?keywords=dam');
     await screen.findByRole('button', { name: 'Site C Application' });
     const before = searchesFor(fetchMock, 'Document').length;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-    await user.click(screen.getByRole('button', { name: 'Remove Search dam' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Search dam' }));
     // Past the debounce, so a draft still holding the old word would have written it back.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+    await act(() => vi.advanceTimersByTimeAsync(400));
 
     expect(search().get('keywords')).toBeNull();
     expect(searchesFor(fetchMock, 'Document').slice(before).filter((url) => url.includes('keywords=dam'))).toEqual([]);
@@ -444,6 +436,7 @@ describe('UnifiedSearch', () => {
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'dam' } });
     await act(() => vi.advanceTimersByTimeAsync(300));
     await act(() => vi.advanceTimersByTimeAsync(0));
+    // findByText polls on setTimeout, so the real clock must be back before it, not in afterEach.
     vi.useRealTimers();
 
     expect(await screen.findByText('The index is down')).toBeTruthy();
