@@ -2,7 +2,8 @@
 
 /**
  * Each eagle-api read a consumer makes, the native DEMI read that answers it (never `/search?dataset=`),
- * and the differences already explained. `format: 'csv'` reads pair rows on `key`, minus `ignoreColumns`.
+ * and the differences already explained. `format: 'csv'` reads pair rows on `key`, minus `ignoreColumns`;
+ * `keysOnly` compares the header and the set of keys, never cell values.
  * Field entries may be `[eagleName, demiName]`; `:demiProject`/`:demiPeriod` take DEMI ids, other
  * placeholders the Eagle ids from `--id`; `mapEagle`/`mapDemi` reshape one side's rows before pairing.
  */
@@ -76,8 +77,6 @@ const PREDICATE_FIELDS = {
 const TRACK_FIELDS = TRACK_PRECEDENCE.map(([, , eagleField]) => eagleField).filter(Boolean);
 /** CSV columns DEMI fills from those fields, per read; Eagle writes its own raw project row. */
 const TRACK_COLUMNS = {
-  // `bcgwRow` in src/controllers/report.js, with the Track-first centroid.
-  'report-bcgw': ['Project name', 'Proponent', 'Type', 'Description', 'Latitude', 'Longitude'],
   // Eagle's raw project.name is blank on legislation-keyed projects.
   'comment-export': ['Project']
 };
@@ -349,9 +348,10 @@ const REST_READS = [
     // Each item carries its element's read[], the ceiling DEMI derives the item's read under.
     mapEagle: elements => elements.flatMap(e => idRows(e.items || []).map(item => ({ ...item, read: e.read }))) },
   { read: 'config', plan: '48', skip: 'runtime config: the two documents differ by design, compared by hand' },
-  // Anonymous only: both APIs answer every caller the anonymous file.
+  // Anonymous only: both APIs answer every caller the anonymous file. DEMI prints its merged values
+  // (Track wins), so cells may differ by design.
   { read: 'report-bcgw', plan: '49', identities: ANON, format: 'csv', key: 'Project GUID',
-    keyIsEagleId: true, eagle: csv('/reports', { type: 'bcgw' }), demi: csv('/reports', { type: 'bcgw' }) },
+    keyIsEagleId: true, keysOnly: true, eagle: csv('/reports', { type: 'bcgw' }), demi: csv('/reports', { type: 'bcgw' }) },
   pending('materialized-views', '50-53', 'not ported: internal to Eagle'),
   pending('audit', '54', 'not ported: dead route')
 ];

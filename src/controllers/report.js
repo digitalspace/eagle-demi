@@ -43,7 +43,7 @@ const BCGW_COLUMNS = [
   'Decision Date', 'URL to Epic Project', 'Project GUID'
 ];
 
-// Not config.linkBaseUrl: eagle-api writes the prod host on every tier, and BCGW parity is byte for byte.
+// Not config.linkBaseUrl: eagle-api writes the prod host on every tier.
 const BCGW_LINK_HOST = 'https://projects.eao.gov.bc.ca';
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
