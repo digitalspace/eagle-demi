@@ -1158,6 +1158,35 @@ test('carryDemiOnlyFields', async (t) => {
     }
   });
 
+  await t.test('Eagle push leaves DEMI-owned fields unchanged: reviewExtensions and reviewSuspensions', () => {
+    const stored = {
+      id: '207',
+      reviewExtensions: [{ type: 'Extension', appliedTo: 'Application review', id: 'a1' }],
+      reviewSuspensions: []
+    };
+    const pushed = eagleFor(TRACK_207, {
+      reviewExtensions: [{ type: 'Extension', appliedTo: 'Assessment' }],
+      reviewSuspensions: [{ type: 'Suspension', appliedTo: 'Assessment' }]
+    });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), stored);
+
+    assert.deepStrictEqual(merged.reviewExtensions, stored.reviewExtensions);
+    assert.deepStrictEqual(merged.reviewSuspensions, [], 'an emptied DEMI list is not refilled from Eagle');
+  });
+
+  await t.test('an extension list the stored row lacks takes what Eagle sent', () => {
+    const extension = { type: 'Extension', appliedTo: 'Application review' };
+    const suspension = { type: 'Suspension', appliedTo: 'Assessment' };
+    const pushed = eagleFor(TRACK_207, { reviewExtensions: [extension], reviewSuspensions: [suspension] });
+
+    const fresh = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), null);
+    const seeded = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), { id: '207' });
+
+    assert.deepStrictEqual([fresh.reviewExtensions, fresh.reviewSuspensions], [[extension], [suspension]]);
+    assert.deepStrictEqual([seeded.reviewExtensions, seeded.reviewSuspensions], [[extension], [suspension]]);
+  });
+
   await t.test('a re-merge takes the guid Track gained over a stored null eagleId', () => {
     const track = { ...TRACK_207, epic_guid: '5cf00c03a266b7e18775000a' };
     const merged = carryDemiOnlyFields(mergeTrackProject(track, null, OPTS), { id: '207', eagleId: null });

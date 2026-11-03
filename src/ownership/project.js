@@ -45,7 +45,7 @@ const EAGLE_STAFF_FIELDS = [
 const EAGLE_ONLY_FIELDS = [
   'eaStatus', 'eacDecision', 'decisionDate', 'currentPhaseName', 'phaseHistory',
   'legislation', 'legislationYear', 'review180Start', 'review45Start',
-  'reviewExtensions', 'reviewSuspensions', 'substitution', 'CEAAInvolvement',
+  'substitution', 'CEAAInvolvement',
   'CEAALink', 'applicableRegulation', 'build', 'dateAdded', 'dateUpdated',
   'projectLead', 'projectLeadEmail', 'projectLeadPhone',
   'responsibleEPD', 'responsibleEPDEmail', 'responsibleEPDPhone',
@@ -89,9 +89,13 @@ const PUSH_ONLY_FIELDS = [
   ...PUSH_BOOKKEEPING_FIELDS
 ];
 
-/** Only DEMI writes these (PUT, `/level`, the dating pass, sync-out), so no re-merge can rebuild them. */
+/**
+ * Only DEMI writes these (PUT, `/level`, the extension routes, the dating pass, sync-out), so no
+ * re-merge can rebuild them.
+ */
 const DEMI_ONLY_FIELDS = [
-  'tags', 'levelHeldAt', 'documentPhases', 'pins', 'pinsRead', 'pinsHistory', ...SYNC_STATE_FIELDS
+  'tags', 'levelHeldAt', 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
+  'reviewExtensions', 'reviewSuspensions', ...SYNC_STATE_FIELDS
 ];
 
 /** Each field's one owner. `legislation_<year>` blocks are Eagle's too (`LEGISLATION_KEY`). */
@@ -115,6 +119,8 @@ const PUT_IGNORED_FIELDS = [
   // Applied by `pinChanges` (src/domain/project-pins.js), which checks them; `pinsPublished` is
   // stored as `pinsRead`, so neither is spread from the body.
   'pins', 'pinsPublished',
+  // Moved only by the extension routes (src/domain/extensions.js), which check and id each item.
+  'reviewExtensions', 'reviewSuspensions',
   // The current year moves only through `/level`.
   ...LEGISLATION_INDEX_FIELDS,
   // Catalogued at vis 2, so staff can send them back and break push ordering or the cascade.
