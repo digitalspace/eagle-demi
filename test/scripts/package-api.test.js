@@ -475,7 +475,7 @@ test('API deploy package', async (t) => {
     const repo = path.join(dir, 'repo');
     scaffold(repo);
     fs.mkdirSync(path.join(repo, 'src', 'deep'), { recursive: true });
-    const refused = ['local.settings.json', '.npmrc', 'server.key', 'cert.pem',
+    const refused = ['local.settings.json', 'local.settings.example.json', '.npmrc', 'server.key', 'cert.pem',
       'bundle.p12', 'bundle.pfx'];
     for (const name of refused) {
       fs.writeFileSync(path.join(repo, name), 'SECRET=x');
