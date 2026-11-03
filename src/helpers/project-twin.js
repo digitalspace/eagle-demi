@@ -82,7 +82,7 @@ function onePerEagleId(rows, prefer) {
   return [...byId].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** Whether two stored `tags` values are the same list; absent reads as empty. */
+/** Whether two stored list values (`tags`, `pins`, `pinsRead`) are the same list; absent reads as empty. */
 const sameTags = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
 
 /** The other row of a Track/`eagle-<id>` pair, or null when the row has none. */
@@ -96,22 +96,28 @@ async function readPartner(row) {
 }
 
 /**
- * Whether the partner's field dial on `tags` refuses this caller, as a direct PUT there would.
- * Its `read[]` is left unchecked, the same as `mirrorTags`.
+ * The keys of `body` the partner's field dials refuse this caller, as a direct PUT there would.
+ * Its `read[]` is left unchecked, the same as `mirrorFields`.
  */
-async function partnerRefusesTags(row, access) {
+async function partnerRefuses(row, access, body) {
   const partner = await readPartner(row);
-  return Boolean(partner) && refusedWriteKeys('projects', { tags: [] }, access, partner).length > 0;
+  return partner ? refusedWriteKeys('projects', body, access, partner) : [];
 }
 
+/** DEMI-owned fields PUT copies onto the pair, and the audit action of each copy. */
+const MIRRORED = Object.freeze({
+  tags: { fields: ['tags'], action: 'project.mirrorTags' },
+  pins: { fields: ['pins', 'pinsRead'], action: 'project.mirrorPins' }
+});
+
 /**
- * Copy `row`'s (pre-write) stored `tags` onto its pair past the caller's `read[]`, safe as only `tags` and `updatedAt`
- * change there; audited under `req`, PUT checks `partnerRefusesTags` first. Returns a 500 message or null.
+ * Copy `row`'s stored `fields` (one MIRRORED entry) onto its pair past the caller's `read[]`, safe as only those
+ * and `updatedAt` change there; audited under `req`, PUT checks `partnerRefuses` first. Returns a 500 message or null.
  */
-async function mirrorTags(row, req) {
+async function mirrorFields(row, req, { fields, action }) {
   const read = () => readPartner(row);
-  const logFailure = (cause) => logger.error('[project-twin] could not mirror tags onto the other row of the pair',
-    { projectId: row.id, eagleId: row.eagleId, ...cause });
+  const logFailure = (cause) => logger.error(`[project-twin] could not mirror ${fields[0]} onto the other row of the pair`,
+    { projectId: row.id, eagleId: row.eagleId, fields, ...cause });
   try {
     const written = await writeGuarded({
       existing: await read(),
@@ -120,19 +126,20 @@ async function mirrorTags(row, req) {
         if (!partner) return { status: 'none' };
         // Stored, not this request's snapshot: a PUT on the partner may have landed since ours.
         const primary = await projects.readForWrite(row.id);
-        if (!primary || sameTags(partner.tags, primary.tags)) return { status: 'none' };
-        const copy = { ...partner, tags: [...(primary.tags || [])], updatedAt: new Date().toISOString() };
+        if (!primary || fields.every(field => sameTags(partner[field], primary[field]))) return { status: 'none' };
+        const copy = { ...partner, updatedAt: new Date().toISOString() };
+        for (const field of fields) copy[field] = [...(primary[field] || [])];
         await projects.upsert(copy, { etag: partner._etag });
         return { status: 'saved', partnerId: partner.id };
       }
     });
     if (written.status === 'saved') {
       auditEvent(req, {
-        action: 'project.mirrorTags',
+        action,
         targetType: 'project',
         targetId: written.partnerId,
         projectId: written.partnerId,
-        detail: { fields: ['tags'], copiedFrom: row.id }
+        detail: { fields, copiedFrom: row.id }
       });
     }
     if (written.status !== 'conflict') return null;
@@ -141,7 +148,7 @@ async function mirrorTags(row, req) {
     // Caught here so the caller still audits the primary write it already made.
     logFailure({ error: err.message, stack: err.stack });
   }
-  return 'The project tags changed, but the other copy of this project could not take them.';
+  return `The project ${fields[0]} changed, but the other copy of this project could not take them.`;
 }
 
-module.exports = { narrowTwin, mirrorTags, partnerRefusesTags, sameTags, onePerEagleId };
+module.exports = { narrowTwin, mirrorFields, partnerRefuses, MIRRORED, sameTags, onePerEagleId };

@@ -775,7 +775,7 @@ paths:
         with 400, except the filters that say they repeat, which match any of up to 100 values. A
         filter, sort or `q` on a field the caller cannot see is refused with 400. A rejected Bearer token answers 401; an
         authenticated answer carries `Cache-Control: private, no-store`. A `q` search is logged as
-        a `search` analytics event.
+        a `search` analytics event. Each row's `pins` has the shape `GET /api/projects/{id}` returns.
       parameters:
         - name: page
           in: query
@@ -936,7 +936,8 @@ paths:
       description: >-
         Ingest a new project with name and geographic centroid coordinates. The project is
         admitted at level 1 (team only): `isPublished` and `read` in the body are ignored, not
-        refused. Raising a project's level is `PUT /api/projects/{id}/level`.
+        refused. Raising a project's level is `PUT /api/projects/{id}/level`. The row gets
+        `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1233,7 +1234,10 @@ paths:
           description: >-
             Project document. It carries `shortCode` and, composed from it, `shortUrl` — the
             `/s/<code>` link — plus `shortLinkUrl`, where that link lands, and `shortLinkCustom`,
-            true when staff set that target. All four appear together or not at all.
+            true when staff set that target. All four appear together or not at all. `pins` is
+            the pinned organizations as `{_id, name, province}` in stored order, without the ones
+            the caller cannot read; an anonymous caller gets it only when the list is published.
+            Staff also get `pinsPublished`.
         '401':
           description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
@@ -1243,7 +1247,10 @@ paths:
       description: >-
         Modify an existing project's metadata or coordinates. It does not change visibility:
         `isPublished` and `read` in the body are ignored and the stored ACL is kept. Use
-        `PUT /api/projects/{id}/level`.
+        `PUT /api/projects/{id}/level`. It also sets the pinned organizations (`pins`,
+        `pinsPublished`); there are no pin routes. On a project created in DEMI, a body that
+        changes a stored value sets `dateUpdated` unless it sends one, and sync-out queues the
+        project for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1266,16 +1273,25 @@ paths:
           description: >-
             Body contains a field the caller cannot see, or a vis key, or `tags` outside the limits
             on `ProjectInput.tags`, or `tags` when the other row of a Track/`eagle-<eagleId>` pair
-            does not let the caller see its tags. Nothing is written to either row.
+            does not let the caller see its tags. Nothing is written to either row. Also a `pins`
+            id that is not an organization, or a malformed `pins` or `pinsPublished`; `fields.pins`
+            names the unknown ids.
         '401':
           description: Unauthorized.
+        '403':
+          description: >-
+            The body changes `pins` or `pinsPublished` and the caller holds none of `sysadmin`,
+            `staff`, `project-system-admin`. Sending back the `pins` and `pinsPublished` this
+            caller's `GET` returns is not a change; stored pins the caller cannot read are kept.
         '404':
           description: Project not found.
         '409':
           description: >-
             The project is under a locked Act (today the Building Canada Act, 2025) and the body
             sends another `legislationYear` (including null) or another `legislation` label,
-            including when the project moved under that Act after this request read it. Nothing is
+            including when the project moved under that Act after this request read it. Or the
+            pin list would turn public while it holds an unpublished organization: publishing the
+            list checks every pin, adding to a published list checks the added ones. Nothing is
             written.
         '500':
           description: >-
@@ -1417,7 +1433,8 @@ paths:
         Pulling a project back from level 4 needs the `sysadmin` role and is audited as
         `record.takedown`; narrowing the row alone does not finish a takedown, see
         `docs/takedown-runbook.md`. A narrow is held across Eagle pushes and re-seeds
-        (`levelHeldAt`) until a widen here reaches level 4 or Eagle's level.
+        (`levelHeldAt`) until a widen here reaches level 4 or Eagle's level. On a project created
+        in DEMI, sync-out queues the move for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -9480,6 +9497,24 @@ components:
             write is refused (400) when the field visibility setting for `tags` on either row
             refuses the caller. The copy writes only the tag list, and it is audited.
           example: ["West Coast Oil Pipeline"]
+        pins:
+          type: array
+          maxItems: 100
+          items:
+            oneOf:
+              - type: string
+              - type: object
+                properties:
+                  _id:
+                    type: string
+          description: >-
+            Set by `PUT` only. Organization ids; replaces the stored list. Repeats are dropped,
+            keeping the first; at most 100 distinct ids. A `{_id, ...}` item, the shape the read
+            returns, counts as its `_id`. Stored pins the caller cannot read stay on the list.
+        pinsPublished:
+          type: boolean
+          description: >-
+            Set by `PUT` only. Publishes or unpublishes the whole pin list.
 
     DocumentInput:
       type: object

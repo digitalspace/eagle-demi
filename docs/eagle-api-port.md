@@ -44,7 +44,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af); no caller yet |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); v2.5.35 deployed to test; prod precondition under Project |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | done (359611b4) |
-| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | todo |
+| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half built; eagle-admin half todo |
 | F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | todo |
 | F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | todo |
 | F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `project.service.ts` | 4, F8 | - | todo |
@@ -198,13 +198,15 @@ Shared code is the read `SPEC`, `writeHandler`, `_write.js` and `_schema.js`. Ea
 
 ### Pins
 
-Status: done, Dark (b9e4685f, rules 38950fd4). Pin rules built in `src/domain/project-pins.js`; no caller until F1.
+Status: DEMI half of F1 built (b9e4685f, rules 38950fd4). `PUT /projects/:id` applies the pin rules in `src/domain/project-pins.js`; the eagle-admin half is todo.
 
-Today: `pins` is a field on the project document, resolved to `{_id, name, province}` in `src/merge/project.js:151-158`, shown when `pinsRead` includes `public` (`src/vis/predicates.js:18`). `PUT /projects/:id` strips `pins` and `pinsPublished` (`src/controllers/nosql/project.js:491-494`). `pinsRead` has maxVis 0 (`src/vis/catalog/projects.js:163`). eagle-public react reads pins through `GET /demi-projects/:id` (`src/app/api/api.ts:395-410`).
+Storage: `pins` is a field on the project document, holding organization ids. Project reads return each pin as `{_id, name, province}` through `labelPins` in `src/domain/project-pins.js`. Anonymous callers see `pins` when `pinsRead` includes `public` (`src/vis/predicates.js:18`).
+
+`pinsRead` has maxVis 0 (`src/vis/catalog/projects.js:163`). eagle-public react reads pins through `GET /demi-projects/:id` (`src/app/api/api.ts:395-410`).
 
 Design (Daniel, 2026-10-14): a pin is an organization, so DEMI has no pin routes. The organization is the object. A pin is only the link "organization X is pinned to project Y" plus a published flag, and that link lives on the project.
 - Organization create and update: the Organizations section below. This section adds no organization rules.
-- `PUT /projects/:id` accepts `pins` (a list of organization ids) and `pinsPublished` (boolean). It stops stripping both (`src/controllers/nosql/project.js:491-494`). The route keeps its existing project guard (`[authMiddleware, requireWrite]`, `routes.js:170`).
+- `PUT /projects/:id` accepts `pins` (a list of organization ids) and `pinsPublished` (boolean). The route keeps its project guard (`[authMiddleware, requireWrite]`, `routes.js:170`).
 - Every id in `pins` must exist in the organizations table. Otherwise the PUT returns 400 and lists the unknown ids. This is a foreign-key check.
 - DEMI has no `POST`, `DELETE` or `PUT` route under `/projects/:id/pins`. eagle-api's `/project/:id/pin` sub-routes edit an array; DEMI does not copy them.
 - Reads: eagle-public and eagle-admin get pins from the project read, `GET /projects/:id`. There is no `GET /projects/:id/pins`.
@@ -214,16 +216,17 @@ Rules:
 - The stored value is the id list. The project read returns each pin as `{_id, name, province}`, resolved from the organizations table.
 - `pinsPublished` true adds `'public'` to `pinsRead`, false removes it, for the whole list (eagle-api `pins.js:167,194`). It applies to the whole list, not one pin.
 - When the list is unpublished, the public response is `[]`. This is a deliberate change from eagle-api `[{total_items: 0}]` (`pins.js:42`).
-- Publishing a pin requires its organization to be published, else 409. For `pinsPublished` true, every organization in `pins` must be published. Built in `src/domain/project-pins.js` (38950fd4), wired into the project PUT in F1.
+- Publishing a pin requires its organization to be published, else 409. For `pinsPublished` true, every organization in `pins` must be published. Built in `src/domain/project-pins.js` (38950fd4).
 - The publish check covers only the ids being added, or the whole list when it goes from unpublished to published, so a list holding a since-unpublished organization can still shrink. The unknown-id 400 and the 403 role rule from (c) below are built in the same module.
 
 Ownership per phase:
-- Dark: Eagle owns `pins` and `pinsRead`. The strip at `project.js:491-494` stays. Slice 1 adds the label read `lists.listOrganizationLabels` (`c.id, c.name, c.province`, key `id`), which has no caller until F1 maps `id` to `_id`.
-- Flip: `pins`, `pinsRead` and `pinsHistory` move to `DEMI_ONLY_FIELDS` in `src/ownership/project.js`. The strip is removed and the PUT accepts the fields as above. Fix the comment at `src/ownership/project.js:111-114` (the `PUT_IGNORED_FIELDS` block) and remove the dead pins-shape branch in `carryEagleOnlyFields` (`src/merge/project.js`) and its tests (`test/merge/project.test.js`).
+- Flip: `pins`, `pinsRead` and `pinsHistory` are in `DEMI_ONLY_FIELDS` in `src/ownership/project.js`, so an Eagle push or re-seed keeps the stored list. A row with no stored copy starts from the pins Eagle sent.
+- A PUT that sends back what the caller's read shows changes nothing. Stored ids the caller cannot read stay on the list.
+- PUT copies `pins` and `pinsRead` onto the other row of a Track and `eagle-<id>` pair, as it copies `tags`.
 - Sync-out: none. No client still reads pins from eagle-api: eagle-admin reads them from DEMI's project (`pins-list.component.ts:117-119` on `origin/develop`), and so does eagle-public (`api.ts:277-280`). After the Flip, eagle-admin writes them through the DEMI project PUT as well.
 
 Open before build:
-- (a) Resolved: the label read exists as `listOrganizationLabels` in `src/repositories/lists.js`, selecting `c.id, c.name, c.province` with key `id`; the domain maps `id` to `_id` in F1; no caller until F1.
+- (a) Resolved: the label read exists as `listOrganizationLabels` in `src/repositories/lists.js`, selecting `c.id, c.name, c.province` with key `id`; the domain maps `id` to `_id`.
 - (b) eagle-admin `pins-list.component.ts:128-136` reads the published flag from the eagle-api envelope, `read.includes('public')`. DEMI never returns `pinsRead` (maxVis 0). eagle-admin must read `pinsPublished` from `GET /projects/:id`, and the pins page must show the correct state after a change.
 - (c) The eagle-api pin publish and unpublish guard was `staff, sysadmin`. The flag now rides on project PUT, whose guard is `requireWrite` (`routes.js:170`), and that guard admits the `demi-service-write` service key; the earlier pin design deliberately kept that key out of pin edits. Rule to apply: the domain policy for project PUT rejects changes to `pins` or `pinsPublished` (403) unless the caller holds `sysadmin`, `staff` or `project-system-admin`, so a service key may update other project fields but never pins. Confirmed 2026-10-14: DEMI has no pin routes. The pinned organization list and `pinsPublished` ride on project PUT, and a change to either returns 403 unless the caller holds sysadmin, staff or project-system-admin. eagle-api pin routes retire after F1.
 
@@ -381,7 +384,9 @@ Today: `GET /organizations`, `/organizations/:id` (`routes.js:288-289`), mirror 
 
 Target routes: `POST /organizations`, `PUT /organizations/:id`, `PUT /organizations/:id/publish`, `PUT /organizations/:id/unpublish`. Pins are organizations, so these are also the only routes that create or edit a pin's organization (see Pins).
 
-Visibility (Daniel, 2026-10-19): organizations keep a row-level visibility choice. eagle-api's publish and unpublish have no caller, but the choice is kept. Create defaults to unpublished. eagle-admin gets the toggle in F1. Existing rows keep their current `read[]` and `isPublished`; there is no backfill. Until the flip, the Eagle mirror (`controllers/nosql/organization.js`) rewrites an Eagle-sourced row's `read[]` from Eagle on each push, so a DEMI publish or unpublish of that row lasts only until its next push.
+Visibility: organizations keep a row-level visibility choice, though eagle-api's publish and unpublish have no caller. Create defaults to unpublished. eagle-admin gets the toggle in F1.
+
+Stored rows keep their `read[]` and `isPublished`; there is no backfill. The Eagle mirror (`controllers/nosql/organization.js`) keeps both on every push, so only DEMI publish and unpublish move them. A row the mirror creates starts from Eagle's `read[]`.
 
 Guards: `POST` is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eagle-api `swagger.yaml:4241`); `PUT` is `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]` (scope `project-system-admin`, `swagger.yaml:4361`). eagle-api's auth admits `sysadmin` and `staff` on every route (`api/helpers/auth.js:35-43`), so each DEMI guard carries the route's `x-security-scopes` plus those two. The route-inventory `roles` entry lists the same names.
 

@@ -14,7 +14,8 @@ const notifications = require('./notifications');
 const commentPeriods = require('./comment-periods');
 const commentPeriodRows = require('../../repositories/comment-periods');
 
-const PROJECTS = { spec: projectsKind, label: 'name', fields: ['id', 'eagleId', 'name'] };
+// No pin labels: `slim` keeps only these fields.
+const PROJECTS = { spec: { ...projectsKind, parentJoin: null }, label: 'name', fields: ['id', 'eagleId', 'name'] };
 const NOTIFICATIONS = { spec: notifications.SPEC, label: 'name', fields: ['id', 'name', 'associatedProjectId'] };
 
 const KINDS = Object.freeze({

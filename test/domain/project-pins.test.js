@@ -5,36 +5,18 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const lists = require('../../src/repositories/lists');
 const { resolveAccess } = require('../../src/helpers/access-sql');
 const { pinsPublished } = require('../../src/vis/predicates');
-const { pinChanges, pinLabels, MAX_PINS } = require('../../src/domain/project-pins');
-
-const PUBLISHED_ORG = '5c1f7a3e9b1d2c0012340001';
-const HIDDEN_ORG = '5c1f7a3e9b1d2c0012340002';
-const UNKNOWN_ORG = '5c1f7a3e9b1d2c0012340003';
-const ORGS = {
-  [PUBLISHED_ORG]: { id: PUBLISHED_ORG, name: 'Acme', province: 'BC', public: true },
-  [HIDDEN_ORG]: { id: HIDDEN_ORG, name: 'Hidden Co', province: 'AB', public: false }
-};
+const { pinChanges, labelPins, MAX_PINS } = require('../../src/domain/project-pins');
+const {
+  PUBLISHED_ORG, HIDDEN_ORG, UNKNOWN_ORG, SEALED_ORG, fakeOrgLabels: fakeOrgs
+} = require('../helpers/org-labels');
 
 const ctxFor = (roles) => ({ access: resolveAccess({ user: { sub: 'kc-1', realm_access: { roles } }, headers: {} }) });
 const STAFF = ctxFor(['staff']);
 
 const UNPUBLISHED_LIST = Object.freeze({ id: 'p1', pins: [], pinsRead: ['staff', 'sysadmin'] });
 const PUBLISHED_LIST = Object.freeze({ id: 'p1', pins: [PUBLISHED_ORG], pinsRead: ['public', 'staff', 'sysadmin'] });
-
-/** Fake label read: a staff-wide read sees every stored organization, an anonymous one the published ones. */
-function fakeOrgs(t) {
-  const calls = [];
-  t.mock.method(lists, 'listOrganizationLabels', async (access, ids) => {
-    const anonymous = !access.roles.some(role => role === 'staff' || role === 'sysadmin');
-    calls.push({ anonymous, ids });
-    return ids.map(id => ORGS[id]).filter(org => org && (!anonymous || org.public))
-      .map(({ id, name, province }) => ({ id, name, province }));
-  });
-  return calls;
-}
 
 test('pinChanges', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -63,7 +45,7 @@ test('pinChanges', async (t) => {
     const result = await pinChanges(ctxFor(['demi-service-write']), eagleShaped,
       { pins: [PUBLISHED_ORG], pinsPublished: true });
     assert.deepStrictEqual(result, { status: 'ok', changes: {} });
-    assert.strictEqual(calls.length, 0);
+    assert.strictEqual(calls.length, 1, 'only the read the caller\'s own GET would make');
   });
 
   await t.test('a change by a caller without sysadmin, staff or project-system-admin is 403', async (t) => {
@@ -72,6 +54,12 @@ test('pinChanges', async (t) => {
     assert.strictEqual(result.status, 'forbidden');
     assert.match(result.error, /sysadmin, staff, project-system-admin/);
     assert.strictEqual(calls.length, 0, 'refused before any organization is looked up');
+  });
+
+  await t.test('the id cap counts distinct organizations', async (t) => {
+    fakeOrgs(t);
+    const result = await pinChanges(STAFF, UNPUBLISHED_LIST, { pins: Array(MAX_PINS + 1).fill(PUBLISHED_ORG) });
+    assert.deepStrictEqual(result.changes, { pins: [PUBLISHED_ORG] });
   });
 
   await t.test('project-system-admin alone may change pins', async (t) => {
@@ -91,7 +79,7 @@ test('pinChanges', async (t) => {
   await t.test('a malformed body is 400 per field', async (t) => {
     fakeOrgs(t);
     for (const body of [{ pins: 'x' }, { pins: ['not-an-id'] }, { pins: [{ name: 'no id' }] },
-      { pins: Array(MAX_PINS + 1).fill(PUBLISHED_ORG) }]) {
+      { pins: Array.from({ length: MAX_PINS + 1 }, (_, i) => i.toString(16).padStart(24, '0')) }]) {
       const result = await pinChanges(STAFF, UNPUBLISHED_LIST, body);
       assert.strictEqual(result.status, 'invalid', JSON.stringify(body).slice(0, 60));
       assert.ok(result.fields.pins);
@@ -111,6 +99,16 @@ test('pinChanges', async (t) => {
     const stored = { ...UNPUBLISHED_LIST, pins: [PUBLISHED_ORG, HIDDEN_ORG] };
     const result = await pinChanges(STAFF, stored, { pinsPublished: true });
     assert.deepStrictEqual(result, { status: 'conflict', error: `Organizations not published: ${HIDDEN_ORG}` });
+  });
+
+  await t.test('the 409 counts an unpublished pin the caller cannot see, never naming it', async (t) => {
+    fakeOrgs(t);
+    const stored = { ...UNPUBLISHED_LIST, pins: [HIDDEN_ORG, SEALED_ORG] };
+    const result = await pinChanges(STAFF, stored, { pinsPublished: true });
+    assert.deepStrictEqual(result, {
+      status: 'conflict',
+      error: `Organizations not published: ${HIDDEN_ORG}; 1 organizations you cannot see are not published`
+    });
   });
 
   await t.test('adding an unpublished organization to a published list is 409', async (t) => {
@@ -144,25 +142,33 @@ test('pinChanges', async (t) => {
   });
 });
 
-test('pinLabels', async (t) => {
+test('labelPins', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('labels in stored order, ids the caller cannot read dropped', async (t) => {
     const calls = fakeOrgs(t);
-    const project = { pins: [HIDDEN_ORG, { _id: UNKNOWN_ORG }, PUBLISHED_ORG] };
-    assert.deepStrictEqual(await pinLabels(STAFF.access, project), [
+    const pins = [HIDDEN_ORG, { _id: UNKNOWN_ORG }, PUBLISHED_ORG];
+    const [staffRow] = await labelPins(STAFF.access, [{ pins }]);
+    assert.deepStrictEqual(staffRow.pins, [
       { _id: HIDDEN_ORG, name: 'Hidden Co', province: 'AB' },
       { _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }
     ]);
-    assert.deepStrictEqual(await pinLabels(resolveAccess({}), project), [
-      { _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }
-    ]);
+    const [publicRow] = await labelPins(resolveAccess({}), [{ pins }]);
+    assert.deepStrictEqual(publicRow.pins, [{ _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }]);
     assert.strictEqual(calls.length, 2);
   });
 
-  await t.test('a project with no pins reads nothing', async (t) => {
+  await t.test('one label read for every row of a page', async (t) => {
     const calls = fakeOrgs(t);
-    assert.deepStrictEqual(await pinLabels(STAFF.access, {}), []);
+    const rows = await labelPins(STAFF.access, [{ pins: [PUBLISHED_ORG] }, { name: 'no pins' }, { pins: [HIDDEN_ORG] }]);
+    assert.deepStrictEqual(rows.map(row => row.pins && row.pins.map(pin => pin._id)),
+      [[PUBLISHED_ORG], undefined, [HIDDEN_ORG]]);
+    assert.strictEqual(calls.length, 1);
+  });
+
+  await t.test('rows with no pins read nothing', async (t) => {
+    const calls = fakeOrgs(t);
+    assert.deepStrictEqual(await labelPins(STAFF.access, [{}]), [{}]);
     assert.strictEqual(calls.length, 0);
   });
 });

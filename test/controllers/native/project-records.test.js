@@ -16,6 +16,7 @@ const cosmos = require('../../../src/db/cosmos-nosql');
 const { makeRes } = require('../../../src/http/router');
 const { swaggerParams, queryNames } = require('../../helpers/swagger-params');
 const { recordEvents } = require('../../helpers/record-events');
+const { PUBLISHED_ORG, HIDDEN_ORG, fakeOrgLabels } = require('../../helpers/org-labels');
 const audit = require('../../../src/utils/audit');
 const { logger } = require('../../../src/utils/logger');
 
@@ -93,6 +94,17 @@ test('GET /project-records', async (t) => {
       ids.push(...res.body.map(row => row.id));
     }
     assert.deepStrictEqual(ids, MERGED_IDS);
+  });
+
+  await t.test('a project row\'s pins are labels of the organizations the caller can read', async (t) => {
+    const pinned = { ...project('p1', 'Alpha'), pins: [PUBLISHED_ORG, HIDDEN_ORG], pinsRead: ['public'] };
+    fakeStores(t, { projects: [pinned], notices: [] });
+    fakeOrgLabels(t);
+
+    const res = await call('');
+
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body[0].pins, [{ _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }]);
   });
 
   for (const qs of ['currentPhaseName=P1', 'eacDecision=E1', 'dateUpdatedStart=2020-01-01', 'phaseIds=a']) {
