@@ -606,6 +606,19 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
+  await t.test('a comment under a period Eagle deleted is still stored, staff-only', async () => {
+    const deleted = { ...storedPeriod(['staff']), isDeleted: true };
+    // As the repository answers: a deleted period only when the read asks for one.
+    t.mock.method(commentPeriods, 'getById', async (access, id, projectId, { includeDeleted = false } = {}) =>
+      (includeDeleted ? deleted : null));
+
+    const { written } = await pushTo(
+      commentController, comments, COMMENT_EAGLE_ID, eagleComment(), t);
+
+    assert.ok(written(), 'the comment is stored');
+    assert.ok(!written().read.includes('public'));
+  });
+
   await t.test('a comment Eagle marks compliance-only lands privileged-only, not sealed', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
 
@@ -810,6 +823,19 @@ test('PUT /eagle/organizations/:eagleId', async (t) => {
       eagleOrganization({ read: ['compliance'] }), t);
 
     assert.deepStrictEqual(written().read, ['sysadmin']);
+  });
+
+  await t.test('Eagle push leaves DEMI-owned fields unchanged: organization visibility', async () => {
+    const existing = {
+      id: ORG_EAGLE_ID, eagleId: ORG_EAGLE_ID, kind: 'Organization', sourceSystem: 'eagle',
+      name: 'Old Name', isPublished: false, read: PRIVATE_ACL
+    };
+    const { written } = await pushTo(organizationController, lists, ORG_EAGLE_ID,
+      eagleOrganization({ read: PUBLIC_ACL }), t, { existing });
+
+    assert.strictEqual(written().name, 'Nicomen Energy Ltd', 'Eagle still owns the business card');
+    assert.strictEqual(written().isPublished, false);
+    assert.deepStrictEqual(written().read, PRIVATE_ACL);
   });
 });
 

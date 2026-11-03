@@ -7,6 +7,10 @@ const assert = require('node:assert');
 
 const projects = require('../../src/repositories/projects');
 const documents = require('../../src/repositories/documents');
+const syncOut = require('../../src/sync-out');
+const {
+  PUBLISHED_ORG, HIDDEN_ORG, UNKNOWN_ORG, SEALED_ORG, fakeOrgLabels
+} = require('../helpers/org-labels');
 const aiSearch = require('../../src/search/ai-search');
 const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
@@ -47,6 +51,7 @@ function eachPatchFits() {
 // `demi-service-write` is level 2 — the tier every WRITE_ROLES holder maps to.
 const WRITER_USER = { realm_access: { roles: ['demi-service-write'] } };
 const STAFF_USER = { realm_access: { roles: ['staff'] } };
+
 
 test('nosql project controller', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -283,6 +288,64 @@ test('nosql project controller', async (t) => {
     assert.deepStrictEqual(saved.sources, {}, 'the wildfire patch needs /sources to exist');
   });
 
+  await t.test('a create stamps syncVersion and the Eagle dates, and queues the project kind', async () => {
+    t.mock.method(projects, 'getById', async () => null);
+    t.mock.method(projects, 'upsert', async (doc) => doc);
+    const queued = [];
+    t.mock.method(syncOut, 'enqueue', async (row, options) => { queued.push({ row, options }); return ['eagle']; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 1, name: 'X', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+
+    assert.strictEqual(queued.length, 1);
+    const { row, options } = queued[0];
+    assert.deepStrictEqual(options, { kind: 'project' });
+    assert.strictEqual(row.syncVersion, 1, 'listSyncPending lists only syncVersion > 0');
+    assert.ok(row.dateAdded && row.dateAdded === row.dateUpdated);
+  });
+
+  await t.test('a PUT content edit of a native project raises syncVersion and queues it; a no-op does neither', async () => {
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', sourceSystem: 'track', sources: {}, syncVersion: 3,
+      dateUpdated: '2026-01-01T00:00:00.000Z', read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    const saves = [];
+    t.mock.method(projects, 'upsert', async (doc) => { saves.push(doc); return doc; });
+    const queued = [];
+    t.mock.method(syncOut, 'enqueue', async (row) => { queued.push(row); return ['eagle']; });
+    const put = (body) => projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: STAFF_USER, body }, mockRes());
+
+    await put({ name: 'P' });
+    await put({ name: 'P2' });
+
+    assert.deepStrictEqual(saves.map(row => row.syncVersion), [3, 4]);
+    assert.strictEqual(saves[0].dateUpdated, stored.dateUpdated);
+    assert.notStrictEqual(saves[1].dateUpdated, stored.dateUpdated);
+    assert.deepStrictEqual(queued.map(row => row.name), ['P2']);
+  });
+
+  await t.test('a PUT content edit of a Track project leaves syncVersion and dateUpdated to their owners', async () => {
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', sources: { track: { id: 207 } }, syncVersion: 3,
+      dateUpdated: '2026-01-01T00:00:00.000Z', read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+    const enqueue = t.mock.method(syncOut, 'enqueue', async () => ['eagle']);
+
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: STAFF_USER, body: { name: 'P2' } }, mockRes());
+
+    assert.strictEqual(saved.name, 'P2');
+    assert.strictEqual(saved.syncVersion, 3);
+    assert.strictEqual(saved.dateUpdated, stored.dateUpdated);
+    assert.strictEqual(enqueue.mock.callCount(), 0);
+  });
+
 
   // Admission is level 1 (P3-3). Literal tokens, because reading them off a constant would pass
   // whatever that constant becomes.
@@ -491,10 +554,10 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(saved.projectCACPublished, false, 'the stored flag wins over the body');
   });
 
-  await t.test('PUT /api/projects/:id does not store the derived pinsPublished', async () => {
-    // A staff GET carries it, so a GET-then-PUT sends it back; it is worked out from pinsRead.
+  await t.test('PUT /api/projects/:id stores pins as ids and pinsPublished as pinsRead', async () => {
+    fakeOrgLabels(t);
     const stored = {
-      id: '207', trackProjectId: 207, name: 'P', pinsRead: ['staff'],
+      id: '207', trackProjectId: 207, name: 'P', pins: [], pinsRead: ['staff', 'sysadmin'],
       read: ['public', ...SECURE_ROLES], isPublished: true
     };
     t.mock.method(projects, 'getById', async () => structuredClone(stored));
@@ -503,20 +566,52 @@ test('nosql project controller', async (t) => {
 
     const res = mockRes();
     await projectController.updateProject({
-      params: { id: '207' }, query: {}, user: WRITER_USER,
-      body: { name: 'P2', pinsPublished: true }
+      params: { id: '207' }, query: {}, user: STAFF_USER,
+      body: { pins: [PUBLISHED_ORG, PUBLISHED_ORG], pinsPublished: true }
     }, res);
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(saved.name, 'P2');
-    assert.ok(!('pinsPublished' in saved), 'a derived value must not be stored');
+    assert.deepStrictEqual(saved.pins, [PUBLISHED_ORG]);
+    assert.deepStrictEqual(saved.pinsRead, ['public', 'staff', 'sysadmin']);
+    assert.ok(!('pinsPublished' in saved), 'stored as pinsRead, never as its own field');
+    assert.deepStrictEqual(res.body.pins, [{ _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }]);
+    assert.strictEqual(res.body.pinsPublished, true);
   });
 
-  await t.test('PUT /api/projects/:id keeps the stored pins over the body', async () => {
-    // Eagle owns the pinned-proponent list; a PUT copy would reach anonymous reads unchecked.
-    const pins = [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }];
+  await t.test('PUT /api/projects/:id answers a refused pin change and writes nothing', async (t) => {
     const stored = {
-      id: '207', trackProjectId: 207, name: 'P', pins, pinsRead: ['public'],
+      id: '207', trackProjectId: 207, name: 'P', pins: [], pinsRead: ['staff', 'sysadmin'],
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    const cases = [
+      { name: 'a service key', user: WRITER_USER, body: { pins: [PUBLISHED_ORG] }, code: 403 },
+      { name: 'an unknown id', user: STAFF_USER, body: { pins: [UNKNOWN_ORG] }, code: 400 },
+      { name: 'an unpublished org', user: STAFF_USER, body: { pins: [HIDDEN_ORG], pinsPublished: true }, code: 409 },
+      { name: 'a pins dial the caller cannot see', user: STAFF_USER, body: { pins: [] }, code: 400, vis: { pins: 1 } }
+    ];
+    for (const { name, user, body, code, vis } of cases) {
+      await t.test(name, async (t) => {
+        fakeOrgLabels(t);
+        t.mock.method(projects, 'getById', async () => structuredClone({ ...stored, vis }));
+        let upserted = false;
+        t.mock.method(projects, 'upsert', async (doc) => { upserted = true; return doc; });
+
+        const res = mockRes();
+        await projectController.updateProject({ params: { id: '207' }, query: {}, user, body }, res);
+
+        assert.strictEqual(res.statusCode, code);
+        assert.strictEqual(upserted, false);
+        if (vis) assert.match(res.body.error, /not writable by this caller: pins/);
+        else if (code === 400) assert.match(res.body.fields.pins, new RegExp(UNKNOWN_ORG));
+      });
+    }
+  });
+
+  await t.test('PUT /api/projects/:id takes back a GET body unchanged from a service key', async () => {
+    // The GET drops the id no organization answers for; sending that list back moves nothing.
+    fakeOrgLabels(t);
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', pins: [PUBLISHED_ORG, UNKNOWN_ORG], pinsRead: ['public', 'staff'],
       read: ['public', ...SECURE_ROLES], isPublished: true
     };
     t.mock.method(projects, 'getById', async () => structuredClone(stored));
@@ -526,12 +621,85 @@ test('nosql project controller', async (t) => {
     const res = mockRes();
     await projectController.updateProject({
       params: { id: '207' }, query: {}, user: WRITER_USER,
-      body: { name: 'P2', pins: [{ _id: 'x', name: '<script>' }] }
+      body: { name: 'P2', pins: [{ _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }], pinsPublished: true }
     }, res);
 
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(saved.name, 'P2');
-    assert.deepStrictEqual(saved.pins, pins);
+    assert.deepStrictEqual(saved.pins, [PUBLISHED_ORG, UNKNOWN_ORG]);
+    assert.ok(!('pinsPublished' in saved));
+  });
+
+  await t.test('PUT /api/projects/:id keeps the pins a staff caller cannot read', async () => {
+    fakeOrgLabels(t);
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', pins: [PUBLISHED_ORG, SEALED_ORG], pinsRead: ['staff'],
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: STAFF_USER, body: { pins: [HIDDEN_ORG] }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(saved.pins, [HIDDEN_ORG, SEALED_ORG]);
+    assert.deepStrictEqual(res.body.pins.map(pin => pin._id), [HIDDEN_ORG], 'and the response still hides it');
+  });
+
+  await t.test('PUT /api/projects/:id checks pins against the row a lost etag race rereads', async () => {
+    // First read: an unpublished list, so pinning an unpublished org is fine. The reread finds it published.
+    fakeOrgLabels(t);
+    const row = {
+      id: '207', trackProjectId: 207, name: 'P', pins: [], pinsRead: ['staff'],
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    const reads = [row, { ...row, pinsRead: ['public', 'staff'] }];
+    t.mock.method(projects, 'getById', async () => structuredClone(reads.length > 1 ? reads.shift() : reads[0]));
+    let upserts = 0;
+    t.mock.method(projects, 'upsert', async (doc) => {
+      upserts++;
+      if (upserts === 1) throw Object.assign(new Error('HTTP 412'), { code: 412 });
+      return doc;
+    });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: STAFF_USER, body: { pins: [HIDDEN_ORG] }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.strictEqual(upserts, 1, 'the rebuilt try refused before writing');
+  });
+
+  await t.test('GET /api/projects labels each row\'s pins', async () => {
+    fakeOrgLabels(t);
+    t.mock.method(projectController.projectsKind.repository, 'list', async () =>
+      [{ id: '207', name: 'P', pins: [PUBLISHED_ORG], pinsRead: ['staff'], read: ['public', ...SECURE_ROLES] }]);
+
+    const res = mockRes();
+    await projectController.getProjects({ query: {}, user: STAFF_USER }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.body[0].pins, [{ _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }]);
+  });
+
+  await t.test('GET /api/projects/:id returns pins as labels and pinsPublished', async () => {
+    fakeOrgLabels(t);
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', trackProjectId: 207, name: 'P', pins: [PUBLISHED_ORG, UNKNOWN_ORG], pinsRead: ['staff'],
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    }));
+
+    const res = mockRes();
+    await projectController.getProject({ params: { id: '207' }, query: {}, user: STAFF_USER }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.body.pins, [{ _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }]);
+    assert.strictEqual(res.body.pinsPublished, false);
   });
 
   await t.test('PUT rejects vis for every caller', async () => {

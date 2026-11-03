@@ -20,11 +20,13 @@ audit._setTransport(async (stream, batch) => { rows.push(...batch); });
 const PROJECT_ID = 'p-public';
 const PERIOD_ID = '5c1f7a3e9b1d2c0012340001';
 const PRIVATE_PERIOD_ID = '5c1f7a3e9b1d2c0012340002';
+const DELETED_PERIOD_ID = '5c1f7a3e9b1d2c0012340003';
 const COMMENT_ID = '5c1f7a3e9b1d2c0012350001';
 const DOC_ID = '5c1f7a3e9b1d2c0012360001';
 const PERIODS = {
   [PERIOD_ID]: { id: PERIOD_ID, projectId: PROJECT_ID, read: ['public', 'staff', 'sysadmin'] },
-  [PRIVATE_PERIOD_ID]: { id: PRIVATE_PERIOD_ID, projectId: PROJECT_ID, read: ['staff', 'sysadmin'] }
+  [PRIVATE_PERIOD_ID]: { id: PRIVATE_PERIOD_ID, projectId: PROJECT_ID, read: ['staff', 'sysadmin'] },
+  [DELETED_PERIOD_ID]: { id: DELETED_PERIOD_ID, projectId: PROJECT_ID, read: ['staff', 'sysadmin'], isDeleted: true }
 };
 const STORED = Object.freeze({
   id: COMMENT_ID, eagleId: COMMENT_ID, periodId: PERIOD_ID, projectId: PROJECT_ID, sourceSystem: 'eagle',
@@ -44,7 +46,8 @@ function fakeStore(t, stored = STORED, { counter = 4 } = {}) {
   let next = counter;
   t.mock.method(comments, 'getById', async (access, id) => stored && id === stored.id ? { ...stored } : null);
   t.mock.method(comments, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
-  t.mock.method(commentPeriods, 'getById', async (access, id) => PERIODS[id] ? { ...PERIODS[id] } : null);
+  t.mock.method(commentPeriods, 'getById', async (access, id, projectId, { includeDeleted = false } = {}) =>
+    (PERIODS[id] && (includeDeleted || !PERIODS[id].isDeleted) ? { ...PERIODS[id] } : null));
   t.mock.method(commentPeriods, 'nextCommentId', async (periodId, projectId) => {
     store.numbered.push([periodId, projectId]);
     return next === null ? null : ++next;
@@ -233,6 +236,13 @@ test('comment domain', async (t) => {
     assert.ok(store.written[0].read.includes('public'));
     assert.strictEqual(store.written[0].updatedBy, 'idir-staff');
     assert.strictEqual(rows[0].Action, 'comment.setStatus');
+  });
+
+  await t.test('status on a comment whose period Eagle deleted is still written, staff-only', async (t) => {
+    const store = fakeStore(t, { ...STORED, periodId: DELETED_PERIOD_ID });
+    const result = await comment.setStatus(STAFF, COMMENT_ID, { status: 'Published' });
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(levelOfRead(store.written[0].read), 2);
   });
 
   for (const status of ['Pending', 'Deferred', 'Rejected']) {

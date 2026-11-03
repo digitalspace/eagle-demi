@@ -110,10 +110,9 @@ function legislationTransitions(yearList, works) {
 /**
  * Put the Eagle slot in the shape `EAGLE_ONLY_FIELDS` names, whatever fed it.
  *
- * eagle-api's push resolves `proponent` and `pins` before it sends them
- * (`api/helpers/demiPush.js`), but the seed reads `/api/public/search?dataset=Project`, which
- * carries neither resolved field: it returns `proponent` as a populated Organization and `pins`
- * as bare ObjectId strings, and no `proponentId`, `proponentName`, `applicableRegulation` or
+ * eagle-api's push resolves `proponent` before it sends it (`api/helpers/demiPush.js`), but the
+ * seed reads `/api/public/search?dataset=Project`, which returns `proponent` as a populated
+ * Organization and no `proponentId`, `proponentName`, `applicableRegulation` or
  * `featuredDocuments` at all (verified against eagle-test, 369/369 rows, 2026-09-07). Without
  * this the seed writes a project whose `proponentId` is null, which is what every row in
  * demi-test held.
@@ -121,9 +120,8 @@ function legislationTransitions(yearList, works) {
  * Only fills what is missing, so it can never overwrite what the push already resolved.
  *
  * @param {object}   flat
- * @param {Map}      [orgs]  Organization `_id` -> `{_id, name, province}`, for `pins`
  */
-function normalizeEagleSlot(flat, orgs) {
+function normalizeEagleSlot(flat) {
   if (!flat) return flat;
 
   if (!hasValue(flat.proponentId) && hasValue(flat.proponent)) {
@@ -138,15 +136,6 @@ function normalizeEagleSlot(flat, orgs) {
     }
   }
 
-  // Only with a lookup: a pin rendered as `{name: null}` is worse than one still held as an id.
-  // An id the lookup does not know is DROPPED, as it is in the push and in handleGetPins.
-  if (orgs && orgs.size && Array.isArray(flat.pins) && flat.pins.some(p => typeof p !== 'object')) {
-    flat.pins = flat.pins
-      .map(p => (typeof p === 'object' && p !== null ? p : orgs.get(String(p))))
-      .filter(Boolean)
-      .map(o => ({ _id: String(o._id), name: o.name || null, province: o.province || null }));
-  }
-
   return flat;
 }
 
@@ -158,11 +147,27 @@ function heldRead(read, existing) {
 }
 
 /**
+ * Each pin field the stored row lacks starts from what Eagle sent, `pins` as ids: eagle-admin keeps
+ * writing them to eagle-api until its own flip, and once DEMI holds a field it owns it.
+ */
+function seedEaglePins(merged, existing) {
+  const eagle = merged.sources && merged.sources.eagle;
+  if (!eagle) return;
+  const lacks = (field) => !existing || existing[field] === undefined;
+  if (lacks('pins') && Array.isArray(eagle.pins)) {
+    merged.pins = eagle.pins.map(pin => (pin !== null && typeof pin === 'object' ? pin._id : pin))
+      .filter(id => typeof id === 'string' && id !== '');
+  }
+  if (lacks('pinsRead') && Array.isArray(eagle.pinsRead)) merged.pinsRead = [...eagle.pinsRead];
+}
+
+/**
  * Carry the DEMI-only fields off the stored row onto a rebuilt one, then derive its assessments. A
  * held row keeps the lower of the rebuilt and stored `read` (`heldRead`): Eagle narrows, never widens.
  */
 function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS) {
   if (!merged) return merged;
+  seedEaglePins(merged, existing);
   if (existing) {
     for (const field of fields) {
       const value = existing[field];
@@ -188,20 +193,6 @@ function carryEagleOnlyFields(merged, existing) {
   for (const field of PUSH_ONLY_FIELDS) {
     if (!hasValue(merged[field]) && hasValue(existing[field])) merged[field] = existing[field];
   }
-
-  // `pins` IS in the feed, but as bare ObjectIds — so only the SHAPE is carried, per id, and only
-  // for ids still in the feed's list. Membership stays the feed's, which is what lets a pin the
-  // EAO removed actually disappear; an id the stored row cannot resolve keeps its bare form rather
-  // than being dropped, since nothing here has an Organization lookup to resolve it against.
-  if (Array.isArray(merged.pins) && merged.pins.some(p => p !== null && typeof p !== 'object') &&
-      Array.isArray(existing.pins)) {
-    const stored = new Map(existing.pins
-      .filter(p => p && typeof p === 'object' && hasValue(p._id))
-      .map(p => [String(p._id), p]));
-    merged.pins = merged.pins.map(p =>
-      (p !== null && typeof p === 'object' ? p : stored.get(String(p)) || p));
-  }
-
   return merged;
 }
 
@@ -210,7 +201,7 @@ function carryEagleOnlyFields(merged, existing) {
  * content under `legislation_<year>`, the public search hoists it, the push does not. The block
  * wins over the top level — `region` is declared in both and the top-level copy is stale.
  */
-function flattenEagleProject(doc, orgs) {
+function flattenEagleProject(doc) {
   if (!doc) return doc;
 
   const isBlock = k => doc[k] && typeof doc[k] === 'object' && !Array.isArray(doc[k]) &&
@@ -234,7 +225,7 @@ function flattenEagleProject(doc, orgs) {
     // nameless and published, so reject rather than guess.
     // Copied, not returned as-is: normalising in place would rewrite the caller's own record.
     if (hasValue(doc.name) || legislationKeys.length === 0) {
-      return normalizeEagleSlot({ ...doc }, orgs);
+      return normalizeEagleSlot({ ...doc });
     }
     const err = new Error('Eagle project has no resolvable legislation block');
     err.status = 400;
@@ -247,7 +238,7 @@ function flattenEagleProject(doc, orgs) {
   }
   // Every block rides along, so `sources.eagle` can be flattened again under another year.
   for (const k of legislationKeys) flat[k] = doc[k];
-  return normalizeEagleSlot(flat, orgs);
+  return normalizeEagleSlot(flat);
 }
 
 /**
@@ -441,7 +432,6 @@ function carryDelete(row, existing) {
  * @param {Array}       [opts.phases]  this project's Track work phases (seed/sources.js)
  * @param {Array}       [opts.works]   this project's Track works (seed/sources.js); absent when
  *                                     not fetched, which also leaves `legislationTransitions` out
- * @param {Map}         [opts.orgs]    Organization lookup, for resolving seed-shaped `pins`
  * @param {boolean}     [opts.deleted] the row's delete flag; defaults to the Eagle record's
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
@@ -450,7 +440,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   }
 
   // Here, not at the call sites: the push hands over a raw Mongo doc and the seed a flat one.
-  const eagle = flattenEagleProject(eagleRaw, opts.orgs);
+  const eagle = flattenEagleProject(eagleRaw);
 
   const now = opts.now || new Date().toISOString();
   const id = String(track.track_project_id);
@@ -535,7 +525,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
  * there is no Track id to use.
  */
 function mergeEagleOnlyProject(eagleRaw, opts = {}) {
-  const eagle = flattenEagleProject(eagleRaw, opts.orgs);
+  const eagle = flattenEagleProject(eagleRaw);
   if (!eagle || !hasValue(eagle._id)) {
     throw new TypeError('[merge] an Eagle project with _id is required');
   }

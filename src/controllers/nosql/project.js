@@ -10,6 +10,7 @@
  * these functions only translate HTTP to a repository call and back.
  */
 
+const { isDeepStrictEqual } = require('node:util');
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
 const commentPeriods = require('../../repositories/comment-periods');
@@ -45,11 +46,14 @@ const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
 const { mirrorError } = require('../../helpers/duplicate-id');
-const { narrowTwin, mirrorTags, partnerRefusesTags, sameTags } = require('../../helpers/project-twin');
+const { narrowTwin, mirrorFields, partnerRefuses, MIRRORED, sameTags } = require('../../helpers/project-twin');
 const { listHandler } = require('./mirror-reads');
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
+const { pinChanges, labelPins } = require('../../domain/project-pins');
+const syncOut = require('../../sync-out');
+const { PROJECT, nextSyncVersion } = require('../../sync-out/kinds');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -57,6 +61,32 @@ function writeConflict(res, what, id) {
   return res.status(503).json({
     error: 'The record is being written by another request. Try again.'
   });
+}
+
+/** A `pinChanges` refusal, answered as `writeHandler` (controllers/native/write.js) answers one. */
+function pinRefusal(res, refusal) {
+  if (refusal.status === 'invalid') {
+    return res.status(400).json({ error: 'Invalid request body.', fields: refusal.fields });
+  }
+  if (refusal.status === 'forbidden') return res.status(403).json({ error: refusal.error });
+  return res.status(409).json({ error: refusal.error });
+}
+
+/** A native row's write raises `syncVersion`, so `listSyncPending` lists it until sync-out sends it. */
+const versioned = (row, current) => (isNativeProject(row) ? { ...row, syncVersion: nextSyncVersion(current) } : row);
+
+/** Queue a native project for sync-out once its write landed. */
+function enqueueProject(saved) {
+  return isNativeProject(saved) ? syncOut.enqueueQuietly(saved, { kind: PROJECT }) : null;
+}
+
+/**
+ * A redacted project with its `pins` as `{_id, name, province}`. Stored pins are ids, or labels on rows
+ * Eagle pushed before the flip; either way the caller sees only the organizations it can read.
+ */
+async function labelled(access, body) {
+  await labelPins(access, [body]);
+  return body;
 }
 
 const MAX_TAGS = 20;
@@ -297,6 +327,7 @@ const PROJECTS_STORE = Object.freeze({
 const projectsKind = {
   entity: 'projects',
   repository: indexedKind(PROJECTS_STORE),
+  parentJoin: labelPins,
   sortKeys: projects.SORTABLE,
   filters: [
     'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict',
@@ -385,7 +416,7 @@ exports.getProject = async (req, res) => {
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    const body = redactForAccess('projects', project, access);
+    const body = await labelled(access, redactForAccess('projects', project, access));
     // Only the code is stored; the masthead's copy button needs the URL, and the base host is
     // per-environment config, not a stored value that could go stale.
     // `shortLinkUrl` is where that link lands; shown exactly where the link itself is.
@@ -438,7 +469,9 @@ exports.createProject = async (req, res) => {
       // sync run, not just this project (sync-wildfires.js loops unguarded).
       sources: {},
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      // eagle-public prints this as "Last updated".
+      dateUpdated: now
     });
     // The upsert replaces a row already under this id; its codes are printed and its tags are set
     // only by PUT, so both carry over, guarded so a PUT landing in between is not written back over.
@@ -446,12 +479,15 @@ exports.createProject = async (req, res) => {
     const written = await writeGuarded({
       existing: await reread(),
       reread,
-      attempt: async (current) => ({
-        status: 'saved',
-        saved: await projects.upsert(
-          carryDemiOnlyFields(carryShortLink({ ...row, eagleId: current?.eagleId ?? null }, current), current),
-          current ? { etag: current._etag } : { create: true })
-      }),
+      attempt: async (current) => {
+        const kept = { ...row, eagleId: current?.eagleId ?? null, dateAdded: current?.dateAdded || now };
+        return {
+          status: 'saved',
+          saved: await projects.upsert(
+            versioned(carryDemiOnlyFields(carryShortLink(kept, current), current), current),
+            current ? { etag: current._etag } : { create: true })
+        };
+      },
       onLost: (_current, attempt) =>
         logger.warn('[Project Controller] project create lost its etag race, rebuilding', { id, attempt })
     });
@@ -465,8 +501,9 @@ exports.createProject = async (req, res) => {
       projectId: saved.id,
       detail: { name: saved.name, isPublished: saved.isPublished }
     });
+    await enqueueProject(saved);
 
-    return res.status(201).json(redactForAccess('projects', saved, access));
+    return res.status(201).json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -481,6 +518,7 @@ exports.updateProject = async (req, res) => {
     }
 
     const { status: wireStatus, ...changes } = req.body;
+    const pinBody = { pins: changes.pins, pinsPublished: changes.pinsPublished };
     for (const key of PUT_IGNORED_FIELDS) delete changes[key];
 
     // Same rename as createProject, and it has to be here too: this route spreads the body in
@@ -499,18 +537,21 @@ exports.updateProject = async (req, res) => {
     // they were never shown, which is the hole the redaction-safe update rule closes
     // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level: the dial map is
     // policy rather than content, and no route sets it yet.
-    const refused = refusedWriteKeys('projects', changes, access, existing);
+    const pinKeys = Object.fromEntries(Object.entries(pinBody).filter(([, value]) => value !== undefined));
+    const refused = refusedWriteKeys('projects', { ...changes, ...pinKeys }, access, existing);
     for (const key of DERIVED_FIELDS) {
       if (Object.hasOwn(changes, key) && !refused.includes(key)) refused.push(key);
     }
-    // The tag copy below writes the other row of the pair, so its dial on `tags` must allow this
-    // caller too. Same message as a refusal here: nothing about that row is told to a caller who may
-    // not read it.
-    const mirrorsTags = changes.tags !== undefined &&
-      (changes.eagleId === undefined || changes.eagleId === existing.eagleId);
-    if (mirrorsTags && !refused.includes('tags') && await partnerRefusesTags(existing, access)) {
-      refused.push('tags');
-    }
+    // The copies below write the other row of the pair, so its dials must allow this caller too.
+    // Same message as a refusal here: nothing about that row is told to a caller who may not read it.
+    const samePair = changes.eagleId === undefined || changes.eagleId === existing.eagleId;
+    // A pin write copies both `pins` and `pinsRead` (MIRRORED.pins), so both dials are checked.
+    const copied = samePair ? {
+      ...(changes.tags !== undefined && { tags: changes.tags }),
+      ...(Object.keys(pinKeys).length && { pins: [], pinsPublished: false })
+    } : {};
+    const unrefused = Object.fromEntries(Object.entries(copied).filter(([key]) => !refused.includes(key)));
+    if (Object.keys(unrefused).length) refused.push(...await partnerRefuses(existing, access, unrefused));
     if (refused.length) {
       return res.status(400).json({
         error: `Fields not writable by this caller: ${refused.join(', ')}`
@@ -535,18 +576,29 @@ exports.updateProject = async (req, res) => {
           });
           return { status: 'locked', error: locked };
         }
+        // Per try too: the publish check depends on the pins the reread row holds.
+        const pinned = await pinChanges({ access }, current, pinBody);
+        if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
+        const now = new Date().toISOString();
+        // Only on a native row: elsewhere Eagle owns `dateUpdated` and sync-out sends nothing.
+        const edited = isNativeProject(current) && (Object.keys(pinned.changes).length > 0 ||
+          Object.keys(changes).some(key => !isDeepStrictEqual(current[key], changes[key])));
         const row = {
           ...current,
           ...changes,
+          ...pinned.changes,
           id: current.id,
           trackProjectId: current.trackProjectId,
-          updatedAt: new Date().toISOString()
+          updatedAt: now,
+          ...(edited && changes.dateUpdated === undefined && { dateUpdated: now })
         };
         Object.assign(row, deriveAssessments(row, { previous: current.assessments }));
         return {
           status: 'saved',
           replaced: current,
-          saved: await projects.upsert(row, { etag: current._etag })
+          edited,
+          pinFields: Object.keys(pinned.changes).map(key => (key === 'pinsRead' ? 'pinsPublished' : key)),
+          saved: await projects.upsert(edited ? versioned(row, current) : row, { etag: current._etag })
         };
       },
       onLost: (_current, attempt) =>
@@ -557,7 +609,8 @@ exports.updateProject = async (req, res) => {
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
     if (written.status === 'locked') return res.status(409).json({ error: written.error });
-    const { saved, replaced } = written;
+    if (written.status === 'pins') return pinRefusal(res, written.refusal);
+    const { saved, replaced, pinFields, edited } = written;
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full
     // before/after of arbitrary request bodies would put project content into a table kept for
@@ -570,23 +623,26 @@ exports.updateProject = async (req, res) => {
       targetId: existing.id,
       projectId: existing.id,
       detail: {
-        fields: Object.keys(changes)
-          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags)),
+        fields: [...Object.keys(changes)
+          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags)), ...pinFields],
         isPublishedFrom: replaced.isPublished,
         isPublishedTo: saved.isPublished
       }
     });
+    if (edited) await enqueueProject(saved);
 
-    // Every PUT that sends tags mirrors them, unchanged or not, so a pair that drifted apart heals.
-    // Never across a re-pointed `eagleId`: the new id's row belongs to another project.
-    const mirrorFailure = changes.tags !== undefined && saved.eagleId === existing.eagleId
-      ? await mirrorTags(existing, req)
-      : null;
+    // Every PUT that sends tags or pins mirrors them, unchanged or not, so a pair that drifted apart
+    // heals. Never across a re-pointed `eagleId`: the new id's row belongs to another project.
+    let mirrorFailure = null;
+    if (saved.eagleId === existing.eagleId) {
+      if (changes.tags !== undefined) mirrorFailure = await mirrorFields(existing, req, MIRRORED.tags);
+      if (!mirrorFailure && Object.keys(pinKeys).length) mirrorFailure = await mirrorFields(existing, req, MIRRORED.pins);
+    }
 
     if (mirrorFailure) return res.status(500).json({ success: false, error: mirrorFailure });
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
-    return res.json(redactForAccess('projects', saved, access));
+    return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -670,7 +726,7 @@ exports.setLevel = async (req, res) => {
         return {
           status: 'saved',
           switchedFrom: move.key ? eagle.currentLegislationYear || null : undefined,
-          saved: await projects.upsert(row, { etag: current._etag })
+          saved: await projects.upsert(versioned(row, current), { etag: current._etag })
         };
       },
       onLost: (_current, attempt) =>
@@ -695,6 +751,7 @@ exports.setLevel = async (req, res) => {
         ...(switchedFrom === undefined ? {} : { legislationFrom: switchedFrom, legislationTo: saved.sources.eagle.currentLegislationYear })
       }
     });
+    await enqueueProject(saved);
 
     if (level !== from) {
       const failure = await cascadeProjectVisibility(existing.id, acl, existing.eagleId);
@@ -705,7 +762,7 @@ exports.setLevel = async (req, res) => {
       }
     }
 
-    return res.json(redactForAccess('projects', saved, access));
+    return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -784,7 +841,7 @@ exports.setVisibility = async (req, res) => {
       }
     });
 
-    return res.json(redactForAccess('projects', saved, access));
+    return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }

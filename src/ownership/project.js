@@ -39,8 +39,8 @@ const EAGLE_STAFF_FIELDS = [
 ];
 
 /**
- * Fields only Eagle has. `applicableRegulation`, `pins`, `featuredDocuments` and `proponentId` are
- * Mongo ObjectIds, so they must reach DEMI resolved (`normalizeEagleSlot` in src/merge/project.js).
+ * Fields only Eagle has. `applicableRegulation`, `featuredDocuments` and `proponentId` are Mongo
+ * ObjectIds, so they must reach DEMI resolved (`normalizeEagleSlot` in src/merge/project.js).
  */
 const EAGLE_ONLY_FIELDS = [
   'eaStatus', 'eacDecision', 'decisionDate', 'currentPhaseName', 'phaseHistory',
@@ -52,7 +52,7 @@ const EAGLE_ONLY_FIELDS = [
   'complianceLead', 'execProjectDirector', 'eaoMember',
   'sector', 'commodity', 'region', 'fedElecDist', 'provElecDist',
   'projectCAC', 'projectCACPublished', 'cacEmail',
-  'proponentId', 'pins', 'pinsRead', 'featuredDocuments',
+  'proponentId', 'featuredDocuments',
   'overallProgress', 'code', 'nameSearchTerms',
   ...EAGLE_STAFF_FIELDS
 ];
@@ -90,7 +90,9 @@ const PUSH_ONLY_FIELDS = [
 ];
 
 /** Only DEMI writes these (PUT, `/level`, the dating pass, sync-out), so no re-merge can rebuild them. */
-const DEMI_ONLY_FIELDS = ['tags', 'levelHeldAt', 'documentPhases', ...SYNC_STATE_FIELDS];
+const DEMI_ONLY_FIELDS = [
+  'tags', 'levelHeldAt', 'documentPhases', 'pins', 'pinsRead', 'pinsHistory', ...SYNC_STATE_FIELDS
+];
 
 /** Each field's one owner. `legislation_<year>` blocks are Eagle's too (`LEGISLATION_KEY`). */
 const OWNERS = Object.freeze({
@@ -110,10 +112,9 @@ const PUT_IGNORED_FIELDS = [
   'isDeleted',
   // The cacPublished predicate reads this, so PUT must not set it (doc §2 item 7).
   'projectCACPublished',
-  // Derived from `pinsRead` on every read, so a GET-then-PUT must not store a copy.
-  'pinsPublished',
-  // Eagle pushes the pinned-proponent list; a PUT copy would reach anonymous reads.
-  'pins',
+  // Applied by `pinChanges` (src/domain/project-pins.js), which checks them; `pinsPublished` is
+  // stored as `pinsRead`, so neither is spread from the body.
+  'pins', 'pinsPublished',
   // The current year moves only through `/level`.
   ...LEGISLATION_INDEX_FIELDS,
   // Catalogued at vis 2, so staff can send them back and break push ordering or the cascade.
