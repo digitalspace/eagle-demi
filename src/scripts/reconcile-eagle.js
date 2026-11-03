@@ -638,8 +638,7 @@ async function reconcile(argv = [], deps = {}) {
   summary.lists = listsSummary(listRows, eagleListIds, eagleRead);
   summary.notifications = {
     inDemi: notificationRows.length, inEagle: eagleNotificationIds.size,
-    // A notification created in DEMI has no Eagle copy until sync-out covers notifications, so it is not drift.
-    ...diff(notificationRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eagleNotificationIds),
+    ...diffById(notificationRows, eagleNotificationIds),
     aclMismatch: aclMismatch(notificationRows, row => String(row.id), eagleRead)
   };
   // An Update's parent is keyed by EAGLE id, and a notification wins an id a Track project carries.
@@ -647,7 +646,7 @@ async function reconcile(argv = [], deps = {}) {
   for (const row of notificationRows) updateParentRead.set(String(row.id), row.read);
   summary.updates = {
     inDemi: updateRows.length, inEagle: eagleUpdateIds.size,
-    ...diff(updateRows, row => String(row.id), eagleUpdateIds),
+    ...diffById(updateRows, eagleUpdateIds),
     aclMismatch: aclMismatch(updateRows, row => String(row.id), eagleRead,
       row => updateParentRead.get(String(row.projectId)) || null, updateRead)
   };

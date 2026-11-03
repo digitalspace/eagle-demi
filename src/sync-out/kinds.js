@@ -8,6 +8,7 @@ const documents = require('../repositories/documents');
 const lists = require('../repositories/lists');
 const notifications = require('../repositories/notifications');
 const projects = require('../repositories/projects');
+const updates = require('../repositories/updates');
 const pending = require('./pending');
 const { logger } = require('../utils/logger');
 
@@ -16,6 +17,7 @@ const DOCUMENT = 'document';
 const NOTIFICATION = 'notification';
 const ORGANIZATION = 'organization';
 const PROJECT = 'project';
+const UPDATE = 'update';
 
 /**
  * The ENGAGE checks, then the pending hook, which alone sees native rows and lapsed send claims. Resolves to the
@@ -90,6 +92,16 @@ const KINDS = Object.freeze({
     }),
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(PROJECT))
+  }),
+  // eagle-api's `/public/recentActivity` serves Updates from Eagle's own copy until F5.
+  [UPDATE]: Object.freeze({
+    repo: Object.freeze({
+      readForWrite: (id) => updates.readForWrite(id),
+      listSyncPending: () => updates.listSyncPending(),
+      upsert: (item, existing) => updates.upsert(item, existing)
+    }),
+    consumers: Object.freeze(['eagle']),
+    reconcile: (options) => pending.reconcile(options, pending.depsFor(UPDATE))
   })
 });
 
@@ -109,5 +121,5 @@ function kindOf(name) {
 }
 
 module.exports = {
-  KINDS, COMMENT_PERIOD, DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion
+  KINDS, COMMENT_PERIOD, DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, UPDATE, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion
 };

@@ -109,6 +109,11 @@ function evaluate(text, row, params) {
     const array = pathOf(row, m[1]);
     return Array.isArray(array) && array.includes(valueOf(m[2], params));
   }
+  m = /^EXISTS\(SELECT VALUE (\w+) FROM \1 IN c\.([\w.]+) WHERE \1\.(\w+) = (@\w+)\)$/.exec(expr);
+  if (m) {
+    const array = pathOf(row, m[2]);
+    return Array.isArray(array) && array.some(item => item && item[m[3]] === valueOf(m[4], params));
+  }
   m = /^EXISTS\(SELECT VALUE (\w+) FROM \1 IN c\.([\w.]+) WHERE \1 IN \(([^)]*)\)\)$/.exec(expr);
   if (m) {
     const array = pathOf(row, m[2]);

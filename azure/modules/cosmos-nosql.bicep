@@ -382,6 +382,14 @@ resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
           {
             path: '/complianceAndEnforcement/?'
           }
+          // The mirror's lookup of a DEMI row by Eagle id, and the sync-out pending list. Deploy before the API
+          // that queries them, on test first: without them each query scans the container.
+          {
+            path: '/sourceSystem/?'
+          }
+          {
+            path: '/eagleId/?'
+          }
         ]
         excludedPaths: noIndex
       }

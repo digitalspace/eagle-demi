@@ -7,7 +7,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
   eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll,
-  oneRowOf, EAGLE_SYNC_PENDING
+  readDemiRowByEagleId, listDemiSyncPending
 } = require('./_sql');
 
 const CONTAINER = 'notifications';
@@ -48,22 +48,11 @@ async function readForWrite(id) {
   return cosmos.readItem(CONTAINER, String(id), String(id));
 }
 
-/**
- * The DEMI-created row sync-out sent under this Eagle id, with no ACL predicate: the echo of its create finds
- * it here. An Eagle row is stored under its id, so `readForWrite` finds it. Throws `DUPLICATE_ID` when two rows name it.
- */
-async function readForWriteByEagleId(eagleId) {
-  const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
-  const { items } = await cosmos.query(CONTAINER,
-    { query: `SELECT * FROM c WHERE ${clause} AND c.sourceSystem = 'demi'`, parameters: params });
-  return oneRowOf(CONTAINER, eagleId, items);
-}
+/** The DEMI-created row sync-out sent under this Eagle id; `readForWrite` finds an Eagle row. */
+const readForWriteByEagleId = (eagleId) => readDemiRowByEagleId(CONTAINER, eagleId);
 
-/** DEMI-created rows holding a version not yet sent to Eagle: the sync-out pending hook's list. */
-async function listSyncPending() {
-  return fetchAll(CONTAINER,
-    { query: `SELECT * FROM c WHERE c.sourceSystem = 'demi' AND ${EAGLE_SYNC_PENDING}`, parameters: [] });
-}
+/** The sync-out pending hook's list. */
+const listSyncPending = () => listDemiSyncPending(CONTAINER);
 
 async function list(access, { pageNum, pageSize, sortBy, ...filters } = {}) {
   const spec = listSpec(access, filters, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, SORT_ALIASES));

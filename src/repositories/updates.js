@@ -22,7 +22,7 @@ const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
-  readPage, fetchAll
+  readPage, fetchAll, readDemiRowByEagleId, listDemiSyncPending, EAGLE_SYNC_PENDING
 } = require('./_sql');
 
 const CONTAINER = 'updates';
@@ -319,6 +319,32 @@ async function getById(access, id) {
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
 async function readForWrite(id) {
   return cosmos.readItem(CONTAINER, String(id), String(id));
+}
+
+/** The DEMI-created row sync-out sent under this Eagle id; `readForWrite` finds an Eagle row. */
+const readForWriteByEagleId = (eagleId) => readDemiRowByEagleId(CONTAINER, eagleId);
+
+/** The sync-out pending hook's list. */
+const listSyncPending = () => listDemiSyncPending(CONTAINER);
+
+// Guarded by IS_*: a missing field compares as undefined, and NOT undefined would drop the row.
+const FAILED_AT_VERSION = "IS_STRING(c.syncOut.eagle.status) AND c.syncOut.eagle.status = 'failed' AND " +
+  'IS_NUMBER(c.syncOut.eagle.failedVersion) AND c.syncOut.eagle.failedVersion = c.syncVersion';
+
+/**
+ * DEMI-created Updates owed a send that name `id` as their parent, comment period, notification, image or
+ * attachment: sync-out holds them until that record is in Eagle. Not a stray, and not one whose send already
+ * failed at its current version: only a new write or `--repair` sends those again.
+ */
+function listSyncPendingNaming(id) {
+  const named = ['c.projectId = @id', 'c.pcp = @id', 'c.projectNotification = @id', 'c.featuredImage.document = @id',
+    'ARRAY_CONTAINS(c.attachments, @id)', 'EXISTS(SELECT VALUE i FROM i IN c.images WHERE i.document = @id)'];
+  return fetchAll(CONTAINER, {
+    query: 'SELECT c.id, c.projectId, c.sourceSystem, c.eagleId, c.status FROM c ' +
+      `WHERE c.sourceSystem = 'demi' AND ${EAGLE_SYNC_PENDING} AND NOT IS_DEFINED(c.syncOut.eagle.strayEagleId) ` +
+      `AND NOT (${FAILED_AT_VERSION}) AND (${named.join(' OR ')})`,
+    parameters: [{ name: '@id', value: String(id) }]
+  });
 }
 
 /**
@@ -780,6 +806,9 @@ module.exports = {
   markNotifySkipped,
   getById,
   readForWrite,
+  readForWriteByEagleId,
+  listSyncPending,
+  listSyncPendingNaming,
   list,
   listEvery,
   listByIds,

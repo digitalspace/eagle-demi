@@ -1331,11 +1331,11 @@ test('keepSeal on an Eagle push', async (t) => {
   });
 });
 
-test('a duplicated id is a 409 on the parent-partitioned mirrors', async (t) => {
+test('a duplicated id is a 409 on the mirrors that read by more than their own id', async (t) => {
   const { captureMirror } = require('../../helpers/eagle-mirror-fixtures');
   t.afterEach(() => t.mock.restoreAll());
 
-  for (const entity of ['commentPeriods', 'comments']) {
+  for (const entity of ['commentPeriods', 'comments', 'notifications', 'updates']) {
     await t.test(entity, async () => {
       const duplicated = Object.assign(new Error('stored twice'), { code: 'DUPLICATE_ID' });
       const { res, row } = await captureMirror(t, entity, null, { existing: duplicated });

@@ -13,7 +13,7 @@ const {
   readParent, ownRead, hasNoRead, updateRead, inheritsParentRead, isPublicParent
 } = require('../../helpers/update-parent');
 const { resolveAccess, levelOfRead } = require('../../helpers/access-sql');
-const { serverError } = require('../../helpers/response');
+const { mirrorError } = require('../../helpers/duplicate-id');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const notify = require('../../services/notify');
@@ -21,7 +21,7 @@ const documents = require('../../repositories/documents');
 const { toIsoOrNull } = require('../../seed/transform');
 const { plainTextOf } = require('../../helpers/html-entities');
 const {
-  eaglePush, refId, upsertWithRetry, ignoreStalePush, pushConflict
+  eaglePush, refId, upsertKeepingDemiRows, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
 const EMAIL_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif']);
@@ -223,11 +223,12 @@ function mirrorItem(eagleId, doc, read, existing) {
  * The rebuild `upsertWithRetry` does after a lost race is what keeps `notifiedAt` honest: carried
  * from a stale read it would hand back a claim another push is holding.
  *
- * @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}>}
+ * Throws `DUPLICATE_ID` when two DEMI rows name the Eagle id.
+ *
+ * @returns {Promise<{saved, existing}|{ignored, existing}|{status: 'conflict'}>}
  */
 function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
-  return upsertWithRetry(
-    updates,
+  return upsertKeepingDemiRows(updates, eagleId, doc,
     // The parent is read per attempt, so a retry after a lost race caps against its ACL as it is
     // then. A parent DEMI does not hold yet caps nothing; the search read gates on it again.
     async (current) => {
@@ -247,9 +248,10 @@ function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
       // Missing is stored as null and `[]` as `[]`: with no status, only null inherits (`inheritsParentRead`).
       return mirrorItem(eagleId, { ...doc, read: hasNoRead(doc) ? null : own }, read, current);
     },
-    // Unfiltered: a row with no `read` or a compartment token is still there to be replaced.
-    () => updates.readForWrite(eagleId),
-    { pushedAt }
+    // Unfiltered: a row with no `read` or a compartment token is still there to be replaced. Else a DEMI row
+    // sync-out sent under the id.
+    async () => await updates.readForWrite(eagleId) || await updates.readForWriteByEagleId(eagleId),
+    { pushedAt, label: 'Update Controller' }
   );
 }
 
@@ -295,10 +297,12 @@ exports.upsertFromEagle = async (req, res) => {
       }
     });
 
-    await announce(saved, existing);
+    // A DEMI row's echo changes nothing DEMI owns; the announce timer mails its publish and its withdrawal, and
+    // sync-out's call does not wait on eagle-notify.
+    if (!(existing && existing.sourceSystem === 'demi')) await announce(saved, existing);
 
     return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {
-    return serverError(res, err, 'update controller failed');
+    return mirrorError(res, err, 'update controller failed');
   }
 };

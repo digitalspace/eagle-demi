@@ -1017,6 +1017,15 @@ async function listSyncPending() {
   });
 }
 
+/** Stored rows of `ids` across partitions, unfiltered: what sync-out reads to name a document by its Eagle id. */
+async function listSyncRefs(ids) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  if (unique.length === 0) return [];
+  const { clause, params } = inList('id', unique, '@ref');
+  const select = [...SYNC_PENDING_FIELDS, 'isDeleted'].map(field => `c.${field}`).join(', ');
+  return fetchAll(CONTAINER, { query: `SELECT ${select} FROM c WHERE ${clause}`, parameters: params });
+}
+
 /** Sync-out's `repo.upsert(item, existing)`: guarded on the stored row's `_etag`, which `upsert` above never reads. */
 async function upsertForSync(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
@@ -1071,6 +1080,7 @@ module.exports = {
   patchExtraction,
   setPublished,
   listSyncPending,
+  listSyncRefs,
   upsertForSync,
   deleteById
 };

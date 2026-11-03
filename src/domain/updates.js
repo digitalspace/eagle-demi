@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Update writes: `POST /updates`, `PUT /updates/:id` and `DELETE /updates/:id`, ported from
- * eagle-api `api/controllers/recentActivity.js` and `api/helpers/updateRules.js` (rules in
- * docs/eagle-api-port.md, Updates).
+ * Update writes (`POST`, `PUT`, `DELETE /updates`), ported from eagle-api `recentActivity.js` and
+ * `updateRules.js`; rules in docs/eagle-api-port.md, Updates.
  */
 
 const crypto = require('node:crypto');
@@ -14,7 +13,8 @@ const { resolveAccess } = require('../helpers/access-sql');
 const updateParent = require('../helpers/update-parent');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { UPDATE } = require('../sync-out/kinds');
 const images = require('./update-images');
 const { logger } = require('../utils/logger');
 
@@ -234,9 +234,8 @@ async function nonPublicIds(row, parentId) {
 }
 
 /**
- * Save through `write`, keeping image state in step (recentActivity.js:173-202,255-290): a
- * published update's own uploads are published first and reverted when the save fails; after it,
- * images no published update shows any more are released. `before` null is a create.
+ * Save through `write`: a published update's uploads are published first, reverted if the save
+ * fails; images no published update still shows are then released. `before` null = create.
  */
 async function writeWithImages(ctx, { before, after, parentId, write }) {
   // Live to the public: published and not capped below public by its parent.
@@ -254,6 +253,8 @@ async function writeWithImages(ctx, { before, after, parentId, write }) {
     await images.revert(ctx, published, after.id);
     return result;
   }
+  // Before the image bookkeeping below, so a throw there cannot leave a landed write unqueued.
+  await queued(result, UPDATE);
   if (before) {
     const shownBefore = images.imageIds(before);
     const shownAfter = images.imageIds(result.value);
