@@ -143,9 +143,12 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - Every Update write in `domain/updates.js` (create, edit, archive) calls `enqueueQuietly` once it lands, before the image publish and release that follow it.
 - The comment consumer PUTs a row that holds an `eagleId` to `/comment/<id>`. eagle-api answers an unknown comment with 200 and a zero match count, which leads to a POST of the same id.
 - eagle-api's PUT sets Eagle's read from `eaoStatus`, as `PUT /comment/<id>/status` does. So a status change is sent as that PUT, and no status call follows.
-- The comment body names its period and documents by their `eagleId`. A period or document sync-out has not sent yet holds the comment with the warn line `held:`. When the period is sent, the engine queues the DEMI comments held on it (`queueHeldOn` in `src/sync-out/index.js`). Otherwise the pending hook lists them and `--repair` queues them. A period or document DEMI does not hold, or one deleted, fails the send with the error line `not sent:`.
+- The comment body names its period and documents by their `eagleId`. A period or document sync-out has not sent yet holds the comment with the warn line `held:`. When that period or document is sent, the engine queues the DEMI comments held on it (`queueHeldOn` in `src/sync-out/index.js`). Otherwise the pending hook lists them and `--repair` queues them.
+- So the comment kind needs `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` on as well. With it off, a comment that names a DEMI document stays held.
+- A period or document DEMI does not hold, or one deleted, fails the send before any call, with the error line `not sent:`. So does a valued component that is not an Eagle id.
+- A comment with no `eaoStatus` is sent as `Pending`, so Eagle's copy reads staff-only and shows in the moderation lists.
 - eagle-api's POST does not copy `submittedCAC`, so the create of a comment with `submittedCAC: true` ends with a PUT.
-- eagle-api's POST numbers each comment from its period's `commentIdCount`, and the echo copies that `commentId` onto the DEMI row. DEMI's own number from `nextCommentId` holds only until the echo lands.
+- eagle-api's POST numbers each comment from its period's `commentIdCount`, and the echo copies that `commentId` onto the DEMI row. Until the echo lands, DEMI's own number from `nextCommentId` can be one Eagle already gave another comment.
 - After a PUT, the organization and project consumers call publish or unpublish when Eagle's copy sits at another level than the row.
 - eagle-api publishes every new organization, so a staff-only organization's create ends with an unpublish call.
 - eagle-api stores every new project staff-only, so a public project's create ends with a publish call. A failed publish is made by the next delivery's level check.
