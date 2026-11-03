@@ -661,9 +661,9 @@ module identity './modules/identity.bicep' = if (deployFoundation) {
 }
 
 // 1b. Key Vault — holds the credentials the API reads by reference rather than as stored settings.
-// Declared after identity because the secrets-read grant needs its principal. `peSubnetId` is
-// required here, so an environment with no private endpoint subnet fails the deploy rather than
-// creating a vault policy makes unreachable.
+// Waits on identity for the secrets-read principal, and in foundation mode on observability for
+// the expiry alert's action group. `peSubnetId` is required here, so an environment with no
+// private endpoint subnet fails the deploy rather than creating a vault policy makes unreachable.
 module keyVault './modules/key-vault.bicep' = if (deployFoundation) {
   name: 'deploy-key-vault'
   params: {

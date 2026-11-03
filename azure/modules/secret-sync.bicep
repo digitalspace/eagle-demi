@@ -276,7 +276,7 @@ resource vaultTopic 'Microsoft.EventGrid/systemTopics@2025-02-15' existing = {
   name: 'evgt-${keyVaultName}'
 }
 
-resource secretSyncSubscription 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2023-12-15-preview' = {
+resource secretSyncSubscription 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2025-02-15' = {
   parent: vaultTopic
   name: 'secret-sync'
   properties: {
