@@ -238,6 +238,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'sync-out/eagle-project.js',
     // A document's parent project send record, and a mirror row under the minted id, whatever their level.
     'sync-out/eagle-document.js',
+    // A comment's period Eagle id, and a mirror row under the minted id, whatever their level.
+    'sync-out/eagle-comment.js',
     // A mirror row under the minted id, whatever its level.
     'sync-out/eagle-notification.js',
     // A parent notification's Eagle id, and a mirror row under the minted id, whatever their level.

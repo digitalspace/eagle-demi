@@ -11,7 +11,8 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const {
-  eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, readForWriteIn, fetchAll
+  eq, inList, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, readForWriteIn, fetchAll,
+  readDemiRowByEagleId, listDemiSyncPending, RELEASABLE_PENDING
 } = require('./_sql');
 const { cascadeAcl } = require('../helpers/acl-cascade');
 const { cosmosKind } = require('../helpers/native-query');
@@ -47,6 +48,30 @@ async function getById(access, id, periodId) {
 /** The stored row, unfiltered: a mirror write asks whether it exists, not who may read it. */
 async function readForWrite(id, periodId) {
   return readForWriteIn(CONTAINER, id, periodId, PARTITION_FIELD);
+}
+
+/** The DEMI row sync-out sent to Eagle under `eagleId`, unfiltered; mirror rows are stored under their Eagle id. */
+const readForWriteByEagleId = (eagleId, periodId) => readDemiRowByEagleId(CONTAINER, eagleId, periodId);
+
+/** The sync-out pending hook's list. */
+const listSyncPending = () => listDemiSyncPending(CONTAINER);
+
+/** DEMI comments naming document `id` that sync-out holds until the document is in Eagle. */
+function listSyncPendingNaming(id) {
+  return fetchAll(CONTAINER, {
+    query: `SELECT c.id, c.projectId, c.sourceSystem, c.eagleId FROM c WHERE ${RELEASABLE_PENDING} ` +
+      'AND ARRAY_CONTAINS(c.documents, @id)',
+    parameters: [{ name: '@id', value: String(id) }]
+  });
+}
+
+/** DEMI comments of one period that sync-out holds until the period is in Eagle. */
+function listSyncPendingInPeriod(periodId) {
+  const { clause, params } = eq(PARTITION_FIELD, String(periodId), '@periodId');
+  return fetchAll(CONTAINER, {
+    query: `SELECT c.id, c.projectId, c.sourceSystem, c.eagleId FROM c WHERE ${clause} AND ${RELEASABLE_PENDING}`,
+    parameters: params
+  }, { partitionKey: String(periodId) });
 }
 
 /** `eaoStatuses`: a list of EAO_STATUSES the caller validated; empty or absent narrows nothing. */
@@ -156,6 +181,10 @@ module.exports = {
   EAO_STATUSES,
   getById,
   readForWrite,
+  readForWriteByEagleId,
+  listSyncPending,
+  listSyncPendingNaming,
+  listSyncPendingInPeriod,
   listByPeriod,
   listEveryByPeriod,
   countByPeriod,

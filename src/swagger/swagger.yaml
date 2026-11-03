@@ -6253,7 +6253,7 @@ paths:
       description: >-
         Adds a comment under `periodId`, with a new UUID id and the period's next `commentId`.
         Needs the role `staff` or `sysadmin`. It reads public only when `eaoStatus` is `Published`
-        and the period is public; no status, or any other status, reads staff-only. `Reset` is
+        and the period is public; any other status reads staff-only. No status and `Reset` are
         stored as `Pending`. `datePosted` is kept only on a `Published` comment. `dateUpdated` in
         the body is ignored. Not yet called by eagle-admin.
       security:
@@ -9178,7 +9178,7 @@ components:
         eaoStatus:
           type: string
           enum: [Pending, Published, Deferred, Rejected, Reset]
-          description: Absent means no status and a staff-only read.
+          description: Absent is stored as `Pending`, with a staff-only read.
         isAnonymous:
           type: boolean
           description: Defaults to true.

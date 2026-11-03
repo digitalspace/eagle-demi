@@ -7,7 +7,7 @@ const settings = require('../config').syncOut;
 const notifications = require('../repositories/notifications');
 const { DEFAULTS } = require('../domain/notifications');
 const {
-  requireSettings, call, failure, claimHeld, createMinted, refuseStray, isPublic
+  requireSettings, call, failure, claimHeld, createMinted, refuseStray, isPublic, mirrorRowUnder
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -68,10 +68,7 @@ async function send(row, { update }) {
   });
 }
 
-async function mirroredAsEagleRow(eagleId, row) {
-  const stored = await notifications.readForWrite(eagleId);
-  return Boolean(stored && stored.id !== row.id && stored.sourceSystem === 'eagle');
-}
+const mirroredAsEagleRow = mirrorRowUnder(eagleId => notifications.readForWrite(eagleId));
 
 module.exports = {
   name: NAME,

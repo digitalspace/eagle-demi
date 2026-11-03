@@ -9,7 +9,7 @@ const { SCHEMA } = require('../domain/organizations');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
 const {
-  requireSettings, call, failure, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
+  requireSettings, call, failure, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic, mirrorRowUnder
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -94,10 +94,7 @@ async function send(row, { update }) {
   });
 }
 
-async function mirroredAsEagleRow(eagleId, row) {
-  const stored = await lists.readForWrite(eagleId, lists.KINDS.ORGANIZATION);
-  return Boolean(stored && stored.id !== row.id && stored.sourceSystem === 'eagle');
-}
+const mirroredAsEagleRow = mirrorRowUnder(eagleId => lists.readForWrite(eagleId, lists.KINDS.ORGANIZATION));
 
 module.exports = {
   name: NAME,
