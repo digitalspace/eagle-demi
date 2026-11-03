@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The `eagle-<id>` row the Track relink keeps beside a Track project (sync-track-projects.js). An
- * Eagle push lands on the Track row only, so without this the twin keeps serving an ACL Eagle has
- * since narrowed.
+ * The `eagle-<id>` row the Track relink keeps beside a Track project. An Eagle push lands on the
+ * Track row only, so without this the twin keeps serving an ACL Eagle has since narrowed.
  */
 
 const projects = require('../repositories/projects');
@@ -106,17 +105,8 @@ async function partnerRefusesTags(row, access) {
 }
 
 /**
- * Copy the row's stored `tags` onto the other row of its pair, so both rows (and the documents
- * each one holds) match the same names, and a removal on one is a removal on both.
- *
- * The partner is read and written without the caller's access: the two rows can carry different
- * `read[]`, and a checked read would skip the partner and leave the pair apart. Only `tags` (and
- * `updatedAt`) change on it, and the write is audited under the caller. The partner's field dial
- * is not skipped: the PUT checks `partnerRefusesTags` before its own write.
- *
- * @param {object} row  the row as it was before this write, so the pair is the one it belonged to
- * @param {object} req  the request whose caller the partner write is audited under
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ * Copy `row`'s (pre-write) stored `tags` onto its pair, past the caller's `read[]` so differing ACLs cannot
+ * split the pair; audited under `req`, PUT checks `partnerRefusesTags` first. Returns a 500 message or null.
  */
 async function mirrorTags(row, req) {
   const read = () => readPartner(row);

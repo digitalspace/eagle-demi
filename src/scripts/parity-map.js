@@ -1,18 +1,8 @@
 'use strict';
 
 /**
- * What `parity-eagle.js` replays: one entry per eagle-api read a consumer makes, the native DEMI
- * read (`/api/<kind>`, never `/search?dataset=`) that answers it, and the differences already
- * explained. Plan numbers are the read-by-read map in the eagle-reads-in-DEMI plan; the map doubles
- * as the consumer switch checklist.
- *
- * Path and query values `:project`, `:period`, `:document`, `:comment`, `:organization`,
- * `:inspection`, `:element`, `:group` are filled from `--id <name>=<eagleId>`; `:demiProject` and
- * `:demiPeriod` are the DEMI ids of those rows, which native filters take. Field entries are Eagle
- * names, read on the DEMI row through `NATIVE_FIELDS`, or `[eagleName, demiName]`.
- *
- * `format: 'csv'` reads compare the header and then rows paired on the `key` column, every shared
- * column but `ignoreColumns`. `mapEagle` / `mapDemi` reshape one side's rows before pairing.
+ * Each eagle-api read a consumer makes, the native DEMI read that answers it (never `/search?dataset=`),
+ * and the differences already explained. `format: 'csv'` reads pair rows on `key`, minus `ignoreColumns`.
  */
 
 const { EAGLE_STAFF_FIELDS, TRACK_PRECEDENCE } = require('../merge/project');
@@ -42,10 +32,8 @@ const FIELDS = {
 };
 
 /**
- * Eagle field -> native DEMI field, where the names differ. Lives only here: the native routes answer
- * DEMI names and never learn Eagle's. Project renames are the ones `TRACK_PRECEDENCE` records.
- * Every other compared field has the same name on the native row, except `directoryStructure`,
- * which has no native field yet (class L3 below).
+ * Eagle field -> native DEMI field where the names differ; native routes never learn Eagle names.
+ * `directoryStructure` has no native field yet (class L3 below).
  */
 const NATIVE_FIELDS = {
   Project: Object.fromEntries(TRACK_PRECEDENCE
@@ -147,10 +135,8 @@ const eagleIdsIn = (value) => [...String(value || '').matchAll(/[0-9a-f]{24}/gi)
 const sameIds = (a, b) => JSON.stringify(eagleIdsIn(a).sort()) === JSON.stringify(eagleIdsIn(b).sort());
 
 /**
- * Every class a difference may be explained by. `ids: true` classes match only ids listed under
- * their name in `--known-ids <file>`; the others match on the rows themselves.
- * kind: missingInDemi (Eagle row, no DEMI row), extraInDemi (DEMI row, no Eagle row), fieldDiff;
- * one kind or a list. A missing or extra row's `unpaired` holds the other side's unpaired rows.
+ * Classes a difference may be explained by. `ids: true` classes match only ids under their name in
+ * `--known-ids`; a missing or extra row's `unpaired` holds the other side's unpaired rows.
  */
 const KNOWN_DIFFERENCES = [
   { name: 'L2-never-mirrored', kind: 'missingInDemi', ids: true,
@@ -215,26 +201,8 @@ const KNOWN_DIFFERENCES = [
 ];
 
 /**
- * The class that explains one id-level or field-level difference, shared by parity-eagle and
- * reconcile-eagle.
- *
- * @param {object} ctx
- * @param {string} ctx.kind          missingInDemi, extraInDemi or fieldDiff
- * @param {string} ctx.id            the row's Eagle id (or DEMI id when it has none)
- * @param {string} [ctx.identity]    caller the read ran as; classes with `identities` need it
- * @param {string} [ctx.read]        PARITY_MAP read name; classes with `reads` need it
- * @param {string} [ctx.dataset]     Eagle _schemaName
- * @param {object} [ctx.eagle]       Eagle row; `ctx.demi` the DEMI row
- * @param {Array}  [ctx.unpaired]    the other side's unpaired rows (list-id-other-env)
- * @param {boolean} [ctx.byEagleId]  DEMI rows are keyed by Eagle id (demi-only)
- * @param {string} [ctx.field]       fieldDiff only, with ctx.eagleValue and ctx.demiValue
- * @param {Set}    [ctx.eaglePublicProjects] ids Eagle lists publicly
- * @param {Object<string, Set>} [ctx.knownIds] class name -> ids, for `ids: true` classes
- * @param {string|null} [ctx.parentState] in-demi, not-public, missing-in-eagle, missing-in-demi
- *   (parent resolves in Eagle or Track but DEMI holds no row; falls through to push-missed), or
- *   null for a row with no parent. Undefined (field-level parity) leaves an unmatched difference
- *   unexplained.
- * @returns {string|null} class name; null when unexplained
+ * The class name explaining one difference, or null; parity-eagle and reconcile-eagle share it.
+ * `ctx.parentState` undefined (field-level parity) leaves an unmatched difference unexplained.
  */
 function classify(ctx) {
   const knownIds = ctx.knownIds || {};
@@ -276,7 +244,7 @@ const idRows = refs => refs.map(ref => ({ _id: String(ref && ref._id ? ref._id :
 /** `{ <eaoStatus>: n }` as one row per status, paired on the status name. */
 const statusRows = counts => Object.entries(counts || {}).map(([status, count]) => ({ _id: status, count }));
 const pending = (read, plan, reason) => ({ read, plan, pending: true, skip: reason });
-// Decided 2026-10-14 (docs/eagle-api-port.md, Decisions): never ported, so never pending.
+// Never ported (docs/eagle-api-port.md, Decisions), so never pending.
 const dropped = (read, plan, reason) => ({ read, plan, skip: `dropped: ${reason}` });
 // DEMI sets x-total-count on GET and HEAD of /search; this script sends GET only.
 const HEAD_REASON = 'HEAD not sent by this script';
