@@ -24,6 +24,7 @@ const { canRead, resolveAccess } = require('../../../src/helpers/access-sql');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, eagleProject, storedEagleProject, projectReadForWriteFromGet
 } = require('../../helpers/eagle-mirror-fixtures');
+const { PUBLISHED_ORG, fakeOrgLabels } = require('../../helpers/org-labels');
 
 // Audit rows go nowhere unless a test asks for them; never to the network.
 audit._setTransport(async () => {});
@@ -613,6 +614,18 @@ test('PUT /projects/:id tags reach the other row of a Track/Eagle pair', async (
     assert.strictEqual(trackRes.statusCode, 200);
     assert.strictEqual(twinRes.statusCode, 200);
     assert.deepStrictEqual(store.tagsOf('207'), store.tagsOf(TWIN_ID));
+  });
+
+  await t.test('pins and their publish flag reach the twin, so a read by Eagle id agrees', async (t) => {
+    fakeOrgLabels(t);
+    const store = pairStore([TRACK_ROW, { ...TWIN_ROW, pins: [], pinsRead: ['staff'] }]);
+
+    const res = await put({ pins: [PUBLISHED_ORG], pinsPublished: true }, STAFF_WRITER);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(store.rowOf(TWIN_ID).pins, [PUBLISHED_ORG]);
+    assert.deepStrictEqual(store.rowOf(TWIN_ID).pinsRead, store.rowOf('207').pinsRead);
+    assert.ok(store.rowOf(TWIN_ID).pinsRead.includes('public'));
   });
 });
 

@@ -7,7 +7,9 @@ const assert = require('node:assert');
 
 const projects = require('../../src/repositories/projects');
 const documents = require('../../src/repositories/documents');
-const lists = require('../../src/repositories/lists');
+const {
+  PUBLISHED_ORG, HIDDEN_ORG, UNKNOWN_ORG, SEALED_ORG, fakeOrgLabels
+} = require('./../helpers/org-labels');
 const aiSearch = require('../../src/search/ai-search');
 const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
@@ -49,22 +51,6 @@ function eachPatchFits() {
 const WRITER_USER = { realm_access: { roles: ['demi-service-write'] } };
 const STAFF_USER = { realm_access: { roles: ['staff'] } };
 
-const PUBLISHED_ORG = '5c1f7a3e9b1d2c0012340001';
-const HIDDEN_ORG = '5c1f7a3e9b1d2c0012340002';
-const UNKNOWN_ORG = '5c1f7a3e9b1d2c0012340003';
-
-/** Organization labels: a staff read sees both stored organizations, any other read the published one. */
-function fakeOrgLabels(t) {
-  const orgs = [
-    { id: PUBLISHED_ORG, name: 'Acme', province: 'BC', public: true },
-    { id: HIDDEN_ORG, name: 'Hidden Co', province: 'AB', public: false }
-  ];
-  t.mock.method(lists, 'listOrganizationLabels', async (access, ids) => {
-    const staff = access.roles.some(role => role === 'staff' || role === 'sysadmin');
-    return orgs.filter(org => ids.includes(org.id) && (staff || org.public))
-      .map(({ id, name, province }) => ({ id, name, province }));
-  });
-}
 
 test('nosql project controller', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -541,12 +527,13 @@ test('nosql project controller', async (t) => {
     const cases = [
       { name: 'a service key', user: WRITER_USER, body: { pins: [PUBLISHED_ORG] }, code: 403 },
       { name: 'an unknown id', user: STAFF_USER, body: { pins: [UNKNOWN_ORG] }, code: 400 },
-      { name: 'an unpublished org', user: STAFF_USER, body: { pins: [HIDDEN_ORG], pinsPublished: true }, code: 409 }
+      { name: 'an unpublished org', user: STAFF_USER, body: { pins: [HIDDEN_ORG], pinsPublished: true }, code: 409 },
+      { name: 'a pins dial the caller cannot see', user: STAFF_USER, body: { pins: [] }, code: 400, vis: { pins: 1 } }
     ];
-    for (const { name, user, body, code } of cases) {
+    for (const { name, user, body, code, vis } of cases) {
       await t.test(name, async (t) => {
         fakeOrgLabels(t);
-        t.mock.method(projects, 'getById', async () => structuredClone(stored));
+        t.mock.method(projects, 'getById', async () => structuredClone({ ...stored, vis }));
         let upserted = false;
         t.mock.method(projects, 'upsert', async (doc) => { upserted = true; return doc; });
 
@@ -555,16 +542,17 @@ test('nosql project controller', async (t) => {
 
         assert.strictEqual(res.statusCode, code);
         assert.strictEqual(upserted, false);
-        if (code === 400) assert.match(res.body.fields.pins, new RegExp(UNKNOWN_ORG));
+        if (vis) assert.match(res.body.error, /not writable by this caller: pins/);
+        else if (code === 400) assert.match(res.body.fields.pins, new RegExp(UNKNOWN_ORG));
       });
     }
   });
 
   await t.test('PUT /api/projects/:id takes back a GET body unchanged from a service key', async () => {
-    // The read returns pins as labels and the derived flag; sending both back moves nothing.
+    // The GET drops the id no organization answers for; sending that list back moves nothing.
     fakeOrgLabels(t);
     const stored = {
-      id: '207', trackProjectId: 207, name: 'P', pins: [PUBLISHED_ORG], pinsRead: ['public', 'staff'],
+      id: '207', trackProjectId: 207, name: 'P', pins: [PUBLISHED_ORG, UNKNOWN_ORG], pinsRead: ['public', 'staff'],
       read: ['public', ...SECURE_ROLES], isPublished: true
     };
     t.mock.method(projects, 'getById', async () => structuredClone(stored));
@@ -579,8 +567,65 @@ test('nosql project controller', async (t) => {
 
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(saved.name, 'P2');
-    assert.deepStrictEqual(saved.pins, [PUBLISHED_ORG]);
+    assert.deepStrictEqual(saved.pins, [PUBLISHED_ORG, UNKNOWN_ORG]);
     assert.ok(!('pinsPublished' in saved));
+  });
+
+  await t.test('PUT /api/projects/:id keeps the pins a staff caller cannot read', async () => {
+    fakeOrgLabels(t);
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', pins: [PUBLISHED_ORG, SEALED_ORG], pinsRead: ['staff'],
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: STAFF_USER, body: { pins: [HIDDEN_ORG] }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(saved.pins, [HIDDEN_ORG, SEALED_ORG]);
+    assert.deepStrictEqual(res.body.pins.map(pin => pin._id), [HIDDEN_ORG], 'and the response still hides it');
+  });
+
+  await t.test('PUT /api/projects/:id checks pins against the row a lost etag race rereads', async () => {
+    // First read: an unpublished list, so pinning an unpublished org is fine. The reread finds it published.
+    fakeOrgLabels(t);
+    const row = {
+      id: '207', trackProjectId: 207, name: 'P', pins: [], pinsRead: ['staff'],
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    const reads = [row, { ...row, pinsRead: ['public', 'staff'] }];
+    t.mock.method(projects, 'getById', async () => structuredClone(reads.length > 1 ? reads.shift() : reads[0]));
+    let upserts = 0;
+    t.mock.method(projects, 'upsert', async (doc) => {
+      upserts++;
+      if (upserts === 1) throw Object.assign(new Error('HTTP 412'), { code: 412 });
+      return doc;
+    });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: STAFF_USER, body: { pins: [HIDDEN_ORG] }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.strictEqual(upserts, 1, 'the rebuilt try refused before writing');
+  });
+
+  await t.test('GET /api/projects labels each row\'s pins', async () => {
+    fakeOrgLabels(t);
+    t.mock.method(projectController.projectsKind.repository, 'list', async () =>
+      [{ id: '207', name: 'P', pins: [PUBLISHED_ORG], pinsRead: ['staff'], read: ['public', ...SECURE_ROLES] }]);
+
+    const res = mockRes();
+    await projectController.getProjects({ query: {}, user: STAFF_USER }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.body[0].pins, [{ _id: PUBLISHED_ORG, name: 'Acme', province: 'BC' }]);
   });
 
   await t.test('GET /api/projects/:id returns pins as labels and pinsPublished', async () => {

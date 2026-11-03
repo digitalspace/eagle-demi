@@ -775,7 +775,7 @@ paths:
         with 400, except the filters that say they repeat, which match any of up to 100 values. A
         filter, sort or `q` on a field the caller cannot see is refused with 400. A rejected Bearer token answers 401; an
         authenticated answer carries `Cache-Control: private, no-store`. A `q` search is logged as
-        a `search` analytics event.
+        a `search` analytics event. Each row's `pins` has the shape `GET /api/projects/{id}` returns.
       parameters:
         - name: page
           in: query
@@ -1278,7 +1278,8 @@ paths:
         '403':
           description: >-
             The body changes `pins` or `pinsPublished` and the caller holds none of `sysadmin`,
-            `staff`, `project-system-admin`. Sending back the stored values is not a change.
+            `staff`, `project-system-admin`. Sending back the `pins` and `pinsPublished` this
+            caller's `GET` returns is not a change; stored pins the caller cannot read are kept.
         '404':
           description: Project not found.
         '409':
@@ -9504,7 +9505,8 @@ components:
                     type: string
           description: >-
             Set by `PUT` only. Organization ids; replaces the stored list. Repeats are dropped,
-            keeping the first. A `{_id, ...}` item, the shape the read returns, counts as its `_id`.
+            keeping the first; at most 100 distinct ids. A `{_id, ...}` item, the shape the read
+            returns, counts as its `_id`. Stored pins the caller cannot read stay on the list.
         pinsPublished:
           type: boolean
           description: >-

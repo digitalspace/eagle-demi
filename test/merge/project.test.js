@@ -1144,6 +1144,16 @@ test('carryDemiOnlyFields', async (t) => {
     assert.deepStrictEqual(merged.pinsRead, stored.pinsRead);
   });
 
+  await t.test('a row with no stored copy takes the pins Eagle sent, as ids', () => {
+    const pin = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
+    const pushed = eagleFor(TRACK_207, { pins: [pin, '5cf00c03a266b7e187750002'], pinsRead: ['public'] });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), null);
+
+    assert.deepStrictEqual(merged.pins, [pin._id, '5cf00c03a266b7e187750002']);
+    assert.deepStrictEqual(merged.pinsRead, ['public']);
+  });
+
   await t.test('a re-merge takes the guid Track gained over a stored null eagleId', () => {
     const track = { ...TRACK_207, epic_guid: '5cf00c03a266b7e18775000a' };
     const merged = carryDemiOnlyFields(mergeTrackProject(track, null, OPTS), { id: '207', eagleId: null });

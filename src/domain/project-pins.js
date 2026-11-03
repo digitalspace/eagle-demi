@@ -26,7 +26,7 @@ const pinId = (pin) => (pin !== null && typeof pin === 'object' && !Array.isArra
 /** First occurrence wins, so the caller's order is kept. */
 const dedupe = (ids) => Array.from(new Set(ids));
 
-/** The stored list as ids: an Eagle push stores `{_id, name, province}`, a DEMI write bare ids. */
+/** The stored list as ids: a row Eagle pushed before the flip holds `{_id, name, province}`, a DEMI write bare ids. */
 function storedIds(project) {
   const pins = project && Array.isArray(project.pins) ? project.pins : [];
   return pins.map(pinId).filter(id => typeof id === 'string' && id !== '');
@@ -34,11 +34,29 @@ function storedIds(project) {
 
 const sameList = (a, b) => a.length === b.length && a.every((id, i) => id === b[i]);
 
-/** The ids in `ids` that `access` can read as organizations. */
-async function readableOrgIds(access, ids) {
-  if (ids.length === 0) return new Set();
-  const rows = await lists.listOrganizationLabels(access, ids);
-  return new Set(rows.map(row => String(row.id)));
+/** Organization id -> label row for the ids `access` can read, read in slices of MAX_PINS ids. */
+async function labelsById(access, ids) {
+  const unique = dedupe(ids);
+  const byId = new Map();
+  for (let i = 0; i < unique.length; i += MAX_PINS) {
+    for (const row of await lists.listOrganizationLabels(access, unique.slice(i, i + MAX_PINS))) {
+      byId.set(String(row.id), row);
+    }
+  }
+  return byId;
+}
+
+const toLabels = (ids, byId) => dedupe(ids).filter(id => byId.has(id))
+  .map(id => ({ _id: id, name: byId.get(id).name || null, province: byId.get(id).province || null }));
+
+/**
+ * The list a PUT body's `pins` leaves stored. A body equal to what the caller's read shows
+ * (`labelPins`) changes nothing; otherwise the stored ids that read hides are kept, after the sent ones.
+ */
+async function pinsAfter(access, before, sent) {
+  const seen = await labelsById(access, before);
+  if (sameList(sent, toLabels(before, seen).map(label => label._id))) return before;
+  return dedupe([...sent, ...before.filter(id => !seen.has(id))]);
 }
 
 /**
@@ -47,13 +65,14 @@ async function readableOrgIds(access, ids) {
  */
 async function pinChanges(ctx, current, body) {
   const input = {};
-  if (body.pins !== undefined) input.pins = Array.isArray(body.pins) ? body.pins.map(pinId) : body.pins;
+  // De-duplicated before the check, so MAX_PINS counts distinct organizations.
+  if (body.pins !== undefined) input.pins = Array.isArray(body.pins) ? dedupe(body.pins.map(pinId)) : body.pins;
   if (body.pinsPublished !== undefined) input.pinsPublished = body.pinsPublished;
   const checked = check(SCHEMA, input, { partial: true });
   if (checked.status !== 'ok') return checked;
 
   const before = storedIds(current);
-  const pins = input.pins === undefined ? before : dedupe(input.pins);
+  const pins = input.pins === undefined ? before : await pinsAfter(ctx.access, before, input.pins);
   const wasPublished = pinsPublished(current);
   const published = input.pinsPublished === undefined ? wasPublished : input.pinsPublished;
 
@@ -70,7 +89,7 @@ async function pinChanges(ctx, current, body) {
 
   const held = new Set(before);
   const added = pins.filter(id => !held.has(id));
-  const known = await readableOrgIds(systemAccess(), added);
+  const known = await labelsById(systemAccess(), added);
   const unknown = added.filter(id => !known.has(id));
   if (unknown.length) {
     logger.warn('[Project Pins] pin change refused: unknown organizations', { projectId, unknown });
@@ -79,7 +98,7 @@ async function pinChanges(ctx, current, body) {
 
   // A pin turns public when the list is published, or when it joins an already published list.
   const goingPublic = published ? (wasPublished ? added : pins) : [];
-  const open = await readableOrgIds(resolveAccess({}), goingPublic);
+  const open = await labelsById(resolveAccess({}), goingPublic);
   const unpublished = goingPublic.filter(id => !open.has(id));
   if (unpublished.length) {
     logger.warn('[Project Pins] pin change refused: unpublished organizations', { projectId, unpublished });
@@ -93,17 +112,15 @@ async function pinChanges(ctx, current, body) {
 }
 
 /**
- * The pins a project read returns, `{_id, name, province}` in stored order. An id the caller cannot
- * read is dropped, as eagle-api's pin read drops an id it cannot find.
+ * Each row's `pins`, where the row has them, as `{_id, name, province}` in stored order, with one
+ * label read for all rows. An id `access` cannot read is dropped, as eagle-api's pin read drops one it cannot find.
  */
-async function pinLabels(access, project) {
-  const ids = storedIds(project);
-  if (ids.length === 0) return [];
-  const rows = await lists.listOrganizationLabels(access, ids);
-  const byId = new Map(rows.map(row => [String(row.id), row]));
-  return ids
-    .filter(id => byId.has(id))
-    .map(id => ({ _id: id, name: byId.get(id).name || null, province: byId.get(id).province || null }));
+async function labelPins(access, rows) {
+  const pinned = rows.filter(row => row && Array.isArray(row.pins));
+  const ids = pinned.flatMap(storedIds);
+  const byId = ids.length ? await labelsById(access, ids) : new Map();
+  for (const row of pinned) row.pins = toLabels(storedIds(row), byId);
+  return rows;
 }
 
-module.exports = { PIN_EDITORS, MAX_PINS, pinChanges, pinLabels };
+module.exports = { PIN_EDITORS, MAX_PINS, pinChanges, labelPins };

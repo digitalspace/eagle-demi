@@ -569,6 +569,9 @@ async function runSeed(args, deps, summary) {
           // tags, the same as the Track relink. Not its sync-out state: that row was never sent.
           const twinId = eagleOnlyProjectId(String(project.eagleId));
           carryDemiOnlyFields(project, await repos.projects.getById(access, twinId), TWIN_CARRY_FIELDS);
+        } else {
+          // A row new to DEMI: its pins start from Eagle's.
+          carryDemiOnlyFields(project, null);
         }
         // Counted as minted, not as held: the carry above already answered for the rest.
         const heldCode = project.shortCode;

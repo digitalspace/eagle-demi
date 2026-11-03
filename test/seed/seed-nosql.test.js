@@ -739,6 +739,23 @@ test('seed() end to end with stubbed sources', async (t) => {
 
   // Why a re-seed is the fix for 396 rows holding `proponentId: null`: the search shape the seed
   // reads carries none of what eagle-api's push resolves, and nothing re-pushes existing rows.
+  await t.test('a project new to DEMI takes its pins from the Eagle feed', async () => {
+    const { written, repos } = makeRepos();
+    const sources = {
+      ...stubSources,
+      fetchEagleProjects: async () => [
+        { ...eagleProject(matchedGuid, 'Nicomen Wind (Eagle)'), pins: ['org-2'], pinsRead: ['public'] },
+        { ...eagleProject('5cf00c03a266b7e18775abcd', 'Eagle Only'), pins: ['org-3'], pinsRead: ['public'] }
+      ]
+    };
+
+    await seed(['--live', '--only', 'projects'], { sources, repos, now: NOW });
+
+    const pinsOf = (id) => written.projects.find(p => p.id === id).pins;
+    assert.deepStrictEqual(pinsOf('207'), ['org-2'], 'a Track row with no twin');
+    assert.deepStrictEqual(pinsOf('eagle-5cf00c03a266b7e18775abcd'), ['org-3'], 'an Eagle-only row');
+  });
+
   await t.test('re-seeding an existing row fills proponentId without blanking the push', async () => {
     const { written, repos } = makeRepos();
     const org = { _id: 'org-1', name: 'Columbia Power Corporation', province: 'British Columbia' };

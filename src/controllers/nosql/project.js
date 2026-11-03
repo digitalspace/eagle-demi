@@ -45,12 +45,12 @@ const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
 const { mirrorError } = require('../../helpers/duplicate-id');
-const { narrowTwin, mirrorTags, partnerRefusesTags, sameTags } = require('../../helpers/project-twin');
+const { narrowTwin, mirrorFields, partnerRefuses, MIRRORED, sameTags } = require('../../helpers/project-twin');
 const { listHandler } = require('./mirror-reads');
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
-const { pinChanges, pinLabels } = require('../../domain/project-pins');
+const { pinChanges, labelPins } = require('../../domain/project-pins');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -69,9 +69,12 @@ function pinRefusal(res, refusal) {
   return res.status(409).json({ error: refusal.error });
 }
 
-/** The stored pins are ids; a read returns them as `{_id, name, province}` when the redaction kept them. */
-async function withPinLabels(body, project, access) {
-  if (Array.isArray(body.pins)) body.pins = await pinLabels(access, project);
+/**
+ * A redacted project with its `pins` as `{_id, name, province}`. Stored pins are ids, or labels on rows
+ * Eagle pushed before the flip; either way the caller sees only the organizations it can read.
+ */
+async function labelled(access, body) {
+  await labelPins(access, [body]);
   return body;
 }
 
@@ -313,7 +316,7 @@ const PROJECTS_STORE = Object.freeze({
 const projectsKind = {
   entity: 'projects',
   repository: indexedKind(PROJECTS_STORE),
-  sortKeys: projects.SORTABLE,
+  parentJoin: labelPins,  sortKeys: projects.SORTABLE,
   filters: [
     'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict',
     'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds'
@@ -401,7 +404,7 @@ exports.getProject = async (req, res) => {
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    const body = await withPinLabels(redactForAccess('projects', project, access), project, access);
+    const body = await labelled(access, redactForAccess('projects', project, access));
     // Only the code is stored; the masthead's copy button needs the URL, and the base host is
     // per-environment config, not a stored value that could go stale.
     // `shortLinkUrl` is where that link lands; shown exactly where the link itself is.
@@ -482,7 +485,7 @@ exports.createProject = async (req, res) => {
       detail: { name: saved.name, isPublished: saved.isPublished }
     });
 
-    return res.status(201).json(redactForAccess('projects', saved, access));
+    return res.status(201).json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -516,18 +519,17 @@ exports.updateProject = async (req, res) => {
     // they were never shown, which is the hole the redaction-safe update rule closes
     // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level: the dial map is
     // policy rather than content, and no route sets it yet.
-    const refused = refusedWriteKeys('projects', changes, access, existing);
+    const pinKeys = Object.fromEntries(Object.entries(pinBody).filter(([, value]) => value !== undefined));
+    const refused = refusedWriteKeys('projects', { ...changes, ...pinKeys }, access, existing);
     for (const key of DERIVED_FIELDS) {
       if (Object.hasOwn(changes, key) && !refused.includes(key)) refused.push(key);
     }
-    // The tag copy below writes the other row of the pair, so its dial on `tags` must allow this
-    // caller too. Same message as a refusal here: nothing about that row is told to a caller who may
-    // not read it.
-    const mirrorsTags = changes.tags !== undefined &&
-      (changes.eagleId === undefined || changes.eagleId === existing.eagleId);
-    if (mirrorsTags && !refused.includes('tags') && await partnerRefusesTags(existing, access)) {
-      refused.push('tags');
-    }
+    // The copies below write the other row of the pair, so its dials must allow this caller too.
+    // Same message as a refusal here: nothing about that row is told to a caller who may not read it.
+    const samePair = changes.eagleId === undefined || changes.eagleId === existing.eagleId;
+    const copied = samePair ? { ...(changes.tags !== undefined && { tags: changes.tags }), ...pinKeys } : {};
+    const unrefused = Object.fromEntries(Object.entries(copied).filter(([key]) => !refused.includes(key)));
+    if (Object.keys(unrefused).length) refused.push(...await partnerRefuses(existing, access, unrefused));
     if (refused.length) {
       return res.status(400).json({
         error: `Fields not writable by this caller: ${refused.join(', ')}`
@@ -600,16 +602,18 @@ exports.updateProject = async (req, res) => {
       }
     });
 
-    // Every PUT that sends tags mirrors them, unchanged or not, so a pair that drifted apart heals.
-    // Never across a re-pointed `eagleId`: the new id's row belongs to another project.
-    const mirrorFailure = changes.tags !== undefined && saved.eagleId === existing.eagleId
-      ? await mirrorTags(existing, req)
-      : null;
+    // Every PUT that sends tags or pins mirrors them, unchanged or not, so a pair that drifted apart
+    // heals. Never across a re-pointed `eagleId`: the new id's row belongs to another project.
+    let mirrorFailure = null;
+    if (saved.eagleId === existing.eagleId) {
+      if (changes.tags !== undefined) mirrorFailure = await mirrorFields(existing, req, MIRRORED.tags);
+      if (!mirrorFailure && Object.keys(pinKeys).length) mirrorFailure = await mirrorFields(existing, req, MIRRORED.pins);
+    }
 
     if (mirrorFailure) return res.status(500).json({ success: false, error: mirrorFailure });
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
-    return res.json(await withPinLabels(redactForAccess('projects', saved, access), saved, access));
+    return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -728,7 +732,7 @@ exports.setLevel = async (req, res) => {
       }
     }
 
-    return res.json(redactForAccess('projects', saved, access));
+    return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -807,7 +811,7 @@ exports.setVisibility = async (req, res) => {
       }
     });
 
-    return res.json(redactForAccess('projects', saved, access));
+    return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }

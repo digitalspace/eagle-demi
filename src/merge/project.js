@@ -147,12 +147,27 @@ function heldRead(read, existing) {
 }
 
 /**
+ * A row with no stored copy takes the pins Eagle sent, as ids: eagle-admin keeps writing them to
+ * eagle-api until its own flip, and once the row exists DEMI owns them.
+ */
+function seedEaglePins(merged) {
+  const eagle = merged.sources && merged.sources.eagle;
+  if (!eagle) return;
+  if (Array.isArray(eagle.pins)) {
+    merged.pins = eagle.pins.map(pin => String(pin !== null && typeof pin === 'object' ? pin._id : pin));
+  }
+  if (Array.isArray(eagle.pinsRead)) merged.pinsRead = [...eagle.pinsRead];
+}
+
+/**
  * Carry the DEMI-only fields off the stored row onto a rebuilt one, then derive its assessments. A
  * held row keeps the lower of the rebuilt and stored `read` (`heldRead`): Eagle narrows, never widens.
  */
 function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS) {
   if (!merged) return merged;
-  if (existing) {
+  if (!existing) {
+    seedEaglePins(merged);
+  } else {
     for (const field of fields) {
       const value = existing[field];
       if (value !== undefined) merged[field] = Array.isArray(value) ? [...value] : value;
