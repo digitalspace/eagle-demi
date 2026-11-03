@@ -12,11 +12,8 @@ const { heldSealed } = require('../../helpers/access-sql');
 const { constrainToProject, DELETED_CEILING } = require('../../repositories/documents');
 
 /**
- * The pusher's clock, carried on the mirrored row.
- *
- * The etag guard makes a lost race safe but not ordered: two eagle-api pods push the same record
- * and the older body can still be the one that lands last. This stamp is what a later push is
- * compared against, so the older one is refused instead of rebuilt and written.
+ * The pusher's clock on the mirrored row. The etag guard makes a race safe but not ordered, so a later
+ * push is compared against this stamp and an older body from another eagle-api pod is refused.
  */
 const PUSHED_AT_FIELD = 'eaglePushedAt';
 
@@ -35,18 +32,8 @@ function eaglePush(req) {
 }
 
 /**
- * Whether this push is older than the one the stored row already carries. No skew tolerance: a
- * push refused for clock skew leaves DEMI on the older record, the same outcome as accepting a
- * stale one, while any tolerance admits every stale push that lands inside the window — which is
- * the case this guard exists for (34 ms in the 2026-09-15 incident).
- *
- * Equal stamps WRITE: two pushes sharing a millisecond came from one pod, which ordered them
- * itself. A push with no stamp writes too, or a client that predates the field could never
- * update a row a newer client had stamped.
- *
- * Ordering on mongoose's `__v` instead does not hold: eagle-api bumps it in the `findOneAndUpdate`
- * hook only (`api/helpers/models.js:71`), and the publish, unpublish and extension paths write
- * through `doc.save()` and `Model.updateOne`, which that hook never sees.
+ * True when this push is older than the stored row's. No skew tolerance: it would admit the stale pushes this
+ * guard exists for. Equal or missing stamps write. Not `__v`: eagle-api bumps it in `findOneAndUpdate` only.
  */
 function isStalePush(pushedAt, current, field = PUSHED_AT_FIELD) {
   if (!Number.isFinite(pushedAt) || !current) return false;
@@ -55,9 +42,8 @@ function isStalePush(pushedAt, current, field = PUSHED_AT_FIELD) {
 }
 
 /**
- * The row to write, carrying the stamp it is ordered by. A push without one keeps whatever the
- * stored row holds — a Cosmos write replaces the item, so not carrying it would clear the ordering
- * for every push behind it.
+ * The row to write with its ordering stamp. A push with none keeps the stored one: a Cosmos write
+ * replaces the item, so dropping it would clear the ordering for every later push.
  */
 function stampPush(item, pushedAt, current, field = PUSHED_AT_FIELD) {
   const stamp = Number.isFinite(pushedAt) ? pushedAt : (current && current[field]);
@@ -65,11 +51,8 @@ function stampPush(item, pushedAt, current, field = PUSHED_AT_FIELD) {
 }
 
 /**
- * Answer a push a newer one has already overtaken: nothing written, nothing cascaded, and 200 —
- * eagle-api's push client re-sends a 5xx and there is nothing here worth sending again.
- *
- * @param {object} options `current` is the stored row that won, `projectId` omitted for the
- *   mirrors that have no project dimension.
+ * Answer a push a newer one overtook: nothing written, and 200, since eagle-api re-sends a 5xx.
+ * `current` is the stored row that won; `projectId` is omitted by mirrors with no project.
  */
 function ignoreStalePush(req, res, { label, action, targetType, current, projectId, pushedAt }) {
   const eaglePushedAt = current[PUSHED_AT_FIELD];
@@ -87,11 +70,8 @@ function ignoreStalePush(req, res, { label, action, targetType, current, project
 }
 
 /**
- * Answer a push that kept losing its race, in the same words on every mirror.
- *
- * A 5xx rather than a 409, because that is the only answer eagle-api's push client sends again: it
- * retries a 500-and-up and gives up on everything below (`api/helpers/pushClient.js`). Nothing is
- * wrong with the push, it just never found the row standing still.
+ * Answer a push that kept losing its race. A 503, not a 409: eagle-api's push client
+ * (`api/helpers/pushClient.js`) retries a 500-and-up only.
  */
 function pushConflict(res, { label, eagleId, projectId }) {
   logger.warn(`[${label}] eagle push lost its etag race, asking for a retry`,
@@ -111,18 +91,8 @@ function keepSeal(item, current) {
 }
 
 /**
- * Write the row, rebuilding against whatever is stored after each lost race. `build(current)`, sync
- * or async, runs per try, so anything carried across from the stored row is carried from the value that is
- * actually stored rather than the one this request read first.
- *
- * `pushedAt` is judged inside each attempt, against the row THAT attempt read: a retry after a
- * lost race decides against the push that won, not against the revision this request first saw.
- *
- * `pushedAtField` names the stamp: each source orders its own pushes, so an ENGAGE ingest stamps
- * `engagePushedAt` and is never refused by an Eagle push's clock, or the other way round.
- *
- * @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}
- *   |{status: 'conflict'}>} `conflict` once every try has lost.
+ * Write the row; `build(current)` and the `pushedAt` check run per try against the row that try read.
+ * `pushedAtField` names the stamp, so ENGAGE and Eagle each order their own pushes. `conflict` once every try lost.
  */
 async function upsertWithRetry(repo, build, readExisting,
   { pushedAt = null, pushedAtField = PUSHED_AT_FIELD } = {}) {
