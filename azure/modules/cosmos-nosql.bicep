@@ -527,6 +527,13 @@ resource notificationsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
           {
             path: '/subType/?'
           }
+          // The mirror's lookup of a DEMI row by Eagle id, and the sync-out pending list.
+          {
+            path: '/sourceSystem/?'
+          }
+          {
+            path: '/eagleId/?'
+          }
         ]
         excludedPaths: noIndex
       }
