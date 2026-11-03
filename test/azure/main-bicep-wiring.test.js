@@ -319,6 +319,20 @@ test('the API storage account declares the container managed devbox runs write t
   assert.match(block[2], /^\s*parent: blobService$/m, 'the container must sit on the API storage account');
 });
 
+// Prod has no secret sync, so this subscription is the only thing that creates the vault's topic there.
+test('every vault mails the action group when a secret nears expiry', () => {
+  const sub = /^resource \w+ 'Microsoft\.EventGrid\/systemTopics\/eventSubscriptions@[^']+' = \{\n([\s\S]*?)\n\}/m
+    .exec(KEY_VAULT.split(/^resource /m).map(b => 'resource ' + b).find(b => b.includes("'Microsoft.KeyVault.SecretNearExpiry'")) || '');
+  assert.ok(sub, 'key-vault.bicep must subscribe SecretNearExpiry unconditionally');
+  assert.match(sub[1], /endpointType: 'MonitorAlert'/);
+  assert.match(sub[1], /actionGroups: \[ actionGroupId \]/);
+  const call = MAIN.split(/^module /m).find(b => b.includes("'./modules/key-vault.bicep'"));
+  assert.match(call, /^\s+actionGroupId: actionGroupId$/m, 'main.bicep must pass the action group to the vault');
+  const sync = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'secret-sync.bicep'), 'utf8');
+  assert.match(sync, /^resource vaultTopic 'Microsoft\.EventGrid\/systemTopics@[^']+' existing = \{$/m,
+    'a vault takes one system topic; secret-sync.bicep must reuse the one key-vault.bicep declares');
+});
+
 // Read off demi-apim-test and demi-apim-prod, both Disabled (2026-09-06). Omitted, the API version's
 // default is Enabled, so every apply proposes switching the deprecated portal back on.
 test('the gateway pins the legacy developer portal off', () => {

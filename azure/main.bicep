@@ -673,6 +673,7 @@ module keyVault './modules/key-vault.bicep' = if (deployFoundation) {
     peSubnetId: privateEndpointSubnetId
     identityPrincipalId: identityPrincipalId
     optionalSecretNames: optionalSecretNames
+    actionGroupId: actionGroupId
   }
 }
 
