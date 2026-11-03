@@ -628,19 +628,33 @@ test('reconcile', async (t) => {
     assert.deepStrictEqual(summary.commentPeriods.unpublishedOrDeleted, []);
   });
 
-  // POST /notifications writes a DEMI row with no Eagle copy until sync-out covers notifications.
-  await t.test('a notification created in DEMI is not drift', async () => {
+  // A DEMI row has no Eagle copy until sync-out sends it, then one under the id it minted.
+  await t.test('a notification or Update created in DEMI is not drift, sent or not', async () => {
     const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, {
+        ...EAGLE_BY_DATASET,
+        ProjectNotification: [...NOTIFICATIONS, { _id: 'N-minted' }],
+        RecentActivity: [...UPDATE_ROWS.map(row => ({ _id: row.id })), { _id: 'U-minted' }]
+      }),
       notifications: {
         ...makeDeps().notifications,
         listEvery: async (access) => {
           assertSystem(access);
-          return [...NOTIFICATION_ROWS, { id: 'N-demi', sourceSystem: 'demi' }];
+          return [...NOTIFICATION_ROWS, { id: 'N-unsent', sourceSystem: 'demi' },
+            { id: 'N-sent', sourceSystem: 'demi', eagleId: 'N-minted' }];
         }
+      },
+      updates: {
+        listEvery: async () => [...UPDATE_ROWS, { id: 'U-unsent', sourceSystem: 'demi' },
+          { id: 'U-sent', sourceSystem: 'demi', eagleId: 'U-minted' }],
+        count: async () => UPDATE_ROWS.length + 2
       }
     }));
 
     assert.deepStrictEqual(summary.notifications.unpublishedOrDeleted, []);
+    assert.deepStrictEqual(summary.notifications.eagleOnly, []);
+    assert.deepStrictEqual(summary.updates.unpublishedOrDeleted, []);
+    assert.deepStrictEqual(summary.updates.eagleOnly, []);
     assert.strictEqual(summary.drift, 5);
   });
 
