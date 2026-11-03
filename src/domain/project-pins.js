@@ -59,6 +59,17 @@ async function pinsAfter(access, before, sent) {
   return dedupe([...sent, ...before.filter(id => !seen.has(id))]);
 }
 
+/** The 409 message: ids the caller sent or can read by name, the rest only counted. */
+async function unpublishedError(access, unpublished, sent) {
+  const shown = await labelsById(access, unpublished.filter(id => !sent.includes(id)));
+  const named = unpublished.filter(id => sent.includes(id) || shown.has(id));
+  const hidden = unpublished.length - named.length;
+  return [
+    named.length ? `Organizations not published: ${named.join(', ')}` : null,
+    hidden ? `${hidden} organizations you cannot see are not published` : null
+  ].filter(Boolean).join('; ');
+}
+
 /**
  * The pin fields a PUT body `{pins?, pinsPublished?}` moves on `current`: `{status: 'ok', changes}`, else a refusal.
  * Only ids new to the list are checked, so a list holding a since-unpublished organization can still shrink.
@@ -102,7 +113,7 @@ async function pinChanges(ctx, current, body) {
   const unpublished = goingPublic.filter(id => !open.has(id));
   if (unpublished.length) {
     logger.warn('[Project Pins] pin change refused: unpublished organizations', { projectId, unpublished });
-    return { status: 'conflict', error: `Organizations not published: ${unpublished.join(', ')}` };
+    return { status: 'conflict', error: await unpublishedError(ctx.access, unpublished, input.pins || []) };
   }
 
   logger.info('[Project Pins] pin change accepted', {

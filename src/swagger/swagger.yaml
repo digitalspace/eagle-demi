@@ -1248,8 +1248,9 @@ paths:
         Modify an existing project's metadata or coordinates. It does not change visibility:
         `isPublished` and `read` in the body are ignored and the stored ACL is kept. Use
         `PUT /api/projects/{id}/level`. It also sets the pinned organizations (`pins`,
-        `pinsPublished`); there are no pin routes. A body that changes a stored value sets
-        `dateUpdated` unless it sends one; on a project created in DEMI, sync-out queues it for Eagle.
+        `pinsPublished`); there are no pin routes. On a project created in DEMI, a body that
+        changes a stored value sets `dateUpdated` unless it sends one, and sync-out queues the
+        project for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1432,7 +1433,8 @@ paths:
         Pulling a project back from level 4 needs the `sysadmin` role and is audited as
         `record.takedown`; narrowing the row alone does not finish a takedown, see
         `docs/takedown-runbook.md`. A narrow is held across Eagle pushes and re-seeds
-        (`levelHeldAt`) until a widen here reaches level 4 or Eagle's level.
+        (`levelHeldAt`) until a widen here reaches level 4 or Eagle's level. On a project created
+        in DEMI, sync-out queues the move for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

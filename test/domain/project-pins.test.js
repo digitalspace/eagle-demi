@@ -9,7 +9,7 @@ const { resolveAccess } = require('../../src/helpers/access-sql');
 const { pinsPublished } = require('../../src/vis/predicates');
 const { pinChanges, labelPins, MAX_PINS } = require('../../src/domain/project-pins');
 const {
-  PUBLISHED_ORG, HIDDEN_ORG, UNKNOWN_ORG, fakeOrgLabels: fakeOrgs
+  PUBLISHED_ORG, HIDDEN_ORG, UNKNOWN_ORG, SEALED_ORG, fakeOrgLabels: fakeOrgs
 } = require('../helpers/org-labels');
 
 const ctxFor = (roles) => ({ access: resolveAccess({ user: { sub: 'kc-1', realm_access: { roles } }, headers: {} }) });
@@ -99,6 +99,16 @@ test('pinChanges', async (t) => {
     const stored = { ...UNPUBLISHED_LIST, pins: [PUBLISHED_ORG, HIDDEN_ORG] };
     const result = await pinChanges(STAFF, stored, { pinsPublished: true });
     assert.deepStrictEqual(result, { status: 'conflict', error: `Organizations not published: ${HIDDEN_ORG}` });
+  });
+
+  await t.test('the 409 counts an unpublished pin the caller cannot see, never naming it', async (t) => {
+    fakeOrgs(t);
+    const stored = { ...UNPUBLISHED_LIST, pins: [HIDDEN_ORG, SEALED_ORG] };
+    const result = await pinChanges(STAFF, stored, { pinsPublished: true });
+    assert.deepStrictEqual(result, {
+      status: 'conflict',
+      error: `Organizations not published: ${HIDDEN_ORG}; 1 organizations you cannot see are not published`
+    });
   });
 
   await t.test('adding an unpublished organization to a published list is 409', async (t) => {

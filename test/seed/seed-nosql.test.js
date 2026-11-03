@@ -737,8 +737,6 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(gone.sources.eagle.isDeleted, true, 'else it reads as a DEMI delete nothing can undo');
   });
 
-  // Why a re-seed is the fix for 396 rows holding `proponentId: null`: the search shape the seed
-  // reads carries none of what eagle-api's push resolves, and nothing re-pushes existing rows.
   await t.test('a project new to DEMI takes its pins from the Eagle feed', async () => {
     const { written, repos } = makeRepos();
     const sources = {
@@ -756,6 +754,8 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.deepStrictEqual(pinsOf('eagle-5cf00c03a266b7e18775abcd'), ['org-3'], 'an Eagle-only row');
   });
 
+  // Why a re-seed is the fix for 396 rows holding `proponentId: null`: the search shape the seed
+  // reads carries none of what eagle-api's push resolves, and nothing re-pushes existing rows.
   await t.test('re-seeding an existing row fills proponentId without blanking the push', async () => {
     const { written, repos } = makeRepos();
     const org = { _id: 'org-1', name: 'Columbia Power Corporation', province: 'British Columbia' };

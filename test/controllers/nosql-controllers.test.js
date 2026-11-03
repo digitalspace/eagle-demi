@@ -327,6 +327,25 @@ test('nosql project controller', async (t) => {
     assert.deepStrictEqual(queued.map(row => row.name), ['P2']);
   });
 
+  await t.test('a PUT content edit of a Track project leaves syncVersion and dateUpdated to their owners', async () => {
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', sources: { track: { id: 207 } }, syncVersion: 3,
+      dateUpdated: '2026-01-01T00:00:00.000Z', read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+    const enqueue = t.mock.method(syncOut, 'enqueue', async () => ['eagle']);
+
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: STAFF_USER, body: { name: 'P2' } }, mockRes());
+
+    assert.strictEqual(saved.name, 'P2');
+    assert.strictEqual(saved.syncVersion, 3);
+    assert.strictEqual(saved.dateUpdated, stored.dateUpdated);
+    assert.strictEqual(enqueue.mock.callCount(), 0);
+  });
+
 
   // Admission is level 1 (P3-3). Literal tokens, because reading them off a constant would pass
   // whatever that constant becomes.

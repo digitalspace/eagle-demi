@@ -627,6 +627,17 @@ test('PUT /projects/:id tags reach the other row of a Track/Eagle pair', async (
     assert.deepStrictEqual(store.rowOf(TWIN_ID).pinsRead, store.rowOf('207').pinsRead);
     assert.ok(store.rowOf(TWIN_ID).pinsRead.includes('public'));
   });
+
+  await t.test('pins alone are refused when the twin\'s pinsPublished dial refuses the caller', async (t) => {
+    fakeOrgLabels(t);
+    const store = pairStore([TRACK_ROW, { ...TWIN_ROW, pins: [], pinsRead: ['staff'], vis: { pinsPublished: 1 } }]);
+
+    const res = await put({ pins: [PUBLISHED_ORG] }, STAFF_WRITER);
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /pinsPublished/);
+    assert.deepStrictEqual(store.written, []);
+  });
 });
 
 test('POST /projects onto an existing id keeps the stored tags', async (t) => {

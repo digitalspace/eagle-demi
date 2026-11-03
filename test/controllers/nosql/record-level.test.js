@@ -27,6 +27,7 @@ const documents = require('../../../src/repositories/documents');
 const chunksRepo = require('../../../src/repositories/chunks');
 const aiSearch = require('../../../src/search/ai-search');
 const projectController = require('../../../src/controllers/nosql/project');
+const syncOut = require('../../../src/sync-out');
 const documentController = require('../../../src/controllers/nosql/document');
 
 const SYSADMIN = { sub: 'kc-1', preferred_username: 'sys.admin', realm_access: { roles: ['sysadmin'] } };
@@ -147,6 +148,22 @@ test('the ladder move routes', async (t) => {
     assert.strictEqual(row.Detail.from, 1);
     assert.strictEqual(row.Detail.to, 3);
     assert.strictEqual(row.Detail.confirmed, false, 'level 3 needs no confirmation');
+  });
+
+  await t.test('a level move on a native project raises syncVersion and queues it for Eagle', async () => {
+    t.mock.method(projects, 'getById', async () => ({ ...PROJECT_AT(1, ['team']), syncVersion: 2 }));
+    let saved;
+    t.mock.method(projects, 'upsert', async (item) => { saved = item; return item; });
+    stubCascade(t);
+    const queued = [];
+    t.mock.method(syncOut, 'enqueue', async (item, options) => { queued.push(options); return ['eagle']; });
+
+    await projectController.setLevel({
+      params: { id: '207' }, query: {}, body: { level: 3 }, user: SYSADMIN
+    }, mockRes());
+
+    assert.strictEqual(saved.syncVersion, 3);
+    assert.deepStrictEqual(queued, [{ kind: 'project' }]);
   });
 
   await t.test('a project level change re-derives its documents', async () => {

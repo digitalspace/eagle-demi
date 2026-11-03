@@ -52,6 +52,7 @@ const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
 const { pinChanges, labelPins } = require('../../domain/project-pins');
+const syncOut = require('../../sync-out');
 const { PROJECT, nextSyncVersion } = require('../../sync-out/kinds');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
@@ -74,9 +75,9 @@ function pinRefusal(res, refusal) {
 /** A native row's write raises `syncVersion`, so `listSyncPending` lists it until sync-out sends it. */
 const versioned = (row, current) => (isNativeProject(row) ? { ...row, syncVersion: nextSyncVersion(current) } : row);
 
-/** Queue a native project for sync-out once its write landed. Required here: `sync-out` loads this controller's modules. */
+/** Queue a native project for sync-out once its write landed. */
 function enqueueProject(saved) {
-  return isNativeProject(saved) ? require('../../sync-out').enqueueQuietly(saved, { kind: PROJECT }) : null;
+  return isNativeProject(saved) ? syncOut.enqueueQuietly(saved, { kind: PROJECT }) : null;
 }
 
 /**
@@ -326,7 +327,8 @@ const PROJECTS_STORE = Object.freeze({
 const projectsKind = {
   entity: 'projects',
   repository: indexedKind(PROJECTS_STORE),
-  parentJoin: labelPins,  sortKeys: projects.SORTABLE,
+  parentJoin: labelPins,
+  sortKeys: projects.SORTABLE,
   filters: [
     'projectType', 'region', 'projectState', 'proponentName', 'regionalDistrict', 'municipality', 'electoralDistrict',
     'eacDecision._id', 'currentPhaseName._id', 'CEAAInvolvement._id', 'sector', 'phaseIds'
@@ -543,7 +545,11 @@ exports.updateProject = async (req, res) => {
     // The copies below write the other row of the pair, so its dials must allow this caller too.
     // Same message as a refusal here: nothing about that row is told to a caller who may not read it.
     const samePair = changes.eagleId === undefined || changes.eagleId === existing.eagleId;
-    const copied = samePair ? { ...(changes.tags !== undefined && { tags: changes.tags }), ...pinKeys } : {};
+    // A pin write copies both `pins` and `pinsRead` (MIRRORED.pins), so both dials are checked.
+    const copied = samePair ? {
+      ...(changes.tags !== undefined && { tags: changes.tags }),
+      ...(Object.keys(pinKeys).length && { pins: [], pinsPublished: false })
+    } : {};
     const unrefused = Object.fromEntries(Object.entries(copied).filter(([key]) => !refused.includes(key)));
     if (Object.keys(unrefused).length) refused.push(...await partnerRefuses(existing, access, unrefused));
     if (refused.length) {
@@ -574,8 +580,9 @@ exports.updateProject = async (req, res) => {
         const pinned = await pinChanges({ access }, current, pinBody);
         if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
         const now = new Date().toISOString();
-        const edited = Object.keys(pinned.changes).length > 0 ||
-          Object.keys(changes).some(key => !isDeepStrictEqual(current[key], changes[key]));
+        // Only on a native row: elsewhere Eagle owns `dateUpdated` and sync-out sends nothing.
+        const edited = isNativeProject(current) && (Object.keys(pinned.changes).length > 0 ||
+          Object.keys(changes).some(key => !isDeepStrictEqual(current[key], changes[key])));
         const row = {
           ...current,
           ...changes,
@@ -719,7 +726,7 @@ exports.setLevel = async (req, res) => {
         return {
           status: 'saved',
           switchedFrom: move.key ? eagle.currentLegislationYear || null : undefined,
-          saved: await projects.upsert(row, { etag: current._etag })
+          saved: await projects.upsert(versioned(row, current), { etag: current._etag })
         };
       },
       onLost: (_current, attempt) =>
@@ -744,6 +751,7 @@ exports.setLevel = async (req, res) => {
         ...(switchedFrom === undefined ? {} : { legislationFrom: switchedFrom, legislationTo: saved.sources.eagle.currentLegislationYear })
       }
     });
+    await enqueueProject(saved);
 
     if (level !== from) {
       const failure = await cascadeProjectVisibility(existing.id, acl, existing.eagleId);

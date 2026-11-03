@@ -168,6 +168,8 @@ exports.getProjectRecords = async (req, res) => {
       const out = redactForAccess(entity, row, access);
       return entity === 'projects' ? { ...out, recordKind: 'project' } : shapeNotification(out);
     });
+    // The pin labels the project list gives its rows.
+    await projectsKind.parentJoin(access, body.filter(row => row.recordKind === 'project'));
 
     const total = parsed.count ? (projectSide.total || 0) + notificationRows.length : undefined;
     if (total !== undefined) res.setHeader('x-total-count', String(total));
