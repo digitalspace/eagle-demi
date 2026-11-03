@@ -356,6 +356,21 @@ param syncOutEagleNativeEnabled bool = false
 @description('Also send document edits and level changes to eagle-api, for documents that already hold an Eagle id. Off until the document cutover.')
 param syncOutEagleDocumentEnabled bool = false
 
+@description('Also send organizations written in DEMI to eagle-api. Off until the organization cutover.')
+param syncOutEagleOrganizationEnabled bool = false
+
+@description('Also send projects written in DEMI to eagle-api. Off until the project cutover.')
+param syncOutEagleProjectEnabled bool = false
+
+@description('Also send updates written in DEMI to eagle-api. Off until the update cutover.')
+param syncOutEagleUpdateEnabled bool = false
+
+@description('Also send notifications written in DEMI to eagle-api. Off until the notification cutover.')
+param syncOutEagleNotificationEnabled bool = false
+
+@description('Also send comments written in DEMI to eagle-api. Off until the comment cutover.')
+param syncOutEagleCommentEnabled bool = false
+
 @description('eagle-api base the sync-out consumer writes to, e.g. https://eagle-test.apps.silver.devops.gov.bc.ca/api. Distinct from eagleApiBase, the public read path.')
 param eagleProtectedApiBase string = ''
 
@@ -852,6 +867,11 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     syncOutEagleEnabled: syncOutEagleEnabled
     syncOutEagleNativeEnabled: syncOutEagleNativeEnabled
     syncOutEagleDocumentEnabled: syncOutEagleDocumentEnabled
+    syncOutEagleOrganizationEnabled: syncOutEagleOrganizationEnabled
+    syncOutEagleProjectEnabled: syncOutEagleProjectEnabled
+    syncOutEagleUpdateEnabled: syncOutEagleUpdateEnabled
+    syncOutEagleNotificationEnabled: syncOutEagleNotificationEnabled
+    syncOutEagleCommentEnabled: syncOutEagleCommentEnabled
     eagleProtectedApiBase: eagleProtectedApiBase
     syncOutEagleClientSecretUri: syncOutEagleClientSecretUri
     eagleEngageMilestone: eagleEngageMilestone

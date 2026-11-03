@@ -327,6 +327,21 @@ param syncOutEagleNativeEnabled bool = false
 @description('Also send document edits and level changes to eagle-api, for documents that already hold an Eagle id. Off until the document cutover.')
 param syncOutEagleDocumentEnabled bool = false
 
+@description('Also send organizations written in DEMI to eagle-api. Off until the organization cutover.')
+param syncOutEagleOrganizationEnabled bool = false
+
+@description('Also send projects written in DEMI to eagle-api. Off until the project cutover.')
+param syncOutEagleProjectEnabled bool = false
+
+@description('Also send updates written in DEMI to eagle-api. Off until the update cutover.')
+param syncOutEagleUpdateEnabled bool = false
+
+@description('Also send notifications written in DEMI to eagle-api. Off until the notification cutover.')
+param syncOutEagleNotificationEnabled bool = false
+
+@description('Also send comments written in DEMI to eagle-api. Off until the comment cutover.')
+param syncOutEagleCommentEnabled bool = false
+
 @description('eagle-api base the sync-out consumer writes to, e.g. https://eagle-test.apps.silver.devops.gov.bc.ca/api. Not eagleApiBase, which is the public read path.')
 param eagleProtectedApiBase string = ''
 
@@ -796,6 +811,26 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SYNC_OUT_EAGLE_DOCUMENT_ENABLED'
           value: syncOutEagleDocumentEnabled ? 'true' : 'false'
+        }
+        {
+          name: 'SYNC_OUT_EAGLE_ORGANIZATION_ENABLED'
+          value: syncOutEagleOrganizationEnabled ? 'true' : 'false'
+        }
+        {
+          name: 'SYNC_OUT_EAGLE_PROJECT_ENABLED'
+          value: syncOutEagleProjectEnabled ? 'true' : 'false'
+        }
+        {
+          name: 'SYNC_OUT_EAGLE_UPDATE_ENABLED'
+          value: syncOutEagleUpdateEnabled ? 'true' : 'false'
+        }
+        {
+          name: 'SYNC_OUT_EAGLE_NOTIFICATION_ENABLED'
+          value: syncOutEagleNotificationEnabled ? 'true' : 'false'
+        }
+        {
+          name: 'SYNC_OUT_EAGLE_COMMENT_ENABLED'
+          value: syncOutEagleCommentEnabled ? 'true' : 'false'
         }
         {
           name: 'EAGLE_PROTECTED_API_BASE'

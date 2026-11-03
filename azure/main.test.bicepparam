@@ -114,6 +114,12 @@ param syncOutEagleEnabled = true
 param syncOutEagleNativeEnabled = false
 // Documents stay off until the document cutover.
 param syncOutEagleDocumentEnabled = false
+// Organizations, projects, updates, notifications and comments stay off until each kind's cutover.
+param syncOutEagleOrganizationEnabled = false
+param syncOutEagleProjectEnabled = false
+param syncOutEagleUpdateEnabled = false
+param syncOutEagleNotificationEnabled = false
+param syncOutEagleCommentEnabled = false
 param eagleProtectedApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-test.apps.gold.devops.gov.bc.ca/api'
 // Eagle List item "Time Limit Imposition", the milestone on every ENGAGE comment period in Eagle test and prod.
