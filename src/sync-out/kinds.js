@@ -6,12 +6,14 @@
 const commentPeriods = require('../repositories/comment-periods');
 const documents = require('../repositories/documents');
 const lists = require('../repositories/lists');
+const notifications = require('../repositories/notifications');
 const projects = require('../repositories/projects');
 const pending = require('./pending');
 const { logger } = require('../utils/logger');
 
 const COMMENT_PERIOD = 'commentPeriod';
 const DOCUMENT = 'document';
+const NOTIFICATION = 'notification';
 const ORGANIZATION = 'organization';
 const PROJECT = 'project';
 
@@ -54,6 +56,17 @@ const KINDS = Object.freeze({
     consumers: Object.freeze(['eagle']),
     reconcile: (options) => pending.reconcile(options, pending.depsFor(DOCUMENT))
   }),
+  // ENGAGE met-api reads eagle-api `/projectNotification/:id` until the EN slice, and eagle-api's
+  // recentActivity aggregate looks up projectNotification.
+  [NOTIFICATION]: Object.freeze({
+    repo: Object.freeze({
+      readForWrite: (id) => notifications.readForWrite(id),
+      listSyncPending: () => notifications.listSyncPending(),
+      upsert: (item, existing) => notifications.upsert(item, existing)
+    }),
+    consumers: Object.freeze(['eagle']),
+    reconcile: (options) => pending.reconcile(options, pending.depsFor(NOTIFICATION))
+  }),
   // A project's proponent and an organization's parentCompany are sent by Eagle id, and eagle-api's project reads
   // join `proponent` to the organization (helpers/aggregators.js).
   [ORGANIZATION]: Object.freeze({
@@ -95,4 +108,6 @@ function kindOf(name) {
   return KINDS[name];
 }
 
-module.exports = { KINDS, COMMENT_PERIOD, DOCUMENT, ORGANIZATION, PROJECT, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion };
+module.exports = {
+  KINDS, COMMENT_PERIOD, DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion
+};

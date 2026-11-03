@@ -235,6 +235,12 @@ param syncOutQueue = ''
 param syncOutEagleEnabled = false
 param syncOutEagleNativeEnabled = false
 param syncOutEagleDocumentEnabled = false
+// Per-kind switches stay off until test has run each kind's cutover.
+param syncOutEagleOrganizationEnabled = false
+param syncOutEagleProjectEnabled = false
+param syncOutEagleUpdateEnabled = false
+param syncOutEagleNotificationEnabled = false
+param syncOutEagleCommentEnabled = false
 param eagleProtectedApiBase = 'https://projects.eao.gov.bc.ca/api'
 param engageApiBase = 'https://epic-engage-web-prod.apps.gold.devops.gov.bc.ca/api'
 

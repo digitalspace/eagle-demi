@@ -1,23 +1,19 @@
 'use strict';
 
-/**
- * Project notifications repository — Cosmos NoSQL.
- *
- * Container `notifications` (Eagle `ProjectNotification`), partitioned by `/id`. ~17 small rows read
- * whole, so /id gives perfect distribution and 1 RU point reads.
- *
- * A notification is not project data: `associatedProjectId` is a loose reference to a project that
- * may not exist yet, so there is NO project axis and `visibilityFor` is called with a null partition
- * field — role ACL applies, project scope does not. Same rule as `boundaries`.
- */
+// Container `notifications` (Eagle `ProjectNotification`), partitioned by `/id`. No project axis, as for `boundaries`:
+// `associatedProjectId` may name a project that does not exist yet, so role ACL applies and project scope does not.
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll } = require('./_sql');
+const {
+  eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, orderByFrom, readPage, upsertItem, fetchAll,
+  oneRowOf, EAGLE_SYNC_PENDING
+} = require('./_sql');
 
 const CONTAINER = 'notifications';
+// A few dozen small rows read whole: /id spreads them evenly and gives 1 RU point reads.
 const PARTITION_FIELD = 'id';
-/** Null is load-bearing, not a placeholder — see the header. */
+/** Null: role ACL only, no project scope. */
 const SCOPE_FIELD = null;
 
 const SORTABLE = ['notificationReceivedDate', 'name', 'type', 'region', 'decision', 'proponent', 'subType'];
@@ -52,6 +48,23 @@ async function readForWrite(id) {
   return cosmos.readItem(CONTAINER, String(id), String(id));
 }
 
+/**
+ * The DEMI-created row sync-out sent under this Eagle id, with no ACL predicate: the echo of its create finds
+ * it here. An Eagle row is stored under its id, so `readForWrite` finds it. Throws `DUPLICATE_ID` when two rows name it.
+ */
+async function readForWriteByEagleId(eagleId) {
+  const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
+  const { items } = await cosmos.query(CONTAINER,
+    { query: `SELECT * FROM c WHERE ${clause} AND c.sourceSystem = 'demi'`, parameters: params });
+  return oneRowOf(CONTAINER, eagleId, items);
+}
+
+/** DEMI-created rows holding a version not yet sent to Eagle: the sync-out pending hook's list. */
+async function listSyncPending() {
+  return fetchAll(CONTAINER,
+    { query: `SELECT * FROM c WHERE c.sourceSystem = 'demi' AND ${EAGLE_SYNC_PENDING}`, parameters: [] });
+}
+
 async function list(access, { pageNum, pageSize, sortBy, ...filters } = {}) {
   const spec = listSpec(access, filters, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, SORT_ALIASES));
 
@@ -74,10 +87,8 @@ async function listEvery(access) {
 }
 
 /**
- * A bounded set of notifications in one query: name and id for the label an update refers to, or
- * whole rows under `{full: true}` for the keyword search, which reads back what the index ranked.
- *
- * Cosmos answers in its own order; a caller that asked for a ranking re-imposes it.
+ * Name and id of each notification in `ids`, the label an update refers to, or whole rows under `{full: true}`
+ * for the keyword search. Cosmos answers in its own order; a caller that asked for a ranking re-imposes it.
  */
 async function listByIds(access, ids, { full = false } = {}) {
   const unique = Array.from(new Set((ids || []).map(String)));
@@ -95,10 +106,8 @@ async function listByIds(access, ids, { full = false } = {}) {
 }
 
 /**
- * Notifications carrying a decision dated no later than `now`, newest first, at most `limit`.
- *
- * Sorted HERE: `decisionDate` is not an indexed path, so Cosmos cannot ORDER BY it. The container
- * holds a few dozen rows, so the filter's scan is cheap.
+ * Notifications with a decision dated no later than `now`, newest first, at most `limit`.
+ * Sorted here: `decisionDate` is not indexed, so Cosmos cannot ORDER BY it; a few dozen rows scan cheaply.
  */
 async function listDecisions(access, { limit, now }) {
   const spec = selectWhere({
@@ -154,6 +163,8 @@ module.exports = {
   FILTERS,
   getById,
   readForWrite,
+  readForWriteByEagleId,
+  listSyncPending,
   list,
   listEvery,
   listByIds,

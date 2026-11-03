@@ -455,6 +455,9 @@ const config = {
       get documentEnabled() { return envTrim('SYNC_OUT_EAGLE_DOCUMENT_ENABLED') === 'true'; },
       get organizationEnabled() { return envTrim('SYNC_OUT_EAGLE_ORGANIZATION_ENABLED') === 'true'; },
       get projectEnabled() { return envTrim('SYNC_OUT_EAGLE_PROJECT_ENABLED') === 'true'; },
+      get updateEnabled() { return envTrim('SYNC_OUT_EAGLE_UPDATE_ENABLED') === 'true'; },
+      get notificationEnabled() { return envTrim('SYNC_OUT_EAGLE_NOTIFICATION_ENABLED') === 'true'; },
+      get commentEnabled() { return envTrim('SYNC_OUT_EAGLE_COMMENT_ENABLED') === 'true'; },
       // eagle-api's protected `/api`, not EAGLE_API_BASE: that one is the public base the seed reads.
       get apiBase() { return envTrim('EAGLE_PROTECTED_API_BASE').replace(/\/+$/, ''); },
       // The realm eagle-api trusts is DEMI's own, so the issuer comes from KEYCLOAK_URL and KEYCLOAK_REALM.
