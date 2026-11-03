@@ -7,6 +7,7 @@ const assert = require('node:assert');
 
 const controller = require('../../src/controllers/report');
 const projects = require('../../src/repositories/projects');
+const config = require('../../src/config');
 
 /**
  * Header and two rows copied byte for byte from eagle-api `GET /api/reports?type=bcgw`: one full
@@ -66,7 +67,9 @@ test('BCGW report', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('matches the eagle-api feed field for field', async () => {
-    t.mock.method(projects, 'listPage', async () => structuredClone(DEMI_ROWS));
+    // Name order and a test link host, as on DEMI test: eagle-api writes neither.
+    t.mock.method(projects, 'listPage', async () => structuredClone(DEMI_ROWS).reverse());
+    t.mock.property(config, 'linkBaseUrl', 'https://eagle-public-next-test.example');
     const res = mockRes();
     await controller.getReport({ query: { type: 'bcgw' }, headers: {} }, res);
 

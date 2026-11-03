@@ -6,7 +6,6 @@
  */
 
 const projects = require('../repositories/projects');
-const config = require('../config');
 const { resolveAccess, MAX_PAGE_SIZE, MAX_PAGE_DEPTH } = require('../helpers/access-sql');
 const { redactAllForAccess } = require('../vis/redact');
 const { serverError } = require('../helpers/response');
@@ -41,6 +40,9 @@ const BCGW_COLUMNS = [
   'MOE Region', 'Project Phase', 'Legislation', 'Federal Involvement', 'EA Decision',
   'Decision Date', 'URL to Epic Project', 'Project GUID'
 ];
+
+// Not config.linkBaseUrl: eagle-api writes the prod host on every tier, and BCGW parity is byte for byte.
+const BCGW_LINK_HOST = 'https://projects.eao.gov.bc.ca';
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
@@ -81,7 +83,7 @@ function bcgwRow(project) {
     'Federal Involvement': refName(project.CEAAInvolvement),
     'EA Decision': refName(project.eacDecision),
     'Decision Date': bcgwDate(project.decisionDate),
-    'URL to Epic Project': `${config.linkBaseUrl}/p/${eagleId}/project-details`,
+    'URL to Epic Project': `${BCGW_LINK_HOST}/p/${eagleId}/project-details`,
     // eagle-api JSON-stringified the ObjectId, so the warehouse has always ingested it in quotes.
     'Project GUID': JSON.stringify(String(eagleId))
   };
@@ -103,7 +105,10 @@ async function bcgwReport() {
   // Anonymous on purpose: the report is the public field set of public rows, whoever asks.
   const access = resolveAccess({});
   const visible = redactAllForAccess('projects', await listPublicProjects(access), access);
-  return toCsv(BCGW_COLUMNS, visible.map(bcgwRow));
+  // eagle-api reads in Mongo natural order, which is _id order but for rows its view upserted later.
+  const rows = visible.map(bcgwRow).sort((a, b) =>
+    a['Project GUID'] < b['Project GUID'] ? -1 : a['Project GUID'] > b['Project GUID'] ? 1 : 0);
+  return toCsv(BCGW_COLUMNS, rows);
 }
 
 const REPORTS = { bcgw: bcgwReport };
