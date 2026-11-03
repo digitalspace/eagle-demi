@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * Project extensions and suspensions: `GET` and `POST /projects/:id/extensions`, `PUT` and
- * `DELETE /projects/:id/extensions/:extId`, ported from eagle-api `api/controllers/project.js`
- * (`protectedExtensionAdd`, `Update`, `Delete`; rules in docs/eagle-api-port.md, Extensions).
- *
- * Items live in two arrays on the project row, `reviewExtensions` and `reviewSuspensions`.
- * Nothing on the review timeline is recalculated, as in eagle-api.
- */
+// The `/projects/:id/extensions` routes, ported from eagle-api `api/controllers/project.js`; items
+// live in two lists on the project row. Rules: docs/eagle-api-port.md, Extensions.
 
 const crypto = require('node:crypto');
 
@@ -45,9 +39,8 @@ function canonical(value) {
 }
 
 /**
- * An item's id: the one stored on it, else a hash of its content. Eagle items carry no id (eagle-api
- * matched the whole object, project.js:525-528), so equal items share an id and a delete removes
- * them all, as eagle-api's `$pull` did.
+ * An item's stored id, else a hash of its content: Eagle items carry none, so equal items share an
+ * id and a delete removes them all, as eagle-api's `$pull` did.
  */
 function idOf(item) {
   if (typeof item.id === 'string' && item.id) return item.id;
