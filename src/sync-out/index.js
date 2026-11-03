@@ -5,7 +5,7 @@
 
 const queues = require('../jobs/queue-client');
 const {
-  kindOf, versionOf, DEFAULT_KIND, COMMENT_PERIOD, DOCUMENT, ORGANIZATION, PROJECT
+  kindOf, versionOf, DEFAULT_KIND, COMMENT_PERIOD, DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT
 } = require('./kinds');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
@@ -16,6 +16,7 @@ const settings = require('../config').syncOut;
 const CONSUMERS_BY_KIND = Object.freeze({
   [COMMENT_PERIOD]: Object.freeze([require('./eagle')]),
   [DOCUMENT]: Object.freeze([require('./eagle-document')]),
+  [NOTIFICATION]: Object.freeze([require('./eagle-notification')]),
   [ORGANIZATION]: Object.freeze([require('./eagle-organization')]),
   [PROJECT]: Object.freeze([require('./eagle-project')])
 });
