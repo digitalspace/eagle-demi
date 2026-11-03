@@ -1249,9 +1249,10 @@ paths:
         `isPublished` and `read` in the body are ignored and the stored ACL is kept. Use
         `PUT /api/projects/{id}/level`. It also sets the pinned organizations (`pins`,
         `pinsPublished`); there are no pin routes. `reviewExtensions` and `reviewSuspensions` in
-        the body are ignored; use `/api/projects/{id}/extensions`. On a project created in DEMI,
-        a body that changes a stored value sets `dateUpdated` unless it sends one, and sync-out
-        queues the project for Eagle.
+        the body are ignored; use `/api/projects/{id}/extensions`. `projectCAC`,
+        `projectCACPublished` and `cacEmail` in the body are ignored; use `/api/projects/{id}/cac`.
+        On a project created in DEMI, a body that changes a stored value sets `dateUpdated` unless
+        it sends one, and sync-out queues the project for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

@@ -17,8 +17,8 @@ const { check } = require('./_schema');
 const { writeRow } = require('./_write');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
+const { CAC_FIELDS: FIELDS } = require('../ownership/project');
 
-const FIELDS = Object.freeze(['projectCAC', 'projectCACPublished', 'cacEmail']);
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
 const EMAIL_SCHEMA = { type: 'string', max: 254, required: true };
 const CREATE_SCHEMA = Object.freeze({ cacEmail: EMAIL_SCHEMA });

@@ -84,7 +84,7 @@ test('field precedence — Track wins, Eagle fills gaps', async (t) => {
     assert.strictEqual(merged.eaStatus, 'Certificate Issued');
     assert.strictEqual(merged.currentPhaseName, 'Post Certification');
     assert.strictEqual(merged.legislation, 2002);
-    assert.ok(!('cacEmail' in merged), 'a field Eagle did not supply must not appear');
+    assert.ok(!('CEAALink' in merged), 'a field Eagle did not supply must not appear');
   });
 
   await t.test('with no Eagle match, only Track fields are present', () => {
@@ -1185,6 +1185,25 @@ test('carryDemiOnlyFields', async (t) => {
 
     assert.deepStrictEqual([fresh.reviewExtensions, fresh.reviewSuspensions], [[extension], [suspension]]);
     assert.deepStrictEqual([seeded.reviewExtensions, seeded.reviewSuspensions], [[extension], [suspension]]);
+  });
+
+  await t.test('Eagle push leaves DEMI-owned fields unchanged: projectCAC, projectCACPublished and cacEmail', () => {
+    const stored = { id: '207', projectCAC: false, projectCACPublished: false, cacEmail: 'demi@example.gov.bc.ca' };
+    const pushed = eagleFor(TRACK_207, { projectCAC: true, projectCACPublished: true, cacEmail: 'eagle@example.gov.bc.ca' });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), stored);
+
+    assert.deepStrictEqual([merged.projectCAC, merged.projectCACPublished, merged.cacEmail],
+      [false, false, 'demi@example.gov.bc.ca']);
+  });
+
+  await t.test('a CAC field the stored row lacks takes what Eagle sent, false included', () => {
+    const pushed = eagleFor(TRACK_207, { projectCAC: true, projectCACPublished: false, cacEmail: 'eagle@example.gov.bc.ca' });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), { id: '207' });
+
+    assert.deepStrictEqual([merged.projectCAC, merged.projectCACPublished, merged.cacEmail],
+      [true, false, 'eagle@example.gov.bc.ca']);
   });
 
   await t.test('a re-merge takes the guid Track gained over a stored null eagleId', () => {
