@@ -155,6 +155,20 @@ test('sync-out of DEMI-created notifications', async (t) => {
     assert.strictEqual(calls[0].body.notificationThresholdValue, 250000);
   });
 
+  await t.test('a create Eagle answers 409 for is PUT under the minted id at the row level', async (tt) => {
+    const store = mirrorStore(tt, [nativeNotification()]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'POST /projectNotification?publish=true': { status: 409 }, 'PUT *': {} });
+
+    const result = await run();
+
+    const minted = calls[0].body._id;
+    assert.deepStrictEqual(keys(calls),
+      ['POST /projectNotification?publish=true', `PUT /projectNotification/${minted}?publish=true`]);
+    assert.deepStrictEqual(result, { status: 'sent', eagleId: minted });
+    assert.strictEqual(rowOf(store).eagleId, minted);
+  });
+
   await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a notification with no eagleId is held, its sync state untouched',
     async (tt) => {
       useEnv(tt, { SYNC_OUT_EAGLE_NATIVE_ENABLED: 'false' });
