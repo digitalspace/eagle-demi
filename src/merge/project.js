@@ -26,7 +26,7 @@ const { beforeDateFloor } = require('../domain/project-legislation');
 const { ASSESSMENT_WORK_TYPE, deriveAssessments } = require('./assessments');
 const {
   TRACK_PRECEDENCE, EAGLE_STAFF_FIELDS, EAGLE_ONLY_FIELDS, LEGISLATION_INDEX_FIELDS, LEGISLATION_KEY,
-  EAGLE_TOP_LEVEL_FIELDS, PUSH_ONLY_FIELDS, DEMI_ONLY_FIELDS
+  EAGLE_TOP_LEVEL_FIELDS, PUSH_ONLY_FIELDS, DEMI_ONLY_FIELDS, EXTENSION_LIST_FIELDS, withoutBlockLists
 } = require('../ownership/project');
 
 /** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
@@ -53,19 +53,12 @@ function pickEagleFields(eagle, fields) {
   return picked;
 }
 
-const BLOCK_OMITTED_FIELDS = new Set(['reviewExtensions', 'reviewSuspensions']);
-
 /**
- * The Eagle-only fields and every `legislation_<year>` block, each block less the extension lists:
- * DEMI holds those once, project-wide, at the top level; `sources.eagle` keeps Eagle's copy.
+ * The Eagle-only fields and every `legislation_<year>` block, each block a copy less the extension
+ * lists; `sources.eagle` keeps Eagle's own.
  */
 function pickEagleBlocks(eagle) {
-  const picked = pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]);
-  for (const [key, block] of Object.entries(picked)) {
-    if (!LEGISLATION_KEY.test(key) || !block || typeof block !== 'object') continue;
-    picked[key] = Object.fromEntries(Object.entries(block).filter(([field]) => !BLOCK_OMITTED_FIELDS.has(field)));
-  }
-  return picked;
+  return withoutBlockLists(pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
 }
 
 /** The fields eagle-api's project model types as `Date`. */
@@ -81,17 +74,13 @@ function nullJunkDates(record) {
 }
 
 /**
- * Null the junk Eagle dates on a merged row, top level and every `legislation_<year>` block. A
- * block is copied before it changes: it is shared with `sources.eagle`, which keeps what Eagle sent.
+ * Null the junk Eagle dates on a merged row, top level and every `legislation_<year>` block. Each
+ * block is `pickEagleBlocks`' copy, so `sources.eagle` keeps what Eagle sent.
  */
 function nullEagleJunkDates(merged) {
   nullJunkDates(merged);
-  for (const key of Object.keys(merged)) {
-    const block = merged[key];
-    if (!LEGISLATION_KEY.test(key) || !block || typeof block !== 'object') continue;
-    if (!EAGLE_DATE_FIELDS.some(field => beforeDateFloor(block[field]))) continue;
-    merged[key] = { ...block };
-    nullJunkDates(merged[key]);
+  for (const [key, block] of Object.entries(merged)) {
+    if (LEGISLATION_KEY.test(key) && block && typeof block === 'object') nullJunkDates(block);
   }
   return merged;
 }
@@ -161,7 +150,7 @@ function heldRead(read, existing) {
     : read;
 }
 
-const EAGLE_SEEDED_LISTS = ['pinsRead', 'reviewExtensions', 'reviewSuspensions'];
+const EAGLE_SEEDED_LISTS = ['pinsRead', ...EXTENSION_LIST_FIELDS];
 
 /**
  * Each pin or extension list the stored row lacks starts from what Eagle sent, `pins` as ids:

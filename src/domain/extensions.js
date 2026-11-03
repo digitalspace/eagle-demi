@@ -11,10 +11,10 @@ const { check } = require('./_schema');
 const { writeRow, queued } = require('./_write');
 const { PROJECT } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
+const { EXTENSION_LIST_FIELDS, withoutBlockLists } = require('../ownership/project');
 
-const EXTENSIONS = 'reviewExtensions';
-const SUSPENSIONS = 'reviewSuspensions';
-const LISTS = Object.freeze([EXTENSIONS, SUSPENSIONS]);
+const LISTS = EXTENSION_LIST_FIELDS;
+const [EXTENSIONS, SUSPENSIONS] = LISTS;
 
 /** The fields eagle-admin's extension form sends (extension.component.ts:105-110); the model is Mixed. */
 const ITEM_SCHEMA = Object.freeze({
@@ -116,7 +116,7 @@ async function writeLists(ctx, existing, build, audit, { created = false } = {})
     repo: PROJECT_REPO,
     existing,
     reread: () => readProject(ctx, existing.id),
-    build: (current) => current && build(current),
+    build: (current) => current && build(withoutBlockLists(current)),
     audit
   }), PROJECT);
   if (result.status !== 'ok') return result;

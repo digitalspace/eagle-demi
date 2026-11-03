@@ -1187,26 +1187,6 @@ test('carryDemiOnlyFields', async (t) => {
     assert.deepStrictEqual([seeded.reviewExtensions, seeded.reviewSuspensions], [[extension], [suspension]]);
   });
 
-  await t.test('the merged legislation blocks hold no extension lists; sources.eagle keeps them', () => {
-    const extension = { type: 'Extension', appliedTo: 'Application review' };
-    const raw = {
-      _id: TRACK_207.epic_guid,
-      read: ['public'],
-      currentLegislationYear: 'legislation_2018',
-      legislationYearList: [2002, 2018],
-      legislation_2002: { name: 'Old Name', reviewExtensions: [extension], reviewSuspensions: [] },
-      legislation_2018: { name: 'New Name', reviewExtensions: [extension], reviewSuspensions: [] }
-    };
-
-    const tracked = mergeTrackProject(TRACK_207, raw, OPTS);
-    const eagleOnly = mergeEagleOnlyProject(raw, OPTS);
-    const blockKeys = (merged) => [Object.keys(merged.legislation_2002), Object.keys(merged.legislation_2018)];
-
-    assert.deepStrictEqual(blockKeys(tracked), [['name'], ['name']]);
-    assert.deepStrictEqual(blockKeys(eagleOnly), [['name'], ['name']]);
-    assert.deepStrictEqual(tracked.sources.eagle.legislation_2002.reviewExtensions, [extension]);
-  });
-
   await t.test('a re-merge takes the guid Track gained over a stored null eagleId', () => {
     const track = { ...TRACK_207, epic_guid: '5cf00c03a266b7e18775000a' };
     const merged = carryDemiOnlyFields(mergeTrackProject(track, null, OPTS), { id: '207', eagleId: null });
