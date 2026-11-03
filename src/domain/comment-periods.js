@@ -18,6 +18,8 @@ const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
+const syncOut = require('../sync-out');
+const { COMMENT_PERIOD } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
 const URL_FIELD = { type: 'string', max: 2000 };
@@ -111,6 +113,12 @@ async function cascadeToComments(period, read) {
   logger.info('[CommentPeriod] comment ACL cascade', { periodId: period.id, comments: cascade.succeeded });
 }
 
+/** Queue a landed write for sync-out; the Eagle consumer's `wants` decides which source systems go. */
+async function queued(written) {
+  if (written.status === 'ok') await syncOut.enqueueQuietly(written.value, { kind: COMMENT_PERIOD });
+  return written;
+}
+
 /** A loaded period this caller may write, or the refusal. */
 async function loadWritable(ctx, id) {
   const existing = await readPeriod(ctx, id);
@@ -170,14 +178,14 @@ async function create(ctx, input) {
     sources: { demi: { read: own } }
   };
 
-  return writeRow({
+  return queued(await writeRow({
     ctx,
     repo: commentPeriods,
     existing: null,
     reread: () => commentPeriods.getById(ctx.access, id, projectId),
     build: () => row,
     audit: auditOf('commentPeriod.create', Object.keys(checked.value))
-  });
+  }));
 }
 
 /**
@@ -200,7 +208,7 @@ async function update(ctx, id, changes) {
   }
 
   const actor = actorOf(ctx);
-  return writeRow({
+  return queued(await writeRow({
     ctx,
     repo: commentPeriods,
     existing,
@@ -209,7 +217,7 @@ async function update(ctx, id, changes) {
       ...current, ...checked.value, updatedBy: actor, dateUpdated: new Date().toISOString()
     },
     audit: auditOf('commentPeriod.update', fields)
-  });
+  }));
 }
 
 /** Hard delete, as eagle-api's `findOneAndDelete` (commentperiod.js:376); its comments drop to staff first. */
@@ -248,7 +256,8 @@ function setPublished(published) {
     if (published && !read.includes('public')) return { status: 'conflict', error: ABOVE_PROJECT };
 
     const actor = actorOf(ctx);
-    const written = await writeRow({
+    // Queued before the cascade, which can throw after the period has landed.
+    const written = await queued(await writeRow({
       ctx,
       repo: commentPeriods,
       existing,
@@ -262,7 +271,7 @@ function setPublished(published) {
         dateUpdated: new Date().toISOString()
       },
       audit: auditOf(action, ['isPublished'])
-    });
+    }));
     if (written.status === 'ok') await cascadeToComments(written.value, read);
     return written;
   };
