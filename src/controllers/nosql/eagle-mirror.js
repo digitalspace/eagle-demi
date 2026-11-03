@@ -32,10 +32,12 @@ function eaglePush(req) {
 }
 
 /**
- * True when this push is older than the stored row's. No skew tolerance: it would admit the stale pushes this
- * guard exists for. Equal or missing stamps write. Not `__v`: eagle-api bumps it in `findOneAndUpdate` only.
+ * True when this push is older than the stored row's; equal or missing stamps write. No skew tolerance: refusing
+ * a skewed push ends in the same state as accepting a stale one, and any window admits the stale pushes.
  */
 function isStalePush(pushedAt, current, field = PUSHED_AT_FIELD) {
+  // Not mongoose's `__v`: publish, unpublish and extension write through doc.save() and Model.updateOne,
+  // which skip the findOneAndUpdate hook that bumps it (eagle-api api/helpers/models.js:71).
   if (!Number.isFinite(pushedAt) || !current) return false;
   const stored = current[field];
   return Number.isFinite(stored) && pushedAt < stored;
@@ -51,7 +53,7 @@ function stampPush(item, pushedAt, current, field = PUSHED_AT_FIELD) {
 }
 
 /**
- * Answer a push a newer one overtook: nothing written, and 200, since eagle-api re-sends a 5xx.
+ * Answer a push a newer one overtook: nothing written, nothing cascaded, and 200, since eagle-api re-sends a 5xx.
  * `current` is the stored row that won; `projectId` is omitted by mirrors with no project.
  */
 function ignoreStalePush(req, res, { label, action, targetType, current, projectId, pushedAt }) {
@@ -120,8 +122,7 @@ function eagleOwnedOnto(current, eagleId, doc) {
  * `upsertWithRetry` for a mirror whose rows DEMI may own: a DEMI row keeps every field but `eagleId` and
  * `sources.eagle`, any other row is `build(current)`. `label` names the controller in the log line.
  */
-async function upsertKeepingDemiRows(repo, eagleId, doc, build, readExisting,
-  { pushedAt = null, label = repo.CONTAINER } = {}) {
+async function upsertKeepingDemiRows(repo, eagleId, doc, build, readExisting, { pushedAt = null, label }) {
   const written = await upsertWithRetry(repo,
     (current) => (demiOwned(current) ? eagleOwnedOnto(current, eagleId, doc) : build(current)),
     readExisting, { pushedAt });

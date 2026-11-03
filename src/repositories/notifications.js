@@ -11,8 +11,9 @@ const {
 } = require('./_sql');
 
 const CONTAINER = 'notifications';
+// A few dozen small rows read whole: /id spreads them evenly and gives 1 RU point reads.
 const PARTITION_FIELD = 'id';
-/** Null is load-bearing, not a placeholder — see the header. */
+/** Null: role ACL only, no project scope. */
 const SCOPE_FIELD = null;
 
 const SORTABLE = ['notificationReceivedDate', 'name', 'type', 'region', 'decision', 'proponent', 'subType'];
@@ -86,8 +87,8 @@ async function listEvery(access) {
 }
 
 /**
- * Name and id of each notification in `ids`, or whole rows under `{full: true}` for the keyword search.
- * Cosmos answers in its own order; a caller that asked for a ranking re-imposes it.
+ * Name and id of each notification in `ids`, the label an update refers to, or whole rows under `{full: true}`
+ * for the keyword search. Cosmos answers in its own order; a caller that asked for a ranking re-imposes it.
  */
 async function listByIds(access, ids, { full = false } = {}) {
   const unique = Array.from(new Set((ids || []).map(String)));

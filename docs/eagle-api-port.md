@@ -132,7 +132,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - The notification consumer PUTs a row that holds an `eagleId` to `/projectNotification/<id>`. An unknown notification answers 404, which leads to a POST of the same id.
 - Each notification call carries the row's level as `?publish=`, which eagle-api reads on the POST and the PUT, so no publish call follows.
 - A row with no `eagleId`, or one Eagle lacks, is POSTed only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Until then the send answers `held`.
-- After a PUT, both consumers call publish or unpublish when Eagle's copy sits at another level than the row.
+- After a PUT, the organization and project consumers call publish or unpublish when Eagle's copy sits at another level than the row.
 - eagle-api publishes every new organization, so a staff-only organization's create ends with an unpublish call.
 - eagle-api stores every new project staff-only, so a public project's create ends with a publish call. A failed publish is made by the next delivery's level check.
 - An organization POST is refused when the minted id already names an Eagle-owned DEMI row: the mirror reads by id first, so that row would take every echo.
@@ -148,7 +148,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - `test/sync-out/sync-out.test.js`, `eagle-organization.test.js`, `eagle-project.test.js`, `eagle-document.test.js` and `eagle-notification.test.js` hold the echo tests. Each runs a sync-out send (a create, or a document PUT) and eagle-api's echo through the mirror, answered 2xx, with the DEMI fields and `syncVersion` unchanged and no second send.
 - Comment periods and documents created in DEMI are sent only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Sync-out POSTs them under an id it mints and stores as `eagleId`. A 409 means an earlier POST landed, so it PUTs instead.
 - The switch also stops queued and retried sends. Turn it on only when eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409. With `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` on, it also needs eagle-api's `POST /document/stored` deployed, or every document create fails.
-- `SYNC_OUT_EAGLE_NOTIFICATION_ENABLED` stays `false` until eagle-api branch `feat-post-accepts-id-2` is deployed on test. Without it, eagle-api answers a duplicate `_id` on `POST /projectNotification` with 400, not 409, so a retried create fails instead of falling through to the PUT.
+- `SYNC_OUT_EAGLE_NOTIFICATION_ENABLED` stays `false` until eagle-api on test answers a duplicate `_id` on `POST /projectNotification` with 409. On a 400 a retried create fails instead of falling through to the PUT.
 - If eagle-api stores a native row under another id, the row gets `syncOut.eagle.strayEagleId` and the error line `not re-keyed`. Sync-out then sends nothing for that row. To clear it:
   1. For a staff-only organization, check that the stray is unpublished in Eagle. Sync-out unpublishes it before it stops; the error line `stray Eagle id ... not cleaned up` means that call failed.
   2. Delete the Eagle record `strayEagleId` through eagle-api.

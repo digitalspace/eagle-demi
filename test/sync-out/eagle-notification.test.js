@@ -155,7 +155,7 @@ test('sync-out of DEMI-created notifications', async (t) => {
     assert.strictEqual(calls[0].body.notificationThresholdValue, 250000);
   });
 
-  await t.test('a create Eagle answers 409 for is PUT under the minted id at the row level', async (tt) => {
+  await t.test("a create answered 409 is PUT under the minted id at the row's level", async (tt) => {
     const store = mirrorStore(tt, [nativeNotification()]);
     wireQueue(tt);
     const calls = wireEagle(tt, { 'POST /projectNotification?publish=true': { status: 409 }, 'PUT *': {} });
