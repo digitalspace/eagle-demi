@@ -17,8 +17,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
-const syncOut = require('../sync-out');
+const { writeRow, queued, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { COMMENT_PERIOD } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
@@ -113,12 +112,6 @@ async function cascadeToComments(period, read) {
   logger.info('[CommentPeriod] comment ACL cascade', { periodId: period.id, comments: cascade.succeeded });
 }
 
-/** Queue a landed write for sync-out; the Eagle consumer's `wants` decides which source systems go. */
-async function queued(written) {
-  if (written.status === 'ok') await syncOut.enqueueQuietly(written.value, { kind: COMMENT_PERIOD });
-  return written;
-}
-
 /** A loaded period this caller may write, or the refusal. */
 async function loadWritable(ctx, id) {
   const existing = await readPeriod(ctx, id);
@@ -185,7 +178,7 @@ async function create(ctx, input) {
     reread: () => commentPeriods.getById(ctx.access, id, projectId),
     build: () => row,
     audit: auditOf('commentPeriod.create', Object.keys(checked.value))
-  }));
+  }), COMMENT_PERIOD);
 }
 
 /**
@@ -217,7 +210,7 @@ async function update(ctx, id, changes) {
       ...current, ...checked.value, updatedBy: actor, dateUpdated: new Date().toISOString()
     },
     audit: auditOf('commentPeriod.update', fields)
-  }));
+  }), COMMENT_PERIOD);
 }
 
 /** Hard delete, as eagle-api's `findOneAndDelete` (commentperiod.js:376); its comments drop to staff first. */
@@ -271,7 +264,7 @@ function setPublished(published) {
         dateUpdated: new Date().toISOString()
       },
       audit: auditOf(action, ['isPublished'])
-    }));
+    }), COMMENT_PERIOD);
     if (written.status === 'ok') await cascadeToComments(written.value, read);
     return written;
   };

@@ -11,6 +11,8 @@ const assert = require('node:assert');
 const audit = require('../../src/utils/audit');
 const notifications = require('../../src/repositories/notifications');
 const updates = require('../../src/repositories/updates');
+const syncOut = require('../../src/sync-out');
+const { NOTIFICATION } = require('../../src/sync-out/kinds');
 const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
 const notification = require('../../src/domain/notifications');
 
@@ -32,9 +34,10 @@ function ctxFor(roles, username = 'idir-staff') {
 }
 const STAFF = ctxFor(['staff']);
 
-/** Fake storage holding `stored`; returns what was written and how often the parent cache was dropped. */
+/** Fake storage holding `stored`; returns what was written, queued for sync-out, and how often the parent cache was dropped. */
 function fakeStore(t, stored = STORED) {
-  const store = { written: [], forgotten: 0 };
+  const store = { written: [], forgotten: 0, queued: [] };
+  t.mock.method(syncOut, 'enqueueQuietly', async (row, { kind }) => { store.queued.push([row.id, row._etag, kind]); return []; });
   t.mock.method(notifications, 'getById', async (access, id) => stored && id === stored.id ? { ...stored } : null);
   t.mock.method(notifications, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
   t.mock.method(updates, 'forgetParents', () => { store.forgotten++; });
@@ -78,6 +81,7 @@ test('notification domain', async (t) => {
     assert.strictEqual(row.delete, undefined);
     assert.strictEqual(rows[0].Action, 'notification.create');
     assert.strictEqual(store.forgotten, 1, 'the Update parent gate drops its cached reads');
+    assert.deepStrictEqual(store.queued, [[row.id, 'e2', NOTIFICATION]]);
   });
 
   await t.test('create with isPublished true adds public to the read', async (t) => {
@@ -136,6 +140,7 @@ test('notification domain', async (t) => {
     assert.strictEqual(rows[0].Action, 'notification.update');
     assert.deepStrictEqual(rows[0].Detail.fields, ['name', 'region'], 'field names only');
     assert.strictEqual(store.forgotten, 0, 'the read did not move');
+    assert.deepStrictEqual(store.queued, [[NOTIFICATION_ID, 'e2', NOTIFICATION]]);
   });
 
   // GET /notifications sorts on it, and Cosmos cannot continue a page from a null sort value.
@@ -212,6 +217,7 @@ test('notification domain', async (t) => {
     assert.strictEqual(store.written[0].name, STORED.name, 'publish touches no content field');
     assert.strictEqual(rows[0].Action, 'notification.publish');
     assert.strictEqual(store.forgotten, 1);
+    assert.deepStrictEqual(store.queued, [[NOTIFICATION_ID, 'e2', NOTIFICATION]]);
   });
 
   await t.test('unpublish takes public out of the read and clears isPublished', async (t) => {
@@ -222,6 +228,7 @@ test('notification domain', async (t) => {
     assert.strictEqual(store.written[0].isPublished, false);
     assert.strictEqual(rows[0].Action, 'notification.unpublish');
     assert.strictEqual(store.forgotten, 1);
+    assert.deepStrictEqual(store.queued, [[NOTIFICATION_ID, 'e2', NOTIFICATION]]);
   });
 
   await t.test('publish of a missing row is not-found and writes nothing', async (t) => {
@@ -231,5 +238,6 @@ test('notification domain', async (t) => {
     assert.strictEqual(store.written.length, 0);
     assert.strictEqual(rows.length, 0);
     assert.strictEqual(store.forgotten, 0);
+    assert.strictEqual(store.queued.length, 0);
   });
 });

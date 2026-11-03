@@ -15,7 +15,8 @@ const { systemAccess } = require('../helpers/access-sql');
 const { writeGuarded } = require('../helpers/etag-write');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { ORGANIZATION } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
 const SHORT = { type: 'string', max: 1000 };
@@ -92,14 +93,14 @@ async function create(ctx, input) {
     read
   };
 
-  return writeRow({
+  return queued(await writeRow({
     ctx,
     repo: lists,
     existing: null,
     reread: () => readOrg(ctx, id),
     build: () => row,
     audit: auditOf('organization.create', Object.keys(checked.value))
-  });
+  }), ORGANIZATION);
 }
 
 /**
@@ -122,7 +123,7 @@ async function update(ctx, id, changes) {
   }
 
   const actor = actorOf(ctx);
-  const written = await writeRow({
+  const written = await queued(await writeRow({
     ctx,
     repo: lists,
     existing,
@@ -131,7 +132,7 @@ async function update(ctx, id, changes) {
       ...current, ...checked.value, updatedBy: actor, dateUpdated: new Date().toISOString()
     },
     audit: auditOf('organization.update', fields)
-  });
+  }), ORGANIZATION);
 
   // A nameless organization gives no orgName to compare, so its users are left alone.
   if (written.status === 'ok' && typeof written.value.name === 'string') {
@@ -194,7 +195,7 @@ function setPublished(published) {
   return async function (ctx, id) {
     const actor = actorOf(ctx);
     // A missing row reaches `build` as null, which writeRow answers as not-found.
-    return writeRow({
+    return queued(await writeRow({
       ctx,
       repo: lists,
       existing: await readOrg(ctx, id),
@@ -207,7 +208,7 @@ function setPublished(published) {
         dateUpdated: new Date().toISOString()
       },
       audit: auditOf(action, ['isPublished'])
-    });
+    }), ORGANIZATION);
   };
 }
 

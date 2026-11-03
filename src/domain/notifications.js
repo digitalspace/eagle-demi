@@ -11,7 +11,8 @@ const notifications = require('../repositories/notifications');
 const updates = require('../repositories/updates');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { NOTIFICATION } = require('../sync-out/kinds');
 
 const SHORT = { type: 'string', max: 1000, nullable: true };
 const LONG = { type: 'string', max: 10000, nullable: true };
@@ -134,14 +135,14 @@ async function create(ctx, input) {
     read
   };
 
-  return forgetParentsOn(await writeRow({
+  return forgetParentsOn(await queued(await writeRow({
     ctx,
     repo: notifications,
     existing: null,
     reread: () => readNotification(ctx, id),
     build: () => row,
     audit: auditOf('notification.create', Object.keys(checked.value))
-  }));
+  }), NOTIFICATION));
 }
 
 /**
@@ -169,14 +170,14 @@ async function update(ctx, id, changes) {
   }
 
   const actor = actorOf(ctx);
-  return writeRow({
+  return queued(await writeRow({
     ctx,
     repo: notifications,
     existing,
     reread: () => readNotification(ctx, id),
     build: (current) => current && { ...current, ...next, updatedBy: actor, dateUpdated: new Date().toISOString() },
     audit: auditOf('notification.update', given)
-  });
+  }), NOTIFICATION);
 }
 
 /**
@@ -188,7 +189,7 @@ function setPublished(published) {
   return async function (ctx, id) {
     const actor = actorOf(ctx);
     // A missing row reaches `build` as null, which writeRow answers as not-found.
-    return forgetParentsOn(await writeRow({
+    return forgetParentsOn(await queued(await writeRow({
       ctx,
       repo: notifications,
       existing: await readNotification(ctx, id),
@@ -201,7 +202,7 @@ function setPublished(published) {
         dateUpdated: new Date().toISOString()
       },
       audit: auditOf(action, ['isPublished'])
-    }));
+    }), NOTIFICATION));
   };
 }
 
