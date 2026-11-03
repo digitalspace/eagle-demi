@@ -22,7 +22,7 @@ const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
-  readPage, fetchAll, readDemiRowByEagleId, listDemiSyncPending, EAGLE_SYNC_PENDING
+  readPage, fetchAll, readDemiRowByEagleId, listDemiSyncPending, RELEASABLE_PENDING
 } = require('./_sql');
 
 const CONTAINER = 'updates';
@@ -327,10 +327,6 @@ const readForWriteByEagleId = (eagleId) => readDemiRowByEagleId(CONTAINER, eagle
 /** The sync-out pending hook's list. */
 const listSyncPending = () => listDemiSyncPending(CONTAINER);
 
-// Guarded by IS_*: a missing field compares as undefined, and NOT undefined would drop the row.
-const FAILED_AT_VERSION = "IS_STRING(c.syncOut.eagle.status) AND c.syncOut.eagle.status = 'failed' AND " +
-  'IS_NUMBER(c.syncOut.eagle.failedVersion) AND c.syncOut.eagle.failedVersion = c.syncVersion';
-
 /**
  * DEMI-created Updates owed a send that name `id` as their parent, comment period, notification, image or
  * attachment: sync-out holds them until that record is in Eagle. Not a stray, and not one whose send already
@@ -341,8 +337,7 @@ function listSyncPendingNaming(id) {
     'ARRAY_CONTAINS(c.attachments, @id)', 'EXISTS(SELECT VALUE i FROM i IN c.images WHERE i.document = @id)'];
   return fetchAll(CONTAINER, {
     query: 'SELECT c.id, c.projectId, c.sourceSystem, c.eagleId, c.status FROM c ' +
-      `WHERE c.sourceSystem = 'demi' AND ${EAGLE_SYNC_PENDING} AND NOT IS_DEFINED(c.syncOut.eagle.strayEagleId) ` +
-      `AND NOT (${FAILED_AT_VERSION}) AND (${named.join(' OR ')})`,
+      `WHERE ${RELEASABLE_PENDING} AND (${named.join(' OR ')})`,
     parameters: [{ name: '@id', value: String(id) }]
   });
 }

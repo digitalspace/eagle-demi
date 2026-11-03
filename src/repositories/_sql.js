@@ -45,6 +45,14 @@ const NOT_DELETED = { clause: 'NOT (IS_BOOL(c.isDeleted) AND c.isDeleted = true)
 const EAGLE_SYNC_PENDING = 'c.syncVersion > 0 AND ' +
   '(NOT IS_NUMBER(c.syncOut.eagle.sentVersion) OR c.syncVersion > c.syncOut.eagle.sentVersion)';
 
+// Guarded by IS_*: a missing field compares as undefined, and NOT undefined would drop the row.
+const FAILED_AT_VERSION = "IS_STRING(c.syncOut.eagle.status) AND c.syncOut.eagle.status = 'failed' AND " +
+  'IS_NUMBER(c.syncOut.eagle.failedVersion) AND c.syncOut.eagle.failedVersion = c.syncVersion';
+
+/** A DEMI row owed a send that a record reaching Eagle releases: not a stray, and not one that failed at its version. */
+const RELEASABLE_PENDING = `c.sourceSystem = 'demi' AND ${EAGLE_SYNC_PENDING} ` +
+  `AND NOT IS_DEFINED(c.syncOut.eagle.strayEagleId) AND NOT (${FAILED_AT_VERSION})`;
+
 /** A native repository (`cosmosKind` shape) whose list and count always carry `fixed` as well. */
 function withCriteria(kind, fixed) {
   const where = criteria => [...fixed, ...(criteria || [])];
@@ -394,6 +402,7 @@ async function readPage(container, spec, { pageNum, pageSize, partitionKey, fetc
 module.exports = {
   NOT_DELETED,
   EAGLE_SYNC_PENDING,
+  RELEASABLE_PENDING,
   withCriteria,
   eq,
   inList,
