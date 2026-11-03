@@ -604,12 +604,13 @@ test('a differing field Track does not master, or an empty DEMI value, is unexpl
   assert.match(line, /fieldDiff=2 unexplained=2/);
 });
 
-test('a BCGW Type DEMI fills from Track is track-mastered; a differing MOE Region is not', async () => {
+test('BCGW cells may differ on a shared GUID; a GUID only Eagle has is unexplained', async () => {
   const columns = ['Type', 'MOE Region', 'Project GUID'];
-  const h = harness(csvSides([['Mines', 'Peace', `"${A}"`]], [['Mines - Coal', 'Omineca', `"${A}"`]], columns));
+  const h = harness(csvSides([['Mines', 'Peace', `"${A}"`], ['Mines', 'Peace', `"${B}"`]],
+    [['Mines - Coal', 'Omineca', `"${A}"`]], columns));
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'report-bcgw'], h.deps);
   assert.strictEqual(code, 1);
-  assert.match(h.out[0], /fieldDiff=2 unexplained=1 known=track-mastered:1/);
+  assert.match(h.out[0], /match=1 missingInDemi=1 extraInDemi=0 fieldDiff=0 unexplained=1/);
 });
 
 const listRow = (id, extra = {}) => ({ _id: id, name: 'Project News', type: 'updateCategory', legislation: 0, ...extra });

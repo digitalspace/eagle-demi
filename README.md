@@ -443,12 +443,18 @@ limit cut it.
 `sort=-datePosted`, the query eagle-public's featured list sends, and compare every featured row.
 
 The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
-one column (`Comment_No`, `Project GUID`) across every column both files have. `Export_Date` is
-skipped. `group-members` pairs Eagle's member User rows with DEMI's `/groups/:id/members` page, on id.
-`commentperiod-summary` pairs Eagle's `{ Pending, Deferred, Published, Rejected }` counts with
-`eaoStatus` of DEMI's `/comment-periods/:id/summary`, one row per status. `inspection-item` pairs the item ids on Eagle's element row with DEMI's items of that element, each
-item carrying its element's `read[]`; it never calls Eagle's item route, which streams the file and
-records a download.
+one column (`Comment_No`, `Project GUID`). The comment export compares every column both files
+have, skipping `Export_Date`. The BCGW report compares only the set of GUIDs, because DEMI prints
+its merged values.
+
+Three reads pair rows of another shape:
+
+- `group-members`: Eagle's member User rows against DEMI's `/groups/:id/members` page, on id.
+- `commentperiod-summary`: Eagle's `{ Pending, Deferred, Published, Rejected }` counts against
+  `eaoStatus` of DEMI's `/comment-periods/:id/summary`, one row per status.
+- `inspection-item`: the item ids on Eagle's element row against DEMI's items of that element.
+  Each item carries its element's `read[]`. The read never calls Eagle's item route, which
+  streams the file and records a download.
 
 eagle-api's project, document, comment period, organization, comment and project notification
 routes return only `_id` and `read` unless `fields` names the rest, so each of those reads sends
