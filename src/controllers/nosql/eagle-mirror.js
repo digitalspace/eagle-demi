@@ -119,12 +119,13 @@ function eagleOwnedOnto(current, eagleId, doc) {
 }
 
 /**
- * `upsertWithRetry` for a mirror whose rows DEMI may own: a DEMI row keeps every field but `eagleId` and
- * `sources.eagle`, any other row is `build(current)`. `label` names the controller in the log line.
+ * `upsertWithRetry` for a mirror whose rows DEMI may own: a DEMI row keeps every field but `eagleId`,
+ * `sources.eagle` and the fields in `fromEagle`, any other row is `build(current)`. `label` names the controller
+ * in the log line.
  */
-async function upsertKeepingDemiRows(repo, eagleId, doc, build, readExisting, { pushedAt = null, label }) {
+async function upsertKeepingDemiRows(repo, eagleId, doc, build, readExisting, { pushedAt = null, label, fromEagle = {} }) {
   const written = await upsertWithRetry(repo,
-    (current) => (demiOwned(current) ? eagleOwnedOnto(current, eagleId, doc) : build(current)),
+    (current) => (demiOwned(current) ? { ...eagleOwnedOnto(current, eagleId, doc), ...fromEagle } : build(current)),
     readExisting, { pushedAt });
   if (written.saved && demiOwned(written.existing)) {
     logger.info(`[${label}] eagle push kept to the raw copy on a row it does not own`,

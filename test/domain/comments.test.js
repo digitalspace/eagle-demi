@@ -11,6 +11,7 @@ const assert = require('node:assert');
 const audit = require('../../src/utils/audit');
 const comments = require('../../src/repositories/comments');
 const commentPeriods = require('../../src/repositories/comment-periods');
+const syncOut = require('../../src/sync-out');
 const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
 const comment = require('../../src/domain/comments');
 
@@ -42,10 +43,11 @@ const STAFF = ctxFor(['staff']);
 
 /** Fake storage: one stored comment, its periods and the period counter. Returns what was written. */
 function fakeStore(t, stored = STORED, { counter = 4 } = {}) {
-  const store = { written: [], numbered: [] };
+  const store = { written: [], numbered: [], queued: [] };
   let next = counter;
   t.mock.method(comments, 'getById', async (access, id) => stored && id === stored.id ? { ...stored } : null);
   t.mock.method(comments, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
+  t.mock.method(syncOut, 'enqueueQuietly', async (row, { kind }) => { store.queued.push([row.id, row._etag, kind]); return []; });
   t.mock.method(commentPeriods, 'getById', async (access, id, projectId, { includeDeleted = false } = {}) =>
     (PERIODS[id] && (includeDeleted || !PERIODS[id].isDeleted) ? { ...PERIODS[id] } : null));
   t.mock.method(commentPeriods, 'nextCommentId', async (periodId, projectId) => {
@@ -86,6 +88,17 @@ test('comment domain', async (t) => {
     assert.strictEqual(row.comment, 'Protect the creek');
     assert.strictEqual(row.addedBy, 'idir-staff');
     assert.strictEqual(rows[0].Action, 'comment.create');
+  });
+
+  await t.test('create, update and status each queue the stored row for the comment sync-out', async (t) => {
+    const store = fakeStore(t);
+
+    const created = await comment.create(STAFF, { periodId: PERIOD_ID });
+    await comment.update(STAFF, COMMENT_ID, { eaoNotes: 'Read twice.' });
+    await comment.setStatus(STAFF, COMMENT_ID, { status: 'Published' });
+
+    assert.deepStrictEqual(store.queued,
+      [[created.value.id, 'e2', 'comment'], [COMMENT_ID, 'e2', 'comment'], [COMMENT_ID, 'e2', 'comment']]);
   });
 
   await t.test('create with no status reads staff-only and stores no status', async (t) => {

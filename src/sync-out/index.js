@@ -5,16 +5,18 @@
 
 const queues = require('../jobs/queue-client');
 const {
-  kindOf, versionOf, DEFAULT_KIND, COMMENT_PERIOD, DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, UPDATE
+  kindOf, versionOf, DEFAULT_KIND, COMMENT, COMMENT_PERIOD, DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, UPDATE
 } = require('./kinds');
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
+const comments = require('../repositories/comments');
 const updates = require('../repositories/updates');
 const settings = require('../config').syncOut;
 
 // Keyed by kind: every kind's consumer is named eagle.
 const CONSUMERS_BY_KIND = Object.freeze({
+  [COMMENT]: Object.freeze([require('./eagle-comment')]),
   [COMMENT_PERIOD]: Object.freeze([require('./eagle')]),
   [DOCUMENT]: Object.freeze([require('./eagle-document')]),
   [NOTIFICATION]: Object.freeze([require('./eagle-notification')]),
@@ -90,14 +92,13 @@ async function enqueueQuietly(row, { kind = DEFAULT_KIND } = {}) {
 /** Kinds an Update names by id. An Update held until one of them reached Eagle goes once it has. */
 const NAMED_BY_UPDATES = new Set([COMMENT_PERIOD, DOCUMENT, NOTIFICATION]);
 
-/** Queue the Updates held on `row`; a failure is logged, and the pending hook still lists them. */
-async function queueUpdatesNaming(row) {
-  const updateConsumer = CONSUMERS_BY_KIND[UPDATE][0];
-  if (!updateConsumer.enabled()) return;
+/** Queue the `kind` rows `listHeld()` finds held on sent `row`; a failure is logged, and the pending hook still lists them. */
+async function queueHeldOn(row, kind, listHeld) {
+  if (!CONSUMERS_BY_KIND[kind][0].enabled()) return;
   try {
-    for (const held of await updates.listSyncPendingNaming(row.id)) await enqueueQuietly(held, { kind: UPDATE });
+    for (const held of await listHeld()) await enqueueQuietly(held, { kind });
   } catch (err) {
-    logger.error('[sync-out] Updates held on a sent row not queued', { id: row.id, error: err.message, stack: err.stack });
+    logger.error(`[sync-out] ${kind} rows held on a sent row not queued`, { id: row.id, error: err.message, stack: err.stack });
   }
 }
 
@@ -293,7 +294,12 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
         kind: job.kind, consumer: job.consumer, id: job.id, projectId: stored.projectId ?? null, attempt: 1, resend: true
       });
     }
-    if (status === 'sent' && NAMED_BY_UPDATES.has(job.kind)) await queueUpdatesNaming(row);
+    if (status === 'sent' && NAMED_BY_UPDATES.has(job.kind)) {
+      await queueHeldOn(row, UPDATE, () => updates.listSyncPendingNaming(row.id));
+    }
+    if (status === 'sent' && job.kind === COMMENT_PERIOD) {
+      await queueHeldOn(row, COMMENT, () => comments.listSyncPendingInPeriod(row.id));
+    }
     return { status, ...(result && result.eagleId ? { eagleId: result.eagleId } : {}) };
   } catch (err) {
     const attempt = state.job ? state.job.attempt : dequeueCount;

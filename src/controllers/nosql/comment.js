@@ -23,7 +23,7 @@ const {
   eagleRef, badRefReason, classify, warnNotAdmitted, refusalCode
 } = require('../../helpers/parent-admit');
 const {
-  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
+  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
 /** Eagle's staff-side review fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
@@ -72,11 +72,14 @@ function mirrorItem(eagleId, doc, period, read, existing) {
   };
 }
 
+/** Sources whose periods are stored under their own id with the Eagle id in `eagleId`: `engage-<id>`, or a DEMI UUID. */
+const OWNED_PERIOD_SOURCES = new Set(['engage', 'demi']);
+
 /**
- * A period ENGAGE created, stored as `engage-<id>` with its Eagle id in `eagleId`. Held to the same
- * system read as `getById`, so a sealed or read-less period still refuses its comments.
+ * A period ENGAGE or DEMI created, found by its Eagle id. Held to the same system read as `getById`,
+ * so a sealed or read-less period still refuses its comments.
  */
-async function engagePeriodByEagleId(eagleId, child) {
+async function ownedPeriodByEagleId(eagleId, child) {
   let row;
   try {
     row = await commentPeriods.readForWriteByEagleId(eagleId);
@@ -87,7 +90,7 @@ async function engagePeriodByEagleId(eagleId, child) {
     // Not the mirror's 409: a duplicate here is DEMI's fault, never a stale push.
     throw new Error(`comment period ${eagleId} is stored on more than one row`, { cause: err });
   }
-  if (!row || row.sourceSystem !== 'engage') return null;
+  if (!row || !OWNED_PERIOD_SOURCES.has(row.sourceSystem)) return null;
   return canRead(row, systemAccess(), commentPeriods.PARTITION_FIELD) ? row : null;
 }
 
@@ -103,7 +106,7 @@ async function admitPeriod(ref, childId) {
     return null;
   }
   const period = await commentPeriods.getById(systemAccess(), periodEagleId, undefined, { includeDeleted: true })
-    || await engagePeriodByEagleId(periodEagleId, child);
+    || await ownedPeriodByEagleId(periodEagleId, child);
   if (!period) {
     const reason = await classify(() => commentPeriods.readForWrite(periodEagleId), {
       eagleId: periodEagleId,
@@ -132,11 +135,12 @@ async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}
   // both ceilings.
   const read = eagleReadUnder(doc.read, period.read);
 
-  const written = await upsertWithRetry(
-    comments,
+  const written = await upsertKeepingDemiRows(comments, eagleId, doc,
     (current) => mirrorItem(eagleId, doc, period, read, current),
-    () => comments.readForWrite(eagleId, period.id),
-    { pushedAt }
+    // Else a DEMI row sync-out sent under the id.
+    async () => await comments.readForWrite(eagleId, period.id) || await comments.readForWriteByEagleId(eagleId),
+    // Eagle numbers every comment while eagle-api takes writes, so a DEMI row takes its number (sync-out/kinds.js).
+    { pushedAt, label: 'Comment Controller', fromEagle: Number.isInteger(doc.commentId) ? { commentId: doc.commentId } : {} }
   );
   // Nothing was written, so the partition cleanup below has nothing to clean up after.
   if (written.status === 'conflict' || written.ignored) return written;

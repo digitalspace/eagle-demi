@@ -564,6 +564,7 @@ module.exports = {
   requireSettings,
   call,
   failure,
+  missingOnPut,
   token,
   clearToken,
   mintEagleId,

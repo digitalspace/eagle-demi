@@ -4,6 +4,7 @@
 // consumer names in `./index.js`, and a hook whose `{ repair: true }` re-queues drifted rows.
 
 const commentPeriods = require('../repositories/comment-periods');
+const comments = require('../repositories/comments');
 const documents = require('../repositories/documents');
 const lists = require('../repositories/lists');
 const notifications = require('../repositories/notifications');
@@ -12,6 +13,7 @@ const updates = require('../repositories/updates');
 const pending = require('./pending');
 const { logger } = require('../utils/logger');
 
+const COMMENT = 'comment';
 const COMMENT_PERIOD = 'commentPeriod';
 const DOCUMENT = 'document';
 const NOTIFICATION = 'notification';
@@ -39,8 +41,20 @@ async function reconcileCommentPeriods(options = {}) {
 
 // No pins kind: no client still reads pins from eagle-api (docs/eagle-api-port.md, Pins, Sync-out).
 const KINDS = Object.freeze({
-  // eagle-admin writes comments through eagle-api until F3; that handler takes the period's `commentIdCount`
-  // (comment.js getNextCommentIdCount) and comment reads gate on the period (helpers/parentRead.js).
+  // Eagle numbers a comment on its POST from the period's `commentIdCount`, and the echo copies that `commentId`
+  // onto the DEMI row (controllers/nosql/comment.js): DEMI's own number holds only until then.
+  [COMMENT]: Object.freeze({
+    // Partitioned on periodId, which a message does not carry, so the read is by id alone.
+    repo: Object.freeze({
+      readForWrite: (id) => comments.readForWrite(id),
+      listSyncPending: () => comments.listSyncPending(),
+      upsert: (item, existing) => comments.upsert(item, existing)
+    }),
+    consumers: Object.freeze(['eagle']),
+    reconcile: (options) => pending.reconcile(options, pending.depsFor(COMMENT))
+  }),
+  // eagle-api's comment POST takes the period's `commentIdCount`, and comment reads gate on the period
+  // (helpers/parentRead.js).
   [COMMENT_PERIOD]: Object.freeze({
     repo: commentPeriods,
     consumers: Object.freeze(['eagle']),
@@ -121,5 +135,5 @@ function kindOf(name) {
 }
 
 module.exports = {
-  KINDS, COMMENT_PERIOD, DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, UPDATE, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion
+  KINDS, COMMENT, COMMENT_PERIOD, DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, UPDATE, DEFAULT_KIND, kindOf, versionOf, nextSyncVersion
 };

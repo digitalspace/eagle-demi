@@ -121,7 +121,7 @@ async function send(row, { update }) {
   if (!row.eagleId && !settings.eagle.nativeEnabled) return { status: 'held' };
   const { body, waiting } = await bodyFor(row, logFields);
   if (waiting.length) {
-    // The engine queues the row again when that record's own send lands (index.js, queueUpdatesNaming).
+    // The engine queues the row again when that record's own send lands (index.js, queueHeldOn).
     logger.warn(`[sync-out eagle] update ${row.id} held: ${waiting.join('; ')}`, { ...logFields, waiting });
     return { status: 'held' };
   }
@@ -157,5 +157,6 @@ module.exports = {
   enableSettings: Object.freeze(['SYNC_OUT_EAGLE_ENABLED', 'SYNC_OUT_EAGLE_UPDATE_ENABLED']),
   wants,
   inFlight: entry => Boolean(claimHeld(entry, Date.now())),
-  send
+  send,
+  refOf
 };

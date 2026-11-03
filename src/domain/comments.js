@@ -13,7 +13,8 @@ const { systemAccess } = require('../helpers/access-sql');
 const { eagleReadUnder } = require('../helpers/eagle-acl');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
-const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { writeRow, queued, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { COMMENT } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
 /** eagle-api's `setPermissionsFromEaoStatus` (comment.js:32-64): `Reset` is stored as `Pending`. */
@@ -145,14 +146,14 @@ async function create(ctx, input) {
   };
   logger.info('[Comment] numbered a new comment', { periodId: row.periodId, commentId });
 
-  return writeRow({
+  return queued(await writeRow({
     ctx,
     repo: comments,
     existing: null,
     reread: () => comments.getById(ctx.access, id, row.periodId),
     build: () => row,
     audit: auditOf('comment.create', Object.keys(checked.value))
-  });
+  }), COMMENT);
 }
 
 /**
@@ -179,7 +180,7 @@ async function update(ctx, id, changes) {
   if (status !== undefined && !period) return { status: 'conflict', error: NO_PERIOD };
 
   const actor = actorOf(ctx);
-  return writeRow({
+  return queued(await writeRow({
     ctx,
     repo: comments,
     existing,
@@ -192,7 +193,7 @@ async function update(ctx, id, changes) {
       dateUpdated: new Date().toISOString()
     },
     audit: auditOf('comment.update', fields)
-  });
+  }), COMMENT);
 }
 
 /**
@@ -209,7 +210,7 @@ async function setStatus(ctx, id, input) {
   if (!period) return { status: 'conflict', error: NO_PERIOD };
 
   const actor = actorOf(ctx);
-  return writeRow({
+  return queued(await writeRow({
     ctx,
     repo: comments,
     existing,
@@ -221,7 +222,7 @@ async function setStatus(ctx, id, input) {
       dateUpdated: new Date().toISOString()
     },
     audit: auditOf('comment.setStatus', ['eaoStatus'])
-  });
+  }), COMMENT);
 }
 
 module.exports = { STATUSES, CREATE_SCHEMA, UPDATE_SCHEMA, create, update, setStatus };
