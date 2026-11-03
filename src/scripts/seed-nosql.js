@@ -555,7 +555,8 @@ async function runSeed(args, deps, summary) {
           // nor drop the legacy codes that still resolve to it.
           carryShortLink(project, existing);
           project.sources = { ...existing.sources, ...project.sources };
-          // A row that lost its Eagle id (to a native project, or in Track) keeps none of that project's Eagle data.
+          // A row that lost its Eagle id (to a native project, or in Track) drops that project's Eagle data,
+          // but keeps the DEMI-only fields, Eagle-seeded pins and extension lists included.
           const unlinked = !project.eagleId && hasValue(existing.eagleId);
           if (unlinked) delete project.sources.eagle;
           // The public search lacks applicableRegulation, featuredDocuments and the push bookkeeping; carried

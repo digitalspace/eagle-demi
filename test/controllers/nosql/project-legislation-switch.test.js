@@ -71,6 +71,20 @@ test('PUT /projects/:id/level legislation year switch', async (t) => {
     assert.strictEqual(writes[0].sources.eagle.legislation_2002.name, 'Mine 2002');
   });
 
+  await t.test('the switch keeps the extension lists DEMI holds for the whole project', async () => {
+    const lists = { reviewExtensions: [{ type: 'Extension', appliedTo: 'Assessment', id: 'x1' }], reviewSuspensions: [] };
+    const block2018 = {
+      name: 'Mine 2018', legislationYear: 2018, legislation: '2018 Environmental Assessment Act',
+      reviewExtensions: [], reviewSuspensions: [{ type: 'Suspension', appliedTo: 'Assessment' }]
+    };
+    const writes = stage(t, [{ ...stored({ blocks: { legislation_2018: block2018 } }), ...lists }]);
+
+    await publish(2018);
+
+    assert.deepStrictEqual([writes[0].reviewExtensions, writes[0].reviewSuspensions],
+      [lists.reviewExtensions, []]);
+  });
+
   await t.test('naming the current year publishes without a switch', async () => {
     const writes = stage(t, [stored()]);
 

@@ -53,6 +53,21 @@ function pickEagleFields(eagle, fields) {
   return picked;
 }
 
+const BLOCK_OMITTED_FIELDS = new Set(['reviewExtensions', 'reviewSuspensions']);
+
+/**
+ * The Eagle-only fields and every `legislation_<year>` block, each block less the extension lists:
+ * DEMI holds those once, project-wide, at the top level; `sources.eagle` keeps Eagle's copy.
+ */
+function pickEagleBlocks(eagle) {
+  const picked = pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]);
+  for (const [key, block] of Object.entries(picked)) {
+    if (!LEGISLATION_KEY.test(key) || !block || typeof block !== 'object') continue;
+    picked[key] = Object.fromEntries(Object.entries(block).filter(([field]) => !BLOCK_OMITTED_FIELDS.has(field)));
+  }
+  return picked;
+}
+
 /** The fields eagle-api's project model types as `Date`. */
 const EAGLE_DATE_FIELDS = [
   'dateUpdated', 'decisionDate', 'eaStatusDate', 'projectStatusDate', 'substantiallyDate',
@@ -487,7 +502,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   }
 
   // Eagle fills the gaps Track cannot.
-  if (eagle) Object.assign(merged, pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
+  if (eagle) Object.assign(merged, pickEagleBlocks(eagle));
 
   // Track-only, and no contest with Eagle: `currentPhaseName` and `phaseHistory` are Eagle's own
   // EA-process record and stay exactly as they are. This is the dated assessment rail, and it is
@@ -556,7 +571,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   for (const [target, , eagleField] of TRACK_PRECEDENCE) {
     if (eagleField && hasValue(eagle[eagleField])) merged[target] = eagle[eagleField];
   }
-  Object.assign(merged, pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
+  Object.assign(merged, pickEagleBlocks(eagle));
   nullEagleJunkDates(merged);
   trimLabels(merged);
 
