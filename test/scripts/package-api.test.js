@@ -1,16 +1,7 @@
 'use strict';
 
-/**
- * What the API deploy package must and must not contain.
- *
- * These are not tidiness assertions. `scripts/package-api.py` excludes the ROOT `scripts` directory
- * — deploy tooling — while `src/scripts` is runtime, required by two controllers. The exclusion is
- * scoped by a `rel_root == "."` guard, and if that guard is ever dropped the package still builds,
- * still deploys, still starts, and then 500s the moment someone calls an admin sync endpoint.
- *
- * Nothing else catches that: no unit test loads the packaged zip, and the failure only appears in
- * Azure. So this test builds the real package and looks inside it.
- */
+// Builds the real deploy package and looks inside: a wrong exclusion still deploys and starts,
+// then 500s only in Azure (root `scripts` is tooling, `src/scripts` is runtime).
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -52,9 +43,8 @@ function scaffold(repo) {
   fs.writeFileSync(path.join(repo, 'azure/search/datasources', 'demi-projects-ds.json'), '{}');
   fs.writeFileSync(path.join(repo, 'azure/search', 'data-checks.json'), '{}');
   fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson', 'a.json'), '{}');
-  // A NESTED directory, because a re-included path lives under an excluded one — geojson is
-  // inside `frontend`. Blocking the excluded realpaths wholesale in the re-include walk would
-  // empty exactly this, and a flat fixture cannot tell the two apart.
+  // NESTED, because geojson is re-included from inside excluded `frontend`; blocking excluded
+  // realpaths wholesale would empty it, and a flat fixture cannot tell.
   fs.mkdirSync(path.join(repo, 'frontend/public/assets/geojson', 'nested'), { recursive: true });
   fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson/nested', 'deep.geojson'), '{}');
 }
@@ -120,9 +110,8 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('does NOT ship public/ — an untracked local build output', () => {
-    // Nothing serves it since the static mounts left src/app.js, and zipdeploy merges into
-    // wwwroot, so packaging a stale bundle once would leave it there permanently. This packager
-    // runs from the operator's working tree, which is exactly where a stale build lives.
+    // Nothing serves it, and zipdeploy merges into wwwroot, so one stale bundle from an operator's
+    // working tree would stay there for good.
     const publicEntries = [...entries].filter(e => e.startsWith('public/'));
     assert.deepStrictEqual(
       publicEntries,
@@ -162,15 +151,8 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('ships a SYMLINKED node_modules, and does not loop on a cycle', () => {
-    // `os.walk` does not descend into a symlinked directory and says nothing when it skips one.
-    // Point node_modules at a store — a pnpm linker, a shared install, a git worktree borrowing one
-    // to avoid a 300 MB reinstall — and the packager walked past it, exited 0, and produced a zip
-    // that deploys and then cannot boot: the app has no route to a registry to npm install from.
-    // Measured against the real packager before the fix: zero node_modules/ entries, exit 0.
-    //
-    // The cycle half is not decoration. `followlinks=True` on its own re-packages the tree under
-    // node_modules/loop-back/node_modules/loop-back/... until the kernel raises ELOOP and the
-    // packager dies — after it has already written the duplicates.
+    // Plain `os.walk` skips a symlinked node_modules silently: the zip deploys and cannot boot.
+    // Plain `followlinks=True` recurses through loop-back until ELOOP, after writing duplicates.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-link-'));
     const repo = path.join(dir, 'repo');
     const store = path.join(dir, 'store');
@@ -187,18 +169,15 @@ test('API deploy package', async (t) => {
 
     assert.ok([...linked].some(e => e.startsWith('node_modules/')),
       'a symlinked node_modules must still be packaged');
-    // What actually keeps this empty is the LINK BUDGET, not any rule about links to the root:
-    // `loop-back` sits inside the store, so reaching it costs a second link and it is pruned.
-    // An earlier message here claimed a root-loop-back guarantee the code does not make — see the
-    // next test, where a link back to the root costs only one and IS followed, once.
+    // The LINK BUDGET keeps this empty: `loop-back` sits inside the store, so it costs a second
+    // link and is pruned. A one-hop link to the root IS followed once (next test).
     assert.deepStrictEqual([...linked].filter(e => e.includes('loop-back')), [],
       'a second link cannot be spent, so a loop reached through the store is not followed');
   });
 
   await t.test('a ONE-link loop back to the root is followed once, and stays bounded', () => {
-    // Not a defect, and written down so nobody "fixes" it into one. The guarantee is the real tree
-    // plus one copy of each link target — so a link costing a single hop is followed, and the
-    // budget stops it compounding. What matters is that the fences still hold on that copy.
+    // Not a defect: the guarantee is the real tree plus one copy of each link target. What
+    // matters is that the fences still hold on that copy.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-root-'));
     const repo = path.join(dir, 'repo');
     scaffold(repo);
@@ -222,10 +201,8 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('keeps BOTH paths when two names resolve to one directory', () => {
-    // The pnpm shape, and the case that makes a global visited-set wrong. `node_modules/foo` is a
-    // link into `node_modules/.pnpm/foo@1.0.0/node_modules/foo`; Node resolves through both, so
-    // both have to ship. Marking the realpath seen at the shallower name pruned the whole store —
-    // measured, and it was content the previous version of the packager did include.
+    // The pnpm shape: Node resolves through both the link and `.pnpm/...` target, so both ship.
+    // A global visited-set on realpaths would prune the whole store.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-pnpm-'));
     const repo = path.join(dir, 'repo');
     scaffold(repo);
@@ -245,12 +222,8 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('a .env reached through a symlink is still refused', () => {
-    // The re-include loop wrote whatever it walked with NO filtering at all — survivable only
-    // while it could not leave the three checked-in data directories. Following symlinks ended
-    // that. The existing '.env at any depth' test cannot catch this: it inspects the real repo's
-    // package, and there are no .env files in those directories today, so the hole was latent.
-    // The packager's own comment records a packaged .env carrying MONGODB_PASSWORD,
-    // TYPESENSE_API_KEY, MINIO_SECRET_KEY and DOCLING_API_KEY into a world-readable wwwroot path.
+    // The re-include loop follows symlinks out of the data directories, so it must filter too.
+    // Fixture-based: the real-tree '.env at any depth' test sees no .env in those directories.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-env-'));
     const repo = path.join(dir, 'repo');
     scaffold(repo);
@@ -272,10 +245,8 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('a symlink cannot re-admit an excluded directory', () => {
-    // root_exclude_dirs is applied by position — only at the repo root — so a link anywhere else
-    // re-admitted the excluded tree under the link's own name. `.claude/worktrees/*` are full
-    // checkouts of this repository; shipping them once made a 202 MB package that left Kudu at
-    // status 1 for over thirty minutes against a normal thirty seconds.
+    // root_exclude_dirs applies at the repo root only, so a link elsewhere could re-admit an
+    // excluded tree (e.g. `.claude/worktrees/*`, full checkouts) under its own name.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-fence-'));
     const repo = path.join(dir, 'repo');
     scaffold(repo);
@@ -296,12 +267,8 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('a reconvergent symlink layout cannot blow the package up', () => {
-    // Cycles are not the only unbounded shape. In an ACYCLIC graph where several paths reach the
-    // same directory — what workspaces and `link:` deps produce — a guard that only refuses to
-    // re-enter the CURRENT branch still enumerates every distinct path through the graph.
-    // Measured on this fixture at 20 levels: 114,590 entries and a 58 MB zip from 22 real
-    // directories, exit 0, no warning. The packager's own comments record what an oversized
-    // package did to Kudu: status 1 for over thirty minutes against a normal thirty seconds.
+    // An ACYCLIC graph where several paths reach one directory (workspaces, `link:` deps) is also
+    // unbounded: a branch-only cycle guard enumerates every path, exit 0, no warning.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-dag-'));
     const repo = path.join(dir, 'repo');
     scaffold(repo);
@@ -324,9 +291,8 @@ test('API deploy package', async (t) => {
     const packed = packageInto(dir, repo);
     fs.rmSync(dir, { recursive: true, force: true });
 
-    // The real tree holds 21 f.js files. A few hundred allows the one permitted copy per link;
-    // the failure this pins is four orders of magnitude away, so the exact ceiling is not
-    // delicate — what matters is that SOME ceiling exists.
+    // 21 real f.js files; a few hundred allows one copy per link. The failure is four orders of
+    // magnitude away, so the exact ceiling is not delicate.
     assert.ok(packed.size < 500,
       `output must stay bounded on a reconvergent layout, got ${packed.size} entries`);
     assert.ok([...packed].some(e => e.startsWith('node_modules/')),
@@ -363,15 +329,8 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('ships the search index definitions — read at REQUIRE time by every route', () => {
-    // `src/search/eagle-query.js` runs `const FIELDS = loadFields()` at module scope, and
-    // src/http/routes.js -> src/controllers/search.js reaches it on the first search. A package without
-    // these does not degrade search, it kills the whole API on startup with an ENOENT on a
-    // scandir. That shipped once: `azure/` is excluded as infra and the definitions live under it.
-    //
-    // Compared against what is on disk rather than a hardcoded list, so a fourth index added to
-    // the repo and forgotten by the packager is RED here rather than a boot loop in Azure. The
-    // two sides are independent — the zip is built by package-api.py, this side is the working
-    // tree — so this cannot pass by agreeing with itself.
+    // eagle-query.js loads these at module scope, so a package without them ENOENTs the API.
+    // Compared against disk, not a list, so an index the packager forgets is RED here.
     const onDisk = fs.readdirSync(path.join(REPO_ROOT, 'azure', 'search', 'indexes'))
       .filter(f => f.endsWith('.json'))
       .map(f => `azure/search/indexes/${f}`)
@@ -380,9 +339,8 @@ test('API deploy package', async (t) => {
     const packaged = [...entries].filter(e => e.startsWith('azure/search/indexes/')).sort();
     assert.deepStrictEqual(packaged, onDisk, 'every committed index definition must be packaged');
 
-    // INDEXERS TOO. This assertion did not exist when `indexes` was re-included, and the gap was
-    // not theoretical: apply-search-definitions.js IS packaged and read them, so it died at
-    // `load(INDEXER_DIR)` with ENOENT before issuing a single request, on dry run and --live alike.
+    // INDEXERS TOO: packaged apply-search-definitions.js reads them, and ENOENTs at
+    // `load(INDEXER_DIR)` without them.
     const indexersOnDisk = fs.readdirSync(path.join(REPO_ROOT, 'azure', 'search', 'indexers'))
       .filter(f => f.endsWith('.json'))
       .map(f => `azure/search/indexers/${f}`)
@@ -391,11 +349,8 @@ test('API deploy package', async (t) => {
     const packagedIndexers = [...entries].filter(e => e.startsWith('azure/search/indexers/')).sort();
     assert.deepStrictEqual(packagedIndexers, indexersOnDisk, 'every committed indexer definition must be packaged');
 
-    // DATA SOURCES SHIP TOO, since POST /admin/search-definitions/apply runs the apply inside this
-    // package: the DIFFERS comparison in `apply-search-definitions.js` reads the committed copy,
-    // and `put-search-datasources.js` PUTs it. They used to be devbox-only, where
-    // `/opt/eagle-demi` is a git checkout that already holds them. They carry no credential —
-    // `connectionString` is null on disk and composed from app settings at PUT time.
+    // DATA SOURCES TOO: POST /admin/search-definitions/apply reads and PUTs them from this package.
+    // No credential ships: `connectionString` is null on disk, composed at PUT time.
     const datasourcesOnDisk = fs.readdirSync(path.join(REPO_ROOT, 'azure', 'search', 'datasources'))
       .filter(f => f.endsWith('.json'))
       .map(f => `azure/search/datasources/${f}`)
@@ -417,11 +372,8 @@ test('API deploy package', async (t) => {
       const hits = [...entries].filter(e => e.startsWith(dir));
       assert.deepStrictEqual(hits, [], `${dir} must not be packaged, found ${hits.length} entries`);
     }
-    // `azure/` was in that list, asserting it ships NOTHING. The point of that assertion — infra
-    // does not ship; Bicep, parameter files and deploy templates are not runtime, and shipping
-    // them is how wwwroot ended up holding a copy of the repository — survives, narrowed to
-    // everything BUT the index definitions above. The blanket form was itself the bug: it locked
-    // in an exclusion that the search query builder had since grown a hard dependency on.
+    // Infra (Bicep, params, deploy templates) does not ship; `azure/` is checked separately
+    // because the search definitions under it must.
     const azureExtras = [...entries]
       .filter(e => e.startsWith('azure/')
         && !e.startsWith('azure/search/indexes/')
@@ -433,10 +385,8 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('every controller loads from the unpacked package', () => {
-    // src/http/routes.js requires controllers lazily, so booting the app never touches them. A file
-    // a controller requires at load and the packager dropped 500s only its route, only in Azure:
-    // azure/search/data-checks.json did, on GET /health/search-data. The name checks above list
-    // known paths; this finds the next one nobody listed.
+    // Controllers load lazily, so a dropped file one requires 500s only its route, only in Azure.
+    // The name checks list known paths; this finds the next one nobody listed.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-unpacked-'));
     try {
       // node_modules is most of the zip and not what is under test; the repo's copy stands in.
@@ -468,14 +418,13 @@ test('API deploy package', async (t) => {
   });
 
   await t.test('never ships an operator credential file, at any depth', () => {
-    // Same class as the .env below — files an operator's working tree holds and wwwroot must not.
-    // Fixture-based, because the repo holds none of them today and a real-tree check would pass
-    // whatever the packager did.
+    // Same class as .env below. Fixture-based: the repo holds none of these, so a real-tree check
+    // would pass whatever the packager did.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-secrets-'));
     const repo = path.join(dir, 'repo');
     scaffold(repo);
     fs.mkdirSync(path.join(repo, 'src', 'deep'), { recursive: true });
-    const refused = ['local.settings.json', '.npmrc', 'server.key', 'cert.pem',
+    const refused = ['local.settings.json', 'local.settings.example.json', '.npmrc', 'server.key', 'cert.pem',
       'bundle.p12', 'bundle.pfx'];
     for (const name of refused) {
       fs.writeFileSync(path.join(repo, name), 'SECRET=x');

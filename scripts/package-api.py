@@ -4,12 +4,8 @@ import sys
 import zipfile
 
 def walk(top, blocked=()):
-    """
-    `os.walk` that follows a symlinked directory, but never a symlink reached THROUGH one.
-
-    One link deep by budget, so the output is the real tree plus one copy of each link target.
-    Richer rules were tried and both dropped content or blew the entry count up: wiki CI-Workflows.
-    """
+    """`os.walk` that follows a symlinked directory, never a symlink reached THROUGH one.
+    One link deep keeps content and entry count bounded: wiki CI-Workflows."""
     max_links = 1
     spent = {top: 0}
     blocked = tuple(blocked)
@@ -35,19 +31,14 @@ def walk(top, blocked=()):
         yield root, dirs, files
 
 
-# Operator files that must never reach wwwroot. A packaged `.env` once carried MONGODB_PASSWORD,
-# TYPESENSE_API_KEY, MINIO_SECRET_KEY and DOCLING_API_KEY into a world-readable path.
-EXCLUDED_NAMES = {"local.settings.json", ".npmrc"}
+# Operator files that must never reach wwwroot, a world-readable path.
+EXCLUDED_NAMES = {"local.settings.json", "local.settings.example.json", ".npmrc"}
 EXCLUDED_PREFIXES = ("LICENSE", "CHANGELOG")
 
 
 def excluded_file(file, exclude_extensions):
-    """
-    Whether a file must never be packaged, wherever it was reached from.
-
-    Shared by both write loops: the re-include loop filtered nothing until a `.env` in a linked
-    directory reached the package. Matched by NAME too — ".env" has no extension to filter on.
-    """
+    """Whether a file must never be packaged; both write loops call it, re-includes too.
+    Matched by NAME as well, because ".env" has no extension to filter on."""
     if file == ".env" or file.startswith(".env."):
         return True
     if file in EXCLUDED_NAMES or file.startswith(EXCLUDED_PREFIXES):
@@ -71,16 +62,12 @@ def package_api(repo_root, zip_path):
     exclude_extensions = {".zip", ".tar.gz", ".map", ".md", ".d.ts",
                           ".pem", ".key", ".p12", ".pfx"}
 
-    # Excluded by PATH rather than by name: `src/secret-sync` is a SEPARATE function app with its
-    # own package.json and dependencies, shipped by scripts/package-secret-sync.sh. Packaged here it
-    # would be a second copy of the sync deployed into the API, drifting from the one that runs.
+    # By PATH: `src/secret-sync` is a SEPARATE function app shipped by package-secret-sync.sh;
+    # a copy here would drift from the one that runs.
     path_exclude_dirs = {os.path.join("src", "secret-sync")}
 
-    # Runtime data living under excluded directories: the boundary seeder reads the geojson,
-    # eagle-query.js the indexes at REQUIRE time, apply-search-definitions.js the indexers, and
-    # both it and put-search-datasources.js the data sources — the search-definition apply now runs
-    # in this package (src/jobs/search-definitions.js), not only on the devbox checkout. The
-    # committed data sources carry `connectionString: null`; the real one is composed at PUT time.
+    # Runtime data under excluded dirs: the boundary seeder reads the geojson, eagle-query.js the
+    # indexes at REQUIRE time, src/jobs/search-definitions.js all of azure/search.
     include_subpaths = {os.path.join("frontend", "public", "assets", "geojson"),
                         os.path.join("azure", "search", "indexes"),
                         os.path.join("azure", "search", "indexers"),
