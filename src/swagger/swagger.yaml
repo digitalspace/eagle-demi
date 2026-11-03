@@ -936,7 +936,8 @@ paths:
       description: >-
         Ingest a new project with name and geographic centroid coordinates. The project is
         admitted at level 1 (team only): `isPublished` and `read` in the body are ignored, not
-        refused. Raising a project's level is `PUT /api/projects/{id}/level`.
+        refused. Raising a project's level is `PUT /api/projects/{id}/level`. The row gets
+        `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1247,7 +1248,8 @@ paths:
         Modify an existing project's metadata or coordinates. It does not change visibility:
         `isPublished` and `read` in the body are ignored and the stored ACL is kept. Use
         `PUT /api/projects/{id}/level`. It also sets the pinned organizations (`pins`,
-        `pinsPublished`); there are no pin routes.
+        `pinsPublished`); there are no pin routes. A body that changes a stored value sets
+        `dateUpdated` unless it sends one; on a project created in DEMI, sync-out queues it for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

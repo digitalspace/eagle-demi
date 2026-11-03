@@ -7,9 +7,10 @@ const assert = require('node:assert');
 
 const projects = require('../../src/repositories/projects');
 const documents = require('../../src/repositories/documents');
+const syncOut = require('../../src/sync-out');
 const {
   PUBLISHED_ORG, HIDDEN_ORG, UNKNOWN_ORG, SEALED_ORG, fakeOrgLabels
-} = require('./../helpers/org-labels');
+} = require('../helpers/org-labels');
 const aiSearch = require('../../src/search/ai-search');
 const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
@@ -285,6 +286,45 @@ test('nosql project controller', async (t) => {
     // patchWildfireStats sets `/sources/wildfire`, and Cosmos will not create the parent path
     // for it. A created project without `sources` fails the next wildfire sync outright.
     assert.deepStrictEqual(saved.sources, {}, 'the wildfire patch needs /sources to exist');
+  });
+
+  await t.test('a create stamps syncVersion and the Eagle dates, and queues the project kind', async () => {
+    t.mock.method(projects, 'getById', async () => null);
+    t.mock.method(projects, 'upsert', async (doc) => doc);
+    const queued = [];
+    t.mock.method(syncOut, 'enqueue', async (row, options) => { queued.push({ row, options }); return ['eagle']; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 1, name: 'X', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+
+    assert.strictEqual(queued.length, 1);
+    const { row, options } = queued[0];
+    assert.deepStrictEqual(options, { kind: 'project' });
+    assert.strictEqual(row.syncVersion, 1, 'listSyncPending lists only syncVersion > 0');
+    assert.ok(row.dateAdded && row.dateAdded === row.dateUpdated);
+  });
+
+  await t.test('a PUT content edit of a native project raises syncVersion and queues it; a no-op does neither', async () => {
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', sourceSystem: 'track', sources: {}, syncVersion: 3,
+      dateUpdated: '2026-01-01T00:00:00.000Z', read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    const saves = [];
+    t.mock.method(projects, 'upsert', async (doc) => { saves.push(doc); return doc; });
+    const queued = [];
+    t.mock.method(syncOut, 'enqueue', async (row) => { queued.push(row); return ['eagle']; });
+    const put = (body) => projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: STAFF_USER, body }, mockRes());
+
+    await put({ name: 'P' });
+    await put({ name: 'P2' });
+
+    assert.deepStrictEqual(saves.map(row => row.syncVersion), [3, 4]);
+    assert.strictEqual(saves[0].dateUpdated, stored.dateUpdated);
+    assert.notStrictEqual(saves[1].dateUpdated, stored.dateUpdated);
+    assert.deepStrictEqual(queued.map(row => row.name), ['P2']);
   });
 
 

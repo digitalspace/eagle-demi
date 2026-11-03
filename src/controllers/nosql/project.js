@@ -10,6 +10,7 @@
  * these functions only translate HTTP to a repository call and back.
  */
 
+const { isDeepStrictEqual } = require('node:util');
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
 const commentPeriods = require('../../repositories/comment-periods');
@@ -51,6 +52,7 @@ const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
 const { pinChanges, labelPins } = require('../../domain/project-pins');
+const { PROJECT, nextSyncVersion } = require('../../sync-out/kinds');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -67,6 +69,14 @@ function pinRefusal(res, refusal) {
   }
   if (refusal.status === 'forbidden') return res.status(403).json({ error: refusal.error });
   return res.status(409).json({ error: refusal.error });
+}
+
+/** A native row's write raises `syncVersion`, so `listSyncPending` lists it until sync-out sends it. */
+const versioned = (row, current) => (isNativeProject(row) ? { ...row, syncVersion: nextSyncVersion(current) } : row);
+
+/** Queue a native project for sync-out once its write landed. Required here: `sync-out` loads this controller's modules. */
+function enqueueProject(saved) {
+  return isNativeProject(saved) ? require('../../sync-out').enqueueQuietly(saved, { kind: PROJECT }) : null;
 }
 
 /**
@@ -457,7 +467,9 @@ exports.createProject = async (req, res) => {
       // sync run, not just this project (sync-wildfires.js loops unguarded).
       sources: {},
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      // eagle-public prints this as "Last updated".
+      dateUpdated: now
     });
     // The upsert replaces a row already under this id; its codes are printed and its tags are set
     // only by PUT, so both carry over, guarded so a PUT landing in between is not written back over.
@@ -465,12 +477,15 @@ exports.createProject = async (req, res) => {
     const written = await writeGuarded({
       existing: await reread(),
       reread,
-      attempt: async (current) => ({
-        status: 'saved',
-        saved: await projects.upsert(
-          carryDemiOnlyFields(carryShortLink({ ...row, eagleId: current?.eagleId ?? null }, current), current),
-          current ? { etag: current._etag } : { create: true })
-      }),
+      attempt: async (current) => {
+        const kept = { ...row, eagleId: current?.eagleId ?? null, dateAdded: current?.dateAdded || now };
+        return {
+          status: 'saved',
+          saved: await projects.upsert(
+            versioned(carryDemiOnlyFields(carryShortLink(kept, current), current), current),
+            current ? { etag: current._etag } : { create: true })
+        };
+      },
       onLost: (_current, attempt) =>
         logger.warn('[Project Controller] project create lost its etag race, rebuilding', { id, attempt })
     });
@@ -484,6 +499,7 @@ exports.createProject = async (req, res) => {
       projectId: saved.id,
       detail: { name: saved.name, isPublished: saved.isPublished }
     });
+    await enqueueProject(saved);
 
     return res.status(201).json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
@@ -557,20 +573,25 @@ exports.updateProject = async (req, res) => {
         // Per try too: the publish check depends on the pins the reread row holds.
         const pinned = await pinChanges({ access }, current, pinBody);
         if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
+        const now = new Date().toISOString();
+        const edited = Object.keys(pinned.changes).length > 0 ||
+          Object.keys(changes).some(key => !isDeepStrictEqual(current[key], changes[key]));
         const row = {
           ...current,
           ...changes,
           ...pinned.changes,
           id: current.id,
           trackProjectId: current.trackProjectId,
-          updatedAt: new Date().toISOString()
+          updatedAt: now,
+          ...(edited && changes.dateUpdated === undefined && { dateUpdated: now })
         };
         Object.assign(row, deriveAssessments(row, { previous: current.assessments }));
         return {
           status: 'saved',
           replaced: current,
+          edited,
           pinFields: Object.keys(pinned.changes).map(key => (key === 'pinsRead' ? 'pinsPublished' : key)),
-          saved: await projects.upsert(row, { etag: current._etag })
+          saved: await projects.upsert(edited ? versioned(row, current) : row, { etag: current._etag })
         };
       },
       onLost: (_current, attempt) =>
@@ -582,7 +603,7 @@ exports.updateProject = async (req, res) => {
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
     if (written.status === 'locked') return res.status(409).json({ error: written.error });
     if (written.status === 'pins') return pinRefusal(res, written.refusal);
-    const { saved, replaced, pinFields } = written;
+    const { saved, replaced, pinFields, edited } = written;
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full
     // before/after of arbitrary request bodies would put project content into a table kept for
@@ -601,6 +622,7 @@ exports.updateProject = async (req, res) => {
         isPublishedTo: saved.isPublished
       }
     });
+    if (edited) await enqueueProject(saved);
 
     // Every PUT that sends tags or pins mirrors them, unchanged or not, so a pair that drifted apart
     // heals. Never across a re-pointed `eagleId`: the new id's row belongs to another project.
