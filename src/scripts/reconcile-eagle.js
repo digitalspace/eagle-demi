@@ -575,7 +575,7 @@ async function reconcile(argv = [], deps = {}) {
   let periodCount = 0;
   for (const parent of periodParents) {
     for (const row of await periodsRepo.listEveryByProject(parent.id, access)) everyPeriodRow.push(row);
-    periodCount += await periodsRepo.countByProject(parent.id, access);
+    periodCount += await periodsRepo.countEveryByProject(parent.id, access);
   }
   // ENGAGE owns these rows and Eagle holds only the copy DEMI sent it, so neither the id diff nor
   // `--drop-orphans` may act on them; reconcile-engage.js checks them instead.

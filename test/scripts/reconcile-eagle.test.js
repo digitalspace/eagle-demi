@@ -155,7 +155,7 @@ function makeDeps(over = {}, counts = {}) {
     ...over
   };
   deps.commentPeriods = {
-    countByProject: countOfRead(deps.commentPeriods.listEveryByProject, counts.commentPeriods),
+    countEveryByProject: countOfRead(deps.commentPeriods.listEveryByProject, counts.commentPeriods),
     ...deps.commentPeriods
   };
   deps.comments = {
@@ -891,6 +891,18 @@ test('reconcile', async (t) => {
     assert.ok(summary.failures.some(f =>
       /commentPeriods enumerated 1 rows but the container holds 1001 — .*truncated read/.test(f)),
     JSON.stringify(summary.failures));
+  });
+
+  await t.test('a deleted period counts toward its partition, as the listing returns it', async () => {
+    const rows = [...PERIOD_ROWS[207], { id: 'CP-deleted', projectId: '207', isDeleted: true }];
+    const summary = await reconcile([], makeDeps({
+      commentPeriods: {
+        listEveryByProject: async (projectId, access) => { assertSystem(access); return projectId === '207' ? rows : []; },
+        // As the repository's request-path count: deleted periods left out.
+        countByProject: async (projectId) => (projectId === '207' ? rows.filter(r => !r.isDeleted).length : 0)
+      }
+    }));
+    assert.ok(!summary.failures.some(f => /commentPeriods enumerated/.test(f)), JSON.stringify(summary.failures));
   });
 
   await t.test('a comment partition read short of its COUNT is reported', async () => {

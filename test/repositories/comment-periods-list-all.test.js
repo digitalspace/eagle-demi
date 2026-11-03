@@ -103,6 +103,37 @@ test('the open rail and its closed count exclude deleted periods', async (t) => 
   }
 });
 
+test('the period reads by id and by project exclude deleted periods', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const seen = capture(t);
+  t.mock.method(cosmos, 'queryFirst', async (container, spec) => { seen.queries.push({ spec }); return null; });
+  t.mock.method(cosmos, 'readItem', async (container, id, projectId) => ({ id, projectId, read: ['public'], isDeleted: true }));
+
+  await commentPeriods.getById(ANON, 'cp-1');
+  await commentPeriods.listByProject('p-1', ANON);
+  await commentPeriods.countByProject('p-1', ANON);
+  await commentPeriods.listByIds(ANON, ['cp-1']);
+
+  assert.strictEqual(seen.queries.length + seen.pages.length, 4);
+  for (const { spec } of [...seen.queries, ...seen.pages]) {
+    assert.match(spec.query, /NOT \(IS_BOOL\(c\.isDeleted\) AND c\.isDeleted = true\)/);
+  }
+  assert.strictEqual(await commentPeriods.getById(ANON, 'cp-1', 'p-1'), null, 'the point read drops a deleted row');
+});
+
+test("the reconcile's partition count has its listing's predicate, deleted periods included", async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const seen = { queries: [] };
+  t.mock.method(cosmos, 'query', async (container, spec) => { seen.queries.push(spec); return { items: [] }; });
+
+  await commentPeriods.listEveryByProject('p-1', ANON);
+  await commentPeriods.countEveryByProject('p-1', ANON);
+
+  const [list, count] = seen.queries.map(whereOf);
+  assert.strictEqual(count, list);
+  assert.doesNotMatch(count, /isDeleted/);
+});
+
 // Dates every tz revision agrees on: tz 2026c keeps America/Vancouver on UTC-7 after 2026-11-01.
 test('startOfPacificDay is the Pacific midnight of the Pacific date, across DST', () => {
   const cases = [

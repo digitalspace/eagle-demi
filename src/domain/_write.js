@@ -50,6 +50,13 @@ async function writeRow({ ctx, repo, existing = null, reread, build, audit }) {
   return { status: 'ok', value: written.saved, created: written.from === null };
 }
 
+/** `written`, after a landed write is queued for sync-out as `kind`; each consumer's `wants` picks the rows it sends. */
+async function queued(written, kind) {
+  // Required here: sync-out consumers import domain schemas, so a top-level require would be a cycle.
+  if (written.status === 'ok') await require('../sync-out').enqueueQuietly(written.value, { kind });
+  return written;
+}
+
 /** The two reads a publish toggle moves a row between: staff-only, or open to the public too. */
 const STAFF_READ = Object.freeze(['staff', 'sysadmin']);
 const PUBLIC_READ = Object.freeze(['public', ...STAFF_READ]);
@@ -61,4 +68,4 @@ function readWith(read, published) {
   return published ? ['public', ...base] : base;
 }
 
-module.exports = { writeRow, readWith, STAFF_READ, PUBLIC_READ };
+module.exports = { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ };

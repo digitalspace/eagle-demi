@@ -102,7 +102,7 @@ async function admitPeriod(ref, childId) {
     warnNotAdmitted(child, { period: badRefReason(ref) });
     return null;
   }
-  const period = await commentPeriods.getById(systemAccess(), periodEagleId)
+  const period = await commentPeriods.getById(systemAccess(), periodEagleId, undefined, { includeDeleted: true })
     || await engagePeriodByEagleId(periodEagleId, child);
   if (!period) {
     const reason = await classify(() => commentPeriods.readForWrite(periodEagleId), {

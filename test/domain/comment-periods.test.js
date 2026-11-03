@@ -15,6 +15,8 @@ const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
 const { DELETED_CEILING } = require('../../src/repositories/documents');
 const { resolveAccess, levelOfRead, canRead } = require('../../src/helpers/access-sql');
+const syncOut = require('../../src/sync-out');
+const { COMMENT_PERIOD } = require('../../src/sync-out/kinds');
 const period = require('../../src/domain/comment-periods');
 
 let rows = [];
@@ -43,9 +45,10 @@ const STAFF = ctxFor(['staff']);
 
 /** Fake storage: one stored period, its parents, and the comment cascade. Returns what was written. */
 function fakeStore(t, stored = STORED, { cascadeFails = 0 } = {}) {
-  const store = { written: [], deleted: [], cascades: [] };
+  const store = { written: [], deleted: [], cascades: [], queued: [] };
   t.mock.method(commentPeriods, 'getById', async (access, id) => stored && id === stored.id ? { ...stored } : null);
   t.mock.method(commentPeriods, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
+  t.mock.method(syncOut, 'enqueueQuietly', async (row, { kind }) => { store.queued.push([row.id, row._etag, kind]); return []; });
   t.mock.method(commentPeriods, 'deleteById', async (...args) => { store.deleted.push(args); return true; });
   // As the repository answers: null for a project the caller may not read.
   t.mock.method(projects, 'getById', async (access, id) =>
@@ -91,6 +94,7 @@ test('comment period domain', async (t) => {
     assert.strictEqual(row.isPublished, false);
     assert.strictEqual(rows[0].Action, 'commentPeriod.create');
     assert.deepStrictEqual(rows[0].Detail.fields.sort(), ['dateStarted', 'instructions', 'projectId']);
+    assert.deepStrictEqual(store.queued, [[row.id, 'e2', COMMENT_PERIOD]]);
   });
 
   await t.test('create with isPublished under a public project reads public', async (t) => {
@@ -186,6 +190,7 @@ test('comment period domain', async (t) => {
     assert.strictEqual(row.updatedBy, 'idir-staff');
     assert.strictEqual(rows[0].Action, 'commentPeriod.update');
     assert.deepStrictEqual(rows[0].Detail.fields, ['instructions']);
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
   });
 
   await t.test('update ignores read and isPublished in the body', async (t) => {
@@ -244,6 +249,46 @@ test('comment period domain', async (t) => {
     assert.deepStrictEqual(store.deleted, [[PERIOD_ID, PROJECT_ID, 'e1']]);
     assert.deepStrictEqual(store.cascades, [{ periodId: PERIOD_ID, read: DELETED_CEILING, deletedYet: false }]);
     assert.strictEqual(rows[0].Action, 'commentPeriod.delete');
+    assert.strictEqual(store.written.length, 0);
+    assert.strictEqual(store.queued.length, 0);
+  });
+
+  await t.test('delete of a DEMI period Eagle holds keeps a deleted staff-only row and queues it', async (t) => {
+    const store = fakeStore(t, { ...STORED, sourceSystem: 'demi', read: ['public', 'staff', 'sysadmin'], isPublished: true });
+
+    const { result, rows } = await audited(() => period.remove(STAFF, PERIOD_ID));
+
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(store.deleted.length, 0);
+    const row = store.written[0];
+    assert.strictEqual(row.isDeleted, true);
+    assert.strictEqual(row.isPublished, false);
+    assert.strictEqual(levelOfRead(row.read), 2);
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
+    assert.strictEqual(rows[0].Action, 'commentPeriod.delete');
+  });
+
+  await t.test('delete that loses its etag to a sync-out create claim keeps the claimed row as deleted', async (t) => {
+    const loaded = { ...STORED, sourceSystem: 'demi', eagleId: null };
+    const store = fakeStore(t, loaded);
+    let reads = 0;
+    t.mock.method(commentPeriods, 'getById', async () => (++reads === 1 ? { ...loaded } : { ...loaded, eagleId: PERIOD_ID, _etag: 'e3' }));
+    t.mock.method(commentPeriods, 'deleteById', async () => { throw Object.assign(new Error('precondition'), { code: 412 }); });
+
+    const { result } = await audited(() => period.remove(STAFF, PERIOD_ID));
+
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(store.written[0].isDeleted, true);
+    assert.strictEqual(store.written[0].eagleId, PERIOD_ID);
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
+  });
+
+  await t.test('delete of a DEMI period Eagle never got hard-deletes it', async (t) => {
+    const store = fakeStore(t, { ...STORED, sourceSystem: 'demi', eagleId: null });
+    const { result } = await audited(() => period.remove(STAFF, PERIOD_ID));
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(store.deleted.length, 1);
+    assert.strictEqual(store.written.length, 0);
   });
 
   await t.test('publish opens the period and cascades its read to the comments', async (t) => {
@@ -258,6 +303,7 @@ test('comment period domain', async (t) => {
     assert.deepStrictEqual(store.cascades.map(c => c.read), [row.read]);
     assert.strictEqual(rows[0].Action, 'commentPeriod.publish');
     assert.deepStrictEqual(rows[0].Detail.fields, ['isPublished']);
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
   });
 
   await t.test('publish under a private project is a conflict and writes nothing', async (t) => {
@@ -284,6 +330,7 @@ test('comment period domain', async (t) => {
     assert.ok(!store.written[0].read.includes('public'));
     assert.deepStrictEqual(store.cascades.map(c => c.read), [store.written[0].read]);
     assert.strictEqual(rows[0].Action, 'commentPeriod.unpublish');
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
   });
 
   await t.test('publish of a DEMI row records its own read for the project cascade', async (t) => {
@@ -296,5 +343,6 @@ test('comment period domain', async (t) => {
     const store = fakeStore(t, STORED, { cascadeFails: 1 });
     await assert.rejects(() => period.publish(STAFF, PERIOD_ID), /comments were not fully updated/);
     assert.strictEqual(store.written.length, 1);
+    assert.strictEqual(store.queued.length, 1);
   });
 });
