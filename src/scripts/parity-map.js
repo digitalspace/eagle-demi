@@ -145,13 +145,6 @@ const filled = value => norm(value) !== null;
 const readOf = (row) => (row && Array.isArray(row.read) ? row.read : null);
 const eagleIdsIn = (value) => [...String(value || '').matchAll(/[0-9a-f]{24}/gi)].map(m => m[0].toLowerCase());
 const sameIds = (a, b) => JSON.stringify(eagleIdsIn(a).sort()) === JSON.stringify(eagleIdsIn(b).sort());
-const pathOf = (value) => {
-  try {
-    return new URL(value).pathname;
-  } catch {
-    return null;
-  }
-};
 
 /**
  * Every class a difference may be explained by. `ids: true` classes match only ids listed under
@@ -202,10 +195,6 @@ const KNOWN_DIFFERENCES = [
     why: 'Eagle links /api/document/:id/fetch on its host, DEMI /documents/:id/download on its own; same documents',
     match: ({ field, eagleValue, demiValue }) => field === 'Attachments' &&
       typeof eagleValue === 'string' && typeof demiValue === 'string' && sameIds(eagleValue, demiValue) },
-  { name: 'bcgw-link-host', kind: 'fieldDiff', reads: ['report-bcgw'],
-    why: 'Eagle writes the prod site host; DEMI writes LINK_BASE_URL, the site of its own environment',
-    match: ({ field, eagleValue, demiValue }) => field === 'URL to Epic Project' &&
-      pathOf(eagleValue) !== null && pathOf(eagleValue) === pathOf(demiValue) },
   { name: 'track-mastered', kind: 'fieldDiff',
     why: 'DEMI projects take these fields from Track when Track has a value (src/merge/project.js)',
     match: ({ read, dataset, field, demiValue, demi }) => filled(demiValue) &&
