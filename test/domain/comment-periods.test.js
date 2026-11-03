@@ -236,7 +236,7 @@ test('comment period domain', async (t) => {
       const result = await run();
       assert.strictEqual(result.status, 'conflict');
       assert.match(result.error, /ENGAGE/);
-      assert.strictEqual(store.written.length + store.deleted.length + store.cascades.length + store.queued.length, 0);
+      assert.strictEqual(store.written.length + store.deleted.length + store.cascades.length, 0);
     });
   }
 
@@ -249,6 +249,31 @@ test('comment period domain', async (t) => {
     assert.deepStrictEqual(store.deleted, [[PERIOD_ID, PROJECT_ID, 'e1']]);
     assert.deepStrictEqual(store.cascades, [{ periodId: PERIOD_ID, read: DELETED_CEILING, deletedYet: false }]);
     assert.strictEqual(rows[0].Action, 'commentPeriod.delete');
+    assert.strictEqual(store.written.length, 0);
+    assert.strictEqual(store.queued.length, 0);
+  });
+
+  await t.test('delete of a DEMI period Eagle holds keeps a deleted staff-only row and queues it', async (t) => {
+    const store = fakeStore(t, { ...STORED, sourceSystem: 'demi', read: ['public', 'staff', 'sysadmin'], isPublished: true });
+
+    const { result, rows } = await audited(() => period.remove(STAFF, PERIOD_ID));
+
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(store.deleted.length, 0);
+    const row = store.written[0];
+    assert.strictEqual(row.isDeleted, true);
+    assert.strictEqual(row.isPublished, false);
+    assert.strictEqual(levelOfRead(row.read), 2);
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
+    assert.strictEqual(rows[0].Action, 'commentPeriod.delete');
+  });
+
+  await t.test('delete of a DEMI period Eagle never got hard-deletes it', async (t) => {
+    const store = fakeStore(t, { ...STORED, sourceSystem: 'demi', eagleId: null });
+    const { result } = await audited(() => period.remove(STAFF, PERIOD_ID));
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(store.deleted.length, 1);
+    assert.strictEqual(store.written.length, 0);
   });
 
   await t.test('publish opens the period and cascades its read to the comments', async (t) => {

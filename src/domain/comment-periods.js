@@ -12,7 +12,7 @@ const commentPeriods = require('../repositories/comment-periods');
 const comments = require('../repositories/comments');
 const projects = require('../repositories/projects');
 const notifications = require('../repositories/notifications');
-const { DELETED_CEILING } = require('../repositories/documents');
+const { DELETED_CEILING, constrainToProject } = require('../repositories/documents');
 const { systemAccess } = require('../helpers/access-sql');
 const { eagleBaseAcl, eagleReadUnder } = require('../helpers/eagle-acl');
 const { refusedWriteKeys } = require('../vis/redact');
@@ -213,26 +213,40 @@ async function update(ctx, id, changes) {
   }), COMMENT_PERIOD);
 }
 
-/** Hard delete, as eagle-api's `findOneAndDelete` (commentperiod.js:376); its comments drop to staff first. */
+/**
+ * Hard delete, as eagle-api's `findOneAndDelete` (commentperiod.js:376); its comments drop to staff first.
+ * A DEMI period Eagle holds a copy of is kept as an `isDeleted` row instead, so sync-out can delete that copy.
+ */
 async function remove(ctx, id) {
   const { existing, refusal } = await loadWritable(ctx, id);
   if (refusal) return refusal;
 
   // Comments before the period: a failure here leaves the period in place for the retry.
   await cascadeToComments(existing, DELETED_CEILING);
-  return writeRow({
+  const actor = actorOf(ctx);
+  const written = await writeRow({
     ctx,
     repo: {
-      upsert: async (row) => {
+      upsert: async (row, current) => {
+        if (row.isDeleted) return commentPeriods.upsert(row, current);
         await commentPeriods.deleteById(row.id, row.projectId, row._etag);
         return row;
       }
     },
     existing,
     reread: () => readPeriod(ctx, id),
-    build: (current) => current,
+    // Decided on the stored row: a sync-out create claim may have stored an eagleId since the load.
+    build: (current) => current && (current.sourceSystem === 'demi' && current.eagleId ? {
+      ...current,
+      isDeleted: true,
+      isPublished: false,
+      read: constrainToProject(current.read, DELETED_CEILING),
+      updatedBy: actor,
+      dateUpdated: new Date().toISOString()
+    } : current),
     audit: auditOf('commentPeriod.delete')
   });
+  return written.status === 'ok' && written.value.isDeleted ? queued(written, COMMENT_PERIOD) : written;
 }
 
 /** eagle-api `Actions.publish` and `unPublish` (actions.js:7,31): the period's own `read` and flag only. */

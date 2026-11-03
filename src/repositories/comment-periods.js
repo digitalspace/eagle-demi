@@ -24,18 +24,18 @@ const DEFAULT_ORDER = 'c.dateStarted DESC';
 /** `listOpen` when the caller named no limit. A rail, not a registry — see `listOpen`. */
 const DEFAULT_OPEN_ROWS = 20;
 
-/** Point read. With the project it is single-partition; without, the predicate runs in the query. */
+/** Point read, deleted periods left out. With the project it is single-partition; without, the predicate runs in the query. */
 async function getById(access, id, projectId) {
   if (projectId) {
     const item = await cosmos.readItem(CONTAINER, String(id), String(projectId));
-    if (!item) return null;
+    if (!item || item.isDeleted === true) return null;
     return canRead(item, access, PARTITION_FIELD) ? item : null;
   }
 
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [eq('id', String(id), '@id')]
+    criteria: [NOT_DELETED, eq('id', String(id), '@id')]
   });
   // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
   // the row exists, and the caller reads that as "no such comment period".
@@ -95,26 +95,26 @@ async function readForWriteEngageByMetUrl(metURL, projectId) {
 }
 
 /**
- * The periods of one parent as this caller may see them. `projectId` is the parent's DEMI `id`; a period may
+ * The periods of one parent as this caller may see them, deleted ones left out. `projectId` is the parent's DEMI `id`; a period may
  * hang off a `ProjectNotification` too (`helpers/parent-admit.js`), so reconcile walks both id spaces.
  */
 async function listByProject(projectId, access, { pageNum, pageSize, sortBy } = {}) {
-  const spec = byProjectSpec(projectId, access, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER));
+  const spec = byProjectSpec(projectId, access, orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER), [NOT_DELETED]);
 
   return readPage(CONTAINER, spec, { pageNum, pageSize, partitionKey: String(projectId) });
 }
 
-function byProjectSpec(projectId, access, orderBy) {
+function byProjectSpec(projectId, access, orderBy, criteria = []) {
   return selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: criteriaFor(projectId),
+    criteria: [...criteriaFor(projectId), ...criteria],
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
     orderBy
   });
 }
 
-/** Every period of one parent, past `listByProject`'s MAX_PAGE_SIZE cap — for the reconcile only. */
+/** Every period of one parent, deleted ones too, past `listByProject`'s MAX_PAGE_SIZE cap — for the reconcile only. */
 async function listEveryByProject(projectId, access) {
   return fetchAll(CONTAINER, byProjectSpec(projectId, access), { partitionKey: String(projectId) });
 }
@@ -130,7 +130,7 @@ async function listByIds(access, ids) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [inList('id', unique, '@cpid')],
+    criteria: [NOT_DELETED, inList('id', unique, '@cpid')],
     select: 'c.id, c.isMet, c.metURL, c.dateStarted, c.dateCompleted'
   });
 
@@ -304,7 +304,7 @@ async function countAll(access, filters) {
 
 /** The same predicate as the read, so the total cannot describe rows the page may not carry. */
 async function countByProject(projectId, access) {
-  return countMatching(access, criteriaFor(projectId), { partitionKey: String(projectId) });
+  return countMatching(access, [...criteriaFor(projectId), NOT_DELETED], { partitionKey: String(projectId) });
 }
 
 /** Any of `statuses` (keys of `clauses`), every clause bound to the same clock read. */
