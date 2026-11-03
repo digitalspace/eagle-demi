@@ -17,7 +17,7 @@ const updates = require('../../src/repositories/updates');
 const notify = require('../../src/services/notify');
 const updateController = require('../../src/controllers/nosql/update');
 const {
-  mockRes, STAFF, PUBLIC_ACL, PRIVATE_ACL, PROJECT_EAGLE_ID, DOCUMENT_EAGLE_ID, eagleUpdate, storedProject, storedDocument
+  mockRes, STAFF, PUBLIC_ACL, PRIVATE_ACL, PROJECT_EAGLE_ID, DOCUMENT_EAGLE_ID, PERIOD_EAGLE_ID, eagleUpdate, storedProject, storedDocument
 } = require('../helpers/eagle-mirror-fixtures');
 const { API, useEnv, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 const { mirrorStore } = require('../helpers/mirror-store');
@@ -183,45 +183,69 @@ test('sync-out of DEMI-created Updates', async (t) => {
     assert.deepStrictEqual(calls[0].body.attachments, [DOCUMENT_EAGLE_ID]);
   });
 
-  await t.test('an Update naming a DEMI document sync-out has not sent is held, its sync state untouched', async (tt) => {
-    const store = mirrorStore(tt, [
-      nativeUpdate({ eagleId: EAGLE_ID, attachments: [NATIVE_DOCUMENT_ID] }),
-      parent(),
-      { container: 'documents', ...storedDocument({ id: NATIVE_DOCUMENT_ID, eagleId: null, sourceSystem: 'demi' }) }
-    ]);
+  const HELD = { result: { status: 'held' }, level: 'warn' };
+  const FAILED = { result: { retryQueued: 2 }, level: 'error' };
+  const MINTED = '6720b3c0a1b2c3d4e5f6071d';
+  // Each a stored document the Update attaches, or null for none; the outcome, and the line naming why.
+  const DOCUMENT_REFS = [
+    ['a DEMI document sync-out has not sent', { eagleId: null, sourceSystem: 'demi' }, HELD, /held: document \S+ is not in Eagle yet/],
+    ['a DEMI document whose minted create has not landed',
+      { eagleId: MINTED, sourceSystem: 'demi', syncOut: { eagle: { mintedId: MINTED, status: 'creating' } } }, HELD, /is not in Eagle yet/],
+    ['a document in the intake scan', { scanStatus: 'pending' }, HELD, /is not through the intake scan/],
+    ['a document the intake scan rejected', { scanStatus: 'rejected' }, FAILED, /not sent: document \S+ was rejected by the intake scan/],
+    ['a deleted document', { isDeleted: true }, FAILED, /not sent: document \S+ is deleted$/],
+    ['a document Eagle deleted', { syncOut: { eagle: { eagleDeleted: true } } }, FAILED, /is deleted in Eagle/],
+    ['an Eagle-owned document with no eagleId', { eagleId: null, sourceSystem: 'eagle' }, FAILED, /has no eagleId/],
+    ['a document DEMI does not hold', null, FAILED, /is not in DEMI/]
+  ];
+  for (const [what, doc, expected, line] of DOCUMENT_REFS) {
+    await t.test(`an Update naming ${what}: ${expected.result.status || 'retried'}, nothing sent`, async (tt) => {
+      const store = mirrorStore(tt, [
+        nativeUpdate({ eagleId: EAGLE_ID, attachments: [NATIVE_DOCUMENT_ID] }),
+        parent(),
+        ...(doc ? [{ container: 'documents', ...storedDocument({ id: NATIVE_DOCUMENT_ID, eagleId: DOCUMENT_EAGLE_ID, ...doc }) }] : [])
+      ]);
+      wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      assert.deepStrictEqual(await run(), expected.result);
+
+      assert.match(logger[expected.level].mock.calls[0].arguments[0], line);
+      assert.deepStrictEqual(calls, []);
+      assert.strictEqual(rowOf(store).syncOut, undefined);
+    });
+  }
+
+  const PERIOD_ID = '7d1e2f40-0000-4000-8000-0000000000ff';
+  const period = fields => ({ container: 'commentPeriods', id: PERIOD_ID, projectId: '207', read: [...PUBLIC_ACL], ...fields });
+
+  await t.test('a comment period is sent by its eagleId', async (tt) => {
+    mirrorStore(tt, [nativeUpdate({ eagleId: EAGLE_ID, pcp: PERIOD_ID }), parent(),
+      period({ sourceSystem: 'engage', eagleId: PERIOD_EAGLE_ID })]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'PUT *': { body: {} } });
+
+    assert.deepStrictEqual(await run(), { status: 'sent', eagleId: EAGLE_ID });
+    assert.strictEqual(calls[0].body.pcp, PERIOD_EAGLE_ID);
+  });
+
+  await t.test('an ENGAGE comment period sync-out has not created in Eagle yet holds the Update', async (tt) => {
+    mirrorStore(tt, [nativeUpdate({ eagleId: EAGLE_ID, pcp: PERIOD_ID }), parent(), period({ sourceSystem: 'engage', eagleId: null })]);
     wireQueue(tt);
     const calls = wireEagle(tt, {});
 
     assert.deepStrictEqual(await run(), { status: 'held' });
-
-    assert.match(logger.warn.mock.calls[0].arguments[0], /held: document \S+ is not in Eagle yet/);
-    assert.deepStrictEqual(calls, []);
-    assert.strictEqual(rowOf(store).syncOut, undefined);
-  });
-
-  await t.test('an Update whose image is still in the intake scan is held', async (tt) => {
-    mirrorStore(tt, [
-      nativeUpdate({ eagleId: EAGLE_ID, featuredImage: { document: DOCUMENT_EAGLE_ID, alt: 'Site' } }),
-      parent(),
-      { container: 'documents', ...storedDocument({ eagleId: DOCUMENT_EAGLE_ID, scanStatus: 'pending' }) }
-    ]);
-    wireQueue(tt);
-    const calls = wireEagle(tt, {});
-
-    assert.deepStrictEqual(await run(), { status: 'held' });
-
-    assert.match(logger.warn.mock.calls[0].arguments[0], /held: document \S+ is not through the intake scan/);
     assert.deepStrictEqual(calls, []);
   });
 
-  await t.test('an Update naming a document DEMI does not hold fails and is retried', async (tt) => {
-    mirrorStore(tt, [nativeUpdate({ eagleId: EAGLE_ID, attachments: [NATIVE_DOCUMENT_ID] }), parent()]);
+  await t.test('a comment period ENGAGE deleted fails the Update', async (tt) => {
+    mirrorStore(tt, [nativeUpdate({ eagleId: EAGLE_ID, pcp: PERIOD_ID }), parent(),
+      period({ sourceSystem: 'engage', eagleId: PERIOD_EAGLE_ID, sources: { engage: { isDeleted: true } } })]);
     wireQueue(tt);
     const calls = wireEagle(tt, {});
 
     assert.deepStrictEqual(await run(), { retryQueued: 2 });
-
-    assert.match(logger.error.mock.calls[0].arguments[0], /not sent: document \S+ is not in DEMI/);
+    assert.match(logger.error.mock.calls[0].arguments[0], /comment period \S+ is deleted/);
     assert.deepStrictEqual(calls, []);
   });
 
@@ -238,7 +262,7 @@ test('sync-out of DEMI-created Updates', async (t) => {
     assert.deepStrictEqual(calls, []);
   });
 
-  await t.test('the echo of a withdrawn DEMI Update sends no cancellation; the announce timer does', async (tt) => {
+  await t.test('the echo of a withdrawn DEMI Update sends no cancellation', async (tt) => {
     tt.mock.method(notify, 'configured', () => true);
     const cancelled = tt.mock.method(notify, 'updateCancelled', async () => notify.OUTCOME.SENT);
     const published = tt.mock.method(notify, 'updatePublished', async () => notify.OUTCOME.SENT);
@@ -266,7 +290,11 @@ test('sync-out of DEMI-created Updates', async (t) => {
       update('held-image', { images: [{ document: 'other' }, { document: NATIVE_NOTIFICATION_ID }] }),
       update('sent', { projectNotification: NATIVE_NOTIFICATION_ID, syncOut: { eagle: { sentVersion: 1 } } }),
       update('eagle-owned', { projectNotification: NATIVE_NOTIFICATION_ID, sourceSystem: undefined }),
-      update('unrelated', { projectNotification: 'other' })
+      update('unrelated', { projectNotification: 'other' }),
+      update('stray', { projectId: NATIVE_NOTIFICATION_ID, syncOut: { eagle: { status: 'failed', strayEagleId: null } } }),
+      update('failed', { projectId: NATIVE_NOTIFICATION_ID, syncOut: { eagle: { status: 'failed', failedVersion: 1 } } }),
+      update('edited-after-failing',
+        { projectId: NATIVE_NOTIFICATION_ID, syncVersion: 2, syncOut: { eagle: { status: 'failed', failedVersion: 1 } } })
     ]);
     const sent = wireQueue(tt);
     wireEagle(tt, { 'PUT *': { body: {} } });
@@ -274,7 +302,7 @@ test('sync-out of DEMI-created Updates', async (t) => {
     const result = await syncOut.run({ kind: NOTIFICATION, consumer: 'eagle', id: NATIVE_NOTIFICATION_ID, attempt: 1 });
 
     assert.strictEqual(result.status, 'sent');
-    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]), [[UPDATE, 'held-parent'], [UPDATE, 'held-image']]);
+    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]), [[UPDATE, 'held-parent'], [UPDATE, 'held-image'], [UPDATE, 'edited-after-failing']]);
   });
 
   await t.test('readForWriteByEagleId finds only the DEMI row under an Eagle id', async (tt) => {

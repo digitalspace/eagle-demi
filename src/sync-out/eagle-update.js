@@ -11,7 +11,7 @@ const notifications = require('../repositories/notifications');
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const {
-  requireSettings, call, failure, claimHeld, createMinted, refuseStray
+  requireSettings, call, failure, claimHeld, createMinted, refuseStray, isDeletedRow
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -35,17 +35,25 @@ function createPending(stored) {
   return entry.mintedId === String(stored.eagleId) && !Number.isInteger(entry.sentVersion);
 }
 
+/** Sources whose records sync-out creates in Eagle itself: one with no `eagleId` yet gets one. */
+const SENT_BY_SYNC_OUT = new Set([NATIVE, 'engage']);
+
 /**
- * The Eagle id a referenced record goes by, else why it has none: `wait` for a DEMI record sync-out has yet to
- * send, `fail` for one that will never have an Eagle id.
+ * The Eagle id a referenced record goes by, else why it has none: `wait` for a record sync-out has yet to send
+ * or the intake scan has yet to release, `fail` for one that will never have an Eagle id.
  */
 function refOf(what, id, stored) {
   const named = `${what} ${id}`;
   if (!stored) return { fail: `${named} is not in DEMI` };
-  if (stored.isDeleted === true) return { fail: `${named} is deleted` };
+  if (isDeletedRow(stored)) return { fail: `${named} is deleted` };
+  if (stored.syncOut && stored.syncOut[NAME] && stored.syncOut[NAME].eagleDeleted === true) {
+    return { fail: `${named} is deleted in Eagle` };
+  }
+  // The intake never clears a rejection: the file stays in quarantine.
+  if (stored.scanStatus === 'rejected') return { fail: `${named} was rejected by the intake scan` };
   if (!documents.isScanCleared(stored)) return { wait: `${named} is not through the intake scan` };
   if (stored.eagleId && !createPending(stored)) return { eagleId: String(stored.eagleId) };
-  if (stored.sourceSystem === NATIVE) return { wait: `${named} is not in Eagle yet` };
+  if (SENT_BY_SYNC_OUT.has(stored.sourceSystem)) return { wait: `${named} is not in Eagle yet` };
   return { fail: `${named} has no eagleId` };
 }
 
