@@ -4142,7 +4142,8 @@ paths:
         read by a non-staff caller shows a row with a `status` only when it is `published` and
         its `publishDate` has passed; a row with no `status`
         follows `read[]` alone. An update is emailed at most once: withdrawing one DEMI announced
-        sends one cancellation, and re-publishing or rescheduling it sends nothing more.
+        sends one cancellation, and re-publishing or rescheduling it sends nothing more. An echo
+        of an Update created in DEMI updates that row and sends no notification.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -4174,6 +4175,10 @@ paths:
           description: Unauthorized.
         '403':
           $ref: '#/components/responses/EagleMirrorForbidden'
+        '409':
+          description: >-
+            The id is stored in more than one DEMI row, so nothing was written. Not retried: a
+            retry finds the same rows.
         '503':
           description: >-
             The record changed repeatedly while the push was retried. The caller retries.
