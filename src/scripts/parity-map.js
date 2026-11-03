@@ -3,6 +3,8 @@
 /**
  * Each eagle-api read a consumer makes, the native DEMI read that answers it (never `/search?dataset=`),
  * and the differences already explained. `format: 'csv'` reads pair rows on `key`, minus `ignoreColumns`.
+ * Field entries may be `[eagleName, demiName]`; `:demiProject`/`:demiPeriod` take DEMI ids, other
+ * placeholders the Eagle ids from `--id`; `mapEagle`/`mapDemi` reshape one side's rows before pairing.
  */
 
 const { EAGLE_STAFF_FIELDS, TRACK_PRECEDENCE } = require('../merge/project');

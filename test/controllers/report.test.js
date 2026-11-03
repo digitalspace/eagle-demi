@@ -78,18 +78,21 @@ test('BCGW report', async (t) => {
     assert.strictEqual(res.headers['content-disposition'], 'attachment; filename=export_bcgw.csv');
   });
 
-  await t.test('writes one row per lowercased Eagle id, the Track row over its twin', async () => {
+  await t.test('writes one row per lowercased Eagle id, the Track row over its twin in any read order', async () => {
     const [keenleyside, coquihalla] = structuredClone(DEMI_ROWS);
-    t.mock.method(projects, 'listPage', async () => [
-      { ...coquihalla, eagleId: coquihalla.eagleId.toUpperCase() },
-      { ...keenleyside, id: `eagle-${keenleyside.eagleId}`, name: 'Stale twin' },
-      { ...keenleyside, id: '1003', eagleId: undefined, name: 'Track only' },
-      keenleyside
-    ]);
-    const res = mockRes();
-    await controller.getReport({ query: { type: 'bcgw' }, headers: {} }, res);
+    const twin = { ...keenleyside, id: `eagle-${keenleyside.eagleId}`, name: 'Stale twin' };
+    for (const pair of [[twin, keenleyside], [keenleyside, twin]]) {
+      t.mock.restoreAll();
+      t.mock.method(projects, 'listPage', async () => [
+        { ...coquihalla, eagleId: coquihalla.eagleId.toUpperCase() },
+        { ...keenleyside, id: '1003', eagleId: undefined, name: 'Track only' },
+        ...pair
+      ]);
+      const res = mockRes();
+      await controller.getReport({ query: { type: 'bcgw' }, headers: {} }, res);
 
-    assert.strictEqual(res.body, EAGLE_CSV);
+      assert.strictEqual(res.body, EAGLE_CSV, pair.map(row => row.id).join(', '));
+    }
   });
 
   await t.test('reads as the public whoever asks', async () => {

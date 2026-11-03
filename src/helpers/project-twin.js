@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * The `eagle-<id>` row the Track relink keeps beside a Track project. An Eagle push lands on the
- * Track row only, so without this the twin keeps serving an ACL Eagle has since narrowed.
+ * The `eagle-<id>` row the Track relink (`src/scripts/sync-track-projects.js`) keeps beside a Track project.
+ * An Eagle push lands on the Track row only, so without this the twin keeps serving an ACL Eagle has since narrowed.
  */
 
 const projects = require('../repositories/projects');
@@ -105,8 +105,8 @@ async function partnerRefusesTags(row, access) {
 }
 
 /**
- * Copy `row`'s (pre-write) stored `tags` onto its pair, past the caller's `read[]` so differing ACLs cannot
- * split the pair; audited under `req`, PUT checks `partnerRefusesTags` first. Returns a 500 message or null.
+ * Copy `row`'s (pre-write) stored `tags` onto its pair past the caller's `read[]`, safe as only `tags` and `updatedAt`
+ * change there; audited under `req`, PUT checks `partnerRefusesTags` first. Returns a 500 message or null.
  */
 async function mirrorTags(row, req) {
   const read = () => readPartner(row);
