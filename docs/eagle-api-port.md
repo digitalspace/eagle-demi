@@ -146,7 +146,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - The comment body names its period and documents by their `eagleId`. A period or document sync-out has not sent yet holds the comment with the warn line `held:`. When that period or document is sent, the engine queues the DEMI comments held on it (`queueHeldOn` in `src/sync-out/index.js`). Otherwise the pending hook lists them and `--repair` queues them.
 - So the comment kind needs `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` on as well. With it off, a comment that names a DEMI document stays held.
 - A period or document DEMI does not hold, or one deleted, fails the send before any call, with the error line `not sent:`. So does a valued component that is not an Eagle id.
-- A comment with no `eaoStatus` is sent as `Pending`, so Eagle's copy reads staff-only and shows in the moderation lists.
+- A comment row with no `eaoStatus`, stored before create defaulted it, is sent as `Pending`, so Eagle's copy reads staff-only and shows in the moderation lists.
 - eagle-api's POST does not copy `submittedCAC`, so the create of a comment with `submittedCAC: true` ends with a PUT.
 - eagle-api's POST numbers each comment from its period's `commentIdCount`, and the echo copies that `commentId` onto the DEMI row. Until the echo lands, DEMI's own number from `nextCommentId` can be one Eagle already gave another comment.
 - After a PUT, the organization and project consumers call publish or unpublish when Eagle's copy sits at another level than the row.
@@ -300,7 +300,7 @@ Guards: every route is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eag
 Business rules (eagle-api `api/controllers/comment.js`):
 - Status sets read (`:32-64`): `Published` adds `public`; `Pending`, `Deferred` and `Rejected` are staff only; `Reset` is stored as `Pending`, staff only. Any other status leaves `read` alone in eagle-api; DEMI answers 400 for it.
 - Create copies author, comment, dateAdded, dateUpdated, documents, eaoNotes, eaoStatus, isAnonymous, location, period, proponentNotes, proponentStatus, publishedNotes, rejectedNotes, rejectedReason and valuedComponents (`:344-360`), and sets `write` and `delete` to staff and sysadmin (`:362-363`). DEMI takes `periodId` (a period DEMI holds, else 400) for `period`, stamps `dateUpdated`, defaults `dateAdded` to now and `isAnonymous` to true, and answers 201 with a UUID id, `sourceSystem: 'demi'` and `addedBy`/`updatedBy`. DEMI rows carry no `write` or `delete` list; the route guards hold that rule.
-- With no `eaoStatus`, eagle-api leaves the model's `read` default (`project-system-admin`); DEMI stores `eaoStatus: null` and reads staff only.
+- With no `eaoStatus`, eagle-api leaves the model's `read` default (`project-system-admin`); DEMI stores `eaoStatus: 'Pending'` and reads staff only, so the comment shows in the Pending lists.
 - `commentId` is the period's `commentIdCount` after an atomic increment (`:340,378-382`); DEMI calls `commentPeriods.nextCommentId` after the body and period check, so a refused body takes no number.
 - `datePosted` is kept only when the comment is created `Published` (`:361`).
 - `documents` and `valuedComponents` entries must be ids (`:323-337`). eagle-api's check returns from a `forEach` callback, so a bad id does not stop the save; DEMI answers 400 naming the field.

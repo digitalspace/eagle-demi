@@ -36,7 +36,7 @@ async function bodyFor(row, logFields) {
     if (row[field] !== undefined) body[field] = row[field];
   }
   const { ref, refuse, waiting } = refsFor(KIND, row, logFields);
-  // With no status eagle-api keeps its default read, and no moderation list shows the comment.
+  // A row stored before create defaulted the status: with none, eagle-api keeps a read no moderation list shows.
   body.eaoStatus = row.eaoStatus ?? 'Pending';
   // eagle-api's POST answers a non-ObjectId with 400 and saves the comment anyway.
   for (const vc of body.valuedComponents || []) {

@@ -101,10 +101,10 @@ test('comment domain', async (t) => {
       [[created.value.id, 'e2', 'comment'], [COMMENT_ID, 'e2', 'comment'], [COMMENT_ID, 'e2', 'comment']]);
   });
 
-  await t.test('create with no status reads staff-only and stores no status', async (t) => {
+  await t.test('create with no status is stored Pending and reads staff-only', async (t) => {
     const store = fakeStore(t, null);
     await comment.create(STAFF, { periodId: PERIOD_ID });
-    assert.strictEqual(store.written[0].eaoStatus, null);
+    assert.strictEqual(store.written[0].eaoStatus, 'Pending');
     assert.strictEqual(levelOfRead(store.written[0].read), 2);
     assert.strictEqual(store.written[0].isPublished, false);
   });

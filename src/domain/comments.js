@@ -75,10 +75,10 @@ function auditOf(action, fields) {
 
 /**
  * The stored status and the comment's own read for `status`. Only `Published` opens a comment;
- * an absent status reads staff-only, never Eagle's `project-system-admin` default.
+ * an absent status is stored `Pending`, never Eagle's `project-system-admin` default.
  */
 function moderation(status) {
-  const eaoStatus = status === 'Reset' ? 'Pending' : (status ?? null);
+  const eaoStatus = status === 'Reset' || status == null ? 'Pending' : status;
   return { eaoStatus, own: [...(eaoStatus === 'Published' ? PUBLIC_READ : STAFF_READ)] };
 }
 
