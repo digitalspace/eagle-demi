@@ -500,11 +500,6 @@ async function runSeed(args, deps, summary) {
   const eagleProjects = await src.fetchEagleProjects({ onTotal: (total) => { projectsTotal = total; } });
   log(`  ${eagleProjects.length} from eagle-api`);
 
-  // The search returns `pins` as bare ObjectIds; the push sends `{_id, name, province}`. The
-  // lookup is what lets the merge land the same shape from either feed.
-  const orgs = await src.fetchOrganizationLookup();
-  log(`  ${orgs.size} organizations for pin and proponent resolution`);
-
   // DEMI-created projects are kept whole: rebuilt from Track they would lose their Eagle id to an `eagle-<id>` twin.
   // Read after the Eagle fetch: sync-out creates in Eagle before it stamps the row, so this order leaves the smaller race.
   const nativeRows = cosmosReady ? await repos.projects.listNative() : undefined;
@@ -513,7 +508,7 @@ async function runSeed(args, deps, summary) {
       'its documents planned under the twin, unlike a live run');
   }
   const { projects, report, nativeIds, clashTrackIds } = buildRegistry(trackProjects, eagleProjects,
-    { now, orgs, nativeRows });
+    { now, nativeRows });
   log(`  merged: ${report.matched} matched · ${report.trackOnlyNoGuid} Track without epic_guid · ` +
     `${report.trackOnlyDanglingGuid} dangling · ${report.eagleOnly} Eagle-only · ` +
     `${report.nativeKept ?? 0} native · ${report.nativeClash ?? 0} Track beside a native Eagle id = ${report.total}`);

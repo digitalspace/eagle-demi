@@ -1233,7 +1233,10 @@ paths:
           description: >-
             Project document. It carries `shortCode` and, composed from it, `shortUrl` — the
             `/s/<code>` link — plus `shortLinkUrl`, where that link lands, and `shortLinkCustom`,
-            true when staff set that target. All four appear together or not at all.
+            true when staff set that target. All four appear together or not at all. `pins` is
+            the pinned organizations as `{_id, name, province}` in stored order, without the ones
+            the caller cannot read; an anonymous caller gets it only when the list is published.
+            Staff also get `pinsPublished`.
         '401':
           description: A Bearer token was presented and rejected. No token gets the public view.
         '404':
@@ -1243,7 +1246,8 @@ paths:
       description: >-
         Modify an existing project's metadata or coordinates. It does not change visibility:
         `isPublished` and `read` in the body are ignored and the stored ACL is kept. Use
-        `PUT /api/projects/{id}/level`.
+        `PUT /api/projects/{id}/level`. It also sets the pinned organizations (`pins`,
+        `pinsPublished`); there are no pin routes.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1266,16 +1270,24 @@ paths:
           description: >-
             Body contains a field the caller cannot see, or a vis key, or `tags` outside the limits
             on `ProjectInput.tags`, or `tags` when the other row of a Track/`eagle-<eagleId>` pair
-            does not let the caller see its tags. Nothing is written to either row.
+            does not let the caller see its tags. Nothing is written to either row. Also a `pins`
+            id that is not an organization, or a malformed `pins` or `pinsPublished`; `fields.pins`
+            names the unknown ids.
         '401':
           description: Unauthorized.
+        '403':
+          description: >-
+            The body changes `pins` or `pinsPublished` and the caller holds none of `sysadmin`,
+            `staff`, `project-system-admin`. Sending back the stored values is not a change.
         '404':
           description: Project not found.
         '409':
           description: >-
             The project is under a locked Act (today the Building Canada Act, 2025) and the body
             sends another `legislationYear` (including null) or another `legislation` label,
-            including when the project moved under that Act after this request read it. Nothing is
+            including when the project moved under that Act after this request read it. Or the
+            pin list would turn public while it holds an unpublished organization: publishing the
+            list checks every pin, adding to a published list checks the added ones. Nothing is
             written.
         '500':
           description: >-
@@ -9480,6 +9492,23 @@ components:
             write is refused (400) when the field visibility setting for `tags` on either row
             refuses the caller. The copy writes only the tag list, and it is audited.
           example: ["West Coast Oil Pipeline"]
+        pins:
+          type: array
+          maxItems: 100
+          items:
+            oneOf:
+              - type: string
+              - type: object
+                properties:
+                  _id:
+                    type: string
+          description: >-
+            Set by `PUT` only. Organization ids; replaces the stored list. Repeats are dropped,
+            keeping the first. A `{_id, ...}` item, the shape the read returns, counts as its `_id`.
+        pinsPublished:
+          type: boolean
+          description: >-
+            Set by `PUT` only. Publishes or unpublishes the whole pin list.
 
     DocumentInput:
       type: object

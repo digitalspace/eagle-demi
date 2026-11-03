@@ -147,7 +147,6 @@ test('the pushed-enriched Eagle project record', async (t) => {
     responsibleEPDPhone: '250 555 0102',
     proponentId: '58850f69aaecd9001b8085cc',
     proponentName: 'Eagle Proponent Ltd',
-    pins: [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }],
     featuredDocuments: ['5cf00c03a266b7e187750002', '5cf00c03a266b7e187750003']
   };
 
@@ -160,30 +159,26 @@ test('the pushed-enriched Eagle project record', async (t) => {
     }
   });
 
-  // They were reachable only under `sources.eagle`, which the field catalog holds at maxVis 0 —
-  // so a caller saw neither. Promoting them must not stop the raw payload carrying them.
-  await t.test('pins and featuredDocuments are top level AND still under sources.eagle', () => {
+  // It was reachable only under `sources.eagle`, which the field catalog holds at maxVis 0, so a
+  // caller never saw it. Promoting it must not stop the raw payload carrying it.
+  await t.test('featuredDocuments is top level AND still under sources.eagle', () => {
     const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, ENRICHED), OPTS);
 
-    assert.deepStrictEqual(merged.pins, ENRICHED.pins);
     assert.deepStrictEqual(merged.featuredDocuments, ENRICHED.featuredDocuments);
-    assert.deepStrictEqual(merged.sources.eagle.pins, ENRICHED.pins);
     assert.deepStrictEqual(merged.sources.eagle.featuredDocuments, ENRICHED.featuredDocuments);
   });
 
-  // A raw Mongo push nests content under `legislation_<year>` and keeps pins and featured documents
-  // at the top level. Both have to survive the flatten, from opposite sides of it.
+  // A raw Mongo push nests content under `legislation_<year>` and keeps featured documents at the
+  // top level. Both have to survive the flatten, from opposite sides of it.
   await t.test('a raw Mongo doc keeps them across the legislation flatten', () => {
     const merged = mergeTrackProject(TRACK_207, {
       _id: TRACK_207.epic_guid,
       read: ['public'],
-      pins: ENRICHED.pins,
       featuredDocuments: ENRICHED.featuredDocuments,
       currentLegislationYear: 'legislation_2002',
       legislation_2002: { name: 'Nested Name', proponentId: ENRICHED.proponentId }
     }, OPTS);
 
-    assert.deepStrictEqual(merged.pins, ENRICHED.pins);
     assert.deepStrictEqual(merged.featuredDocuments, ENRICHED.featuredDocuments);
     assert.strictEqual(merged.proponentId, ENRICHED.proponentId);
   });
@@ -1008,7 +1003,7 @@ test('buildProjectIndex — the deterministic id join', async (t) => {
 });
 
 // The pushed fields above, arriving from the seed: `/api/public/search?dataset=Project` returns
-// `proponent` populated and `pins` as bare ObjectIds, not the push's resolved shape.
+// `proponent` populated, not the push's resolved shape.
 test('the seed-shaped Eagle project record', async (t) => {
   const ORG = {
     _id: '58850f68aaecd9001b80857c',
@@ -1017,9 +1012,6 @@ test('the seed-shaped Eagle project record', async (t) => {
     province: 'British Columbia',
     city: 'Castlegar'
   };
-  const PIN = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
-  const ORGS = new Map([[PIN._id, PIN]]);
-  const OPTS_ORGS = { now: NOW, orgs: ORGS };
   // Nothing to inherit a proponent name from, so the Eagle slot's own value is what shows.
   const NO_PROPONENT = { ...TRACK_207, proponent_name: '' };
 
@@ -1051,39 +1043,22 @@ test('the seed-shaped Eagle project record', async (t) => {
     assert.strictEqual(merged.proponentName, 'Pushed Name');
   });
 
-  await t.test('pins resolve to the push shape, and an unknown org drops', () => {
-    const merged = mergeTrackProject(NO_PROPONENT, eagleFor(TRACK_207, {
-      pins: [PIN._id, '5cf00c03a266b7e187759999']
-    }), OPTS_ORGS);
-
-    assert.deepStrictEqual(merged.pins, [PIN]);
-  });
-
-  await t.test('without a lookup, pin ids are left alone rather than made nameless', () => {
-    const merged = mergeTrackProject(NO_PROPONENT, eagleFor(TRACK_207, { pins: [PIN._id] }), OPTS);
-
-    assert.deepStrictEqual(merged.pins, [PIN._id]);
-  });
-
   await t.test('a nested Mongo doc is normalised out of its legislation block', () => {
     const merged = mergeEagleOnlyProject({
       _id: TRACK_207.epic_guid,
       currentLegislationYear: 'legislation_2002',
-      pins: [PIN._id],
       legislation_2002: { name: 'Nested Name', proponent: ORG }
-    }, OPTS_ORGS);
+    }, OPTS);
 
     assert.strictEqual(merged.proponentId, ORG._id);
     assert.strictEqual(merged.proponentName, ORG.name);
-    assert.deepStrictEqual(merged.pins, [PIN]);
   });
 
   await t.test('normalising never rewrites the caller\'s own record', () => {
-    const eagle = eagleFor(TRACK_207, { proponent: ORG, pins: [PIN._id] });
-    mergeTrackProject(NO_PROPONENT, eagle, OPTS_ORGS);
+    const eagle = eagleFor(TRACK_207, { proponent: ORG });
+    mergeTrackProject(NO_PROPONENT, eagle, OPTS);
 
     assert.strictEqual(eagle.proponentId, undefined);
-    assert.deepStrictEqual(eagle.pins, [PIN._id]);
   });
 
   // The seed's feed is narrower than the push's: no applicableRegulation, no featuredDocuments.
@@ -1106,20 +1081,14 @@ test('the seed-shaped Eagle project record', async (t) => {
 // A re-merge carries only the fields the feed never sends; `hasValue` cannot tell an omitted field
 // from one the EAO cleared, so carrying any other would make an upstream clear unappliable.
 test('carryEagleOnlyFields carries only what the feed cannot rebuild', async (t) => {
-  const PIN = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
-  const OTHER_PIN = { _id: '5cf00c03a266b7e187750002', name: 'Another Nation', province: 'BC' };
-  const UNKNOWN_PIN_ID = '5cf00c03a266b7e187759999';
-
   await t.test('a field the feed cleared is NOT restored from the stored row', () => {
-    // `region` and `pinsRead` are both in EAGLE_ONLY_FIELDS and both in the feed, so the EAO
-    // clearing either has to stick. This is the regression: they came back on every re-merge.
-    const stored = { region: 'Kootenay', pinsRead: ['public'], proponentId: 'org-1' };
+    // `region` is in EAGLE_ONLY_FIELDS and in the feed, so the EAO clearing it has to stick. This
+    // is the regression: it came back on every re-merge.
+    const stored = { region: 'Kootenay', proponentId: 'org-1' };
     const merged = carryEagleOnlyFields(
-      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { region: '', pinsRead: [] }), OPTS),
-      stored);
+      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { region: '' }), OPTS), stored);
 
     assert.strictEqual(merged.region, undefined, 'a cleared region must stay cleared');
-    assert.strictEqual(merged.pinsRead, undefined, 'a cleared pinsRead must stay cleared');
   });
 
   await t.test('a push-only field the feed never sends IS carried', () => {
@@ -1134,32 +1103,6 @@ test('carryEagleOnlyFields carries only what the feed cannot rebuild', async (t)
 
     assert.strictEqual(merged.proponentId, 'org-1');
     assert.deepStrictEqual(merged.applicableRegulation, stored.applicableRegulation);
-  });
-
-  await t.test('pins: [] upstream clears the pins', () => {
-    const merged = carryEagleOnlyFields(
-      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { pins: [] }), OPTS), { pins: [PIN] });
-
-    assert.strictEqual(merged.pins, undefined,
-      'the item is replaced whole, so no pins field is a project with no pins');
-  });
-
-  await t.test('a bare id takes the stored shape, and an unresolvable one keeps its own', () => {
-    // The feed sends pins as bare ObjectIds. Only the SHAPE comes off the stored row, per id —
-    // dropping an id the stored row cannot resolve would lose a pin the EAO still has.
-    const merged = carryEagleOnlyFields(
-      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { pins: [PIN._id, UNKNOWN_PIN_ID] }), OPTS),
-      { pins: [PIN] });
-
-    assert.deepStrictEqual(merged.pins, [PIN, UNKNOWN_PIN_ID]);
-  });
-
-  await t.test('membership stays the feed\'s — a pin the EAO removed does not come back', () => {
-    const merged = carryEagleOnlyFields(
-      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { pins: [PIN._id] }), OPTS),
-      { pins: [PIN, OTHER_PIN] });
-
-    assert.deepStrictEqual(merged.pins, [PIN]);
   });
 });
 
@@ -1190,16 +1133,15 @@ test('carryDemiOnlyFields', async (t) => {
     assert.deepStrictEqual(stored.tags, ['Old Name']);
   });
 
-  // Dark (docs/eagle-api-port.md, Pins): until F1 moves pins to DEMI_ONLY_FIELDS, Eagle's list wins.
-  await t.test('an Eagle push overwrites the pins and pinsRead a DEMI write stored', () => {
+  await t.test('Eagle push leaves DEMI-owned fields unchanged: pins and pinsRead', () => {
     const pin = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
     const stored = { id: '207', pins: ['5cf00c03a266b7e187750002'], pinsRead: ['public', 'staff', 'sysadmin'] };
     const pushed = eagleFor(TRACK_207, { pins: [pin], pinsRead: ['project-system-admin'] });
 
     const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), stored);
 
-    assert.deepStrictEqual(merged.pins, [pin]);
-    assert.deepStrictEqual(merged.pinsRead, ['project-system-admin']);
+    assert.deepStrictEqual(merged.pins, stored.pins);
+    assert.deepStrictEqual(merged.pinsRead, stored.pinsRead);
   });
 
   await t.test('a re-merge takes the guid Track gained over a stored null eagleId', () => {

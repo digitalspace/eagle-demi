@@ -576,17 +576,6 @@ async function fetchListLookup() {
 }
 
 /**
- * Organization `_id` -> `{_id, name, province}`, the shape eagle-api's push resolves `pins` to;
- * the public search returns bare ObjectIds, so without it the seed stores another pin shape.
- */
-async function fetchOrganizationLookup() {
-  const orgs = await fetchAllPages(EAGLE_API_BASE, 'Organization');
-  return new Map(orgs.filter(o => o && o._id).map(o => [
-    String(o._id), { _id: String(o._id), name: o.name || null, province: o.province || null }
-  ]));
-}
-
-/**
  * The checked-in boundary exports, read from the frontend asset directory the export script
  * writes and the frontend reads, because a second copy would drift.
  */
@@ -627,6 +616,5 @@ module.exports = {
   fetchEagleProjects,
   streamEagleDocuments,
   fetchListLookup,
-  fetchOrganizationLookup,
   loadBoundaries
 };

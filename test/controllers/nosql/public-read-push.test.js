@@ -811,6 +811,19 @@ test('PUT /eagle/organizations/:eagleId', async (t) => {
 
     assert.deepStrictEqual(written().read, ['sysadmin']);
   });
+
+  await t.test('Eagle push leaves DEMI-owned fields unchanged: organization visibility', async () => {
+    const existing = {
+      id: ORG_EAGLE_ID, eagleId: ORG_EAGLE_ID, kind: 'Organization', sourceSystem: 'eagle',
+      name: 'Old Name', isPublished: false, read: PRIVATE_ACL
+    };
+    const { written } = await pushTo(organizationController, lists, ORG_EAGLE_ID,
+      eagleOrganization({ read: PUBLIC_ACL }), t, { existing });
+
+    assert.strictEqual(written().name, 'Nicomen Energy Ltd', 'Eagle still owns the business card');
+    assert.strictEqual(written().isPublished, false);
+    assert.deepStrictEqual(written().read, PRIVATE_ACL);
+  });
 });
 
 test('PUT /eagle/notifications/:eagleId', async (t) => {

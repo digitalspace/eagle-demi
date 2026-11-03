@@ -495,9 +495,6 @@ test('seed() end to end with stubbed sources', async (t) => {
       return { count: 3, total: 3 };
     },
     fetchListLookup: async () => new Map([['t1', 'Letter']]),
-    fetchOrganizationLookup: async () => new Map([
-      ['org1', { _id: 'org1', name: 'Some Nation', province: 'BC' }]
-    ]),
     // Empty, so the default fixtures hold no notification parents and an unknown parent stays unknown.
     fetchAllPages: async () => [],
     loadBoundaries: () => [
@@ -745,20 +742,19 @@ test('seed() end to end with stubbed sources', async (t) => {
   await t.test('re-seeding an existing row fills proponentId without blanking the push', async () => {
     const { written, repos } = makeRepos();
     const org = { _id: 'org-1', name: 'Columbia Power Corporation', province: 'British Columbia' };
-    const pin = { _id: 'org-2', name: 'Some Nation', province: 'BC' };
     const sources = {
       ...stubSources,
       fetchEagleProjects: async () => [{
         ...eagleProject(matchedGuid, 'Nicomen Wind (Eagle)'),
         proponent: org,
-        pins: [pin._id]
-      }],
-      fetchOrganizationLookup: async () => new Map([[org._id, org], [pin._id, pin]])
+        pins: ['org-2']
+      }]
     };
     repos.projects.getById = async (_access, id) => (id === '207'
       ? {
         id: '207',
         proponentId: null,
+        pins: ['org-3'],
         applicableRegulation: { _id: 'r1', name: 'Reviewable Projects Regulation', item: null },
         featuredDocuments: ['d1']
       }
@@ -768,7 +764,7 @@ test('seed() end to end with stubbed sources', async (t) => {
 
     const matched = written.projects.find(p => p.id === '207');
     assert.strictEqual(matched.proponentId, org._id);
-    assert.deepStrictEqual(matched.pins, [pin]);
+    assert.deepStrictEqual(matched.pins, ['org-3'], 'DEMI owns pins, so the feed list never replaces them');
     assert.deepStrictEqual(matched.applicableRegulation,
       { _id: 'r1', name: 'Reviewable Projects Regulation', item: null },
       'the search carries no applicableRegulation, so the re-merge must not blank it');
@@ -1241,7 +1237,6 @@ test('seed --reconcile end to end', async (t) => {
       return { count: 1, total: 1 };
     },
     fetchListLookup: async () => new Map(),
-    fetchOrganizationLookup: async () => new Map(),
     // Empty and consistent, the shape that passes every completeness gate; the total is reported as
     // for the other fetches.
     fetchAllPages: async (_base, _dataset, opts) => {
@@ -2016,7 +2011,6 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
       return { count: docs.length, total: docs.length };
     },
     fetchListLookup: async () => new Map(),
-    fetchOrganizationLookup: async () => new Map(),
     fetchAllPages: async (_base, _dataset, opts) => {
       if (opts && opts.onTotal) opts.onTotal(0);
       return [];
@@ -2188,7 +2182,6 @@ test('a re-seed carries extraction state forward', async (t) => {
       return { count: docs.length, total: docs.length };
     },
     fetchListLookup: async () => new Map(),
-    fetchOrganizationLookup: async () => new Map(),
     fetchAllPages: async () => [],
     loadBoundaries: () => []
   });

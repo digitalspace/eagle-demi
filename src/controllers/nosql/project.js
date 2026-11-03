@@ -50,6 +50,7 @@ const { listHandler } = require('./mirror-reads');
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
 const { PROJECT_TYPE_SPELLINGS } = require('../../helpers/spellings');
 const { lockRefusal, yearSwitch } = require('../../domain/project-legislation');
+const { pinChanges, pinLabels } = require('../../domain/project-pins');
 
 /** A staff write that never found the row standing still. Same 503 the mirrors answer with. */
 function writeConflict(res, what, id) {
@@ -57,6 +58,21 @@ function writeConflict(res, what, id) {
   return res.status(503).json({
     error: 'The record is being written by another request. Try again.'
   });
+}
+
+/** A `pinChanges` refusal, answered as `writeHandler` (controllers/native/write.js) answers one. */
+function pinRefusal(res, refusal) {
+  if (refusal.status === 'invalid') {
+    return res.status(400).json({ error: 'Invalid request body.', fields: refusal.fields });
+  }
+  if (refusal.status === 'forbidden') return res.status(403).json({ error: refusal.error });
+  return res.status(409).json({ error: refusal.error });
+}
+
+/** The stored pins are ids; a read returns them as `{_id, name, province}` when the redaction kept them. */
+async function withPinLabels(body, project, access) {
+  if (Array.isArray(body.pins)) body.pins = await pinLabels(access, project);
+  return body;
 }
 
 const MAX_TAGS = 20;
@@ -385,7 +401,7 @@ exports.getProject = async (req, res) => {
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    const body = redactForAccess('projects', project, access);
+    const body = await withPinLabels(redactForAccess('projects', project, access), project, access);
     // Only the code is stored; the masthead's copy button needs the URL, and the base host is
     // per-environment config, not a stored value that could go stale.
     // `shortLinkUrl` is where that link lands; shown exactly where the link itself is.
@@ -481,6 +497,7 @@ exports.updateProject = async (req, res) => {
     }
 
     const { status: wireStatus, ...changes } = req.body;
+    const pinBody = { pins: changes.pins, pinsPublished: changes.pinsPublished };
     for (const key of PUT_IGNORED_FIELDS) delete changes[key];
 
     // Same rename as createProject, and it has to be here too: this route spreads the body in
@@ -535,9 +552,13 @@ exports.updateProject = async (req, res) => {
           });
           return { status: 'locked', error: locked };
         }
+        // Per try too: the publish check depends on the pins the reread row holds.
+        const pinned = await pinChanges({ access }, current, pinBody);
+        if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
         const row = {
           ...current,
           ...changes,
+          ...pinned.changes,
           id: current.id,
           trackProjectId: current.trackProjectId,
           updatedAt: new Date().toISOString()
@@ -546,6 +567,7 @@ exports.updateProject = async (req, res) => {
         return {
           status: 'saved',
           replaced: current,
+          pinFields: Object.keys(pinned.changes).map(key => (key === 'pinsRead' ? 'pinsPublished' : key)),
           saved: await projects.upsert(row, { etag: current._etag })
         };
       },
@@ -557,7 +579,8 @@ exports.updateProject = async (req, res) => {
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
     if (written.status === 'locked') return res.status(409).json({ error: written.error });
-    const { saved, replaced } = written;
+    if (written.status === 'pins') return pinRefusal(res, written.refusal);
+    const { saved, replaced, pinFields } = written;
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full
     // before/after of arbitrary request bodies would put project content into a table kept for
@@ -570,8 +593,8 @@ exports.updateProject = async (req, res) => {
       targetId: existing.id,
       projectId: existing.id,
       detail: {
-        fields: Object.keys(changes)
-          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags)),
+        fields: [...Object.keys(changes)
+          .filter(key => key !== 'tags' || !sameTags(replaced.tags, changes.tags)), ...pinFields],
         isPublishedFrom: replaced.isPublished,
         isPublishedTo: saved.isPublished
       }
@@ -586,7 +609,7 @@ exports.updateProject = async (req, res) => {
     if (mirrorFailure) return res.status(500).json({ success: false, error: mirrorFailure });
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
-    return res.json(redactForAccess('projects', saved, access));
+    return res.json(await withPinLabels(redactForAccess('projects', saved, access), saved, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }

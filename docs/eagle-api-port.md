@@ -44,7 +44,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af); no caller yet |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); v2.5.35 deployed to test; prod precondition under Project |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | done (359611b4) |
-| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | todo |
+| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half done: project PUT takes pins, Eagle push keeps pins and organization visibility; eagle-admin half todo |
 | F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | todo |
 | F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | todo |
 | F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `project.service.ts` | 4, F8 | - | todo |

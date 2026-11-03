@@ -1,7 +1,6 @@
 'use strict';
 
 // Pin rules of `PUT /projects/:id`, from eagle-api `api/controllers/pins.js` (docs/eagle-api-port.md, Pins).
-// Dark: no caller until F1; the Eagle push owns `pins` and `pinsRead` until then.
 
 const lists = require('../repositories/lists');
 const { resolveAccess, systemAccess } = require('../helpers/access-sql');
