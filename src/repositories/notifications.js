@@ -56,8 +56,8 @@ async function readForWrite(id) {
 }
 
 /**
- * The DEMI-created row sync-out sent under this Eagle id, unfiltered: the echo of its create finds it here.
- * Throws `DUPLICATE_ID` when two rows name it.
+ * The DEMI-created row sync-out sent under this Eagle id, with no ACL predicate: the echo of its create finds
+ * it here. An Eagle row is stored under its id, so `readForWrite` finds it. Throws `DUPLICATE_ID` when two rows name it.
  */
 async function readForWriteByEagleId(eagleId) {
   const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');

@@ -5,7 +5,7 @@
 
 const settings = require('../config').syncOut;
 const notifications = require('../repositories/notifications');
-const { SCHEMA } = require('../domain/notifications');
+const { DEFAULTS } = require('../domain/notifications');
 const {
   requireSettings, call, failure, claimHeld, createMinted, refuseStray, isPublic
 } = require('./eagle');
@@ -15,8 +15,8 @@ const KIND = 'notification';
 const NATIVE = 'demi';
 const ROUTE = '/projectNotification';
 
-/** The fields eagle-api's PUT maps from the body (projectNotification.js protectedPut): SCHEMA plus the two it types itself. */
-const FIELDS = Object.freeze([...Object.keys(SCHEMA), 'notificationThresholdValue', 'centroid']);
+/** Every field a DEMI write sets, which is every field eagle-api's PUT maps (and resets when absent). */
+const FIELDS = Object.freeze(Object.keys(DEFAULTS));
 
 // eagle-api sets the level from `?publish=` on both POST and PUT; it has no publish route for notifications.
 const withLevel = (path, row) => `${path}?publish=${isPublic(row.read)}`;

@@ -150,7 +150,8 @@ function eagleOwnedOnto(current, eagleId, doc) {
  * `upsertWithRetry` for a mirror whose rows DEMI may own: a DEMI row keeps every field but `eagleId` and
  * `sources.eagle`, any other row is `build(current)`. `label` names the controller in the log line.
  */
-async function upsertKeepingDemiRows(repo, eagleId, doc, build, readExisting, { pushedAt = null, label }) {
+async function upsertKeepingDemiRows(repo, eagleId, doc, build, readExisting,
+  { pushedAt = null, label = repo.CONTAINER } = {}) {
   const written = await upsertWithRetry(repo,
     (current) => (demiOwned(current) ? eagleOwnedOnto(current, eagleId, doc) : build(current)),
     readExisting, { pushedAt });
