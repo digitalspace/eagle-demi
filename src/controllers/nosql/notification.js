@@ -9,10 +9,9 @@ const notifications = require('../../repositories/notifications');
 const updates = require('../../repositories/updates');
 const { eagleBaseAcl } = require('../../seed/transform');
 const { mirrorError } = require('../../helpers/duplicate-id');
-const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
+  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
@@ -61,13 +60,6 @@ function mirrorItem(eagleId, doc, read, existing) {
   };
 }
 
-const demiOwned = (row) => Boolean(row) && row.sourceSystem === 'demi';
-
-/** The Eagle echo applied to a row DEMI owns: no Eagle field is copied, only the raw `sources.eagle`. */
-function eagleOwnedOnto(current, eagleId, doc) {
-  return { ...current, eagleId, sources: { ...current.sources, eagle: doc } };
-}
-
 /** Row for this push: by Eagle id, else a DEMI row sync-out sent under that id. */
 async function readTarget(eagleId) {
   return await notifications.readForWrite(eagleId) || await notifications.readForWriteByEagleId(eagleId);
@@ -83,18 +75,9 @@ async function readTarget(eagleId) {
 async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   const read = eagleBaseAcl(doc.read);
 
-  const written = await upsertWithRetry(
-    notifications,
-    (current) => (demiOwned(current)
-      ? eagleOwnedOnto(current, eagleId, doc)
-      : mirrorItem(eagleId, doc, read, current)),
-    () => readTarget(eagleId),
-    { pushedAt }
-  );
-  if (written.saved && demiOwned(written.existing)) {
-    logger.info('[Notification Controller] eagle push kept to the raw copy on a row it does not own',
-      { eagleId, id: written.saved.id, sourceSystem: written.existing.sourceSystem });
-  }
+  const written = await upsertKeepingDemiRows(notifications, eagleId, doc,
+    (current) => mirrorItem(eagleId, doc, read, current),
+    () => readTarget(eagleId), { pushedAt, label: 'Notification Controller' });
   // The Update parent gate caches every notification's read.
   updates.forgetParents();
   return written;

@@ -139,6 +139,28 @@ async function upsertWithRetry(repo, build, readExisting,
   });
 }
 
+const demiOwned = (row) => Boolean(row) && row.sourceSystem === 'demi';
+
+/** The Eagle echo applied to a row DEMI owns: no Eagle field is copied, only the raw `sources.eagle`. */
+function eagleOwnedOnto(current, eagleId, doc) {
+  return { ...current, eagleId, sources: { ...current.sources, eagle: doc } };
+}
+
+/**
+ * `upsertWithRetry` for a mirror whose rows DEMI may own: a DEMI row keeps every field but `eagleId` and
+ * `sources.eagle`, any other row is `build(current)`. `label` names the controller in the log line.
+ */
+async function upsertKeepingDemiRows(repo, eagleId, doc, build, readExisting, { pushedAt = null, label }) {
+  const written = await upsertWithRetry(repo,
+    (current) => (demiOwned(current) ? eagleOwnedOnto(current, eagleId, doc) : build(current)),
+    readExisting, { pushedAt });
+  if (written.saved && demiOwned(written.existing)) {
+    logger.info(`[${label}] eagle push kept to the raw copy on a row it does not own`,
+      { eagleId, id: written.saved.id, sourceSystem: written.existing.sourceSystem });
+  }
+  return written;
+}
+
 /**
  * `read` under the deleted ceiling (level 2) when Eagle pushed the record with `isDeleted: true`,
  * as the comment-period mirror does: DEMI flags and narrows a delete, it never removes the row.
@@ -161,6 +183,7 @@ module.exports = {
   pushConflict,
   keepSeal,
   upsertWithRetry,
+  upsertKeepingDemiRows,
   underDeleteCeiling,
   refId
 };

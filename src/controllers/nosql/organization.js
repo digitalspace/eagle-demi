@@ -6,11 +6,10 @@
 const lists = require('../../repositories/lists');
 const { eagleBaseAcl } = require('../../seed/transform');
 const { mirrorError } = require('../../helpers/duplicate-id');
-const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { DEMI_OWNED_FIELDS } = require('../../ownership/organization');
 const {
-  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict
+  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
 /** Eagle's staff-side organization fields. Also what src/scripts/backfill-eagle-staff-fields.js copies. */
@@ -54,13 +53,6 @@ function mirrorItem(eagleId, doc, read, existing) {
   };
 }
 
-const demiOwned = (row) => Boolean(row) && row.sourceSystem === 'demi';
-
-/** The Eagle echo applied to a row DEMI owns: no Eagle field is copied, only the raw `sources.eagle`. */
-function eagleOwnedOnto(current, eagleId, doc) {
-  return { ...current, eagleId, sources: { ...current.sources, eagle: doc } };
-}
-
 /**
  * Row for this push: by Eagle id, else a DEMI row sync-out sent under that id. The id wins, as in
  * the comment-period mirror: a row stored under the Eagle id is that record's mirror.
@@ -78,19 +70,8 @@ async function readTarget(eagleId) {
 async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   const read = eagleBaseAcl(doc.read);
 
-  const written = await upsertWithRetry(
-    lists,
-    (current) => (demiOwned(current)
-      ? eagleOwnedOnto(current, eagleId, doc)
-      : mirrorItem(eagleId, doc, read, current)),
-    () => readTarget(eagleId),
-    { pushedAt }
-  );
-  if (written.saved && demiOwned(written.existing)) {
-    logger.info('[Organization Controller] eagle push kept to the raw copy on a row it does not own',
-      { eagleId, id: written.saved.id, sourceSystem: written.existing.sourceSystem });
-  }
-  return written;
+  return upsertKeepingDemiRows(lists, eagleId, doc, (current) => mirrorItem(eagleId, doc, read, current),
+    () => readTarget(eagleId), { pushedAt, label: 'Organization Controller' });
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
