@@ -6,9 +6,10 @@
  */
 
 const projects = require('../repositories/projects');
-const config = require('../config');
 const { resolveAccess, MAX_PAGE_SIZE, MAX_PAGE_DEPTH } = require('../helpers/access-sql');
 const { redactAllForAccess } = require('../vis/redact');
+const { onePerEagleId } = require('../helpers/project-twin');
+const { isEagleOnlyProjectId } = require('../merge/project');
 const { serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
 
@@ -42,6 +43,9 @@ const BCGW_COLUMNS = [
   'Decision Date', 'URL to Epic Project', 'Project GUID'
 ];
 
+// Not config.linkBaseUrl: eagle-api writes the prod host on every tier, and BCGW parity is byte for byte.
+const BCGW_LINK_HOST = 'https://projects.eao.gov.bc.ca';
+
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 /** The label of an Eagle List ref, which the push sends resolved as `{_id, name}`. */
@@ -61,11 +65,10 @@ function bcgwDate(value) {
   return `${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}-${date.getUTCFullYear()}`;
 }
 
-/** One redacted project as the BCGW row eagle-api built from `read_only__reports__project_info`. */
-function bcgwRow(project) {
+/** One `[eagleId, redacted project]` as the BCGW row eagle-api built from `read_only__reports__project_info`. */
+function bcgwRow([eagleId, project]) {
   const coordinates = project.centroid && Array.isArray(project.centroid.coordinates)
     ? project.centroid.coordinates : [];
-  const eagleId = project.eagleId || project.id;
   return {
     'Latitude': coordinates[1],
     'Longitude': coordinates[0],
@@ -81,7 +84,7 @@ function bcgwRow(project) {
     'Federal Involvement': refName(project.CEAAInvolvement),
     'EA Decision': refName(project.eacDecision),
     'Decision Date': bcgwDate(project.decisionDate),
-    'URL to Epic Project': `${config.linkBaseUrl}/p/${eagleId}/project-details`,
+    'URL to Epic Project': `${BCGW_LINK_HOST}/p/${eagleId}/project-details`,
     // eagle-api JSON-stringified the ObjectId, so the warehouse has always ingested it in quotes.
     'Project GUID': JSON.stringify(String(eagleId))
   };
@@ -103,7 +106,9 @@ async function bcgwReport() {
   // Anonymous on purpose: the report is the public field set of public rows, whoever asks.
   const access = resolveAccess({});
   const visible = redactAllForAccess('projects', await listPublicProjects(access), access);
-  return toCsv(BCGW_COLUMNS, visible.map(bcgwRow));
+  // Sorted by Project GUID, one row each, Track row over its twin; eagle-api's natural order can differ.
+  const trackFirst = (kept, row) => (isEagleOnlyProjectId(kept.id) && !isEagleOnlyProjectId(row.id) ? row : kept);
+  return toCsv(BCGW_COLUMNS, onePerEagleId(visible, trackFirst).map(bcgwRow));
 }
 
 const REPORTS = { bcgw: bcgwReport };

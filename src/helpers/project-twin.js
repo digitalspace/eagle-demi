@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * The `eagle-<id>` row the Track relink keeps beside a Track project (sync-track-projects.js). An
- * Eagle push lands on the Track row only, so without this the twin keeps serving an ACL Eagle has
- * since narrowed.
+ * The `eagle-<id>` row the Track relink (`src/scripts/sync-track-projects.js`) keeps beside a Track project.
+ * An Eagle push lands on the Track row only, so without this the twin keeps serving an ACL Eagle has since narrowed.
  */
 
 const projects = require('../repositories/projects');
@@ -68,6 +67,21 @@ async function narrowTwin(saved, eagleId, cascade) {
   return failure;
 }
 
+/**
+ * `[eagleId, row]` once per lowercased Eagle id, sorted by it. Rows with no Eagle ObjectId are
+ * skipped; for a Track row and its `eagle-<id>` twin, `prefer(kept, row)` returns the one to keep.
+ */
+function onePerEagleId(rows, prefer) {
+  const byId = new Map();
+  for (const row of rows) {
+    if (!row || !projects.EAGLE_OBJECT_ID.test(row.eagleId || '')) continue;
+    const eagleId = String(row.eagleId).toLowerCase();
+    const kept = byId.get(eagleId);
+    byId.set(eagleId, kept ? prefer(kept, row) : row);
+  }
+  return [...byId].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 /** Whether two stored `tags` values are the same list; absent reads as empty. */
 const sameTags = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
 
@@ -91,17 +105,8 @@ async function partnerRefusesTags(row, access) {
 }
 
 /**
- * Copy the row's stored `tags` onto the other row of its pair, so both rows (and the documents
- * each one holds) match the same names, and a removal on one is a removal on both.
- *
- * The partner is read and written without the caller's access: the two rows can carry different
- * `read[]`, and a checked read would skip the partner and leave the pair apart. Only `tags` (and
- * `updatedAt`) change on it, and the write is audited under the caller. The partner's field dial
- * is not skipped: the PUT checks `partnerRefusesTags` before its own write.
- *
- * @param {object} row  the row as it was before this write, so the pair is the one it belonged to
- * @param {object} req  the request whose caller the partner write is audited under
- * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ * Copy `row`'s (pre-write) stored `tags` onto its pair past the caller's `read[]`, safe as only `tags` and `updatedAt`
+ * change there; audited under `req`, PUT checks `partnerRefusesTags` first. Returns a 500 message or null.
  */
 async function mirrorTags(row, req) {
   const read = () => readPartner(row);
@@ -139,4 +144,4 @@ async function mirrorTags(row, req) {
   return 'The project tags changed, but the other copy of this project could not take them.';
 }
 
-module.exports = { narrowTwin, mirrorTags, partnerRefusesTags, sameTags };
+module.exports = { narrowTwin, mirrorTags, partnerRefusesTags, sameTags, onePerEagleId };

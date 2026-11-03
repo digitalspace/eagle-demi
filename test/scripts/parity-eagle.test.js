@@ -385,26 +385,12 @@ test('the same columns in a different order are a header difference and exit 1',
 
 const BCGW_COLUMNS = ['Project name', 'URL to Epic Project', 'Project GUID'];
 // Both report writers wrap the Project GUID cell in literal quotes.
-const bcgwRow = (id, host = 'projects.eao.gov.bc.ca', linkId = id) =>
-  ['Mine', `https://${host}/p/${linkId}/project-details`, `"${id}"`];
+const bcgwRow = (id) => ['Mine', `https://projects.eao.gov.bc.ca/p/${id}/project-details`, `"${id}"`];
 const bcgwRun = async (eagleRows, demiRows, { args = [], files } = {}) => {
   const h = harness(csvSides(eagleRows, demiRows, BCGW_COLUMNS), { files });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'report-bcgw', ...args], h.deps);
   return { code, line: h.out[0] };
 };
-
-test('a BCGW project link that differs only by host is counted as a known difference', async () => {
-  const { code, line } = await bcgwRun([bcgwRow(A)], [bcgwRow(A, 'eagle-test.example')]);
-  assert.strictEqual(code, 0);
-  assert.match(line,
-    /report-bcgw identity=anonymous match=0 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=0 known=bcgw-link-host:1/);
-});
-
-test('a BCGW project link that points at a different project is unexplained and exits 1', async () => {
-  const { code, line } = await bcgwRun([bcgwRow(A)], [bcgwRow(A, 'eagle-test.example', B)]);
-  assert.strictEqual(code, 1);
-  assert.match(line, /match=0 missingInDemi=0 extraInDemi=0 fieldDiff=1 unexplained=1/);
-});
 
 test('a quoted BCGW Project GUID is matched against bare Eagle ids in --known-ids', async () => {
   const { code, line } = await bcgwRun([bcgwRow(A), bcgwRow(B)], [bcgwRow(A)], {

@@ -7,10 +7,11 @@ const assert = require('node:assert');
 
 const controller = require('../../src/controllers/report');
 const projects = require('../../src/repositories/projects');
+const config = require('../../src/config');
 
 /**
- * Header and two rows of eagle-api's own `GET /api/reports?type=bcgw` (eagle-test, 2026-10-06),
- * byte for byte: one complete row, and one with a comma-bearing description and no decision date.
+ * Header and two rows copied byte for byte from eagle-api `GET /api/reports?type=bcgw`: one full
+ * row, one with a comma in the description and no decision date.
  */
 const EAGLE_CSV = [
   'Latitude,Longitude,Project name,Proponent,Type,Sub-Type,Description,MOE Region,Project Phase,Legislation,Federal Involvement,EA Decision,Decision Date,URL to Epic Project,Project GUID',
@@ -66,13 +67,32 @@ test('BCGW report', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   await t.test('matches the eagle-api feed field for field', async () => {
-    t.mock.method(projects, 'listPage', async () => structuredClone(DEMI_ROWS));
+    // Name order and a test link host, as on DEMI test: eagle-api writes neither.
+    t.mock.method(projects, 'listPage', async () => structuredClone(DEMI_ROWS).reverse());
+    t.mock.property(config, 'linkBaseUrl', 'https://eagle-public-next-test.example');
     const res = mockRes();
     await controller.getReport({ query: { type: 'bcgw' }, headers: {} }, res);
 
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.body, EAGLE_CSV);
     assert.strictEqual(res.headers['content-disposition'], 'attachment; filename=export_bcgw.csv');
+  });
+
+  await t.test('writes one row per lowercased Eagle id, the Track row over its twin in any read order', async () => {
+    const [keenleyside, coquihalla] = structuredClone(DEMI_ROWS);
+    const twin = { ...keenleyside, id: `eagle-${keenleyside.eagleId}`, name: 'Stale twin' };
+    for (const pair of [[twin, keenleyside], [keenleyside, twin]]) {
+      t.mock.restoreAll();
+      t.mock.method(projects, 'listPage', async () => [
+        { ...coquihalla, eagleId: coquihalla.eagleId.toUpperCase() },
+        { ...keenleyside, id: '1003', eagleId: undefined, name: 'Track only' },
+        ...pair
+      ]);
+      const res = mockRes();
+      await controller.getReport({ query: { type: 'bcgw' }, headers: {} }, res);
+
+      assert.strictEqual(res.body, EAGLE_CSV, pair.map(row => row.id).join(', '));
+    }
   });
 
   await t.test('reads as the public whoever asks', async () => {

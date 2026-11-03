@@ -9,6 +9,7 @@ const projects = require('../repositories/projects');
 const { resolveAccess } = require('../helpers/access-sql');
 const { redactForAccess } = require('../vis/redact');
 const { defaultProjectUrl } = require('../helpers/short-links');
+const { onePerEagleId } = require('../helpers/project-twin');
 const { serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
 
@@ -30,17 +31,12 @@ async function publicPages() {
   // Anonymous whoever asks: one cached answer serves every caller.
   const access = resolveAccess({});
   const { items } = await projects.listVisible(access, {});
-  const pages = new Map();
-  for (const row of items) {
-    // The row's own dials can hide `eagleId` or `dateUpdated` from an anonymous reader.
-    const project = redactForAccess('projects', row, access);
-    if (!project || !projects.EAGLE_OBJECT_ID.test(project.eagleId || '')) continue;
-    const eagleId = project.eagleId.toLowerCase();
-    const lastmod = lastmodOf(project.dateUpdated);
-    // A Track row and its `eagle-<id>` twin are one page; keep the later date.
-    if (!pages.has(eagleId) || (lastmod && lastmod > (pages.get(eagleId) || ''))) pages.set(eagleId, lastmod);
-  }
-  return [...pages].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  // The row's own dials can hide `eagleId` or `dateUpdated` from an anonymous reader.
+  const visible = items.map(row => redactForAccess('projects', row, access));
+  // A Track row and its `eagle-<id>` twin are one page; keep the later date.
+  const later = (kept, row) =>
+    ((lastmodOf(row.dateUpdated) || '') > (lastmodOf(kept.dateUpdated) || '') ? row : kept);
+  return onePerEagleId(visible, later).map(([eagleId, row]) => [eagleId, lastmodOf(row.dateUpdated)]);
 }
 
 async function buildSitemap() {
