@@ -487,9 +487,9 @@ Known Dark-phase limit: the CAC fields are copied from Eagle, so the next Eagle 
 
 ### Extensions
 
-Status: done (99c9045c), Dark
+Status: done (99c9045c). DEMI half of F8 built (1ef05689, ac66bb8c); the eagle-admin half is todo.
 
-Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project (`EAGLE_ONLY_FIELDS` in `src/ownership/project.js`), filled by the Eagle push. Dark: the four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
+Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project, in `DEMI_ONLY_FIELDS` (`src/ownership/project.js`). The four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
 
 Target routes: `GET` and `POST /projects/:id/extensions`, `PUT` and `DELETE /projects/:id/extensions/:extId`.
 
@@ -511,13 +511,15 @@ Decisions:
 - POST answers 201; the GET and every write answer `{ reviewExtensions, reviewSuspensions }` only (`bodyOf` in `src/domain/extensions.js`), redacted as a project. A list a per-project dial hides from the caller is left out of the GET and is a 400 to write.
 - The write is one etag-guarded project upsert, so the remove and add of a PUT land together; eagle-api's two updates could drop the old item and then fail the push.
 - No `vis/catalog/projects.js` edit was needed: both lists are already catalogued, and the redactor does not descend into arrays. Slice 11 is free to edit it.
-- Dark: a DEMI write is replaced by the next Eagle push of that project, and by any merge that rebuilds the row from its stored Eagle copy.
+- An Eagle push or re-merge keeps the stored lists. A row with no stored list takes the one Eagle sent (`seedEagleLists` in `src/merge/project.js`), as pins do.
+- `PUT /projects/:id` ignores both lists (`PUT_IGNORED_FIELDS`), so only these routes move them.
+- Sync-out: each write queues the project (`queued` in `src/domain/_write.js`), but the lists never reach Eagle. eagle-api's project PUT writes neither list, and the project consumer sends only projects DEMI created. No client reads them from eagle-api: eagle-public on `react` and `develop` never reads them, and eagle-admin loads the project from DEMI.
 
 Questioned:
 - Delete removes every equal copy, not one (`:527`). Ported as is through the shared content id.
 - A `type` other than `Extension` lands in `reviewSuspensions` with that type (`:490`). Ported as is; eagle-admin only sends `Extension` and `Suspension`.
 
-Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `editExtension`, `deleteExtension`), from `extension.component.ts:87,115,122`. At the flip (F8) `reviewExtensions` and `reviewSuspensions` leave `EAGLE_ONLY_FIELDS`.
+Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `editExtension`, `deleteExtension`), from `extension.component.ts:87,115,122`. Between the DEMI tag and the eagle-admin tag, an extension edit made through eagle-api does not reach a DEMI row that already holds the list.
 
 ### Project
 
