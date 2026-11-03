@@ -13,7 +13,7 @@ const { logger } = require('../../src/utils/logger');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const consumer = require('../../src/sync-out/eagle-comment');
-const { COMMENT, COMMENT_PERIOD, DOCUMENT, kindOf } = require('../../src/sync-out/kinds');
+const { COMMENT, COMMENT_PERIOD, DOCUMENT, UPDATE, kindOf } = require('../../src/sync-out/kinds');
 const commentController = require('../../src/controllers/nosql/comment');
 const {
   mockRes, STAFF, PUBLIC_ACL, PRIVATE_ACL, PERIOD_EAGLE_ID, eagleComment, storedProject
@@ -194,9 +194,11 @@ test('sync-out of DEMI-created comments', async (t) => {
       assert.strictEqual(rowOf(store).syncOut, undefined);
     });
 
-  await t.test('a sent period queues the comments held on it, and no other', async (tt) => {
+  await t.test('a sent period queues the comments and Updates held on it, and no other', async (tt) => {
+    useEnv(tt, { SYNC_OUT_EAGLE_UPDATE_ENABLED: 'true' });
     mirrorStore(tt, [nativePeriod({ eagleId: null, syncOut: undefined }), parent()]);
     fakeWhereQuery(tt, [
+      { id: 'update-held', sourceSystem: 'demi', syncVersion: 1, pcp: PERIOD_ROW_ID },
       held('held'),
       held('other-period', { periodId: 'another-period' }),
       held('sent', { syncOut: { eagle: { sentVersion: 1 } } }),
@@ -211,17 +213,19 @@ test('sync-out of DEMI-created comments', async (t) => {
     const result = await syncOut.run({ kind: COMMENT_PERIOD, consumer: 'eagle', id: PERIOD_ROW_ID, projectId: PROJECT_ID });
 
     assert.strictEqual(result.status, 'sent');
-    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]), [[COMMENT, 'held'], [COMMENT, 'edited-after-failing']]);
+    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]),
+      [[UPDATE, 'update-held'], [COMMENT, 'held'], [COMMENT, 'edited-after-failing']]);
   });
 
-  await t.test('a sent document queues the comments held on it, and no other', async (tt) => {
-    useEnv(tt, { SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true' });
+  await t.test('a sent document queues the comments and Updates held on it, and no other', async (tt) => {
+    useEnv(tt, { SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true', SYNC_OUT_EAGLE_UPDATE_ENABLED: 'true' });
     mirrorStore(tt, [parent(), {
       container: 'documents', id: DOCUMENT_ROW_ID, projectId: PROJECT_ID, sourceSystem: 'demi', eagleId: DOCUMENT_EAGLE_ID,
       syncVersion: 2, syncOut: { eagle: { status: 'sent', sentVersion: 1, published: true } },
       displayName: 'Draft plan', s3Key: 'docs/draft-plan.pdf', read: [...PUBLIC_ACL], isPublished: true
     }]);
     fakeWhereQuery(tt, [
+      { id: 'update-held', sourceSystem: 'demi', syncVersion: 1, attachments: [DOCUMENT_ROW_ID] },
       held('held', { documents: ['another-document', DOCUMENT_ROW_ID] }),
       held('names-another', { documents: ['another-document'] }),
       held('sent', { documents: [DOCUMENT_ROW_ID], syncOut: { eagle: { sentVersion: 1 } } })
@@ -232,7 +236,7 @@ test('sync-out of DEMI-created comments', async (t) => {
     const result = await syncOut.run({ kind: DOCUMENT, consumer: 'eagle', id: DOCUMENT_ROW_ID, projectId: PROJECT_ID });
 
     assert.strictEqual(result.status, 'sent');
-    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]), [[COMMENT, 'held']]);
+    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]), [[UPDATE, 'update-held'], [COMMENT, 'held']]);
   });
 
   await t.test('a comment with no status is sent as Pending', async (tt) => {

@@ -13,7 +13,8 @@ const { logger } = require('../../src/utils/logger');
 const notifications = require('../../src/repositories/notifications');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
-const { NOTIFICATION } = require('../../src/sync-out/kinds');
+const consumer = require('../../src/sync-out/eagle-notification');
+const { NOTIFICATION, kindOf } = require('../../src/sync-out/kinds');
 const notificationController = require('../../src/controllers/nosql/notification');
 const {
   mockRes, STAFF, PUBLIC_ACL, PRIVATE_ACL, eagleNotification
@@ -154,6 +155,16 @@ test('sync-out of DEMI-created notifications', async (t) => {
     assert.deepStrictEqual(keys(calls), [`PUT /projectNotification/${EAGLE_ID}?publish=false`]);
     assert.strictEqual(calls[0].body.notificationThresholdValue, 250000);
   });
+
+  await t.test('a row with no sourceSystem under the Eagle id is the mirror\'s: the create stops before any POST',
+    async (tt) => {
+      const store = mirrorStore(tt, [nativeNotification({ eagleId: EAGLE_ID }), { container: 'notifications', id: EAGLE_ID }]);
+      const calls = wireEagle(tt, { 'PUT *': { status: 404 } });
+      const update = mutate => syncOut.updateRow(kindOf(NOTIFICATION).repo, ROW_ID, null, mutate);
+
+      await assert.rejects(consumer.send(rowOf(store), { update }), /is held by an Eagle-owned DEMI row/);
+      assert.deepStrictEqual(keys(calls), [`PUT /projectNotification/${EAGLE_ID}?publish=true`]);
+    });
 
   await t.test("a create answered 409 is PUT under the minted id at the row's level", async (tt) => {
     const store = mirrorStore(tt, [nativeNotification()]);
