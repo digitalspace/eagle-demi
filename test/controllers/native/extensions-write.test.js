@@ -22,9 +22,9 @@ const STORED = Object.freeze({
 });
 
 /** Fake storage holding one project; returns the rows written. */
-function fakeStore(t) {
+function fakeStore(t, stored = STORED) {
   const store = { written: [] };
-  t.mock.method(projects, 'getById', async (access, id) => (id === STORED.id ? structuredClone(STORED) : null));
+  t.mock.method(projects, 'getById', async (access, id) => (id === stored.id ? structuredClone(stored) : null));
   t.mock.method(projects, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
   return store;
 }
@@ -92,6 +92,17 @@ test('extension routes', async (t) => {
     const added = store.written[0].reviewExtensions[1];
     assert.strictEqual(res.body.reviewExtensions[1].id, added.id);
     assert.strictEqual(res.body.reviewExtensions[1].appliedTo, 'More time');
+  });
+
+  await t.test('a write drops the extension lists a stored block still holds; sources.eagle keeps them', async (t) => {
+    const block = { name: 'Mine', reviewExtensions: [EXTENSION] };
+    const store = fakeStore(t, { ...STORED, legislation_2018: block, sources: { eagle: { legislation_2018: block } } });
+
+    await ROUTES.create(['sysadmin']);
+
+    const written = store.written[0];
+    assert.deepStrictEqual(written.legislation_2018, { name: 'Mine' });
+    assert.deepStrictEqual(written.sources.eagle.legislation_2018.reviewExtensions, [EXTENSION]);
   });
 
   await t.test('staff replaces an item: 200, same id', async (t) => {

@@ -487,9 +487,9 @@ Known Dark-phase limit: the CAC fields are copied from Eagle, so the next Eagle 
 
 ### Extensions
 
-Status: done (99c9045c), Dark
+Status: done (99c9045c). DEMI half of F8 built (1ef05689, ac66bb8c); the eagle-admin half is todo.
 
-Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project (`EAGLE_ONLY_FIELDS` in `src/ownership/project.js`), filled by the Eagle push. Dark: the four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
+Today: `reviewExtensions` and `reviewSuspensions` are arrays on the project, in `DEMI_ONLY_FIELDS` (`src/ownership/project.js`). The four routes are served under the `port: extensions` anchor in `routes.js`, rules in `src/domain/extensions.js`, handlers in `src/controllers/native/extensions.js`. eagle-admin still calls eagle-api.
 
 Target routes: `GET` and `POST /projects/:id/extensions`, `PUT` and `DELETE /projects/:id/extensions/:extId`.
 
@@ -502,7 +502,7 @@ Business rules (eagle-api `api/controllers/project.js:486-575`):
 - A project id that is not an ObjectId is 400 (`:492-494,518-520,545-547`). DEMI takes its own project ids, so any unknown project is 404.
 - An unknown project, or an item not found, is 404 (`:502-503,529-531,559-561`); so is any thrown error, a bad `item` JSON included (`:509-511`).
 - Each write records an action (`Post`, `Delete`, `Put`, kind `Extension`; `:506,533,571`). DEMI writes `extension.create`, `.update` and `.delete`, with `detail` `{ list, extensionId }`, on the project.
-- The model is `Mixed` (`helpers/models/project.js:81-82`), so eagle-api stores any body. eagle-admin sends `type`, `appliedTo`, `start`, `end` (`extension.component.ts:105-110`).
+- The block field is `Mixed` (`helpers/models/project.js:81-82`), but the routes write a top-level path. eagle-admin sends `type`, `appliedTo`, `start`, `end` (`extension.component.ts:105-110`).
 
 Decisions:
 - DEMI gives each item an `id`: a UUID for an item DEMI adds, kept across a PUT. An Eagle item carries none (eagle-api matched the whole object, `:525-528`), so its id is a hash of its content, the same on every read; equal items share an id, and a delete removes them all, as `$pull` did. DEMI never stamps an id onto an untouched Eagle item, so the nightly parity check sees no change it did not make.
@@ -511,13 +511,17 @@ Decisions:
 - POST answers 201; the GET and every write answer `{ reviewExtensions, reviewSuspensions }` only (`bodyOf` in `src/domain/extensions.js`), redacted as a project. A list a per-project dial hides from the caller is left out of the GET and is a 400 to write.
 - The write is one etag-guarded project upsert, so the remove and add of a PUT land together; eagle-api's two updates could drop the old item and then fail the push.
 - No `vis/catalog/projects.js` edit was needed: both lists are already catalogued, and the redactor does not descend into arrays. Slice 11 is free to edit it.
-- Dark: a DEMI write is replaced by the next Eagle push of that project, and by any merge that rebuilds the row from its stored Eagle copy.
+- An Eagle push or re-merge keeps the stored lists. A row with no stored list takes the one Eagle sent (`seedEagleLists` in `src/merge/project.js`), as pins do.
+- The lists are project-wide, not per Act: a `/level` year switch keeps them. eagle-api keeps one pair per `legislation_<year>` block (`helpers/models/project.js:81-82`).
+- The merged `legislation_<year>` blocks hold neither list (`pickEagleBlocks` in `src/merge/project.js`), and each extension write drops both from stored blocks; `sources.eagle` keeps Eagle's.
+- `PUT /projects/:id` ignores both lists (`PUT_IGNORED_FIELDS`), so only these routes move them.
+- Sync-out: each write queues the project (`queued` in `src/domain/_write.js`), but the lists never reach Eagle. eagle-api's project PUT writes neither list, and the project consumer sends only projects DEMI created. No client shows them from eagle-api: eagle-public on `react` and `develop` never reads them, and eagle-admin's `getForEdit` requests both lists, but no view shows them.
 
 Questioned:
 - Delete removes every equal copy, not one (`:527`). Ported as is through the shared content id.
 - A `type` other than `Extension` lands in `reviewSuspensions` with that type (`:490`). Ported as is; eagle-admin only sends `Extension` and `Suspension`.
 
-Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `editExtension`, `deleteExtension`), from `extension.component.ts:87,115,122`. At the flip (F8) `reviewExtensions` and `reviewSuspensions` leave `EAGLE_ONLY_FIELDS`.
+Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `editExtension`, `deleteExtension`), from `extension.component.ts:87,115,122`. No edit is lost between the DEMI tag and the eagle-admin tag, because eagle-api stores none. Its routes write a top-level path its strict schema lacks, so Mongoose sends no update. On test, a POST and a DELETE each answered 200 `{"acknowledged":false}` and changed nothing (measured 2026-11-03).
 
 ### Project
 
@@ -541,7 +545,7 @@ Business rules (eagle-api `api/controllers/project.js` and `api/helpers/constant
 Decisions:
 - DEMI's PUT stores `legislationYear` and `legislation` as sent, where eagle-api ignored a blank year and always derived the label from the year (`:642-650`). So on a locked project DEMI also refuses a null year and another label; both would move it off the Act.
 - The year switch lives in `setLevel` as an optional `legislationYear`, taken only with level 4 (eagle-api switches on publish only); with a lower level it is a 400 (Daniel 2026-10-19).
-- DEMI stores every legislation block (Daniel 2026-10-19). Both merges put every `legislation_<year>` block, `currentLegislationYear` and `legislationYearList` on the row (`legislationFields`, `merge/project.js`), and `flattenEagleProject` keeps the same in `sources.eagle` for a switch to merge again. The row's top level is still the current block. Cosmos indexes none of them (the projects container indexes named paths only).
+- DEMI stores every legislation block (Daniel 2026-10-19). Both merges put every `legislation_<year>` block, less both extension lists, plus `currentLegislationYear` and `legislationYearList`, on the row (`pickEagleBlocks`, `merge/project.js`). `flattenEagleProject` keeps them whole in `sources.eagle` for a switch to merge again. The row's top level is still the current block. Cosmos indexes none of them (the projects container indexes named paths only).
 - Reads return them redacted (`src/vis/catalog/projects.js`): a block is withheld whole (0/0) and published field by field, each `legislation_<year>.<field>` at the entry of the top-level field of the same name. `type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`. A dial (`PATCH /projects/:id/visibility`) on the top-level field, on the block, or on the block field itself reaches the block field, and the strictest wins (`childVis`, `src/vis/redact.js`). A block field with no top-level counterpart is withheld from every caller. `currentLegislationYear` and `legislationYearList` are public, like `legislationYear`.
 - PUT ignores `currentLegislationYear`, `legislationYearList` and every `legislation_<year>` key, so a GET body sent back is not refused and cannot rewrite Eagle's blocks.
 - Delete keeps the row, as eagle-api's flag-only delete does (`Actions.delete`). An Eagle push with `isDeleted: true` and DEMI `DELETE /projects/:id` both set `isDeleted` and cap `read` at staff (`DELETED_CEILING`), so the anonymous `GET /projects/:id` is a 404. The visibility cascade narrows the index row, documents, engagement, groups, inspections and updates. The `eagle-<id>` twin beside a Track row takes the same flag, so `setLevel` refuses it too.

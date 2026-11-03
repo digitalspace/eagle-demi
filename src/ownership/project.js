@@ -45,7 +45,7 @@ const EAGLE_STAFF_FIELDS = [
 const EAGLE_ONLY_FIELDS = [
   'eaStatus', 'eacDecision', 'decisionDate', 'currentPhaseName', 'phaseHistory',
   'legislation', 'legislationYear', 'review180Start', 'review45Start',
-  'reviewExtensions', 'reviewSuspensions', 'substitution', 'CEAAInvolvement',
+  'substitution', 'CEAAInvolvement',
   'CEAALink', 'applicableRegulation', 'build', 'dateAdded', 'dateUpdated',
   'projectLead', 'projectLeadEmail', 'projectLeadPhone',
   'responsibleEPD', 'responsibleEPDEmail', 'responsibleEPDPhone',
@@ -89,9 +89,16 @@ const PUSH_ONLY_FIELDS = [
   ...PUSH_BOOKKEEPING_FIELDS
 ];
 
-/** Only DEMI writes these (PUT, `/level`, the dating pass, sync-out), so no re-merge can rebuild them. */
+/** The extension lists: DEMI holds them once, project-wide, at the top level, never in a block. */
+const EXTENSION_LIST_FIELDS = Object.freeze(['reviewExtensions', 'reviewSuspensions']);
+
+/**
+ * Only DEMI writes these (PUT, `/level`, the extension routes, the dating pass, sync-out), so no
+ * re-merge can rebuild them.
+ */
 const DEMI_ONLY_FIELDS = [
-  'tags', 'levelHeldAt', 'documentPhases', 'pins', 'pinsRead', 'pinsHistory', ...SYNC_STATE_FIELDS
+  'tags', 'levelHeldAt', 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
+  ...EXTENSION_LIST_FIELDS, ...SYNC_STATE_FIELDS
 ];
 
 /** Each field's one owner. `legislation_<year>` blocks are Eagle's too (`LEGISLATION_KEY`). */
@@ -115,6 +122,8 @@ const PUT_IGNORED_FIELDS = [
   // Applied by `pinChanges` (src/domain/project-pins.js), which checks them; `pinsPublished` is
   // stored as `pinsRead`, so neither is spread from the body.
   'pins', 'pinsPublished',
+  // Moved only by the extension routes (src/domain/extensions.js), which check and id each item.
+  ...EXTENSION_LIST_FIELDS,
   // The current year moves only through `/level`.
   ...LEGISLATION_INDEX_FIELDS,
   // Catalogued at vis 2, so staff can send them back and break push ordering or the cascade.
@@ -125,6 +134,16 @@ const PUT_IGNORED_FIELDS = [
   '_rid', '_self', '_attachments', '_ts', '_etag', 'sources'
 ];
 
+/** A copy of `row` whose `legislation_<year>` blocks lack both extension lists. */
+function withoutBlockLists(row) {
+  const out = { ...row };
+  for (const [key, block] of Object.entries(row)) {
+    if (!LEGISLATION_KEY.test(key) || !block || typeof block !== 'object') continue;
+    out[key] = Object.fromEntries(Object.entries(block).filter(([field]) => !EXTENSION_LIST_FIELDS.includes(field)));
+  }
+  return out;
+}
+
 module.exports = {
   TRACK_PRECEDENCE,
   EAGLE_STAFF_FIELDS,
@@ -134,7 +153,9 @@ module.exports = {
   EAGLE_TOP_LEVEL_FIELDS,
   PUSH_BOOKKEEPING_FIELDS,
   PUSH_ONLY_FIELDS,
+  EXTENSION_LIST_FIELDS,
   DEMI_ONLY_FIELDS,
   OWNERS,
-  PUT_IGNORED_FIELDS
+  PUT_IGNORED_FIELDS,
+  withoutBlockLists
 };

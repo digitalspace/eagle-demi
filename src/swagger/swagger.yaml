@@ -1248,9 +1248,10 @@ paths:
         Modify an existing project's metadata or coordinates. It does not change visibility:
         `isPublished` and `read` in the body are ignored and the stored ACL is kept. Use
         `PUT /api/projects/{id}/level`. It also sets the pinned organizations (`pins`,
-        `pinsPublished`); there are no pin routes. On a project created in DEMI, a body that
-        changes a stored value sets `dateUpdated` unless it sends one, and sync-out queues the
-        project for Eagle.
+        `pinsPublished`); there are no pin routes. `reviewExtensions` and `reviewSuspensions` in
+        the body are ignored; use `/api/projects/{id}/extensions`. On a project created in DEMI,
+        a body that changes a stored value sets `dateUpdated` unless it sends one, and sync-out
+        queues the project for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -8878,7 +8879,8 @@ components:
       additionalProperties:
         description: >-
           `legislation_<year>` (1996, 2002, 2018, 2025): the project's content under that Act, as
-          Eagle sent it. Each field is shown at the level of the top-level field of the same name,
+          Eagle sent it, less `reviewExtensions` and `reviewSuspensions`, held once at the top level.
+          Each field is shown at the level of the top-level field of the same name,
           under the strictest of that field's dial, the block's and its own
           (`type`, `status`, `location`, `shortName`, `activeStatus` and `proponent` follow
           `projectType`, `projectState`, `address`, `abbreviation`, `isActive` and `proponentId`);

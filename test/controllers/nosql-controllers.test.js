@@ -554,6 +554,28 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(saved.projectCACPublished, false, 'the stored flag wins over the body');
   });
 
+  await t.test('PUT /api/projects/:id cannot set the extension lists', async () => {
+    // Only the extension routes move them, checking each item and giving it an id.
+    const extension = { type: 'Extension', appliedTo: 'Application review', id: 'a1' };
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', reviewExtensions: [extension], reviewSuspensions: [],
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: WRITER_USER,
+      body: { name: 'P2', reviewExtensions: [], reviewSuspensions: [{ bogus: true }] }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.name, 'P2');
+    assert.deepStrictEqual([saved.reviewExtensions, saved.reviewSuspensions], [[extension], []]);
+  });
+
   await t.test('PUT /api/projects/:id stores pins as ids and pinsPublished as pinsRead', async () => {
     fakeOrgLabels(t);
     const stored = {

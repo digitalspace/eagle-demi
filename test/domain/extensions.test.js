@@ -10,6 +10,7 @@ const assert = require('node:assert');
 
 const audit = require('../../src/utils/audit');
 const projects = require('../../src/repositories/projects');
+const syncOut = require('../../src/sync-out');
 const { resolveAccess } = require('../../src/helpers/access-sql');
 const extension = require('../../src/domain/extensions');
 
@@ -36,11 +37,12 @@ function ctxFor(roles) {
 }
 const STAFF = ctxFor(['staff']);
 
-/** Fake storage holding one project; returns the rows written. */
+/** Fake storage holding one project; returns the rows written and queued for sync-out. */
 function fakeStore(t, stored = STORED) {
-  const store = { written: [] };
+  const store = { written: [], queued: [] };
   t.mock.method(projects, 'getById', async (access, id) => (id === stored.id ? structuredClone(stored) : null));
   t.mock.method(projects, 'upsert', async (row) => { store.written.push(row); return { ...row, _etag: 'e2' }; });
+  t.mock.method(syncOut, 'enqueueQuietly', async (row, { kind }) => { store.queued.push([row.id, row._etag, kind]); return []; });
   return store;
 }
 
@@ -176,6 +178,15 @@ test('extension domain', async (t) => {
     assert.strictEqual(result.status, 'invalid');
     assert.ok(result.fields.reviewSuspensions);
     assert.strictEqual(store.written.length, 0);
+    assert.strictEqual(store.queued.length, 0);
+  });
+
+  await t.test('create, update and delete each queue the saved project for sync-out', async (t) => {
+    const store = fakeStore(t);
+    await extension.create(STAFF, PROJECT_ID, SUSPENSION);
+    await extension.update(STAFF, PROJECT_ID, extId, { ...EXTENSION, appliedTo: 'Changed' });
+    await extension.remove(STAFF, PROJECT_ID, susId);
+    assert.deepStrictEqual(store.queued, [[PROJECT_ID, 'e2', 'project'], [PROJECT_ID, 'e2', 'project'], [PROJECT_ID, 'e2', 'project']]);
   });
 
   await t.test('update cannot move an item out of a list a project dial hides from the caller', async (t) => {

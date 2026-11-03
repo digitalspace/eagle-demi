@@ -1,25 +1,20 @@
 'use strict';
 
-/**
- * Project extensions and suspensions: `GET` and `POST /projects/:id/extensions`, `PUT` and
- * `DELETE /projects/:id/extensions/:extId`, ported from eagle-api `api/controllers/project.js`
- * (`protectedExtensionAdd`, `Update`, `Delete`; rules in docs/eagle-api-port.md, Extensions).
- *
- * Items live in two arrays on the project row, `reviewExtensions` and `reviewSuspensions`.
- * Nothing on the review timeline is recalculated, as in eagle-api.
- */
+// The `/projects/:id/extensions` routes, ported from eagle-api `api/controllers/project.js`; items
+// live in two lists on the project row. Rules: docs/eagle-api-port.md, Extensions.
 
 const crypto = require('node:crypto');
 
 const projects = require('../repositories/projects');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
-const { writeRow } = require('./_write');
+const { writeRow, queued } = require('./_write');
+const { PROJECT } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
+const { EXTENSION_LIST_FIELDS, withoutBlockLists } = require('../ownership/project');
 
-const EXTENSIONS = 'reviewExtensions';
-const SUSPENSIONS = 'reviewSuspensions';
-const LISTS = Object.freeze([EXTENSIONS, SUSPENSIONS]);
+const LISTS = EXTENSION_LIST_FIELDS;
+const [EXTENSIONS, SUSPENSIONS] = LISTS;
 
 /** The fields eagle-admin's extension form sends (extension.component.ts:105-110); the model is Mixed. */
 const ITEM_SCHEMA = Object.freeze({
@@ -44,9 +39,8 @@ function canonical(value) {
 }
 
 /**
- * An item's id: the one stored on it, else a hash of its content. Eagle items carry no id (eagle-api
- * matched the whole object, project.js:525-528), so equal items share an id and a delete removes
- * them all, as eagle-api's `$pull` did.
+ * An item's stored id, else a hash of its content: Eagle items carry none, so equal items share an
+ * id and a delete removes them all, as eagle-api's `$pull` did.
  */
 function idOf(item) {
   if (typeof item.id === 'string' && item.id) return item.id;
@@ -112,16 +106,19 @@ function checkItem(input) {
   return checked;
 }
 
-/** `writeRow` on the project, answering the extensions view instead of the whole row. */
+/**
+ * `writeRow` on the project, answering the extensions view instead of the whole row. Queued so a
+ * native row's raised `syncVersion` is sent; eagle-api's project PUT writes neither list.
+ */
 async function writeLists(ctx, existing, build, audit, { created = false } = {}) {
-  const result = await writeRow({
+  const result = await queued(await writeRow({
     ctx,
     repo: PROJECT_REPO,
     existing,
     reread: () => readProject(ctx, existing.id),
-    build: (current) => current && build(current),
+    build: (current) => current && build(withoutBlockLists(current)),
     audit
-  });
+  }), PROJECT);
   if (result.status !== 'ok') return result;
   return { status: 'ok', value: viewOf(result.value), created };
 }

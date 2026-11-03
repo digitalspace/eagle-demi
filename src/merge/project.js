@@ -26,7 +26,7 @@ const { beforeDateFloor } = require('../domain/project-legislation');
 const { ASSESSMENT_WORK_TYPE, deriveAssessments } = require('./assessments');
 const {
   TRACK_PRECEDENCE, EAGLE_STAFF_FIELDS, EAGLE_ONLY_FIELDS, LEGISLATION_INDEX_FIELDS, LEGISLATION_KEY,
-  EAGLE_TOP_LEVEL_FIELDS, PUSH_ONLY_FIELDS, DEMI_ONLY_FIELDS
+  EAGLE_TOP_LEVEL_FIELDS, PUSH_ONLY_FIELDS, DEMI_ONLY_FIELDS, EXTENSION_LIST_FIELDS, withoutBlockLists
 } = require('../ownership/project');
 
 /** The row id of a project DEMI holds from Eagle alone, before Track matched it. */
@@ -53,6 +53,14 @@ function pickEagleFields(eagle, fields) {
   return picked;
 }
 
+/**
+ * The Eagle-only fields and every `legislation_<year>` block, each block a copy less the extension
+ * lists; `sources.eagle` keeps Eagle's own.
+ */
+function pickEagleBlocks(eagle) {
+  return withoutBlockLists(pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
+}
+
 /** The fields eagle-api's project model types as `Date`. */
 const EAGLE_DATE_FIELDS = [
   'dateUpdated', 'decisionDate', 'eaStatusDate', 'projectStatusDate', 'substantiallyDate',
@@ -66,17 +74,13 @@ function nullJunkDates(record) {
 }
 
 /**
- * Null the junk Eagle dates on a merged row, top level and every `legislation_<year>` block. A
- * block is copied before it changes: it is shared with `sources.eagle`, which keeps what Eagle sent.
+ * Null the junk Eagle dates on a merged row, top level and every `legislation_<year>` block. Each
+ * block is `pickEagleBlocks`' copy, so `sources.eagle` keeps what Eagle sent.
  */
 function nullEagleJunkDates(merged) {
   nullJunkDates(merged);
-  for (const key of Object.keys(merged)) {
-    const block = merged[key];
-    if (!LEGISLATION_KEY.test(key) || !block || typeof block !== 'object') continue;
-    if (!EAGLE_DATE_FIELDS.some(field => beforeDateFloor(block[field]))) continue;
-    merged[key] = { ...block };
-    nullJunkDates(merged[key]);
+  for (const [key, block] of Object.entries(merged)) {
+    if (LEGISLATION_KEY.test(key) && block && typeof block === 'object') nullJunkDates(block);
   }
   return merged;
 }
@@ -146,11 +150,13 @@ function heldRead(read, existing) {
     : read;
 }
 
+const EAGLE_SEEDED_LISTS = ['pinsRead', ...EXTENSION_LIST_FIELDS];
+
 /**
- * Each pin field the stored row lacks starts from what Eagle sent, `pins` as ids: eagle-admin keeps
- * writing them to eagle-api until its own flip, and once DEMI holds a field it owns it.
+ * Each pin or extension list the stored row lacks starts from what Eagle sent, `pins` as ids:
+ * eagle-admin keeps writing them to eagle-api until its own flip, and once DEMI holds one it owns it.
  */
-function seedEaglePins(merged, existing) {
+function seedEagleLists(merged, existing) {
   const eagle = merged.sources && merged.sources.eagle;
   if (!eagle) return;
   const lacks = (field) => !existing || existing[field] === undefined;
@@ -158,7 +164,9 @@ function seedEaglePins(merged, existing) {
     merged.pins = eagle.pins.map(pin => (pin !== null && typeof pin === 'object' ? pin._id : pin))
       .filter(id => typeof id === 'string' && id !== '');
   }
-  if (lacks('pinsRead') && Array.isArray(eagle.pinsRead)) merged.pinsRead = [...eagle.pinsRead];
+  for (const field of EAGLE_SEEDED_LISTS) {
+    if (lacks(field) && Array.isArray(eagle[field])) merged[field] = [...eagle[field]];
+  }
 }
 
 /**
@@ -167,7 +175,7 @@ function seedEaglePins(merged, existing) {
  */
 function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS) {
   if (!merged) return merged;
-  seedEaglePins(merged, existing);
+  seedEagleLists(merged, existing);
   if (existing) {
     for (const field of fields) {
       const value = existing[field];
@@ -483,7 +491,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   }
 
   // Eagle fills the gaps Track cannot.
-  if (eagle) Object.assign(merged, pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
+  if (eagle) Object.assign(merged, pickEagleBlocks(eagle));
 
   // Track-only, and no contest with Eagle: `currentPhaseName` and `phaseHistory` are Eagle's own
   // EA-process record and stay exactly as they are. This is the dated assessment rail, and it is
@@ -552,7 +560,7 @@ function mergeEagleOnlyProject(eagleRaw, opts = {}) {
   for (const [target, , eagleField] of TRACK_PRECEDENCE) {
     if (eagleField && hasValue(eagle[eagleField])) merged[target] = eagle[eagleField];
   }
-  Object.assign(merged, pickEagleFields(eagle, [...EAGLE_ONLY_FIELDS, ...legislationFields(eagle)]));
+  Object.assign(merged, pickEagleBlocks(eagle));
   nullEagleJunkDates(merged);
   trimLabels(merged);
 
