@@ -14,7 +14,8 @@ const crypto = require('node:crypto');
 const projects = require('../repositories/projects');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
-const { writeRow } = require('./_write');
+const { writeRow, queued } = require('./_write');
+const { PROJECT } = require('../sync-out/kinds');
 const { logger } = require('../utils/logger');
 
 const EXTENSIONS = 'reviewExtensions';
@@ -112,16 +113,19 @@ function checkItem(input) {
   return checked;
 }
 
-/** `writeRow` on the project, answering the extensions view instead of the whole row. */
+/**
+ * `writeRow` on the project, answering the extensions view instead of the whole row. Queued so a
+ * native row's raised `syncVersion` is sent; eagle-api's project PUT writes neither list.
+ */
 async function writeLists(ctx, existing, build, audit, { created = false } = {}) {
-  const result = await writeRow({
+  const result = await queued(await writeRow({
     ctx,
     repo: PROJECT_REPO,
     existing,
     reread: () => readProject(ctx, existing.id),
     build: (current) => current && build(current),
     audit
-  });
+  }), PROJECT);
   if (result.status !== 'ok') return result;
   return { status: 'ok', value: viewOf(result.value), created };
 }
