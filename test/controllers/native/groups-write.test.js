@@ -114,8 +114,8 @@ test('group routes', async (t) => {
     assert.strictEqual(res.status, 404);
   });
 
-  await t.test('sysadmin deletes a group: 200 and the row is removed', async (t) => {
-    const store = fakeStore(t);
+  await t.test('sysadmin deletes a DEMI group: 200 and the row is removed', async (t) => {
+    const store = fakeStore(t, { ...STORED, eagleId: null, sourceSystem: 'demi' });
     const res = await ROUTES.delete(['sysadmin']);
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(store.deleted, [[GROUP_ID, PROJECT_ID, 'e1']]);

@@ -29,7 +29,8 @@ const PROJECTS = {
 };
 const STORED = Object.freeze({
   id: GROUP_ID, eagleId: GROUP_ID, projectId: PROJECT_ID, sourceSystem: 'eagle', name: 'Agencies',
-  members: [USER_A, USER_B], links: [], read: ['staff', 'sysadmin'], isPublished: false, _etag: 'e1'
+  members: [USER_A, USER_B], links: [], read: ['staff', 'sysadmin'], isPublished: false, _etag: 'e1',
+  sources: { eagle: { _id: GROUP_ID, read: ['project-system-admin', 'sysadmin'] } }
 });
 
 function ctxFor(roles, username = 'idir-staff') {
@@ -128,6 +129,15 @@ test('group domain', async (t) => {
     assert.strictEqual(rows[0].Action, 'group.update');
   });
 
+  await t.test("a DEMI write takes over an Eagle group, keeping Eagle's own read for the cascade", async (t) => {
+    const store = fakeStore(t);
+    await group.update(STAFF, GROUP_ID, { name: 'Nations' });
+    const row = store.written[0];
+    assert.strictEqual(row.sourceSystem, 'demi', 'otherwise the next Eagle push replaces the write');
+    assert.deepStrictEqual(row.sources.demi.read, STORED.sources.eagle.read);
+    assert.deepStrictEqual(row.sources.eagle, STORED.sources.eagle);
+  });
+
   await t.test('update naming anything but name is a 400 and writes nothing', async (t) => {
     const store = fakeStore(t);
     for (const body of [{ members: [USER_C] }, { projectId: PRIVATE_PROJECT_ID }, { read: ['public'] }, {}]) {
@@ -143,12 +153,24 @@ test('group domain', async (t) => {
     assert.strictEqual(result.status, 'not-found');
   });
 
-  await t.test('delete hard-deletes the stored revision', async (t) => {
-    const store = fakeStore(t);
+  await t.test('delete hard-deletes the stored revision of a DEMI group', async (t) => {
+    const store = fakeStore(t, { ...STORED, eagleId: null, sourceSystem: 'demi' });
     const { result, rows } = await audited(() => group.remove(STAFF, GROUP_ID));
     assert.strictEqual(result.status, 'ok');
     assert.deepStrictEqual(store.deleted, [[GROUP_ID, PROJECT_ID, 'e1']]);
     assert.strictEqual(store.written.length, 0);
+    assert.strictEqual(rows[0].Action, 'group.delete');
+  });
+
+  await t.test('delete of a group with an Eagle id keeps it flagged, DEMI-owned, at level 2', async (t) => {
+    const store = fakeStore(t, { ...STORED, read: ['public', 'staff', 'sysadmin'] });
+    const { result, rows } = await audited(() => group.remove(STAFF, GROUP_ID));
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(store.deleted.length, 0, 'a removed row is recreated by the next Eagle push');
+    const row = store.written[0];
+    assert.strictEqual(row.isDeleted, true);
+    assert.strictEqual(row.sourceSystem, 'demi');
+    assert.strictEqual(levelOfRead(row.read), 2);
     assert.strictEqual(rows[0].Action, 'group.delete');
   });
 
