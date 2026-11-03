@@ -18,7 +18,9 @@ const eagle = require('../../src/sync-out/eagle');
 const eagleDocument = require('../../src/sync-out/eagle-document');
 const lists = require('../../src/repositories/lists');
 const projects = require('../../src/repositories/projects');
-const { DOCUMENT, ORGANIZATION, PROJECT, kindOf } = require('../../src/sync-out/kinds');
+const notifications = require('../../src/repositories/notifications');
+const updates = require('../../src/repositories/updates');
+const { DOCUMENT, NOTIFICATION, ORGANIZATION, PROJECT, UPDATE, kindOf } = require('../../src/sync-out/kinds');
 const { logger } = require('../../src/utils/logger');
 const { depsFor, reconcile } = require('../../src/sync-out/pending');
 const { parseArgs, run } = require('../../src/scripts/sync-out-pending');
@@ -187,13 +189,19 @@ test('the document hook re-queues only rows owed a send, a lapsed send claim inc
   assert.strictEqual(sent.length, 2);
 });
 
+/** A DEMI-created row of a kind partitioned by id, sent through `sentVersion`. */
+const idPartitionedRow = (id, sentVersion) => ({ id, projectId: null, sourceSystem: 'demi', eagleId: `e-${id}`,
+  syncVersion: 3, syncOut: { eagle: { status: 'sent', sentVersion } } });
+
 for (const { kind, flag, repo, row } of [
   { kind: ORGANIZATION, flag: 'SYNC_OUT_EAGLE_ORGANIZATION_ENABLED', repo: lists,
     row: (id, sentVersion) => ({ id, kind: 'Organization', projectId: null, sourceSystem: 'demi', eagleId: `e-${id}`,
       syncVersion: 3, syncOut: { eagle: { status: 'sent', sentVersion } } }) },
   { kind: PROJECT, flag: 'SYNC_OUT_EAGLE_PROJECT_ENABLED', repo: projects,
     row: (id, sentVersion) => ({ id, sourceSystem: 'track', sources: {}, eagleId: `e-${id}`,
-      syncVersion: 3, syncOut: { eagle: { status: 'sent', sentVersion, mintedId: `e-${id}` } } }) }
+      syncVersion: 3, syncOut: { eagle: { status: 'sent', sentVersion, mintedId: `e-${id}` } } }) },
+  { kind: NOTIFICATION, flag: 'SYNC_OUT_EAGLE_NOTIFICATION_ENABLED', repo: notifications, row: idPartitionedRow },
+  { kind: UPDATE, flag: 'SYNC_OUT_EAGLE_UPDATE_ENABLED', repo: updates, row: idPartitionedRow }
 ]) {
   test(`the ${kind} hook re-queues only rows owed a send, a lapsed send claim included, and names its flag when it is off`, async (t) => {
     useEnv(t, { SYNC_OUT_EAGLE_ENABLED: 'true', [flag]: 'true' });

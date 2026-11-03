@@ -15,6 +15,7 @@ const updateParent = require('../helpers/update-parent');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
+const syncOut = require('../sync-out');
 const { UPDATE } = require('../sync-out/kinds');
 const images = require('./update-images');
 const { logger } = require('../utils/logger');
@@ -255,6 +256,8 @@ async function writeWithImages(ctx, { before, after, parentId, write }) {
     await images.revert(ctx, published, after.id);
     return result;
   }
+  // Before the image bookkeeping below, so a throw there cannot leave a landed write unqueued.
+  await syncOut.enqueueQuietly(result.value, { kind: UPDATE });
   if (before) {
     const shownBefore = images.imageIds(before);
     const shownAfter = images.imageIds(result.value);
@@ -264,8 +267,6 @@ async function writeWithImages(ctx, { before, after, parentId, write }) {
       : [...new Set([...shownBefore, ...shownAfter])], result.value.id);
   }
   if (publishing) await images.republish(ctx, result.value, parentId);
-  // Required on call: sync-out's update consumer requires this module.
-  await require('../sync-out').enqueueQuietly(result.value, { kind: UPDATE });
   return result;
 }
 

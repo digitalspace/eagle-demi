@@ -297,7 +297,9 @@ exports.upsertFromEagle = async (req, res) => {
       }
     });
 
-    await announce(saved, existing);
+    // A DEMI row's echo changes nothing DEMI owns; the announce timer mails its publish and its withdrawal, and
+    // sync-out's call does not wait on eagle-notify.
+    if (!(existing && existing.sourceSystem === 'demi')) await announce(saved, existing);
 
     return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {

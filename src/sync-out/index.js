@@ -10,6 +10,7 @@ const {
 const { writeGuarded } = require('../helpers/etag-write');
 const { logger } = require('../utils/logger');
 const { isScanCleared } = require('../repositories/documents');
+const updates = require('../repositories/updates');
 const settings = require('../config').syncOut;
 
 // Keyed by kind: every kind's consumer is named eagle.
@@ -83,6 +84,20 @@ async function enqueueQuietly(row, { kind = DEFAULT_KIND } = {}) {
     return [];
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** Kinds an Update names by id. An Update held until one of them reached Eagle goes once it has. */
+const NAMED_BY_UPDATES = new Set([COMMENT_PERIOD, DOCUMENT, NOTIFICATION]);
+
+/** Queue the Updates held on `row`; a failure is logged, and the pending hook still lists them. */
+async function queueUpdatesNaming(row) {
+  const updateConsumer = CONSUMERS_BY_KIND[UPDATE][0];
+  if (!updateConsumer.enabled()) return;
+  try {
+    for (const held of await updates.listSyncPendingNaming(row.id)) await enqueueQuietly(held, { kind: UPDATE });
+  } catch (err) {
+    logger.error('[sync-out] Updates held on a sent row not queued', { id: row.id, error: err.message, stack: err.stack });
   }
 }
 
@@ -278,6 +293,7 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
         kind: job.kind, consumer: job.consumer, id: job.id, projectId: stored.projectId ?? null, attempt: 1, resend: true
       });
     }
+    if (status === 'sent' && NAMED_BY_UPDATES.has(job.kind)) await queueUpdatesNaming(row);
     return { status, ...(result && result.eagleId ? { eagleId: result.eagleId } : {}) };
   } catch (err) {
     const attempt = state.job ? state.job.attempt : dequeueCount;

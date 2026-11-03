@@ -22,7 +22,7 @@ const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
-  readPage, fetchAll, readDemiRowByEagleId, listDemiSyncPending
+  readPage, fetchAll, readDemiRowByEagleId, listDemiSyncPending, EAGLE_SYNC_PENDING
 } = require('./_sql');
 
 const CONTAINER = 'updates';
@@ -326,6 +326,20 @@ const readForWriteByEagleId = (eagleId) => readDemiRowByEagleId(CONTAINER, eagle
 
 /** The sync-out pending hook's list. */
 const listSyncPending = () => listDemiSyncPending(CONTAINER);
+
+/**
+ * DEMI-created Updates owed a send that name `id` as their parent, comment period, notification, image or
+ * attachment: sync-out holds them until that record is in Eagle.
+ */
+function listSyncPendingNaming(id) {
+  const named = ['c.projectId = @id', 'c.pcp = @id', 'c.projectNotification = @id', 'c.featuredImage.document = @id',
+    'ARRAY_CONTAINS(c.attachments, @id)', 'EXISTS(SELECT VALUE i FROM i IN c.images WHERE i.document = @id)'];
+  return fetchAll(CONTAINER, {
+    query: 'SELECT c.id, c.projectId, c.sourceSystem, c.eagleId, c.status FROM c ' +
+      `WHERE c.sourceSystem = 'demi' AND ${EAGLE_SYNC_PENDING} AND (${named.join(' OR ')})`,
+    parameters: [{ name: '@id', value: String(id) }]
+  });
+}
 
 /**
  * The keyword criterion: the text fields the `activities` index searches, less `notificationName`,
@@ -788,6 +802,7 @@ module.exports = {
   readForWrite,
   readForWriteByEagleId,
   listSyncPending,
+  listSyncPendingNaming,
   list,
   listEvery,
   listByIds,

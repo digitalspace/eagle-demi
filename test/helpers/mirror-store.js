@@ -33,7 +33,15 @@ function applyPatch(row, operations) {
 }
 
 function matches(row, spec) {
-  for (const { name, value } of spec.parameters) {
+  // `c.<field> IN (@a0, @a1)`, as `inList` writes it.
+  const lists = [...spec.query.matchAll(/c\.(\w+) IN \(([^)]*)\)/g)]
+    .map(([, field, names]) => ({ field, names: names.split(',').map(name => name.trim()) }));
+  const listed = new Set(lists.flatMap(list => list.names));
+  const valueOf = name => spec.parameters.find(p => p.name === name).value;
+  for (const { field, names } of lists) {
+    if (!names.map(valueOf).map(String).includes(String(row[field]))) return false;
+  }
+  for (const { name, value } of spec.parameters.filter(p => !listed.has(p.name))) {
     if (!(name in FIELD_OF_PARAM)) throw new Error(`mirror-store: unknown parameter ${name}`);
     if (String(row[FIELD_OF_PARAM[name]]) !== String(value)) return false;
   }

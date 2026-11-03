@@ -8,9 +8,7 @@ const updates = require('../repositories/updates');
 const commentPeriods = require('../repositories/comment-periods');
 const documents = require('../repositories/documents');
 const notifications = require('../repositories/notifications');
-const { readParent } = require('../helpers/update-parent');
 const { systemAccess } = require('../helpers/access-sql');
-const { UPDATE_SCHEMA } = require('../domain/updates');
 const { logger } = require('../utils/logger');
 const {
   requireSettings, call, failure, claimHeld, createMinted, refuseStray
@@ -19,53 +17,77 @@ const {
 const NAME = 'eagle';
 const KIND = 'update';
 const NATIVE = 'demi';
+const ARCHIVED = 'archived';
 const ROUTE = '/recentActivity';
 
-/** Fields that name another record by DEMI id; the body names it by Eagle id. */
-const REFS = Object.freeze(['projectId', 'pcp', 'projectNotification', 'attachments']);
-// Not `_etag`: that is DEMI's. Not `dateUpdated`: eagle-api's PUT refuses a body whose date is not the stored one.
+/** The fields eagle-api's PUT writes as DEMI stores them. Not `dateUpdated`: the PUT refuses one it did not store. */
 const FIELDS = Object.freeze([
-  ...Object.keys(UPDATE_SCHEMA).filter(field => !REFS.includes(field) && field !== '_etag'), 'regions'
+  'headline', 'content', 'type', 'pinned', 'active', 'complianceAndEnforcement', 'notificationName', 'contentUrl',
+  'documentUrl', 'category', 'subject', 'shortHeadline', 'summary', 'regions', 'location', 'engagementUrl', 'status',
+  'publishDate'
 ]);
 
 const pathOf = eagleId => `${ROUTE}/${encodeURIComponent(eagleId)}`;
 
-/** The Eagle id of the record `id` names; throws when DEMI holds none, so nothing goes with a DEMI id in it. */
-async function eagleIdOf(what, id, read, logFields) {
-  const stored = await read(String(id));
-  if (stored && stored.eagleId) return String(stored.eagleId);
-  logger.error(`[sync-out eagle] ${what} ${id} of update ${logFields.rowId} has no eagleId, nothing sent`,
-    { ...logFields, refId: String(id) });
-  throw new Error(`${what} ${id} of update ${logFields.rowId} has no eagleId`);
+/** True while sync-out's own create of `stored` has not landed: Eagle may not hold the id it minted. */
+function createPending(stored) {
+  const entry = (stored.syncOut && stored.syncOut[NAME]) || {};
+  return entry.mintedId === String(stored.eagleId) && !Number.isInteger(entry.sentVersion);
 }
 
-const parentRead = async (id) => {
-  const parent = await readParent(id);
-  return parent && parent.doc;
-};
-const periodRead = id => commentPeriods.getById(systemAccess(), id);
-const documentRead = id => documents.getById(systemAccess(), id);
-
-/** An image with its document named by Eagle id. */
-async function imageFor(image, logFields) {
-  if (!image || !image.document) return image;
-  return { ...image, document: await eagleIdOf('document', image.document, documentRead, logFields) };
+/**
+ * The Eagle id a referenced record goes by, else why it has none: `wait` for a DEMI record sync-out has yet to
+ * send, `fail` for one that will never have an Eagle id.
+ */
+function refOf(what, id, stored) {
+  const named = `${what} ${id}`;
+  if (!stored) return { fail: `${named} is not in DEMI` };
+  if (stored.isDeleted === true) return { fail: `${named} is deleted` };
+  if (!documents.isScanCleared(stored)) return { wait: `${named} is not through the intake scan` };
+  if (stored.eagleId && !createPending(stored)) return { eagleId: String(stored.eagleId) };
+  if (stored.sourceSystem === NATIVE) return { wait: `${named} is not in Eagle yet` };
+  return { fail: `${named} has no eagleId` };
 }
 
-/** eagle-api's Update body: the fields its PUT writes, each reference as an Eagle id. */
+/**
+ * eagle-api's Update body, each reference as an Eagle id, and the references that are not in Eagle yet. Throws
+ * when one never will be.
+ */
 async function bodyFor(row, logFields) {
+  const refs = [];
+  const ref = (what, id, stored) => {
+    const found = refOf(what, id, stored);
+    refs.push(found);
+    return found.eagleId || null;
+  };
   const body = {};
   for (const field of FIELDS) {
     if (row[field] !== undefined) body[field] = row[field];
   }
-  const ref = (what, id, read) => (id ? eagleIdOf(what, id, read, logFields) : null);
-  body.project = await ref('parent', row.projectId, parentRead);
-  body.pcp = await ref('comment period', row.pcp, periodRead);
-  body.projectNotification = await ref('notification', row.projectNotification, id => notifications.readForWrite(id));
-  body.attachments = await Promise.all((row.attachments || []).map(id => ref('document', id, documentRead)));
-  if (row.featuredImage !== undefined) body.featuredImage = await imageFor(row.featuredImage, logFields);
-  if (row.images !== undefined) body.images = await Promise.all((row.images || []).map(i => imageFor(i, logFields)));
-  return body;
+  // A project parent is stored under its Eagle id already; a notification parent is stored under its own.
+  const parentNotification = row.projectId ? await notifications.readForWrite(String(row.projectId)) : null;
+  body.project = parentNotification ? ref('notification', row.projectId, parentNotification) : row.projectId ?? null;
+  body.pcp = row.pcp ? ref('comment period', row.pcp, await commentPeriods.getById(systemAccess(), row.pcp)) : null;
+  body.projectNotification = row.projectNotification
+    ? ref('notification', row.projectNotification, await notifications.readForWrite(String(row.projectNotification)))
+    : null;
+
+  const images = Array.isArray(row.images) ? row.images : [];
+  const attachments = Array.isArray(row.attachments) ? row.attachments : [];
+  const ids = [row.featuredImage && row.featuredImage.document, ...images.map(i => i && i.document), ...attachments];
+  const stored = new Map((await documents.listSyncRefs(ids.filter(Boolean))).map(doc => [String(doc.id), doc]));
+  const docRef = id => ref('document', id, stored.get(String(id)));
+  const imageOf = image => (image && image.document ? { ...image, document: docRef(image.document) } : image);
+  if (row.featuredImage !== undefined) body.featuredImage = imageOf(row.featuredImage);
+  if (row.images !== undefined) body.images = images.map(imageOf);
+  if (row.attachments !== undefined) body.attachments = attachments.map(docRef);
+
+  const failed = refs.filter(r => r.fail).map(r => r.fail);
+  if (failed.length) {
+    logger.error(`[sync-out eagle] update ${row.id} not sent: ${failed.join('; ')}`, { ...logFields, failed });
+    throw new Error(`update ${row.id} names records Eagle cannot hold: ${failed.join('; ')}`);
+  }
+  return { body, waiting: refs.filter(r => r.wait).map(r => r.wait) };
 }
 
 /** PUT the row's fields; false when Eagle has no Update under the id. */
@@ -77,7 +99,8 @@ async function put(s, eagleId, body, logFields) {
   return true;
 }
 
-const owned = row => Boolean(row && row.sourceSystem === NATIVE);
+// An Update archived before Eagle held it has nothing to archive there.
+const owned = row => Boolean(row && row.sourceSystem === NATIVE) && !(row.status === ARCHIVED && !row.eagleId);
 const wants = row => owned(row) && Boolean(row.eagleId || settings.eagle.nativeEnabled);
 
 /** Write the row to its Eagle Update, creating it when Eagle has none. `update` is the engine's guarded write. */
@@ -88,7 +111,12 @@ async function send(row, { update }) {
   const logFields = { rowId: row.id, eagleId: row.eagleId || null, kind: KIND };
   // Held, not skipped: a skip records the version as sent, so the row would never go once the switch is on.
   if (!row.eagleId && !settings.eagle.nativeEnabled) return { status: 'held' };
-  const body = await bodyFor(row, logFields);
+  const { body, waiting } = await bodyFor(row, logFields);
+  if (waiting.length) {
+    // The engine queues the row again when that record's own send lands (index.js, queueUpdatesNaming).
+    logger.warn(`[sync-out eagle] update ${row.id} held: ${waiting.join('; ')}`, { ...logFields, waiting });
+    return { status: 'held' };
+  }
 
   if (row.eagleId && await put(s, String(row.eagleId), body, logFields)) {
     return { status: 'sent', eagleId: String(row.eagleId) };
@@ -121,6 +149,5 @@ module.exports = {
   enableSettings: Object.freeze(['SYNC_OUT_EAGLE_ENABLED', 'SYNC_OUT_EAGLE_UPDATE_ENABLED']),
   wants,
   inFlight: entry => Boolean(claimHeld(entry, Date.now())),
-  send,
-  bodyFor
+  send
 };
