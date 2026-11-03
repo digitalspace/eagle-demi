@@ -5,6 +5,7 @@
 
 const settings = require('../config').syncOut;
 const comments = require('../repositories/comments');
+const { EAGLE_OBJECT_ID } = require('../repositories/projects');
 const commentPeriods = require('../repositories/comment-periods');
 const documents = require('../repositories/documents');
 const { logger } = require('../utils/logger');
@@ -34,7 +35,13 @@ async function bodyFor(row, logFields) {
   for (const field of FIELDS) {
     if (row[field] !== undefined) body[field] = row[field];
   }
-  const { ref, waiting } = refsFor(KIND, row, logFields);
+  const { ref, refuse, waiting } = refsFor(KIND, row, logFields);
+  // With no status eagle-api keeps its default read, and no moderation list shows the comment.
+  body.eaoStatus = row.eaoStatus ?? 'Pending';
+  // eagle-api's POST answers a non-ObjectId with 400 and saves the comment anyway.
+  for (const vc of body.valuedComponents || []) {
+    if (!EAGLE_OBJECT_ID.test(String(vc))) refuse(`valued component ${vc} is not an Eagle id`);
+  }
   body.period = ref('comment period', row.periodId,
     await commentPeriods.readForWrite(row.periodId, row.projectId));
   const ids = Array.isArray(row.documents) ? row.documents : [];
@@ -65,7 +72,7 @@ async function send(row, { update }) {
   if (!row.eagleId && !settings.eagle.nativeEnabled) return { status: 'held' };
   const { body, waiting } = await bodyFor(row, logFields);
   if (waiting.length) {
-    // The engine queues the row again when its period's own send lands (index.js, queueHeldOn).
+    // The engine queues the row again when that period or document's own send lands (index.js, queueHeldOn).
     logger.warn(`[sync-out eagle] comment ${row.id} held: ${waiting.join('; ')}`, { ...logFields, waiting });
     return { status: 'held' };
   }

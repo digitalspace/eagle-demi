@@ -295,10 +295,11 @@ function oneRowOf(container, key, items, partitionField) {
  * The DEMI-created row sync-out sent under this Eagle id, with no ACL predicate, in a container whose Eagle rows
  * are stored under their Eagle id. Throws `DUPLICATE_ID` when two rows name it.
  */
-async function readDemiRowByEagleId(container, eagleId) {
+async function readDemiRowByEagleId(container, eagleId, partitionKey) {
   const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
   const { items } = await cosmos.query(container,
-    { query: `SELECT * FROM c WHERE ${clause} AND c.sourceSystem = 'demi'`, parameters: params });
+    { query: `SELECT * FROM c WHERE ${clause} AND c.sourceSystem = 'demi'`, parameters: params },
+    partitionKey == null ? undefined : { partitionKey: String(partitionKey) });
   return oneRowOf(container, eagleId, items);
 }
 

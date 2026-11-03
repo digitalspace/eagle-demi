@@ -89,8 +89,13 @@ async function enqueueQuietly(row, { kind = DEFAULT_KIND } = {}) {
   }
 }
 
-/** Kinds an Update names by id. An Update held until one of them reached Eagle goes once it has. */
-const NAMED_BY_UPDATES = new Set([COMMENT_PERIOD, DOCUMENT, NOTIFICATION]);
+const updatesNaming = row => updates.listSyncPendingNaming(row.id);
+/** Per kind, the held rows its send releases: each `[kind, list(row)]`. Those rows go once the record is in Eagle. */
+const RELEASED_BY = Object.freeze({
+  [COMMENT_PERIOD]: [[UPDATE, updatesNaming], [COMMENT, row => comments.listSyncPendingInPeriod(row.id)]],
+  [DOCUMENT]: [[UPDATE, updatesNaming], [COMMENT, row => comments.listSyncPendingNaming(row.id)]],
+  [NOTIFICATION]: [[UPDATE, updatesNaming]]
+});
 
 /** Queue the `kind` rows `listHeld()` finds held on sent `row`; a failure is logged, and the pending hook still lists them. */
 async function queueHeldOn(row, kind, listHeld) {
@@ -294,11 +299,8 @@ async function run(message, { attempt: dequeueCount = 1, maxAttempts = 1 } = {})
         kind: job.kind, consumer: job.consumer, id: job.id, projectId: stored.projectId ?? null, attempt: 1, resend: true
       });
     }
-    if (status === 'sent' && NAMED_BY_UPDATES.has(job.kind)) {
-      await queueHeldOn(row, UPDATE, () => updates.listSyncPendingNaming(row.id));
-    }
-    if (status === 'sent' && job.kind === COMMENT_PERIOD) {
-      await queueHeldOn(row, COMMENT, () => comments.listSyncPendingInPeriod(row.id));
+    if (status === 'sent') {
+      for (const [kind, list] of RELEASED_BY[job.kind] || []) await queueHeldOn(row, kind, () => list(row));
     }
     return { status, ...(result && result.eagleId ? { eagleId: result.eagleId } : {}) };
   } catch (err) {

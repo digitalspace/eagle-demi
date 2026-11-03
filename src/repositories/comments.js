@@ -51,10 +51,19 @@ async function readForWrite(id, periodId) {
 }
 
 /** The DEMI row sync-out sent to Eagle under `eagleId`, unfiltered; mirror rows are stored under their Eagle id. */
-const readForWriteByEagleId = (eagleId) => readDemiRowByEagleId(CONTAINER, eagleId);
+const readForWriteByEagleId = (eagleId, periodId) => readDemiRowByEagleId(CONTAINER, eagleId, periodId);
 
 /** The sync-out pending hook's list. */
 const listSyncPending = () => listDemiSyncPending(CONTAINER);
+
+/** DEMI comments naming document `id` that sync-out holds until the document is in Eagle. */
+function listSyncPendingNaming(id) {
+  return fetchAll(CONTAINER, {
+    query: `SELECT c.id, c.projectId, c.sourceSystem, c.eagleId FROM c WHERE ${RELEASABLE_PENDING} ` +
+      'AND ARRAY_CONTAINS(c.documents, @id)',
+    parameters: [{ name: '@id', value: String(id) }]
+  });
+}
 
 /** DEMI comments of one period that sync-out holds until the period is in Eagle. */
 function listSyncPendingInPeriod(periodId) {
@@ -174,6 +183,7 @@ module.exports = {
   readForWrite,
   readForWriteByEagleId,
   listSyncPending,
+  listSyncPendingNaming,
   listSyncPendingInPeriod,
   listByPeriod,
   listEveryByPeriod,

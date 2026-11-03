@@ -138,7 +138,7 @@ async function mirrorFromEagle(eagleId, doc, periodRow, { pushedAt = null } = {}
   const written = await upsertKeepingDemiRows(comments, eagleId, doc,
     (current) => mirrorItem(eagleId, doc, period, read, current),
     // Else a DEMI row sync-out sent under the id.
-    async () => await comments.readForWrite(eagleId, period.id) || await comments.readForWriteByEagleId(eagleId),
+    async () => await comments.readForWrite(eagleId, period.id) || await comments.readForWriteByEagleId(eagleId, period.id),
     // Eagle numbers every comment while eagle-api takes writes, so a DEMI row takes its number (sync-out/kinds.js).
     { pushedAt, label: 'Comment Controller', fromEagle: Number.isInteger(doc.commentId) ? { commentId: doc.commentId } : {} }
   );

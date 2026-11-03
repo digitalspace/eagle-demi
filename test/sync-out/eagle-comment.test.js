@@ -12,19 +12,23 @@ const audit = require('../../src/utils/audit');
 const { logger } = require('../../src/utils/logger');
 const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
-const { COMMENT, COMMENT_PERIOD } = require('../../src/sync-out/kinds');
+const consumer = require('../../src/sync-out/eagle-comment');
+const { COMMENT, COMMENT_PERIOD, DOCUMENT, kindOf } = require('../../src/sync-out/kinds');
 const commentController = require('../../src/controllers/nosql/comment');
 const {
   mockRes, STAFF, PUBLIC_ACL, PRIVATE_ACL, PERIOD_EAGLE_ID, eagleComment, storedProject
 } = require('../helpers/eagle-mirror-fixtures');
 const { API, useEnv, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 const { mirrorStore } = require('../helpers/mirror-store');
+const { fakeWhereQuery } = require('../helpers/updates-store');
 
 audit._setTransport(async () => {});
 
 const ROW_ID = '7d1e2f40-0000-4000-8000-0000000000c1';
 const PERIOD_ROW_ID = '7d1e2f40-0000-4000-8000-0000000000c2';
 const EAGLE_ID = '6720b3c0a1b2c3d4e5f6072a';
+const DOCUMENT_ROW_ID = '7d1e2f40-0000-4000-8000-0000000000c3';
+const DOCUMENT_EAGLE_ID = '6720b3c0a1b2c3d4e5f6072b';
 const PROJECT_ID = storedProject().id;
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
@@ -97,9 +101,14 @@ function nativeComment(overrides = {}) {
 }
 
 const parent = () => ({ container: 'projects', ...storedProject() });
+/** A pending comment row as the wake-up queries see it. */
+const held = (id, fields) => ({ id, sourceSystem: 'demi', syncVersion: 1, periodId: PERIOD_ROW_ID, ...fields });
 const run = (id = ROW_ID) => syncOut.run({ kind: COMMENT, consumer: 'eagle', id, projectId: PROJECT_ID, attempt: 1 },
   { maxAttempts: 3 });
 const rowOf = store => store.rows('comments').find(r => r.id === ROW_ID);
+/** The consumer's send of the stored row, with the engine's guarded write. */
+const sendStored = store => consumer.send(rowOf(store),
+  { update: mutate => syncOut.updateRow(kindOf(COMMENT).repo, ROW_ID, PROJECT_ID, mutate) });
 const push = async (eagleId, doc) => {
   const res = mockRes();
   await commentController.upsertFromEagle(
@@ -186,10 +195,15 @@ test('sync-out of DEMI-created comments', async (t) => {
     });
 
   await t.test('a sent period queues the comments held on it, and no other', async (tt) => {
-    mirrorStore(tt, [
-      nativePeriod({ eagleId: null, syncOut: undefined }), parent(),
-      nativeComment(),
-      nativeComment({ id: 'other-period', periodId: 'another-period' })
+    mirrorStore(tt, [nativePeriod({ eagleId: null, syncOut: undefined }), parent()]);
+    fakeWhereQuery(tt, [
+      held('held'),
+      held('other-period', { periodId: 'another-period' }),
+      held('sent', { syncOut: { eagle: { sentVersion: 1 } } }),
+      held('eagle-owned', { sourceSystem: 'eagle' }),
+      held('stray', { syncOut: { eagle: { status: 'failed', strayEagleId: null } } }),
+      held('failed', { syncOut: { eagle: { status: 'failed', failedVersion: 1 } } }),
+      held('edited-after-failing', { syncVersion: 2, syncOut: { eagle: { status: 'failed', failedVersion: 1 } } })
     ]);
     const sent = wireQueue(tt);
     wireEagle(tt, { 'POST /commentperiod': body => ({ body: { _id: body._id } }) });
@@ -197,7 +211,70 @@ test('sync-out of DEMI-created comments', async (t) => {
     const result = await syncOut.run({ kind: COMMENT_PERIOD, consumer: 'eagle', id: PERIOD_ROW_ID, projectId: PROJECT_ID });
 
     assert.strictEqual(result.status, 'sent');
-    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]), [[COMMENT, ROW_ID]]);
+    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]), [[COMMENT, 'held'], [COMMENT, 'edited-after-failing']]);
+  });
+
+  await t.test('a sent document queues the comments held on it, and no other', async (tt) => {
+    useEnv(tt, { SYNC_OUT_EAGLE_DOCUMENT_ENABLED: 'true' });
+    mirrorStore(tt, [parent(), {
+      container: 'documents', id: DOCUMENT_ROW_ID, projectId: PROJECT_ID, sourceSystem: 'demi', eagleId: DOCUMENT_EAGLE_ID,
+      syncVersion: 2, syncOut: { eagle: { status: 'sent', sentVersion: 1, published: true } },
+      displayName: 'Draft plan', s3Key: 'docs/draft-plan.pdf', read: [...PUBLIC_ACL], isPublished: true
+    }]);
+    fakeWhereQuery(tt, [
+      held('held', { documents: ['another-document', DOCUMENT_ROW_ID] }),
+      held('names-another', { documents: ['another-document'] }),
+      held('sent', { documents: [DOCUMENT_ROW_ID], syncOut: { eagle: { sentVersion: 1 } } })
+    ]);
+    const sent = wireQueue(tt);
+    wireEagle(tt, { [`PUT /document/${DOCUMENT_EAGLE_ID}`]: {} });
+
+    const result = await syncOut.run({ kind: DOCUMENT, consumer: 'eagle', id: DOCUMENT_ROW_ID, projectId: PROJECT_ID });
+
+    assert.strictEqual(result.status, 'sent');
+    assert.deepStrictEqual(sent.map(m => [m.body.kind, m.body.id]), [[COMMENT, 'held']]);
+  });
+
+  await t.test('a comment with no status is sent as Pending', async (tt) => {
+    mirrorStore(tt, [nativeComment({ eagleId: EAGLE_ID, eaoStatus: null }), nativePeriod()]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'PUT *': { body: { matchedCount: 1 } } });
+
+    await run();
+
+    assert.strictEqual(calls[0].body.eaoStatus, 'Pending');
+  });
+
+  await t.test('a valued component that is not an Eagle id fails the send before any call', async (tt) => {
+    const valuedComponents = ['5cf00c03a266b7e187750004', '7d1e2f40-0000-4000-8000-0000000000ff'];
+    const store = mirrorStore(tt, [nativeComment({ eagleId: EAGLE_ID, valuedComponents }), nativePeriod()]);
+    const calls = wireEagle(tt, {});
+
+    await assert.rejects(sendStored(store), /valued component 7d1e2f40-0000-4000-8000-0000000000ff is not an Eagle id/);
+    assert.deepStrictEqual(calls, []);
+  });
+
+  await t.test('a create with submittedCAC is PUT after the POST, which does not copy it', async (tt) => {
+    mirrorStore(tt, [nativeComment({ submittedCAC: true }), nativePeriod()]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'POST /comment': body => ({ body: { _id: body._id } }), 'PUT *': { body: { matchedCount: 1 } } });
+
+    await run();
+
+    const minted = calls[0].body._id;
+    assert.deepStrictEqual(keys(calls), ['POST /comment', `PUT /comment/${minted}`]);
+    assert.strictEqual(calls[1].body.submittedCAC, true);
+  });
+
+  await t.test('an Eagle-owned comment row under the id stops the create before any POST', async (tt) => {
+    const store = mirrorStore(tt, [
+      nativeComment({ eagleId: EAGLE_ID }), nativePeriod(),
+      nativeComment({ id: EAGLE_ID, eagleId: EAGLE_ID, sourceSystem: 'eagle' })
+    ]);
+    const calls = wireEagle(tt, { 'PUT *': { body: { matchedCount: 0 } } });
+
+    await assert.rejects(sendStored(store), /is held by an Eagle-owned DEMI row/);
+    assert.deepStrictEqual(keys(calls), [`PUT /comment/${EAGLE_ID}`]);
   });
 
   await t.test('a status change is sent as eaoStatus on the PUT, with no call to the status route', async (tt) => {

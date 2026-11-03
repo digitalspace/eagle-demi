@@ -41,8 +41,8 @@ async function reconcileCommentPeriods(options = {}) {
 
 // No pins kind: no client still reads pins from eagle-api (docs/eagle-api-port.md, Pins, Sync-out).
 const KINDS = Object.freeze({
-  // Eagle numbers a comment on its POST from the period's `commentIdCount`, and the echo copies that `commentId`
-  // onto the DEMI row (controllers/nosql/comment.js): DEMI's own number holds only until then.
+  // Eagle's POST numbers a comment from the period's `commentIdCount` and the echo copies it onto the DEMI row
+  // (controllers/nosql/comment.js); until then DEMI's own number can repeat one Eagle gave another comment.
   [COMMENT]: Object.freeze({
     // Partitioned on periodId, which a message does not carry, so the read is by id alone.
     repo: Object.freeze({
