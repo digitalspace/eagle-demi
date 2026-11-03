@@ -322,8 +322,8 @@ const exportRow = (no, extra = {}) => {
     Export_Date: '2026-10-06', ...extra };
   return COMMENT_COLUMNS.map(c => row[c]);
 };
-const csvSides = (eagleRows, demiRows, columns = COMMENT_COLUMNS) => (host) =>
-  new Response(csvText(columns, host === 'eagle.test' ? eagleRows : demiRows));
+const csvSides = (eagleRows, demiRows, columns = COMMENT_COLUMNS, demiColumns = columns) => (host) =>
+  new Response(host === 'eagle.test' ? csvText(columns, eagleRows) : csvText(demiColumns, demiRows));
 const exportRun = async (answer) => {
   const h = harness(answer, { env: { PARITY_TOKEN: TOKEN } });
   const code = await run([...staff, '--only', 'comment-export', '--id', `period=${A}`], h.deps);
@@ -385,11 +385,11 @@ test('the same columns in a different order are a header difference and exit 1',
 
 const BCGW_COLUMNS = ['Project name', 'URL to Epic Project', 'Project GUID'];
 // Both report writers wrap the Project GUID cell in literal quotes.
-const bcgwRow = (id) => ['Mine', `https://projects.eao.gov.bc.ca/p/${id}/project-details`, `"${id}"`];
-const bcgwRun = async (eagleRows, demiRows, { args = [], files } = {}) => {
-  const h = harness(csvSides(eagleRows, demiRows, BCGW_COLUMNS), { files });
+const bcgwRow = (id, name = 'Mine') => [name, `https://projects.eao.gov.bc.ca/p/${id}/project-details`, `"${id}"`];
+const bcgwRun = async (eagleRows, demiRows, { args = [], files, demiColumns } = {}) => {
+  const h = harness(csvSides(eagleRows, demiRows, BCGW_COLUMNS, demiColumns), { files });
   const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'report-bcgw', ...args], h.deps);
-  return { code, line: h.out[0] };
+  return { code, line: h.out[0], written: h.written };
 };
 
 test('a quoted BCGW Project GUID is matched against bare Eagle ids in --known-ids', async () => {
@@ -405,6 +405,21 @@ test('a BCGW row only DEMI has, keyed by a quoted Eagle id, is unexplained, not 
   const { code, line } = await bcgwRun([bcgwRow(A)], [bcgwRow(A), bcgwRow(B)]);
   assert.strictEqual(code, 1);
   assert.match(line, /match=1 missingInDemi=0 extraInDemi=1 fieldDiff=0 unexplained=1/);
+});
+
+test('BCGW cells may differ on a shared GUID and still match', async () => {
+  const { code, line } = await bcgwRun([bcgwRow(A)], [bcgwRow(A, 'Coal Mine')]);
+  assert.strictEqual(code, 0);
+  assert.match(line, /match=1 missingInDemi=0 extraInDemi=0 fieldDiff=0 unexplained=0/);
+});
+
+test('a BCGW Project GUID column in another place is a header difference and exits 1', async () => {
+  const moved = ['Project GUID', 'Project name', 'URL to Epic Project'];
+  const row = bcgwRow(A);
+  const { code, written } = await bcgwRun([row], [moved.map(c => row[BCGW_COLUMNS.indexOf(c)])],
+    { demiColumns: moved, args: ['--report', 'r.json'] });
+  assert.strictEqual(code, 1);
+  assert.deepStrictEqual(JSON.parse(written[0]).results[0].samples, [{ kind: 'fieldDiff', id: 'header', field: 'column order' }]);
 });
 
 const [INSPECTION, ELEMENT, GROUP] = ['1'.repeat(24), '2'.repeat(24), '3'.repeat(24)];
@@ -602,15 +617,6 @@ test('a differing field Track does not master, or an empty DEMI value, is unexpl
   const { code, line } = await trackRun({ sector: 'Metals', address: '' });
   assert.strictEqual(code, 1);
   assert.match(line, /fieldDiff=2 unexplained=2/);
-});
-
-test('BCGW cells may differ on a shared GUID; a GUID only Eagle has is unexplained', async () => {
-  const columns = ['Type', 'MOE Region', 'Project GUID'];
-  const h = harness(csvSides([['Mines', 'Peace', `"${A}"`], ['Mines', 'Peace', `"${B}"`]],
-    [['Mines - Coal', 'Omineca', `"${A}"`]], columns));
-  const code = await run(['--eagle', EAGLE, '--demi', DEMI, '--only', 'report-bcgw'], h.deps);
-  assert.strictEqual(code, 1);
-  assert.match(h.out[0], /match=1 missingInDemi=1 extraInDemi=0 fieldDiff=0 unexplained=1/);
 });
 
 const listRow = (id, extra = {}) => ({ _id: id, name: 'Project News', type: 'updateCategory', legislation: 0, ...extra });

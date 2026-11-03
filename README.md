@@ -444,8 +444,8 @@ limit cut it.
 
 The two CSV reads, `comment-export` and `report-bcgw`, compare the header row, then rows paired on
 one column (`Comment_No`, `Project GUID`). The comment export compares every column both files
-have, skipping `Export_Date`. The BCGW report compares only the set of GUIDs, because DEMI prints
-its merged values.
+have, skipping `Export_Date`. The BCGW report compares the header and the set of GUIDs, never cell
+values, because DEMI prints its merged values.
 
 Three reads pair rows of another shape:
 
@@ -1044,7 +1044,7 @@ These parts match eagle-api's file:
 
 - the header row and the column order
 - the set of `Project GUID` values, one row per Eagle id
-- the `Project GUID` cell wrapped in quotes, as eagle-api has always written it
+- the `Project GUID` cell wrapped in quotes
 
 Other cells come from DEMI's merged fields, so a Track value wins over the raw Eagle one. Rows
 sort by `Project GUID`, not in eagle-api's order.

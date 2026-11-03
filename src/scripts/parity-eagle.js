@@ -426,7 +426,7 @@ const withSampleCap = (out, sampleCap) => ({
 
 /** A CSV read: rows on every shared column (none when `keysOnly`), and header differences under id `header`. */
 function compareCsv(entry, identity, eagle, demi, known) {
-  const ignored = new Set([entry.key, ...(entry.ignoreColumns || [])]);
+  const ignored = new Set(entry.ignoreColumns || []);
   const [eagleCols, demiCols] = [eagle.header, demi.header].map(h => h.filter(c => !ignored.has(c)));
   const shared = eagleCols.filter(c => demiCols.includes(c));
   const headerDiffs = [
@@ -434,7 +434,8 @@ function compareCsv(entry, identity, eagle, demi, known) {
     ...demiCols.filter(c => !eagleCols.includes(c)),
     ...(JSON.stringify(shared) === JSON.stringify(demiCols.filter(c => eagleCols.includes(c))) ? [] : ['column order'])
   ];
-  return compare(entry, identity, eagle, demi, known, entry.keysOnly ? [] : shared.map(c => [c, c]), headerDiffs);
+  const fields = entry.keysOnly ? [] : shared.filter(c => c !== entry.key).map(c => [c, c]);
+  return compare(entry, identity, eagle, demi, known, fields, headerDiffs);
 }
 
 /** sha256 and byte length of a response body, read as a stream. */
