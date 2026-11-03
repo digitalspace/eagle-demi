@@ -9,9 +9,8 @@ const commentPeriods = require('../repositories/comment-periods');
 const documents = require('../repositories/documents');
 const { logger } = require('../utils/logger');
 const {
-  requireSettings, call, failure, missingOnPut, claimHeld, createMinted, refuseStray
+  requireSettings, call, failure, missingOnPut, claimHeld, createMinted, refuseStray, refsFor, mirrorRowUnder
 } = require('./eagle');
-const { refOf } = require('./eagle-update');
 
 const NAME = 'eagle';
 const KIND = 'comment';
@@ -35,24 +34,13 @@ async function bodyFor(row, logFields) {
   for (const field of FIELDS) {
     if (row[field] !== undefined) body[field] = row[field];
   }
-  const refs = [];
-  const ref = (what, id, stored) => {
-    const found = refOf(what, id, stored);
-    refs.push(found);
-    return found.eagleId || null;
-  };
+  const { ref, waiting } = refsFor(KIND, row, logFields);
   body.period = ref('comment period', row.periodId,
     await commentPeriods.readForWrite(row.periodId, row.projectId));
   const ids = Array.isArray(row.documents) ? row.documents : [];
   const stored = new Map((await documents.listSyncRefs(ids)).map(doc => [String(doc.id), doc]));
   body.documents = ids.map(id => ref('document', id, stored.get(String(id))));
-
-  const failed = refs.filter(r => r.fail).map(r => r.fail);
-  if (failed.length) {
-    logger.error(`[sync-out eagle] comment ${row.id} not sent: ${failed.join('; ')}`, { ...logFields, failed });
-    throw new Error(`comment ${row.id} names records Eagle cannot hold: ${failed.join('; ')}`);
-  }
-  return { body, waiting: refs.filter(r => r.wait).map(r => r.wait) };
+  return { body, waiting: waiting() };
 }
 
 /** PUT the row's fields; false when Eagle has no comment under the id. */
@@ -103,10 +91,7 @@ async function send(row, { update }) {
   });
 }
 
-async function mirroredAsEagleRow(eagleId, row) {
-  const stored = await comments.readForWrite(eagleId);
-  return Boolean(stored && stored.id !== row.id && stored.sourceSystem !== NATIVE);
-}
+const mirroredAsEagleRow = mirrorRowUnder(eagleId => comments.readForWrite(eagleId));
 
 module.exports = {
   name: NAME,

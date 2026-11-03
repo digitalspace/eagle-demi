@@ -301,11 +301,17 @@ async function findByMetUrl(s, body, logFields) {
   return match ? String(match._id) : null;
 }
 
+/** Sources whose records sync-out creates in Eagle itself; any other row is the mirror's (Update mirror rows carry none). */
+const SENT_BY_SYNC_OUT = new Set([NATIVE, 'engage']);
+
+/** A `heldByMirror`/`twinOf` hook: true when `read(eagleId, row)` finds another, Eagle-owned row under the id. */
+const mirrorRowUnder = read => async (eagleId, row) => {
+  const stored = await read(eagleId, row);
+  return Boolean(stored && stored.id !== row.id && !SENT_BY_SYNC_OUT.has(stored.sourceSystem));
+};
+
 /** True when DEMI already mirrors this Eagle period as its own Eagle-owned row: adopting it would make two rows one period. */
-async function mirroredAsEagleRow(eagleId, row) {
-  const stored = await commentPeriods.readForWrite(eagleId, row.projectId);
-  return Boolean(stored && stored.id !== row.id && stored.sourceSystem === 'eagle');
-}
+const mirroredAsEagleRow = mirrorRowUnder((eagleId, row) => commentPeriods.readForWrite(eagleId, row.projectId));
 
 const sent = (eagleId, body) => ({ status: 'sent', eagleId, record: { projectId: String(body.project) } });
 
@@ -456,6 +462,55 @@ async function parentEagleId(row, logFields) {
 /** A row ENGAGE or DEMI deleted: send() removes its Eagle copy. */
 const isDeletedRow = row => Boolean(row.isDeleted || (row.sources && row.sources.engage && row.sources.engage.isDeleted));
 
+/** True while sync-out's own create of `stored` has not landed: Eagle may not hold the id it minted. */
+function createPending(stored) {
+  const entry = (stored.syncOut && stored.syncOut[NAME]) || {};
+  return entry.mintedId === String(stored.eagleId) && !Number.isInteger(entry.sentVersion);
+}
+
+/**
+ * The Eagle id a referenced record goes by, else why it has none: `wait` for a record sync-out has yet to send
+ * or the intake scan has yet to release, `fail` for one that will never have an Eagle id.
+ */
+function refOf(what, id, stored) {
+  const named = `${what} ${id}`;
+  if (!stored) return { fail: `${named} is not in DEMI` };
+  if (isDeletedRow(stored)) return { fail: `${named} is deleted` };
+  if (stored.syncOut && stored.syncOut[NAME] && stored.syncOut[NAME].eagleDeleted === true) {
+    return { fail: `${named} is deleted in Eagle` };
+  }
+  // The intake never clears a rejection: the file stays in quarantine.
+  if (stored.scanStatus === 'rejected') return { fail: `${named} was rejected by the intake scan` };
+  if (!isScanCleared(stored)) return { wait: `${named} is not through the intake scan` };
+  if (stored.eagleId && !createPending(stored)) return { eagleId: String(stored.eagleId) };
+  if (SENT_BY_SYNC_OUT.has(stored.sourceSystem)) return { wait: `${named} is not in Eagle yet` };
+  return { fail: `${named} has no eagleId` };
+}
+
+/**
+ * `ref(what, id, stored)` answers a reference's Eagle id and records why one has none; `refuse(reason)` records a
+ * failure. `waiting()` throws once anything failed, else lists what is not in Eagle yet.
+ */
+function refsFor(noun, row, logFields) {
+  const refs = [];
+  return {
+    ref: (what, id, stored) => {
+      const found = refOf(what, id, stored);
+      refs.push(found);
+      return found.eagleId || null;
+    },
+    refuse: (reason) => { refs.push({ fail: reason }); },
+    waiting: () => {
+      const failed = refs.filter(r => r.fail).map(r => r.fail);
+      if (failed.length) {
+        logger.error(`[sync-out eagle] ${noun} ${row.id} not sent: ${failed.join('; ')}`, { ...logFields, failed });
+        throw new Error(`${noun} ${row.id} names records Eagle cannot hold: ${failed.join('; ')}`);
+      }
+      return refs.filter(r => r.wait).map(r => r.wait);
+    }
+  };
+}
+
 /** Read-only GET client for reconcile scripts: own token, injected fetch, no milestone needed. */
 function eagleReader(get) {
   const s = settings.eagle;
@@ -579,5 +634,7 @@ module.exports = {
   refreshClaim,
   endClaim,
   isDeletedRow,
+  refsFor,
+  mirrorRowUnder,
   eagleReader
 };

@@ -11,7 +11,7 @@ const notifications = require('../repositories/notifications');
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const {
-  requireSettings, call, failure, claimHeld, createMinted, refuseStray, isDeletedRow
+  requireSettings, call, failure, claimHeld, createMinted, refuseStray, refsFor, mirrorRowUnder
 } = require('./eagle');
 
 const NAME = 'eagle';
@@ -29,45 +29,12 @@ const FIELDS = Object.freeze([
 
 const pathOf = eagleId => `${ROUTE}/${encodeURIComponent(eagleId)}`;
 
-/** True while sync-out's own create of `stored` has not landed: Eagle may not hold the id it minted. */
-function createPending(stored) {
-  const entry = (stored.syncOut && stored.syncOut[NAME]) || {};
-  return entry.mintedId === String(stored.eagleId) && !Number.isInteger(entry.sentVersion);
-}
-
-/** Sources whose records sync-out creates in Eagle itself: one with no `eagleId` yet gets one. */
-const SENT_BY_SYNC_OUT = new Set([NATIVE, 'engage']);
-
-/**
- * The Eagle id a referenced record goes by, else why it has none: `wait` for a record sync-out has yet to send
- * or the intake scan has yet to release, `fail` for one that will never have an Eagle id.
- */
-function refOf(what, id, stored) {
-  const named = `${what} ${id}`;
-  if (!stored) return { fail: `${named} is not in DEMI` };
-  if (isDeletedRow(stored)) return { fail: `${named} is deleted` };
-  if (stored.syncOut && stored.syncOut[NAME] && stored.syncOut[NAME].eagleDeleted === true) {
-    return { fail: `${named} is deleted in Eagle` };
-  }
-  // The intake never clears a rejection: the file stays in quarantine.
-  if (stored.scanStatus === 'rejected') return { fail: `${named} was rejected by the intake scan` };
-  if (!documents.isScanCleared(stored)) return { wait: `${named} is not through the intake scan` };
-  if (stored.eagleId && !createPending(stored)) return { eagleId: String(stored.eagleId) };
-  if (SENT_BY_SYNC_OUT.has(stored.sourceSystem)) return { wait: `${named} is not in Eagle yet` };
-  return { fail: `${named} has no eagleId` };
-}
-
 /**
  * eagle-api's Update body, each reference as an Eagle id, and the references that are not in Eagle yet. Throws
  * when one never will be.
  */
 async function bodyFor(row, logFields) {
-  const refs = [];
-  const ref = (what, id, stored) => {
-    const found = refOf(what, id, stored);
-    refs.push(found);
-    return found.eagleId || null;
-  };
+  const { ref, waiting } = refsFor(KIND, row, logFields);
   const body = {};
   for (const field of FIELDS) {
     if (row[field] !== undefined) body[field] = row[field];
@@ -89,13 +56,7 @@ async function bodyFor(row, logFields) {
   if (row.featuredImage !== undefined) body.featuredImage = imageOf(row.featuredImage);
   if (row.images !== undefined) body.images = images.map(imageOf);
   if (row.attachments !== undefined) body.attachments = attachments.map(docRef);
-
-  const failed = refs.filter(r => r.fail).map(r => r.fail);
-  if (failed.length) {
-    logger.error(`[sync-out eagle] update ${row.id} not sent: ${failed.join('; ')}`, { ...logFields, failed });
-    throw new Error(`update ${row.id} names records Eagle cannot hold: ${failed.join('; ')}`);
-  }
-  return { body, waiting: refs.filter(r => r.wait).map(r => r.wait) };
+  return { body, waiting: waiting() };
 }
 
 /** PUT the row's fields; false when Eagle has no Update under the id. */
@@ -145,11 +106,7 @@ async function send(row, { update }) {
   });
 }
 
-async function mirroredAsEagleRow(eagleId, row) {
-  const stored = await updates.readForWrite(eagleId);
-  // Mirror rows carry no `sourceSystem`.
-  return Boolean(stored && stored.id !== row.id && stored.sourceSystem !== NATIVE);
-}
+const mirroredAsEagleRow = mirrorRowUnder(eagleId => updates.readForWrite(eagleId));
 
 module.exports = {
   name: NAME,
@@ -157,6 +114,5 @@ module.exports = {
   enableSettings: Object.freeze(['SYNC_OUT_EAGLE_ENABLED', 'SYNC_OUT_EAGLE_UPDATE_ENABLED']),
   wants,
   inFlight: entry => Boolean(claimHeld(entry, Date.now())),
-  send,
-  refOf
+  send
 };
