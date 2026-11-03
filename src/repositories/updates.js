@@ -22,7 +22,7 @@ const config = require('../config');
 const { logger } = require('../utils/logger');
 const {
   eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom,
-  readPage, fetchAll
+  readPage, fetchAll, readDemiRowByEagleId, listDemiSyncPending
 } = require('./_sql');
 
 const CONTAINER = 'updates';
@@ -320,6 +320,12 @@ async function getById(access, id) {
 async function readForWrite(id) {
   return cosmos.readItem(CONTAINER, String(id), String(id));
 }
+
+/** The DEMI-created row sync-out sent under this Eagle id; `readForWrite` finds an Eagle row. */
+const readForWriteByEagleId = (eagleId) => readDemiRowByEagleId(CONTAINER, eagleId);
+
+/** The sync-out pending hook's list. */
+const listSyncPending = () => listDemiSyncPending(CONTAINER);
 
 /**
  * The keyword criterion: the text fields the `activities` index searches, less `notificationName`,
@@ -780,6 +786,8 @@ module.exports = {
   markNotifySkipped,
   getById,
   readForWrite,
+  readForWriteByEagleId,
+  listSyncPending,
   list,
   listEvery,
   listByIds,

@@ -13,6 +13,7 @@ const updates = require('../../src/repositories/updates');
 const documents = require('../../src/repositories/documents');
 const updateParent = require('../../src/helpers/update-parent');
 const update = require('../../src/domain/updates');
+const syncOut = require('../../src/sync-out');
 const { fakeImages } = require('../helpers/update-images-store');
 const { ctxFor } = require('../helpers/domain-ctx');
 
@@ -83,6 +84,14 @@ test('update domain', async (t) => {
     assert.ok(row.publishDate, 'the publish gate needs a publishDate on every row');
     assert.strictEqual(rows[0].Action, 'update.create');
     assert.strictEqual(rows[0].TargetId, row.id);
+  });
+
+  await t.test('a write queues the saved row for the update sync-out', async (t) => {
+    fakeStore(t, null);
+    const queued = t.mock.method(syncOut, 'enqueueQuietly', async () => []);
+    const result = await update.create(STAFF, createBody());
+    assert.deepStrictEqual(queued.mock.calls.map(c => [c.arguments[0].id, c.arguments[1].kind]),
+      [[result.value.id, 'update']]);
   });
 
   await t.test('create ignores read, pinned and notifiedAt in the body', async (t) => {

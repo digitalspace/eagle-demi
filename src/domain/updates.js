@@ -15,6 +15,7 @@ const updateParent = require('../helpers/update-parent');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { UPDATE } = require('../sync-out/kinds');
 const images = require('./update-images');
 const { logger } = require('../utils/logger');
 
@@ -263,6 +264,8 @@ async function writeWithImages(ctx, { before, after, parentId, write }) {
       : [...new Set([...shownBefore, ...shownAfter])], result.value.id);
   }
   if (publishing) await images.republish(ctx, result.value, parentId);
+  // Required on call: sync-out's update consumer requires this module.
+  await require('../sync-out').enqueueQuietly(result.value, { kind: UPDATE });
   return result;
 }
 
