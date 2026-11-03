@@ -1,15 +1,7 @@
 'use strict';
 
-/**
- * Project notifications repository — Cosmos NoSQL.
- *
- * Container `notifications` (Eagle `ProjectNotification`), partitioned by `/id`. ~17 small rows read
- * whole, so /id gives perfect distribution and 1 RU point reads.
- *
- * A notification is not project data: `associatedProjectId` is a loose reference to a project that
- * may not exist yet, so there is NO project axis and `visibilityFor` is called with a null partition
- * field — role ACL applies, project scope does not. Same rule as `boundaries`.
- */
+// Container `notifications` (Eagle `ProjectNotification`), partitioned by `/id`. No project axis, as for `boundaries`:
+// `associatedProjectId` may name a project that does not exist yet, so role ACL applies and project scope does not.
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
@@ -94,9 +86,7 @@ async function listEvery(access) {
 }
 
 /**
- * A bounded set of notifications in one query: name and id for the label an update refers to, or
- * whole rows under `{full: true}` for the keyword search, which reads back what the index ranked.
- *
+ * Name and id of each notification in `ids`, or whole rows under `{full: true}` for the keyword search.
  * Cosmos answers in its own order; a caller that asked for a ranking re-imposes it.
  */
 async function listByIds(access, ids, { full = false } = {}) {
@@ -115,10 +105,8 @@ async function listByIds(access, ids, { full = false } = {}) {
 }
 
 /**
- * Notifications carrying a decision dated no later than `now`, newest first, at most `limit`.
- *
- * Sorted HERE: `decisionDate` is not an indexed path, so Cosmos cannot ORDER BY it. The container
- * holds a few dozen rows, so the filter's scan is cheap.
+ * Notifications with a decision dated no later than `now`, newest first, at most `limit`.
+ * Sorted here: `decisionDate` is not indexed, so Cosmos cannot ORDER BY it; a few dozen rows scan cheaply.
  */
 async function listDecisions(access, { limit, now }) {
   const spec = selectWhere({
