@@ -9,8 +9,8 @@ const controller = require('../../src/controllers/report');
 const projects = require('../../src/repositories/projects');
 
 /**
- * Header and two rows of eagle-api's own `GET /api/reports?type=bcgw` (eagle-test, 2026-10-06),
- * byte for byte: one complete row, and one with a comma-bearing description and no decision date.
+ * Header and two rows copied byte for byte from eagle-api `GET /api/reports?type=bcgw`: one full
+ * row, one with a comma in the description and no decision date.
  */
 const EAGLE_CSV = [
   'Latitude,Longitude,Project name,Proponent,Type,Sub-Type,Description,MOE Region,Project Phase,Legislation,Federal Involvement,EA Decision,Decision Date,URL to Epic Project,Project GUID',
