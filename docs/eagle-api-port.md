@@ -512,14 +512,16 @@ Decisions:
 - The write is one etag-guarded project upsert, so the remove and add of a PUT land together; eagle-api's two updates could drop the old item and then fail the push.
 - No `vis/catalog/projects.js` edit was needed: both lists are already catalogued, and the redactor does not descend into arrays. Slice 11 is free to edit it.
 - An Eagle push or re-merge keeps the stored lists. A row with no stored list takes the one Eagle sent (`seedEagleLists` in `src/merge/project.js`), as pins do.
+- The lists are project-wide, not per Act: a `/level` year switch keeps them. eagle-api keeps one pair per `legislation_<year>` block (`helpers/models/project.js:81-82`).
+- The merged `legislation_<year>` blocks hold neither list (`pickEagleBlocks` in `src/merge/project.js`), so a row holds one copy; `sources.eagle` keeps Eagle's.
 - `PUT /projects/:id` ignores both lists (`PUT_IGNORED_FIELDS`), so only these routes move them.
-- Sync-out: each write queues the project (`queued` in `src/domain/_write.js`), but the lists never reach Eagle. eagle-api's project PUT writes neither list, and the project consumer sends only projects DEMI created. No client reads them from eagle-api: eagle-public on `react` and `develop` never reads them, and eagle-admin loads the project from DEMI.
+- Sync-out: each write queues the project (`queued` in `src/domain/_write.js`), but the lists never reach Eagle. eagle-api's project PUT writes neither list, and the project consumer sends only projects DEMI created. No client reads them from eagle-api: eagle-public on `react` and `develop` never reads them, and eagle-admin's `getForEdit` requests both lists, but no view shows them.
 
 Questioned:
 - Delete removes every equal copy, not one (`:527`). Ported as is through the shared content id.
 - A `type` other than `Extension` lands in `reviewSuspensions` with that type (`:490`). Ported as is; eagle-admin only sends `Extension` and `Suspension`.
 
-Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `editExtension`, `deleteExtension`), from `extension.component.ts:87,115,122`. Between the DEMI tag and the eagle-admin tag, an extension edit made through eagle-api does not reach a DEMI row that already holds the list.
+Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `editExtension`, `deleteExtension`), from `extension.component.ts:87,115,122`. No edit is lost between the DEMI tag and the eagle-admin tag, because eagle-api stores none: its routes write a top-level path its strict schema lacks, so Mongoose sends no update. On test, a POST and a DELETE each answered 200 `{"acknowledged":false}` and changed nothing (measured 2026-11-03).
 
 ### Project
 
