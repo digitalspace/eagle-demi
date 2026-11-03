@@ -37,7 +37,7 @@ def walk(top, blocked=()):
 
 # Operator files that must never reach wwwroot. A packaged `.env` once carried MONGODB_PASSWORD,
 # TYPESENSE_API_KEY, MINIO_SECRET_KEY and DOCLING_API_KEY into a world-readable path.
-EXCLUDED_NAMES = {"local.settings.json", ".npmrc"}
+EXCLUDED_NAMES = {"local.settings.json", "local.settings.example.json", ".npmrc"}
 EXCLUDED_PREFIXES = ("LICENSE", "CHANGELOG")
 
 

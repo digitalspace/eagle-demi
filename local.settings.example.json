@@ -1,0 +1,12 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "AzureFunctionsJobHost__logging__logLevel__default": "Information",
+    "ENVIRONMENT": "dev",
+    "COSMOS_ENDPOINT": "",
+    "COSMOS_NOSQL_DATABASE": "demi",
+    "SEARCH_ENDPOINT": ""
+  }
+}

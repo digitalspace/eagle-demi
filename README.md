@@ -24,10 +24,46 @@ This repository houses:
 
 ## Local development
 
-```bash
-yarn install
-yarn start            # Azure Functions Core Tools (`func start`) on :7071
-```
+The API runs on your machine without a database. You need these tools:
+
+| Tool | Version | Install |
+|------|---------|---------|
+| Node.js | 22.12 or later | [nodejs.org](https://nodejs.org) or nvm |
+| Yarn | 4.12.0, from `packageManager` | `corepack enable` |
+| Azure Functions Core Tools | 4 | `npm install -g azure-functions-core-tools@4` |
+| Azurite | 3 | `npm install -g azurite` |
+
+1. Install dependencies and copy the settings template. `local.settings.json` is gitignored and never packaged.
+
+   ```bash
+   yarn install
+   cp local.settings.example.json local.settings.json
+   ```
+
+2. Start Azurite in a second terminal. `AzureWebJobsStorage` in the template points at it.
+
+   ```bash
+   azurite --silent --location ~/.azurite
+   ```
+
+3. Start the API on :7071 with Azure Functions Core Tools (`func start`).
+
+   ```bash
+   yarn start
+   ```
+
+4. Check that it answers.
+
+   ```bash
+   curl -i localhost:7071/api/health      # 200
+   curl -i localhost:7071/api/health/db   # 503 {"ok":false,"error":"Database client is not configured."}
+   ```
+
+The 503 is expected: the template leaves `COSMOS_ENDPOINT` empty. Without it, data routes return `[]` with status 200, and the log shows `[Cosmos] COSMOS_ENDPOINT is not set; data access is unavailable.`
+
+The template sets the host log level to `Information`. At the `host.json` level of `Warning`, the host drops the app's console output.
+
+Cosmos and AI Search accept only private, keyless access, so no laptop reaches them. To work with real data, use the devbox in [Running anything against the database](#running-anything-against-the-database).
 
 OpenAPI spec: `http://localhost:7071/api-docs` — the raw YAML, not a UI. Not served in prod.
 
