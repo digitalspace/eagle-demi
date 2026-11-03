@@ -268,6 +268,21 @@ test('comment period domain', async (t) => {
     assert.strictEqual(rows[0].Action, 'commentPeriod.delete');
   });
 
+  await t.test('delete that loses its etag to a sync-out create claim keeps the claimed row as deleted', async (t) => {
+    const loaded = { ...STORED, sourceSystem: 'demi', eagleId: null };
+    const store = fakeStore(t, loaded);
+    let reads = 0;
+    t.mock.method(commentPeriods, 'getById', async () => (++reads === 1 ? { ...loaded } : { ...loaded, eagleId: PERIOD_ID, _etag: 'e3' }));
+    t.mock.method(commentPeriods, 'deleteById', async () => { throw Object.assign(new Error('precondition'), { code: 412 }); });
+
+    const { result } = await audited(() => period.remove(STAFF, PERIOD_ID));
+
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(store.written[0].isDeleted, true);
+    assert.strictEqual(store.written[0].eagleId, PERIOD_ID);
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
+  });
+
   await t.test('delete of a DEMI period Eagle never got hard-deletes it', async (t) => {
     const store = fakeStore(t, { ...STORED, sourceSystem: 'demi', eagleId: null });
     const { result } = await audited(() => period.remove(STAFF, PERIOD_ID));

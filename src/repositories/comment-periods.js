@@ -24,18 +24,21 @@ const DEFAULT_ORDER = 'c.dateStarted DESC';
 /** `listOpen` when the caller named no limit. A rail, not a registry — see `listOpen`. */
 const DEFAULT_OPEN_ROWS = 20;
 
-/** Point read, deleted periods left out. With the project it is single-partition; without, the predicate runs in the query. */
-async function getById(access, id, projectId) {
+/**
+ * Point read. With the project it is single-partition; without, the predicate runs in the query.
+ * Deleted periods are left out unless `includeDeleted`: a comment under one is still stored and vetted.
+ */
+async function getById(access, id, projectId, { includeDeleted = false } = {}) {
   if (projectId) {
     const item = await cosmos.readItem(CONTAINER, String(id), String(projectId));
-    if (!item || item.isDeleted === true) return null;
+    if (!item || (!includeDeleted && item.isDeleted === true)) return null;
     return canRead(item, access, PARTITION_FIELD) ? item : null;
   }
 
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [NOT_DELETED, eq('id', String(id), '@id')]
+    criteria: [...(includeDeleted ? [] : [NOT_DELETED]), eq('id', String(id), '@id')]
   });
   // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
   // the row exists, and the caller reads that as "no such comment period".
@@ -307,6 +310,11 @@ async function countByProject(projectId, access) {
   return countMatching(access, [...criteriaFor(projectId), NOT_DELETED], { partitionKey: String(projectId) });
 }
 
+/** `listEveryByProject`'s predicate, deleted periods counted: the reconcile's truncation guard. */
+async function countEveryByProject(projectId, access) {
+  return countMatching(access, criteriaFor(projectId), { partitionKey: String(projectId) });
+}
+
 /** Any of `statuses` (keys of `clauses`), every clause bound to the same clock read. */
 function anyStatusCriterion(statuses, now, clauses = STATUS_CLAUSES) {
   const parts = statuses.map(status => statusCriterion(status, now, clauses));
@@ -489,6 +497,7 @@ module.exports = {
   listAll,
   countAll,
   countByProject,
+  countEveryByProject,
   keywordsOf,
   keywordProjectIds,
   nativeRepository,

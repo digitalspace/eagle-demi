@@ -121,6 +121,19 @@ test('the period reads by id and by project exclude deleted periods', async (t) 
   assert.strictEqual(await commentPeriods.getById(ANON, 'cp-1', 'p-1'), null, 'the point read drops a deleted row');
 });
 
+test("the reconcile's partition count has its listing's predicate, deleted periods included", async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  const seen = { queries: [] };
+  t.mock.method(cosmos, 'query', async (container, spec) => { seen.queries.push(spec); return { items: [] }; });
+
+  await commentPeriods.listEveryByProject('p-1', ANON);
+  await commentPeriods.countEveryByProject('p-1', ANON);
+
+  const [list, count] = seen.queries.map(whereOf);
+  assert.strictEqual(count, list);
+  assert.doesNotMatch(count, /isDeleted/);
+});
+
 // Dates every tz revision agrees on: tz 2026c keeps America/Vancouver on UTC-7 after 2026-11-01.
 test('startOfPacificDay is the Pacific midnight of the Pacific date, across DST', () => {
   const cases = [

@@ -94,7 +94,8 @@ function statusFields(current, status, period) {
 }
 
 const readComment = (ctx, id) => comments.getById(ctx.access, id);
-const periodOf = (comment) => commentPeriods.getById(systemAccess(), comment.periodId, comment.projectId);
+const periodOf = (comment) =>
+  commentPeriods.getById(systemAccess(), comment.periodId, comment.projectId, { includeDeleted: true });
 
 /**
  * @param {{access: object, req: object}} ctx

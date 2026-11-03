@@ -606,6 +606,19 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
+  await t.test('a comment under a period Eagle deleted is still stored, staff-only', async () => {
+    const deleted = { ...storedPeriod(['staff']), isDeleted: true };
+    // As the repository answers: a deleted period only when the read asks for one.
+    t.mock.method(commentPeriods, 'getById', async (access, id, projectId, { includeDeleted = false } = {}) =>
+      (includeDeleted ? deleted : null));
+
+    const { written } = await pushTo(
+      commentController, comments, COMMENT_EAGLE_ID, eagleComment(), t);
+
+    assert.ok(written(), 'the comment is stored');
+    assert.ok(!written().read.includes('public'));
+  });
+
   await t.test('a comment Eagle marks compliance-only lands privileged-only, not sealed', async () => {
     t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
 
