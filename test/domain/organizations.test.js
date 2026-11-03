@@ -33,20 +33,21 @@ function ctxFor(roles, username = 'idir-staff') {
 }
 const STAFF = ctxFor(['staff']);
 
-/** Fake `lists` storage: one stored organization, and every row upserted kept in order. */
-function fakeLists(t, stored = STORED) {
-  const written = [];
-  t.mock.method(lists, 'getById', async (access, id, kind) =>
-    stored && id === stored.id && kind === 'Organization' ? { ...stored } : null);
-  t.mock.method(lists, 'upsert', async (row) => { written.push(row); return { ...row, _etag: 'e2' }; });
-  return written;
-}
-
 /** Sync-out stubbed: each queued row's id and etag, with its kind. */
 function fakeQueue(t) {
   const queued = [];
   t.mock.method(syncOut, 'enqueueQuietly', async (row, { kind }) => { queued.push([row.id, row._etag, kind]); return []; });
   return queued;
+}
+
+/** Fake `lists` storage: one stored organization, and every row upserted kept in order; sync-out stubbed. */
+function fakeLists(t, stored = STORED) {
+  const written = [];
+  written.queued = fakeQueue(t);
+  t.mock.method(lists, 'getById', async (access, id, kind) =>
+    stored && id === stored.id && kind === 'Organization' ? { ...stored } : null);
+  t.mock.method(lists, 'upsert', async (row) => { written.push(row); return { ...row, _etag: 'e2' }; });
+  return written;
 }
 
 /** Fake `users` storage over `members`; `failIds` throw on write. */
@@ -75,7 +76,6 @@ test('organization domain', async (t) => {
 
   await t.test('create stores a DEMI-owned row, unpublished, with the caller stamped', async (t) => {
     const written = fakeLists(t, null);
-    const queued = fakeQueue(t);
 
     const { result } = await audited(() => organization.create(STAFF, { name: 'New Co', city: 'Nelson' }));
 
@@ -93,7 +93,7 @@ test('organization domain', async (t) => {
     assert.strictEqual(row.name, 'New Co');
     assert.strictEqual(row.companyLegal, '', 'an omitted field gets the eagle-api default');
     assert.strictEqual(row.parentCompany, null);
-    assert.deepStrictEqual(queued, [[row.id, 'e2', ORGANIZATION]]);
+    assert.deepStrictEqual(written.queued, [[row.id, 'e2', ORGANIZATION]]);
   });
 
   await t.test('create with an empty body is allowed, since eagle-api requires no field', async (t) => {
@@ -160,7 +160,6 @@ test('organization domain', async (t) => {
 
   await t.test('update merges the allowed fields, stamps the editor and keeps the ACL', async (t) => {
     const written = fakeLists(t);
-    const queued = fakeQueue(t);
     const editor = ctxFor(['project-system-admin', 'sysadmin'], 'idir-psa');
 
     const { result } = await audited(() => organization.update(editor, ORG_ID, { city: 'Nelson' }));
@@ -172,7 +171,7 @@ test('organization domain', async (t) => {
     assert.strictEqual(written[0].updatedBy, 'idir-psa');
     assert.ok(written[0].dateUpdated);
     assert.deepStrictEqual(written[0].read, STORED.read);
-    assert.deepStrictEqual(queued, [[ORG_ID, 'e2', ORGANIZATION]]);
+    assert.deepStrictEqual(written.queued, [[ORG_ID, 'e2', ORGANIZATION]]);
   });
 
   await t.test('update keeps dateAdded, which eagle-api resets', async (t) => {
@@ -234,7 +233,6 @@ test('organization domain', async (t) => {
 
   await t.test('publish adds public to the read, sets isPublished and audits it', async (t) => {
     const written = fakeLists(t, { ...STORED, read: ['staff', 'sysadmin'], isPublished: false });
-    const queued = fakeQueue(t);
     const { result, rows: logged } = await audited(() => organization.publish(STAFF, ORG_ID));
     assert.strictEqual(result.status, 'ok');
     assert.deepStrictEqual(written[0].read, ['public', 'staff', 'sysadmin']);
@@ -243,7 +241,7 @@ test('organization domain', async (t) => {
     assert.strictEqual(logged.length, 1);
     assert.strictEqual(logged[0].Action, 'organization.publish');
     assert.strictEqual(logged[0].TargetId, ORG_ID);
-    assert.deepStrictEqual(queued, [[ORG_ID, 'e2', ORGANIZATION]]);
+    assert.deepStrictEqual(written.queued, [[ORG_ID, 'e2', ORGANIZATION]]);
   });
 
   await t.test('publish of a published organization does not repeat public', async (t) => {
@@ -254,13 +252,12 @@ test('organization domain', async (t) => {
 
   await t.test('unpublish takes public out of the read and clears isPublished', async (t) => {
     const written = fakeLists(t);
-    const queued = fakeQueue(t);
     const { result, rows: logged } = await audited(() => organization.unpublish(STAFF, ORG_ID));
     assert.strictEqual(result.status, 'ok');
     assert.deepStrictEqual(written[0].read, ['staff', 'sysadmin']);
     assert.strictEqual(written[0].isPublished, false);
     assert.strictEqual(logged[0].Action, 'organization.unpublish');
-    assert.deepStrictEqual(queued, [[ORG_ID, 'e2', ORGANIZATION]]);
+    assert.deepStrictEqual(written.queued, [[ORG_ID, 'e2', ORGANIZATION]]);
   });
 
   await t.test('unpublish of a public-only read leaves it readable by staff', async (t) => {
@@ -271,12 +268,11 @@ test('organization domain', async (t) => {
 
   await t.test('publish of a missing organization is not-found and writes nothing', async (t) => {
     const written = fakeLists(t, null);
-    const queued = fakeQueue(t);
     const { result, rows: logged } = await audited(() => organization.publish(STAFF, ORG_ID));
     assert.strictEqual(result.status, 'not-found');
     assert.strictEqual(written.length, 0);
     assert.strictEqual(logged.length, 0);
-    assert.strictEqual(queued.length, 0);
+    assert.strictEqual(written.queued.length, 0);
   });
 
   await t.test('update refuses a field above the caller level and writes nothing', async (t) => {

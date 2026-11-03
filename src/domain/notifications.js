@@ -135,14 +135,14 @@ async function create(ctx, input) {
     read
   };
 
-  return forgetParentsOn(await queued(await writeRow({
+  return queued(forgetParentsOn(await writeRow({
     ctx,
     repo: notifications,
     existing: null,
     reread: () => readNotification(ctx, id),
     build: () => row,
     audit: auditOf('notification.create', Object.keys(checked.value))
-  }), NOTIFICATION));
+  })), NOTIFICATION);
 }
 
 /**
@@ -189,7 +189,7 @@ function setPublished(published) {
   return async function (ctx, id) {
     const actor = actorOf(ctx);
     // A missing row reaches `build` as null, which writeRow answers as not-found.
-    return forgetParentsOn(await queued(await writeRow({
+    return queued(forgetParentsOn(await writeRow({
       ctx,
       repo: notifications,
       existing: await readNotification(ctx, id),
@@ -202,7 +202,7 @@ function setPublished(published) {
         dateUpdated: new Date().toISOString()
       },
       audit: auditOf(action, ['isPublished'])
-    }), NOTIFICATION));
+    })), NOTIFICATION);
   };
 }
 
