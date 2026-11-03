@@ -8,6 +8,8 @@
 const projects = require('../repositories/projects');
 const { resolveAccess, MAX_PAGE_SIZE, MAX_PAGE_DEPTH } = require('../helpers/access-sql');
 const { redactAllForAccess } = require('../vis/redact');
+const { onePerEagleId } = require('../helpers/project-twin');
+const { isEagleOnlyProjectId } = require('../merge/project');
 const { serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
 
@@ -63,11 +65,10 @@ function bcgwDate(value) {
   return `${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}-${date.getUTCFullYear()}`;
 }
 
-/** One redacted project as the BCGW row eagle-api built from `read_only__reports__project_info`. */
-function bcgwRow(project) {
+/** One `[eagleId, redacted project]` as the BCGW row eagle-api built from `read_only__reports__project_info`. */
+function bcgwRow([eagleId, project]) {
   const coordinates = project.centroid && Array.isArray(project.centroid.coordinates)
     ? project.centroid.coordinates : [];
-  const eagleId = project.eagleId || project.id;
   return {
     'Latitude': coordinates[1],
     'Longitude': coordinates[0],
@@ -105,10 +106,9 @@ async function bcgwReport() {
   // Anonymous on purpose: the report is the public field set of public rows, whoever asks.
   const access = resolveAccess({});
   const visible = redactAllForAccess('projects', await listPublicProjects(access), access);
-  // eagle-api reads in Mongo natural order, which is _id order but for rows its view upserted later.
-  const rows = visible.map(bcgwRow).sort((a, b) =>
-    a['Project GUID'] < b['Project GUID'] ? -1 : a['Project GUID'] > b['Project GUID'] ? 1 : 0);
-  return toCsv(BCGW_COLUMNS, rows);
+  // Sorted by Project GUID, one row each, Track row over its twin; eagle-api's natural order can differ.
+  const trackFirst = (kept, row) => (isEagleOnlyProjectId(kept.id) && !isEagleOnlyProjectId(row.id) ? row : kept);
+  return toCsv(BCGW_COLUMNS, onePerEagleId(visible, trackFirst).map(bcgwRow));
 }
 
 const REPORTS = { bcgw: bcgwReport };

@@ -78,6 +78,20 @@ test('BCGW report', async (t) => {
     assert.strictEqual(res.headers['content-disposition'], 'attachment; filename=export_bcgw.csv');
   });
 
+  await t.test('writes one row per lowercased Eagle id, the Track row over its twin', async () => {
+    const [keenleyside, coquihalla] = structuredClone(DEMI_ROWS);
+    t.mock.method(projects, 'listPage', async () => [
+      { ...coquihalla, eagleId: coquihalla.eagleId.toUpperCase() },
+      { ...keenleyside, id: `eagle-${keenleyside.eagleId}`, name: 'Stale twin' },
+      { ...keenleyside, id: '1003', eagleId: undefined, name: 'Track only' },
+      keenleyside
+    ]);
+    const res = mockRes();
+    await controller.getReport({ query: { type: 'bcgw' }, headers: {} }, res);
+
+    assert.strictEqual(res.body, EAGLE_CSV);
+  });
+
   await t.test('reads as the public whoever asks', async () => {
     const seen = [];
     t.mock.method(projects, 'listPage', async (access) => { seen.push(access); return []; });

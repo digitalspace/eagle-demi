@@ -68,6 +68,21 @@ async function narrowTwin(saved, eagleId, cascade) {
   return failure;
 }
 
+/**
+ * `[eagleId, row]` once per lowercased Eagle id, sorted by it. Rows with no Eagle ObjectId are
+ * skipped; for a Track row and its `eagle-<id>` twin, `prefer(kept, row)` returns the one to keep.
+ */
+function onePerEagleId(rows, prefer) {
+  const byId = new Map();
+  for (const row of rows) {
+    if (!row || !projects.EAGLE_OBJECT_ID.test(row.eagleId || '')) continue;
+    const eagleId = String(row.eagleId).toLowerCase();
+    const kept = byId.get(eagleId);
+    byId.set(eagleId, kept ? prefer(kept, row) : row);
+  }
+  return [...byId].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 /** Whether two stored `tags` values are the same list; absent reads as empty. */
 const sameTags = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
 
@@ -139,4 +154,4 @@ async function mirrorTags(row, req) {
   return 'The project tags changed, but the other copy of this project could not take them.';
 }
 
-module.exports = { narrowTwin, mirrorTags, partnerRefusesTags, sameTags };
+module.exports = { narrowTwin, mirrorTags, partnerRefusesTags, sameTags, onePerEagleId };
