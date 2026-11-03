@@ -462,9 +462,9 @@ Callers to move: eagle-admin `user.service.ts:55-62`; its `toEagleUserBody` (`mo
 
 ### CAC
 
-Status: done (eagle-notify e1c389b, eagle-demi 05ffdb67), Dark. Both deployed to test.
+Status: done (eagle-notify e1c389b, eagle-demi 05ffdb67), Dark. Both deployed to test. DEMI owns the three CAC fields (F11-d); the edge rule is todo.
 
-Today: `projectCAC`, `projectCACPublished`, `cacEmail` are project fields (`EAGLE_ONLY_FIELDS` in `src/ownership/project.js`, `src/vis/catalog/projects.js:88-89,109`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79). DEMI serves the routes under the `port: cac` anchor in `routes.js`, rules in `src/domain/cac.js`, handlers in `src/controllers/native/cac.js`.
+Today: `projectCAC`, `projectCACPublished`, `cacEmail` are top-level project fields in `DEMI_ONLY_FIELDS` (`CAC_FIELDS` in `src/ownership/project.js`, `src/vis/catalog/projects.js:92-93,116`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79). DEMI serves the routes under the `port: cac` anchor in `routes.js`, rules in `src/domain/cac.js`, handlers in `src/controllers/native/cac.js`.
 
 Routes (all six served): `GET`, `POST` and `DELETE /projects/:id/cac`, `PUT /projects/:id/cac/publish` and `/unpublish`, `POST /projects/:id/cac/members/remove` with `{ "address" }` (decided 2026-10-19: eagle-notify keys members by email, so no id route). All [staff, sysadmin]. Member sign-up stays in eagle-notify.
 
@@ -483,7 +483,11 @@ Test use: `demi-kv-test/notify-api-key` holds eagle-notify's host key named `dem
 
 After a rotation the Function App's floating Key Vault reference keeps the old value through a plain restart; re-save the `NOTIFY_API_KEY` app setting, then restart. Through Front Door, `/demi/api/*` refuses every method but GET, HEAD and OPTIONS (eagle-edge rule `demiapimethod`), so eagle-admin cannot call the CAC write routes until F11 adds an edge rule.
 
-Known Dark-phase limit: the CAC fields are copied from Eagle, so the next Eagle push replaces a DEMI write to them, while the eagle-notify removal stays. Accepted 2026-10-19: the routes have no caller until F11, and both eagle-notify routes are idempotent with a 30-day undo.
+Ownership:
+- An Eagle push or re-merge keeps the stored CAC fields. A row with none takes Eagle's value once, `false` included (`seedEagleLists` in `src/merge/project.js`).
+- The fields are top-level in Eagle's Mongo model too (`helpers/models/project.js:120-123`), never in a `legislation_<year>` block, so no block strip is needed.
+- `PUT /projects/:id` ignores all three (`PUT_IGNORED_FIELDS`). A PUT setting `projectCAC` false would skip ending the members in eagle-notify, and one setting `cacEmail` would skip the email check.
+- No sync-out: no CAC write queues the project. eagle-public never reads the fields on `react` (29451c1c) or `develop` (5f191b4b), and no eagle-api route writes them.
 
 ### Extensions
 
