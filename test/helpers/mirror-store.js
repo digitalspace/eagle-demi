@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * In-memory `documents`, `projects` and `lists` containers for the Eagle mirror's existence reads.
+ * In-memory `documents`, `projects`, `lists` and `notifications` containers for the Eagle mirror's existence reads.
  *
  * The one predicate it evaluates is the seal exclusion every ACL-gated read carries,
  * `NOT ARRAY_CONTAINS(c.read, '<sealed>')`, with Cosmos semantics: on a row with no `read[]` the
@@ -12,7 +12,7 @@
 
 const cosmos = require('../../src/db/cosmos-nosql');
 
-const PARTITION = { documents: 'projectId', projects: 'id', lists: 'kind' };
+const PARTITION = { documents: 'projectId', projects: 'id', lists: 'kind', notifications: 'id' };
 const FIELD_OF_PARAM = { '@id': 'id', '@eagleId': 'eagleId', '@projectId': 'projectId', '@kind': 'kind' };
 
 const failure = (code, message) => Object.assign(new Error(message), { code });
