@@ -1032,9 +1032,16 @@ documents the caller can read. Text that starts with `=`, `+`, `-` or `@` gets a
 spreadsheet does not run it as a formula. `Pillar` is always empty: DEMI does not copy that field.
 
 **BCGW report.** The feed of published projects for the BC Geographic Warehouse. It always reads
-as an anonymous caller, so a signed-in caller gets the same file. Columns and values match
-eagle-api's file, including the `Project GUID` cell wrapped in quotes that eagle-api has always
-written.
+as an anonymous caller, so a signed-in caller gets the same file.
+
+These parts match eagle-api's file:
+
+- the header row and the column order
+- the set of `Project GUID` values, one row per Eagle id
+- the `Project GUID` cell wrapped in quotes, as eagle-api has always written it
+
+Other cells come from DEMI's merged fields, so a Track value wins over the raw Eagle one. Rows
+sort by `Project GUID`, not in eagle-api's order.
 
 Both responses are built whole, because the Functions host sends one buffered body.
 
