@@ -304,6 +304,11 @@ test('sync-out of DEMI-created comments', async (t) => {
     assert.strictEqual(result.status, 'sent');
   });
 
+  await t.test('only DEMI rows are wanted: an Eagle-mirrored comment staff edited in DEMI is not', () => {
+    assert.strictEqual(consumer.wants(nativeComment({ id: EAGLE_ID, eagleId: EAGLE_ID, sourceSystem: 'eagle' })), false);
+    assert.strictEqual(consumer.wants(nativeComment()), true);
+  });
+
   await t.test('with SYNC_OUT_EAGLE_COMMENT_ENABLED off nothing is queued or sent', async (tt) => {
     useEnv(tt, { SYNC_OUT_EAGLE_COMMENT_ENABLED: 'false' });
     mirrorStore(tt, [nativeComment(), nativePeriod()]);
