@@ -169,7 +169,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - The switch also stops queued and retried sends. Turn it on only when eagle-api's POST keeps the `_id` DEMI sends and answers a duplicate `_id` with 409. With `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` on, it also needs eagle-api's `POST /document/stored` deployed, or every document create fails.
 - `SYNC_OUT_EAGLE_NOTIFICATION_ENABLED` stays `false` until eagle-api on test answers a duplicate `_id` on `POST /projectNotification` with 409. On a 400 a retried create fails instead of falling through to the PUT.
 - `SYNC_OUT_EAGLE_UPDATE_ENABLED` stays `false` until eagle-api on test answers a duplicate `_id` on `POST /recentActivity` with 409, for the same reason.
-- `SYNC_OUT_EAGLE_COMMENT_ENABLED` stays `false` until eagle-api's `POST /comment` keeps the `_id` DEMI sends and answers a duplicate `_id` with 409. Today it builds a new comment and ignores `_id`, so every create would end as a stray.
+- `SYNC_OUT_EAGLE_COMMENT_ENABLED` is `false` on every environment. Turn it on only where the deployed eagle-api keeps the `_id` DEMI sends on `POST /comment` and answers a duplicate with 409 (eagle-api develop e1e4a6a or later). An older build stores a new id, so every create ends as a stray.
 - If eagle-api stores a native row under another id, the row gets `syncOut.eagle.strayEagleId` and the error line `not re-keyed`. Sync-out then sends nothing for that row. To clear it:
   1. For a staff-only organization, check that the stray is unpublished in Eagle. Sync-out unpublishes it before it stops; the error line `stray Eagle id ... not cleaned up` means that call failed.
   2. Delete the Eagle record `strayEagleId` through eagle-api.
