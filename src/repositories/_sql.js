@@ -284,6 +284,23 @@ function oneRowOf(container, key, items, partitionField) {
 }
 
 /**
+ * The DEMI-created row sync-out sent under this Eagle id, with no ACL predicate, in a container whose Eagle rows
+ * are stored under their Eagle id. Throws `DUPLICATE_ID` when two rows name it.
+ */
+async function readDemiRowByEagleId(container, eagleId) {
+  const { clause, params } = eq('eagleId', String(eagleId), '@eagleId');
+  const { items } = await cosmos.query(container,
+    { query: `SELECT * FROM c WHERE ${clause} AND c.sourceSystem = 'demi'`, parameters: params });
+  return oneRowOf(container, eagleId, items);
+}
+
+/** DEMI-created rows holding a version not yet sent to Eagle: a sync-out pending hook's list. */
+function listDemiSyncPending(container) {
+  return fetchAll(container,
+    { query: `SELECT * FROM c WHERE c.sourceSystem = 'demi' AND ${EAGLE_SYNC_PENDING}`, parameters: [] });
+}
+
+/**
  * The SDK reports a failed access condition on `code` or on `statusCode` depending on the path
  * that raised it; a caller retrying a lost write should not have to know which.
  */
@@ -387,6 +404,8 @@ module.exports = {
   upsertItem,
   readForWriteIn,
   oneRowOf,
+  readDemiRowByEagleId,
+  listDemiSyncPending,
   upsertWithEtag,
   createItem,
   isDefinedAndNotNull,
