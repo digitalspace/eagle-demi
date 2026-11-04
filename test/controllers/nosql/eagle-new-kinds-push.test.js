@@ -16,6 +16,8 @@ const { levelOfRead, resolveAccess } = require('../../../src/helpers/access-sql'
 const { redactForAccess } = require('../../../src/vis/redact');
 const groups = require('../../../src/repositories/groups');
 const groupDomain = require('../../../src/domain/groups');
+const users = require('../../../src/repositories/users');
+const userDomain = require('../../../src/domain/users');
 const userController = require('../../../src/controllers/nosql/user');
 const inspectionController = require('../../../src/controllers/nosql/inspection');
 const {
@@ -83,6 +85,27 @@ test('user mirror', async (t) => {
     const asStaff = mockRes();
     await userController.getUser(staffReq({ id: USER_EAGLE_ID }), asStaff);
     assert.strictEqual(asStaff.body.email, 'robin.inspector@example.invalid');
+  });
+
+  await t.test('a DEMI-edited user keeps email and read on a later push; the raw copy has no password', async () => {
+    const mirrored = (await captureMirror(t, 'users', eagleUser({ read: STAFF_READ }))).row;
+    t.mock.restoreAll();
+    t.mock.method(users, 'getById', async () => ({ ...mirrored, _etag: 'e1' }));
+    let written;
+    t.mock.method(users, 'upsert', async (row) => { written = row; return { ...row, _etag: 'e2' }; });
+    const ctx = { access: resolveAccess(staffReq()), req: staffReq() };
+    const edit = { firstName: mirrored.firstName, lastName: mirrored.lastName, email: 'demi@example.invalid' };
+    assert.strictEqual((await userDomain.update(ctx, USER_EAGLE_ID, edit)).status, 'ok');
+    t.mock.restoreAll();
+
+    const pushed = eagleUser({ email: 'eagle@example.invalid', read: PUBLIC_ACL, password: 'hash-value', salt: 'salt-value' });
+    const { res, row } = await captureMirror(t, 'users', pushed, { existing: written });
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(row.email, 'demi@example.invalid');
+    assert.deepStrictEqual(row.read, written.read);
+    assert.ok(!row.read.includes('public'), 'a push cannot publish a user DEMI owns');
+    assert.strictEqual(row.sources.eagle.email, 'eagle@example.invalid', 'Eagle copy kept for the reconcile');
+    assert.ok(!('password' in row.sources.eagle) && !('salt' in row.sources.eagle));
   });
 
   await t.test('anonymous gets no unpublished user at all', async () => {

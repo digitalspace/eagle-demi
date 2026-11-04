@@ -14,7 +14,7 @@ const { eagleBaseAcl } = require('../../seed/transform');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const {
-  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict, underDeleteCeiling, refId
+  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict, underDeleteCeiling, refId
 } = require('./eagle-mirror');
 const { listHandler, getHandler } = require('./mirror-reads');
 
@@ -64,12 +64,8 @@ function mirrorItem(eagleId, doc, read, existing) {
 function mirrorFromEagle(eagleId, rawDoc, { pushedAt = null } = {}) {
   const doc = withoutSecrets(rawDoc);
   const read = underDeleteCeiling(eagleBaseAcl(doc.read), doc);
-  return upsertWithRetry(
-    users,
-    (current) => mirrorItem(eagleId, doc, read, current),
-    () => users.readForWrite(eagleId),
-    { pushedAt }
-  );
+  return upsertKeepingDemiRows(users, eagleId, doc, (current) => mirrorItem(eagleId, doc, read, current),
+    () => users.readForWrite(eagleId), { pushedAt, label: LABEL });
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;

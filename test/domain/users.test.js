@@ -122,7 +122,7 @@ test('user domain', async (t) => {
     assert.strictEqual(row.phoneNumber, '');
     assert.strictEqual(row.middleName, null);
     assert.strictEqual(row.org, null);
-    assert.strictEqual(row.sourceSystem, 'eagle');
+    assert.strictEqual(row.sourceSystem, 'demi', 'the edit takes the Eagle user over');
     assert.deepStrictEqual(row.sources, STORED.sources, 'the stored Eagle copy is kept');
     assert.deepStrictEqual(row.read, ['public', 'staff', 'sysadmin'], 'an EAO user keeps public when isPublished is left out');
     assert.strictEqual(row.isPublished, true);

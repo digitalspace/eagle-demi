@@ -12,6 +12,7 @@ const users = require('../repositories/users');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { logger } = require('../utils/logger');
 
 /** eagle-api lets only this organization's users read public (user.js:39,92). */
 const PUBLIC_ORG_NAME = 'Environmental Assessment Office';
@@ -146,7 +147,7 @@ async function update(ctx, id, changes) {
   }
 
   const actor = actorOf(ctx);
-  return writeRow({
+  const written = await writeRow({
     ctx,
     repo: users,
     existing,
@@ -158,6 +159,8 @@ async function update(ctx, id, changes) {
       return {
         ...current,
         ...next,
+        // Owned by DEMI from now on, so the Eagle mirror keeps this edit (controllers/nosql/user.js).
+        sourceSystem: 'demi',
         updatedBy: actor,
         dateUpdated: new Date().toISOString(),
         isPublished: published,
@@ -166,6 +169,10 @@ async function update(ctx, id, changes) {
     },
     audit: auditOf('user.update', Object.keys(checked.value))
   });
+  if (written.status === 'ok' && existing.sourceSystem !== 'demi') {
+    logger.info('[User] DEMI write took over an Eagle user', { id, eagleId: existing.eagleId });
+  }
+  return written;
 }
 
 module.exports = { SCHEMA, DEFAULTS, PUBLIC_ORG_NAME, create, update };
