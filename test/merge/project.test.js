@@ -1197,13 +1197,13 @@ test('carryDemiOnlyFields', async (t) => {
       [false, false, 'demi@example.gov.bc.ca']);
   });
 
-  await t.test('a CAC field the stored row lacks takes what Eagle sent, false included', () => {
-    const pushed = eagleFor(TRACK_207, { projectCAC: true, projectCACPublished: false, cacEmail: 'eagle@example.gov.bc.ca' });
+  await t.test('a CAC field the stored row lacks takes what Eagle sent, false included, an empty string not', () => {
+    const pushed = eagleFor(TRACK_207, { projectCAC: true, projectCACPublished: false, cacEmail: '' });
 
     const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), { id: '207' });
 
-    assert.deepStrictEqual([merged.projectCAC, merged.projectCACPublished, merged.cacEmail],
-      [true, false, 'eagle@example.gov.bc.ca']);
+    assert.deepStrictEqual([merged.projectCAC, merged.projectCACPublished], [true, false]);
+    assert.ok(!('cacEmail' in merged), 'an empty Eagle email seeds nothing');
   });
 
   await t.test('a re-merge takes the guid Track gained over a stored null eagleId', () => {

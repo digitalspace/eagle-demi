@@ -623,7 +623,10 @@ test('seed() end to end with stubbed sources', async (t) => {
 
   await t.test('a Track project beside an Eagle id minted for a native one is written without it', async () => {
     // Stored as matched by an earlier seed: its Eagle data and its documents go with the id.
-    const stored555 = { id: '555', eagleId: X, sources: { eagle: { _id: X } }, applicableRegulation: 'Reg' };
+    const stored555 = {
+      id: '555', eagleId: X, sources: { eagle: { _id: X } }, applicableRegulation: 'Reg',
+      projectCAC: true, projectCACPublished: true, cacEmail: 'cac@example.com', tags: ['Kept']
+    };
     const docRow = { id: 'doc-native', projectId: '555', contentExtracted: true, pdfTitle: { title: 'T' } };
     const { summary, written } = await seedWithNative(minted, [track555], { 555: [docRow] }, { stored: { 555: stored555 } });
 
@@ -632,6 +635,9 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(row555.eagleId, null);
     assert.strictEqual(row555.sources.eagle, undefined);
     assert.strictEqual(row555.applicableRegulation, undefined);
+    // Its CAC members sit under the old Eagle id in eagle-notify, so the CAC goes too.
+    assert.deepStrictEqual([row555.projectCAC, row555.projectCACPublished, row555.cacEmail, row555.tags],
+      [undefined, undefined, undefined, ['Kept']]);
     assert.strictEqual(summary.stages.projects.written, summary.stages.projects.built);
     const doc = written.documents[0][1][0];
     assert.deepStrictEqual([written.documents[0][0], doc.contentExtracted, doc.pdfTitle], ['1234', true, { title: 'T' }]);

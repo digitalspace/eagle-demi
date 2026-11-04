@@ -151,13 +151,13 @@ function heldRead(read, existing) {
     : read;
 }
 
-const EAGLE_SEEDED_LISTS = ['pinsRead', ...EXTENSION_LIST_FIELDS];
+const EAGLE_SEEDED_FIELDS = ['pinsRead', ...EXTENSION_LIST_FIELDS];
 
 /**
  * Each pin, extension or CAC field the stored row lacks starts from what Eagle sent, `pins` as ids.
  * Eagle holds the value until DEMI takes the field over; once DEMI holds one it owns it.
  */
-function seedEagleLists(merged, existing) {
+function seedEagleFields(merged, existing) {
   const eagle = merged.sources && merged.sources.eagle;
   if (!eagle) return;
   const lacks = (field) => !existing || existing[field] === undefined;
@@ -165,7 +165,7 @@ function seedEagleLists(merged, existing) {
     merged.pins = eagle.pins.map(pin => (pin !== null && typeof pin === 'object' ? pin._id : pin))
       .filter(id => typeof id === 'string' && id !== '');
   }
-  for (const field of EAGLE_SEEDED_LISTS) {
+  for (const field of EAGLE_SEEDED_FIELDS) {
     if (lacks(field) && Array.isArray(eagle[field])) merged[field] = [...eagle[field]];
   }
   for (const field of CAC_FIELDS) {
@@ -179,7 +179,7 @@ function seedEagleLists(merged, existing) {
  */
 function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS) {
   if (!merged) return merged;
-  seedEagleLists(merged, existing);
+  seedEagleFields(merged, existing);
   if (existing) {
     for (const field of fields) {
       const value = existing[field];

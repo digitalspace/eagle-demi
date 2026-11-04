@@ -1904,7 +1904,7 @@ paths:
         '404':
           description: Project not found.
         '409':
-          description: The project has no CAC (`projectCAC` is not true).
+          description: The project has no CAC (`projectCAC` is not true), or `cacEmail` has no value.
         '503':
           description: Another request kept writing the same project. Send it again.
 
