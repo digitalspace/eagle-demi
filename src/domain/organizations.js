@@ -66,6 +66,34 @@ function auditOf(action, fields) {
 }
 
 /**
+ * `changes(current)` stored as DEMI's row, so the Eagle mirror keeps it and sync-out sends it.
+ * No `sources.demi.read`: no cascade reads an organization's own read.
+ */
+async function demiWrite(ctx, id, existing, changes, audit) {
+  const actor = actorOf(ctx);
+  let tookOver = false;
+  const written = await queued(await writeRow({
+    ctx,
+    repo: lists,
+    existing,
+    reread: () => readOrg(ctx, id),
+    build: (current) => {
+      if (!current) return null;
+      tookOver = current.sourceSystem !== 'demi';
+      return {
+        ...current, ...changes(current), sourceSystem: 'demi', updatedBy: actor, dateUpdated: new Date().toISOString()
+      };
+    },
+    audit
+  }), ORGANIZATION);
+  if (written.status === 'ok' && tookOver) {
+    logger.info('[Organization] DEMI write took over an Eagle organization',
+      { id: written.value.id, eagleId: written.value.eagleId });
+  }
+  return written;
+}
+
+/**
  * @param {{access: object, req: object}} ctx
  * @param {object} input the request body; `read` is ignored, `isPublished` defaults to false
  */
@@ -122,17 +150,7 @@ async function update(ctx, id, changes) {
     return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
   }
 
-  const actor = actorOf(ctx);
-  const written = await queued(await writeRow({
-    ctx,
-    repo: lists,
-    existing,
-    reread: () => readOrg(ctx, id),
-    build: (current) => current && {
-      ...current, ...checked.value, updatedBy: actor, dateUpdated: new Date().toISOString()
-    },
-    audit: auditOf('organization.update', fields)
-  }), ORGANIZATION);
+  const written = await demiWrite(ctx, id, existing, () => checked.value, auditOf('organization.update', fields));
 
   // A nameless organization gives no orgName to compare, so its users are left alone.
   if (written.status === 'ok' && typeof written.value.name === 'string') {
@@ -193,22 +211,10 @@ async function renameUsers(orgId, orgName) {
 function setPublished(published) {
   const action = published ? 'organization.publish' : 'organization.unpublish';
   return async function (ctx, id) {
-    const actor = actorOf(ctx);
     // A missing row reaches `build` as null, which writeRow answers as not-found.
-    return queued(await writeRow({
-      ctx,
-      repo: lists,
-      existing: await readOrg(ctx, id),
-      reread: () => readOrg(ctx, id),
-      build: (current) => current && {
-        ...current,
-        isPublished: published,
-        read: readWith(current.read, published),
-        updatedBy: actor,
-        dateUpdated: new Date().toISOString()
-      },
-      audit: auditOf(action, ['isPublished'])
-    }), ORGANIZATION);
+    return demiWrite(ctx, id, await readOrg(ctx, id),
+      (current) => ({ isPublished: published, read: readWith(current.read, published) }),
+      auditOf(action, ['isPublished']));
   };
 }
 

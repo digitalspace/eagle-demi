@@ -16,6 +16,7 @@ const { ORGANIZATION } = require('../../src/sync-out/kinds');
 const { logger } = require('../../src/utils/logger');
 const { resolveAccess } = require('../../src/helpers/access-sql');
 const organization = require('../../src/domain/organizations');
+const orgMirror = require('../../src/controllers/nosql/organization');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -174,6 +175,45 @@ test('organization domain', async (t) => {
     assert.deepStrictEqual(written.queued, [[ORG_ID, 'e2', ORGANIZATION]]);
   });
 
+  await t.test('update of an Eagle organization sets sourceSystem demi and queues organization', async (t) => {
+    const written = fakeLists(t);
+    const logged = [];
+    t.mock.method(logger, 'info', (message, meta) => { logged.push([message, meta]); });
+
+    const { result } = await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
+
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(written[0].sourceSystem, 'demi');
+    assert.deepStrictEqual(written.queued, [[ORG_ID, 'e2', ORGANIZATION]]);
+    assert.deepStrictEqual(logged.filter(([message]) => message.includes('took over')),
+      [['[Organization] DEMI write took over an Eagle organization', { id: ORG_ID, eagleId: ORG_ID }]]);
+  });
+
+  await t.test('an update of a DEMI organization logs no takeover', async (t) => {
+    fakeLists(t, { ...STORED, sourceSystem: 'demi' });
+    const logged = [];
+    t.mock.method(logger, 'info', (message) => { logged.push(message); });
+    await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
+    assert.deepStrictEqual(logged.filter(message => message.includes('took over')), []);
+  });
+
+  await t.test('a later push through controllers/nosql/organization.js keeps name and read', async (t) => {
+    const written = fakeLists(t);
+    await audited(() => organization.update(STAFF, ORG_ID, { name: 'Acme Resources' }));
+    const owned = { ...written[0], _etag: 'e2' };
+    t.mock.method(lists, 'readForWrite', async () => ({ ...owned }));
+    t.mock.method(lists, 'readForWriteByEagleId', async () => null);
+    const pushed = { _id: ORG_ID, name: 'Acme Mining', city: 'Victoria', read: ['staff', 'sysadmin'] };
+
+    const { saved } = await orgMirror.mirrorFromEagle(ORG_ID, pushed);
+
+    assert.strictEqual(saved.name, 'Acme Resources');
+    assert.deepStrictEqual(saved.read, ['public', 'staff', 'sysadmin']);
+    assert.strictEqual(saved.isPublished, true);
+    assert.strictEqual(saved.sourceSystem, 'demi');
+    assert.deepStrictEqual(saved.sources.eagle, pushed);
+  });
+
   await t.test('update keeps dateAdded, which eagle-api resets', async (t) => {
     const written = fakeLists(t, { ...STORED, dateAdded: '2019-01-02T00:00:00.000Z' });
     await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
@@ -238,6 +278,7 @@ test('organization domain', async (t) => {
     assert.deepStrictEqual(written[0].read, ['public', 'staff', 'sysadmin']);
     assert.strictEqual(written[0].isPublished, true);
     assert.strictEqual(written[0].updatedBy, 'idir-staff');
+    assert.strictEqual(written[0].sourceSystem, 'demi');
     assert.strictEqual(logged.length, 1);
     assert.strictEqual(logged[0].Action, 'organization.publish');
     assert.strictEqual(logged[0].TargetId, ORG_ID);
