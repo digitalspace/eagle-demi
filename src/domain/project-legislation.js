@@ -61,11 +61,13 @@ function yearSwitch(row, year) {
   if (locked) return { status: 409, error: locked };
   if (!isRegistryYear(year)) return { status: 404, error: 'Unknown legislation year' };
   const key = `legislation_${year}`;
+  // The row's own year and blocks first: on a row DEMI owns they can differ from Eagle's copy.
   const eagle = (row.sources && row.sources.eagle) || {};
-  const current = eagle.currentLegislationYear || (yearOf(row) && `legislation_${yearOf(row)}`);
+  const current = row.currentLegislationYear || eagle.currentLegislationYear || (yearOf(row) && `legislation_${yearOf(row)}`);
   if (key === current) return { key: null };
-  const listed = Array.isArray(eagle.legislationYearList) && eagle.legislationYearList.map(Number).includes(year);
-  if (!listed || !(eagle[key] && eagle[key].name)) {
+  const list = row.legislationYearList ?? eagle.legislationYearList;
+  const block = row[key] ?? eagle[key];
+  if (!(Array.isArray(list) && list.map(Number).includes(year)) || !(block && block.name)) {
     return { status: 409, error: `Project has no content under legislation year ${year}` };
   }
   return { key };

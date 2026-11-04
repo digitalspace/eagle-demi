@@ -956,6 +956,8 @@ paths:
           description: Unauthorized.
         '403':
           description: Forbidden. Insufficient roles.
+        '409':
+          description: The Track id names a project DEMI already owns. Nothing is saved; edit it with `PUT /api/projects/{id}`. Body `{ error }`.
         '503':
           description: >-
             Another request kept writing a project under the same id, and nothing was saved. Send

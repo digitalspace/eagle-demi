@@ -78,6 +78,20 @@ test('PUT /projects/:id/level legislation year switch', async (t) => {
     assert.strictEqual(writes[0].region, 'Skeena');
   });
 
+  await t.test("a project DEMI owns switches against its own year, not Eagle's", async () => {
+    const row = stored();
+    const owned = {
+      ...row, demiOwnedAt: '2026-11-01T00:00:00.000Z',
+      sources: { ...row.sources, eagle: { ...row.sources.eagle, currentLegislationYear: 'legislation_2018' } }
+    };
+    const writes = stage(t, [owned]);
+
+    const res = await publish(2018);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(writes[0].legislationYear, 2018);
+  });
+
   await t.test('the switch keeps every block for the next one', async () => {
     const writes = stage(t, [stored()]);
 
