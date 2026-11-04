@@ -1161,6 +1161,7 @@ test('the rotator alerts match the lines the rotator logs', () => {
   assert.match(failed, /Message contains "\[secret-rotator\] FAILED"/);
   assert.match(failed, /Message contains "\[secret-rotator\] issuer-expiry"/);
   assert.match(failed, /operator: 'GreaterThan'\n\s+threshold: 0/);
+  assert.match(failed, /windowSize: 'PT2H'/, 'an hourly rule over a 1 h window misses a line ingested late');
 
   const silent = rotatorRule('silentAlert');
   assert.match(silent, /where TimeGenerated > ago\(26h\) \| where Message contains "\[secret-rotator\] run finished"/);
