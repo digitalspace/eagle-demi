@@ -10,6 +10,7 @@ const assert = require('node:assert');
 
 const projects = require('../../../src/repositories/projects');
 const projectController = require('../../../src/controllers/nosql/project');
+const syncOut = require('../../../src/sync-out');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, eagleProject, storedEagleProject, projectReadForWriteFromGet
 } = require('../../helpers/eagle-mirror-fixtures');
@@ -94,5 +95,56 @@ test('PUT /eagle/projects/:eagleId on a project DEMI owns', async (t) => {
     assert.deepStrictEqual(written.legislationYearList, [2002]);
     assert.ok(!('legislation_2018' in written));
     assert.ok(!('region' in written), 'a field DEMI does not hold is not taken from Eagle');
+  });
+});
+
+test('a DEMI PUT on an Eagle project', async (t) => {
+  t.beforeEach(() => projectReadForWriteFromGet(t));
+  t.afterEach(() => t.mock.restoreAll());
+
+  /** One stored row that the PUT and the push both read and write; `queued` is what sync-out was handed. */
+  function store(t, row) {
+    const state = { row, queued: [] };
+    const read = async () => structuredClone(state.row);
+    t.mock.method(projects, 'getById', read);
+    t.mock.method(projects, 'getByEagleId', read);
+    t.mock.method(projects, 'upsert', async (item) => { state.row = item; return item; });
+    t.mock.method(syncOut, 'enqueue', async (item, options) => { state.queued.push({ item, options }); return ['eagle']; });
+    return state;
+  }
+
+  const put = (body) => projectController.updateProject(
+    { params: { id: '207' }, query: {}, user: STAFF, body }, mockRes());
+
+  await t.test("of sector, then an Eagle push with another sector, keeps DEMI's", async () => {
+    const state = store(t, storedEagleProject({ sector: 'Energy' }));
+
+    await put({ sector: 'Mining' });
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject({ sector: 'Transportation' }) }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(state.row.sector, 'Mining');
+  });
+
+  await t.test('of an Eagle field bumps syncVersion and queues the project', async () => {
+    const state = store(t, storedEagleProject({ syncVersion: 2 }));
+
+    await put({ sector: 'Mining' });
+
+    assert.strictEqual(state.row.syncVersion, 3);
+    assert.deepStrictEqual(state.queued.map(q => [q.item.id, q.options.kind]), [['207', 'project']]);
+  });
+
+  await t.test('of a Track field leaves the project Eagle\'s', async () => {
+    const state = store(t, storedEagleProject({ syncVersion: 2 }));
+
+    await put({ name: 'Renamed' });
+
+    assert.ok(!('demiOwnedAt' in state.row));
+    assert.strictEqual(state.row.syncVersion, 2);
+    assert.deepStrictEqual(state.queued, []);
   });
 });

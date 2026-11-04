@@ -29,10 +29,12 @@ const updateAcl = require('../../helpers/update-acl');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
-  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, deleteStands,
-  TRIMMED_FIELDS, hasValue, isNativeProject, isMintedNative, isDemiOwnedProject
+  mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, clearDeleted,
+  deleteStands, TRIMMED_FIELDS, hasValue, isNativeProject, isMintedNative, isDemiOwnedProject
 } = require('../../merge/project');
-const { LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS } = require('../../ownership/project');
+const {
+  LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS, EAGLE_ONLY_FIELDS, DEMI_OWNED_AT
+} = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const links = require('../../repositories/links');
@@ -72,12 +74,27 @@ function pinRefusal(res, refusal) {
   return res.status(409).json({ error: refusal.error });
 }
 
-/** A native row's write raises `syncVersion`, so `listSyncPending` lists it until sync-out sends it. */
-const versioned = (row, current) => (isNativeProject(row) ? { ...row, syncVersion: nextSyncVersion(current) } : row);
+/** A row sync-out sends: one DEMI created, or one it took over from Eagle. */
+const syncsOut = (row) => isNativeProject(row) || isDemiOwnedProject(row);
 
-/** Queue a native project for sync-out once its write landed. */
+/** Such a row's write raises `syncVersion`, so `listSyncPending` lists it until sync-out sends it. */
+const versioned = (row, current) => (syncsOut(row) ? { ...row, syncVersion: nextSyncVersion(current) } : row);
+
+/** Queue a project sync-out sends once its write landed. */
 function enqueueProject(saved) {
-  return isNativeProject(saved) ? syncOut.enqueueQuietly(saved, { kind: PROJECT }) : null;
+  return syncsOut(saved) ? syncOut.enqueueQuietly(saved, { kind: PROJECT }) : null;
+}
+
+/** `{ demiOwnedAt: now }` when `current` mirrors an Eagle project DEMI does not own yet, else `{}`. */
+const takeOver = (current, now) =>
+  (hasValue(current.eagleId) && !isNativeProject(current) && !isDemiOwnedProject(current)
+    ? { [DEMI_OWNED_AT]: now } : {});
+
+/** Log the write that first set `demiOwnedAt`, the one that took the row from Eagle. */
+function noteTakeover(before, saved, route) {
+  if (isDemiOwnedProject(before) || !isDemiOwnedProject(saved)) return;
+  logger.info('[Project Controller] DEMI write took over an Eagle project',
+    { id: saved.id, eagleId: saved.eagleId, route });
 }
 
 /**
@@ -586,13 +603,17 @@ exports.updateProject = async (req, res) => {
         const pinned = await pinChanges({ access }, current, pinBody);
         if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
         const now = new Date().toISOString();
-        // Only on a native row: elsewhere Eagle owns `dateUpdated` and sync-out sends nothing.
-        const edited = isNativeProject(current) && (Object.keys(pinned.changes).length > 0 ||
-          Object.keys(changes).some(key => !isDeepStrictEqual(current[key], changes[key])));
+        const moved = (key) => !isDeepStrictEqual(current[key], changes[key]);
+        const owner = EAGLE_ONLY_FIELDS.some(key => Object.hasOwn(changes, key) && moved(key))
+          ? takeOver(current, now) : {};
+        // Only on a row sync-out sends: elsewhere Eagle owns `dateUpdated`.
+        const edited = syncsOut({ ...current, ...owner }) &&
+          (Object.keys(pinned.changes).length > 0 || Object.keys(changes).some(moved));
         const row = {
           ...current,
           ...changes,
           ...pinned.changes,
+          ...owner,
           id: current.id,
           trackProjectId: current.trackProjectId,
           updatedAt: now,
@@ -617,6 +638,7 @@ exports.updateProject = async (req, res) => {
     if (written.status === 'locked') return res.status(409).json({ error: written.error });
     if (written.status === 'pins') return pinRefusal(res, written.refusal);
     const { saved, replaced, pinFields, edited } = written;
+    noteTakeover(replaced, saved, 'PUT /projects/:id');
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full
     // before/after of arbitrary request bodies would put project content into a table kept for
@@ -722,15 +744,18 @@ exports.setLevel = async (req, res) => {
           ? keepSeal(stampPush(mergeEaglePush({ ...eagle, currentLegislationYear: move.key }, current,
             { switchTo: move.key }), undefined, current), current)
           : current;
+        const now = new Date().toISOString();
         const row = {
           ...base,
           ...acl,
           ...(levelHeldAt === undefined ? {} : { levelHeldAt }),
+          ...takeOver(current, now),
           id: current.id,
-          updatedAt: new Date().toISOString()
+          updatedAt: now
         };
         return {
           status: 'saved',
+          replaced: current,
           switchedFrom: move.key
             ? (isDemiOwnedProject(current) ? current : eagle).currentLegislationYear || null
             : undefined,
@@ -745,7 +770,8 @@ exports.setLevel = async (req, res) => {
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project level change', req.params.id);
     if (written.status === 'refused') return res.status(written.code).json({ error: written.error });
-    const { saved, switchedFrom } = written;
+    const { saved, switchedFrom, replaced } = written;
+    noteTakeover(replaced, saved, 'PUT /projects/:id/level');
 
     // Before the cascade, which can 500: the row someone comes looking for is the visibility
     // change, and it must not be the one path that records nothing.
@@ -1235,7 +1261,8 @@ exports.deleteProject = async (req, res) => {
         if (!current) return { status: 'missing' };
         if (deleteStands(current)) return { status: 'already', saved: current };
         // An Eagle-side delete becomes DEMI's, or Eagle republishing the project would undo it.
-        const row = markDeleted({ ...current, updatedAt: new Date().toISOString() });
+        const now = new Date().toISOString();
+        const row = markDeleted({ ...current, ...takeOver(current, now), updatedAt: now });
         return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), existing: current };
       },
       onLost: (_current, attempt) =>
@@ -1245,6 +1272,7 @@ exports.deleteProject = async (req, res) => {
     if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (written.status === 'conflict') return writeConflict(res, 'project delete', req.params.id);
     const { saved, existing: from } = written;
+    if (from) noteTakeover(from, saved, 'DELETE /projects/:id');
 
     // A repeat writes nothing and audits nothing; it only retries what the first call left owed.
     if (from) {
@@ -1273,6 +1301,55 @@ exports.deleteProject = async (req, res) => {
       message: 'Project deleted successfully',
       deleted: redactForAccess('projects', saved, access)
     });
+  } catch (err) {
+    return serverError(res, err, 'project controller failed');
+  }
+};
+
+/** Drop a project's delete flag. `read` stays at the deleted ceiling: widening is `PUT /projects/:id/level`. */
+exports.restoreProject = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const reread = () => projects.getById(access, req.params.id);
+    const existing = await reread();
+    if (!existing) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const written = await writeGuarded({
+      existing,
+      reread,
+      attempt: async (current) => {
+        if (!current) return { status: 'missing' };
+        if (current.isDeleted !== true) return { status: 'live' };
+        const now = new Date().toISOString();
+        const row = clearDeleted({ ...current, ...takeOver(current, now), updatedAt: now });
+        return { status: 'saved', saved: await projects.upsert(versioned(row, current), { etag: current._etag }), replaced: current };
+      },
+      onLost: (_current, attempt) =>
+        logger.warn('[Project Controller] project restore lost its etag race, rebuilding',
+          { id: req.params.id, attempt })
+    });
+    if (written.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (written.status === 'conflict') return writeConflict(res, 'project restore', req.params.id);
+    if (written.status === 'live') {
+      logger.warn('[Project Controller] restore refused: not deleted', { id: req.params.id });
+      return res.status(409).json({ error: 'Project is not deleted' });
+    }
+    const { saved, replaced } = written;
+    noteTakeover(replaced, saved, 'PUT /projects/:id/restore');
+    logger.info('[Project Controller] project restored', { id: saved.id });
+
+    auditEvent(req, {
+      action: 'project.restore',
+      targetType: 'project',
+      targetId: saved.id,
+      projectId: saved.id,
+      detail: { name: saved.name, isPublished: saved.isPublished }
+    });
+    await enqueueProject(saved);
+
+    return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }

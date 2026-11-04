@@ -1253,8 +1253,11 @@ paths:
         `pinsPublished`); there are no pin routes. `reviewExtensions` and `reviewSuspensions` in
         the body are ignored; use `/api/projects/{id}/extensions`. `projectCAC`,
         `projectCACPublished` and `cacEmail` in the body are ignored; use `/api/projects/{id}/cac`.
-        On a project created in DEMI, a body that changes a stored value sets `dateUpdated` unless
-        it sends one, and sync-out queues the project for Eagle.
+        On a project mirrored from Eagle, a body that changes an Eagle field (for example `sector`
+        or `region`) takes the project over: from then on Eagle pushes no longer overwrite DEMI's
+        values, and DEMI sends its edits to Eagle. On a project created in DEMI or taken over, a
+        body that changes a stored value sets `dateUpdated` unless it sends one, and sync-out
+        queues the project for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1307,7 +1310,9 @@ paths:
         Flag the project `isDeleted` and drop its `read[]` to staff. The row stays for staff and
         reconcile; anonymous reads answer 404, and the index row, documents and engagement narrow
         with it. Repeating the call on a deleted project writes nothing and records no second audit
-        row; it only retries a cascade the first call left owed.
+        row; it only retries a cascade the first call left owed. A delete takes a project mirrored
+        from Eagle over, so an Eagle push no longer undoes or changes it. Undo it with
+        `PUT /api/projects/{id}/restore`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1334,6 +1339,37 @@ paths:
             row keeps `cascadePendingAt`. When the project has an Eagle record, the next Eagle push
             or `seed-nosql --live --reconcile` run retries the cascade; otherwise send the DELETE
             again.
+        '503':
+          description: The row kept changing under the write; send the request again.
+
+  /api/projects/{id}/restore:
+    put:
+      summary: Restore a deleted project
+      description: >-
+        Drop the project's `isDeleted` flag. `read[]` stays at staff, where the delete left it;
+        publish it again with `PUT /api/projects/{id}/level`. A project mirrored from Eagle is
+        taken over, so an Eagle push that still carries its delete does not delete it again.
+        Audited as `project.restore`, and sync-out queues the project for Eagle.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The restored project, redacted for the caller.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: The caller lacks a write role.
+        '404':
+          description: Project not found.
+        '409':
+          description: The project is not deleted. Nothing is written.
         '503':
           description: The row kept changing under the write; send the request again.
 
@@ -1436,9 +1472,9 @@ paths:
         `record.widen` or `record.narrow`, and the change cascades to the project's documents.
         Pulling a project back from level 4 needs the `sysadmin` role and is audited as
         `record.takedown`; narrowing the row alone does not finish a takedown, see
-        `docs/takedown-runbook.md`. A narrow is held across Eagle pushes and re-seeds
-        (`levelHeldAt`) until a widen here reaches level 4 or Eagle's level. On a project created
-        in DEMI, sync-out queues the move for Eagle.
+        `docs/takedown-runbook.md`. A move takes a project mirrored from Eagle over, so its level
+        holds across Eagle pushes and re-seeds. On a project created in DEMI or taken over,
+        sync-out queues the move for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

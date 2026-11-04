@@ -11,6 +11,7 @@ const assert = require('node:assert');
 const projects = require('../../../src/repositories/projects');
 const documents = require('../../../src/repositories/documents');
 const aiSearch = require('../../../src/search/ai-search');
+const syncOut = require('../../../src/sync-out');
 const projectController = require('../../../src/controllers/nosql/project');
 const { canRead } = require('../../../src/helpers/access-sql');
 const { redactForAccess } = require('../../../src/vis/redact');
@@ -58,6 +59,12 @@ async function push(doc) {
   await projectController.upsertFromEagle({
     params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc }
   }, res);
+  return res;
+}
+
+async function restore(id = '207') {
+  const res = mockRes();
+  await projectController.restoreProject({ params: { id }, query: {}, user: STAFF }, res);
   return res;
 }
 
@@ -302,4 +309,51 @@ test('PUT /projects/:id/level refuses a deleted project', async (t) => {
   assert.strictEqual(res.statusCode, 409);
   assert.deepStrictEqual(res.body, { error: 'Project is deleted' });
   assert.strictEqual(seen.writes.length, 0);
+});
+
+test('PUT /projects/:id/restore', async (t) => {
+  t.beforeEach(() => {
+    projectReadForWriteFromGet(t);
+    t.mock.method(syncOut, 'enqueue', async () => ['eagle']);
+  });
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('clears isDeleted, keeps read at staff; setLevel then answers 200, not 409', async () => {
+    const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY }));
+
+    const res = await restore();
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok(!('isDeleted' in seen.written));
+    assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read, 'widening stays with /level');
+
+    const after = stage(t, seen.written);
+    const level = mockRes();
+    await projectController.setLevel({
+      params: { id: '207' }, query: {}, user: STAFF, body: { level: 4, confirm: true, reason: 'republish' }
+    }, level);
+    assert.strictEqual(level.statusCode, 200);
+    assert.ok(after.written.read.includes('public'));
+  });
+
+  await t.test('takes over an Eagle delete, so the next Eagle push carrying the flag leaves it live', async () => {
+    const stored = storedEagleProject({ isDeleted: true, ...STAFF_ONLY });
+    stored.sources.eagle.isDeleted = true;
+    const seen = stage(t, stored);
+
+    await restore();
+    const after = stage(t, seen.written);
+    await push(rawEagleProject({ isDeleted: true }));
+
+    assert.ok(!('isDeleted' in after.written));
+  });
+
+  await t.test('of a project that is not deleted answers 409 and writes nothing', async () => {
+    const seen = stage(t, storedEagleProject());
+
+    const res = await restore();
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.strictEqual(seen.writes.length, 0);
+  });
 });
