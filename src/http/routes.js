@@ -174,6 +174,7 @@ const routes = [
   // Staff only: requireAdmin is the existing gate that leaves out the machine writer.
   { method: 'put', path: '/projects/:id/short-code', guards: [authMiddleware, requireAdmin], load: () => projectController().setShortCode },
   { method: 'delete', path: '/projects/:id', guards: [authMiddleware, requireWrite], load: () => projectController().deleteProject },
+  { method: 'put', path: '/projects/:id/restore', guards: [authMiddleware, requireWrite], load: () => projectController().restoreProject },
   // Classifying a field is narrower than writing one: `requireWrite` admits staff and the machine
   // writer, `sysadmin` is who may change the policy itself.
   { method: 'patch', path: '/projects/:id/visibility', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => projectController().setVisibility },

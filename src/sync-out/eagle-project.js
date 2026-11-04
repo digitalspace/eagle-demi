@@ -74,7 +74,9 @@ async function bodyFor(row, logFields) {
     const value = pick(field);
     if (value !== undefined) body[field] = bareId(value);
   }
-  if (row.centroid && Array.isArray(row.centroid.coordinates)) body.centroid = row.centroid.coordinates;
+  // A native row stores GeoJSON; one mirrored from Eagle keeps Eagle's bare `[lng, lat]`.
+  if (Array.isArray(row.centroid)) body.centroid = row.centroid;
+  else if (row.centroid && Array.isArray(row.centroid.coordinates)) body.centroid = row.centroid.coordinates;
   else if (row.centroid === undefined && Array.isArray(eagle.centroid)) body.centroid = eagle.centroid;
   // eagle-api refuses a project without a proponent. A taken-over row naming no DEMI org keeps Eagle's; an org
   // still waiting for its Eagle id sends nothing, so the retry sends the row's own.

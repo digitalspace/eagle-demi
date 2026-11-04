@@ -758,6 +758,17 @@ test('a relink of an Eagle-only row DEMI owns keeps the Eagle-side fields DEMI h
   assert.deepStrictEqual([written.sector, written.demiOwnedAt], ['Mines', NOW]);
 });
 
+test('a relink of an Eagle-only row DEMI owns hands the ownership to the Track row', async () => {
+  const projects = fakeProjects([eagleOnlyProject({ demiOwnedAt: NOW, syncVersion: 3, syncOut: { eagle: { status: 'sent' } } })]);
+
+  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  const twin = projects.items.find(p => p.id === `eagle-${API_PROJECT.epic_guid}`);
+  assert.ok(twin, 'the twin row stays');
+  assert.deepStrictEqual(['demiOwnedAt', 'syncVersion', 'syncOut'].filter(k => Object.hasOwn(twin, k)), [],
+    'else sync-out sends the twin and the Track row to one Eagle project');
+});
+
 test('a relink of a live DEMI-owned row Eagle deleted writes a live Track row', async () => {
   const projects = fakeProjects([eagleOnlyProject({
     demiOwnedAt: NOW,

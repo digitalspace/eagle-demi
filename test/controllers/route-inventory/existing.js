@@ -12,6 +12,7 @@ module.exports = {
   'PUT /projects/:id/level': { action: ['record.widen', 'record.narrow', 'record.takedown'] },
   'PUT /projects/:id/short-code': { action: 'project.shortCode' },
   'DELETE /projects/:id': { action: 'project.delete' },
+  'PUT /projects/:id/restore': { action: 'project.restore' },
   'PATCH /projects/:id/visibility': { action: 'project.reclassify' },
   'POST /documents/pdf-title/sweep': { action: 'pdfTitle.sweep' },
   'POST /documents': { action: 'document.create' },

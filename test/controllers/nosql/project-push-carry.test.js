@@ -10,6 +10,10 @@ const assert = require('node:assert');
 
 const projects = require('../../../src/repositories/projects');
 const projectController = require('../../../src/controllers/nosql/project');
+const syncOut = require('../../../src/sync-out');
+const aiSearch = require('../../../src/search/ai-search');
+const documents = require('../../../src/repositories/documents');
+const { DUPLICATE_ID } = require('../../../src/helpers/duplicate-id');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, eagleProject, storedEagleProject, projectReadForWriteFromGet
 } = require('../../helpers/eagle-mirror-fixtures');
@@ -94,5 +98,161 @@ test('PUT /eagle/projects/:eagleId on a project DEMI owns', async (t) => {
     assert.deepStrictEqual(written.legislationYearList, [2002]);
     assert.ok(!('legislation_2018' in written));
     assert.ok(!('region' in written), 'a field DEMI does not hold is not taken from Eagle');
+  });
+});
+
+test('a DEMI PUT on an Eagle project', async (t) => {
+  t.beforeEach(() => projectReadForWriteFromGet(t));
+  t.afterEach(() => t.mock.restoreAll());
+
+  /** One stored row that the PUT and the push both read and write; `queued` is what sync-out was handed. */
+  function store(t, row) {
+    const state = { row, queued: [] };
+    const read = async () => structuredClone(state.row);
+    t.mock.method(projects, 'getById', read);
+    t.mock.method(projects, 'getByEagleId', read);
+    t.mock.method(projects, 'readForWrite', async () => null);
+    t.mock.method(projects, 'upsert', async (item) => { state.row = item; return item; });
+    t.mock.method(syncOut, 'enqueue', async (item, options) => { state.queued.push({ item, options }); return ['eagle']; });
+    return state;
+  }
+
+  async function put(body, id = '207') {
+    const res = mockRes();
+    await projectController.updateProject({ params: { id }, query: {}, user: STAFF, body }, res);
+    return res;
+  }
+
+  const TWIN_ID = `eagle-${PROJECT_EAGLE_ID}`;
+  /** The row Eagle alone gave DEMI: no Track source, so its name and the like come from Eagle. */
+  const eagleOnly = () => ({
+    id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, sourceSystem: 'eagle', name: 'Nicomen Wind Energy',
+    read: ['public', 'staff'], isPublished: true, sources: { eagle: { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy' } }
+  });
+
+  await t.test("of sector, then an Eagle push with another sector, keeps DEMI's", async () => {
+    const state = store(t, storedEagleProject({ sector: 'Energy' }));
+
+    await put({ sector: 'Mining' });
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject({ sector: 'Transportation' }) }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(state.row.sector, 'Mining');
+  });
+
+  await t.test('of an Eagle field bumps syncVersion and queues the project', async () => {
+    const state = store(t, storedEagleProject({ syncVersion: 2 }));
+
+    await put({ sector: 'Mining' });
+
+    assert.strictEqual(state.row.syncVersion, 3);
+    assert.deepStrictEqual(state.queued.map(q => [q.item.id, q.options.kind]), [['207', 'project']]);
+  });
+
+  await t.test('of a Track field leaves the project Eagle\'s', async () => {
+    const state = store(t, storedEagleProject({ syncVersion: 2 }));
+
+    await put({ name: 'Renamed' });
+
+    assert.ok(!('demiOwnedAt' in state.row));
+    assert.strictEqual(state.row.syncVersion, 2);
+    assert.deepStrictEqual(state.queued, []);
+  });
+
+  await t.test('/level leaves an Eagle project Eagle\'s: the next push still lands', async () => {
+    const state = store(t, storedEagleProject({ sector: 'Energy' }));
+    t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
+    t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
+
+    const level = mockRes();
+    await projectController.setLevel({ params: { id: '207' }, query: {}, user: STAFF, body: { level: 3 } }, level);
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject({ sector: 'Mining' }) }
+    }, mockRes());
+
+    assert.strictEqual(level.statusCode, 200);
+    assert.ok(!('demiOwnedAt' in state.row));
+    assert.strictEqual(state.row.sector, 'Mining');
+  });
+
+  await t.test('of dateUpdated alone leaves the project Eagle\'s', async () => {
+    const state = store(t, storedEagleProject({ dateUpdated: '2026-01-01T00:00:00.000Z' }));
+
+    await put({ dateUpdated: '2026-11-04T00:00:00.000Z' });
+
+    assert.ok(!('demiOwnedAt' in state.row));
+  });
+
+  await t.test('on a twin whose Eagle id several Track rows hold leaves it Eagle\'s', async () => {
+    const state = store(t, eagleOnly());
+    t.mock.method(projects, 'readForWriteByEagleId', async () => {
+      throw Object.assign(new Error('duplicate'), { code: DUPLICATE_ID });
+    });
+
+    const res = await put({ sector: 'Mining' }, TWIN_ID);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok(!('demiOwnedAt' in state.row));
+  });
+
+  await t.test('echoing an unchanged Eagle field leaves the project Eagle\'s', async () => {
+    const state = store(t, storedEagleProject({ sector: 'Energy' }));
+
+    await put({ sector: 'Energy', name: 'Renamed' });
+
+    assert.ok(!('demiOwnedAt' in state.row));
+  });
+
+  await t.test('of name on a project only Eagle has takes it over', async () => {
+    const state = store(t, eagleOnly());
+
+    await put({ name: 'Nicomen Wind' }, TWIN_ID);
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject() }
+    }, mockRes());
+
+    assert.strictEqual(state.row.name, 'Nicomen Wind');
+  });
+
+  await t.test('on the Eagle-only twin beside a Track row leaves the twin Eagle\'s', async () => {
+    const state = store(t, eagleOnly());
+    t.mock.method(projects, 'readForWriteByEagleId', async () => storedEagleProject());
+
+    await put({ sector: 'Mining' }, TWIN_ID);
+
+    assert.strictEqual(state.row.sector, 'Mining');
+    assert.ok(!('demiOwnedAt' in state.row), 'sync-out would send both rows to one Eagle project');
+  });
+
+  await t.test('on a row with no Eagle copy leaves it untaken: sync-out would send blanks over Eagle', async () => {
+    const stored = storedEagleProject();
+    delete stored.sources.eagle;
+    const state = store(t, stored);
+
+    await put({ sector: 'Mining' });
+
+    assert.ok(!('demiOwnedAt' in state.row));
+  });
+
+  await t.test('that re-points eagleId answers 409 and writes nothing', async () => {
+    const state = store(t, storedEagleProject());
+
+    const res = await put({ eagleId: 'aaaaaaaaaaaaaaaaaaaaaaaa', sector: 'Mining' });
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.strictEqual(state.row.eagleId, PROJECT_EAGLE_ID);
+  });
+
+  await t.test('of tags alone on a taken-over project queues nothing', async () => {
+    const state = store(t, storedEagleProject({ demiOwnedAt: '2026-11-01T00:00:00.000Z', syncVersion: 2 }));
+
+    await put({ tags: ['wind'] });
+
+    assert.deepStrictEqual(state.row.tags, ['wind']);
+    assert.strictEqual(state.row.syncVersion, 2);
+    assert.deepStrictEqual(state.queued, []);
   });
 });
