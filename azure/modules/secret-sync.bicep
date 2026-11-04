@@ -27,7 +27,7 @@ param identityClientId string
 @description('Principal ID of demi-identity-<env>. Granted the host roles on this app\'s own storage.')
 param identityPrincipalId string
 
-@description('Name of the vault this app reads. Used to hang the Event Grid system topic off it.')
+@description('Name of the vault this app reads. Its Event Grid system topic is named after it.')
 param keyVaultName string
 
 @description('Vault URI, e.g. https://demi-kv-test.vault.azure.net/')
@@ -271,24 +271,12 @@ resource syncFtpBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicie
   }
 }
 
-// The vault this app watches. `existing` — key-vault.bicep owns it.
-resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
-  name: keyVaultName
-}
-
-// A system topic is how a vault's own events are subscribed to. One per vault; the name is derived
-// so a redeploy re-uses it rather than creating a second.
-resource vaultTopic 'Microsoft.EventGrid/systemTopics@2023-12-15-preview' = {
+// key-vault.bicep owns the vault's system topic; a vault takes only one.
+resource vaultTopic 'Microsoft.EventGrid/systemTopics@2025-02-15' existing = {
   name: 'evgt-${keyVaultName}'
-  location: location
-  tags: tags
-  properties: {
-    source: vault.id
-    topicType: 'Microsoft.KeyVault.vaults'
-  }
 }
 
-resource secretSyncSubscription 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2023-12-15-preview' = {
+resource secretSyncSubscription 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2025-02-15' = {
   parent: vaultTopic
   name: 'secret-sync'
   properties: {

@@ -30,6 +30,9 @@ param identityPrincipalId string
 @description('Subnet ID for the inbound private endpoint. REQUIRED — public network access is denied by policy, so a vault without one is unreachable.')
 param peSubnetId string
 
+@description('Action group the secret near-expiry alert mails.')
+param actionGroupId string
+
 // Optional secrets are named per environment rather than assumed: a Key Vault reference to a
 // secret nobody has set leaves the app setting unresolved. Naming one here is the statement that
 // it has been set on that environment's vault. Whatever a later phase moves in goes in the same
@@ -125,6 +128,40 @@ resource vaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = 
         }
       }
     ]
+  }
+}
+
+// One system topic per vault, shared with the secret sync's subscription in secret-sync.bicep.
+resource vaultTopic 'Microsoft.EventGrid/systemTopics@2025-02-15' = {
+  name: 'evgt-${vaultName}'
+  location: location
+  tags: tags
+  properties: {
+    source: vault.id
+    topicType: 'Microsoft.KeyVault.vaults'
+  }
+}
+
+// Key Vault raises SecretNearExpiry 30 days before a secret's exp. The MonitorAlert destination
+// accepts only the CloudEvents schema.
+resource secretNearExpiryAlert 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2025-02-15' = {
+  parent: vaultTopic
+  name: 'secret-near-expiry'
+  properties: {
+    eventDeliverySchema: 'CloudEventSchemaV1_0'
+    destination: {
+      endpointType: 'MonitorAlert'
+      properties: {
+        severity: 'Sev2'
+        actionGroups: [ actionGroupId ]
+        description: 'A secret in ${vaultName} expires within 30 days. Set a new version with a later exp.'
+      }
+    }
+    filter: {
+      includedEventTypes: [
+        'Microsoft.KeyVault.SecretNearExpiry'
+      ]
+    }
   }
 }
 
