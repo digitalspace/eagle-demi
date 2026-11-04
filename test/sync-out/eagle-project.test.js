@@ -1,6 +1,7 @@
 'use strict';
 
-// Projects created in DEMI, sent to Eagle through the real projects adapter over an in-memory container.
+// Projects created in DEMI or taken over from Eagle, sent to Eagle through the real projects adapter over an in-memory
+// container.
 
 process.env.NODE_ENV = 'test';
 
@@ -17,8 +18,11 @@ const { PROJECT } = require('../../src/sync-out/kinds');
 const projectController = require('../../src/controllers/nosql/project');
 const cosmos = require('../../src/db/cosmos-nosql');
 const lists = require('../../src/repositories/lists');
+const projects = require('../../src/repositories/projects');
+const eagleProjectConsumer = require('../../src/sync-out/eagle-project');
 const { readForLevel } = require('../../src/helpers/access-sql');
 const { mirrorStore } = require('../helpers/mirror-store');
+const { fakeWhereQuery } = require('../helpers/updates-store');
 const {
   mockRes, STAFF, PRIVATE_ACL, PUBLIC_ACL, ORG_EAGLE_ID, eagleProject
 } = require('../helpers/eagle-mirror-fixtures');
@@ -63,6 +67,14 @@ function nativeProject(overrides = {}) {
     ...overrides
   };
 }
+
+/** A Track-matched project DEMI took over from Eagle: it keeps the Eagle id and Eagle's raw copy. */
+const ownedProject = (overrides = {}) => nativeProject({
+  eagleId: EAGLE_ID,
+  demiOwnedAt: '2026-11-01T00:00:00.000Z',
+  sources: { track: { track_project_id: 1234 }, eagle: { _id: EAGLE_ID, read: PRIVATE_ACL } },
+  ...overrides
+});
 
 const proponent = (eagleId = ORG_EAGLE_ID) =>
   ({ container: 'lists', id: ORG_ID, kind: 'Organization', sourceSystem: 'demi', eagleId, read: PRIVATE_ACL });
@@ -255,6 +267,35 @@ test('sync-out of DEMI-created projects', async (t) => {
     assert.strictEqual(logged('warn', 'which sync-out did not create; not sent').length, 1);
   });
 
+  await t.test('a DEMI-owned Eagle project PUTs bodyFor to /project/<eagleId>', async (tt) => {
+    const row = ownedProject({ read: [...PUBLIC_ACL], isPublished: true });
+    mirrorStore(tt, [row, proponent()]);
+    wireQueue(tt);
+    const expected = await eagleProjectConsumer.bodyFor(row, {});
+    const put = `PUT /project/${EAGLE_ID}`;
+    const calls = wireEagle(tt, { [put]: {}, [`${put}/publish`]: {} });
+
+    const result = await run();
+
+    assert.deepStrictEqual(keys(calls), [put, `${put}/publish`], 'one PUT and the level sync, no POST');
+    assert.deepStrictEqual(calls[0].body, expected);
+    assert.strictEqual(calls[0].body.proponent, ORG_EAGLE_ID);
+    assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
+    assert.strictEqual(logged('info', 'sending DEMI-owned Eagle project').length, 1);
+  });
+
+  await t.test('a DEMI-owned Eagle project whose PUT misses never POSTs', async (tt) => {
+    const store = mirrorStore(tt, [ownedProject(), proponent()]);
+    wireQueue(tt);
+    const put = `PUT /project/${EAGLE_ID}`;
+    const calls = wireEagle(tt, { [put]: { status: 404 } });
+
+    assert.deepStrictEqual(await run(), { status: 'skipped' });
+
+    assert.deepStrictEqual(keys(calls), [put]);
+    assert.strictEqual(rowOf(store).eagleId, EAGLE_ID, 'no id minted over the Eagle one');
+  });
+
   await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a project with no eagleId is held, its sync state untouched',
     async (tt) => {
       useEnv(tt, { SYNC_OUT_EAGLE_NATIVE_ENABLED: 'false' });
@@ -294,4 +335,18 @@ test('sync-out of DEMI-created projects', async (t) => {
     assert.deepStrictEqual(results.filter(r => !r.status), [{ retryQueued: 2 }]);
     assert.strictEqual(rowOf(store).eagleId, minted);
   });
+});
+
+test('listSyncPending lists an owned row with a pending version and still skips a non-owned twin', async (t) => {
+  const twinId = '5cf00c03a266b7e1877504db';
+  const pending = { syncVersion: 2, syncOut: { eagle: { sentVersion: 1 } } };
+  fakeWhereQuery(t, [
+    ownedProject({ id: 'owned-track', ...pending }),
+    ownedProject({ id: 'owned-sent', syncVersion: 2, syncOut: { eagle: { sentVersion: 2 } } }),
+    { id: `eagle-${twinId}`, eagleId: twinId, sourceSystem: 'eagle', sources: {}, ...pending }
+  ]);
+
+  const rows = await projects.listSyncPending();
+
+  assert.deepStrictEqual(rows.map(row => row.id), ['owned-track']);
 });

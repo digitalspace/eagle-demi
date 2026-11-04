@@ -1,11 +1,14 @@
 'use strict';
 
-// Sync-out consumer: projects created in DEMI (`isNativeProject`), written into Eagle through eagle-api. It sends
-// only an Eagle project it created itself, POSTed under a minted id once SYNC_OUT_EAGLE_NATIVE_ENABLED is on.
+// Sync-out consumer: projects created in DEMI (`isNativeProject`) or taken over from Eagle (`isDemiOwnedProject`),
+// written into Eagle through eagle-api. Only one it created is POSTed, under a minted id, once
+// SYNC_OUT_EAGLE_NATIVE_ENABLED is on; a taken-over one is only PUT.
 
 const settings = require('../config').syncOut;
 const projects = require('../repositories/projects');
-const { isNativeProject, eagleOnlyProjectId, isMintedNative: mintedHere } = require('../merge/project');
+const {
+  isNativeProject, isDemiOwnedProject, eagleOnlyProjectId, isMintedNative: mintedHere
+} = require('../merge/project');
 const { logger } = require('../utils/logger');
 const {
   requireSettings, call, failure, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
@@ -59,14 +62,15 @@ async function put(s, eagleId, body, logFields) {
   return true;
 }
 
-const owned = row => isNativeProject(row) && row.isDeleted !== true;
-const wants = row => owned(row) && (row.eagleId ? mintedHere(row) : settings.eagle.nativeEnabled);
+const takenOver = row => isDemiOwnedProject(row) && Boolean(row.eagleId);
+const owned = row => (isNativeProject(row) || takenOver(row)) && row.isDeleted !== true;
+const wants = row => owned(row) && (row.eagleId ? mintedHere(row) || takenOver(row) : settings.eagle.nativeEnabled);
 
-/** Write the row to the Eagle project it created, creating it when Eagle has none. `update` is the engine's guarded write. */
+/** Write the row to its Eagle project, creating one only for a row sync-out minted. `update` is the engine's guarded write. */
 async function send(row, { update }) {
   if (!owned(row)) return { status: 'skipped' };
   const logFields = { rowId: row.id, eagleId: row.eagleId || null, kind: KIND };
-  if (row.eagleId && !mintedHere(row)) {
+  if (row.eagleId && !mintedHere(row) && !takenOver(row)) {
     logger.warn(`[sync-out eagle] project ${row.id} holds Eagle id ${row.eagleId}, which sync-out did not create; not sent`,
       logFields);
     return { status: 'skipped' };
@@ -76,6 +80,7 @@ async function send(row, { update }) {
   // Held, not skipped: a skip records the version as sent, so the row would never go once the switch is on.
   if (!row.eagleId && !settings.eagle.nativeEnabled) return { status: 'held' };
   const body = await bodyFor(row, logFields);
+  if (takenOver(row)) logger.info('[sync-out eagle] sending DEMI-owned Eagle project', logFields);
 
   if (row.eagleId && await put(s, String(row.eagleId), body, logFields)) {
     await syncLevel(s, pathOf(row.eagleId), row, logFields);
@@ -90,6 +95,7 @@ async function send(row, { update }) {
     put: (eagleId, fields) => put(s, eagleId, body, fields),
     // A PUT naming a year whose block the Eagle project lacks answers 404, so the year rides the create only.
     ...(row.legislationYear !== undefined ? { postOnly: { legislationYear: row.legislationYear } } : {}),
+    // A taken-over project holds the id Eagle made, so a PUT miss ends as a skip, never a POST.
     mintedOnly: true,
     mirrorRowId: eagleOnlyProjectId,
     unknownId: () => ({ line: 'Eagle stored the project under an unknown id; find it by name', fields: { name: body.name } }),
