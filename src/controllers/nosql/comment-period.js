@@ -15,6 +15,9 @@
 // A row ENGAGE or DEMI owns takes only the Eagle id, raw copy and staff fields its owner does not
 // write (`KEPT_FROM_ECHO`): an Eagle push is often the echo of what DEMI sent.
 
+// A period DEMI took over but has not sent also takes Eagle's unpublish and delete: until DEMI
+// sends, eagle-admin still writes it in Eagle and nothing else would carry those to DEMI.
+
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
 // The widest a deleted period may be stored at, and the ceiling the cascade later re-derives it
@@ -108,16 +111,32 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
   };
 }
 
-/** The Eagle echo applied to a row ENGAGE or DEMI owns. */
-function eagleOwnedOnto(current, eagleId, doc) {
+/** A DEMI period whose Eagle id sync-out neither minted nor has sent to: taken over from Eagle, not yet sent. */
+function takenOverUnsent(row) {
+  const entry = (row.syncOut && row.syncOut.eagle) || {};
+  return row.sourceSystem === 'demi' && !Number.isInteger(entry.sentVersion) && entry.mintedId !== String(row.eagleId);
+}
+
+/** The Eagle echo applied to a row ENGAGE or DEMI owns; `read` is the mirror's, under the parent and delete ceilings. */
+function eagleOwnedOnto(current, eagleId, doc, read) {
   // Delete of an old Eagle id that sync-out dropped to recreate the period under a new project:
   // the row stays tied to its new id.
   if (doc.isDeleted === true && current.eagleId !== eagleId) return current;
   const staff = staffFields(doc);
   for (const field of KEPT_FROM_ECHO[current.sourceSystem]) delete staff[field];
   const row = { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
-  // Eagle may still number comments on a period DEMI took over; DEMI must not reuse a number Eagle gave.
+  // Eagle may still number comments on a period DEMI took over; DEMI never reuses a number an echo showed.
   if (current.sourceSystem === 'demi') row.commentIdCount = higherCount(current.commentIdCount, doc.commentIdCount);
+  const unpublished = current.read.includes('public') && !read.includes('public');
+  if (takenOverUnsent(current) && (doc.isDeleted === true || unpublished)) {
+    const narrowed = constrainToProject(read, current.read);
+    Object.assign(row, {
+      read: narrowed,
+      isPublished: narrowed.includes('public'),
+      isDeleted: current.isDeleted === true || doc.isDeleted === true,
+      sources: { ...row.sources, demi: { read: eagleBaseAcl(doc.read) } }
+    });
+  }
   return row;
 }
 
@@ -172,7 +191,7 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
   const written = await upsertWithRetry(
     commentPeriods,
     (current) => (ownedElsewhere(current)
-      ? eagleOwnedOnto(current, eagleId, doc)
+      ? eagleOwnedOnto(current, eagleId, doc, read)
       : mirrorItem(eagleId, doc, parent.id, read, current)),
     () => readTarget(eagleId, doc, parent.id),
     { pushedAt }
@@ -187,6 +206,10 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
     if (saved.commentIdCount !== existing.commentIdCount && existing.sourceSystem === 'demi') {
       logger.info('[Comment Period Controller] echo raised commentIdCount',
         { id: saved.id, from: existing.commentIdCount ?? null, to: saved.commentIdCount });
+    }
+    if (!sameAccess(existing.read, saved.read)) {
+      logger.info('[Comment Period Controller] echo narrowed a period DEMI took over but has not sent',
+        { id: saved.id, isDeleted: saved.isDeleted, read: saved.read });
     }
   }
 

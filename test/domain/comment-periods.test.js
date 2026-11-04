@@ -211,6 +211,41 @@ test('comment period domain', async (t) => {
     assert.deepStrictEqual(took.map(c => c.arguments[1]), [{ id: PERIOD_ID, eagleId: PERIOD_ID }]);
   });
 
+  await t.test('takeover of a public Eagle period under a staff project keeps public as its own read only', async (t) => {
+    const store = fakeStore(t, { ...STORED, projectId: PRIVATE_PROJECT_ID, sources: { eagle: { read: ['public', 'staff', 'sysadmin'] } } });
+    await audited(() => period.update(STAFF, PERIOD_ID, { instructions: 'new' }));
+    const row = store.written[0];
+    assert.ok(row.sources.demi.read.includes('public'));
+    assert.ok(!row.read.includes('public'));
+    assert.strictEqual(row.isPublished, false);
+  });
+
+  await t.test('takeover of a period whose parent is gone keeps its stored read', async (t) => {
+    const stored = { ...STORED, projectId: 'p-gone', sources: { eagle: { read: ['public', 'staff', 'sysadmin'] } } };
+    const store = fakeStore(t, stored);
+    await audited(() => period.update(STAFF, PERIOD_ID, { instructions: 'new' }));
+    assert.deepStrictEqual(store.written[0].read, stored.read);
+  });
+
+  await t.test('a write that lost its race to another takeover logs none', async (t) => {
+    const store = fakeStore(t);
+    const info = t.mock.method(logger, 'info');
+    const owned = { ...STORED, sourceSystem: 'demi', sources: { demi: { read: ['staff'] } }, _etag: 'e3' };
+    let reads = 0;
+    t.mock.method(commentPeriods, 'getById', async () => ({ ...(reads++ === 0 ? STORED : owned) }));
+    let tries = 0;
+    t.mock.method(commentPeriods, 'upsert', async (row) => {
+      if (tries++ === 0) throw Object.assign(new Error('precondition'), { code: 412 });
+      store.written.push(row);
+      return { ...row, _etag: 'e4' };
+    });
+
+    const { result } = await audited(() => period.update(STAFF, PERIOD_ID, { instructions: 'new' }));
+
+    assert.strictEqual(result.status, 'ok');
+    assert.ok(!info.mock.calls.some(c => String(c.arguments[0]).includes('took over')));
+  });
+
   await t.test('a write on a period DEMI already owns logs no takeover', async (t) => {
     fakeStore(t, { ...STORED, sourceSystem: 'demi', sources: { demi: { read: ['staff', 'sysadmin'] } } });
     const info = t.mock.method(logger, 'info');

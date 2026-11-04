@@ -112,6 +112,8 @@ async function syncLevel(s, path, row, logFields) {
 const missingOnPut = (res) =>
   res.status === 404 || (res.ok && res.body && (res.body.matchedCount === 0 || res.body.n === 0));
 
+const ownRead = row => row.sources && row.sources.demi && row.sources.demi.read;
+
 /** eagle-api's comment period body. `milestone` always rides: eagle-api turns a missing one into a bad ObjectId. */
 function bodyFor(row, s, project = row.eagleProjectId) {
   if (row.sourceSystem === NATIVE) {
@@ -128,7 +130,8 @@ function bodyFor(row, s, project = row.eagleProjectId) {
       commentTip: row.commentTip,
       openHouses: row.openHouses,
       relatedDocuments: row.relatedDocuments,
-      isPublished: Boolean(row.isPublished),
+      // The period's own level, not its read under the project, so a DEMI edit never unpublishes it in Eagle.
+      isPublished: ownRead(row) ? isPublic(ownRead(row)) : Boolean(row.isPublished),
       milestone: row.milestone || s.milestone
     };
   }
@@ -450,10 +453,15 @@ function refuseStray(row) {
   }
 }
 
-/** A native period's Eagle project id, from its parent project. Without one there is nothing to POST under. */
+/**
+ * A native period's Eagle project id, from its parent project, or for a period under a notification the parent its
+ * Eagle copy names (PUT ignores `project`). Without one there is nothing to POST under.
+ */
 async function parentEagleId(row, logFields) {
   const parent = await projects.readForWrite(row.projectId);
   if (parent && parent.eagleId) return String(parent.eagleId);
+  const eagleParent = !parent && refId(row.sources && row.sources.eagle && row.sources.eagle.project);
+  if (eagleParent) return eagleParent;
   logger.error(`[sync-out eagle] project ${row.projectId} of row ${row.id} has no eagleId, nothing sent`,
     { ...logFields, parentId: row.projectId });
   throw new Error(`project ${row.projectId} of row ${row.id} has no eagleId`);

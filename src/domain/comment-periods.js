@@ -114,12 +114,18 @@ async function ownedByDemi(row) {
   return ownedWith(row, own, cap === undefined ? row.read : readUnder(own, cap));
 }
 
-/** `written`, logged when it is the write that took an Eagle period over. */
-function notedTakeover(written, existing) {
-  if (written.status === 'ok' && existing.sourceSystem !== 'demi' && written.value.sourceSystem === 'demi') {
-    logger.info('[CommentPeriod] DEMI write took over an Eagle period', { id: written.value.id, eagleId: written.value.eagleId });
-  }
-  return written;
+/** One write's takeover log: `seen` marks the row each try builds on, so only the try that landed decides. */
+function takeoverLog() {
+  let tookOver = false;
+  return {
+    seen: (current) => { tookOver = current.sourceSystem !== 'demi'; return current; },
+    noted: (written) => {
+      if (written.status === 'ok' && tookOver && written.value.sourceSystem === 'demi') {
+        logger.info('[CommentPeriod] DEMI write took over an Eagle period', { id: written.value.id, eagleId: written.value.eagleId });
+      }
+      return written;
+    }
+  };
 }
 
 /**
@@ -226,16 +232,17 @@ async function update(ctx, id, changes) {
   }
 
   const actor = actorOf(ctx);
-  return queued(notedTakeover(await writeRow({
+  const takeover = takeoverLog();
+  return queued(takeover.noted(await writeRow({
     ctx,
     repo: commentPeriods,
     existing,
     reread: () => readPeriod(ctx, id),
     build: async (current) => current && {
-      ...await ownedByDemi(current), ...checked.value, updatedBy: actor, dateUpdated: new Date().toISOString()
+      ...await ownedByDemi(takeover.seen(current)), ...checked.value, updatedBy: actor, dateUpdated: new Date().toISOString()
     },
     audit: auditOf('commentPeriod.update', fields)
-  }), existing), COMMENT_PERIOD);
+  })), COMMENT_PERIOD);
 }
 
 /**
@@ -249,7 +256,8 @@ async function remove(ctx, id) {
   // Comments before the period: a failure here leaves the period in place for the retry.
   await cascadeToComments(existing, DELETED_CEILING);
   const actor = actorOf(ctx);
-  const written = await writeRow({
+  const takeover = takeoverLog();
+  const written = takeover.noted(await writeRow({
     ctx,
     repo: {
       upsert: async (row, current) => {
@@ -263,7 +271,7 @@ async function remove(ctx, id) {
     // Decided on the stored row: a sync-out create claim may have stored an eagleId since the load.
     build: async (current) => {
       if (!current || !current.eagleId) return current;
-      const owned = await ownedByDemi(current);
+      const owned = await ownedByDemi(takeover.seen(current));
       return {
         ...owned,
         isDeleted: true,
@@ -274,8 +282,7 @@ async function remove(ctx, id) {
       };
     },
     audit: auditOf('commentPeriod.delete')
-  });
-  notedTakeover(written, existing);
+  }));
   return written.status === 'ok' && written.value.isDeleted ? queued(written, COMMENT_PERIOD) : written;
 }
 
@@ -293,17 +300,18 @@ function setPublished(published) {
     if (published && !read.includes('public')) return { status: 'conflict', error: ABOVE_PROJECT };
 
     const actor = actorOf(ctx);
+    const takeover = takeoverLog();
     // Queued before the cascade, which can throw after the period has landed.
-    const written = await queued(notedTakeover(await writeRow({
+    const written = await queued(takeover.noted(await writeRow({
       ctx,
       repo: commentPeriods,
       existing,
       reread: () => readPeriod(ctx, id),
       build: (current) => current && {
-        ...ownedWith(current, own, read), updatedBy: actor, dateUpdated: new Date().toISOString()
+        ...ownedWith(takeover.seen(current), own, read), updatedBy: actor, dateUpdated: new Date().toISOString()
       },
       audit: auditOf(action, ['isPublished'])
-    }), existing), COMMENT_PERIOD);
+    })), COMMENT_PERIOD);
     if (written.status === 'ok') await cascadeToComments(written.value, read);
     return written;
   };
