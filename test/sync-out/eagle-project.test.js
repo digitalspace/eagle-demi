@@ -34,6 +34,7 @@ const EAGLE_ID = '6720b3c0a1b2c3d4e5f60719';
 const PHASE_ID = '5cf00c03a266b7e1877504ff';
 const STRAY_ID = '6720b3c0a1b2c3d4e5f607fe';
 const LEAD_ID = '5cf00c03a266b7e1877504aa';
+const EAGLE_PROPONENT_ID = '5cf00c03a266b7e1877504bb';
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
 const ENV = {
@@ -361,6 +362,18 @@ test('sync-out of DEMI-created projects', async (t) => {
     const body = await eagleProjectConsumer.bodyFor(row, {});
 
     assert.strictEqual(body.disputeDate, EAGLE_BLOCK.disputeDate);
+  });
+
+  await t.test('a DEMI-owned Eagle project whose proponent DEMI lacks sends Eagle\'s, with no error line', async (tt) => {
+    mirrorStore(tt, []);
+    const row = ownedProject({
+      sources: { track: { track_project_id: 1234 }, eagle: eagleCopy({ ...EAGLE_BLOCK, proponent: EAGLE_PROPONENT_ID }) }
+    });
+
+    const body = await eagleProjectConsumer.bodyFor(row, {});
+
+    assert.strictEqual(body.proponent, EAGLE_PROPONENT_ID);
+    assert.strictEqual(logged('error', 'has no eagleId').length, 0);
   });
 
   await t.test('an intake held as eagle-admin\'s { investment, notes } keeps its notes', async (tt) => {
