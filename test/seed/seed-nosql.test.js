@@ -1353,6 +1353,19 @@ test('seed --reconcile end to end', async (t) => {
     assert.deepStrictEqual(purged, { documents: [], projects: [] });
   });
 
+  await t.test('a project DEMI owns missing from the feed is not projects surplus', async () => {
+    const { purged, deps } = makeDeps();
+    deps.repos.projects.listEagleOnlyIds = async () => [
+      { id: 'eagle-gone', eagleId: 'gone', demiOwnedAt: NOW },
+      { id: `eagle-${matchedGuid}`, eagleId: matchedGuid }
+    ];
+
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'], { ...deps, sources: stubSources() });
+
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 0);
+    assert.deepStrictEqual(purged.projects, []);
+  });
+
   await t.test('reconcile spares a project listed in --keep-ids', async () => {
     const { purged, deps } = makeDeps();
     const keep = keepIdsFile('project.txt', '# DEMI keeps this one\ngone\n');

@@ -1000,7 +1000,8 @@ async function runSeed(args, deps, summary) {
       const containers = [
         ['documents', documentRows.filter(row => !retired.has(String(row.projectId))),
           row => `${row.projectId}|${row.id}`, documentFetch.keys, removeDocument],
-        ['projects', liveProjects, projectKey, fetchedProjects, retireProject]
+        // DEMI owns an owned row's lifecycle, so it is never projects surplus.
+        ['projects', liveProjects.filter(row => !isDemiOwnedProject(row)), projectKey, fetchedProjects, retireProject]
       ];
       // Both containers sized BEFORE either delete, so a breach in one stops the other too.
       const sized = containers.map(([label, rows, keyOf, fetched]) => ({

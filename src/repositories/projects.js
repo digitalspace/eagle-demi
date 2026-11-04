@@ -266,7 +266,7 @@ async function listEagleOnlyIds(access) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: eagleOnlyCriteria(),
-    select: 'c.id, c.eagleId, c.isDeleted'
+    select: 'c.id, c.eagleId, c.isDeleted, c.demiOwnedAt'
   });
   return fetchAll(CONTAINER, spec);
 }
