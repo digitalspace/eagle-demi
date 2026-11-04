@@ -319,7 +319,7 @@ Callers to move: eagle-admin `comment.service.ts:47,52,73,139`.
 
 ### Project groups
 
-Status: done (5ccd2bf3), Dark
+Status: done (5ccd2bf3), Dark. DEMI half of F4 built (8b926aa6).
 
 Today: `GET /groups`, `GET /groups/:id` (`routes.js:275-276`), Eagle mirror at `routes.js:254`. Dark: the six routes are served under the `port: groups` anchor (`routes.js:381`), rules in `src/domain/groups.js`, write handlers in `src/controllers/native/groups-write.js`, the members read in `src/controllers/native/groups.js`. eagle-admin still calls eagle-api.
 
@@ -330,7 +330,7 @@ Guards: every route is `[authMiddleware, requireRole('project-system-admin', 'sy
 Business rules (eagle-api `api/controllers/projectGroup.js`):
 - A group belongs to one project (`:21`) and reads `project-system-admin`, `sysadmin` and `staff` (`:22-24`). DEMI takes `projectId` (a project DEMI holds, else 400) in the body, caps that read under the project's (`eagleReadUnder`, as the mirror does), never opens it to `public`, and keeps the uncapped read in `sources.demi.read` for the project cascade (`groups.setAclForProject`). The row carries no `write` or `delete` list; the route guards hold that rule.
 - `name` defaults to an empty string (Group model). Create answers 201 with a UUID id, `sourceSystem: 'demi'`, no members, and `addedBy`/`updatedBy`/`dateAdded`/`dateUpdated`.
-- DELETE is a hard delete (`findOneAndDelete`, `:68`); DEMI removes the row on the revision it read.
+- DELETE is a hard delete (`findOneAndDelete`, `:68`); DEMI removes the row on the revision it read. A group with an `eagleId` is kept instead, flagged `isDeleted`, DEMI-owned, at level 2.
 - Removing a member is a `$pull` (`:190-193`). An id the group does not hold answers 200 and writes nothing.
 - The members read returns the group's members through the users read (`:150-168`): DEMI runs `GET /users` limited to the member ids, so sort keys, paging, `count`, redaction and the `users.list` audit are the users read's. A missing group is a 404 where eagle-api answers `[{ total_items: 0 }]`.
 - Each write records an action (`Add`, `Put`, `Delete`, `Add GroupMember`, `Delete GroupMember`). DEMI writes `group.create`, `.update`, `.delete`, `.addMembers` and `.removeMember`; update carries field names only, the member writes the user ids.
@@ -338,7 +338,12 @@ Business rules (eagle-api `api/controllers/projectGroup.js`):
 Decisions:
 - PUT applies the whole body in eagle-api (`:48`). DEMI takes `name` only; members move through the member routes, and any other key is a 400.
 - Adding members allows duplicates in eagle-api (`:92-95`). DEMI adds only ids the group does not hold, recomputed on the re-read row after a lost etag race; a body that adds nothing writes nothing. The body is `{ members }` (at most 100 ids), not a bare array.
-- Dark: a write to an Eagle-mirrored group is replaced by the next Eagle push.
+- Ownership: any DEMI write sets `sourceSystem: 'demi'` and copies Eagle's own read, less `public`, into `sources.demi.read`, or the default group read when Eagle sent none. The project cascade and the reconcile both derive a DEMI-owned row from that read.
+- Eagle push onto a DEMI-owned group (`upsertKeepingDemiRows` in `controllers/nosql/group.js`): 200, only `sources.eagle` and the push stamp change. Name, members, read and the delete flag stay as DEMI wrote them.
+- An Eagle delete of a DEMI-owned group changes only the raw copy. A group DEMI created has no `eagleId`, so no Eagle push ever reaches it.
+- Flip: once eagle-admin writes groups through DEMI, each group it edits is DEMI-owned, and a late eagle-api push cannot undo that edit. Untouched groups keep following Eagle.
+- Sync-out: none. Neither eagle-public line (`react`, `develop`) reads groups, and eagle-admin reads them from DEMI after the Flip.
+- Tests: `test/controllers/nosql/eagle-new-kinds-push.test.js` (push leaves DEMI fields, DEMI write then a later Eagle push keeps members), `test/domain/groups.test.js` (takeover, flagged delete), `test/scripts/reconcile-eagle.test.js` (taken-over group read).
 
 Callers to move: eagle-admin `project.service.ts:252,256,262,266,270` and the members read.
 

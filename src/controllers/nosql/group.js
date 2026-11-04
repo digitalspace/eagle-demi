@@ -7,6 +7,9 @@
  * A group may never out-rank its project, so its read is derived under the project's through
  * `eagleReadUnder`, as a comment period's is. eagle-api hard-deletes a group and pushes the removed
  * record with `isDeleted: true`; the row is kept, flagged, and narrowed to level 2.
+ *
+ * A group DEMI owns (`sourceSystem: 'demi'`, set by any DEMI write) takes only the raw copy: the push
+ * answers 200 and leaves its name, members, read and delete flag as DEMI wrote them.
  */
 
 const groups = require('../../repositories/groups');
@@ -15,7 +18,7 @@ const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const {
-  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict, underDeleteCeiling, refId
+  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict, underDeleteCeiling, refId
 } = require('./eagle-mirror');
 const { listHandler, getHandler } = require('./mirror-reads');
 const { projectParentJoin } = require('../../helpers/native-query');
@@ -46,11 +49,11 @@ async function mirrorFromEagle(eagleId, doc, { pushedAt = null } = {}) {
   if (!parent) return null;
 
   const read = underDeleteCeiling(eagleReadUnder(doc.read, parent.read), doc);
-  const written = await upsertWithRetry(
-    groups,
+  const written = await upsertKeepingDemiRows(
+    groups, eagleId, doc,
     (current) => mirrorItem(eagleId, doc, parent.id, read, current),
     () => groups.readForWrite(eagleId, parent.id),
-    { pushedAt }
+    { pushedAt, label: LABEL }
   );
   if (written.status === 'conflict' || written.ignored) return written;
   const { saved, existing } = written;

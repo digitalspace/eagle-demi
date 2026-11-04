@@ -18,6 +18,7 @@ const notificationsRepo = require('../../src/repositories/notifications');
 const listsRepo = require('../../src/repositories/lists');
 const periodsRepo = require('../../src/repositories/comment-periods');
 const commentsRepo = require('../../src/repositories/comments');
+const groupsRepo = require('../../src/repositories/groups');
 const sources = require('../../src/seed/sources');
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
@@ -1514,6 +1515,17 @@ test('the user, group and inspection mirrors are checked against their stored Ea
     assert.deepStrictEqual(summary.inspectionItems.missingParent, ['IT-orphan']);
     const clean = await reconcile([], deps({ inspections: storedRows(cleanChain) }));
     assert.strictEqual(summary.drift - clean.drift, 2, 'both reach the alert total');
+  });
+
+  await t.test('a group DEMI took over is checked against its DEMI read, as the cascade derives it', async (tt) => {
+    // As Cosmos projects it: the later Eagle push still stores a public Eagle copy beside the row.
+    const owned = {
+      id: 'G-owned', projectId: '207', sourceSystem: 'demi', read: ['staff'], isPublished: false,
+      eagleRead: ['public', 'staff', 'sysadmin'], demiRead: ['project-system-admin', 'sysadmin', 'staff']
+    };
+    pagedCosmos(tt, container => (container === groupsRepo.CONTAINER ? [owned] : []));
+    const summary = await reconcile([], deps({ groups: groupsRepo }));
+    assert.deepStrictEqual(summary.groups.aclMismatch, []);
   });
 
   const failing = (container, err) => ({ CONTAINER: container, listAclRows: async () => { throw err; } });

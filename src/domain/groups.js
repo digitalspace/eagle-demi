@@ -1,16 +1,14 @@
 'use strict';
 
-/**
- * Project group writes: `POST /groups`, `PUT` and `DELETE /groups/:id`, and adding and removing
- * members on `/groups/:id/members`, ported from eagle-api `api/controllers/projectGroup.js` (rules
- * in docs/eagle-api-port.md, Project groups).
- */
+/** Project group writes; rules in docs/eagle-api-port.md, Project groups. */
 
 const crypto = require('node:crypto');
 
 const groups = require('../repositories/groups');
 const projects = require('../repositories/projects');
 const { eagleReadUnder } = require('../helpers/eagle-acl');
+const { deriveAcls } = require('../helpers/acl-cascade');
+const { constrainToProject, DELETED_CEILING } = require('../repositories/documents');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
 const { writeRow } = require('./_write');
@@ -49,6 +47,31 @@ function auditOf(action, detail) {
 function stamped(ctx, row) {
   return { ...row, updatedBy: actorOf(ctx), dateUpdated: new Date().toISOString() };
 }
+
+/**
+ * The row a DEMI write leaves, owned by DEMI so the Eagle mirror stops replacing it. A mirrored row
+ * keeps Eagle's own read, less `public`, and its `read` is derived from that as the cascade does.
+ */
+async function ownedByDemi(row) {
+  if (row.sourceSystem === 'demi') return row;
+  const eagleRead = row.sources && row.sources.eagle && row.sources.eagle.read;
+  const own = (Array.isArray(eagleRead) ? eagleRead : []).filter((role) => role !== 'public');
+  // No stored Eagle read, or only `public`, takes eagle-api's group ACL.
+  const demiRead = own.length ? own : GROUP_READ;
+  const project = await projects.readForWrite(row.projectId);
+  // A group whose project is gone is capped by its own read, so a takeover never widens it.
+  const [acl] = deriveAcls([{ ...row, eagleRead: demiRead }], (project && project.read) || row.read);
+  return {
+    ...row,
+    read: acl.read,
+    isPublished: acl.isPublished,
+    sourceSystem: 'demi',
+    sources: { ...row.sources, demi: { read: demiRead } }
+  };
+}
+
+/** A DEMI write: owned by DEMI, stamped with the caller and the time. */
+const demiWrite = async (ctx, row) => stamped(ctx, await ownedByDemi(row));
 
 /**
  * @param {{access: object, req: object}} ctx
@@ -123,12 +146,15 @@ async function update(ctx, id, changes) {
     repo: groups,
     existing,
     reread: () => readGroup(ctx, id),
-    build: (current) => current && stamped(ctx, { ...current, ...checked.value }),
+    build: (current) => current && demiWrite(ctx, { ...current, ...checked.value }),
     audit: auditOf('group.update', { fields })
   });
 }
 
-/** Hard delete, as eagle-api's `findOneAndDelete` (projectGroup.js:68), on the revision read. */
+/**
+ * Hard delete, as eagle-api's `findOneAndDelete` (projectGroup.js:68), on the revision read. A group
+ * with an Eagle id is kept flagged and owned by DEMI instead, so a later Eagle push cannot bring it back.
+ */
 async function remove(ctx, id) {
   const existing = await readGroup(ctx, id);
   if (!existing) return { status: 'not-found' };
@@ -136,14 +162,20 @@ async function remove(ctx, id) {
   return writeRow({
     ctx,
     repo: {
-      upsert: async (row) => {
+      upsert: async (row, current) => {
+        if (row.isDeleted) return groups.upsert(row, current);
         await groups.deleteById(row.id, row.projectId, row._etag);
         return row;
       }
     },
     existing,
     reread: () => readGroup(ctx, id),
-    build: (current) => current,
+    build: (current) => current && (current.eagleId ? demiWrite(ctx, {
+      ...current,
+      isDeleted: true,
+      isPublished: false,
+      read: constrainToProject(current.read, DELETED_CEILING)
+    }) : current),
     audit: auditOf('group.delete')
   });
 }
@@ -172,7 +204,7 @@ async function addMembers(ctx, id, input) {
     existing,
     reread: () => readGroup(ctx, id),
     // Recomputed on the row a lost race re-read, so a concurrent add is neither lost nor doubled.
-    build: (current) => current && stamped(ctx, { ...current, members: [...membersOf(current), ...newIn(current)] }),
+    build: (current) => current && demiWrite(ctx, { ...current, members: [...membersOf(current), ...newIn(current)] }),
     audit: auditOf('group.addMembers', { userIds: added })
   });
 }
@@ -191,7 +223,7 @@ async function removeMember(ctx, id, userId) {
     repo: groups,
     existing,
     reread: () => readGroup(ctx, id),
-    build: (current) => current && stamped(ctx, {
+    build: (current) => current && demiWrite(ctx, {
       ...current, members: membersOf(current).filter(member => member !== userId)
     }),
     audit: auditOf('group.removeMember', { userIds: [userId] })

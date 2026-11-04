@@ -205,6 +205,8 @@ test('readForWrite is reached only from the mirror write paths', () => {
     'controllers/nosql/project.js',
     'controllers/nosql/update.js',
     'controllers/nosql/user.js',
+    // A taken-over group's parent, read to derive the group's read: a filtered read would miss a sealed one.
+    'domain/groups.js',
     'helpers/parent-admit.js',
     'helpers/project-twin.js',
     // An Update's parent, read to narrow the Update's own read: a filtered read would miss a sealed one.

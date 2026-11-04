@@ -12,18 +12,20 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const cosmos = require('../../../src/db/cosmos-nosql');
-const { levelOfRead } = require('../../../src/helpers/access-sql');
+const { levelOfRead, resolveAccess } = require('../../../src/helpers/access-sql');
 const { redactForAccess } = require('../../../src/vis/redact');
 const groups = require('../../../src/repositories/groups');
+const groupDomain = require('../../../src/domain/groups');
 const userController = require('../../../src/controllers/nosql/user');
 const inspectionController = require('../../../src/controllers/nosql/inspection');
 const {
-  PUBLIC_ACL, PRIVATE_ACL, INSPECTOR_ACL, INSPECTION_EAGLE_ID, ELEMENT_EAGLE_ID, USER_EAGLE_ID,
+  PUBLIC_ACL, PRIVATE_ACL, INSPECTOR_ACL, INSPECTION_EAGLE_ID, ELEMENT_EAGLE_ID, USER_EAGLE_ID, GROUP_EAGLE_ID,
   storedProject, storedElement, eagleUser, eagleGroup, eagleInspection,
   eagleInspectionElement, eagleInspectionItem, captureMirror, mockRes, anonymous, staff
 } = require('../../helpers/eagle-mirror-fixtures');
 
 const STAFF_READ = ['sysadmin', 'staff'];
+const OTHER_USER = '5c0e4a0c3f4b1a0021a1b2f9';
 
 function anonymousReq(params = {}, query = {}) {
   return { params, query, headers: {} };
@@ -133,6 +135,38 @@ test('group mirror', async (t) => {
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(row.isDeleted, true);
     assert.strictEqual(levelOfRead(row.read), 2);
+  });
+
+  await t.test('Eagle push leaves DEMI-owned fields unchanged: group', async () => {
+    const demiRead = ['project-system-admin', 'sysadmin', 'staff'];
+    const existing = {
+      id: GROUP_EAGLE_ID, eagleId: GROUP_EAGLE_ID, projectId: '207', sourceSystem: 'demi', name: 'DEMI name',
+      members: [OTHER_USER], read: STAFF_READ, isDeleted: true, sources: { demi: { read: demiRead } }, _etag: 'e1'
+    };
+    const pushed = eagleGroup({ name: 'Eagle name', read: PUBLIC_ACL });
+    const { res, row } = await captureMirror(t, 'groups', pushed, { existing });
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(row.name, 'DEMI name');
+    assert.deepStrictEqual(row.members, [OTHER_USER]);
+    assert.strictEqual(row.isDeleted, true, 'a push cannot bring back a group DEMI deleted');
+    assert.deepStrictEqual(row.read, STAFF_READ);
+    assert.deepStrictEqual(row.sources.demi.read, demiRead);
+    assert.deepStrictEqual(row.sources.eagle, pushed, 'Eagle copy kept for the reconcile');
+  });
+
+  await t.test('a DEMI write then a later Eagle push keeps the DEMI members', async () => {
+    const mirrored = (await captureMirror(t, 'groups')).row;
+    t.mock.restoreAll();
+    t.mock.method(groups, 'getById', async () => ({ ...mirrored, _etag: 'e1' }));
+    let written;
+    t.mock.method(groups, 'upsert', async (row) => { written = row; return { ...row, _etag: 'e2' }; });
+    const ctx = { access: resolveAccess(staffReq()), req: staffReq() };
+    assert.strictEqual((await groupDomain.addMembers(ctx, GROUP_EAGLE_ID, { members: [OTHER_USER] })).status, 'ok');
+    t.mock.restoreAll();
+
+    const { res, row } = await captureMirror(t, 'groups', eagleGroup(), { existing: written });
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(row.members, [USER_EAGLE_ID, OTHER_USER]);
   });
 
   await t.test('no stored project: 404, nothing written', async () => {
