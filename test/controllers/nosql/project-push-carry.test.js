@@ -11,6 +11,9 @@ const assert = require('node:assert');
 const projects = require('../../../src/repositories/projects');
 const projectController = require('../../../src/controllers/nosql/project');
 const syncOut = require('../../../src/sync-out');
+const aiSearch = require('../../../src/search/ai-search');
+const documents = require('../../../src/repositories/documents');
+const { DUPLICATE_ID } = require('../../../src/helpers/duplicate-id');
 const {
   mockRes, STAFF, PROJECT_EAGLE_ID, eagleProject, storedEagleProject, projectReadForWriteFromGet
 } = require('../../helpers/eagle-mirror-fixtures');
@@ -157,6 +160,42 @@ test('a DEMI PUT on an Eagle project', async (t) => {
     assert.ok(!('demiOwnedAt' in state.row));
     assert.strictEqual(state.row.syncVersion, 2);
     assert.deepStrictEqual(state.queued, []);
+  });
+
+  await t.test('/level leaves an Eagle project Eagle\'s: the next push still lands', async () => {
+    const state = store(t, storedEagleProject({ sector: 'Energy' }));
+    t.mock.method(aiSearch, 'writeAcls', async (_index, rows) => rows.length);
+    t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
+
+    const level = mockRes();
+    await projectController.setLevel({ params: { id: '207' }, query: {}, user: STAFF, body: { level: 3 } }, level);
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {}, user: STAFF, body: { doc: eagleProject({ sector: 'Mining' }) }
+    }, mockRes());
+
+    assert.strictEqual(level.statusCode, 200);
+    assert.ok(!('demiOwnedAt' in state.row));
+    assert.strictEqual(state.row.sector, 'Mining');
+  });
+
+  await t.test('of dateUpdated alone leaves the project Eagle\'s', async () => {
+    const state = store(t, storedEagleProject({ dateUpdated: '2026-01-01T00:00:00.000Z' }));
+
+    await put({ dateUpdated: '2026-11-04T00:00:00.000Z' });
+
+    assert.ok(!('demiOwnedAt' in state.row));
+  });
+
+  await t.test('on a twin whose Eagle id several Track rows hold leaves it Eagle\'s', async () => {
+    const state = store(t, eagleOnly());
+    t.mock.method(projects, 'readForWriteByEagleId', async () => {
+      throw Object.assign(new Error('duplicate'), { code: DUPLICATE_ID });
+    });
+
+    const res = await put({ sector: 'Mining' }, TWIN_ID);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok(!('demiOwnedAt' in state.row));
   });
 
   await t.test('echoing an unchanged Eagle field leaves the project Eagle\'s', async () => {

@@ -1268,8 +1268,10 @@ paths:
         is on, it sends `name`, `description`, `projectType`, `abbreviation`, `address`,
         `eaStatus`, `eaStatusDate`, `decisionDate`, `currentPhaseName`, `eacDecision`,
         `CEAAInvolvement`, `CEAALink`, `build`, `sector`, `commodity`, `region`, `projectLeadId`,
-        `responsibleEPDId`, `substantially`, `substantiallyDate`, `intake`, `dispute` and
-        `disputeDate`; other Eagle fields stay in DEMI.
+        `responsibleEPDId`, `substantially`, `substantiallyDate`, `intake`, `dispute`,
+        `disputeDate`, `centroid` and the proponent (`proponentId`, as its Eagle id), then
+        publishes or unpublishes the Eagle project to match `read[]`. Other Eagle fields stay in
+        DEMI.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1325,7 +1327,8 @@ paths:
         with it. Repeating the call on a deleted project writes nothing and records no second audit
         row; it only retries a cascade the first call left owed. A delete takes a project mirrored
         from Eagle over, so an Eagle push does not undo or change it; Eagle's own copy stays live.
-        Undo it with `PUT /api/projects/{id}/restore`.
+        Not an `eagle-<eagleId>` copy beside its Track project, nor a project with no stored Eagle
+        record: those stay Eagle's. Undo it with `PUT /api/projects/{id}/restore`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1360,11 +1363,12 @@ paths:
       summary: Restore a deleted project
       description: >-
         Drop the project's `isDeleted` flag. `read[]` stays at staff, where the delete left it;
-        publish it again with `PUT /api/projects/{id}/level`. The `eagle-<eagleId>` copy beside a
-        Track project loses the delete DEMI gave it too. A project mirrored from Eagle is taken
-        over (under the same rules as `PUT /api/projects/{id}`), so an Eagle push that still
-        carries its delete does not delete it again. Audited as `project.restore`. A project
-        created in DEMI or taken over is queued for sync-out; any other project is not.
+        publish it again with `PUT /api/projects/{id}/level`. When DEMI deleted a Track project,
+        its `eagle-<eagleId>` copy loses the delete DEMI gave it too. A project mirrored from Eagle
+        is taken over, so an Eagle push that still carries its delete does not delete it again;
+        not an `eagle-<eagleId>` copy beside its Track project, nor a project with no stored Eagle
+        record. Audited as `project.restore`. A project created in DEMI or taken over is queued
+        for sync-out; any other project is not.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

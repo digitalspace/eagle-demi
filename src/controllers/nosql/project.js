@@ -48,7 +48,7 @@ const { writeGuarded, raced } = require('../../helpers/etag-write');
 const {
   eaglePush, isStalePush, stampPush, ignoreStalePush, pushConflict, keepSeal
 } = require('./eagle-mirror');
-const { mirrorError } = require('../../helpers/duplicate-id');
+const { mirrorError, DUPLICATE_ID } = require('../../helpers/duplicate-id');
 const { narrowTwin, mirrorFields, partnerRefuses, MIRRORED, sameTags } = require('../../helpers/project-twin');
 const { listHandler } = require('./mirror-reads');
 const { indexedKind, INDEX_MAPS } = require('../../search/native-index');
@@ -89,9 +89,12 @@ function enqueueProject(saved) {
 /** A row with no Track source takes these from Eagle too (`TRACK_PRECEDENCE`'s Eagle slot). */
 const EAGLE_SLOT_FIELDS = [...TRACK_PRECEDENCE.filter(([, , eagle]) => eagle).map(([target]) => target), 'centroid'];
 
+// The two stamps every edit tool sends back; a changed stamp alone is no edit of Eagle's content.
+const TAKEOVER_FIELDS = EAGLE_ONLY_FIELDS.filter(field => !['dateAdded', 'dateUpdated'].includes(field));
+
 /** The fields whose edit takes `row` over from Eagle. */
 const eagleFields = (row) => (row.sources && row.sources.track
-  ? EAGLE_ONLY_FIELDS : [...EAGLE_ONLY_FIELDS, ...EAGLE_SLOT_FIELDS]);
+  ? TAKEOVER_FIELDS : [...TAKEOVER_FIELDS, ...EAGLE_SLOT_FIELDS]);
 
 /** A non-native row mirroring an Eagle project. */
 const eagleMirrored = (row) => hasValue(row.eagleId) && !isNativeProject(row);
@@ -103,7 +106,15 @@ const eagleMirrored = (row) => hasValue(row.eagleId) && !isNativeProject(row);
 async function takeOver(current, now) {
   if (!eagleMirrored(current) || isDemiOwnedProject(current) || !(current.sources && current.sources.eagle)) return {};
   if (isEagleOnlyProjectId(current.id)) {
-    const primary = await projects.readForWriteByEagleId(current.eagleId);
+    let primary;
+    try {
+      primary = await projects.readForWriteByEagleId(current.eagleId);
+    } catch (err) {
+      // Several Track rows hold this Eagle id: a partner exists, so the twin stays Eagle's.
+      if (err.code !== DUPLICATE_ID) throw err;
+      logger.warn('[Project Controller] takeover skipped: several rows hold the Eagle id', { id: current.id, eagleId: current.eagleId });
+      return {};
+    }
     if (primary && String(primary.id) !== String(current.id)) return {};
   }
   return { [DEMI_OWNED_AT]: now };
@@ -665,7 +676,7 @@ exports.updateProject = async (req, res) => {
     if (written.status === 'conflict') return writeConflict(res, 'project update', req.params.id);
     if (written.status === 'locked') return res.status(409).json({ error: written.error });
     if (written.status === 'repoint') {
-      return res.status(409).json({ error: 'eagleId cannot change while the row mirrors Eagle' });
+      return res.status(409).json({ error: 'eagleId cannot be changed through PUT on this row' });
     }
     if (written.status === 'pins') return pinRefusal(res, written.refusal);
     const { saved, replaced, pinFields, edited } = written;
@@ -775,6 +786,11 @@ exports.setLevel = async (req, res) => {
           ? keepSeal(stampPush(mergeEaglePush({ ...eagle, currentLegislationYear: move.key }, current,
             { switchTo: move.key }), undefined, current), current)
           : current;
+        // An owned row's Eagle copy keeps Eagle's real year: sync-out must see the move, or its PUT
+        // writes the new Act's values over Eagle's current block.
+        if (move.key && isDemiOwnedProject(current) && eagle) {
+          base.sources = { ...base.sources, eagle: { ...base.sources.eagle, currentLegislationYear: eagle.currentLegislationYear } };
+        }
         const row = {
           ...base,
           ...acl,
@@ -809,7 +825,7 @@ exports.setLevel = async (req, res) => {
       projectId: existing.id,
       detail: {
         from, to: level, confirmed: confirm === true, reason: reason || '',
-        ...(switchedFrom === undefined ? {} : { legislationFrom: switchedFrom, legislationTo: saved.sources.eagle.currentLegislationYear })
+        ...(switchedFrom === undefined ? {} : { legislationFrom: switchedFrom, legislationTo: saved.currentLegislationYear })
       }
     });
     await enqueueProject(saved);
@@ -1334,12 +1350,12 @@ exports.deleteProject = async (req, res) => {
 };
 
 /**
- * Undo the delete `narrowTwin` copied onto the `eagle-<id>` twin beside a Track row; its `read`
- * stays. False when the twin kept changing under every try.
+ * Undo the DEMI delete `narrowTwin` copied onto the `eagle-<id>` twin, `read` kept, when `row`'s is
+ * DEMI's too; any other twin delete is its own. False when every try lost.
  */
 async function restoreTwin(row) {
   const twinId = hasValue(row.eagleId) ? eagleOnlyProjectId(String(row.eagleId)) : null;
-  if (!twinId || String(row.id) === twinId) return true;
+  if (!twinId || String(row.id) === twinId || deletedBy(row) !== 'demi') return true;
   const read = () => projects.readForWrite(twinId);
   const written = await writeGuarded({
     existing: await read(),
