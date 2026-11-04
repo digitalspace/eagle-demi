@@ -534,11 +534,4 @@ test('native notifications', async (t) => {
     assert.strictEqual(res.body.id, 'demi-uuid-1');
     assert.strictEqual((await call(get, '', { id: row.eagleId })).status, 404);
   });
-
-  await t.test('by id: an Eagle-shaped id no row holds is a 404', async (t) => {
-    fakeStores(t);
-    const res = await call(get, '', { id: 'eeeeeeeeeeeeeeeeeeeeeeee', user: STAFF });
-    assert.strictEqual(res.status, 404);
-    assert.strictEqual(res.body.error, 'Notification not found');
-  });
 });

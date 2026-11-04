@@ -6957,14 +6957,7 @@ paths:
         One project notification the caller may read, with hidden fields left out. One the caller
         cannot read is a 404, the same as one that does not exist.
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: >-
-            The record id (the Eagle `_id`, or the UUID of a notification DEMI created), or the
-            24-hex Eagle id sync-out gave a notification DEMI created.
-          schema:
-            type: string
+        - $ref: '#/components/parameters/NotificationId'
       responses:
         '200':
           description: The record.
@@ -8435,7 +8428,9 @@ components:
       name: id
       in: path
       required: true
-      description: The record id (the Eagle `_id`, or the UUID of a notification DEMI created).
+      description: >-
+        The record id (the Eagle `_id`, or the UUID of a notification DEMI created). A GET also
+        takes the 24-hex Eagle id sync-out gave a notification DEMI created; writes do not.
       schema:
         type: string
 
