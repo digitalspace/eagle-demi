@@ -1579,8 +1579,12 @@ federated credential, with no client secret anywhere:
 |---|---|
 | Identity | `demi-cicd-test`, in `c4b0a8-test-rg` |
 | Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:environment:test`, audience `api://AzureADTokenExchange` |
-| RBAC | Website Contributor on `demi-api-fc-test` and on `demi-pdf-title-test`, each granted **individually** by hand, outside bicep (the worker app exists only once `deployPdfTitleWorker` is true), plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
+| RBAC | Website Contributor on `demi-api-fc-test`, `demi-pdf-title-test`, `demi-secret-sync-test` and `demi-secret-rotator-test`, each granted **individually** by hand, outside bicep (`demi-pdf-title-test` exists only once `deployPdfTitleWorker` is true), plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
 | Config | All four values live on the **`test` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
+
+For a new Function app the order is: `scripts/deploy-infra.sh <env> --live` creates it, then grant
+`demi-cicd-<env>` Website Contributor on it, then its staging workflow deploys it. Until both are
+done, the pdf-title and secret rotator workflows skip with a notice.
 
 **Declaring `environment: test` changes the OIDC subject claim, and that is the trap.** With an
 environment the claim becomes `repo:digitalspace/eagle-demi:environment:test` rather than
