@@ -1234,37 +1234,51 @@ It does not record a foundation deployment. The next `deploy-infra.sh <env> --li
 `demi-kv-<env>` holds the credentials the API resolves at runtime as
 `@Microsoft.KeyVault(SecretUri=...)`. The names it must hold:
 
-| Secret | What it is | Where it is required |
-|---|---|---|
-| `admin-api-key` | break-glass sysadmin credential | every environment |
-| `track-client-secret` | Keycloak client secret of the Track service account | every environment |
-| `role-sync-client-secret` | Keycloak client secret the team sync grants roles with | every environment |
-| `docling-api-key` | outbound key DEMI presents to docling-serve as `X-Api-Key` | every environment |
-| `minio-access-key` | object-store access key for the NRS store the corpus lives in | every environment |
-| `minio-secret-key` | object-store secret key paired with it | every environment |
-| `analytics-shared-header` | header APIM stamps on every analytics call, which that app demands | every environment |
-| `analytics-audit-header` | second credential APIM stamps on `POST /analytics-machine/audit` alone | every environment |
-| `notify-api-key` | function key eagle-notify accepts on `POST /api/events` | only where `notifyApiBase` is set |
-| `edge-secret` | value the eagle-edge Front Door rule set stamps as `X-Edge-Secret` | only where Front Door fronts the app |
-| `access-gate-password` | password `POST /api/gate` accepts, gating the public site | only where the site runs a curtain; not prod |
-| `pdf-title-worker-api-key` | registry key the PDF title worker presents as `X-Api-Key` | only where `deployPdfTitleWorker` is true; see [PDF title worker](#pdf-title-worker) |
-| `openshift-token-<env>` | ServiceAccount token the secret sync writes OpenShift Secrets with | `demi-kv-test` only; prod runs no sync |
-| `dev-openshift-token` | the same for `6cdc9e-dev`, which `demi-kv-test` also serves | `demi-kv-test` only |
+| Secret | What it is | Where it is required | Action |
+|---|---|---|---|
+| `admin-api-key` | break-glass sysadmin credential | every environment | renew |
+| `track-client-secret` | Keycloak client secret of the Track service account | every environment | renew |
+| `role-sync-client-secret` | Keycloak client secret the team sync grants roles with | every environment | renew |
+| `docling-api-key` | outbound key DEMI presents to docling-serve as `X-Api-Key` | every environment | renew; reissue by hand, date in `rotatorIssuerExpiry` |
+| `minio-access-key` | object-store access key for the NRS store the corpus lives in | every environment | renew; reissue by hand, date in `rotatorIssuerExpiry` |
+| `minio-secret-key` | object-store secret key paired with it | every environment | renew; reissue by hand, date in `rotatorIssuerExpiry` |
+| `analytics-shared-header` | header APIM stamps on every analytics call, which that app demands | every environment | rotate |
+| `analytics-audit-header` | second credential APIM stamps on `POST /analytics-machine/audit` alone | every environment | rotate |
+| `notify-api-key` | function key eagle-notify accepts on `POST /api/events` | only where `notifyApiBase` is set | renew |
+| `edge-secret` | value the eagle-edge Front Door rule set stamps as `X-Edge-Secret` | only where Front Door fronts the app | rotate |
+| `apim-gateway-secret` | value APIM stamps as `X-Gateway-Secret`; written once through the ARM control plane, see `azure/modules/apim.bicep` | only where `deployApim` is true (both environments) | rotate |
+| `access-gate-password` | password `POST /api/gate` accepts, gating the public site | only where the site runs a curtain; not prod | renew |
+| `pdf-title-worker-api-key` | registry key the PDF title worker presents as `X-Api-Key` | only where `deployPdfTitleWorker` is true; see [PDF title worker](#pdf-title-worker) | renew; replace by hand before the key's own `expiresAt` |
+| `eagle-sync-out-client-secret` | Keycloak client secret the Eagle sync-out consumer uses | only where `syncOutQueue` is set: test | renew |
+| `edge-ban-policy` | the edge ban policy JSON, config and not a credential | only where the ban timer runs | renew |
+| `openshift-token-<env>` | ServiceAccount token the secret sync writes OpenShift Secrets with | `demi-kv-test` only; prod runs no sync | renew |
+| `dev-openshift-token` | the same for `6cdc9e-dev`, which `demi-kv-test` also serves | `demi-kv-test` only | renew |
+| any other secret with an expiry | | | renew |
+
+**rotate** means the secret rotator mints a new value and hands it over without a gap, see
+[Secret rotator](#secret-rotator). **renew** means the rotator writes the same value again as a new
+version with a later expiry, so the policy and the `SecretNearExpiry` alert stay quiet. Renew does
+not change the value, so for a secret that expires at its issuer it buys nothing; the Keycloak
+secrets and the object-store keys are reissued at the issuer by hand.
 
 The first eight are the required set, written down once in `requiredSecretNames` in
 `azure/modules/key-vault.bicep`. The rest are optional per environment and are listed in that
-environment's `optionalSecretNames` parameter. Naming one there says the vault holds it; an unnamed
-one leaves its app setting empty, which is what a dark environment wants.
+environment's `optionalSecretNames` parameter, except `apim-gateway-secret`, which APIM reads and
+neither list names. Naming one there says the vault holds it; an unnamed one leaves its app setting
+empty, which is what a dark environment wants.
 
 The two analytics headers are not read by the API app. APIM resolves them as Key Vault-backed named
-values, so the gateway is no longer a second copy of them, and eagle-analytics reads the same two
-secrets as `APIM_SHARED_HEADER_VALUE` and `AUDIT_SHARED_HEADER_VALUE`. Both sides have to be
-recycled after a rotation.
+values, so the gateway is no longer a second copy of them. eagle-analytics reads the same two
+secrets from the vault itself, by `APIM_SHARED_HEADER_SECRET_URI` and `AUDIT_SHARED_HEADER_SECRET_URI`,
+and accepts both the latest version and the `-standby` secret beside it. The rotator moves them
+(see [Secret rotator](#secret-rotator)); neither side is recycled.
 
-**Values are set once by hand, from the devbox, and never through git, a workflow input or a
+**First values are set by hand, from the devbox, and never through git, a workflow input or a
 template parameter.** The Bicep has no parameter carrying a secret value, so an infrastructure
-deploy cannot blank a live credential. Rotation is the same command as the first write: a new
-version, then recycle the app (`stop` then `start` — `restart` does not re-read a reference).
+deploy cannot blank a live credential. The four rotated secrets need only that first version; the
+rotator takes it from there. For any other secret, a new value is the same command as the first
+write: a new version, then recycle the app (`stop` then `start` — `restart` does not re-read a
+reference).
 
 ```bash
 # on demi-devbox-<env>, which runs as demi-identity-<env>
@@ -1286,8 +1300,103 @@ Landing-zone policy refuses a secret write without an expiry date. Key Vault sen
 Event Grid system topic `evgt-demi-kv-<env>` turns each event into an Azure Monitor alert that mails
 the `demi-alerts-<env>` action group.
 
-The topic and the subscription live in `azure/modules/key-vault.bicep`. To clear the alert, set a
-new version of the secret with a later `exp`.
+The topic and the subscription live in `azure/modules/key-vault.bicep`. The rotator starts at 40
+days, so this alert fires only for a secret the rotator did not handle: it has no expiry, it is not
+enabled, or the rotator is off or failing. To clear it, set a new version of the secret with a
+later `exp`.
+
+### Secret rotator
+
+Four secrets rotate on their own, in test and prod: `edge-secret`, `apim-gateway-secret`,
+`analytics-shared-header` and `analytics-audit-header`. The Function app `demi-secret-rotator-<env>`
+does it. Its timer `secretRotatorHourly` runs at the top of every hour (`0 0 * * * *`). Code:
+`src/secret-rotator/`. Infrastructure: `azure/modules/secret-rotator.bicep`. It never deletes a
+secret and never logs a value.
+
+It runs as `demi-rotator-identity-<env>`, which holds Key Vault Secrets Officer on `demi-kv-<env>`
+(granted in bicep) and CDN Profile Contributor on the eagle-edge rule sets `rulesdemi`, `rulesapi`
+and `rulesdemidocs` (granted by eagle-edge from its `rotatorPrincipalId` parameter).
+
+| Secret | Who sends it | Probe after a change |
+|---|---|---|
+| `edge-secret` | Front Door. The rotator writes the value into the `stampedgesecret` rule of each rule set | `demi-edge`: `GET /demi/api/health/trust` answers `edge: true` |
+| `apim-gateway-secret` | APIM named value, which APIM re-reads from the vault within 4 hours | `demi-gateway`: the same route answers `gateway: true` |
+| `analytics-shared-header` | APIM named value | `analytics`: `POST` to `/analytics/events` answers anything but 401 |
+| `analytics-audit-header` | APIM named value | `none` |
+
+Each one has a companion secret `<name>-standby`. The state of a rotation sits in tags on the latest
+standby version: `rotation-stage`, `rotation-at`, `rotation-attempts`, and `rotation-patched-at`
+once Front Door was patched. Below, O is the old value and N the new one. Every new version expires
+in 89 days and keeps the content type of the one it replaces (`text/plain` when it had none).
+
+1. **Mint.** Starts when the latest `<name>` has no expiry or expires within 40 days, and the probe
+   passes. Standby becomes N, 32 random bytes. The checkers now accept O and N.
+2. **Promote.** At least 30 minutes after mint. Standby becomes O, then `<name>` becomes N.
+3. **Retire.** Standby becomes N, so only N is accepted. APIM secrets wait at least 6 hours after
+   promote. For `edge-secret`, at least 10 minutes after promote the rotator patches the
+   `stampedgesecret` rule in every rule set listed in `rotatorEdgeRuleIds`. A `409` from Front Door
+   is retried on the next run. Retire waits until every rule reads back `Succeeded` with N, 45
+   minutes have passed since the last patch, and the probe passes.
+4. **Verify.** At least 10 minutes after retire the rotator runs the probe again. On success the
+   stage is `verified`. On failure it puts O back in standby, logs `FAILED`, and tries the retire
+   again after 24 hours. After 2 attempts the stage is `failed`: both values stay accepted and
+   `FAILED` is logged on every run until someone fixes it by hand.
+
+A mint whose probe fails does not happen and logs `FAILED`. An `edge-secret` retire still waiting
+after 24 hours logs `FAILED`.
+
+**The checkers.** `demi-api` and eagle-analytics read `<name>` and `<name>-standby` from the vault
+themselves, every 5 minutes: `EDGE_SECRET_URI` and `APIM_GATEWAY_SECRET_URI` on the API,
+`APIM_SHARED_HEADER_SECRET_URI` and `AUDIT_SHARED_HEADER_SECRET_URI` on eagle-analytics. They keep
+the read before the latest one for 5 more minutes, so a retired value stops working within about 10
+minutes. The value of the app setting counts only until the first read succeeds. A failed read
+keeps the last good values and logs a warning. App Service caches a Key Vault reference for up to
+24 hours, which is why the apps read the vault directly. Nothing is stopped or started.
+
+`GET /demi/api/health/trust` is public. It returns `{ "edge": bool, "gateway": bool }`: whether
+the request's `X-Edge-Secret` and `X-Gateway-Secret` match what the checkers accept now. The
+rotator calls it through Front Door, three tries 20 seconds apart.
+
+**Renew.** With `rotatorRenew` true, every other enabled secret with an expiry within 40 days gets
+a new version with the same value, an expiry 89 days out, and the same content type and tags. It
+skips `-standby` secrets, secrets with no expiry, disabled ones, and any that changed since the
+rotator listed them. The OpenShift sync compares values, so a renewed secret writes and restarts
+nothing there.
+
+**Issuer expiry.** `rotatorIssuerExpiry` is a comma list of `name=YYYY-MM-DD` for secrets whose real
+value expires at the issuer: the object-store keys and the docling key. Neither param file sets it
+yet. Within 30 days of a date the rotator logs `[secret-rotator] issuer-expiry <name> on <date>`
+on every run, and the failed alert fires. Reissue the key at the issuer by hand, set a new version
+in the vault, and move the date.
+
+**Settings.** All of them are bicep parameters in `azure/main.<env>.bicepparam`:
+
+| Parameter | App setting | Holds |
+|---|---|---|
+| `rotatorTargets` | `ROTATED_SECRETS` | `name:stamper:probe`, comma separated. Stamper is `frontdoor` or `apim` |
+| `rotatorRenew` | `RENEW` | `true` turns renew on |
+| `rotatorEdgeRuleIds` | `EDGE_RULE_IDS` | the `stampedgesecret` rule id in each of `rulesdemi`, `rulesapi` and `rulesdemidocs`. A rule left out keeps stamping O |
+| `rotatorProbeDemiUrl` | `PROBE_DEMI_URL` | the public `/demi/api/health/trust` URL |
+| `rotatorProbeAnalyticsUrl` | `PROBE_ANALYTICS_URL` | the public `/analytics/events` URL |
+| `rotatorIssuerExpiry` | `ISSUER_EXPIRY` | issuer dates, above |
+
+**Kill switch.** An empty `rotatorTargets` and `rotatorRenew = false` stop all rotation and
+renewal; the app still runs and logs `run finished`. Redeploy infrastructure to apply it. The
+prod deploy workflow does not roll the rotator back with the API: its rollback is this switch.
+
+**Rotating early.** Only the rotator should write a new version of the four. Stampers and checkers
+switch in a fixed order, and a value written by hand skips it. To rotate sooner, move the `exp` of
+the latest version of `<name>` to a date within 40 days; the next hourly run mints. It cannot start
+while the secret is mid-rotation.
+
+**Deploying.** `.github/workflows/azure-deploy-staging-secret-rotator.yaml` deploys test on a push
+to main that touches `src/secret-rotator/` or the two files `scripts/package-secret-sync.sh` copies
+in beside it. The `deploy-secret-rotator` job of `azure-deploy-prod.yaml` deploys prod from the tag,
+after the API, and skips when the tag has no `src/secret-rotator`. Both wait until
+`secretRotatorHourly` is registered. Until `demi-cicd-<env>` holds Website Contributor on
+`demi-secret-rotator-<env>`, granted by hand after the first infrastructure deploy, the workflow
+skips with a notice. Alerts: `demi-secret-rotator-failed-<env>` and
+`demi-secret-rotator-silent-<env>`, see [Alerts](#alerts).
 
 ### OpenShift secret sync
 
@@ -1413,7 +1522,8 @@ secret breaks the worker's `X-Api-Key` header.
 Read the key's id from `GET /admin/api-keys`; it is the value for `pdfTitleWorkerPrincipals`. To
 check the secret, use `--query attributes.enabled`. Never use `--query value`: it prints the key.
 
-**To rotate the key**, before the 90-day expiry:
+**To rotate the key**, before its `expiresAt`, 90 days after it was minted unless the mint set
+another date. The secret rotator only renews the vault copy; it cannot replace the key itself:
 
 1. Mint a new key as above. `az keyvault secret set` writes a new version of the same secret.
 2. In `pdfTitleWorkerPrincipals`, list both key ids, comma-separated.
@@ -1694,6 +1804,8 @@ Everything below mails one action group, `demi-alerts-<env>`, created in
 | `demi-search-5xx-ratio-<env>` | `AppRequests` | 1 | Over 20% of `/search` requests answered 5xx in five minutes, over at least five requests |
 | `demi-search-availability-<env>` | `availabilityResults` | 1 | The web test below dropped under 90% over fifteen minutes |
 | `demi-audit-drop-<env>` | `AppTraces` | 1 | Audit rows stopped landing — see `audit-logs.bicep` |
+| `demi-secret-rotator-failed-<env>` | `AppTraces` | 1 | A `[secret-rotator] FAILED` or `[secret-rotator] issuer-expiry` line in the last 2 hours. Checked hourly |
+| `demi-secret-rotator-silent-<env>` | `AppTraces` | 1 | No `[secret-rotator] run finished` line in 26 hours |
 
 The two chunk and Cosmos rules are the answer to a retry loop in September 2026 that held
 `demi-cosmos-test` at 4-8M RU an hour, about 70 CAD a day, for five days. The budget alert was the
