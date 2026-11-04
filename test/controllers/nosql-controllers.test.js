@@ -288,6 +288,51 @@ test('nosql project controller', async (t) => {
     assert.deepStrictEqual(saved.sources, {}, 'the wildfire patch needs /sources to exist');
   });
 
+  await t.test('createProject without trackProjectId stores a UUID id, trackProjectId null, sourceSystem demi', async () => {
+    t.mock.method(projects, 'getById', async () => null);
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+    const res = mockRes();
+
+    await projectController.createProject({
+      body: { name: 'New', centroid: { coordinates: [-123.4, 48.4] } }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.match(saved.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.strictEqual(saved.trackProjectId, null);
+    assert.strictEqual(saved.sourceSystem, 'demi');
+  });
+
+  await t.test('createProject with trackProjectId keeps id = trackProjectId', async () => {
+    t.mock.method(projects, 'getById', async () => null);
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 9, name: 'T', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+
+    assert.strictEqual(saved.id, '9');
+    assert.strictEqual(saved.trackProjectId, 9);
+    assert.strictEqual(saved.sourceSystem, 'track');
+  });
+
+  await t.test('createProject without name or centroid answers 400 naming both', async () => {
+    const upsert = t.mock.method(projects, 'upsert', async (doc) => doc);
+    const noName = mockRes();
+    const noCentroid = mockRes();
+
+    await projectController.createProject({ body: { centroid: { coordinates: [0, 0] } } }, noName);
+    await projectController.createProject({ body: { name: 'N', centroid: {} } }, noCentroid);
+
+    assert.strictEqual(noName.statusCode, 400);
+    assert.strictEqual(noName.body.error, 'Missing required fields: name, centroid');
+    assert.strictEqual(noCentroid.statusCode, 400);
+    assert.strictEqual(noCentroid.body.error, 'Missing required fields: name, centroid');
+    assert.strictEqual(upsert.mock.callCount(), 0);
+  });
+
   await t.test('a create stamps syncVersion and the Eagle dates, and queues the project kind', async () => {
     t.mock.method(projects, 'getById', async () => null);
     t.mock.method(projects, 'upsert', async (doc) => doc);

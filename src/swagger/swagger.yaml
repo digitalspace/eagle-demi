@@ -962,10 +962,12 @@ paths:
     post:
       summary: Create project
       description: >-
-        Ingest a new project with name and geographic centroid coordinates. The project is
-        admitted at level 1 (team only): `isPublished` and `read` in the body are ignored, not
-        refused. Raising a project's level is `PUT /api/projects/{id}/level`. The row gets
-        `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle.
+        Ingest a new project with name and geographic centroid coordinates. With
+        `trackProjectId`, the row's id is that Track id. Without it, the project is brand new:
+        DEMI makes a UUID id and stores `trackProjectId: null` and `sourceSystem: "demi"`. The
+        project is admitted at level 1 (team only): `isPublished` and `read` in the body are
+        ignored, not refused. Raising a project's level is `PUT /api/projects/{id}/level`. The row
+        gets `dateAdded` and `dateUpdated`, and sync-out queues it for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -979,7 +981,7 @@ paths:
         '201':
           description: Project successfully created.
         '400':
-          description: Missing required fields.
+          description: '`name` or `centroid.coordinates` is missing. Body `{ error: "Missing required fields: name, centroid" }`.'
         '401':
           description: Unauthorized.
         '403':
@@ -9588,12 +9590,12 @@ components:
     ProjectInput:
       type: object
       required:
-        - trackProjectId
         - name
         - centroid
       properties:
         trackProjectId:
           type: integer
+          description: The Track id, which becomes the row id. Leave it out for a brand new project; DEMI then makes a UUID id.
         name:
           type: string
         region:
