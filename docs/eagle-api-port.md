@@ -319,7 +319,7 @@ Callers to move: eagle-admin `comment.service.ts:47,52,73,139`.
 
 ### Project groups
 
-Status: done (5ccd2bf3), Dark. DEMI half of F4 built (8b926aa6); eagle-admin still calls eagle-api.
+Status: done (5ccd2bf3), Dark. DEMI half of F4 built (8b926aa6).
 
 Today: `GET /groups`, `GET /groups/:id` (`routes.js:275-276`), Eagle mirror at `routes.js:254`. Dark: the six routes are served under the `port: groups` anchor (`routes.js:381`), rules in `src/domain/groups.js`, write handlers in `src/controllers/native/groups-write.js`, the members read in `src/controllers/native/groups.js`. eagle-admin still calls eagle-api.
 
