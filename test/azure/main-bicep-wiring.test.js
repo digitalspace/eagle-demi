@@ -1116,6 +1116,13 @@ test('the rotator runs as its own identity with Secrets Officer on the vault and
   }
   assert.match(ROTATOR_MODULE, /maximumInstanceCount: 1$/m,
     'two instances would run the same stage at once and write two versions');
+
+  const grants = ROTATOR_MODULE.split(/^resource /m).filter((b) => /^\w+ 'Microsoft\.Authorization\/roleAssignments@/.test(b));
+  assert.deepStrictEqual(grants.map((b) => /^\s+scope: (\w+)$/m.exec(b)?.[1]).sort(),
+    ['rotatorStorage', 'rotatorStorage', 'rotatorStorage', 'vault'],
+    'three host roles on its own storage and Officer on the vault, nothing at resource group scope');
+  assert.doesNotMatch(ROTATOR_MODULE, /@Microsoft\.KeyVault/,
+    'the rotator reads the vault with its own client; a reference would resolve a value into app settings');
 });
 
 test('the rotator app carries every setting the rotator reads, each from its own param', () => {
@@ -1137,9 +1144,9 @@ test('the rotator app carries every setting the rotator reads, each from its own
   const block = moduleBlock('./modules/secret-rotator.bicep');
   assert.ok(block, 'main.bicep must call the secret-rotator module');
   for (const [arg, source] of [
-    ['keyVaultName', 'vaultName'], ['keyVaultUri', 'vaultUri'], ['rotationTargets', 'rotationTargets'],
-    ['renew', 'renewSecrets'], ['edgeRuleIds', 'rotatorEdgeRuleIds'], ['probeDemiUrl', 'rotatorProbeDemiUrl'],
-    ['probeAnalyticsUrl', 'rotatorProbeAnalyticsUrl'], ['issuerExpiry', 'issuerExpiry'],
+    ['keyVaultName', 'vaultName'], ['keyVaultUri', 'vaultUri'], ['rotationTargets', 'rotatorTargets'],
+    ['renew', 'rotatorRenew'], ['edgeRuleIds', 'rotatorEdgeRuleIds'], ['probeDemiUrl', 'rotatorProbeDemiUrl'],
+    ['probeAnalyticsUrl', 'rotatorProbeAnalyticsUrl'], ['issuerExpiry', 'rotatorIssuerExpiry'],
     ['logsWorkspaceId', 'appLogsWorkspaceId'], ['actionGroupId', 'actionGroupId']
   ]) {
     assert.match(block, new RegExp(`^\\s+${arg}: ${source}$`, 'm'), `main.bicep must pass ${arg}: ${source}`);
@@ -1157,6 +1164,7 @@ test('the rotator alerts match the lines the rotator logs', () => {
 
   const silent = rule('silentAlert');
   assert.match(silent, /where TimeGenerated > ago\(26h\) \| where Message contains "\[secret-rotator\] run finished"/);
+  assert.match(silent, /windowSize: 'P2D'/, 'ago(26h) narrows nothing in a window shorter than 26 h');
   assert.match(silent, /operator: 'LessThan'\n\s+threshold: 1/,
     'the silence rule must fire on the ABSENCE of the run line');
   for (const r of [failed, silent]) {
@@ -1179,7 +1187,7 @@ for (const [env, params, sub, rg, profile, host] of [
   ['prod', PROD_PARAMS, 'be5924ac-1083-4a1b-be92-7b444882cfd9', 'rg-eagle-public-prod', 'eagle-edge-prod', 'projects.eao.gov.bc.ca']
 ]) {
   test(`${env}: the rotator list parses and points at this environment's edge and host`, () => {
-    const targets = stringParam(params, 'rotationTargets', '').split(',').map((t) => t.split(':'));
+    const targets = stringParam(params, 'rotatorTargets', '').split(',').map((t) => t.split(':'));
     assert.deepStrictEqual(targets.map(([name]) => name),
       ['edge-secret', 'apim-gateway-secret', 'analytics-shared-header', 'analytics-audit-header']);
     for (const t of targets) {
@@ -1189,13 +1197,13 @@ for (const [env, params, sub, rg, profile, host] of [
     }
 
     // A rule left off the list keeps stamping the old value after retire, and that path 401s.
-    const base = `/subscriptions/${sub}/resourcegroups/${rg}/providers/Microsoft.Cdn/profiles/${profile}/rulesets`;
+    const base = `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Cdn/profiles/${profile}/ruleSets`;
     assert.deepStrictEqual(stringParam(params, 'rotatorEdgeRuleIds', '').split(','),
       ['rulesdemi', 'rulesapi', 'rulesdemidocs'].map((rs) => `${base}/${rs}/rules/stampedgesecret`));
 
     assert.strictEqual(stringParam(params, 'rotatorProbeDemiUrl', ''), `https://${host}/demi/api/health/trust`);
     assert.strictEqual(stringParam(params, 'rotatorProbeAnalyticsUrl', ''), `https://${host}/analytics/events`);
-    assert.strictEqual(boolParam(params, 'renewSecrets', false), true);
+    assert.strictEqual(boolParam(params, 'rotatorRenew', false), true);
   });
 }
 

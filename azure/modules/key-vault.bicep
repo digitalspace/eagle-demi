@@ -1,9 +1,8 @@
 // Key Vault for the DEMI application secrets, plus its private endpoint and the read grants.
 //
 // THIS TEMPLATE NEVER CARRIES A SECRET VALUE. It creates the vault and says which names the app
-// expects; each value is set once by hand from the devbox with `az keyvault secret set`. After
-// that demi-secret-rotator-<env> (secret-rotator.bicep) rotates the self-minted secrets and renews
-// the expiry of the rest, both as new versions at the vault. Nothing about a value passes through
+// expects; the values are set once by hand from the devbox with `az keyvault secret set`, and
+// rotation is a new version at the vault plus an app recycle. Nothing about a value passes through
 // git, a workflow input, or an ARM parameter, so there is no @secure() parameter that can blank a
 // live credential and nothing for `what-if` to mask.
 //

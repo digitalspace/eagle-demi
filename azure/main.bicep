@@ -186,13 +186,11 @@ param syncNamespaces string = ''
 @description('Deploy the OpenShift secret sync app. False leaves that environment\'s OpenShift secrets to be set by hand.')
 param deploySecretSync bool = true
 
-// The secret rotator (modules/secret-rotator.bicep). Empty rotationTargets with renewSecrets false
-// is its kill switch: the app runs and writes nothing.
 @description('ROTATED_SECRETS for the rotator: comma list of name:stamper:probe, stamper frontdoor or apim, probe demi-edge, demi-gateway, analytics or none.')
-param rotationTargets string = ''
+param rotatorTargets string = ''
 
 @description('RENEW for the rotator: extend the expiry of every other enabled secret before it lapses.')
-param renewSecrets bool = false
+param rotatorRenew bool = false
 
 @description('EDGE_RULE_IDS for the rotator: comma list of the eagle-edge stampedgesecret rule ids.')
 param rotatorEdgeRuleIds string = ''
@@ -204,7 +202,7 @@ param rotatorProbeDemiUrl string = ''
 param rotatorProbeAnalyticsUrl string = ''
 
 @description('ISSUER_EXPIRY for the rotator: comma list of name=YYYY-MM-DD for issuer-owned secrets.')
-param issuerExpiry string = ''
+param rotatorIssuerExpiry string = ''
 
 // Deploys only where `pdf-title-worker-api-key` is also in optionalSecretNames, so the vault is
 // known to hold the key the app setting references.
@@ -980,12 +978,12 @@ module secretRotator './modules/secret-rotator.bicep' = if (!empty(apiFlexSubnet
     virtualNetworkSubnetId: apiFlexSubnetId
     keyVaultName: vaultName
     keyVaultUri: vaultUri
-    rotationTargets: rotationTargets
-    renew: renewSecrets
+    rotationTargets: rotatorTargets
+    renew: rotatorRenew
     edgeRuleIds: rotatorEdgeRuleIds
     probeDemiUrl: rotatorProbeDemiUrl
     probeAnalyticsUrl: rotatorProbeAnalyticsUrl
-    issuerExpiry: issuerExpiry
+    issuerExpiry: rotatorIssuerExpiry
     logsWorkspaceId: appLogsWorkspaceId
     actionGroupId: actionGroupId
     appInsightsConnectionString: appInsightsConnectionString

@@ -140,7 +140,7 @@ param trustedProxyIps string = ''
 
 // Empty keys every visitor arriving through Front Door on its egress address, which is one shared
 // anonymous bulk-download quota for all of them. src/utils/caller-ip.js.
-@description('Key Vault URI of the shared secret the eagle-edge rule set stamps as X-Edge-Secret. Not the value: the app resolves it through a Key Vault reference. Empty ignores the header.')
+@description('Key Vault URI of the shared secret the eagle-edge rule set stamps as X-Edge-Secret. Not the value: the app resolves it through a Key Vault reference, and it is also passed plain as EDGE_SECRET_URI. Empty ignores the header.')
 param edgeSecretUri string = ''
 
 @description('EDGE_GATE for src/http/router.js: empty off, log serves and writes one warn line per request that skipped Front Door, enforce answers 403.')

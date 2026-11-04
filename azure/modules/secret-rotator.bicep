@@ -1,5 +1,5 @@
-// Hourly timer (`secretRotatorHourly`) that rotates the self-minted secrets and renews the rest. Own
-// identity, not demi-identity: it holds Secrets Officer on the vault, and nothing else may run as it.
+// Hourly timer `secretRotatorHourly`: rotates the self-minted secrets and renews the rest as new vault
+// versions. Own identity, not demi-identity: it holds Secrets Officer, and nothing else runs as it.
 
 @description('Location for the rotator resources')
 param location string = resourceGroup().location
@@ -185,7 +185,7 @@ resource rotatorApp 'Microsoft.Web/sites@2024-11-01' = {
           }
         }
       }
-      // One instance: two runs at once would both read the same stage tag and both write the next version.
+      // One instance, so two runs never step the same secret at once.
       scaleAndConcurrency: {
         maximumInstanceCount: 1
         instanceMemoryMB: 2048
@@ -332,8 +332,8 @@ resource failedAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   }
 }
 
-// 26 h, so one missed hourly run or a slow cold start does not page. A window is not 26 h, so the
-// query narrows a 2-day window itself. Not gated: it fires if the code deploy lags this module.
+// Window choices skip 26 h; the P2D window intersected with ago(26h) gives 26 h. Fires on its first
+// evaluation if no run has logged: deploy the rotator code within the hour of this infra deploy.
 resource silentAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   name: 'demi-secret-rotator-silent-${environmentName}'
   location: location
