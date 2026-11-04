@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const groups = require('../repositories/groups');
 const projects = require('../repositories/projects');
 const { eagleReadUnder } = require('../helpers/eagle-acl');
+const { deriveAcls } = require('../helpers/acl-cascade');
 const { constrainToProject, DELETED_CEILING } = require('../repositories/documents');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
@@ -48,20 +49,29 @@ function stamped(ctx, row) {
 }
 
 /**
- * The row a DEMI write leaves, owned by DEMI so the Eagle mirror stops replacing it. The cascade
- * reads `sources.demi.read`, so a mirrored row keeps Eagle's own read, less `public`.
+ * The row a DEMI write leaves, owned by DEMI so the Eagle mirror stops replacing it. A mirrored row
+ * keeps Eagle's own read, less `public`, and its `read` is derived from that as the cascade does.
  */
-function ownedByDemi(row) {
+async function ownedByDemi(row) {
   if (row.sourceSystem === 'demi') return row;
   const eagleRead = row.sources && row.sources.eagle && row.sources.eagle.read;
   const own = (Array.isArray(eagleRead) ? eagleRead : []).filter((role) => role !== 'public');
   // No stored Eagle read, or only `public`, takes eagle-api's group ACL.
-  const read = own.length ? own : GROUP_READ;
-  return { ...row, sourceSystem: 'demi', sources: { ...row.sources, demi: { read } } };
+  const demiRead = own.length ? own : GROUP_READ;
+  const project = await projects.readForWrite(row.projectId);
+  // A group whose project is gone is capped by its own read, so a takeover never widens it.
+  const [acl] = deriveAcls([{ ...row, eagleRead: demiRead }], (project && project.read) || row.read);
+  return {
+    ...row,
+    read: acl.read,
+    isPublished: acl.isPublished,
+    sourceSystem: 'demi',
+    sources: { ...row.sources, demi: { read: demiRead } }
+  };
 }
 
 /** A DEMI write: owned by DEMI, stamped with the caller and the time. */
-const demiWrite = (ctx, row) => stamped(ctx, ownedByDemi(row));
+const demiWrite = async (ctx, row) => stamped(ctx, await ownedByDemi(row));
 
 /**
  * @param {{access: object, req: object}} ctx
