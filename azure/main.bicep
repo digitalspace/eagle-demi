@@ -186,6 +186,26 @@ param syncNamespaces string = ''
 @description('Deploy the OpenShift secret sync app. False leaves that environment\'s OpenShift secrets to be set by hand.')
 param deploySecretSync bool = true
 
+// The secret rotator (modules/secret-rotator.bicep). Empty rotationTargets with renewSecrets false
+// is its kill switch: the app runs and writes nothing.
+@description('ROTATED_SECRETS for the rotator: comma list of name:stamper:probe, stamper frontdoor or apim, probe demi-edge, demi-gateway, analytics or none.')
+param rotationTargets string = ''
+
+@description('RENEW for the rotator: extend the expiry of every other enabled secret before it lapses.')
+param renewSecrets bool = false
+
+@description('EDGE_RULE_IDS for the rotator: comma list of the eagle-edge stampedgesecret rule ids.')
+param rotatorEdgeRuleIds string = ''
+
+@description('PROBE_DEMI_URL for the rotator: DEMI /health/trust through Front Door.')
+param rotatorProbeDemiUrl string = ''
+
+@description('PROBE_ANALYTICS_URL for the rotator: analytics /events through Front Door.')
+param rotatorProbeAnalyticsUrl string = ''
+
+@description('ISSUER_EXPIRY for the rotator: comma list of name=YYYY-MM-DD for issuer-owned secrets.')
+param issuerExpiry string = ''
+
 // Deploys only where `pdf-title-worker-api-key` is also in optionalSecretNames, so the vault is
 // known to hold the key the app setting references.
 @description('Deploy the PDF title worker app. Needs pdf-title-worker-api-key in optionalSecretNames.')
@@ -616,11 +636,14 @@ var syncOutEagleClientSecretUri = contains(optionalSecretNames, 'eagle-sync-out-
 var edgeBanPolicySecretUri = contains(optionalSecretNames, 'edge-ban-policy')
   ? '${secretUriBase}edge-ban-policy'
   : ''
+// Plain URI, not a reference: the checker reads it and its -standby twin from the vault itself.
+var apimGatewaySecretUri = deployApim ? '${secretUriBase}${apimGatewaySecretName}' : ''
 
 var appInsightsConnectionString = deployFoundation ? observability!.outputs.connectionString : appInsightsExisting.properties.ConnectionString
 var appInsightsId = deployFoundation ? observability!.outputs.appInsightsId : appInsightsExisting.id
 var actionGroupId = deployFoundation ? observability!.outputs.actionGroupId : actionGroupExisting.id
 var appLogsWorkspaceName = deployFoundation ? observability!.outputs.workspaceName : logsWorkspaceExisting.name
+var appLogsWorkspaceId = deployFoundation ? observability!.outputs.workspaceId : logsWorkspaceExisting.id
 var appLogsWorkspaceCustomerId = deployFoundation ? observability!.outputs.workspaceCustomerId : logsWorkspaceExisting.properties.customerId
 
 var auditDcrEndpoint = deployFoundation ? auditLogs!.outputs.dcrEndpoint : auditDcrExisting.properties.endpoints.logsIngestion
@@ -942,6 +965,30 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     // outputs its versioned identifier. Empty until APIM is deployed, which disables the app's
     // gateway trust branch entirely.
     apimGatewaySecretRef: deployApim ? '@Microsoft.KeyVault(VaultName=${vaultName};SecretName=${apimGatewaySecretName})' : ''
+    apimGatewaySecretUri: apimGatewaySecretUri
+  }
+}
+
+// 7f. The Key Vault secret rotator. Its own Flex app and identity on the API's subnet, so it reaches
+// the vault through the private endpoint; the only app with write on the vault.
+module secretRotator './modules/secret-rotator.bicep' = if (!empty(apiFlexSubnetId)) {
+  name: 'deploy-secret-rotator'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    virtualNetworkSubnetId: apiFlexSubnetId
+    keyVaultName: vaultName
+    keyVaultUri: vaultUri
+    rotationTargets: rotationTargets
+    renew: renewSecrets
+    edgeRuleIds: rotatorEdgeRuleIds
+    probeDemiUrl: rotatorProbeDemiUrl
+    probeAnalyticsUrl: rotatorProbeAnalyticsUrl
+    issuerExpiry: issuerExpiry
+    logsWorkspaceId: appLogsWorkspaceId
+    actionGroupId: actionGroupId
+    appInsightsConnectionString: appInsightsConnectionString
   }
 }
 
@@ -1110,6 +1157,8 @@ output apimGatewayUrl string = (deployFoundation && deployApim && !empty(apiFlex
 output secretSyncAppName string = (deploySecretSync && !empty(syncNamespaces) && !empty(apiFlexSubnetId)) ? secretSync!.outputs.secretSyncAppName : ''
 // Empty where the worker is not deployed; the worker's deploy workflow publishes to this name.
 output pdfTitleWorkerAppName string = deployPdfTitleWorkerApp ? pdfTitleWorker!.outputs.pdfTitleWorkerAppName : ''
+// eagle-edge grants this principal write on its stampedgesecret rule sets.
+output secretRotatorPrincipalId string = !empty(apiFlexSubnetId) ? secretRotator!.outputs.principalId : ''
 // The VM every `az vm run-command invoke` addresses. Empty when the devbox is not deployed.
 output devboxName string = (deployDevbox && !empty(devboxSubnetId)) ? devbox!.outputs.devboxName : ''
 output searchEndpoint string = searchEndpoint

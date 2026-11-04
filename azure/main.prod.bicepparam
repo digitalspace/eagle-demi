@@ -137,6 +137,15 @@ param edgeBanMode = 'shadow'
 param edgeLogWorkspaceId = 'c63b7683-1773-4610-97b7-6326b860e9f0'
 param edgeBanRuleId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/ruleSets/rulesdemidocs/rules/banauto'
 
+// Secret rotator (modules/secret-rotator.bicep). Empty rotationTargets with renewSecrets false stops
+// every write. Rule ids = the stampedgesecret rule in each eagle-edge-prod rule set that stamps X-Edge-Secret.
+param rotationTargets = 'edge-secret:frontdoor:demi-edge,apim-gateway-secret:apim:demi-gateway,analytics-shared-header:apim:analytics,analytics-audit-header:apim:none'
+param renewSecrets = true
+param rotatorEdgeRuleIds = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourcegroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/rulesets/rulesdemi/rules/stampedgesecret,/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourcegroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/rulesets/rulesapi/rules/stampedgesecret,/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourcegroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/rulesets/rulesdemidocs/rules/stampedgesecret'
+param rotatorProbeDemiUrl = 'https://projects.eao.gov.bc.ca/demi/api/health/trust'
+param rotatorProbeAnalyticsUrl = 'https://projects.eao.gov.bc.ca/analytics/events'
+param issuerExpiry = ''
+
 // The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
 // so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
 // same-origin through rproxy. The one entry is the DEMI admin console's Front Door endpoint on

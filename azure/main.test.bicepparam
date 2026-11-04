@@ -206,6 +206,15 @@ param edgeBanMode = 'shadow'
 param edgeLogWorkspaceId = '0012cdde-c428-4b7f-9bcb-8e55ec9c35c7'
 param edgeBanRuleId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourcegroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/rulesets/rulesdemidocs/rules/banauto'
 
+// Secret rotator (modules/secret-rotator.bicep). Empty rotationTargets with renewSecrets false stops
+// every write. Rule ids = the stampedgesecret rule in each eagle-edge-test rule set that stamps X-Edge-Secret.
+param rotationTargets = 'edge-secret:frontdoor:demi-edge,apim-gateway-secret:apim:demi-gateway,analytics-shared-header:apim:analytics,analytics-audit-header:apim:none'
+param renewSecrets = true
+param rotatorEdgeRuleIds = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourcegroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/rulesets/rulesdemi/rules/stampedgesecret,/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourcegroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/rulesets/rulesapi/rules/stampedgesecret,/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourcegroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/rulesets/rulesdemidocs/rules/stampedgesecret'
+param rotatorProbeDemiUrl = 'https://test.projects.eao.gov.bc.ca/demi/api/health/trust'
+param rotatorProbeAnalyticsUrl = 'https://test.projects.eao.gov.bc.ca/analytics/events'
+param issuerExpiry = ''
+
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
 // Both client secrets are vault-only (`track-client-secret`, `role-sync-client-secret`).

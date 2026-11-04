@@ -21,6 +21,7 @@ const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bi
 const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
 const PDF_TITLE_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'pdf-title-worker.bicep'), 'utf8');
+const ROTATOR_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'secret-rotator.bicep'), 'utf8');
 const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
 const AI_SEARCH_PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'ai-search.prod.bicepparam'), 'utf8');
 
@@ -1087,6 +1088,117 @@ test('the secret sync is deployed only where it is asked for and namespaces are 
     'environment that asked for none');
 });
 
+// The value an app setting is given, skipping comment lines between name and value.
+const settingValue = (src, name) =>
+  new RegExp(`name: '${name}'\n(?:\\s+//.*\n)*\\s+value: (.+)$`, 'm').exec(src)?.[1];
+
+test('the rotator runs as its own identity with Secrets Officer on the vault and nothing more', () => {
+  assert.match(ROTATOR_MODULE, /^var identityName = 'demi-rotator-identity-\$\{environmentName\}'$/m);
+  assert.doesNotMatch(ROTATOR_MODULE, /^param identity/m,
+    'the rotator must not borrow demi-identity: that one is the API identity, and Officer on it ' +
+    'would hand every API caller path write on the vault');
+
+  const officer = /^resource secretsOfficer [\s\S]*?\n\}/m.exec(ROTATOR_MODULE);
+  assert.ok(officer, 'the rotator must be granted Key Vault Secrets Officer, or every mint and renew is 403');
+  assert.match(ROTATOR_MODULE, /^var keyVaultSecretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'$/m);
+  assert.match(officer[0], /^\s+scope: vault$/m,
+    'vault scope: the -standby names do not exist before the first mint, so a per-secret scope has nothing to attach to');
+  assert.match(officer[0], /^\s+principalId: rotatorIdentity\.properties\.principalId$/m);
+  assert.doesNotMatch(ROTATOR_MODULE, /00482a5a-887f-4fb3-b363-3b7fe8e74483/,
+    'Key Vault Administrator also grants role assignment on the vault');
+
+  assert.strictEqual(settingValue(ROTATOR_MODULE, 'AZURE_CLIENT_ID'), 'rotatorIdentity.properties.clientId',
+    'DefaultAzureCredential must pick the identity that holds the grant');
+  for (const policy of ['scm', 'ftp']) {
+    assert.match(ROTATOR_MODULE,
+      new RegExp(`basicPublishingCredentialsPolicies@[^']+' = \\{\\n\\s+parent: rotatorApp\\n\\s+name: '${policy}'\\n\\s+properties: \\{\\n\\s+allow: false`),
+      `${policy} basic auth must be off: a publish credential would let anyone deploy code that runs as the Officer`);
+  }
+  assert.match(ROTATOR_MODULE, /maximumInstanceCount: 1$/m,
+    'two instances would run the same stage at once and write two versions');
+});
+
+test('the rotator app carries every setting the rotator reads, each from its own param', () => {
+  const SETTINGS = [
+    ['KEY_VAULT_URI', 'keyVaultUri'],
+    ['ROTATED_SECRETS', 'rotationTargets'],
+    ['RENEW', "renew ? 'true' : ''"],
+    ['EDGE_RULE_IDS', 'edgeRuleIds'],
+    ['PROBE_DEMI_URL', 'probeDemiUrl'],
+    ['PROBE_ANALYTICS_URL', 'probeAnalyticsUrl'],
+    ['ISSUER_EXPIRY', 'issuerExpiry'],
+    ['WEBSITE_VNET_ROUTE_ALL', "'1'"],
+    ['WEBSITE_DNS_SERVER', "'10.53.244.4'"]
+  ];
+  for (const [name, value] of SETTINGS) {
+    assert.strictEqual(settingValue(ROTATOR_MODULE, name), value, `${name} must be ${value}`);
+  }
+
+  const block = moduleBlock('./modules/secret-rotator.bicep');
+  assert.ok(block, 'main.bicep must call the secret-rotator module');
+  for (const [arg, source] of [
+    ['keyVaultName', 'vaultName'], ['keyVaultUri', 'vaultUri'], ['rotationTargets', 'rotationTargets'],
+    ['renew', 'renewSecrets'], ['edgeRuleIds', 'rotatorEdgeRuleIds'], ['probeDemiUrl', 'rotatorProbeDemiUrl'],
+    ['probeAnalyticsUrl', 'rotatorProbeAnalyticsUrl'], ['issuerExpiry', 'issuerExpiry'],
+    ['logsWorkspaceId', 'appLogsWorkspaceId'], ['actionGroupId', 'actionGroupId']
+  ]) {
+    assert.match(block, new RegExp(`^\\s+${arg}: ${source}$`, 'm'), `main.bicep must pass ${arg}: ${source}`);
+  }
+  assert.match(MAIN, /^output secretRotatorPrincipalId string = !empty\(apiFlexSubnetId\) \? secretRotator!\.outputs\.principalId : ''$/m,
+    'eagle-edge reads this principal to grant it write on the stampedgesecret rule sets');
+});
+
+test('the rotator alerts match the lines the rotator logs', () => {
+  const rule = (name) => new RegExp(`^resource ${name} [\\s\\S]*?\\n\\}`, 'm').exec(ROTATOR_MODULE)?.[0] ?? '';
+  const failed = rule('failedAlert');
+  assert.match(failed, /Message contains "\[secret-rotator\] FAILED"/);
+  assert.match(failed, /Message contains "\[secret-rotator\] issuer-expiry"/);
+  assert.match(failed, /operator: 'GreaterThan'\n\s+threshold: 0/);
+
+  const silent = rule('silentAlert');
+  assert.match(silent, /where TimeGenerated > ago\(26h\) \| where Message contains "\[secret-rotator\] run finished"/);
+  assert.match(silent, /operator: 'LessThan'\n\s+threshold: 1/,
+    'the silence rule must fire on the ABSENCE of the run line');
+  for (const r of [failed, silent]) {
+    assert.match(r, /scopes: \[ logsWorkspaceId \]/);
+    assert.match(r, /actionGroups: \[ actionGroupId \]/);
+  }
+});
+
+// Plain URIs: a reference resolves to the value, and the checker would then GET a secret as a URL.
+test('the API app reads the edge and gateway secret URIs as plain vault URIs', () => {
+  assert.strictEqual(settingValue(API_MODULE, 'EDGE_SECRET_URI'), 'edgeSecretUri');
+  assert.strictEqual(settingValue(API_MODULE, 'APIM_GATEWAY_SECRET_URI'), 'apimGatewaySecretUri');
+  assert.match(MAIN, /^\s+apimGatewaySecretUri: apimGatewaySecretUri$/m);
+  assert.match(MAIN, /^var apimGatewaySecretUri = deployApim \? '\$\{secretUriBase\}\$\{apimGatewaySecretName\}' : ''$/m,
+    'the URI must name the same secret the gateway stamps, and be empty where APIM is not deployed');
+});
+
+for (const [env, params, sub, rg, profile, host] of [
+  ['test', TEST_PARAMS, '7897ceb1-9a86-4639-87d7-7f9ff67142b3', 'c4b0a8-test-rg', 'eagle-edge-test', 'test.projects.eao.gov.bc.ca'],
+  ['prod', PROD_PARAMS, 'be5924ac-1083-4a1b-be92-7b444882cfd9', 'rg-eagle-public-prod', 'eagle-edge-prod', 'projects.eao.gov.bc.ca']
+]) {
+  test(`${env}: the rotator list parses and points at this environment's edge and host`, () => {
+    const targets = stringParam(params, 'rotationTargets', '').split(',').map((t) => t.split(':'));
+    assert.deepStrictEqual(targets.map(([name]) => name),
+      ['edge-secret', 'apim-gateway-secret', 'analytics-shared-header', 'analytics-audit-header']);
+    for (const t of targets) {
+      assert.strictEqual(t.length, 3, `${t.join(':')} is not name:stamper:probe`);
+      assert.ok(['frontdoor', 'apim'].includes(t[1]), `${t[0]}: unknown stamper ${t[1]}`);
+      assert.ok(['demi-edge', 'demi-gateway', 'analytics', 'none'].includes(t[2]), `${t[0]}: unknown probe ${t[2]}`);
+    }
+
+    // A rule left off the list keeps stamping the old value after retire, and that path 401s.
+    const base = `/subscriptions/${sub}/resourcegroups/${rg}/providers/Microsoft.Cdn/profiles/${profile}/rulesets`;
+    assert.deepStrictEqual(stringParam(params, 'rotatorEdgeRuleIds', '').split(','),
+      ['rulesdemi', 'rulesapi', 'rulesdemidocs'].map((rs) => `${base}/${rs}/rules/stampedgesecret`));
+
+    assert.strictEqual(stringParam(params, 'rotatorProbeDemiUrl', ''), `https://${host}/demi/api/health/trust`);
+    assert.strictEqual(stringParam(params, 'rotatorProbeAnalyticsUrl', ''), `https://${host}/analytics/events`);
+    assert.strictEqual(boolParam(params, 'renewSecrets', false), true);
+  });
+}
+
 // The access curtain's password, same shape as EDGE_SECRET above and the same reason for a
 // text-structural guard: `az bicep build` exits 0 with the app setting deleted, and the failure is
 // silent in the wrong direction — an empty ACCESS_GATE_PASSWORD makes POST /api/gate answer 404, so
@@ -1560,6 +1672,7 @@ const FOUNDATION_MODULES = [
 const APP_MODULES = [
   ['apiFunctionFlex', './modules/api-function-flex.bicep'],
   ['secretSync', './modules/secret-sync.bicep'],
+  ['secretRotator', './modules/secret-rotator.bicep'],
   ['availability', './modules/availability.bicep'],
   ['devbox', './modules/devbox.bicep']
 ];

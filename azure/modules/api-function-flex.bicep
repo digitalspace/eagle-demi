@@ -252,6 +252,9 @@ param announceUpdatesSchedule string = ''
 @secure()
 param apimGatewaySecretRef string = ''
 
+@description('Versionless vault URI of apim-gateway-secret, read by the app itself with its -standby twin. Empty turns the vault read off.')
+param apimGatewaySecretUri string = ''
+
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty registers no timer.')
 param syncTeamsSchedule string = ''
 
@@ -930,6 +933,16 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'APIM_GATEWAY_SECRET'
           value: apimGatewaySecretRef
+        }
+        // Plain URIs, not references: the checker reads the current and -standby values itself, so
+        // a rotation is accepted without the settings rewrite a Flex app needs to refetch a reference.
+        {
+          name: 'APIM_GATEWAY_SECRET_URI'
+          value: apimGatewaySecretUri
+        }
+        {
+          name: 'EDGE_SECRET_URI'
+          value: edgeSecretUri
         }
         // No key: AI Search has disableLocalAuth, so the app authenticates with the same identity
         // it uses for Cosmos. Absent endpoint degrades the chunk dataset to empty results.
