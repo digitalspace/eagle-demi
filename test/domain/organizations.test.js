@@ -209,6 +209,7 @@ test('organization domain', async (t) => {
     const { result } = await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
 
     assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(upsert.mock.callCount(), 2);
     assert.deepStrictEqual(logged.filter(message => message.includes('took over')), []);
   });
 
