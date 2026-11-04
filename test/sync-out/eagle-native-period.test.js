@@ -718,6 +718,17 @@ test('sync-out of DEMI-native comment periods', async (t) => {
     assert.deepStrictEqual(store.get(EAGLE_ID).read, ['staff']);
   });
 
+  await t.test('an Eagle edit still showing staff never undoes a DEMI publish', async (tt) => {
+    const store = wireStore(tt, [takenOver({ eagleRead: ['staff', 'sysadmin'], own: PUBLIC_ACL, read: PUBLIC_ACL })]);
+    wireParent(tt);
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, instructions: 'Eagle edit' });
+
+    const row = store.get(EAGLE_ID);
+    assert.ok(row.read.includes('public'), 'the stored read stays public');
+    assert.deepStrictEqual(row.sources.demi.read, PUBLIC_ACL);
+  });
+
   await t.test('an Eagle publish never republishes a taken-over period DEMI deleted', async (tt) => {
     const store = wireStore(tt, [{ ...takenOver({ eagleRead: ['staff', 'sysadmin'], read: ['staff'] }), isDeleted: true }]);
     wireParent(tt);

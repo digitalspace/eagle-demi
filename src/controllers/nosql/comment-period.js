@@ -143,13 +143,13 @@ function eagleOwnedOnto(current, eagleId, doc, read) {
 
 /** The read an unsent taken-over row stores from Eagle's delete, unpublish or publish; null when it keeps its own. */
 function echoedRead(current, doc, read) {
+  if (doc.isDeleted === true) return constrainToProject(read, current.read);
+  // Only a level change Eagle just made: an unrelated Eagle edit never undoes a DEMI publish or unpublish.
   const isPublic = acl => eagleBaseAcl(acl).includes('public');
-  if (doc.isDeleted === true || (current.read.includes('public') && !read.includes('public'))) {
-    return constrainToProject(read, current.read);
-  }
-  // Only a publish Eagle just made: an unrelated Eagle edit never undoes a DEMI unpublish.
-  const published = isPublic(doc.read) && !isPublic(current.sources.eagle && current.sources.eagle.read);
-  return published && current.isDeleted !== true ? read : null;
+  const was = isPublic(current.sources.eagle && current.sources.eagle.read);
+  const now = isPublic(doc.read);
+  if (was && !now) return constrainToProject(read, current.read);
+  return !was && now && current.isDeleted !== true ? read : null;
 }
 
 /** The higher of two comment counts, ignoring one that is not a count. */
