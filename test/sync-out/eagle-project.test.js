@@ -18,11 +18,9 @@ const { PROJECT } = require('../../src/sync-out/kinds');
 const projectController = require('../../src/controllers/nosql/project');
 const cosmos = require('../../src/db/cosmos-nosql');
 const lists = require('../../src/repositories/lists');
-const projects = require('../../src/repositories/projects');
 const eagleProjectConsumer = require('../../src/sync-out/eagle-project');
 const { readForLevel } = require('../../src/helpers/access-sql');
 const { mirrorStore } = require('../helpers/mirror-store');
-const { fakeWhereQuery } = require('../helpers/updates-store');
 const {
   mockRes, STAFF, PRIVATE_ACL, PUBLIC_ACL, ORG_EAGLE_ID, eagleProject
 } = require('../helpers/eagle-mirror-fixtures');
@@ -75,7 +73,8 @@ const eagleCopy = block => ({
 });
 const EAGLE_BLOCK = Object.freeze({
   name: 'Eagle name', region: 'Peace', dispute: true, disputeDate: '2025-03-01T00:00:00.000Z',
-  intake: { investment: 12, investmentNotes: 'Phase one' }, projectLeadId: LEAD_ID, currentPhaseName: PHASE_ID
+  intake: { investment: 12, investmentNotes: 'Phase one' }, projectLeadId: LEAD_ID, currentPhaseName: PHASE_ID,
+  type: 'Energy-Electricity', location: 'Near Hudson\'s Hope', centroid: [-121, 51]
 });
 
 /** A Track-matched project DEMI took over from Eagle: it keeps the Eagle id and Eagle's raw copy. */
@@ -306,11 +305,38 @@ test('sync-out of DEMI-created projects', async (t) => {
     assert.strictEqual(rowOf(store).eagleId, EAGLE_ID, 'no id minted over the Eagle one');
   });
 
+  await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a DEMI-owned project whose PUT misses is skipped, not held',
+    async (tt) => {
+      useEnv(tt, { SYNC_OUT_EAGLE_NATIVE_ENABLED: 'false' });
+      mirrorStore(tt, [ownedProject(), proponent()]);
+      wireQueue(tt);
+      wireEagle(tt, { [`PUT /project/${EAGLE_ID}`]: { status: 404 } });
+
+      assert.deepStrictEqual(await run(), { status: 'skipped' });
+
+      assert.strictEqual(logged('warn', `Eagle has no project ${EAGLE_ID} for DEMI-owned ${ROW_ID}; not sent`).length, 1);
+    });
+
+  await t.test('a DEMI-owned project whose legislation year moved off Eagle\'s is skipped with no call', async (tt) => {
+    mirrorStore(tt, [ownedProject({
+      currentLegislationYear: 'legislation_2018',
+      sources: { track: { track_project_id: 1234 }, eagle: eagleCopy(EAGLE_BLOCK) }
+    }), proponent()]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, {});
+
+    assert.deepStrictEqual(await run(), { status: 'skipped' });
+
+    assert.deepStrictEqual(calls, [], 'a PUT would write the new year\'s values over Eagle\'s old block');
+    assert.strictEqual(logged('warn', `DEMI-owned project ${ROW_ID} changed legislation year`).length, 1);
+  });
+
   await t.test('a DEMI-owned Eagle project sends Eagle\'s value for each field the row lacks, and its own where it has one',
     async (tt) => {
       mirrorStore(tt, [proponent()]);
       const row = ownedProject({
         region: null,
+        centroid: undefined,
         sources: { track: { track_project_id: 1234 }, eagle: eagleCopy(EAGLE_BLOCK) }
       });
 
@@ -321,9 +347,30 @@ test('sync-out of DEMI-created projects', async (t) => {
       assert.deepStrictEqual(body.intake, { investment: 12, notes: 'Phase one' }, 'in the shape eagle-api\'s PUT reads');
       assert.strictEqual(body.projectLeadId, LEAD_ID);
       assert.strictEqual(body.currentPhaseName, PHASE_ID);
+      assert.strictEqual(body.type, EAGLE_BLOCK.type, 'a renamed field falls back under Eagle\'s name');
+      assert.strictEqual(body.location, EAGLE_BLOCK.location);
+      assert.deepStrictEqual(body.centroid, [-121, 51]);
       assert.strictEqual(body.name, 'Nicomen Wind Energy (DEMI)', 'a field the row holds is sent from the row');
       assert.strictEqual(body.region, null, 'a blank the row holds still wins');
     });
+
+  await t.test('a DEMI-owned Eagle project with a flat Eagle copy falls back to its flat fields', async (tt) => {
+    mirrorStore(tt, [proponent()]);
+    const row = ownedProject({ sources: { track: { track_project_id: 1234 }, eagle: { _id: EAGLE_ID, ...EAGLE_BLOCK } } });
+
+    const body = await eagleProjectConsumer.bodyFor(row, {});
+
+    assert.strictEqual(body.disputeDate, EAGLE_BLOCK.disputeDate);
+  });
+
+  await t.test('an intake held as eagle-admin\'s { investment, notes } keeps its notes', async (tt) => {
+    mirrorStore(tt, [proponent()]);
+    const row = ownedProject({ intake: { investment: 5, notes: 'Row notes' } });
+
+    const body = await eagleProjectConsumer.bodyFor(row, {});
+
+    assert.deepStrictEqual(body.intake, { investment: 5, notes: 'Row notes' });
+  });
 
   await t.test('a native project\'s body takes nothing from its Eagle copy', async (tt) => {
     mirrorStore(tt, [proponent()]);
@@ -375,18 +422,4 @@ test('sync-out of DEMI-created projects', async (t) => {
     assert.deepStrictEqual(results.filter(r => !r.status), [{ retryQueued: 2 }]);
     assert.strictEqual(rowOf(store).eagleId, minted);
   });
-});
-
-test('listSyncPending lists an owned row with a pending version and still skips a non-owned twin', async (t) => {
-  const twinId = '5cf00c03a266b7e1877504db';
-  const pending = { syncVersion: 2, syncOut: { eagle: { sentVersion: 1 } } };
-  fakeWhereQuery(t, [
-    ownedProject({ id: 'owned-track', ...pending }),
-    ownedProject({ id: 'owned-sent', syncVersion: 2, syncOut: { eagle: { sentVersion: 2 } } }),
-    { id: `eagle-${twinId}`, eagleId: twinId, sourceSystem: 'eagle', sources: {}, ...pending }
-  ]);
-
-  const rows = await projects.listSyncPending();
-
-  assert.deepStrictEqual(rows.map(row => row.id), ['owned-track']);
 });

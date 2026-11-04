@@ -36,16 +36,24 @@ const pathOf = eagleId => `/project/${encodeURIComponent(eagleId)}`;
 
 const takenOver = row => isDemiOwnedProject(row) && Boolean(row.eagleId);
 
+const eagleCopyOf = row => (row.sources && row.sources.eagle) || {};
+
+// eagle-api's PUT writes Eagle's current block and takes the year from the create only.
+const movedYear = (row) => {
+  const eagleYear = eagleCopyOf(row).currentLegislationYear;
+  return Boolean(row.currentLegislationYear && eagleYear) && row.currentLegislationYear !== eagleYear;
+};
+
 /** The block eagle-api's PUT rewrites: the current `legislation_<year>` of Eagle's copy, else its flat fields. */
 function eagleBlockOf(row) {
-  const eagle = (row.sources && row.sources.eagle) || {};
+  const eagle = eagleCopyOf(row);
   const block = eagle[eagle.currentLegislationYear];
   return block && typeof block === 'object' ? block : eagle;
 }
 
-// eagle-api stores `intake.investmentNotes` but its PUT reads `intake.notes`, so a round trip would clear the notes.
+// eagle-api stores `intake.investmentNotes` but its PUT reads `intake.notes`; a row may hold either shape.
 const putIntake = intake => (intake && typeof intake === 'object'
-  ? { investment: intake.investment, notes: intake.investmentNotes }
+  ? { investment: intake.investment, notes: intake.investmentNotes !== undefined ? intake.investmentNotes : intake.notes }
   : intake);
 
 async function bodyFor(row, logFields) {
@@ -99,12 +107,22 @@ async function send(row, { update }) {
   refuseStray(row);
   // Held, not skipped: a skip records the version as sent, so the row would never go once the switch is on.
   if (!row.eagleId && !settings.eagle.nativeEnabled) return { status: 'held' };
+  if (takenOver(row) && movedYear(row)) {
+    logger.warn(`[sync-out eagle] DEMI-owned project ${row.id} changed legislation year; Eagle PUT cannot carry it, not sent`,
+      logFields);
+    return { status: 'skipped' };
+  }
   const body = await bodyFor(row, logFields);
   if (takenOver(row)) logger.info('[sync-out eagle] sending DEMI-owned Eagle project', logFields);
 
   if (row.eagleId && await put(s, String(row.eagleId), body, logFields)) {
     await syncLevel(s, pathOf(row.eagleId), row, logFields);
     return { status: 'sent', eagleId: String(row.eagleId) };
+  }
+  // Skipped, not held: Eagle made this id, so a retry can never create it and would loop.
+  if (takenOver(row)) {
+    logger.warn(`[sync-out eagle] Eagle has no project ${row.eagleId} for DEMI-owned ${row.id}; not sent`, logFields);
+    return { status: 'skipped' };
   }
   if (!settings.eagle.nativeEnabled) return { status: 'held' };
 
@@ -115,7 +133,7 @@ async function send(row, { update }) {
     put: (eagleId, fields) => put(s, eagleId, body, fields),
     // A PUT naming a year whose block the Eagle project lacks answers 404, so the year rides the create only.
     ...(row.legislationYear !== undefined ? { postOnly: { legislationYear: row.legislationYear } } : {}),
-    // A taken-over project holds the id Eagle made, so a PUT miss ends as a skip, never a POST.
+    // An Eagle id staff linked after this delivery read the row is not one sync-out minted: skip, never POST.
     mintedOnly: true,
     mirrorRowId: eagleOnlyProjectId,
     unknownId: () => ({ line: 'Eagle stored the project under an unknown id; find it by name', fields: { name: body.name } }),

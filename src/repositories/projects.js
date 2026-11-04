@@ -132,6 +132,7 @@ async function listNative() {
 }
 
 // isDemiOwnedProject in SQL: a taken-over row with an Eagle id; an `eagle-<id>` twin without the marker stays out.
+// `demiOwnedAt` is an ISO string or absent, so the string test matches the JS `hasValue`.
 const DEMI_OWNED_EAGLE_PROJECT = 'IS_STRING(c.demiOwnedAt) AND c.demiOwnedAt != \'\' AND IS_STRING(c.eagleId) AND c.eagleId != \'\'';
 
 /**
