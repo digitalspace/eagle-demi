@@ -1,10 +1,12 @@
 'use strict';
 
+const { setTimeout: sleep } = require('node:timers/promises');
+
 const PROBE_TIMEOUT_MS = 15000;
 
 /** True when stamper and checker agree on the live value, seen through the public path. */
-// analytics passes on anything but 401: the empty body is refused only after the header was accepted.
-function createProbe({ demiUrl, analyticsUrl, fetchImpl = fetch } = {}) {
+// Retries cover a DEMI cold start (~50 s): one slow first request must not count as a rejection.
+function createProbe({ demiUrl, analyticsUrl, fetchImpl = fetch, attempts = 3, delayMs = 20000 } = {}) {
   const call = async (url, init) => {
     if (!url) return null;
     try {
@@ -25,6 +27,7 @@ function createProbe({ demiUrl, analyticsUrl, fetchImpl = fetch } = {}) {
     none: async () => true,
     'demi-edge': () => trust('edge'),
     'demi-gateway': () => trust('gateway'),
+    // The empty body is refused only after the shared header was accepted, so anything but 401 passes.
     analytics: async () => {
       const res = await call(analyticsUrl, { method: 'POST', body: '' });
       return Boolean(res) && res.status !== 401;
@@ -32,9 +35,13 @@ function createProbe({ demiUrl, analyticsUrl, fetchImpl = fetch } = {}) {
   };
 
   return async function probe(kind) {
-    const run = probes[kind];
-    if (!run) throw new Error(`unknown probe ${kind}`);
-    return run();
+    const once = probes[kind];
+    if (!once) throw new Error(`unknown probe ${kind}`);
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      if (await once()) return true;
+      if (attempt < attempts) await sleep(delayMs);
+    }
+    return false;
   };
 }
 

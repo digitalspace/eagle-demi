@@ -2,12 +2,8 @@
 
 let credential = null;
 
-/**
- * The credential for this process. Inside an App Service or Functions host that carries a
- * user-assigned identity (the platform sets IDENTITY_ENDPOINT; a VM such as the devbox does not),
- * go straight to that identity. Everywhere else, including the devbox and local `az login`, keep
- * DefaultAzureCredential's chain.
- */
+/** The credential for this process. A host with IDENTITY_ENDPOINT (App Service, Functions; not the
+ * devbox VM) goes straight to its user-assigned identity; elsewhere the default chain. */
 function createCredential(env = process.env) {
   const identity = require('@azure/identity');
   const clientId = env.AZURE_CLIENT_ID;
@@ -16,13 +12,8 @@ function createCredential(env = process.env) {
   return new identity.DefaultAzureCredential(clientId ? { managedIdentityClientId: clientId } : undefined);
 }
 
-/**
- * An Entra token for one scope, from the app's user-assigned identity.
- *
- * One credential per process, several scopes: the audit writer publishes to Azure Monitor, the
- * admin read routes query Log Analytics and ARM. Required lazily, matching src/db/cosmos-nosql.js:
- * importing this module must not pull in @azure/identity where nothing calls Azure.
- */
+/** An Entra token for one scope from the one process credential. @azure/identity loads lazily so
+ * importing this module costs nothing where nothing calls Azure. */
 async function getToken(scope) {
   if (!credential) credential = createCredential();
   // The credential caches and refreshes internally, so this is not a network call per use.
@@ -32,7 +23,11 @@ async function getToken(scope) {
 
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const FRONT_DOOR_API_VERSION = '2024-02-01';
-const FRONT_DOOR_RULE_ID = /^\/subscriptions\/[^/]+\/resourceGroups\/[^/]+\/providers\/Microsoft\.Cdn\/profiles\/[^/]+\/ruleSets\/[^/]+\/rules\/[^/]+$/i;
+const AZURE_REQUEST_TIMEOUT_MS = 30000;
+// Plain ARM name characters only: `.`/`..` segments, `?`, `#` and `%` would change the URL the token goes to.
+const SEGMENT = String.raw`(?!\.{1,2}(?:/|$))[A-Za-z0-9._()-]+`;
+const FRONT_DOOR_RULE_ID = new RegExp(String.raw`^/subscriptions/${SEGMENT}/resourceGroups/${SEGMENT}` +
+  String.raw`/providers/Microsoft\.Cdn/profiles/${SEGMENT}/ruleSets/${SEGMENT}/rules/${SEGMENT}$`, 'i');
 
 /** One REST call with a bearer token for `scope` from the given TokenCredential; returns the fetch Response. */
 async function azureRequest(credential, scope, method, url, body) {
@@ -40,7 +35,8 @@ async function azureRequest(credential, scope, method, url, body) {
   return fetch(url, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(AZURE_REQUEST_TIMEOUT_MS)
   });
 }
 

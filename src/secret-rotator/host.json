@@ -1,6 +1,5 @@
 {
   "version": "2.0",
-  "_comment": "Host settings for the demi-secret-rotator-<env> app only. One timer trigger, no queue or HTTP triggers.",
   "logging": {
     "logLevel": {
       "default": "Warning",
