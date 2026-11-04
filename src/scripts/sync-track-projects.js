@@ -15,7 +15,7 @@ const {
 } = require('../merge/project');
 const { deriveAssessments } = require('../merge/assessments');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
-const { TWIN_CARRY_FIELDS } = require('../ownership/project');
+const { TWIN_CARRY_FIELDS, DEMI_OWNED_AT } = require('../ownership/project');
 const { clientToken, fetchTrackProjects, trackApiToExtract } = require('../seed/sources');
 const config = require('../config');
 const linksRepository = require('../repositories/links');
@@ -189,6 +189,27 @@ async function syncProjects(apiProjects, opts = {}) {
     if (written.status !== 'saved') {
       logger.warn('[track-projects] project created behind this run, left for the next', { id });
     }
+    return written.status;
+  };
+
+  /** Hand the twin's ownership to the Track row that took it, or sync-out sends both to one Eagle project. */
+  const disownTwin = async (twinId) => {
+    const written = await writeGuarded({
+      existing: await repo.getById(systemAccess(), twinId),
+      reread: reread(twinId),
+      attempt: async (twin) => {
+        if (!isDemiOwnedProject(twin)) return { status: 'none' };
+        const row = Object.fromEntries(Object.entries(twin)
+          .filter(([k]) => k !== DEMI_OWNED_AT && !SYNC_STATE_FIELDS.includes(k)));
+        await repo.upsert(row, { etag: twin._etag });
+        return { status: 'saved' };
+      },
+      onLost: lost(twinId)
+    });
+    if (written.status === 'conflict') {
+      summary.failures++;
+      logger.error(`[track-projects] project ${twinId} still owned beside its Track row`, { status: written.status });
+    }
   };
 
   const now = opts.now || new Date().toISOString();
@@ -230,7 +251,7 @@ async function syncProjects(apiProjects, opts = {}) {
         rekeyed.add(String(relink.eagleId));
         await heal(relink);
         // The twin as stored now, not at run start: a tags PUT or a narrowing since must carry.
-        await insert(id, async () => {
+        const inserted = await insert(id, async () => {
           const twin = (live && await repo.getById(systemAccess(), relink.id)) || relink;
           const merged = mergeTrackProject(track, eagleOf(twin), mergeOpts);
           // The Track row is a new record: it must not inherit the twin's sync-out state.
@@ -240,6 +261,7 @@ async function syncProjects(apiProjects, opts = {}) {
           if (!isDemiOwnedProject(twin)) return withDerived(row, twin);
           return carryDelete(carryDemiOnlyFields(row, twin, TWIN_CARRY_FIELDS), twin);
         });
+        if (inserted === 'saved') await disownTwin(relink.id);
         continue;
       }
 
