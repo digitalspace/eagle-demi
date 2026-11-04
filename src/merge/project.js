@@ -222,6 +222,9 @@ function holdOwnedFields(merged, existing, { drop = [], switchTo } = {}) {
       if (hasValue(existing[target])) merged[target] = existing[target];
     }
   }
+  // Track's coordinates still win the centroid; else the stored one stands, Eagle's only where it has none.
+  const trackCentroid = normalizeCentroid(merged.sources && merged.sources.track, null);
+  if (!trackCentroid && Array.isArray(existing.centroid)) merged.centroid = [...existing.centroid];
   if (switchTo) liftOwnedBlock(merged, switchTo);
 }
 

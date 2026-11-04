@@ -1276,6 +1276,13 @@ test('carryDemiOnlyFields', async (t) => {
       "Eagle's value fills only a field the stored row has none for");
   });
 
+  await t.test("a DEMI-owned Eagle-only project keeps its stored centroid over Eagle's", () => {
+    const stored = { id: 'eagle-x', demiOwnedAt: OWNED_AT, centroid: [-125, 55], read: ['staff'] };
+    const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207, { centroid: [-120, 50] }), OPTS);
+
+    assert.deepStrictEqual(carryDemiOnlyFields(rebuilt, stored).centroid, [-125, 55]);
+  });
+
   await t.test('a DEMI-owned project Eagle deleted stays deleted when the feed lists it again', () => {
     const stored = {
       id: '207', demiOwnedAt: OWNED_AT, isDeleted: true, read: ['staff', 'sysadmin'],
