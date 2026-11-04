@@ -288,6 +288,17 @@ test('DELETE /projects/:id', async (t) => {
     assert.ok(!seen.writes[0].item.read.includes('public'));
   });
 
+  await t.test('takes the project over, so a later Eagle push keeps DEMI\'s values', async () => {
+    projectReadForWriteFromGet(t);
+    const seen = stage(t, storedEagleProject({ sector: 'Energy' }));
+
+    await del();
+    const after = stage(t, seen.written);
+    await push(eagleProject({ sector: 'Mining' }));
+
+    assert.strictEqual(after.written.sector, 'Energy');
+  });
+
   await t.test('an unknown project is a 404', async () => {
     t.mock.method(projects, 'getById', async () => null);
 
@@ -312,13 +323,15 @@ test('PUT /projects/:id/level refuses a deleted project', async (t) => {
 });
 
 test('PUT /projects/:id/restore', async (t) => {
+  let queued;
   t.beforeEach(() => {
     projectReadForWriteFromGet(t);
-    t.mock.method(syncOut, 'enqueue', async () => ['eagle']);
+    queued = [];
+    t.mock.method(syncOut, 'enqueue', async (row) => { queued.push(row); return ['eagle']; });
   });
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('clears isDeleted, keeps read at staff; setLevel then answers 200, not 409', async () => {
+  await t.test('clears isDeleted, so /level no longer refuses it, and keeps read at staff', async () => {
     const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY }));
 
     const res = await restore();
@@ -326,14 +339,26 @@ test('PUT /projects/:id/restore', async (t) => {
     assert.strictEqual(res.statusCode, 200);
     assert.ok(!('isDeleted' in seen.written));
     assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read, 'widening stays with /level');
+  });
 
-    const after = stage(t, seen.written);
-    const level = mockRes();
-    await projectController.setLevel({
-      params: { id: '207' }, query: {}, user: STAFF, body: { level: 4, confirm: true, reason: 'republish' }
-    }, level);
-    assert.strictEqual(level.statusCode, 200);
-    assert.ok(after.written.read.includes('public'));
+  await t.test('raises syncVersion and queues the project for sync-out', async () => {
+    const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY, syncVersion: 4 }));
+
+    await restore();
+
+    assert.strictEqual(seen.written.syncVersion, 5);
+    assert.deepStrictEqual(queued.map(row => row.id), ['207']);
+  });
+
+  await t.test('clears the DEMI delete on the Eagle-only twin, without widening it', async () => {
+    const twin = { id: TWIN_ID, eagleId: PROJECT_EAGLE_ID, isDeleted: true, ...STAFF_ONLY, sources: { eagle: {} } };
+    const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY }), { twin });
+
+    await restore();
+
+    const twinWrite = seen.writes.find(w => w.item.id === TWIN_ID);
+    assert.ok(!('isDeleted' in twinWrite.item), 'else PUT /level on the twin answers 409 for good');
+    assert.deepStrictEqual(twinWrite.item.read, STAFF_ONLY.read);
   });
 
   await t.test('takes over an Eagle delete, so the next Eagle push carrying the flag leaves it live', async () => {

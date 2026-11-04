@@ -1253,11 +1253,23 @@ paths:
         `pinsPublished`); there are no pin routes. `reviewExtensions` and `reviewSuspensions` in
         the body are ignored; use `/api/projects/{id}/extensions`. `projectCAC`,
         `projectCACPublished` and `cacEmail` in the body are ignored; use `/api/projects/{id}/cac`.
-        On a project mirrored from Eagle, a body that changes an Eagle field (for example `sector`
-        or `region`) takes the project over: from then on Eagle pushes no longer overwrite DEMI's
-        values, and DEMI sends its edits to Eagle. On a project created in DEMI or taken over, a
-        body that changes a stored value sets `dateUpdated` unless it sends one, and sync-out
-        queues the project for Eagle.
+        On a project mirrored from Eagle, a body that changes an Eagle field takes the project
+        over: from then on Eagle pushes do not overwrite DEMI's values. Eagle fields are the ones
+        only Eagle supplies, such as `eaStatus`, `eacDecision`, `decisionDate`, `currentPhaseName`,
+        `phaseHistory`, `legislation`, `legislationYear`, `sector`, `commodity`, `region`, the
+        lead and EPD contacts, and the rest of the Eagle staff fields. On a project with no Track
+        record, `name`, `description`, `projectType`, `abbreviation`, `address`, `proponentName`,
+        `projectState`, `isActive` and `centroid` count too. Sending a stored value back unchanged
+        takes nothing over. An `eagle-<eagleId>` copy that sits beside its Track project, or a
+        project with no stored Eagle record, is never taken over.
+        On a project created in DEMI or taken over, a body that changes a stored value sets
+        `dateUpdated` unless it sends one, and sync-out queues the project for Eagle; on a
+        taken-over project, `tags` and `pins` alone are not such a change. Once project sync-out
+        is on, it sends `name`, `description`, `projectType`, `abbreviation`, `address`,
+        `eaStatus`, `eaStatusDate`, `decisionDate`, `currentPhaseName`, `eacDecision`,
+        `CEAAInvolvement`, `CEAALink`, `build`, `sector`, `commodity`, `region`, `projectLeadId`,
+        `responsibleEPDId`, `substantially`, `substantiallyDate`, `intake`, `dispute` and
+        `disputeDate`; other Eagle fields stay in DEMI.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1298,7 +1310,8 @@ paths:
             sends another `legislationYear` (including null) or another `legislation` label,
             including when the project moved under that Act after this request read it. Or the
             pin list would turn public while it holds an unpublished organization: publishing the
-            list checks every pin, adding to a published list checks the added ones. Nothing is
+            list checks every pin, adding to a published list checks the added ones. Or the body
+            changes `eagleId` on a project mirrored from Eagle or taken over from it. Nothing is
             written.
         '500':
           description: >-
@@ -1311,8 +1324,8 @@ paths:
         reconcile; anonymous reads answer 404, and the index row, documents and engagement narrow
         with it. Repeating the call on a deleted project writes nothing and records no second audit
         row; it only retries a cascade the first call left owed. A delete takes a project mirrored
-        from Eagle over, so an Eagle push no longer undoes or changes it. Undo it with
-        `PUT /api/projects/{id}/restore`.
+        from Eagle over, so an Eagle push does not undo or change it; Eagle's own copy stays live.
+        Undo it with `PUT /api/projects/{id}/restore`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1347,9 +1360,11 @@ paths:
       summary: Restore a deleted project
       description: >-
         Drop the project's `isDeleted` flag. `read[]` stays at staff, where the delete left it;
-        publish it again with `PUT /api/projects/{id}/level`. A project mirrored from Eagle is
-        taken over, so an Eagle push that still carries its delete does not delete it again.
-        Audited as `project.restore`, and sync-out queues the project for Eagle.
+        publish it again with `PUT /api/projects/{id}/level`. The `eagle-<eagleId>` copy beside a
+        Track project loses the delete DEMI gave it too. A project mirrored from Eagle is taken
+        over (under the same rules as `PUT /api/projects/{id}`), so an Eagle push that still
+        carries its delete does not delete it again. Audited as `project.restore`. A project
+        created in DEMI or taken over is queued for sync-out; any other project is not.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1371,7 +1386,9 @@ paths:
         '409':
           description: The project is not deleted. Nothing is written.
         '503':
-          description: The row kept changing under the write; send the request again.
+          description: >-
+            The project or its `eagle-<eagleId>` copy kept changing under the write; send the
+            request again.
 
   /api/projects/{id}/summary:
     get:
@@ -1472,9 +1489,10 @@ paths:
         `record.widen` or `record.narrow`, and the change cascades to the project's documents.
         Pulling a project back from level 4 needs the `sysadmin` role and is audited as
         `record.takedown`; narrowing the row alone does not finish a takedown, see
-        `docs/takedown-runbook.md`. A move takes a project mirrored from Eagle over, so its level
-        holds across Eagle pushes and re-seeds. On a project created in DEMI or taken over,
-        sync-out queues the move for Eagle.
+        `docs/takedown-runbook.md`. A narrow is held across Eagle pushes and re-seeds
+        (`levelHeldAt`) until a widen here reaches level 4 or Eagle's level. A move does not take a
+        project over from Eagle. On a project created in DEMI or taken over, sync-out queues the
+        move for Eagle.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
