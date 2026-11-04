@@ -697,11 +697,14 @@ Alert `demi-track-teams-<env>` fires when that line is missing for 26 hours or r
 
 Set `SYNC_PROJECTS_SCHEDULE` to an NCRONTAB expression (test and prod use `0 */5 * * * *`, every five
 minutes) and the API app registers a `syncTrackProjects` timer; unset, no timer is registered. It
-reads `GET /api/v1/projects` from Track with the same client credentials as the team sync and applies
-changed rows to the DEMI project rows, so a Track edit reaches DEMI within five minutes. The poll does
-not heal links or mint short codes for Eagle-only projects, and a run with no change writes nothing;
-the nightly `syncTrackTeams` run keeps those jobs and the team sync. One summary log line:
-`[track-projects-poll] mode=… trackProjects= created= updated= relinked= skippedApiRows= orphaned= shortLinks= failures=`.
+reads `GET /api/v1/projects` from Track with the team sync's client credentials. It applies changed
+rows to the DEMI project rows, so a Track edit reaches DEMI within five minutes.
+
+The poll does not heal links or mint short codes for Eagle-only projects. A run with no change writes
+nothing; the nightly `syncTrackTeams` run keeps those jobs and the team sync.
+
+One summary log line:
+`[track-projects-poll] mode=… trackProjects= created= updated= relinked= skippedApiRows= orphaned= shortLinks= nativeClash= failures=`.
 Alert `demi-track-projects-poll-<env>` fires when that line is missing for 20 minutes or reports
 failures (see [Alerts](#alerts)).
 

@@ -451,6 +451,20 @@ test('Search Controller Tests', async (t) => {
       'the DEMI id itself is unchanged — only the claim that it is a Track id is withdrawn');
   });
 
+  await t.test('a DEMI-minted row reports trackProjectId null, not its UUID id', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{ id: '0f8fad5b-d9cb-469f-a165-70867728950e', name: 'Brand New', read: ['public'] }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'brand' }, header: () => null }, res);
+
+    assert.strictEqual(body[0].searchResults[0].trackProjectId, null);
+  });
+
   await t.test('a Track row still reports its trackProjectId', async () => {
     // The other half: a fix that nulls everything would pass the test above and break the field.
     t.mock.method(aiSearch, 'searchProjects', async () => ({

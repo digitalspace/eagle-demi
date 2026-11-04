@@ -85,8 +85,8 @@ async function getById(access, id) {
 }
 
 /**
- * An Eagle ObjectId. DEMI project ids are Track integers or `eagle-<ObjectId>`, so an id in this
- * shape is unambiguously Eagle's and the two spaces cannot collide.
+ * An Eagle ObjectId. DEMI project ids are Track integers, `eagle-<ObjectId>` or UUIDs (DEMI-created),
+ * so an id in this shape is unambiguously Eagle's and the spaces cannot collide.
  */
 const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
 

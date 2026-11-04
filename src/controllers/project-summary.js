@@ -27,10 +27,8 @@ const { auditEvent } = require('../utils/audit');
 const config = require('../config');
 
 /**
- * The project this request is about, under the caller's own access, or null.
- *
- * Both id spaces, for the same reason `GET /projects/:id` takes both: eagle-public holds Eagle
- * ObjectIds and DEMI ids are Track integers. `getById` gates the point read internally.
+ * The project this request is about, under the caller's own access, or null. Takes Eagle ObjectIds
+ * and DEMI ids (Track integer or UUID), like `GET /projects/:id`; `getById` gates the read itself.
  */
 function readProject(access, id) {
   return projects.EAGLE_OBJECT_ID.test(id)

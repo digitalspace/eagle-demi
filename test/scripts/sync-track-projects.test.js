@@ -691,6 +691,30 @@ function eagleOnlyProject(overrides = {}) {
   };
 }
 
+test('a Track project naming a native project\'s Eagle id is not created beside it', async (t) => {
+  const native = {
+    id: '0f8fad5b-d9cb-469f-a165-70867728950e', trackProjectId: null, sourceSystem: 'demi',
+    eagleId: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy', sources: {}, read: readForLevel(1)
+  };
+  const otherGuid = '58851172aaecd9001b820336';
+  const other = { ...native, id: '7c9e6679-7425-40de-944b-e07fc1f90ae7', eagleId: otherGuid };
+  const projects = fakeProjects([native, other]);
+  const warn = t.mock.method(logger, 'warn', () => {});
+
+  const summary = await syncProjects([API_PROJECT, { ...API_PROJECT, id: 208, epic_guid: otherGuid }],
+    { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  assert.strictEqual(summary.nativeClash, 2);
+  assert.strictEqual(summary.created, 0);
+  assert.strictEqual(projects.writes.length, 0, 'a second row with this Eagle id throws DUPLICATE_ID on lookup');
+  const clashWarns = warn.mock.calls.filter(c => /native project/.test(c.arguments[0]));
+  assert.strictEqual(clashWarns.length, 1, 'one warn per run, not one per clash');
+  assert.deepStrictEqual(clashWarns[0].arguments[1].clashes, [
+    { trackProjectId: '207', nativeId: native.id, eagleId: API_PROJECT.epic_guid },
+    { trackProjectId: '208', nativeId: other.id, eagleId: otherGuid }
+  ]);
+});
+
 test('a project stored as Eagle-only is re-keyed to its Track id, not duplicated', async () => {
   const projects = fakeProjects([eagleOnlyProject()]);
   const links = fakeLinks();
@@ -889,7 +913,7 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, works: 0, shortLinks: 0, healed: 0, failures: 0 },
+      phases: 0, works: 0, shortLinks: 0, healed: 0, nativeClash: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });
 

@@ -1474,10 +1474,9 @@ exports.search = async (req, res) => {
                 _id: doc.legacyEagleId || String(doc.id),
                 _schemaName: 'Project',
                 id: String(doc.id),
-                // NULL when there is no Track counterpart, never the DEMI id. Told apart by the
-                // `eagle-` id prefix the merge writes, NOT by `sourceSystem`, which is not in
-                // PROJECT_SELECT. See wiki Search-Query-Construction#project-id-spaces.
-                trackProjectId: String(doc.id).startsWith('eagle-') ? null : String(doc.id),
+                // NULL when there is no Track counterpart, never the DEMI id. Only a Track id is all
+                // digits (`eagle-` and minted UUID ids are not); `sourceSystem` is not in PROJECT_SELECT.
+                trackProjectId: /^\d+$/.test(String(doc.id)) ? String(doc.id) : null,
                 legacyEagleId: doc.legacyEagleId || '',
                 name: doc.name || doc.displayName || 'Unnamed Project',
                 sector: wireSector(hit, doc, doc.legislationYear),
