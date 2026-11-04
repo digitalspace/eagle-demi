@@ -278,7 +278,10 @@ test('sync-out of DEMI-created projects', async (t) => {
   });
 
   await t.test('a DEMI-owned Eagle project PUTs bodyFor to /project/<eagleId>', async (tt) => {
-    const row = ownedProject({ read: [...PUBLIC_ACL], isPublished: true });
+    const row = ownedProject({
+      read: [...PUBLIC_ACL], isPublished: true, currentLegislationYear: 'legislation_2002',
+      sources: { track: { track_project_id: 1234 }, eagle: eagleCopy({ ...EAGLE_BLOCK, proponent: EAGLE_PROPONENT_ID }) }
+    });
     mirrorStore(tt, [row, proponent()]);
     wireQueue(tt);
     const expected = await eagleProjectConsumer.bodyFor(row, {});
@@ -289,10 +292,25 @@ test('sync-out of DEMI-created projects', async (t) => {
 
     assert.deepStrictEqual(keys(calls), [put, `${put}/publish`], 'one PUT and the level sync, no POST');
     assert.deepStrictEqual(calls[0].body, expected);
-    assert.strictEqual(calls[0].body.proponent, ORG_EAGLE_ID);
-    assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
+    assert.strictEqual(calls[0].body.proponent, ORG_EAGLE_ID, 'the DEMI org wins over Eagle\'s proponent');
+    assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID }, 'the same legislation year on both sides sends');
     assert.strictEqual(logged('info', 'sending DEMI-owned Eagle project').length, 1);
   });
+
+  await t.test('a DEMI-owned Eagle project whose DEMI org has no Eagle id yet sends nothing and fails with the error line',
+    async (tt) => {
+      const store = mirrorStore(tt, [ownedProject({
+        sources: { track: { track_project_id: 1234 }, eagle: eagleCopy({ ...EAGLE_BLOCK, proponent: EAGLE_PROPONENT_ID }) }
+      }), proponent(null)]);
+      wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      await run(message(), 1);
+
+      assert.deepStrictEqual(calls, [], 'Eagle\'s old proponent is not sent over the row\'s');
+      assert.strictEqual(rowOf(store).syncOut.eagle.status, 'failed');
+      assert.strictEqual(logged('error', `[sync-out eagle] proponent ${ORG_ID} of project ${ROW_ID} has no eagleId`).length, 1);
+    });
 
   await t.test('a DEMI-owned Eagle project whose PUT misses never POSTs', async (tt) => {
     const store = mirrorStore(tt, [ownedProject(), proponent()]);

@@ -29,7 +29,7 @@ const ROWS = [
   project('source-null', 2, 1, { sourceSystem: null }),
   project('tracked', 2, 1, { sources: { track: { track_project_id: 7 } } }),
   project('eagle-owned', 2, 1, { sourceSystem: 'eagle' }),
-  project('eagle-5cf00c03a266b7e1877504db', 2, 1, { sourceSystem: undefined }),
+  project('eagle-5cf00c03a266b7e1877504db', 2, 1, { sourceSystem: undefined, eagleId: '5cf00c03a266b7e1877504db' }),
   project('owned', 2, 1, { ...OWNED, eagleId: '5cf00c03a266b7e1877504dc' }),
   project('owned-sent', 2, 2, { ...OWNED, eagleId: '5cf00c03a266b7e1877504dd' }),
   project('owned-no-eagle-id', 2, 1, OWNED)

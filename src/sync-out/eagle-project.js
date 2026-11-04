@@ -12,7 +12,7 @@ const { logger } = require('../utils/logger');
 const {
   requireSettings, call, failure, claimHeld, createMinted, refuseStray, setPublished, syncLevel, isPublic
 } = require('./eagle');
-const { findOrganizationEagleId, organizationEagleId } = require('./eagle-organization');
+const { organizationEagleId } = require('./eagle-organization');
 
 const NAME = 'eagle';
 const KIND = 'project';
@@ -76,11 +76,10 @@ async function bodyFor(row, logFields) {
   }
   if (row.centroid && Array.isArray(row.centroid.coordinates)) body.centroid = row.centroid.coordinates;
   else if (row.centroid === undefined && Array.isArray(eagle.centroid)) body.centroid = eagle.centroid;
-  // eagle-api refuses a project without a proponent: a taken-over row falls back to Eagle's, others send nothing.
-  const eagleProponent = bareId(eagle.proponent);
-  body.proponent = eagleProponent
-    ? (await findOrganizationEagleId(row.proponentId)) || eagleProponent
-    : await organizationEagleId(row.proponentId, `proponent ${row.proponentId ?? 'none'} of project ${row.id}`, logFields);
+  // eagle-api refuses a project without a proponent. A taken-over row naming no DEMI org keeps Eagle's; an org
+  // still waiting for its Eagle id sends nothing, so the retry sends the row's own.
+  body.proponent = await organizationEagleId(row.proponentId,
+    `proponent ${row.proponentId ?? 'none'} of project ${row.id}`, logFields, bareId(eagle.proponent));
   return body;
 }
 

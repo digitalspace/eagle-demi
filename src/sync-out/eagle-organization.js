@@ -18,20 +18,15 @@ const NATIVE = 'demi';
 
 const pathOf = eagleId => `/organization/${encodeURIComponent(eagleId)}`;
 
-/** The Eagle id of the organization a row names by DEMI id or, after an echo, by Eagle id; null without one. */
-async function findOrganizationEagleId(id) {
+/**
+ * The Eagle id of the organization a row names by DEMI id or, after an echo, by Eagle id; `noOrg` when no row
+ * matches. Throws without either: eagle-api's PUT writes the body as sent, so a null would clear the link in Eagle.
+ */
+async function organizationEagleId(id, what, logFields, noOrg = null) {
   const org = id ? await lists.readForWrite(id, lists.KINDS.ORGANIZATION)
     || await lists.readForWriteByEagleId(id, lists.KINDS.ORGANIZATION) : null;
-  return org && org.eagleId ? String(org.eagleId) : null;
-}
-
-/**
- * `findOrganizationEagleId`, but throws without one: eagle-api's PUT writes the body as sent, so a null would
- * clear the link in Eagle.
- */
-async function organizationEagleId(id, what, logFields) {
-  const found = await findOrganizationEagleId(id);
-  if (found) return found;
+  if (org && org.eagleId) return String(org.eagleId);
+  if (!org && noOrg) return noOrg;
   logger.error(`[sync-out eagle] ${what} has no eagleId, nothing sent`, { ...logFields, organizationId: id ?? null });
   throw new Error(`${what} has no eagleId`);
 }
@@ -110,6 +105,5 @@ module.exports = {
   inFlight: entry => Boolean(claimHeld(entry, Date.now())),
   send,
   bodyFor,
-  findOrganizationEagleId,
   organizationEagleId
 };
