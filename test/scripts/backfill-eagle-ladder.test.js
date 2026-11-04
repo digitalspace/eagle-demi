@@ -218,6 +218,16 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.deepStrictEqual(readOf(writes, 'up-1'), ['sysadmin']);
   });
 
+  await t.test('a project DEMI owns keeps its read and still caps its children', async (t) => {
+    const writes = fakeCosmos(t, {
+      projects: [{ ...WIDENED_PROJECT, sourceSystem: 'demi' }],
+      documents: [{ id: 'd-1', projectId: 'p-w', eagleId: 'd-1', read: ['staff'], ownRead: ['sysadmin', 'inspector'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.strictEqual(readOf(writes, 'p-w'), undefined);
+    assert.deepStrictEqual(readOf(writes, 'd-1'), ['sysadmin'], 'inspector is capped off by the project');
+  });
+
   await t.test('a row DEMI narrowed is skipped and counted, and its children capped by it', async (t) => {
     const writes = fakeCosmos(t, {
       projects: [{ ...WIDENED_PROJECT, read: ['team'] }],

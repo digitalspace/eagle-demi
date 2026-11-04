@@ -13,6 +13,7 @@ const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { logger } = require('../utils/logger');
+const { storedRead } = require('../controllers/nosql/user');
 
 /** eagle-api lets only this organization's users read public (user.js:39,92). */
 const PUBLIC_ORG_NAME = 'Environmental Assessment Office';
@@ -118,6 +119,12 @@ async function create(ctx, input) {
   });
 }
 
+/** The read a DEMI write starts from: an Eagle row's own read under the mirror rule, else the stored one. */
+function takeoverBase(row) {
+  const eagle = row.sourceSystem !== 'demi' && row.sources && row.sources.eagle;
+  return eagle && Array.isArray(eagle.read) ? storedRead(eagle) : row.read;
+}
+
 /**
  * Replaces every field, as eagle-api's PUT does (user.js:69-90); a field the body leaves out goes
  * back to its default. `isPublished` left out keeps the current visibility, except that a user
@@ -166,7 +173,7 @@ async function update(ctx, id, changes) {
         updatedBy: actor,
         dateUpdated: new Date().toISOString(),
         isPublished: published,
-        read: readWith(current.read, published)
+        read: readWith(takeoverBase(current), published)
       };
     },
     audit: auditOf('user.update', Object.keys(checked.value))

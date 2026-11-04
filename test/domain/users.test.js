@@ -12,6 +12,7 @@ const audit = require('../../src/utils/audit');
 const users = require('../../src/repositories/users');
 const { resolveAccess } = require('../../src/helpers/access-sql');
 const user = require('../../src/domain/users');
+const { logger } = require('../../src/utils/logger');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -129,6 +130,22 @@ test('user domain', async (t) => {
     assert.strictEqual(row.updatedBy, 'idir-staff');
     assert.strictEqual(rows[0].Action, 'user.update');
     assert.deepStrictEqual(rows[0].Detail.fields, ['firstName', 'email', 'orgName']);
+  });
+
+  await t.test('a takeover rebuilds read from the Eagle copy under the mirror rule and logs once', async (t) => {
+    const written = fakeStore(t, { ...STORED, read: ['sysadmin', 'staff'], isPublished: false, sources: { eagle: { _id: USER_ID, read: ['sysadmin'] } } });
+    const info = t.mock.method(logger, 'info', () => {});
+    await audited(() => user.update(STAFF, USER_ID, { orgName: EAO }));
+    assert.deepStrictEqual(written[0].read, ['sysadmin'], 'a staff entry the Eagle read lacks is dropped');
+    assert.strictEqual(info.mock.calls.filter(c => c.arguments[0].includes('took over')).length, 1);
+  });
+
+  await t.test('a DEMI-owned user keeps its stored read and logs no takeover', async (t) => {
+    const written = fakeStore(t, { ...STORED, sourceSystem: 'demi', read: ['sysadmin', 'staff'], isPublished: false, sources: { eagle: { _id: USER_ID, read: ['sysadmin'] } } });
+    const info = t.mock.method(logger, 'info', () => {});
+    await audited(() => user.update(STAFF, USER_ID, { orgName: EAO }));
+    assert.deepStrictEqual(written[0].read, ['sysadmin', 'staff']);
+    assert.strictEqual(info.mock.calls.filter(c => c.arguments[0].includes('took over')).length, 0);
   });
 
   await t.test('an empty string sent in the body is stored as the field default, as eagle-api does', async (t) => {

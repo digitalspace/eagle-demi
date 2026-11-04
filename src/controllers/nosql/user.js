@@ -62,15 +62,21 @@ function mirrorItem(eagleId, doc, read, existing) {
   };
 }
 
+/** The `read` the mirror stores for an Eagle user doc. */
+function storedRead(doc) {
+  return underDeleteCeiling(eagleBaseAcl(doc.read), doc);
+}
+
 /** @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}|{status: 'conflict'}>} */
 function mirrorFromEagle(eagleId, rawDoc, { pushedAt = null } = {}) {
   const doc = withoutSecrets(rawDoc);
-  const read = underDeleteCeiling(eagleBaseAcl(doc.read), doc);
+  const read = storedRead(doc);
   return upsertKeepingDemiRows(users, eagleId, doc, (current) => mirrorItem(eagleId, doc, read, current),
     () => users.readForWrite(eagleId), { pushedAt, label: LABEL });
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
+exports.storedRead = storedRead;
 
 exports.upsertFromEagle = async (req, res) => {
   try {
