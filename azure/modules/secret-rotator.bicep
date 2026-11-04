@@ -19,7 +19,7 @@ param keyVaultName string
 @description('Vault URI, e.g. https://demi-kv-test.vault.azure.net/')
 param keyVaultUri string
 
-@description('ROTATED_SECRETS: comma list of name:stamper:probe. Empty, with renew off, is the kill switch.')
+@description('ROTATED_SECRETS: comma list of name:stamper:probe.')
 param rotationTargets string = ''
 
 @description('RENEW: extend the expiry of every other enabled secret before it lapses.')
@@ -310,7 +310,8 @@ resource failedAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
     enabled: true
     scopes: [ logsWorkspaceId ]
     evaluationFrequency: 'PT1H'
-    windowSize: 'PT1H'
+    // Two hours, so a line ingested late still lands in a window.
+    windowSize: 'PT2H'
     criteria: {
       allOf: [
         {
@@ -332,8 +333,8 @@ resource failedAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   }
 }
 
-// Window choices skip 26 h; the P2D window intersected with ago(26h) gives 26 h. Fires on its first
-// evaluation if no run has logged: deploy the rotator code within the hour of this infra deploy.
+// Window choices skip 26 h; the P2D window intersected with ago(26h) gives 26 h. Fires once on a new
+// app until the first hourly run finishes (no runOnStartup); autoMitigate then clears it.
 resource silentAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   name: 'demi-secret-rotator-silent-${environmentName}'
   location: location

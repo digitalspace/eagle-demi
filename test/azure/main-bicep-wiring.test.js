@@ -1156,13 +1156,13 @@ test('the rotator app carries every setting the rotator reads, each from its own
 });
 
 test('the rotator alerts match the lines the rotator logs', () => {
-  const rule = (name) => new RegExp(`^resource ${name} [\\s\\S]*?\\n\\}`, 'm').exec(ROTATOR_MODULE)?.[0] ?? '';
-  const failed = rule('failedAlert');
+  const rotatorRule = (name) => new RegExp(`^resource ${name} [\\s\\S]*?\\n\\}`, 'm').exec(ROTATOR_MODULE)?.[0] ?? '';
+  const failed = rotatorRule('failedAlert');
   assert.match(failed, /Message contains "\[secret-rotator\] FAILED"/);
   assert.match(failed, /Message contains "\[secret-rotator\] issuer-expiry"/);
   assert.match(failed, /operator: 'GreaterThan'\n\s+threshold: 0/);
 
-  const silent = rule('silentAlert');
+  const silent = rotatorRule('silentAlert');
   assert.match(silent, /where TimeGenerated > ago\(26h\) \| where Message contains "\[secret-rotator\] run finished"/);
   assert.match(silent, /windowSize: 'P2D'/, 'ago(26h) narrows nothing in a window shorter than 26 h');
   assert.match(silent, /operator: 'LessThan'\n\s+threshold: 1/,

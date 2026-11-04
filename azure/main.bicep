@@ -967,29 +967,6 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
   }
 }
 
-// 7f. The Key Vault secret rotator. Its own Flex app and identity on the API's subnet, so it reaches
-// the vault through the private endpoint; the only app with write on the vault.
-module secretRotator './modules/secret-rotator.bicep' = if (!empty(apiFlexSubnetId)) {
-  name: 'deploy-secret-rotator'
-  params: {
-    location: location
-    environmentName: environmentName
-    tags: defaultTags
-    virtualNetworkSubnetId: apiFlexSubnetId
-    keyVaultName: vaultName
-    keyVaultUri: vaultUri
-    rotationTargets: rotatorTargets
-    renew: rotatorRenew
-    edgeRuleIds: rotatorEdgeRuleIds
-    probeDemiUrl: rotatorProbeDemiUrl
-    probeAnalyticsUrl: rotatorProbeAnalyticsUrl
-    issuerExpiry: rotatorIssuerExpiry
-    logsWorkspaceId: appLogsWorkspaceId
-    actionGroupId: actionGroupId
-    appInsightsConnectionString: appInsightsConnectionString
-  }
-}
-
 // 7d. The OpenShift secret sync. Its own Flex app on the API's subnet, so a bad deploy of it
 // cannot take the API down, and it reads the vault through the same private endpoint. Off unless
 // the environment both asks for it and names the namespaces it owns.
@@ -1029,6 +1006,29 @@ module pdfTitleWorker './modules/pdf-title-worker.bicep' = if (deployPdfTitleWor
     live: pdfTitleLive
     maxRows: pdfTitleMaxRows
     maxMinutes: pdfTitleMaxMinutes
+    appInsightsConnectionString: appInsightsConnectionString
+  }
+}
+
+// 7f. The Key Vault secret rotator. Its own Flex app and identity on the API's subnet, so it reaches
+// the vault through the private endpoint; the only app with write on the vault.
+module secretRotator './modules/secret-rotator.bicep' = if (!empty(apiFlexSubnetId)) {
+  name: 'deploy-secret-rotator'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    virtualNetworkSubnetId: apiFlexSubnetId
+    keyVaultName: vaultName
+    keyVaultUri: vaultUri
+    rotationTargets: rotatorTargets
+    renew: rotatorRenew
+    edgeRuleIds: rotatorEdgeRuleIds
+    probeDemiUrl: rotatorProbeDemiUrl
+    probeAnalyticsUrl: rotatorProbeAnalyticsUrl
+    issuerExpiry: rotatorIssuerExpiry
+    logsWorkspaceId: appLogsWorkspaceId
+    actionGroupId: actionGroupId
     appInsightsConnectionString: appInsightsConnectionString
   }
 }

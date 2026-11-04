@@ -119,9 +119,7 @@ param ssoAudience = 'demi-api'
 // An address missing here only puts that proxy's visitors back on one shared key.
 param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194.124'
 
-// The secret the eagle-edge rule set stamps on origin requests is the vault's `edge-secret`, named
-// in optionalSecretNames above. Both sides read the SAME value — rotate it in eagle-edge and in the
-// vault together, or callers fall back to the shared anonymous quota key for a while.
+// eagle-edge stamps the vault's `edge-secret` (optionalSecretNames); the rotator below rotates both.
 
 // Off until test has run `log`, then `enforce`, with no unknown caller left.
 param edgeGate = ''
@@ -144,7 +142,6 @@ param rotatorRenew = true
 param rotatorEdgeRuleIds = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/ruleSets/rulesdemi/rules/stampedgesecret,/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/ruleSets/rulesapi/rules/stampedgesecret,/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-public-prod/providers/Microsoft.Cdn/profiles/eagle-edge-prod/ruleSets/rulesdemidocs/rules/stampedgesecret'
 param rotatorProbeDemiUrl = 'https://projects.eao.gov.bc.ca/demi/api/health/trust'
 param rotatorProbeAnalyticsUrl = 'https://projects.eao.gov.bc.ca/analytics/events'
-param rotatorIssuerExpiry = ''
 
 // The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
 // so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
