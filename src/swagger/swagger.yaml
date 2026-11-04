@@ -1492,7 +1492,8 @@ paths:
             The project's current Act is locked (today the Building Canada Act, 2025) and
             `legislationYear` names another year, including when it moved under that Act after
             this request read it; or `legislationYear` is not the current year and the project has
-            no content under it (not in its `legislationYearList`, or that block has no name).
+            no content under it (not in its `legislationYearList`, or that block has no name), or
+            the project has no Eagle record to rebuild that year from.
             Also `Project is deleted` for a project flagged `isDeleted`, at any level. Nothing is
             written.
 
