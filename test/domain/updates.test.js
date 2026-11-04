@@ -69,6 +69,8 @@ async function audited(fn) {
   return { result, rows };
 }
 
+const TAKEOVER_LINE = '[Update] DEMI write took over an Eagle update';
+
 const createBody = (fields = {}) => ({ projectId: PUBLIC_PROJECT, headline: 'Open house', ...fields });
 
 test('update domain', async (t) => {
@@ -320,6 +322,7 @@ test('update domain', async (t) => {
 
   await t.test('delete archives: status archived, inactive, public pulled, audited', async (t) => {
     const store = fakeStore(t, { ...STORED, sourceSystem: 'eagle' });
+    const info = t.mock.method(logger, 'info', () => {});
     const { result, rows } = await audited(() => update.remove(STAFF, UPDATE_ID));
     assert.strictEqual(result.status, 'ok');
     const row = store.written[0];
@@ -330,6 +333,19 @@ test('update domain', async (t) => {
     assert.strictEqual(row.sourceSystem, 'demi', 'the archive takes an Eagle row over');
     assert.deepStrictEqual(row.sources.demi, { read: ['staff', 'sysadmin'], status: 'archived' });
     assert.strictEqual(rows[0].Action, 'update.archive');
+    assert.strictEqual(info.mock.calls.filter(c => c.arguments[0] === TAKEOVER_LINE).length, 1);
+  });
+
+  await t.test('an edit that loses its etag race to a DEMI takeover is not logged as a takeover', async (t) => {
+    fakeStore(t, { ...DRAFT, sourceSystem: 'eagle' });
+    updates.getById.mock.mockImplementation(async () => ({ ...DRAFT, sourceSystem: 'demi', _etag: 'e9' }));
+    updates.getById.mock.mockImplementationOnce(async () => ({ ...DRAFT, sourceSystem: 'eagle' }));
+    updates.upsert.mock.mockImplementationOnce(async () => { throw Object.assign(new Error('etag moved'), { code: 412 }); });
+    const info = t.mock.method(logger, 'info', () => {});
+    const result = await update.update(STAFF, UPDATE_ID, { headline: 'x' });
+    assert.strictEqual(result.status, 'ok', JSON.stringify(result));
+    assert.strictEqual(updates.upsert.mock.callCount(), 2);
+    assert.strictEqual(info.mock.calls.filter(c => c.arguments[0] === TAKEOVER_LINE).length, 0);
   });
 
   await t.test('listDueForNotify returns a native-published Update', async (t) => {
@@ -358,7 +374,7 @@ test('update domain', async (t) => {
     assert.strictEqual(row(UPDATE_ID).sourceSystem, 'demi');
     assert.deepStrictEqual(row(UPDATE_ID).sources.demi, { read: ['public', 'staff', 'sysadmin'], status: 'published' });
     assert.strictEqual(eagleUpdate.wants(row(UPDATE_ID)), true, 'sync-out sends the taken-over row');
-    assert.deepStrictEqual(infos.filter(i => i.msg === '[Update] DEMI write took over an Eagle update').map(i => i.meta),
+    assert.deepStrictEqual(infos.filter(i => i.msg === TAKEOVER_LINE).map(i => i.meta),
       [{ id: UPDATE_ID, eagleId: UPDATE_ID }]);
 
     const pushed = await controller.mirrorFromEagle(UPDATE_ID, {

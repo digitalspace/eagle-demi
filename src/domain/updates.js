@@ -238,8 +238,7 @@ async function nonPublicIds(row, parentId) {
 
 /**
  * Save through `write`: a published update's uploads are published first, reverted if the save
- * fails; images no published update still shows are then released. `before` null = create.
- * `write` is handed `seen`, which its build calls with each row it builds over.
+ * fails; images no published update still shows are then released. `before` null = create; `write`'s build calls `seen` per row.
  */
 async function writeWithImages(ctx, { before, after, parentId, write }) {
   // Live to the public: published and not capped below public by its parent.
