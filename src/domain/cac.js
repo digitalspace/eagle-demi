@@ -19,7 +19,6 @@ const { PROJECT } = require('../sync-out/kinds');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
 const { CAC_FIELDS: FIELDS } = require('../ownership/project');
-const { hasValue } = require('../merge/project');
 
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
 const EMAIL_SCHEMA = { type: 'string', max: 254, required: true };
@@ -123,7 +122,7 @@ async function publish(ctx, id) {
   const { project, refused } = await writable(ctx, id);
   if (refused) return refused;
   if (project.projectCAC !== true) return { status: 'conflict', error: 'The project has no CAC.' };
-  if (!hasValue(project.cacEmail)) return { status: 'conflict', error: 'The CAC has no email.' };
+  if (typeof project.cacEmail !== 'string' || project.cacEmail.trim() === '') return { status: 'conflict', error: 'The CAC has no email.' };
   return writeFields(ctx, project, { projectCACPublished: true }, 'cac.publish');
 }
 

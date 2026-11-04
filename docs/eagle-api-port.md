@@ -479,7 +479,7 @@ Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`):
 - `GET` and every write answer `projectCAC`, `projectCACPublished` and `cacEmail` only (`bodyOf` in `src/domain/cac.js`). eagle-notify has no list route and DEMI holds no member store.
 - Sign-up is anonymous and unconfirmed in eagle-api (workspace TODO 2026-10-14 asks for a confirm step; that belongs in eagle-notify, not here).
 
-Deviations: delete also sets `projectCACPublished` false, so a deleted CAC's `cacEmail` stops showing to the public; publish refuses with 409 a project with no CAC or no `cacEmail`; `cacEmail` and `address` must be email addresses; an unknown project is 404 (eagle-api: 400 on create).
+Deviations: delete also sets `projectCACPublished` false, so a deleted CAC's `cacEmail` stops showing to the public. Publish refuses with 409 a project with no CAC or no `cacEmail`. `cacEmail` and `address` must be email addresses. An unknown project is 404 (eagle-api: 400 on create).
 
 Test use: `demi-kv-test/notify-api-key` holds eagle-notify's host key named `demi`. A direct `POST /projects/145/cac/members/remove` on test returned 200 with a real notify round trip (measured 2026-10-19).
 

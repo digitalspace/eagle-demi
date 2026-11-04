@@ -344,14 +344,14 @@ Each item below overrides the corresponding section of the source document.
    and `seed-nosql.js:403` replace the whole item and carry only `sources` forward. `vis` is
    carried forward beside `sources` in both, with a test, in the same change that adds the dial
    engine.
-7. **`cacPublished` reads a flag only the CAC routes write.** `projectCACPublished` is DEMI-owned
-   (`CAC_FIELDS` in `src/ownership/project.js`). Only `src/domain/cac.js` writes it, through the
-   CAC create, publish, unpublish and delete routes. An Eagle push seeds it once on a row
-   that lacks it and never replaces it after.
+7. **`cacPublished` reads a flag DEMI owns.** `projectCACPublished` is DEMI-owned
+   (`CAC_FIELDS` in `src/ownership/project.js`). Once a row holds it, only the CAC routes in
+   `src/domain/cac.js` change it: create, publish, unpublish and delete. An Eagle push or a seed
+   sets it on a row that lacks it, and a re-seed drops it from a row that lost its Eagle id.
 
    `PUT /api/projects/:id` ignores it (`PUT_IGNORED_FIELDS`), so a hand-edited project body
    cannot flip it. The CAC routes take [staff, sysadmin] only, while PUT also takes `demi-admin`
-   and `demi-service-write`. So the strip keeps those two roles from publishing `cacEmail`.
+   and `demi-service-write`. So the strip keeps those two roles from flipping it through PUT.
 
    `cacEmail` is `defaultVis: 2, maxVis: 4, when: 'cacPublished'`: a true predicate widens the
    field to `maxVis`, and a dial beats it. `sysadmin` can pin `cacEmail` shut with the dial even

@@ -1204,6 +1204,11 @@ test('carryDemiOnlyFields', async (t) => {
 
     assert.deepStrictEqual([merged.projectCAC, merged.projectCACPublished], [true, false]);
     assert.ok(!('cacEmail' in merged), 'an empty Eagle email seeds nothing');
+
+    const withEmail = eagleFor(TRACK_207, { cacEmail: 'eagle@example.gov.bc.ca' });
+    const seeded = carryDemiOnlyFields(mergeTrackProject(TRACK_207, withEmail, OPTS), { id: '207' });
+
+    assert.strictEqual(seeded.cacEmail, 'eagle@example.gov.bc.ca');
   });
 
   await t.test('a re-merge takes the guid Track gained over a stored null eagleId', () => {

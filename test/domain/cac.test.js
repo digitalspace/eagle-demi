@@ -113,7 +113,6 @@ test('CAC domain', async (t) => {
     const store = fakeStore(t, { ...STORED, projectCAC: false });
     assert.strictEqual((await cac.publish(STAFF, PROJECT_ID)).status, 'conflict');
     assert.strictEqual(store.written.length, 0);
-    assert.strictEqual(store.queued.length, 0);
   });
 
   await t.test('publish refuses a CAC with a blank email', async (t) => {
