@@ -18,6 +18,7 @@ const { resolveAccess, levelOfRead, canRead } = require('../../src/helpers/acces
 const syncOut = require('../../src/sync-out');
 const { COMMENT_PERIOD } = require('../../src/sync-out/kinds');
 const period = require('../../src/domain/comment-periods');
+const { logger } = require('../../src/utils/logger');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -29,7 +30,7 @@ const PERIOD_ID = '5c1f7a3e9b1d2c0012340001';
 const STORED = Object.freeze({
   id: PERIOD_ID, eagleId: PERIOD_ID, projectId: PROJECT_ID, sourceSystem: 'eagle',
   instructions: 'old', dateAdded: '2024-01-01T00:00:00.000Z', addedBy: 'idir-first',
-  read: ['staff', 'sysadmin'], isPublished: false, _etag: 'e1'
+  read: ['staff', 'sysadmin'], isPublished: false, sources: { eagle: { read: ['staff', 'sysadmin'] } }, _etag: 'e1'
 });
 const PROJECTS = {
   [PROJECT_ID]: { id: PROJECT_ID, read: ['public', 'staff', 'sysadmin'] },
@@ -193,13 +194,44 @@ test('comment period domain', async (t) => {
     assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
   });
 
+  await t.test('update of an Eagle period sets sourceSystem demi and queues commentPeriod', async (t) => {
+    const store = fakeStore(t);
+    const info = t.mock.method(logger, 'info');
+
+    const { result } = await audited(() => period.update(STAFF, PERIOD_ID, { instructions: 'new' }));
+
+    assert.strictEqual(result.status, 'ok');
+    const row = store.written[0];
+    assert.strictEqual(row.sourceSystem, 'demi');
+    assert.deepStrictEqual(row.sources.demi.read, STORED.sources.eagle.read);
+    assert.deepStrictEqual(row.sources.eagle, STORED.sources.eagle, 'the raw Eagle copy is kept');
+    assert.strictEqual(levelOfRead(row.read), 2);
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
+    const took = info.mock.calls.filter(c => c.arguments[0] === '[CommentPeriod] DEMI write took over an Eagle period');
+    assert.deepStrictEqual(took.map(c => c.arguments[1]), [{ id: PERIOD_ID, eagleId: PERIOD_ID }]);
+  });
+
+  await t.test('a write on a period DEMI already owns logs no takeover', async (t) => {
+    fakeStore(t, { ...STORED, sourceSystem: 'demi', sources: { demi: { read: ['staff', 'sysadmin'] } } });
+    const info = t.mock.method(logger, 'info');
+    await audited(() => period.update(STAFF, PERIOD_ID, { instructions: 'new' }));
+    assert.ok(!info.mock.calls.some(c => String(c.arguments[0]).includes('took over')));
+  });
+
+  await t.test('publish of an Eagle period takes it over with the published read as its own', async (t) => {
+    const store = fakeStore(t);
+    await audited(() => period.publish(STAFF, PERIOD_ID));
+    assert.strictEqual(store.written[0].sourceSystem, 'demi');
+    assert.ok(store.written[0].sources.demi.read.includes('public'));
+  });
+
   await t.test('update ignores read and isPublished in the body', async (t) => {
     const store = fakeStore(t);
     const { result } = await audited(() => period.update(STAFF, PERIOD_ID, {
       instructions: 'new', read: ['public'], isPublished: true
     }));
     assert.strictEqual(result.status, 'ok');
-    assert.deepStrictEqual(store.written[0].read, STORED.read);
+    assert.strictEqual(levelOfRead(store.written[0].read), levelOfRead(STORED.read));
     assert.strictEqual(store.written[0].isPublished, false);
   });
 
@@ -240,17 +272,21 @@ test('comment period domain', async (t) => {
     });
   }
 
-  await t.test('delete hard-deletes the stored revision after its comments drop to staff', async (t) => {
-    const store = fakeStore(t);
+  await t.test('delete of an Eagle period keeps it flagged at DELETED_CEILING and queues it', async (t) => {
+    const store = fakeStore(t, { ...STORED, read: ['public', 'staff', 'sysadmin'], isPublished: true });
 
     const { result, rows } = await audited(() => period.remove(STAFF, PERIOD_ID));
 
     assert.strictEqual(result.status, 'ok');
-    assert.deepStrictEqual(store.deleted, [[PERIOD_ID, PROJECT_ID, 'e1']]);
+    assert.strictEqual(store.deleted.length, 0);
+    const row = store.written[0];
+    assert.strictEqual(row.sourceSystem, 'demi');
+    assert.strictEqual(row.isDeleted, true);
+    assert.strictEqual(row.isPublished, false);
+    assert.strictEqual(levelOfRead(row.read), levelOfRead(DELETED_CEILING));
     assert.deepStrictEqual(store.cascades, [{ periodId: PERIOD_ID, read: DELETED_CEILING, deletedYet: false }]);
+    assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
     assert.strictEqual(rows[0].Action, 'commentPeriod.delete');
-    assert.strictEqual(store.written.length, 0);
-    assert.strictEqual(store.queued.length, 0);
   });
 
   await t.test('delete of a DEMI period Eagle holds keeps a deleted staff-only row and queues it', async (t) => {
@@ -283,12 +319,14 @@ test('comment period domain', async (t) => {
     assert.deepStrictEqual(store.queued, [[PERIOD_ID, 'e2', COMMENT_PERIOD]]);
   });
 
-  await t.test('delete of a DEMI period Eagle never got hard-deletes it', async (t) => {
+  await t.test('delete of a DEMI period Eagle never got hard-deletes it after its comments drop to staff', async (t) => {
     const store = fakeStore(t, { ...STORED, sourceSystem: 'demi', eagleId: null });
     const { result } = await audited(() => period.remove(STAFF, PERIOD_ID));
     assert.strictEqual(result.status, 'ok');
-    assert.strictEqual(store.deleted.length, 1);
+    assert.deepStrictEqual(store.deleted, [[PERIOD_ID, PROJECT_ID, 'e1']]);
+    assert.deepStrictEqual(store.cascades, [{ periodId: PERIOD_ID, read: DELETED_CEILING, deletedYet: false }]);
     assert.strictEqual(store.written.length, 0);
+    assert.strictEqual(store.queued.length, 0);
   });
 
   await t.test('publish opens the period and cascades its read to the comments', async (t) => {

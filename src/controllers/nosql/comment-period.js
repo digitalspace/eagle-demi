@@ -115,7 +115,16 @@ function eagleOwnedOnto(current, eagleId, doc) {
   if (doc.isDeleted === true && current.eagleId !== eagleId) return current;
   const staff = staffFields(doc);
   for (const field of KEPT_FROM_ECHO[current.sourceSystem]) delete staff[field];
-  return { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
+  const row = { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
+  // Eagle may still number comments on a period DEMI took over; DEMI must not reuse a number Eagle gave.
+  if (current.sourceSystem === 'demi') row.commentIdCount = higherCount(current.commentIdCount, doc.commentIdCount);
+  return row;
+}
+
+/** The higher of two comment counts, ignoring one that is not a count. */
+function higherCount(stored, echoed) {
+  const counts = [stored, echoed].filter(Number.isInteger);
+  return counts.length ? Math.max(...counts) : stored;
 }
 
 /**
@@ -175,6 +184,10 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
   if (ownedElsewhere(existing)) {
     logger.info('[Comment Period Controller] eagle push kept to Eagle fields on a row it does not own',
       { eagleId, id: saved.id, projectId: saved.projectId, sourceSystem: existing.sourceSystem });
+    if (saved.commentIdCount !== existing.commentIdCount && existing.sourceSystem === 'demi') {
+      logger.info('[Comment Period Controller] echo raised commentIdCount',
+        { id: saved.id, from: existing.commentIdCount ?? null, to: saved.commentIdCount });
+    }
   }
 
   // A period whose parent changed lands in a NEW partition, and Cosmos leaves the old row

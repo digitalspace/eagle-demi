@@ -9,6 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const commentPeriods = require('../../src/repositories/comment-periods');
+const comments = require('../../src/repositories/comments');
 const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
 const { logger } = require('../../src/utils/logger');
@@ -16,6 +17,8 @@ const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const { COMMENT_PERIOD } = require('../../src/sync-out/kinds');
 const commentPeriodController = require('../../src/controllers/nosql/comment-period');
+const period = require('../../src/domain/comment-periods');
+const { ctxFor } = require('../helpers/domain-ctx');
 const { mockRes, STAFF, PUBLIC_ACL } = require('../helpers/eagle-mirror-fixtures');
 const { API, useEnv, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 
@@ -25,6 +28,8 @@ const PROJECT_EAGLE_ID = '5cf00c03a266b7e1877504db';
 const ROW_ID = '7d1e2f40-0000-4000-8000-000000000001';
 const MAX_ATTEMPTS = 3;
 const OBJECT_ID = /^[0-9a-f]{24}$/;
+const EAGLE_ID = '5cf00c03a266b7e18775e001';
+const STAFF_CTX = ctxFor(['staff']);
 
 const ENV = {
   SYNC_OUT_QUEUE: 'sync-out',
@@ -94,6 +99,34 @@ function wireStore(t, rows) {
     return saved;
   });
   return store;
+}
+
+/** A period the Eagle mirror stored: its id is Eagle's, and sync-out never minted it. */
+function eagleRow() {
+  const doc = {
+    _id: EAGLE_ID, project: PROJECT_EAGLE_ID, instructions: 'Eagle text', milestone: MILESTONE, read: PUBLIC_ACL, commentIdCount: 4
+  };
+  return nativeRow({
+    id: EAGLE_ID, eagleId: EAGLE_ID, sourceSystem: 'eagle', instructions: doc.instructions, milestone: MILESTONE,
+    commentIdCount: 4, sources: { eagle: doc }
+  });
+}
+
+/** The reads and deletes `domain/comment-periods.js` makes, over the same store. */
+function wireDomain(t, store) {
+  t.mock.method(commentPeriods, 'getById', async (_access, id) =>
+    (store.has(String(id)) ? structuredClone(store.get(String(id))) : null));
+  t.mock.method(commentPeriods, 'deleteById', async (id) => store.delete(String(id)));
+  t.mock.method(projects, 'getById', async (_access, id) => (String(id) === PROJECT_ID ? { id: PROJECT_ID, read: PUBLIC_ACL } : null));
+  t.mock.method(notifications, 'getById', async () => null);
+  t.mock.method(comments, 'setAclForPeriod', async () => ({ succeeded: 0, failed: 0 }));
+}
+
+/** eagle-api pushing its copy of the period to DEMI. */
+function push(doc, pushedAt = Date.now()) {
+  return commentPeriodController.upsertFromEagle({
+    params: { eagleId: doc._id }, query: {}, body: { doc, pushedAt }, user: STAFF
+  }, mockRes());
 }
 
 function wireParent(t, eagleId = PROJECT_EAGLE_ID) {
@@ -559,6 +592,81 @@ test('sync-out of DEMI-native comment periods', async (t) => {
     const [line] = logged('error', 'stray Eagle id 5cf00c03a266b7e18775ffff not recorded');
     assert.ok(line, 'the error line names the stray');
     assert.strictEqual(line.arguments[1].strayEagleId, '5cf00c03a266b7e18775ffff');
+  });
+
+  await t.test('a later Eagle push keeps instructions, milestone and read', async (tt) => {
+    const store = wireStore(tt, [eagleRow()]);
+    wireParent(tt);
+    wireDomain(tt, store);
+    wireQueue(tt);
+    const demiMilestone = '5cf00c03a266b7e18775aaaa';
+    assert.strictEqual((await period.update(STAFF_CTX, EAGLE_ID, { instructions: 'DEMI text', milestone: demiMilestone })).status, 'ok');
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, instructions: 'Eagle edit', milestone: MILESTONE, read: ['staff', 'sysadmin'] });
+
+    const row = store.get(EAGLE_ID);
+    assert.strictEqual(row.sourceSystem, 'demi');
+    assert.strictEqual(row.instructions, 'DEMI text');
+    assert.strictEqual(row.milestone, demiMilestone);
+    assert.ok(row.read.includes('public'), 'the read DEMI took over stays public');
+    assert.strictEqual(row.sources.eagle.instructions, 'Eagle edit', 'the raw copy takes the push');
+  });
+
+  await t.test('an echo on a taken-over period raises commentIdCount and never lowers it', async (tt) => {
+    const store = wireStore(tt, [{ ...eagleRow(), sourceSystem: 'demi' }]);
+    wireParent(tt);
+    wireDomain(tt, store);
+    const doc = store.get(EAGLE_ID).sources.eagle;
+    const now = Date.now();
+
+    await push({ ...doc, commentIdCount: 9 }, now);
+    assert.strictEqual(store.get(EAGLE_ID).commentIdCount, 9);
+    await push({ ...doc, commentIdCount: 2 }, now + 1);
+    assert.strictEqual(store.get(EAGLE_ID).commentIdCount, 9);
+
+    const raised = logged('info', 'echo raised commentIdCount');
+    assert.deepStrictEqual(raised.map(c => c.arguments[1]), [{ id: EAGLE_ID, from: 4, to: 9 }]);
+  });
+
+  await t.test('a taken-over period with a foreign eagleId POSTs under that id, PUTs on 409, and records no strayEagleId',
+    async (tt) => {
+      const store = wireStore(tt, [eagleRow()]);
+      wireParent(tt);
+      wireDomain(tt, store);
+      wireQueue(tt);
+      const put = `PUT /commentperiod/${EAGLE_ID}`;
+      const calls = wireEagle(tt, {
+        'POST /commentperiod': { status: 409, body: { message: 'exists' } },
+        [put]: { body: { matchedCount: 1 } }
+      });
+      await period.update(STAFF_CTX, EAGLE_ID, { instructions: 'DEMI text' });
+
+      const result = await run(message({ id: EAGLE_ID }));
+
+      assert.strictEqual(result.status, 'sent');
+      assert.deepStrictEqual(keys(calls), ['POST /commentperiod', put]);
+      assert.strictEqual(calls[0].body._id, EAGLE_ID);
+      assert.strictEqual(calls[1].body.instructions, 'DEMI text');
+      const row = store.get(EAGLE_ID);
+      assert.strictEqual(row.eagleId, EAGLE_ID);
+      assert.strictEqual(row.syncOut.eagle.status, 'sent');
+      assert.ok(!Object.hasOwn(row.syncOut.eagle, 'strayEagleId'));
+      assert.ok(!Object.hasOwn(row.syncOut.eagle, 'mintedId'), 'sync-out did not mint the id');
+    });
+
+  await t.test('its flagged delete sends DELETE /commentperiod/<eagleId>', async (tt) => {
+    const store = wireStore(tt, [eagleRow()]);
+    wireParent(tt);
+    wireDomain(tt, store);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { [`DELETE /commentperiod/${EAGLE_ID}`]: {} });
+    assert.strictEqual((await period.remove(STAFF_CTX, EAGLE_ID)).status, 'ok');
+
+    const result = await run(message({ id: EAGLE_ID }));
+
+    assert.strictEqual(result.status, 'sent');
+    assert.deepStrictEqual(keys(calls), [`DELETE /commentperiod/${EAGLE_ID}`]);
+    assert.strictEqual(store.get(EAGLE_ID).isDeleted, true);
   });
 
   await t.test('a deleted native row DELETEs its minted id', async (tt) => {

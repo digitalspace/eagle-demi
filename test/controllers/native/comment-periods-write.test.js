@@ -96,11 +96,12 @@ test('comment period writes', async (t) => {
     assert.strictEqual(res.status, 404);
   });
 
-  await t.test('staff deletes: 200 and the row is removed', async (t) => {
+  await t.test('staff deletes: 200 and an Eagle period is kept flagged for sync-out', async (t) => {
     const store = fakeStore(t);
     const res = await ROUTES.delete(['staff']);
     assert.strictEqual(res.status, 200);
-    assert.deepStrictEqual(store.deleted, [PERIOD_ID]);
+    assert.deepStrictEqual(store.deleted, []);
+    assert.strictEqual(store.written[0].isDeleted, true);
   });
 
   await t.test('staff publishes: 200 and isPublished true', async (t) => {
