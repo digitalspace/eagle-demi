@@ -4,14 +4,10 @@
 const azureCredential = require('../utils/azure-credential');
 
 const LOGS_SCOPE = 'https://api.loganalytics.io/.default';
-const ARM_SCOPE = 'https://management.azure.com/.default';
+const { ARM_SCOPE } = azureCredential;
 
-/**
- * One authenticated JSON call. GET when there is no body, POST when there is.
- *
- * Plain fetch: three read endpoints do not justify three Azure SDK packages in a Flex Consumption
- * cold start, and the identity is already here.
- */
+/** One authenticated JSON call, GET without a body, POST with one. Plain fetch: three read
+ * endpoints do not justify three Azure SDK packages in a Flex cold start. */
 async function call(url, scope, body) {
   const token = await azureCredential.getToken(scope);
   if (!token) throw new Error(`no token for ${scope}`);
@@ -34,12 +30,8 @@ function zip(columns, rows) {
   return (rows || []).map((row) => Object.fromEntries(names.map((name, i) => [name, row[i]])));
 }
 
-/**
- * Run KQL against a workspace and return its first table as row objects.
- *
- * `customerId` is the workspace GUID, `timespan` an ISO 8601 duration (`PT24H`, `P30D`) which
- * bounds the query on the service side — a caller's window never reaches the KQL text.
- */
+/** First table of a KQL query as row objects. `timespan` (ISO 8601, `PT24H`) bounds the query on the
+ * service side, so a caller's window never reaches the KQL text. */
 async function queryLogs(customerId, query, timespan) {
   const body = await call(
     `https://api.loganalytics.io/v1/workspaces/${customerId}/query`,
@@ -72,12 +64,8 @@ async function queryCost(scope) {
   return zip(props.columns, props.rows);
 }
 
-/**
- * The monthly anomaly guard: what it is set to, and what Azure thinks has been spent against it.
- *
- * `currentSpend` has been observed reporting 0.0 on live budgets here (azure/modules/cost-budget.bicep),
- * so it is reported beside the cost query rather than instead of it.
- */
+/** The monthly budget and Azure's spend against it. `currentSpend` reads 0.0 on live budgets here,
+ * so it is reported beside the cost query, not instead of it. */
 async function getBudget(scope, name) {
   const body = await call(
     `https://management.azure.com${scope}/providers/Microsoft.Consumption/budgets/${name}?api-version=2021-10-01`,
