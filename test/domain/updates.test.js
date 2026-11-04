@@ -14,9 +14,14 @@ const documents = require('../../src/repositories/documents');
 const updateParent = require('../../src/helpers/update-parent');
 const update = require('../../src/domain/updates');
 const syncOut = require('../../src/sync-out');
+const eagleUpdate = require('../../src/sync-out/eagle-update');
 const images = require('../../src/domain/update-images');
+const controller = require('../../src/controllers/nosql/update');
+const { logger } = require('../../src/utils/logger');
 const { fakeImages } = require('../helpers/update-images-store');
 const { ctxFor } = require('../helpers/domain-ctx');
+const { updatesStore } = require('../helpers/updates-store');
+const { parentProject, parentNotification } = require('../helpers/update-parents');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -64,6 +69,8 @@ async function audited(fn) {
   return { result, rows };
 }
 
+const TAKEOVER_LINE = '[Update] DEMI write took over an Eagle update';
+
 const createBody = (fields = {}) => ({ projectId: PUBLIC_PROJECT, headline: 'Open house', ...fields });
 
 test('update domain', async (t) => {
@@ -105,7 +112,7 @@ test('update domain', async (t) => {
 
   await t.test('a write that never lands queues nothing', async (t) => {
     fakeStore(t, DRAFT);
-    t.mock.method(updates, 'upsert', async () => { throw Object.assign(new Error('etag moved'), { code: 412 }); });
+    updates.upsert.mock.mockImplementation(async () => { throw Object.assign(new Error('etag moved'), { code: 412 }); });
     const queued = t.mock.method(syncOut, 'enqueueQuietly', async () => []);
     const result = await update.update(STAFF, UPDATE_ID, { headline: 'x' });
     assert.strictEqual(result.status, 'busy');
@@ -314,7 +321,8 @@ test('update domain', async (t) => {
   });
 
   await t.test('delete archives: status archived, inactive, public pulled, audited', async (t) => {
-    const store = fakeStore(t);
+    const store = fakeStore(t, { ...STORED, sourceSystem: 'eagle' });
+    const info = t.mock.method(logger, 'info', () => {});
     const { result, rows } = await audited(() => update.remove(STAFF, UPDATE_ID));
     assert.strictEqual(result.status, 'ok');
     const row = store.written[0];
@@ -322,7 +330,53 @@ test('update domain', async (t) => {
     assert.strictEqual(row.active, false);
     assert.deepStrictEqual(row.read, ['staff', 'sysadmin']);
     assert.strictEqual(row.isPublished, false);
+    assert.strictEqual(row.sourceSystem, 'demi', 'the archive takes an Eagle row over');
+    assert.deepStrictEqual(row.sources.demi, { read: ['staff', 'sysadmin'], status: 'archived' });
     assert.strictEqual(rows[0].Action, 'update.archive');
+    assert.strictEqual(info.mock.calls.filter(c => c.arguments[0] === TAKEOVER_LINE).length, 1);
+  });
+
+  await t.test('an edit that loses its etag race to a DEMI takeover is not logged as a takeover', async (t) => {
+    fakeStore(t, { ...DRAFT, sourceSystem: 'eagle' });
+    updates.getById.mock.mockImplementation(async () => ({ ...DRAFT, sourceSystem: 'demi', _etag: 'e9' }));
+    updates.getById.mock.mockImplementationOnce(async () => ({ ...DRAFT, sourceSystem: 'eagle' }));
+    updates.upsert.mock.mockImplementationOnce(async () => { throw Object.assign(new Error('etag moved'), { code: 412 }); });
+    const info = t.mock.method(logger, 'info', () => {});
+    const result = await update.update(STAFF, UPDATE_ID, { headline: 'x' });
+    assert.strictEqual(result.status, 'ok', JSON.stringify(result));
+    assert.strictEqual(updates.upsert.mock.callCount(), 2);
+    assert.strictEqual(info.mock.calls.filter(c => c.arguments[0] === TAKEOVER_LINE).length, 0);
+  });
+
+  await t.test('edit of an Eagle update takes it over and a later push keeps headline', async (t) => {
+    const eagleRow = { ...STORED, attachments: [], sourceSystem: 'eagle', sources: { eagle: { read: STORED.read } } };
+    const { row } = updatesStore(t, [eagleRow]);
+    parentProject(t, { ...PARENTS[PUBLIC_PROJECT] });
+    parentNotification(t, null);
+    t.mock.method(syncOut, 'enqueueQuietly', async () => []);
+    const infos = [];
+    t.mock.method(logger, 'info', (msg, meta) => { infos.push({ msg, meta }); });
+
+    const edited = await update.update(STAFF, UPDATE_ID, { headline: 'Edited in DEMI' });
+    assert.strictEqual(edited.status, 'ok', JSON.stringify(edited));
+    assert.strictEqual(row(UPDATE_ID).sourceSystem, 'demi');
+    assert.deepStrictEqual(row(UPDATE_ID).sources.demi, { read: ['public', 'staff', 'sysadmin'], status: 'published' });
+    assert.strictEqual(eagleUpdate.wants(row(UPDATE_ID)), true, 'sync-out sends the taken-over row');
+    assert.deepStrictEqual(infos.filter(i => i.msg === TAKEOVER_LINE).map(i => i.meta),
+      [{ id: UPDATE_ID, eagleId: UPDATE_ID }]);
+
+    const pushed = await controller.mirrorFromEagle(UPDATE_ID, {
+      _id: UPDATE_ID, headline: 'Edited in Eagle', project: PUBLIC_PROJECT, status: 'published', active: true,
+      read: ['public', 'staff', 'sysadmin']
+    });
+    assert.ok(pushed.saved, JSON.stringify(pushed));
+    assert.strictEqual(row(UPDATE_ID).headline, 'Edited in DEMI');
+    assert.strictEqual(row(UPDATE_ID).sources.eagle.headline, 'Edited in Eagle');
+
+    infos.length = 0;
+    const again = await update.update(STAFF, UPDATE_ID, { headline: 'Edited again' });
+    assert.strictEqual(again.status, 'ok', JSON.stringify(again));
+    assert.ok(!infos.some(i => i.msg.startsWith('[Update] DEMI write took over')), 'a DEMI row is not taken over twice');
   });
 
   await t.test('publishing with its own private upload passes and publishes the image', async (t) => {
@@ -353,7 +407,7 @@ test('update domain', async (t) => {
       featuredImage: { document: OWN_IMAGE, alt: 'a' }, images: [{ document: second, alt: 'b' }]
     });
     const images = fakeImages(t, [{ id: OWN_IMAGE, level: 4, ...upload }, { id: second, level: 4, ...upload }]);
-    t.mock.method(documents, 'listByIdsUnscoped', async (access, ids) => ids.map(id => ({ id })));
+    documents.listByIdsUnscoped.mock.mockImplementation(async (access, ids) => ids.map(id => ({ id })));
     const result = await update.update(STAFF, UPDATE_ID, { headline: 'Moved' });
     assert.strictEqual(result.status, 'ok');
     assert.strictEqual(images.level(OWN_IMAGE), 2);
@@ -362,7 +416,7 @@ test('update domain', async (t) => {
 
   await t.test('a save that fails puts the image it published back', async (t) => {
     fakeStore(t, null);
-    t.mock.method(updates, 'upsert', async () => { throw new Error('cosmos down'); });
+    updates.upsert.mock.mockImplementation(async () => { throw new Error('cosmos down'); });
     const images = fakeImages(t, [{ id: OWN_IMAGE, level: 2, ...UPLOAD }]);
     await assert.rejects(update.create(STAFF, createBody({ status: 'published', images: [{ document: OWN_IMAGE, alt: 'A creek' }] })));
     assert.strictEqual(images.level(OWN_IMAGE), 2);
@@ -372,7 +426,7 @@ test('update domain', async (t) => {
     const kept = '5c1f7a3e9b1d2c0012370009';
     fakeStore(t, { ...STORED, attachments: [], images: [{ document: OWN_IMAGE, alt: 'a' }, { document: kept, alt: 'b' }] });
     const images = fakeImages(t, [{ id: OWN_IMAGE, level: 4, ...UPLOAD }, { id: kept, level: 4, ...UPLOAD }]);
-    t.mock.method(documents, 'listByIdsUnscoped', async (access, ids) => ids.map(id => ({ id })));
+    documents.listByIdsUnscoped.mock.mockImplementation(async (access, ids) => ids.map(id => ({ id })));
     const result = await update.update(STAFF, UPDATE_ID, { images: [{ document: kept, alt: 'b' }] });
     assert.strictEqual(result.status, 'ok');
     assert.strictEqual(images.level(OWN_IMAGE), 2);

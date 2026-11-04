@@ -97,6 +97,7 @@ async function send(row, { update }) {
     path: ROUTE,
     noun: 'Update',
     put: (eagleId, fields) => put(s, eagleId, body, fields),
+    mintedOnly: true,
     unknownId: () => ({ line: 'Eagle stored the Update under an unknown id; find it by headline', fields: { headline: body.headline } }),
     // eagle-api's POST stores every new Update unpinned.
     ...(row.pinned === true ? { afterCreate: (eagleId, fields) => put(s, eagleId, body, fields) } : {}),

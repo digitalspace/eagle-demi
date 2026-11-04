@@ -196,14 +196,17 @@ function statusFields(given, merged, { live, now }) {
   };
 }
 
-/** The row's read under its parent, and the copy of the inputs a DEMI row keeps for itself. */
+/**
+ * The fields every DEMI write sets: the row is DEMI's from then on, so the Eagle mirror stops
+ * replacing it and sync-out sends it. `sources.demi` keeps the inputs its read is derived from.
+ */
+const ownedByDemi = (current, own, status) =>
+  ({ sourceSystem: 'demi', sources: { ...current.sources, demi: { read: own, status } } });
+
+/** The row's read under its parent, and the copy of the inputs DEMI keeps for itself. */
 function readFields(current, own, status, parent) {
   const read = updateParent.readUnder(own, parent);
-  return {
-    read,
-    isPublished: read.includes('public'),
-    ...(current.sourceSystem === 'demi' && { sources: { ...current.sources, demi: { read: own, status } } })
-  };
+  return { read, isPublished: read.includes('public'), ...ownedByDemi(current, own, status) };
 }
 
 const idsShown = (row) => [...new Set([
@@ -235,16 +238,18 @@ async function nonPublicIds(row, parentId) {
 
 /**
  * Save through `write`: a published update's uploads are published first, reverted if the save
- * fails; images no published update still shows are then released. `before` null = create.
+ * fails; images no published update still shows are then released. `before` null = create; `write`'s build calls `seen` per row.
  */
 async function writeWithImages(ctx, { before, after, parentId, write }) {
   // Live to the public: published and not capped below public by its parent.
   const publishing = after.status === PUBLISHED && Array.isArray(after.read) && after.read.includes('public');
   // Throws, having reverted what it published, when an image cannot be published.
   const published = publishing ? await images.publishFor(ctx, after, parentId) : [];
+  let tookOver = false;
+  const seen = (current) => { tookOver = Boolean(current) && current.sourceSystem !== 'demi'; };
   let result;
   try {
-    result = await write();
+    result = await write(seen);
   } catch (err) {
     await images.revert(ctx, published, after.id);
     throw err;
@@ -255,6 +260,9 @@ async function writeWithImages(ctx, { before, after, parentId, write }) {
   }
   // Before the image bookkeeping below, so a throw there cannot leave a landed write unqueued.
   await queued(result, UPDATE);
+  if (tookOver) {
+    logger.info('[Update] DEMI write took over an Eagle update', { id: result.value.id, eagleId: result.value.eagleId });
+  }
   if (before) {
     const shownBefore = images.imageIds(before);
     const shownAfter = images.imageIds(result.value);
@@ -316,7 +324,6 @@ async function create(ctx, input) {
   const base = {
     id,
     eagleId: null,
-    sourceSystem: 'demi',
     projectId: null,
     headline: null,
     content: null,
@@ -354,7 +361,7 @@ async function create(ctx, input) {
     notifiedBy: null,
     ...Object.fromEntries(updates.NOTIFY_STATE_FIELDS.map(field => [field, null])),
     notifyAttempts: 0,
-    ...readFields({ sourceSystem: 'demi' }, own, status.status, parent)
+    ...readFields({}, own, status.status, parent)
   };
   const parentId = parent && parent.id;
   const refused = await refusal(row, parentId);
@@ -433,12 +440,13 @@ async function update(ctx, id, changes) {
       before: existing,
       after: preview,
       parentId,
-      write: () => writeRow({
+      write: (seen) => writeRow({
         ctx,
         repo: updates,
         existing,
         reread: () => updates.getById(ctx.access, id),
         build: (current) => {
+          seen(current);
           if (!current) return null;
           if (loaded !== undefined && current._etag !== loaded) throw STALE;
           return rowFor(current);
@@ -466,17 +474,18 @@ async function remove(ctx, id) {
     before: existing,
     after: { id: existing.id, status: ARCHIVED },
     parentId: null,
-    write: () => archive(ctx, existing, actor)
+    write: (seen) => archive(ctx, existing, actor, seen)
   });
 }
 
-function archive(ctx, existing, actor) {
+function archive(ctx, existing, actor, seen) {
   return writeRow({
     ctx,
     repo: updates,
     existing,
     reread: () => updates.getById(ctx.access, existing.id),
     build: (current) => {
+      seen(current);
       if (!current) return null;
       const read = (current.read || []).filter(role => role !== 'public');
       return {
@@ -485,9 +494,7 @@ function archive(ctx, existing, actor) {
         active: false,
         read,
         isPublished: false,
-        ...(current.sourceSystem === 'demi' && {
-          sources: { ...current.sources, demi: { read: [...STAFF_READ], status: ARCHIVED } }
-        }),
+        ...ownedByDemi(current, [...STAFF_READ], ARCHIVED),
         updatedBy: actor,
         dateUpdated: new Date().toISOString()
       };
