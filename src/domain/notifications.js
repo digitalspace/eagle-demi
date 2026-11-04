@@ -55,7 +55,7 @@ const NUMBER_FIELDS = Object.freeze({
 const FIELDS = [...Object.keys(SCHEMA), ...Object.keys(NUMBER_FIELDS)];
 
 /**
- * What a field missing from a PUT becomes, as the Eagle push maps it. create and update override
+ * What a field sent empty in a PUT becomes, as the Eagle push maps it. create and update override
  * the null `notificationReceivedDate`: Cosmos cannot continue a page sorted on a null value.
  */
 const DEFAULTS = Object.freeze({
@@ -173,7 +173,10 @@ async function update(ctx, id, changes) {
   if (!existing) return { status: 'not-found' };
 
   const next = defaulted(checked.value, given);
-  const refused = refusedWriteKeys(notifications.CONTAINER, next, ctx.access, existing);
+  // A null received date is filled in by `build`, which writes the field even when the body left it out.
+  const fillsDate = !{ ...existing, ...next }.notificationReceivedDate;
+  const refused = refusedWriteKeys(notifications.CONTAINER,
+    fillsDate ? { ...next, notificationReceivedDate: null } : next, ctx.access, existing);
   if (refused.length) {
     return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
   }
@@ -188,7 +191,7 @@ async function update(ctx, id, changes) {
       if (!current) return null;
       const now = new Date().toISOString();
       const row = ownedByDemi({ ...current, ...next, updatedBy: actor, dateUpdated: now });
-      row.notificationReceivedDate ||= current.dateAdded || now;
+      row.notificationReceivedDate ||= current.dateAdded || notifications.createdAtOf(current.eagleId) || now;
       return row;
     },
     audit: auditOf('notification.update', given)

@@ -207,6 +207,23 @@ test('notification domain', async (t) => {
     assert.strictEqual(store.written[0].pcp, 'closed');
   });
 
+  await t.test('update that nulls the received date of a mirrored row falls back to its Eagle creation time',
+    async (t) => {
+      const { dateAdded: _dateAdded, ...mirrored } = STORED;
+      const store = fakeStore(t, mirrored);
+
+      await notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', notificationReceivedDate: null });
+
+      assert.strictEqual(store.written[0].notificationReceivedDate, '2018-12-23T12:06:22.000Z');
+    });
+
+  await t.test('update refuses to fill a null received date a vis dial hides from the caller', async (t) => {
+    const store = fakeStore(t, { ...STORED, notificationReceivedDate: null, vis: { notificationReceivedDate: 1 } });
+    const { result } = await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine' }));
+    assert.deepStrictEqual(result.fields, { notificationReceivedDate: 'is not writable by this caller' });
+    assert.strictEqual(store.written.length, 0);
+  });
+
   await t.test('update ignores read and isPublished, and a body of only those is invalid', async (t) => {
     const store = fakeStore(t);
     await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', read: ['sysadmin'], isPublished: false }));
