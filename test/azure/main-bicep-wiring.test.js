@@ -1155,16 +1155,12 @@ test('the rotator app carries every setting the rotator reads, each from its own
     'eagle-edge reads this principal to grant it write on the stampedgesecret rule sets');
 });
 
-test('the rotator alerts match the lines the rotator logs', () => {
-  const rotatorRule = (name) => new RegExp(`^resource ${name} [\\s\\S]*?\\n\\}`, 'm').exec(ROTATOR_MODULE)?.[0] ?? '';
-  const failed = rotatorRule('failedAlert');
-  assert.match(failed, /Message contains "\[secret-rotator\] FAILED"/);
-  assert.match(failed, /Message contains "\[secret-rotator\] issuer-expiry"/);
+test('the rotator alerts read the right window, fire on the right count and mail the shared group', () => {
+  const { block: failed } = ruleQuery('demi-secret-rotator-failed', ROTATOR_MODULE);
   assert.match(failed, /operator: 'GreaterThan'\n\s+threshold: 0/);
   assert.match(failed, /windowSize: 'PT2H'/, 'an hourly rule over a 1 h window misses a line ingested late');
 
-  const silent = rotatorRule('silentAlert');
-  assert.match(silent, /where TimeGenerated > ago\(26h\) \| where Message contains "\[secret-rotator\] run finished"/);
+  const { block: silent } = ruleQuery('demi-secret-rotator-silent', ROTATOR_MODULE);
   assert.match(silent, /windowSize: 'P2D'/, 'ago(26h) narrows nothing in a window shorter than 26 h');
   assert.match(silent, /operator: 'LessThan'\n\s+threshold: 1/,
     'the silence rule must fire on the ABSENCE of the run line');
@@ -1449,13 +1445,11 @@ test('both APIM APIs expose wildcard operations over every method', () => {
   }
 });
 
-// The two search alerts are the answer to the 2026-09-08 outage: 65 minutes of `dataset=Document`
-// 502s that only a log line recorded. Both halves are strings in different languages in different
-// files, and every way of getting it wrong is silent — a rule that matches nothing keeps evaluating
-// and keeps finding nothing, which reads exactly like a healthy service. Text-structural, with the
-// same honest limits as the drift guard above.
-// Every `logger.<level>` message under the request path, rendered the way the runtime renders it:
-// interpolations stand in as `x`, and a message split across concatenated literals is rejoined.
+// Alert query and log line are strings in different files, and a rule that matches nothing keeps
+// evaluating like a healthy service. Text-structural, with the same limits as the drift guard above.
+
+// Every `<call>.<level>` message in `sources` (default: `logger` under the request path), rendered as
+// the runtime renders it: interpolations stand in as `x`, concatenated literals are rejoined.
 const LOG_SOURCES = ['controllers', 'search'].flatMap((dir) => {
   const base = path.join(ROOT, 'src', dir);
   return fs.readdirSync(base, { recursive: true })
@@ -1463,21 +1457,25 @@ const LOG_SOURCES = ['controllers', 'search'].flatMap((dir) => {
     .map(f => ({ file: path.join('src', dir, f), source: fs.readFileSync(path.join(base, f), 'utf8') }));
 });
 
-const LITERAL = /`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'/;
+const LITERAL = /`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/;
 
-const logLines = (level) => LOG_SOURCES.flatMap(({ file, source }) =>
+// `tag` is what a `${TAG}` interpolation renders as, for a module-level tag constant.
+const logLines = (level, { sources = LOG_SOURCES, call = 'logger', tag } = {}) => sources.flatMap(({ file, source }) =>
   [...source.matchAll(new RegExp(
-    `logger\\.${level}\\(\\s*((?:${LITERAL.source})(?:\\s*\\+\\s*(?:${LITERAL.source}))*)`, 'g'))]
+    `${call}\\.${level}\\(\\s*((?:${LITERAL.source})(?:\\s*\\+\\s*(?:${LITERAL.source}))*)`, 'g'))]
     .map(m => [...m[1].matchAll(new RegExp(LITERAL.source, 'g'))].map(s => s[0].slice(1, -1)).join(''))
-    .map(line => ({ file, line: line.replace(/\$\{[^}]+\}/g, 'x').replace(/\\(.)/g, '$1') })));
+    .map(line => ({
+      file,
+      line: line.replace(/\$\{([^}]+)\}/g, (_, expr) => (expr === 'TAG' && tag !== undefined ? tag : 'x')).replace(/\\(.)/g, '$1'),
+    })));
 
-const rule = (name) => OBSERVABILITY
+const rule = (name, source = OBSERVABILITY) => source
   .split(/^resource /m)
   .find(b => b.includes(`name: '${name}-\${environmentName}'`));
 
-const ruleQuery = (name) => {
-  const block = rule(name);
-  assert.ok(block, `no ${name} rule in observability.bicep`);
+const ruleQuery = (name, source = OBSERVABILITY) => {
+  const block = rule(name, source);
+  assert.ok(block, `no ${name} rule in the module`);
   const query = /query: '([^']+)'/.exec(block);
   assert.ok(query, `${name} declares no query`);
   return { block, query: query[1] };
@@ -1582,6 +1580,58 @@ test('the search 5xx rule matches the paths the search routes are mounted at', (
   assert.match(block, /severity: 1$/m, 'same severity as the trace rule — it is the same outage');
   assert.match(block, /actionGroups: \[ alertGroup\.id \]/,
     'the rule must mail the shared action group, not one of its own');
+});
+
+const ROTATOR_DIR = path.join(ROOT, 'src', 'secret-rotator');
+const ROTATOR_SOURCES = fs.readdirSync(ROTATOR_DIR, { recursive: true })
+  .filter(f => f.endsWith('.js') && !f.includes('node_modules'))
+  .map(f => ({ file: path.join('src', 'secret-rotator', f), source: fs.readFileSync(path.join(ROTATOR_DIR, f), 'utf8') }));
+const ROTATOR_TAG = /^const TAG = '([^']+)';$/m.exec(
+  ROTATOR_SOURCES.find(s => path.relative(ROTATOR_DIR, path.join(ROOT, s.file)) === 'rotate.js')?.source ?? '')?.[1];
+// `\b(?:log|logger)` takes the `log.`, `s.log.` and `ctx.log.` forms in rotate.js and covers
+// `logger.<level>` calls too.
+const rotatorLines = (level) => {
+  assert.ok(ROTATOR_TAG, 'rotate.js no longer defines const TAG');
+  return logLines(level, { sources: ROTATOR_SOURCES, call: '\\b(?:log|logger)', tag: ROTATOR_TAG }).map(({ line }) => line);
+};
+
+// Reads `Message contains "a" or Message contains "b"` in the last where clause, and pins the
+// earlier ones. KQL `contains` is case-insensitive, so the match is too.
+const rotatorMatcher = (name, earlierWheres) => {
+  const { query } = ruleQuery(name, ROTATOR_MODULE);
+  const wheres = query.split(/\s*\|\s*where\s+/);
+  assert.deepStrictEqual(wheres.slice(0, -1), earlierWheres, `${name} has unexpected clauses before its Message filter`);
+  const clauses = wheres.at(-1).split(' or ');
+  const needles = clauses.map(c => /^Message contains "([^"]+)"$/.exec(c)?.[1]);
+  assert.ok(needles.every(Boolean), `${name} has a clause this test cannot read: ${JSON.stringify(clauses)}`);
+  return (line) => needles.some(n => line.toLowerCase().includes(n.toLowerCase()));
+};
+
+test('the secret rotator failure alert matches every FAILED and issuer-expiry line and nothing else', () => {
+  const failing = rotatorMatcher('demi-secret-rotator-failed', ['AppTraces']);
+  const errors = rotatorLines('error');
+  const warns = rotatorLines('warn');
+  const issuer = warns.filter(l => l.startsWith(`${ROTATOR_TAG} issuer-expiry`));
+
+  assert.ok(errors.length, 'src/secret-rotator logs no error lines at all any more');
+  assert.ok(issuer.length, 'rotate.js logs no issuer-expiry warning any more');
+  assert.deepStrictEqual(errors.filter(l => !failing(l)), [], 'error lines the failure alert misses');
+  assert.deepStrictEqual(issuer.filter(l => !failing(l)), [], 'issuer-expiry lines the failure alert misses');
+  assert.deepStrictEqual(
+    [...rotatorLines('info'), ...warns.filter(l => !issuer.includes(l))].filter(failing), [],
+    'routine lines the failure alert would page on');
+});
+
+test('the secret rotator silence alert counts run finished lines and nothing else', () => {
+  const heartbeat = rotatorMatcher('demi-secret-rotator-silent', ['AppTraces', 'TimeGenerated > ago(26h)']);
+  const finished = rotatorLines('info').filter(l => l.startsWith(`${ROTATOR_TAG} run finished`));
+  const all = ['error', 'warn', 'info'].flatMap(rotatorLines);
+
+  assert.ok(finished.some(l => /run finished rotated=x renewed=x failed=x/.test(l)),
+    'rotate.js logs no run finished line with rotated, renewed and failed counters any more');
+  assert.deepStrictEqual(finished.filter(l => !heartbeat(l)), [], 'run finished lines the heartbeat misses');
+  assert.deepStrictEqual(all.filter(l => heartbeat(l) && !finished.includes(l)), [],
+    'other lines that would keep the heartbeat quiet while no run finishes');
 });
 
 // A content match against a key the API stopped emitting fails every probe run, which is an outage
