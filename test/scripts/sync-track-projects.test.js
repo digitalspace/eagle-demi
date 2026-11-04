@@ -745,6 +745,19 @@ test('a relink does not carry the Eagle-only row sync-out state to the Track row
   assert.strictEqual(Object.hasOwn(written, 'syncVersion'), false);
 });
 
+test('a relink of an Eagle-only row DEMI owns keeps the Eagle-side fields DEMI holds', async () => {
+  const projects = fakeProjects([eagleOnlyProject({
+    demiOwnedAt: NOW, sector: 'Mines',
+    sources: { track: null, eagle: { _id: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy', sector: 'Energy' } }
+  })]);
+
+  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  const [written] = projects.writes;
+  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
+  assert.deepStrictEqual([written.sector, written.demiOwnedAt], ['Mines', NOW]);
+});
+
 // `tags` is DEMI's own and Track never sends it, so neither the nightly update nor a re-key may
 // rebuild the row without it.
 test('the Track sync keeps the tags DEMI set', async (t) => {

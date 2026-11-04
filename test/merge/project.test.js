@@ -11,6 +11,7 @@ const {
   mergeEagleOnlyProject,
   carryEagleOnlyFields,
   carryDemiOnlyFields,
+  carryDelete,
   buildRegistry,
   buildProjectIndex,
   normalizeCentroid,
@@ -1230,7 +1231,7 @@ test('carryDemiOnlyFields', async (t) => {
 
   await t.test('a re-merge of a DEMI-owned project keeps sector, region and read from the stored row', () => {
     const stored = { id: '207', demiOwnedAt: OWNED_AT, sector: 'Mines', region: 'Skeena', read: ['staff', 'sysadmin'] };
-    const pushed = eagleFor(TRACK_207, { sector: 'Energy - Electricity', region: 'Lower Mainland' });
+    const pushed = eagleFor(TRACK_207, { region: 'Lower Mainland' });
 
     const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), stored);
 
@@ -1240,12 +1241,42 @@ test('carryDemiOnlyFields', async (t) => {
     assert.strictEqual(merged.demiOwnedAt, OWNED_AT);
   });
 
+  await t.test('a value a DEMI-owned project cleared to null stays null', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, sector: null, read: ['staff', 'sysadmin'] };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { sector: 'Mines' }), OPTS), stored);
+
+    assert.strictEqual(merged.sector, null);
+  });
+
   await t.test('a DEMI-owned project still takes the Track-precedence fields from Track', () => {
     const stored = { id: '207', demiOwnedAt: OWNED_AT, name: 'DEMI name', read: ['staff', 'sysadmin'] };
 
     const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
 
     assert.strictEqual(merged.name, TRACK_207.name);
+  });
+
+  await t.test('a DEMI-owned project with no Track source keeps its own Track-precedence values', () => {
+    const stored = { id: 'eagle-x', demiOwnedAt: OWNED_AT, name: 'DEMI name', read: ['staff', 'sysadmin'] };
+    const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207, { name: 'Eagle name', proponentName: 'Eagle Corp' }), OPTS);
+
+    const merged = carryDemiOnlyFields(rebuilt, stored);
+
+    assert.deepStrictEqual([merged.name, merged.proponentName], ['DEMI name', 'Eagle Corp'],
+      "Eagle's value fills only a field the stored row has none for");
+  });
+
+  await t.test('a DEMI-owned project Eagle deleted stays deleted when the feed lists it again', () => {
+    const stored = {
+      id: '207', demiOwnedAt: OWNED_AT, isDeleted: true, read: ['staff', 'sysadmin'],
+      sources: { eagle: { isDeleted: true } }
+    };
+
+    const merged = carryDelete(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
+
+    assert.strictEqual(merged.isDeleted, true);
+    assert.ok(!merged.read.includes('public'), JSON.stringify(merged.read));
   });
 
   await t.test('a delete the re-merge applies still caps a DEMI-owned project at staff', () => {
