@@ -199,7 +199,7 @@ function reverseSpec(step) {
   const touched = step.loadAll || step.scanAll ? ''
     : ` AND (ARRAY_CONTAINS(c.read, '${STAFF}') OR ARRAY_CONTAINS(c.read, '${TEAM}'))`;
   return skip => ({
-    query: 'SELECT c.id, c.read, c.ownRead, c.eagleId, c.projectId, c.periodId, c.kind, ' +
+    query: 'SELECT c.id, c.read, c.ownRead, c.eagleId, c.sourceSystem, c.projectId, c.periodId, c.kind, ' +
       'c.inspection, c.element, c.isDeleted, c.levelHeldAt, c.sealedAt, c._etag, ' +
       'c.sources.eagle.read AS eagleRead, c.sources.eagle.isDeleted AS eagleDeleted, ' +
       'c.sources.eagle.status AS eagleStatus, c.sources.eagle.active AS eagleActive, ' +
@@ -282,6 +282,8 @@ function candidates(step, row, eagleRead, parent) {
  * parent, flagged `parentMissing`.
  */
 function planReverse(step, row, parents) {
+  // A row DEMI owns holds DEMI's read; the dropped rule never wrote it, so it is not the reverse's to undo.
+  if (row.sourceSystem === 'demi') return null;
   const eagleRead = eagleReadOf(step, row);
   if (step.parent !== 'eagle' && eagleRead === undefined) return null;
   const parent = parentOf(step, row, parents);

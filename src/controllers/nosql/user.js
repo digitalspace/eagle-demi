@@ -7,6 +7,8 @@
  * `['sysadmin']` stays privileged-only. Contact fields are 2/2 in catalog/users.js. Eagle's `password`
  * and `salt` are dropped before anything is built, the raw copy under `sources` included: eagle-api
  * already strips them, and a legacy row it missed must still not land here.
+ *
+ * A user DEMI owns (`sourceSystem: 'demi'`, set by any DEMI write) takes only the raw copy on a push.
  */
 
 const users = require('../../repositories/users');
@@ -14,7 +16,7 @@ const { eagleBaseAcl } = require('../../seed/transform');
 const { mirrorError } = require('../../helpers/duplicate-id');
 const { auditEvent } = require('../../utils/audit');
 const {
-  eaglePush, upsertWithRetry, ignoreStalePush, pushConflict, underDeleteCeiling, refId
+  eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict, underDeleteCeiling, refId
 } = require('./eagle-mirror');
 const { listHandler, getHandler } = require('./mirror-reads');
 
@@ -60,19 +62,21 @@ function mirrorItem(eagleId, doc, read, existing) {
   };
 }
 
+/** The `read` the mirror stores for an Eagle user doc. */
+function storedRead(doc) {
+  return underDeleteCeiling(eagleBaseAcl(doc.read), doc);
+}
+
 /** @returns {Promise<{saved: object, existing: object|null}|{ignored: string, existing: object}|{status: 'conflict'}>} */
 function mirrorFromEagle(eagleId, rawDoc, { pushedAt = null } = {}) {
   const doc = withoutSecrets(rawDoc);
-  const read = underDeleteCeiling(eagleBaseAcl(doc.read), doc);
-  return upsertWithRetry(
-    users,
-    (current) => mirrorItem(eagleId, doc, read, current),
-    () => users.readForWrite(eagleId),
-    { pushedAt }
-  );
+  const read = storedRead(doc);
+  return upsertKeepingDemiRows(users, eagleId, doc, (current) => mirrorItem(eagleId, doc, read, current),
+    () => users.readForWrite(eagleId), { pushedAt, label: LABEL });
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
+exports.storedRead = storedRead;
 
 exports.upsertFromEagle = async (req, res) => {
   try {

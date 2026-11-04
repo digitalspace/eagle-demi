@@ -12,6 +12,8 @@ const users = require('../repositories/users');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
+const { logger } = require('../utils/logger');
+const { storedRead } = require('../controllers/nosql/user');
 
 /** eagle-api lets only this organization's users read public (user.js:39,92). */
 const PUBLIC_ORG_NAME = 'Environmental Assessment Office';
@@ -117,6 +119,12 @@ async function create(ctx, input) {
   });
 }
 
+/** The read a DEMI write starts from: an Eagle row's own read under the mirror rule, else the stored one. */
+function takeoverBase(row) {
+  const eagle = row.sourceSystem !== 'demi' && row.sources && row.sources.eagle;
+  return eagle && Array.isArray(eagle.read) ? storedRead(eagle) : row.read;
+}
+
 /**
  * Replaces every field, as eagle-api's PUT does (user.js:69-90); a field the body leaves out goes
  * back to its default. `isPublished` left out keeps the current visibility, except that a user
@@ -146,26 +154,34 @@ async function update(ctx, id, changes) {
   }
 
   const actor = actorOf(ctx);
-  return writeRow({
+  let tookOver = false;
+  const written = await writeRow({
     ctx,
     repo: users,
     existing,
     reread: () => readUser(ctx, id),
     build: (current) => {
       if (!current) return null;
+      tookOver = current.sourceSystem !== 'demi';
       const wanted = isPublished ?? current.isPublished === true;
       const published = wanted && next.orgName === PUBLIC_ORG_NAME;
       return {
         ...current,
         ...next,
+        // Owned by DEMI from now on, so the Eagle mirror keeps this edit (controllers/nosql/user.js).
+        sourceSystem: 'demi',
         updatedBy: actor,
         dateUpdated: new Date().toISOString(),
         isPublished: published,
-        read: readWith(current.read, published)
+        read: readWith(takeoverBase(current), published)
       };
     },
     audit: auditOf('user.update', Object.keys(checked.value))
   });
+  if (written.status === 'ok' && tookOver) {
+    logger.info('[User] DEMI write took over an Eagle user', { id, eagleId: existing.eagleId });
+  }
+  return written;
 }
 
 module.exports = { SCHEMA, DEFAULTS, PUBLIC_ORG_NAME, create, update };

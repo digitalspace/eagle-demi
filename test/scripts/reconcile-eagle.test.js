@@ -19,6 +19,7 @@ const listsRepo = require('../../src/repositories/lists');
 const periodsRepo = require('../../src/repositories/comment-periods');
 const commentsRepo = require('../../src/repositories/comments');
 const groupsRepo = require('../../src/repositories/groups');
+const usersRepo = require('../../src/repositories/users');
 const sources = require('../../src/seed/sources');
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
@@ -1562,6 +1563,15 @@ test('the user, group and inspection mirrors are checked against their stored Ea
     pagedCosmos(tt, container => (container === groupsRepo.CONTAINER ? [owned] : []));
     const summary = await reconcile([], deps({ groups: groupsRepo }));
     assert.deepStrictEqual(summary.groups.aclMismatch, []);
+  });
+
+  await t.test('a user DEMI took over is not checked against the Eagle copy a later push stores', async (tt) => {
+    const owned = {
+      id: 'U-owned', sourceSystem: 'demi', read: ['sysadmin'], isPublished: false, eagleRead: ['public', 'sysadmin']
+    };
+    pagedCosmos(tt, container => (container === usersRepo.CONTAINER ? [owned] : []));
+    const summary = await reconcile([], deps({ users: usersRepo }));
+    assert.deepStrictEqual(summary.users.aclMismatch, []);
   });
 
   const failing = (container, err) => ({ CONTAINER: container, listAclRows: async () => { throw err; } });
