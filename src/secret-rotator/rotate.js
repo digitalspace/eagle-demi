@@ -26,6 +26,7 @@ const STAMPERS = ['frontdoor', 'apim'];
 const EDGE_HEADER = 'x-edge-secret';
 const DEFAULT_CONTENT_TYPE = 'text/plain';
 const IDLE_STAGES = ['idle', 'verified'];
+const TIMED_STAGES = ['minted', 'promoted', 'retired', 'restored'];
 
 const standbyName = (name) => `${name}-standby`;
 const list = (raw) => (raw || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -60,6 +61,8 @@ const stateTags = (stage, nowMs, attempts) => ({
   'rotation-at': new Date(nowMs).toISOString(),
   'rotation-attempts': String(attempts)
 });
+
+const sameTime = (a, b) => (a ? a.getTime() : null) === (b ? b.getTime() : null);
 
 const isDue = (secret, nowMs) => !secret.expiresOn || secret.expiresOn.getTime() - nowMs <= DUE_WITHIN;
 
@@ -139,7 +142,12 @@ async function retireWhenReady(s) {
     await retag(s, 'promoted', { 'rotation-at': s.spare.tags['rotation-at'], 'rotation-patched-at': new Date(s.nowMs).toISOString() });
     return waiting(s, 'rules not yet on the new value');
   }
-  const patchedAt = Date.parse(s.spare.tags['rotation-patched-at'] || '') || s.at;
+  const patchedAt = Date.parse(s.spare.tags['rotation-patched-at'] || '');
+  if (Number.isNaN(patchedAt)) {
+    s.log.warn(`${TAG} ${s.name}: rotation-patched-at unreadable; restarting the edge wait`);
+    await retag(s, 'promoted', { 'rotation-at': s.spare.tags['rotation-at'], 'rotation-patched-at': new Date(s.nowMs).toISOString() });
+    return waiting(s, 'edge propagation');
+  }
   if (rules.some((r) => r.state !== 'Succeeded')) return waiting(s, 'a rule is not Succeeded');
   if (s.nowMs - patchedAt < EDGE_SETTLE) return waiting(s, 'edge propagation');
   if (!(await s.probe(s.entry.probe))) return waiting(s, `probe ${s.entry.probe}`);
@@ -187,7 +195,7 @@ async function rotateOne(ctx, entry) {
   // Bad state tags fail closed: a lost time restarts the wait, a lost count uses up the retries.
   s.attempts = /^\d+$/.test(tags['rotation-attempts'] || '') ? Number(tags['rotation-attempts']) : MAX_ATTEMPTS;
   const at = Date.parse(tags['rotation-at'] || '');
-  if (Number.isNaN(at)) {
+  if (Number.isNaN(at) && TIMED_STAGES.includes(stage)) {
     s.log.warn(`${TAG} ${s.name}: rotation-at unreadable in stage ${stage}; restarting its wait`);
     await retag(s, stage);
     return;
@@ -234,9 +242,11 @@ async function renew(ctx, rotatedNames) {
   for (const props of due) {
     try {
       const secret = await ctx.vault.get(props.name);
-      // A version written since the list is someone else's change; rewriting the old value would revert it.
-      if (secret.version !== props.version) {
-        ctx.log.info(`${TAG} ${props.name}: new version since the list; renew waits for the next run`);
+      if (!secret) continue;
+      // A change since the list is someone else's write; rewriting the old value would revert it. The list
+      // carries no version id, so updatedOn is the marker.
+      if (!sameTime(secret.updatedOn, props.updatedOn)) {
+        ctx.log.info(`${TAG} ${props.name}: changed since the list; renew waits for the next run`);
         continue;
       }
       await write({ ...ctx, current: secret }, props.name, secret.value, secret.tags || {});
@@ -302,6 +312,7 @@ const properties = (p) => ({
   enabled: p.enabled !== false,
   managed: Boolean(p.managed),
   expiresOn: p.expiresOn || null,
+  updatedOn: p.updatedOn || null,
   contentType: p.contentType || null,
   tags: p.tags || {}
 });

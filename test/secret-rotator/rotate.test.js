@@ -29,7 +29,8 @@ function fakeVault(seed) {
   const add = (name, fields) => {
     const version = `v${++seq}`;
     const versions = store.get(name) || [];
-    versions.push({ name, version, enabled: true, expiresOn: null, contentType: null, tags: {}, ...fields });
+    const updatedOn = new Date(T0 + seq);
+    versions.push({ name, version, enabled: true, expiresOn: null, updatedOn, contentType: null, tags: {}, ...fields });
     store.set(name, versions);
     return version;
   };
@@ -56,11 +57,14 @@ function fakeVault(seed) {
     },
     async tag(name, version, tags) {
       writes.push(name);
-      store.get(name).find((v) => v.version === version).tags = { ...tags };
+      const target = store.get(name).find((v) => v.version === version);
+      target.tags = { ...tags };
+      target.updatedOn = new Date(target.updatedOn.getTime() + 1);
     },
+    // Like listPropertiesOfSecrets: latest properties per name, no value and no version id.
     async list() {
       return [...store.keys()].map((name) => {
-        const { value: _value, ...props } = latest(name);
+        const { value: _value, version: _version, ...props } = latest(name);
         return props;
       });
     }
@@ -298,6 +302,7 @@ test('verify', async (t) => {
     assert.strictEqual(stageOf(h, 'apim-gateway-secret'), 'restored');
     assert.strictEqual(standbyOf(h, 'apim-gateway-secret').tags['rotation-attempts'], '1');
     assert.strictEqual(failedLines(h).length, 1);
+    assert.match(failedLines(h)[0].m, /both values accepted/);
   });
 
   await t.test('a failing probe on the frontdoor class leaves the rules on N', async () => {
@@ -344,6 +349,7 @@ test('verify', async (t) => {
     await h.at(retired + 4 * DAY);
     assert.strictEqual(h.vault.writes.length, writes, 'no write once failed');
     assert.strictEqual(failedLines(h).length, alerts + 1);
+    assert.match(failedLines(h).at(-1).m, /both values accepted/);
   });
 });
 
@@ -356,6 +362,25 @@ test('state tags fail closed', async (t) => {
     await h.at(T0);
     assert.strictEqual(h.vault.latest('apim-gateway-secret').value, OLD, 'not promoted');
     assert.strictEqual(standbyOf(h, 'apim-gateway-secret').tags['rotation-at'], new Date(T0).toISOString());
+  });
+
+  await t.test('a missing rotation-patched-at restarts the 45 min edge wait', async () => {
+    const h = harness({ env: EDGE_ENV, secrets: rotated('edge-secret') });
+    const stamped = await edgeToStamped(h);
+    delete standbyOf(h, 'edge-secret').tags['rotation-patched-at'];
+    await h.at(stamped + 45 * MIN);
+    assert.strictEqual(stageOf(h, 'edge-secret'), 'promoted');
+    assert.strictEqual(standbyOf(h, 'edge-secret').tags['rotation-patched-at'], new Date(stamped + 45 * MIN).toISOString());
+  });
+
+  await t.test('stage failed with an unreadable rotation-at writes nothing', async () => {
+    const h = harness({ env: APIM_ENV, secrets: {
+      ...rotated('apim-gateway-secret'),
+      'apim-gateway-secret-standby': { value: OLD, tags: { 'rotation-stage': 'failed', 'rotation-at': 'bad', 'rotation-attempts': '2' } }
+    } });
+    await h.at(T0);
+    assert.deepStrictEqual(h.vault.writes, []);
+    assert.strictEqual(failedLines(h).length, 1);
   });
 
   await t.test('an unreadable rotation-attempts uses up the retries', async () => {
@@ -412,12 +437,19 @@ test('renew', async (t) => {
     assert.deepStrictEqual(h.vault.writes, []);
   });
 
-  await t.test('skips a secret that got a new version after the list', async () => {
+  await t.test('skips a secret changed after the list', async () => {
     const h = harness({ env: renewEnv, secrets: { 'docling-api-key': { value: 'd', expiresOn: new Date(T0 + DAY) } } });
     const list = h.vault.list;
-    h.vault.list = async () => (await list()).map((p) => ({ ...p, version: 'v-listed' }));
+    h.vault.list = async () => (await list()).map((p) => ({ ...p, updatedOn: new Date(T0 - DAY) }));
     await h.at(T0);
     assert.deepStrictEqual(h.vault.writes, []);
+  });
+
+  await t.test('a secret gone between the list and the read is skipped, not failed', async () => {
+    const h = harness({ env: renewEnv, secrets: {} });
+    h.vault.list = async () => [{ name: 'gone-key', enabled: true, managed: false, expiresOn: new Date(T0 + DAY), tags: {} }];
+    await h.at(T0);
+    assert.deepStrictEqual(failedLines(h), []);
   });
 });
 
@@ -529,7 +561,7 @@ test('createVault over a SecretClient', async (t) => {
     },
     async getSecret(name, options = {}) {
       if (name === 'missing') throw Object.assign(new Error('not found'), { statusCode: 404 });
-      return { value: `value-${options.version || 'latest'}`, properties: { name, version: 'c' } };
+      return { value: `value-${options.version || 'latest'}`, properties: { name, version: 'c', updatedOn: new Date(T0) } };
     }
   };
   const vault = createVault(client);
@@ -544,5 +576,6 @@ test('createVault over a SecretClient', async (t) => {
     assert.strictEqual(secret.enabled, true);
     assert.strictEqual(secret.managed, false);
     assert.strictEqual(secret.contentType, null);
+    assert.strictEqual(secret.updatedOn.getTime(), T0, 'renew compares it with the list');
   });
 });

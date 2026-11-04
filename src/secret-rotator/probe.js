@@ -4,8 +4,8 @@ const { setTimeout: sleep } = require('node:timers/promises');
 
 const PROBE_TIMEOUT_MS = 15000;
 
-/** True when stamper and checker agree on the live value, seen through the public path. */
-// Retries cover a DEMI cold start (~50 s): one slow first request must not count as a rejection.
+/** True when stamper and checker agree on the live value, seen through the public path. Retries
+ * cover a DEMI cold start (~50 s): one slow first request must not count as a rejection. */
 function createProbe({ demiUrl, analyticsUrl, fetchImpl = fetch, attempts = 3, delayMs = 20000 } = {}) {
   const call = async (url, init) => {
     if (!url) return null;
