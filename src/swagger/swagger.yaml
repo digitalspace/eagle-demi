@@ -6865,11 +6865,12 @@ paths:
         '404':
           description: Notification not found.
     put:
-      summary: Replace a project notification
+      summary: Update a project notification
       description: >-
-        Replaces every field, as eagle-api's PUT did: a field the body leaves out, or sends empty,
-        goes back to its default (`null`; `centroid` `[]`, `pcp` `none`, `isMet` false, `metURL`
-        empty). Sets `dateUpdated` and `updatedBy`. Needs the role `staff` or `sysadmin`. `read`
+        Sets the fields the body names. A field the body leaves out keeps its stored value. A field
+        sent empty goes to its default (`null`; `centroid` `[]`, `pcp` `none`, `isMet` false,
+        `metURL` empty), as eagle-api's PUT did. Sets `dateUpdated` and `updatedBy`. A notification
+        mirrored from Eagle becomes a DEMI row, so a later Eagle push no longer changes its fields. Needs the role `staff` or `sysadmin`. `read`
         and `isPublished` are ignored: visibility moves through `/publish` and `/unpublish`. A body
         with no other field is a 400.
       security:

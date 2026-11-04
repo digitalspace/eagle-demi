@@ -15,6 +15,7 @@ const syncOut = require('../../src/sync-out');
 const { NOTIFICATION } = require('../../src/sync-out/kinds');
 const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
 const notification = require('../../src/domain/notifications');
+const { mirrorFromEagle } = require('../../src/controllers/nosql/notification');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -25,6 +26,7 @@ const STORED = Object.freeze({
   type: 'Mines', region: 'Kootenay', decision: 'In Progress', pcp: 'open', isMet: true,
   metURL: 'https://engage.example/mine', dateStarted: '2026-09-01T00:00:00.000Z', centroid: [49.5, -117.3],
   notificationThresholdValue: 75, dateAdded: '2020-01-01T00:00:00.000Z',
+  notificationReceivedDate: '2021-03-01T00:00:00.000Z',
   read: ['public', 'staff', 'sysadmin'], isPublished: true, _etag: 'e1'
 });
 
@@ -116,7 +118,7 @@ test('notification domain', async (t) => {
     assert.strictEqual(store.written[0].notificationThresholdValue, 12);
   });
 
-  await t.test('update replaces every field, so one the body leaves out goes back to its default', async (t) => {
+  await t.test('PUT without pcp/isMet/metURL keeps the stored values', async (t) => {
     const store = fakeStore(t);
 
     const { result, rows } = await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', region: '' }));
@@ -125,22 +127,43 @@ test('notification domain', async (t) => {
     assert.strictEqual(result.created, false);
     const row = store.written[0];
     assert.strictEqual(row.name, 'Mine');
-    assert.strictEqual(row.region, null, "eagle-api's '' default, stored as the mirror stores it");
-    assert.strictEqual(row.type, null);
-    assert.strictEqual(row.pcp, 'none');
-    assert.strictEqual(row.isMet, false);
-    assert.strictEqual(row.metURL, '');
-    assert.strictEqual(row.dateStarted, null);
-    assert.deepStrictEqual(row.centroid, []);
-    assert.strictEqual(row.notificationThresholdValue, null);
+    assert.strictEqual(row.region, null, "a field sent empty takes eagle-api's '' default, stored as the mirror stores it");
+    assert.strictEqual(row.type, STORED.type);
+    assert.strictEqual(row.pcp, STORED.pcp);
+    assert.strictEqual(row.isMet, STORED.isMet);
+    assert.strictEqual(row.metURL, STORED.metURL);
+    assert.strictEqual(row.dateStarted, STORED.dateStarted);
+    assert.deepStrictEqual(row.centroid, STORED.centroid);
+    assert.strictEqual(row.notificationThresholdValue, STORED.notificationThresholdValue);
+    assert.strictEqual(row.notificationReceivedDate, STORED.notificationReceivedDate);
     assert.deepStrictEqual(row.read, STORED.read, 'PUT leaves the visibility alone');
     assert.strictEqual(row.isPublished, true);
     assert.strictEqual(row.dateAdded, STORED.dateAdded);
     assert.strictEqual(row.updatedBy, 'idir-staff');
+    assert.strictEqual(row.sourceSystem, 'demi', 'the edit takes the Eagle row over');
     assert.strictEqual(rows[0].Action, 'notification.update');
     assert.deepStrictEqual(rows[0].Detail.fields, ['name', 'region'], 'field names only');
     assert.strictEqual(store.forgotten, 0, 'the read did not move');
     assert.deepStrictEqual(store.queued, [[NOTIFICATION_ID, 'e2', NOTIFICATION]]);
+  });
+
+  await t.test('a push after a DEMI edit keeps the DEMI fields', async (t) => {
+    let stored = { ...STORED };
+    t.mock.method(syncOut, 'enqueueQuietly', async () => []);
+    t.mock.method(updates, 'forgetParents', () => {});
+    t.mock.method(notifications, 'getById', async () => ({ ...stored }));
+    t.mock.method(notifications, 'readForWrite', async () => ({ ...stored }));
+    t.mock.method(notifications, 'upsert', async (row) => { stored = { ...row, _etag: 'e2' }; return stored; });
+    await notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', pcp: 'closed' });
+
+    const doc = { _id: NOTIFICATION_ID, name: 'Eagle name', pcp: 'open', region: 'Skeena', read: ['public'] };
+    await mirrorFromEagle(NOTIFICATION_ID, doc);
+
+    assert.strictEqual(stored.name, 'Mine');
+    assert.strictEqual(stored.pcp, 'closed');
+    assert.strictEqual(stored.region, STORED.region);
+    assert.strictEqual(stored.sourceSystem, 'demi');
+    assert.deepStrictEqual(stored.sources.eagle, doc, 'the push lands only as the raw Eagle copy');
   });
 
   // GET /notifications sorts on it, and Cosmos cannot continue a page from a null sort value.
@@ -161,16 +184,20 @@ test('notification domain', async (t) => {
     assert.strictEqual(store.written[0].notificationReceivedDate, '2026-05-01T00:00:00.000Z');
   });
 
-  await t.test('update that omits or nulls the received date falls back to dateAdded', async (t) => {
-    for (const body of [{ name: 'Mine' }, { name: 'Mine', notificationReceivedDate: null }]) {
-      const store = fakeStore(t, { ...STORED, notificationReceivedDate: '2021-03-01T00:00:00.000Z' });
+  await t.test('update that nulls the received date falls back to dateAdded', async (t) => {
+    const store = fakeStore(t);
 
-      const result = await notification.update(STAFF, NOTIFICATION_ID, body);
+    await notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', notificationReceivedDate: null });
 
-      assert.strictEqual(result.status, 'ok');
-      assert.strictEqual(store.written[0].notificationReceivedDate, STORED.dateAdded, JSON.stringify(body));
-      t.mock.restoreAll();
-    }
+    assert.strictEqual(store.written[0].notificationReceivedDate, STORED.dateAdded);
+  });
+
+  await t.test('update that omits the received date on a row with none stores dateAdded, never null', async (t) => {
+    const store = fakeStore(t, { ...STORED, notificationReceivedDate: null });
+
+    await notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine' });
+
+    assert.strictEqual(store.written[0].notificationReceivedDate, STORED.dateAdded);
   });
 
   await t.test('update keeps an isMet of false, as eagle-api does with ??', async (t) => {
@@ -194,7 +221,7 @@ test('notification domain', async (t) => {
 
   await t.test('update refuses to blank a field a vis dial hides from the caller', async (t) => {
     const store = fakeStore(t, { ...STORED, vis: { region: 1 } });
-    const { result } = await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine' }));
+    const { result } = await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', region: '' }));
     assert.strictEqual(result.status, 'invalid');
     assert.deepStrictEqual(result.fields, { region: 'is not writable by this caller' });
     assert.strictEqual(store.written.length, 0);
@@ -215,6 +242,7 @@ test('notification domain', async (t) => {
     assert.deepStrictEqual(store.written[0].read, ['public', 'staff', 'sysadmin']);
     assert.strictEqual(store.written[0].isPublished, true);
     assert.strictEqual(store.written[0].name, STORED.name, 'publish touches no content field');
+    assert.strictEqual(store.written[0].sourceSystem, 'demi', 'the publish takes the Eagle row over');
     assert.strictEqual(rows[0].Action, 'notification.publish');
     assert.strictEqual(store.forgotten, 1);
     assert.deepStrictEqual(store.queued, [[NOTIFICATION_ID, 'e2', NOTIFICATION]]);
