@@ -1367,8 +1367,9 @@ paths:
         its `eagle-<eagleId>` copy loses the delete DEMI gave it too. A project mirrored from Eagle
         is taken over, so an Eagle push that still carries its delete does not delete it again;
         not an `eagle-<eagleId>` copy beside its Track project, nor a project with no stored Eagle
-        record. Audited as `project.restore`. A project created in DEMI or taken over is queued
-        for sync-out; any other project is not.
+        record. Audited as `project.restore`. Restore itself sends nothing to Eagle, so Eagle's
+        copy stays as it is; the later `PUT /api/projects/{id}/level` on a project created in
+        DEMI or taken over is what sync-out sends.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

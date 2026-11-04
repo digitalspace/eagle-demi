@@ -341,12 +341,27 @@ test('PUT /projects/:id/restore', async (t) => {
     assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read, 'widening stays with /level');
   });
 
-  await t.test('raises syncVersion and queues the project for sync-out', async () => {
+  await t.test('sends nothing to Eagle: sent at staff, it would unpublish Eagle\'s live copy', async () => {
     const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY, syncVersion: 4 }));
 
     await restore();
 
-    assert.strictEqual(seen.written.syncVersion, 5);
+    assert.strictEqual(seen.written.syncVersion, 4);
+    assert.deepStrictEqual(queued, []);
+  });
+
+  await t.test('then /level to public versions and queues the project it took over', async () => {
+    const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY, syncVersion: 4 }));
+    await restore();
+    const after = stage(t, seen.written);
+
+    const level = mockRes();
+    await projectController.setLevel({
+      params: { id: '207' }, query: {}, user: STAFF, body: { level: 4, confirm: true, reason: 'republish' }
+    }, level);
+
+    assert.strictEqual(level.statusCode, 200);
+    assert.strictEqual(after.written.syncVersion, 5);
     assert.deepStrictEqual(queued.map(row => row.id), ['207']);
   });
 

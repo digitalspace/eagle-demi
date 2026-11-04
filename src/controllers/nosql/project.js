@@ -1394,8 +1394,10 @@ exports.restoreProject = async (req, res) => {
         if (!current) return { status: 'missing' };
         if (current.isDeleted !== true) return { status: 'live' };
         const now = new Date().toISOString();
+        // Not versioned: sent at the staff-only `read` it keeps, the send would unpublish Eagle's
+        // live copy. The `/level` widen after it is what reaches Eagle.
         const row = clearDeleted({ ...current, ...await takeOver(current, now), updatedAt: now });
-        return { status: 'saved', saved: await projects.upsert(versioned(row, current), { etag: current._etag }), replaced: current };
+        return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), replaced: current };
       },
       onLost: (_current, attempt) =>
         logger.warn('[Project Controller] project restore lost its etag race, rebuilding',
@@ -1415,7 +1417,6 @@ exports.restoreProject = async (req, res) => {
       projectId: saved.id,
       detail: { name: saved.name, isPublished: saved.isPublished }
     });
-    await enqueueProject(saved);
 
     return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {
