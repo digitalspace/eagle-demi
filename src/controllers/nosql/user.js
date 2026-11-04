@@ -7,6 +7,8 @@
  * `['sysadmin']` stays privileged-only. Contact fields are 2/2 in catalog/users.js. Eagle's `password`
  * and `salt` are dropped before anything is built, the raw copy under `sources` included: eagle-api
  * already strips them, and a legacy row it missed must still not land here.
+ *
+ * A user DEMI owns (`sourceSystem: 'demi'`, set by any DEMI write) takes only the raw copy on a push.
  */
 
 const users = require('../../repositories/users');

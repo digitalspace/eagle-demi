@@ -100,6 +100,14 @@ test('backfill-eagle-ladder --reverse', async (t) => {
     assert.deepStrictEqual(readOf(writes, 'u-1'), ['sysadmin']);
   });
 
+  await t.test('a user DEMI took over keeps its read', async (t) => {
+    const writes = fakeCosmos(t, {
+      users: [{ id: 'u-1', eagleId: 'u-1', sourceSystem: 'demi', read: ['sysadmin', 'staff'], eagleRead: ['sysadmin'], _etag: 'x' }]
+    });
+    await reverse('--live');
+    assert.strictEqual(readOf(writes, 'u-1'), undefined);
+  });
+
   await t.test('a deleted user under the delete ceiling goes back to Eagle\'s read', async (t) => {
     const writes = fakeCosmos(t, {
       users: [{ id: 'u-1', eagleId: 'u-1', read: ['staff'], eagleRead: ['sysadmin'], eagleDeleted: true, _etag: 'x' }]

@@ -147,6 +147,7 @@ async function update(ctx, id, changes) {
   }
 
   const actor = actorOf(ctx);
+  let tookOver = false;
   const written = await writeRow({
     ctx,
     repo: users,
@@ -154,6 +155,7 @@ async function update(ctx, id, changes) {
     reread: () => readUser(ctx, id),
     build: (current) => {
       if (!current) return null;
+      tookOver = current.sourceSystem !== 'demi';
       const wanted = isPublished ?? current.isPublished === true;
       const published = wanted && next.orgName === PUBLIC_ORG_NAME;
       return {
@@ -169,7 +171,7 @@ async function update(ctx, id, changes) {
     },
     audit: auditOf('user.update', Object.keys(checked.value))
   });
-  if (written.status === 'ok' && existing.sourceSystem !== 'demi') {
+  if (written.status === 'ok' && tookOver) {
     logger.info('[User] DEMI write took over an Eagle user', { id, eagleId: existing.eagleId });
   }
   return written;

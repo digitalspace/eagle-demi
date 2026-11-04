@@ -67,13 +67,17 @@ async function listByOrg(access, orgId) {
   }));
 }
 
-/** Every row's ACL inputs, whole container — for the reconcile only. */
+/**
+ * Every row's ACL inputs, whole container — for the reconcile only. A row DEMI owns carries no
+ * `eagleRead`: a later push still stores an Eagle copy, but the row's read is DEMI's, not derived from it.
+ */
 async function listAclRows(access) {
-  return fetchAll(CONTAINER, selectWhere({
+  const rows = await fetchAll(CONTAINER, selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    select: 'c.id, c.read, c.isPublished, c.isDeleted, c.sealedAt, c.sources.eagle.read AS eagleRead'
+    select: 'c.id, c.read, c.isPublished, c.isDeleted, c.sealedAt, c.sourceSystem, c.sources.eagle.read AS eagleRead'
   }));
+  return rows.map(({ sourceSystem, eagleRead, ...row }) => (sourceSystem === 'demi' ? row : { ...row, eagleRead }));
 }
 
 /** The native list contract's reads (`helpers/native-query.js`); by id keeps the point read above. */

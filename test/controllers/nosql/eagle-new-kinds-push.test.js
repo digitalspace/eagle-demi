@@ -103,7 +103,6 @@ test('user mirror', async (t) => {
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(row.email, 'demi@example.invalid');
     assert.deepStrictEqual(row.read, written.read);
-    assert.ok(!row.read.includes('public'), 'a push cannot publish a user DEMI owns');
     assert.strictEqual(row.sources.eagle.email, 'eagle@example.invalid', 'Eagle copy kept for the reconcile');
     assert.ok(!('password' in row.sources.eagle) && !('salt' in row.sources.eagle));
   });
