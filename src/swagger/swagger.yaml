@@ -6869,10 +6869,11 @@ paths:
       description: >-
         Sets the fields the body names. A field the body leaves out keeps its stored value. A field
         sent empty goes to its default (`null`; `centroid` `[]`, `pcp` `none`, `isMet` false,
-        `metURL` empty), as eagle-api's PUT did. Sets `dateUpdated` and `updatedBy`. A notification
-        mirrored from Eagle becomes a DEMI row, so a later Eagle push no longer changes its fields. Needs the role `staff` or `sysadmin`. `read`
-        and `isPublished` are ignored: visibility moves through `/publish` and `/unpublish`. A body
-        with no other field is a 400.
+        `metURL` empty), as eagle-api's PUT did. An empty `notificationReceivedDate` becomes the
+        date the notification was added. Sets `dateUpdated` and `updatedBy`. A notification mirrored
+        from Eagle becomes a DEMI row, so a later Eagle push no longer changes its fields. Needs the
+        role `staff` or `sysadmin`. `read` and `isPublished` are ignored: visibility moves through
+        `/publish` and `/unpublish`. A body with no other field is a 400.
       security:
         - BearerAuth: []
       parameters:
@@ -6905,8 +6906,9 @@ paths:
     put:
       summary: Publish a project notification
       description: >-
-        Adds `public` to the notification's read and sets `isPublished`. Needs the role `staff` or
-        `sysadmin`. Takes no body fields. Replaces eagle-api's `?publish=true`.
+        Adds `public` to the notification's read and sets `isPublished`. A notification mirrored
+        from Eagle becomes a DEMI row, so a later Eagle push no longer changes its fields. Needs the
+        role `staff` or `sysadmin`. Takes no body fields. Replaces eagle-api's `?publish=true`.
       security:
         - BearerAuth: []
       parameters:
@@ -6931,8 +6933,10 @@ paths:
     put:
       summary: Unpublish a project notification
       description: >-
-        Removes `public` from the notification's read and clears `isPublished`. Needs the role
-        `staff` or `sysadmin`. Takes no body fields. Replaces eagle-api's `?publish=false`.
+        Removes `public` from the notification's read and clears `isPublished`. A notification
+        mirrored from Eagle becomes a DEMI row, so a later Eagle push no longer changes its fields.
+        Needs the role `staff` or `sysadmin`. Takes no body fields. Replaces eagle-api's
+        `?publish=false`.
       security:
         - BearerAuth: []
       parameters:
