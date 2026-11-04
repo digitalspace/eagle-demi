@@ -62,9 +62,9 @@ def package_api(repo_root, zip_path):
     exclude_extensions = {".zip", ".tar.gz", ".map", ".md", ".d.ts",
                           ".pem", ".key", ".p12", ".pfx"}
 
-    # By PATH: `src/secret-sync` is a SEPARATE function app shipped by package-secret-sync.sh;
-    # a copy here would drift from the one that runs.
-    path_exclude_dirs = {os.path.join("src", "secret-sync")}
+    # By PATH: `src/secret-sync` and `src/secret-rotator` are SEPARATE function apps with their own
+    # zips; a copy here would drift from the one that runs.
+    path_exclude_dirs = {os.path.join("src", "secret-sync"), os.path.join("src", "secret-rotator")}
 
     # Runtime data under excluded dirs: the boundary seeder reads the geojson, eagle-query.js the
     # indexes at REQUIRE time, src/jobs/search-definitions.js all of azure/search.

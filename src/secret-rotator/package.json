@@ -1,0 +1,17 @@
+{
+  "name": "eagle-demi-secret-rotator",
+  "version": "1.0.0",
+  "description": "Rotates the self-minted Key Vault secrets and renews the exp of every other one",
+  "_comment_main": "Zip manifest: the zip keeps the repo layout, so main is a path from the zip root.",
+  "main": "src/secret-rotator/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.13.2",
+    "@azure/keyvault-secrets": "^4.10.0",
+    "@azure/monitor-opentelemetry": "^1.19.0",
+    "winston": "^3.19.0"
+  }
+}

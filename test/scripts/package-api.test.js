@@ -85,14 +85,13 @@ test('API deploy package', async (t) => {
     );
   });
 
-  await t.test('does NOT ship src/secret-sync — that is a separate function app', () => {
-    // scripts/package-secret-sync.sh builds it with its own package.json and dependencies. A copy
-    // inside the API package is a second deployment of the same sync, drifting from the live one.
-    const syncEntries = [...entries].filter(e => e.startsWith('src/secret-sync/'));
+  await t.test('does NOT ship src/secret-sync or src/secret-rotator — those are separate function apps', () => {
+    // Each has its own zip, package.json and dependencies; a copy inside the API package drifts from the live one.
+    const appEntries = [...entries].filter(e => e.startsWith('src/secret-sync/') || e.startsWith('src/secret-rotator/'));
     assert.deepStrictEqual(
-      syncEntries,
+      appEntries,
       [],
-      `src/secret-sync must not be packaged, found: ${syncEntries.join(', ')}`
+      `separate apps must not be packaged, found: ${appEntries.join(', ')}`
     );
   });
 

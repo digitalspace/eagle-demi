@@ -174,6 +174,13 @@ test('edge ban detector', async (t) => {
     assert.ok(h.store.has('5.9.1.1_32'));
   });
 
+  await t.test('a rule id with a .. segment is refused before any ARM call', async () => {
+    const h = harness(t, {});
+    const id = RULE_ID.replace('rulesdemidocs', '..');
+    await assert.rejects(edgeBan.writeRule(credential, id, ['192.0.2.1/32'], quiet), /not a rules engine rule id/);
+    assert.strictEqual(h.calls.arm.length, 0);
+  });
+
   await t.test('off mode writes the placeholder back and reads no log', async () => {
     const h = harness(t, { matchValues: ['5.9.1.1/32'] });
     await h.run({ mode: 'off', policy: null });
