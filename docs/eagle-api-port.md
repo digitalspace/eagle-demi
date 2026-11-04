@@ -319,7 +319,7 @@ Callers to move: eagle-admin `comment.service.ts:47,52,73,139`.
 
 ### Project groups
 
-Status: done (5ccd2bf3), Dark. DEMI half of F4 built (8b926aa6); the eagle-admin half is todo.
+Status: done (5ccd2bf3), Dark. DEMI half of F4 built (8b926aa6); eagle-admin still calls eagle-api.
 
 Today: `GET /groups`, `GET /groups/:id` (`routes.js:275-276`), Eagle mirror at `routes.js:254`. Dark: the six routes are served under the `port: groups` anchor (`routes.js:381`), rules in `src/domain/groups.js`, write handlers in `src/controllers/native/groups-write.js`, the members read in `src/controllers/native/groups.js`. eagle-admin still calls eagle-api.
 
@@ -338,12 +338,12 @@ Business rules (eagle-api `api/controllers/projectGroup.js`):
 Decisions:
 - PUT applies the whole body in eagle-api (`:48`). DEMI takes `name` only; members move through the member routes, and any other key is a 400.
 - Adding members allows duplicates in eagle-api (`:92-95`). DEMI adds only ids the group does not hold, recomputed on the re-read row after a lost etag race; a body that adds nothing writes nothing. The body is `{ members }` (at most 100 ids), not a bare array.
-- Ownership: any DEMI write sets `sourceSystem: 'demi'` and copies Eagle's own read into `sources.demi.read`, so the project cascade keeps the same ACL.
+- Ownership: any DEMI write sets `sourceSystem: 'demi'` and copies Eagle's own read, less `public`, into `sources.demi.read`, or the default group read when Eagle sent none. The project cascade and the reconcile both derive a DEMI-owned row from that read.
 - Eagle push onto a DEMI-owned group (`upsertKeepingDemiRows` in `controllers/nosql/group.js`): 200, only `sources.eagle` and the push stamp change. Name, members, read and the delete flag stay as DEMI wrote them.
 - An Eagle delete of a DEMI-owned group changes only the raw copy. A group DEMI created has no `eagleId`, so no Eagle push ever reaches it.
 - Flip: once eagle-admin writes groups through DEMI, each group it edits is DEMI-owned, and a late eagle-api push cannot undo that edit. Untouched groups keep following Eagle.
 - Sync-out: none. Neither eagle-public line (`react`, `develop`) reads groups, and eagle-admin reads them from DEMI after the Flip.
-- Tests: `test/controllers/nosql/eagle-new-kinds-push.test.js` (push leaves DEMI fields, DEMI write then echo keeps members), `test/domain/groups.test.js` (takeover, flagged delete).
+- Tests: `test/controllers/nosql/eagle-new-kinds-push.test.js` (push leaves DEMI fields, DEMI write then a later Eagle push keeps members), `test/domain/groups.test.js` (takeover, flagged delete), `test/scripts/reconcile-eagle.test.js` (taken-over group read).
 
 Callers to move: eagle-admin `project.service.ts:252,256,262,266,270` and the members read.
 
