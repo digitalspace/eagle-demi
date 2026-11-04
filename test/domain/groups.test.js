@@ -139,10 +139,12 @@ test('group domain', async (t) => {
     assert.deepStrictEqual(row.sources.eagle, eagle);
   });
 
-  await t.test("a takeover of a group with no stored Eagle read takes eagle-api's group read", async (t) => {
-    const store = fakeStore(t, { ...STORED, sources: { eagle: { _id: GROUP_ID } } });
-    await group.update(STAFF, GROUP_ID, { name: 'Nations' });
-    assert.deepStrictEqual(store.written[0].sources.demi.read, group.GROUP_READ);
+  await t.test("a takeover with no Eagle read, or only public, takes eagle-api's group read", async (t) => {
+    for (const eagle of [{ _id: GROUP_ID }, { _id: GROUP_ID, read: ['public'] }]) {
+      const store = fakeStore(t, { ...STORED, sources: { eagle } });
+      await group.update(STAFF, GROUP_ID, { name: 'Nations' });
+      assert.deepStrictEqual(store.written[0].sources.demi.read, group.GROUP_READ, JSON.stringify(eagle));
+    }
   });
 
   await t.test('update naming anything but name is a 400 and writes nothing', async (t) => {

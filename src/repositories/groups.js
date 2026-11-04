@@ -77,7 +77,7 @@ async function deleteById(id, projectId, etag) {
   return cosmos.remove(CONTAINER, String(id), String(projectId), { etag });
 }
 
-/** A row's own ACL, read from Cosmos as `eagleRead`. */
+/** The columns `withOwnRead` picks a row's own ACL from. */
 const OWN_READ = 'c.sourceSystem, c.sources.eagle.read AS eagleRead, c.sources.demi.read AS demiRead';
 
 /** A row DEMI owns, created or taken over, takes its own ACL from `sources.demi.read`. */

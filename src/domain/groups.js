@@ -54,9 +54,10 @@ function stamped(ctx, row) {
 function ownedByDemi(row) {
   if (row.sourceSystem === 'demi') return row;
   const eagleRead = row.sources && row.sources.eagle && row.sources.eagle.read;
-  // A mirrored row with no stored Eagle read takes eagle-api's group ACL.
-  const own = (Array.isArray(eagleRead) ? eagleRead : GROUP_READ).filter((role) => role !== 'public');
-  return { ...row, sourceSystem: 'demi', sources: { ...row.sources, demi: { read: own } } };
+  const own = (Array.isArray(eagleRead) ? eagleRead : []).filter((role) => role !== 'public');
+  // No stored Eagle read, or only `public`, takes eagle-api's group ACL.
+  const read = own.length ? own : GROUP_READ;
+  return { ...row, sourceSystem: 'demi', sources: { ...row.sources, demi: { read } } };
 }
 
 /** A DEMI write: owned by DEMI, stamped with the caller and the time. */
