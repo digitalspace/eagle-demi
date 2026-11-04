@@ -540,15 +540,23 @@ test('probes', async (t) => {
     assert.strictEqual(await at(401), false);
   });
 
-  await t.test('a first attempt that times out is retried before the probe counts as failed', async () => {
-    const replies = [null, { ok: true, status: 200, json: async () => ({ edge: true }) }];
+  /** A probe whose first `failures` fetches time out and every later one passes. */
+  const flaky = (failures) => {
+    let calls = 0;
     const fetchImpl = async () => {
-      const reply = replies.shift();
-      if (!reply) throw new Error('timeout');
-      return reply;
+      calls += 1;
+      if (calls <= failures) throw new Error('timeout');
+      return { ok: true, status: 200, json: async () => ({ edge: true }) };
     };
-    const probe = createProbe({ demiUrl: 'https://demi.test/health/trust', delayMs: 0, fetchImpl });
-    assert.strictEqual(await probe('demi-edge'), true);
+    return createProbe({ demiUrl: 'https://demi.test/health/trust', delayMs: 0, fetchImpl });
+  };
+
+  await t.test('two timeouts then a pass: the probe passes on the third attempt', async () => {
+    assert.strictEqual(await flaky(2)('demi-edge'), true);
+  });
+
+  await t.test('three timeouts: the probe fails', async () => {
+    assert.strictEqual(await flaky(3)('demi-edge'), false);
   });
 });
 
