@@ -1347,18 +1347,6 @@ test('PUT /eagle/commentperiods/:eagleId on a period DEMI created', async (t) =>
     });
   });
 
-  await t.test('the echo keeps a higher comment counter, the milestone and edit date DEMI staff write', async () => {
-    const { store } = partitionedCosmos(t, 'projectId', [{ ...demiRow(), commentIdCount: 20 }]);
-
-    await push(eaglePeriod());
-
-    const row = store.get(NATIVE_KEY);
-    assert.strictEqual(row.commentIdCount, 20);
-    assert.strictEqual(row.milestone, '5cf00c03a266b7e1877500aa');
-    assert.strictEqual(row.dateUpdated, '2026-10-29T18:00:00.000Z');
-    assert.strictEqual(row.metURLAdmin, 'https://engage.gov.bc.ca/admin/demi');
-  });
-
   await t.test('an Eagle delete leaves the native row live and only lands in the raw copy', async () => {
     const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);
 

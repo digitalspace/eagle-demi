@@ -266,7 +266,7 @@ test('comment period domain', async (t) => {
       instructions: 'new', read: ['public'], isPublished: true
     }));
     assert.strictEqual(result.status, 'ok');
-    assert.strictEqual(levelOfRead(store.written[0].read), levelOfRead(STORED.read));
+    assert.deepStrictEqual(store.written[0].read, ['staff'], 'the staff read Eagle gave, under the project');
     assert.strictEqual(store.written[0].isPublished, false);
   });
 
