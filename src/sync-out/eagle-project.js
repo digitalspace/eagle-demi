@@ -18,11 +18,11 @@ const NAME = 'eagle';
 const KIND = 'project';
 
 /** DEMI field to the eagle-api field its PUT writes, where the names differ. */
-const RENAMED = Object.freeze({ projectType: 'type', abbreviation: 'shortName', address: 'location' });
+const RENAMED = Object.freeze({ projectType: 'type', address: 'location' });
 /** Fields eagle-api's PUT writes under the same name, as stored. */
 const SAME_NAME = Object.freeze([
   'name', 'description', 'eaStatus', 'eaStatusDate', 'decisionDate', 'CEAALink', 'build',
-  'sector', 'commodity', 'region', 'substantially', 'substantiallyDate', 'intake', 'dispute', 'disputeDate'
+  'sector', 'region', 'substantially', 'substantiallyDate', 'intake', 'dispute', 'disputeDate'
 ]);
 /** ObjectId fields in eagle-api's model that DEMI may hold as `{ _id, name }` refs: sent as the bare id or null. */
 const REFS = Object.freeze(['currentPhaseName', 'eacDecision', 'CEAAInvolvement', 'projectLeadId', 'responsibleEPDId']);
