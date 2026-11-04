@@ -376,6 +376,19 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(saved.isPublished, false);
   });
 
+  await t.test('a create over a project DEMI owns is refused and writes nothing', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '7', demiOwnedAt: '2026-11-01T00:00:00.000Z', _etag: '"1"' }));
+    const upsert = t.mock.method(projects, 'upsert', async (doc) => doc);
+    const res = mockRes();
+
+    await projectController.createProject({
+      body: { trackProjectId: 7, name: 'O', centroid: { coordinates: [0, 0] } }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 409);
+    assert.strictEqual(upsert.mock.callCount(), 0);
+  });
+
   // ONE STORED NAME FOR THE PROJECT STATE. `status` is the wire name and the index alias
   // (`c.projectState AS status`); `projectState` is what the sync writes and what 389 of the 393
   // stored rows carry. Both write routes used to let the wire name through, which put the state

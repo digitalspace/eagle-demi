@@ -11,6 +11,7 @@ const {
   mergeEagleOnlyProject,
   carryEagleOnlyFields,
   carryDemiOnlyFields,
+  carryDelete,
   buildRegistry,
   buildProjectIndex,
   normalizeCentroid,
@@ -1224,6 +1225,126 @@ test('carryDemiOnlyFields', async (t) => {
       { id: '207', eagleId: '5cf00c03a266b7e18775000a' });
 
     assert.strictEqual(merged.eagleId, '5cf00c03a266b7e18775000b');
+  });
+
+  const OWNED_AT = '2026-11-01T00:00:00.000Z';
+
+  await t.test('a re-merge of a DEMI-owned project keeps sector, region and read from the stored row', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, sector: 'Mines', region: 'Skeena', read: ['staff', 'sysadmin'] };
+    const pushed = eagleFor(TRACK_207, { region: 'Lower Mainland' });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), stored);
+
+    assert.deepStrictEqual([merged.sector, merged.region], ['Mines', 'Skeena']);
+    assert.deepStrictEqual(merged.read, ['staff', 'sysadmin']);
+    assert.strictEqual(merged.isPublished, false);
+    assert.strictEqual(merged.demiOwnedAt, OWNED_AT);
+  });
+
+  await t.test('a value a DEMI-owned project cleared to null stays null', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, sector: null, read: ['staff', 'sysadmin'] };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { sector: 'Mines' }), OPTS), stored);
+
+    assert.strictEqual(merged.sector, null);
+  });
+
+  await t.test('a DEMI-owned project still takes the Track-precedence fields from Track', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, name: 'DEMI name', read: ['staff', 'sysadmin'] };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
+
+    assert.strictEqual(merged.name, TRACK_207.name);
+  });
+
+  await t.test('a Track column cleared on a DEMI-owned Track project clears in DEMI', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, eaCertificate: 'OLD-CERT', eacExpires: '2030-01-01', read: ['staff'] };
+    const track = { ...TRACK_207, ea_certificate: null, eac_expires: '' };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(track, eagleFor(TRACK_207), OPTS), stored);
+
+    assert.deepStrictEqual([merged.eaCertificate, merged.eacExpires], [undefined, undefined]);
+  });
+
+  await t.test('a DEMI-owned project with no Track source keeps its own Track-precedence values', () => {
+    const stored = { id: 'eagle-x', demiOwnedAt: OWNED_AT, name: 'DEMI name', read: ['staff', 'sysadmin'] };
+    const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207, { name: 'Eagle name', proponentName: 'Eagle Corp' }), OPTS);
+
+    const merged = carryDemiOnlyFields(rebuilt, stored);
+
+    assert.deepStrictEqual([merged.name, merged.proponentName], ['DEMI name', 'Eagle Corp'],
+      "Eagle's value fills only a field the stored row has none for");
+  });
+
+  await t.test("a DEMI-owned Eagle-only project keeps its stored centroid over Eagle's", () => {
+    const stored = { id: 'eagle-x', demiOwnedAt: OWNED_AT, centroid: [-125, 55], read: ['staff'] };
+    const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207, { centroid: [-120, 50] }), OPTS);
+
+    assert.deepStrictEqual(carryDemiOnlyFields(rebuilt, stored).centroid, [-125, 55]);
+  });
+
+  await t.test('a DEMI-owned project Eagle deleted stays deleted when the feed lists it again', () => {
+    const stored = {
+      id: '207', demiOwnedAt: OWNED_AT, isDeleted: true, read: ['staff', 'sysadmin'],
+      sources: { eagle: { isDeleted: true } }
+    };
+
+    const merged = carryDelete(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
+
+    assert.strictEqual(merged.isDeleted, true);
+    assert.ok(!merged.read.includes('public'), JSON.stringify(merged.read));
+  });
+
+  await t.test('a delete the re-merge applies still caps a DEMI-owned project at staff', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, read: ['public', 'staff', 'sysadmin'] };
+    const rebuilt = mergeTrackProject(TRACK_207, eagleFor(TRACK_207), { ...OPTS, deleted: true });
+
+    const merged = carryDemiOnlyFields(rebuilt, stored);
+
+    assert.ok(!merged.read.includes('public'), JSON.stringify(merged.read));
+    assert.strictEqual(merged.isPublished, false);
+  });
+
+  await t.test('a CAC field a DEMI-owned project lacks is not seeded from Eagle', () => {
+    const pushed = eagleFor(TRACK_207, { cacEmail: 'eagle@example.gov.bc.ca' });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS),
+      { id: '207', demiOwnedAt: OWNED_AT, read: ['staff', 'sysadmin'] });
+
+    assert.ok(!('cacEmail' in merged));
+  });
+
+  // An Eagle record on 2018 with a 2002 block, as a year switch to 2018 rebuilds it.
+  const TWO_ACTS = {
+    _id: 'e-two', read: ['public', 'staff', 'sysadmin'], currentLegislationYear: 'legislation_2018', legislationYearList: [2002, 2018],
+    legislation_2002: { name: 'Mine', legislationYear: 2002, region: 'Peace', eaStatus: 'Certified' },
+    legislation_2018: { name: 'Mine', legislationYear: 2018, region: 'Skeena', decisionDate: '1969-12-31T08:00:00.000Z' }
+  };
+  const ON_2002 = {
+    id: 'eagle-e-two', demiOwnedAt: OWNED_AT, read: ['staff'], currentLegislationYear: 'legislation_2002',
+    legislationYear: 2002, region: 'Peace', eaStatus: 'Certified', legislation_2002: TWO_ACTS.legislation_2002
+  };
+  const switchTo2018 = (stored, eagle = TWO_ACTS) =>
+    carryDemiOnlyFields(mergeEagleOnlyProject(eagle, OPTS), stored, undefined, { switchTo: 'legislation_2018' });
+
+  await t.test("an owned switch to a year only Eagle's copy holds lifts that block, its junk dates nulled", () => {
+    const merged = switchTo2018({ ...ON_2002, legislationYearList: [2002] });
+
+    assert.strictEqual(merged.region, 'Skeena');
+    assert.strictEqual(merged.legislation_2018.decisionDate, null);
+    assert.deepStrictEqual(merged.legislationYearList, [2002, 2018]);
+  });
+
+  await t.test("an owned switch from a row with no year list starts from Eagle's and keeps the year it leaves", () => {
+    const merged = switchTo2018(ON_2002, { ...TWO_ACTS, legislationYearList: [1996, 2018] });
+
+    assert.deepStrictEqual(merged.legislationYearList, [1996, 2002, 2018]);
+  });
+
+  await t.test('an owned switch drops a field only the old block held', () => {
+    const merged = switchTo2018({ ...ON_2002, legislation_2018: TWO_ACTS.legislation_2018 });
+
+    assert.strictEqual(merged.eaStatus, undefined);
   });
 
   await t.test('no stored row hands the rebuilt row back as it was', () => {

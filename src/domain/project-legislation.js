@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * The legislation registry, the locked-Act rule and the publish year switch, ported from eagle-api
- * `api/helpers/constants.js:55-102` and `api/controllers/project.js:580-600,776-801` (rules in
- * docs/eagle-api-port.md, Project).
- *
- * A DEMI project row's top level is the current block, as `legislationYear` and its `legislation`
- * label. Every block, `currentLegislationYear` and `legislationYearList` sit beside it and in
- * `sources.eagle`, which a switch merges again (`merge/project.js`).
+ * Legislation registry, locked-Act rule and publish year switch, ported from eagle-api (docs/eagle-api-port.md).
+ * A row's top level is its current block; every block and the year index also sit in `sources.eagle`.
  */
 
 /**
@@ -21,8 +16,8 @@ const LEGISLATIONS = Object.freeze({
   2025: Object.freeze({ label: 'Building Canada Act', locked: true, inForce: null })
 });
 
-// Eagle stores a cleared date as epoch zero in Pacific time (1969-12-31T08:00Z); no EA record
-// is that old, so anything before this is junk, not history.
+// Eagle stores a cleared date as epoch zero in Pacific time; no EA record is that old, so an
+// earlier date is junk.
 const EAGLE_DATE_FLOOR = Date.UTC(1971, 0, 1);
 
 const beforeDateFloor = (v) =>
@@ -61,11 +56,15 @@ function yearSwitch(row, year) {
   if (locked) return { status: 409, error: locked };
   if (!isRegistryYear(year)) return { status: 404, error: 'Unknown legislation year' };
   const key = `legislation_${year}`;
+  // The row's own year and blocks first: on a row DEMI owns they can differ from Eagle's copy.
   const eagle = (row.sources && row.sources.eagle) || {};
-  const current = eagle.currentLegislationYear || (yearOf(row) && `legislation_${yearOf(row)}`);
+  const current = row.currentLegislationYear || eagle.currentLegislationYear || (yearOf(row) && `legislation_${yearOf(row)}`);
   if (key === current) return { key: null };
-  const listed = Array.isArray(eagle.legislationYearList) && eagle.legislationYearList.map(Number).includes(year);
-  if (!listed || !(eagle[key] && eagle[key].name)) {
+  // A switch rebuilds the row from its Eagle record, so a row with none cannot switch.
+  if (!(row.sources && row.sources.eagle)) return { status: 409, error: 'Project has no Eagle record to switch' };
+  const list = row.legislationYearList ?? eagle.legislationYearList;
+  const block = row[key] ?? eagle[key];
+  if (!(Array.isArray(list) && list.map(Number).includes(year)) || !(block && block.name)) {
     return { status: 409, error: `Project has no content under legislation year ${year}` };
   }
   return { key };

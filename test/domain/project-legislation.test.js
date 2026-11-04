@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { lockRefusal } = require('../../src/domain/project-legislation');
+const { lockRefusal, yearSwitch } = require('../../src/domain/project-legislation');
 
 const BCA = { legislationYear: 2025, legislation: 'Building Canada Act' };
 
@@ -46,5 +46,24 @@ test('lockRefusal', async (t) => {
 
   await t.test('a row with no Act may move', () => {
     assert.strictEqual(lockRefusal({}, { legislationYear: 2018 }), null);
+  });
+});
+
+test('yearSwitch', async (t) => {
+  const block = (year) => ({ name: `Mine ${year}`, legislationYear: year });
+
+  await t.test("a row DEMI owns switches to a year its own list and block hold, though Eagle's lack it", () => {
+    const row = {
+      currentLegislationYear: 'legislation_2002', legislationYearList: [2002, 2018], legislation_2018: block(2018),
+      sources: { eagle: { currentLegislationYear: 'legislation_2002', legislationYearList: [2002] } }
+    };
+
+    assert.deepStrictEqual(yearSwitch(row, 2018), { key: 'legislation_2018' });
+  });
+
+  await t.test('a row with no Eagle record is a 409', () => {
+    const row = { currentLegislationYear: 'legislation_2002', legislationYearList: [2002, 2018], legislation_2018: block(2018) };
+
+    assert.strictEqual(yearSwitch(row, 2018).status, 409);
   });
 });

@@ -56,3 +56,8 @@ test('project: every push-only field has an owner', () => {
 test('project: PUT never takes a field the Eagle push owns as bookkeeping', () => {
   for (const field of project.OWNERS.push) assert.ok(project.PUT_IGNORED_FIELDS.includes(field), field);
 });
+
+test('project: only DEMI sets the takeover marker, and PUT never takes it', () => {
+  assert.ok(project.OWNERS.demi.includes('demiOwnedAt'));
+  assert.ok(project.PUT_IGNORED_FIELDS.includes('demiOwnedAt'));
+});

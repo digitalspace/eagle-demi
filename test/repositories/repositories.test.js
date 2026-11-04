@@ -559,7 +559,7 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     const { spec } = calls[0];
     assert.match(spec.query, /c\.sourceSystem = @sourceSystem/);
     assert.ok(spec.parameters.some(p => p.name === '@sourceSystem' && p.value === 'eagle'));
-    assert.match(spec.query, /^SELECT c\.id, c\.eagleId, c\.isDeleted FROM c/);
+    assert.match(spec.query, /^SELECT c\.id, c\.eagleId, c\.isDeleted, c\.demiOwnedAt FROM c/);
     assert.doesNotMatch(spec.query, /ORDER BY/, 'same continuation-token drop as listSeededIds');
   });
 

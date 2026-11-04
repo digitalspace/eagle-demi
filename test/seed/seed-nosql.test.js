@@ -644,6 +644,23 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.deepStrictEqual(written.reStamped.map(r => [r.id, r.doc.projectId]), [['doc-native', '1234']]);
   });
 
+  await t.test('an unlinked project DEMI owns keeps its own fields but none that point at the old Eagle project', async () => {
+    const stored555 = {
+      id: '555', eagleId: X, demiOwnedAt: NOW, sources: { eagle: { _id: X } }, read: ['staff'],
+      sector: 'Mines', code: 'old-code', proponentId: 'p1', featuredDocuments: ['d1'], phaseHistory: ['ph1'],
+      currentLegislationYear: 'legislation_2002', legislationYearList: [2002],
+      legislation_2002: { name: 'Old project', proponentId: 'p1' }
+    };
+    const { written } = await seedWithNative(minted, [track555], {}, { stored: { 555: stored555 } });
+
+    const row555 = written.projects.find(p => p.id === '555');
+    assert.strictEqual(row555.sector, 'Mines');
+    assert.deepStrictEqual([row555.code, row555.proponentId, row555.featuredDocuments, row555.phaseHistory],
+      [undefined, undefined, undefined, undefined]);
+    assert.deepStrictEqual([row555.legislation_2002, row555.currentLegislationYear, row555.legislationYearList],
+      [undefined, undefined, undefined]);
+  });
+
   await t.test('a Track project beside an Eagle id staff typed on a native one stops a live run', async () => {
     const { summary, written } = await seedWithNative(nativeRow, [track555]);
 
@@ -871,6 +888,18 @@ test('seed() end to end with stubbed sources', async (t) => {
     const matched = written.projects.find(p => p.id === '207');
     assert.strictEqual(matched.syncVersion, undefined);
     assert.strictEqual(matched.syncOut, undefined);
+  });
+
+  await t.test('a Track row seeded beside an eagle-<id> twin DEMI owns takes its fields and level', async () => {
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) => (id === `eagle-${matchedGuid}`
+      ? { id: `eagle-${matchedGuid}`, eagleId: matchedGuid, demiOwnedAt: NOW, sector: 'Mines', read: ['staff'] }
+      : null);
+
+    await seed(['--live', '--only', 'projects'], { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.deepStrictEqual([matched.demiOwnedAt, matched.sector, matched.read], [NOW, 'Mines', ['staff']]);
   });
 
   await t.test('documents are grouped by project — the partition key', async () => {
@@ -1322,6 +1351,19 @@ test('seed --reconcile end to end', async (t) => {
     assert.strictEqual(summary.reconcile.documents.deleted, 0);
     assert.strictEqual(summary.reconcile.projects.wouldDelete, 1);
     assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('a project DEMI owns missing from the feed is not projects surplus', async () => {
+    const { purged, deps } = makeDeps();
+    deps.repos.projects.listEagleOnlyIds = async () => [
+      { id: 'eagle-gone', eagleId: 'gone', demiOwnedAt: NOW },
+      { id: `eagle-${matchedGuid}`, eagleId: matchedGuid }
+    ];
+
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'], { ...deps, sources: stubSources() });
+
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 0);
+    assert.deepStrictEqual(purged.projects, []);
   });
 
   await t.test('reconcile spares a project listed in --keep-ids', async () => {
@@ -1902,6 +1944,20 @@ test('seed --reconcile end to end', async (t) => {
       'without the Eagle-side flag the project could never come back when Eagle republishes it');
     assert.deepStrictEqual(cascaded, ['eagle-gone'], 'its documents and index row are capped too');
     assert.strictEqual(summary.reconcile.projects.deleted, 1);
+  });
+
+  await t.test('a surplus project DEMI owns is left live', async (tt) => {
+    const { deps, upserts, cascaded } = retireDeps(tt);
+    const stored = deps.repos.projects.getById;
+    deps.repos.projects.getById = async (access, id) => {
+      const row = await stored(access, id);
+      return row && { ...row, demiOwnedAt: NOW };
+    };
+
+    await seed(['--live', '--reconcile', '--only', 'projects,documents'], { ...deps, sources: stubSources() });
+
+    assert.ok(!upserts.some(p => p.id === 'eagle-gone' && p.isDeleted), 'DEMI owns its lifecycle');
+    assert.deepStrictEqual(cascaded, []);
   });
 
   await t.test('a retire whose cascade fails fails the run', async (tt) => {
