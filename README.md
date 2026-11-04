@@ -1281,11 +1281,13 @@ why `peSubnetId` has no default in `azure/modules/key-vault.bicep`.
 deploys anything, and refuses when one is missing, because a reference to a secret nobody set
 resolves to nothing and reports no error.
 
-Landing-zone policy refuses a secret write without an expiry date, and Key Vault sends a
+Landing-zone policy refuses a secret write without an expiry date. Key Vault sends a
 `SecretNearExpiry` event 30 days before that date. The subscription `secret-near-expiry` on the
 Event Grid system topic `evgt-demi-kv-<env>` turns each event into an Azure Monitor alert that mails
-the `demi-alerts-<env>` action group. Both live in `azure/modules/key-vault.bicep`. To clear the
-alert, set a new version of the secret with a later `exp`.
+the `demi-alerts-<env>` action group.
+
+The topic and the subscription live in `azure/modules/key-vault.bicep`. To clear the alert, set a
+new version of the secret with a later `exp`.
 
 ### OpenShift secret sync
 
