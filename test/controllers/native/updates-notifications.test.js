@@ -522,4 +522,16 @@ test('native notifications', async (t) => {
     assert.strictEqual((await call(get, '', { id: 'n-staff' })).status, 404);
     assert.strictEqual((await call(get, '', { id: 'n-staff', user: STAFF })).status, 200);
   });
+
+  await t.test('by Eagle id: a DEMI-created row reads under the same role gate', async (t) => {
+    fakeStores(t);
+    const row = { id: 'demi-uuid-1', eagleId: 'dddddddddddddddddddddddd', sourceSystem: 'demi', name: 'Synced notice', read: ['staff'] };
+    CONTAINERS.notifications.push(row);
+    t.after(() => CONTAINERS.notifications.splice(CONTAINERS.notifications.indexOf(row), 1));
+
+    const res = await call(get, '', { id: row.eagleId, user: STAFF });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.id, 'demi-uuid-1');
+    assert.strictEqual((await call(get, '', { id: row.eagleId })).status, 404);
+  });
 });

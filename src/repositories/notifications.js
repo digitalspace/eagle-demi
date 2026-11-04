@@ -136,8 +136,10 @@ const nativeRepository = Object.freeze({
     return items[0] || 0;
   },
   readAll: (access, { criteria, orderBy }) => fetchAll(CONTAINER, nativeSpec(access, criteria, orderBy)),
-  // Mirrored: the DEMI id is the Eagle `_id`, so one point read answers both.
-  getById
+  // A mirrored row's DEMI id is its Eagle `_id`; a DEMI-created row holds the Eagle id sync-out gave it in `eagleId`.
+  getById,
+  getByEagleId: (access, eagleId) =>
+    cosmos.queryFirst(CONTAINER, nativeSpec(access, [eq('eagleId', String(eagleId), '@eagleId')]), {})
 });
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;

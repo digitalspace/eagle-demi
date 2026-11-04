@@ -8428,7 +8428,9 @@ components:
       name: id
       in: path
       required: true
-      description: The record id (the Eagle `_id`, or the UUID of a notification DEMI created).
+      description: >-
+        The record id (the Eagle `_id`, or the UUID of a notification DEMI created). A GET also
+        takes the 24-hex Eagle id sync-out gave a notification DEMI created; writes do not.
       schema:
         type: string
 
