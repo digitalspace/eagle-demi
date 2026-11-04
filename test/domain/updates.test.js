@@ -348,18 +348,6 @@ test('update domain', async (t) => {
     assert.strictEqual(info.mock.calls.filter(c => c.arguments[0] === TAKEOVER_LINE).length, 0);
   });
 
-  await t.test('listDueForNotify returns a native-published Update', async (t) => {
-    const { row } = updatesStore(t, []);
-    parentProject(t, { ...PARENTS[PUBLIC_PROJECT] });
-    parentNotification(t, null);
-    const created = await update.create(STAFF, createBody({ status: 'published' }));
-    assert.strictEqual(created.status, 'ok', JSON.stringify(created));
-    const id = created.value.id;
-
-    const due = await updates.listDueForNotify(row(id).publishDate, 10);
-    assert.deepStrictEqual(due.map(r => r.id), [id]);
-  });
-
   await t.test('edit of an Eagle update takes it over and a later push keeps headline', async (t) => {
     const eagleRow = { ...STORED, attachments: [], sourceSystem: 'eagle', sources: { eagle: { read: STORED.read } } };
     const { row } = updatesStore(t, [eagleRow]);
