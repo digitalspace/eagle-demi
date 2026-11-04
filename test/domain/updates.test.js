@@ -15,8 +15,12 @@ const updateParent = require('../../src/helpers/update-parent');
 const update = require('../../src/domain/updates');
 const syncOut = require('../../src/sync-out');
 const images = require('../../src/domain/update-images');
+const controller = require('../../src/controllers/nosql/update');
+const { logger } = require('../../src/utils/logger');
 const { fakeImages } = require('../helpers/update-images-store');
 const { ctxFor } = require('../helpers/domain-ctx');
+const { updatesStore } = require('../helpers/updates-store');
+const { parentProject, parentNotification } = require('../helpers/update-parents');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -314,7 +318,7 @@ test('update domain', async (t) => {
   });
 
   await t.test('delete archives: status archived, inactive, public pulled, audited', async (t) => {
-    const store = fakeStore(t);
+    const store = fakeStore(t, { ...STORED, sourceSystem: 'eagle' });
     const { result, rows } = await audited(() => update.remove(STAFF, UPDATE_ID));
     assert.strictEqual(result.status, 'ok');
     const row = store.written[0];
@@ -322,7 +326,51 @@ test('update domain', async (t) => {
     assert.strictEqual(row.active, false);
     assert.deepStrictEqual(row.read, ['staff', 'sysadmin']);
     assert.strictEqual(row.isPublished, false);
+    assert.strictEqual(row.sourceSystem, 'demi', 'the archive takes an Eagle row over');
+    assert.deepStrictEqual(row.sources.demi, { read: ['staff', 'sysadmin'], status: 'archived' });
     assert.strictEqual(rows[0].Action, 'update.archive');
+  });
+
+  await t.test('listDueForNotify returns a native-published Update', async (t) => {
+    const { row } = updatesStore(t, []);
+    parentProject(t, { ...PARENTS[PUBLIC_PROJECT] });
+    parentNotification(t, null);
+    const created = await update.create(STAFF, createBody({ status: 'published' }));
+    assert.strictEqual(created.status, 'ok', JSON.stringify(created));
+    const id = created.value.id;
+
+    const due = await updates.listDueForNotify(row(id).publishDate, 10);
+    assert.deepStrictEqual(due.map(r => r.id), [id]);
+  });
+
+  await t.test('edit of an Eagle update takes it over and a later push keeps headline', async (t) => {
+    const eagleRow = { ...STORED, attachments: [], sourceSystem: 'eagle', sources: { eagle: { read: STORED.read } } };
+    const { row } = updatesStore(t, [eagleRow]);
+    parentProject(t, { ...PARENTS[PUBLIC_PROJECT] });
+    parentNotification(t, null);
+    const queued = t.mock.method(syncOut, 'enqueueQuietly', async () => []);
+    const infos = [];
+    t.mock.method(logger, 'info', (msg, meta) => { infos.push({ msg, meta }); });
+
+    const edited = await update.update(STAFF, UPDATE_ID, { headline: 'Edited in DEMI' });
+    assert.strictEqual(edited.status, 'ok', JSON.stringify(edited));
+    assert.strictEqual(row(UPDATE_ID).sourceSystem, 'demi');
+    assert.deepStrictEqual(row(UPDATE_ID).sources.demi, { read: ['public', 'staff', 'sysadmin'], status: 'published' });
+    assert.deepStrictEqual(queued.mock.calls.map(c => c.arguments[1].kind), ['update']);
+    assert.deepStrictEqual(infos.filter(i => i.msg === '[Update] DEMI write took over an Eagle update').map(i => i.meta),
+      [{ id: UPDATE_ID, eagleId: UPDATE_ID }]);
+
+    const pushed = await controller.mirrorFromEagle(UPDATE_ID, {
+      _id: UPDATE_ID, headline: 'Edited in Eagle', project: PUBLIC_PROJECT, status: 'published', active: true,
+      read: ['public', 'staff', 'sysadmin']
+    });
+    assert.ok(pushed.saved, JSON.stringify(pushed));
+    assert.strictEqual(row(UPDATE_ID).headline, 'Edited in DEMI');
+    assert.strictEqual(row(UPDATE_ID).sources.eagle.headline, 'Edited in Eagle');
+
+    infos.length = 0;
+    await update.update(STAFF, UPDATE_ID, { headline: 'Edited again' });
+    assert.ok(!infos.some(i => i.msg.startsWith('[Update] DEMI write took over')), 'a DEMI row is not taken over twice');
   });
 
   await t.test('publishing with its own private upload passes and publishes the image', async (t) => {

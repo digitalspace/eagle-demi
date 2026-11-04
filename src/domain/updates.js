@@ -196,14 +196,17 @@ function statusFields(given, merged, { live, now }) {
   };
 }
 
-/** The row's read under its parent, and the copy of the inputs a DEMI row keeps for itself. */
+/**
+ * The fields every DEMI write sets: the row is DEMI's from then on, so the Eagle mirror stops
+ * replacing it and sync-out sends it. `sources.demi` keeps the inputs its read is derived from.
+ */
+const ownedByDemi = (current, own, status) =>
+  ({ sourceSystem: 'demi', sources: { ...current.sources, demi: { read: own, status } } });
+
+/** The row's read under its parent, and the copy of the inputs DEMI keeps for itself. */
 function readFields(current, own, status, parent) {
   const read = updateParent.readUnder(own, parent);
-  return {
-    read,
-    isPublished: read.includes('public'),
-    ...(current.sourceSystem === 'demi' && { sources: { ...current.sources, demi: { read: own, status } } })
-  };
+  return { read, isPublished: read.includes('public'), ...ownedByDemi(current, own, status) };
 }
 
 const idsShown = (row) => [...new Set([
@@ -255,6 +258,9 @@ async function writeWithImages(ctx, { before, after, parentId, write }) {
   }
   // Before the image bookkeeping below, so a throw there cannot leave a landed write unqueued.
   await queued(result, UPDATE);
+  if (before && before.sourceSystem !== 'demi') {
+    logger.info('[Update] DEMI write took over an Eagle update', { id: result.value.id, eagleId: result.value.eagleId });
+  }
   if (before) {
     const shownBefore = images.imageIds(before);
     const shownAfter = images.imageIds(result.value);
@@ -354,7 +360,7 @@ async function create(ctx, input) {
     notifiedBy: null,
     ...Object.fromEntries(updates.NOTIFY_STATE_FIELDS.map(field => [field, null])),
     notifyAttempts: 0,
-    ...readFields({ sourceSystem: 'demi' }, own, status.status, parent)
+    ...readFields({}, own, status.status, parent)
   };
   const parentId = parent && parent.id;
   const refused = await refusal(row, parentId);
@@ -485,9 +491,7 @@ function archive(ctx, existing, actor) {
         active: false,
         read,
         isPublished: false,
-        ...(current.sourceSystem === 'demi' && {
-          sources: { ...current.sources, demi: { read: [...STAFF_READ], status: ARCHIVED } }
-        }),
+        ...ownedByDemi(current, [...STAFF_READ], ARCHIVED),
         updatedBy: actor,
         dateUpdated: new Date().toISOString()
       };
