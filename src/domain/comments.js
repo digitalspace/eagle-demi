@@ -94,6 +94,25 @@ function statusFields(current, status, period) {
   };
 }
 
+/**
+ * The row a DEMI write leaves, owned by DEMI so a later Eagle push keeps its values and sync-out sends it.
+ * Its own read is the Eagle copy's, else the one its stored status gives.
+ */
+function ownedByDemi(row) {
+  if (row.sourceSystem === 'demi') return row;
+  const eagleRead = row.sources && row.sources.eagle && row.sources.eagle.read;
+  const own = Array.isArray(eagleRead) && eagleRead.length ? [...eagleRead] : moderation(row.eaoStatus).own;
+  return { ...row, sourceSystem: 'demi', sources: { ...row.sources, demi: { read: own } } };
+}
+
+/** `written`, logged once when the write took over the Eagle comment `existing`. */
+function loggedTakeover(written, existing) {
+  if (written.status === 'ok' && existing.sourceSystem !== 'demi') {
+    logger.info('[Comment] DEMI write took over an Eagle comment', { id: existing.id, eagleId: existing.eagleId });
+  }
+  return written;
+}
+
 const readComment = (ctx, id) => comments.getById(ctx.access, id);
 const periodOf = (comment) =>
   commentPeriods.getById(systemAccess(), comment.periodId, comment.projectId, { includeDeleted: true });
@@ -180,20 +199,24 @@ async function update(ctx, id, changes) {
   if (status !== undefined && !period) return { status: 'conflict', error: NO_PERIOD };
 
   const actor = actorOf(ctx);
-  return queued(await writeRow({
+  return queued(loggedTakeover(await writeRow({
     ctx,
     repo: comments,
     existing,
     reread: () => readComment(ctx, id),
-    build: (current) => current && {
-      ...current,
-      ...rest,
-      ...(period && statusFields(current, status, period)),
-      updatedBy: actor,
-      dateUpdated: new Date().toISOString()
+    build: (current) => {
+      if (!current) return null;
+      const owned = ownedByDemi(current);
+      return {
+        ...owned,
+        ...rest,
+        ...(period && statusFields(owned, status, period)),
+        updatedBy: actor,
+        dateUpdated: new Date().toISOString()
+      };
     },
     audit: auditOf('comment.update', fields)
-  }), COMMENT);
+  }), existing), COMMENT);
 }
 
 /**
@@ -210,19 +233,23 @@ async function setStatus(ctx, id, input) {
   if (!period) return { status: 'conflict', error: NO_PERIOD };
 
   const actor = actorOf(ctx);
-  return queued(await writeRow({
+  return queued(loggedTakeover(await writeRow({
     ctx,
     repo: comments,
     existing,
     reread: () => readComment(ctx, id),
-    build: (current) => current && {
-      ...current,
-      ...statusFields(current, checked.value.status, period),
-      updatedBy: actor,
-      dateUpdated: new Date().toISOString()
+    build: (current) => {
+      if (!current) return null;
+      const owned = ownedByDemi(current);
+      return {
+        ...owned,
+        ...statusFields(owned, checked.value.status, period),
+        updatedBy: actor,
+        dateUpdated: new Date().toISOString()
+      };
     },
     audit: auditOf('comment.setStatus', ['eaoStatus'])
-  }), COMMENT);
+  }), existing), COMMENT);
 }
 
 module.exports = { STATUSES, CREATE_SCHEMA, UPDATE_SCHEMA, create, update, setStatus };

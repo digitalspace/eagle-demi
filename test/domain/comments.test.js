@@ -14,6 +14,7 @@ const commentPeriods = require('../../src/repositories/comment-periods');
 const syncOut = require('../../src/sync-out');
 const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
 const comment = require('../../src/domain/comments');
+const { mirrorFromEagle } = require('../../src/controllers/nosql/comment');
 
 let rows = [];
 audit._setTransport(async (stream, batch) => { rows.push(...batch); });
@@ -218,7 +219,36 @@ test('comment domain', async (t) => {
   await t.test('update of an Eagle row leaves its Eagle source alone', async (t) => {
     const store = fakeStore(t, { ...STORED, sources: { eagle: { read: ['staff'] } } });
     await comment.update(STAFF, COMMENT_ID, { eaoStatus: 'Published' });
-    assert.deepStrictEqual(store.written[0].sources, { eagle: { read: ['staff'] } });
+    assert.deepStrictEqual(store.written[0].sources.eagle, { read: ['staff'] });
+  });
+
+  await t.test('update of an Eagle comment takes it over with the Eagle copy\'s read', async (t) => {
+    const store = fakeStore(t, { ...STORED, sources: { eagle: { read: ['project-system-admin', 'sysadmin'] } } });
+    await comment.update(STAFF, COMMENT_ID, { eaoNotes: 'checked' });
+    assert.strictEqual(store.written[0].sourceSystem, 'demi');
+    assert.deepStrictEqual(store.written[0].sources.demi.read, ['project-system-admin', 'sysadmin']);
+  });
+
+  await t.test('status on an Eagle comment sets sourceSystem demi and sources.demi.read and queues comment', async (t) => {
+    const store = fakeStore(t);
+    await comment.setStatus(STAFF, COMMENT_ID, { status: 'Published' });
+    assert.strictEqual(store.written[0].sourceSystem, 'demi');
+    assert.deepStrictEqual(store.written[0].sources.demi.read, ['public', 'staff', 'sysadmin']);
+    assert.deepStrictEqual(store.queued, [[COMMENT_ID, 'e2', 'comment']]);
+  });
+
+  await t.test('a later push through controllers/nosql/comment.js mirrorFromEagle keeps eaoStatus and read', async (t) => {
+    const store = fakeStore(t, { ...STORED, sources: { eagle: { read: ['staff', 'sysadmin'] } } });
+    await comment.setStatus(STAFF, COMMENT_ID, { status: 'Published' });
+    const owned = { ...store.written[0], _etag: 'e2' };
+    t.mock.method(comments, 'readForWrite', async (id) => (id === COMMENT_ID ? { ...owned } : null));
+
+    const doc = { _id: COMMENT_ID, period: PERIOD_ID, eaoStatus: 'Rejected', read: ['staff'], commentId: 7 };
+    const { saved } = await mirrorFromEagle(COMMENT_ID, doc, PERIODS[PERIOD_ID]);
+
+    assert.strictEqual(saved.eaoStatus, 'Published');
+    assert.deepStrictEqual(saved.read, owned.read);
+    assert.deepStrictEqual(saved.sources.eagle, doc);
   });
 
   await t.test('an empty update body is a 400', async (t) => {
