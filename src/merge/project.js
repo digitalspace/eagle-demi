@@ -189,13 +189,13 @@ const LEGISLATION_BLOCK_FIELDS = EAGLE_ONLY_FIELDS.filter(field => !EAGLE_TOP_LE
 
 /** Make `key` an owned row's current year, lifting its own copy of the block; Eagle's only when DEMI lacks one. */
 function liftOwnedBlock(merged, key) {
-  if (!merged[key]) {
-    const eagle = (merged.sources && merged.sources.eagle) || {};
-    Object.assign(merged, pickEagleBlocks({ [key]: eagle[key] }));
-    const year = Number(key.slice(key.indexOf('_') + 1));
-    const years = Array.isArray(merged.legislationYearList) ? merged.legislationYearList : [];
-    if (!years.map(Number).includes(year)) merged.legislationYearList = [...years, year];
-  }
+  const eagle = (merged.sources && merged.sources.eagle) || {};
+  if (!merged[key]) Object.assign(merged, nullEagleJunkDates(pickEagleBlocks({ [key]: eagle[key] })));
+  // A stored row with no list starts from Eagle's; the year it leaves stays one to switch back to.
+  const yearOfKey = (k) => Number(k.slice(k.indexOf('_') + 1));
+  const from = merged.currentLegislationYear ? yearOfKey(merged.currentLegislationYear) : Number(merged.legislationYear);
+  const years = ([merged.legislationYearList, eagle.legislationYearList].find(Array.isArray) || []).map(Number);
+  merged.legislationYearList = [...new Set([...years, from, yearOfKey(key)].filter(Number.isInteger))].sort((a, b) => a - b);
   const lifted = flattenEagleProject({ [key]: merged[key], currentLegislationYear: key });
   for (const field of LEGISLATION_BLOCK_FIELDS) {
     if (hasValue(lifted[field])) merged[field] = lifted[field];

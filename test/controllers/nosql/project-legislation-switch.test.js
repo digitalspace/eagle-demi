@@ -3,6 +3,10 @@
 /** `PUT /projects/:id/level` with a `legislationYear`: eagle-api's publish switch (`project.js:776-801`). */
 
 process.env.NODE_ENV = 'test';
+// Before src/config loads: a batch of 1 flushes each audit row through the stub transport at once.
+process.env.AUDIT_DCR_ENDPOINT = 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com';
+process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
+process.env.AUDIT_MAX_BATCH = '1';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -78,7 +82,10 @@ test('PUT /projects/:id/level legislation year switch', async (t) => {
     assert.strictEqual(writes[0].region, 'Skeena');
   });
 
-  await t.test("a project DEMI owns switches against its own year, not Eagle's", async () => {
+  await t.test("a project DEMI owns switches against its own year, not Eagle's", async (st) => {
+    const rows = [];
+    audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
+    st.after(() => audit._setTransport(async () => {}));
     const row = stored();
     const owned = {
       ...row, demiOwnedAt: '2026-11-01T00:00:00.000Z',
@@ -90,6 +97,7 @@ test('PUT /projects/:id/level legislation year switch', async (t) => {
 
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(writes[0].legislationYear, 2018);
+    assert.strictEqual(rows[0].Detail.legislationFrom, 'legislation_2002');
   });
 
   await t.test('the switch keeps every block for the next one', async () => {

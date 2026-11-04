@@ -874,7 +874,10 @@ exports.upsertFromEagle = async (req, res) => {
   return applyEaglePush(req, res, push);
 };
 
-/** Whether a push leaves the row deleted: its own flag, else the stored delete if it stands. DEMI's call once it owns the row. */
+/**
+ * Whether a push leaves the row deleted: its own flag, else the stored delete if it stands.
+ * Once DEMI owns the row, the stored flag decides.
+ */
 function pushDeleted(doc, existing) {
   if (isDemiOwnedProject(existing)) return existing.isDeleted === true;
   if (typeof doc.isDeleted === 'boolean') return doc.isDeleted;
@@ -906,7 +909,10 @@ function keepNativeIdentity(merged, existing) {
   }
 }
 
-/** The row a push writes, built from whatever revision is stored at the moment of the write. `switchTo`: `carryDemiOnlyFields`. */
+/**
+ * The row a push writes, built from whatever revision is stored at the moment of the write.
+ * `switchTo` names the `legislation_<year>` block an owned row makes current.
+ */
 function mergeEaglePush(doc, existing, { switchTo } = {}) {
   const deleted = pushDeleted(doc, existing);
   // A push carries no Track phases or works, so the stored ones go back in (not DEMI-only: the sync

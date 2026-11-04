@@ -1307,6 +1307,39 @@ test('carryDemiOnlyFields', async (t) => {
     assert.ok(!('cacEmail' in merged));
   });
 
+  // An Eagle record on 2018 with a 2002 block, as a year switch to 2018 rebuilds it.
+  const TWO_ACTS = {
+    _id: 'e-two', read: ['public', 'staff', 'sysadmin'], currentLegislationYear: 'legislation_2018', legislationYearList: [2002, 2018],
+    legislation_2002: { name: 'Mine', legislationYear: 2002, region: 'Peace', eaStatus: 'Certified' },
+    legislation_2018: { name: 'Mine', legislationYear: 2018, region: 'Skeena', decisionDate: '1969-12-31T08:00:00.000Z' }
+  };
+  const ON_2002 = {
+    id: 'eagle-e-two', demiOwnedAt: OWNED_AT, read: ['staff'], currentLegislationYear: 'legislation_2002',
+    legislationYear: 2002, region: 'Peace', eaStatus: 'Certified', legislation_2002: TWO_ACTS.legislation_2002
+  };
+  const switchTo2018 = (stored, eagle = TWO_ACTS) =>
+    carryDemiOnlyFields(mergeEagleOnlyProject(eagle, OPTS), stored, undefined, { switchTo: 'legislation_2018' });
+
+  await t.test("an owned switch to a year only Eagle's copy holds lifts that block, its junk dates nulled", () => {
+    const merged = switchTo2018({ ...ON_2002, legislationYearList: [2002] });
+
+    assert.strictEqual(merged.region, 'Skeena');
+    assert.strictEqual(merged.legislation_2018.decisionDate, null);
+    assert.deepStrictEqual(merged.legislationYearList, [2002, 2018]);
+  });
+
+  await t.test("an owned switch from a row with no year list starts from Eagle's and keeps the year it leaves", () => {
+    const merged = switchTo2018(ON_2002, { ...TWO_ACTS, legislationYearList: [1996, 2018] });
+
+    assert.deepStrictEqual(merged.legislationYearList, [1996, 2002, 2018]);
+  });
+
+  await t.test('an owned switch drops a field only the old block held', () => {
+    const merged = switchTo2018({ ...ON_2002, legislation_2018: TWO_ACTS.legislation_2018 });
+
+    assert.strictEqual(merged.eaStatus, undefined);
+  });
+
   await t.test('no stored row hands the rebuilt row back as it was', () => {
     const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207), OPTS);
 

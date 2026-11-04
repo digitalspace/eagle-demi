@@ -647,7 +647,9 @@ test('seed() end to end with stubbed sources', async (t) => {
   await t.test('an unlinked project DEMI owns keeps its own fields but none that point at the old Eagle project', async () => {
     const stored555 = {
       id: '555', eagleId: X, demiOwnedAt: NOW, sources: { eagle: { _id: X } }, read: ['staff'],
-      sector: 'Mines', code: 'old-code', proponentId: 'p1', featuredDocuments: ['d1'], phaseHistory: ['ph1']
+      sector: 'Mines', code: 'old-code', proponentId: 'p1', featuredDocuments: ['d1'], phaseHistory: ['ph1'],
+      currentLegislationYear: 'legislation_2002', legislationYearList: [2002],
+      legislation_2002: { name: 'Old project', proponentId: 'p1' }
     };
     const { written } = await seedWithNative(minted, [track555], {}, { stored: { 555: stored555 } });
 
@@ -655,6 +657,8 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(row555.sector, 'Mines');
     assert.deepStrictEqual([row555.code, row555.proponentId, row555.featuredDocuments, row555.phaseHistory],
       [undefined, undefined, undefined, undefined]);
+    assert.deepStrictEqual([row555.legislation_2002, row555.currentLegislationYear, row555.legislationYearList],
+      [undefined, undefined, undefined]);
   });
 
   await t.test('a Track project beside an Eagle id staff typed on a native one stops a live run', async () => {

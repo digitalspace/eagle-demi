@@ -13,7 +13,9 @@ const {
   eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, carryDelete, deletedBy, hasValue,
   isDemiOwnedProject
 } = require('../merge/project');
-const { TWIN_CARRY_FIELDS, EAGLE_REFERENCE_FIELDS, CAC_FIELDS } = require('../ownership/project');
+const {
+  TWIN_CARRY_FIELDS, EAGLE_REFERENCE_FIELDS, LEGISLATION_INDEX_FIELDS, LEGISLATION_KEY, CAC_FIELDS
+} = require('../ownership/project');
 const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
 const { pickParent } = require('../helpers/parent-admit');
@@ -560,7 +562,9 @@ async function runSeed(args, deps, summary) {
           // The public search lacks applicableRegulation, featuredDocuments and the push bookkeeping; carried
           // over so a re-seed neither blanks them nor lets an applied push land again.
           if (!unlinked) carryEagleOnlyFields(project, existing);
-          carryDemiOnlyFields(project, existing, undefined, unlinked ? { drop: EAGLE_REFERENCE_FIELDS } : {});
+          const oldBlocks = unlinked ? Object.keys(existing).filter(key => LEGISLATION_KEY.test(key)) : [];
+          carryDemiOnlyFields(project, existing, undefined,
+            unlinked ? { drop: [...EAGLE_REFERENCE_FIELDS, ...LEGISLATION_INDEX_FIELDS, ...oldBlocks] } : {});
           if (unlinked) for (const field of CAC_FIELDS) delete project[field];
           // The public feed never says a project was deleted, so a rebuilt row would republish it.
           carryDelete(project, existing);

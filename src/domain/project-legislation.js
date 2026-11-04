@@ -65,6 +65,8 @@ function yearSwitch(row, year) {
   const eagle = (row.sources && row.sources.eagle) || {};
   const current = row.currentLegislationYear || eagle.currentLegislationYear || (yearOf(row) && `legislation_${yearOf(row)}`);
   if (key === current) return { key: null };
+  // A switch rebuilds the row from its Eagle record, so a row with none cannot switch.
+  if (!(row.sources && row.sources.eagle)) return { status: 409, error: 'Project has no Eagle record to switch' };
   const list = row.legislationYearList ?? eagle.legislationYearList;
   const block = row[key] ?? eagle[key];
   if (!(Array.isArray(list) && list.map(Number).includes(year)) || !(block && block.name)) {
