@@ -1340,23 +1340,11 @@ test('PUT /eagle/commentperiods/:eagleId on a period DEMI created', async (t) =>
 
     await push(doc);
 
-    const { metURLAdmin: _a, commentIdCount: _c, milestone: _m, dateUpdated: _d, ...eagleStaff } =
-      STAFF_PERIOD_FIELDS;
+    // The echo's commentIdCount is the higher one here, so it lands too.
+    const { metURLAdmin: _a, milestone: _m, dateUpdated: _d, ...eagleStaff } = STAFF_PERIOD_FIELDS;
     assert.deepStrictEqual(store.get(NATIVE_KEY), {
       ...stored, ...eagleStaff, sources: { ...stored.sources, eagle: doc }, eaglePushedAt: PUSHED_AT
     });
-  });
-
-  await t.test('the echo keeps the comment counter, milestone and edit date DEMI staff write', async () => {
-    const { store } = partitionedCosmos(t, 'projectId', [demiRow()]);
-
-    await push(eaglePeriod());
-
-    const row = store.get(NATIVE_KEY);
-    assert.strictEqual(row.commentIdCount, 3);
-    assert.strictEqual(row.milestone, '5cf00c03a266b7e1877500aa');
-    assert.strictEqual(row.dateUpdated, '2026-10-29T18:00:00.000Z');
-    assert.strictEqual(row.metURLAdmin, 'https://engage.gov.bc.ca/admin/demi');
   });
 
   await t.test('an Eagle delete leaves the native row live and only lands in the raw copy', async () => {

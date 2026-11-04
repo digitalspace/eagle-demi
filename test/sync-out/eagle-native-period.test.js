@@ -9,6 +9,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const commentPeriods = require('../../src/repositories/comment-periods');
+const { DELETED_CEILING } = require('../../src/repositories/documents');
+const comments = require('../../src/repositories/comments');
 const projects = require('../../src/repositories/projects');
 const notifications = require('../../src/repositories/notifications');
 const { logger } = require('../../src/utils/logger');
@@ -16,6 +18,8 @@ const syncOut = require('../../src/sync-out');
 const eagle = require('../../src/sync-out/eagle');
 const { COMMENT_PERIOD } = require('../../src/sync-out/kinds');
 const commentPeriodController = require('../../src/controllers/nosql/comment-period');
+const period = require('../../src/domain/comment-periods');
+const { ctxFor } = require('../helpers/domain-ctx');
 const { mockRes, STAFF, PUBLIC_ACL } = require('../helpers/eagle-mirror-fixtures');
 const { API, useEnv, wireQueue, wireEagle, keys } = require('../helpers/sync-out-eagle');
 
@@ -25,6 +29,8 @@ const PROJECT_EAGLE_ID = '5cf00c03a266b7e1877504db';
 const ROW_ID = '7d1e2f40-0000-4000-8000-000000000001';
 const MAX_ATTEMPTS = 3;
 const OBJECT_ID = /^[0-9a-f]{24}$/;
+const EAGLE_ID = '5cf00c03a266b7e18775e001';
+const STAFF_CTX = ctxFor(['staff']);
 
 const ENV = {
   SYNC_OUT_QUEUE: 'sync-out',
@@ -96,8 +102,45 @@ function wireStore(t, rows) {
   return store;
 }
 
-function wireParent(t, eagleId = PROJECT_EAGLE_ID) {
-  const parent = { id: PROJECT_ID, eagleId, read: PUBLIC_ACL };
+/** A period the Eagle mirror stored: its id is Eagle's, and sync-out never minted it. */
+function eagleRow() {
+  const doc = {
+    _id: EAGLE_ID, project: PROJECT_EAGLE_ID, instructions: 'Eagle text', milestone: MILESTONE, read: PUBLIC_ACL, commentIdCount: 4
+  };
+  return nativeRow({
+    id: EAGLE_ID, eagleId: EAGLE_ID, sourceSystem: 'eagle', instructions: doc.instructions, milestone: MILESTONE,
+    commentIdCount: 4, sources: { eagle: doc }
+  });
+}
+
+/** A period Eagle holds at `eagleRead` that a DEMI write took over at `read`, owning `own`, not yet sent. */
+function takenOver({ eagleRead, own = eagleRead, read }) {
+  const row = eagleRow();
+  return {
+    ...row, sourceSystem: 'demi', read, isPublished: read.includes('public'),
+    sources: { eagle: { ...row.sources.eagle, read: eagleRead }, demi: { read: own } }
+  };
+}
+
+/** The reads and deletes `domain/comment-periods.js` makes, over the same store. */
+function wireDomain(t, store) {
+  t.mock.method(commentPeriods, 'getById', async (_access, id) =>
+    (store.has(String(id)) ? structuredClone(store.get(String(id))) : null));
+  t.mock.method(commentPeriods, 'deleteById', async (id) => store.delete(String(id)));
+  t.mock.method(projects, 'getById', async (_access, id) => (String(id) === PROJECT_ID ? { id: PROJECT_ID, read: PUBLIC_ACL } : null));
+  t.mock.method(notifications, 'getById', async () => null);
+  t.mock.method(comments, 'setAclForPeriod', async () => ({ succeeded: 0, failed: 0 }));
+}
+
+/** eagle-api pushing its copy of the period to DEMI. */
+function push(doc, pushedAt = Date.now()) {
+  return commentPeriodController.upsertFromEagle({
+    params: { eagleId: doc._id }, query: {}, body: { doc, pushedAt }, user: STAFF
+  }, mockRes());
+}
+
+function wireParent(t, eagleId = PROJECT_EAGLE_ID, read = PUBLIC_ACL) {
+  const parent = { id: PROJECT_ID, eagleId, read };
   t.mock.method(projects, 'readForWrite', async (id) => (String(id) === PROJECT_ID ? { ...parent } : null));
   t.mock.method(projects, 'getByEagleId', async (_access, id) => (id === eagleId ? { ...parent } : null));
   t.mock.method(notifications, 'readForWrite', async () => null);
@@ -168,6 +211,22 @@ test('sync-out of DEMI-native comment periods', async (t) => {
     assert.strictEqual(body.instructions, 'Comment on the draft plan.');
     assert.strictEqual(body.isPublished, true);
     assert.strictEqual(body.milestone, '5cf00c03a266b7e18775aaaa', 'the row\'s milestone wins over the setting');
+  });
+
+  await t.test('the PUT sends the period\'s own publish state, not its read under a non-public project', async (tt) => {
+    const minted = eagle.mintEagleId();
+    wireStore(tt, [nativeRow({
+      eagleId: minted, syncVersion: 2, syncOut: { eagle: { status: 'sent', sentVersion: 1 } }, read: ['staff'], isPublished: false
+    })]);
+    wireParent(tt);
+    wireQueue(tt);
+    const put = `PUT /commentperiod/${minted}`;
+    const calls = wireEagle(tt, { [put]: { body: { matchedCount: 1 } } });
+
+    await run();
+
+    assert.deepStrictEqual(keys(calls), [put]);
+    assert.strictEqual(calls[0].body.isPublished, true);
   });
 
   await t.test('a POST whose answer was lost is retried with the same id, gets 409 and PUTs', async (tt) => {
@@ -559,6 +618,235 @@ test('sync-out of DEMI-native comment periods', async (t) => {
     const [line] = logged('error', 'stray Eagle id 5cf00c03a266b7e18775ffff not recorded');
     assert.ok(line, 'the error line names the stray');
     assert.strictEqual(line.arguments[1].strayEagleId, '5cf00c03a266b7e18775ffff');
+  });
+
+  await t.test('once DEMI has sent it, a later Eagle push keeps instructions, milestone and read', async (tt) => {
+    const store = wireStore(tt, [eagleRow()]);
+    wireParent(tt);
+    wireDomain(tt, store);
+    wireQueue(tt);
+    wireEagle(tt, { [`PUT /commentperiod/${EAGLE_ID}`]: { body: { matchedCount: 1 } }, 'POST /commentperiod': { status: 409 } });
+    const demiMilestone = '5cf00c03a266b7e18775aaaa';
+    assert.strictEqual((await period.update(STAFF_CTX, EAGLE_ID, { instructions: 'DEMI text', milestone: demiMilestone })).status, 'ok');
+    assert.strictEqual((await run(message({ id: EAGLE_ID }))).status, 'sent');
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, instructions: 'Eagle edit', milestone: MILESTONE, read: ['staff', 'sysadmin'] });
+
+    const row = store.get(EAGLE_ID);
+    assert.strictEqual(row.sourceSystem, 'demi');
+    assert.strictEqual(row.instructions, 'DEMI text');
+    assert.strictEqual(row.milestone, demiMilestone);
+    assert.ok(row.read.includes('public'), 'the read DEMI took over stays public');
+    assert.strictEqual(row.sources.eagle.instructions, 'Eagle edit', 'the raw copy takes the push');
+  });
+
+  await t.test('an Eagle unpublish of a period DEMI took over but has not sent unpublishes it', async (tt) => {
+    const store = wireStore(tt, [eagleRow()]);
+    wireParent(tt);
+    wireDomain(tt, store);
+    wireQueue(tt);
+    await period.update(STAFF_CTX, EAGLE_ID, { instructions: 'DEMI text' });
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, read: ['staff', 'sysadmin'] });
+
+    const row = store.get(EAGLE_ID);
+    assert.deepStrictEqual(row.read, ['staff']);
+    assert.strictEqual(row.isPublished, false);
+    assert.deepStrictEqual(row.sources.demi.read, ['staff', 'sysadmin']);
+    assert.strictEqual(row.instructions, 'DEMI text');
+  });
+
+  await t.test('an Eagle delete of a period DEMI took over but has not sent flags it, and sync-out DELETEs, never POSTs',
+    async (tt) => {
+      const store = wireStore(tt, [eagleRow()]);
+      wireParent(tt);
+      wireDomain(tt, store);
+      wireQueue(tt);
+      const calls = wireEagle(tt, { [`DELETE /commentperiod/${EAGLE_ID}`]: { status: 404 } });
+      await period.update(STAFF_CTX, EAGLE_ID, { instructions: 'DEMI text' });
+
+      await push({ ...store.get(EAGLE_ID).sources.eagle, isDeleted: true });
+      const row = store.get(EAGLE_ID);
+      assert.strictEqual(row.isDeleted, true);
+      assert.deepStrictEqual(row.read, DELETED_CEILING);
+      assert.strictEqual(row.isPublished, false);
+
+      assert.strictEqual((await run(message({ id: EAGLE_ID }))).status, 'sent');
+      assert.deepStrictEqual(keys(calls), [`DELETE /commentperiod/${EAGLE_ID}`]);
+    });
+
+  await t.test('an Eagle delete of a taken-over period stored narrower than the delete ceiling keeps the narrower read',
+    async (tt) => {
+      const store = wireStore(tt, [takenOver({ eagleRead: PUBLIC_ACL, read: ['sysadmin'] })]);
+      wireParent(tt);
+
+      await push({ ...store.get(EAGLE_ID).sources.eagle, isDeleted: true });
+
+      assert.deepStrictEqual(store.get(EAGLE_ID).read, ['sysadmin']);
+    });
+
+  await t.test('an Eagle publish of a staff period DEMI took over but has not sent publishes it', async (tt) => {
+    const store = wireStore(tt, [takenOver({ eagleRead: ['staff', 'sysadmin'], read: ['staff'] })]);
+    wireParent(tt);
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, read: PUBLIC_ACL });
+
+    const row = store.get(EAGLE_ID);
+    assert.ok(row.read.includes('public'), 'the stored read is public');
+    assert.strictEqual(row.isPublished, true);
+    assert.deepStrictEqual(row.sources.demi.read, PUBLIC_ACL);
+  });
+
+  await t.test('under a staff project the same publish sets only the period\'s own read', async (tt) => {
+    const store = wireStore(tt, [takenOver({ eagleRead: ['staff', 'sysadmin'], read: ['staff'] })]);
+    wireParent(tt, PROJECT_EAGLE_ID, ['staff']);
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, read: PUBLIC_ACL });
+
+    const row = store.get(EAGLE_ID);
+    assert.deepStrictEqual(row.sources.demi.read, PUBLIC_ACL);
+    assert.deepStrictEqual(row.read, ['staff']);
+    assert.strictEqual(row.isPublished, false);
+  });
+
+  await t.test('an Eagle edit still showing public never undoes a DEMI unpublish', async (tt) => {
+    const store = wireStore(tt, [takenOver({ eagleRead: PUBLIC_ACL, own: ['staff', 'sysadmin'], read: ['staff'] })]);
+    wireParent(tt);
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, instructions: 'Eagle edit' });
+
+    assert.deepStrictEqual(store.get(EAGLE_ID).read, ['staff']);
+  });
+
+  await t.test('an Eagle edit still showing staff never undoes a DEMI publish', async (tt) => {
+    const store = wireStore(tt, [takenOver({ eagleRead: ['staff', 'sysadmin'], own: PUBLIC_ACL, read: PUBLIC_ACL })]);
+    wireParent(tt);
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, instructions: 'Eagle edit' });
+
+    const row = store.get(EAGLE_ID);
+    assert.ok(row.read.includes('public'), 'the stored read stays public');
+    assert.deepStrictEqual(row.sources.demi.read, PUBLIC_ACL);
+  });
+
+  await t.test('an Eagle publish never republishes a taken-over period DEMI deleted', async (tt) => {
+    const store = wireStore(tt, [{ ...takenOver({ eagleRead: ['staff', 'sysadmin'], read: ['staff'] }), isDeleted: true }]);
+    wireParent(tt);
+
+    await push({ ...store.get(EAGLE_ID).sources.eagle, read: PUBLIC_ACL });
+
+    assert.deepStrictEqual(store.get(EAGLE_ID).read, ['staff']);
+  });
+
+  await t.test('an Eagle unpublish landing during the first send is sent on the next delivery', async (tt) => {
+    const store = wireStore(tt, [eagleRow()]);
+    wireParent(tt);
+    wireDomain(tt, store);
+    wireQueue(tt);
+    const put = `PUT /commentperiod/${EAGLE_ID}`;
+    const calls = wireEagle(tt, {
+      'POST /commentperiod': { status: 409 },
+      // eagle-admin unpublishes while DEMI's first PUT is in flight.
+      [put]: [async () => {
+        await push({ ...store.get(EAGLE_ID).sources.eagle, read: ['staff', 'sysadmin'] });
+        return { body: { matchedCount: 1 } };
+      }, { body: { matchedCount: 1 } }]
+    });
+    await period.update(STAFF_CTX, EAGLE_ID, { instructions: 'DEMI text' });
+    assert.strictEqual((await run(message({ id: EAGLE_ID }))).status, 'sent');
+
+    assert.strictEqual((await run(message({ id: EAGLE_ID }))).status, 'sent');
+
+    assert.deepStrictEqual(keys(calls), ['POST /commentperiod', put, put]);
+    assert.strictEqual(calls[2].body.isPublished, false);
+  });
+
+  await t.test('an echo showing staff during a create DEMI started leaves the period read alone', async (tt) => {
+    const minted = eagle.mintEagleId();
+    const store = wireStore(tt, [nativeRow({
+      eagleId: minted, syncOut: { eagle: { mintedId: minted, status: 'creating', claimedAt: new Date().toISOString() } }
+    })]);
+    wireParent(tt);
+
+    await push({ _id: minted, project: PROJECT_EAGLE_ID, read: ['staff', 'sysadmin'] });
+
+    assert.deepStrictEqual(store.get(ROW_ID).read, PUBLIC_ACL);
+  });
+
+  await t.test('a taken-over period under a notification PUTs with the parent its Eagle copy names', async (tt) => {
+    const NOTIFICATION_EAGLE_ID = '5cf00c03a266b7e18775f00d';
+    const row = eagleRow();
+    const store = wireStore(tt, [{
+      ...row, projectId: NOTIFICATION_EAGLE_ID, sourceSystem: 'demi', sources: { eagle: { ...row.sources.eagle, project: NOTIFICATION_EAGLE_ID } }
+    }]);
+    wireParent(tt);
+    wireQueue(tt);
+    const put = `PUT /commentperiod/${EAGLE_ID}`;
+    const calls = wireEagle(tt, { 'POST /commentperiod': { status: 409 }, [put]: { body: { matchedCount: 1 } } });
+
+    const result = await run(message({ id: EAGLE_ID, projectId: NOTIFICATION_EAGLE_ID }));
+
+    assert.strictEqual(result.status, 'sent');
+    assert.deepStrictEqual(keys(calls), ['POST /commentperiod', put]);
+    assert.strictEqual(calls[1].body.project, NOTIFICATION_EAGLE_ID);
+    assert.ok(store.get(EAGLE_ID).syncOut.eagle.sentVersion >= 1);
+  });
+
+  await t.test('an echo on a taken-over period raises commentIdCount and never lowers it', async (tt) => {
+    const store = wireStore(tt, [{ ...eagleRow(), sourceSystem: 'demi' }]);
+    wireParent(tt);
+    wireDomain(tt, store);
+    const doc = store.get(EAGLE_ID).sources.eagle;
+    const now = Date.now();
+
+    await push({ ...doc, commentIdCount: 9 }, now);
+    assert.strictEqual(store.get(EAGLE_ID).commentIdCount, 9);
+    await push({ ...doc, commentIdCount: 2 }, now + 1);
+    assert.strictEqual(store.get(EAGLE_ID).commentIdCount, 9);
+
+    const raised = logged('info', 'echo raised commentIdCount');
+    assert.deepStrictEqual(raised.map(c => c.arguments[1]), [{ id: EAGLE_ID, from: 4, to: 9 }]);
+  });
+
+  await t.test('a taken-over period with a foreign eagleId POSTs under that id, PUTs on 409, and records no strayEagleId',
+    async (tt) => {
+      const store = wireStore(tt, [eagleRow()]);
+      wireParent(tt);
+      wireDomain(tt, store);
+      wireQueue(tt);
+      const put = `PUT /commentperiod/${EAGLE_ID}`;
+      const calls = wireEagle(tt, {
+        'POST /commentperiod': { status: 409, body: { message: 'exists' } },
+        [put]: { body: { matchedCount: 1 } }
+      });
+      await period.update(STAFF_CTX, EAGLE_ID, { instructions: 'DEMI text' });
+
+      const result = await run(message({ id: EAGLE_ID }));
+
+      assert.strictEqual(result.status, 'sent');
+      assert.deepStrictEqual(keys(calls), ['POST /commentperiod', put]);
+      assert.strictEqual(calls[0].body._id, EAGLE_ID);
+      assert.strictEqual(calls[1].body.instructions, 'DEMI text');
+      const row = store.get(EAGLE_ID);
+      assert.strictEqual(row.eagleId, EAGLE_ID);
+      assert.strictEqual(row.syncOut.eagle.status, 'sent');
+      assert.ok(!Object.hasOwn(row.syncOut.eagle, 'strayEagleId'));
+      assert.ok(!Object.hasOwn(row.syncOut.eagle, 'mintedId'), 'sync-out did not mint the id');
+    });
+
+  await t.test('its flagged delete sends DELETE /commentperiod/<eagleId>', async (tt) => {
+    const store = wireStore(tt, [eagleRow()]);
+    wireParent(tt);
+    wireDomain(tt, store);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { [`DELETE /commentperiod/${EAGLE_ID}`]: {} });
+    assert.strictEqual((await period.remove(STAFF_CTX, EAGLE_ID)).status, 'ok');
+
+    const result = await run(message({ id: EAGLE_ID }));
+
+    assert.strictEqual(result.status, 'sent');
+    assert.deepStrictEqual(keys(calls), [`DELETE /commentperiod/${EAGLE_ID}`]);
+    assert.strictEqual(store.get(EAGLE_ID).isDeleted, true);
   });
 
   await t.test('a deleted native row DELETEs its minted id', async (tt) => {
