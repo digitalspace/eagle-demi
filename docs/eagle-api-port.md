@@ -13,7 +13,7 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 3. Design the DEMI shape from the rules, not from the eagle-api route. Plural REST under the existing router (`src/http/routes.js`), guards from the route table, visibility from `src/vis/catalog`, reads through `src/helpers/access-sql.js`, writes through `src/repositories/`, same error envelope as the other DEMI routes. Reuse existing DEMI routes and fields where they already serve the need. Layering rules: see "Layering" below.
 4. Every new route needs `node --test` tests, a catalog entry for any new field, a `src/swagger/swagger.yaml` entry, and a README line under "Parity with eagle-api".
 5. Field ownership runs in three phases for every object.
-   - Dark: the DEMI routes are merged and have no caller. Eagle owns every field and mirror ingress keeps writing them. A DEMI write in this phase is overwritten by the next push, so the routes are staff-only and the row says so.
+   - Dark: the DEMI routes are merged, staff-only and have no caller. A DEMI write on a row Eagle mirrors takes that row over, and a later push changes only its Eagle copy. Each object's Ownership line says what a write takes over.
    - Flip, one release window covering both repos: the eagle-admin caller moves to DEMI, and DEMI ingress stops taking that object's fields. Project-embedded fields such as pins and CAC move to `DEMI_ONLY_FIELDS` (`src/ownership/project.js`) and out of `EAGLE_ONLY_FIELDS`. For a whole kind, `/eagle/<kind>/:eagleId` accepts the push and ignores the fields DEMI now owns, answering 2xx, so eagle-api's echo of a DEMI write does not fail. The sync-out consumer is turned on only if an Eagle reader still needs the data; decide and record that per object. Deploy the DEMI tag first, eagle-admin right after, then compare the nightly reconcile drift report for that object. Each flip ships a test that an Eagle push leaves DEMI-owned fields unchanged.
    - Retire: delete the eagle-api handler, `controllers/nosql/<kind>.js` and the mirror route.
 6. Set the row status in the same diff as the code: `todo`, `in progress (branch)`, `done (demi sha, admin sha)`. Record all shas on the row.
@@ -44,17 +44,17 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af); no caller yet |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); v2.5.35 deployed to test; prod precondition under Project |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | done (359611b4) |
-| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half built; eagle-admin half todo |
-| F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | todo |
-| F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | todo |
-| F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `project.service.ts` | 4, F8 | - | todo |
-| F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | todo |
-| F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | todo |
-| F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | todo |
-| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | todo |
-| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | todo |
+| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half built (pins c661dfb2, organizations f8a9c3dd); eagle-admin half todo |
+| F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | DEMI half built (4529a818); eagle-admin half todo |
+| F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | DEMI half built (83912121); eagle-admin half todo |
+| F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `project.service.ts` | 4, F8 | - | DEMI half built (1980d570); eagle-admin half todo |
+| F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | DEMI half built (6d72fb04); eagle-admin half todo |
+| F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | DEMI half built (20fdf282); eagle-admin half todo |
+| F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | DEMI half built (c9b2a878); eagle-admin half todo |
+| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | DEMI half built (fe41a6aa); eagle-admin half todo |
+| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | DEMI half built (8e724347, f30f6b8e, 5ceb0912); eagle-admin half todo |
 | F10 | Flip: documents | document mirror, eagle-admin `document.service.ts` and components | FS, A0 | - | todo |
-| F11 | Flip: CAC | `ownership/project.js` (`DEMI_ONLY_FIELDS`) | 11, F8 | - | todo; no sync-out: neither eagle-public line reads the CAC fields, so no eagle-api write path |
+| F11 | Flip: CAC | `ownership/project.js` (`DEMI_ONLY_FIELDS`) | 11, F8 | - | done (530bf0cc); no sync-out: neither eagle-public line reads the CAC fields, so no eagle-api write path |
 | R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | done (eagle-api 681b483): topic, vc, `GET /jobs` list removed; `protectedRefresh`, `/task`, `/public/comment`, `/public/document` were already gone; `login` kept (eagle-admin local login when Keycloak is off) |
 | R2 | Retire in eagle-api: per object | handlers under "Callers to move", pin routes, extension routes | the object's Flip live on test (retire tag: live on prod) | - | todo |
 | R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle` | the kind's Flip live on prod | - | todo |
@@ -110,11 +110,11 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 | Kind | Consumer | Switch | Sends |
 |---|---|---|---|
 | `comment` | `src/sync-out/eagle-comment.js` | `SYNC_OUT_EAGLE_COMMENT_ENABLED` | rows with `sourceSystem: 'demi'` |
-| `commentPeriod` | `src/sync-out/eagle.js` | none | ENGAGE rows, and DEMI rows (see `SYNC_OUT_EAGLE_NATIVE_ENABLED` below) |
+| `commentPeriod` | `src/sync-out/eagle.js` | none | ENGAGE rows, and DEMI rows (see `SYNC_OUT_EAGLE_NATIVE_ENABLED` below). A period taken over from Eagle sends a POST under its Eagle id, then a PUT after the 409. |
 | `document` | `src/sync-out/eagle-document.js` | `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` | rows with `sourceSystem: 'demi'` |
 | `notification` | `src/sync-out/eagle-notification.js` | `SYNC_OUT_EAGLE_NOTIFICATION_ENABLED` | rows with `sourceSystem: 'demi'` |
 | `organization` | `src/sync-out/eagle-organization.js` | `SYNC_OUT_EAGLE_ORGANIZATION_ENABLED` | rows with `sourceSystem: 'demi'` |
-| `project` | `src/sync-out/eagle-project.js` | `SYNC_OUT_EAGLE_PROJECT_ENABLED` | rows made by `POST /projects` (`isNativeProject`) |
+| `project` | `src/sync-out/eagle-project.js` | `SYNC_OUT_EAGLE_PROJECT_ENABLED` | rows made by `POST /projects` (`isNativeProject`), and rows DEMI owns (`demiOwnedAt`) that hold an `eagleId`, which get a PUT and never a POST |
 | `update` | `src/sync-out/eagle-update.js` | `SYNC_OUT_EAGLE_UPDATE_ENABLED` | rows with `sourceSystem: 'demi'` |
 
 - The document consumer PUTs a row whose `eagleId` was linked by staff, or whose create has landed, then calls publish or unpublish only when the public level changed. A minted row whose create has not landed is POSTed again.
@@ -125,10 +125,10 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - A parent not yet in Eagle stops the send before its claim with the warn line `parent project <id> not yet in Eagle`, and the engine retries. That covers a missing parent, a native parent with no `eagleId`, and a minted parent whose create has not landed.
 - A Track parent with no `eagleId` stops the send with the error line `has no eagleId, nothing sent`.
 - After a create, or the PUT that follows a 409, the consumer moves Eagle's copy to the row's level. It reads the level from the echo, else from eagle-api.
-- `createDocument` and `extractDocument` call `enqueueQuietly` after the write. A comment period DELETE queues only the deleted row it keeps for a DEMI period with an `eagleId` (see Comment periods); a hard delete queues nothing. The document pending hook also lists DEMI documents never recorded as sent that have no `eagleId` or one sync-out minted.
+- `createDocument` and `extractDocument` call `enqueueQuietly` after the write. A comment period DELETE queues only the deleted row it keeps for a period with an `eagleId` (see Comment periods); a hard delete queues nothing. The document pending hook also lists DEMI documents never recorded as sent that have no `eagleId` or one sync-out minted.
 - The organization consumer PUTs a row that holds an `eagleId`. Eagle answers an unknown organization with 200 and a `null` body, which leads to a POST of the same id.
-- The project consumer PUTs only an Eagle id it minted itself (`syncOut.eagle.mintedId`). A project linked by staff to an Eagle project that already existed is skipped with the warn line `which sync-out did not create; not sent`, because Eagle staff own that project.
-- An unknown project answers the PUT with 404, which leads to a POST of the same id.
+- The project consumer PUTs an Eagle id it minted itself (`syncOut.eagle.mintedId`), and the Eagle id of a row DEMI owns. A DEMI-created project linked by staff to an Eagle project that already existed is skipped with the warn line `which sync-out did not create; not sent`, because Eagle staff own that project.
+- An unknown project answers the PUT with 404, which leads to a POST of the same id. A row DEMI owns is never created in Eagle: it is logged as `Eagle has no project ... for DEMI-owned ...` and skipped.
 - The notification consumer PUTs a row that holds an `eagleId` to `/projectNotification/<id>`. An unknown notification answers 404, which leads to a POST of the same id.
 - Each notification call carries the row's level as `?publish=`, which eagle-api reads on the POST and the PUT, so no publish call follows.
 - A row with no `eagleId`, or one Eagle lacks, is POSTed only when `SYNC_OUT_EAGLE_NATIVE_ENABLED` is `true`. Until then the send answers `held`.
@@ -147,6 +147,7 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - So the comment kind needs `SYNC_OUT_EAGLE_DOCUMENT_ENABLED` on as well. With it off, a comment that names a DEMI document stays held.
 - A period or document DEMI does not hold, or one deleted, fails the send before any call, with the error line `not sent:`. So does a valued component that is not an Eagle id.
 - A comment row with no `eaoStatus`, stored before create defaulted it, is sent as `Pending`, so Eagle's copy reads staff-only and shows in the moderation lists.
+- A notification, Update or comment taken over from Eagle holds an id sync-out did not mint. When its PUT finds no record, the send is skipped with a warn line and not POSTed.
 - eagle-api's POST does not copy `submittedCAC`, so the create of a comment with `submittedCAC: true` ends with a PUT.
 - eagle-api's POST numbers each comment from its period's `commentIdCount`, and the echo copies that `commentId` onto the DEMI row. Until the echo lands, DEMI's own number from `nextCommentId` can be one Eagle already gave another comment.
 - After a PUT, the organization and project consumers call publish or unpublish when Eagle's copy sits at another level than the row.
@@ -160,7 +161,8 @@ A separate auth layer would have to load the row twice or copy the rules, so the
 - `enqueueQuietly(row, { kind })` in `src/sync-out/index.js` queues a write that has landed and logs a failure instead of throwing. A message lost that way leaves the row's version unsent: the pending hook lists it, and `sync-out-pending.js --repair` queues it again. It waits at most 5 s, then logs `[sync-out] enqueue timed out`.
 - A Flip that needs sync-out adds its kind to `kinds.js`, its consumers to that kind's list in `index.js`, and calls `enqueueQuietly` after its write.
 - The Eagle mirror keeps a DEMI-created row when eagle-api pushes the record under the row's `eagleId`, and makes no second row. Organizations (`controllers/nosql/organization.js`), notifications (`controllers/nosql/notification.js`) and Updates (`controllers/nosql/update.js`) take only `sources.eagle`, through `upsertKeepingDemiRows` in `controllers/nosql/eagle-mirror.js`. Comments (`controllers/nosql/comment.js`) take `sources.eagle` and Eagle's `commentId` the same way. A comment echo finds a DEMI or ENGAGE period by its `eagleId`. Comment periods (`controllers/nosql/comment-period.js`) take the Eagle staff fields except the ones DEMI writes.
-- The echo of a DEMI-created Update sends no eagle-notify mail. The `announceUpdates` timer mails its publish and its withdrawal, as it does for any due row.
+- Users (`controllers/nosql/user.js`) keep a DEMI-owned row the same way, after the secrets are dropped.
+- The echo of a DEMI-created or DEMI-owned Update sends no eagle-notify mail. The `announceUpdates` timer mails its publish and its withdrawal, as it does for any due row.
 - The nightly reconcile counts an Eagle notification or Update that a DEMI row names by `eagleId` as that row's copy, not as `eagleOnly`.
 - A project made by `POST /projects` (no `sources.track`) gets its `eagleId` from a staff `PUT` or from sync-out, and the next Eagle push for that id lands on it (`mergeEaglePush` in `controllers/nosql/project.js`). DEMI owns its id, `sourceSystem`, `trackProjectId`, `centroid`, `createdAt` and Track-owned fields, empty ones included, except `proponentName` and `isActive`, which follow Eagle's `proponentId` and `activeStatus`; Eagle fills the other fields. `syncOut` and `syncVersion` stay as they were.
 - On a project whose Eagle id sync-out minted (`syncOut.eagle.mintedId`), the push also keeps DEMI's `read` and `isPublished`. Eagle's level stays in `sources.eagle.read`, and sync-out moves Eagle to DEMI's level.
@@ -272,7 +274,8 @@ Business rules (eagle-api `api/controllers/commentperiod.js`):
 - Create sets `commentIdCount` 0, `addedBy` and `dateAdded` (`:271-274`). DEMI also sets `updatedBy` and `dateUpdated`, `sourceSystem: 'demi'`, `eagleId: null` and a UUID id, and answers 201.
 - Create reads staff and sysadmin, plus `public` when `isPublished` is true (`:288-298`). DEMI caps that under the project's read like the mirror does, and answers 409 when `isPublished` is true under a project that is not public. `read` in the body is ignored. The uncapped read is kept in `sources.demi.read`, which the project ACL cascade reads for a DEMI row (`aclRowsForProject`).
 - PUT copies commentTip, dateCompleted, dateStarted, isMet, instructions, informationLabel, metURL, metBannerImageUrl, milestone, openHouses and relatedDocuments, and stamps `updatedBy` and `dateUpdated` (`:326-341`). It never moves `project` (`:353-355`); in DEMI a `projectId` key is a 400. DEMI keeps `dateAdded`, answers 404 for a missing row, and 400 for an empty body.
-- DELETE is a hard delete (`findOneAndDelete`, `:376`). DEMI removes the row on the revision it read, after narrowing the period's comments to staff (`DELETED_CEILING`). A DEMI period with an `eagleId` is kept instead, with `isDeleted: true`, `isPublished: false` and `read` capped at `DELETED_CEILING`, and queued, so sync-out deletes Eagle's copy. The comment period reads by id, by project and by id list leave `isDeleted` rows out. An Eagle comment push and a staff comment status change read the period with `includeDeleted`, so a comment under a deleted period is still stored and vetted at staff level. The reconcile walk lists and counts every period, deleted ones included (`listEveryByProject`, `countEveryByProject`).
+- DELETE is a hard delete (`findOneAndDelete`, `:376`). DEMI removes the row on the revision it read, after narrowing the period's comments to staff (`DELETED_CEILING`). A period with an `eagleId` is kept instead, as a DEMI-owned row with `isDeleted: true`, `isPublished: false` and `read` capped at `DELETED_CEILING`, and queued, so sync-out deletes Eagle's copy.
+- The comment period reads by id, by project and by id list leave `isDeleted` rows out. An Eagle comment push and a staff comment status change read the period with `includeDeleted`, so a comment under a deleted period is still stored and vetted at staff level. The reconcile walk lists and counts every period, deleted ones included (`listEveryByProject`, `countEveryByProject`).
 - Publish and unpublish act on the period's own `read` and `isPublished` only (`:400,421`, `actions.js:7,31`).
 - Each write records an action (`Post`, `Put`, `Delete`, `Publish`, `Unpublish`). DEMI writes `commentPeriod.create`, `.update`, `.delete`, `.publish` and `.unpublish`, with `detail.fields` holding field names only.
 - `openHouses` (objects of strings) and `relatedDocuments` (strings) are checked in the domain module, since `_schema.js` has no type for them.
@@ -282,7 +285,11 @@ Decisions:
 - A staff write to an ENGAGE period (`sourceSystem: 'engage'`, `sync-out/eagle.js:327`) is a 409, `conflict` in `controllers/native/write.js`, because the refusal comes from the row's state, not the caller's role (the document level change uses 409 the same way, `document.js:1300`).
 - Publish does not change the comments' own ACL, as in eagle-api. It does re-derive their stored `read` from the period's new one through `comments.setAclForPeriod`, which is what the Eagle mirror already does on every eagle-api publish (`controllers/nosql/comment-period.js`, `cascadeToComments`); without it, comments of an unpublished period stay readable through `/search?dataset=Comment`. A failed cascade answers 500 and the period stays written; a retry runs the cascade again.
 - Publishing above the project's level is a 409, as for documents (`document.js:1300`), rather than a silent cap.
-- Dark: a publish or update of an Eagle-mirrored row is replaced by the next Eagle push, and the project ACL cascade derives an Eagle row from `sources.eagle.read`, not from a DEMI publish.
+- Ownership: a DEMI update, publish, unpublish or delete of an Eagle-mirrored period sets `sourceSystem: 'demi'` and stores the period's own read in `sources.demi.read`. The project ACL cascade derives the row from that read, and the stored read stays capped under the project's.
+- Eagle push onto a DEMI-owned period (`eagleOwnedOnto` in `controllers/nosql/comment-period.js`): 200, and only `eagleId`, `sources.eagle`, Eagle's staff-side fields other than `metURLAdmin`, `milestone` and `dateUpdated`, and a higher `commentIdCount` change. Fields DEMI writes stay as DEMI wrote them.
+- Until sync-out first sends a taken-over period, eagle-admin still writes it in eagle-api, so Eagle's publish, unpublish and delete echoes apply to it and raise `syncVersion`. After the first send, echoes change none of them.
+- Sync-out sends the period's own level as `isPublished`. A period under a notification parent, or whose project row is gone, takes its Eagle parent id from `sources.eagle.project`.
+- Accepted gap: sends of DEMI rows need `SYNC_OUT_EAGLE_NATIVE_ENABLED`, which is `false` on prod. A taken-over period stays unsent there, so DEMI text edits do not reach Eagle and Eagle text edits stop landing on it. The gap lasts until F2-a moves eagle-admin's period writes to DEMI.
 - `nextCommentId(periodId, projectId?)` in `repositories/comment-periods.js` is the atomic counter slice 3 calls: a Cosmos patch increment conditioned on `commentIdCount` being a number, else a set to 1 conditioned on it not being one, retried three times. It answers the count after the increment, as eagle-api's `$inc` does (`comment.js:380`).
 
 Callers to move: eagle-admin `commentperiod.service.ts:98,104,109,115,120`; DEMI sync-out lines above.
@@ -313,7 +320,10 @@ Questioned:
 
 Decisions:
 - A comment's read is its status read capped under its period's (`eagleReadUnder`), as the mirror does: a `Published` comment under an unpublished period reads staff only, without a 409. A DEMI row keeps its own read in `sources.demi.read`, and `comments.aclRowsForPeriod` hands that to the period cascade, so publishing the period opens it.
-- Dark: a status or update of an Eagle-mirrored row is replaced by the next Eagle push, and the period cascade derives an Eagle row from `sources.eagle.read`, not from a DEMI status write.
+- Ownership: a DEMI update or status change of an Eagle-mirrored comment sets `sourceSystem: 'demi'` and stores the comment's own read in `sources.demi.read`: the Eagle copy's read, else the read its status gives. A missing `eaoStatus` becomes `Pending`.
+- Eagle push onto a DEMI-owned comment (`upsertKeepingDemiRows` in `controllers/nosql/comment.js`): 200, and only `eagleId`, `sources.eagle` and Eagle's `commentId` change. Text, status and read stay as DEMI wrote them.
+- The nightly reconcile does not count a taken-over comment as `eagleOnly`, and leaves it out of `aclMismatch`, because DEMI sets its read.
+- Accepted gap: eagle-admin still moderates comments through eagle-api and comment sync-out is off, so after a takeover that moderation is dropped in DEMI. Once the switch is on, the queued DEMI row PUTs over newer Eagle edits, until eagle-admin writes comments through DEMI (F3-a).
 
 Callers to move: eagle-admin `comment.service.ts:47,52,73,139`.
 
@@ -364,7 +374,9 @@ Business rules (eagle-api `api/controllers/recentActivity.js`, `api/helpers/upda
 - PUT `_etag` is the client's loaded version: a moved row is a 409. A body with neither `status` nor `active` keeps the status.
 - DELETE archives: status `archived`, `active` false, `public` pulled.
 - A DEMI row keeps its own read and status in `sources.demi`; the project cascade (`helpers/update-acl.js`) re-derives such a row from them, not from `sources.eagle`, and publishes the own uploads of one it leaves public. Going private, `documents.setAclForProject` caps those images.
-- Dark: a write to an Eagle-mirrored row is replaced by the next Eagle push. A published DEMI row is announced by `announce-updates.js` once due, like a mirrored one.
+- Ownership: a DEMI edit or archive of an Eagle-mirrored Update sets `sourceSystem: 'demi'` and stores its own read and status in `sources.demi`. A later Eagle push (`upsertKeepingDemiRows` in `controllers/nosql/update.js`) changes only `eagleId` and `sources.eagle`, so the headline and the other fields stay.
+- The ACL drift check leaves a taken-over Update out, because DEMI owns its read.
+- A published DEMI row is announced by `announce-updates.js` once due, like a mirrored one.
 
 Open:
 - `parity-map.js` `recent-activity-top` now sorts on `publishDate`; Eagle's pinned-first order needs a second sort key `/updates` does not take.
@@ -384,7 +396,7 @@ Guards: every route is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eag
 Business rules (eagle-api `api/controllers/projectNotification.js`):
 - A notification reads, writes and deletes as SECURE_ROLES, `sysadmin` and `staff` (`:79-81`, `constants.js:21`). DEMI stores that read; the row carries no `write` or `delete` list, the route guards hold that rule. No project caps the read: `associatedProjectId` is a loose reference (`repositories/notifications.js`).
 - Create copies the body (`:77-78`) and answers 201. DEMI answers with a UUID id, `sourceSystem: 'demi'`, `eagleId: null`, and `addedBy`/`updatedBy`/`dateAdded`/`dateUpdated`.
-- PUT replaces every field, each defaulted when missing (`:114-135`): `value || default`, and `isMet ?? false` (`:134`). A missing row is a 404 (`:109-111`).
+- PUT replaces every field, each defaulted when missing (`:114-135`): `value || default`, and `isMet ?? false` (`:134`). A missing row is a 404 (`:109-111`). DEMI changes only the fields the body names; see Decisions.
 - `?publish=true` on POST or PUT adds `public`, `false` on PUT removes it, absent keeps the read (`:84-86,137-144`).
 - Each write records an action (`Post`, `Put`; `:90,147`). DEMI writes `notification.create`, `.update`, `.publish` and `.unpublish`, with field names only.
 - A write that moves the read drops the Update parent cache (`updates.forgetParents`), as the mirror does, since an Update under a notification follows its read.
@@ -395,10 +407,12 @@ Decisions:
 - `notificationReceivedDate` is never stored null, because the list sorts on it and Cosmos cannot page past a null sort value. Create and PUT fall back to `dateAdded`; the push falls back to the time in the Eagle id.
 - A PUT body with no field besides `read` and `isPublished` is a 400; eagle-api would blank the row.
 - `notificationThresholdValue` must be a number and `centroid` at most two numbers or strings (Number and Mixed array in the model); any key not in the model is a 400.
-- Dark: a write to an Eagle-mirrored notification is replaced by the next Eagle push.
+- Ownership: a DEMI PUT, publish or unpublish of an Eagle-mirrored notification sets `sourceSystem: 'demi'`. A later Eagle push (`upsertKeepingDemiRows` in `controllers/nosql/notification.js`) changes only `eagleId` and `sources.eagle`, so DEMI's fields stay.
+- The nightly reconcile leaves a DEMI-owned notification out of the ACL check, because DEMI sets its read.
+- Accepted gap: eagle-admin loads notifications from DEMI but saves them to eagle-api, and notification sync-out is off. After a DEMI write, an eagle-admin save is kept out of the DEMI row, until eagle-admin writes notifications through DEMI (F6-a).
 
 Questioned:
-- PUT blanks `pcp`, `isMet`, `metURL`, `dateStarted` and `dateCompleted` when the body leaves them out (`:131-135`), though eagle-admin's edit form does not send them. Ported as is. Decided 2026-10-19: at F6 the PUT leaves omitted fields unchanged, so a save from eagle-admin never blanks the comment-period fields DEMI owns; no separate endpoint.
+- PUT blanks `pcp`, `isMet`, `metURL`, `dateStarted` and `dateCompleted` when the body leaves them out (`:131-135`), though eagle-admin's edit form does not send them. DEMI does not port this: the PUT keeps any field the body leaves out, so a save from eagle-admin never blanks the comment-period fields DEMI owns. A field sent empty still goes to its default, and there is no separate endpoint.
 
 Callers to move: eagle-admin `notification-project.service.ts:58-69`. Notification documents attach through the document routes; the eagle-admin screen builds eagle-api fetch URLs (`project-notification-documents.component.ts:463`), move those too.
 
@@ -413,6 +427,8 @@ Target routes: `POST /organizations`, `PUT /organizations/:id`, `PUT /organizati
 Visibility: organizations keep a row-level visibility choice, though eagle-api's publish and unpublish have no caller. Create defaults to unpublished. eagle-admin gets the toggle in F1.
 
 Stored rows keep their `read[]` and `isPublished`; there is no backfill. The Eagle mirror (`controllers/nosql/organization.js`) keeps both on every push, so only DEMI publish and unpublish move them. A row the mirror creates starts from Eagle's `read[]`.
+
+Ownership: a DEMI update, publish or unpublish of an Eagle-mirrored organization sets `sourceSystem: 'demi'` and queues the organization for sync-out. A later Eagle push (`upsertKeepingDemiRows`) changes only `eagleId` and `sources.eagle`, so name and `read[]` stay. The row keeps no `sources.demi.read`, because no cascade reads an organization's own read.
 
 Guards: `POST` is `[authMiddleware, requireRole('staff', 'sysadmin')]` (eagle-api `swagger.yaml:4241`); `PUT` is `[authMiddleware, requireRole('project-system-admin', 'sysadmin', 'staff')]` (scope `project-system-admin`, `swagger.yaml:4361`). eagle-api's auth admits `sysadmin` and `staff` on every route (`api/helpers/auth.js:35-43`), so each DEMI guard carries the route's `x-security-scopes` plus those two. The route-inventory `roles` entry lists the same names.
 
@@ -461,7 +477,9 @@ Decisions:
 - Decided 2026-10-19: F7 writes name and email from the request body, as eagle-api's full field set does. They also live in Keycloak, and nothing syncs them either way; DEMI does not read them from the token.
 - Not ported: `auth.setPassword` (`:45`). Keycloak holds sign-in, eagle-api's User model has no `password` or `salt` field so the hash is never saved, and the mirror drops `password` and `salt`. A `password` in the body is a 400.
 - Not copied: POST audits as 'Put' (`:49`). DEMI writes `user.create`.
-- Dark: a write to an Eagle-mirrored user is replaced by the next Eagle push, and the nightly reconcile reports a DEMI visibility change on such a row as `aclMismatch` until then. A DEMI-created user has no Eagle copy, so the reconcile skips it.
+- Ownership: a DEMI update of an Eagle-mirrored user sets `sourceSystem: 'demi'` and rebuilds the read from the Eagle copy under the mirror rule, else keeps the stored read. A later Eagle push (`upsertKeepingDemiRows` in `controllers/nosql/user.js`) stores only the raw copy, with `password` and `salt` stripped, so the DEMI email and read stay.
+- The nightly reconcile and `backfill-eagle-ladder --reverse` leave a DEMI-owned user alone. A DEMI-created user has no Eagle copy, so they skip it too.
+- Users have no sync-out kind. eagle-admin saves users to eagle-api but reads them from DEMI, so after a DEMI edit its saves never show. The DEMI edit never reaches eagle-api's User collection either, until F7-a moves eagle-admin's user writes to DEMI.
 
 Callers to move: eagle-admin `user.service.ts:55-62`; its `toEagleUserBody` (`models/demi/user.ts:43`) sends `_id`, which DEMI refuses as an unknown key.
 
@@ -537,7 +555,7 @@ Callers to move: eagle-admin `project.service.ts:216-227` (`addExtension`, `edit
 
 ### Project
 
-Status: done (47412c65), Dark. PUT lock, publish year switch and every block on reads done.
+Status: done (47412c65), Dark. PUT lock, publish year switch and every block on reads done. DEMI half of F9 built (8e724347, f30f6b8e, 5ceb0912); the eagle-admin half is todo.
 
 Today: create, update, delete and level exist (`routes.js:159-178`). Publish through `PUT /projects/:id/level`. Rules in `src/domain/project-legislation.js`, applied by `updateProject` and `setLevel` in `src/controllers/nosql/project.js`.
 
@@ -562,8 +580,21 @@ Decisions:
 - PUT ignores `currentLegislationYear`, `legislationYearList` and every `legislation_<year>` key, so a GET body sent back is not refused and cannot rewrite Eagle's blocks.
 - Delete keeps the row, as eagle-api's flag-only delete does (`Actions.delete`). An Eagle push with `isDeleted: true` and DEMI `DELETE /projects/:id` both set `isDeleted` and cap `read` at staff (`DELETED_CEILING`), so the anonymous `GET /projects/:id` is a 404. The visibility cascade narrows the index row, documents, engagement, groups, inspections and updates. The `eagle-<id>` twin beside a Track row takes the same flag, so `setLevel` refuses it too.
 - A push with `isDeleted: false` restores Eagle's `read`, but eagle-api never sends that flag. A push that omits it restores only a delete Eagle made (`sources.eagle.isDeleted`), so a DEMI delete stays. `DELETE /projects/:id` on a project Eagle or the seed deleted clears that marker, which makes the delete DEMI's. `PUT /projects/:id/level` refuses a deleted project with a 409.
+- `PUT /projects/:id/restore` (`requireWrite`, audited as `project.restore`) drops the delete flag and sends nothing to Eagle. A project that is not deleted answers 409. When DEMI deleted a Track row, restore also clears the delete DEMI gave its `eagle-<id>` twin.
+- Restore returns a project DEMI owns and deleted to Eagle's level, so the first send after it neither publishes nor unpublishes Eagle. It keeps the stored `read` when Eagle deleted the project, when the row holds a `levelHeldAt`, or when it has no Eagle copy. DELETE and an Eagle push stamp `levelHeldAt` when they leave a deleted row below Eagle's level, so a hold set before the delete survives it.
+- Restore takes a project over only when Eagle deleted it, because Eagle's next push would delete it again. A project DEMI deleted while it was unowned stays unowned and returns to Eagle's level on Eagle's next push unless held. Raising the level stays with `PUT /projects/:id/level`.
 - `seed-nosql --reconcile` retires a project gone from the public feed the same way, and also sets `sources.eagle.isDeleted`, because gone may only mean unpublished. Its documents stay, capped by the cascade, as do those of a deleted Track row the feed lacks. A later seed or push that finds the project restores it and runs the cascade again.
 - `DELETE /projects/:id` stays under `requireWrite`, the gate the hard delete had, while a level-4 takedown through `setLevel` is sysadmin only.
+- Ownership: a project row carries `demiOwnedAt` once DEMI owns it (`isDemiOwnedProject` in `src/merge/project.js`). An Eagle push or re-merge of an owned row keeps its Eagle fields, its `read` and its legislation blocks, and ignores Eagle's `isDeleted`. Eagle's copy goes to `sources.eagle`.
+- On a Track row, Track still feeds the Track fields, blanks included.
+- A `PUT /projects/:id` that changes an Eagle field takes the project over, and so do `DELETE /projects/:id` and the restore of a project Eagle deleted. An Eagle field is any field only Eagle supplies, such as `sector`, `region`, `eaStatus` and the lead and EPD contacts. On a row with no Track record, `name`, `description`, `projectType`, `abbreviation`, `address`, `proponentName`, `projectState`, `isActive` and `centroid` count too.
+- Sending a stored value back, or changing only `dateAdded`, `dateUpdated`, `tags` or `pins`, takes nothing over. `/level` takes nothing over, so Eagle narrows and eagle-admin edits keep reaching a project DEMI has only re-levelled. A PUT to a deleted project takes nothing over.
+- Two kinds of row are never taken over. One is the `eagle-<id>` twin beside a Track row, because sync-out would send two rows to one Eagle project. The other is a row with no stored Eagle record, because its send would blank Eagle's fields.
+- The Track sync's relink removes `demiOwnedAt` and the sync-out state from the twin when the Track row takes them.
+- A taken-over row is versioned and queued for sync-out like a DEMI-created one. A PUT that changes `eagleId` on an Eagle-mirrored or owned row answers 409, because sync-out would write this project's values to another Eagle project. `POST /projects` over an owned row answers 409.
+- Sync-out: the project consumer PUTs an owned row that holds an `eagleId`, then calls `syncLevel`. It never creates the project.
+- eagle-api's PUT clears every field the body leaves out. So the sync-out body takes a field the row lacks from the current block of its Eagle copy. The body carries the `[lng, lat]` centroid mirrored rows store, because eagle-api clears a centroid the PUT leaves out.
+- A `/level` year switch on an owned row keeps Eagle's real year on the row's Eagle copy. Sync-out sees the year move and skips the row with a warn line for as long as the years differ, because Eagle's PUT cannot carry a year. A deleted owned row is not sent.
 - Existing rows get their blocks on their next Eagle push, which sends every block (`demiPush.js`). No DEMI backfill script: DEMI has no other source for the blocks, as the seed feed hoists only the current one. Until a row is re-pushed, a switch to another year is a 409 (no content), never a wrong write.
 - To fill all at once, run eagle-api `scripts/demi-repush.js --kind project --concurrency 1 --ids-file <ids> --state <state> --live --rate 60` from the eagle-api pod with `LOG_LEVEL=info`. Dry run without `--state`, `--live` and `--rate`. The eagle-dev-guides wiki page `Eagle-DEMI-Re-Push-And-Backfill` lists the flags and the ids to remove from the id file first.
 - Backfill state: every project is re-pushed on test (377 of 377, 0 failed) and prod (365 of 365, 0 failed). Prod leaves out 4 nameless Eagle projects DEMI never held and 1 hidden notification carrying a Track project id.
@@ -571,6 +602,7 @@ Decisions:
 
 Questioned:
 - eagle-api's PUT 404s a year outside the registry (`:646-655`); DEMI's PUT takes any four-digit year. Not ported: only the lock was in scope, and the machine writer also calls this PUT.
+- A year switch on an owned project lifts the chosen block over the row's top-level Eagle fields, so top-level edits are lost. Sync-out then skips the row, as above.
 
 A2 (done, eagle-admin #984, 13305c76; `full-project.resolver.ts` reads `GET /projects/:id`):
 - `_id`: reads return `eagleId`, not `_id`; eagle-admin maps `_id` from `eagleId`.
@@ -580,8 +612,18 @@ A2 (done, eagle-admin #984, 13305c76; `full-project.resolver.ts` reads `GET /pro
 
 Eagle push and a DEMI-set level (`merge/project.js:145-170`, `repositories/documents.js:432-437`):
 - `setLevel` sets `levelHeldAt` only on a narrow; a widen to level 4 clears it. A held row keeps the lower of Eagle's and its stored `read` on every push, so Eagle can narrow it but not widen it.
-- A DEMI publish holds nothing, so the next Eagle push for that project replaces `read` with Eagle's. A DEMI publish of a project Eagle still has private is undone by the next push.
-- A DEMI-set `legislationYear`, or a DEMI year switch, on an Eagle-mirrored row is also replaced by the next push (`legislationYear` is in `EAGLE_ONLY_FIELDS` in `ownership/project.js`; the push sends its own `currentLegislationYear`).
+- On a project DEMI does not own, a DEMI publish holds nothing, so the next Eagle push replaces `read` with Eagle's. A DEMI publish of a project Eagle still has private is undone by the next push.
+- A DEMI-set `legislationYear`, or a DEMI year switch, on such a row is also replaced by the next push (`legislationYear` is in `EAGLE_ONLY_FIELDS` in `ownership/project.js`; the push sends its own `currentLegislationYear`).
+- On an owned project, DEMI holds `read`, `legislationYear` and the current year, and an Eagle push changes none of them. Eagle's level stays in `sources.eagle.read`.
+
+Accepted gaps, latent while project sync-out is off on test and prod:
+- Before `SYNC_OUT_EAGLE_PROJECT_ENABLED` goes on, list the owned rows whose `read` and `sources.eagle.read` differ on publicness. The first send of each publishes or unpublishes the Eagle project. A restored row DEMI deleted while unowned joins that list once an Eagle-field PUT takes it over.
+- eagle-admin edits made while DEMI holds a delete are dropped. The next send after a restore carries the values from delete time, so once sync-out is on it reverts Eagle edits made in between.
+- Eagle's own copy of a DEMI-deleted project stays live, because a deleted owned row is not sent.
+- Restoring a project Eagle deleted is DEMI-only. The next send PUTs the project Eagle still holds as deleted.
+- Restore cannot bring back a level above staff for a held row, a row Eagle deleted, a DEMI-created row, or a row deleted while unowned. `PUT /projects/:id/level` does that. Public needs `confirm` and a reason.
+- A re-seed that rebuilds `sources.eagle` on a deleted owned row skips the push stamp. The result matches Eagle's live public state, so the next send changes nothing.
+- An Eagle-field edit to an unowned deleted project is overwritten by the next Eagle push and never sent. A project DEMI deleted while unowned and then restored stays Eagle's, so if Eagle deleted it meanwhile its next push deletes it again.
 
 ### Search
 
