@@ -260,7 +260,7 @@ for (const side of SIDE_APPS) {
     env: { AZURE_RESOURCE_GROUP: 'rg-demi-prod', [side.appVar]: side.app }, ...opts,
   });
 
-  test(`${side.job}: the probe asks for ${side.app} and deploys when it exists`, () => {
+  test(`${side.job}: the probe asks Azure for ${side.app}`, () => {
     const r = probe({ files: [path.join('release', side.marker)], azErr: '(ResourceNotFound) gone' });
     assert.match(r.stdout, new RegExp(`^::notice::${side.app} does not exist yet`, 'm'));
     assert.strictEqual(probe({ files: [path.join('release', side.marker)], azOut: side.app }).found, 'found=true');

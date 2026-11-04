@@ -20,11 +20,11 @@ test('skips with a notice and the hint when the app does not exist yet', () => {
   assert.match(r.summary, /does not exist yet/);
 });
 
-test('skips when CI cannot see the app', () => {
+test('skips with the hint when CI cannot see the app, which an absent app also answers', () => {
   const r = runWithFakeAz(PROBE, { azErr: '(AuthorizationFailed) no access' });
   assert.strictEqual(r.status, 0);
   assert.strictEqual(r.found, 'found=false');
-  assert.match(r.stdout, /lacks Website Contributor/);
+  assert.match(r.stdout, /^::notice::demi-x-test is absent, or CI lacks Website Contributor on it\. Create it first\. /m);
 });
 
 test('any other Azure error fails', () => {

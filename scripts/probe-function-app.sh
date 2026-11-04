@@ -34,7 +34,7 @@ elif err=$(az functionapp show -g "$RG" -n "$APP" --query name -o tsv 2>&1 >/dev
 elif [[ "$err" == *ResourceNotFound* ]]; then
   skip "$APP does not exist yet. $HINT Skipping the deploy."
 elif [[ "$err" == *AuthorizationFailed* ]]; then
-  skip "$APP exists but CI lacks Website Contributor on it. Grant the role and rerun. Skipping the deploy."
+  skip "$APP is absent, or CI lacks Website Contributor on it. $HINT Grant the role and rerun. Skipping the deploy."
 else
   echo "::error::az functionapp show failed for $APP: $err"
   exit 1
