@@ -68,9 +68,14 @@ const NO_PERIOD = 'The comment has no comment period.';
 const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
 
 function auditOf(action, fields) {
-  return (saved) => ({
-    action, targetType: 'comment', targetId: saved.id, projectId: saved.projectId, ...(fields && { detail: { fields } })
-  });
+  return (saved, from) => {
+    // A takeover stores `Pending` over an absent status, so the log names that field too.
+    const filled = from && from.eaoStatus !== saved.eaoStatus && !fields.includes('eaoStatus');
+    const named = filled ? [...fields, 'eaoStatus'] : fields;
+    return {
+      action, targetType: 'comment', targetId: saved.id, projectId: saved.projectId, ...(named && { detail: { fields: named } })
+    };
+  };
 }
 
 /**
@@ -94,9 +99,47 @@ function statusFields(current, status, period) {
   };
 }
 
+/**
+ * The row a DEMI write leaves, owned by DEMI so a later Eagle push keeps its values and sync-out sends it.
+ * Its own read is the Eagle copy's, else the one its stored status gives; its status is the one sync-out sends.
+ */
+function ownedByDemi(row) {
+  if (row.sourceSystem === 'demi') return row;
+  const eagleRead = row.sources && row.sources.eagle && row.sources.eagle.read;
+  const { eaoStatus, own } = moderation(row.eaoStatus);
+  const read = Array.isArray(eagleRead) ? [...eagleRead] : own;
+  return { ...row, eaoStatus, sourceSystem: 'demi', sources: { ...row.sources, demi: { read } } };
+}
+
 const readComment = (ctx, id) => comments.getById(ctx.access, id);
 const periodOf = (comment) =>
   commentPeriods.getById(systemAccess(), comment.periodId, comment.projectId, { includeDeleted: true });
+
+/**
+ * Write `changes(owned)` over the stored comment as DEMI owns it, and log a takeover once: only the attempt
+ * that wrote decides, as a lost race may rebuild from a row another DEMI write already took over.
+ */
+async function demiWrite(ctx, id, existing, changes, audit) {
+  const actor = actorOf(ctx);
+  let tookOver = false;
+  const written = await queued(await writeRow({
+    ctx,
+    repo: comments,
+    existing,
+    reread: () => readComment(ctx, id),
+    build: (current) => {
+      if (!current) return null;
+      tookOver = current.sourceSystem !== 'demi';
+      const owned = ownedByDemi(current);
+      return { ...owned, ...changes(owned), updatedBy: actor, dateUpdated: new Date().toISOString() };
+    },
+    audit
+  }), COMMENT);
+  if (written.status === 'ok' && tookOver) {
+    logger.info('[Comment] DEMI write took over an Eagle comment', { id: written.value.id, eagleId: written.value.eagleId });
+  }
+  return written;
+}
 
 /**
  * @param {{access: object, req: object}} ctx
@@ -179,21 +222,8 @@ async function update(ctx, id, changes) {
   const period = status === undefined ? null : await periodOf(existing);
   if (status !== undefined && !period) return { status: 'conflict', error: NO_PERIOD };
 
-  const actor = actorOf(ctx);
-  return queued(await writeRow({
-    ctx,
-    repo: comments,
-    existing,
-    reread: () => readComment(ctx, id),
-    build: (current) => current && {
-      ...current,
-      ...rest,
-      ...(period && statusFields(current, status, period)),
-      updatedBy: actor,
-      dateUpdated: new Date().toISOString()
-    },
-    audit: auditOf('comment.update', fields)
-  }), COMMENT);
+  return demiWrite(ctx, id, existing, owned => ({ ...rest, ...(period && statusFields(owned, status, period)) }),
+    auditOf('comment.update', fields));
 }
 
 /**
@@ -209,20 +239,8 @@ async function setStatus(ctx, id, input) {
   const period = await periodOf(existing);
   if (!period) return { status: 'conflict', error: NO_PERIOD };
 
-  const actor = actorOf(ctx);
-  return queued(await writeRow({
-    ctx,
-    repo: comments,
-    existing,
-    reread: () => readComment(ctx, id),
-    build: (current) => current && {
-      ...current,
-      ...statusFields(current, checked.value.status, period),
-      updatedBy: actor,
-      dateUpdated: new Date().toISOString()
-    },
-    audit: auditOf('comment.setStatus', ['eaoStatus'])
-  }), COMMENT);
+  return demiWrite(ctx, id, existing, owned => statusFields(owned, checked.value.status, period),
+    auditOf('comment.setStatus', ['eaoStatus']));
 }
 
 module.exports = { STATUSES, CREATE_SCHEMA, UPDATE_SCHEMA, create, update, setStatus };

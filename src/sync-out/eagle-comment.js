@@ -1,7 +1,7 @@
 'use strict';
 
-// Sync-out consumer: comments created in DEMI, written into Eagle through eagle-api. A row with an `eagleId` is
-// PUT; one Eagle lacks is POSTed under a minted id once SYNC_OUT_EAGLE_NATIVE_ENABLED is on.
+// Sync-out consumer: comments DEMI created or took over from Eagle, PUT to eagle-api. A DEMI-created comment Eagle
+// lacks is POSTed under a minted id once SYNC_OUT_EAGLE_NATIVE_ENABLED is on; a taken-over one never is.
 
 const settings = require('../config').syncOut;
 const comments = require('../repositories/comments');
@@ -87,6 +87,8 @@ async function send(row, { update }) {
     path: ROUTE,
     noun: 'comment',
     put: (eagleId, fields) => put(s, eagleId, body, fields),
+    // A comment DEMI took over holds an id Eagle made, not one sync-out minted; a POST would add a stray comment.
+    mintedOnly: true,
     unknownId: () => ({
       line: 'Eagle stored the comment under an unknown id; find it by period and text', fields: { period: body.period }
     }),

@@ -31,6 +31,8 @@ const DOCUMENT_ROW_ID = '7d1e2f40-0000-4000-8000-0000000000c3';
 const DOCUMENT_EAGLE_ID = '6720b3c0a1b2c3d4e5f6072b';
 const PROJECT_ID = storedProject().id;
 const OBJECT_ID = /^[0-9a-f]{24}$/;
+/** The sync state of a row whose Eagle id sync-out minted. */
+const MINTED = Object.freeze({ eagle: { mintedId: EAGLE_ID } });
 
 const ENV = {
   SYNC_OUT_QUEUE: 'sync-out',
@@ -116,7 +118,7 @@ const push = async (eagleId, doc) => {
   return res;
 };
 
-test('sync-out of DEMI-created comments', async (t) => {
+test('sync-out of comments DEMI created or took over', async (t) => {
   t.beforeEach((tt) => {
     useEnv(tt, ENV);
     eagle.clearToken();
@@ -272,7 +274,7 @@ test('sync-out of DEMI-created comments', async (t) => {
 
   await t.test('an Eagle-owned comment row under the id stops the create before any POST', async (tt) => {
     const store = mirrorStore(tt, [
-      nativeComment({ eagleId: EAGLE_ID }), nativePeriod(),
+      nativeComment({ eagleId: EAGLE_ID, syncOut: MINTED }), nativePeriod(),
       nativeComment({ id: EAGLE_ID, eagleId: EAGLE_ID, sourceSystem: 'eagle' })
     ]);
     const calls = wireEagle(tt, { 'PUT *': { body: { matchedCount: 0 } } });
@@ -292,8 +294,8 @@ test('sync-out of DEMI-created comments', async (t) => {
     assert.strictEqual(calls[0].body.eaoStatus, 'Rejected');
   });
 
-  await t.test('a PUT that matches no Eagle comment is POSTed under the same id', async (tt) => {
-    mirrorStore(tt, [nativeComment({ eagleId: EAGLE_ID }), nativePeriod()]);
+  await t.test('a PUT that matches no Eagle comment sync-out created is POSTed under the same id', async (tt) => {
+    mirrorStore(tt, [nativeComment({ eagleId: EAGLE_ID, syncOut: MINTED }), nativePeriod()]);
     wireQueue(tt);
     const calls = wireEagle(tt, { 'PUT *': { body: { matchedCount: 0 } }, 'POST /comment': body => ({ body: { _id: body._id } }) });
 
@@ -302,6 +304,20 @@ test('sync-out of DEMI-created comments', async (t) => {
     assert.deepStrictEqual(keys(calls), [`PUT /comment/${EAGLE_ID}`, 'POST /comment']);
     assert.strictEqual(calls[1].body._id, EAGLE_ID);
     assert.strictEqual(result.status, 'sent');
+  });
+
+  await t.test('a PUT that matches no Eagle comment for a comment DEMI took over sends no POST', async (tt) => {
+    mirrorStore(tt, [nativeComment({ id: EAGLE_ID, eagleId: EAGLE_ID }), nativePeriod()]);
+    wireQueue(tt);
+    const warned = [];
+    tt.mock.method(logger, 'warn', (message) => { warned.push(message); });
+    const calls = wireEagle(tt, { 'PUT *': { body: { matchedCount: 0 } }, 'POST /comment': body => ({ body: { _id: body._id } }) });
+
+    const result = await run(EAGLE_ID);
+
+    assert.deepStrictEqual(keys(calls), [`PUT /comment/${EAGLE_ID}`]);
+    assert.strictEqual(result.status, 'skipped');
+    assert.ok(warned.some(message => message.includes('which sync-out did not create')), warned.join('\n'));
   });
 
   await t.test('only DEMI rows are wanted: an Eagle-mirrored comment staff edited in DEMI is not', () => {

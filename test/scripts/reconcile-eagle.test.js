@@ -674,6 +674,24 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 5);
   });
 
+  await t.test('a comment DEMI took over is neither eagleOnly nor an ACL mismatch', async () => {
+    const summary = await reconcile(['--comments'], makeDeps({
+      sources: stubSources({
+        fetchJsonWithHeaders: async () => ({
+          body: [{ _id: 'C-taken', read: ['staff', 'sysadmin'] }], headers: new Headers({ 'x-total-count': '1' })
+        })
+      }),
+      comments: {
+        listEveryByPeriod: async () => [{
+          id: 'C-taken', eagleId: 'C-taken', sourceSystem: 'demi', read: ['public', 'staff', 'sysadmin'], isPublished: true
+        }]
+      }
+    }));
+
+    assert.deepStrictEqual(summary.comments.eagleOnly, []);
+    assert.deepStrictEqual(summary.comments.aclMismatch, []);
+  });
+
   // Track 353's epic_guid is the notification's own _id, so a project-first lookup files the
   // period under Track project '353'. Both containers hold it, so an id-set diff calls it clean.
   await t.test('a period stored under a Track project that shadows its notification is misfiled',
