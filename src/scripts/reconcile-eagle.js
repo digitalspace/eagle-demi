@@ -728,10 +728,9 @@ async function reconcile(argv = [], deps = {}) {
     }
     summary.comments = {
       inDemi: commentRows.length, inEagle: eagleCommentIds.size,
-      // A comment created in DEMI has no Eagle copy until sync-out covers comments, so it is not drift.
-      ...diff(commentRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eagleCommentIds,
-        undefined, id => !unresolvedComments.has(id)),
-      aclMismatch: aclMismatch(commentRows, row => String(row.id), eagleRead,
+      ...diffById(commentRows, eagleCommentIds, id => !unresolvedComments.has(id)),
+      // DEMI sets a DEMI row's read; Eagle's copy follows it only once sync-out sends it.
+      aclMismatch: aclMismatch(commentRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eagleRead,
         row => periodReadOf.get(String(row.id)) || null)
     };
     summary.failures.push(...await truncated([['comments', commentRows, async () => commentCount]]));

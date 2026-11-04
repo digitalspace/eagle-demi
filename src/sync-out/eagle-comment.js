@@ -87,6 +87,8 @@ async function send(row, { update }) {
     path: ROUTE,
     noun: 'comment',
     put: (eagleId, fields) => put(s, eagleId, body, fields),
+    // A comment DEMI took over holds an id Eagle made, not one sync-out minted; a POST would add a stray comment.
+    mintedOnly: true,
     unknownId: () => ({
       line: 'Eagle stored the comment under an unknown id; find it by period and text', fields: { period: body.period }
     }),
