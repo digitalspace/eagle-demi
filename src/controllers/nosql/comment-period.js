@@ -15,8 +15,8 @@
 // A row ENGAGE or DEMI owns takes only the Eagle id, raw copy and staff fields its owner does not
 // write (`KEPT_FROM_ECHO`): an Eagle push is often the echo of what DEMI sent.
 
-// A period DEMI took over but has not sent also takes Eagle's unpublish and delete: until DEMI
-// sends, eagle-admin still writes it in Eagle and nothing else would carry those to DEMI.
+// A period DEMI took over but has not sent also takes Eagle's publish, unpublish and delete: until
+// DEMI sends, eagle-admin still writes it in Eagle and nothing else would carry those to DEMI.
 
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
@@ -27,6 +27,7 @@ const { admitParent, refusalCode } = require('../../helpers/parent-admit');
 const { eagleBaseAcl, eagleReadUnder } = require('../../seed/transform');
 const { systemAccess, sameAccess } = require('../../helpers/access-sql');
 const { mirrorError } = require('../../helpers/duplicate-id');
+const { nextSyncVersion } = require('../../sync-out/kinds');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
@@ -125,19 +126,30 @@ function eagleOwnedOnto(current, eagleId, doc, read) {
   const staff = staffFields(doc);
   for (const field of KEPT_FROM_ECHO[current.sourceSystem]) delete staff[field];
   const row = { ...current, ...staff, eagleId, sources: { ...current.sources, eagle: doc } };
-  // Eagle may still number comments on a period DEMI took over; DEMI never reuses a number an echo showed.
+  // Eagle may still number comments on any DEMI period; DEMI never reuses a number an echo showed.
   if (current.sourceSystem === 'demi') row.commentIdCount = higherCount(current.commentIdCount, doc.commentIdCount);
-  const unpublished = current.read.includes('public') && !read.includes('public');
-  if (takenOverUnsent(current) && (doc.isDeleted === true || unpublished)) {
-    const narrowed = constrainToProject(read, current.read);
-    Object.assign(row, {
-      read: narrowed,
-      isPublished: narrowed.includes('public'),
-      isDeleted: current.isDeleted === true || doc.isDeleted === true,
-      sources: { ...row.sources, demi: { read: eagleBaseAcl(doc.read) } }
-    });
+  const stored = takenOverUnsent(current) && echoedRead(current, doc, read);
+  if (!stored) return row;
+  return {
+    ...row,
+    read: stored,
+    isPublished: stored.includes('public'),
+    isDeleted: current.isDeleted === true || doc.isDeleted === true,
+    sources: { ...row.sources, demi: { read: eagleBaseAcl(doc.read) } },
+    // Raised so a send already in flight records an older version and this state is sent after it.
+    syncVersion: nextSyncVersion(current)
+  };
+}
+
+/** The read an unsent taken-over row stores from Eagle's delete, unpublish or publish; null when it keeps its own. */
+function echoedRead(current, doc, read) {
+  const isPublic = acl => eagleBaseAcl(acl).includes('public');
+  if (doc.isDeleted === true || (current.read.includes('public') && !read.includes('public'))) {
+    return constrainToProject(read, current.read);
   }
-  return row;
+  // Only a publish Eagle just made: an unrelated Eagle edit never undoes a DEMI unpublish.
+  const published = isPublic(doc.read) && !isPublic(current.sources.eagle && current.sources.eagle.read);
+  return published && current.isDeleted !== true ? read : null;
 }
 
 /** The higher of two comment counts, ignoring one that is not a count. */
@@ -208,7 +220,7 @@ async function mirrorFromEagle(eagleId, doc, parentRow, { pushedAt = null } = {}
         { id: saved.id, from: existing.commentIdCount ?? null, to: saved.commentIdCount });
     }
     if (!sameAccess(existing.read, saved.read)) {
-      logger.info('[Comment Period Controller] echo narrowed a period DEMI took over but has not sent',
+      logger.info('[Comment Period Controller] echo changed the read of a period DEMI took over but has not sent',
         { id: saved.id, isDeleted: saved.isDeleted, read: saved.read });
     }
   }

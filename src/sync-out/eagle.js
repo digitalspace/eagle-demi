@@ -454,8 +454,8 @@ function refuseStray(row) {
 }
 
 /**
- * A native period's Eagle project id, from its parent project, or for a period under a notification the parent its
- * Eagle copy names (PUT ignores `project`). Without one there is nothing to POST under.
+ * A native period's Eagle project id, from its parent project, or with no DEMI project row (a notification parent, or
+ * the row is gone) the parent its Eagle copy names; PUT ignores `project`. Without one there is nothing to POST under.
  */
 async function parentEagleId(row, logFields) {
   const parent = await projects.readForWrite(row.projectId);
