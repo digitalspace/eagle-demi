@@ -578,6 +578,34 @@ paths:
             serving the dataset from Cosmos, `"error": "check failed"` for any other upstream
             failure (details in the log). Also answered when `SEARCH_ENDPOINT` is unset.
 
+  /api/health/trust:
+    get:
+      summary: Do this request's edge and gateway headers match what the API accepts?
+      description: >-
+        Unauthenticated, like the other health routes, and exempt from the edge gate. It only
+        reports whether the header values this request presents are accepted. `edge` is true when
+        `X-Edge-Secret` matches an accepted Front Door value; `gateway` is true when
+        `X-Gateway-Secret` matches an accepted APIM value.
+
+        Accepted values are the latest and the standby copy of each secret in Key Vault, read every
+        5 minutes. The values of the read before also count for 5 minutes after it is replaced, so
+        a retired value stops matching within 10 minutes. Until the first read succeeds (retried
+        every 30 seconds) the app setting counts instead. The secret rotator calls this route
+        through the public site before and after each change. Returns booleans only, never a value.
+      responses:
+        '200':
+          description: '`{ "edge": true, "gateway": true }`'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [edge, gateway]
+                properties:
+                  edge:
+                    type: boolean
+                  gateway:
+                    type: boolean
+
   /api/config:
     get:
       summary: DEMI admin console runtime configuration

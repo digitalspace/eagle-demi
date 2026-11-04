@@ -14,7 +14,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const apiKeys = require('../../src/repositories/api-keys');
+const config = require('../../src/config');
 const { authenticate, forgetCachedKey } = require('../../src/helpers/auth');
+const { ready } = require('../../src/utils/rotating-secret');
+const { freshUri, fakeVault } = require('./fake-vault');
 
 const SECRET = 'gateway-secret-value-32-bytes-long';
 const ROW_ID = 'apim:eagle-api';
@@ -71,6 +74,23 @@ test('the right secret plus a subscription name authenticates as that consumer',
   // The party id credentials and access-sql key off — the registry row, not the raw header.
   assert.strictEqual(user.keyId, ROW_ID);
   assert.deepStrictEqual(user.realm_access.roles, ['demi-service-write']);
+  forgetCachedKey(ROW_ID);
+});
+
+test('standby value accepted', async (t) => {
+  // Mid-rotation APIM may stamp either value, so the standby copy in the vault must pass too.
+  withSecret(t, SECRET);
+  const saved = config.apimGatewaySecretUri;
+  const uri = freshUri();
+  config.apimGatewaySecretUri = uri;
+  t.after(() => { config.apimGatewaySecretUri = saved; });
+  fakeVault(t, { [uri]: 'next-gateway-value-in-vault', [`${uri}-standby`]: 'standby-gateway-value' });
+  stubRegistry(t, { [ROW_ID]: row() });
+  await ready();
+
+  const { user } = await run({ 'X-Gateway-Secret': 'standby-gateway-value', 'X-APIM-Subscription': 'eagle-api' });
+
+  assert.strictEqual(user && user.preferred_username, 'key:eagle-api');
   forgetCachedKey(ROW_ID);
 });
 

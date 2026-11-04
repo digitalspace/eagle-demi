@@ -3,7 +3,7 @@
 const net = require('node:net');
 const { fromGateway, matchesConfiguredKey } = require('../helpers/auth');
 const config = require('../config');
-const { isKeyVaultReference } = require('./key-vault-reference');
+const { acceptedValues } = require('./rotating-secret');
 
 /**
  * `1.2.3.4:5678` → `1.2.3.4`, `[2001:db8::1]:8080` → `2001:db8::1`.
@@ -55,18 +55,12 @@ function normalizeIp(value) {
   return net.isIP(ip) ? ip : '';
 }
 
-/**
- * Is this request provably stamped by the eagle-edge Front Door rule set?
- *
- * Empty config is the off switch. src/config.js already empties an unresolved Key Vault reference
- * read from the environment; the literal is public in this repository, so it is re-checked here
- * rather than trusted because of where it came from.
- */
+/** Is this request provably stamped by the eagle-edge Front Door rule set? No accepted value = off. */
 function fromEdge(headers) {
-  const secret = config.edgeSecret;
-  if (!secret || isKeyVaultReference(secret)) return false;
+  const accepted = acceptedValues('EDGE_SECRET');
+  if (accepted.length === 0) return false;
 
-  return matchesConfiguredKey(headers['x-edge-secret'] || '', [secret]);
+  return matchesConfiguredKey(headers['x-edge-secret'] || '', accepted);
 }
 
 /** A hop we run: a plain address, or a range for the in-cluster router hop (`10.0.0.0/8`). */
@@ -122,7 +116,7 @@ function callerIp(req) {
   // the connection from; X-Azure-ClientIP is derived from the caller's own X-Forwarded-For and any
   // browser can pick it, so it is never read here. Checked ahead of the gateway branch because
   // this is a different hop's proof — AFD reaches us through APIM either way.
-  // ponytail: the trust is only as good as the secret's rotation; Private Link from Front Door to APIM would drop the header trust entirely.
+  // ponytail: a shared header secret, rotated through utils/rotating-secret.js; Private Link from Front Door to APIM would drop the header trust entirely.
   if (fromEdge(headers)) {
     // Front Door's own socket peer is the OpenShift rproxy on the public path
     // (browser → rproxy → Front Door → APIM), so this is not automatically the browser either —
