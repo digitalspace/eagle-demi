@@ -140,7 +140,7 @@ param trustedProxyIps string = ''
 
 // Empty keys every visitor arriving through Front Door on its egress address, which is one shared
 // anonymous bulk-download quota for all of them. src/utils/caller-ip.js.
-@description('Key Vault URI of the shared secret the eagle-edge rule set stamps as X-Edge-Secret. Not the value: the app resolves it through a Key Vault reference. Empty ignores the header.')
+@description('Key Vault URI of the shared secret the eagle-edge rule set stamps as X-Edge-Secret. Not the value: the app resolves it through a Key Vault reference, and it is also passed plain as EDGE_SECRET_URI. Empty ignores the header.')
 param edgeSecretUri string = ''
 
 @description('EDGE_GATE for src/http/router.js: empty off, log serves and writes one warn line per request that skipped Front Door, enforce answers 403.')
@@ -251,6 +251,9 @@ param announceUpdatesSchedule string = ''
 @description('Key Vault reference for the APIM gateway secret. Empty disables the gateway trust branch.')
 @secure()
 param apimGatewaySecretRef string = ''
+
+@description('Versionless vault URI of apim-gateway-secret, read by the app itself with its -standby twin. Empty turns the vault read off.')
+param apimGatewaySecretUri string = ''
 
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty registers no timer.')
 param syncTeamsSchedule string = ''
@@ -930,6 +933,16 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'APIM_GATEWAY_SECRET'
           value: apimGatewaySecretRef
+        }
+        // Plain URIs, not references: the checker reads the current and -standby values itself, so
+        // a rotation is accepted without the settings rewrite a Flex app needs to refetch a reference.
+        {
+          name: 'APIM_GATEWAY_SECRET_URI'
+          value: apimGatewaySecretUri
+        }
+        {
+          name: 'EDGE_SECRET_URI'
+          value: edgeSecretUri
         }
         // No key: AI Search has disableLocalAuth, so the app authenticates with the same identity
         // it uses for Cosmos. Absent endpoint degrades the chunk dataset to empty results.

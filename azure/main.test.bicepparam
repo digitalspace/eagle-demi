@@ -191,9 +191,7 @@ param ssoAudience = 'demi-api'
 // An address missing here only puts that proxy's visitors back on one shared key.
 param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194.124'
 
-// The secret the eagle-edge rule set stamps on origin requests is the vault's `edge-secret`, named
-// in optionalSecretNames above. Both sides read the SAME value — rotate it in eagle-edge and in the
-// vault together, or callers fall back to the shared anonymous quota key for a while.
+// eagle-edge stamps the vault's `edge-secret` (optionalSecretNames); the rotator below rotates both.
 
 // `log` while the list of callers that skip Front Door is measured (AppTraces, evt 'edge-gate').
 param edgeGate = 'log'
@@ -205,6 +203,14 @@ param edgeGate = 'log'
 param edgeBanMode = 'shadow'
 param edgeLogWorkspaceId = '0012cdde-c428-4b7f-9bcb-8e55ec9c35c7'
 param edgeBanRuleId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourcegroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/rulesets/rulesdemidocs/rules/banauto'
+
+// Secret rotator (modules/secret-rotator.bicep). Rule ids = the stampedgesecret rule in each
+// eagle-edge-test rule set, the one that stamps X-Edge-Secret.
+param rotatorTargets = 'edge-secret:frontdoor:demi-edge,apim-gateway-secret:apim:demi-gateway,analytics-shared-header:apim:analytics,analytics-audit-header:apim:none'
+param rotatorRenew = true
+param rotatorEdgeRuleIds = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/ruleSets/rulesdemi/rules/stampedgesecret,/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/ruleSets/rulesapi/rules/stampedgesecret,/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-rg/providers/Microsoft.Cdn/profiles/eagle-edge-test/ruleSets/rulesdemidocs/rules/stampedgesecret'
+param rotatorProbeDemiUrl = 'https://test.projects.eao.gov.bc.ca/demi/api/health/trust'
+param rotatorProbeAnalyticsUrl = 'https://test.projects.eao.gov.bc.ca/analytics/events'
 
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
