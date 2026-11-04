@@ -1,16 +1,7 @@
 'use strict';
 
-/**
- * The break-glass `skip_schema_probe` input on the prod deploy.
- *
- * It exists for one deadlock: the app serving production answers the probe with a 500, and the
- * release that fixes it cannot pass the gate. What has to hold is narrow: unticked, both gates run
- * as before; ticked, neither runs, the run and the release name who skipped them, and the job still
- * succeeds so the deploy jobs that need it are not skipped along with it.
- *
- * No YAML dependency in this repo, so the file is read by indentation, which is all GitHub's own
- * layout here needs.
- */
+// The prod deploy workflow: the skip_schema_probe break-glass input and the side-app jobs.
+// No YAML dependency in this repo, so the file is read by indentation.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -72,9 +63,8 @@ function step(jobLines, name) {
   return found;
 }
 
-// Just enough of GitHub's expression language for these steps: `inputs.x`, `!inputs.x`, and
-// `needs.<job>.outputs.<key> == '<value>'`, bare or inside `${{ }}`. Anything else throws, so a
-// rewrite fails here instead of passing blind.
+// Only `inputs.x`, `!inputs.x` and `needs.<job>.outputs.<key> == '<value>'`; anything else throws,
+// so a rewrite fails here instead of passing blind.
 function runs(stepLines, ctx) {
   const cond = scalars(stepLines, 8).if;
   if (cond === undefined) return true;
