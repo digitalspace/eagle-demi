@@ -51,7 +51,6 @@ const EAGLE_ONLY_FIELDS = [
   'responsibleEPD', 'responsibleEPDEmail', 'responsibleEPDPhone',
   'complianceLead', 'execProjectDirector', 'eaoMember',
   'sector', 'commodity', 'region', 'fedElecDist', 'provElecDist',
-  'projectCAC', 'projectCACPublished', 'cacEmail',
   'proponentId', 'featuredDocuments',
   'overallProgress', 'code', 'nameSearchTerms',
   ...EAGLE_STAFF_FIELDS
@@ -92,13 +91,16 @@ const PUSH_ONLY_FIELDS = [
 /** The extension lists: DEMI holds them once, project-wide, at the top level, never in a block. */
 const EXTENSION_LIST_FIELDS = Object.freeze(['reviewExtensions', 'reviewSuspensions']);
 
+/** The CAC fields, top-level in Mongo and in DEMI; the CAC routes (src/domain/cac.js) write them. */
+const CAC_FIELDS = Object.freeze(['projectCAC', 'projectCACPublished', 'cacEmail']);
+
 /**
- * Only DEMI writes these (PUT, `/level`, the extension routes, the dating pass, sync-out), so no
- * re-merge can rebuild them.
+ * Only DEMI writes these (PUT, `/level`, the extension and CAC routes, the dating pass, sync-out),
+ * so no re-merge can rebuild them.
  */
 const DEMI_ONLY_FIELDS = [
   'tags', 'levelHeldAt', 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
-  ...EXTENSION_LIST_FIELDS, ...SYNC_STATE_FIELDS
+  ...EXTENSION_LIST_FIELDS, ...CAC_FIELDS, ...SYNC_STATE_FIELDS
 ];
 
 /** Each field's one owner. `legislation_<year>` blocks are Eagle's too (`LEGISLATION_KEY`). */
@@ -117,8 +119,9 @@ const PUT_IGNORED_FIELDS = [
   'read', 'isPublished',
   // Only DELETE /projects/:id and the Eagle push move it, together with `read`.
   'isDeleted',
-  // The cacPublished predicate reads this, so PUT must not set it (doc §2 item 7).
-  'projectCACPublished',
+  // Moved only by the CAC routes: the cacPublished predicate reads `projectCACPublished` (doc §2
+  // item 7), and a CAC delete ends its members in eagle-notify first.
+  ...CAC_FIELDS,
   // Applied by `pinChanges` (src/domain/project-pins.js), which checks them; `pinsPublished` is
   // stored as `pinsRead`, so neither is spread from the body.
   'pins', 'pinsPublished',
@@ -154,6 +157,7 @@ module.exports = {
   PUSH_BOOKKEEPING_FIELDS,
   PUSH_ONLY_FIELDS,
   EXTENSION_LIST_FIELDS,
+  CAC_FIELDS,
   DEMI_ONLY_FIELDS,
   OWNERS,
   PUT_IGNORED_FIELDS,

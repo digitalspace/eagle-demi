@@ -12,7 +12,7 @@ const {
   buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
   eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, carryDelete, deletedBy, hasValue
 } = require('../merge/project');
-const { DEMI_ONLY_FIELDS } = require('../ownership/project');
+const { DEMI_ONLY_FIELDS, CAC_FIELDS } = require('../ownership/project');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
 const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
@@ -555,14 +555,15 @@ async function runSeed(args, deps, summary) {
           // nor drop the legacy codes that still resolve to it.
           carryShortLink(project, existing);
           project.sources = { ...existing.sources, ...project.sources };
-          // A row that lost its Eagle id (to a native project, or in Track) drops that project's Eagle data,
-          // but keeps the DEMI-only fields, Eagle-seeded pins and extension lists included.
+          // A row that lost its Eagle id drops that project's Eagle data and its CAC, whose members sit
+          // under the old id in eagle-notify; it keeps the other DEMI-only fields, Eagle-seeded ones included.
           const unlinked = !project.eagleId && hasValue(existing.eagleId);
           if (unlinked) delete project.sources.eagle;
           // The public search lacks applicableRegulation, featuredDocuments and the push bookkeeping; carried
           // over so a re-seed neither blanks them nor lets an applied push land again.
           if (!unlinked) carryEagleOnlyFields(project, existing);
           carryDemiOnlyFields(project, existing);
+          if (unlinked) for (const field of CAC_FIELDS) delete project[field];
           // The public feed never says a project was deleted, so a rebuilt row would republish it.
           carryDelete(project, existing);
         } else if (project.eagleId && !isEagleOnlyProjectId(project.id)) {

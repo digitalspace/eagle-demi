@@ -14,11 +14,12 @@ const projects = require('../repositories/projects');
 const notify = require('../services/notify');
 const { refusedWriteKeys } = require('../vis/redact');
 const { check } = require('./_schema');
-const { writeRow } = require('./_write');
+const { writeRow, queued } = require('./_write');
+const { PROJECT } = require('../sync-out/kinds');
 const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
+const { CAC_FIELDS: FIELDS } = require('../ownership/project');
 
-const FIELDS = Object.freeze(['projectCAC', 'projectCACPublished', 'cacEmail']);
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
 const EMAIL_SCHEMA = { type: 'string', max: 254, required: true };
 const CREATE_SCHEMA = Object.freeze({ cacEmail: EMAIL_SCHEMA });
@@ -72,16 +73,19 @@ function notifyFailure(err, projectId, call) {
   return { status: 'upstream-failed', error: 'The subscription service did not remove the members. Nothing was changed.' };
 }
 
-/** Sets `changes` on the project and answers the CAC view. */
+/**
+ * Sets `changes` on the project and answers the CAC view. Queued so a native row's raised
+ * `syncVersion` is sent; the project consumer sends no CAC field.
+ */
 async function writeFields(ctx, project, changes, action, { created = false, detail = {} } = {}) {
-  const result = await writeRow({
+  const result = await queued(await writeRow({
     ctx,
     repo: PROJECT_REPO,
     existing: project,
     reread: () => readProject(ctx, project.id),
     build: (current) => current && { ...current, ...changes, updatedAt: new Date().toISOString() },
     audit: (saved) => ({ action, targetType: 'project', targetId: saved.id, projectId: saved.id, detail })
-  });
+  }), PROJECT);
   if (result.status !== 'ok') return result;
   return { status: 'ok', value: viewOf(result.value), created };
 }
@@ -113,11 +117,12 @@ async function create(ctx, id, input) {
     { projectCAC: true, cacEmail: checked.value.cacEmail, projectCACPublished: false }, 'cac.create', { created: true });
 }
 
-/** Publishes the CAC (cac.js:23). Unlike eagle-api, a project with no CAC is refused. */
+/** Publishes the CAC (cac.js:23). Unlike eagle-api, a project with no CAC or no email is refused. */
 async function publish(ctx, id) {
   const { project, refused } = await writable(ctx, id);
   if (refused) return refused;
   if (project.projectCAC !== true) return { status: 'conflict', error: 'The project has no CAC.' };
+  if (typeof project.cacEmail !== 'string' || project.cacEmail.trim() === '') return { status: 'conflict', error: 'The CAC has no email.' };
   return writeFields(ctx, project, { projectCACPublished: true }, 'cac.publish');
 }
 

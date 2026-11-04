@@ -11,6 +11,7 @@ const assert = require('node:assert');
 const audit = require('../../src/utils/audit');
 const projects = require('../../src/repositories/projects');
 const notify = require('../../src/services/notify');
+const syncOut = require('../../src/sync-out');
 const { logger } = require('../../src/utils/logger');
 const { resolveAccess } = require('../../src/helpers/access-sql');
 const cac = require('../../src/domain/cac');
@@ -31,9 +32,10 @@ function ctxFor(roles) {
 }
 const STAFF = ctxFor(['staff']);
 
-/** Fake storage holding one project; returns the rows written and the options each write passed. */
+/** Fake storage holding one project; returns the rows written, each write's options and the rows queued. */
 function fakeStore(t, stored = STORED) {
-  const store = { written: [], options: [] };
+  const store = { written: [], options: [], queued: [] };
+  t.mock.method(syncOut, 'enqueueQuietly', async (row, { kind }) => { store.queued.push([row.id, row._etag, kind]); return []; });
   t.mock.method(projects, 'getById', async (access, id) => (id === stored.id ? structuredClone(stored) : null));
   t.mock.method(projects, 'upsert', async (row, options) => {
     store.written.push(row);
@@ -111,6 +113,22 @@ test('CAC domain', async (t) => {
     const store = fakeStore(t, { ...STORED, projectCAC: false });
     assert.strictEqual((await cac.publish(STAFF, PROJECT_ID)).status, 'conflict');
     assert.strictEqual(store.written.length, 0);
+  });
+
+  await t.test('publish refuses a CAC with a blank email', async (t) => {
+    const store = fakeStore(t, { ...STORED, projectCACPublished: false, cacEmail: ' ' });
+    assert.strictEqual((await cac.publish(STAFF, PROJECT_ID)).status, 'conflict');
+    assert.strictEqual(store.written.length, 0);
+  });
+
+  await t.test('create, publish, unpublish and delete each queue the saved project for sync-out', async (t) => {
+    const store = fakeStore(t);
+    fakeNotify(t, { count: 0 });
+    await cac.create(STAFF, PROJECT_ID, { cacEmail: 'cac@example.com' });
+    await cac.publish(STAFF, PROJECT_ID);
+    await cac.unpublish(STAFF, PROJECT_ID);
+    await cac.remove(STAFF, PROJECT_ID);
+    assert.deepStrictEqual(store.queued, Array(4).fill([PROJECT_ID, 'e2', 'project']));
   });
 
   await t.test('an unknown project is not-found on every write, with no eagle-notify call', async (t) => {
