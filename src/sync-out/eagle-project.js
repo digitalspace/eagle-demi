@@ -1,8 +1,7 @@
 'use strict';
 
-// Sync-out consumer: projects created in DEMI (`isNativeProject`) or taken over from Eagle (`isDemiOwnedProject`),
-// written into Eagle through eagle-api. Only one it created is POSTed, under a minted id, once
-// SYNC_OUT_EAGLE_NATIVE_ENABLED is on; a taken-over one is only PUT.
+// Sync-out consumer: DEMI-created (`isNativeProject`) and taken-over (`isDemiOwnedProject`) projects, PUT through
+// eagle-api. Only a DEMI-created one is POSTed, under a minted id, once SYNC_OUT_EAGLE_NATIVE_ENABLED is on.
 
 const settings = require('../config').syncOut;
 const projects = require('../repositories/projects');
@@ -35,18 +34,40 @@ const bareId = (ref) => {
 
 const pathOf = eagleId => `/project/${encodeURIComponent(eagleId)}`;
 
+const takenOver = row => isDemiOwnedProject(row) && Boolean(row.eagleId);
+
+/** The block eagle-api's PUT rewrites: the current `legislation_<year>` of Eagle's copy, else its flat fields. */
+function eagleBlockOf(row) {
+  const eagle = (row.sources && row.sources.eagle) || {};
+  const block = eagle[eagle.currentLegislationYear];
+  return block && typeof block === 'object' ? block : eagle;
+}
+
+// eagle-api stores `intake.investmentNotes` but its PUT reads `intake.notes`, so a round trip would clear the notes.
+const putIntake = intake => (intake && typeof intake === 'object'
+  ? { investment: intake.investment, notes: intake.investmentNotes }
+  : intake);
+
 async function bodyFor(row, logFields) {
+  // eagle-api's PUT clears every field the body leaves out, so a taken-over row sends Eagle's value where it has none.
+  const eagle = takenOver(row) ? eagleBlockOf(row) : {};
+  const pick = (field, eagleField = field) => (row[field] !== undefined ? row[field] : eagle[eagleField]);
   const body = {};
   for (const field of SAME_NAME) {
-    if (row[field] !== undefined) body[field] = row[field];
+    const value = pick(field);
+    if (value !== undefined) body[field] = value;
   }
+  if (body.intake !== undefined) body.intake = putIntake(body.intake);
   for (const [field, eagleField] of Object.entries(RENAMED)) {
-    if (row[field] !== undefined) body[eagleField] = row[field];
+    const value = pick(field, eagleField);
+    if (value !== undefined) body[eagleField] = value;
   }
   for (const field of REFS) {
-    if (row[field] !== undefined) body[field] = bareId(row[field]);
+    const value = pick(field);
+    if (value !== undefined) body[field] = bareId(value);
   }
   if (row.centroid && Array.isArray(row.centroid.coordinates)) body.centroid = row.centroid.coordinates;
+  else if (row.centroid === undefined && Array.isArray(eagle.centroid)) body.centroid = eagle.centroid;
   // eagle-api refuses a project without a proponent, so a row whose proponent Eagle lacks sends nothing.
   body.proponent = await organizationEagleId(row.proponentId,
     `proponent ${row.proponentId ?? 'none'} of project ${row.id}`, logFields);
@@ -62,7 +83,6 @@ async function put(s, eagleId, body, logFields) {
   return true;
 }
 
-const takenOver = row => isDemiOwnedProject(row) && Boolean(row.eagleId);
 const owned = row => (isNativeProject(row) || takenOver(row)) && row.isDeleted !== true;
 const wants = row => owned(row) && (row.eagleId ? mintedHere(row) || takenOver(row) : settings.eagle.nativeEnabled);
 

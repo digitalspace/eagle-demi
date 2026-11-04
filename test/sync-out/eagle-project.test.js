@@ -35,6 +35,7 @@ const ORG_ID = 'org-native-1';
 const EAGLE_ID = '6720b3c0a1b2c3d4e5f60719';
 const PHASE_ID = '5cf00c03a266b7e1877504ff';
 const STRAY_ID = '6720b3c0a1b2c3d4e5f607fe';
+const LEAD_ID = '5cf00c03a266b7e1877504aa';
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
 const ENV = {
@@ -67,6 +68,15 @@ function nativeProject(overrides = {}) {
     ...overrides
   };
 }
+
+/** Eagle's copy as the mirror stores it: flat fields plus every block, the current one holding what its PUT rewrites. */
+const eagleCopy = block => ({
+  _id: EAGLE_ID, read: PRIVATE_ACL, currentLegislationYear: 'legislation_2002', legislation_2002: block
+});
+const EAGLE_BLOCK = Object.freeze({
+  name: 'Eagle name', region: 'Peace', dispute: true, disputeDate: '2025-03-01T00:00:00.000Z',
+  intake: { investment: 12, investmentNotes: 'Phase one' }, projectLeadId: LEAD_ID, currentPhaseName: PHASE_ID
+});
 
 /** A Track-matched project DEMI took over from Eagle: it keeps the Eagle id and Eagle's raw copy. */
 const ownedProject = (overrides = {}) => nativeProject({
@@ -294,6 +304,36 @@ test('sync-out of DEMI-created projects', async (t) => {
 
     assert.deepStrictEqual(keys(calls), [put]);
     assert.strictEqual(rowOf(store).eagleId, EAGLE_ID, 'no id minted over the Eagle one');
+  });
+
+  await t.test('a DEMI-owned Eagle project sends Eagle\'s value for each field the row lacks, and its own where it has one',
+    async (tt) => {
+      mirrorStore(tt, [proponent()]);
+      const row = ownedProject({
+        region: null,
+        sources: { track: { track_project_id: 1234 }, eagle: eagleCopy(EAGLE_BLOCK) }
+      });
+
+      const body = await eagleProjectConsumer.bodyFor(row, {});
+
+      assert.strictEqual(body.dispute, true);
+      assert.strictEqual(body.disputeDate, EAGLE_BLOCK.disputeDate);
+      assert.deepStrictEqual(body.intake, { investment: 12, notes: 'Phase one' }, 'in the shape eagle-api\'s PUT reads');
+      assert.strictEqual(body.projectLeadId, LEAD_ID);
+      assert.strictEqual(body.currentPhaseName, PHASE_ID);
+      assert.strictEqual(body.name, 'Nicomen Wind Energy (DEMI)', 'a field the row holds is sent from the row');
+      assert.strictEqual(body.region, null, 'a blank the row holds still wins');
+    });
+
+  await t.test('a native project\'s body takes nothing from its Eagle copy', async (tt) => {
+    mirrorStore(tt, [proponent()]);
+    const row = nativeProject({
+      eagleId: EAGLE_ID, syncOut: { eagle: { mintedId: EAGLE_ID } }, sources: { eagle: eagleCopy(EAGLE_BLOCK) }
+    });
+
+    const body = await eagleProjectConsumer.bodyFor(row, {});
+
+    assert.deepStrictEqual(Object.keys(body).sort(), ['centroid', 'description', 'name', 'proponent']);
   });
 
   await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a project with no eagleId is held, its sync state untouched',
