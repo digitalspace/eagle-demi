@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * Organization writes: `POST /organizations`, `PUT /organizations/:id`, and publish and unpublish
- * on `/organizations/:id`, ported from eagle-api
- * `api/controllers/organization.js` (rules in docs/eagle-api-port.md, Organizations). Rows live in
- * the `lists` container as `kind: 'Organization'`, beside the ones the Eagle mirror writes.
+ * Organization writes ported from eagle-api `api/controllers/organization.js`; rules in
+ * docs/eagle-api-port.md, Organizations. Rows sit in `lists` beside the Eagle mirror's.
  */
 
 const crypto = require('node:crypto');
@@ -66,6 +64,34 @@ function auditOf(action, fields) {
 }
 
 /**
+ * `changes(current)` stored as DEMI's row, so the Eagle mirror keeps it and sync-out sends it.
+ * No `sources.demi.read`: no cascade reads an organization's own read.
+ */
+async function demiWrite(ctx, id, existing, changes, audit) {
+  const actor = actorOf(ctx);
+  let tookOver = false;
+  const written = await queued(await writeRow({
+    ctx,
+    repo: lists,
+    existing,
+    reread: () => readOrg(ctx, id),
+    build: (current) => {
+      if (!current) return null;
+      tookOver = current.sourceSystem !== 'demi';
+      return {
+        ...current, ...changes(current), sourceSystem: 'demi', updatedBy: actor, dateUpdated: new Date().toISOString()
+      };
+    },
+    audit
+  }), ORGANIZATION);
+  if (written.status === 'ok' && tookOver) {
+    logger.info('[Organization] DEMI write took over an Eagle organization',
+      { id: written.value.id, eagleId: written.value.eagleId });
+  }
+  return written;
+}
+
+/**
  * @param {{access: object, req: object}} ctx
  * @param {object} input the request body; `read` is ignored, `isPublished` defaults to false
  */
@@ -122,17 +148,7 @@ async function update(ctx, id, changes) {
     return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
   }
 
-  const actor = actorOf(ctx);
-  const written = await queued(await writeRow({
-    ctx,
-    repo: lists,
-    existing,
-    reread: () => readOrg(ctx, id),
-    build: (current) => current && {
-      ...current, ...checked.value, updatedBy: actor, dateUpdated: new Date().toISOString()
-    },
-    audit: auditOf('organization.update', fields)
-  }), ORGANIZATION);
+  const written = await demiWrite(ctx, id, existing, () => checked.value, auditOf('organization.update', fields));
 
   // A nameless organization gives no orgName to compare, so its users are left alone.
   if (written.status === 'ok' && typeof written.value.name === 'string') {
@@ -142,10 +158,8 @@ async function update(ctx, id, changes) {
 }
 
 /**
- * eagle-api renames `orgName` on every user of the organization (organization.js:163). The org row
- * is already saved, so a failed cascade is logged, not returned. Any later PUT of the organization
- * repairs it, because each user's orgName is compared with the organization name rather than
- * checking whether the name changed.
+ * eagle-api renames `orgName` on every user (organization.js:163). A failure is logged, not returned:
+ * the org is saved, and any later PUT repairs it, since each orgName is compared with the name.
  */
 async function renameUsers(orgId, orgName) {
   let updated = 0;
@@ -193,22 +207,10 @@ async function renameUsers(orgId, orgName) {
 function setPublished(published) {
   const action = published ? 'organization.publish' : 'organization.unpublish';
   return async function (ctx, id) {
-    const actor = actorOf(ctx);
     // A missing row reaches `build` as null, which writeRow answers as not-found.
-    return queued(await writeRow({
-      ctx,
-      repo: lists,
-      existing: await readOrg(ctx, id),
-      reread: () => readOrg(ctx, id),
-      build: (current) => current && {
-        ...current,
-        isPublished: published,
-        read: readWith(current.read, published),
-        updatedBy: actor,
-        dateUpdated: new Date().toISOString()
-      },
-      audit: auditOf(action, ['isPublished'])
-    }), ORGANIZATION);
+    return demiWrite(ctx, id, await readOrg(ctx, id),
+      (current) => ({ isPublished: published, read: readWith(current.read, published) }),
+      auditOf(action, ['isPublished']));
   };
 }
 
