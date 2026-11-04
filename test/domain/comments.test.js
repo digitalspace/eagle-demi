@@ -190,13 +190,14 @@ test('comment domain', async (t) => {
   });
 
   await t.test('update writes the listed fields, keeps documents and the read, stamps updatedBy', async (t) => {
-    const store = fakeStore(t);
+    // Published under a closed period: the stored read is not the one its status gives.
+    const store = fakeStore(t, { ...STORED, eaoStatus: 'Published', read: ['staff', 'sysadmin'], isPublished: false });
     const { result, rows } = await audited(() => comment.update(STAFF, COMMENT_ID, { eaoNotes: 'checked' }));
     assert.strictEqual(result.status, 'ok');
     const row = store.written[0];
     assert.strictEqual(row.eaoNotes, 'checked');
     assert.deepStrictEqual(row.documents, [DOC_ID]);
-    assert.deepStrictEqual(row.read, STORED.read);
+    assert.deepStrictEqual(row.read, ['staff', 'sysadmin']);
     assert.strictEqual(row.isPublished, false);
     assert.strictEqual(row.updatedBy, 'idir-staff');
     assert.deepStrictEqual(rows[0].Detail.fields, ['eaoNotes']);
@@ -231,10 +232,12 @@ test('comment domain', async (t) => {
     assert.deepStrictEqual(store.written[0].sources.demi.read, ['project-system-admin', 'sysadmin']);
   });
 
-  await t.test('a takeover with no Eagle copy takes the read its stored status gives', async (t) => {
-    const store = fakeStore(t, { ...STORED, eaoStatus: 'Published', read: ['public', 'staff', 'sysadmin'] });
+  await t.test('a takeover with no Eagle copy takes the read its stored status gives, and keeps the stored read', async (t) => {
+    const store = fakeStore(t, { ...STORED, eaoStatus: 'Published', read: ['staff', 'sysadmin'], isPublished: false });
     await comment.update(STAFF, COMMENT_ID, { eaoNotes: 'checked' });
     assert.deepStrictEqual(store.written[0].sources.demi.read, ['public', 'staff', 'sysadmin']);
+    assert.deepStrictEqual(store.written[0].read, ['staff', 'sysadmin']);
+    assert.strictEqual(store.written[0].isPublished, false);
   });
 
   await t.test('a takeover of an Eagle copy with an empty read keeps it closed', async (t) => {
@@ -243,10 +246,11 @@ test('comment domain', async (t) => {
     assert.deepStrictEqual(store.written[0].sources.demi.read, []);
   });
 
-  await t.test('a takeover of a comment with no status stores Pending, the status sync-out sends', async (t) => {
+  await t.test('a takeover of a comment with no status stores Pending, the status sync-out sends, and audits it', async (t) => {
     const store = fakeStore(t, { ...STORED, eaoStatus: null });
-    await comment.update(STAFF, COMMENT_ID, { eaoNotes: 'checked' });
+    const { rows } = await audited(() => comment.update(STAFF, COMMENT_ID, { eaoNotes: 'checked' }));
     assert.strictEqual(store.written[0].eaoStatus, 'Pending');
+    assert.deepStrictEqual(rows[0].Detail.fields, ['eaoNotes', 'eaoStatus']);
   });
 
   await t.test('a takeover is logged once with the comment ids', async (t) => {
@@ -284,7 +288,7 @@ test('comment domain', async (t) => {
     assert.deepStrictEqual(logged.filter(message => message.includes('took over')), []);
   });
 
-  await t.test('status on an Eagle comment sets sourceSystem demi and sources.demi.read and queues comment', async (t) => {
+  await t.test('status on an Eagle comment sets sourceSystem demi and sources.demi.read', async (t) => {
     const store = fakeStore(t);
     await comment.setStatus(STAFF, COMMENT_ID, { status: 'Published' });
     assert.strictEqual(store.written[0].sourceSystem, 'demi');

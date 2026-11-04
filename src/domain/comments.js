@@ -68,9 +68,14 @@ const NO_PERIOD = 'The comment has no comment period.';
 const actorOf = (ctx) => (ctx.req.user && ctx.req.user.preferred_username) || '';
 
 function auditOf(action, fields) {
-  return (saved) => ({
-    action, targetType: 'comment', targetId: saved.id, projectId: saved.projectId, ...(fields && { detail: { fields } })
-  });
+  return (saved, from) => {
+    // A takeover stores `Pending` over an absent status, so the log names that field too.
+    const filled = from && from.eaoStatus !== saved.eaoStatus && !fields.includes('eaoStatus');
+    const named = filled ? [...fields, 'eaoStatus'] : fields;
+    return {
+      action, targetType: 'comment', targetId: saved.id, projectId: saved.projectId, ...(named && { detail: { fields: named } })
+    };
+  };
 }
 
 /**

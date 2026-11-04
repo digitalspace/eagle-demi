@@ -118,7 +118,7 @@ const push = async (eagleId, doc) => {
   return res;
 };
 
-test('sync-out of DEMI-created comments', async (t) => {
+test('sync-out of comments DEMI created or took over', async (t) => {
   t.beforeEach((tt) => {
     useEnv(tt, ENV);
     eagle.clearToken();
