@@ -175,7 +175,7 @@ test('organization domain', async (t) => {
     assert.deepStrictEqual(written.queued, [[ORG_ID, 'e2', ORGANIZATION]]);
   });
 
-  await t.test('update of an Eagle organization sets sourceSystem demi and queues organization', async (t) => {
+  await t.test('update of an Eagle organization sets sourceSystem demi and logs the takeover', async (t) => {
     const written = fakeLists(t);
     const logged = [];
     t.mock.method(logger, 'info', (message, meta) => { logged.push([message, meta]); });
@@ -184,7 +184,6 @@ test('organization domain', async (t) => {
 
     assert.strictEqual(result.status, 'ok');
     assert.strictEqual(written[0].sourceSystem, 'demi');
-    assert.deepStrictEqual(written.queued, [[ORG_ID, 'e2', ORGANIZATION]]);
     assert.deepStrictEqual(logged.filter(([message]) => message.includes('took over')),
       [['[Organization] DEMI write took over an Eagle organization', { id: ORG_ID, eagleId: ORG_ID }]]);
   });
@@ -194,6 +193,22 @@ test('organization domain', async (t) => {
     const logged = [];
     t.mock.method(logger, 'info', (message) => { logged.push(message); });
     await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
+    assert.deepStrictEqual(logged.filter(message => message.includes('took over')), []);
+  });
+
+  await t.test('an update that loses its etag race to a DEMI write logs no takeover', async (t) => {
+    fakeQueue(t);
+    const getById = t.mock.method(lists, 'getById', async () => ({ ...STORED, sourceSystem: 'demi', _etag: 'e3' }));
+    getById.mock.mockImplementationOnce(async () => ({ ...STORED }));
+    const upsert = t.mock.method(lists, 'upsert', async (row) => ({ ...row, _etag: 'e4' }));
+    upsert.mock.mockImplementationOnce(async () => { throw Object.assign(new Error('etag moved'), { code: 412 }); });
+    t.mock.method(logger, 'warn', () => {});
+    const logged = [];
+    t.mock.method(logger, 'info', (message) => { logged.push(message); });
+
+    const { result } = await audited(() => organization.update(STAFF, ORG_ID, { city: 'Nelson' }));
+
+    assert.strictEqual(result.status, 'ok');
     assert.deepStrictEqual(logged.filter(message => message.includes('took over')), []);
   });
 

@@ -156,6 +156,18 @@ test('sync-out of DEMI-created organizations', async (t) => {
     });
   }
 
+  await t.test('an Eagle organization DEMI took over is sent as one PUT under its own id', async (tt) => {
+    mirrorStore(tt, [nativeOrg({
+      id: EAGLE_ID, eagleId: EAGLE_ID, sources: { eagle: { _id: EAGLE_ID, read: PUBLIC_ACL } }
+    })]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'PUT *': { body: { _id: EAGLE_ID } } });
+
+    assert.strictEqual((await run(message({ id: EAGLE_ID }))).status, 'sent');
+
+    assert.deepStrictEqual(keys(calls), [`PUT /organization/${EAGLE_ID}`]);
+  });
+
   await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off an organization with no eagleId is held, its sync state untouched',
     async (tt) => {
       useEnv(tt, { SYNC_OUT_EAGLE_NATIVE_ENABLED: 'false' });
