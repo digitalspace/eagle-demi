@@ -136,6 +136,28 @@ test('sync-out of DEMI-created Updates', async (t) => {
     assert.strictEqual(store.rows('updates').length, 1, 'no row under the Eagle id');
   });
 
+  await t.test('an Eagle Update DEMI took over is PUT under its own id', async (tt) => {
+    mirrorStore(tt, [nativeUpdate({ id: EAGLE_ID, eagleId: EAGLE_ID }), parent()]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'PUT *': { body: {} } });
+
+    const result = await syncOut.run({ ...message(), id: EAGLE_ID }, { maxAttempts: 3 });
+
+    assert.deepStrictEqual(keys(calls), [`PUT /recentActivity/${EAGLE_ID}`]);
+    assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID });
+  });
+
+  await t.test('a taken-over Update Eagle no longer holds is not POSTed under its Eagle id', async (tt) => {
+    mirrorStore(tt, [nativeUpdate({ id: EAGLE_ID, eagleId: EAGLE_ID }), parent()]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'PUT *': { status: 404 } });
+
+    const result = await syncOut.run({ ...message(), id: EAGLE_ID }, { maxAttempts: 3 });
+
+    assert.deepStrictEqual(keys(calls), [`PUT /recentActivity/${EAGLE_ID}`]);
+    assert.strictEqual(result.status, 'skipped');
+  });
+
   await t.test('a create answered 409 is PUT under the minted id', async (tt) => {
     const store = mirrorStore(tt, [nativeUpdate(), parent()]);
     wireQueue(tt);

@@ -833,6 +833,24 @@ test('reconcile', async (t) => {
     assert.deepStrictEqual(summary.updates.aclMismatch, []);
   });
 
+  await t.test('an Eagle Update a DEMI write took over is not ACL drift', async () => {
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, { ...EAGLE_BY_DATASET, RecentActivity: [
+        { _id: 'U-taken', project: 'P1', read: ['public', 'sysadmin', 'staff'] }
+      ] }),
+      updates: {
+        // Archived in DEMI with sync-out off: Eagle still publishes it.
+        listEvery: async () => [
+          { id: 'U-taken', eagleId: 'U-taken', sourceSystem: 'demi', projectId: 'P1',
+            read: ['staff', 'sysadmin'], isPublished: false }
+        ],
+        count: async () => 1
+      }
+    }));
+
+    assert.deepStrictEqual(summary.updates.aclMismatch, []);
+  });
+
   await t.test('a truncated updates enumeration is reported', async () => {
     const summary = await reconcile([], makeDeps({}, { updates: UPDATE_ROWS.length + 42 }));
     assert.ok(summary.failures.some(f =>

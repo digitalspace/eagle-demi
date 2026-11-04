@@ -647,7 +647,8 @@ async function reconcile(argv = [], deps = {}) {
   summary.updates = {
     inDemi: updateRows.length, inEagle: eagleUpdateIds.size,
     ...diffById(updateRows, eagleUpdateIds),
-    aclMismatch: aclMismatch(updateRows, row => String(row.id), eagleRead,
+    // A taken-over row keeps its Eagle id but DEMI owns its read now, so it is not drift.
+    aclMismatch: aclMismatch(updateRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eagleRead,
       row => updateParentRead.get(String(row.projectId)) || null, updateRead)
   };
 
