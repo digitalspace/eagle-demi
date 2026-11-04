@@ -1370,7 +1370,7 @@ async function restoreTwin(row) {
   return written.status !== 'conflict';
 }
 
-/** Drop a project's delete flag. `read` stays at the deleted ceiling: widening is `PUT /projects/:id/level`. */
+/** Drop a project's delete flag. A row with no Eagle copy stays at the deleted ceiling until `PUT /projects/:id/level`. */
 exports.restoreProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
@@ -1394,9 +1394,15 @@ exports.restoreProject = async (req, res) => {
         if (!current) return { status: 'missing' };
         if (current.isDeleted !== true) return { status: 'live' };
         const now = new Date().toISOString();
-        // Not versioned: sent at the staff-only `read` it keeps, the send would unpublish Eagle's
-        // live copy. The `/level` widen after it is what reaches Eagle.
         const row = clearDeleted({ ...current, ...await takeOver(current, now), updatedAt: now });
+        // Eagle never saw DEMI's delete, so a mirrored row goes back to Eagle's level: an owned row
+        // left at staff would unpublish Eagle's live copy on its next send. Not versioned either.
+        const eagle = row.sources && row.sources.eagle;
+        if (eagle) {
+          delete row.levelHeldAt;
+          row.read = resolveProjectAcl(eagle, false);
+          row.isPublished = row.read.includes('public');
+        }
         return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), replaced: current };
       },
       onLost: (_current, attempt) =>
@@ -1415,8 +1421,13 @@ exports.restoreProject = async (req, res) => {
       targetType: 'project',
       targetId: saved.id,
       projectId: saved.id,
-      detail: { name: saved.name, isPublished: saved.isPublished }
+      detail: { name: saved.name, isPublishedFrom: replaced.isPublished, isPublishedTo: saved.isPublished }
     });
+
+    if (visibilityMoved(replaced, saved)) {
+      const failure = await runCascade(saved, saved.eagleId);
+      if (failure) return res.status(500).json({ success: false, error: failure });
+    }
 
     return res.json(await labelled(access, redactForAccess('projects', saved, access)));
   } catch (err) {

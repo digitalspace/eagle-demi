@@ -331,14 +331,29 @@ test('PUT /projects/:id/restore', async (t) => {
   });
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('clears isDeleted and keeps read at staff', async () => {
-    const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY }));
+  await t.test('of a native project clears isDeleted and keeps the read the delete left', async () => {
+    const seen = stage(t, {
+      id: '207', trackProjectId: 207, sourceSystem: 'track', sources: {}, isDeleted: true, read: ['team'], isPublished: false
+    });
 
     const res = await restore();
 
     assert.strictEqual(res.statusCode, 200);
     assert.ok(!('isDeleted' in seen.written));
-    assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read, 'widening stays with /level');
+    assert.deepStrictEqual(seen.written.read, ['team'], 'widening stays with /level');
+  });
+
+  await t.test('of an Eagle-mirrored project returns read to Eagle\'s level and drops the hold', async () => {
+    const stored = storedEagleProject({ isDeleted: true, ...STAFF_ONLY, levelHeldAt: '2026-11-01T00:00:00.000Z' });
+    stored.sources.eagle.read = ['public', 'sysadmin', 'staff'];
+    const seen = stage(t, stored);
+
+    await restore();
+
+    assert.ok(seen.written.read.includes('public'), 'Eagle never saw the delete, so its level stands');
+    assert.strictEqual(seen.written.isPublished, true);
+    assert.ok(!('levelHeldAt' in seen.written));
+    assert.ok(seen.cascaded[0].read.includes('public'), 'the documents follow');
   });
 
   await t.test('sends nothing to Eagle: sent at staff, it would unpublish Eagle\'s live copy', async () => {

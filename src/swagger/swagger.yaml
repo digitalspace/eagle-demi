@@ -1362,14 +1362,16 @@ paths:
     put:
       summary: Restore a deleted project
       description: >-
-        Drop the project's `isDeleted` flag. `read[]` stays at staff, where the delete left it;
-        publish it again with `PUT /api/projects/{id}/level`. When DEMI deleted a Track project,
-        its `eagle-<eagleId>` copy loses the delete DEMI gave it too. A project mirrored from Eagle
-        is taken over, so an Eagle push that still carries its delete does not delete it again;
-        not an `eagle-<eagleId>` copy beside its Track project, nor a project with no stored Eagle
-        record. Audited as `project.restore`. Restore itself sends nothing to Eagle, so Eagle's
-        copy stays as it is; the later `PUT /api/projects/{id}/level` on a project created in
-        DEMI or taken over is what sync-out sends.
+        Drop the project's `isDeleted` flag. On a project with a stored Eagle record, `read[]`
+        returns to Eagle's level and any level hold is dropped: Eagle never saw the delete, so its
+        level still stands. The documents, engagement and index row follow. A project with no
+        Eagle record keeps the `read[]` the delete left (staff at most) until
+        `PUT /api/projects/{id}/level`. When DEMI deleted a Track project, its `eagle-<eagleId>`
+        copy loses the delete DEMI gave it too. A project mirrored from Eagle is taken over, so an
+        Eagle push that still carries its delete does not delete it again; not an
+        `eagle-<eagleId>` copy beside its Track project, nor a project with no stored Eagle
+        record. Audited as `project.restore`. Restore itself sends nothing to Eagle; the next
+        change to a project created in DEMI or taken over is what sync-out sends.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1390,6 +1392,11 @@ paths:
           description: Project not found.
         '409':
           description: The project is not deleted. Nothing is written.
+        '500':
+          description: >-
+            The project was restored, but its documents, engagement or updates did not take the
+            new level. The row keeps `cascadePendingAt`; the next Eagle push or
+            `seed-nosql --live --reconcile` run retries the cascade.
         '503':
           description: >-
             The project or its `eagle-<eagleId>` copy kept changing under the write; send the

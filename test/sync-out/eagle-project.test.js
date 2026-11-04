@@ -371,6 +371,28 @@ test('sync-out of DEMI-created projects', async (t) => {
     assert.deepStrictEqual(calls, [], 'a PUT would write the 2018 values over Eagle\'s 2002 block');
   });
 
+  await t.test('restore of an Eagle-mirrored project, then a PUT, sends a body that keeps Eagle\'s level', async (tt) => {
+    const store = mirrorStore(tt, [ownedProject({
+      demiOwnedAt: undefined, isDeleted: true, read: ['staff'], isPublished: false,
+      sources: { track: { track_project_id: 1234 }, eagle: { ...eagleCopy(EAGLE_BLOCK), read: [...PUBLIC_ACL] } }
+    }), proponent()]);
+    wireQueue(tt);
+    const put = `PUT /project/${EAGLE_ID}`;
+    const calls = wireEagle(tt, { [put]: {} });
+    const call = async (handler, body) => {
+      const res = mockRes();
+      await projectController[handler]({ params: { id: ROW_ID }, query: {}, user: STAFF, body }, res);
+      assert.strictEqual(res.statusCode, 200, handler);
+    };
+
+    await call('restoreProject');
+    await call('updateProject', { description: 'Edited in DEMI' });
+    assert.ok(rowOf(store).demiOwnedAt, 'the premise: restore took the project over');
+
+    assert.deepStrictEqual(await run(), { status: 'sent', eagleId: EAGLE_ID });
+    assert.deepStrictEqual(keys(calls), [put], 'no unpublish of Eagle\'s live copy');
+  });
+
   await t.test('a DEMI-owned Eagle project sends Eagle\'s value for each field the row lacks, and its own where it has one',
     async (tt) => {
       mirrorStore(tt, [proponent()]);
