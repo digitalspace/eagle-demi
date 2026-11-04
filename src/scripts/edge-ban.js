@@ -14,7 +14,7 @@
  */
 
 const net = require('node:net');
-const { createCredential } = require('../utils/azure-credential');
+const { createCredential, azureRequest, frontDoorRuleUrl, ARM_SCOPE } = require('../utils/azure-credential');
 const db = require('../db/cosmos-nosql');
 const { isKeyVaultReference } = require('../utils/key-vault-reference');
 const edgeBans = require('../repositories/edge-bans');
@@ -23,10 +23,7 @@ const { logger } = require('../utils/logger');
 const TAG = '[edge-ban]';
 const MODES = ['off', 'shadow', 'write'];
 const PLACEHOLDER = '192.0.2.1/32';
-const ARM_SCOPE = 'https://management.azure.com/.default';
 const LOGS_SCOPE = 'https://api.loganalytics.io/.default';
-const ARM_API_VERSION = '2024-02-01';
-const RULE_ID = /^\/subscriptions\/[^/]+\/resourceGroups\/[^/]+\/providers\/Microsoft\.Cdn\/profiles\/[^/]+\/ruleSets\/[^/]+\/rules\/[^/]+$/i;
 const HOUR_MS = 60 * 60 * 1000;
 const FEED_MAX_AGE_MS = 24 * HOUR_MS;
 
@@ -289,18 +286,9 @@ function buildList(rows, now, policy, warnings) {
   return list.length ? list : [PLACEHOLDER];
 }
 
-async function azure(credential, scope, method, url, body) {
-  const { token } = await credential.getToken(scope);
-  return fetch(url, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined
-  });
-}
-
 /** Rows of the first table, as objects. Not src/azure/monitor.js: that one holds its own process credential. */
 async function queryLog(credential, workspaceId, query) {
-  const res = await azure(credential, LOGS_SCOPE, 'POST', `https://api.loganalytics.io/v1/workspaces/${workspaceId}/query`,
+  const res = await azureRequest(credential, LOGS_SCOPE, 'POST', `https://api.loganalytics.io/v1/workspaces/${workspaceId}/query`,
     { query, timespan: 'PT24H' });
   if (!res.ok) throw new Error(`${TAG} log query ${res.status} ${await res.text()}`);
   const table = ((await res.json()).tables || [])[0] || { columns: [], rows: [] };
@@ -309,16 +297,16 @@ async function queryLog(credential, workspaceId, query) {
 
 /** Swap the SocketAddr match values on the rule, other conditions kept. False when unchanged or on 409. */
 async function writeRule(credential, ruleId, values, log) {
-  if (!RULE_ID.test(ruleId || '')) throw new Error(`${TAG} not a rules engine rule id: ${ruleId}`);
-  const url = `https://management.azure.com${ruleId}?api-version=${ARM_API_VERSION}`;
-  const read = await azure(credential, ARM_SCOPE, 'GET', url);
+  const url = frontDoorRuleUrl(ruleId);
+  if (!url) throw new Error(`${TAG} not a rules engine rule id: ${ruleId}`);
+  const read = await azureRequest(credential, ARM_SCOPE, 'GET', url);
   if (!read.ok) throw new Error(`${TAG} rule read ${read.status} ${await read.text()}`);
   const conditions = ((await read.json()).properties || {}).conditions || [];
   const socket = conditions.find(c => c.name === 'SocketAddr');
   if (!socket) throw new Error(`${TAG} rule has no SocketAddr condition`);
   if (JSON.stringify(socket.parameters.matchValues) === JSON.stringify(values)) return false;
   const next = conditions.map(c => (c === socket ? { ...c, parameters: { ...c.parameters, matchValues: values } } : c));
-  const res = await azure(credential, ARM_SCOPE, 'PATCH', url, { properties: { conditions: next } });
+  const res = await azureRequest(credential, ARM_SCOPE, 'PATCH', url, { properties: { conditions: next } });
   if (res.status === 409) {
     log.warn(`${TAG} rule write conflict (409); next run retries`);
     return false;
@@ -417,7 +405,7 @@ function parseArgs(argv) {
 /** EDGE_LOG_WORKSPACE_ID, else the customer id of workspace eagle-logs-<env> from Resource Graph. */
 async function workspaceFor(credential, env) {
   if (process.env.EDGE_LOG_WORKSPACE_ID) return process.env.EDGE_LOG_WORKSPACE_ID;
-  const res = await azure(credential, ARM_SCOPE, 'POST', 'https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01', {
+  const res = await azureRequest(credential, ARM_SCOPE, 'POST', 'https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01', {
     query: `resources | where type =~ 'microsoft.operationalinsights/workspaces' and name == 'eagle-logs-${env}' | project id = tostring(properties.customerId)`
   });
   if (!res.ok) throw new Error(`${TAG} workspace lookup ${res.status} ${await res.text()}`);

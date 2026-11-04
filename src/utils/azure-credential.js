@@ -30,4 +30,24 @@ async function getToken(scope) {
   return token && token.token;
 }
 
-module.exports = { getToken, createCredential };
+const ARM_SCOPE = 'https://management.azure.com/.default';
+const FRONT_DOOR_API_VERSION = '2024-02-01';
+const FRONT_DOOR_RULE_ID = /^\/subscriptions\/[^/]+\/resourceGroups\/[^/]+\/providers\/Microsoft\.Cdn\/profiles\/[^/]+\/ruleSets\/[^/]+\/rules\/[^/]+$/i;
+
+/** One REST call with a bearer token for `scope` from the given TokenCredential; returns the fetch Response. */
+async function azureRequest(credential, scope, method, url, body) {
+  const { token } = await credential.getToken(scope);
+  return fetch(url, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+}
+
+/** The ARM URL of a Front Door rules engine rule, or null when `ruleId` is not one. */
+function frontDoorRuleUrl(ruleId) {
+  if (!FRONT_DOOR_RULE_ID.test(ruleId || '')) return null;
+  return `https://management.azure.com${ruleId}?api-version=${FRONT_DOOR_API_VERSION}`;
+}
+
+module.exports = { getToken, createCredential, azureRequest, frontDoorRuleUrl, ARM_SCOPE };
