@@ -1,6 +1,5 @@
-# Deploy the PDF title worker to the nonprod Flex Consumption app. Application only, same as the
-# API workflow: the CI identity holds Website Contributor on the app and cannot run an ARM
-# deployment. Infrastructure comes from scripts/deploy-infra.sh with deployPdfTitleWorker = true.
+# Application only: the CI identity holds just Website Contributor and cannot run an ARM deployment.
+# Infrastructure comes from scripts/deploy-infra.sh with deployPdfTitleWorker = true.
 
 name: Deploy DEMI PDF title worker to Azure staging
 
