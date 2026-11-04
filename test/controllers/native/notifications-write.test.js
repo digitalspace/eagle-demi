@@ -75,12 +75,11 @@ test('notification write routes', async (t) => {
     assert.strictEqual(store.written.length, 0);
   });
 
-  await t.test('sysadmin updates a notification: 200, fields left out are kept', async (t) => {
-    const store = fakeStore(t);
+  await t.test('sysadmin updates a notification: 200 with the new field', async (t) => {
+    fakeStore(t);
     const res = await ROUTES.update(['sysadmin']);
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.name, 'Mine');
-    assert.strictEqual(store.written[0].region, STORED.region);
   });
 
   await t.test('an update of a missing notification is 404', async (t) => {

@@ -14,6 +14,7 @@ const updates = require('../../src/repositories/updates');
 const syncOut = require('../../src/sync-out');
 const { NOTIFICATION } = require('../../src/sync-out/kinds');
 const { resolveAccess, levelOfRead } = require('../../src/helpers/access-sql');
+const { logger } = require('../../src/utils/logger');
 const notification = require('../../src/domain/notifications');
 const { mirrorFromEagle } = require('../../src/controllers/nosql/notification');
 
@@ -202,9 +203,8 @@ test('notification domain', async (t) => {
 
   await t.test('update keeps an isMet of false, as eagle-api does with ??', async (t) => {
     const store = fakeStore(t);
-    await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', isMet: true, pcp: 'closed' }));
-    assert.strictEqual(store.written[0].isMet, true);
-    assert.strictEqual(store.written[0].pcp, 'closed');
+    await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine', isMet: false }));
+    assert.strictEqual(store.written[0].isMet, false);
   });
 
   await t.test('update that nulls the received date of a mirrored row falls back to its Eagle creation time',
@@ -222,6 +222,23 @@ test('notification domain', async (t) => {
     const { result } = await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine' }));
     assert.deepStrictEqual(result.fields, { notificationReceivedDate: 'is not writable by this caller' });
     assert.strictEqual(store.written.length, 0);
+  });
+
+  /** The info lines one update of `stored` logs. */
+  async function infoLinesOf(t, stored) {
+    const lines = [];
+    t.mock.method(logger, 'info', (message) => { lines.push(message); });
+    fakeStore(t, stored);
+    await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine' }));
+    return lines.filter(line => /took over an Eagle notification/.test(line));
+  }
+
+  await t.test('the takeover of an Eagle row is logged once', async (t) => {
+    assert.strictEqual((await infoLinesOf(t, STORED)).length, 1);
+  });
+
+  await t.test('an update of a DEMI row logs no takeover', async (t) => {
+    assert.deepStrictEqual(await infoLinesOf(t, { ...STORED, sourceSystem: 'demi' }), []);
   });
 
   await t.test('update ignores read and isPublished, and a body of only those is invalid', async (t) => {
