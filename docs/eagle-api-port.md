@@ -464,7 +464,9 @@ Callers to move: eagle-admin `user.service.ts:55-62`; its `toEagleUserBody` (`mo
 
 Status: done (eagle-notify e1c389b, eagle-demi 05ffdb67), Dark. Both deployed to test. DEMI owns the three CAC fields (F11-d); the edge rule is todo.
 
-Today: `projectCAC`, `projectCACPublished`, `cacEmail` are top-level project fields in `DEMI_ONLY_FIELDS` (`CAC_FIELDS` in `src/ownership/project.js`, `src/vis/catalog/projects.js:92-93,116`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api `cac.js` never pushes to DEMI, which contradicts `docs/rbac-architecture.md:346-348`. eagle-api admin CAC handlers are removed (b072e79). DEMI serves the routes under the `port: cac` anchor in `routes.js`, rules in `src/domain/cac.js`, handlers in `src/controllers/native/cac.js`.
+Today: `projectCAC`, `projectCACPublished`, `cacEmail` are top-level project fields in `DEMI_ONLY_FIELDS` (`CAC_FIELDS` in `src/ownership/project.js`, `src/vis/catalog/projects.js:92-93,116`). Public sign-up and remove-member live in eagle-notify (`subscriptions.js:56`, `codes.js:7-9`). eagle-api admin CAC handlers are removed (b072e79).
+
+DEMI serves the routes under the `port: cac` anchor in `routes.js`. Rules are in `src/domain/cac.js`, handlers in `src/controllers/native/cac.js`.
 
 Routes (all six served): `GET`, `POST` and `DELETE /projects/:id/cac`, `PUT /projects/:id/cac/publish` and `/unpublish`, `POST /projects/:id/cac/members/remove` with `{ "address" }` (decided 2026-10-19: eagle-notify keys members by email, so no id route). All [staff, sysadmin]. Member sign-up stays in eagle-notify.
 
@@ -477,17 +479,18 @@ Business rules (eagle-api `api/controllers/cac.js` at `b072e79^`):
 - `GET` and every write answer `projectCAC`, `projectCACPublished` and `cacEmail` only (`bodyOf` in `src/domain/cac.js`). eagle-notify has no list route and DEMI holds no member store.
 - Sign-up is anonymous and unconfirmed in eagle-api (workspace TODO 2026-10-14 asks for a confirm step; that belongs in eagle-notify, not here).
 
-Deviations: delete also sets `projectCACPublished` false, so a deleted CAC's `cacEmail` stops showing to the public; publish refuses with 409 a project with no CAC; `cacEmail` and `address` must be email addresses; an unknown project is 404 (eagle-api: 400 on create).
+Deviations: delete also sets `projectCACPublished` false, so a deleted CAC's `cacEmail` stops showing to the public; publish refuses with 409 a project with no CAC or no `cacEmail`; `cacEmail` and `address` must be email addresses; an unknown project is 404 (eagle-api: 400 on create).
 
 Test use: `demi-kv-test/notify-api-key` holds eagle-notify's host key named `demi`. A direct `POST /projects/145/cac/members/remove` on test returned 200 with a real notify round trip (measured 2026-10-19).
 
 After a rotation the Function App's floating Key Vault reference keeps the old value through a plain restart; re-save the `NOTIFY_API_KEY` app setting, then restart. Through Front Door, `/demi/api/*` refuses every method but GET, HEAD and OPTIONS (eagle-edge rule `demiapimethod`), so eagle-admin cannot call the CAC write routes until F11 adds an edge rule.
 
 Ownership:
-- An Eagle push or re-merge keeps the stored CAC fields. A row with none takes Eagle's value once, `false` included (`seedEagleLists` in `src/merge/project.js`).
+- An Eagle push or re-merge keeps the stored CAC fields. Each CAC field the row lacks takes Eagle's value once; `false` seeds, an empty string does not (`seedEagleFields` in `src/merge/project.js`).
+- A re-seed drops all three from a row that lost its Eagle id (`src/scripts/seed-nosql.js`). Its members sit under `cac:<old Eagle id>` in eagle-notify, so the row loses the CAC.
 - The fields are top-level in Eagle's Mongo model too (`helpers/models/project.js:120-123`), never in a `legislation_<year>` block, so no block strip is needed.
 - `PUT /projects/:id` ignores all three (`PUT_IGNORED_FIELDS`). A PUT setting `projectCAC` false would skip ending the members in eagle-notify, and one setting `cacEmail` would skip the email check.
-- No sync-out: no CAC write queues the project. eagle-public never reads the fields on `react` (29451c1c) or `develop` (5f191b4b), and no eagle-api route writes them.
+- Each CAC write queues the project for sync-out, as the extension routes do. The project consumer sends only native rows, and no CAC field. eagle-public never reads the fields on `react` (29451c1c) or `develop` (5f191b4b), and no eagle-api route writes them.
 
 ### Extensions
 
@@ -515,7 +518,7 @@ Decisions:
 - POST answers 201; the GET and every write answer `{ reviewExtensions, reviewSuspensions }` only (`bodyOf` in `src/domain/extensions.js`), redacted as a project. A list a per-project dial hides from the caller is left out of the GET and is a 400 to write.
 - The write is one etag-guarded project upsert, so the remove and add of a PUT land together; eagle-api's two updates could drop the old item and then fail the push.
 - No `vis/catalog/projects.js` edit was needed: both lists are already catalogued, and the redactor does not descend into arrays. Slice 11 is free to edit it.
-- An Eagle push or re-merge keeps the stored lists. A row with no stored list takes the one Eagle sent (`seedEagleLists` in `src/merge/project.js`), as pins do.
+- An Eagle push or re-merge keeps the stored lists. A row with no stored list takes the one Eagle sent (`seedEagleFields` in `src/merge/project.js`), as pins do.
 - The lists are project-wide, not per Act: a `/level` year switch keeps them. eagle-api keeps one pair per `legislation_<year>` block (`helpers/models/project.js:81-82`).
 - The merged `legislation_<year>` blocks hold neither list (`pickEagleBlocks` in `src/merge/project.js`), and each extension write drops both from stored blocks; `sources.eagle` keeps Eagle's.
 - `PUT /projects/:id` ignores both lists (`PUT_IGNORED_FIELDS`), so only these routes move them.

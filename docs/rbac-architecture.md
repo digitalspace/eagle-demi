@@ -344,16 +344,19 @@ Each item below overrides the corresponding section of the source document.
    and `seed-nosql.js:403` replace the whole item and carry only `sources` forward. `vis` is
    carried forward beside `sources` in both, with a test, in the same change that adds the dial
    engine.
-7. **Predicates read only mirror-owned fields.** `projectCACPublished` is written
-   by the Eagle push (`PUT /api/eagle/projects/:eagleId`, mirroring eagle-admin's CAC publish
-   toggle). Ordinary `PUT /api/projects/:id` strips the field
-   (`src/controllers/nosql/project.js`) so a hand-edited project body cannot flip it. The Eagle
-   push carries the same `authMiddleware, requireWrite` gate as PUT, so the strip is not a
-   privilege boundary — it keeps the flag mirror-owned. `cacEmail` is
-   `defaultVis: 2, maxVis: 4, when: 'cacPublished'`: a true predicate widens the field to
-   `maxVis`, a dial beats it — `sysadmin` can pin `cacEmail` shut with the dial even while
-   `cacPublished` is true — and a `when` naming no export of `src/vis/predicates.js` throws at
-   load. Predicates take `(record)` only.
+7. **`cacPublished` reads a flag only the CAC routes write.** `projectCACPublished` is DEMI-owned
+   (`CAC_FIELDS` in `src/ownership/project.js`). Only `src/domain/cac.js` writes it, through the
+   CAC create, publish, unpublish and delete routes. An Eagle push seeds it once on a row
+   that lacks it and never replaces it after.
+
+   `PUT /api/projects/:id` ignores it (`PUT_IGNORED_FIELDS`), so a hand-edited project body
+   cannot flip it. The CAC routes take [staff, sysadmin] only, while PUT also takes `demi-admin`
+   and `demi-service-write`. So the strip keeps those two roles from publishing `cacEmail`.
+
+   `cacEmail` is `defaultVis: 2, maxVis: 4, when: 'cacPublished'`: a true predicate widens the
+   field to `maxVis`, and a dial beats it. `sysadmin` can pin `cacEmail` shut with the dial even
+   while `cacPublished` is true. A `when` naming no export of `src/vis/predicates.js` throws at
+   load, and predicates take `(record)` only.
 8. **`read`, `s3Key`, `vis` are `maxVis: 0`; `_etag` is `maxVis: 2`.** `publicView` strips
    `read` on purpose and the document controller strips `s3Key`. `isPublished` is derived in the
    redactor from `read.includes('public')`. Exposing the `vis` map at level 2 would reveal which
