@@ -1257,6 +1257,15 @@ test('carryDemiOnlyFields', async (t) => {
     assert.strictEqual(merged.name, TRACK_207.name);
   });
 
+  await t.test('a Track column cleared on a DEMI-owned Track project clears in DEMI', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, eaCertificate: 'OLD-CERT', eacExpires: '2030-01-01', read: ['staff'] };
+    const track = { ...TRACK_207, ea_certificate: null, eac_expires: '' };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(track, eagleFor(TRACK_207), OPTS), stored);
+
+    assert.deepStrictEqual([merged.eaCertificate, merged.eacExpires], [undefined, undefined]);
+  });
+
   await t.test('a DEMI-owned project with no Track source keeps its own Track-precedence values', () => {
     const stored = { id: 'eagle-x', demiOwnedAt: OWNED_AT, name: 'DEMI name', read: ['staff', 'sysadmin'] };
     const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207, { name: 'Eagle name', proponentName: 'Eagle Corp' }), OPTS);

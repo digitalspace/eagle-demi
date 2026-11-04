@@ -207,8 +207,8 @@ function liftOwnedBlock(merged, key) {
 }
 
 /**
- * On an owned row the stored Eagle side stands, an absent field included, minus `drop`. Track's own
- * value still wins a Track-precedence field; Eagle's fills one only where the stored row has none.
+ * On an owned row the stored Eagle side stands, an absent field included, minus `drop`. A Track row
+ * takes Track's precedence fields, blanks included; with no Track source the stored value stands.
  */
 function holdOwnedFields(merged, existing, { drop = [], switchTo } = {}) {
   const blocks = [merged, existing].flatMap(row => Object.keys(row).filter(key => LEGISLATION_KEY.test(key)));
@@ -217,9 +217,10 @@ function holdOwnedFields(merged, existing, { drop = [], switchTo } = {}) {
     if (value === undefined || drop.includes(field)) delete merged[field];
     else merged[field] = Array.isArray(value) ? [...value] : value;
   }
-  const track = merged.sources && merged.sources.track;
-  for (const [target, trackField] of TRACK_PRECEDENCE) {
-    if (!(track && hasValue(track[trackField])) && hasValue(existing[target])) merged[target] = existing[target];
+  if (!(merged.sources && merged.sources.track)) {
+    for (const [target] of TRACK_PRECEDENCE) {
+      if (hasValue(existing[target])) merged[target] = existing[target];
+    }
   }
   if (switchTo) liftOwnedBlock(merged, switchTo);
 }

@@ -758,6 +758,21 @@ test('a relink of an Eagle-only row DEMI owns keeps the Eagle-side fields DEMI h
   assert.deepStrictEqual([written.sector, written.demiOwnedAt], ['Mines', NOW]);
 });
 
+test('a relink of a live DEMI-owned row Eagle deleted writes a live Track row', async () => {
+  const projects = fakeProjects([eagleOnlyProject({
+    demiOwnedAt: NOW,
+    sources: { track: null, eagle: { _id: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy', isDeleted: true } }
+  })]);
+
+  await syncProjects([API_PROJECT], { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
+
+  const [written] = projects.writes;
+  assert.strictEqual(written.id, '207', 'the premise: this is the re-keyed row');
+  assert.strictEqual(Object.hasOwn(written, 'isDeleted'), false);
+  assert.strictEqual(Object.hasOwn(written.sources.eagle, 'isDeleted'), false);
+  assert.deepStrictEqual(written.read, readForLevel(4));
+});
+
 // `tags` is DEMI's own and Track never sends it, so neither the nightly update nor a re-key may
 // rebuild the row without it.
 test('the Track sync keeps the tags DEMI set', async (t) => {
