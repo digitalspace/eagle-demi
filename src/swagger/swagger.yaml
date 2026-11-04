@@ -1261,7 +1261,8 @@ paths:
         record, `name`, `description`, `projectType`, `abbreviation`, `address`, `proponentName`,
         `projectState`, `isActive` and `centroid` count too. Sending a stored value back unchanged
         takes nothing over. An `eagle-<eagleId>` copy that sits beside its Track project, or a
-        project with no stored Eagle record, is never taken over.
+        project with no stored Eagle record, is never taken over. A body sent to a deleted project
+        takes nothing over.
         On a project created in DEMI or taken over, a body that changes a stored value sets
         `dateUpdated` unless it sends one, and sync-out queues the project for Eagle; on a
         taken-over project, `tags` and `pins` alone are not such a change. Once project sync-out
@@ -1328,7 +1329,9 @@ paths:
         row; it only retries a cascade the first call left owed. A delete takes a project mirrored
         from Eagle over, so an Eagle push does not undo or change it; Eagle's own copy stays live.
         Not an `eagle-<eagleId>` copy beside its Track project, nor a project with no stored Eagle
-        record: those stay Eagle's. Undo it with `PUT /api/projects/{id}/restore`.
+        record: those stay Eagle's. A delete that leaves the project below Eagle's level holds
+        that level (`levelHeldAt`), so a restore keeps it. Undo it with
+        `PUT /api/projects/{id}/restore`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1362,15 +1365,17 @@ paths:
     put:
       summary: Restore a deleted project
       description: >-
-        Drop the project's `isDeleted` flag. On a project with a stored Eagle record, `read[]`
-        returns to Eagle's level and any level hold is dropped: Eagle never saw the delete, so its
-        level still stands. The documents, engagement and index row follow. A project with no
-        Eagle record keeps the `read[]` the delete left (staff at most) until
-        `PUT /api/projects/{id}/level`. When DEMI deleted a Track project, its `eagle-<eagleId>`
-        copy loses the delete DEMI gave it too. A project mirrored from Eagle is taken over, so an
-        Eagle push that still carries its delete does not delete it again; not an
-        `eagle-<eagleId>` copy beside its Track project, nor a project with no stored Eagle
-        record. Audited as `project.restore`. Restore itself sends nothing to Eagle; the next
+        Drop the project's `isDeleted` flag. A project DEMI took over and deleted, with no level
+        hold, returns to Eagle's level: Eagle never saw the delete, so its level still stands. The
+        documents, engagement and index row follow. A project deleted before DEMI took projects
+        over keeps the `read[]` the delete left (staff at most), and returns to Eagle's level on
+        Eagle's next push unless held. Every other project keeps the `read[]` the delete left,
+        hold included, until `PUT /api/projects/{id}/level`: a held project, one Eagle deleted, or
+        one created in DEMI. When DEMI deleted a Track project, its `eagle-<eagleId>` copy loses
+        the delete DEMI gave it too. A project Eagle deleted is taken over, so an Eagle push that
+        still carries its delete does not delete it again; not an `eagle-<eagleId>` copy beside
+        its Track project, nor a project with no stored Eagle record. Audited as
+        `project.restore`. Restore itself sends nothing to Eagle; the next
         change to a project created in DEMI or taken over is what sync-out sends.
       security:
         - ApiKeyAuth: []

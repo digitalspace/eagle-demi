@@ -13,15 +13,23 @@ const documents = require('../../../src/repositories/documents');
 const aiSearch = require('../../../src/search/ai-search');
 const syncOut = require('../../../src/sync-out');
 const projectController = require('../../../src/controllers/nosql/project');
-const { canRead } = require('../../../src/helpers/access-sql');
+const { canRead, readForLevel } = require('../../../src/helpers/access-sql');
 const { redactForAccess } = require('../../../src/vis/redact');
 const {
-  mockRes, STAFF, PROJECT_EAGLE_ID, anonymous, staff, eagleProject, storedEagleProject,
+  mockRes, STAFF, PROJECT_EAGLE_ID, PUBLIC_ACL, anonymous, staff, eagleProject, storedEagleProject,
   projectReadForWriteFromGet
 } = require('../../helpers/eagle-mirror-fixtures');
 
 const STAFF_ONLY = { read: ['staff'], isPublished: false };
 const TWIN_ID = `eagle-${PROJECT_EAGLE_ID}`;
+const HELD_AT = '2026-11-01T00:00:00.000Z';
+
+/** A project DEMI took over, with Eagle's copy public; deleted unless `overrides` say otherwise. */
+function ownedProject(overrides = {}) {
+  const stored = storedEagleProject({ demiOwnedAt: '2026-10-30T00:00:00.000Z', isDeleted: true, ...STAFF_ONLY, ...overrides });
+  stored.sources.eagle.read = [...PUBLIC_ACL];
+  return stored;
+}
 
 /** What eagle-api sends: the raw Mongo record, content under its block, the flag on the top level. */
 function rawEagleProject(top = {}) {
@@ -333,7 +341,8 @@ test('PUT /projects/:id/restore', async (t) => {
 
   await t.test('of a native project clears isDeleted and keeps the read the delete left', async () => {
     const seen = stage(t, {
-      id: '207', trackProjectId: 207, sourceSystem: 'track', sources: {}, isDeleted: true, read: ['team'], isPublished: false
+      id: '207', trackProjectId: 207, sourceSystem: 'track', eagleId: PROJECT_EAGLE_ID,
+      sources: { eagle: { _id: PROJECT_EAGLE_ID, read: [...PUBLIC_ACL] } }, isDeleted: true, read: ['team'], isPublished: false
     });
 
     const res = await restore();
@@ -343,17 +352,124 @@ test('PUT /projects/:id/restore', async (t) => {
     assert.deepStrictEqual(seen.written.read, ['team'], 'widening stays with /level');
   });
 
-  await t.test('of an Eagle-mirrored project returns read to Eagle\'s level and drops the hold', async () => {
-    const stored = storedEagleProject({ isDeleted: true, ...STAFF_ONLY, levelHeldAt: '2026-11-01T00:00:00.000Z' });
-    stored.sources.eagle.read = ['public', 'sysadmin', 'staff'];
-    const seen = stage(t, stored);
+  await t.test('of a project DEMI took over and deleted returns read to Eagle\'s level', async () => {
+    const seen = stage(t, ownedProject());
 
     await restore();
 
     assert.ok(seen.written.read.includes('public'), 'Eagle never saw the delete, so its level stands');
     assert.strictEqual(seen.written.isPublished, true);
-    assert.ok(!('levelHeldAt' in seen.written));
     assert.ok(seen.cascaded[0].read.includes('public'), 'the documents follow');
+  });
+
+  await t.test('of a project DEMI held, then deleted, keeps the held read and the hold', async () => {
+    const seen = stage(t, ownedProject({ read: ['team'], levelHeldAt: HELD_AT }));
+
+    await restore();
+
+    assert.deepStrictEqual(seen.written.read, ['team'], 'widening a held project stays with /level');
+    assert.strictEqual(seen.written.levelHeldAt, HELD_AT);
+    assert.strictEqual(seen.written.isPublished, false);
+    assert.deepStrictEqual(seen.cascaded, []);
+  });
+
+  await t.test('of a project DEMI owns that Eagle deleted keeps the read the delete left', async () => {
+    const stored = ownedProject();
+    stored.sources.eagle.isDeleted = true;
+    const seen = stage(t, stored);
+
+    await restore();
+
+    assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read, 'Eagle\'s copy is deleted, so its read is no level');
+    assert.strictEqual(seen.written.isPublished, false);
+  });
+
+  await t.test('of an owned project with no stored Eagle copy keeps its read', async () => {
+    const stored = ownedProject({ read: ['team'] });
+    delete stored.sources.eagle;
+    const seen = stage(t, stored);
+
+    await restore();
+
+    assert.deepStrictEqual(seen.written.read, ['team']);
+    assert.deepStrictEqual(seen.cascaded, []);
+  });
+
+  await t.test('after a DELETE over a project Eagle deleted stays at staff: the DELETE holds it', async () => {
+    const stored = storedEagleProject({ isDeleted: true, ...STAFF_ONLY });
+    stored.sources.eagle = { ...stored.sources.eagle, isDeleted: true, read: [...PUBLIC_ACL] };
+    const deleted = stage(t, stored);
+    await del();
+    assert.ok(deleted.written.demiOwnedAt && deleted.written.levelHeldAt, 'the premise: taken over and held');
+    const seen = stage(t, deleted.written);
+
+    await restore();
+
+    assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read);
+    assert.strictEqual(seen.written.isPublished, false);
+  });
+
+  await t.test('after a DELETE of an owned project below Eagle\'s level keeps that level: the DELETE holds it', async () => {
+    const deleted = stage(t, ownedProject({ isDeleted: undefined, read: ['team'], isPublished: false }));
+    await del();
+    const seen = stage(t, deleted.written);
+
+    await restore();
+
+    assert.deepStrictEqual(seen.written.read, ['team']);
+    assert.ok(seen.written.levelHeldAt);
+  });
+
+  await t.test('after an Eagle delete push onto a DEMI-deleted project stays at staff: the push holds it', async () => {
+    const pushed = stage(t, ownedProject());
+    await push(rawEagleProject({ isDeleted: true }));
+    const seen = stage(t, pushed.written);
+
+    await restore();
+
+    assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read, 'Eagle\'s copy is deleted, so its level is no target');
+  });
+
+  await t.test('after Eagle publishes a project DEMI deleted stays at staff: the push holds it', async () => {
+    const stored = ownedProject();
+    stored.sources.eagle.read = readForLevel(2);
+    const pushed = stage(t, stored);
+    await push(rawEagleProject());
+    const seen = stage(t, pushed.written);
+
+    await restore();
+
+    assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read, 'Eagle\'s level is above the one the delete found');
+  });
+
+  await t.test('after an Eagle edit push during a DEMI delete returns to Eagle\'s level: the push holds nothing', async () => {
+    const pushed = stage(t, ownedProject());
+    const doc = rawEagleProject();
+    doc.legislation_2018.name = 'Nicomen Wind Energy, renamed';
+    await push(doc);
+    const seen = stage(t, pushed.written);
+
+    await restore();
+
+    assert.ok(!seen.written.levelHeldAt);
+    assert.ok(seen.written.read.includes('public'));
+  });
+
+  await t.test('after a PUT to a deleted project stays at staff: the PUT takes nothing over', async () => {
+    const stored = storedEagleProject({ isDeleted: true, ...STAFF_ONLY, syncVersion: 4 });
+    stored.sources.eagle.read = [...PUBLIC_ACL];
+    const updated = stage(t, stored);
+    const res = mockRes();
+    await projectController.updateProject({ params: { id: '207' }, query: {}, user: STAFF, body: { sector: 'Energy' } }, res);
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok(!updated.written.demiOwnedAt);
+    assert.deepStrictEqual(queued, []);
+    const seen = stage(t, updated.written);
+
+    await restore();
+
+    assert.deepStrictEqual(seen.written.read, STAFF_ONLY.read);
+    assert.deepStrictEqual(seen.cascaded, []);
   });
 
   await t.test('sends nothing to Eagle: sent at staff, it would unpublish Eagle\'s live copy', async () => {
@@ -365,7 +481,7 @@ test('PUT /projects/:id/restore', async (t) => {
     assert.deepStrictEqual(queued, []);
   });
 
-  await t.test('then /level to public versions and queues the project it took over', async () => {
+  await t.test('then /level on a project deleted before takeover queues nothing', async () => {
     const seen = stage(t, storedEagleProject({ isDeleted: true, ...STAFF_ONLY, syncVersion: 4 }));
     await restore();
     const after = stage(t, seen.written);
@@ -376,8 +492,8 @@ test('PUT /projects/:id/restore', async (t) => {
     }, level);
 
     assert.strictEqual(level.statusCode, 200);
-    assert.strictEqual(after.written.syncVersion, 5);
-    assert.deepStrictEqual(queued.map(row => row.id), ['207']);
+    assert.strictEqual(after.written.syncVersion, 4);
+    assert.deepStrictEqual(queued, []);
   });
 
   await t.test('clears the DEMI delete on the Eagle-only twin, without widening it', async () => {

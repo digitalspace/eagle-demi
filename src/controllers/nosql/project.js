@@ -120,6 +120,9 @@ async function takeOver(current, now) {
   return { [DEMI_OWNED_AT]: now };
 }
 
+/** Eagle's level for its stored copy of a project, read as live. */
+const eagleLevel = (eagle) => levelOfRead(resolveProjectAcl(eagle, false));
+
 /** Log the write that first set `demiOwnedAt`, the one that took the row from Eagle. */
 function noteTakeover(before, saved, route) {
   if (isDemiOwnedProject(before) || !isDemiOwnedProject(saved)) return;
@@ -640,8 +643,13 @@ exports.updateProject = async (req, res) => {
         const pinned = await pinChanges({ access }, current, pinBody);
         if (pinned.status !== 'ok') return { status: 'pins', refusal: pinned };
         const now = new Date().toISOString();
-        const owner = eagleFields(current).some(key => Object.hasOwn(changes, key) && moved(key))
-          ? await takeOver(current, now) : {};
+        const eagleEdit = eagleFields(current).some(key => Object.hasOwn(changes, key) && moved(key));
+        // A deleted row's staff read is no level to send: restore decides whether DEMI owns it.
+        const deleted = current.isDeleted === true;
+        if (eagleEdit && deleted && eagleMirrored(current) && !isDemiOwnedProject(current)) {
+          logger.info('[Project Controller] takeover skipped: project is deleted', { id: current.id, eagleId: current.eagleId });
+        }
+        const owner = eagleEdit && !deleted ? await takeOver(current, now) : {};
         // Only on a row sync-out sends: elsewhere Eagle owns `dateUpdated`. A taken-over row's
         // DEMI-only fields (tags, pins) never reach Eagle, so they alone are no edit.
         const native = isNativeProject(current);
@@ -1006,6 +1014,12 @@ function mergeEaglePush(doc, existing, { switchTo } = {}) {
   carryDemiOnlyFields(merged, existing, undefined, { switchTo });
   // A Track row with no `epic_guid` holds the Eagle id sync-out gave it; the echo must keep it.
   if (existing && !hasValue(merged.eagleId) && hasValue(existing.eagleId)) merged.eagleId = existing.eagleId;
+  // Restore lifts an unheld DEMI delete to Eagle's level; once Eagle deletes or raises its copy, that level is unsafe.
+  if (deleteStands(existing) && !merged.levelHeldAt && (doc.isDeleted === true ||
+      eagleLevel(merged.sources.eagle) > eagleLevel(existing.sources && existing.sources.eagle))) {
+    merged.levelHeldAt = new Date().toISOString();
+    logger.info('[Project Controller] Eagle push held a deleted project', { id: merged.id, eagleId: merged.eagleId });
+  }
   // Eagle deleting a project DEMI already deleted must not hand the delete to Eagle to undo.
   if (merged.isDeleted === true) markDeleted(merged, deleteStands(existing) ? 'demi' : 'eagle');
   return merged;
@@ -1306,6 +1320,12 @@ exports.deleteProject = async (req, res) => {
         // An Eagle-side delete becomes DEMI's, or Eagle republishing the project would undo it.
         const now = new Date().toISOString();
         const row = markDeleted({ ...current, ...await takeOver(current, now), updatedAt: now });
+        // Restore returns an unheld row to Eagle's level, so a row left below it keeps its own.
+        const eagle = current.sources && current.sources.eagle;
+        if (eagle && !current.levelHeldAt && levelOfRead(current.read) < eagleLevel(eagle)) {
+          row.levelHeldAt = now;
+          logger.info('[Project Controller] delete held the project below Eagle\'s level', { id: current.id, eagleId: current.eagleId });
+        }
         return { status: 'saved', saved: await projects.upsert(row, { etag: current._etag }), existing: current };
       },
       onLost: (_current, attempt) =>
@@ -1370,7 +1390,10 @@ async function restoreTwin(row) {
   return written.status !== 'conflict';
 }
 
-/** Drop a project's delete flag. A row with no Eagle copy stays at the deleted ceiling until `PUT /projects/:id/level`. */
+/**
+ * Drop a project's delete flag. A project DEMI took over and deleted, unheld, returns to Eagle's level; any
+ * other keeps the read the delete left until `PUT /projects/:id/level`, or, unowned and unheld, Eagle's next push.
+ */
 exports.restoreProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
@@ -1394,12 +1417,13 @@ exports.restoreProject = async (req, res) => {
         if (!current) return { status: 'missing' };
         if (current.isDeleted !== true) return { status: 'live' };
         const now = new Date().toISOString();
-        const row = clearDeleted({ ...current, ...await takeOver(current, now), updatedAt: now });
-        // Eagle never saw DEMI's delete, so a mirrored row goes back to Eagle's level: an owned row
-        // left at staff would unpublish Eagle's live copy on its next send. Not versioned either.
-        const eagle = row.sources && row.sources.eagle;
-        if (eagle) {
-          delete row.levelHeldAt;
+        const by = deletedBy(current);
+        // Only Eagle's delete: else its next push, still carrying the flag, deletes the row again.
+        const row = clearDeleted({ ...current, ...(by === 'eagle' ? await takeOver(current, now) : {}), updatedAt: now });
+        // Eagle never saw this delete and a delete or push below Eagle's level would have held the row,
+        // so Eagle's level widens nothing; left at staff, the next send would unpublish Eagle's copy.
+        const eagle = current.sources && current.sources.eagle;
+        if (isDemiOwnedProject(current) && eagle && by === 'demi' && !current.levelHeldAt) {
           row.read = resolveProjectAcl(eagle, false);
           row.isPublished = row.read.includes('public');
         }
