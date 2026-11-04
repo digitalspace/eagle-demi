@@ -47,7 +47,7 @@ const ENV = {
   EAGLE_KC_CLIENT_SECRET: 'not-a-real-value'
 };
 
-/** A project as `createProject` makes it: no `sources.track`, level 1. */
+/** A project as `createProject` makes it from a Track id: no `sources.track`, level 1. */
 function nativeProject(overrides = {}) {
   return {
     container: 'projects',

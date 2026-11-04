@@ -493,13 +493,17 @@ exports.createProject = async (req, res) => {
     if (!name || !centroid || !centroid.coordinates) {
       return res.status(400).json({ error: 'Missing required fields: name, centroid' });
     }
+    // A brand new project has no Track id yet; DEMI is its source of truth, so DEMI makes the id.
+    // `== null`, not `!`: Track id 0 is a real id.
+    const minted = trackProjectId == null || trackProjectId === '';
+    if (!minted && !/^\d+$/.test(String(trackProjectId))) {
+      return res.status(400).json({ error: 'trackProjectId must be an integer' });
+    }
 
     // Admission is level 1 (docs/rbac-architecture.md §1, "Default on admission is level 1"):
     // nothing reaches level 2 or above by being created.
     const read = readForLevel(1);
     const now = new Date().toISOString();
-    // A brand new project has no Track id yet; DEMI is its source of truth, so DEMI makes the id.
-    const minted = !trackProjectId;
     const id = minted ? randomUUID() : String(trackProjectId);
     const reread = () => projects.getById(systemAccess(), id);
     const row = trimLabels({
@@ -530,7 +534,8 @@ exports.createProject = async (req, res) => {
     // only by PUT, so both carry over, guarded so a PUT landing in between is not written back over.
     // Its `eagleId` too: on a relinked Track row, null would split it from its `eagle-<id>` twin.
     const written = await writeGuarded({
-      existing: await reread(),
+      // A fresh UUID cannot name a stored row, so the minted path skips the point read.
+      existing: minted ? null : await reread(),
       reread,
       attempt: async (current) => {
         // The upsert would hand an owned row's held fields back as if the body had sent them.

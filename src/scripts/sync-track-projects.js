@@ -11,7 +11,7 @@ const {
 } = require('../helpers/short-links');
 const { writeGuarded } = require('../helpers/etag-write');
 const {
-  TRACK_PRECEDENCE, mergeTrackProject, carryDemiOnlyFields, carryDelete, isDemiOwnedProject
+  TRACK_PRECEDENCE, mergeTrackProject, carryDemiOnlyFields, carryDelete, isDemiOwnedProject, isNativeProject
 } = require('../merge/project');
 const { deriveAssessments } = require('../merge/assessments');
 const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
@@ -99,7 +99,7 @@ async function syncProjects(apiProjects, opts = {}) {
   const summary = {
     trackProjects: rows.length,
     created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, works: 0,
-    shortLinks: 0, healed: 0, failures: 0
+    shortLinks: 0, healed: 0, nativeClash: 0, failures: 0
   };
 
   const repo = deps.projects || projectsRepository();
@@ -229,6 +229,10 @@ async function syncProjects(apiProjects, opts = {}) {
   const rekeyed = new Set(
     items.filter(p => p.sourceSystem !== 'eagle' && p.eagleId).map(p => String(p.eagleId))
   );
+  // A second row holding a native row's Eagle id makes the Eagle id lookup throw DUPLICATE_ID.
+  const nativeByEagleId = new Map(
+    items.filter(p => isNativeProject(p) && p.eagleId).map(p => [String(p.eagleId), p])
+  );
 
   for (const apiProject of rows) {
     const track = trackApiToExtract(apiProject);
@@ -262,6 +266,14 @@ async function syncProjects(apiProjects, opts = {}) {
           return carryDelete(carryDemiOnlyFields(row, twin, TWIN_CARRY_FIELDS), twin);
         });
         if (inserted === 'saved') await disownTwin(relink.id);
+        continue;
+      }
+
+      const native = !existing && guid ? nativeByEagleId.get(guid) : null;
+      if (native) {
+        summary.nativeClash++;
+        logger.warn('[track-projects] Track project names the Eagle id of a native project; not created',
+          { trackProjectId: id, nativeId: String(native.id), eagleId: guid });
         continue;
       }
 
@@ -362,7 +374,7 @@ async function syncProjects(apiProjects, opts = {}) {
 }
 
 const POLL_FIELDS = ['trackProjects', 'created', 'updated', 'relinked', 'skippedApiRows', 'orphaned',
-  'shortLinks', 'failures'];
+  'shortLinks', 'nativeClash', 'failures'];
 
 /** The line a log alert matches. A run that failed before the mirror reports its counts as 0. */
 const pollLine = (s) => `[track-projects-poll] mode=${s.mode} ` +

@@ -981,7 +981,9 @@ paths:
         '201':
           description: Project successfully created.
         '400':
-          description: '`name` or `centroid.coordinates` is missing. Body `{ error: "Missing required fields: name, centroid" }`.'
+          description: >-
+            `name` or `centroid.coordinates` is missing (`{ error: "Missing required fields: name, centroid" }`),
+            or `trackProjectId` is not a whole number (`{ error: "trackProjectId must be an integer" }`).
         '401':
           description: Unauthorized.
         '403':
@@ -8803,6 +8805,8 @@ components:
           type: string
         trackProjectId:
           type: integer
+          nullable: true
+          description: The Track id. Null on a project DEMI created without one.
         name:
           type: string
         region:
@@ -9595,7 +9599,10 @@ components:
       properties:
         trackProjectId:
           type: integer
-          description: The Track id, which becomes the row id. Leave it out for a brand new project; DEMI then makes a UUID id.
+          description: >-
+            The Track id, which becomes the row id; 0 is a valid id. Leave it out, or send null
+            or an empty string, for a brand new project; DEMI then makes a UUID id. Any other
+            value that is not a whole number gets a 400.
         name:
           type: string
         region:

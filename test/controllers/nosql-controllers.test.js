@@ -318,6 +318,32 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(saved.sourceSystem, 'track');
   });
 
+  await t.test('createProject with trackProjectId 0 keeps id 0', async () => {
+    t.mock.method(projects, 'getById', async () => null);
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 0, name: 'Zero', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+
+    assert.strictEqual(saved.id, '0');
+    assert.strictEqual(saved.trackProjectId, 0);
+  });
+
+  await t.test('createProject with a non-integer trackProjectId answers 400', async () => {
+    const upsert = t.mock.method(projects, 'upsert', async (doc) => doc);
+    const res = mockRes();
+
+    await projectController.createProject({
+      body: { trackProjectId: 'abc', name: 'N', centroid: { coordinates: [0, 0] } }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body.error, 'trackProjectId must be an integer');
+    assert.strictEqual(upsert.mock.callCount(), 0);
+  });
+
   await t.test('createProject without name or centroid answers 400 naming both', async () => {
     const upsert = t.mock.method(projects, 'upsert', async (doc) => doc);
     const noName = mockRes();
