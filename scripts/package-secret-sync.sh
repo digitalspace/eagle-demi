@@ -31,6 +31,8 @@ stage() {
 }
 
 if $STAGE_ONLY; then
+  # cp -R into an existing src/<app> nests a second copy inside it.
+  if [[ -n "$(ls -A "$OUTPUT" 2>/dev/null)" ]]; then echo "--stage needs an empty directory: $OUTPUT" >&2; exit 1; fi
   stage "$OUTPUT"
   exit 0
 fi

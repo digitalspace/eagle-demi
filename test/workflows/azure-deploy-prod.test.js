@@ -1,67 +1,24 @@
 'use strict';
 
 // The prod deploy workflow: the skip_schema_probe break-glass input and the side-app jobs.
-// No YAML dependency in this repo, so the file is read by indentation.
 
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { readWorkflow, block, scalars, job: jobIn, stepIndex, step, runScript, withTmp, runWithFakeAz } = require('../helpers/workflow-yaml');
 
-const WORKFLOW = path.join(__dirname, '..', '..', '.github', 'workflows', 'azure-deploy-prod.yaml');
-const TEXT = fs.readFileSync(WORKFLOW, 'utf8');
-const LINES = TEXT.split('\n');
-
-const indentOf = (line) => line.search(/\S/);
-
-// The lines under `<key>:` at `indent`, up to the next line at that indent or shallower.
-function block(lines, indent, key) {
-  const start = lines.findIndex((l) => l === `${' '.repeat(indent)}${key}:`);
-  assert.notStrictEqual(start, -1, `no "${key}:" at indent ${indent}`);
-  const rest = lines.slice(start + 1);
-  const end = rest.findIndex((l) => l.trim() !== '' && indentOf(l) <= indent);
-  return end === -1 ? rest : rest.slice(0, end);
-}
-
-// `key: value` scalars at exactly `indent`.
-function scalars(lines, indent) {
-  const prefix = ' '.repeat(indent);
-  return Object.fromEntries(lines
-    .filter((l) => l.startsWith(prefix) && indentOf(l) === indent && /^\S[^:]*: /.test(l.slice(indent)))
-    .map((l) => {
-      const at = l.indexOf(': ');
-      return [l.slice(indent, at), l.slice(at + 2)];
-    }));
-}
+const LINES = readWorkflow('azure-deploy-prod.yaml');
 
 function input(name) {
   const inputs = block(block(block(LINES, 0, 'on'), 2, 'workflow_dispatch'), 4, 'inputs');
   return scalars(block(inputs, 6, name), 8);
 }
 
-const job = (name) => block(block(LINES, 0, 'jobs'), 2, name);
+const job = (name) => jobIn(LINES, name);
 const VERIFY_JOB = job('verify-search-schema');
 const PUBLISH_JOB = job('publish-release');
-
-// Each `- ` item under a job's `steps:`, re-indented so its keys sit at 8 like the others.
-function steps(jobLines) {
-  const body = block(jobLines, 4, 'steps');
-  const starts = body.map((l, i) => (l.startsWith('      - ') ? i : -1)).filter((i) => i !== -1);
-  return starts.map((s, n) => {
-    const chunk = body.slice(s, starts[n + 1]);
-    return [`        ${chunk[0].slice(8)}`, ...chunk.slice(1)];
-  });
-}
-
-const stepIndex = (jobLines, name) => steps(jobLines).findIndex((s) => scalars(s, 8).name === name);
-
-function step(jobLines, name) {
-  const found = steps(jobLines)[stepIndex(jobLines, name)];
-  assert.ok(found, `no step named "${name}"`);
-  return found;
-}
 
 // Only `inputs.x`, `!inputs.x` and `needs.<job>.outputs.<key> == '<value>'`; anything else throws,
 // so a rewrite fails here instead of passing blind.
@@ -74,15 +31,6 @@ function runs(stepLines, ctx) {
   assert.ok(input || need, `unsupported if: ${cond}`);
   if (need) return (ctx.needs?.[need[1]]?.[need[2]] ?? '') === need[3];
   return input[1] === '!' ? !ctx.inputs[input[2]] : Boolean(ctx.inputs[input[2]]);
-}
-
-function runScript(stepLines) {
-  const at = stepLines.findIndex((l) => l === '        run: |');
-  assert.notStrictEqual(at, -1, 'step has no block run:');
-  const body = stepLines.slice(at + 1);
-  // Stop before the next step's leading comments, which `steps()` leaves on this chunk.
-  const end = body.findIndex((l) => l.trim() !== '' && indentOf(l) < 10);
-  return (end === -1 ? body : body.slice(0, end)).map((l) => l.slice(10)).join('\n');
 }
 
 function bash(script, env) {
@@ -110,15 +58,6 @@ function record(dir) {
     outputs: parseOutputs(fs.readFileSync(output, 'utf8')),
   };
 }
-
-const withTmp = (fn) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skip-probe-'));
-  try {
-    return fn(dir);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-};
 
 const VALIDATE = 'Validate version format';
 const SCHEMA = "Probe the live indexes with this tag's index definitions";
@@ -167,7 +106,7 @@ test('the verify job itself has no condition, so the deploy jobs that need it st
 
 test('the input is read only by the verify job', () => {
   const inVerify = VERIFY_JOB.join('\n').match(/inputs\.skip_schema_probe/g) || [];
-  const inFile = TEXT.match(/inputs\.skip_schema_probe/g) || [];
+  const inFile = LINES.join('\n').match(/inputs\.skip_schema_probe/g) || [];
   assert.ok(inVerify.length > 0);
   assert.strictEqual(inFile.length, inVerify.length);
   assert.doesNotMatch(job('deploy-extractor').join('\n'), /skip_schema_probe/);
@@ -251,17 +190,16 @@ test('the release notes keep their body and gain the skip line', () => {
 
 // Side-app jobs skip rather than fail while prod has no app, so a release before the infra deploy
 // still publishes.
-const SCRIPTS = path.join(__dirname, '..', '..', 'scripts');
 const SIDE_APPS = [
   {
     job: 'deploy-pdf-title', probe: 'Does the PDF title app exist yet?', deploy: 'Deploy the PDF title worker',
     packager: 'package-pdf-title.sh', appVar: 'PDF_TITLE_APP_NAME', app: 'demi-pdf-title-prod',
-    marker: 'pdf-title/function_app.py', fn: 'pdf_title_run',
+    marker: 'pdf-title/function_app.py', fn: 'pdf_title_run', appArg: undefined,
   },
   {
     job: 'deploy-secret-rotator', probe: 'Does the secret rotator app exist yet?', deploy: 'Deploy the secret rotator',
     packager: 'package-secret-sync.sh', appVar: 'SECRET_ROTATOR_APP_NAME', app: 'demi-secret-rotator-prod',
-    marker: 'src/secret-rotator/index.js', fn: 'secretRotatorHourly',
+    marker: 'src/secret-rotator/index.js', fn: 'secretRotatorHourly', appArg: 'secret-rotator',
   },
 ];
 
@@ -295,11 +233,11 @@ for (const side of SIDE_APPS) {
 
   test(`${side.job} packages from the tag checkout, not the workflow ref`, () => {
     const tagPath = scalars(block(step(JOB, 'Checkout the tag'), 8, 'with'), 10).path;
-    const packagedFrom = withTmp((dir) => {
+    const args = withTmp((dir) => {
       const capture = path.join(dir, 'args');
       fs.mkdirSync(path.join(dir, 'scripts'));
       fs.writeFileSync(path.join(dir, 'scripts', side.packager),
-        `#!/usr/bin/env bash\necho "$1" > '${capture}'\n`, { mode: 0o755 });
+        `#!/usr/bin/env bash\necho "$*" > '${capture}'\n`, { mode: 0o755 });
       const bin = path.join(dir, 'bin');
       fs.mkdirSync(bin);
       fs.writeFileSync(path.join(bin, 'az'), '#!/usr/bin/env bash\n', { mode: 0o755 });
@@ -310,80 +248,28 @@ for (const side of SIDE_APPS) {
         env: { PATH: `${bin}:${process.env.PATH}`, AZURE_RESOURCE_GROUP: 'rg-demi-prod', [side.appVar]: side.app },
       });
       assert.strictEqual(run.status, 0, run.stderr);
-      return fs.readFileSync(capture, 'utf8').trim();
+      return fs.readFileSync(capture, 'utf8').trim().split(' ');
     });
     assert.strictEqual(tagPath, 'release');
-    assert.strictEqual(packagedFrom, tagPath);
+    assert.strictEqual(args[0], tagPath);
+    assert.strictEqual(args[2], side.appArg);
   });
 
-  // Runs the probe against a fake `az` that fails with `azErr` on stderr, or succeeds when it is null.
-  const probe = ({ tagHasApp = true, azErr = null }) => withTmp((dir) => {
-    fs.symlinkSync(SCRIPTS, path.join(dir, 'scripts'));
-    if (tagHasApp) {
-      const marker = path.join(dir, 'release', side.marker);
-      fs.mkdirSync(path.dirname(marker), { recursive: true });
-      fs.writeFileSync(marker, '');
-    }
-    const bin = path.join(dir, 'bin');
-    fs.mkdirSync(bin);
-    fs.writeFileSync(path.join(bin, 'az'), azErr === null
-      ? `#!/usr/bin/env bash\necho ${side.app}\n`
-      : `#!/usr/bin/env bash\necho '${azErr}' >&2\nexit 1\n`, { mode: 0o755 });
-    const summary = path.join(dir, 'summary.md');
-    const output = path.join(dir, 'output');
-    fs.writeFileSync(output, '');
-    const run = spawnSync('bash', ['-e', '-c', runScript(step(JOB, side.probe))], {
-      cwd: dir,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        PATH: `${bin}:${process.env.PATH}`,
-        AZURE_RESOURCE_GROUP: 'rg-demi-prod',
-        [side.appVar]: side.app,
-        GITHUB_STEP_SUMMARY: summary,
-        GITHUB_OUTPUT: output,
-      },
-    });
-    return {
-      status: run.status,
-      stdout: run.stdout,
-      found: fs.readFileSync(output, 'utf8').trim(),
-      summary: fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '',
-    };
+  // The probe's own branches are covered in test/scripts/probe-function-app.test.js.
+  const probe = (opts) => runWithFakeAz(runScript(step(JOB, side.probe)), {
+    env: { AZURE_RESOURCE_GROUP: 'rg-demi-prod', [side.appVar]: side.app }, ...opts,
   });
 
-  test(`${side.job}: the probe deploys when the app exists`, () => {
-    const r = probe({});
-    assert.strictEqual(r.status, 0);
-    assert.strictEqual(r.found, 'found=true');
-  });
-
-  test(`${side.job}: the probe skips with a notice when the app does not exist yet`, () => {
-    const r = probe({ azErr: '(ResourceNotFound) The Resource was not found.' });
-    assert.strictEqual(r.status, 0);
-    assert.strictEqual(r.found, 'found=false');
+  test(`${side.job}: the probe asks for ${side.app} and deploys when it exists`, () => {
+    const r = probe({ files: [path.join('release', side.marker)], azErr: '(ResourceNotFound) gone' });
     assert.match(r.stdout, new RegExp(`^::notice::${side.app} does not exist yet`, 'm'));
-    assert.match(r.summary, /does not exist yet/);
-  });
-
-  test(`${side.job}: the probe skips when CI cannot see the app`, () => {
-    const r = probe({ azErr: '(AuthorizationFailed) no access' });
-    assert.strictEqual(r.status, 0);
-    assert.strictEqual(r.found, 'found=false');
-    assert.match(r.stdout, /lacks Website Contributor/);
+    assert.strictEqual(probe({ files: [path.join('release', side.marker)], azOut: side.app }).found, 'found=true');
   });
 
   test(`${side.job}: the probe skips a tag that predates the app without asking Azure`, () => {
-    const r = probe({ tagHasApp: false, azErr: 'az must not be called' });
+    const r = probe({ azErr: 'az must not be called' });
     assert.strictEqual(r.status, 0);
     assert.strictEqual(r.found, 'found=false');
     assert.ok(r.stdout.includes(`The tag has no ${side.marker}`), r.stdout);
-  });
-
-  test(`${side.job}: any other Azure error fails the job`, () => {
-    const r = probe({ azErr: '(InternalServerError) boom' });
-    assert.strictEqual(r.status, 1);
-    assert.strictEqual(r.found, '');
-    assert.match(r.stdout, new RegExp(`^::error::az functionapp show failed for ${side.app}`, 'm'));
   });
 }

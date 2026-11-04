@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Prod deploy gate for a side Function app: writes found=true|false to $GITHUB_OUTPUT. Skips with a
+# Deploy gate for a side Function app: writes found=true|false to $GITHUB_OUTPUT. Skips with a
 # notice when the tag lacks <marker> or the app is absent; any other az error fails the job.
 set -uo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/probe-function-app.sh <resource-group> <app-name> <marker-path> <absent-hint>
+Usage: scripts/probe-function-app.sh <resource-group> <app-name> <absent-hint> [<marker-file>]
 
-<marker-path> is a file in the tag checkout (release/...) that only tags carrying the app have, so
-redeploying an older tag still publishes. <absent-hint> says how to create the app.
+<absent-hint> says how to create the app. <marker-file> is a file in the tag checkout (release/...)
+that only tags carrying the app have, so redeploying an older tag still publishes; staging, which
+deploys its own checkout, passes none.
 An absent site answers Forbidden (AuthorizationFailed) as well as NotFound: CI's Website
 Contributor role is granted per site by hand.
 EOF
@@ -17,8 +18,8 @@ EOF
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
 esac
-[ $# -eq 4 ] || { usage; exit 1; }
-RG="$1"; APP="$2"; MARKER="$3"; HINT="$4"
+[ $# -eq 3 ] || [ $# -eq 4 ] || { usage >&2; exit 1; }
+RG="$1"; APP="$2"; HINT="$3"; MARKER="${4:-}"
 
 skip() {
   echo "found=false" >> "$GITHUB_OUTPUT"
@@ -26,7 +27,7 @@ skip() {
   echo "⏭️ $1" >> "$GITHUB_STEP_SUMMARY"
 }
 
-if [[ ! -e "$MARKER" ]]; then
+if [[ -n "$MARKER" && ! -f "$MARKER" ]]; then
   skip "The tag has no ${MARKER#release/}. Skipping the $APP deploy."
 elif err=$(az functionapp show -g "$RG" -n "$APP" --query name -o tsv 2>&1 >/dev/null); then
   echo "found=true" >> "$GITHUB_OUTPUT"

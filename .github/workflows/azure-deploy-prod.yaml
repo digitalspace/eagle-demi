@@ -355,8 +355,8 @@ jobs:
           echo "### ❌ API deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "Check step logs above for details on packaging or Azure Function App deployment errors." >> $GITHUB_STEP_SUMMARY
 
-  # After the API, which the worker calls. Rollback redeploys the API only: a failure here or in
-  # deploy-secret-rotator leaves the release unpublished; the rotator's rollback is empty ROTATED_SECRETS and RENEW.
+  # After the API, which the worker calls. Rollback redeploys the API only, so a failure here
+  # leaves the new API serving and the release unpublished.
   deploy-pdf-title:
     name: Deploy PDF title worker (Azure Function App)
     runs-on: ubuntu-latest
@@ -398,7 +398,7 @@ jobs:
         id: probe
         run: |
           ./scripts/probe-function-app.sh "$AZURE_RESOURCE_GROUP" "$PDF_TITLE_APP_NAME" \
-            release/pdf-title/function_app.py "Deploy the prod bicep with deployPdfTitleWorker = true first."
+            "Deploy the prod bicep with deployPdfTitleWorker = true first." release/pdf-title/function_app.py
 
       # `config-zip`: a Flex app has no Kudu wwwroot, and the remote build installs `requirements.txt`.
       - name: Deploy the PDF title worker
@@ -423,6 +423,8 @@ jobs:
           echo "### ❌ PDF title worker deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "The API is already on this version; the release was NOT published. Check the probe, packaging, zipdeploy or timer-registration logs above." >> $GITHUB_STEP_SUMMARY
 
+  # Rollback redeploys the API only, so a failure here leaves the release unpublished. The rotator's
+  # own rollback is its kill switch: empty ROTATED_SECRETS and RENEW app settings.
   deploy-secret-rotator:
     name: Deploy Key Vault secret rotator (Azure Function App)
     runs-on: ubuntu-latest
@@ -442,8 +444,8 @@ jobs:
             exit 1
           fi
 
-      # scripts/ from this workflow's ref: no tag before the rotator takes an app name in
-      # package-secret-sync.sh. Root first — a checkout cleans the directory it lands in.
+      # scripts/ from this workflow's ref, src from the tag, as for pdf-title: the zip gets the ref's
+      # shared file list with the tag's code. Root first — a checkout cleans the directory it lands in.
       - name: Checkout this workflow's ref for the tooling
         uses: actions/checkout@v7
 
@@ -469,7 +471,7 @@ jobs:
         id: probe
         run: |
           ./scripts/probe-function-app.sh "$AZURE_RESOURCE_GROUP" "$SECRET_ROTATOR_APP_NAME" \
-            release/src/secret-rotator/index.js "Deploy the prod bicep with scripts/deploy-infra.sh prod first."
+            "Deploy the prod bicep with scripts/deploy-infra.sh prod first." release/src/secret-rotator/index.js
 
       - name: Deploy the secret rotator
         if: steps.probe.outputs.found == 'true'

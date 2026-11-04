@@ -57,18 +57,24 @@ function loadStagedEntry(stage) {
   return result;
 }
 
-/** The app must require, outside src/<app>, exactly the files the script copied there, and none BANNED. */
-function assertRequiresOnlyCopied(stage, app, loadedFiles) {
+/** Files the script copied outside src/<app>, repo-relative and sorted. */
+function copiedShared(stage, app) {
   const appDir = path.join('src', app) + path.sep;
-  const copied = fs
+  return fs
     .readdirSync(path.join(stage, 'src'), { recursive: true, withFileTypes: true })
     .filter((e) => e.isFile())
     .map((e) => path.relative(stage, path.join(e.parentPath, e.name)))
     .filter((f) => !f.startsWith(appDir))
     .sort();
+}
+
+/** The app must require, outside src/<app>, exactly the files the script copied there, and none BANNED. */
+function assertRequiresOnlyCopied(stage, app, loadedFiles) {
+  const appDir = path.join('src', app) + path.sep;
+  const copied = copiedShared(stage, app);
   const required = loadedFiles.filter((f) => !f.startsWith(appDir)).sort();
   assert.deepStrictEqual(required, copied, `requires outside src/${app} must be exactly the script's shared files`);
   assert.deepStrictEqual(copied.filter((f) => BANNED.includes(f)), [], `${BANNED.join(' and ')} must never be packaged`);
 }
 
-module.exports = { stagePackage, linkDependencies, loadStagedEntry, assertRequiresOnlyCopied };
+module.exports = { stagePackage, linkDependencies, loadStagedEntry, copiedShared, assertRequiresOnlyCopied };
