@@ -7,8 +7,8 @@
  * group belongs to one project and every list is "the groups of this project". `projectId` is the
  * DEMI project id, as `documents` and `commentPeriods` store it.
  *
- * A group Eagle deleted stays stored, flagged `isDeleted`, for the reconcile and the ACL cascade;
- * no read here serves it (`NOT_DELETED`), as eagle-api's search never did.
+ * A group Eagle deleted, or one with an `eagleId` that DEMI deleted, stays stored, flagged
+ * `isDeleted`, for the reconcile and the ACL cascade; no read here serves it (`NOT_DELETED`).
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -77,30 +77,33 @@ async function deleteById(id, projectId, etag) {
   return cosmos.remove(CONTAINER, String(id), String(projectId), { etag });
 }
 
-/**
- * Re-derive every group of one project from the project's ACL. systemAccess skips a sealed row. A
- * row DEMI created takes its own ACL from `sources.demi.read`, since `read` is already narrowed.
- */
+/** A row's own ACL, read from Cosmos as `eagleRead`. */
+const OWN_READ = 'c.sourceSystem, c.sources.eagle.read AS eagleRead, c.sources.demi.read AS demiRead';
+
+/** A row DEMI owns, created or taken over, takes its own ACL from `sources.demi.read`. */
+const withOwnRead = ({ sourceSystem, demiRead, eagleRead, ...row }) =>
+  ({ ...row, eagleRead: sourceSystem === 'demi' ? demiRead : eagleRead });
+
+/** Re-derive every group of one project from the project's ACL. systemAccess skips a sealed row. */
 async function setAclForProject(projectId, read) {
   const spec = selectWhere({
     access: systemAccess(),
     partitionField: PARTITION_FIELD,
     criteria: [eq(PARTITION_FIELD, String(projectId), '@projectId')],
-    select: 'c.id, c.read, c.isDeleted, c.sourceSystem, c.sources.eagle.read AS eagleRead, c.sources.demi.read AS demiRead'
+    select: `c.id, c.read, c.isDeleted, ${OWN_READ}`
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
-  const rows = items.map(({ sourceSystem, demiRead, eagleRead, ...row }) =>
-    ({ ...row, eagleRead: sourceSystem === 'demi' ? demiRead : eagleRead }));
-  return cascadeAcl(CONTAINER, projectId, rows, read);
+  return cascadeAcl(CONTAINER, projectId, items.map(withOwnRead), read);
 }
 
-/** Every row's ACL inputs, whole container — for the reconcile only. */
+/** Every row's ACL inputs, whole container — for the reconcile only. Same own ACL as the cascade. */
 async function listAclRows(access) {
-  return fetchAll(CONTAINER, selectWhere({
+  const rows = await fetchAll(CONTAINER, selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    select: 'c.id, c.projectId, c.read, c.isPublished, c.isDeleted, c.sealedAt, c.sources.eagle.read AS eagleRead'
+    select: `c.id, c.projectId, c.read, c.isPublished, c.isDeleted, c.sealedAt, ${OWN_READ}`
   }));
+  return rows.map(withOwnRead);
 }
 
 /** The native list contract's reads (`helpers/native-query.js`). */

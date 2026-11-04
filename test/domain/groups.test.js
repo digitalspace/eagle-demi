@@ -129,13 +129,20 @@ test('group domain', async (t) => {
     assert.strictEqual(rows[0].Action, 'group.update');
   });
 
-  await t.test("a DEMI write takes over an Eagle group, keeping Eagle's own read for the cascade", async (t) => {
-    const store = fakeStore(t);
+  await t.test("a DEMI write takes over an Eagle group, keeping Eagle's own read less public", async (t) => {
+    const eagle = { ...STORED.sources.eagle, read: ['public', 'project-system-admin', 'sysadmin'] };
+    const store = fakeStore(t, { ...STORED, sources: { eagle } });
     await group.update(STAFF, GROUP_ID, { name: 'Nations' });
     const row = store.written[0];
     assert.strictEqual(row.sourceSystem, 'demi', 'otherwise the next Eagle push replaces the write');
-    assert.deepStrictEqual(row.sources.demi.read, STORED.sources.eagle.read);
-    assert.deepStrictEqual(row.sources.eagle, STORED.sources.eagle);
+    assert.deepStrictEqual(row.sources.demi.read, ['project-system-admin', 'sysadmin']);
+    assert.deepStrictEqual(row.sources.eagle, eagle);
+  });
+
+  await t.test("a takeover of a group with no stored Eagle read takes eagle-api's group read", async (t) => {
+    const store = fakeStore(t, { ...STORED, sources: { eagle: { _id: GROUP_ID } } });
+    await group.update(STAFF, GROUP_ID, { name: 'Nations' });
+    assert.deepStrictEqual(store.written[0].sources.demi.read, group.GROUP_READ);
   });
 
   await t.test('update naming anything but name is a 400 and writes nothing', async (t) => {
@@ -227,6 +234,7 @@ test('group domain', async (t) => {
     const { result, rows } = await audited(() => group.removeMember(STAFF, GROUP_ID, USER_A));
     assert.strictEqual(result.status, 'ok');
     assert.deepStrictEqual(store.written[0].members, [USER_B]);
+    assert.strictEqual(store.written[0].sourceSystem, 'demi');
     assert.strictEqual(rows[0].Action, 'group.removeMember');
   });
 

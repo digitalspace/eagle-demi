@@ -1,10 +1,6 @@
 'use strict';
 
-/**
- * Project group writes: `POST /groups`, `PUT` and `DELETE /groups/:id`, and adding and removing
- * members on `/groups/:id/members`, ported from eagle-api `api/controllers/projectGroup.js` (rules
- * in docs/eagle-api-port.md, Project groups).
- */
+/** Project group writes; rules in docs/eagle-api-port.md, Project groups. */
 
 const crypto = require('node:crypto');
 
@@ -52,14 +48,15 @@ function stamped(ctx, row) {
 }
 
 /**
- * The row a DEMI write leaves, owned by DEMI so the Eagle mirror stops replacing it. The project
- * cascade then reads `sources.demi.read`, so a mirrored row carries over Eagle's own read.
+ * The row a DEMI write leaves, owned by DEMI so the Eagle mirror stops replacing it. The cascade
+ * reads `sources.demi.read`, so a mirrored row keeps Eagle's own read, less `public`.
  */
 function ownedByDemi(row) {
   if (row.sourceSystem === 'demi') return row;
   const eagleRead = row.sources && row.sources.eagle && row.sources.eagle.read;
-  const own = Array.isArray(eagleRead) ? eagleRead : GROUP_READ;
-  return { ...row, sourceSystem: 'demi', sources: { ...row.sources, demi: { read: [...own] } } };
+  // A mirrored row with no stored Eagle read takes eagle-api's group ACL.
+  const own = (Array.isArray(eagleRead) ? eagleRead : GROUP_READ).filter((role) => role !== 'public');
+  return { ...row, sourceSystem: 'demi', sources: { ...row.sources, demi: { read: own } } };
 }
 
 /** A DEMI write: owned by DEMI, stamped with the caller and the time. */

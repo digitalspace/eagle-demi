@@ -141,19 +141,20 @@ test('group mirror', async (t) => {
     const demiRead = ['project-system-admin', 'sysadmin', 'staff'];
     const existing = {
       id: GROUP_EAGLE_ID, eagleId: GROUP_EAGLE_ID, projectId: '207', sourceSystem: 'demi', name: 'DEMI name',
-      members: [OTHER_USER], read: STAFF_READ, isDeleted: false, sources: { demi: { read: demiRead } }, _etag: 'e1'
+      members: [OTHER_USER], read: STAFF_READ, isDeleted: true, sources: { demi: { read: demiRead } }, _etag: 'e1'
     };
     const pushed = eagleGroup({ name: 'Eagle name', read: PUBLIC_ACL });
     const { res, row } = await captureMirror(t, 'groups', pushed, { existing });
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(row.name, 'DEMI name');
     assert.deepStrictEqual(row.members, [OTHER_USER]);
+    assert.strictEqual(row.isDeleted, true, 'a push cannot bring back a group DEMI deleted');
     assert.deepStrictEqual(row.read, STAFF_READ);
     assert.deepStrictEqual(row.sources.demi.read, demiRead);
     assert.deepStrictEqual(row.sources.eagle, pushed, 'Eagle copy kept for the reconcile');
   });
 
-  await t.test('a DEMI write then an Eagle echo keeps the DEMI members', async () => {
+  await t.test('a DEMI write then a later Eagle push keeps the DEMI members', async () => {
     const mirrored = (await captureMirror(t, 'groups')).row;
     t.mock.restoreAll();
     t.mock.method(groups, 'getById', async () => ({ ...mirrored, _etag: 'e1' }));
