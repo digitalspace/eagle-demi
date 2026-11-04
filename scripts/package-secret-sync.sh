@@ -1,40 +1,46 @@
 #!/usr/bin/env bash
-#
-# Build the deployment zip for demi-secret-sync-<env>.
-#
-# The zip mirrors the REPO LAYOUT rather than flattening src/secret-sync to its root: host.json and
-# package.json are taken from src/secret-sync and placed at the zip root — package.json's `main`
-# points back down at src/secret-sync/index.js — and the sources keep their paths, so a path printed
-# in a stack trace is the path in this repo.
-#
-# src/secret-sync is the WHOLE of the app, plus src/utils/azure-credential.js, which requires only
-# @azure/identity. Nothing else of src/ is copied, and nothing else may be:
-# src/config.js is the API's configuration and throws under this app's host.json and app settings,
-# so anything that reaches it (src/utils/logger.js did) makes the entry point unloadable. The sync
-# has its own logger for that reason. test/secret-sync/package-loads.test.js holds the line.
-#
-# Dependencies come from src/secret-sync/package.json, installed into the staging directory. The
-# API's node_modules is not reused: this app needs five packages, the API's tree is an order of
-# magnitude bigger, and Flex charges extract time per file.
-#
-# Usage: scripts/package-secret-sync.sh <repo-root> <output.zip>
+# Zip for demi-<app>-<env> in repo layout (package.json `main` points at src/<app>), deps from npm.
+# Usage: scripts/package-secret-sync.sh [--stage] <repo-root> <output.zip|empty-dir> [secret-sync|secret-rotator]
 set -euo pipefail
 
+STAGE_ONLY=false
+if [[ "${1:-}" == --stage ]]; then STAGE_ONLY=true; shift; fi
+
 REPO_ROOT="$(cd "${1:?repo root required}" && pwd)"
-OUTPUT="${2:?output zip path required}"
+OUTPUT="${2:?output path required}"
+APP="${3:-secret-sync}"
+
+# Only src/<app> and these: src/config.js throws under these apps' settings, so nothing reaching it
+# (src/utils/logger.js does) may be copied. The package-loads tests stage with --stage and check.
+case "$APP" in
+  secret-sync) SHARED=(src/utils/azure-credential.js) ;;
+  secret-rotator) SHARED=(src/secret-sync/logger.js src/utils/azure-credential.js) ;;
+  *) echo "unknown app '$APP': expected secret-sync or secret-rotator" >&2; exit 1 ;;
+esac
+
+stage() {
+  local dir="$1" file
+  mkdir -p "$dir/src"
+  cp "$REPO_ROOT/src/$APP/host.json" "$dir/host.json"
+  cp "$REPO_ROOT/src/$APP/package.json" "$dir/package.json"
+  cp -R "$REPO_ROOT/src/$APP" "$dir/src/$APP"
+  for file in "${SHARED[@]}"; do
+    mkdir -p "$dir/$(dirname "$file")"
+    cp "$REPO_ROOT/$file" "$dir/$file"
+  done
+}
+
+if $STAGE_ONLY; then
+  stage "$OUTPUT"
+  exit 0
+fi
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
+stage "$STAGE"
 
-mkdir -p "$STAGE/src"
-cp "$REPO_ROOT/src/secret-sync/host.json" "$STAGE/host.json"
-cp "$REPO_ROOT/src/secret-sync/package.json" "$STAGE/package.json"
-cp -R "$REPO_ROOT/src/secret-sync" "$STAGE/src/secret-sync"
-mkdir -p "$STAGE/src/utils"
-cp "$REPO_ROOT/src/utils/azure-credential.js" "$STAGE/src/utils/azure-credential.js"
-
-# npm rather than yarn: this package has no lockfile of its own and is not a yarn workspace of the
-# API. `--omit=dev` because there are no dev dependencies to begin with and the flag keeps it so.
+# npm, not the API's yarn tree: no lockfile here, and Flex charges extract time per file, so only
+# the app's own five packages go in.
 npm install --omit=dev --prefix "$STAGE" --no-audit --no-fund --loglevel=error
 
 rm -f "$OUTPUT"

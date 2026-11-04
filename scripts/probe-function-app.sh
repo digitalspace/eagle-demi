@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Prod deploy gate for a side Function app: writes found=true|false to $GITHUB_OUTPUT. Skips with a
+# notice when the tag lacks <marker> or the app is absent; any other az error fails the job.
+set -uo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/probe-function-app.sh <resource-group> <app-name> <marker-path> <absent-hint>
+
+<marker-path> is a file in the tag checkout (release/...) that only tags carrying the app have, so
+redeploying an older tag still publishes. <absent-hint> says how to create the app.
+An absent site answers Forbidden (AuthorizationFailed) as well as NotFound: CI's Website
+Contributor role is granted per site by hand.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+[ $# -eq 4 ] || { usage; exit 1; }
+RG="$1"; APP="$2"; MARKER="$3"; HINT="$4"
+
+skip() {
+  echo "found=false" >> "$GITHUB_OUTPUT"
+  echo "::notice::$1"
+  echo "⏭️ $1" >> "$GITHUB_STEP_SUMMARY"
+}
+
+if [[ ! -e "$MARKER" ]]; then
+  skip "The tag has no ${MARKER#release/}. Skipping the $APP deploy."
+elif err=$(az functionapp show -g "$RG" -n "$APP" --query name -o tsv 2>&1 >/dev/null); then
+  echo "found=true" >> "$GITHUB_OUTPUT"
+elif [[ "$err" == *ResourceNotFound* ]]; then
+  skip "$APP does not exist yet. $HINT Skipping the deploy."
+elif [[ "$err" == *AuthorizationFailed* ]]; then
+  skip "$APP exists but CI lacks Website Contributor on it. Grant the role and rerun. Skipping the deploy."
+else
+  echo "::error::az functionapp show failed for $APP: $err"
+  exit 1
+fi

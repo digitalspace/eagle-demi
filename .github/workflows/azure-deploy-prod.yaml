@@ -34,6 +34,7 @@ env:
   EXTRACTOR_APP_NAME: eagle-extractor-prod
   API_FLEX_APP_NAME: demi-api-fc-prod
   PDF_TITLE_APP_NAME: demi-pdf-title-prod
+  SECRET_ROTATOR_APP_NAME: demi-secret-rotator-prod
   # The app's own host, for the /health* probes, which EDGE_GATE always lets through.
   API_BASE_URL: https://demi-api-fc-prod.azurewebsites.net
   # Search goes through Front Door, as eagle-public does: under EDGE_GATE=enforce the Function
@@ -354,9 +355,8 @@ jobs:
           echo "### ❌ API deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "Check step logs above for details on packaging or Azure Function App deployment errors." >> $GITHUB_STEP_SUMMARY
 
-  # After the API, because the worker calls it. Same packaging and existence probe as
-  # azure-deploy-staging-pdf-title.yaml. The rollback job redeploys the API only, so a worker
-  # failure here leaves the new API serving and the release unpublished.
+  # After the API, which the worker calls. Rollback redeploys the API only: a failure here or in
+  # deploy-secret-rotator leaves the release unpublished; the rotator's rollback is empty ROTATED_SECRETS and RENEW.
   deploy-pdf-title:
     name: Deploy PDF title worker (Azure Function App)
     runs-on: ubuntu-latest
@@ -394,31 +394,11 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # Skips, with a notice, when the app is absent (no `deployPdfTitleWorker` in prod yet; an absent
-      # site answers Forbidden as well as NotFound) or the tag predates the worker, so redeploying an
-      # older tag still publishes. Any other error must still fail the run.
       - name: Does the PDF title app exist yet?
         id: probe
         run: |
-          set -uo pipefail
-          skip() {
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::$1"
-            echo "⏭️ $1" >> "$GITHUB_STEP_SUMMARY"
-          }
-          if [[ ! -f release/pdf-title/function_app.py ]]; then
-            skip "The tag has no pdf-title/function_app.py. Skipping the $PDF_TITLE_APP_NAME deploy."
-          elif err=$(az functionapp show -g "$AZURE_RESOURCE_GROUP" -n "$PDF_TITLE_APP_NAME" \
-                       --query name -o tsv 2>&1 >/dev/null); then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$err" == *ResourceNotFound* ]]; then
-            skip "$PDF_TITLE_APP_NAME does not exist yet. Deploy the prod bicep with deployPdfTitleWorker = true first. Skipping the deploy."
-          elif [[ "$err" == *AuthorizationFailed* ]]; then
-            skip "$PDF_TITLE_APP_NAME exists but CI lacks Website Contributor on it. Grant the role and rerun. Skipping the deploy."
-          else
-            echo "::error::az functionapp show failed for $PDF_TITLE_APP_NAME: $err"
-            exit 1
-          fi
+          ./scripts/probe-function-app.sh "$AZURE_RESOURCE_GROUP" "$PDF_TITLE_APP_NAME" \
+            release/pdf-title/function_app.py "Deploy the prod bicep with deployPdfTitleWorker = true first."
 
       # `config-zip`: a Flex app has no Kudu wwwroot, and the remote build installs `requirements.txt`.
       - name: Deploy the PDF title worker
@@ -442,6 +422,75 @@ jobs:
         run: |
           echo "### ❌ PDF title worker deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "The API is already on this version; the release was NOT published. Check the probe, packaging, zipdeploy or timer-registration logs above." >> $GITHUB_STEP_SUMMARY
+
+  deploy-secret-rotator:
+    name: Deploy Key Vault secret rotator (Azure Function App)
+    runs-on: ubuntu-latest
+    needs: deploy-api
+    environment: prod
+    timeout-minutes: 15
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+    steps:
+      - name: Validate version format
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Version must be in the format v1.2.3, got '$VERSION'"
+            exit 1
+          fi
+
+      # scripts/ from this workflow's ref: no tag before the rotator takes an app name in
+      # package-secret-sync.sh. Root first — a checkout cleans the directory it lands in.
+      - name: Checkout this workflow's ref for the tooling
+        uses: actions/checkout@v7
+
+      - name: Checkout the tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.version }}
+          path: release
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Does the secret rotator app exist yet?
+        id: probe
+        run: |
+          ./scripts/probe-function-app.sh "$AZURE_RESOURCE_GROUP" "$SECRET_ROTATOR_APP_NAME" \
+            release/src/secret-rotator/index.js "Deploy the prod bicep with scripts/deploy-infra.sh prod first."
+
+      - name: Deploy the secret rotator
+        if: steps.probe.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          ./scripts/package-secret-sync.sh release /tmp/secret-rotator.zip secret-rotator
+          az functionapp deployment source config-zip \
+            -g "$AZURE_RESOURCE_GROUP" \
+            -n "$SECRET_ROTATOR_APP_NAME" \
+            --src /tmp/secret-rotator.zip
+
+      # A host that registers nothing loads happily, and then no secret is ever rotated or renewed.
+      - name: Verify the timer is registered
+        if: steps.probe.outputs.found == 'true'
+        run: ./scripts/wait-for-function.sh "$AZURE_RESOURCE_GROUP" "$SECRET_ROTATOR_APP_NAME" secretRotatorHourly
+
+      - name: Report secret rotator failure to job summary
+        if: failure()
+        run: |
+          echo "### ❌ Secret rotator deployment failed" >> $GITHUB_STEP_SUMMARY
+          echo "The API is already on this version; the release was NOT published. Empty ROTATED_SECRETS and RENEW stop the rotator." >> $GITHUB_STEP_SUMMARY
 
   # Only once the zip reached the app — not on a packaging or upload failure, which never changed
   # what production is serving. Everything from the trigger-sync wait onwards fails on a build
@@ -548,7 +597,7 @@ jobs:
     # LAST, and only on a fully successful deploy: a job with `needs` runs only when every one of
     # them succeeded. Add a deploy job above and it belongs in this list too.
     # verify-search-schema already gates both deploys; listed here only to read its outputs.
-    needs: [deploy-extractor, deploy-api, deploy-pdf-title, verify-search-schema]
+    needs: [deploy-extractor, deploy-api, deploy-pdf-title, deploy-secret-rotator, verify-search-schema]
     timeout-minutes: 5
     # Job-level permissions REPLACE the workflow-level block, which is what keeps `contents: read`
     # on the deploy jobs. No environment: a second approval gate here would gate only bookkeeping.
