@@ -1,13 +1,8 @@
 'use strict';
 
 /**
- * The legislation registry, the locked-Act rule and the publish year switch, ported from eagle-api
- * `api/helpers/constants.js:55-102` and `api/controllers/project.js:580-600,776-801` (rules in
- * docs/eagle-api-port.md, Project).
- *
- * A DEMI project row's top level is the current block, as `legislationYear` and its `legislation`
- * label. Every block, `currentLegislationYear` and `legislationYearList` sit beside it and in
- * `sources.eagle`, which a switch merges again (`merge/project.js`).
+ * Legislation registry, locked-Act rule and publish year switch, ported from eagle-api (docs/eagle-api-port.md).
+ * A row's top level is its current block; every block and the year index also sit in `sources.eagle`.
  */
 
 /**
@@ -21,8 +16,8 @@ const LEGISLATIONS = Object.freeze({
   2025: Object.freeze({ label: 'Building Canada Act', locked: true, inForce: null })
 });
 
-// Eagle stores a cleared date as epoch zero in Pacific time (1969-12-31T08:00Z); no EA record
-// is that old, so anything before this is junk, not history.
+// Eagle stores a cleared date as epoch zero in Pacific time; no EA record is that old, so an
+// earlier date is junk.
 const EAGLE_DATE_FLOOR = Date.UTC(1971, 0, 1);
 
 const beforeDateFloor = (v) =>
