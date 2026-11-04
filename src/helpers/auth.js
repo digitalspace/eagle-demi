@@ -7,6 +7,7 @@ const jwksClient = require('jwks-rsa');
 const config = require('../config');
 const apiKeys = require('../repositories/api-keys');
 const { parseKey, verify, isLive } = require('./api-key');
+const { acceptedValues } = require('../utils/rotating-secret');
 
 /**
  * Verified registry lookups, cached to keep a Cosmos point read off the hot path.
@@ -94,16 +95,14 @@ function isRegistryIdentity(user) {
  * the literal is public in this repo.
  */
 function fromGateway(req) {
-  // Read per request rather than from a config field: APIM was wired after this path shipped, and
-  // the suites that exercise it set the variable once the process is up.
-  const secret = config.secretFromEnv('APIM_GATEWAY_SECRET');
-  if (!secret) return false;
+  const accepted = acceptedValues('APIM_GATEWAY_SECRET');
+  if (accepted.length === 0) return false;
 
   // The header bag as well as req.header(): utils/caller-ip.js asks this question from the request
   // log and the audit writer, which are handed request-shaped objects that carry headers only.
   const presented = (req.header ? req.header('X-Gateway-Secret') : null) ||
     ((req.headers || {})['x-gateway-secret']) || '';
-  return matchesConfiguredKey(presented, [secret]);
+  return matchesConfiguredKey(presented, accepted);
 }
 
 /**

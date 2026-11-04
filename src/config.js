@@ -91,6 +91,15 @@ function principalsFromEnv(name, fallback = '') {
 
 const envTrim = (name) => (process.env[name] || '').trim();
 
+/** A versionless Key Vault secret URI, or '' (vault read off). A version pins one value and rotation never lands. */
+function vaultSecretUriFromEnv(name) {
+  const uri = envTrim(name);
+  if (uri && !/^https:\/\/[a-z0-9-]+\.vault\.azure\.net\/secrets\/[A-Za-z0-9-]+$/.test(uri)) {
+    throw new Error(`${name} must be a versionless https://<vault>.vault.azure.net/secrets/<name> URI.`);
+  }
+  return uri;
+}
+
 const EDGE_BAN_MODES = ['off', 'shadow', 'write'];
 const EDGE_GATE_MODES = ['', 'log', 'enforce'];
 
@@ -500,8 +509,13 @@ const config = {
   // Shared secret the eagle-edge Front Door rule set stamps on origin requests as X-Edge-Secret.
   // Front Door terminates the connection, so APIM asserts an AFD egress address for every visitor
   // and the anonymous bulk quota becomes one global bucket again; the secret is the only reason
-  // X-Azure-SocketIP can be believed. Empty = the header is ignored. See utils/caller-ip.js.
+  // X-Azure-SocketIP can be believed. Empty = the header is ignored until an EDGE_SECRET_URI read succeeds.
   edgeSecret:            secretFromEnv('EDGE_SECRET'),
+
+  // Where utils/rotating-secret.js reads the edge and gateway secrets (`<uri>` and `<uri>-standby`)
+  // so a rotation is accepted without a deploy. Empty = only EDGE_SECRET / APIM_GATEWAY_SECRET count.
+  edgeSecretUri:         vaultSecretUriFromEnv('EDGE_SECRET_URI'),
+  apimGatewaySecretUri:  vaultSecretUriFromEnv('APIM_GATEWAY_SECRET_URI'),
 
   // Refuse requests that reached the Function or APIM without passing Front Door
   // (src/http/router.js, edgeGate). '' = off, 'log' = serve and write one warn line,
@@ -594,7 +608,7 @@ if ((config.environmentName === 'test' || config.environmentName === 'prod') && 
 // one boot report docs/prod-flip-runbook.md promises. The value is discarded here; only the name is recorded.
 secretFromEnv('ADMIN_API_KEY');
 
-// Read by src/helpers/auth.js, which takes APIM_GATEWAY_SECRET per request.
+// Read by src/utils/rotating-secret.js, which takes APIM_GATEWAY_SECRET per request.
 config.secretFromEnv = secretFromEnv;
 // Which settings came back as an unresolved reference. src/utils/logger.js reports the names.
 config.unresolvedSecrets = unresolvedSecrets;

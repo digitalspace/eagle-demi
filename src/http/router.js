@@ -20,6 +20,7 @@ const { logRequest } = require('../middleware/http-logger');
 const { fromGateway, isValidApiKey } = require('../helpers/auth');
 const { searchServiceReply } = require('../helpers/response');
 const { fromEdge } = require('../utils/caller-ip');
+const rotatingSecret = require('../utils/rotating-secret');
 const config = require('../config');
 const routes = require('./routes');
 
@@ -347,6 +348,8 @@ function applyCors(origin, res) {
 /** Fixed text so one KQL `has` filter finds every line; the variable parts go in path and reason. */
 const EDGE_GATE_MESSAGE = '[demi-api] edge gate: request did not come through Front Door';
 const EDGE_GATE_MODES = new Set(['log', 'enforce']);
+// Liveness probes skip the vault wait, so a cold start answers them at once.
+const SKIP_SECRET_WAIT = new Set(['/health', '/health/db']);
 
 /**
  * Why this request skipped Front Door, or null when it did not.
@@ -419,6 +422,7 @@ async function dispatch(request, context) {
         res.status(204).send('');
       } else {
         const route = match(request.method, url.pathname);
+        if (route && !SKIP_SECRET_WAIT.has(routePath(url.pathname))) await rotatingSecret.ready();
         const gateReason = route && EDGE_GATE_MODES.has(config.edgeGate)
           ? await edgeGateReason(req, url.pathname) : null;
         if (!route) {

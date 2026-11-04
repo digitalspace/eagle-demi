@@ -2,6 +2,8 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { logger } = require('../utils/logger');
+const { fromGateway } = require('../helpers/auth');
+const { fromEdge } = require('../utils/caller-ip');
 
 /**
  * Readiness — actually reaches the database. ping() returns FALSE rather than throwing when the
@@ -21,3 +23,6 @@ exports.db = async (req, res) => {
     return res.status(503).json({ ok: false, error: 'Database unavailable.' });
   }
 };
+
+/** Do this request's edge and gateway headers match what the checkers accept? The rotator's probe. */
+exports.trust = (req, res) => res.json({ edge: fromEdge(req.headers), gateway: fromGateway(req) });

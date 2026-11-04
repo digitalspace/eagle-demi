@@ -30,6 +30,7 @@ const healthController = require('../../src/controllers/health');
 const searchSchemaController = require('../../src/controllers/search-schema');
 const config = require('../../src/config');
 const { logger } = require('../../src/utils/logger');
+const { freshUri, fakeVault } = require('../helpers/fake-vault');
 
 const AUTHED = { 'x-api-key': SUITE_KEY };
 
@@ -507,7 +508,7 @@ test('edge gate', async (t) => {
   // Fake values: the gate compares what the request presents against these.
   const GATEWAY = { 'x-gateway-secret': 'gateway-secret-for-edge-gate-suite' };
   const EDGE = { 'x-edge-secret': 'edge-secret-for-edge-gate-suite' };
-  const saved = { edgeGate: config.edgeGate, edgeSecret: config.edgeSecret };
+  const saved = { edgeGate: config.edgeGate, edgeSecret: config.edgeSecret, edgeSecretUri: config.edgeSecretUri };
 
   t.beforeEach((t) => {
     process.env.APIM_GATEWAY_SECRET = GATEWAY['x-gateway-secret'];
@@ -595,6 +596,37 @@ test('edge gate', async (t) => {
     const lines = gateWarnings(warn);
     assert.strictEqual(lines.length, 1);
     assert.deepStrictEqual(lines[0].arguments[1], { evt: 'edge-gate', path: '/api/config', reason: 'bad-key' });
+  });
+
+  // The router waits for the first vault read, so a rotated value works on a cold instance whose
+  // app setting still holds the old one.
+  await t.test('fresh instance, env=O, presented N, vault holds N: accepted on the first request', async (t) => {
+    config.edgeSecretUri = freshUri();
+    fakeVault(t, { [config.edgeSecretUri]: 'rotated-edge-value-in-vault' });
+
+    const res = await call('/api/config', { headers: { ...GATEWAY, 'x-edge-secret': 'rotated-edge-value-in-vault' } });
+
+    assert.strictEqual(res.status, 200);
+  });
+
+  await t.test('/health answers without waiting on a vault read', async (t) => {
+    config.edgeSecretUri = freshUri();
+    fakeVault(t, {}).mock.mockImplementation(() => new Promise(() => {}));
+
+    let timer;
+    const slow = new Promise(resolve => { timer = setTimeout(resolve, 1000, 'waited'); });
+    const outcome = await Promise.race([call('/api/health').then(res => res.status), slow]);
+    clearTimeout(timer);
+
+    assert.strictEqual(outcome, 200);
+  });
+
+  await t.test('/health/trust returns both booleans', async () => {
+    const proven = await call('/api/health/trust', { headers: { ...GATEWAY, ...EDGE } });
+    const bare = await call('/api/health/trust');
+
+    assert.deepStrictEqual(JSON.parse(proven.body), { edge: true, gateway: true });
+    assert.deepStrictEqual(JSON.parse(bare.body), { edge: false, gateway: false });
   });
 
   await t.test('/health/db is served with no headers at all', async (t) => {

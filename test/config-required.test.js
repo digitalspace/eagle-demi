@@ -116,6 +116,21 @@ test('an unknown EDGE_GATE value refuses to boot instead of turning the gate off
   assert.strictEqual(readConfig({ EDGE_GATE: 'LOG' }, c => c.edgeGate), 'log');
 });
 
+// Pins the names api-function-flex.bicep sets; a mismatch leaves the vault read off with no error.
+test('EDGE_SECRET_URI and APIM_GATEWAY_SECRET_URI reach config under those exact names', () => {
+  const uri = 'https://demi-kv-unit.vault.azure.net/secrets/edge-secret';
+  assert.strictEqual(readConfig({ EDGE_SECRET_URI: uri }, c => c.edgeSecretUri), uri);
+  assert.strictEqual(readConfig({ APIM_GATEWAY_SECRET_URI: uri }, c => c.apimGatewaySecretUri), uri);
+});
+
+test('a versioned or non-vault secret URI refuses to boot', () => {
+  // A version pins one value, so no rotation would ever be accepted.
+  const versioned = 'https://demi-kv-unit.vault.azure.net/secrets/edge-secret/0123456789abcdef';
+  assert.throws(() => readConfig({ EDGE_SECRET_URI: versioned }, c => c.edgeSecretUri), /EDGE_SECRET_URI/);
+  assert.throws(() => readConfig({ APIM_GATEWAY_SECRET_URI: 'https://example.com/secrets/x' },
+    c => c.apimGatewaySecretUri), /APIM_GATEWAY_SECRET_URI/);
+});
+
 test('KEYCLOAK_ENABLED=false refuses to boot in test and prod only', async (t) => {
   const load = (environment) => readConfig(
     { ENVIRONMENT: environment, DEMI_ALLOWED_CLIENTS: 'eagle-admin-console', KEYCLOAK_ENABLED: 'false' },

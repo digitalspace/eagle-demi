@@ -77,6 +77,7 @@ const openApiSpec = (req, res) =>
 const routes = [
   { method: 'get', path: '/health', guards: [], load: () => liveness },
   { method: 'get', path: '/health/db', guards: [], load: () => healthController().db },
+  { method: 'get', path: '/health/trust', guards: [], load: () => healthController().trust },
   // Anonymous like the two above, and for the same reason: the prod deploy job and an operator with
   // one curl both need it before anything holds a token. It discloses index field names the public
   // repo already carries, and no row.
