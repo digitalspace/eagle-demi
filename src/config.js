@@ -93,9 +93,10 @@ const envTrim = (name) => (process.env[name] || '').trim();
 
 /** A versionless Key Vault secret URI, or '' (vault read off). A version pins one value and rotation never lands. */
 function vaultSecretUriFromEnv(name) {
-  const uri = envTrim(name);
+  const uri = envTrim(name).replace(/^https:\/\/[^/]+/i, origin => origin.toLowerCase());
   if (uri && !/^https:\/\/[a-z0-9-]+\.vault\.azure\.net\/secrets\/[A-Za-z0-9-]+$/.test(uri)) {
-    throw new Error(`${name} must be a versionless https://<vault>.vault.azure.net/secrets/<name> URI.`);
+    throw new Error(
+      `${name} must be https://<vault>.vault.azure.net/secrets/<name>, with no version and no trailing slash.`);
   }
   return uri;
 }

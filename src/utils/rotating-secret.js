@@ -29,13 +29,13 @@ const SECRETS = {
 const states = new Map();
 
 /** One secret's current value, null when it does not exist. Never puts the body in an error. */
-async function readSecret(uri, token) {
-  const res = await fetch(`${uri}?api-version=7.4`, {
-    headers: { authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(READ_TIMEOUT_MS)
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`vault answered ${res.status}`);
+async function readSecret(uri, token, signal) {
+  const res = await fetch(`${uri}?api-version=7.4`, { headers: { authorization: `Bearer ${token}` }, signal });
+  if (res.status === 404 || !res.ok) {
+    await res.body?.cancel();
+    if (res.status === 404) return null;
+    throw new Error(`vault answered ${res.status}`);
+  }
   let body;
   try {
     body = await res.json();
@@ -46,26 +46,42 @@ async function readSecret(uri, token) {
   return body && typeof body.value === 'string' && body.value ? body.value : null;
 }
 
+/** Rejects when `signal` aborts, so a hung token call fails the read instead of pinning it. */
+function untilAborted(signal) {
+  return new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('vault read timed out')), { once: true });
+  });
+}
+
+async function readSet(uri, signal) {
+  const token = await azureCredential.getToken(VAULT_SCOPE);
+  // Name first: the rotator writes standby := O before name := N, so a later standby read still
+  // holds O whichever side of the promote the name read landed on.
+  const latest = await readSecret(uri, token, signal);
+  if (!latest) throw new Error('secret not found');
+  const standby = await readSecret(`${uri}-standby`, token, signal);
+  return standby && standby !== latest ? [latest, standby] : [latest];
+}
+
 function refresh(uri, state) {
   if (state.inflight) return state.inflight;
   state.checkedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+  timer.unref?.();
   state.inflight = (async () => {
     try {
-      const token = await azureCredential.getToken(VAULT_SCOPE);
-      const [latest, standby] = await Promise.all([
-        readSecret(uri, token),
-        readSecret(`${uri}-standby`, token)
-      ]);
-      if (!latest) throw new Error('secret not found');
-      state.values = standby ? [latest, standby] : [latest];
+      const { signal } = controller;
+      state.values = await Promise.race([readSet(uri, signal), untilAborted(signal)]);
     } catch (err) {
       logger.warn('[rotating-secret] vault read failed', {
         evt: 'rotating-secret',
         uri,
         using: state.values ? 'last-good' : 'env',
-        error: err.message
+        error: String(err && err.message)
       });
     } finally {
+      clearTimeout(timer);
       state.inflight = null;
     }
   })();
