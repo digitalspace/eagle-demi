@@ -331,16 +331,39 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(saved.trackProjectId, 0);
   });
 
-  await t.test('createProject with a non-integer trackProjectId answers 400', async () => {
-    const upsert = t.mock.method(projects, 'upsert', async (doc) => doc);
-    const res = mockRes();
+  await t.test('createProject with null or empty trackProjectId mints a UUID id', async () => {
+    t.mock.method(projects, 'getById', async () => null);
+    const saved = [];
+    t.mock.method(projects, 'upsert', async (doc) => { saved.push(doc); return doc; });
 
     await projectController.createProject({
-      body: { trackProjectId: 'abc', name: 'N', centroid: { coordinates: [0, 0] } }
-    }, res);
+      body: { trackProjectId: null, name: 'A', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+    await projectController.createProject({
+      body: { trackProjectId: '', name: 'B', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
 
-    assert.strictEqual(res.statusCode, 400);
-    assert.strictEqual(res.body.error, 'trackProjectId must be an integer');
+    assert.deepStrictEqual(saved.map(doc => [doc.sourceSystem, doc.trackProjectId]),
+      [['demi', null], ['demi', null]]);
+    assert.match(saved[0].id, /^[0-9a-f-]{36}$/);
+    assert.match(saved[1].id, /^[0-9a-f-]{36}$/);
+  });
+
+  await t.test('createProject answers 400 for a trackProjectId that is not a plain whole number', async () => {
+    const upsert = t.mock.method(projects, 'upsert', async (doc) => doc);
+    const send = async (trackProjectId) => {
+      const res = mockRes();
+      await projectController.createProject({
+        body: { trackProjectId, name: 'N', centroid: { coordinates: [0, 0] } }
+      }, res);
+      return [res.statusCode, res.body.error];
+    };
+    const refused = [400, 'trackProjectId must be an integer'];
+
+    assert.deepStrictEqual(await send('abc'), refused);
+    assert.deepStrictEqual(await send('007'), refused, 'a leading zero would key a second row for Track 7');
+    assert.deepStrictEqual(await send([5]), refused, 'String([5]) is "5"; an array is not an id');
+    assert.deepStrictEqual(await send(2 ** 53), refused, 'past MAX_SAFE_INTEGER the id is not exact');
     assert.strictEqual(upsert.mock.callCount(), 0);
   });
 

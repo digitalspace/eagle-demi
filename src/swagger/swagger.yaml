@@ -9599,10 +9599,12 @@ components:
       properties:
         trackProjectId:
           type: integer
+          nullable: true
           description: >-
             The Track id, which becomes the row id; 0 is a valid id. Leave it out, or send null
             or an empty string, for a brand new project; DEMI then makes a UUID id. Any other
-            value that is not a whole number gets a 400.
+            value must be a safe whole number, as a number or a digit string with no leading
+            zero; anything else gets a 400.
         name:
           type: string
         region:

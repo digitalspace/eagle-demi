@@ -496,7 +496,9 @@ exports.createProject = async (req, res) => {
     // A brand new project has no Track id yet; DEMI is its source of truth, so DEMI makes the id.
     // `== null`, not `!`: Track id 0 is a real id.
     const minted = trackProjectId == null || trackProjectId === '';
-    if (!minted && !/^\d+$/.test(String(trackProjectId))) {
+    const wholeId = ['string', 'number'].includes(typeof trackProjectId) &&
+      /^(0|[1-9]\d{0,15})$/.test(String(trackProjectId)) && Number.isSafeInteger(Number(trackProjectId));
+    if (!minted && !wholeId) {
       return res.status(400).json({ error: 'trackProjectId must be an integer' });
     }
 

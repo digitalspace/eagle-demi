@@ -233,6 +233,7 @@ async function syncProjects(apiProjects, opts = {}) {
   const nativeByEagleId = new Map(
     items.filter(p => isNativeProject(p) && p.eagleId).map(p => [String(p.eagleId), p])
   );
+  const nativeClashes = [];
 
   for (const apiProject of rows) {
     const track = trackApiToExtract(apiProject);
@@ -272,9 +273,7 @@ async function syncProjects(apiProjects, opts = {}) {
       const native = !existing && guid ? nativeByEagleId.get(guid) : null;
       if (native) {
         summary.nativeClash++;
-        logger.warn('[track-projects] Track project names the Eagle id of a native project; not created',
-          { trackProjectId: id, nativeId: String(native.id), eagleId: guid });
-        continue;
+        nativeClashes.push({ trackProjectId: id, nativeId: String(native.id), eagleId: guid });        continue;
       }
 
       if (!existing) {
@@ -336,6 +335,10 @@ async function syncProjects(apiProjects, opts = {}) {
 
   for (const [id, project] of stored) {
     if (!listed.has(id) && project.sourceSystem === 'track') summary.orphaned++;
+  }
+  if (nativeClashes.length) {
+    logger.warn('[track-projects] Track projects name the Eagle id of a native project; not created',
+      { clashes: nativeClashes });
   }
 
   // Eagle-only rows are in no Track row, so this is the only nightly pass that heals, mints or
