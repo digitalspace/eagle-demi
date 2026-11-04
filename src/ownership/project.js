@@ -95,11 +95,17 @@ const EXTENSION_LIST_FIELDS = Object.freeze(['reviewExtensions', 'reviewSuspensi
 const CAC_FIELDS = Object.freeze(['projectCAC', 'projectCACPublished', 'cacEmail']);
 
 /**
+ * When DEMI took the project over from Eagle (`isDemiOwnedProject` in src/merge/project.js). Its
+ * own field: `sourceSystem` already says which system the project came from.
+ */
+const DEMI_OWNED_AT = 'demiOwnedAt';
+
+/**
  * Only DEMI writes these (PUT, `/level`, the extension and CAC routes, the dating pass, sync-out),
  * so no re-merge can rebuild them.
  */
 const DEMI_ONLY_FIELDS = [
-  'tags', 'levelHeldAt', 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
+  'tags', 'levelHeldAt', DEMI_OWNED_AT, 'documentPhases', 'pins', 'pinsRead', 'pinsHistory',
   ...EXTENSION_LIST_FIELDS, ...CAC_FIELDS, ...SYNC_STATE_FIELDS
 ];
 
@@ -129,6 +135,8 @@ const PUT_IGNORED_FIELDS = [
   ...EXTENSION_LIST_FIELDS,
   // The current year moves only through `/level`.
   ...LEGISLATION_INDEX_FIELDS,
+  // Set by the writes that take the project over; a PUT clearing it would hand the row back to Eagle.
+  DEMI_OWNED_AT,
   // Catalogued at vis 2, so staff can send them back and break push ordering or the cascade.
   ...PUSH_BOOKKEEPING_FIELDS,
   // The code has a link record behind it, so only `PUT /projects/:id/short-code` moves it.
@@ -158,6 +166,7 @@ module.exports = {
   PUSH_ONLY_FIELDS,
   EXTENSION_LIST_FIELDS,
   CAC_FIELDS,
+  DEMI_OWNED_AT,
   DEMI_ONLY_FIELDS,
   OWNERS,
   PUT_IGNORED_FIELDS,

@@ -1226,6 +1226,47 @@ test('carryDemiOnlyFields', async (t) => {
     assert.strictEqual(merged.eagleId, '5cf00c03a266b7e18775000b');
   });
 
+  const OWNED_AT = '2026-11-01T00:00:00.000Z';
+
+  await t.test('a re-merge of a DEMI-owned project keeps sector, region and read from the stored row', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, sector: 'Mines', region: 'Skeena', read: ['staff', 'sysadmin'] };
+    const pushed = eagleFor(TRACK_207, { sector: 'Energy - Electricity', region: 'Lower Mainland' });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS), stored);
+
+    assert.deepStrictEqual([merged.sector, merged.region], ['Mines', 'Skeena']);
+    assert.deepStrictEqual(merged.read, ['staff', 'sysadmin']);
+    assert.strictEqual(merged.isPublished, false);
+    assert.strictEqual(merged.demiOwnedAt, OWNED_AT);
+  });
+
+  await t.test('a DEMI-owned project still takes the Track-precedence fields from Track', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, name: 'DEMI name', read: ['staff', 'sysadmin'] };
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
+
+    assert.strictEqual(merged.name, TRACK_207.name);
+  });
+
+  await t.test('a delete the re-merge applies still caps a DEMI-owned project at staff', () => {
+    const stored = { id: '207', demiOwnedAt: OWNED_AT, read: ['public', 'staff', 'sysadmin'] };
+    const rebuilt = mergeTrackProject(TRACK_207, eagleFor(TRACK_207), { ...OPTS, deleted: true });
+
+    const merged = carryDemiOnlyFields(rebuilt, stored);
+
+    assert.ok(!merged.read.includes('public'), JSON.stringify(merged.read));
+    assert.strictEqual(merged.isPublished, false);
+  });
+
+  await t.test('a CAC field a DEMI-owned project lacks is not seeded from Eagle', () => {
+    const pushed = eagleFor(TRACK_207, { cacEmail: 'eagle@example.gov.bc.ca' });
+
+    const merged = carryDemiOnlyFields(mergeTrackProject(TRACK_207, pushed, OPTS),
+      { id: '207', demiOwnedAt: OWNED_AT, read: ['staff', 'sysadmin'] });
+
+    assert.ok(!('cacEmail' in merged));
+  });
+
   await t.test('no stored row hands the rebuilt row back as it was', () => {
     const rebuilt = mergeEagleOnlyProject(eagleFor(TRACK_207), OPTS);
 
