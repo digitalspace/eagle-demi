@@ -1,10 +1,10 @@
 // Key Vault for the DEMI application secrets, plus its private endpoint and the read grants.
 //
 // THIS TEMPLATE NEVER CARRIES A SECRET VALUE. It creates the vault and says which names the app
-// expects; the values are set once by hand from the devbox with `az keyvault secret set`, and
-// rotation is a new version at the vault plus an app recycle. Nothing about a value passes through
-// git, a workflow input, or an ARM parameter, so there is no @secure() parameter that can blank a
-// live credential and nothing for `what-if` to mask.
+// expects; the first value is set by hand from the devbox with `az keyvault secret set`. The rotator
+// (secret-rotator.bicep) mints new versions of the four rotated names and renews the rest. Nothing
+// about a value passes through git, a workflow input, or an ARM parameter, so there is no @secure()
+// parameter that can blank a live credential and nothing for `what-if` to mask.
 //
 // The app reads each name as `@Microsoft.KeyVault(SecretUri=<vaultUri>secrets/<name>)`. That URI is
 // composed from the vault URI below, not read off a secret resource, because the secret is created
@@ -176,9 +176,8 @@ var secretUriBase = '${vault.properties.vaultUri}secrets/'
 // silently never resolves.
 output secretNames array = union(requiredSecretNames, optionalSecretNames)
 
-// VERSIONLESS on purpose (no `/<version>` suffix): App Service re-reads a versionless reference on
-// its own, so a rotation is a new secret version plus a recycle rather than an infrastructure
-// deploy. `vaultUri` already ends in a slash.
+// VERSIONLESS on purpose (no `/<version>` suffix), so a new version needs no infrastructure deploy.
+// The four rotated names are also read from the vault by their checkers. `vaultUri` ends in a slash.
 output adminApiKeySecretUri string = '${secretUriBase}admin-api-key'
 output trackClientSecretUri string = '${secretUriBase}track-client-secret'
 output roleSyncClientSecretUri string = '${secretUriBase}role-sync-client-secret'
