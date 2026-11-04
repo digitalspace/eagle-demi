@@ -4550,7 +4550,8 @@ paths:
       description: |-
         Receives one Eagle `User`, keyed by the Eagle `_id`. Stored in the `users` container, partition
         `/id`. `password` and `salt` are dropped before anything is stored. Every contact field and the
-        notes are level 2 (staff) only.
+        notes are level 2 (staff) only. A user DEMI owns (see `PUT /api/users/{id}`) keeps every
+        stored field on a push except `eagleId` and `sources.eagle`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -4958,7 +4959,9 @@ paths:
         stored empty (`null` for `middleName` and `org`). Needs the role `project-system-admin`,
         `sysadmin` or `staff`. `isPublished` left out keeps the current visibility, except that a
         user whose `orgName` is no longer `Environmental Assessment Office` stops being public.
-        `read` is ignored. A body with no field besides `isPublished` and `read` is a 400.
+        `read` is ignored. A body with no field besides `isPublished` and `read` is a 400. The edit
+        makes DEMI own the user (`sourceSystem: 'demi'`), so a later Eagle push no longer
+        overwrites it. `read` is rebuilt from the stored Eagle copy.
       security:
         - BearerAuth: []
       parameters:
