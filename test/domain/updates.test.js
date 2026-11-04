@@ -14,6 +14,7 @@ const documents = require('../../src/repositories/documents');
 const updateParent = require('../../src/helpers/update-parent');
 const update = require('../../src/domain/updates');
 const syncOut = require('../../src/sync-out');
+const eagleUpdate = require('../../src/sync-out/eagle-update');
 const images = require('../../src/domain/update-images');
 const controller = require('../../src/controllers/nosql/update');
 const { logger } = require('../../src/utils/logger');
@@ -348,7 +349,7 @@ test('update domain', async (t) => {
     const { row } = updatesStore(t, [eagleRow]);
     parentProject(t, { ...PARENTS[PUBLIC_PROJECT] });
     parentNotification(t, null);
-    const queued = t.mock.method(syncOut, 'enqueueQuietly', async () => []);
+    t.mock.method(syncOut, 'enqueueQuietly', async () => []);
     const infos = [];
     t.mock.method(logger, 'info', (msg, meta) => { infos.push({ msg, meta }); });
 
@@ -356,7 +357,7 @@ test('update domain', async (t) => {
     assert.strictEqual(edited.status, 'ok', JSON.stringify(edited));
     assert.strictEqual(row(UPDATE_ID).sourceSystem, 'demi');
     assert.deepStrictEqual(row(UPDATE_ID).sources.demi, { read: ['public', 'staff', 'sysadmin'], status: 'published' });
-    assert.deepStrictEqual(queued.mock.calls.map(c => c.arguments[1].kind), ['update']);
+    assert.strictEqual(eagleUpdate.wants(row(UPDATE_ID)), true, 'sync-out sends the taken-over row');
     assert.deepStrictEqual(infos.filter(i => i.msg === '[Update] DEMI write took over an Eagle update').map(i => i.meta),
       [{ id: UPDATE_ID, eagleId: UPDATE_ID }]);
 
@@ -369,7 +370,8 @@ test('update domain', async (t) => {
     assert.strictEqual(row(UPDATE_ID).sources.eagle.headline, 'Edited in Eagle');
 
     infos.length = 0;
-    await update.update(STAFF, UPDATE_ID, { headline: 'Edited again' });
+    const again = await update.update(STAFF, UPDATE_ID, { headline: 'Edited again' });
+    assert.strictEqual(again.status, 'ok', JSON.stringify(again));
     assert.ok(!infos.some(i => i.msg.startsWith('[Update] DEMI write took over')), 'a DEMI row is not taken over twice');
   });
 
