@@ -105,7 +105,7 @@ test('update domain', async (t) => {
 
   await t.test('a write that never lands queues nothing', async (t) => {
     fakeStore(t, DRAFT);
-    t.mock.method(updates, 'upsert', async () => { throw Object.assign(new Error('etag moved'), { code: 412 }); });
+    updates.upsert.mock.mockImplementation(async () => { throw Object.assign(new Error('etag moved'), { code: 412 }); });
     const queued = t.mock.method(syncOut, 'enqueueQuietly', async () => []);
     const result = await update.update(STAFF, UPDATE_ID, { headline: 'x' });
     assert.strictEqual(result.status, 'busy');
@@ -353,7 +353,7 @@ test('update domain', async (t) => {
       featuredImage: { document: OWN_IMAGE, alt: 'a' }, images: [{ document: second, alt: 'b' }]
     });
     const images = fakeImages(t, [{ id: OWN_IMAGE, level: 4, ...upload }, { id: second, level: 4, ...upload }]);
-    t.mock.method(documents, 'listByIdsUnscoped', async (access, ids) => ids.map(id => ({ id })));
+    documents.listByIdsUnscoped.mock.mockImplementation(async (access, ids) => ids.map(id => ({ id })));
     const result = await update.update(STAFF, UPDATE_ID, { headline: 'Moved' });
     assert.strictEqual(result.status, 'ok');
     assert.strictEqual(images.level(OWN_IMAGE), 2);
@@ -362,7 +362,7 @@ test('update domain', async (t) => {
 
   await t.test('a save that fails puts the image it published back', async (t) => {
     fakeStore(t, null);
-    t.mock.method(updates, 'upsert', async () => { throw new Error('cosmos down'); });
+    updates.upsert.mock.mockImplementation(async () => { throw new Error('cosmos down'); });
     const images = fakeImages(t, [{ id: OWN_IMAGE, level: 2, ...UPLOAD }]);
     await assert.rejects(update.create(STAFF, createBody({ status: 'published', images: [{ document: OWN_IMAGE, alt: 'A creek' }] })));
     assert.strictEqual(images.level(OWN_IMAGE), 2);
@@ -372,7 +372,7 @@ test('update domain', async (t) => {
     const kept = '5c1f7a3e9b1d2c0012370009';
     fakeStore(t, { ...STORED, attachments: [], images: [{ document: OWN_IMAGE, alt: 'a' }, { document: kept, alt: 'b' }] });
     const images = fakeImages(t, [{ id: OWN_IMAGE, level: 4, ...UPLOAD }, { id: kept, level: 4, ...UPLOAD }]);
-    t.mock.method(documents, 'listByIdsUnscoped', async (access, ids) => ids.map(id => ({ id })));
+    documents.listByIdsUnscoped.mock.mockImplementation(async (access, ids) => ids.map(id => ({ id })));
     const result = await update.update(STAFF, UPDATE_ID, { images: [{ document: kept, alt: 'b' }] });
     assert.strictEqual(result.status, 'ok');
     assert.strictEqual(images.level(OWN_IMAGE), 2);
