@@ -116,8 +116,7 @@ test('an unknown EDGE_GATE value refuses to boot instead of turning the gate off
   assert.strictEqual(readConfig({ EDGE_GATE: 'LOG' }, c => c.edgeGate), 'log');
 });
 
-// Pins the names the DEMI API bicep sets (the slice adding the rotator infra); a mismatch leaves the
-// vault read off with no error.
+// Pins the names the DEMI API bicep sets; a mismatch leaves the vault read off with no error.
 test('EDGE_SECRET_URI and APIM_GATEWAY_SECRET_URI reach config under those exact names', () => {
   const uri = 'https://demi-kv-unit.vault.azure.net/secrets/edge-secret';
   assert.strictEqual(readConfig({ EDGE_SECRET_URI: uri }, c => c.edgeSecretUri), uri);

@@ -33,10 +33,9 @@ function stubVault(t, fetchImpl, getToken = async () => 'fake-vault-token') {
   t.mock.method(globalThis, 'fetch', fetchImpl);
 }
 
-/** Let one TTL pass and run the background refresh a request then starts. */
+/** Let one TTL pass on the fake clock, with no request, and let the timed refresh finish. */
 async function refreshAfterTtl(t) {
   t.mock.timers.tick(TTL_MS);
-  acceptedValues('EDGE_SECRET');
   await settle();
 }
 
@@ -49,7 +48,7 @@ function recordLogs(t) {
 }
 
 test('after a successful vault read, env-only O is rejected once the vault no longer holds it', async (t) => {
-  t.mock.timers.enable({ apis: ['Date'] });
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const uri = edgeSetting(t, OLD);
   const vault = { [uri]: NEW, [`${uri}-standby`]: OLD };
   fakeVault(t, vault);
@@ -64,7 +63,7 @@ test('after a successful vault read, env-only O is rejected once the vault no lo
 });
 
 test('refresh in the {O,O} promote gap, then a stamper sends N within 5 min: N still accepted', async (t) => {
-  t.mock.timers.enable({ apis: ['Date'] });
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const uri = edgeSetting(t, OLD);
   const vault = { [uri]: OLD, [`${uri}-standby`]: NEW };
   fakeVault(t, vault);
@@ -77,8 +76,64 @@ test('refresh in the {O,O} promote gap, then a stamper sends N within 5 min: N s
   assert.ok(acceptedValues('EDGE_SECRET').includes(NEW));
 });
 
-// The vault serves concurrent GETs in any order. Here the standby GET is answered first, then the
-// rotator promotes (standby := O, name := N), then the name GET is answered.
+test('a failed read between [O,N] and the {O,O} gap leaves both generations, so N stays accepted', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const uri = edgeSetting(t, OLD);
+  const vault = { [uri]: OLD, [`${uri}-standby`]: NEW };
+  const fetchMock = fakeVault(t, vault);
+  await ready();
+
+  fetchMock.mock.mockImplementationOnce(async () => new Response('', { status: 503 }));
+  await refreshAfterTtl(t);
+  vault[`${uri}-standby`] = OLD;
+  await refreshAfterTtl(t);
+
+  assert.ok(acceptedValues('EDGE_SECRET').includes(NEW));
+});
+
+test('a replaced generation stops counting one TTL later, even while reads fail', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const uri = edgeSetting(t, OLD);
+  const vault = { [uri]: NEW, [`${uri}-standby`]: OLD };
+  const fetchMock = fakeVault(t, vault);
+  await ready();
+  vault[`${uri}-standby`] = NEW;
+  await refreshAfterTtl(t);
+
+  fetchMock.mock.mockImplementation(async () => new Response('', { status: 503 }));
+  await refreshAfterTtl(t);
+
+  assert.deepStrictEqual(acceptedValues('EDGE_SECRET'), [NEW]);
+});
+
+test('an idle instance picks up a newly minted standby on the clock', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const uri = edgeSetting(t, OLD);
+  const vault = { [uri]: OLD };
+  fakeVault(t, vault);
+  await ready();
+
+  vault[`${uri}-standby`] = NEW;
+  await refreshAfterTtl(t);
+
+  assert.ok(acceptedValues('EDGE_SECRET').includes(NEW));
+});
+
+test('a failed first read is retried after 30 s, not after a full TTL', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const uri = edgeSetting(t, OLD);
+  const fetchMock = fakeVault(t, { [uri]: NEW });
+  fetchMock.mock.mockImplementationOnce(async () => new Response('', { status: 503 }));
+  await ready();
+
+  t.mock.timers.tick(30_000);
+  await settle();
+
+  assert.deepStrictEqual(acceptedValues('EDGE_SECRET'), [NEW]);
+});
+
+// Guards against reading the two secrets in parallel: if the standby GET is answered first, then the
+// rotator promotes (standby := O, name := N), then the name GET is answered, the set holds only N.
 test('a promote between the two reads never drops the value the stampers still send', async (t) => {
   const uri = edgeSetting(t, OLD);
   const vault = { [uri]: OLD, [`${uri}-standby`]: NEW };
@@ -114,7 +169,7 @@ for (const [failure, stubs] of Object.entries(BOOT_FAILURES)) {
 }
 
 test('a read that fails after a success keeps the last good set', async (t) => {
-  t.mock.timers.enable({ apis: ['Date'] });
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const uri = edgeSetting(t, OLD);
   const fetchMock = fakeVault(t, { [uri]: NEW });
   await ready();
@@ -159,7 +214,7 @@ test('a hung token call fails the read at 10 s and a later read still lands', as
 });
 
 test('no secret value in any logger call', async (t) => {
-  t.mock.timers.enable({ apis: ['Date'] });
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const calls = recordLogs(t);
   const uri = edgeSetting(t, OLD);
   const fetchMock = fakeVault(t, { [uri]: NEW, [`${uri}-standby`]: OLD });
