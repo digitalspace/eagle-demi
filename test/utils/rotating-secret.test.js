@@ -33,6 +33,13 @@ function stubVault(t, fetchImpl, getToken = async () => 'fake-vault-token') {
   t.mock.method(globalThis, 'fetch', fetchImpl);
 }
 
+/** Let one TTL pass and run the background refresh a request then starts. */
+async function refreshAfterTtl(t) {
+  t.mock.timers.tick(TTL_MS);
+  acceptedValues('EDGE_SECRET');
+  await settle();
+}
+
 function recordLogs(t) {
   const calls = [];
   for (const level of ['error', 'warn', 'info', 'debug']) {
@@ -50,11 +57,24 @@ test('after a successful vault read, env-only O is rejected once the vault no lo
   assert.ok(acceptedValues('EDGE_SECRET').includes(OLD), 'mid-rotation the standby still holds O');
 
   vault[`${uri}-standby`] = NEW;
-  t.mock.timers.tick(TTL_MS);
-  acceptedValues('EDGE_SECRET');
-  await settle();
+  await refreshAfterTtl(t);
+  await refreshAfterTtl(t);
 
   assert.deepStrictEqual(acceptedValues('EDGE_SECRET'), [NEW]);
+});
+
+test('refresh in the {O,O} promote gap, then a stamper sends N within 5 min: N still accepted', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  const uri = edgeSetting(t, OLD);
+  const vault = { [uri]: OLD, [`${uri}-standby`]: NEW };
+  fakeVault(t, vault);
+  await ready();
+
+  // standby := O is written, name := N is not yet.
+  vault[`${uri}-standby`] = OLD;
+  await refreshAfterTtl(t);
+
+  assert.ok(acceptedValues('EDGE_SECRET').includes(NEW));
 });
 
 // The vault serves concurrent GETs in any order. Here the standby GET is answered first, then the
@@ -100,9 +120,7 @@ test('a read that fails after a success keeps the last good set', async (t) => {
   await ready();
 
   fetchMock.mock.mockImplementation(async () => new Response('', { status: 503 }));
-  t.mock.timers.tick(TTL_MS);
-  acceptedValues('EDGE_SECRET');
-  await settle();
+  await refreshAfterTtl(t);
 
   assert.deepStrictEqual(acceptedValues('EDGE_SECRET'), [NEW]);
 });
@@ -135,9 +153,7 @@ test('a hung token call fails the read at 10 s and a later read still lands', as
   assert.strictEqual(calls.length, 1, 'the hung read is logged as failed');
 
   token.mock.mockImplementation(async () => 'fake-vault-token');
-  t.mock.timers.tick(TTL_MS);
-  acceptedValues('EDGE_SECRET');
-  await settle();
+  await refreshAfterTtl(t);
 
   assert.deepStrictEqual(acceptedValues('EDGE_SECRET'), [NEW]);
 });
@@ -151,9 +167,7 @@ test('no secret value in any logger call', async (t) => {
 
   // A body that is not JSON: the parser's message quotes its first characters.
   fetchMock.mock.mockImplementation(async () => new Response(NEW, { status: 200 }));
-  t.mock.timers.tick(TTL_MS);
-  acceptedValues('EDGE_SECRET');
-  await settle();
+  await refreshAfterTtl(t);
 
   assert.ok(calls.length > 0, 'the failed read is logged');
   const logged = JSON.stringify(calls);

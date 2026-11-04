@@ -585,8 +585,8 @@ paths:
         Unauthenticated, like the other health routes, and exempt from the edge gate. `edge` is true
         when `X-Edge-Secret` matches an accepted Front Door value; `gateway` is true when
         `X-Gateway-Secret` matches an accepted APIM value. Accepted values are the latest and the
-        standby copy of each secret in Key Vault, refreshed every 5 minutes, or the app setting
-        until the first vault read succeeds. The secret rotator calls this through the public site
+        standby copy of each secret in Key Vault from the last two reads, refreshed every 5 minutes,
+        or the app setting until the first vault read succeeds. The secret rotator calls this through the public site
         before and after each change. Returns booleans only, never a value.
       responses:
         '200':

@@ -72,7 +72,11 @@ function refresh(uri, state) {
   state.inflight = (async () => {
     try {
       const { signal } = controller;
-      state.values = await Promise.race([readSet(uri, signal), untilAborted(signal)]);
+      const read = await Promise.race([readSet(uri, signal), untilAborted(signal)]);
+      // Two generations: a read between the rotator's two promote writes sees only O, and must not
+      // drop the N the read before it saw. A retired value therefore lasts two refreshes.
+      state.values = [...new Set([...read, ...(state.lastRead || [])])];
+      state.lastRead = read;
     } catch (err) {
       logger.warn('[rotating-secret] vault read failed', {
         evt: 'rotating-secret',
@@ -91,7 +95,7 @@ function refresh(uri, state) {
 function stateFor(uri) {
   let state = states.get(uri);
   if (!state) {
-    state = { values: null, checkedAt: 0, inflight: null, settled: false, first: null };
+    state = { values: null, lastRead: null, checkedAt: 0, inflight: null, settled: false, first: null };
     states.set(uri, state);
     state.first = refresh(uri, state).then(() => { state.settled = true; });
   }
