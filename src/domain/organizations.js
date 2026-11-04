@@ -1,10 +1,8 @@
 'use strict';
 
 /**
- * Organization writes: `POST /organizations`, `PUT /organizations/:id`, and publish and unpublish
- * on `/organizations/:id`, ported from eagle-api
- * `api/controllers/organization.js` (rules in docs/eagle-api-port.md, Organizations). Rows live in
- * the `lists` container as `kind: 'Organization'`, beside the ones the Eagle mirror writes.
+ * Organization writes ported from eagle-api `api/controllers/organization.js`; rules in
+ * docs/eagle-api-port.md, Organizations. Rows sit in `lists` beside the Eagle mirror's.
  */
 
 const crypto = require('node:crypto');
@@ -160,10 +158,8 @@ async function update(ctx, id, changes) {
 }
 
 /**
- * eagle-api renames `orgName` on every user of the organization (organization.js:163). The org row
- * is already saved, so a failed cascade is logged, not returned. Any later PUT of the organization
- * repairs it, because each user's orgName is compared with the organization name rather than
- * checking whether the name changed.
+ * eagle-api renames `orgName` on every user (organization.js:163). A failure is logged, not returned:
+ * the org is saved, and any later PUT repairs it, since each orgName is compared with the name.
  */
 async function renameUsers(orgId, orgName) {
   let updated = 0;
