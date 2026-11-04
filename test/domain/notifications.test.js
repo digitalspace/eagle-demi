@@ -224,6 +224,13 @@ test('notification domain', async (t) => {
     assert.strictEqual(store.written.length, 0);
   });
 
+  await t.test('a name-only update of a row whose received date a vis dial hides still writes', async (t) => {
+    const store = fakeStore(t, { ...STORED, vis: { notificationReceivedDate: 1 } });
+    const { result } = await audited(() => notification.update(STAFF, NOTIFICATION_ID, { name: 'Mine' }));
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(store.written.length, 1);
+  });
+
   /** The info lines one update of `stored` logs. */
   async function infoLinesOf(t, stored) {
     const lines = [];
