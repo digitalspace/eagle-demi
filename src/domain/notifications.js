@@ -13,6 +13,7 @@ const { refusedWriteKeys } = require('../vis/redact');
 const { check, without } = require('./_schema');
 const { writeRow, queued, readWith, STAFF_READ, PUBLIC_READ } = require('./_write');
 const { NOTIFICATION } = require('../sync-out/kinds');
+const { logger } = require('../utils/logger');
 
 const SHORT = { type: 'string', max: 1000, nullable: true };
 const LONG = { type: 'string', max: 10000, nullable: true };
@@ -54,7 +55,7 @@ const NUMBER_FIELDS = Object.freeze({
 const FIELDS = [...Object.keys(SCHEMA), ...Object.keys(NUMBER_FIELDS)];
 
 /**
- * What a field missing from a PUT becomes, as the Eagle push maps it. create and update override
+ * What a field sent empty in a PUT becomes, as the Eagle push maps it. create and update override
  * the null `notificationReceivedDate`: Cosmos cannot continue a page sorted on a null value.
  */
 const DEFAULTS = Object.freeze({
@@ -91,14 +92,23 @@ function checkBody(schema, input) {
   return Object.keys(fields).length ? { status: 'invalid', fields } : { status: 'ok', value };
 }
 
-/** Every field, missing ones defaulted: eagle-api's `value || default`, `??` for isMet (:134). */
-function replaced(value) {
-  return Object.fromEntries(FIELDS.map(key => [key,
+/** `keys` of `value`, an empty one defaulted: eagle-api's `value || default`, `??` for isMet (:134). */
+function defaulted(value, keys = FIELDS) {
+  return Object.fromEntries(keys.map(key => [key,
     key === 'isMet' ? value.isMet ?? DEFAULTS.isMet : value[key] || DEFAULTS[key]]));
 }
 
+/** A DEMI write owns the row, so the Eagle mirror stops replacing it and sync-out sends it. */
+const ownedByDemi = (row) => ({ ...row, sourceSystem: 'demi' });
+
 function auditOf(action, fields) {
-  return (saved) => ({ action, targetType: 'notification', targetId: saved.id, detail: { fields } });
+  return (saved, from) => {
+    // writeRow calls this once, when the write lands, with the row it replaced.
+    if (from && from.sourceSystem !== 'demi') {
+      logger.info('[Notification] DEMI write took over an Eagle notification', { id: saved.id, eagleId: saved.eagleId });
+    }
+    return { action, targetType: 'notification', targetId: saved.id, detail: { fields } };
+  };
 }
 
 /** The Update parent gate caches every notification's read (`updates.forgetParents`). */
@@ -125,7 +135,7 @@ async function create(ctx, input) {
     id,
     eagleId: null,
     sourceSystem: 'demi',
-    ...replaced(fields),
+    ...defaulted(fields),
     notificationReceivedDate: fields.notificationReceivedDate || now,
     addedBy: actor,
     updatedBy: actor,
@@ -146,8 +156,8 @@ async function create(ctx, input) {
 }
 
 /**
- * Replaces every field, as eagle-api's PUT does (projectNotification.js:114-135); a field the body
- * leaves out goes back to its default.
+ * Sets the fields the body names; one sent empty goes to its default, as eagle-api's PUT maps it
+ * (projectNotification.js:114-135). A field the body leaves out keeps its stored value.
  *
  * @param {{access: object, req: object}} ctx
  * @param {string} id
@@ -162,9 +172,11 @@ async function update(ctx, id, changes) {
   const existing = await readNotification(ctx, id);
   if (!existing) return { status: 'not-found' };
 
-  const next = replaced(checked.value);
-  next.notificationReceivedDate ||= existing.dateAdded || new Date().toISOString();
-  const refused = refusedWriteKeys(notifications.CONTAINER, next, ctx.access, existing);
+  const next = defaulted(checked.value, given);
+  // A null received date is filled in by `build`, which writes the field even when the body left it out.
+  const fillsDate = !{ ...existing, ...next }.notificationReceivedDate;
+  const refused = refusedWriteKeys(notifications.CONTAINER,
+    fillsDate ? { ...next, notificationReceivedDate: null } : next, ctx.access, existing);
   if (refused.length) {
     return { status: 'invalid', fields: Object.fromEntries(refused.map(key => [key, 'is not writable by this caller'])) };
   }
@@ -175,7 +187,13 @@ async function update(ctx, id, changes) {
     repo: notifications,
     existing,
     reread: () => readNotification(ctx, id),
-    build: (current) => current && { ...current, ...next, updatedBy: actor, dateUpdated: new Date().toISOString() },
+    build: (current) => {
+      if (!current) return null;
+      const now = new Date().toISOString();
+      const row = ownedByDemi({ ...current, ...next, updatedBy: actor, dateUpdated: now });
+      row.notificationReceivedDate ||= current.dateAdded || notifications.createdAtOf(current.eagleId) || now;
+      return row;
+    },
     audit: auditOf('notification.update', given)
   }), NOTIFICATION);
 }
@@ -194,13 +212,13 @@ function setPublished(published) {
       repo: notifications,
       existing: await readNotification(ctx, id),
       reread: () => readNotification(ctx, id),
-      build: (current) => current && {
+      build: (current) => current && ownedByDemi({
         ...current,
         isPublished: published,
         read: readWith(current.read, published),
         updatedBy: actor,
         dateUpdated: new Date().toISOString()
-      },
+      }),
       audit: auditOf(action, ['isPublished'])
     })), NOTIFICATION);
   };

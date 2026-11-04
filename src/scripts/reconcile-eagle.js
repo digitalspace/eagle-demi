@@ -639,7 +639,8 @@ async function reconcile(argv = [], deps = {}) {
   summary.notifications = {
     inDemi: notificationRows.length, inEagle: eagleNotificationIds.size,
     ...diffById(notificationRows, eagleNotificationIds),
-    aclMismatch: aclMismatch(notificationRows, row => String(row.id), eagleRead)
+    // A row DEMI took over sets its own read, which Eagle's copy does not follow.
+    aclMismatch: aclMismatch(notificationRows.filter(row => row.sourceSystem !== 'demi'), row => String(row.id), eagleRead)
   };
   // An Update's parent is keyed by EAGLE id, and a notification wins an id a Track project carries.
   const updateParentRead = new Map(projectRows.map(row => [String(row.eagleId), row.read]));

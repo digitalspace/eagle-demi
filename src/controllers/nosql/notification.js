@@ -14,13 +14,7 @@ const {
   eaglePush, upsertKeepingDemiRows, ignoreStalePush, pushConflict
 } = require('./eagle-mirror');
 
-const OBJECT_ID = /^[0-9a-f]{24}$/i;
-
-/** When Eagle created the row, from its ObjectId; Eagle's model has no date-added field. */
-function createdAtOf(eagleId) {
-  const id = String(eagleId);
-  return OBJECT_ID.test(id) ? new Date(parseInt(id.slice(0, 8), 16) * 1000).toISOString() : null;
-}
+const { createdAtOf } = notifications;
 
 function mirrorItem(eagleId, doc, read, existing) {
   return {

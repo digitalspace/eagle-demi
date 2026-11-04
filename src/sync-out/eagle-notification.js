@@ -61,6 +61,7 @@ async function send(row, { update }) {
     path: withLevel(ROUTE, row),
     noun: 'notification',
     put: (eagleId, fields) => put(s, eagleId, row, body, fields),
+    mintedOnly: true,
     unknownId: () => ({ line: 'Eagle stored the notification under an unknown id; find it by name', fields: { name: body.name } }),
     // The mirror reads by id first, so a row already stored under the id would take every echo for good.
     heldByMirror: mirroredAsEagleRow,

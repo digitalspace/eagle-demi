@@ -158,13 +158,25 @@ test('sync-out of DEMI-created notifications', async (t) => {
 
   await t.test('a row with no sourceSystem under the Eagle id is the mirror\'s: the create stops before any POST',
     async (tt) => {
-      const store = mirrorStore(tt, [nativeNotification({ eagleId: EAGLE_ID }), { container: 'notifications', id: EAGLE_ID }]);
+      const minted = nativeNotification({ eagleId: EAGLE_ID, syncOut: { eagle: { mintedId: EAGLE_ID } } });
+      const store = mirrorStore(tt, [minted, { container: 'notifications', id: EAGLE_ID }]);
       const calls = wireEagle(tt, { 'PUT *': { status: 404 } });
       const update = mutate => syncOut.updateRow(kindOf(NOTIFICATION).repo, ROW_ID, null, mutate);
 
       await assert.rejects(consumer.send(rowOf(store), { update }), /is held by an Eagle-owned DEMI row/);
       assert.deepStrictEqual(keys(calls), [`PUT /projectNotification/${EAGLE_ID}?publish=true`]);
     });
+
+  await t.test('a notification DEMI took over from Eagle is not created again when Eagle lost it', async (tt) => {
+    const store = mirrorStore(tt, [nativeNotification({ id: EAGLE_ID, eagleId: EAGLE_ID })]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, { 'PUT *': { status: 404 } });
+
+    assert.deepStrictEqual(await run(message({ id: EAGLE_ID })), { status: 'skipped' });
+
+    assert.deepStrictEqual(keys(calls), [`PUT /projectNotification/${EAGLE_ID}?publish=true`], 'no POST');
+    assert.strictEqual(store.rows('notifications')[0].eagleId, EAGLE_ID);
+  });
 
   await t.test("a create answered 409 is PUT under the minted id at the row's level", async (tt) => {
     const store = mirrorStore(tt, [nativeNotification()]);

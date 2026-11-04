@@ -660,6 +660,18 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 5);
   });
 
+  await t.test('a notification DEMI took over and unpublished is not an ACL mismatch', async () => {
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, { ...EAGLE_BY_DATASET, ProjectNotification: [{ _id: 'N1', read: readForLevel(4) }] }),
+      notifications: {
+        ...makeDeps().notifications,
+        listEvery: async () => [{ id: 'N1', eagleId: 'N1', sourceSystem: 'demi', read: readForLevel(2), isPublished: false }]
+      }
+    }));
+
+    assert.deepStrictEqual(summary.notifications.aclMismatch, []);
+  });
+
   // POST /comments writes a DEMI row with no Eagle copy until sync-out covers comments.
   await t.test('a comment created in DEMI is not drift', async () => {
     const summary = await reconcile(['--comments'], makeDeps({

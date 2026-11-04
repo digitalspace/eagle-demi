@@ -140,6 +140,14 @@ const nativeRepository = Object.freeze({
   getById
 });
 
+const OBJECT_ID = /^[0-9a-f]{24}$/i;
+
+/** When Eagle created the row, from its ObjectId; Eagle's model has no date-added field. */
+function createdAtOf(eagleId) {
+  const id = String(eagleId);
+  return OBJECT_ID.test(id) ? new Date(parseInt(id.slice(0, 8), 16) * 1000).toISOString() : null;
+}
+
 async function upsert(item, existing) {
   return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
 }
@@ -160,5 +168,6 @@ module.exports = {
   listDecisions,
   count,
   nativeRepository,
+  createdAtOf,
   upsert
 };
