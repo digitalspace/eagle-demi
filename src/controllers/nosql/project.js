@@ -30,7 +30,7 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const {
   mergeTrackProject, mergeEagleOnlyProject, carryDemiOnlyFields, resolveProjectAcl, markDeleted, deleteStands,
-  TRIMMED_FIELDS, hasValue, isNativeProject, isMintedNative
+  TRIMMED_FIELDS, hasValue, isNativeProject, isMintedNative, isDemiOwnedProject
 } = require('../../merge/project');
 const { LEGISLATION_KEY, PUT_IGNORED_FIELDS, OWNERS } = require('../../ownership/project');
 const { DERIVED_FIELDS, deriveAssessments } = require('../../merge/assessments');
@@ -480,6 +480,8 @@ exports.createProject = async (req, res) => {
       existing: await reread(),
       reread,
       attempt: async (current) => {
+        // The upsert would hand an owned row's held fields back as if the body had sent them.
+        if (isDemiOwnedProject(current)) return { status: 'owned' };
         const kept = { ...row, eagleId: current?.eagleId ?? null, dateAdded: current?.dateAdded || now };
         return {
           status: 'saved',
@@ -492,6 +494,10 @@ exports.createProject = async (req, res) => {
         logger.warn('[Project Controller] project create lost its etag race, rebuilding', { id, attempt })
     });
     if (written.status === 'conflict') return writeConflict(res, 'project create', id);
+    if (written.status === 'owned') {
+      logger.warn('[Project Controller] project create refused: DEMI owns the stored row', { id });
+      return res.status(409).json({ error: 'Project already exists and DEMI owns it; edit it with PUT' });
+    }
     const { saved } = written;
 
     auditEvent(req, {
@@ -713,8 +719,8 @@ exports.setLevel = async (req, res) => {
           eagle ? levelOfRead(resolveProjectAcl(eagle)) : null);
         // A switch rebuilds the row the way a push would, with the named block lifted to the top.
         const base = move.key
-          ? keepSeal(stampPush(mergeEaglePush({ ...eagle, currentLegislationYear: move.key }, current),
-            undefined, current), current)
+          ? keepSeal(stampPush(mergeEaglePush({ ...eagle, currentLegislationYear: move.key }, current,
+            { switchTo: move.key }), undefined, current), current)
           : current;
         const row = {
           ...base,
@@ -725,7 +731,9 @@ exports.setLevel = async (req, res) => {
         };
         return {
           status: 'saved',
-          switchedFrom: move.key ? eagle.currentLegislationYear || null : undefined,
+          switchedFrom: move.key
+            ? (isDemiOwnedProject(current) ? current : eagle).currentLegislationYear || null
+            : undefined,
           saved: await projects.upsert(versioned(row, current), { etag: current._etag })
         };
       },
@@ -866,8 +874,9 @@ exports.upsertFromEagle = async (req, res) => {
   return applyEaglePush(req, res, push);
 };
 
-/** Whether a push leaves the row deleted: its own flag, else the stored delete if it stands. */
+/** Whether a push leaves the row deleted: its own flag, else the stored delete if it stands. DEMI's call once it owns the row. */
 function pushDeleted(doc, existing) {
+  if (isDemiOwnedProject(existing)) return existing.isDeleted === true;
   if (typeof doc.isDeleted === 'boolean') return doc.isDeleted;
   return deleteStands(existing);
 }
@@ -897,8 +906,8 @@ function keepNativeIdentity(merged, existing) {
   }
 }
 
-/** The row a push writes, built from whatever revision is stored at the moment of the write. */
-function mergeEaglePush(doc, existing) {
+/** The row a push writes, built from whatever revision is stored at the moment of the write. `switchTo`: `carryDemiOnlyFields`. */
+function mergeEaglePush(doc, existing, { switchTo } = {}) {
   const deleted = pushDeleted(doc, existing);
   // A push carries no Track phases or works, so the stored ones go back in (not DEMI-only: the sync
   // rebuilds them).
@@ -919,7 +928,7 @@ function mergeEaglePush(doc, existing) {
   // The merge rebuilds the record from the push, so without this a retry of a push whose cascade
   // failed would clear the marker saying that cascade is still owed.
   if (existing && existing.cascadePendingAt) merged.cascadePendingAt = existing.cascadePendingAt;
-  carryDemiOnlyFields(merged, existing);
+  carryDemiOnlyFields(merged, existing, undefined, { switchTo });
   // A Track row with no `epic_guid` holds the Eagle id sync-out gave it; the echo must keep it.
   if (existing && !hasValue(merged.eagleId) && hasValue(existing.eagleId)) merged.eagleId = existing.eagleId;
   // Eagle deleting a project DEMI already deleted must not hand the delete to Eagle to undo.

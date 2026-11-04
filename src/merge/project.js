@@ -184,19 +184,58 @@ function carryStored(merged, existing, fields) {
   }
 }
 
+/** The Eagle-only fields that live in a `legislation_<year>` block, so a year switch lifts them. */
+const LEGISLATION_BLOCK_FIELDS = EAGLE_ONLY_FIELDS.filter(field => !EAGLE_TOP_LEVEL_FIELDS.includes(field));
+
+/** Make `key` an owned row's current year, lifting its own copy of the block; Eagle's only when DEMI lacks one. */
+function liftOwnedBlock(merged, key) {
+  if (!merged[key]) {
+    const eagle = (merged.sources && merged.sources.eagle) || {};
+    Object.assign(merged, pickEagleBlocks({ [key]: eagle[key] }));
+    const year = Number(key.slice(key.indexOf('_') + 1));
+    const years = Array.isArray(merged.legislationYearList) ? merged.legislationYearList : [];
+    if (!years.map(Number).includes(year)) merged.legislationYearList = [...years, year];
+  }
+  const lifted = flattenEagleProject({ [key]: merged[key], currentLegislationYear: key });
+  for (const field of LEGISLATION_BLOCK_FIELDS) {
+    if (hasValue(lifted[field])) merged[field] = lifted[field];
+    else delete merged[field];
+  }
+  merged.currentLegislationYear = key;
+  nullJunkDates(merged);
+  trimLabels(merged);
+}
+
 /**
- * Carry the DEMI-only fields off the stored row onto a rebuilt one, then derive its assessments. A
- * held row keeps the lower of the rebuilt and stored `read` (`heldRead`): Eagle narrows, never widens.
- * A DEMI-owned row (`isDemiOwnedProject`) also keeps its Eagle-only fields and `read`; Track's stay Track's.
+ * On an owned row the stored Eagle side stands, an absent field included, minus `drop`. Track's own
+ * value still wins a Track-precedence field; Eagle's fills one only where the stored row has none.
  */
-function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS) {
+function holdOwnedFields(merged, existing, { drop = [], switchTo } = {}) {
+  const blocks = [merged, existing].flatMap(row => Object.keys(row).filter(key => LEGISLATION_KEY.test(key)));
+  for (const field of new Set([...EAGLE_ONLY_FIELDS, ...LEGISLATION_INDEX_FIELDS, ...blocks])) {
+    const value = existing[field];
+    if (value === undefined || drop.includes(field)) delete merged[field];
+    else merged[field] = Array.isArray(value) ? [...value] : value;
+  }
+  const track = merged.sources && merged.sources.track;
+  for (const [target, trackField] of TRACK_PRECEDENCE) {
+    if (!(track && hasValue(track[trackField])) && hasValue(existing[target])) merged[target] = existing[target];
+  }
+  if (switchTo) liftOwnedBlock(merged, switchTo);
+}
+
+/**
+ * Carry DEMI's fields off the stored row, then derive assessments: a held row's `read` only narrows
+ * (`heldRead`), an owned one keeps its Eagle side (`holdOwnedFields`), `switchTo` its year move.
+ */
+function carryDemiOnlyFields(merged, existing, fields = DEMI_ONLY_FIELDS, { drop, switchTo } = {}) {
   if (!merged) return merged;
   const owned = isDemiOwnedProject(existing);
   if (!owned) seedEagleFields(merged, existing);
   if (existing) {
     carryStored(merged, existing, fields);
     if (owned) {
-      carryStored(merged, existing, EAGLE_ONLY_FIELDS);
+      holdOwnedFields(merged, existing, { drop, switchTo });
       // A delete the rebuild applied still caps the row at staff.
       if (Array.isArray(existing.read)) {
         merged.read = merged.isDeleted === true ? capRead(existing.read, merged.read) : [...existing.read];
@@ -446,6 +485,8 @@ function clearDeleted(row) {
 /** Keep the stored delete on a rebuilt row, in place: a DEMI one always, an Eagle one until Eagle sends the record. */
 function carryDelete(row, existing) {
   const by = deletedBy(existing);
+  // DEMI owns an owned row's lifecycle: the rebuilt row keeps the stored delete state, either way.
+  if (isDemiOwnedProject(existing)) return by ? markDeleted(row, by) : clearDeleted(row);
   if (by === 'demi') return markDeleted(row);
   if (by === 'eagle' && !(row.sources && row.sources.eagle)) return markDeleted(row, 'eagle');
   return row;

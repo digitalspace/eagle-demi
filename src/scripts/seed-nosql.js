@@ -10,10 +10,10 @@ const sources = require('../seed/sources');
 const transform = require('../seed/transform');
 const {
   buildRegistry, buildProjectIndex, carryEagleOnlyFields, carryDemiOnlyFields, notificationShadowedProjects,
-  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, carryDelete, deletedBy, hasValue
+  eagleOnlyProjectId, isEagleOnlyProjectId, heldRead, markDeleted, carryDelete, deletedBy, hasValue,
+  isDemiOwnedProject
 } = require('../merge/project');
-const { DEMI_ONLY_FIELDS, CAC_FIELDS } = require('../ownership/project');
-const { SYNC_STATE_FIELDS } = require('../ownership/sync-out');
+const { TWIN_CARRY_FIELDS, EAGLE_REFERENCE_FIELDS, CAC_FIELDS } = require('../ownership/project');
 const { systemAccess } = require('../helpers/access-sql');
 // The parent rule, shared with the push mirrors: which of the two containers claims a child.
 const { pickParent } = require('../helpers/parent-admit');
@@ -33,8 +33,6 @@ const boundariesRepo = require('../repositories/boundaries');
 const linksRepo = require('../repositories/links');
 const chunksRepo = require('../repositories/chunks');
 const { ensureProjectShortLink, carryShortLink } = require('../helpers/short-links');
-
-const TWIN_CARRY_FIELDS = DEMI_ONLY_FIELDS.filter(f => !SYNC_STATE_FIELDS.includes(f));
 
 /** The failure line for each `buildRegistry` native conflict. */
 const NATIVE_CONFLICT = {
@@ -432,8 +430,8 @@ async function runSeed(args, deps, summary) {
       existing: await read(),
       reread: read,
       attempt: async (current) => {
-        // Deleted since the enumeration: a push or a staff DELETE got there first.
-        if (!current || current.isDeleted === true) return { status: 'gone' };
+        // Deleted since the enumeration (a push or a staff DELETE got there first), or now DEMI's to retire.
+        if (!current || current.isDeleted === true || isDemiOwnedProject(current)) return { status: 'gone' };
         const row = markDeleted({ ...current, updatedAt: new Date().toISOString() }, 'eagle');
         return { status: 'saved', saved: await repos.projects.upsert(row, { etag: current._etag }) };
       }
@@ -562,7 +560,7 @@ async function runSeed(args, deps, summary) {
           // The public search lacks applicableRegulation, featuredDocuments and the push bookkeeping; carried
           // over so a re-seed neither blanks them nor lets an applied push land again.
           if (!unlinked) carryEagleOnlyFields(project, existing);
-          carryDemiOnlyFields(project, existing);
+          carryDemiOnlyFields(project, existing, undefined, unlinked ? { drop: EAGLE_REFERENCE_FIELDS } : {});
           if (unlinked) for (const field of CAC_FIELDS) delete project[field];
           // The public feed never says a project was deleted, so a rebuilt row would republish it.
           carryDelete(project, existing);
@@ -985,7 +983,7 @@ async function runSeed(args, deps, summary) {
       const fetchedProjects = new Set(eagleProjects.map(p => String(p._id)));
       const liveProjects = projectRows.filter(row => row.isDeleted !== true);
       // A retired project's documents leave the feed with it; they stay, capped by its cascade. One the
-      // feed still lists keeps its documents in step, as a published one does.
+      // feed still lists keeps its documents in step, as a published one does. One DEMI owns keeps them too.
       const retired = new Set([
         ...surplusOf([...projectRows, ...eagleIdRows].filter(row => row.isDeleted === true), projectKey, fetchedProjects),
         ...surplusOf(liveProjects, projectKey, fetchedProjects).filter(row => !listedProject(row))

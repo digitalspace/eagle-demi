@@ -109,6 +109,12 @@ const DEMI_ONLY_FIELDS = [
   ...EXTENSION_LIST_FIELDS, ...CAC_FIELDS, ...SYNC_STATE_FIELDS
 ];
 
+/** What a Track row takes from its `eagle-<id>` twin: not the sync-out state, as the Track row was never sent. */
+const TWIN_CARRY_FIELDS = DEMI_ONLY_FIELDS.filter(field => !SYNC_STATE_FIELDS.includes(field));
+
+/** Eagle-only fields that point into one Eagle project, so a row unlinked from it drops them. */
+const EAGLE_REFERENCE_FIELDS = ['code', 'featuredDocuments', 'proponentId', 'applicableRegulation', 'phaseHistory'];
+
 /** Each field's one owner. `legislation_<year>` blocks are Eagle's too (`LEGISLATION_KEY`). */
 const OWNERS = Object.freeze({
   track: TRACK_PRECEDENCE.map(([target]) => target),
@@ -168,6 +174,8 @@ module.exports = {
   CAC_FIELDS,
   DEMI_OWNED_AT,
   DEMI_ONLY_FIELDS,
+  TWIN_CARRY_FIELDS,
+  EAGLE_REFERENCE_FIELDS,
   OWNERS,
   PUT_IGNORED_FIELDS,
   withoutBlockLists
