@@ -131,9 +131,19 @@ async function listNative() {
   return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT}`, parameters: [] });
 }
 
-/** Native rows whose `syncVersion` the Eagle sync-out has not sent, across partitions. For `src/sync-out/pending.js` only. */
+// isDemiOwnedProject in SQL: a taken-over row with an Eagle id; an `eagle-<id>` twin without the marker stays out.
+// `demiOwnedAt` is an ISO string or absent, so the string test matches the JS `hasValue`.
+const DEMI_OWNED_EAGLE_PROJECT = 'IS_STRING(c.demiOwnedAt) AND c.demiOwnedAt != \'\' AND IS_STRING(c.eagleId) AND c.eagleId != \'\'';
+
+/**
+ * Native and DEMI-owned Eagle rows whose `syncVersion` the Eagle sync-out has not sent, across partitions.
+ * For `src/sync-out/pending.js` only.
+ */
 async function listSyncPending() {
-  return fetchAll(CONTAINER, { query: `SELECT * FROM c WHERE ${NATIVE_PROJECT} AND ${EAGLE_SYNC_PENDING}`, parameters: [] });
+  return fetchAll(CONTAINER, {
+    query: `SELECT * FROM c WHERE ((${NATIVE_PROJECT}) OR (${DEMI_OWNED_EAGLE_PROJECT})) AND ${EAGLE_SYNC_PENDING}`,
+    parameters: []
+  });
 }
 
 /**

@@ -1,6 +1,7 @@
 'use strict';
 
-// Projects created in DEMI, sent to Eagle through the real projects adapter over an in-memory container.
+// Projects created in DEMI or taken over from Eagle, sent to Eagle through the real projects adapter over an in-memory
+// container.
 
 process.env.NODE_ENV = 'test';
 
@@ -17,6 +18,7 @@ const { PROJECT } = require('../../src/sync-out/kinds');
 const projectController = require('../../src/controllers/nosql/project');
 const cosmos = require('../../src/db/cosmos-nosql');
 const lists = require('../../src/repositories/lists');
+const eagleProjectConsumer = require('../../src/sync-out/eagle-project');
 const { readForLevel } = require('../../src/helpers/access-sql');
 const { mirrorStore } = require('../helpers/mirror-store');
 const {
@@ -31,6 +33,8 @@ const ORG_ID = 'org-native-1';
 const EAGLE_ID = '6720b3c0a1b2c3d4e5f60719';
 const PHASE_ID = '5cf00c03a266b7e1877504ff';
 const STRAY_ID = '6720b3c0a1b2c3d4e5f607fe';
+const LEAD_ID = '5cf00c03a266b7e1877504aa';
+const EAGLE_PROPONENT_ID = '5cf00c03a266b7e1877504bb';
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
 const ENV = {
@@ -63,6 +67,24 @@ function nativeProject(overrides = {}) {
     ...overrides
   };
 }
+
+/** Eagle's copy as the mirror stores it: flat fields plus every block, the current one holding what its PUT rewrites. */
+const eagleCopy = block => ({
+  _id: EAGLE_ID, read: PRIVATE_ACL, currentLegislationYear: 'legislation_2002', legislation_2002: block
+});
+const EAGLE_BLOCK = Object.freeze({
+  name: 'Eagle name', region: 'Peace', dispute: true, disputeDate: '2025-03-01T00:00:00.000Z',
+  intake: { investment: 12, investmentNotes: 'Phase one' }, projectLeadId: LEAD_ID, currentPhaseName: PHASE_ID,
+  type: 'Energy-Electricity', location: 'Near Hudson\'s Hope', centroid: [-121, 51]
+});
+
+/** A Track-matched project DEMI took over from Eagle: it keeps the Eagle id and Eagle's raw copy. */
+const ownedProject = (overrides = {}) => nativeProject({
+  eagleId: EAGLE_ID,
+  demiOwnedAt: '2026-11-01T00:00:00.000Z',
+  sources: { track: { track_project_id: 1234 }, eagle: { _id: EAGLE_ID, read: PRIVATE_ACL } },
+  ...overrides
+});
 
 const proponent = (eagleId = ORG_EAGLE_ID) =>
   ({ container: 'lists', id: ORG_ID, kind: 'Organization', sourceSystem: 'demi', eagleId, read: PRIVATE_ACL });
@@ -253,6 +275,143 @@ test('sync-out of DEMI-created projects', async (t) => {
     assert.deepStrictEqual(calls, []);
     assert.strictEqual(rowOf(store).eagleId, EAGLE_ID);
     assert.strictEqual(logged('warn', 'which sync-out did not create; not sent').length, 1);
+  });
+
+  await t.test('a DEMI-owned Eagle project PUTs bodyFor to /project/<eagleId>', async (tt) => {
+    const row = ownedProject({
+      read: [...PUBLIC_ACL], isPublished: true, currentLegislationYear: 'legislation_2002',
+      sources: { track: { track_project_id: 1234 }, eagle: eagleCopy({ ...EAGLE_BLOCK, proponent: EAGLE_PROPONENT_ID }) }
+    });
+    mirrorStore(tt, [row, proponent()]);
+    wireQueue(tt);
+    const expected = await eagleProjectConsumer.bodyFor(row, {});
+    const put = `PUT /project/${EAGLE_ID}`;
+    const calls = wireEagle(tt, { [put]: {}, [`${put}/publish`]: {} });
+
+    const result = await run();
+
+    assert.deepStrictEqual(keys(calls), [put, `${put}/publish`], 'one PUT and the level sync, no POST');
+    assert.deepStrictEqual(calls[0].body, expected);
+    assert.strictEqual(calls[0].body.proponent, ORG_EAGLE_ID, 'the DEMI org wins over Eagle\'s proponent');
+    assert.deepStrictEqual(result, { status: 'sent', eagleId: EAGLE_ID }, 'the same legislation year on both sides sends');
+    assert.strictEqual(logged('info', 'sending DEMI-owned Eagle project').length, 1);
+  });
+
+  await t.test('a DEMI-owned Eagle project whose DEMI org has no Eagle id yet sends nothing and fails with the error line',
+    async (tt) => {
+      const store = mirrorStore(tt, [ownedProject({
+        sources: { track: { track_project_id: 1234 }, eagle: eagleCopy({ ...EAGLE_BLOCK, proponent: EAGLE_PROPONENT_ID }) }
+      }), proponent(null)]);
+      wireQueue(tt);
+      const calls = wireEagle(tt, {});
+
+      await run(message(), 1);
+
+      assert.deepStrictEqual(calls, [], 'Eagle\'s old proponent is not sent over the row\'s');
+      assert.strictEqual(rowOf(store).syncOut.eagle.status, 'failed');
+      assert.strictEqual(logged('error', `[sync-out eagle] proponent ${ORG_ID} of project ${ROW_ID} has no eagleId`).length, 1);
+    });
+
+  await t.test('a DEMI-owned Eagle project whose PUT misses never POSTs', async (tt) => {
+    const store = mirrorStore(tt, [ownedProject(), proponent()]);
+    wireQueue(tt);
+    const put = `PUT /project/${EAGLE_ID}`;
+    const calls = wireEagle(tt, { [put]: { status: 404 } });
+
+    assert.deepStrictEqual(await run(), { status: 'skipped' });
+
+    assert.deepStrictEqual(keys(calls), [put]);
+    assert.strictEqual(rowOf(store).eagleId, EAGLE_ID, 'no id minted over the Eagle one');
+  });
+
+  await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a DEMI-owned project whose PUT misses is skipped, not held',
+    async (tt) => {
+      useEnv(tt, { SYNC_OUT_EAGLE_NATIVE_ENABLED: 'false' });
+      mirrorStore(tt, [ownedProject(), proponent()]);
+      wireQueue(tt);
+      wireEagle(tt, { [`PUT /project/${EAGLE_ID}`]: { status: 404 } });
+
+      assert.deepStrictEqual(await run(), { status: 'skipped' });
+
+      assert.strictEqual(logged('warn', `Eagle has no project ${EAGLE_ID} for DEMI-owned ${ROW_ID}; not sent`).length, 1);
+    });
+
+  await t.test('a DEMI-owned project whose legislation year moved off Eagle\'s is skipped with no call', async (tt) => {
+    mirrorStore(tt, [ownedProject({
+      currentLegislationYear: 'legislation_2018',
+      sources: { track: { track_project_id: 1234 }, eagle: eagleCopy(EAGLE_BLOCK) }
+    }), proponent()]);
+    wireQueue(tt);
+    const calls = wireEagle(tt, {});
+
+    assert.deepStrictEqual(await run(), { status: 'skipped' });
+
+    assert.deepStrictEqual(calls, [], 'a PUT would write the new year\'s values over Eagle\'s old block');
+    assert.strictEqual(logged('warn', `DEMI-owned project ${ROW_ID} changed legislation year`).length, 1);
+  });
+
+  await t.test('a DEMI-owned Eagle project sends Eagle\'s value for each field the row lacks, and its own where it has one',
+    async (tt) => {
+      mirrorStore(tt, [proponent()]);
+      const row = ownedProject({
+        region: null,
+        centroid: undefined,
+        sources: { track: { track_project_id: 1234 }, eagle: eagleCopy(EAGLE_BLOCK) }
+      });
+
+      const body = await eagleProjectConsumer.bodyFor(row, {});
+
+      assert.strictEqual(body.dispute, true);
+      assert.strictEqual(body.disputeDate, EAGLE_BLOCK.disputeDate);
+      assert.deepStrictEqual(body.intake, { investment: 12, notes: 'Phase one' }, 'in the shape eagle-api\'s PUT reads');
+      assert.strictEqual(body.projectLeadId, LEAD_ID);
+      assert.strictEqual(body.currentPhaseName, PHASE_ID);
+      assert.strictEqual(body.type, EAGLE_BLOCK.type, 'a renamed field falls back under Eagle\'s name');
+      assert.strictEqual(body.location, EAGLE_BLOCK.location);
+      assert.deepStrictEqual(body.centroid, [-121, 51]);
+      assert.strictEqual(body.name, 'Nicomen Wind Energy (DEMI)', 'a field the row holds is sent from the row');
+      assert.strictEqual(body.region, null, 'a blank the row holds still wins');
+    });
+
+  await t.test('a DEMI-owned Eagle project with a flat Eagle copy falls back to its flat fields', async (tt) => {
+    mirrorStore(tt, [proponent()]);
+    const row = ownedProject({ sources: { track: { track_project_id: 1234 }, eagle: { _id: EAGLE_ID, ...EAGLE_BLOCK } } });
+
+    const body = await eagleProjectConsumer.bodyFor(row, {});
+
+    assert.strictEqual(body.disputeDate, EAGLE_BLOCK.disputeDate);
+  });
+
+  await t.test('a DEMI-owned Eagle project whose proponent DEMI lacks sends Eagle\'s, with no error line', async (tt) => {
+    mirrorStore(tt, []);
+    const row = ownedProject({
+      sources: { track: { track_project_id: 1234 }, eagle: eagleCopy({ ...EAGLE_BLOCK, proponent: EAGLE_PROPONENT_ID }) }
+    });
+
+    const body = await eagleProjectConsumer.bodyFor(row, {});
+
+    assert.strictEqual(body.proponent, EAGLE_PROPONENT_ID);
+    assert.strictEqual(logged('error', 'has no eagleId').length, 0);
+  });
+
+  await t.test('an intake held as eagle-admin\'s { investment, notes } keeps its notes', async (tt) => {
+    mirrorStore(tt, [proponent()]);
+    const row = ownedProject({ intake: { investment: 5, notes: 'Row notes' } });
+
+    const body = await eagleProjectConsumer.bodyFor(row, {});
+
+    assert.deepStrictEqual(body.intake, { investment: 5, notes: 'Row notes' });
+  });
+
+  await t.test('a native project\'s body takes nothing from its Eagle copy', async (tt) => {
+    mirrorStore(tt, [proponent()]);
+    const row = nativeProject({
+      eagleId: EAGLE_ID, syncOut: { eagle: { mintedId: EAGLE_ID } }, sources: { eagle: eagleCopy(EAGLE_BLOCK) }
+    });
+
+    const body = await eagleProjectConsumer.bodyFor(row, {});
+
+    assert.deepStrictEqual(Object.keys(body).sort(), ['centroid', 'description', 'name', 'proponent']);
   });
 
   await t.test('with SYNC_OUT_EAGLE_NATIVE_ENABLED off a project with no eagleId is held, its sync state untouched',
