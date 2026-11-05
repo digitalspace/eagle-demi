@@ -4,7 +4,7 @@ Goal: DEMI owns every EPIC object with its own create, read, update and delete r
 
 Scope: DEMI is the EAO platform API. It will serve every EAO application and future projects, not only eagle-public and eagle-admin. Design each object and route for any consumer: no field names, filters or response shapes that exist only because one screen wants them, no consumer-specific endpoints, public and staff behaviour decided by role and visibility rather than by which app is calling.
 
-Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the local checkout on that date) and eagle-admin `origin/develop` 593e910ec. Local checkouts were stale; recheck upstream before trusting a `file:line` here. The Caller lines describe eagle-admin tag v2.5.41 (develop ab929eabb).
+Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the local checkout on that date) and eagle-admin `origin/develop` 593e910ec. Local checkouts were stale; recheck upstream before trusting a `file:line` here. The Caller lines describe eagle-admin tag v2.5.42 (develop 0dde13aab).
 
 ## How to work this file
 
@@ -44,22 +44,22 @@ Audited 2026-10-14 against eagle-api `origin/develop` (24 commits ahead of the l
 | A0 | eagle-admin DEMI write client | `demi-api.service.ts` and spec | none | S | done (eagle-admin 51b4e13af) |
 | A2 | eagle-admin project legislation read | `full-project.resolver.ts` and spec | none | S | done (eagle-admin 13305c76); prod precondition under Project |
 | FS | Sync-out generalization | `sync-out/index.js`, `sync-out/kinds.js`, `domain/_write.js`, `src/controllers/nosql/engage-comment-period.js` | 0 | M | done (359611b4) |
-| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half built (pins c661dfb2, organizations f8a9c3dd); eagle-admin half (PR 995), on test in v2.5.41; flip live on test, not on prod |
-| F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | DEMI half built (4529a818); eagle-admin half (PR 1005), on test in v2.5.41; flip live on test, not on prod |
-| F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | DEMI half built (83912121); eagle-admin half (PR 1002), on test in v2.5.41; flip live on test, not on prod |
-| F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `user.service.ts` and project groups components | 4, F8 | - | DEMI half built (1980d570); eagle-admin half (PRs 1000, 1004), on test in v2.5.41; flip live on test, not on prod |
-| F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | DEMI half built (6d72fb04); eagle-admin half (PR 1003), on test in v2.5.41; flip live on test, not on prod |
-| F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | DEMI half built (20fdf282); eagle-admin half (PR 1001), on test in v2.5.41; flip live on test, not on prod |
-| F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | DEMI half built (c9b2a878); eagle-admin half (PR 1000), on test in v2.5.41; flip live on test, not on prod |
-| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | DEMI half built (fe41a6aa); eagle-admin half (PRs 1006, 1007), on test in v2.5.41; flip live on test, not on prod |
-| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | DEMI half built (8e724347, f30f6b8e, 5ceb0912); eagle-admin half (PRs 1006, 1008 to 1010), on test in v2.5.41; flip live on test, not on prod |
+| F1 | Flip: pins + organizations | `domain/project-pins.js`, `controllers/nosql/project.js`, `merge/project.js`, `ownership/project.js`, eagle-admin pins and org services | 1, 9, FS, A0 | - | DEMI half built (pins c661dfb2, organizations f8a9c3dd); eagle-admin half (PR 995), on test in v2.5.42; flip live on test, not on prod |
+| F2 | Flip: comment periods | `controllers/nosql/comment-period.js`, `sync-out/eagle.js`, eagle-admin `commentperiod.service.ts` | 2, FS | - | DEMI half built (4529a818); eagle-admin half (PR 1005), on test in v2.5.42; flip live on test, not on prod |
+| F3 | Flip: comments | `controllers/nosql/comment.js`, eagle-admin `comment.service.ts` | 3, F2 | - | DEMI half built (83912121); eagle-admin half (PR 1002), on test in v2.5.42; flip live on test, not on prod |
+| F4 | Flip: groups | `controllers/nosql/group.js`, eagle-admin `user.service.ts` and project groups components | 4, F8 | - | DEMI half built (1980d570); eagle-admin half (PRs 1000, 1004), on test in v2.5.42; flip live on test, not on prod |
+| F5 | Flip: updates | `controllers/nosql/update.js`, eagle-admin `recent-activity.ts` | 5 | - | DEMI half built (6d72fb04); eagle-admin half (PR 1003), on test in v2.5.42; flip live on test, not on prod |
+| F6 | Flip: notifications | `controllers/nosql/notification.js`, eagle-admin `notification-project.service.ts` | 6 | - | DEMI half built (20fdf282); eagle-admin half (PR 1001), on test in v2.5.42; flip live on test, not on prod |
+| F7 | Flip: users | `controllers/nosql/user.js`, eagle-admin `user.service.ts` | 7 | - | DEMI half built (c9b2a878); eagle-admin half (PR 1000), on test in v2.5.42; flip live on test, not on prod |
+| F8 | Flip: extensions | `ownership/project.js`, eagle-admin `project.service.ts` | 8, F1 | - | DEMI half built (fe41a6aa); eagle-admin half (PRs 1006, 1007), on test in v2.5.42; flip live on test, not on prod |
+| F9 | Flip: project writes | `controllers/nosql/project.js`, eagle-admin `project.service.ts` | 9, F4 | - | DEMI half built (8e724347, f30f6b8e, 5ceb0912); eagle-admin half (PRs 1006, 1008 to 1010), on test in v2.5.42; flip live on test, not on prod |
 | F10 | Flip: documents | document mirror, eagle-admin `document.service.ts` and components | FS, A0 | - | todo |
 | F11 | Flip: CAC | `ownership/project.js` (`DEMI_ONLY_FIELDS`) | 11, F8 | - | done (530bf0cc); no sync-out: neither eagle-public line reads the CAC fields, so no eagle-api write path |
 | R1 | Retire in eagle-api: dead handlers | topic, vc, materialized-view refresh, `/public/comment`, `/public/document`, `/task`, `listJobs`, `login` | none | - | done (eagle-api 681b483): topic, vc, `GET /jobs` list removed; `protectedRefresh`, `/task`, `/public/comment`, `/public/document` were already gone; `login` kept (eagle-admin local login when Keycloak is off) |
 | R2 | Retire in eagle-api: per object | the write methods listed under "Retire in eagle-api" | the object's Flip live on test (retire tag: live on prod) | - | todo |
 | R3 | Retire in DEMI: mirror lines | mirror lines and each kind's `upsertFromEagle` | the kind's Flip live on prod | - | todo |
 
-Deployed state (measured 2026-11-05): eagle-admin v2.5.41 (PRs 1000 to 1013) runs on test, and prod runs v2.5.32. The staging API workflow deployed eagle-demi 0f260317, which holds every DEMI half above, to test. A flip is live on test when both halves run there.
+Deployed state (measured 2026-11-05): eagle-admin v2.5.42 (PRs 1000 to 1013) runs on test, and prod runs v2.5.32. The staging API workflow deployed eagle-demi 0f260317, which holds every DEMI half above, to test. A flip is live on test when both halves run there.
 
 ### Decisions
 
